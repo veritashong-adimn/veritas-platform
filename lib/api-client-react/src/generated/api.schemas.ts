@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.5.0
+ * OpenAPI spec version: 0.6.0
  */
 export interface HealthStatus {
   status: string;
@@ -81,6 +81,8 @@ export interface User {
 
 export interface CreateProjectRequest {
   title: string;
+  /** URL of an uploaded file (from /api/upload) */
+  fileUrl?: string | null;
 }
 
 export type ProjectStatus = (typeof ProjectStatus)[keyof typeof ProjectStatus];
@@ -98,6 +100,7 @@ export interface Project {
   id: number;
   userId: number;
   title: string;
+  fileUrl?: string | null;
   status: ProjectStatus;
   createdAt: string;
 }
@@ -178,6 +181,11 @@ export interface Log {
   createdAt: string;
 }
 
+export interface UploadResponse {
+  /** Public URL of the uploaded file */
+  fileUrl: string;
+}
+
 export interface ErrorResponse {
   error: string;
 }
@@ -188,6 +196,10 @@ export type ListProjectsParams = {
 
 export type ListTasksParams = {
   translatorId?: number;
+};
+
+export type UploadFileBody = {
+  file: Blob;
 };
 
 export type ListLogsParams = {

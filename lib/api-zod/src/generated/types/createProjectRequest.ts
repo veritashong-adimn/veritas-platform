@@ -3,9 +3,11 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.5.0
+ * OpenAPI spec version: 0.6.0
  */
 
 export interface CreateProjectRequest {
   title: string;
+  /** URL of an uploaded file (from /api/upload) */
+  fileUrl?: string | null;
 }

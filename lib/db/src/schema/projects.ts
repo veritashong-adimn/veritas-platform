@@ -18,6 +18,7 @@ export const projectsTable = pgTable("projects", {
     .notNull()
     .references(() => usersTable.id),
   title: text("title").notNull(),
+  fileUrl: text("file_url"),
   status: projectStatusEnum("status").notNull().default("created"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });

@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.5.0
+ * OpenAPI spec version: 0.6.0
  */
 import * as zod from "zod";
 
@@ -63,6 +63,10 @@ export const CreateUserBody = zod.object({
  */
 export const CreateProjectBody = zod.object({
   title: zod.string(),
+  fileUrl: zod
+    .string()
+    .nullish()
+    .describe("URL of an uploaded file (from \/api\/upload)"),
 });
 
 /**
@@ -76,6 +80,7 @@ export const ListProjectsResponseItem = zod.object({
   id: zod.number(),
   userId: zod.number(),
   title: zod.string(),
+  fileUrl: zod.string().nullish(),
   status: zod.enum([
     "created",
     "quoted",
@@ -166,6 +171,13 @@ export const CompleteTaskResponse = zod.object({
   translatorId: zod.number(),
   status: zod.enum(["waiting", "assigned", "working", "done"]),
   createdAt: zod.date(),
+});
+
+/**
+ * @summary Upload a file to R2 storage (max 10MB)
+ */
+export const UploadFileBody = zod.object({
+  file: zod.instanceof(File),
 });
 
 /**

@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.5.0
+ * OpenAPI spec version: 0.6.0
  */
 
 export * from "./authResponse";
@@ -30,6 +30,8 @@ export * from "./task";
 export * from "./taskStatus";
 export * from "./taskWithProject";
 export * from "./taskWithProjectStatus";
+export * from "./uploadFileBody";
+export * from "./uploadResponse";
 export * from "./user";
 export * from "./userPublic";
 export * from "./userPublicRole";

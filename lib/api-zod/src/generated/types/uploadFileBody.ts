@@ -6,7 +6,6 @@
  * OpenAPI spec version: 0.6.0
  */
 
-export interface LoginRequest {
-  email: string;
-  password: string;
-}
+export type UploadFileBody = {
+  file: Blob;
+};

@@ -11,15 +11,24 @@ router.post(
   requireAuth,
   requireRole("customer", "admin"),
   async (req, res) => {
-    const body = { ...req.body, userId: req.user!.id };
-    const parsed = insertProjectSchema.safeParse(body);
+    const { fileUrl, ...rest } = req.body as { fileUrl?: string; [key: string]: unknown };
+    const body = { ...rest, userId: req.user!.id };
+    const parsed = insertProjectSchema.omit({ fileUrl: true }).safeParse(body);
     if (!parsed.success) {
       res.status(400).json({ error: parsed.error.message });
       return;
     }
 
+    if (fileUrl !== undefined && typeof fileUrl !== "string") {
+      res.status(400).json({ error: "fileUrl은 문자열이어야 합니다." });
+      return;
+    }
+
     try {
-      const [project] = await db.insert(projectsTable).values(parsed.data).returning();
+      const [project] = await db
+        .insert(projectsTable)
+        .values({ ...parsed.data, fileUrl: fileUrl ?? null })
+        .returning();
       await logEvent("project", project.id, "project_created", req.log);
       res.status(201).json(project);
     } catch (err) {

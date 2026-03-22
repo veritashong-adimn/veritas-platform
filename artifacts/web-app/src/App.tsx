@@ -5,7 +5,7 @@ const api = (path: string) => `${BASE}${path}`;
 
 type Role = "customer" | "translator" | "admin";
 type User = { id: number; email: string; role: Role };
-type Project = { id: number; userId: number; title: string; status: string; createdAt: string };
+type Project = { id: number; userId: number; title: string; fileUrl: string | null; status: string; createdAt: string };
 type Task = {
   id: number; projectId: number; translatorId: number;
   status: string; createdAt: string;
@@ -187,6 +187,8 @@ function CustomerView({ user, token }: { user: User; token: string }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [msg, setMsg] = useState("");
   const [title, setTitle] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const authHeaders = {
@@ -206,17 +208,39 @@ function CustomerView({ user, token }: { user: User; token: string }) {
   const createProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) { setMsg("오류: 제목을 입력해주세요."); return; }
-    setMsg("");
+    setMsg(""); setUploading(!!file);
+
+    let fileUrl: string | undefined;
+
+    if (file) {
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const upRes = await fetch(api("/api/upload"), {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${token}` },
+          body: formData,
+        });
+        const upData = await upRes.json();
+        if (!upRes.ok) {
+          setMsg(`오류: 파일 업로드 실패 — ${upData.error}`);
+          setUploading(false); return;
+        }
+        fileUrl = upData.fileUrl as string;
+      } catch { setMsg("오류: 파일 업로드 실패"); setUploading(false); return; }
+    }
+
+    setUploading(false);
     try {
       const res = await fetch(api("/api/projects"), {
         method: "POST",
         headers: authHeaders,
-        body: JSON.stringify({ title }),
+        body: JSON.stringify({ title, ...(fileUrl ? { fileUrl } : {}) }),
       });
       const data = await res.json();
       if (!res.ok) { setMsg(`오류: ${data.error}`); return; }
-      setMsg(`프로젝트 생성 완료 (id: ${data.id})`);
-      setTitle("");
+      setMsg(`프로젝트 생성 완료 (id: ${data.id})${fileUrl ? " — 파일 첨부됨" : ""}`);
+      setTitle(""); setFile(null);
       await fetchProjects();
     } catch { setMsg("오류: 프로젝트 생성 실패"); }
   };
@@ -227,13 +251,33 @@ function CustomerView({ user, token }: { user: User; token: string }) {
       <Msg text={msg} />
       <section style={section}>
         <h3 style={h3}>새 프로젝트 생성</h3>
-        <form onSubmit={createProject} style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap" }}>
-          <label style={{ flex: 1, minWidth: 200 }}>
-            프로젝트 제목
-            <input style={input} value={title} onChange={e => setTitle(e.target.value)}
-              placeholder="예: 영한 번역 요청" />
+        <form onSubmit={createProject}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+            <label style={{ flex: 2, minWidth: 200 }}>
+              프로젝트 제목 <span style={{ color: "#dc2626" }}>*</span>
+              <input style={input} value={title} onChange={e => setTitle(e.target.value)}
+                placeholder="예: 영한 번역 요청" />
+            </label>
+          </div>
+          <label style={{ display: "block", marginBottom: 10 }}>
+            번역 파일 첨부 <span style={{ color: "#6b7280", fontSize: 12 }}>(선택 · 최대 10MB · PDF/DOCX/TXT/이미지/ZIP)</span>
+            <input
+              style={{ ...input, padding: "5px 8px" }}
+              type="file"
+              accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.gif,.zip"
+              onChange={e => setFile(e.target.files?.[0] ?? null)}
+            />
           </label>
-          <button type="submit" style={btn("#2563eb")}>생성</button>
+          {file && (
+            <div style={{ fontSize: 12, color: "#374151", marginBottom: 10 }}>
+              선택된 파일: <strong>{file.name}</strong> ({(file.size / 1024).toFixed(1)} KB)
+              <button type="button" style={{ ...btn("#6b7280", true), marginLeft: 8 }}
+                onClick={() => setFile(null)}>제거</button>
+            </div>
+          )}
+          <button type="submit" style={btn("#2563eb")} disabled={uploading}>
+            {uploading ? "파일 업로드 중..." : "프로젝트 생성"}
+          </button>
         </form>
       </section>
       <section style={section}>
@@ -246,9 +290,14 @@ function CustomerView({ user, token }: { user: User; token: string }) {
         {projects.length === 0
           ? <p style={{ color: "#6b7280", fontSize: 13 }}>새로고침을 눌러 프로젝트를 불러오세요.</p>
           : <Table
-            headers={["ID", "제목", "상태", "생성일시"]}
+            headers={["ID", "제목", "파일", "상태", "생성일시"]}
             rows={projects.map(p => [
-              p.id, p.title,
+              p.id,
+              p.title,
+              p.fileUrl
+                ? <a href={p.fileUrl} target="_blank" rel="noreferrer"
+                    style={{ color: "#2563eb", fontSize: 12 }}>📎 첨부파일</a>
+                : <span style={{ color: "#9ca3af", fontSize: 12 }}>없음</span>,
               <Badge status={p.status} />,
               new Date(p.createdAt).toLocaleString("ko-KR"),
             ])}

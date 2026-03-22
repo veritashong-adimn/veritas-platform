@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.5.0
+ * OpenAPI spec version: 0.6.0
  */
 import type { ProjectStatus } from "./projectStatus";
 
@@ -11,6 +11,7 @@ export interface Project {
   id: number;
   userId: number;
   title: string;
+  fileUrl?: string | null;
   status: ProjectStatus;
   createdAt: Date;
 }

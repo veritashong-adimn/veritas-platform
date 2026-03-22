@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.5.0
+ * OpenAPI spec version: 0.6.0
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
@@ -33,6 +33,8 @@ import type {
   RegisterRequest,
   Task,
   TaskWithProject,
+  UploadFileBody,
+  UploadResponse,
   User,
 } from "./api.schemas";
 
@@ -1072,6 +1074,94 @@ export const useCompleteTask = <
   TContext
 > => {
   return useMutation(getCompleteTaskMutationOptions(options));
+};
+
+/**
+ * @summary Upload a file to R2 storage (max 10MB)
+ */
+export const getUploadFileUrl = () => {
+  return `/api/upload`;
+};
+
+export const uploadFile = async (
+  uploadFileBody: UploadFileBody,
+  options?: RequestInit,
+): Promise<UploadResponse> => {
+  const formData = new FormData();
+  formData.append(`file`, uploadFileBody.file);
+
+  return customFetch<UploadResponse>(getUploadFileUrl(), {
+    ...options,
+    method: "POST",
+    body: formData,
+  });
+};
+
+export const getUploadFileMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadFile>>,
+    TError,
+    { data: BodyType<UploadFileBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof uploadFile>>,
+  TError,
+  { data: BodyType<UploadFileBody> },
+  TContext
+> => {
+  const mutationKey = ["uploadFile"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof uploadFile>>,
+    { data: BodyType<UploadFileBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return uploadFile(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type UploadFileMutationResult = NonNullable<
+  Awaited<ReturnType<typeof uploadFile>>
+>;
+export type UploadFileMutationBody = BodyType<UploadFileBody>;
+export type UploadFileMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Upload a file to R2 storage (max 10MB)
+ */
+export const useUploadFile = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof uploadFile>>,
+    TError,
+    { data: BodyType<UploadFileBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof uploadFile>>,
+  TError,
+  { data: BodyType<UploadFileBody> },
+  TContext
+> => {
+  return useMutation(getUploadFileMutationOptions(options));
 };
 
 /**

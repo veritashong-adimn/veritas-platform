@@ -6,7 +6,7 @@
  * OpenAPI spec version: 0.6.0
  */
 
-export interface LoginRequest {
-  email: string;
-  password: string;
+export interface UploadResponse {
+  /** Public URL of the uploaded file */
+  fileUrl: string;
 }
