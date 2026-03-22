@@ -49,8 +49,8 @@ router.post(
       res.status(404).json({ error: `Project ${projectId} not found.` });
       return;
     }
-    if (project.status !== "approved") {
-      res.status(400).json({ error: `매칭하려면 프로젝트가 "approved" 상태여야 합니다. 현재: "${project.status}"` });
+    if (project.status !== "paid") {
+      res.status(400).json({ error: `매칭하려면 결제가 완료된 "paid" 상태여야 합니다. 현재: "${project.status}"` });
       return;
     }
 

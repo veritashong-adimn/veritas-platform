@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.6.0
+ * OpenAPI spec version: 0.7.0
  */
 
 export type ProjectStatus = (typeof ProjectStatus)[keyof typeof ProjectStatus];
@@ -12,6 +12,7 @@ export const ProjectStatus = {
   created: "created",
   quoted: "quoted",
   approved: "approved",
+  paid: "paid",
   matched: "matched",
   in_progress: "in_progress",
   completed: "completed",

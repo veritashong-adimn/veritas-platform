@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.6.0
+ * OpenAPI spec version: 0.7.0
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
@@ -24,10 +24,15 @@ import type {
   ErrorResponse,
   HealthStatus,
   ListLogsParams,
+  ListPaymentsParams,
   ListProjectsParams,
   ListTasksParams,
   Log,
   LoginRequest,
+  Payment,
+  PaymentConfirmBody,
+  PaymentRequestBody,
+  PaymentRequestResponse,
   Project,
   Quote,
   RegisterRequest,
@@ -1075,6 +1080,272 @@ export const useCompleteTask = <
 > => {
   return useMutation(getCompleteTaskMutationOptions(options));
 };
+
+/**
+ * @summary Create a payment request for an approved project
+ */
+export const getRequestPaymentUrl = () => {
+  return `/api/payments/request`;
+};
+
+export const requestPayment = async (
+  paymentRequestBody: PaymentRequestBody,
+  options?: RequestInit,
+): Promise<PaymentRequestResponse> => {
+  return customFetch<PaymentRequestResponse>(getRequestPaymentUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(paymentRequestBody),
+  });
+};
+
+export const getRequestPaymentMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestPayment>>,
+    TError,
+    { data: BodyType<PaymentRequestBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof requestPayment>>,
+  TError,
+  { data: BodyType<PaymentRequestBody> },
+  TContext
+> => {
+  const mutationKey = ["requestPayment"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof requestPayment>>,
+    { data: BodyType<PaymentRequestBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return requestPayment(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RequestPaymentMutationResult = NonNullable<
+  Awaited<ReturnType<typeof requestPayment>>
+>;
+export type RequestPaymentMutationBody = BodyType<PaymentRequestBody>;
+export type RequestPaymentMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Create a payment request for an approved project
+ */
+export const useRequestPayment = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestPayment>>,
+    TError,
+    { data: BodyType<PaymentRequestBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof requestPayment>>,
+  TError,
+  { data: BodyType<PaymentRequestBody> },
+  TContext
+> => {
+  return useMutation(getRequestPaymentMutationOptions(options));
+};
+
+/**
+ * @summary Confirm or fail a payment
+ */
+export const getConfirmPaymentUrl = () => {
+  return `/api/payments/confirm`;
+};
+
+export const confirmPayment = async (
+  paymentConfirmBody: PaymentConfirmBody,
+  options?: RequestInit,
+): Promise<Payment> => {
+  return customFetch<Payment>(getConfirmPaymentUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(paymentConfirmBody),
+  });
+};
+
+export const getConfirmPaymentMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof confirmPayment>>,
+    TError,
+    { data: BodyType<PaymentConfirmBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof confirmPayment>>,
+  TError,
+  { data: BodyType<PaymentConfirmBody> },
+  TContext
+> => {
+  const mutationKey = ["confirmPayment"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof confirmPayment>>,
+    { data: BodyType<PaymentConfirmBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return confirmPayment(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ConfirmPaymentMutationResult = NonNullable<
+  Awaited<ReturnType<typeof confirmPayment>>
+>;
+export type ConfirmPaymentMutationBody = BodyType<PaymentConfirmBody>;
+export type ConfirmPaymentMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Confirm or fail a payment
+ */
+export const useConfirmPayment = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof confirmPayment>>,
+    TError,
+    { data: BodyType<PaymentConfirmBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof confirmPayment>>,
+  TError,
+  { data: BodyType<PaymentConfirmBody> },
+  TContext
+> => {
+  return useMutation(getConfirmPaymentMutationOptions(options));
+};
+
+/**
+ * @summary List payments (optional projectId filter)
+ */
+export const getListPaymentsUrl = (params?: ListPaymentsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/payments?${stringifiedParams}`
+    : `/api/payments`;
+};
+
+export const listPayments = async (
+  params?: ListPaymentsParams,
+  options?: RequestInit,
+): Promise<Payment[]> => {
+  return customFetch<Payment[]>(getListPaymentsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListPaymentsQueryKey = (params?: ListPaymentsParams) => {
+  return [`/api/payments`, ...(params ? [params] : [])] as const;
+};
+
+export const getListPaymentsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listPayments>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListPaymentsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPayments>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListPaymentsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listPayments>>> = ({
+    signal,
+  }) => listPayments(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listPayments>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListPaymentsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listPayments>>
+>;
+export type ListPaymentsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List payments (optional projectId filter)
+ */
+
+export function useListPayments<
+  TData = Awaited<ReturnType<typeof listPayments>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListPaymentsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listPayments>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListPaymentsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary Upload a file to R2 storage (max 10MB)

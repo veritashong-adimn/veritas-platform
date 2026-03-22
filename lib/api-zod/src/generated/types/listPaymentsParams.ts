@@ -6,6 +6,6 @@
  * OpenAPI spec version: 0.7.0
  */
 
-export type ListProjectsParams = {
-  userId?: number;
+export type ListPaymentsParams = {
+  projectId?: number;
 };

@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.6.0
+ * OpenAPI spec version: 0.7.0
  */
 export interface HealthStatus {
   status: string;
@@ -91,6 +91,7 @@ export const ProjectStatus = {
   created: "created",
   quoted: "quoted",
   approved: "approved",
+  paid: "paid",
   matched: "matched",
   in_progress: "in_progress",
   completed: "completed",
@@ -181,6 +182,36 @@ export interface Log {
   createdAt: string;
 }
 
+export interface PaymentRequestBody {
+  projectId: number;
+}
+
+export interface PaymentRequestResponse {
+  paymentId: number;
+  amount: number;
+}
+
+export interface PaymentConfirmBody {
+  paymentId: number;
+  success: boolean;
+}
+
+export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];
+
+export const PaymentStatus = {
+  pending: "pending",
+  paid: "paid",
+  failed: "failed",
+} as const;
+
+export interface Payment {
+  id: number;
+  projectId: number;
+  amount: string;
+  status: PaymentStatus;
+  createdAt: string;
+}
+
 export interface UploadResponse {
   /** Public URL of the uploaded file */
   fileUrl: string;
@@ -196,6 +227,10 @@ export type ListProjectsParams = {
 
 export type ListTasksParams = {
   translatorId?: number;
+};
+
+export type ListPaymentsParams = {
+  projectId?: number;
 };
 
 export type UploadFileBody = {

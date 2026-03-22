@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.6.0
+ * OpenAPI spec version: 0.7.0
  */
 import * as zod from "zod";
 
@@ -85,6 +85,7 @@ export const ListProjectsResponseItem = zod.object({
     "created",
     "quoted",
     "approved",
+    "paid",
     "matched",
     "in_progress",
     "completed",
@@ -172,6 +173,45 @@ export const CompleteTaskResponse = zod.object({
   status: zod.enum(["waiting", "assigned", "working", "done"]),
   createdAt: zod.date(),
 });
+
+/**
+ * @summary Create a payment request for an approved project
+ */
+export const RequestPaymentBody = zod.object({
+  projectId: zod.number(),
+});
+
+/**
+ * @summary Confirm or fail a payment
+ */
+export const ConfirmPaymentBody = zod.object({
+  paymentId: zod.number(),
+  success: zod.boolean(),
+});
+
+export const ConfirmPaymentResponse = zod.object({
+  id: zod.number(),
+  projectId: zod.number(),
+  amount: zod.string(),
+  status: zod.enum(["pending", "paid", "failed"]),
+  createdAt: zod.date(),
+});
+
+/**
+ * @summary List payments (optional projectId filter)
+ */
+export const ListPaymentsQueryParams = zod.object({
+  projectId: zod.coerce.number().optional(),
+});
+
+export const ListPaymentsResponseItem = zod.object({
+  id: zod.number(),
+  projectId: zod.number(),
+  amount: zod.string(),
+  status: zod.enum(["pending", "paid", "failed"]),
+  createdAt: zod.date(),
+});
+export const ListPaymentsResponse = zod.array(ListPaymentsResponseItem);
 
 /**
  * @summary Upload a file to R2 storage (max 10MB)

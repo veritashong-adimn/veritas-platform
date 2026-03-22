@@ -7,6 +7,7 @@ export const projectStatusEnum = pgEnum("project_status", [
   "created",
   "quoted",
   "approved",
+  "paid",
   "matched",
   "in_progress",
   "completed",

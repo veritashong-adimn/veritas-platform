@@ -5,13 +5,12 @@
  * 통번역 플랫폼 API
  * OpenAPI spec version: 0.7.0
  */
-import type { ProjectStatus } from "./projectStatus";
+import type { PaymentStatus } from "./paymentStatus";
 
-export interface Project {
+export interface Payment {
   id: number;
-  userId: number;
-  title: string;
-  fileUrl?: string | null;
-  status: ProjectStatus;
+  projectId: number;
+  amount: string;
+  status: PaymentStatus;
   createdAt: Date;
 }

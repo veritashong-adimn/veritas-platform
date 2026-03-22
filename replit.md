@@ -66,9 +66,10 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 ## DB Schema
 
 - `users` — id, email, **password** (nullable, bcrypt hashed), role (customer/translator/admin), created_at
-- `projects` — id, user_id, title, status (created/quoted/approved/matched/in_progress/completed), created_at
+- `projects` — id, user_id, title, file_url (nullable), status (created/quoted/approved/**paid**/matched/in_progress/completed), created_at
 - `quotes` — id, project_id, price (numeric), status (pending/sent/approved/rejected), created_at
 - `tasks` — id, project_id, translator_id (FK→users), status (waiting/assigned/working/done), created_at
+- `payments` — id, project_id (FK), amount (numeric 12,2), status (pending/paid/failed), created_at
 - `logs` — id, entity_type (project/quote/task), entity_id, action, created_at
 
 ## Log Events
@@ -93,9 +94,17 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 - `GET /api/users/:id` — 사용자 조회
 
 ### Projects (🔒 = 인증 필요)
-- `POST /api/projects` 🔒 (customer only) — 프로젝트 생성 (userId는 JWT에서 자동)
+- `POST /api/projects` 🔒 (customer only) — 프로젝트 생성 (userId는 JWT에서 자동, fileUrl optional)
 - `GET /api/projects` — 프로젝트 목록 (?userId=N 필터)
-- `POST /api/projects/:id/match` 🔒 (customer/admin) — 번역가 랜덤 매칭 + task 생성
+- `POST /api/projects/:id/match` 🔒 (customer/admin) — 번역가 랜덤 매칭 (**paid 상태에서만 가능**)
+
+### Payments (🔒 = 인증 필요)
+- `POST /api/payments/request` 🔒 — 결제 요청 생성 (approved 상태 프로젝트, 견적 금액 기준)
+- `POST /api/payments/confirm` 🔒 — 결제 확인 ({paymentId, success: bool}) → paid/failed
+- `GET /api/payments` — 결제 목록 (?projectId=N)
+
+### Upload (🔒 = 인증 필요)
+- `POST /api/upload` 🔒 — 파일 업로드 → R2 저장 → fileUrl 반환 (10MB, PDF/DOCX/TXT/이미지/ZIP)
 
 ### Quotes
 - `POST /api/quotes` 🔒 — 견적 생성 (project status → quoted)

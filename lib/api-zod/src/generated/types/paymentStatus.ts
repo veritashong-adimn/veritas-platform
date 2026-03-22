@@ -6,11 +6,10 @@
  * OpenAPI spec version: 0.7.0
  */
 
-export type QuoteStatus = (typeof QuoteStatus)[keyof typeof QuoteStatus];
+export type PaymentStatus = (typeof PaymentStatus)[keyof typeof PaymentStatus];
 
-export const QuoteStatus = {
+export const PaymentStatus = {
   pending: "pending",
-  sent: "sent",
-  approved: "approved",
-  rejected: "rejected",
+  paid: "paid",
+  failed: "failed",
 } as const;

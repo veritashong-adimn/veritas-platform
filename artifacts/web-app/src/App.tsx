@@ -32,8 +32,9 @@ function loadSession(): { token: string; user: User } | null {
 
 const STATUS_COLOR: Record<string, string> = {
   created: "#6b7280", quoted: "#2563eb", approved: "#16a34a",
-  matched: "#9333ea", in_progress: "#f59e0b", completed: "#059669",
+  paid: "#0891b2", matched: "#9333ea", in_progress: "#f59e0b", completed: "#059669",
   waiting: "#6b7280", assigned: "#2563eb", working: "#f59e0b", done: "#059669",
+  pending: "#f59e0b", failed: "#dc2626",
   customer: "#1d4ed8", translator: "#7c3aed", admin: "#dc2626",
 };
 
@@ -183,6 +184,8 @@ function AuthForm({ onAuth }: { onAuth: (token: string, user: User) => void }) {
   );
 }
 
+type PaymentPanel = { projectId: number; paymentId: number; amount: number } | null;
+
 function CustomerView({ user, token }: { user: User; token: string }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [msg, setMsg] = useState("");
@@ -190,6 +193,8 @@ function CustomerView({ user, token }: { user: User; token: string }) {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [paymentPanel, setPaymentPanel] = useState<PaymentPanel>(null);
+  const [payActing, setPayActing] = useState(false);
 
   const authHeaders = {
     "Content-Type": "application/json",
@@ -245,6 +250,40 @@ function CustomerView({ user, token }: { user: User; token: string }) {
     } catch { setMsg("오류: 프로젝트 생성 실패"); }
   };
 
+  const requestPayment = async (projectId: number) => {
+    setMsg("");
+    try {
+      const res = await fetch(api("/api/payments/request"), {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({ projectId }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setMsg(`오류: ${data.error}`); return; }
+      setPaymentPanel({ projectId, paymentId: data.paymentId, amount: data.amount });
+    } catch { setMsg("오류: 결제 요청 실패"); }
+  };
+
+  const confirmPayment = async (success: boolean) => {
+    if (!paymentPanel) return;
+    setPayActing(true); setMsg("");
+    try {
+      const res = await fetch(api("/api/payments/confirm"), {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({ paymentId: paymentPanel.paymentId, success }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setMsg(`오류: ${data.error}`); return; }
+      setMsg(success
+        ? `결제 완료! (결제 ID: ${paymentPanel.paymentId}, 금액: ${paymentPanel.amount.toLocaleString()}원)`
+        : `결제 실패 처리됨 (결제 ID: ${paymentPanel.paymentId})`);
+      setPaymentPanel(null);
+      await fetchProjects();
+    } catch { setMsg("오류: 결제 확인 실패"); }
+    finally { setPayActing(false); }
+  };
+
   return (
     <div>
       <h2 style={{ marginBottom: 16, color: "#1d4ed8" }}>고객 대시보드</h2>
@@ -280,6 +319,32 @@ function CustomerView({ user, token }: { user: User; token: string }) {
           </button>
         </form>
       </section>
+      {paymentPanel && (
+        <section style={{ ...section, background: "#f0f9ff", border: "1px solid #0891b2" }}>
+          <h3 style={{ ...h3, color: "#0891b2" }}>결제 진행</h3>
+          <p style={{ fontSize: 14, marginBottom: 12 }}>
+            <strong>프로젝트 #{paymentPanel.projectId}</strong> 결제 금액:&nbsp;
+            <strong style={{ fontSize: 18, color: "#0891b2" }}>
+              {paymentPanel.amount.toLocaleString()}원
+            </strong>
+          </p>
+          <p style={{ fontSize: 12, color: "#6b7280", marginBottom: 16 }}>
+            실제 결제창 연동 전 테스트용 — 아래 버튼으로 결제 성공/실패를 시뮬레이션합니다.
+          </p>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button style={btn("#059669")} onClick={() => confirmPayment(true)} disabled={payActing}>
+              {payActing ? "처리중..." : "결제 성공 (시뮬레이션)"}
+            </button>
+            <button style={btn("#dc2626")} onClick={() => confirmPayment(false)} disabled={payActing}>
+              {payActing ? "처리중..." : "결제 실패 (시뮬레이션)"}
+            </button>
+            <button style={btn("#6b7280")} onClick={() => setPaymentPanel(null)} disabled={payActing}>
+              취소
+            </button>
+          </div>
+        </section>
+      )}
+
       <section style={section}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
           <h3 style={{ ...h3, margin: 0 }}>내 프로젝트 목록</h3>
@@ -290,7 +355,7 @@ function CustomerView({ user, token }: { user: User; token: string }) {
         {projects.length === 0
           ? <p style={{ color: "#6b7280", fontSize: 13 }}>새로고침을 눌러 프로젝트를 불러오세요.</p>
           : <Table
-            headers={["ID", "제목", "파일", "상태", "생성일시"]}
+            headers={["ID", "제목", "파일", "상태", "액션", "생성일시"]}
             rows={projects.map(p => [
               p.id,
               p.title,
@@ -299,6 +364,13 @@ function CustomerView({ user, token }: { user: User; token: string }) {
                     style={{ color: "#2563eb", fontSize: 12 }}>📎 첨부파일</a>
                 : <span style={{ color: "#9ca3af", fontSize: 12 }}>없음</span>,
               <Badge status={p.status} />,
+              p.status === "approved"
+                ? <button style={btn("#0891b2", true)}
+                    onClick={() => requestPayment(p.id)}
+                    disabled={paymentPanel?.projectId === p.id}>
+                    💳 결제 요청
+                  </button>
+                : <span style={{ color: "#9ca3af", fontSize: 12 }}>—</span>,
               new Date(p.createdAt).toLocaleString("ko-KR"),
             ])}
           />}
