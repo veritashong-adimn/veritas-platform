@@ -48,6 +48,22 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 - `pnpm run build` — runs `typecheck` first, then recursively runs `build` in all packages that define it
 - `pnpm run typecheck` — runs `tsc --build --emitDeclarationOnly` using project references
 
+## Domain
+
+통번역 플랫폼 MVP
+
+## DB Schema
+
+- `users` — id, email, role (customer/translator/admin), created_at
+- `projects` — id, user_id, title, status (created), created_at
+
+## API Endpoints
+
+- `POST /api/users` — 사용자 생성
+- `POST /api/projects` — 프로젝트 생성
+- `GET /api/projects` — 프로젝트 목록 조회
+- `GET /api/healthz` — 헬스체크
+
 ## Packages
 
 ### `artifacts/api-server` (`@workspace/api-server`)
