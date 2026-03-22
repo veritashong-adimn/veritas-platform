@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.2.0
+ * OpenAPI spec version: 0.3.0
  */
 
 export * from "./createProjectRequest";
@@ -16,5 +16,7 @@ export * from "./project";
 export * from "./projectStatus";
 export * from "./quote";
 export * from "./quoteStatus";
+export * from "./task";
+export * from "./taskStatus";
 export * from "./user";
 export * from "./userRole";

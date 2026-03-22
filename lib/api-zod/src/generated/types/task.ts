@@ -5,12 +5,12 @@
  * 통번역 플랫폼 API
  * OpenAPI spec version: 0.3.0
  */
-import type { ProjectStatus } from "./projectStatus";
+import type { TaskStatus } from "./taskStatus";
 
-export interface Project {
+export interface Task {
   id: number;
-  userId: number;
-  title: string;
-  status: ProjectStatus;
+  projectId: number;
+  translatorId: number;
+  status: TaskStatus;
   createdAt: Date;
 }

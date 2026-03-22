@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.2.0
+ * OpenAPI spec version: 0.3.0
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
@@ -24,6 +24,7 @@ import type {
   HealthStatus,
   Project,
   Quote,
+  Task,
   User,
 } from "./api.schemas";
 
@@ -37,7 +38,6 @@ type Awaited<O> = O extends AwaitedInput<infer T> ? T : never;
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 /**
- * Returns server health status
  * @summary Health check
  */
 export const getHealthCheckUrl = () => {
@@ -360,7 +360,91 @@ export function useListProjects<
 }
 
 /**
- * Creates a quote and updates the project status to "quoted"
+ * Randomly assigns a translator, creates a task, and sets project status to "matched"
+ * @summary Match a translator to an approved project
+ */
+export const getMatchProjectUrl = (id: number) => {
+  return `/api/projects/${id}/match`;
+};
+
+export const matchProject = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Task> => {
+  return customFetch<Task>(getMatchProjectUrl(id), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getMatchProjectMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof matchProject>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof matchProject>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["matchProject"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof matchProject>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return matchProject(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type MatchProjectMutationResult = NonNullable<
+  Awaited<ReturnType<typeof matchProject>>
+>;
+
+export type MatchProjectMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Match a translator to an approved project
+ */
+export const useMatchProject = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof matchProject>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof matchProject>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getMatchProjectMutationOptions(options));
+};
+
+/**
  * @summary Create a quote for a project
  */
 export const getCreateQuoteUrl = () => {
@@ -447,7 +531,6 @@ export const useCreateQuote = <
 };
 
 /**
- * Approves a quote and updates the project status to "approved"
  * @summary Approve a quote
  */
 export const getApproveQuoteUrl = (id: number) => {
@@ -529,4 +612,174 @@ export const useApproveQuote = <
   TContext
 > => {
   return useMutation(getApproveQuoteMutationOptions(options));
+};
+
+/**
+ * Sets task status to "working" and project status to "in_progress"
+ * @summary Start a task
+ */
+export const getStartTaskUrl = (id: number) => {
+  return `/api/tasks/${id}/start`;
+};
+
+export const startTask = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Task> => {
+  return customFetch<Task>(getStartTaskUrl(id), {
+    ...options,
+    method: "PATCH",
+  });
+};
+
+export const getStartTaskMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startTask>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof startTask>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["startTask"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof startTask>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return startTask(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type StartTaskMutationResult = NonNullable<
+  Awaited<ReturnType<typeof startTask>>
+>;
+
+export type StartTaskMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Start a task
+ */
+export const useStartTask = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof startTask>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof startTask>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getStartTaskMutationOptions(options));
+};
+
+/**
+ * Sets task status to "done" and project status to "completed"
+ * @summary Complete a task
+ */
+export const getCompleteTaskUrl = (id: number) => {
+  return `/api/tasks/${id}/complete`;
+};
+
+export const completeTask = async (
+  id: number,
+  options?: RequestInit,
+): Promise<Task> => {
+  return customFetch<Task>(getCompleteTaskUrl(id), {
+    ...options,
+    method: "PATCH",
+  });
+};
+
+export const getCompleteTaskMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof completeTask>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof completeTask>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["completeTask"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof completeTask>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return completeTask(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CompleteTaskMutationResult = NonNullable<
+  Awaited<ReturnType<typeof completeTask>>
+>;
+
+export type CompleteTaskMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Complete a task
+ */
+export const useCompleteTask = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof completeTask>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof completeTask>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getCompleteTaskMutationOptions(options));
 };

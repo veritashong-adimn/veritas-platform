@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Api
-  version: 0.2.0
+  version: 0.3.0
   description: 통번역 플랫폼 API
 servers:
   - url: /api
@@ -15,13 +15,14 @@ tags:
     description: Project operations
   - name: quotes
     description: Quote operations
+  - name: tasks
+    description: Task operations
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -90,12 +91,42 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Project"
+  /projects/{id}/match:
+    post:
+      operationId: matchProject
+      tags: [projects]
+      summary: Match a translator to an approved project
+      description: Randomly assigns a translator, creates a task, and sets project status to "matched"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "201":
+          description: Task created and translator matched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          description: Project not approved or already matched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Project or translator not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /quotes:
     post:
       operationId: createQuote
       tags: [quotes]
       summary: Create a quote for a project
-      description: Creates a quote and updates the project status to "quoted"
       requestBody:
         required: true
         content:
@@ -126,7 +157,6 @@ paths:
       operationId: approveQuote
       tags: [quotes]
       summary: Approve a quote
-      description: Approves a quote and updates the project status to "approved"
       parameters:
         - name: id
           in: path
@@ -141,13 +171,75 @@ paths:
               schema:
                 $ref: "#/components/schemas/Quote"
         "400":
-          description: Already approved or invalid
+          description: Already approved
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Quote not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /tasks/{id}/start:
+    patch:
+      operationId: startTask
+      tags: [tasks]
+      summary: Start a task
+      description: Sets task status to "working" and project status to "in_progress"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Task started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          description: Invalid state transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /tasks/{id}/complete:
+    patch:
+      operationId: completeTask
+      tags: [tasks]
+      summary: Complete a task
+      description: Sets task status to "done" and project status to "completed"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Task completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "400":
+          description: Invalid state transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Task not found
           content:
             application/json:
               schema:
@@ -212,7 +304,7 @@ components:
           type: string
         status:
           type: string
-          enum: [created, quoted, approved]
+          enum: [created, quoted, approved, matched, in_progress, completed]
         createdAt:
           type: string
           format: date-time
@@ -252,6 +344,27 @@ components:
         - id
         - projectId
         - price
+        - status
+        - createdAt
+    Task:
+      type: object
+      properties:
+        id:
+          type: integer
+        projectId:
+          type: integer
+        translatorId:
+          type: integer
+        status:
+          type: string
+          enum: [waiting, assigned, working, done]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - projectId
+        - translatorId
         - status
         - createdAt
     ErrorResponse:

@@ -3,7 +3,14 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
 
-export const projectStatusEnum = pgEnum("project_status", ["created", "quoted", "approved"]);
+export const projectStatusEnum = pgEnum("project_status", [
+  "created",
+  "quoted",
+  "approved",
+  "matched",
+  "in_progress",
+  "completed",
+]);
 
 export const projectsTable = pgTable("projects", {
   id: serial("id").primaryKey(),

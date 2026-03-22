@@ -3,12 +3,11 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.2.0
+ * OpenAPI spec version: 0.3.0
  */
 import * as zod from "zod";
 
 /**
- * Returns server health status
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({
@@ -42,13 +41,27 @@ export const ListProjectsResponseItem = zod.object({
   id: zod.number(),
   userId: zod.number(),
   title: zod.string(),
-  status: zod.enum(["created", "quoted", "approved"]),
+  status: zod.enum([
+    "created",
+    "quoted",
+    "approved",
+    "matched",
+    "in_progress",
+    "completed",
+  ]),
   createdAt: zod.date(),
 });
 export const ListProjectsResponse = zod.array(ListProjectsResponseItem);
 
 /**
- * Creates a quote and updates the project status to "quoted"
+ * Randomly assigns a translator, creates a task, and sets project status to "matched"
+ * @summary Match a translator to an approved project
+ */
+export const MatchProjectParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+/**
  * @summary Create a quote for a project
  */
 export const createQuoteBodyPriceMin = 0;
@@ -59,7 +72,6 @@ export const CreateQuoteBody = zod.object({
 });
 
 /**
- * Approves a quote and updates the project status to "approved"
  * @summary Approve a quote
  */
 export const ApproveQuoteParams = zod.object({
@@ -71,5 +83,37 @@ export const ApproveQuoteResponse = zod.object({
   projectId: zod.number(),
   price: zod.string(),
   status: zod.enum(["pending", "sent", "approved", "rejected"]),
+  createdAt: zod.date(),
+});
+
+/**
+ * Sets task status to "working" and project status to "in_progress"
+ * @summary Start a task
+ */
+export const StartTaskParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const StartTaskResponse = zod.object({
+  id: zod.number(),
+  projectId: zod.number(),
+  translatorId: zod.number(),
+  status: zod.enum(["waiting", "assigned", "working", "done"]),
+  createdAt: zod.date(),
+});
+
+/**
+ * Sets task status to "done" and project status to "completed"
+ * @summary Complete a task
+ */
+export const CompleteTaskParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const CompleteTaskResponse = zod.object({
+  id: zod.number(),
+  projectId: zod.number(),
+  translatorId: zod.number(),
+  status: zod.enum(["waiting", "assigned", "working", "done"]),
   createdAt: zod.date(),
 });
