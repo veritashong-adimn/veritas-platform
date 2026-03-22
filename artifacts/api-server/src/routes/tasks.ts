@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, tasksTable, projectsTable, usersTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { logEvent } from "../lib/logEvent";
 
 const router: IRouter = Router();
 
@@ -63,6 +64,7 @@ router.post("/projects/:id/match", async (req, res) => {
       return task;
     });
 
+    await logEvent("project", projectId, "project_matched", req.log);
     res.status(201).json(result);
   } catch (err) {
     req.log.error({ err }, "Failed to match project");
@@ -108,6 +110,7 @@ router.patch("/tasks/:id/start", async (req, res) => {
       return updated;
     });
 
+    await logEvent("task", taskId, "task_started", req.log);
     res.json(result);
   } catch (err) {
     req.log.error({ err }, "Failed to start task");
@@ -158,6 +161,7 @@ router.patch("/tasks/:id/complete", async (req, res) => {
       return updated;
     });
 
+    await logEvent("task", taskId, "task_completed", req.log);
     res.json(result);
   } catch (err) {
     req.log.error({ err }, "Failed to complete task");

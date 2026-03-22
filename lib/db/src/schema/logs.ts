@@ -1,0 +1,13 @@
+import { pgTable, serial, text, integer, timestamp, pgEnum } from "drizzle-orm/pg-core";
+
+export const entityTypeEnum = pgEnum("entity_type", ["project", "quote", "task"]);
+
+export const logsTable = pgTable("logs", {
+  id: serial("id").primaryKey(),
+  entityType: entityTypeEnum("entity_type").notNull(),
+  entityId: integer("entity_id").notNull(),
+  action: text("action").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export type Log = typeof logsTable.$inferSelect;

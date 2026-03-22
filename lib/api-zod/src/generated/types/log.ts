@@ -5,12 +5,12 @@
  * 통번역 플랫폼 API
  * OpenAPI spec version: 0.4.0
  */
-import type { ProjectStatus } from "./projectStatus";
+import type { LogEntityType } from "./logEntityType";
 
-export interface Project {
+export interface Log {
   id: number;
-  userId: number;
-  title: string;
-  status: ProjectStatus;
+  entityType: LogEntityType;
+  entityId: number;
+  action: string;
   createdAt: Date;
 }

@@ -58,6 +58,18 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 - `projects` — id, user_id, title, status (created/quoted/approved/matched/in_progress/completed), created_at
 - `quotes` — id, project_id, price (numeric), status (pending/sent/approved/rejected), created_at
 - `tasks` — id, project_id, translator_id (FK→users), status (waiting/assigned/working/done), created_at
+- `logs` — id, entity_type (project/quote/task), entity_id, action, created_at
+
+## Log Events
+
+| 이벤트 | action 값 |
+|--------|-----------|
+| 프로젝트 생성 | project_created |
+| 견적 생성 | quote_created |
+| 견적 승인 | quote_approved |
+| 매칭 실행 | project_matched |
+| 작업 시작 | task_started |
+| 작업 완료 | task_completed |
 
 ## API Endpoints
 
@@ -69,6 +81,7 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 - `POST /api/projects/:id/match` — 번역가 랜덤 매칭 + task 생성 (project status → matched)
 - `PATCH /api/tasks/:id/start` — 작업 시작 (task status → working, project → in_progress)
 - `PATCH /api/tasks/:id/complete` — 작업 완료 (task status → done, project → completed)
+- `GET /api/logs` — 전체 로그 조회 (?entityType=project|quote|task, ?entityId=N)
 - `GET /api/healthz` — 헬스체크
 
 ## Packages

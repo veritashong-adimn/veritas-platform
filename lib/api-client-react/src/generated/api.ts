@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.3.0
+ * OpenAPI spec version: 0.4.0
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
@@ -22,6 +22,8 @@ import type {
   CreateUserRequest,
   ErrorResponse,
   HealthStatus,
+  ListLogsParams,
+  Log,
   Project,
   Quote,
   Task,
@@ -360,7 +362,6 @@ export function useListProjects<
 }
 
 /**
- * Randomly assigns a translator, creates a task, and sets project status to "matched"
  * @summary Match a translator to an approved project
  */
 export const getMatchProjectUrl = (id: number) => {
@@ -615,7 +616,6 @@ export const useApproveQuote = <
 };
 
 /**
- * Sets task status to "working" and project status to "in_progress"
  * @summary Start a task
  */
 export const getStartTaskUrl = (id: number) => {
@@ -700,7 +700,6 @@ export const useStartTask = <
 };
 
 /**
- * Sets task status to "done" and project status to "completed"
  * @summary Complete a task
  */
 export const getCompleteTaskUrl = (id: number) => {
@@ -783,3 +782,97 @@ export const useCompleteTask = <
 > => {
   return useMutation(getCompleteTaskMutationOptions(options));
 };
+
+/**
+ * @summary List all event logs
+ */
+export const getListLogsUrl = (params?: ListLogsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/logs?${stringifiedParams}`
+    : `/api/logs`;
+};
+
+export const listLogs = async (
+  params?: ListLogsParams,
+  options?: RequestInit,
+): Promise<Log[]> => {
+  return customFetch<Log[]>(getListLogsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getListLogsQueryKey = (params?: ListLogsParams) => {
+  return [`/api/logs`, ...(params ? [params] : [])] as const;
+};
+
+export const getListLogsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listLogs>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListLogsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listLogs>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getListLogsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof listLogs>>> = ({
+    signal,
+  }) => listLogs(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listLogs>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListLogsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listLogs>>
+>;
+export type ListLogsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary List all event logs
+ */
+
+export function useListLogs<
+  TData = Awaited<ReturnType<typeof listLogs>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: ListLogsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof listLogs>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getListLogsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}

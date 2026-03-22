@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.3.0
+ * OpenAPI spec version: 0.4.0
  */
 import * as zod from "zod";
 
@@ -54,7 +54,6 @@ export const ListProjectsResponseItem = zod.object({
 export const ListProjectsResponse = zod.array(ListProjectsResponseItem);
 
 /**
- * Randomly assigns a translator, creates a task, and sets project status to "matched"
  * @summary Match a translator to an approved project
  */
 export const MatchProjectParams = zod.object({
@@ -87,7 +86,6 @@ export const ApproveQuoteResponse = zod.object({
 });
 
 /**
- * Sets task status to "working" and project status to "in_progress"
  * @summary Start a task
  */
 export const StartTaskParams = zod.object({
@@ -103,7 +101,6 @@ export const StartTaskResponse = zod.object({
 });
 
 /**
- * Sets task status to "done" and project status to "completed"
  * @summary Complete a task
  */
 export const CompleteTaskParams = zod.object({
@@ -117,3 +114,20 @@ export const CompleteTaskResponse = zod.object({
   status: zod.enum(["waiting", "assigned", "working", "done"]),
   createdAt: zod.date(),
 });
+
+/**
+ * @summary List all event logs
+ */
+export const ListLogsQueryParams = zod.object({
+  entityType: zod.enum(["project", "quote", "task"]).optional(),
+  entityId: zod.coerce.number().optional(),
+});
+
+export const ListLogsResponseItem = zod.object({
+  id: zod.number(),
+  entityType: zod.enum(["project", "quote", "task"]),
+  entityId: zod.number(),
+  action: zod.string(),
+  createdAt: zod.date(),
+});
+export const ListLogsResponse = zod.array(ListLogsResponseItem);

@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, quotesTable, projectsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { logEvent } from "../lib/logEvent";
 
 const router: IRouter = Router();
 
@@ -41,6 +42,7 @@ router.post("/quotes", async (req, res) => {
       return quote;
     });
 
+    await logEvent("quote", result.id, "quote_created", req.log);
     res.status(201).json(result);
   } catch (err) {
     req.log.error({ err }, "Failed to create quote");
@@ -86,6 +88,7 @@ router.post("/quotes/:id/approve", async (req, res) => {
       return updated;
     });
 
+    await logEvent("quote", result.id, "quote_approved", req.log);
     res.json(result);
   } catch (err) {
     req.log.error({ err }, "Failed to approve quote");

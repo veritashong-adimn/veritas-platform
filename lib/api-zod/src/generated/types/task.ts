@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.3.0
+ * OpenAPI spec version: 0.4.0
  */
 import type { TaskStatus } from "./taskStatus";
 

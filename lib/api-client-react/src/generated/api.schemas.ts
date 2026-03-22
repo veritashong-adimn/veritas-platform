@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.3.0
+ * OpenAPI spec version: 0.4.0
  */
 export interface HealthStatus {
   status: string;
@@ -102,6 +102,36 @@ export interface Task {
   createdAt: string;
 }
 
+export type LogEntityType = (typeof LogEntityType)[keyof typeof LogEntityType];
+
+export const LogEntityType = {
+  project: "project",
+  quote: "quote",
+  task: "task",
+} as const;
+
+export interface Log {
+  id: number;
+  entityType: LogEntityType;
+  entityId: number;
+  action: string;
+  createdAt: string;
+}
+
 export interface ErrorResponse {
   error: string;
 }
+
+export type ListLogsParams = {
+  entityType?: ListLogsEntityType;
+  entityId?: number;
+};
+
+export type ListLogsEntityType =
+  (typeof ListLogsEntityType)[keyof typeof ListLogsEntityType];
+
+export const ListLogsEntityType = {
+  project: "project",
+  quote: "quote",
+  task: "task",
+} as const;
