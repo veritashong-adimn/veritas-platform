@@ -5,9 +5,8 @@
  * 통번역 플랫폼 API
  * OpenAPI spec version: 0.5.0
  */
-import type { CreateUserRequestRole } from "./createUserRequestRole";
 
-export interface CreateUserRequest {
+export interface LoginRequest {
   email: string;
-  role?: CreateUserRequestRole;
+  password: string;
 }

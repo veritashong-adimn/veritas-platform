@@ -5,7 +5,9 @@
  * 통번역 플랫폼 API
  * OpenAPI spec version: 0.5.0
  */
+import type { UserPublic } from "./userPublic";
 
-export interface ErrorResponse {
-  error: string;
+export interface AuthResponse {
+  token: string;
+  user: UserPublic;
 }

@@ -52,9 +52,20 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 
 통번역 플랫폼 MVP
 
+## Authentication
+
+- **방식**: JWT Bearer token (7일 만료)
+- **비밀번호**: bcryptjs (saltRound=10) 해싱
+- **미들웨어**: `artifacts/api-server/src/middlewares/auth.ts`
+  - `requireAuth` — Authorization: Bearer 헤더 검증 후 req.user 주입
+  - `requireRole(...roles)` — 역할 기반 접근 제어
+- **인증 필요 API**: POST /projects, POST /quotes, POST /projects/:id/match, PATCH /tasks/:id/start, PATCH /tasks/:id/complete
+- **역할 제한**: customer → 프로젝트 생성, translator → task 작업만
+- **프론트엔드**: 로그인/회원가입 폼, JWT를 localStorage에 저장, 로그아웃 지원
+
 ## DB Schema
 
-- `users` — id, email, role (customer/translator/admin), created_at
+- `users` — id, email, **password** (nullable, bcrypt hashed), role (customer/translator/admin), created_at
 - `projects` — id, user_id, title, status (created/quoted/approved/matched/in_progress/completed), created_at
 - `quotes` — id, project_id, price (numeric), status (pending/sent/approved/rejected), created_at
 - `tasks` — id, project_id, translator_id (FK→users), status (waiting/assigned/working/done), created_at
@@ -73,15 +84,30 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 
 ## API Endpoints
 
-- `POST /api/users` — 사용자 생성
-- `POST /api/projects` — 프로젝트 생성
-- `GET /api/projects` — 프로젝트 목록 조회
-- `POST /api/quotes` — 견적 생성 (project status → quoted)
+### Auth (공개)
+- `POST /api/auth/register` — 회원가입 (email, password, role) → {token, user}
+- `POST /api/auth/login` — 로그인 (email, password) → {token, user}
+
+### Users
+- `POST /api/users` — 사용자 생성 (레거시, 비밀번호 없음)
+- `GET /api/users/:id` — 사용자 조회
+
+### Projects (🔒 = 인증 필요)
+- `POST /api/projects` 🔒 (customer only) — 프로젝트 생성 (userId는 JWT에서 자동)
+- `GET /api/projects` — 프로젝트 목록 (?userId=N 필터)
+- `POST /api/projects/:id/match` 🔒 (customer/admin) — 번역가 랜덤 매칭 + task 생성
+
+### Quotes
+- `POST /api/quotes` 🔒 — 견적 생성 (project status → quoted)
 - `POST /api/quotes/:id/approve` — 견적 승인 (project status → approved)
-- `POST /api/projects/:id/match` — 번역가 랜덤 매칭 + task 생성 (project status → matched)
-- `PATCH /api/tasks/:id/start` — 작업 시작 (task status → working, project → in_progress)
-- `PATCH /api/tasks/:id/complete` — 작업 완료 (task status → done, project → completed)
-- `GET /api/logs` — 전체 로그 조회 (?entityType=project|quote|task, ?entityId=N)
+
+### Tasks
+- `GET /api/tasks` — 작업 목록 (?translatorId=N, 프로젝트 정보 JOIN)
+- `PATCH /api/tasks/:id/start` 🔒 (translator) — 작업 시작 (→ working, project → in_progress)
+- `PATCH /api/tasks/:id/complete` 🔒 (translator) — 작업 완료 (→ done, project → completed)
+
+### Logs & Health
+- `GET /api/logs` — 전체 로그 (?entityType=project|quote|task, ?entityId=N)
 - `GET /api/healthz` — 헬스체크
 
 ## Packages

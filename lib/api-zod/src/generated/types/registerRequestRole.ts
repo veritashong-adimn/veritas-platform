@@ -6,10 +6,10 @@
  * OpenAPI spec version: 0.5.0
  */
 
-export type CreateUserRequestRole =
-  (typeof CreateUserRequestRole)[keyof typeof CreateUserRequestRole];
+export type RegisterRequestRole =
+  (typeof RegisterRequestRole)[keyof typeof RegisterRequestRole];
 
-export const CreateUserRequestRole = {
+export const RegisterRequestRole = {
   customer: "customer",
   translator: "translator",
   admin: "admin",

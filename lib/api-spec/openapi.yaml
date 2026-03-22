@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Api
-  version: 0.4.0
+  version: 0.5.0
   description: 통번역 플랫폼 API
 servers:
   - url: /api
@@ -9,6 +9,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication operations
   - name: users
     description: User operations
   - name: projects
@@ -32,11 +34,59 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /auth/register:
+    post:
+      operationId: registerUser
+      tags: [auth]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User registered and token issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Validation error or duplicate email
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /auth/login:
+    post:
+      operationId: loginUser
+      tags: [auth]
+      summary: Login and receive JWT token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /users:
     post:
       operationId: createUser
       tags: [users]
-      summary: Create a user
+      summary: Create a user (no password, legacy)
       requestBody:
         required: true
         content:
@@ -60,7 +110,9 @@ paths:
     post:
       operationId: createProject
       tags: [projects]
-      summary: Create a project
+      summary: Create a project (customer only)
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -80,10 +132,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden (wrong role)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
     get:
       operationId: listProjects
       tags: [projects]
-      summary: List all projects
+      summary: List projects (optional userId filter)
+      parameters:
+        - name: userId
+          in: query
+          required: false
+          schema:
+            type: integer
       responses:
         "200":
           description: List of projects
@@ -98,6 +168,8 @@ paths:
       operationId: matchProject
       tags: [projects]
       summary: Match a translator to an approved project
+      security:
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -117,6 +189,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Project or translator not found
           content:
@@ -128,6 +206,8 @@ paths:
       operationId: createQuote
       tags: [quotes]
       summary: Create a quote for a project
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -143,6 +223,12 @@ paths:
                 $ref: "#/components/schemas/Quote"
         "400":
           description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
           content:
             application/json:
               schema:
@@ -183,11 +269,33 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /tasks:
+    get:
+      operationId: listTasks
+      tags: [tasks]
+      summary: List tasks (optional translatorId filter)
+      parameters:
+        - name: translatorId
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of tasks with project info
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TaskWithProject"
   /tasks/{id}/start:
     patch:
       operationId: startTask
       tags: [tasks]
-      summary: Start a task
+      summary: Start a task (translator only)
+      security:
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -207,6 +315,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not assigned to this task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Task not found
           content:
@@ -217,7 +337,9 @@ paths:
     patch:
       operationId: completeTask
       tags: [tasks]
-      summary: Complete a task
+      summary: Complete a task (translator only)
+      security:
+        - bearerAuth: []
       parameters:
         - name: id
           in: path
@@ -233,6 +355,18 @@ paths:
                 $ref: "#/components/schemas/Task"
         "400":
           description: Invalid state transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not assigned to this task
           content:
             application/json:
               schema:
@@ -270,6 +404,11 @@ paths:
                 items:
                   $ref: "#/components/schemas/Log"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
   schemas:
     HealthStatus:
       type: object
@@ -278,6 +417,57 @@ components:
           type: string
       required:
         - status
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 6
+        role:
+          type: string
+          enum: [customer, translator, admin]
+          default: customer
+      required:
+        - email
+        - password
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required:
+        - email
+        - password
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/UserPublic"
+      required:
+        - token
+        - user
+    UserPublic:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+        role:
+          type: string
+          enum: [customer, translator, admin]
+      required:
+        - id
+        - email
+        - role
     CreateUserRequest:
       type: object
       properties:
@@ -311,12 +501,9 @@ components:
     CreateProjectRequest:
       type: object
       properties:
-        userId:
-          type: integer
         title:
           type: string
       required:
-        - userId
         - title
     Project:
       type: object
@@ -386,6 +573,33 @@ components:
         createdAt:
           type: string
           format: date-time
+      required:
+        - id
+        - projectId
+        - translatorId
+        - status
+        - createdAt
+    TaskWithProject:
+      type: object
+      properties:
+        id:
+          type: integer
+        projectId:
+          type: integer
+        translatorId:
+          type: integer
+        status:
+          type: string
+          enum: [waiting, assigned, working, done]
+        createdAt:
+          type: string
+          format: date-time
+        projectTitle:
+          type: string
+          nullable: true
+        projectStatus:
+          type: string
+          nullable: true
       required:
         - id
         - projectId

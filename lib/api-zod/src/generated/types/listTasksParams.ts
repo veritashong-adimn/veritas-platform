@@ -6,6 +6,6 @@
  * OpenAPI spec version: 0.5.0
  */
 
-export interface ErrorResponse {
-  error: string;
-}
+export type ListTasksParams = {
+  translatorId?: number;
+};

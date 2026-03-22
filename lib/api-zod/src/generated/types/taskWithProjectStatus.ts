@@ -6,9 +6,10 @@
  * OpenAPI spec version: 0.5.0
  */
 
-export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];
+export type TaskWithProjectStatus =
+  (typeof TaskWithProjectStatus)[keyof typeof TaskWithProjectStatus];
 
-export const TaskStatus = {
+export const TaskWithProjectStatus = {
   waiting: "waiting",
   assigned: "assigned",
   working: "working",

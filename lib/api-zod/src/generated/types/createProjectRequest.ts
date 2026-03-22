@@ -3,10 +3,9 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.4.0
+ * OpenAPI spec version: 0.5.0
  */
 
 export interface CreateProjectRequest {
-  userId: number;
   title: string;
 }

@@ -3,10 +3,51 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.4.0
+ * OpenAPI spec version: 0.5.0
  */
 export interface HealthStatus {
   status: string;
+}
+
+export type RegisterRequestRole =
+  (typeof RegisterRequestRole)[keyof typeof RegisterRequestRole];
+
+export const RegisterRequestRole = {
+  customer: "customer",
+  translator: "translator",
+  admin: "admin",
+} as const;
+
+export interface RegisterRequest {
+  email: string;
+  /** @minLength 6 */
+  password: string;
+  role?: RegisterRequestRole;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export type UserPublicRole =
+  (typeof UserPublicRole)[keyof typeof UserPublicRole];
+
+export const UserPublicRole = {
+  customer: "customer",
+  translator: "translator",
+  admin: "admin",
+} as const;
+
+export interface UserPublic {
+  id: number;
+  email: string;
+  role: UserPublicRole;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: UserPublic;
 }
 
 export type CreateUserRequestRole =
@@ -39,7 +80,6 @@ export interface User {
 }
 
 export interface CreateProjectRequest {
-  userId: number;
   title: string;
 }
 
@@ -102,6 +142,26 @@ export interface Task {
   createdAt: string;
 }
 
+export type TaskWithProjectStatus =
+  (typeof TaskWithProjectStatus)[keyof typeof TaskWithProjectStatus];
+
+export const TaskWithProjectStatus = {
+  waiting: "waiting",
+  assigned: "assigned",
+  working: "working",
+  done: "done",
+} as const;
+
+export interface TaskWithProject {
+  id: number;
+  projectId: number;
+  translatorId: number;
+  status: TaskWithProjectStatus;
+  createdAt: string;
+  projectTitle?: string | null;
+  projectStatus?: string | null;
+}
+
 export type LogEntityType = (typeof LogEntityType)[keyof typeof LogEntityType];
 
 export const LogEntityType = {
@@ -121,6 +181,14 @@ export interface Log {
 export interface ErrorResponse {
   error: string;
 }
+
+export type ListProjectsParams = {
+  userId?: number;
+};
+
+export type ListTasksParams = {
+  translatorId?: number;
+};
 
 export type ListLogsParams = {
   entityType?: ListLogsEntityType;

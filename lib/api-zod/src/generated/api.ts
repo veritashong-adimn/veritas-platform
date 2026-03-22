@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.4.0
+ * OpenAPI spec version: 0.5.0
  */
 import * as zod from "zod";
 
@@ -15,7 +15,39 @@ export const HealthCheckResponse = zod.object({
 });
 
 /**
- * @summary Create a user
+ * @summary Register a new user
+ */
+export const registerUserBodyPasswordMin = 6;
+
+export const registerUserBodyRoleDefault = `customer`;
+
+export const RegisterUserBody = zod.object({
+  email: zod.string().email(),
+  password: zod.string().min(registerUserBodyPasswordMin),
+  role: zod
+    .enum(["customer", "translator", "admin"])
+    .default(registerUserBodyRoleDefault),
+});
+
+/**
+ * @summary Login and receive JWT token
+ */
+export const LoginUserBody = zod.object({
+  email: zod.string().email(),
+  password: zod.string(),
+});
+
+export const LoginUserResponse = zod.object({
+  token: zod.string(),
+  user: zod.object({
+    id: zod.number(),
+    email: zod.string(),
+    role: zod.enum(["customer", "translator", "admin"]),
+  }),
+});
+
+/**
+ * @summary Create a user (no password, legacy)
  */
 export const createUserBodyRoleDefault = `customer`;
 
@@ -27,16 +59,19 @@ export const CreateUserBody = zod.object({
 });
 
 /**
- * @summary Create a project
+ * @summary Create a project (customer only)
  */
 export const CreateProjectBody = zod.object({
-  userId: zod.number(),
   title: zod.string(),
 });
 
 /**
- * @summary List all projects
+ * @summary List projects (optional userId filter)
  */
+export const ListProjectsQueryParams = zod.object({
+  userId: zod.coerce.number().optional(),
+});
+
 export const ListProjectsResponseItem = zod.object({
   id: zod.number(),
   userId: zod.number(),
@@ -86,7 +121,25 @@ export const ApproveQuoteResponse = zod.object({
 });
 
 /**
- * @summary Start a task
+ * @summary List tasks (optional translatorId filter)
+ */
+export const ListTasksQueryParams = zod.object({
+  translatorId: zod.coerce.number().optional(),
+});
+
+export const ListTasksResponseItem = zod.object({
+  id: zod.number(),
+  projectId: zod.number(),
+  translatorId: zod.number(),
+  status: zod.enum(["waiting", "assigned", "working", "done"]),
+  createdAt: zod.date(),
+  projectTitle: zod.string().nullish(),
+  projectStatus: zod.string().nullish(),
+});
+export const ListTasksResponse = zod.array(ListTasksResponseItem);
+
+/**
+ * @summary Start a task (translator only)
  */
 export const StartTaskParams = zod.object({
   id: zod.coerce.number(),
@@ -101,7 +154,7 @@ export const StartTaskResponse = zod.object({
 });
 
 /**
- * @summary Complete a task
+ * @summary Complete a task (translator only)
  */
 export const CompleteTaskParams = zod.object({
   id: zod.coerce.number(),
