@@ -6,10 +6,11 @@
  * OpenAPI spec version: 0.2.0
  */
 
-export type ProjectStatus = (typeof ProjectStatus)[keyof typeof ProjectStatus];
+export type QuoteStatus = (typeof QuoteStatus)[keyof typeof QuoteStatus];
 
-export const ProjectStatus = {
-  created: "created",
-  quoted: "quoted",
+export const QuoteStatus = {
+  pending: "pending",
+  sent: "sent",
   approved: "approved",
+  rejected: "rejected",
 } as const;

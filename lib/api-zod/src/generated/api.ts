@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.1.0
+ * OpenAPI spec version: 0.2.0
  */
 import * as zod from "zod";
 
@@ -42,7 +42,34 @@ export const ListProjectsResponseItem = zod.object({
   id: zod.number(),
   userId: zod.number(),
   title: zod.string(),
-  status: zod.enum(["created"]),
+  status: zod.enum(["created", "quoted", "approved"]),
   createdAt: zod.date(),
 });
 export const ListProjectsResponse = zod.array(ListProjectsResponseItem);
+
+/**
+ * Creates a quote and updates the project status to "quoted"
+ * @summary Create a quote for a project
+ */
+export const createQuoteBodyPriceMin = 0;
+
+export const CreateQuoteBody = zod.object({
+  projectId: zod.number(),
+  price: zod.number().min(createQuoteBodyPriceMin),
+});
+
+/**
+ * Approves a quote and updates the project status to "approved"
+ * @summary Approve a quote
+ */
+export const ApproveQuoteParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const ApproveQuoteResponse = zod.object({
+  id: zod.number(),
+  projectId: zod.number(),
+  price: zod.string(),
+  status: zod.enum(["pending", "sent", "approved", "rejected"]),
+  createdAt: zod.date(),
+});

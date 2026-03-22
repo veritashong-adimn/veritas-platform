@@ -6,7 +6,8 @@
  * OpenAPI spec version: 0.2.0
  */
 
-export interface CreateProjectRequest {
-  userId: number;
-  title: string;
+export interface CreateQuoteRequest {
+  projectId: number;
+  /** @minimum 0 */
+  price: number;
 }

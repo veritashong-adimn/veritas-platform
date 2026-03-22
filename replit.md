@@ -55,13 +55,16 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 ## DB Schema
 
 - `users` — id, email, role (customer/translator/admin), created_at
-- `projects` — id, user_id, title, status (created), created_at
+- `projects` — id, user_id, title, status (created/quoted/approved), created_at
+- `quotes` — id, project_id, price (numeric), status (pending/sent/approved/rejected), created_at
 
 ## API Endpoints
 
 - `POST /api/users` — 사용자 생성
 - `POST /api/projects` — 프로젝트 생성
 - `GET /api/projects` — 프로젝트 목록 조회
+- `POST /api/quotes` — 견적 생성 (project status → quoted)
+- `POST /api/quotes/:id/approve` — 견적 승인 (quote status → approved, project status → approved)
 - `GET /api/healthz` — 헬스체크
 
 ## Packages

@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.1.0
+ * OpenAPI spec version: 0.2.0
  */
 export interface HealthStatus {
   status: string;
@@ -47,6 +47,8 @@ export type ProjectStatus = (typeof ProjectStatus)[keyof typeof ProjectStatus];
 
 export const ProjectStatus = {
   created: "created",
+  quoted: "quoted",
+  approved: "approved",
 } as const;
 
 export interface Project {
@@ -54,6 +56,29 @@ export interface Project {
   userId: number;
   title: string;
   status: ProjectStatus;
+  createdAt: string;
+}
+
+export interface CreateQuoteRequest {
+  projectId: number;
+  /** @minimum 0 */
+  price: number;
+}
+
+export type QuoteStatus = (typeof QuoteStatus)[keyof typeof QuoteStatus];
+
+export const QuoteStatus = {
+  pending: "pending",
+  sent: "sent",
+  approved: "approved",
+  rejected: "rejected",
+} as const;
+
+export interface Quote {
+  id: number;
+  projectId: number;
+  price: string;
+  status: QuoteStatus;
   createdAt: string;
 }
 

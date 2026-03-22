@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Api
-  version: 0.1.0
+  version: 0.2.0
   description: 통번역 플랫폼 API
 servers:
   - url: /api
@@ -13,6 +13,8 @@ tags:
     description: User operations
   - name: projects
     description: Project operations
+  - name: quotes
+    description: Quote operations
 paths:
   /healthz:
     get:
@@ -88,6 +90,68 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Project"
+  /quotes:
+    post:
+      operationId: createQuote
+      tags: [quotes]
+      summary: Create a quote for a project
+      description: Creates a quote and updates the project status to "quoted"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateQuoteRequest"
+      responses:
+        "201":
+          description: Quote created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quote"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /quotes/{id}/approve:
+    post:
+      operationId: approveQuote
+      tags: [quotes]
+      summary: Approve a quote
+      description: Approves a quote and updates the project status to "approved"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Quote approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quote"
+        "400":
+          description: Already approved or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Quote not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -148,7 +212,7 @@ components:
           type: string
         status:
           type: string
-          enum: [created]
+          enum: [created, quoted, approved]
         createdAt:
           type: string
           format: date-time
@@ -156,6 +220,38 @@ components:
         - id
         - userId
         - title
+        - status
+        - createdAt
+    CreateQuoteRequest:
+      type: object
+      properties:
+        projectId:
+          type: integer
+        price:
+          type: number
+          minimum: 0
+      required:
+        - projectId
+        - price
+    Quote:
+      type: object
+      properties:
+        id:
+          type: integer
+        projectId:
+          type: integer
+        price:
+          type: string
+        status:
+          type: string
+          enum: [pending, sent, approved, rejected]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - projectId
+        - price
         - status
         - createdAt
     ErrorResponse:
