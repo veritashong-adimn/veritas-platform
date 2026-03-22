@@ -5,6 +5,39 @@ import { logEvent } from "../lib/logEvent";
 
 const router: IRouter = Router();
 
+router.get("/tasks", async (req, res) => {
+  try {
+    const { translatorId } = req.query as { translatorId?: string };
+
+    let query = db
+      .select({
+        id: tasksTable.id,
+        projectId: tasksTable.projectId,
+        translatorId: tasksTable.translatorId,
+        status: tasksTable.status,
+        createdAt: tasksTable.createdAt,
+        projectTitle: projectsTable.title,
+        projectStatus: projectsTable.status,
+      })
+      .from(tasksTable)
+      .leftJoin(projectsTable, eq(tasksTable.projectId, projectsTable.id))
+      .$dynamic();
+
+    if (translatorId) {
+      const id = Number(translatorId);
+      if (!isNaN(id)) {
+        query = query.where(eq(tasksTable.translatorId, id));
+      }
+    }
+
+    const tasks = await query;
+    res.json(tasks);
+  } catch (err) {
+    req.log.error({ err }, "Failed to fetch tasks");
+    res.status(500).json({ error: "Failed to fetch tasks." });
+  }
+});
+
 router.post("/projects/:id/match", async (req, res) => {
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) {
