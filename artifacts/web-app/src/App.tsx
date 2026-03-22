@@ -165,7 +165,6 @@ function AuthForm({ onAuth }: { onAuth: (token: string, user: User) => void }) {
                 onChange={e => setRole(e.target.value as Role)}>
                 <option value="customer">고객 (customer)</option>
                 <option value="translator">번역사 (translator)</option>
-                <option value="admin">관리자 (admin)</option>
               </select>
             </label>
           )}

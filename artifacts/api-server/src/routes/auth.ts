@@ -22,8 +22,13 @@ router.post("/auth/register", async (req, res) => {
     return;
   }
 
-  const validRoles = ["customer", "translator", "admin"] as const;
-  const userRole = validRoles.includes(role as never) ? (role as typeof validRoles[number]) : "customer";
+  const allowedRoles = ["customer", "translator"] as const;
+  type AllowedRole = typeof allowedRoles[number];
+  if (role !== undefined && !allowedRoles.includes(role as AllowedRole)) {
+    res.status(400).json({ error: "role은 'customer' 또는 'translator'만 허용됩니다." });
+    return;
+  }
+  const userRole: AllowedRole = allowedRoles.includes(role as AllowedRole) ? (role as AllowedRole) : "customer";
 
   const hashed = await bcrypt.hash(password, 10);
 
