@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, tasksTable, projectsTable, usersTable } from "@workspace/db";
+import { db, tasksTable, projectsTable, usersTable, paymentsTable, settlementsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logEvent } from "../lib/logEvent";
 import { requireAuth, requireRole } from "../middlewares/auth";
@@ -166,6 +166,40 @@ router.patch(
         return updated;
       });
       await logEvent("task", taskId, "task_completed", req.log);
+
+      // 정산 자동 생성 (중복 방지)
+      const [existing] = await db
+        .select()
+        .from(settlementsTable)
+        .where(eq(settlementsTable.projectId, task.projectId));
+
+      if (!existing) {
+        const [payment] = await db
+          .select()
+          .from(paymentsTable)
+          .where(eq(paymentsTable.projectId, task.projectId));
+
+        const total = payment ? Number(payment.amount) : 0;
+        const translatorAmount = total * 0.7;
+        const platformFee = total * 0.3;
+
+        const [settlement] = await db
+          .insert(settlementsTable)
+          .values({
+            projectId: task.projectId,
+            translatorId: task.translatorId,
+            paymentId: payment?.id ?? null,
+            totalAmount: total.toFixed(2),
+            translatorAmount: translatorAmount.toFixed(2),
+            platformFee: platformFee.toFixed(2),
+            status: "ready",
+          })
+          .returning();
+
+        await logEvent("project", task.projectId, "settlement_created", req.log);
+        req.log.info({ settlementId: settlement.id, projectId: task.projectId }, "Settlement auto-created");
+      }
+
       res.json(result);
     } catch (err) {
       req.log.error({ err }, "Failed to complete task");

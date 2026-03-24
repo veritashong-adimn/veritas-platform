@@ -8,6 +8,7 @@ import tasksRouter from "./tasks";
 import uploadRouter from "./upload";
 import paymentsRouter from "./payments";
 import adminRouter from "./admin";
+import settlementsRouter from "./settlements";
 import logsRouter from "./logs";
 
 const router: IRouter = Router();
@@ -21,6 +22,7 @@ router.use(tasksRouter);
 router.use(uploadRouter);
 router.use(paymentsRouter);
 router.use(adminRouter);
+router.use(settlementsRouter);
 router.use(logsRouter);
 
 export default router;
