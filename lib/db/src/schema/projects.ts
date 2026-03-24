@@ -11,6 +11,7 @@ export const projectStatusEnum = pgEnum("project_status", [
   "matched",
   "in_progress",
   "completed",
+  "cancelled",
 ]);
 
 export const projectsTable = pgTable("projects", {

@@ -70,6 +70,11 @@ router.post("/auth/login", async (req, res) => {
     return;
   }
 
+  if (!user.isActive) {
+    res.status(403).json({ error: "비활성화된 계정입니다. 관리자에게 문의하세요." });
+    return;
+  }
+
   const token = signToken({ id: user.id, email: user.email, role: user.role });
   res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
 });

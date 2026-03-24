@@ -65,11 +65,13 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 
 ## DB Schema
 
-- `users` — id, email, **password** (nullable, bcrypt hashed), role (customer/translator/admin), created_at
-- `projects` — id, user_id, title, file_url (nullable), status (created/quoted/approved/**paid**/matched/in_progress/completed), created_at
+- `users` — id, email, **password** (nullable, bcrypt hashed), role (customer/translator/admin), **is_active** (boolean default true), created_at
+- `projects` — id, user_id, title, file_url (nullable), status (created/quoted/approved/**paid**/matched/in_progress/completed/**cancelled**), created_at
 - `quotes` — id, project_id, price (numeric), status (pending/sent/approved/rejected), created_at
 - `tasks` — id, project_id, translator_id (FK→users), status (waiting/assigned/working/done), created_at
 - `payments` — id, project_id (FK), amount (numeric 12,2), status (pending/paid/failed), created_at
+- `settlements` — id, project_id, translator_id, total_amount, translator_amount (70%), platform_fee (30%), status (pending/ready/paid), created_at
+- `notes` — id, project_id (FK), admin_id (FK→users), content, created_at (관리자 메모)
 - `logs` — id, entity_type (project/quote/task), entity_id, action, created_at
 
 ## Log Events
@@ -104,11 +106,21 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 - `GET /api/settlements/my` 🔒 (translator) — 내 정산 내역 (프로젝트 제목 포함)
 
 ### Admin (🔒 admin role 전용)
-- `GET /api/admin/projects` 🔒 — 전체 프로젝트 + 고객 이메일 (최신순)
+- `GET /api/admin/projects` 🔒 — 전체 프로젝트 + 고객 이메일 (최신순, ?search, ?status, ?dateFrom, ?dateTo 필터)
+- `GET /api/admin/projects/:id` 🔒 — 프로젝트 상세 (견적/결제/작업/정산/로그 포함)
+- `PATCH /api/admin/projects/:id/status` 🔒 — 프로젝트 상태 수동 변경
+- `POST /api/admin/projects/:id/rematch` 🔒 — 번역사 재매칭 (기존 task 삭제 후 재배정)
+- `PATCH /api/admin/projects/:id/cancel` 🔒 — 프로젝트 취소 (→ cancelled)
+- `GET /api/admin/projects/:id/notes` 🔒 — 관리자 메모 목록
+- `POST /api/admin/projects/:id/notes` 🔒 — 관리자 메모 추가
 - `GET /api/admin/payments` 🔒 — 전체 결제 + 프로젝트 제목
 - `GET /api/admin/tasks` 🔒 — 전체 작업 + 번역사 이메일
 - `GET /api/admin/logs/:projectId` 🔒 — 프로젝트 이벤트 로그
+- `GET /api/admin/users` 🔒 — 사용자 목록 (?search, ?role 필터)
+- `PATCH /api/admin/users/:id/role` 🔒 — 사용자 역할 변경 (customer/translator만, admin 변경 불가)
+- `PATCH /api/admin/users/:id/deactivate` 🔒 — 계정 활성화/비활성화 토글 (본인 불가, admin 불가)
 - `PATCH /api/admin/update-email` 🔒 — 본인 이메일 변경 (이메일 형식 검증, 중복 불가, 본인만 변경 가능)
+- Login: 비활성화(is_active=false)된 계정은 403으로 차단됨
 
 ### Payments (🔒 = 인증 필요)
 - `POST /api/payments/request` 🔒 — 결제 요청 생성 (approved 상태 프로젝트, 견적 금액 기준)

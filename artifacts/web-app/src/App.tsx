@@ -37,7 +37,7 @@ function loadSession(): { token: string; user: User } | null {
 const STATUS_LABEL: Record<string, string> = {
   created: "접수됨", quoted: "견적 발송", approved: "견적 승인",
   paid: "결제 완료", matched: "번역사 배정", in_progress: "번역 중",
-  completed: "완료", waiting: "대기", assigned: "배정됨",
+  completed: "완료", cancelled: "취소됨", waiting: "대기", assigned: "배정됨",
   working: "작업 중", done: "완료",
   pending: "대기", ready: "정산 가능",
 };
@@ -50,6 +50,7 @@ const STATUS_STYLE: Record<string, React.CSSProperties> = {
   matched:     { background: "#faf5ff", color: "#9333ea" },
   in_progress: { background: "#fffbeb", color: "#d97706" },
   completed:   { background: "#f0fdf4", color: "#059669" },
+  cancelled:   { background: "#fef2f2", color: "#dc2626" },
   waiting:     { background: "#f3f4f6", color: "#6b7280" },
   assigned:    { background: "#eff6ff", color: "#2563eb" },
   working:     { background: "#fffbeb", color: "#d97706" },
@@ -900,8 +901,17 @@ type AdminTask = {
   translatorEmail: string | null;
 };
 type LogEntry = { id: number; entityType: string; entityId: number; action: string; createdAt: string };
+type NoteEntry = { id: number; content: string; createdAt: string; adminEmail: string | null };
+type AdminUser = { id: number; email: string; role: Role; isActive: boolean; createdAt: string };
+type ProjectDetail = AdminProject & {
+  quotes: Array<{ id: number; amount: number; status: string; createdAt: string }>;
+  payments: Array<{ id: number; amount: number; status: string; createdAt: string }>;
+  tasks: Array<{ id: number; translatorId: number; status: string; createdAt: string; translatorEmail: string | null }>;
+  settlements: Array<{ id: number; totalAmount: number; translatorAmount: number; platformFee: number; status: string; createdAt: string }>;
+  logs: LogEntry[];
+};
 
-const ALL_PROJECT_STATUSES = ["created","quoted","approved","paid","matched","in_progress","completed"] as const;
+const ALL_PROJECT_STATUSES = ["created","quoted","approved","paid","matched","in_progress","completed","cancelled"] as const;
 const ALL_PAYMENT_STATUSES = ["pending","paid","failed"] as const;
 
 function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
@@ -993,18 +1003,308 @@ function LogModal({ projectId, token, onClose }: { projectId: number; token: str
   );
 }
 
+function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast }: {
+  projectId: number; token: string; onClose: () => void;
+  onRefresh: () => void; onToast: (msg: string) => void;
+}) {
+  const [detail, setDetail] = useState<ProjectDetail | null>(null);
+  const [notes, setNotes] = useState<NoteEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [noteInput, setNoteInput] = useState("");
+  const [addingNote, setAddingNote] = useState(false);
+  const [statusTarget, setStatusTarget] = useState("");
+  const [changingStatus, setChangingStatus] = useState(false);
+  const [rematching, setRematching] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+
+  const authH = { Authorization: `Bearer ${token}` };
+
+  const loadDetail = async () => {
+    try {
+      const [dRes, nRes] = await Promise.all([
+        fetch(api(`/api/admin/projects/${projectId}`), { headers: authH }),
+        fetch(api(`/api/admin/projects/${projectId}/notes`), { headers: authH }),
+      ]);
+      const [dData, nData] = await Promise.all([dRes.json(), nRes.json()]);
+      if (dRes.ok) { setDetail(dData); setStatusTarget(dData.status); }
+      else { setErr(dData.error ?? "조회 실패"); }
+      if (nRes.ok) setNotes(Array.isArray(nData) ? nData : []);
+    } catch { setErr("서버 연결 실패"); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { loadDetail(); }, [projectId]);
+
+  const handleStatusChange = async () => {
+    if (!statusTarget || statusTarget === detail?.status) return;
+    setChangingStatus(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/status`), {
+        method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ status: statusTarget }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast(`상태가 "${STATUS_LABEL[statusTarget] ?? statusTarget}"로 변경되었습니다.`);
+      await loadDetail(); onRefresh();
+    } catch { onToast("오류: 상태 변경 실패"); }
+    finally { setChangingStatus(false); }
+  };
+
+  const handleRematch = async () => {
+    setRematching(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/rematch`), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast(`재매칭 완료 → ${data.translatorEmail ?? "번역사 배정됨"}`);
+      await loadDetail(); onRefresh();
+    } catch { onToast("오류: 재매칭 실패"); }
+    finally { setRematching(false); }
+  };
+
+  const handleCancel = async () => {
+    if (!confirm("이 프로젝트를 취소하시겠습니까?")) return;
+    setCancelling(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/cancel`), {
+        method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast("프로젝트가 취소되었습니다.");
+      await loadDetail(); onRefresh();
+    } catch { onToast("오류: 취소 실패"); }
+    finally { setCancelling(false); }
+  };
+
+  const handleAddNote = async () => {
+    if (!noteInput.trim()) return;
+    setAddingNote(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/notes`), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ content: noteInput.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      setNotes(prev => [...prev, data]);
+      setNoteInput("");
+    } catch { onToast("오류: 메모 추가 실패"); }
+    finally { setAddingNote(false); }
+  };
+
+  const sectionHd: React.CSSProperties = {
+    fontSize: 12, fontWeight: 700, color: "#6b7280",
+    textTransform: "uppercase", letterSpacing: "0.06em",
+    margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
+  };
+  const dl: React.CSSProperties = { display: "flex", gap: 4, fontSize: 13, marginBottom: 6 };
+  const dt: React.CSSProperties = { color: "#9ca3af", minWidth: 80 };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      display: "flex", alignItems: "flex-start", justifyContent: "center",
+      zIndex: 300, overflowY: "auto", padding: "20px 16px",
+    }}>
+      <div style={{
+        background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb",
+        width: "100%", maxWidth: 720, padding: "24px 28px",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>
+            프로젝트 #{projectId} 상세
+          </h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#9ca3af", lineHeight: 1, padding: 4 }}>×</button>
+        </div>
+
+        {loading ? (
+          <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p>
+        ) : err ? (
+          <p style={{ color: "#dc2626", padding: "16px 0" }}>{err}</p>
+        ) : detail && (
+          <>
+            {/* 기본 정보 */}
+            <p style={sectionHd}>기본 정보</p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px" }}>
+              <div style={dl}><span style={dt}>제목</span><strong style={{ color: "#111827" }}>{detail.title}</strong></div>
+              <div style={dl}><span style={dt}>고객</span><span style={{ color: "#374151" }}>{detail.customerEmail ?? "-"}</span></div>
+              <div style={dl}><span style={dt}>상태</span><StatusBadge status={detail.status} /></div>
+              <div style={dl}><span style={dt}>등록일</span><span style={{ color: "#374151" }}>{new Date(detail.createdAt).toLocaleString("ko-KR")}</span></div>
+              {detail.fileUrl && (
+                <div style={dl}>
+                  <span style={dt}>첨부파일</span>
+                  <a href={detail.fileUrl} target="_blank" rel="noreferrer" style={{ color: "#2563eb", fontSize: 13 }}>📎 다운로드</a>
+                </div>
+              )}
+            </div>
+
+            {/* 액션 버튼 */}
+            <p style={sectionHd}>관리 액션</p>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              <select value={statusTarget} onChange={e => setStatusTarget(e.target.value)}
+                style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }}>
+                {ALL_PROJECT_STATUSES.map(s => (
+                  <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
+                ))}
+              </select>
+              <GhostBtn onClick={handleStatusChange} disabled={changingStatus || statusTarget === detail.status} color="#2563eb">
+                {changingStatus ? "변경 중..." : "상태 변경"}
+              </GhostBtn>
+              <GhostBtn onClick={handleRematch} disabled={rematching} color="#7c3aed">
+                {rematching ? "재매칭 중..." : "번역사 재매칭"}
+              </GhostBtn>
+              {detail.status !== "cancelled" && (
+                <GhostBtn onClick={handleCancel} disabled={cancelling} color="#dc2626">
+                  {cancelling ? "취소 중..." : "프로젝트 취소"}
+                </GhostBtn>
+              )}
+            </div>
+
+            {/* 견적 */}
+            {detail.quotes.length > 0 && (
+              <>
+                <p style={sectionHd}>견적 ({detail.quotes.length})</p>
+                {detail.quotes.map(q => (
+                  <div key={q.id} style={{ display: "flex", gap: 16, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13 }}>
+                    <span style={{ color: "#9ca3af" }}>#{q.id}</span>
+                    <span style={{ fontWeight: 700, color: "#0891b2" }}>{Number(q.amount).toLocaleString()}원</span>
+                    <StatusBadge status={q.status} />
+                    <span style={{ color: "#9ca3af", marginLeft: "auto" }}>{new Date(q.createdAt).toLocaleDateString("ko-KR")}</span>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {/* 결제 */}
+            {detail.payments.length > 0 && (
+              <>
+                <p style={sectionHd}>결제 ({detail.payments.length})</p>
+                {detail.payments.map(pm => (
+                  <div key={pm.id} style={{ display: "flex", gap: 16, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13 }}>
+                    <span style={{ color: "#9ca3af" }}>#{pm.id}</span>
+                    <span style={{ fontWeight: 700, color: "#0891b2" }}>{Number(pm.amount).toLocaleString()}원</span>
+                    <StatusBadge status={pm.status} />
+                    <span style={{ color: "#9ca3af", marginLeft: "auto" }}>{new Date(pm.createdAt).toLocaleDateString("ko-KR")}</span>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {/* 작업 */}
+            {detail.tasks.length > 0 && (
+              <>
+                <p style={sectionHd}>배정된 번역사 ({detail.tasks.length})</p>
+                {detail.tasks.map(t => (
+                  <div key={t.id} style={{ display: "flex", gap: 16, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, flexWrap: "wrap" }}>
+                    <span style={{ color: "#9ca3af" }}>작업#{t.id}</span>
+                    <span style={{ color: "#374151" }}>{t.translatorEmail ?? `번역사 #${t.translatorId}`}</span>
+                    <StatusBadge status={t.status} />
+                    <span style={{ color: "#9ca3af", marginLeft: "auto" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</span>
+                  </div>
+                ))}
+              </>
+            )}
+
+            {/* 정산 */}
+            {detail.settlements.length > 0 && (
+              <>
+                <p style={sectionHd}>정산 ({detail.settlements.length})</p>
+                {detail.settlements.map(s => (
+                  <div key={s.id} style={{ display: "flex", gap: 16, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, flexWrap: "wrap" }}>
+                    <span style={{ color: "#9ca3af" }}>#{s.id}</span>
+                    <span style={{ color: "#0891b2", fontWeight: 600 }}>총 {Number(s.totalAmount).toLocaleString()}원</span>
+                    <span style={{ color: "#059669", fontWeight: 600 }}>번역사 {Number(s.translatorAmount).toLocaleString()}원</span>
+                    <StatusBadge status={s.status} />
+                  </div>
+                ))}
+              </>
+            )}
+
+            {/* 이벤트 로그 */}
+            {detail.logs.length > 0 && (
+              <>
+                <p style={sectionHd}>이벤트 로그 ({detail.logs.length})</p>
+                <div style={{ maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+                  {detail.logs.map(log => (
+                    <div key={log.id} style={{ display: "flex", gap: 12, padding: "7px 10px", background: "#f9fafb", borderRadius: 6, fontSize: 12 }}>
+                      <span style={{ color: "#9ca3af", minWidth: 120 }}>{new Date(log.createdAt).toLocaleString("ko-KR")}</span>
+                      <span style={{ color: "#374151" }}>{log.action}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* 관리자 메모 */}
+            <p style={sectionHd}>관리자 메모 ({notes.length})</p>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <input
+                value={noteInput} onChange={e => setNoteInput(e.target.value)}
+                placeholder="메모 내용 입력..."
+                style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "8px 10px" }}
+                onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleAddNote()}
+              />
+              <PrimaryBtn onClick={handleAddNote} disabled={addingNote || !noteInput.trim()} style={{ padding: "8px 16px", fontSize: 13 }}>
+                {addingNote ? "추가 중..." : "추가"}
+              </PrimaryBtn>
+            </div>
+            {notes.length === 0 ? (
+              <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "12px 0" }}>메모가 없습니다.</p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto" }}>
+                {notes.map(n => (
+                  <div key={n.id} style={{ padding: "10px 12px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, color: "#92400e", fontWeight: 600 }}>{n.adminEmail ?? "관리자"}</span>
+                      <span style={{ fontSize: 11, color: "#9ca3af" }}>{new Date(n.createdAt).toLocaleString("ko-KR")}</span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: 13, color: "#374151" }}>{n.content}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AdminDashboard({ user, token }: { user: User; token: string }) {
+  const [adminTab, setAdminTab] = useState<"projects"|"payments"|"tasks"|"settlements"|"users">("projects");
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [payments, setPayments] = useState<AdminPayment[]>([]);
   const [tasks, setTasks] = useState<AdminTask[]>([]);
   const [settlements, setSettlements] = useState<AdminSettlement[]>([]);
+  const [users, setUsers] = useState<AdminUser[]>([]);
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(true);
+  const [usersLoading, setUsersLoading] = useState(false);
+
+  // project filters
   const [projectFilter, setProjectFilter] = useState<string>("all");
+  const [projectSearch, setProjectSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  // other filters
   const [paymentFilter, setPaymentFilter] = useState<string>("all");
   const [settlementFilter, setSettlementFilter] = useState<string>("all");
-  const [logModal, setLogModal] = useState<number | null>(null);
-  const [matching, setMatching] = useState<number | null>(null);
+
+  // user management
+  const [userSearch, setUserSearch] = useState("");
+  const [userRoleFilter, setUserRoleFilter] = useState<string>("all");
+  const [roleChanging, setRoleChanging] = useState<number | null>(null);
+  const [toggling, setToggling] = useState<number | null>(null);
+
+  // modals
+  const [detailModal, setDetailModal] = useState<number | null>(null);
   const [paying, setPaying] = useState<number | null>(null);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
@@ -1012,8 +1312,15 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
+      const params = new URLSearchParams();
+      if (projectSearch.trim()) params.set("search", projectSearch.trim());
+      if (projectFilter !== "all") params.set("status", projectFilter);
+      if (dateFrom) params.set("dateFrom", dateFrom);
+      if (dateTo) params.set("dateTo", dateTo);
+      const pUrl = `/api/admin/projects${params.toString() ? "?" + params.toString() : ""}`;
+
       const [pRes, pmRes, tRes, sRes] = await Promise.all([
-        fetch(api("/api/admin/projects"), { headers: authHeaders }),
+        fetch(api(pUrl), { headers: authHeaders }),
         fetch(api("/api/admin/payments"), { headers: authHeaders }),
         fetch(api("/api/admin/tasks"), { headers: authHeaders }),
         fetch(api("/api/admin/settlements"), { headers: authHeaders }),
@@ -1025,9 +1332,23 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
       if (sRes.ok) setSettlements(Array.isArray(sData) ? sData : []);
     } catch { setToast("오류: 데이터 불러오기 실패"); }
     finally { setLoading(false); }
-  }, [token]);
+  }, [token, projectSearch, projectFilter, dateFrom, dateTo]);
+
+  const fetchUsers = useCallback(async () => {
+    setUsersLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (userSearch.trim()) params.set("search", userSearch.trim());
+      if (userRoleFilter !== "all") params.set("role", userRoleFilter);
+      const res = await fetch(api(`/api/admin/users${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      const data = await res.json();
+      if (res.ok) setUsers(Array.isArray(data) ? data : []);
+    } catch { setToast("오류: 사용자 조회 실패"); }
+    finally { setUsersLoading(false); }
+  }, [token, userSearch, userRoleFilter]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
+  useEffect(() => { if (adminTab === "users") fetchUsers(); }, [adminTab, fetchUsers]);
 
   const runSettlementPay = async (settlementId: number) => {
     setPaying(settlementId);
@@ -1043,26 +1364,36 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
     finally { setPaying(null); }
   };
 
-  const runMatch = async (projectId: number) => {
-    setMatching(projectId);
+  const handleRoleChange = async (userId: number, newRole: string) => {
+    setRoleChanging(userId);
     try {
-      const res = await fetch(api(`/api/projects/${projectId}/match`), {
-        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+      const res = await fetch(api(`/api/admin/users/${userId}/role`), {
+        method: "PATCH", headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ role: newRole }),
       });
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
-      setToast(`프로젝트 #${projectId} 매칭 완료!`);
-      await fetchAll();
-    } catch { setToast("오류: 매칭 실패"); }
-    finally { setMatching(null); }
+      setUsers(prev => prev.map(u => u.id === userId ? { ...u, role: data.role } : u));
+      setToast("역할이 변경되었습니다.");
+    } catch { setToast("오류: 역할 변경 실패"); }
+    finally { setRoleChanging(null); }
   };
 
-  const filteredProjects = projectFilter === "all"
-    ? projects
-    : projects.filter(p => p.status === projectFilter);
-  const filteredPayments = paymentFilter === "all"
-    ? payments
-    : payments.filter(p => p.status === paymentFilter);
+  const handleToggleActive = async (userId: number) => {
+    setToggling(userId);
+    try {
+      const res = await fetch(api(`/api/admin/users/${userId}/deactivate`), {
+        method: "PATCH", headers: { ...authHeaders, "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setUsers(prev => prev.map(u => u.id === userId ? { ...u, isActive: data.isActive } : u));
+      setToast(data.isActive ? "계정이 활성화되었습니다." : "계정이 비활성화되었습니다.");
+    } catch { setToast("오류: 계정 상태 변경 실패"); }
+    finally { setToggling(null); }
+  };
+
+  const filteredPayments = paymentFilter === "all" ? payments : payments.filter(p => p.status === paymentFilter);
 
   const tableTh: React.CSSProperties = {
     padding: "10px 12px", textAlign: "left", fontSize: 12,
@@ -1074,22 +1405,36 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
     borderBottom: "1px solid #f3f4f6", verticalAlign: "middle",
   };
 
+  const TABS = [
+    { id: "projects", label: "프로젝트" },
+    { id: "payments", label: "결제" },
+    { id: "tasks", label: "작업" },
+    { id: "settlements", label: "정산" },
+    { id: "users", label: "사용자 관리" },
+  ] as const;
+
   return (
     <>
       <Toast msg={toast} onClose={() => setToast("")} />
-      {logModal !== null && (
-        <LogModal projectId={logModal} token={token} onClose={() => setLogModal(null)} />
+      {detailModal !== null && (
+        <ProjectDetailModal
+          projectId={detailModal} token={token}
+          onClose={() => setDetailModal(null)}
+          onRefresh={fetchAll}
+          onToast={setToast}
+        />
       )}
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <div>
           <h1 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 800, color: "#111827" }}>관리자 대시보드</h1>
-          <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>전체 프로젝트·결제·작업 현황을 조회하고 개입합니다.</p>
+          <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>전체 현황을 조회하고 개입합니다.</p>
         </div>
         <GhostBtn onClick={fetchAll} disabled={loading}>{loading ? "로딩..." : "전체 새로고침"}</GhostBtn>
       </div>
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 28 }}>
+      {/* 통계 카드 */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
         {[
           { label: "전체 프로젝트", value: projects.length, color: "#2563eb", bg: "#eff6ff" },
           { label: "결제 완료", value: payments.filter(p => p.status === "paid").length, color: "#059669", bg: "#f0fdf4" },
@@ -1106,192 +1451,185 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
         ))}
       </div>
 
-      <Section
-        title={`전체 프로젝트 (${filteredProjects.length})`}
-        action={
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {/* 탭 바 */}
+      <div style={{ display: "flex", borderBottom: "2px solid #e5e7eb", marginBottom: 24, gap: 0 }}>
+        {TABS.map(tab => (
+          <button key={tab.id} onClick={() => setAdminTab(tab.id)} style={{
+            background: "none", border: "none", padding: "10px 18px", fontSize: 14,
+            fontWeight: 600, cursor: "pointer",
+            color: adminTab === tab.id ? "#2563eb" : "#6b7280",
+            borderBottom: adminTab === tab.id ? "2px solid #2563eb" : "2px solid transparent",
+            marginBottom: -2, transition: "all 0.12s",
+          }}>{tab.label}</button>
+        ))}
+      </div>
+
+      {/* ── 프로젝트 탭 ── */}
+      {adminTab === "projects" && (
+        <Section title={`전체 프로젝트 (${projects.length})`}>
+          {/* 검색 + 필터 */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
+            <input
+              value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
+              placeholder="제목 또는 고객 이메일 검색..."
+              style={{ ...inputStyle, maxWidth: 280, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+            />
+            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+              style={{ ...inputStyle, width: "auto", padding: "8px 10px", fontSize: 13 }} />
+            <span style={{ color: "#9ca3af", fontSize: 13 }}>~</span>
+            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+              style={{ ...inputStyle, width: "auto", padding: "8px 10px", fontSize: 13 }} />
+            <PrimaryBtn onClick={fetchAll} disabled={loading} style={{ padding: "8px 16px", fontSize: 13 }}>
+              {loading ? "검색 중..." : "검색"}
+            </PrimaryBtn>
+            {(projectSearch || dateFrom || dateTo) && (
+              <GhostBtn onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); }} style={{ padding: "8px 12px", fontSize: 13 }}>
+                초기화
+              </GhostBtn>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
             <FilterPill label="전체" active={projectFilter === "all"} onClick={() => setProjectFilter("all")} />
             {ALL_PROJECT_STATUSES.map(s => (
               <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
                 active={projectFilter === s} onClick={() => setProjectFilter(s)} />
             ))}
           </div>
-        }
-      >
-        {loading ? (
-          <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
-        ) : filteredProjects.length === 0 ? (
-          <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
-            해당 상태의 프로젝트가 없습니다.
-          </Card>
-        ) : (
-          <Card style={{ padding: 0, overflow: "hidden" }}>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    {["ID","제목","고객","상태","생성일","첨부","액션"].map(h => (
-                      <th key={h} style={tableTh}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredProjects.map(p => (
-                    <tr key={p.id} style={{ transition: "background 0.1s" }}
-                      onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                      <td style={{ ...tableTd, color: "#9ca3af" }}>#{p.id}</td>
-                      <td style={{ ...tableTd, fontWeight: 600, color: "#111827", maxWidth: 200 }}>
-                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {p.title}
-                        </div>
-                      </td>
-                      <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{p.customerEmail ?? "-"}</td>
-                      <td style={tableTd}><StatusBadge status={p.status} /></td>
-                      <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
-                        {new Date(p.createdAt).toLocaleDateString("ko-KR")}
-                      </td>
-                      <td style={tableTd}>
-                        {p.fileUrl ? (
-                          <a href={p.fileUrl} target="_blank" rel="noreferrer" style={{
-                            color: "#2563eb", fontSize: 12, textDecoration: "none",
-                            display: "inline-flex", alignItems: "center", gap: 4,
-                          }}>📎 파일</a>
-                        ) : <span style={{ color: "#d1d5db", fontSize: 12 }}>-</span>}
-                      </td>
-                      <td style={{ ...tableTd, whiteSpace: "nowrap" }}>
-                        <div style={{ display: "flex", gap: 6 }}>
-                          <button onClick={() => setLogModal(p.id)} style={{
-                            padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer",
-                            background: "#f3f4f6", border: "1px solid #e5e7eb", color: "#374151", fontWeight: 500,
-                          }}>로그</button>
-                          {p.status === "paid" && (
-                            <button onClick={() => runMatch(p.id)} disabled={matching === p.id} style={{
-                              padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: matching === p.id ? "not-allowed" : "pointer",
-                              background: matching === p.id ? "#86efac" : "#16a34a",
-                              border: "none", color: "#fff", fontWeight: 600,
-                            }}>
-                              {matching === p.id ? "매칭 중..." : "매칭 실행"}
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        )}
-      </Section>
 
-      <Section
-        title={`결제 현황 (${filteredPayments.length})`}
-        action={
-          <div style={{ display: "flex", gap: 6 }}>
-            <FilterPill label="전체" active={paymentFilter === "all"} onClick={() => setPaymentFilter("all")} />
-            {ALL_PAYMENT_STATUSES.map(s => (
-              <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
-                active={paymentFilter === s} onClick={() => setPaymentFilter(s)} />
-            ))}
-          </div>
-        }
-      >
-        {loading ? (
-          <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
-        ) : filteredPayments.length === 0 ? (
-          <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
-            결제 내역이 없습니다.
-          </Card>
-        ) : (
-          <Card style={{ padding: 0, overflow: "hidden" }}>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    {["ID","프로젝트","결제 금액","결제 상태","프로젝트 상태","생성일"].map(h => (
-                      <th key={h} style={tableTh}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPayments.map(pm => (
-                    <tr key={pm.id}
-                      onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                      <td style={{ ...tableTd, color: "#9ca3af" }}>#{pm.id}</td>
-                      <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>
-                        {pm.projectTitle ?? `프로젝트 #${pm.projectId}`}
-                      </td>
-                      <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2" }}>
-                        {Number(pm.amount).toLocaleString()}원
-                      </td>
-                      <td style={tableTd}><StatusBadge status={pm.status} /></td>
-                      <td style={tableTd}>
-                        {pm.projectStatus ? <StatusBadge status={pm.projectStatus} /> : "-"}
-                      </td>
-                      <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
-                        {new Date(pm.createdAt).toLocaleDateString("ko-KR")}
-                      </td>
+          {loading ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : projects.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
+              해당 조건의 프로젝트가 없습니다.
+            </Card>
+          ) : (
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      {["ID","제목","고객","상태","생성일","첨부"].map(h => (
+                        <th key={h} style={tableTh}>{h}</th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        )}
-      </Section>
-
-      <Section title={`작업 현황 (${tasks.length})`}>
-        {loading ? (
-          <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
-        ) : tasks.length === 0 ? (
-          <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
-            작업이 없습니다.
-          </Card>
-        ) : (
-          <Card style={{ padding: 0, overflow: "hidden" }}>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    {["ID","프로젝트","번역사","작업 상태","프로젝트 상태","생성일"].map(h => (
-                      <th key={h} style={tableTh}>{h}</th>
+                  </thead>
+                  <tbody>
+                    {projects.map(p => (
+                      <tr key={p.id}
+                        onClick={() => setDetailModal(p.id)}
+                        style={{ cursor: "pointer", transition: "background 0.1s" }}
+                        onMouseEnter={e => (e.currentTarget.style.background = "#f0f9ff")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <td style={{ ...tableTd, color: "#9ca3af" }}>#{p.id}</td>
+                        <td style={{ ...tableTd, fontWeight: 600, color: "#2563eb", maxWidth: 200 }}>
+                          <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
+                        </td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{p.customerEmail ?? "-"}</td>
+                        <td style={tableTd}><StatusBadge status={p.status} /></td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                          {new Date(p.createdAt).toLocaleDateString("ko-KR")}
+                        </td>
+                        <td style={tableTd}>
+                          {p.fileUrl ? (
+                            <a href={p.fileUrl} target="_blank" rel="noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              style={{ color: "#2563eb", fontSize: 12, textDecoration: "none" }}>📎 파일</a>
+                          ) : <span style={{ color: "#d1d5db", fontSize: 12 }}>-</span>}
+                        </td>
+                      </tr>
                     ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {tasks.map(t => (
-                    <tr key={t.id}
-                      onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                      <td style={{ ...tableTd, color: "#9ca3af" }}>#{t.id}</td>
-                      <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>
-                        {t.projectTitle ?? `프로젝트 #${t.projectId}`}
-                      </td>
-                      <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
-                        {t.translatorEmail ?? `번역사 #${t.translatorId}`}
-                      </td>
-                      <td style={tableTd}><StatusBadge status={t.status} /></td>
-                      <td style={tableTd}>
-                        {t.projectStatus ? <StatusBadge status={t.projectStatus} /> : "-"}
-                      </td>
-                      <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
-                        {new Date(t.createdAt).toLocaleDateString("ko-KR")}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        )}
-      </Section>
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </Section>
+      )}
 
-      {(() => {
-        const filtered = settlementFilter === "all"
-          ? settlements
-          : settlements.filter(s => s.status === settlementFilter);
+      {/* ── 결제 탭 ── */}
+      {adminTab === "payments" && (
+        <Section
+          title={`결제 현황 (${filteredPayments.length})`}
+          action={
+            <div style={{ display: "flex", gap: 6 }}>
+              <FilterPill label="전체" active={paymentFilter === "all"} onClick={() => setPaymentFilter("all")} />
+              {ALL_PAYMENT_STATUSES.map(s => (
+                <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
+                  active={paymentFilter === s} onClick={() => setPaymentFilter(s)} />
+              ))}
+            </div>
+          }
+        >
+          {loading ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : filteredPayments.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>결제 내역이 없습니다.</Card>
+          ) : (
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>{["ID","프로젝트","결제 금액","결제 상태","프로젝트 상태","생성일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {filteredPayments.map(pm => (
+                      <tr key={pm.id}
+                        onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <td style={{ ...tableTd, color: "#9ca3af" }}>#{pm.id}</td>
+                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{pm.projectTitle ?? `프로젝트 #${pm.projectId}`}</td>
+                        <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2" }}>{Number(pm.amount).toLocaleString()}원</td>
+                        <td style={tableTd}><StatusBadge status={pm.status} /></td>
+                        <td style={tableTd}>{pm.projectStatus ? <StatusBadge status={pm.projectStatus} /> : "-"}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(pm.createdAt).toLocaleDateString("ko-KR")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </Section>
+      )}
+
+      {/* ── 작업 탭 ── */}
+      {adminTab === "tasks" && (
+        <Section title={`작업 현황 (${tasks.length})`}>
+          {loading ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : tasks.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>작업이 없습니다.</Card>
+          ) : (
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>{["ID","프로젝트","번역사","작업 상태","프로젝트 상태","생성일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {tasks.map(t => (
+                      <tr key={t.id}
+                        onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <td style={{ ...tableTd, color: "#9ca3af" }}>#{t.id}</td>
+                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{t.projectTitle ?? `프로젝트 #${t.projectId}`}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{t.translatorEmail ?? `번역사 #${t.translatorId}`}</td>
+                        <td style={tableTd}><StatusBadge status={t.status} /></td>
+                        <td style={tableTd}>{t.projectStatus ? <StatusBadge status={t.projectStatus} /> : "-"}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </Section>
+      )}
+
+      {/* ── 정산 탭 ── */}
+      {adminTab === "settlements" && (() => {
+        const filtered = settlementFilter === "all" ? settlements : settlements.filter(s => s.status === settlementFilter);
         return (
           <Section
             title={`정산 현황 (${filtered.length})`}
@@ -1308,19 +1646,13 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
             {loading ? (
               <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
             ) : filtered.length === 0 ? (
-              <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
-                정산 내역이 없습니다.
-              </Card>
+              <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>정산 내역이 없습니다.</Card>
             ) : (
               <Card style={{ padding: 0, overflow: "hidden" }}>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
-                      <tr>
-                        {["ID","프로젝트","번역사","총 결제금액","번역사 지급액","플랫폼 수수료","정산 상태","생성일","액션"].map(h => (
-                          <th key={h} style={tableTh}>{h}</th>
-                        ))}
-                      </tr>
+                      <tr>{["ID","프로젝트","번역사","총 결제금액","번역사 지급액","플랫폼 수수료","상태","생성일","액션"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                     </thead>
                     <tbody>
                       {filtered.map(s => (
@@ -1329,47 +1661,27 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                           <td style={{ ...tableTd, color: "#9ca3af" }}>#{s.id}</td>
                           <td style={{ ...tableTd, fontWeight: 600, color: "#111827", maxWidth: 160 }}>
-                            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {s.projectTitle ?? `프로젝트 #${s.projectId}`}
-                            </div>
+                            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.projectTitle ?? `프로젝트 #${s.projectId}`}</div>
                           </td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
-                            {s.translatorEmail ?? `번역사 #${s.translatorId}`}
-                          </td>
-                          <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" }}>
-                            {Number(s.totalAmount).toLocaleString()}원
-                          </td>
-                          <td style={{ ...tableTd, fontWeight: 700, color: "#059669", whiteSpace: "nowrap" }}>
-                            {Number(s.translatorAmount).toLocaleString()}원
-                          </td>
-                          <td style={{ ...tableTd, color: "#9333ea", whiteSpace: "nowrap" }}>
-                            {Number(s.platformFee).toLocaleString()}원
-                          </td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{s.translatorEmail ?? `번역사 #${s.translatorId}`}</td>
+                          <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" }}>{Number(s.totalAmount).toLocaleString()}원</td>
+                          <td style={{ ...tableTd, fontWeight: 700, color: "#059669", whiteSpace: "nowrap" }}>{Number(s.translatorAmount).toLocaleString()}원</td>
+                          <td style={{ ...tableTd, color: "#9333ea", whiteSpace: "nowrap" }}>{Number(s.platformFee).toLocaleString()}원</td>
                           <td style={tableTd}><StatusBadge status={s.status} /></td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
-                            {new Date(s.createdAt).toLocaleDateString("ko-KR")}
-                          </td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(s.createdAt).toLocaleDateString("ko-KR")}</td>
                           <td style={tableTd}>
                             {s.status === "ready" && (
-                              <button
-                                onClick={() => runSettlementPay(s.id)}
-                                disabled={paying === s.id}
-                                style={{
-                                  padding: "4px 10px", fontSize: 12, borderRadius: 6,
-                                  cursor: paying === s.id ? "not-allowed" : "pointer",
-                                  background: paying === s.id ? "#86efac" : "#059669",
-                                  border: "none", color: "#fff", fontWeight: 600, whiteSpace: "nowrap",
-                                }}
-                              >
+                              <button onClick={() => runSettlementPay(s.id)} disabled={paying === s.id} style={{
+                                padding: "4px 10px", fontSize: 12, borderRadius: 6,
+                                cursor: paying === s.id ? "not-allowed" : "pointer",
+                                background: paying === s.id ? "#86efac" : "#059669",
+                                border: "none", color: "#fff", fontWeight: 600, whiteSpace: "nowrap",
+                              }}>
                                 {paying === s.id ? "처리 중..." : "정산 완료 처리"}
                               </button>
                             )}
-                            {s.status === "paid" && (
-                              <span style={{ color: "#059669", fontSize: 12, fontWeight: 600 }}>✓ 완료</span>
-                            )}
-                            {s.status === "pending" && (
-                              <span style={{ color: "#9ca3af", fontSize: 12 }}>대기 중</span>
-                            )}
+                            {s.status === "paid" && <span style={{ color: "#059669", fontSize: 12, fontWeight: 600 }}>✓ 완료</span>}
+                            {s.status === "pending" && <span style={{ color: "#9ca3af", fontSize: 12 }}>대기 중</span>}
                           </td>
                         </tr>
                       ))}
@@ -1381,6 +1693,100 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
           </Section>
         );
       })()}
+
+      {/* ── 사용자 관리 탭 ── */}
+      {adminTab === "users" && (
+        <Section title={`사용자 관리 (${users.length})`}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
+            <input
+              value={userSearch} onChange={e => setUserSearch(e.target.value)}
+              placeholder="이메일 검색..."
+              style={{ ...inputStyle, maxWidth: 260, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+            />
+            <select value={userRoleFilter} onChange={e => setUserRoleFilter(e.target.value)}
+              style={{ ...inputStyle, width: "auto", padding: "8px 10px", fontSize: 13, cursor: "pointer" }}>
+              <option value="all">전체 역할</option>
+              <option value="customer">고객</option>
+              <option value="translator">번역사</option>
+              <option value="admin">관리자</option>
+            </select>
+            <PrimaryBtn onClick={fetchUsers} disabled={usersLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
+              {usersLoading ? "검색 중..." : "검색"}
+            </PrimaryBtn>
+          </div>
+
+          {usersLoading ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : users.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>사용자가 없습니다.</Card>
+          ) : (
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>{["ID","이메일","역할","상태","가입일","역할 변경","계정 상태"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {users.map(u => (
+                      <tr key={u.id}
+                        onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <td style={{ ...tableTd, color: "#9ca3af" }}>#{u.id}</td>
+                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{u.email}</td>
+                        <td style={tableTd}><RoleBadge role={u.role} /></td>
+                        <td style={tableTd}>
+                          <span style={{
+                            padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600,
+                            background: u.isActive ? "#f0fdf4" : "#fef2f2",
+                            color: u.isActive ? "#059669" : "#dc2626",
+                          }}>
+                            {u.isActive ? "활성" : "비활성"}
+                          </span>
+                        </td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                          {new Date(u.createdAt).toLocaleDateString("ko-KR")}
+                        </td>
+                        <td style={tableTd}>
+                          {u.role !== "admin" ? (
+                            <select
+                              value={u.role}
+                              disabled={roleChanging === u.id}
+                              onChange={e => handleRoleChange(u.id, e.target.value)}
+                              style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, cursor: "pointer", background: "#fff" }}>
+                              <option value="customer">고객</option>
+                              <option value="translator">번역사</option>
+                            </select>
+                          ) : (
+                            <span style={{ fontSize: 12, color: "#9ca3af" }}>변경 불가</span>
+                          )}
+                        </td>
+                        <td style={tableTd}>
+                          {u.role !== "admin" ? (
+                            <button
+                              onClick={() => handleToggleActive(u.id)}
+                              disabled={toggling === u.id}
+                              style={{
+                                padding: "4px 10px", fontSize: 12, borderRadius: 6, fontWeight: 600,
+                                cursor: toggling === u.id ? "not-allowed" : "pointer",
+                                background: u.isActive ? "#fef2f2" : "#f0fdf4",
+                                color: u.isActive ? "#dc2626" : "#059669",
+                                border: `1px solid ${u.isActive ? "#fca5a5" : "#86efac"}`,
+                              }}>
+                              {toggling === u.id ? "처리 중..." : u.isActive ? "비활성화" : "활성화"}
+                            </button>
+                          ) : (
+                            <span style={{ fontSize: 12, color: "#9ca3af" }}>—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </Section>
+      )}
     </>
   );
 }
