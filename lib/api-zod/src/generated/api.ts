@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.7.0
+ * OpenAPI spec version: 0.9.0
  */
 import * as zod from "zod";
 
@@ -175,6 +175,46 @@ export const CompleteTaskResponse = zod.object({
 });
 
 /**
+ * @summary List all projects with customer info (admin only)
+ */
+export const AdminListProjectsResponseItem = zod.unknown();
+export const AdminListProjectsResponse = zod.array(
+  AdminListProjectsResponseItem,
+);
+
+/**
+ * @summary List all payments with project info (admin only)
+ */
+export const AdminListPaymentsResponseItem = zod.unknown();
+export const AdminListPaymentsResponse = zod.array(
+  AdminListPaymentsResponseItem,
+);
+
+/**
+ * @summary List all tasks with project and translator info (admin only)
+ */
+export const AdminListTasksResponseItem = zod.unknown();
+export const AdminListTasksResponse = zod.array(AdminListTasksResponseItem);
+
+/**
+ * @summary Get event logs for a project (admin only)
+ */
+export const AdminGetProjectLogsParams = zod.object({
+  projectId: zod.coerce.number(),
+});
+
+export const AdminGetProjectLogsResponseItem = zod.object({
+  id: zod.number(),
+  entityType: zod.enum(["project", "quote", "task"]),
+  entityId: zod.number(),
+  action: zod.string(),
+  createdAt: zod.date(),
+});
+export const AdminGetProjectLogsResponse = zod.array(
+  AdminGetProjectLogsResponseItem,
+);
+
+/**
  * @summary Create a payment request for an approved project
  */
 export const RequestPaymentBody = zod.object({
@@ -236,3 +276,65 @@ export const ListLogsResponseItem = zod.object({
   createdAt: zod.date(),
 });
 export const ListLogsResponse = zod.array(ListLogsResponseItem);
+
+/**
+ * @summary List all settlements (admin only)
+ */
+export const AdminListSettlementsResponseItem = zod.object({
+  id: zod.number(),
+  projectId: zod.number(),
+  translatorId: zod.number(),
+  paymentId: zod.number().nullish(),
+  totalAmount: zod.string().describe("고객 결제 총액"),
+  translatorAmount: zod.string().describe("번역사 지급액 (총액의 70%)"),
+  platformFee: zod.string().describe("플랫폼 수수료 (총액의 30%)"),
+  status: zod
+    .enum(["pending", "ready", "paid"])
+    .describe("pending: 정산 대기, ready: 정산 가능, paid: 지급 완료"),
+  createdAt: zod.date(),
+  projectTitle: zod.string().nullish(),
+  translatorEmail: zod.string().nullish(),
+});
+export const AdminListSettlementsResponse = zod.array(
+  AdminListSettlementsResponseItem,
+);
+
+/**
+ * @summary Mark a settlement as paid (admin only)
+ */
+export const AdminPaySettlementParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const AdminPaySettlementResponse = zod.object({
+  id: zod.number(),
+  projectId: zod.number(),
+  translatorId: zod.number(),
+  paymentId: zod.number().nullish(),
+  totalAmount: zod.string().describe("고객 결제 총액"),
+  translatorAmount: zod.string().describe("번역사 지급액 (총액의 70%)"),
+  platformFee: zod.string().describe("플랫폼 수수료 (총액의 30%)"),
+  status: zod
+    .enum(["pending", "ready", "paid"])
+    .describe("pending: 정산 대기, ready: 정산 가능, paid: 지급 완료"),
+  createdAt: zod.date(),
+  projectTitle: zod.string().nullish(),
+  translatorEmail: zod.string().nullish(),
+});
+
+/**
+ * @summary Get current translator's settlements
+ */
+export const MySettlementsResponseItem = zod.object({
+  id: zod.number(),
+  projectId: zod.number(),
+  totalAmount: zod.string(),
+  translatorAmount: zod.string().describe("번역사 지급 예정 금액 (총액의 70%)"),
+  platformFee: zod.string(),
+  status: zod
+    .enum(["pending", "ready", "paid"])
+    .describe("pending: 정산 대기, ready: 정산 가능, paid: 지급 완료"),
+  createdAt: zod.date(),
+  projectTitle: zod.string().nullish(),
+});
+export const MySettlementsResponse = zod.array(MySettlementsResponseItem);

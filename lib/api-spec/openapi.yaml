@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Api
-  version: 0.8.0
+  version: 0.9.0
   description: 통번역 플랫폼 API
 servers:
   - url: /api
@@ -27,6 +27,8 @@ tags:
     description: File upload operations
   - name: logs
     description: Log operations
+  - name: settlements
+    description: Settlement operations — translator payout management
 paths:
   /healthz:
     get:
@@ -629,12 +631,101 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Log"
+  /api/admin/settlements:
+    get:
+      operationId: adminListSettlements
+      tags: [settlements]
+      summary: List all settlements (admin only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of settlements with project and translator info
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminSettlement"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/admin/settlements/{id}/pay:
+    patch:
+      operationId: adminPaySettlement
+      tags: [settlements]
+      summary: Mark a settlement as paid (admin only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Settlement marked as paid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminSettlement"
+        "400":
+          description: Already paid or not in ready state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Settlement not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/settlements/my:
+    get:
+      operationId: mySettlements
+      tags: [settlements]
+      summary: Get current translator's settlements
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of settlements for the authenticated translator
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MySettlement"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  responses:
+    Unauthorized:
+      description: Missing or invalid Bearer token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: Insufficient role permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
   schemas:
     HealthStatus:
       type: object
@@ -906,6 +997,81 @@ components:
         - id
         - projectId
         - amount
+        - status
+        - createdAt
+    SettlementStatus:
+      type: string
+      enum: [pending, ready, paid]
+      description: "pending: 정산 대기, ready: 정산 가능, paid: 지급 완료"
+    AdminSettlement:
+      type: object
+      properties:
+        id:
+          type: integer
+        projectId:
+          type: integer
+        translatorId:
+          type: integer
+        paymentId:
+          type: integer
+          nullable: true
+        totalAmount:
+          type: string
+          description: 고객 결제 총액
+        translatorAmount:
+          type: string
+          description: 번역사 지급액 (총액의 70%)
+        platformFee:
+          type: string
+          description: 플랫폼 수수료 (총액의 30%)
+        status:
+          $ref: "#/components/schemas/SettlementStatus"
+        createdAt:
+          type: string
+          format: date-time
+        projectTitle:
+          type: string
+          nullable: true
+        translatorEmail:
+          type: string
+          nullable: true
+      required:
+        - id
+        - projectId
+        - translatorId
+        - totalAmount
+        - translatorAmount
+        - platformFee
+        - status
+        - createdAt
+    MySettlement:
+      type: object
+      properties:
+        id:
+          type: integer
+        projectId:
+          type: integer
+        totalAmount:
+          type: string
+        translatorAmount:
+          type: string
+          description: 번역사 지급 예정 금액 (총액의 70%)
+        platformFee:
+          type: string
+        status:
+          $ref: "#/components/schemas/SettlementStatus"
+        createdAt:
+          type: string
+          format: date-time
+        projectTitle:
+          type: string
+          nullable: true
+      required:
+        - id
+        - projectId
+        - totalAmount
+        - translatorAmount
+        - platformFee
         - status
         - createdAt
     UploadResponse:

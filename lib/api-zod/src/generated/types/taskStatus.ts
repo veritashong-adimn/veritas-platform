@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.7.0
+ * OpenAPI spec version: 0.9.0
  */
 
 export type TaskStatus = (typeof TaskStatus)[keyof typeof TaskStatus];

@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.7.0
+ * OpenAPI spec version: 0.9.0
  */
 export interface HealthStatus {
   status: string;
@@ -212,6 +212,47 @@ export interface Payment {
   createdAt: string;
 }
 
+/**
+ * pending: 정산 대기, ready: 정산 가능, paid: 지급 완료
+ */
+export type SettlementStatus =
+  (typeof SettlementStatus)[keyof typeof SettlementStatus];
+
+export const SettlementStatus = {
+  pending: "pending",
+  ready: "ready",
+  paid: "paid",
+} as const;
+
+export interface AdminSettlement {
+  id: number;
+  projectId: number;
+  translatorId: number;
+  paymentId?: number | null;
+  /** 고객 결제 총액 */
+  totalAmount: string;
+  /** 번역사 지급액 (총액의 70%) */
+  translatorAmount: string;
+  /** 플랫폼 수수료 (총액의 30%) */
+  platformFee: string;
+  status: SettlementStatus;
+  createdAt: string;
+  projectTitle?: string | null;
+  translatorEmail?: string | null;
+}
+
+export interface MySettlement {
+  id: number;
+  projectId: number;
+  totalAmount: string;
+  /** 번역사 지급 예정 금액 (총액의 70%) */
+  translatorAmount: string;
+  platformFee: string;
+  status: SettlementStatus;
+  createdAt: string;
+  projectTitle?: string | null;
+}
+
 export interface UploadResponse {
   /** Public URL of the uploaded file */
   fileUrl: string;
@@ -220,6 +261,16 @@ export interface UploadResponse {
 export interface ErrorResponse {
   error: string;
 }
+
+/**
+ * Missing or invalid Bearer token
+ */
+export type UnauthorizedResponse = ErrorResponse;
+
+/**
+ * Insufficient role permissions
+ */
+export type ForbiddenResponse = ErrorResponse;
 
 export type ListProjectsParams = {
   userId?: number;

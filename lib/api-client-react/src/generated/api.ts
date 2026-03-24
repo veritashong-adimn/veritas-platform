@@ -3,7 +3,7 @@
  * Do not edit manually.
  * Api
  * 통번역 플랫폼 API
- * OpenAPI spec version: 0.7.0
+ * OpenAPI spec version: 0.9.0
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
@@ -17,11 +17,16 @@ import type {
 } from "@tanstack/react-query";
 
 import type {
+  AdminPayment,
+  AdminProject,
+  AdminSettlement,
+  AdminTask,
   AuthResponse,
   CreateProjectRequest,
   CreateQuoteRequest,
   CreateUserRequest,
   ErrorResponse,
+  ForbiddenResponse,
   HealthStatus,
   ListLogsParams,
   ListPaymentsParams,
@@ -29,6 +34,7 @@ import type {
   ListTasksParams,
   Log,
   LoginRequest,
+  MySettlement,
   Payment,
   PaymentConfirmBody,
   PaymentRequestBody,
@@ -38,6 +44,7 @@ import type {
   RegisterRequest,
   Task,
   TaskWithProject,
+  UnauthorizedResponse,
   UploadFileBody,
   UploadResponse,
   User,
@@ -1082,6 +1089,328 @@ export const useCompleteTask = <
 };
 
 /**
+ * @summary List all projects with customer info (admin only)
+ */
+export const getAdminListProjectsUrl = () => {
+  return `/api/admin/projects`;
+};
+
+export const adminListProjects = async (
+  options?: RequestInit,
+): Promise<AdminProject[]> => {
+  return customFetch<AdminProject[]>(getAdminListProjectsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getAdminListProjectsQueryKey = () => {
+  return [`/api/admin/projects`] as const;
+};
+
+export const getAdminListProjectsQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminListProjects>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminListProjects>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getAdminListProjectsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminListProjects>>
+  > = ({ signal }) => adminListProjects({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminListProjects>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminListProjectsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminListProjects>>
+>;
+export type AdminListProjectsQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary List all projects with customer info (admin only)
+ */
+
+export function useAdminListProjects<
+  TData = Awaited<ReturnType<typeof adminListProjects>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminListProjects>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminListProjectsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List all payments with project info (admin only)
+ */
+export const getAdminListPaymentsUrl = () => {
+  return `/api/admin/payments`;
+};
+
+export const adminListPayments = async (
+  options?: RequestInit,
+): Promise<AdminPayment[]> => {
+  return customFetch<AdminPayment[]>(getAdminListPaymentsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getAdminListPaymentsQueryKey = () => {
+  return [`/api/admin/payments`] as const;
+};
+
+export const getAdminListPaymentsQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminListPayments>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminListPayments>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getAdminListPaymentsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminListPayments>>
+  > = ({ signal }) => adminListPayments({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminListPayments>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminListPaymentsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminListPayments>>
+>;
+export type AdminListPaymentsQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary List all payments with project info (admin only)
+ */
+
+export function useAdminListPayments<
+  TData = Awaited<ReturnType<typeof adminListPayments>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminListPayments>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminListPaymentsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List all tasks with project and translator info (admin only)
+ */
+export const getAdminListTasksUrl = () => {
+  return `/api/admin/tasks`;
+};
+
+export const adminListTasks = async (
+  options?: RequestInit,
+): Promise<AdminTask[]> => {
+  return customFetch<AdminTask[]>(getAdminListTasksUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getAdminListTasksQueryKey = () => {
+  return [`/api/admin/tasks`] as const;
+};
+
+export const getAdminListTasksQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminListTasks>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminListTasks>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getAdminListTasksQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof adminListTasks>>> = ({
+    signal,
+  }) => adminListTasks({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminListTasks>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminListTasksQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminListTasks>>
+>;
+export type AdminListTasksQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary List all tasks with project and translator info (admin only)
+ */
+
+export function useAdminListTasks<
+  TData = Awaited<ReturnType<typeof adminListTasks>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminListTasks>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminListTasksQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get event logs for a project (admin only)
+ */
+export const getAdminGetProjectLogsUrl = (projectId: number) => {
+  return `/api/admin/logs/${projectId}`;
+};
+
+export const adminGetProjectLogs = async (
+  projectId: number,
+  options?: RequestInit,
+): Promise<Log[]> => {
+  return customFetch<Log[]>(getAdminGetProjectLogsUrl(projectId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getAdminGetProjectLogsQueryKey = (projectId: number) => {
+  return [`/api/admin/logs/${projectId}`] as const;
+};
+
+export const getAdminGetProjectLogsQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminGetProjectLogs>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  projectId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof adminGetProjectLogs>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getAdminGetProjectLogsQueryKey(projectId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminGetProjectLogs>>
+  > = ({ signal }) =>
+    adminGetProjectLogs(projectId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!projectId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminGetProjectLogs>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminGetProjectLogsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminGetProjectLogs>>
+>;
+export type AdminGetProjectLogsQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary Get event logs for a project (admin only)
+ */
+
+export function useAdminGetProjectLogs<
+  TData = Awaited<ReturnType<typeof adminGetProjectLogs>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(
+  projectId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof adminGetProjectLogs>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminGetProjectLogsQueryOptions(projectId, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
  * @summary Create a payment request for an approved project
  */
 export const getRequestPaymentUrl = () => {
@@ -1521,6 +1850,246 @@ export function useListLogs<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getListLogsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary List all settlements (admin only)
+ */
+export const getAdminListSettlementsUrl = () => {
+  return `/api/api/admin/settlements`;
+};
+
+export const adminListSettlements = async (
+  options?: RequestInit,
+): Promise<AdminSettlement[]> => {
+  return customFetch<AdminSettlement[]>(getAdminListSettlementsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getAdminListSettlementsQueryKey = () => {
+  return [`/api/api/admin/settlements`] as const;
+};
+
+export const getAdminListSettlementsQueryOptions = <
+  TData = Awaited<ReturnType<typeof adminListSettlements>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminListSettlements>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getAdminListSettlementsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof adminListSettlements>>
+  > = ({ signal }) => adminListSettlements({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof adminListSettlements>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type AdminListSettlementsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof adminListSettlements>>
+>;
+export type AdminListSettlementsQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary List all settlements (admin only)
+ */
+
+export function useAdminListSettlements<
+  TData = Awaited<ReturnType<typeof adminListSettlements>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof adminListSettlements>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getAdminListSettlementsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Mark a settlement as paid (admin only)
+ */
+export const getAdminPaySettlementUrl = (id: number) => {
+  return `/api/api/admin/settlements/${id}/pay`;
+};
+
+export const adminPaySettlement = async (
+  id: number,
+  options?: RequestInit,
+): Promise<AdminSettlement> => {
+  return customFetch<AdminSettlement>(getAdminPaySettlementUrl(id), {
+    ...options,
+    method: "PATCH",
+  });
+};
+
+export const getAdminPaySettlementMutationOptions = <
+  TError = ErrorType<ErrorResponse | UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminPaySettlement>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof adminPaySettlement>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["adminPaySettlement"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof adminPaySettlement>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return adminPaySettlement(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AdminPaySettlementMutationResult = NonNullable<
+  Awaited<ReturnType<typeof adminPaySettlement>>
+>;
+
+export type AdminPaySettlementMutationError = ErrorType<
+  ErrorResponse | UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary Mark a settlement as paid (admin only)
+ */
+export const useAdminPaySettlement = <
+  TError = ErrorType<ErrorResponse | UnauthorizedResponse | ForbiddenResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof adminPaySettlement>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof adminPaySettlement>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getAdminPaySettlementMutationOptions(options));
+};
+
+/**
+ * @summary Get current translator's settlements
+ */
+export const getMySettlementsUrl = () => {
+  return `/api/api/settlements/my`;
+};
+
+export const mySettlements = async (
+  options?: RequestInit,
+): Promise<MySettlement[]> => {
+  return customFetch<MySettlement[]>(getMySettlementsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getMySettlementsQueryKey = () => {
+  return [`/api/api/settlements/my`] as const;
+};
+
+export const getMySettlementsQueryOptions = <
+  TData = Awaited<ReturnType<typeof mySettlements>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof mySettlements>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getMySettlementsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof mySettlements>>> = ({
+    signal,
+  }) => mySettlements({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof mySettlements>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type MySettlementsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof mySettlements>>
+>;
+export type MySettlementsQueryError = ErrorType<
+  UnauthorizedResponse | ForbiddenResponse
+>;
+
+/**
+ * @summary Get current translator's settlements
+ */
+
+export function useMySettlements<
+  TData = Awaited<ReturnType<typeof mySettlements>>,
+  TError = ErrorType<UnauthorizedResponse | ForbiddenResponse>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof mySettlements>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getMySettlementsQueryOptions(options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;
