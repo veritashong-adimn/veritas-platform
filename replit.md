@@ -114,6 +114,27 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 - `GET /api/admin/customers/:id/communications` 🔒 — 고객별 커뮤니케이션 목록
 - `GET /api/admin/projects/:id/communications` 🔒 — 프로젝트별 커뮤니케이션 목록
 
+### 거래처·담당자·상품·게시판 (🔒 admin role 전용)
+- `GET /api/admin/companies` — 거래처 목록 (?search, contactCount/projectCount/totalPayment 포함)
+- `POST /api/admin/companies` — 거래처 등록 (name, businessNumber, industry, address, website, notes)
+- `GET /api/admin/companies/:id` — 거래처 상세 (contacts, projects, totalQuote/totalPayment/totalSettlement)
+- `PATCH /api/admin/companies/:id` — 거래처 정보 수정
+- `POST /api/admin/companies/:id/contacts` — 담당자 추가 (name, position, email, phone, notes)
+- `GET /api/admin/products` — 상품 목록 (?search, active 포함)
+- `POST /api/admin/products` — 상품 등록 (code, name, category, unit, basePrice, languagePair, field)
+- `PATCH /api/admin/products/:id` — 상품 수정
+- `PATCH /api/admin/products/:id/toggle` — 상품 활성/비활성 토글
+- `GET /api/admin/board` — 게시판 목록 (?category: notice/reference/manual, pinned 우선 정렬)
+- `POST /api/admin/board` — 게시물 등록 (category, title, content, pinned, visibleToAll)
+- `GET /api/admin/board/:id` — 게시물 상세
+- `PATCH /api/admin/board/:id` — 게시물 수정
+- `DELETE /api/admin/board/:id` — 게시물 삭제
+- `GET /api/board/public` — 공개 게시판 (visibleToAll=true, 번역사도 접근 가능)
+- `GET /api/admin/translator-profiles/:userId` — 번역사 프로필 조회 (user 정보 + profile)
+- `PATCH /api/admin/translator-profiles/:userId` — 번역사 프로필 저장/수정 (upsert)
+- `GET /api/admin/export/projects` — 프로젝트 CSV 내보내기 (UTF-8 BOM)
+- `GET /api/admin/export/settlements` — 정산 CSV 내보내기 (UTF-8 BOM)
+
 ### Admin (🔒 admin role 전용)
 - `GET /api/admin/projects` 🔒 — 전체 프로젝트 + 고객 이메일 (최신순, ?search, ?status, ?dateFrom, ?dateTo 필터)
 - `GET /api/admin/projects/:id` 🔒 — 프로젝트 상세 (견적/결제/작업/정산/로그 포함)

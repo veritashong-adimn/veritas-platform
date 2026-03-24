@@ -927,6 +927,43 @@ type ProjectDetail = AdminProject & {
   logs: LogEntry[];
 };
 
+type Company = {
+  id: number; name: string; businessNumber: string | null; industry: string | null;
+  address: string | null; website: string | null; notes: string | null;
+  createdAt: string; contactCount: number; projectCount: number; totalPayment: number;
+};
+type Contact = {
+  id: number; companyId: number; name: string; position: string | null;
+  email: string | null; phone: string | null; notes: string | null; createdAt: string;
+};
+type CompanyDetail = Company & {
+  contacts: Contact[];
+  projects: Array<{ id: number; title: string; status: string; createdAt: string }>;
+  totalQuote: number; totalSettlement: number;
+};
+type Product = {
+  id: number; code: string; name: string; category: string | null;
+  unit: string; basePrice: number; languagePair: string | null;
+  field: string | null; active: boolean; createdAt: string;
+};
+type BoardPost = {
+  id: number; category: string; title: string; content?: string;
+  pinned: boolean; visibleToAll: boolean;
+  createdAt: string; updatedAt: string;
+  authorId: number; authorEmail: string | null;
+};
+type TranslatorProfile = {
+  id?: number; userId: number;
+  languagePairs?: string | null; specializations?: string | null;
+  education?: string | null; major?: string | null;
+  graduationYear?: number | null; region?: string | null;
+  rating?: number | null; availabilityStatus?: string;
+  bio?: string | null; ratePerWord?: number | null; ratePerPage?: number | null;
+};
+
+const BOARD_CATEGORY_LABEL: Record<string, string> = { notice: "공지", reference: "통역자료", manual: "내부매뉴얼" };
+const AVAILABILITY_LABEL: Record<string, string> = { available: "가능", busy: "바쁨", unavailable: "불가" };
+
 const ALL_PROJECT_STATUSES = ["created","quoted","approved","paid","matched","in_progress","completed","cancelled"] as const;
 const ALL_PAYMENT_STATUSES = ["pending","paid","failed"] as const;
 
@@ -1015,6 +1052,307 @@ function LogModal({ projectId, token, onClose }: { projectId: number; token: str
           )}
         </div>
       </Card>
+    </div>
+  );
+}
+
+// ─── CompanyDetailModal ──────────────────────────────────────────────────────
+function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject }: {
+  companyId: number; token: string; onClose: () => void;
+  onToast: (msg: string) => void; onOpenProject: (id: number) => void;
+}) {
+  const [detail, setDetail] = useState<CompanyDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [showContactForm, setShowContactForm] = useState(false);
+  const [contactForm, setContactForm] = useState({ name: "", position: "", email: "", phone: "", notes: "" });
+  const [addingContact, setAddingContact] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", industry: "", address: "", website: "", notes: "" });
+
+  const authH = { Authorization: `Bearer ${token}` };
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(api(`/api/admin/companies/${companyId}`), { headers: authH });
+      const data = await res.json();
+      if (res.ok) {
+        setDetail(data);
+        setEditForm({ name: data.name, businessNumber: data.businessNumber ?? "", industry: data.industry ?? "", address: data.address ?? "", website: data.website ?? "", notes: data.notes ?? "" });
+      }
+    } catch { onToast("오류: 거래처 정보 불러오기 실패"); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { load(); }, [companyId]);
+
+  const handleSaveEdit = async () => {
+    try {
+      const res = await fetch(api(`/api/admin/companies/${companyId}`), {
+        method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify(editForm),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      setDetail(prev => prev ? { ...prev, ...data } : prev);
+      setEditMode(false);
+      onToast("거래처 정보가 수정되었습니다.");
+    } catch { onToast("오류: 수정 실패"); }
+  };
+
+  const handleAddContact = async () => {
+    if (!contactForm.name.trim()) { onToast("담당자명을 입력하세요."); return; }
+    setAddingContact(true);
+    try {
+      const res = await fetch(api(`/api/admin/companies/${companyId}/contacts`), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify(contactForm),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      setDetail(prev => prev ? { ...prev, contacts: [...prev.contacts, data] } : prev);
+      setContactForm({ name: "", position: "", email: "", phone: "", notes: "" });
+      setShowContactForm(false);
+      onToast("담당자가 추가되었습니다.");
+    } catch { onToast("오류: 담당자 추가 실패"); }
+    finally { setAddingContact(false); }
+  };
+
+  const sH: React.CSSProperties = {
+    fontSize: 12, fontWeight: 700, color: "#6b7280",
+    textTransform: "uppercase", letterSpacing: "0.06em",
+    margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 300, overflowY: "auto", padding: "20px 16px" }}>
+      <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb", width: "100%", maxWidth: 780, padding: "24px 28px", boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>거래처 #{companyId} 상세</h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#9ca3af" }}>×</button>
+        </div>
+        {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : !detail ? <p style={{ color: "#dc2626" }}>데이터를 불러올 수 없습니다.</p> : (
+          <>
+            <p style={sH}>거래처 정보</p>
+            {!editMode ? (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px", marginBottom: 8 }}>
+                {([["회사명", detail.name], ["사업자번호", detail.businessNumber ?? "-"], ["업종", detail.industry ?? "-"], ["주소", detail.address ?? "-"], ["웹사이트", detail.website ?? "-"]] as [string,string][]).map(([l, v]) => (
+                  <div key={l} style={{ display: "flex", gap: 4, fontSize: 13, marginBottom: 4 }}>
+                    <span style={{ color: "#9ca3af", minWidth: 80 }}>{l}</span>
+                    <span style={{ color: "#374151", fontWeight: l === "회사명" ? 700 : 400 }}>{v}</span>
+                  </div>
+                ))}
+                <GhostBtn onClick={() => setEditMode(true)} style={{ width: "fit-content", fontSize: 12, padding: "5px 12px" }}>정보 수정</GhostBtn>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", marginBottom: 12 }}>
+                {(["name","businessNumber","industry","address","website"] as const).map(f => (
+                  <div key={f}><label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>{f === "name" ? "회사명*" : f === "businessNumber" ? "사업자번호" : f === "industry" ? "업종" : f === "address" ? "주소" : "웹사이트"}</label>
+                    <input value={editForm[f]} onChange={e => setEditForm(p => ({ ...p, [f]: e.target.value }))} style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} /></div>
+                ))}
+                <div style={{ gridColumn: "span 2", display: "flex", gap: 8 }}>
+                  <PrimaryBtn onClick={handleSaveEdit} style={{ fontSize: 13, padding: "7px 16px" }}>저장</PrimaryBtn>
+                  <GhostBtn onClick={() => setEditMode(false)} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
+                </div>
+              </div>
+            )}
+
+            <p style={sH}>재무 요약</p>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              {[
+                { label: "담당자 수", value: `${detail.contacts.length}명`, color: "#6b7280", bg: "#f3f4f6" },
+                { label: "프로젝트 수", value: `${detail.projects.length}건`, color: "#2563eb", bg: "#eff6ff" },
+                { label: "총 견적 금액", value: `${Number(detail.totalQuote).toLocaleString()}원`, color: "#0891b2", bg: "#f0f9ff" },
+                { label: "총 결제 금액", value: `${Number(detail.totalPayment).toLocaleString()}원`, color: "#059669", bg: "#f0fdf4" },
+                { label: "총 정산 금액", value: `${Number(detail.totalSettlement).toLocaleString()}원`, color: "#7c3aed", bg: "#faf5ff" },
+              ].map(s => (
+                <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.color}22`, borderRadius: 10, padding: "10px 16px", flex: "1 1 100px" }}>
+                  <p style={{ margin: "0 0 2px", fontSize: 11, fontWeight: 600, color: s.color }}>{s.label}</p>
+                  <p style={{ margin: 0, fontSize: 18, fontWeight: 800, color: s.color }}>{s.value}</p>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 20, marginBottom: 10 }}>
+              <p style={{ ...sH, margin: 0 }}>담당자 목록 ({detail.contacts.length})</p>
+              <GhostBtn onClick={() => setShowContactForm(v => !v)} style={{ fontSize: 12, padding: "4px 10px" }}>+ 추가</GhostBtn>
+            </div>
+            {showContactForm && (
+              <div style={{ background: "#f9fafb", borderRadius: 10, padding: "14px 16px", marginBottom: 12, border: "1px solid #e5e7eb" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px" }}>
+                  {(["name","position","email","phone"] as const).map(f => (
+                    <div key={f}><label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>{f === "name" ? "이름*" : f === "position" ? "직책" : f === "email" ? "이메일" : "전화"}</label>
+                      <input value={contactForm[f]} onChange={e => setContactForm(p => ({ ...p, [f]: e.target.value }))} style={{ ...inputStyle, fontSize: 13, padding: "6px 10px", width: "100%", boxSizing: "border-box" }} /></div>
+                  ))}
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <PrimaryBtn onClick={handleAddContact} disabled={addingContact} style={{ fontSize: 13, padding: "7px 16px" }}>{addingContact ? "추가 중..." : "추가"}</PrimaryBtn>
+                  <GhostBtn onClick={() => setShowContactForm(false)} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
+                </div>
+              </div>
+            )}
+            {detail.contacts.length === 0 ? <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "10px 0" }}>등록된 담당자가 없습니다.</p> : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {detail.contacts.map(c => (
+                  <div key={c.id} style={{ padding: "10px 14px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6", display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13 }}>
+                    <strong style={{ color: "#111827", minWidth: 80 }}>{c.name}</strong>
+                    {c.position && <span style={{ color: "#6b7280" }}>{c.position}</span>}
+                    {c.email && <span style={{ color: "#2563eb" }}>✉ {c.email}</span>}
+                    {c.phone && <span style={{ color: "#374151" }}>📞 {c.phone}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <p style={{ ...sH, marginTop: 20 }}>프로젝트 목록 ({detail.projects.length})</p>
+            {detail.projects.length === 0 ? <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "10px 0" }}>등록된 프로젝트가 없습니다.</p> : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {detail.projects.map(p => (
+                  <div key={p.id} onClick={() => { onClose(); onOpenProject(p.id); }}
+                    style={{ display: "flex", gap: 16, padding: "10px 14px", background: "#f9fafb", borderRadius: 8, fontSize: 13, cursor: "pointer", alignItems: "center", border: "1px solid transparent" }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = "#eff6ff"; (e.currentTarget as HTMLDivElement).style.borderColor = "#bfdbfe"; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = "#f9fafb"; (e.currentTarget as HTMLDivElement).style.borderColor = "transparent"; }}>
+                    <span style={{ color: "#9ca3af", minWidth: 36 }}>#{p.id}</span>
+                    <span style={{ fontWeight: 600, color: "#111827", flex: 1 }}>{p.title}</span>
+                    <StatusBadge status={p.status} />
+                    <span style={{ color: "#9ca3af", fontSize: 12 }}>{new Date(p.createdAt).toLocaleDateString("ko-KR")}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── TranslatorProfileModal ──────────────────────────────────────────────────
+function TranslatorProfileModal({ userId, userEmail, token, onClose, onToast }: {
+  userId: number; userEmail: string; token: string;
+  onClose: () => void; onToast: (msg: string) => void;
+}) {
+  const [profile, setProfile] = useState<TranslatorProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    languagePairs: "", specializations: "", education: "", major: "",
+    graduationYear: "", region: "", rating: "", availabilityStatus: "available",
+    bio: "", ratePerWord: "", ratePerPage: "",
+  });
+
+  const authH = { Authorization: `Bearer ${token}` };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(api(`/api/admin/translator-profiles/${userId}`), { headers: authH });
+        const data = await res.json();
+        if (res.ok && data.profile) {
+          const p = data.profile as TranslatorProfile;
+          setProfile(p);
+          setForm({
+            languagePairs: p.languagePairs ?? "",
+            specializations: p.specializations ?? "",
+            education: p.education ?? "",
+            major: p.major ?? "",
+            graduationYear: p.graduationYear ? String(p.graduationYear) : "",
+            region: p.region ?? "",
+            rating: p.rating ? String(p.rating) : "",
+            availabilityStatus: p.availabilityStatus ?? "available",
+            bio: p.bio ?? "",
+            ratePerWord: p.ratePerWord ? String(p.ratePerWord) : "",
+            ratePerPage: p.ratePerPage ? String(p.ratePerPage) : "",
+          });
+        }
+      } catch { onToast("오류: 프로필 불러오기 실패"); }
+      finally { setLoading(false); }
+    })();
+  }, [userId]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(api(`/api/admin/translator-profiles/${userId}`), {
+        method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...form,
+          graduationYear: form.graduationYear ? Number(form.graduationYear) : null,
+          rating: form.rating ? Number(form.rating) : null,
+          ratePerWord: form.ratePerWord ? Number(form.ratePerWord) : null,
+          ratePerPage: form.ratePerPage ? Number(form.ratePerPage) : null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      setProfile(data);
+      onToast("번역사 프로필이 저장되었습니다.");
+    } catch { onToast("오류: 저장 실패"); }
+    finally { setSaving(false); }
+  };
+
+  const F = ({ label, field, type = "text", placeholder = "" }: { label: string; field: keyof typeof form; type?: string; placeholder?: string }) => (
+    <div>
+      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>{label}</label>
+      <input type={type} value={form[field]} onChange={e => setForm(p => ({ ...p, [field]: e.target.value }))}
+        placeholder={placeholder} style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+    </div>
+  );
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 300, overflowY: "auto", padding: "20px 16px" }}>
+      <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb", width: "100%", maxWidth: 680, padding: "24px 28px", boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>번역사 프로필</h2>
+            <p style={{ margin: "4px 0 0", fontSize: 13, color: "#6b7280" }}>{userEmail}</p>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#9ca3af" }}>×</button>
+        </div>
+        {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            <div>
+              <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#6b7280", textTransform: "uppercase" }}>기본 정보</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
+                <F label="언어 조합 (예: 한→영, 영→한)" field="languagePairs" placeholder="한→영, 영→한" />
+                <F label="전문 분야" field="specializations" placeholder="법률, 의학, 기술" />
+                <F label="학력" field="education" placeholder="서울대학교" />
+                <F label="전공" field="major" />
+                <F label="졸업연도" field="graduationYear" type="number" placeholder="2010" />
+                <F label="지역" field="region" placeholder="서울" />
+              </div>
+            </div>
+            <div>
+              <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#6b7280", textTransform: "uppercase" }}>운영 정보</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>가용 상태</label>
+                  <select value={form.availabilityStatus} onChange={e => setForm(p => ({ ...p, availabilityStatus: e.target.value }))}
+                    style={{ ...inputStyle, width: "100%", padding: "7px 10px", fontSize: 13 }}>
+                    <option value="available">가능</option>
+                    <option value="busy">바쁨</option>
+                    <option value="unavailable">불가</option>
+                  </select>
+                </div>
+                <F label="평점 (0-5)" field="rating" type="number" placeholder="4.5" />
+                <F label="단어당 단가 (원)" field="ratePerWord" type="number" placeholder="50" />
+                <F label="페이지당 단가 (원)" field="ratePerPage" type="number" placeholder="10000" />
+              </div>
+            </div>
+            <div>
+              <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>소개 / 메모</label>
+              <textarea value={form.bio} onChange={e => setForm(p => ({ ...p, bio: e.target.value }))}
+                rows={4} style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: 13, padding: "8px 10px", resize: "vertical" }} />
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <PrimaryBtn onClick={handleSave} disabled={saving} style={{ fontSize: 14, padding: "10px 24px" }}>
+                {saving ? "저장 중..." : "저장"}
+              </PrimaryBtn>
+              <GhostBtn onClick={onClose} style={{ fontSize: 14, padding: "10px 20px" }}>닫기</GhostBtn>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1617,7 +1955,7 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
 }
 
 function AdminDashboard({ user, token }: { user: User; token: string }) {
-  const [adminTab, setAdminTab] = useState<"projects"|"payments"|"tasks"|"settlements"|"users"|"customers">("projects");
+  const [adminTab, setAdminTab] = useState<"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"products"|"board">("projects");
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [payments, setPayments] = useState<AdminPayment[]>([]);
   const [tasks, setTasks] = useState<AdminTask[]>([]);
@@ -1653,6 +1991,34 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
   const [userRoleFilter, setUserRoleFilter] = useState<string>("all");
   const [roleChanging, setRoleChanging] = useState<number | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
+
+  // companies / products / board state
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [companiesLoading, setCompaniesLoading] = useState(false);
+  const [companySearch, setCompanySearch] = useState("");
+  const [companyModal, setCompanyModal] = useState<number | null>(null);
+  const [showCompanyForm, setShowCompanyForm] = useState(false);
+  const [companyForm, setCompanyForm] = useState({ name: "", businessNumber: "", industry: "", address: "", website: "", notes: "" });
+  const [savingCompany, setSavingCompany] = useState(false);
+
+  const [products, setProducts] = useState<Product[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [productSearch, setProductSearch] = useState("");
+  const [showProductForm, setShowProductForm] = useState(false);
+  const [productForm, setProductForm] = useState({ code: "", name: "", category: "", unit: "건", basePrice: "", languagePair: "", field: "" });
+  const [editingProduct, setEditingProduct] = useState<number | null>(null);
+  const [savingProduct, setSavingProduct] = useState(false);
+
+  const [boardPosts, setBoardPosts] = useState<BoardPost[]>([]);
+  const [boardLoading, setBoardLoading] = useState(false);
+  const [boardCategory, setBoardCategory] = useState<string>("all");
+  const [boardPostModal, setBoardPostModal] = useState<BoardPost | null>(null);
+  const [showBoardForm, setShowBoardForm] = useState(false);
+  const [boardForm, setBoardForm] = useState({ category: "notice", title: "", content: "", pinned: false, visibleToAll: false });
+  const [savingBoard, setSavingBoard] = useState(false);
+
+  // translator profile modal
+  const [translatorProfileModal, setTranslatorProfileModal] = useState<{ userId: number; email: string } | null>(null);
 
   // modals
   const [detailModal, setDetailModal] = useState<number | null>(null);
@@ -1733,9 +2099,143 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
     finally { setCreatingCustomer(false); }
   };
 
+  const fetchCompanies = useCallback(async () => {
+    setCompaniesLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (companySearch.trim()) params.set("search", companySearch.trim());
+      const res = await fetch(api(`/api/admin/companies${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      const data = await res.json();
+      if (res.ok) setCompanies(Array.isArray(data) ? data : []);
+    } catch { setToast("오류: 거래처 조회 실패"); }
+    finally { setCompaniesLoading(false); }
+  }, [token, companySearch]);
+
+  const fetchProducts = useCallback(async () => {
+    setProductsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (productSearch.trim()) params.set("search", productSearch.trim());
+      const res = await fetch(api(`/api/admin/products${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      const data = await res.json();
+      if (res.ok) setProducts(Array.isArray(data) ? data : []);
+    } catch { setToast("오류: 상품 조회 실패"); }
+    finally { setProductsLoading(false); }
+  }, [token, productSearch]);
+
+  const fetchBoard = useCallback(async () => {
+    setBoardLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (boardCategory !== "all") params.set("category", boardCategory);
+      const res = await fetch(api(`/api/admin/board${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      const data = await res.json();
+      if (res.ok) setBoardPosts(Array.isArray(data) ? data : []);
+    } catch { setToast("오류: 게시판 조회 실패"); }
+    finally { setBoardLoading(false); }
+  }, [token, boardCategory]);
+
+  const handleCreateCompany = async () => {
+    if (!companyForm.name.trim()) { setToast("회사명을 입력하세요."); return; }
+    setSavingCompany(true);
+    try {
+      const res = await fetch(api("/api/admin/companies"), {
+        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(companyForm),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setToast("거래처가 등록되었습니다.");
+      setCompanyForm({ name: "", businessNumber: "", industry: "", address: "", website: "", notes: "" });
+      setShowCompanyForm(false);
+      await fetchCompanies();
+    } catch { setToast("오류: 거래처 등록 실패"); }
+    finally { setSavingCompany(false); }
+  };
+
+  const handleSaveProduct = async () => {
+    if (!productForm.code.trim() || !productForm.name.trim() || !productForm.basePrice) {
+      setToast("코드, 상품명, 기본단가는 필수입니다."); return;
+    }
+    setSavingProduct(true);
+    try {
+      const payload = { ...productForm, basePrice: Number(productForm.basePrice) };
+      const url = editingProduct ? `/api/admin/products/${editingProduct}` : "/api/admin/products";
+      const method = editingProduct ? "PATCH" : "POST";
+      const res = await fetch(api(url), {
+        method, headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setToast(editingProduct ? "상품이 수정되었습니다." : "상품이 등록되었습니다.");
+      setProductForm({ code: "", name: "", category: "", unit: "건", basePrice: "", languagePair: "", field: "" });
+      setEditingProduct(null);
+      setShowProductForm(false);
+      await fetchProducts();
+    } catch { setToast("오류: 상품 저장 실패"); }
+    finally { setSavingProduct(false); }
+  };
+
+  const handleToggleProduct = async (id: number) => {
+    try {
+      const res = await fetch(api(`/api/admin/products/${id}/toggle`), { method: "PATCH", headers: authHeaders });
+      if (!res.ok) { setToast("오류: 상태 변경 실패"); return; }
+      await fetchProducts();
+    } catch { setToast("오류: 상태 변경 실패"); }
+  };
+
+  const handleSaveBoardPost = async () => {
+    if (!boardForm.title.trim() || !boardForm.content.trim()) { setToast("제목과 내용을 입력하세요."); return; }
+    setSavingBoard(true);
+    try {
+      const res = await fetch(api("/api/admin/board"), {
+        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(boardForm),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setToast("게시물이 등록되었습니다.");
+      setBoardForm({ category: "notice", title: "", content: "", pinned: false, visibleToAll: false });
+      setShowBoardForm(false);
+      await fetchBoard();
+    } catch { setToast("오류: 게시물 등록 실패"); }
+    finally { setSavingBoard(false); }
+  };
+
+  const handleDeleteBoardPost = async (id: number) => {
+    if (!confirm("정말 삭제하시겠습니까?")) return;
+    try {
+      const res = await fetch(api(`/api/admin/board/${id}`), { method: "DELETE", headers: authHeaders });
+      if (!res.ok) { setToast("오류: 삭제 실패"); return; }
+      setToast("게시물이 삭제되었습니다.");
+      setBoardPostModal(null);
+      await fetchBoard();
+    } catch { setToast("오류: 삭제 실패"); }
+  };
+
+  const handleExportCSV = async (type: "projects" | "settlements") => {
+    try {
+      const res = await fetch(api(`/api/admin/export/${type}`), { headers: authHeaders });
+      if (!res.ok) { setToast("오류: CSV 내보내기 실패"); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `${type}_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch { setToast("오류: CSV 내보내기 실패"); }
+  };
+
   useEffect(() => { fetchAll(); }, [fetchAll]);
   useEffect(() => { if (adminTab === "users") fetchUsers(); }, [adminTab, fetchUsers]);
   useEffect(() => { if (adminTab === "customers") fetchCustomers(); }, [adminTab, fetchCustomers]);
+  useEffect(() => { if (adminTab === "companies") fetchCompanies(); }, [adminTab, fetchCompanies]);
+  useEffect(() => { if (adminTab === "products") fetchProducts(); }, [adminTab, fetchProducts]);
+  useEffect(() => { if (adminTab === "board") fetchBoard(); }, [adminTab, fetchBoard]);
 
   const runSettlementPay = async (settlementId: number) => {
     setPaying(settlementId);
@@ -1799,11 +2299,56 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
     { id: "settlements", label: "정산" },
     { id: "users", label: "사용자 관리" },
     { id: "customers", label: "고객 관리" },
+    { id: "companies", label: "거래처" },
+    { id: "products", label: "상품/단가" },
+    { id: "board", label: "게시판" },
   ] as const;
 
   return (
     <>
       <Toast msg={toast} onClose={() => setToast("")} />
+      {companyModal !== null && (
+        <CompanyDetailModal
+          companyId={companyModal}
+          token={token}
+          onClose={() => setCompanyModal(null)}
+          onToast={setToast}
+          onOpenProject={(id) => { setCompanyModal(null); setDetailModal(id); }}
+        />
+      )}
+      {translatorProfileModal !== null && (
+        <TranslatorProfileModal
+          userId={translatorProfileModal.userId}
+          userEmail={translatorProfileModal.email}
+          token={token}
+          onClose={() => setTranslatorProfileModal(null)}
+          onToast={setToast}
+        />
+      )}
+      {boardPostModal !== null && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 300, overflowY: "auto", padding: "20px 16px" }}>
+          <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb", width: "100%", maxWidth: 680, padding: "24px 28px", boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 12 }}>
+              <div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
+                  {boardPostModal.pinned && <span style={{ background: "#fef3c7", color: "#d97706", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>📌 고정</span>}
+                  <span style={{ background: "#eff6ff", color: "#2563eb", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>{BOARD_CATEGORY_LABEL[boardPostModal.category] ?? boardPostModal.category}</span>
+                  {boardPostModal.visibleToAll && <span style={{ background: "#f0fdf4", color: "#059669", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>공개</span>}
+                </div>
+                <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>{boardPostModal.title}</h2>
+                <p style={{ margin: "4px 0 0", fontSize: 12, color: "#9ca3af" }}>{boardPostModal.authorEmail} · {new Date(boardPostModal.createdAt).toLocaleDateString("ko-KR")}</p>
+              </div>
+              <button onClick={() => setBoardPostModal(null)} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#9ca3af" }}>×</button>
+            </div>
+            <div style={{ background: "#f9fafb", borderRadius: 10, padding: "16px 18px", fontSize: 14, color: "#374151", lineHeight: 1.7, whiteSpace: "pre-wrap", marginBottom: 16, border: "1px solid #e5e7eb" }}>
+              {boardPostModal.content ?? "내용 없음"}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+              <button onClick={() => handleDeleteBoardPost(boardPostModal.id)} style={{ background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>삭제</button>
+            </div>
+          </div>
+        </div>
+      )}
       {detailModal !== null && (
         <ProjectDetailModal
           projectId={detailModal} token={token}
@@ -1863,7 +2408,9 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
 
       {/* ── 프로젝트 탭 ── */}
       {adminTab === "projects" && (
-        <Section title={`전체 프로젝트 (${projects.length})`}>
+        <Section title={`전체 프로젝트 (${projects.length})`} action={
+          <GhostBtn onClick={() => handleExportCSV("projects")} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
+        }>
           {/* 검색 + 필터 */}
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
             <input
@@ -2036,7 +2583,8 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
           <Section
             title={`정산 현황 (${filtered.length})`}
             action={
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                <GhostBtn onClick={() => handleExportCSV("settlements")} style={{ fontSize: 12, padding: "6px 12px" }}>⬇ CSV</GhostBtn>
                 <FilterPill label="전체" active={settlementFilter === "all"} onClick={() => setSettlementFilter("all")} />
                 {ALL_SETTLEMENT_STATUSES.map(s => (
                   <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
@@ -2126,7 +2674,7 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["ID","이메일","역할","상태","가입일","역할 변경","계정 상태"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                    <tr>{["ID","이메일","역할","상태","가입일","역할 변경","계정 상태","프로필"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {users.map(u => (
@@ -2179,6 +2727,14 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
                           ) : (
                             <span style={{ fontSize: 12, color: "#9ca3af" }}>—</span>
                           )}
+                        </td>
+                        <td style={tableTd}>
+                          {u.role === "translator" ? (
+                            <button onClick={() => setTranslatorProfileModal({ userId: u.id, email: u.email })}
+                              style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, fontWeight: 600, cursor: "pointer", background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd6fe" }}>
+                              프로필
+                            </button>
+                          ) : <span style={{ fontSize: 12, color: "#d1d5db" }}>—</span>}
                         </td>
                       </tr>
                     ))}
@@ -2279,6 +2835,269 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
                         <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
                           {new Date(c.createdAt).toLocaleDateString("ko-KR")}
                         </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </Section>
+      )}
+
+      {/* ── 거래처 탭 ── */}
+      {adminTab === "companies" && (
+        <Section title={`거래처 관리 (${companies.length})`} action={
+          <PrimaryBtn onClick={() => setShowCompanyForm(v => !v)} style={{ fontSize: 13, padding: "7px 14px" }}>
+            {showCompanyForm ? "취소" : "+ 거래처 등록"}
+          </PrimaryBtn>
+        }>
+          {showCompanyForm && (
+            <Card style={{ marginBottom: 16, padding: "16px 20px" }}>
+              <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#111827" }}>새 거래처 등록</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
+                {([["name","회사명 *"],["businessNumber","사업자번호"],["industry","업종"],["address","주소"],["website","웹사이트"]] as const).map(([f, l]) => (
+                  <div key={f}>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>{l}</label>
+                    <input value={companyForm[f]} onChange={e => setCompanyForm(p => ({ ...p, [f]: e.target.value }))}
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+                  </div>
+                ))}
+                <div style={{ gridColumn: "span 2" }}>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>메모</label>
+                  <textarea value={companyForm.notes} onChange={e => setCompanyForm(p => ({ ...p, notes: e.target.value }))}
+                    rows={2} style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: 13, padding: "7px 10px", resize: "vertical" }} />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <PrimaryBtn onClick={handleCreateCompany} disabled={savingCompany} style={{ fontSize: 13, padding: "8px 18px" }}>
+                  {savingCompany ? "등록 중..." : "등록"}
+                </PrimaryBtn>
+                <GhostBtn onClick={() => setShowCompanyForm(false)} style={{ fontSize: 13, padding: "8px 14px" }}>취소</GhostBtn>
+              </div>
+            </Card>
+          )}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+            <input value={companySearch} onChange={e => setCompanySearch(e.target.value)}
+              placeholder="회사명, 사업자번호 검색..."
+              style={{ ...inputStyle, maxWidth: 300, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+              onKeyDown={e => e.key === "Enter" && fetchCompanies()} />
+            <PrimaryBtn onClick={fetchCompanies} disabled={companiesLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
+              {companiesLoading ? "검색 중..." : "검색"}
+            </PrimaryBtn>
+          </div>
+          {companiesLoading ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : companies.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 거래처가 없습니다.</Card>
+          ) : (
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>{["ID","회사명","업종","담당자","프로젝트","총 결제","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {companies.map(c => (
+                      <tr key={c.id} onClick={() => setCompanyModal(c.id)} style={{ cursor: "pointer" }}
+                        onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
+                        <td style={{ ...tableTd, fontWeight: 700, color: "#111827" }}>{c.name}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{c.industry ?? "-"}</td>
+                        <td style={{ ...tableTd, textAlign: "center" }}>
+                          <span style={{ padding: "2px 8px", borderRadius: 10, background: "#f3f4f6", color: "#374151", fontSize: 12 }}>{c.contactCount}명</span>
+                        </td>
+                        <td style={{ ...tableTd, textAlign: "center" }}>
+                          <span style={{ padding: "2px 8px", borderRadius: 10, background: "#eff6ff", color: "#2563eb", fontSize: 12, fontWeight: 600 }}>{c.projectCount}건</span>
+                        </td>
+                        <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap" }}>{Number(c.totalPayment).toLocaleString()}원</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </Section>
+      )}
+
+      {/* ── 상품/단가 탭 ── */}
+      {adminTab === "products" && (
+        <Section title={`상품/단가 관리 (${products.length})`} action={
+          <PrimaryBtn onClick={() => { setShowProductForm(v => !v); setEditingProduct(null); setProductForm({ code: "", name: "", category: "", unit: "건", basePrice: "", languagePair: "", field: "" }); }} style={{ fontSize: 13, padding: "7px 14px" }}>
+            {showProductForm && !editingProduct ? "취소" : "+ 상품 등록"}
+          </PrimaryBtn>
+        }>
+          {showProductForm && (
+            <Card style={{ marginBottom: 16, padding: "16px 20px" }}>
+              <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#111827" }}>{editingProduct ? "상품 수정" : "새 상품 등록"}</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
+                {([["code","상품 코드 *"],["name","상품명 *"],["category","분류"],["unit","단위"],["basePrice","기본단가 *"],["languagePair","언어 조합"],["field","전문 분야"]] as const).map(([f, l]) => (
+                  <div key={f}>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>{l}</label>
+                    <input value={productForm[f]} onChange={e => setProductForm(p => ({ ...p, [f]: e.target.value }))}
+                      type={f === "basePrice" ? "number" : "text"}
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <PrimaryBtn onClick={handleSaveProduct} disabled={savingProduct} style={{ fontSize: 13, padding: "8px 18px" }}>
+                  {savingProduct ? "저장 중..." : "저장"}
+                </PrimaryBtn>
+                <GhostBtn onClick={() => { setShowProductForm(false); setEditingProduct(null); }} style={{ fontSize: 13, padding: "8px 14px" }}>취소</GhostBtn>
+              </div>
+            </Card>
+          )}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+            <input value={productSearch} onChange={e => setProductSearch(e.target.value)}
+              placeholder="상품명, 코드 검색..."
+              style={{ ...inputStyle, maxWidth: 300, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+              onKeyDown={e => e.key === "Enter" && fetchProducts()} />
+            <PrimaryBtn onClick={fetchProducts} disabled={productsLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
+              {productsLoading ? "검색 중..." : "검색"}
+            </PrimaryBtn>
+          </div>
+          {productsLoading ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : products.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 상품이 없습니다.</Card>
+          ) : (
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>{["코드","상품명","분류","단위","기본단가","언어조합","분야","상태","관리"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {products.map(p => (
+                      <tr key={p.id}
+                        onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <td style={{ ...tableTd, fontFamily: "monospace", fontSize: 12, color: "#6b7280" }}>{p.code}</td>
+                        <td style={{ ...tableTd, fontWeight: 700, color: "#111827" }}>{p.name}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.category ?? "-"}</td>
+                        <td style={{ ...tableTd, fontSize: 12 }}>{p.unit}</td>
+                        <td style={{ ...tableTd, fontWeight: 600, color: "#2563eb", whiteSpace: "nowrap" }}>{Number(p.basePrice).toLocaleString()}원</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.languagePair ?? "-"}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.field ?? "-"}</td>
+                        <td style={tableTd}>
+                          <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 12, fontWeight: 600, background: p.active ? "#f0fdf4" : "#f3f4f6", color: p.active ? "#059669" : "#9ca3af" }}>
+                            {p.active ? "활성" : "비활성"}
+                          </span>
+                        </td>
+                        <td style={{ ...tableTd, whiteSpace: "nowrap" }}>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button onClick={() => { setEditingProduct(p.id); setProductForm({ code: p.code, name: p.name, category: p.category ?? "", unit: p.unit, basePrice: String(p.basePrice), languagePair: p.languagePair ?? "", field: p.field ?? "" }); setShowProductForm(true); }}
+                              style={{ padding: "3px 8px", fontSize: 11, borderRadius: 6, cursor: "pointer", background: "#eff6ff", color: "#2563eb", border: "none", fontWeight: 600 }}>수정</button>
+                            <button onClick={() => handleToggleProduct(p.id)}
+                              style={{ padding: "3px 8px", fontSize: 11, borderRadius: 6, cursor: "pointer", background: p.active ? "#fef2f2" : "#f0fdf4", color: p.active ? "#dc2626" : "#059669", border: "none", fontWeight: 600 }}>
+                              {p.active ? "비활성" : "활성"}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </Section>
+      )}
+
+      {/* ── 게시판 탭 ── */}
+      {adminTab === "board" && (
+        <Section title={`게시판 (${boardPosts.length})`} action={
+          <PrimaryBtn onClick={() => setShowBoardForm(v => !v)} style={{ fontSize: 13, padding: "7px 14px" }}>
+            {showBoardForm ? "취소" : "+ 글 작성"}
+          </PrimaryBtn>
+        }>
+          {showBoardForm && (
+            <Card style={{ marginBottom: 16, padding: "16px 20px" }}>
+              <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#111827" }}>게시물 작성</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px", marginBottom: 10 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>카테고리</label>
+                  <select value={boardForm.category} onChange={e => setBoardForm(p => ({ ...p, category: e.target.value }))}
+                    style={{ ...inputStyle, width: "100%", padding: "7px 10px", fontSize: 13 }}>
+                    <option value="notice">공지</option>
+                    <option value="reference">통역자료</option>
+                    <option value="manual">내부매뉴얼</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>제목 *</label>
+                  <input value={boardForm.title} onChange={e => setBoardForm(p => ({ ...p, title: e.target.value }))}
+                    style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: 13, padding: "7px 10px" }} />
+                </div>
+              </div>
+              <div style={{ marginBottom: 10 }}>
+                <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>내용 *</label>
+                <textarea value={boardForm.content} onChange={e => setBoardForm(p => ({ ...p, content: e.target.value }))}
+                  rows={5} style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: 13, padding: "8px 10px", resize: "vertical" }} />
+              </div>
+              <div style={{ display: "flex", gap: 16, marginBottom: 12 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+                  <input type="checkbox" checked={boardForm.pinned} onChange={e => setBoardForm(p => ({ ...p, pinned: e.target.checked }))} />
+                  상단 고정
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
+                  <input type="checkbox" checked={boardForm.visibleToAll} onChange={e => setBoardForm(p => ({ ...p, visibleToAll: e.target.checked }))} />
+                  번역사에게 공개
+                </label>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <PrimaryBtn onClick={handleSaveBoardPost} disabled={savingBoard} style={{ fontSize: 13, padding: "8px 18px" }}>
+                  {savingBoard ? "등록 중..." : "등록"}
+                </PrimaryBtn>
+                <GhostBtn onClick={() => setShowBoardForm(false)} style={{ fontSize: 13, padding: "8px 14px" }}>취소</GhostBtn>
+              </div>
+            </Card>
+          )}
+
+          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+            {[{ v: "all", l: "전체" }, { v: "notice", l: "공지" }, { v: "reference", l: "통역자료" }, { v: "manual", l: "내부매뉴얼" }].map(({ v, l }) => (
+              <button key={v} onClick={() => setBoardCategory(v)}
+                style={{ padding: "6px 14px", borderRadius: 20, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
+                  background: boardCategory === v ? "#2563eb" : "#f3f4f6", color: boardCategory === v ? "#fff" : "#374151" }}>
+                {l}
+              </button>
+            ))}
+          </div>
+
+          {boardLoading ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : boardPosts.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>게시물이 없습니다.</Card>
+          ) : (
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>{["","분류","제목","작성자","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {boardPosts.map(post => (
+                      <tr key={post.id} onClick={() => setBoardPostModal(post)} style={{ cursor: "pointer" }}
+                        onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <td style={{ ...tableTd, width: 30 }}>
+                          {post.pinned && <span style={{ fontSize: 14 }}>📌</span>}
+                        </td>
+                        <td style={tableTd}>
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <span style={{ padding: "2px 8px", borderRadius: 10, background: "#eff6ff", color: "#2563eb", fontSize: 11, fontWeight: 700 }}>
+                              {BOARD_CATEGORY_LABEL[post.category] ?? post.category}
+                            </span>
+                            {post.visibleToAll && <span style={{ padding: "2px 8px", borderRadius: 10, background: "#f0fdf4", color: "#059669", fontSize: 11, fontWeight: 700 }}>공개</span>}
+                          </div>
+                        </td>
+                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{post.title}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{post.authorEmail ?? "-"}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(post.createdAt).toLocaleDateString("ko-KR")}</td>
                       </tr>
                     ))}
                   </tbody>

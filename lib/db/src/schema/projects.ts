@@ -21,6 +21,8 @@ export const projectsTable = pgTable("projects", {
     .references(() => usersTable.id),
   customerId: integer("customer_id"),
   adminId: integer("admin_id").references(() => usersTable.id),
+  companyId: integer("company_id"),
+  contactId: integer("contact_id"),
   title: text("title").notNull(),
   fileUrl: text("file_url"),
   status: projectStatusEnum("status").notNull().default("created"),

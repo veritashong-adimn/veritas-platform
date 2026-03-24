@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import {
   db, projectsTable, paymentsTable, tasksTable, usersTable,
   logsTable, quotesTable, settlementsTable, notesTable,
-  customersTable, communicationsTable,
+  customersTable, communicationsTable, translatorProfilesTable,
 } from "@workspace/db";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
@@ -786,6 +786,150 @@ router.get("/admin/projects/:id/communications", ...adminGuard, async (req, res)
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch project communications");
     res.status(500).json({ error: "커뮤니케이션 조회 실패." });
+  }
+});
+
+// ─── 번역사 프로필 조회 ───────────────────────────────────────────────────────
+router.get("/admin/translator-profiles/:userId", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+
+  try {
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+    if (!user || user.role !== "translator") {
+      res.status(404).json({ error: "번역사를 찾을 수 없습니다." }); return;
+    }
+
+    const [profile] = await db.select().from(translatorProfilesTable).where(eq(translatorProfilesTable.userId, userId));
+    res.json({ user: { id: user.id, email: user.email, isActive: user.isActive }, profile: profile ?? null });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to get translator profile");
+    res.status(500).json({ error: "번역사 프로필 조회 실패." });
+  }
+});
+
+// ─── 번역사 프로필 저장/수정 (upsert) ─────────────────────────────────────────
+router.patch("/admin/translator-profiles/:userId", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.userId);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+
+  const {
+    languagePairs, specializations, education, major,
+    graduationYear, region, rating, availabilityStatus, bio,
+    ratePerWord, ratePerPage,
+  } = req.body;
+
+  try {
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+    if (!user || user.role !== "translator") {
+      res.status(404).json({ error: "번역사를 찾을 수 없습니다." }); return;
+    }
+
+    const existing = await db.select().from(translatorProfilesTable).where(eq(translatorProfilesTable.userId, userId));
+
+    const profileData = {
+      languagePairs, specializations, education, major,
+      graduationYear: graduationYear ? Number(graduationYear) : undefined,
+      region, rating: rating ? Number(rating) : undefined,
+      availabilityStatus: availabilityStatus ?? "available",
+      bio, ratePerWord: ratePerWord ? Number(ratePerWord) : undefined,
+      ratePerPage: ratePerPage ? Number(ratePerPage) : undefined,
+      updatedAt: new Date(),
+    };
+
+    let profile;
+    if (existing.length === 0) {
+      [profile] = await db.insert(translatorProfilesTable).values({ userId, ...profileData }).returning();
+    } else {
+      [profile] = await db.update(translatorProfilesTable).set(profileData).where(eq(translatorProfilesTable.userId, userId)).returning();
+    }
+    res.json(profile);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to update translator profile");
+    res.status(500).json({ error: "번역사 프로필 저장 실패." });
+  }
+});
+
+// ─── 프로젝트 목록 CSV 내보내기 ───────────────────────────────────────────────
+router.get("/admin/export/projects", ...adminGuard, async (req, res) => {
+  try {
+    const rows = await db
+      .select({
+        id: projectsTable.id,
+        title: projectsTable.title,
+        status: projectsTable.status,
+        createdAt: projectsTable.createdAt,
+        customerEmail: usersTable.email,
+      })
+      .from(projectsTable)
+      .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))
+      .orderBy(desc(projectsTable.createdAt));
+
+    const header = ["ID", "제목", "고객 이메일", "상태", "생성일"].join(",");
+    const lines = rows.map(r =>
+      [
+        r.id,
+        `"${(r.title ?? "").replace(/"/g, '""')}"`,
+        `"${(r.customerEmail ?? "").replace(/"/g, '""')}"`,
+        r.status,
+        new Date(r.createdAt).toLocaleDateString("ko-KR"),
+      ].join(",")
+    );
+
+    const csv = [header, ...lines].join("\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="projects_${Date.now()}.csv"`);
+    res.send("\uFEFF" + csv);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to export projects");
+    res.status(500).json({ error: "내보내기 실패." });
+  }
+});
+
+// ─── 정산 목록 CSV 내보내기 ───────────────────────────────────────────────────
+router.get("/admin/export/settlements", ...adminGuard, async (req, res) => {
+  try {
+    const rows = await db
+      .select({
+        id: settlementsTable.id,
+        totalAmount: settlementsTable.totalAmount,
+        translatorAmount: settlementsTable.translatorAmount,
+        platformFee: settlementsTable.platformFee,
+        status: settlementsTable.status,
+        createdAt: settlementsTable.createdAt,
+        projectTitle: projectsTable.title,
+        translatorEmail: usersTable.email,
+      })
+      .from(settlementsTable)
+      .leftJoin(projectsTable, eq(settlementsTable.projectId, projectsTable.id))
+      .leftJoin(usersTable, eq(settlementsTable.translatorId, usersTable.id))
+      .orderBy(desc(settlementsTable.createdAt));
+
+    const header = ["ID", "프로젝트", "번역사 이메일", "총 금액", "번역사 금액", "수수료", "상태", "생성일"].join(",");
+    const lines = rows.map(r =>
+      [
+        r.id,
+        `"${(r.projectTitle ?? "").replace(/"/g, '""')}"`,
+        `"${(r.translatorEmail ?? "").replace(/"/g, '""')}"`,
+        r.totalAmount,
+        r.translatorAmount,
+        r.platformFee,
+        r.status,
+        new Date(r.createdAt).toLocaleDateString("ko-KR"),
+      ].join(",")
+    );
+
+    const csv = [header, ...lines].join("\n");
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="settlements_${Date.now()}.csv"`);
+    res.send("\uFEFF" + csv);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to export settlements");
+    res.status(500).json({ error: "내보내기 실패." });
   }
 });
 

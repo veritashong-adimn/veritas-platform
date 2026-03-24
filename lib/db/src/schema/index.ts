@@ -8,3 +8,8 @@ export * from "./logs";
 export * from "./notes";
 export * from "./customers";
 export * from "./communications";
+export * from "./companies";
+export * from "./contacts";
+export * from "./products";
+export * from "./translator_profiles";
+export * from "./board_posts";

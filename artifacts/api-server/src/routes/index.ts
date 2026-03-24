@@ -10,6 +10,9 @@ import paymentsRouter from "./payments";
 import adminRouter from "./admin";
 import settlementsRouter from "./settlements";
 import logsRouter from "./logs";
+import companiesRouter from "./companies";
+import productsRouter from "./products";
+import boardRouter from "./board";
 
 const router: IRouter = Router();
 
@@ -24,5 +27,8 @@ router.use(paymentsRouter);
 router.use(adminRouter);
 router.use(settlementsRouter);
 router.use(logsRouter);
+router.use(companiesRouter);
+router.use(productsRouter);
+router.use(boardRouter);
 
 export default router;
