@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
 import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { signToken } from "../middlewares/auth";
+import { signToken, requireAuth } from "../middlewares/auth";
 
 const router: IRouter = Router();
 
@@ -72,6 +72,54 @@ router.post("/auth/login", async (req, res) => {
 
   const token = signToken({ id: user.id, email: user.email, role: user.role });
   res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
+});
+
+router.patch("/auth/change-password", requireAuth, async (req, res) => {
+  const { currentPassword, newPassword } = req.body as {
+    currentPassword?: string;
+    newPassword?: string;
+  };
+
+  if (!currentPassword || !newPassword) {
+    res.status(400).json({ error: "현재 비밀번호와 새 비밀번호를 모두 입력해주세요." });
+    return;
+  }
+  if (newPassword.length < 6) {
+    res.status(400).json({ error: "새 비밀번호는 최소 6자 이상이어야 합니다." });
+    return;
+  }
+  if (currentPassword === newPassword) {
+    res.status(400).json({ error: "현재 비밀번호와 새 비밀번호가 동일합니다." });
+    return;
+  }
+
+  const userId = (req as any).user?.id as number;
+
+  const [user] = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.id, userId));
+
+  if (!user || !user.password) {
+    res.status(404).json({ error: "사용자를 찾을 수 없습니다." });
+    return;
+  }
+
+  const match = await bcrypt.compare(currentPassword, user.password);
+  if (!match) {
+    res.status(401).json({ error: "현재 비밀번호가 올바르지 않습니다." });
+    return;
+  }
+
+  const hashed = await bcrypt.hash(newPassword, 10);
+
+  await db
+    .update(usersTable)
+    .set({ password: hashed })
+    .where(eq(usersTable.id, userId));
+
+  req.log.info({ userId }, "Password changed");
+  res.json({ ok: true });
 });
 
 export default router;
