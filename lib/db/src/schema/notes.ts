@@ -1,12 +1,10 @@
 import { pgTable, serial, integer, text, timestamp } from "drizzle-orm/pg-core";
 import { usersTable } from "./users";
-import { projectsTable } from "./projects";
 
 export const notesTable = pgTable("notes", {
   id: serial("id").primaryKey(),
-  projectId: integer("project_id")
-    .notNull()
-    .references(() => projectsTable.id),
+  entityType: text("entity_type").notNull().default("project"),
+  entityId: integer("entity_id").notNull(),
   adminId: integer("admin_id")
     .notNull()
     .references(() => usersTable.id),
@@ -15,3 +13,4 @@ export const notesTable = pgTable("notes", {
 });
 
 export type Note = typeof notesTable.$inferSelect;
+export type InsertNote = typeof notesTable.$inferInsert;

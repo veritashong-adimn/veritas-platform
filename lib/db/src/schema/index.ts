@@ -12,4 +12,5 @@ export * from "./companies";
 export * from "./contacts";
 export * from "./products";
 export * from "./translator_profiles";
+export * from "./translator_rates";
 export * from "./board_posts";

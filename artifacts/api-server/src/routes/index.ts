@@ -13,6 +13,7 @@ import logsRouter from "./logs";
 import companiesRouter from "./companies";
 import productsRouter from "./products";
 import boardRouter from "./board";
+import translatorsRouter from "./translators";
 
 const router: IRouter = Router();
 
@@ -30,5 +31,6 @@ router.use(logsRouter);
 router.use(companiesRouter);
 router.use(productsRouter);
 router.use(boardRouter);
+router.use(translatorsRouter);
 
 export default router;

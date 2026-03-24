@@ -1,0 +1,113 @@
+현재 MVP를 회사 실사용 CRM 구조에 맞춰 운영형 CRM으로 확장해주세요.
+단, 아래 항목은 이번 세션에서 제외합니다:
+- PDF 견적서/거래명세서 생성
+- 공통 첨부파일 테이블 재구성
+- CSV 대량등록 + 중복 병합
+- quote_items와 product_id 연결
+
+이번 세션에서는 아래 항목만 구현해주세요.
+
+1. 거래처 / 담당자 구조 분리
+- companies 테이블 생성
+  - id
+  - name
+  - business_number
+  - representative_name
+  - email
+  - phone
+  - address
+  - memo
+  - created_at
+- contacts 테이블 생성
+  - id
+  - company_id (FK)
+  - name
+  - email
+  - phone
+  - department
+  - position
+  - memo
+  - created_at
+- projects 테이블에 company_id, contact_id 추가
+- 관리자 API 추가:
+  - GET /api/admin/companies
+  - POST /api/admin/companies
+  - GET /api/admin/companies/:id
+  - GET /api/admin/contacts
+  - POST /api/admin/contacts
+  - GET /api/admin/contacts/:id
+- 회사 상세에서 프로젝트 수, 결제 합계, 정산 합계 조회
+- 담당자 상세에서 프로젝트 및 커뮤니케이션 이력 조회
+
+2. 번역사 프로필 고도화
+- translator_profiles 테이블 추가 또는 기존 users(role=translator) 확장
+  - user_id
+  - language_pairs (json or text array)
+  - specializations (json or text array)
+  - education
+  - major
+  - graduation_year
+  - region
+  - rating
+  - availability_status
+  - intro
+  - created_at
+- translator_rates 테이블 추가
+  - id
+  - translator_id
+  - service_type
+  - language_pair
+  - unit
+  - rate
+  - created_at
+- 관리자 API:
+  - GET /api/admin/translators
+  - GET /api/admin/translators/:id
+  - PATCH /api/admin/translators/:id
+- 검색 필터:
+  - 언어쌍
+  - 분야
+  - 상태
+  - 평점
+
+3. 관리자 검색 / 필터 강화
+- 관리자 프로젝트 목록 검색 기능 확장:
+  - 거래처명
+  - 담당자명
+  - 프로젝트명
+  - 상태
+  - 담당 관리자
+  - 날짜 범위
+- 견적 / 작업 / 정산 목록에도 동일한 필터 구조 추가
+- 페이지네이션 및 정렬 유지
+
+4. 자료실 / 게시판
+- board_posts 테이블 생성
+  - id
+  - category (notice / interpretation_material / internal_manual)
+  - title
+  - content
+  - author_id
+  - created_at
+- 기존 업로드 구조를 활용하여 게시글 첨부 가능하게 구현
+- API:
+  - GET /api/boards
+  - POST /api/admin/boards
+  - GET /api/boards/:id
+  - PATCH /api/admin/boards/:id
+  - DELETE /api/admin/boards/:id
+
+5. 관리자 메모 확장
+- notes 구조를 project 전용에서 공통 메모 구조로 확장
+  - id
+  - entity_type (project / company / contact / translator)
+  - entity_id
+  - admin_id
+  - content
+  - created_at
+- API:
+  - POST /api/admin/notes
+  - GET /api/admin/notes?entityType=&entityId=
+
+기존 controller / service / db 구조를 유지하고,
+OpenAPI 스펙과 관리자 프론트엔드도 함께 업데이트해주세요.

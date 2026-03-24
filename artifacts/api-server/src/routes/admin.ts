@@ -3,6 +3,7 @@ import {
   db, projectsTable, paymentsTable, tasksTable, usersTable,
   logsTable, quotesTable, settlementsTable, notesTable,
   customersTable, communicationsTable, translatorProfilesTable,
+  contactsTable, companiesTable,
 } from "@workspace/db";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
@@ -14,13 +15,20 @@ const adminGuard = [requireAuth, requireRole("admin")];
 // ─── 프로젝트 목록 (검색/필터) ────────────────────────────────────────────
 router.get("/admin/projects", ...adminGuard, async (req, res) => {
   try {
-    const { search, status, dateFrom, dateTo, assignedAdminId } = req.query as {
-      search?: string; status?: string; dateFrom?: string; dateTo?: string; assignedAdminId?: string;
+    const { search, status, dateFrom, dateTo, assignedAdminId, companyName, contactName } = req.query as {
+      search?: string; status?: string; dateFrom?: string; dateTo?: string;
+      assignedAdminId?: string; companyName?: string; contactName?: string;
     };
 
-    const adminAlias = db.$with("admin_user").as(
-      db.select({ id: usersTable.id, email: usersTable.email }).from(usersTable)
-    );
+    const contactAlias = db
+      .select({ id: contactsTable.id, name: contactsTable.name, companyId: contactsTable.companyId })
+      .from(contactsTable)
+      .as("proj_contact");
+
+    const companyAlias = db
+      .select({ id: companiesTable.id, name: companiesTable.name })
+      .from(companiesTable)
+      .as("proj_company");
 
     const rows = await db
       .select({
@@ -33,9 +41,15 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
         customerId: usersTable.id,
         projectCustomerId: projectsTable.customerId,
         adminId: projectsTable.adminId,
+        contactId: projectsTable.contactId,
+        companyId: projectsTable.companyId,
+        contactName: contactAlias.name,
+        companyName: companyAlias.name,
       })
       .from(projectsTable)
       .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))
+      .leftJoin(contactAlias, eq(projectsTable.contactId, contactAlias.id))
+      .leftJoin(companyAlias, eq(projectsTable.companyId, companyAlias.id))
       .orderBy(projectsTable.createdAt);
 
     let result = rows.reverse();
@@ -44,8 +58,20 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
       const s = search.trim().toLowerCase();
       result = result.filter(p =>
         p.title.toLowerCase().includes(s) ||
-        (p.customerEmail ?? "").toLowerCase().includes(s)
+        (p.customerEmail ?? "").toLowerCase().includes(s) ||
+        (p.contactName ?? "").toLowerCase().includes(s) ||
+        (p.companyName ?? "").toLowerCase().includes(s)
       );
+    }
+
+    if (companyName?.trim()) {
+      const cn = companyName.trim().toLowerCase();
+      result = result.filter(p => (p.companyName ?? "").toLowerCase().includes(cn));
+    }
+
+    if (contactName?.trim()) {
+      const ct = contactName.trim().toLowerCase();
+      result = result.filter(p => (p.contactName ?? "").toLowerCase().includes(ct));
     }
 
     if (status?.trim()) {
@@ -481,13 +507,15 @@ router.get("/admin/projects/:id/notes", ...adminGuard, async (req, res) => {
     const rows = await db
       .select({
         id: notesTable.id,
+        entityType: notesTable.entityType,
+        entityId: notesTable.entityId,
         content: notesTable.content,
         createdAt: notesTable.createdAt,
         adminEmail: usersTable.email,
       })
       .from(notesTable)
       .leftJoin(usersTable, eq(notesTable.adminId, usersTable.id))
-      .where(eq(notesTable.projectId, projectId))
+      .where(and(eq(notesTable.entityType, "project"), eq(notesTable.entityId, projectId)))
       .orderBy(notesTable.createdAt);
 
     res.json(rows);
@@ -513,12 +541,69 @@ router.post("/admin/projects/:id/notes", ...adminGuard, async (req, res) => {
   try {
     const [note] = await db
       .insert(notesTable)
-      .values({ projectId, adminId: req.user!.id, content: content.trim() })
+      .values({ entityType: "project", entityId: projectId, adminId: req.user!.id, content: content.trim() })
       .returning();
 
     res.status(201).json({ ...note, adminEmail: req.user!.email });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to add note");
+    res.status(500).json({ error: "메모 추가 실패." });
+  }
+});
+
+// ─── 범용 메모 API (entityType: project/company/contact/translator) ────────────
+router.get("/admin/notes", ...adminGuard, async (req, res) => {
+  const { entityType, entityId } = req.query as { entityType?: string; entityId?: string };
+  if (!entityType || !entityId) {
+    res.status(400).json({ error: "entityType과 entityId는 필수입니다." }); return;
+  }
+
+  try {
+    const rows = await db
+      .select({
+        id: notesTable.id,
+        entityType: notesTable.entityType,
+        entityId: notesTable.entityId,
+        content: notesTable.content,
+        createdAt: notesTable.createdAt,
+        adminEmail: usersTable.email,
+        adminId: notesTable.adminId,
+      })
+      .from(notesTable)
+      .leftJoin(usersTable, eq(notesTable.adminId, usersTable.id))
+      .where(and(eq(notesTable.entityType, entityType), eq(notesTable.entityId, Number(entityId))))
+      .orderBy(desc(notesTable.createdAt));
+    res.json(rows);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch generic notes");
+    res.status(500).json({ error: "메모 조회 실패." });
+  }
+});
+
+router.post("/admin/notes", ...adminGuard, async (req, res) => {
+  const { entityType, entityId, content } = req.body as {
+    entityType?: string; entityId?: number; content?: string;
+  };
+
+  const validTypes = ["project", "company", "contact", "translator"];
+  if (!entityType || !validTypes.includes(entityType)) {
+    res.status(400).json({ error: `entityType은 ${validTypes.join("/")} 중 하나여야 합니다.` }); return;
+  }
+  if (!entityId || isNaN(entityId)) {
+    res.status(400).json({ error: "entityId는 필수입니다." }); return;
+  }
+  if (!content?.trim()) {
+    res.status(400).json({ error: "메모 내용을 입력해주세요." }); return;
+  }
+
+  try {
+    const [note] = await db
+      .insert(notesTable)
+      .values({ entityType, entityId: Number(entityId), adminId: req.user!.id, content: content.trim() })
+      .returning();
+    res.status(201).json({ ...note, adminEmail: req.user!.email });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to add generic note");
     res.status(500).json({ error: "메모 추가 실패." });
   }
 });

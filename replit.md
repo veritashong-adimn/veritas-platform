@@ -71,8 +71,11 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 - `tasks` — id, project_id, translator_id (FK→users), status (waiting/assigned/working/done), created_at
 - `payments` — id, project_id (FK), amount (numeric 12,2), status (pending/paid/failed), created_at
 - `settlements` — id, project_id, translator_id, total_amount, translator_amount (70%), platform_fee (30%), status (pending/ready/paid), created_at
-- `notes` — id, project_id (FK), admin_id (FK→users), content, created_at (관리자 메모)
+- `notes` — id, entity_type (text, default 'project'), entity_id (integer), admin_id (FK→users), content, created_at (범용 메모: project/company/contact/translator)
 - `logs` — id, entity_type (project/quote/task), entity_id, action, created_at
+- `companies` — id, name, businessNumber, industry, address, website, representativeName, email, phone, notes, created_at
+- `contacts` — id, company_id (FK), name, department, position, email, phone, notes, created_at
+- `translator_rates` — id, translator_id (FK→users), serviceType, languagePair, unit (word/page/hour), rate (real), created_at
 
 ## Log Events
 
@@ -114,12 +117,22 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 - `GET /api/admin/customers/:id/communications` 🔒 — 고객별 커뮤니케이션 목록
 - `GET /api/admin/projects/:id/communications` 🔒 — 프로젝트별 커뮤니케이션 목록
 
-### 거래처·담당자·상품·게시판 (🔒 admin role 전용)
+### 거래처·담당자·번역사·상품·게시판 (🔒 admin role 전용)
 - `GET /api/admin/companies` — 거래처 목록 (?search, contactCount/projectCount/totalPayment 포함)
-- `POST /api/admin/companies` — 거래처 등록 (name, businessNumber, industry, address, website, notes)
+- `POST /api/admin/companies` — 거래처 등록 (name, businessNumber, industry, address, website, representativeName, email, phone, notes)
 - `GET /api/admin/companies/:id` — 거래처 상세 (contacts, projects, totalQuote/totalPayment/totalSettlement)
-- `PATCH /api/admin/companies/:id` — 거래처 정보 수정
-- `POST /api/admin/companies/:id/contacts` — 담당자 추가 (name, position, email, phone, notes)
+- `PATCH /api/admin/companies/:id` — 거래처 정보 수정 (representativeName, email, phone 포함)
+- `POST /api/admin/companies/:id/contacts` — 담당자 추가 (name, department, position, email, phone, notes)
+- `GET /api/admin/contacts` — 전체 담당자 목록 (?search, 거래처명 포함)
+- `GET /api/admin/contacts/:id` — 담당자 상세 (프로젝트 이력, 커뮤니케이션 이력)
+- `GET /api/admin/translators` — 번역사 목록 (?search, ?languagePair, ?field, ?status, ?minRating)
+- `GET /api/admin/translators/:id` — 번역사 상세 (프로필 + rates)
+- `PATCH /api/admin/translators/:id` — 번역사 프로필 수정
+- `GET /api/admin/translators/:id/rates` — 번역사 단가표 조회
+- `POST /api/admin/translators/:id/rates` — 단가 추가 (serviceType, languagePair, unit, rate)
+- `DELETE /api/admin/translators/:id/rates/:rateId` — 단가 삭제
+- `GET /api/admin/notes` — 범용 메모 조회 (?entityType=company|contact|translator|project, ?entityId=N)
+- `POST /api/admin/notes` — 범용 메모 추가 (entityType, entityId, content)
 - `GET /api/admin/products` — 상품 목록 (?search, active 포함)
 - `POST /api/admin/products` — 상품 등록 (code, name, category, unit, basePrice, languagePair, field)
 - `PATCH /api/admin/products/:id` — 상품 수정

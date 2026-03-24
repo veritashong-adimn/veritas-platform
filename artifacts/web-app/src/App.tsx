@@ -891,6 +891,8 @@ type AdminProject = {
   id: number; title: string; status: string; fileUrl: string | null;
   createdAt: string; customerEmail: string | null; customerId: number | null;
   projectCustomerId: number | null; adminId: number | null;
+  contactId: number | null; companyId: number | null;
+  contactName: string | null; companyName: string | null;
 };
 type AdminPayment = {
   id: number; projectId: number; amount: number; status: string;
@@ -930,11 +932,34 @@ type ProjectDetail = AdminProject & {
 type Company = {
   id: number; name: string; businessNumber: string | null; industry: string | null;
   address: string | null; website: string | null; notes: string | null;
+  representativeName: string | null; email: string | null; phone: string | null;
   createdAt: string; contactCount: number; projectCount: number; totalPayment: number;
 };
 type Contact = {
-  id: number; companyId: number; name: string; position: string | null;
+  id: number; companyId: number; name: string; department: string | null; position: string | null;
   email: string | null; phone: string | null; notes: string | null; createdAt: string;
+};
+type AdminContact = {
+  id: number; companyId: number; companyName: string | null;
+  name: string; department: string | null; position: string | null;
+  email: string | null; phone: string | null; notes: string | null; createdAt: string;
+};
+type TranslatorRate = {
+  id: number; translatorId: number; serviceType: string; languagePair: string;
+  unit: string; rate: number; createdAt: string;
+};
+type TranslatorListItem = {
+  id: number; email: string; isActive: boolean; createdAt: string;
+  profileId: number | null; languagePairs: string | null; specializations: string | null;
+  region: string | null; rating: number | null; availabilityStatus: string | null;
+  bio: string | null; ratePerWord: number | null; ratePerPage: number | null;
+};
+type ContactDetail = {
+  id: number; companyId: number; companyName: string | null;
+  name: string; department: string | null; position: string | null;
+  email: string | null; phone: string | null; notes: string | null; createdAt: string;
+  projects: Array<{ id: number; title: string; status: string; createdAt: string }>;
+  communications: Array<{ id: number; type: string; content: string; projectId: number | null; createdAt: string }>;
 };
 type CompanyDetail = Company & {
   contacts: Contact[];
@@ -1064,27 +1089,57 @@ function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject 
   const [detail, setDetail] = useState<CompanyDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [showContactForm, setShowContactForm] = useState(false);
-  const [contactForm, setContactForm] = useState({ name: "", position: "", email: "", phone: "", notes: "" });
+  const [contactForm, setContactForm] = useState({ name: "", department: "", position: "", email: "", phone: "", notes: "" });
   const [addingContact, setAddingContact] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", industry: "", address: "", website: "", notes: "" });
+  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", industry: "", address: "", website: "", notes: "", representativeName: "", email: "", phone: "" });
+  const [compNotes, setCompNotes] = useState<NoteEntry[]>([]);
+  const [compNoteText, setCompNoteText] = useState("");
+  const [addingCompNote, setAddingCompNote] = useState(false);
 
   const authH = { Authorization: `Bearer ${token}` };
 
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch(api(`/api/admin/companies/${companyId}`), { headers: authH });
-      const data = await res.json();
-      if (res.ok) {
+      const [dRes, nRes] = await Promise.all([
+        fetch(api(`/api/admin/companies/${companyId}`), { headers: authH }),
+        fetch(api(`/api/admin/notes?entityType=company&entityId=${companyId}`), { headers: authH }),
+      ]);
+      const [data, nData] = await Promise.all([dRes.json(), nRes.json()]);
+      if (dRes.ok) {
         setDetail(data);
-        setEditForm({ name: data.name, businessNumber: data.businessNumber ?? "", industry: data.industry ?? "", address: data.address ?? "", website: data.website ?? "", notes: data.notes ?? "" });
+        setEditForm({
+          name: data.name, businessNumber: data.businessNumber ?? "",
+          industry: data.industry ?? "", address: data.address ?? "",
+          website: data.website ?? "", notes: data.notes ?? "",
+          representativeName: data.representativeName ?? "",
+          email: data.email ?? "", phone: data.phone ?? "",
+        });
       }
+      if (nRes.ok) setCompNotes(Array.isArray(nData) ? nData : []);
     } catch { onToast("오류: 거래처 정보 불러오기 실패"); }
     finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, [companyId]);
+
+  const handleAddCompNote = async () => {
+    if (!compNoteText.trim()) return;
+    setAddingCompNote(true);
+    try {
+      const res = await fetch(api("/api/admin/notes"), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ entityType: "company", entityId: companyId, content: compNoteText.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      setCompNotes(prev => [data, ...prev]);
+      setCompNoteText("");
+      onToast("메모가 추가되었습니다.");
+    } catch { onToast("오류: 메모 추가 실패"); }
+    finally { setAddingCompNote(false); }
+  };
 
   const handleSaveEdit = async () => {
     try {
@@ -1111,7 +1166,7 @@ function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject 
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       setDetail(prev => prev ? { ...prev, contacts: [...prev.contacts, data] } : prev);
-      setContactForm({ name: "", position: "", email: "", phone: "", notes: "" });
+      setContactForm({ name: "", department: "", position: "", email: "", phone: "", notes: "" });
       setShowContactForm(false);
       onToast("담당자가 추가되었습니다.");
     } catch { onToast("오류: 담당자 추가 실패"); }
@@ -1136,7 +1191,7 @@ function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject 
             <p style={sH}>거래처 정보</p>
             {!editMode ? (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px", marginBottom: 8 }}>
-                {([["회사명", detail.name], ["사업자번호", detail.businessNumber ?? "-"], ["업종", detail.industry ?? "-"], ["주소", detail.address ?? "-"], ["웹사이트", detail.website ?? "-"]] as [string,string][]).map(([l, v]) => (
+                {([["회사명", detail.name], ["사업자번호", detail.businessNumber ?? "-"], ["업종", detail.industry ?? "-"], ["주소", detail.address ?? "-"], ["웹사이트", detail.website ?? "-"], ["대표자명", detail.representativeName ?? "-"], ["이메일", detail.email ?? "-"], ["전화", detail.phone ?? "-"]] as [string,string][]).map(([l, v]) => (
                   <div key={l} style={{ display: "flex", gap: 4, fontSize: 13, marginBottom: 4 }}>
                     <span style={{ color: "#9ca3af", minWidth: 80 }}>{l}</span>
                     <span style={{ color: "#374151", fontWeight: l === "회사명" ? 700 : 400 }}>{v}</span>
@@ -1146,8 +1201,8 @@ function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject 
               </div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", marginBottom: 12 }}>
-                {(["name","businessNumber","industry","address","website"] as const).map(f => (
-                  <div key={f}><label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>{f === "name" ? "회사명*" : f === "businessNumber" ? "사업자번호" : f === "industry" ? "업종" : f === "address" ? "주소" : "웹사이트"}</label>
+                {(["name","businessNumber","industry","address","website","representativeName","email","phone"] as const).map(f => (
+                  <div key={f}><label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>{f === "name" ? "회사명*" : f === "businessNumber" ? "사업자번호" : f === "industry" ? "업종" : f === "address" ? "주소" : f === "website" ? "웹사이트" : f === "representativeName" ? "대표자명" : f === "email" ? "이메일" : "전화"}</label>
                     <input value={editForm[f]} onChange={e => setEditForm(p => ({ ...p, [f]: e.target.value }))} style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} /></div>
                 ))}
                 <div style={{ gridColumn: "span 2", display: "flex", gap: 8 }}>
@@ -1180,8 +1235,8 @@ function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject 
             {showContactForm && (
               <div style={{ background: "#f9fafb", borderRadius: 10, padding: "14px 16px", marginBottom: 12, border: "1px solid #e5e7eb" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px" }}>
-                  {(["name","position","email","phone"] as const).map(f => (
-                    <div key={f}><label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>{f === "name" ? "이름*" : f === "position" ? "직책" : f === "email" ? "이메일" : "전화"}</label>
+                  {(["name","department","position","email","phone"] as const).map(f => (
+                    <div key={f}><label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>{f === "name" ? "이름*" : f === "department" ? "부서" : f === "position" ? "직책" : f === "email" ? "이메일" : "전화"}</label>
                       <input value={contactForm[f]} onChange={e => setContactForm(p => ({ ...p, [f]: e.target.value }))} style={{ ...inputStyle, fontSize: 13, padding: "6px 10px", width: "100%", boxSizing: "border-box" }} /></div>
                   ))}
                 </div>
@@ -1216,6 +1271,29 @@ function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject 
                     <span style={{ fontWeight: 600, color: "#111827", flex: 1 }}>{p.title}</span>
                     <StatusBadge status={p.status} />
                     <span style={{ color: "#9ca3af", fontSize: 12 }}>{new Date(p.createdAt).toLocaleDateString("ko-KR")}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <p style={{ ...sH, marginTop: 20 }}>메모 ({compNotes.length})</p>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <input value={compNoteText} onChange={e => setCompNoteText(e.target.value)} placeholder="메모 입력..."
+                style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "7px 10px" }}
+                onKeyDown={e => e.key === "Enter" && handleAddCompNote()} />
+              <PrimaryBtn onClick={handleAddCompNote} disabled={addingCompNote || !compNoteText.trim()} style={{ fontSize: 13, padding: "7px 14px" }}>
+                {addingCompNote ? "추가 중..." : "추가"}
+              </PrimaryBtn>
+            </div>
+            {compNotes.length === 0 ? <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>메모가 없습니다.</p> : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {compNotes.map(n => (
+                  <div key={n.id} style={{ padding: "10px 12px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, color: "#92400e", fontWeight: 600 }}>{n.adminEmail ?? "관리자"}</span>
+                      <span style={{ fontSize: 11, color: "#9ca3af" }}>{new Date(n.createdAt).toLocaleString("ko-KR")}</span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: 13, color: "#374151" }}>{n.content}</p>
                   </div>
                 ))}
               </div>
@@ -1351,6 +1429,373 @@ function TranslatorProfileModal({ userId, userEmail, token, onClose, onToast }: 
               <GhostBtn onClick={onClose} style={{ fontSize: 14, padding: "10px 20px" }}>닫기</GhostBtn>
             </div>
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── ContactDetailModal ──────────────────────────────────────────────────────
+function ContactDetailModal({ contactId, token, onClose, onToast, onOpenProject }: {
+  contactId: number; token: string; onClose: () => void;
+  onToast: (msg: string) => void; onOpenProject: (id: number) => void;
+}) {
+  const [detail, setDetail] = useState<ContactDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [notes, setNotes] = useState<NoteEntry[]>([]);
+  const [noteText, setNoteText] = useState("");
+  const [addingNote, setAddingNote] = useState(false);
+
+  const authH = { Authorization: `Bearer ${token}` };
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [dRes, nRes] = await Promise.all([
+        fetch(api(`/api/admin/contacts/${contactId}`), { headers: authH }),
+        fetch(api(`/api/admin/notes?entityType=contact&entityId=${contactId}`), { headers: authH }),
+      ]);
+      const [dData, nData] = await Promise.all([dRes.json(), nRes.json()]);
+      if (dRes.ok) setDetail(dData);
+      if (nRes.ok) setNotes(Array.isArray(nData) ? nData : []);
+    } catch { onToast("오류: 담당자 정보 불러오기 실패"); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, [contactId]);
+
+  const handleAddNote = async () => {
+    if (!noteText.trim()) return;
+    setAddingNote(true);
+    try {
+      const res = await fetch(api("/api/admin/notes"), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ entityType: "contact", entityId: contactId, content: noteText.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      setNotes(prev => [data, ...prev]);
+      setNoteText("");
+      onToast("메모가 추가되었습니다.");
+    } catch { onToast("오류: 메모 추가 실패"); }
+    finally { setAddingNote(false); }
+  };
+
+  const sH: React.CSSProperties = {
+    fontSize: 12, fontWeight: 700, color: "#6b7280",
+    textTransform: "uppercase", letterSpacing: "0.06em",
+    margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 300, overflowY: "auto", padding: "20px 16px" }}>
+      <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb", width: "100%", maxWidth: 720, padding: "24px 28px", boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>담당자 상세</h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#9ca3af" }}>×</button>
+        </div>
+        {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : !detail ? <p style={{ color: "#dc2626" }}>데이터를 불러올 수 없습니다.</p> : (
+          <>
+            <p style={sH}>기본 정보</p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px", marginBottom: 8 }}>
+              {([["이름", detail.name], ["거래처", detail.companyName ?? "-"], ["부서", detail.department ?? "-"], ["직책", detail.position ?? "-"], ["이메일", detail.email ?? "-"], ["전화", detail.phone ?? "-"]] as [string,string][]).map(([l, v]) => (
+                <div key={l} style={{ display: "flex", gap: 4, fontSize: 13, marginBottom: 4 }}>
+                  <span style={{ color: "#9ca3af", minWidth: 60 }}>{l}</span>
+                  <span style={{ color: "#374151", fontWeight: l === "이름" ? 700 : 400 }}>{v}</span>
+                </div>
+              ))}
+            </div>
+
+            <p style={{ ...sH, marginTop: 20 }}>연관 프로젝트 ({detail.projects.length})</p>
+            {detail.projects.length === 0 ? <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>프로젝트가 없습니다.</p> : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {detail.projects.map(p => (
+                  <div key={p.id} onClick={() => { onClose(); onOpenProject(p.id); }}
+                    style={{ display: "flex", gap: 16, padding: "10px 14px", background: "#f9fafb", borderRadius: 8, fontSize: 13, cursor: "pointer", alignItems: "center", border: "1px solid transparent" }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = "#eff6ff"; (e.currentTarget as HTMLDivElement).style.borderColor = "#bfdbfe"; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = "#f9fafb"; (e.currentTarget as HTMLDivElement).style.borderColor = "transparent"; }}>
+                    <span style={{ color: "#9ca3af", minWidth: 36 }}>#{p.id}</span>
+                    <span style={{ fontWeight: 600, color: "#111827", flex: 1 }}>{p.title}</span>
+                    <StatusBadge status={p.status} />
+                    <span style={{ color: "#9ca3af", fontSize: 12 }}>{new Date(p.createdAt).toLocaleDateString("ko-KR")}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {detail.communications.length > 0 && (
+              <>
+                <p style={{ ...sH, marginTop: 20 }}>커뮤니케이션 이력 ({detail.communications.length})</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {detail.communications.map(c => (
+                    <div key={c.id} style={{ padding: "8px 12px", background: "#f9fafb", borderRadius: 8, fontSize: 12, border: "1px solid #f3f4f6" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                        <span style={{ fontWeight: 600, color: "#6b7280" }}>{c.type}</span>
+                        <span style={{ color: "#9ca3af" }}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
+                      </div>
+                      <p style={{ margin: 0, color: "#374151" }}>{c.content}</p>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <p style={{ ...sH, marginTop: 20 }}>메모 ({notes.length})</p>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <input value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="메모 입력..."
+                style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "7px 10px" }}
+                onKeyDown={e => e.key === "Enter" && handleAddNote()} />
+              <PrimaryBtn onClick={handleAddNote} disabled={addingNote || !noteText.trim()} style={{ fontSize: 13, padding: "7px 14px" }}>
+                {addingNote ? "추가 중..." : "추가"}
+              </PrimaryBtn>
+            </div>
+            {notes.length === 0 ? <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>메모가 없습니다.</p> : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {notes.map(n => (
+                  <div key={n.id} style={{ padding: "10px 12px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, color: "#92400e", fontWeight: 600 }}>{n.adminEmail ?? "관리자"}</span>
+                      <span style={{ fontSize: 11, color: "#9ca3af" }}>{new Date(n.createdAt).toLocaleString("ko-KR")}</span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: 13, color: "#374151" }}>{n.content}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── TranslatorDetailModal ───────────────────────────────────────────────────
+function TranslatorDetailModal({ userId, userEmail, token, onClose, onToast }: {
+  userId: number; userEmail: string; token: string;
+  onClose: () => void; onToast: (msg: string) => void;
+}) {
+  const [profile, setProfile] = useState<TranslatorProfile | null>(null);
+  const [rates, setRates] = useState<TranslatorRate[]>([]);
+  const [notes, setNotes] = useState<NoteEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [noteText, setNoteText] = useState("");
+  const [addingNote, setAddingNote] = useState(false);
+  const [rateForm, setRateForm] = useState({ serviceType: "", languagePair: "", unit: "word", rate: "" });
+  const [addingRate, setAddingRate] = useState(false);
+  const [form, setForm] = useState({
+    languagePairs: "", specializations: "", education: "", major: "",
+    graduationYear: "", region: "", rating: "", availabilityStatus: "available",
+    bio: "", ratePerWord: "", ratePerPage: "",
+  });
+
+  const authH = { Authorization: `Bearer ${token}` };
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [dRes, nRes] = await Promise.all([
+        fetch(api(`/api/admin/translators/${userId}`), { headers: authH }),
+        fetch(api(`/api/admin/notes?entityType=translator&entityId=${userId}`), { headers: authH }),
+      ]);
+      const [dData, nData] = await Promise.all([dRes.json(), nRes.json()]);
+      if (dRes.ok) {
+        const p: TranslatorProfile | null = dData.profile;
+        setProfile(p);
+        setRates(Array.isArray(dData.rates) ? dData.rates : []);
+        if (p) {
+          setForm({
+            languagePairs: p.languagePairs ?? "", specializations: p.specializations ?? "",
+            education: p.education ?? "", major: p.major ?? "",
+            graduationYear: p.graduationYear ? String(p.graduationYear) : "",
+            region: p.region ?? "", rating: p.rating ? String(p.rating) : "",
+            availabilityStatus: p.availabilityStatus ?? "available",
+            bio: p.bio ?? "", ratePerWord: p.ratePerWord ? String(p.ratePerWord) : "",
+            ratePerPage: p.ratePerPage ? String(p.ratePerPage) : "",
+          });
+        }
+      }
+      if (nRes.ok) setNotes(Array.isArray(nData) ? nData : []);
+    } catch { onToast("오류: 번역사 정보 불러오기 실패"); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, [userId]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(api(`/api/admin/translators/${userId}`), {
+        method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...form,
+          graduationYear: form.graduationYear ? Number(form.graduationYear) : null,
+          rating: form.rating ? Number(form.rating) : null,
+          ratePerWord: form.ratePerWord ? Number(form.ratePerWord) : null,
+          ratePerPage: form.ratePerPage ? Number(form.ratePerPage) : null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      setProfile(data);
+      onToast("번역사 프로필이 저장되었습니다.");
+    } catch { onToast("오류: 저장 실패"); }
+    finally { setSaving(false); }
+  };
+
+  const handleAddRate = async () => {
+    if (!rateForm.serviceType.trim() || !rateForm.languagePair.trim() || !rateForm.rate) return;
+    setAddingRate(true);
+    try {
+      const res = await fetch(api(`/api/admin/translators/${userId}/rates`), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...rateForm, rate: Number(rateForm.rate) }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      setRates(prev => [data, ...prev]);
+      setRateForm({ serviceType: "", languagePair: "", unit: "word", rate: "" });
+      onToast("단가가 추가되었습니다.");
+    } catch { onToast("오류: 단가 추가 실패"); }
+    finally { setAddingRate(false); }
+  };
+
+  const handleDeleteRate = async (rateId: number) => {
+    try {
+      await fetch(api(`/api/admin/translators/${userId}/rates/${rateId}`), { method: "DELETE", headers: authH });
+      setRates(prev => prev.filter(r => r.id !== rateId));
+      onToast("단가가 삭제되었습니다.");
+    } catch { onToast("오류: 단가 삭제 실패"); }
+  };
+
+  const handleAddNote = async () => {
+    if (!noteText.trim()) return;
+    setAddingNote(true);
+    try {
+      const res = await fetch(api("/api/admin/notes"), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ entityType: "translator", entityId: userId, content: noteText.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      setNotes(prev => [data, ...prev]);
+      setNoteText("");
+      onToast("메모가 추가되었습니다.");
+    } catch { onToast("오류: 메모 추가 실패"); }
+    finally { setAddingNote(false); }
+  };
+
+  const sH: React.CSSProperties = {
+    fontSize: 12, fontWeight: 700, color: "#6b7280",
+    textTransform: "uppercase", letterSpacing: "0.06em",
+    margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
+  };
+  const F = ({ label, field, type = "text", placeholder = "" }: { label: string; field: keyof typeof form; type?: string; placeholder?: string }) => (
+    <div>
+      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>{label}</label>
+      <input type={type} value={form[field]} onChange={e => setForm(p => ({ ...p, [field]: e.target.value }))}
+        placeholder={placeholder} style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+    </div>
+  );
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 300, overflowY: "auto", padding: "20px 16px" }}>
+      <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb", width: "100%", maxWidth: 820, padding: "24px 28px", boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>번역사 상세</h2>
+            <p style={{ margin: "4px 0 0", fontSize: 13, color: "#6b7280" }}>{userEmail}</p>
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#9ca3af" }}>×</button>
+        </div>
+        {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : (
+          <>
+            <p style={sH}>프로필 편집</p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", marginBottom: 12 }}>
+              <F label="언어쌍" field="languagePairs" placeholder="예: 한→영, 영→한" />
+              <F label="전문분야" field="specializations" placeholder="예: 법률, IT, 의학" />
+              <F label="학력" field="education" />
+              <F label="전공" field="major" />
+              <F label="졸업연도" field="graduationYear" type="number" />
+              <F label="지역" field="region" />
+              <F label="평점 (1-5)" field="rating" type="number" placeholder="예: 4.5" />
+              <div>
+                <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>가용 상태</label>
+                <select value={form.availabilityStatus} onChange={e => setForm(p => ({ ...p, availabilityStatus: e.target.value }))}
+                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
+                  <option value="available">가능</option>
+                  <option value="busy">바쁨</option>
+                  <option value="unavailable">불가</option>
+                </select>
+              </div>
+              <F label="기본 단가 (어절)" field="ratePerWord" type="number" />
+              <F label="기본 단가 (페이지)" field="ratePerPage" type="number" />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>소개/메모</label>
+              <textarea value={form.bio} onChange={e => setForm(p => ({ ...p, bio: e.target.value }))}
+                rows={3} style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: 13, padding: "8px 10px", resize: "vertical" }} />
+            </div>
+            <PrimaryBtn onClick={handleSave} disabled={saving} style={{ fontSize: 13, padding: "8px 20px", marginBottom: 4 }}>
+              {saving ? "저장 중..." : "프로필 저장"}
+            </PrimaryBtn>
+
+            <p style={sH}>단가 관리 ({rates.length})</p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 80px 100px auto", gap: "6px 8px", alignItems: "end", marginBottom: 10 }}>
+              <input value={rateForm.serviceType} onChange={e => setRateForm(p => ({ ...p, serviceType: e.target.value }))}
+                placeholder="서비스 유형 (예: 번역)" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+              <input value={rateForm.languagePair} onChange={e => setRateForm(p => ({ ...p, languagePair: e.target.value }))}
+                placeholder="언어조합 (예: 한→영)" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+              <select value={rateForm.unit} onChange={e => setRateForm(p => ({ ...p, unit: e.target.value }))}
+                style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }}>
+                <option value="word">어절</option>
+                <option value="page">페이지</option>
+                <option value="hour">시간</option>
+              </select>
+              <input type="number" value={rateForm.rate} onChange={e => setRateForm(p => ({ ...p, rate: e.target.value }))}
+                placeholder="단가(원)" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+              <PrimaryBtn onClick={handleAddRate} disabled={addingRate} style={{ fontSize: 12, padding: "6px 12px", whiteSpace: "nowrap" }}>
+                {addingRate ? "추가 중..." : "+ 추가"}
+              </PrimaryBtn>
+            </div>
+            {rates.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 4 }}>
+                {rates.map(r => (
+                  <div key={r.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "8px 12px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6", fontSize: 13 }}>
+                    <span style={{ fontWeight: 600, color: "#374151", minWidth: 80 }}>{r.serviceType}</span>
+                    <span style={{ color: "#2563eb", minWidth: 80 }}>{r.languagePair}</span>
+                    <span style={{ color: "#6b7280", minWidth: 50 }}>{r.unit === "word" ? "어절" : r.unit === "page" ? "페이지" : "시간"}</span>
+                    <span style={{ fontWeight: 700, color: "#059669", flex: 1 }}>{r.rate.toLocaleString()}원</span>
+                    <button onClick={() => handleDeleteRate(r.id)} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, cursor: "pointer" }}>삭제</button>
+                  </div>
+                ))}
+              </div>
+            ) : <p style={{ color: "#9ca3af", fontSize: 13, padding: "6px 0" }}>등록된 단가가 없습니다.</p>}
+
+            <p style={sH}>메모 ({notes.length})</p>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <input value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="메모 입력..."
+                style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "7px 10px" }}
+                onKeyDown={e => e.key === "Enter" && handleAddNote()} />
+              <PrimaryBtn onClick={handleAddNote} disabled={addingNote || !noteText.trim()} style={{ fontSize: 13, padding: "7px 14px" }}>
+                {addingNote ? "추가 중..." : "추가"}
+              </PrimaryBtn>
+            </div>
+            {notes.length === 0 ? <p style={{ color: "#9ca3af", fontSize: 13, padding: "6px 0" }}>메모가 없습니다.</p> : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {notes.map(n => (
+                  <div key={n.id} style={{ padding: "10px 12px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, color: "#92400e", fontWeight: 600 }}>{n.adminEmail ?? "관리자"}</span>
+                      <span style={{ fontSize: 11, color: "#9ca3af" }}>{new Date(n.createdAt).toLocaleString("ko-KR")}</span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: 13, color: "#374151" }}>{n.content}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+              <GhostBtn onClick={onClose} style={{ fontSize: 14, padding: "9px 20px" }}>닫기</GhostBtn>
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -1955,7 +2400,7 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
 }
 
 function AdminDashboard({ user, token }: { user: User; token: string }) {
-  const [adminTab, setAdminTab] = useState<"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"products"|"board">("projects");
+  const [adminTab, setAdminTab] = useState<"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators">("projects");
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [payments, setPayments] = useState<AdminPayment[]>([]);
   const [tasks, setTasks] = useState<AdminTask[]>([]);
@@ -2019,6 +2464,21 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
 
   // translator profile modal
   const [translatorProfileModal, setTranslatorProfileModal] = useState<{ userId: number; email: string } | null>(null);
+
+  // contacts tab state
+  const [contacts, setContacts] = useState<AdminContact[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactSearch, setContactSearch] = useState("");
+  const [contactModal, setContactModal] = useState<number | null>(null);
+
+  // translators tab state
+  const [translatorList, setTranslatorList] = useState<TranslatorListItem[]>([]);
+  const [translatorsLoading, setTranslatorsLoading] = useState(false);
+  const [translatorSearch, setTranslatorSearch] = useState("");
+  const [translatorLangFilter, setTranslatorLangFilter] = useState("");
+  const [translatorStatusFilter, setTranslatorStatusFilter] = useState("all");
+  const [translatorRatingFilter, setTranslatorRatingFilter] = useState("");
+  const [translatorDetailModal, setTranslatorDetailModal] = useState<{ userId: number; email: string } | null>(null);
 
   // modals
   const [detailModal, setDetailModal] = useState<number | null>(null);
@@ -2135,6 +2595,33 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
     finally { setBoardLoading(false); }
   }, [token, boardCategory]);
 
+  const fetchContacts = useCallback(async () => {
+    setContactsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (contactSearch.trim()) params.set("search", contactSearch.trim());
+      const res = await fetch(api(`/api/admin/contacts${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      const data = await res.json();
+      if (res.ok) setContacts(Array.isArray(data) ? data : []);
+    } catch { setToast("오류: 담당자 조회 실패"); }
+    finally { setContactsLoading(false); }
+  }, [token, contactSearch]);
+
+  const fetchTranslators = useCallback(async () => {
+    setTranslatorsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (translatorSearch.trim()) params.set("search", translatorSearch.trim());
+      if (translatorLangFilter.trim()) params.set("languagePair", translatorLangFilter.trim());
+      if (translatorStatusFilter !== "all") params.set("status", translatorStatusFilter);
+      if (translatorRatingFilter.trim()) params.set("minRating", translatorRatingFilter.trim());
+      const res = await fetch(api(`/api/admin/translators${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      const data = await res.json();
+      if (res.ok) setTranslatorList(Array.isArray(data) ? data : []);
+    } catch { setToast("오류: 번역사 조회 실패"); }
+    finally { setTranslatorsLoading(false); }
+  }, [token, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorRatingFilter]);
+
   const handleCreateCompany = async () => {
     if (!companyForm.name.trim()) { setToast("회사명을 입력하세요."); return; }
     setSavingCompany(true);
@@ -2234,8 +2721,10 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
   useEffect(() => { if (adminTab === "users") fetchUsers(); }, [adminTab, fetchUsers]);
   useEffect(() => { if (adminTab === "customers") fetchCustomers(); }, [adminTab, fetchCustomers]);
   useEffect(() => { if (adminTab === "companies") fetchCompanies(); }, [adminTab, fetchCompanies]);
+  useEffect(() => { if (adminTab === "contacts") fetchContacts(); }, [adminTab, fetchContacts]);
   useEffect(() => { if (adminTab === "products") fetchProducts(); }, [adminTab, fetchProducts]);
   useEffect(() => { if (adminTab === "board") fetchBoard(); }, [adminTab, fetchBoard]);
+  useEffect(() => { if (adminTab === "translators") fetchTranslators(); }, [adminTab, fetchTranslators]);
 
   const runSettlementPay = async (settlementId: number) => {
     setPaying(settlementId);
@@ -2300,8 +2789,10 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
     { id: "users", label: "사용자 관리" },
     { id: "customers", label: "고객 관리" },
     { id: "companies", label: "거래처" },
+    { id: "contacts", label: "담당자" },
     { id: "products", label: "상품/단가" },
     { id: "board", label: "게시판" },
+    { id: "translators", label: "번역사" },
   ] as const;
 
   return (
@@ -2314,6 +2805,24 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
           onClose={() => setCompanyModal(null)}
           onToast={setToast}
           onOpenProject={(id) => { setCompanyModal(null); setDetailModal(id); }}
+        />
+      )}
+      {contactModal !== null && (
+        <ContactDetailModal
+          contactId={contactModal}
+          token={token}
+          onClose={() => setContactModal(null)}
+          onToast={setToast}
+          onOpenProject={(id) => { setContactModal(null); setDetailModal(id); }}
+        />
+      )}
+      {translatorDetailModal !== null && (
+        <TranslatorDetailModal
+          userId={translatorDetailModal.userId}
+          userEmail={translatorDetailModal.email}
+          token={token}
+          onClose={() => setTranslatorDetailModal(null)}
+          onToast={setToast}
         />
       )}
       {translatorProfileModal !== null && (
@@ -2412,11 +2921,12 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
           <GhostBtn onClick={() => handleExportCSV("projects")} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
         }>
           {/* 검색 + 필터 */}
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
             <input
               value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
-              placeholder="제목 또는 고객 이메일 검색..."
+              placeholder="제목, 이메일, 거래처, 담당자 검색..."
               style={{ ...inputStyle, maxWidth: 280, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+              onKeyDown={e => e.key === "Enter" && fetchAll()}
             />
             <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
               style={{ ...inputStyle, width: "auto", padding: "8px 10px", fontSize: 13 }} />
@@ -2457,7 +2967,7 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
-                      {["ID","제목","고객","상태","생성일","첨부"].map(h => (
+                      {["ID","제목","고객","거래처","담당자","상태","생성일","첨부"].map(h => (
                         <th key={h} style={tableTh}>{h}</th>
                       ))}
                     </tr>
@@ -2474,6 +2984,8 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
                           <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
                         </td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{p.customerEmail ?? "-"}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.companyName ?? "-"}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.contactName ?? "-"}</td>
                         <td style={tableTd}><StatusBadge status={p.status} /></td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
                           {new Date(p.createdAt).toLocaleDateString("ko-KR")}
@@ -2923,6 +3435,53 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
         </Section>
       )}
 
+      {/* ── 담당자 탭 ── */}
+      {adminTab === "contacts" && (
+        <Section title={`담당자 관리 (${contacts.length})`}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+            <input value={contactSearch} onChange={e => setContactSearch(e.target.value)}
+              placeholder="이름, 이메일, 부서, 거래처 검색..."
+              style={{ ...inputStyle, maxWidth: 320, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+              onKeyDown={e => e.key === "Enter" && fetchContacts()} />
+            <PrimaryBtn onClick={fetchContacts} disabled={contactsLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
+              {contactsLoading ? "검색 중..." : "검색"}
+            </PrimaryBtn>
+          </div>
+          {contactsLoading ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : contacts.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 담당자가 없습니다.</Card>
+          ) : (
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>{["ID","이름","부서/직책","이메일","전화","거래처","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {contacts.map(c => (
+                      <tr key={c.id} onClick={() => setContactModal(c.id)} style={{ cursor: "pointer" }}
+                        onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
+                        <td style={{ ...tableTd, fontWeight: 700, color: "#111827" }}>{c.name}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
+                          {[c.department, c.position].filter(Boolean).join(" / ") || "-"}
+                        </td>
+                        <td style={{ ...tableTd, color: "#2563eb", fontSize: 12 }}>{c.email ?? "-"}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{c.phone ?? "-"}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{c.companyName ?? "-"}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </Section>
+      )}
+
       {/* ── 상품/단가 탭 ── */}
       {adminTab === "products" && (
         <Section title={`상품/단가 관리 (${products.length})`} action={
@@ -3100,6 +3659,81 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
                         <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(post.createdAt).toLocaleDateString("ko-KR")}</td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </Section>
+      )}
+
+      {/* ── 번역사 탭 ── */}
+      {adminTab === "translators" && (
+        <Section title={`번역사 관리 (${translatorList.length})`}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
+            <input value={translatorSearch} onChange={e => setTranslatorSearch(e.target.value)}
+              placeholder="이메일, 언어쌍, 지역 검색..."
+              style={{ ...inputStyle, maxWidth: 260, flex: "1 1 180px", padding: "8px 12px", fontSize: 13 }}
+              onKeyDown={e => e.key === "Enter" && fetchTranslators()} />
+            <input value={translatorLangFilter} onChange={e => setTranslatorLangFilter(e.target.value)}
+              placeholder="언어쌍 (예: 한→영)"
+              style={{ ...inputStyle, maxWidth: 160, padding: "8px 12px", fontSize: 13 }} />
+            <input value={translatorRatingFilter} onChange={e => setTranslatorRatingFilter(e.target.value)}
+              placeholder="최소 평점 (1~5)"
+              style={{ ...inputStyle, maxWidth: 130, padding: "8px 12px", fontSize: 13 }} />
+            <select value={translatorStatusFilter} onChange={e => setTranslatorStatusFilter(e.target.value)}
+              style={{ ...inputStyle, padding: "8px 12px", fontSize: 13, minWidth: 100 }}>
+              <option value="all">전체 상태</option>
+              <option value="available">가능</option>
+              <option value="busy">바쁨</option>
+              <option value="unavailable">불가</option>
+            </select>
+            <PrimaryBtn onClick={fetchTranslators} disabled={translatorsLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
+              {translatorsLoading ? "검색 중..." : "검색"}
+            </PrimaryBtn>
+          </div>
+          {translatorsLoading ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : translatorList.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 번역사가 없습니다.</Card>
+          ) : (
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>{["ID","이메일","언어쌍","분야","지역","평점","상태","단가(어절)","활성","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {translatorList.map(t => {
+                      const statusColor = t.availabilityStatus === "available" ? "#059669" : t.availabilityStatus === "busy" ? "#d97706" : "#dc2626";
+                      const statusBg = t.availabilityStatus === "available" ? "#f0fdf4" : t.availabilityStatus === "busy" ? "#fffbeb" : "#fef2f2";
+                      return (
+                        <tr key={t.id} onClick={() => setTranslatorDetailModal({ userId: t.id, email: t.email })} style={{ cursor: "pointer" }}
+                          onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
+                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                          <td style={{ ...tableTd, color: "#9ca3af" }}>#{t.id}</td>
+                          <td style={{ ...tableTd, fontWeight: 600, color: "#111827", fontSize: 12 }}>{t.email}</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{t.languagePairs ?? "-"}</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{t.specializations ?? "-"}</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{t.region ?? "-"}</td>
+                          <td style={{ ...tableTd, textAlign: "center" }}>
+                            {t.rating != null ? <span style={{ fontWeight: 700, color: "#d97706" }}>★ {t.rating.toFixed(1)}</span> : <span style={{ color: "#9ca3af" }}>-</span>}
+                          </td>
+                          <td style={{ ...tableTd, textAlign: "center" }}>
+                            <span style={{ padding: "2px 8px", borderRadius: 10, background: statusBg, color: statusColor, fontSize: 11, fontWeight: 700 }}>
+                              {AVAILABILITY_LABEL[t.availabilityStatus ?? "available"] ?? t.availabilityStatus}
+                            </span>
+                          </td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#374151", textAlign: "right" }}>
+                            {t.ratePerWord != null ? `${t.ratePerWord.toFixed(1)}원` : "-"}
+                          </td>
+                          <td style={{ ...tableTd, textAlign: "center" }}>
+                            <span style={{ width: 10, height: 10, borderRadius: "50%", display: "inline-block", background: t.isActive ? "#059669" : "#d1d5db" }} />
+                          </td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
