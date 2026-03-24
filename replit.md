@@ -105,6 +105,15 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 - `PATCH /api/admin/settlements/:id/pay` 🔒 (admin) — 정산 완료 처리 (ready → paid)
 - `GET /api/settlements/my` 🔒 (translator) — 내 정산 내역 (프로젝트 제목 포함)
 
+### 고객·커뮤니케이션
+- `GET /api/admin/customers` 🔒 — 고객 목록 (?search, 프로젝트 수·결제 합계 포함)
+- `POST /api/admin/customers` 🔒 — 고객 등록 (companyName, contactName, email, phone)
+- `GET /api/admin/customers/:id` 🔒 — 고객 상세 (projects 목록, totalPayment, totalSettlement)
+- `PATCH /api/admin/customers/:id` 🔒 — 고객 정보 수정
+- `POST /api/admin/communications` 🔒 — 커뮤니케이션 기록 추가 (customerId, projectId?, type, content)
+- `GET /api/admin/customers/:id/communications` 🔒 — 고객별 커뮤니케이션 목록
+- `GET /api/admin/projects/:id/communications` 🔒 — 프로젝트별 커뮤니케이션 목록
+
 ### Admin (🔒 admin role 전용)
 - `GET /api/admin/projects` 🔒 — 전체 프로젝트 + 고객 이메일 (최신순, ?search, ?status, ?dateFrom, ?dateTo 필터)
 - `GET /api/admin/projects/:id` 🔒 — 프로젝트 상세 (견적/결제/작업/정산/로그 포함)

@@ -1,7 +1,7 @@
 import { db, logsTable } from "@workspace/db";
 import type { Logger } from "pino";
 
-type EntityType = "project" | "quote" | "task";
+type EntityType = "project" | "quote" | "task" | "communication";
 
 export async function logEvent(
   entityType: EntityType,

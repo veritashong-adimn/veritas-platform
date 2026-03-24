@@ -19,6 +19,8 @@ export const projectsTable = pgTable("projects", {
   userId: integer("user_id")
     .notNull()
     .references(() => usersTable.id),
+  customerId: integer("customer_id"),
+  adminId: integer("admin_id").references(() => usersTable.id),
   title: text("title").notNull(),
   fileUrl: text("file_url"),
   status: projectStatusEnum("status").notNull().default("created"),

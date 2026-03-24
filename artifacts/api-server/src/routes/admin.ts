@@ -2,8 +2,9 @@ import { Router, type IRouter } from "express";
 import {
   db, projectsTable, paymentsTable, tasksTable, usersTable,
   logsTable, quotesTable, settlementsTable, notesTable,
+  customersTable, communicationsTable,
 } from "@workspace/db";
-import { eq, and, ne, ilike, or, gte, lte, inArray } from "drizzle-orm";
+import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 
@@ -13,9 +14,13 @@ const adminGuard = [requireAuth, requireRole("admin")];
 // ─── 프로젝트 목록 (검색/필터) ────────────────────────────────────────────
 router.get("/admin/projects", ...adminGuard, async (req, res) => {
   try {
-    const { search, status, dateFrom, dateTo } = req.query as {
-      search?: string; status?: string; dateFrom?: string; dateTo?: string;
+    const { search, status, dateFrom, dateTo, assignedAdminId } = req.query as {
+      search?: string; status?: string; dateFrom?: string; dateTo?: string; assignedAdminId?: string;
     };
+
+    const adminAlias = db.$with("admin_user").as(
+      db.select({ id: usersTable.id, email: usersTable.email }).from(usersTable)
+    );
 
     const rows = await db
       .select({
@@ -26,6 +31,8 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
         createdAt: projectsTable.createdAt,
         customerEmail: usersTable.email,
         customerId: usersTable.id,
+        projectCustomerId: projectsTable.customerId,
+        adminId: projectsTable.adminId,
       })
       .from(projectsTable)
       .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))
@@ -60,6 +67,13 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
       if (!isNaN(to.getTime())) {
         to.setHours(23, 59, 59, 999);
         result = result.filter(p => new Date(p.createdAt) <= to);
+      }
+    }
+
+    if (assignedAdminId?.trim()) {
+      const adminIdNum = Number(assignedAdminId);
+      if (!isNaN(adminIdNum)) {
+        result = result.filter(p => p.adminId === adminIdNum);
       }
     }
 
@@ -506,6 +520,272 @@ router.post("/admin/projects/:id/notes", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Admin: failed to add note");
     res.status(500).json({ error: "메모 추가 실패." });
+  }
+});
+
+// ─── 담당자 지정 ────────────────────────────────────────────────────────────
+router.patch("/admin/projects/:id/assign", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 project id." });
+    return;
+  }
+
+  const { adminId } = req.body as { adminId: number | null };
+
+  try {
+    const [existing] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId));
+    if (!existing) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
+
+    if (adminId !== null && adminId !== undefined) {
+      const [admin] = await db.select().from(usersTable)
+        .where(and(eq(usersTable.id, adminId), eq(usersTable.role, "admin")));
+      if (!admin) { res.status(400).json({ error: "유효한 관리자가 아닙니다." }); return; }
+    }
+
+    const [updated] = await db
+      .update(projectsTable)
+      .set({ adminId: adminId ?? null })
+      .where(eq(projectsTable.id, projectId))
+      .returning();
+
+    await logEvent("project", projectId, `담당자 ${adminId ? `지정 (adminId=${adminId})` : "해제"}`, req.log);
+    res.json(updated);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to assign admin");
+    res.status(500).json({ error: "담당자 지정 실패." });
+  }
+});
+
+// ─── 고객 목록 ──────────────────────────────────────────────────────────────
+router.get("/admin/customers", ...adminGuard, async (req, res) => {
+  try {
+    const { search } = req.query as { search?: string };
+
+    const rows = await db
+      .select({
+        id: customersTable.id,
+        companyName: customersTable.companyName,
+        contactName: customersTable.contactName,
+        email: customersTable.email,
+        phone: customersTable.phone,
+        createdAt: customersTable.createdAt,
+        projectCount: sql<number>`COUNT(DISTINCT ${projectsTable.id})::int`,
+        totalPayment: sql<number>`COALESCE(SUM(${paymentsTable.amount}) FILTER (WHERE ${paymentsTable.status} = 'paid'), 0)::int`,
+      })
+      .from(customersTable)
+      .leftJoin(projectsTable, eq(projectsTable.customerId, customersTable.id))
+      .leftJoin(paymentsTable, eq(paymentsTable.projectId, projectsTable.id))
+      .groupBy(customersTable.id)
+      .orderBy(desc(customersTable.createdAt));
+
+    let result = rows;
+    if (search?.trim()) {
+      const s = search.trim().toLowerCase();
+      result = result.filter(c =>
+        c.companyName.toLowerCase().includes(s) ||
+        c.contactName.toLowerCase().includes(s) ||
+        c.email.toLowerCase().includes(s)
+      );
+    }
+
+    res.json(result);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch customers");
+    res.status(500).json({ error: "고객 조회 실패." });
+  }
+});
+
+// ─── 고객 생성 ──────────────────────────────────────────────────────────────
+router.post("/admin/customers", ...adminGuard, async (req, res) => {
+  const { companyName, contactName, email, phone } = req.body as {
+    companyName?: string; contactName?: string; email?: string; phone?: string;
+  };
+
+  if (!companyName?.trim() || !contactName?.trim() || !email?.trim()) {
+    res.status(400).json({ error: "회사명, 담당자명, 이메일은 필수입니다." });
+    return;
+  }
+
+  try {
+    const [customer] = await db
+      .insert(customersTable)
+      .values({ companyName: companyName.trim(), contactName: contactName.trim(), email: email.trim(), phone: phone?.trim() })
+      .returning();
+    res.status(201).json(customer);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to create customer");
+    res.status(500).json({ error: "고객 생성 실패." });
+  }
+});
+
+// ─── 고객 상세 ──────────────────────────────────────────────────────────────
+router.get("/admin/customers/:id", ...adminGuard, async (req, res) => {
+  const customerId = Number(req.params.id);
+  if (isNaN(customerId) || customerId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 customer id." });
+    return;
+  }
+
+  try {
+    const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, customerId));
+    if (!customer) { res.status(404).json({ error: "고객을 찾을 수 없습니다." }); return; }
+
+    const projects = await db
+      .select({
+        id: projectsTable.id,
+        title: projectsTable.title,
+        status: projectsTable.status,
+        createdAt: projectsTable.createdAt,
+      })
+      .from(projectsTable)
+      .where(eq(projectsTable.customerId, customerId))
+      .orderBy(desc(projectsTable.createdAt));
+
+    const projectIds = projects.map(p => p.id);
+
+    let totalPayment = 0;
+    let totalSettlement = 0;
+
+    if (projectIds.length > 0) {
+      const [payRow] = await db
+        .select({ total: sql<number>`COALESCE(SUM(${paymentsTable.amount}), 0)::int` })
+        .from(paymentsTable)
+        .where(and(inArray(paymentsTable.projectId, projectIds), eq(paymentsTable.status, "paid")));
+      totalPayment = payRow?.total ?? 0;
+
+      const [setRow] = await db
+        .select({ total: sql<number>`COALESCE(SUM(${settlementsTable.translatorAmount}), 0)::int` })
+        .from(settlementsTable)
+        .where(inArray(settlementsTable.projectId, projectIds));
+      totalSettlement = setRow?.total ?? 0;
+    }
+
+    res.json({ ...customer, projects, totalPayment, totalSettlement });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch customer detail");
+    res.status(500).json({ error: "고객 상세 조회 실패." });
+  }
+});
+
+// ─── 고객 수정 ──────────────────────────────────────────────────────────────
+router.patch("/admin/customers/:id", ...adminGuard, async (req, res) => {
+  const customerId = Number(req.params.id);
+  if (isNaN(customerId) || customerId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 customer id." }); return;
+  }
+
+  const { companyName, contactName, email, phone } = req.body as {
+    companyName?: string; contactName?: string; email?: string; phone?: string;
+  };
+
+  try {
+    const [existing] = await db.select().from(customersTable).where(eq(customersTable.id, customerId));
+    if (!existing) { res.status(404).json({ error: "고객을 찾을 수 없습니다." }); return; }
+
+    const [updated] = await db
+      .update(customersTable)
+      .set({
+        companyName: companyName?.trim() ?? existing.companyName,
+        contactName: contactName?.trim() ?? existing.contactName,
+        email: email?.trim() ?? existing.email,
+        phone: phone?.trim() ?? existing.phone,
+      })
+      .where(eq(customersTable.id, customerId))
+      .returning();
+
+    res.json(updated);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to update customer");
+    res.status(500).json({ error: "고객 수정 실패." });
+  }
+});
+
+// ─── 커뮤니케이션 생성 ───────────────────────────────────────────────────────
+router.post("/admin/communications", ...adminGuard, async (req, res) => {
+  const { customerId, projectId, type, content } = req.body as {
+    customerId?: number; projectId?: number; type?: string; content?: string;
+  };
+
+  if (!customerId || !content?.trim()) {
+    res.status(400).json({ error: "고객 ID와 내용은 필수입니다." }); return;
+  }
+
+  const validTypes = ["email", "phone", "message"];
+  const commType = validTypes.includes(type ?? "") ? (type as "email" | "phone" | "message") : "message";
+
+  try {
+    const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, customerId));
+    if (!customer) { res.status(404).json({ error: "고객을 찾을 수 없습니다." }); return; }
+
+    const [comm] = await db
+      .insert(communicationsTable)
+      .values({
+        customerId,
+        projectId: projectId ?? null,
+        type: commType,
+        content: content.trim(),
+      })
+      .returning();
+
+    if (projectId) {
+      await logEvent("communication", comm.id, `커뮤니케이션 기록 (type=${commType}, projectId=${projectId})`, req.log);
+    }
+
+    res.status(201).json(comm);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to create communication");
+    res.status(500).json({ error: "커뮤니케이션 기록 실패." });
+  }
+});
+
+// ─── 고객별 커뮤니케이션 목록 ─────────────────────────────────────────────
+router.get("/admin/customers/:id/communications", ...adminGuard, async (req, res) => {
+  const customerId = Number(req.params.id);
+  if (isNaN(customerId) || customerId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 customer id." }); return;
+  }
+
+  try {
+    const rows = await db
+      .select()
+      .from(communicationsTable)
+      .where(eq(communicationsTable.customerId, customerId))
+      .orderBy(desc(communicationsTable.createdAt));
+    res.json(rows);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch customer communications");
+    res.status(500).json({ error: "커뮤니케이션 조회 실패." });
+  }
+});
+
+// ─── 프로젝트별 커뮤니케이션 목록 ───────────────────────────────────────────
+router.get("/admin/projects/:id/communications", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 project id." }); return;
+  }
+
+  try {
+    const rows = await db
+      .select({
+        id: communicationsTable.id,
+        customerId: communicationsTable.customerId,
+        projectId: communicationsTable.projectId,
+        type: communicationsTable.type,
+        content: communicationsTable.content,
+        createdAt: communicationsTable.createdAt,
+        companyName: customersTable.companyName,
+        contactName: customersTable.contactName,
+      })
+      .from(communicationsTable)
+      .leftJoin(customersTable, eq(communicationsTable.customerId, customersTable.id))
+      .where(eq(communicationsTable.projectId, projectId))
+      .orderBy(desc(communicationsTable.createdAt));
+    res.json(rows);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch project communications");
+    res.status(500).json({ error: "커뮤니케이션 조회 실패." });
   }
 });
 
