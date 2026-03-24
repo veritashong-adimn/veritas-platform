@@ -98,6 +98,12 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 - `GET /api/projects` — 프로젝트 목록 (?userId=N 필터)
 - `POST /api/projects/:id/match` 🔒 (customer/admin) — 번역가 랜덤 매칭 (**paid 상태에서만 가능**)
 
+### Admin (🔒 admin role 전용)
+- `GET /api/admin/projects` 🔒 — 전체 프로젝트 + 고객 이메일 (최신순)
+- `GET /api/admin/payments` 🔒 — 전체 결제 + 프로젝트 제목
+- `GET /api/admin/tasks` 🔒 — 전체 작업 + 번역사 이메일
+- `GET /api/admin/logs/:projectId` 🔒 — 프로젝트 이벤트 로그
+
 ### Payments (🔒 = 인증 필요)
 - `POST /api/payments/request` 🔒 — 결제 요청 생성 (approved 상태 프로젝트, 견적 금액 기준)
 - `POST /api/payments/confirm` 🔒 — 결제 확인 ({paymentId, success: bool}) → paid/failed

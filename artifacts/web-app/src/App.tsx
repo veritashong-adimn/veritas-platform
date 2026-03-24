@@ -605,6 +605,392 @@ function CustomerDashboard({ user, token }: { user: User; token: string }) {
   );
 }
 
+type AdminProject = {
+  id: number; title: string; status: string; fileUrl: string | null;
+  createdAt: string; customerEmail: string | null; customerId: number | null;
+};
+type AdminPayment = {
+  id: number; projectId: number; amount: number; status: string;
+  createdAt: string; projectTitle: string | null; projectStatus: string | null;
+};
+type AdminTask = {
+  id: number; projectId: number; translatorId: number; status: string;
+  createdAt: string; projectTitle: string | null; projectStatus: string | null;
+  translatorEmail: string | null;
+};
+type LogEntry = { id: number; entityType: string; entityId: number; action: string; createdAt: string };
+
+const ALL_PROJECT_STATUSES = ["created","quoted","approved","paid","matched","in_progress","completed"] as const;
+const ALL_PAYMENT_STATUSES = ["pending","paid","failed"] as const;
+
+function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <div style={{ marginBottom: 32 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>{title}</h2>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function FilterPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick} style={{
+      padding: "5px 12px", borderRadius: 20, fontSize: 12, fontWeight: 600, cursor: "pointer", border: "1px solid",
+      background: active ? "#2563eb" : "#fff",
+      color: active ? "#fff" : "#6b7280",
+      borderColor: active ? "#2563eb" : "#d1d5db",
+      transition: "all 0.12s",
+    }}>{label}</button>
+  );
+}
+
+function LogModal({ projectId, token, onClose }: { projectId: number; token: string; onClose: () => void }) {
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(api(`/api/admin/logs/${projectId}`), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (!res.ok) { setErr(data.error ?? "로그 조회 실패"); return; }
+        setLogs(Array.isArray(data) ? data : []);
+      } catch { setErr("서버 연결 실패"); }
+      finally { setLoading(false); }
+    })();
+  }, [projectId, token]);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+      display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300,
+    }}>
+      <Card style={{ width: "100%", maxWidth: 520, margin: "0 16px", maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>
+            프로젝트 #{projectId} 이벤트 로그
+          </h2>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#9ca3af", lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ overflowY: "auto", flex: 1 }}>
+          {loading ? (
+            <p style={{ textAlign: "center", color: "#9ca3af", padding: "24px 0" }}>로딩 중...</p>
+          ) : err ? (
+            <p style={{ color: "#dc2626", fontSize: 13 }}>{err}</p>
+          ) : logs.length === 0 ? (
+            <p style={{ textAlign: "center", color: "#9ca3af", padding: "24px 0", fontSize: 14 }}>로그가 없습니다.</p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              {logs.map((log) => (
+                <div key={log.id} style={{
+                  display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 12px",
+                  background: "#f9fafb", borderRadius: 8,
+                }}>
+                  <span style={{ fontSize: 11, color: "#9ca3af", minWidth: 130, marginTop: 1 }}>
+                    {new Date(log.createdAt).toLocaleString("ko-KR")}
+                  </span>
+                  <div style={{ flex: 1 }}>
+                    <span style={{
+                      background: "#eff6ff", color: "#2563eb",
+                      borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 600, marginRight: 8,
+                    }}>{log.entityType}</span>
+                    <span style={{ fontSize: 13, color: "#374151" }}>{log.action}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function AdminDashboard({ user, token }: { user: User; token: string }) {
+  const [projects, setProjects] = useState<AdminProject[]>([]);
+  const [payments, setPayments] = useState<AdminPayment[]>([]);
+  const [tasks, setTasks] = useState<AdminTask[]>([]);
+  const [toast, setToast] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [projectFilter, setProjectFilter] = useState<string>("all");
+  const [paymentFilter, setPaymentFilter] = useState<string>("all");
+  const [logModal, setLogModal] = useState<number | null>(null);
+  const [matching, setMatching] = useState<number | null>(null);
+
+  const authHeaders = { Authorization: `Bearer ${token}` };
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [pRes, pmRes, tRes] = await Promise.all([
+        fetch(api("/api/admin/projects"), { headers: authHeaders }),
+        fetch(api("/api/admin/payments"), { headers: authHeaders }),
+        fetch(api("/api/admin/tasks"), { headers: authHeaders }),
+      ]);
+      const [pData, pmData, tData] = await Promise.all([pRes.json(), pmRes.json(), tRes.json()]);
+      if (pRes.ok) setProjects(Array.isArray(pData) ? pData : []);
+      if (pmRes.ok) setPayments(Array.isArray(pmData) ? pmData : []);
+      if (tRes.ok) setTasks(Array.isArray(tData) ? tData : []);
+    } catch { setToast("오류: 데이터 불러오기 실패"); }
+    finally { setLoading(false); }
+  }, [token]);
+
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  const runMatch = async (projectId: number) => {
+    setMatching(projectId);
+    try {
+      const res = await fetch(api(`/api/projects/${projectId}/match`), {
+        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setToast(`프로젝트 #${projectId} 매칭 완료!`);
+      await fetchAll();
+    } catch { setToast("오류: 매칭 실패"); }
+    finally { setMatching(null); }
+  };
+
+  const filteredProjects = projectFilter === "all"
+    ? projects
+    : projects.filter(p => p.status === projectFilter);
+  const filteredPayments = paymentFilter === "all"
+    ? payments
+    : payments.filter(p => p.status === paymentFilter);
+
+  const tableTh: React.CSSProperties = {
+    padding: "10px 12px", textAlign: "left", fontSize: 12,
+    fontWeight: 600, color: "#6b7280", background: "#f9fafb",
+    borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap",
+  };
+  const tableTd: React.CSSProperties = {
+    padding: "11px 12px", fontSize: 13, color: "#374151",
+    borderBottom: "1px solid #f3f4f6", verticalAlign: "middle",
+  };
+
+  return (
+    <>
+      <Toast msg={toast} onClose={() => setToast("")} />
+      {logModal !== null && (
+        <LogModal projectId={logModal} token={token} onClose={() => setLogModal(null)} />
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+        <div>
+          <h1 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 800, color: "#111827" }}>관리자 대시보드</h1>
+          <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>전체 프로젝트·결제·작업 현황을 조회하고 개입합니다.</p>
+        </div>
+        <GhostBtn onClick={fetchAll} disabled={loading}>{loading ? "로딩..." : "전체 새로고침"}</GhostBtn>
+      </div>
+
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 28 }}>
+        {[
+          { label: "전체 프로젝트", value: projects.length, color: "#2563eb", bg: "#eff6ff" },
+          { label: "결제 완료", value: payments.filter(p => p.status === "paid").length, color: "#059669", bg: "#f0fdf4" },
+          { label: "진행 중 작업", value: tasks.filter(t => t.status !== "done").length, color: "#d97706", bg: "#fffbeb" },
+          { label: "완료된 작업", value: tasks.filter(t => t.status === "done").length, color: "#9333ea", bg: "#faf5ff" },
+        ].map(s => (
+          <div key={s.label} style={{
+            background: s.bg, border: `1px solid ${s.color}22`,
+            borderRadius: 10, padding: "14px 20px", minWidth: 140, flex: "1 1 120px",
+          }}>
+            <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 600, color: s.color }}>{s.label}</p>
+            <p style={{ margin: 0, fontSize: 26, fontWeight: 800, color: s.color }}>{s.value}</p>
+          </div>
+        ))}
+      </div>
+
+      <Section
+        title={`전체 프로젝트 (${filteredProjects.length})`}
+        action={
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <FilterPill label="전체" active={projectFilter === "all"} onClick={() => setProjectFilter("all")} />
+            {ALL_PROJECT_STATUSES.map(s => (
+              <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
+                active={projectFilter === s} onClick={() => setProjectFilter(s)} />
+            ))}
+          </div>
+        }
+      >
+        {loading ? (
+          <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+        ) : filteredProjects.length === 0 ? (
+          <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
+            해당 상태의 프로젝트가 없습니다.
+          </Card>
+        ) : (
+          <Card style={{ padding: 0, overflow: "hidden" }}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    {["ID","제목","고객","상태","생성일","첨부","액션"].map(h => (
+                      <th key={h} style={tableTh}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredProjects.map(p => (
+                    <tr key={p.id} style={{ transition: "background 0.1s" }}
+                      onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                      <td style={{ ...tableTd, color: "#9ca3af" }}>#{p.id}</td>
+                      <td style={{ ...tableTd, fontWeight: 600, color: "#111827", maxWidth: 200 }}>
+                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {p.title}
+                        </div>
+                      </td>
+                      <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{p.customerEmail ?? "-"}</td>
+                      <td style={tableTd}><StatusBadge status={p.status} /></td>
+                      <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                        {new Date(p.createdAt).toLocaleDateString("ko-KR")}
+                      </td>
+                      <td style={tableTd}>
+                        {p.fileUrl ? (
+                          <a href={p.fileUrl} target="_blank" rel="noreferrer" style={{
+                            color: "#2563eb", fontSize: 12, textDecoration: "none",
+                            display: "inline-flex", alignItems: "center", gap: 4,
+                          }}>📎 파일</a>
+                        ) : <span style={{ color: "#d1d5db", fontSize: 12 }}>-</span>}
+                      </td>
+                      <td style={{ ...tableTd, whiteSpace: "nowrap" }}>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button onClick={() => setLogModal(p.id)} style={{
+                            padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer",
+                            background: "#f3f4f6", border: "1px solid #e5e7eb", color: "#374151", fontWeight: 500,
+                          }}>로그</button>
+                          {p.status === "paid" && (
+                            <button onClick={() => runMatch(p.id)} disabled={matching === p.id} style={{
+                              padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: matching === p.id ? "not-allowed" : "pointer",
+                              background: matching === p.id ? "#86efac" : "#16a34a",
+                              border: "none", color: "#fff", fontWeight: 600,
+                            }}>
+                              {matching === p.id ? "매칭 중..." : "매칭 실행"}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+      </Section>
+
+      <Section
+        title={`결제 현황 (${filteredPayments.length})`}
+        action={
+          <div style={{ display: "flex", gap: 6 }}>
+            <FilterPill label="전체" active={paymentFilter === "all"} onClick={() => setPaymentFilter("all")} />
+            {ALL_PAYMENT_STATUSES.map(s => (
+              <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
+                active={paymentFilter === s} onClick={() => setPaymentFilter(s)} />
+            ))}
+          </div>
+        }
+      >
+        {loading ? (
+          <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+        ) : filteredPayments.length === 0 ? (
+          <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
+            결제 내역이 없습니다.
+          </Card>
+        ) : (
+          <Card style={{ padding: 0, overflow: "hidden" }}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    {["ID","프로젝트","결제 금액","결제 상태","프로젝트 상태","생성일"].map(h => (
+                      <th key={h} style={tableTh}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredPayments.map(pm => (
+                    <tr key={pm.id}
+                      onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                      <td style={{ ...tableTd, color: "#9ca3af" }}>#{pm.id}</td>
+                      <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>
+                        {pm.projectTitle ?? `프로젝트 #${pm.projectId}`}
+                      </td>
+                      <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2" }}>
+                        {Number(pm.amount).toLocaleString()}원
+                      </td>
+                      <td style={tableTd}><StatusBadge status={pm.status} /></td>
+                      <td style={tableTd}>
+                        {pm.projectStatus ? <StatusBadge status={pm.projectStatus} /> : "-"}
+                      </td>
+                      <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                        {new Date(pm.createdAt).toLocaleDateString("ko-KR")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+      </Section>
+
+      <Section title={`작업 현황 (${tasks.length})`}>
+        {loading ? (
+          <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+        ) : tasks.length === 0 ? (
+          <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
+            작업이 없습니다.
+          </Card>
+        ) : (
+          <Card style={{ padding: 0, overflow: "hidden" }}>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    {["ID","프로젝트","번역사","작업 상태","프로젝트 상태","생성일"].map(h => (
+                      <th key={h} style={tableTh}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tasks.map(t => (
+                    <tr key={t.id}
+                      onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                      <td style={{ ...tableTd, color: "#9ca3af" }}>#{t.id}</td>
+                      <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>
+                        {t.projectTitle ?? `프로젝트 #${t.projectId}`}
+                      </td>
+                      <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
+                        {t.translatorEmail ?? `번역사 #${t.translatorId}`}
+                      </td>
+                      <td style={tableTd}><StatusBadge status={t.status} /></td>
+                      <td style={tableTd}>
+                        {t.projectStatus ? <StatusBadge status={t.projectStatus} /> : "-"}
+                      </td>
+                      <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                        {new Date(t.createdAt).toLocaleDateString("ko-KR")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+      </Section>
+    </>
+  );
+}
+
 function TranslatorDashboard({ user, token }: { user: User; token: string }) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [toast, setToast] = useState("");
@@ -725,26 +1111,22 @@ export default function App() {
       <Navbar user={user} onLogout={handleLogout} />
 
       <main style={{ maxWidth: 1100, margin: "0 auto", padding: "80px 24px 48px" }}>
-        <div style={{ marginBottom: 24 }}>
-          <h1 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 800, color: "#111827" }}>
-            {user.role === "customer" ? "번역 의뢰 관리" : "번역 작업 관리"}
-          </h1>
-          <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>
-            {user.role === "customer"
-              ? "번역 프로젝트를 등록하고 진행 상황을 확인하세요."
-              : "배정된 번역 작업을 확인하고 진행해주세요."}
-          </p>
-        </div>
+        {user.role !== "admin" && (
+          <div style={{ marginBottom: 24 }}>
+            <h1 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 800, color: "#111827" }}>
+              {user.role === "customer" ? "번역 의뢰 관리" : "번역 작업 관리"}
+            </h1>
+            <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>
+              {user.role === "customer"
+                ? "번역 프로젝트를 등록하고 진행 상황을 확인하세요."
+                : "배정된 번역 작업을 확인하고 진행해주세요."}
+            </p>
+          </div>
+        )}
 
         {user.role === "customer" && <CustomerDashboard user={user} token={token} />}
         {user.role === "translator" && <TranslatorDashboard user={user} token={token} />}
-        {user.role === "admin" && (
-          <Card style={{ textAlign: "center", padding: "48px 24px", color: "#6b7280" }}>
-            <p style={{ margin: 0, fontSize: 32 }}>🔧</p>
-            <p style={{ margin: "12px 0 0", fontSize: 15, fontWeight: 600, color: "#374151" }}>관리자 대시보드</p>
-            <p style={{ margin: "6px 0 0", fontSize: 13 }}>관리자 화면은 추후 구현 예정입니다.</p>
-          </Card>
-        )}
+        {user.role === "admin" && <AdminDashboard user={user} token={token} />}
       </main>
     </div>
   );

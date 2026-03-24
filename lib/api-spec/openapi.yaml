@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Api
-  version: 0.7.0
+  version: 0.8.0
   description: 통번역 플랫폼 API
 servers:
   - url: /api
@@ -19,6 +19,8 @@ tags:
     description: Quote operations
   - name: tasks
     description: Task operations
+  - name: admin
+    description: Admin (CRM) operations — admin role only
   - name: payments
     description: Payment operations
   - name: upload
@@ -381,6 +383,92 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /admin/projects:
+    get:
+      operationId: adminListProjects
+      tags: [admin]
+      summary: List all projects with customer info (admin only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: All projects
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminProject"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /admin/payments:
+    get:
+      operationId: adminListPayments
+      tags: [admin]
+      summary: List all payments with project info (admin only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: All payments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminPayment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /admin/tasks:
+    get:
+      operationId: adminListTasks
+      tags: [admin]
+      summary: List all tasks with project and translator info (admin only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: All tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminTask"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /admin/logs/{projectId}:
+    get:
+      operationId: adminGetProjectLogs
+      tags: [admin]
+      summary: Get event logs for a project (admin only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Project logs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Log"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
   /payments/request:
     post:
       operationId: requestPayment
