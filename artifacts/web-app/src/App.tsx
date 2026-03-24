@@ -109,16 +109,35 @@ function Toast({ msg, onClose }: { msg: string; onClose: () => void }) {
   );
 }
 
-function Navbar({ user, onLogout }: { user: User; onLogout: () => void }) {
+type NavPage = "dashboard" | "admin";
+
+function Navbar({
+  user, page, onPageChange, onLogout,
+}: {
+  user: User;
+  page: NavPage;
+  onPageChange: (p: NavPage) => void;
+  onLogout: () => void;
+}) {
+  const navLink = (label: string, target: NavPage, active: boolean) => (
+    <button onClick={() => onPageChange(target)} style={{
+      background: "none", border: "none", cursor: "pointer",
+      padding: "0 4px", height: 56, fontSize: 14, fontWeight: 600,
+      color: active ? "#2563eb" : "#6b7280",
+      borderBottom: active ? "2px solid #2563eb" : "2px solid transparent",
+      transition: "color 0.15s, border-color 0.15s",
+    }}>{label}</button>
+  );
+
   return (
     <nav style={{
       position: "fixed", top: 0, left: 0, right: 0, zIndex: 50,
       height: 56, background: "#fff",
       borderBottom: "1px solid #e5e7eb",
       display: "flex", alignItems: "center",
-      padding: "0 24px", gap: 16,
+      padding: "0 24px", gap: 0,
     }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 24 }}>
         <div style={{
           width: 28, height: 28, background: "#2563eb", borderRadius: 6,
           display: "flex", alignItems: "center", justifyContent: "center",
@@ -126,9 +145,33 @@ function Navbar({ user, onLogout }: { user: User; onLogout: () => void }) {
         }}>T</div>
         <span style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>통번역 플랫폼</span>
       </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 4, flex: 1 }}>
+        {user.role === "customer" && navLink("내 프로젝트", "dashboard", page === "dashboard")}
+        {user.role === "translator" && navLink("내 작업", "dashboard", page === "dashboard")}
+        {user.role === "admin" && (
+          <>
+            {navLink("관리자 대시보드", "admin", page === "admin")}
+          </>
+        )}
+      </div>
+
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        {user.role === "admin" && page === "admin" && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: 6,
+            background: "#fef2f2", border: "1px solid #fca5a5",
+            borderRadius: 8, padding: "4px 10px",
+          }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: "#dc2626", letterSpacing: "0.05em" }}>
+              ADMIN
+            </span>
+          </div>
+        )}
         <RoleBadge role={user.role} />
-        <span style={{ fontSize: 13, color: "#6b7280" }}>{user.email}</span>
+        <span style={{ fontSize: 13, color: "#6b7280", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {user.email}
+        </span>
         <button onClick={onLogout} style={{
           padding: "6px 14px", borderRadius: 6, border: "1px solid #e5e7eb",
           background: "#fff", color: "#374151", fontSize: 13,
@@ -1084,49 +1127,104 @@ function TranslatorDashboard({ user, token }: { user: User; token: string }) {
   );
 }
 
+function getDefaultPage(role: Role): NavPage {
+  return role === "admin" ? "admin" : "dashboard";
+}
+
+function AccessDenied({ onBack }: { onBack: () => void }) {
+  return (
+    <Card style={{ textAlign: "center", padding: "60px 24px" }}>
+      <p style={{ margin: 0, fontSize: 40 }}>🚫</p>
+      <h2 style={{ margin: "12px 0 6px", fontSize: 18, fontWeight: 700, color: "#111827" }}>
+        접근 권한이 없습니다
+      </h2>
+      <p style={{ margin: "0 0 20px", fontSize: 14, color: "#6b7280" }}>
+        관리자 계정만 접근할 수 있는 페이지입니다.
+      </p>
+      <GhostBtn onClick={onBack}>홈으로 돌아가기</GhostBtn>
+    </Card>
+  );
+}
+
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [page, setPage] = useState<NavPage>("dashboard");
 
   useEffect(() => {
     const session = loadSession();
-    if (session) { setToken(session.token); setUser(session.user); }
+    if (session) {
+      setToken(session.token);
+      setUser(session.user);
+      setPage(getDefaultPage(session.user.role));
+    }
   }, []);
 
   const handleAuth = (t: string, u: User) => {
-    saveSession(t, u); setToken(t); setUser(u);
+    saveSession(t, u);
+    setToken(t);
+    setUser(u);
+    setPage(getDefaultPage(u.role));
   };
 
   const handleLogout = () => {
-    clearSession(); setToken(null); setUser(null);
+    clearSession();
+    setToken(null);
+    setUser(null);
+    setPage("dashboard");
+  };
+
+  const handlePageChange = (p: NavPage) => {
+    if (p === "admin" && user?.role !== "admin") return;
+    setPage(p);
   };
 
   if (!token || !user) return <AuthPage onAuth={handleAuth} />;
+
+  const isAdmin = user.role === "admin";
+  const showAdminPage = page === "admin";
+
+  if (showAdminPage && !isAdmin) {
+    return (
+      <div style={{
+        minHeight: "100vh", background: "#f9fafb",
+        fontFamily: "'Pretendard', 'Apple SD Gothic Neo', system-ui, sans-serif",
+      }}>
+        <Navbar user={user} page={page} onPageChange={handlePageChange} onLogout={handleLogout} />
+        <main style={{ maxWidth: 1100, margin: "0 auto", padding: "80px 24px 48px" }}>
+          <AccessDenied onBack={() => setPage("dashboard")} />
+        </main>
+      </div>
+    );
+  }
+
+  const PAGE_META: Record<string, { title: string; desc: string }> = {
+    customer_dashboard: { title: "번역 의뢰 관리", desc: "번역 프로젝트를 등록하고 진행 상황을 확인하세요." },
+    translator_dashboard: { title: "번역 작업 관리", desc: "배정된 번역 작업을 확인하고 진행해주세요." },
+  };
+  const metaKey = `${user.role}_${page}`;
+  const meta = PAGE_META[metaKey];
 
   return (
     <div style={{
       minHeight: "100vh", background: "#f9fafb",
       fontFamily: "'Pretendard', 'Apple SD Gothic Neo', system-ui, sans-serif",
     }}>
-      <Navbar user={user} onLogout={handleLogout} />
+      <Navbar user={user} page={page} onPageChange={handlePageChange} onLogout={handleLogout} />
 
       <main style={{ maxWidth: 1100, margin: "0 auto", padding: "80px 24px 48px" }}>
-        {user.role !== "admin" && (
+        {meta && (
           <div style={{ marginBottom: 24 }}>
             <h1 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 800, color: "#111827" }}>
-              {user.role === "customer" ? "번역 의뢰 관리" : "번역 작업 관리"}
+              {meta.title}
             </h1>
-            <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>
-              {user.role === "customer"
-                ? "번역 프로젝트를 등록하고 진행 상황을 확인하세요."
-                : "배정된 번역 작업을 확인하고 진행해주세요."}
-            </p>
+            <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>{meta.desc}</p>
           </div>
         )}
 
         {user.role === "customer" && <CustomerDashboard user={user} token={token} />}
         {user.role === "translator" && <TranslatorDashboard user={user} token={token} />}
-        {user.role === "admin" && <AdminDashboard user={user} token={token} />}
+        {isAdmin && <AdminDashboard user={user} token={token} />}
       </main>
     </div>
   );
