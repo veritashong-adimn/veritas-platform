@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, projectsTable, paymentsTable, tasksTable, usersTable, logsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and, ne } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 
 const router: IRouter = Router();
@@ -95,6 +95,53 @@ router.get("/admin/logs/:projectId", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch logs");
     res.status(500).json({ error: "로그 조회 실패." });
+  }
+});
+
+router.patch("/admin/update-email", ...adminGuard, async (req, res) => {
+  const { newEmail } = req.body as { newEmail?: string };
+
+  if (!newEmail || typeof newEmail !== "string" || !newEmail.trim()) {
+    res.status(400).json({ error: "newEmail은 필수입니다." });
+    return;
+  }
+
+  const trimmed = newEmail.trim().toLowerCase();
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(trimmed)) {
+    res.status(400).json({ error: "올바른 이메일 형식을 입력해주세요." });
+    return;
+  }
+
+  const adminId = req.user!.id;
+
+  try {
+    const duplicates = await db
+      .select({ id: usersTable.id })
+      .from(usersTable)
+      .where(and(eq(usersTable.email, trimmed), ne(usersTable.id, adminId)))
+      .limit(1);
+
+    if (duplicates.length > 0) {
+      res.status(409).json({ error: "이미 사용 중인 이메일입니다." });
+      return;
+    }
+
+    const [updated] = await db
+      .update(usersTable)
+      .set({ email: trimmed })
+      .where(eq(usersTable.id, adminId))
+      .returning({ id: usersTable.id, email: usersTable.email, role: usersTable.role });
+
+    if (!updated) {
+      res.status(404).json({ error: "계정을 찾을 수 없습니다." });
+      return;
+    }
+
+    res.json({ message: "이메일이 변경되었습니다.", email: updated.email });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to update email");
+    res.status(500).json({ error: "이메일 변경 실패." });
   }
 });
 
