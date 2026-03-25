@@ -2920,7 +2920,7 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
 }
 
 function AdminDashboard({ user, token }: { user: User; token: string }) {
-  const [adminTab, setAdminTab] = useState<"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators">("projects");
+  const [adminTab, setAdminTab] = useState<"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test">("projects");
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [payments, setPayments] = useState<AdminPayment[]>([]);
   const [tasks, setTasks] = useState<AdminTask[]>([]);
@@ -3004,6 +3004,21 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
   const [translatorStatusFilter, setTranslatorStatusFilter] = useState("all");
   const [translatorRatingFilter, setTranslatorRatingFilter] = useState("");
   const [translatorDetailModal, setTranslatorDetailModal] = useState<{ userId: number; email: string } | null>(null);
+
+  // 운영 테스트 시나리오
+  type ScenarioStep = { step: number; name: string; status: "ok"|"error"|"skipped"; detail: string; data?: Record<string, unknown> };
+  type ScenarioResult = { projectId: number|null; startedAt: string; finishedAt: string; steps: ScenarioStep[]; summary: { total: number; ok: number; error: number; skipped: number } };
+  const [scenarioRunning, setScenarioRunning] = useState(false);
+  const [scenarioResult, setScenarioResult] = useState<ScenarioResult | null>(null);
+  const [scenarioAmount, setScenarioAmount] = useState("500000");
+  const [scenarioRatio, setScenarioRatio] = useState("0.6");
+  const [scenarioHistory, setScenarioHistory] = useState<Array<{ id: number; title: string; status: string; createdAt: string }>>([]);
+  const [scenarioHistoryLoading, setScenarioHistoryLoading] = useState(false);
+  // UX 피드백
+  const [feedbackList, setFeedbackList] = useState<Array<{ id: number; content: string; createdAt: string; adminEmail: string | null }>>([]);
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackInput, setFeedbackInput] = useState("");
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
 
   // 관리자 프로젝트 생성 모달
   const [showCreateProject, setShowCreateProject] = useState(false);
@@ -3259,6 +3274,65 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
   useEffect(() => { if (adminTab === "board") fetchBoard(); }, [adminTab, fetchBoard]);
   useEffect(() => { if (adminTab === "translators") fetchTranslators(); }, [adminTab, fetchTranslators]);
 
+  const fetchScenarioHistory = async () => {
+    setScenarioHistoryLoading(true);
+    try {
+      const res = await fetch(api("/api/admin/test/scenarios"), { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) setScenarioHistory(await res.json());
+    } catch { /* ignore */ }
+    finally { setScenarioHistoryLoading(false); }
+  };
+  const fetchFeedback = async () => {
+    setFeedbackLoading(true);
+    try {
+      const res = await fetch(api("/api/admin/feedback"), { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) setFeedbackList(await res.json());
+    } catch { /* ignore */ }
+    finally { setFeedbackLoading(false); }
+  };
+  useEffect(() => {
+    if (adminTab === "test") { fetchScenarioHistory(); fetchFeedback(); }
+  }, [adminTab]);
+
+  const runScenario = async () => {
+    if (scenarioRunning) return;
+    setScenarioRunning(true);
+    setScenarioResult(null);
+    try {
+      const res = await fetch(api("/api/admin/test/run-scenario"), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ quoteAmount: Number(scenarioAmount) || 500000, translatorRatio: Number(scenarioRatio) || 0.6 }),
+      });
+      const data = await res.json();
+      setScenarioResult(data);
+      fetchScenarioHistory();
+    } catch { setToast("시나리오 실행 오류"); }
+    finally { setScenarioRunning(false); }
+  };
+
+  const submitFeedback = async () => {
+    if (!feedbackInput.trim() || feedbackSubmitting) return;
+    setFeedbackSubmitting(true);
+    try {
+      const res = await fetch(api("/api/admin/feedback"), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ content: feedbackInput.trim() }),
+      });
+      if (res.ok) { setFeedbackInput(""); fetchFeedback(); setToast("피드백이 저장되었습니다."); }
+      else { const d = await res.json(); setToast(`오류: ${d.error}`); }
+    } catch { setToast("피드백 저장 실패"); }
+    finally { setFeedbackSubmitting(false); }
+  };
+
+  const deleteFeedback = async (id: number) => {
+    try {
+      await fetch(api(`/api/admin/feedback/${id}`), { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+      setFeedbackList(prev => prev.filter(f => f.id !== id));
+    } catch { setToast("삭제 실패"); }
+  };
+
   const handleCreateAdminProject = async () => {
     if (!newProjectTitle.trim()) { setToast("프로젝트 제목을 입력하세요."); return; }
     setCreatingProject(true);
@@ -3368,6 +3442,7 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
     { id: "products", label: "상품/단가" },
     { id: "board", label: "게시판" },
     { id: "translators", label: "번역사" },
+    { id: "test", label: "🧪 운영 테스트" },
   ] as const;
 
   return (
@@ -4447,6 +4522,165 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
             </Card>
           )}
         </Section>
+      )}
+
+      {/* ── 운영 테스트 탭 ── */}
+      {adminTab === "test" && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
+
+          {/* 시나리오 실행 패널 */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px 22px", boxShadow: "0 1px 3px rgba(0,0,0,.07)" }}>
+              <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800, color: "#111827" }}>🧪 운영 시나리오 자동 실행</h3>
+              <p style={{ margin: "0 0 16px", fontSize: 13, color: "#6b7280" }}>프로젝트 생성 → 견적 → 승인 → 결제 → 번역사 배정 → 진행 → 완료 → 정산까지 순차 실행합니다.</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>견적 금액 (원)</label>
+                  <input
+                    value={scenarioAmount} onChange={e => setScenarioAmount(e.target.value)}
+                    type="number" min="10000"
+                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 7, padding: "8px 10px", fontSize: 13, boxSizing: "border-box" as const }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>번역사 수익 비율 (0~1)</label>
+                  <input
+                    value={scenarioRatio} onChange={e => setScenarioRatio(e.target.value)}
+                    type="number" min="0" max="1" step="0.1"
+                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 7, padding: "8px 10px", fontSize: 13, boxSizing: "border-box" as const }} />
+                </div>
+              </div>
+              <button onClick={runScenario} disabled={scenarioRunning}
+                style={{ width: "100%", padding: "11px 0", background: scenarioRunning ? "#9ca3af" : "#1e3a8a", color: "#fff", border: "none", borderRadius: 9, fontSize: 14, fontWeight: 700, cursor: scenarioRunning ? "not-allowed" : "pointer" }}>
+                {scenarioRunning ? "⏳ 실행 중..." : "▶ 시나리오 실행"}
+              </button>
+            </div>
+
+            {/* 실행 결과 */}
+            {scenarioResult && (
+              <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "18px 20px", boxShadow: "0 1px 3px rgba(0,0,0,.07)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                  <h4 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: "#111827" }}>
+                    실행 결과 {scenarioResult.projectId ? `— #${scenarioResult.projectId}` : ""}
+                  </h4>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, background: "#f0fdf4", color: "#166534", borderRadius: 6, padding: "2px 8px" }}>✅ {scenarioResult.summary.ok}</span>
+                    {scenarioResult.summary.error > 0 && <span style={{ fontSize: 12, fontWeight: 700, background: "#fef2f2", color: "#991b1b", borderRadius: 6, padding: "2px 8px" }}>❌ {scenarioResult.summary.error}</span>}
+                    {scenarioResult.summary.skipped > 0 && <span style={{ fontSize: 12, fontWeight: 700, background: "#f3f4f6", color: "#6b7280", borderRadius: 6, padding: "2px 8px" }}>⏭ {scenarioResult.summary.skipped}</span>}
+                  </div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {scenarioResult.steps.map(s => (
+                    <div key={s.step} style={{
+                      display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 10px",
+                      borderRadius: 8,
+                      background: s.status === "ok" ? "#f0fdf4" : s.status === "error" ? "#fef2f2" : "#f9fafb",
+                      border: `1px solid ${s.status === "ok" ? "#bbf7d0" : s.status === "error" ? "#fecaca" : "#e5e7eb"}`,
+                    }}>
+                      <span style={{ fontSize: 16, lineHeight: 1.4, flexShrink: 0 }}>
+                        {s.status === "ok" ? "✅" : s.status === "error" ? "❌" : "⏭"}
+                      </span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#9ca3af" }}>Step {s.step}</span>
+                          <span style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>{s.name}</span>
+                        </div>
+                        <p style={{ margin: 0, fontSize: 12, color: s.status === "error" ? "#991b1b" : "#374151", wordBreak: "break-all" }}>{s.detail}</p>
+                        {s.data?.logs && (
+                          <details style={{ marginTop: 4 }}>
+                            <summary style={{ fontSize: 11, color: "#6b7280", cursor: "pointer" }}>로그 보기</summary>
+                            <pre style={{ margin: "4px 0 0", fontSize: 10, color: "#374151", background: "#f9fafb", borderRadius: 4, padding: "6px 8px", overflowX: "auto" }}>{JSON.stringify(s.data.logs, null, 2)}</pre>
+                          </details>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <p style={{ margin: "10px 0 0", fontSize: 11, color: "#9ca3af" }}>
+                  {new Date(scenarioResult.startedAt).toLocaleString("ko-KR")} → {new Date(scenarioResult.finishedAt).toLocaleString("ko-KR")}
+                </p>
+              </div>
+            )}
+
+            {/* 시나리오 실행 이력 */}
+            <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "18px 20px", boxShadow: "0 1px 3px rgba(0,0,0,.07)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <h4 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: "#111827" }}>시나리오 이력 ({scenarioHistory.length})</h4>
+                <button onClick={fetchScenarioHistory} disabled={scenarioHistoryLoading}
+                  style={{ fontSize: 12, color: "#2563eb", background: "none", border: "none", cursor: "pointer" }}>
+                  {scenarioHistoryLoading ? "로딩..." : "새로고침"}
+                </button>
+              </div>
+              {scenarioHistory.length === 0 ? (
+                <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>아직 실행된 시나리오가 없습니다.</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                  {scenarioHistory.slice(0, 10).map(h => (
+                    <div key={h.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 10px", background: "#f9fafb", borderRadius: 7, fontSize: 12 }}>
+                      <span style={{ color: "#111827", fontWeight: 600 }}>#{h.id} {h.title.replace("[테스트] 시나리오 ", "")}</span>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ color: "#6b7280", fontSize: 11 }}>{h.status}</span>
+                        <span style={{ color: "#9ca3af", fontSize: 11 }}>{new Date(h.createdAt).toLocaleDateString("ko-KR")}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* UX 피드백 패널 */}
+          <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px 22px", boxShadow: "0 1px 3px rgba(0,0,0,.07)", display: "flex", flexDirection: "column", gap: 16 }}>
+            <div>
+              <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800, color: "#111827" }}>💬 불편한 점 메모</h3>
+              <p style={{ margin: "0 0 12px", fontSize: 13, color: "#6b7280" }}>운영 테스트 중 발견한 UX 문제나 개선 아이디어를 기록하세요.</p>
+              <textarea
+                value={feedbackInput} onChange={e => setFeedbackInput(e.target.value)}
+                placeholder="예) 프로젝트 목록에서 상태 필터 초기화 버튼이 눈에 잘 안 띕니다..."
+                rows={4}
+                style={{ width: "100%", boxSizing: "border-box" as const, border: "1px solid #d1d5db", borderRadius: 8, padding: "10px 12px", fontSize: 13, resize: "vertical", fontFamily: "inherit", color: "#111", outline: "none" }}
+                onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submitFeedback(); }}
+              />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
+                <span style={{ fontSize: 11, color: "#9ca3af" }}>Ctrl+Enter 또는 버튼으로 저장</span>
+                <button onClick={submitFeedback} disabled={feedbackSubmitting || !feedbackInput.trim()}
+                  style={{ padding: "7px 18px", background: feedbackSubmitting || !feedbackInput.trim() ? "#e5e7eb" : "#1e3a8a", color: feedbackSubmitting || !feedbackInput.trim() ? "#9ca3af" : "#fff", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: feedbackSubmitting || !feedbackInput.trim() ? "not-allowed" : "pointer" }}>
+                  {feedbackSubmitting ? "저장 중..." : "저장"}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <h4 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: "#374151" }}>피드백 목록 ({feedbackList.length})</h4>
+                <button onClick={fetchFeedback} disabled={feedbackLoading}
+                  style={{ fontSize: 12, color: "#2563eb", background: "none", border: "none", cursor: "pointer" }}>
+                  {feedbackLoading ? "로딩..." : "새로고침"}
+                </button>
+              </div>
+              {feedbackList.length === 0 ? (
+                <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>아직 저장된 피드백이 없습니다.</p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 560, overflowY: "auto" }}>
+                  {feedbackList.map(f => (
+                    <div key={f.id} style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <span style={{ fontSize: 11, color: "#92400e", fontWeight: 600 }}>{f.adminEmail ?? "관리자"}</span>
+                          <span style={{ fontSize: 11, color: "#b45309" }}>{new Date(f.createdAt).toLocaleString("ko-KR")}</span>
+                        </div>
+                        <button onClick={() => deleteFeedback(f.id)}
+                          style={{ fontSize: 11, color: "#ef4444", background: "none", border: "none", cursor: "pointer", padding: 0 }}>
+                          삭제
+                        </button>
+                      </div>
+                      <p style={{ margin: 0, fontSize: 13, color: "#111827", whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{f.content}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

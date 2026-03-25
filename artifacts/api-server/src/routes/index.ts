@@ -15,6 +15,7 @@ import productsRouter from "./products";
 import boardRouter from "./board";
 import translatorsRouter from "./translators";
 import documentsRouter from "./documents";
+import testScenarioRouter from "./test-scenario";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(productsRouter);
 router.use(boardRouter);
 router.use(translatorsRouter);
 router.use(documentsRouter);
+router.use(testScenarioRouter);
 
 export default router;
