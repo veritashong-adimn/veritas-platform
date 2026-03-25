@@ -33,7 +33,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [assigning, setAssigning] = useState<number | null>(null);
   const [showCandidates, setShowCandidates] = useState(false);
-  const [activeSection, setActiveSection] = useState<"info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log">("info");
+  const [activeSection, setActiveSection] = useState<"info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log"|"files">("info");
+
+  type ProjectFile = { id: number; fileType: string; fileName: string; objectPath: string; fileSize: number | null; mimeType: string | null; createdAt: string; uploaderName: string | null; uploaderEmail: string | null };
+  const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [uploadFileType, setUploadFileType] = useState<"source"|"translated"|"attachment">("attachment");
+  const [uploadProgress, setUploadProgress] = useState<string>("");
 
   // 기본정보 인라인 편집
   const [editingInfo, setEditingInfo] = useState(false);
@@ -108,6 +115,59 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 배정 실패"); }
     finally { setAssigning(null); }
+  };
+
+  const fetchFiles = async () => {
+    setFilesLoading(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/files`), { headers: authH });
+      if (res.ok) setProjectFiles(await res.json());
+    } catch { /* silent */ }
+    finally { setFilesLoading(false); }
+  };
+
+  useEffect(() => { if (activeSection === "files") fetchFiles(); }, [activeSection]);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setUploadingFile(true);
+    setUploadProgress("presigned URL 요청 중...");
+    try {
+      const urlRes = await fetch(api("/api/storage/uploads/request-url"), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: file.name, size: file.size, contentType: file.type }),
+      });
+      if (!urlRes.ok) { onToast("오류: 업로드 URL 발급 실패"); return; }
+      const { uploadURL, objectPath } = await urlRes.json();
+
+      setUploadProgress("파일 업로드 중...");
+      const putRes = await fetch(uploadURL, {
+        method: "PUT", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file,
+      });
+      if (!putRes.ok) { onToast("오류: GCS 업로드 실패"); return; }
+
+      setUploadProgress("파일 정보 저장 중...");
+      const regRes = await fetch(api(`/api/admin/projects/${projectId}/files`), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ fileType: uploadFileType, fileName: file.name, objectPath, fileSize: file.size, mimeType: file.type }),
+      });
+      if (!regRes.ok) { onToast("오류: 파일 정보 저장 실패"); return; }
+      onToast(`"${file.name}" 업로드 완료`);
+      await fetchFiles();
+    } catch { onToast("오류: 파일 업로드 중 오류 발생"); }
+    finally { setUploadingFile(false); setUploadProgress(""); }
+  };
+
+  const handleFileDelete = async (fileId: number, fileName: string) => {
+    if (!confirm(`"${fileName}"을(를) 삭제하시겠습니까?`)) return;
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/files/${fileId}`), { method: "DELETE", headers: authH });
+      if (!res.ok) { onToast("오류: 파일 삭제 실패"); return; }
+      onToast("파일이 삭제되었습니다.");
+      await fetchFiles();
+    } catch { onToast("오류: 파일 삭제 실패"); }
   };
 
   const handleStatusChange = async () => {
@@ -290,6 +350,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     { key: "settlement", label: "견적/결제/정산" },
     { key: "translator", label: "번역사" },
     { key: "company", label: "거래처/담당자" },
+    { key: "files", label: `📎 파일 (${projectFiles.length})` },
     { key: "comms", label: "커뮤니케이션" },
     { key: "notes", label: "메모" },
     { key: "log", label: "이벤트 로그" },
@@ -721,6 +782,104 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     <StatusBadge status={s.status} />
                   </div>
                 ))}
+              </>
+            )}
+
+            {/* 파일 관리 */}
+            {activeSection === "files" && (
+              <>
+                {/* 업로드 영역 */}
+                <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: "16px 18px", marginBottom: 16 }}>
+                  <p style={sectionHd}>파일 업로드</p>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <select value={uploadFileType} onChange={e => setUploadFileType(e.target.value as "source"|"translated"|"attachment")}
+                      style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }}>
+                      <option value="source">📄 원본 파일</option>
+                      <option value="translated">✅ 번역본</option>
+                      <option value="attachment">📎 기타 첨부</option>
+                    </select>
+                    <label style={{
+                      display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 16px",
+                      background: uploadingFile ? "#e5e7eb" : "#2563eb", color: uploadingFile ? "#9ca3af" : "#fff",
+                      borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: uploadingFile ? "not-allowed" : "pointer",
+                      transition: "background 0.12s",
+                    }}>
+                      {uploadingFile ? (uploadProgress || "업로드 중...") : "📁 파일 선택"}
+                      <input type="file" disabled={uploadingFile} onChange={handleFileUpload}
+                        accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,.gif,.zip,.xls,.xlsx,.ppt,.pptx,.hwp,.csv"
+                        style={{ display: "none" }} />
+                    </label>
+                    <span style={{ fontSize: 12, color: "#9ca3af" }}>최대 10MB · PDF, Word, Excel, 이미지, ZIP 등</span>
+                  </div>
+                </div>
+
+                {/* 파일 목록 */}
+                {filesLoading ? (
+                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "24px 0" }}>불러오는 중...</p>
+                ) : projectFiles.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af" }}>
+                    <p style={{ fontSize: 32, margin: "0 0 8px" }}>📂</p>
+                    <p style={{ fontSize: 13, margin: 0 }}>등록된 파일이 없습니다.</p>
+                  </div>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        {["유형", "파일명", "크기", "업로드자", "업로드일", ""].map(h => (
+                          <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#6b7280", background: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {projectFiles.map(f => {
+                        const typeInfo = f.fileType === "source" ? { label: "원본", color: "#2563eb", bg: "#eff6ff" }
+                          : f.fileType === "translated" ? { label: "번역본", color: "#059669", bg: "#f0fdf4" }
+                          : { label: "첨부", color: "#6b7280", bg: "#f3f4f6" };
+                        const sizeStr = f.fileSize ? (f.fileSize < 1024 * 1024 ? `${(f.fileSize / 1024).toFixed(1)}KB` : `${(f.fileSize / 1024 / 1024).toFixed(1)}MB`) : "-";
+                        const downloadUrl = api(`/api/admin/projects/${projectId}/files/${f.id}/download`);
+                        return (
+                          <tr key={f.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                            <td style={{ padding: "10px 10px", verticalAlign: "middle" }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10, color: typeInfo.color, background: typeInfo.bg }}>
+                                {typeInfo.label}
+                              </span>
+                            </td>
+                            <td style={{ padding: "10px 10px", fontSize: 13, color: "#111827", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", verticalAlign: "middle" }}>
+                              {f.fileName}
+                            </td>
+                            <td style={{ padding: "10px 10px", fontSize: 12, color: "#6b7280", whiteSpace: "nowrap", verticalAlign: "middle" }}>{sizeStr}</td>
+                            <td style={{ padding: "10px 10px", fontSize: 12, color: "#374151", verticalAlign: "middle" }}>{f.uploaderName ?? f.uploaderEmail ?? "-"}</td>
+                            <td style={{ padding: "10px 10px", fontSize: 12, color: "#6b7280", whiteSpace: "nowrap", verticalAlign: "middle" }}>
+                              {new Date(f.createdAt).toLocaleDateString("ko-KR")}
+                            </td>
+                            <td style={{ padding: "10px 10px", verticalAlign: "middle" }}>
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <button onClick={async () => {
+                                  try {
+                                    const r = await fetch(downloadUrl, { headers: authH });
+                                    if (!r.ok) { onToast("오류: 다운로드 실패"); return; }
+                                    const blob = await r.blob();
+                                    const url = URL.createObjectURL(blob);
+                                    const a = document.createElement("a"); a.href = url; a.download = f.fileName;
+                                    document.body.appendChild(a); a.click();
+                                    document.body.removeChild(a); URL.revokeObjectURL(url);
+                                  } catch { onToast("오류: 다운로드 실패"); }
+                                }}
+                                  style={{ fontSize: 12, color: "#2563eb", padding: "4px 10px", border: "1px solid #2563eb", borderRadius: 6, background: "none", cursor: "pointer" }}>
+                                  ⬇ 다운로드
+                                </button>
+                                <button onClick={() => handleFileDelete(f.id, f.fileName)}
+                                  style={{ fontSize: 12, color: "#dc2626", padding: "4px 8px", border: "1px solid #dc2626", borderRadius: 6, background: "none", cursor: "pointer" }}>
+                                  삭제
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
               </>
             )}
 

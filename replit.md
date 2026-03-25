@@ -10,6 +10,7 @@ Key capabilities include:
 - Payment processing and settlement management for translators.
 - Admin CRM dashboard: **좌측 사이드바 레이아웃** (dark #1e2433, 220px, 접기/펼치기 가능). 메뉴 그룹: 운영관리(대시보드/프로젝트/결제/작업/정산), 사용자/고객(사용자관리/고객관리/거래처/담당자), 번역/단가(번역사/상품·단가), 기타(게시판/운영 테스트). 상단 바에 햄버거+페이지 제목+새로고침. 사이드바 하단 사용자 이메일+로그아웃.
 - Project detail modal (7-tab UI: 기본정보/거래처·담당자/번역사/견적결제정산/커뮤니케이션/메모/이벤트로그), company/contact management, translator profiles and rate management, user management (activation/role/password-reset), product master, board/bulletin.
+- **파일 관리**: 프로젝트별 파일 업로드/다운로드/삭제. GCS presigned URL 방식(2단계: URL 발급 → GCS PUT → DB 등록). 파일 유형: source(원본), translated(번역본), attachment(기타). ProjectDetailModal 내 "📎 파일" 탭. 다운로드는 Bearer 토큰 인증 후 blob URL로 처리.
 - Translator self-service: profile edit + rate table CRUD via own-auth API endpoints.
 - File upload for project documents.
 - Comprehensive logging of key events.

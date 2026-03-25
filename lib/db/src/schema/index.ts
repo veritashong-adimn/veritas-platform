@@ -15,3 +15,4 @@ export * from "./products";
 export * from "./translator_profiles";
 export * from "./translator_rates";
 export * from "./board_posts";
+export * from "./project_files";

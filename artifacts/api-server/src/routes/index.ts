@@ -16,6 +16,8 @@ import boardRouter from "./board";
 import translatorsRouter from "./translators";
 import documentsRouter from "./documents";
 import testScenarioRouter from "./test-scenario";
+import storageRouter from "./storage";
+import filesRouter from "./files";
 
 const router: IRouter = Router();
 
@@ -36,5 +38,7 @@ router.use(boardRouter);
 router.use(translatorsRouter);
 router.use(documentsRouter);
 router.use(testScenarioRouter);
+router.use(storageRouter);
+router.use(filesRouter);
 
 export default router;
