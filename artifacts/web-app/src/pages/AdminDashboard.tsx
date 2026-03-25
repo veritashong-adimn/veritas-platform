@@ -37,8 +37,9 @@ function Section({ title, children, action }: { title: string; children: React.R
   );
 }
 
-export function AdminDashboard({ user, token }: { user: User; token: string }) {
-  const [adminTab, setAdminTab] = useState<"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test">("projects");
+export function AdminDashboard({ user, token, onLogout }: { user: User; token: string; onLogout?: () => void }) {
+  const [adminTab, setAdminTab] = useState<"dashboard"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test">("dashboard");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [payments, setPayments] = useState<AdminPayment[]>([]);
   const [tasks, setTasks] = useState<AdminTask[]>([]);
@@ -574,20 +575,57 @@ export function AdminDashboard({ user, token }: { user: User; token: string }) {
     borderBottom: "1px solid #f3f4f6", verticalAlign: "middle",
   };
 
-  const TABS = [
-    { id: "projects", label: "프로젝트" },
-    { id: "payments", label: "결제" },
-    { id: "tasks", label: "작업" },
-    { id: "settlements", label: "정산" },
-    { id: "users", label: "사용자 관리" },
-    { id: "customers", label: "고객 관리" },
-    { id: "companies", label: "거래처" },
-    { id: "contacts", label: "담당자" },
-    { id: "products", label: "상품/단가" },
-    { id: "board", label: "게시판" },
-    { id: "translators", label: "번역사" },
-    { id: "test", label: "🧪 운영 테스트" },
+  const SIDEBAR_GROUPS = [
+    {
+      label: "운영관리",
+      items: [
+        { id: "dashboard", label: "대시보드", icon: "◉" },
+        { id: "projects", label: "프로젝트", icon: "📋" },
+        { id: "payments", label: "결제", icon: "💳" },
+        { id: "tasks", label: "작업", icon: "⚙️" },
+        { id: "settlements", label: "정산", icon: "📊" },
+      ],
+    },
+    {
+      label: "사용자/고객",
+      items: [
+        { id: "users", label: "사용자관리", icon: "👤" },
+        { id: "customers", label: "고객관리", icon: "🏠" },
+        { id: "companies", label: "거래처", icon: "🏢" },
+        { id: "contacts", label: "담당자", icon: "📇" },
+      ],
+    },
+    {
+      label: "번역/단가",
+      items: [
+        { id: "translators", label: "번역사", icon: "🌐" },
+        { id: "products", label: "상품/단가", icon: "💰" },
+      ],
+    },
+    {
+      label: "기타",
+      items: [
+        { id: "board", label: "게시판", icon: "📌" },
+        { id: "test", label: "운영 테스트", icon: "🧪" },
+      ],
+    },
   ] as const;
+
+  const PAGE_TITLE: Record<string, string> = {
+    dashboard: "대시보드",
+    projects: "프로젝트",
+    payments: "결제",
+    tasks: "작업",
+    settlements: "정산",
+    users: "사용자관리",
+    customers: "고객관리",
+    companies: "거래처",
+    contacts: "담당자",
+    translators: "번역사",
+    products: "상품/단가",
+    board: "게시판",
+    test: "운영 테스트",
+  };
 
   return (
     <>
@@ -695,44 +733,162 @@ export function AdminDashboard({ user, token }: { user: User; token: string }) {
         />
       )}
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-        <div>
-          <h1 style={{ margin: "0 0 4px", fontSize: 20, fontWeight: 800, color: "#111827" }}>관리자 대시보드</h1>
-          <p style={{ margin: 0, fontSize: 14, color: "#6b7280" }}>전체 현황을 조회하고 개입합니다.</p>
-        </div>
-        <GhostBtn onClick={fetchAll} disabled={loading}>{loading ? "로딩..." : "전체 새로고침"}</GhostBtn>
-      </div>
+      {/* ── 풀스크린 사이드바 레이아웃 ───────────────────────── */}
+      <div style={{ display: "flex", position: "fixed", inset: 0, overflow: "hidden", zIndex: 1 }}>
 
-      {/* 통계 카드 */}
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 24 }}>
-        {[
-          { label: "전체 프로젝트", value: projects.length, color: "#2563eb", bg: "#eff6ff" },
-          { label: "결제 완료", value: payments.filter(p => p.status === "paid").length, color: "#059669", bg: "#f0fdf4" },
-          { label: "진행 중 작업", value: tasks.filter(t => t.status !== "done").length, color: "#d97706", bg: "#fffbeb" },
-          { label: "완료된 작업", value: tasks.filter(t => t.status === "done").length, color: "#9333ea", bg: "#faf5ff" },
-        ].map(s => (
-          <div key={s.label} style={{
-            background: s.bg, border: `1px solid ${s.color}22`,
-            borderRadius: 10, padding: "14px 20px", minWidth: 140, flex: "1 1 120px",
-          }}>
-            <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 600, color: s.color }}>{s.label}</p>
-            <p style={{ margin: 0, fontSize: 26, fontWeight: 800, color: s.color }}>{s.value}</p>
+        {/* ── 사이드바 ──────────────────────────────────────── */}
+        <aside style={{
+          width: sidebarCollapsed ? 0 : 220,
+          minWidth: sidebarCollapsed ? 0 : 220,
+          background: "#1e2433",
+          display: "flex", flexDirection: "column",
+          overflow: "hidden",
+          transition: "width 0.22s ease, min-width 0.22s ease",
+          flexShrink: 0,
+        }}>
+          {/* 로고 영역 */}
+          <div style={{ padding: "20px 20px 16px", borderBottom: "1px solid #2d3547", flexShrink: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: "#fff", letterSpacing: "-0.3px", whiteSpace: "nowrap" }}>
+              🔤 통번역 플랫폼
+            </div>
+            <div style={{ fontSize: 11, color: "#8892a4", marginTop: 3, whiteSpace: "nowrap" }}>관리자 CRM</div>
           </div>
-        ))}
-      </div>
 
-      {/* 탭 바 */}
-      <div style={{ display: "flex", borderBottom: "2px solid #e5e7eb", marginBottom: 24, gap: 0 }}>
-        {TABS.map(tab => (
-          <button key={tab.id} onClick={() => setAdminTab(tab.id)} style={{
-            background: "none", border: "none", padding: "10px 18px", fontSize: 14,
-            fontWeight: 600, cursor: "pointer",
-            color: adminTab === tab.id ? "#2563eb" : "#6b7280",
-            borderBottom: adminTab === tab.id ? "2px solid #2563eb" : "2px solid transparent",
-            marginBottom: -2, transition: "all 0.12s",
-          }}>{tab.label}</button>
-        ))}
-      </div>
+          {/* 메뉴 그룹 */}
+          <nav style={{ flex: 1, overflowY: "auto", padding: "12px 0" }}>
+            {SIDEBAR_GROUPS.map(group => (
+              <div key={group.label}>
+                <div style={{ padding: "8px 20px 4px", fontSize: 10, fontWeight: 700, color: "#5a6478", textTransform: "uppercase", letterSpacing: "0.8px", whiteSpace: "nowrap" }}>
+                  {group.label}
+                </div>
+                {group.items.map(item => {
+                  const isActive = adminTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      onClick={() => setAdminTab(item.id as typeof adminTab)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 10,
+                        width: "100%", padding: "8px 20px", border: "none", cursor: "pointer",
+                        background: isActive ? "#2563eb" : "transparent",
+                        color: isActive ? "#fff" : "#c1c8d4",
+                        fontSize: 13, fontWeight: isActive ? 600 : 400,
+                        textAlign: "left", whiteSpace: "nowrap",
+                        borderRadius: 0, transition: "background 0.12s, color 0.12s",
+                      }}
+                      onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "#2d3547"; }}
+                      onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                    >
+                      <span style={{ fontSize: 15, lineHeight: 1, flexShrink: 0 }}>{item.icon}</span>
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </nav>
+
+          {/* 사용자 정보 + 로그아웃 */}
+          <div style={{ padding: "14px 20px", borderTop: "1px solid #2d3547", flexShrink: 0 }}>
+            <div style={{ fontSize: 12, color: "#8892a4", marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {user.email}
+            </div>
+            <div style={{ fontSize: 10, color: "#5a6478", marginBottom: 10 }}>관리자</div>
+            {onLogout && (
+              <button onClick={onLogout} style={{
+                width: "100%", padding: "7px 0", background: "transparent",
+                border: "1px solid #3d4558", borderRadius: 6, color: "#8892a4",
+                fontSize: 12, cursor: "pointer", transition: "all 0.12s",
+              }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = "#fff"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#6b7280"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = "#8892a4"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#3d4558"; }}
+              >
+                로그아웃
+              </button>
+            )}
+          </div>
+        </aside>
+
+        {/* ── 메인 컨텐츠 영역 ──────────────────────────────── */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
+
+          {/* 상단 바 */}
+          <div style={{
+            height: 54, background: "#fff", borderBottom: "1px solid #e5e7eb",
+            display: "flex", alignItems: "center", gap: 12, padding: "0 24px",
+            flexShrink: 0,
+          }}>
+            <button
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              style={{ background: "none", border: "none", cursor: "pointer", padding: "6px 8px", borderRadius: 6, color: "#6b7280", fontSize: 18, lineHeight: 1, flexShrink: 0 }}
+              title={sidebarCollapsed ? "메뉴 펼치기" : "메뉴 접기"}
+            >
+              ☰
+            </button>
+            <span style={{ fontSize: 15, fontWeight: 700, color: "#111827", flex: 1 }}>
+              {PAGE_TITLE[adminTab] ?? "관리자"}
+            </span>
+            <GhostBtn onClick={fetchAll} disabled={loading} style={{ fontSize: 12, padding: "5px 12px" }}>
+              {loading ? "로딩..." : "새로고침"}
+            </GhostBtn>
+          </div>
+
+          {/* 스크롤 컨텐츠 */}
+          <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px", background: "#f9fafb" }}>
+
+          {/* 대시보드 탭 */}
+          {adminTab === "dashboard" && (
+            <div>
+              <div style={{ marginBottom: 24 }}>
+                <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 800, color: "#111827" }}>전체 현황</h2>
+                <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>통번역 플랫폼 운영 현황을 한눈에 확인합니다.</p>
+              </div>
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 32 }}>
+                {[
+                  { label: "전체 프로젝트", value: projects.length, color: "#2563eb", bg: "#eff6ff", sub: "총 등록 건수", onClick: () => setAdminTab("projects") },
+                  { label: "결제 완료", value: payments.filter(p => p.status === "paid").length, color: "#059669", bg: "#f0fdf4", sub: "결제 확인 완료", onClick: () => setAdminTab("payments") },
+                  { label: "진행 중 작업", value: tasks.filter(t => t.status !== "done").length, color: "#d97706", bg: "#fffbeb", sub: "번역 진행 중", onClick: () => setAdminTab("tasks") },
+                  { label: "완료된 작업", value: tasks.filter(t => t.status === "done").length, color: "#9333ea", bg: "#faf5ff", sub: "번역 완료", onClick: () => setAdminTab("tasks") },
+                  { label: "정산 대기", value: settlements.filter(s => s.status === "ready").length, color: "#dc2626", bg: "#fef2f2", sub: "정산 처리 필요", onClick: () => setAdminTab("settlements") },
+                ].map(s => (
+                  <div key={s.label} onClick={s.onClick} style={{
+                    background: s.bg, border: `1px solid ${s.color}22`,
+                    borderRadius: 12, padding: "20px 24px", minWidth: 160, flex: "1 1 140px",
+                    cursor: "pointer", transition: "box-shadow 0.12s",
+                  }}
+                    onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.boxShadow = `0 4px 12px ${s.color}22`}
+                    onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.boxShadow = "none"}
+                  >
+                    <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 600, color: s.color }}>{s.label}</p>
+                    <p style={{ margin: "0 0 4px", fontSize: 30, fontWeight: 800, color: s.color, lineHeight: 1 }}>{s.value}</p>
+                    <p style={{ margin: 0, fontSize: 11, color: `${s.color}99` }}>{s.sub}</p>
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", padding: "20px 22px" }}>
+                  <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#111827" }}>최근 프로젝트</h3>
+                  {projects.slice(0, 5).map(p => (
+                    <div key={p.id} onClick={() => setDetailModal(p.id)} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
+                      <span style={{ fontSize: 13, color: "#374151", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</span>
+                      <StatusBadge status={p.status} />
+                    </div>
+                  ))}
+                  {projects.length === 0 && <p style={{ fontSize: 13, color: "#9ca3af", margin: 0 }}>프로젝트가 없습니다.</p>}
+                </div>
+                <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", padding: "20px 22px" }}>
+                  <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#111827" }}>최근 정산</h3>
+                  {settlements.slice(0, 5).map(s => (
+                    <div key={s.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
+                      <span style={{ fontSize: 13, color: "#374151" }}>{(s as any).translatorName ?? s.translatorId}</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{Number(s.translatorAmount).toLocaleString()}원</span>
+                    </div>
+                  ))}
+                  {settlements.length === 0 && <p style={{ fontSize: 13, color: "#9ca3af", margin: 0 }}>정산 내역이 없습니다.</p>}
+                </div>
+              </div>
+            </div>
+          )}
 
       {/* 관리자 프로젝트 생성 모달 */}
       {showCreateProject && (
@@ -1908,6 +2064,10 @@ export function AdminDashboard({ user, token }: { user: User; token: string }) {
           </div>
         </div>
       )}
+
+          </div>{/* /스크롤 컨텐츠 */}
+        </div>{/* /메인 컨텐츠 */}
+      </div>{/* /풀스크린 레이아웃 */}
     </>
   );
 }

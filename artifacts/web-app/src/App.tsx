@@ -88,6 +88,14 @@ export default function App() {
   const metaKey = `${user.role}_${page}`;
   const meta = PAGE_META[metaKey];
 
+  if (isAdmin) {
+    return (
+      <div style={{ fontFamily: "'Pretendard', 'Apple SD Gothic Neo', system-ui, sans-serif" }}>
+        <AdminDashboard user={user} token={token} onLogout={handleLogout} />
+      </div>
+    );
+  }
+
   return (
     <div style={{
       minHeight: "100vh", background: "#f9fafb",
@@ -107,7 +115,6 @@ export default function App() {
 
         {user.role === "customer" && <CustomerDashboard user={user} token={token} />}
         {user.role === "translator" && <TranslatorDashboard user={user} token={token} />}
-        {isAdmin && <AdminDashboard user={user} token={token} />}
       </main>
     </div>
   );
