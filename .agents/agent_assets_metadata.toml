@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "IqxgvDZ6KnmJJ8CPkhClI"
+uri = "file://artifacts/web-app/public/field-checklist.md"
+type = "text"
+title = "화면별 필드 점검 체크리스트"

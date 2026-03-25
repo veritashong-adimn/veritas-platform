@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { api, CompanyDetail, Contact, NoteEntry } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn } from "../ui";
+import { ReviewMemoPanel } from "./ReviewMemoPanel";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -112,6 +113,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
         </div>
         {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : !detail ? <p style={{ color: "#dc2626" }}>데이터를 불러올 수 없습니다.</p> : (
           <>
+            <ReviewMemoPanel storageKey={`company_${companyId}`} label="이 거래처 검수 메모" />
             <p style={sH}>거래처 정보</p>
             {!editMode ? (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px", marginBottom: 8 }}>

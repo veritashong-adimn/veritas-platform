@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { api, TranslatorProfile, TranslatorRate, NoteEntry } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn } from "../ui";
+import { ReviewMemoPanel } from "./ReviewMemoPanel";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -147,6 +148,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, onClose, onToa
         </div>
         {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : (
           <>
+            <ReviewMemoPanel storageKey={`translator_${userId}`} label="이 번역사 검수 메모" />
             <p style={sH}>프로필 편집</p>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", marginBottom: 12 }}>
               <F label="언어쌍" field="languagePairs" placeholder="예: 한→영, 영→한" />

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { api, ContactDetail, NoteEntry } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn } from "../ui";
+import { ReviewMemoPanel } from "./ReviewMemoPanel";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -66,6 +67,7 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
         </div>
         {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : !detail ? <p style={{ color: "#dc2626" }}>데이터를 불러올 수 없습니다.</p> : (
           <>
+            <ReviewMemoPanel storageKey={`contact_${contactId}`} label="이 담당자 검수 메모" />
             <p style={sH}>기본 정보</p>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px", marginBottom: 8 }}>
               {([["이름", detail.name], ["거래처", detail.companyName ?? "-"], ["부서", detail.department ?? "-"], ["직책", detail.position ?? "-"], ["이메일", detail.email ?? "-"], ["전화", detail.phone ?? "-"]] as [string,string][]).map(([l, v]) => (
