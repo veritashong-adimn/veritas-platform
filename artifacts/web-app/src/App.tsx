@@ -1120,6 +1120,9 @@ const ACTION_LABEL: Record<string, { ko: string; color: string; dot: string }> =
   settlement_created:          { ko: "정산 생성",           color: "#7c3aed", dot: "📊" },
   settlement_paid:             { ko: "정산 완료",           color: "#059669", dot: "💸" },
   project_cancelled:           { ko: "프로젝트 취소",       color: "#dc2626", dot: "🚫" },
+  admin_project_cancelled:     { ko: "관리자 취소",          color: "#dc2626", dot: "🚫" },
+  payment_received:            { ko: "결제 확인",            color: "#059669", dot: "💰" },
+  admin_info_updated:          { ko: "기본정보 수정",         color: "#6b7280", dot: "✏️" },
 };
 
 function getActionLabel(action: string): { ko: string; color: string; dot: string } {
@@ -2196,6 +2199,24 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
   const [showCandidates, setShowCandidates] = useState(false);
   const [activeSection, setActiveSection] = useState<"info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log">("info");
 
+  // 기본정보 인라인 편집
+  const [editingInfo, setEditingInfo] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editCompanyId, setEditCompanyId] = useState<number | null>(null);
+  const [editContactId, setEditContactId] = useState<number | null>(null);
+  const [savingInfo, setSavingInfo] = useState(false);
+  const [companiesList, setCompaniesList] = useState<{id: number; name: string}[]>([]);
+  const [contactsList, setContactsList] = useState<{id: number; name: string; companyId: number | null}[]>([]);
+  const [loadingMeta, setLoadingMeta] = useState(false);
+
+  // 견적 생성
+  const [quoteAmount, setQuoteAmount] = useState("");
+  const [creatingQuote, setCreatingQuote] = useState(false);
+
+  // 결제 등록
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [creatingPayment, setCreatingPayment] = useState(false);
+
   const authH = { Authorization: `Bearer ${token}` };
 
   const loadDetail = async () => {
@@ -2274,6 +2295,82 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
     finally { setCancelling(false); }
   };
 
+  const loadMeta = async () => {
+    if (companiesList.length > 0) return;
+    setLoadingMeta(true);
+    try {
+      const [cRes, coRes] = await Promise.all([
+        fetch(api("/api/admin/companies"), { headers: authH }),
+        fetch(api("/api/admin/contacts"), { headers: authH }),
+      ]);
+      if (cRes.ok) setCompaniesList((await cRes.json()).map((c: any) => ({ id: c.id, name: c.name })));
+      if (coRes.ok) setContactsList((await coRes.json()).map((c: any) => ({ id: c.id, name: c.name, companyId: c.companyId })));
+    } catch { /* ignore */ }
+    finally { setLoadingMeta(false); }
+  };
+
+  const startEditInfo = async () => {
+    if (!detail) return;
+    await loadMeta();
+    setEditTitle(detail.title);
+    setEditCompanyId(detail.company?.id ?? (detail as any).companyId ?? null);
+    setEditContactId(detail.contact?.id ?? (detail as any).contactId ?? null);
+    setEditingInfo(true);
+  };
+
+  const handleSaveInfo = async () => {
+    if (!editTitle.trim()) return;
+    setSavingInfo(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/info`), {
+        method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ title: editTitle.trim(), companyId: editCompanyId, contactId: editContactId }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast("기본정보가 수정되었습니다.");
+      setEditingInfo(false);
+      await loadDetail(); onRefresh();
+    } catch { onToast("오류: 저장 실패"); }
+    finally { setSavingInfo(false); }
+  };
+
+  const handleCreateQuote = async () => {
+    const amt = Number(quoteAmount.replace(/,/g, ""));
+    if (!amt || amt <= 0) { onToast("유효한 금액을 입력하세요."); return; }
+    setCreatingQuote(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/quote`), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: amt }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast(`견적 생성 완료 — ${amt.toLocaleString()}원`);
+      setQuoteAmount("");
+      await loadDetail(); onRefresh();
+    } catch { onToast("오류: 견적 생성 실패"); }
+    finally { setCreatingQuote(false); }
+  };
+
+  const handleCreatePayment = async () => {
+    const amt = Number(paymentAmount.replace(/,/g, ""));
+    if (!amt || amt <= 0) { onToast("유효한 금액을 입력하세요."); return; }
+    setCreatingPayment(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/payment`), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: amt }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast(`결제 등록 완료 — ${amt.toLocaleString()}원`);
+      setPaymentAmount("");
+      await loadDetail(); onRefresh();
+    } catch { onToast("오류: 결제 등록 실패"); }
+    finally { setCreatingPayment(false); }
+  };
+
   const handleAddNote = async () => {
     if (!noteInput.trim()) return;
     setAddingNote(true);
@@ -2328,9 +2425,9 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
 
   const sections: Array<{ key: typeof activeSection; label: string }> = [
     { key: "info", label: "기본 정보" },
-    { key: "company", label: "거래처/담당자" },
-    { key: "translator", label: "번역사" },
     { key: "settlement", label: "견적/결제/정산" },
+    { key: "translator", label: "번역사" },
+    { key: "company", label: "거래처/담당자" },
     { key: "comms", label: "커뮤니케이션" },
     { key: "notes", label: "메모" },
     { key: "log", label: "이벤트 로그" },
@@ -2364,25 +2461,37 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
         ) : detail && (
           <>
             {/* 액션 바 */}
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", padding: "10px 12px", background: "#f9fafb", borderRadius: 10, marginBottom: 14 }}>
-              <select value={statusTarget} onChange={e => setStatusTarget(e.target.value)}
-                style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12 }}>
-                <option value={detail.status}>{STATUS_LABEL[detail.status] ?? detail.status} (현재)</option>
-                {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).map(s => (
-                  <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
-                ))}
-              </select>
-              <GhostBtn onClick={handleStatusChange} disabled={changingStatus || statusTarget === detail.status} color="#2563eb" style={{ fontSize: 12, padding: "6px 12px" }}>
-                {changingStatus ? "변경 중..." : "상태 변경"}
-              </GhostBtn>
-              <GhostBtn onClick={loadCandidates} disabled={loadingCandidates} color="#7c3aed" style={{ fontSize: 12, padding: "6px 12px" }}>
-                {loadingCandidates ? "조회 중..." : "번역사 추천"}
-              </GhostBtn>
-              {detail.status !== "cancelled" && (
-                <GhostBtn onClick={handleCancel} disabled={cancelling} color="#dc2626" style={{ fontSize: 12, padding: "6px 12px" }}>
-                  {cancelling ? "취소 중..." : "프로젝트 취소"}
-                </GhostBtn>
-              )}
+            <div style={{ background: "#f9fafb", borderRadius: 10, padding: "10px 12px", marginBottom: 14, border: "1px solid #e5e7eb" }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                {/* 상태 변경 */}
+                {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).length > 0 && (
+                  <>
+                    <select value={statusTarget} onChange={e => setStatusTarget(e.target.value)}
+                      style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12 }}>
+                      <option value={detail.status}>{STATUS_LABEL[detail.status] ?? detail.status} (현재)</option>
+                      {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).map(s => (
+                        <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
+                      ))}
+                    </select>
+                    <GhostBtn onClick={handleStatusChange} disabled={changingStatus || statusTarget === detail.status} color="#2563eb" style={{ fontSize: 12, padding: "6px 12px" }}>
+                      {changingStatus ? "변경 중..." : "상태 변경 적용"}
+                    </GhostBtn>
+                    <span style={{ color: "#d1d5db", fontSize: 14 }}>|</span>
+                  </>
+                )}
+                {/* 번역사 추천 — 배정이 필요한 상태일 때만 */}
+                {["paid", "matched", "in_progress"].includes(detail.status) && (
+                  <GhostBtn onClick={loadCandidates} disabled={loadingCandidates} color="#7c3aed" style={{ fontSize: 12, padding: "6px 12px" }}>
+                    {loadingCandidates ? "조회 중..." : "번역사 추천"}
+                  </GhostBtn>
+                )}
+                {/* 프로젝트 취소 */}
+                {!["cancelled", "completed"].includes(detail.status) && (
+                  <GhostBtn onClick={handleCancel} disabled={cancelling} color="#dc2626" style={{ fontSize: 12, padding: "6px 12px", marginLeft: "auto" }}>
+                    {cancelling ? "취소 중..." : "프로젝트 취소"}
+                  </GhostBtn>
+                )}
+              </div>
             </div>
 
             {/* 번역사 추천 후보 */}
@@ -2433,20 +2542,68 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
 
             {/* 기본 정보 */}
             {activeSection === "info" && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px" }}>
-                <div style={dl}><span style={dt}>제목</span><strong style={{ color: "#111827", fontSize: 14 }}>{detail.title}</strong></div>
-                <div style={dl}><span style={dt}>고객</span><span style={{ color: "#374151" }}>{detail.customerEmail ?? "-"}</span></div>
-                <div style={dl}><span style={dt}>상태</span><StatusBadge status={detail.status} /></div>
-                <div style={dl}><span style={dt}>등록일</span><span style={{ color: "#374151" }}>{new Date(detail.createdAt).toLocaleString("ko-KR")}</span></div>
-                <div style={dl}><span style={dt}>거래처</span><span style={{ color: "#374151" }}>{detail.company?.name ?? detail.companyName ?? "-"}</span></div>
-                <div style={dl}><span style={dt}>담당자</span><span style={{ color: "#374151" }}>{detail.contact?.name ?? detail.contactName ?? "-"}</span></div>
-                {detail.fileUrl && (
-                  <div style={{ ...dl, gridColumn: "span 2" }}>
-                    <span style={dt}>첨부파일</span>
-                    <a href={detail.fileUrl} target="_blank" rel="noreferrer" style={{ color: "#2563eb", fontSize: 13 }}>📎 다운로드</a>
+              <>
+                {!editingInfo ? (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px" }}>
+                      <div style={dl}><span style={dt}>제목</span><strong style={{ color: "#111827", fontSize: 14 }}>{detail.title}</strong></div>
+                      <div style={dl}><span style={dt}>고객</span><span style={{ color: "#374151" }}>{detail.customerEmail ?? "-"}</span></div>
+                      <div style={dl}><span style={dt}>상태</span><StatusBadge status={detail.status} /></div>
+                      <div style={dl}><span style={dt}>등록일</span><span style={{ color: "#374151" }}>{new Date(detail.createdAt).toLocaleString("ko-KR")}</span></div>
+                      <div style={dl}><span style={dt}>거래처</span><span style={{ color: "#374151" }}>{detail.company?.name ?? (detail as any).companyName ?? "미연결"}</span></div>
+                      <div style={dl}><span style={dt}>담당자</span><span style={{ color: "#374151" }}>{detail.contact?.name ?? (detail as any).contactName ?? "미연결"}</span></div>
+                      {detail.fileUrl && (
+                        <div style={{ ...dl, gridColumn: "span 2" }}>
+                          <span style={dt}>첨부파일</span>
+                          <a href={detail.fileUrl} target="_blank" rel="noreferrer" style={{ color: "#2563eb", fontSize: 13 }}>📎 다운로드</a>
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ marginTop: 14 }}>
+                      <GhostBtn onClick={startEditInfo} disabled={loadingMeta} color="#6b7280" style={{ fontSize: 12, padding: "5px 12px" }}>
+                        {loadingMeta ? "불러오는 중..." : "✏️ 기본정보 수정"}
+                      </GhostBtn>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ background: "#f0f9ff", borderRadius: 10, padding: "14px 16px", border: "1px solid #bae6fd" }}>
+                    <p style={{ margin: "0 0 12px", fontSize: 13, fontWeight: 700, color: "#0369a1" }}>기본정보 수정</p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      <div>
+                        <label style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 4 }}>제목 *</label>
+                        <input value={editTitle} onChange={e => setEditTitle(e.target.value)}
+                          style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }} placeholder="프로젝트 제목" />
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <div>
+                          <label style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 4 }}>거래처</label>
+                          <select value={editCompanyId ?? ""} onChange={e => { setEditCompanyId(e.target.value ? Number(e.target.value) : null); setEditContactId(null); }}
+                            style={{ ...inputStyle, width: "100%" }}>
+                            <option value="">미연결</option>
+                            {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 4 }}>담당자</label>
+                          <select value={editContactId ?? ""} onChange={e => setEditContactId(e.target.value ? Number(e.target.value) : null)}
+                            style={{ ...inputStyle, width: "100%" }}>
+                            <option value="">미연결</option>
+                            {contactsList
+                              .filter(c => !editCompanyId || c.companyId === editCompanyId)
+                              .map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                      <PrimaryBtn onClick={handleSaveInfo} disabled={savingInfo || !editTitle.trim()} style={{ fontSize: 12, padding: "6px 16px" }}>
+                        {savingInfo ? "저장 중..." : "저장"}
+                      </PrimaryBtn>
+                      <GhostBtn onClick={() => setEditingInfo(false)} style={{ fontSize: 12, padding: "6px 12px" }}>취소</GhostBtn>
+                    </div>
                   </div>
                 )}
-              </div>
+              </>
             )}
 
             {/* 거래처 / 담당자 */}
@@ -2533,9 +2690,30 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
             {/* 견적/결제/정산 */}
             {activeSection === "settlement" && (
               <>
-                <p style={sectionHd}>견적 ({detail.quotes.length})</p>
+                {/* 견적 섹션 */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <p style={sectionHd}>견적 ({detail.quotes.length})</p>
+                </div>
+                {detail.status === "created" && detail.quotes.length === 0 && (
+                  <div style={{ background: "#fdf4ff", borderRadius: 10, padding: "12px 14px", marginBottom: 12, border: "1px solid #e9d5ff" }}>
+                    <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: "#7c3aed" }}>견적 생성</p>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input
+                        type="number" min="0" value={quoteAmount}
+                        onChange={e => setQuoteAmount(e.target.value)}
+                        placeholder="견적 금액 (원)"
+                        style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "7px 10px" }}
+                        onKeyDown={e => e.key === "Enter" && handleCreateQuote()}
+                      />
+                      <PrimaryBtn onClick={handleCreateQuote} disabled={creatingQuote || !quoteAmount}
+                        style={{ fontSize: 12, padding: "7px 14px", background: "#7c3aed", border: "none" }}>
+                        {creatingQuote ? "생성 중..." : "견적 생성"}
+                      </PrimaryBtn>
+                    </div>
+                  </div>
+                )}
                 {detail.quotes.length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: 13 }}>견적 없음</p>
+                  <p style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>등록된 견적이 없습니다.</p>
                 ) : detail.quotes.map(q => (
                   <div key={q.id} style={{ display: "flex", gap: 14, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, alignItems: "center" }}>
                     <span style={{ color: "#9ca3af" }}>#{q.id}</span>
@@ -2545,10 +2723,34 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
                   </div>
                 ))}
 
-                <p style={sectionHd}>결제 ({detail.payments.length})</p>
+                {/* 결제 섹션 */}
+                <p style={{ ...sectionHd, marginTop: 10 }}>결제 ({detail.payments.length})</p>
+                {detail.status === "approved" && detail.payments.filter((pm: any) => pm.status === "paid").length === 0 && (
+                  <div style={{ background: "#f0fdf4", borderRadius: 10, padding: "12px 14px", marginBottom: 12, border: "1px solid #bbf7d0" }}>
+                    <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: "#059669" }}>결제 확인 등록</p>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input
+                        type="number" min="0" value={paymentAmount}
+                        onChange={e => setPaymentAmount(e.target.value)}
+                        placeholder="결제 금액 (원)"
+                        style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "7px 10px" }}
+                        onKeyDown={e => e.key === "Enter" && handleCreatePayment()}
+                      />
+                      <PrimaryBtn onClick={handleCreatePayment} disabled={creatingPayment || !paymentAmount}
+                        style={{ fontSize: 12, padding: "7px 14px", background: "#059669", border: "none" }}>
+                        {creatingPayment ? "처리 중..." : "결제 확인"}
+                      </PrimaryBtn>
+                    </div>
+                    {detail.quotes.length > 0 && (
+                      <p style={{ margin: "6px 0 0", fontSize: 11, color: "#6b7280" }}>
+                        견적 금액: {Number(detail.quotes[0].amount).toLocaleString()}원
+                      </p>
+                    )}
+                  </div>
+                )}
                 {detail.payments.length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: 13 }}>결제 없음</p>
-                ) : detail.payments.map(pm => (
+                  <p style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>등록된 결제가 없습니다.</p>
+                ) : detail.payments.map((pm: any) => (
                   <div key={pm.id} style={{ display: "flex", gap: 14, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, alignItems: "center" }}>
                     <span style={{ color: "#9ca3af" }}>#{pm.id}</span>
                     <span style={{ fontWeight: 700, color: "#0891b2" }}>{Number(pm.amount).toLocaleString()}원</span>
@@ -2557,10 +2759,11 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
                   </div>
                 ))}
 
-                <p style={sectionHd}>정산 ({detail.settlements.length})</p>
+                {/* 정산 섹션 */}
+                <p style={{ ...sectionHd, marginTop: 10 }}>정산 ({detail.settlements.length})</p>
                 {detail.settlements.length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: 13 }}>정산 없음</p>
-                ) : detail.settlements.map(s => (
+                  <p style={{ color: "#9ca3af", fontSize: 13 }}>등록된 정산이 없습니다.</p>
+                ) : detail.settlements.map((s: any) => (
                   <div key={s.id} style={{ display: "flex", gap: 14, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, flexWrap: "wrap", alignItems: "center" }}>
                     <span style={{ color: "#9ca3af" }}>#{s.id}</span>
                     <span style={{ color: "#0891b2", fontWeight: 600 }}>총 {Number(s.totalAmount).toLocaleString()}원</span>
@@ -2779,6 +2982,14 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
   const [translatorStatusFilter, setTranslatorStatusFilter] = useState("all");
   const [translatorRatingFilter, setTranslatorRatingFilter] = useState("");
   const [translatorDetailModal, setTranslatorDetailModal] = useState<{ userId: number; email: string } | null>(null);
+
+  // 관리자 프로젝트 생성 모달
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProjectTitle, setNewProjectTitle] = useState("");
+  const [newProjectCustomerId, setNewProjectCustomerId] = useState<number | null>(null);
+  const [newProjectCompanyId, setNewProjectCompanyId] = useState<number | null>(null);
+  const [newProjectContactId, setNewProjectContactId] = useState<number | null>(null);
+  const [creatingProject, setCreatingProject] = useState(false);
 
   // modals
   const [detailModal, setDetailModal] = useState<number | null>(null);
@@ -3026,6 +3237,30 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
   useEffect(() => { if (adminTab === "board") fetchBoard(); }, [adminTab, fetchBoard]);
   useEffect(() => { if (adminTab === "translators") fetchTranslators(); }, [adminTab, fetchTranslators]);
 
+  const handleCreateAdminProject = async () => {
+    if (!newProjectTitle.trim()) { setToast("프로젝트 제목을 입력하세요."); return; }
+    setCreatingProject(true);
+    try {
+      const res = await fetch(api("/api/admin/projects"), {
+        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: newProjectTitle.trim(),
+          customerId: newProjectCustomerId ?? undefined,
+          companyId: newProjectCompanyId ?? undefined,
+          contactId: newProjectContactId ?? undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setToast(`프로젝트 #${data.id} 생성 완료`);
+      setShowCreateProject(false);
+      setNewProjectTitle(""); setNewProjectCustomerId(null); setNewProjectCompanyId(null); setNewProjectContactId(null);
+      await fetchAll();
+      setDetailModal(data.id);
+    } catch { setToast("오류: 프로젝트 생성 실패"); }
+    finally { setCreatingProject(false); }
+  };
+
   const runSettlementPay = async (settlementId: number) => {
     setPaying(settlementId);
     try {
@@ -3258,10 +3493,65 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
         ))}
       </div>
 
+      {/* 관리자 프로젝트 생성 모달 */}
+      {showCreateProject && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 400 }}>
+          <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 480, padding: "28px 32px", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+            <h3 style={{ margin: "0 0 18px", fontSize: 17, fontWeight: 800, color: "#111827" }}>프로젝트 직접 등록</h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>제목 *</label>
+                <input value={newProjectTitle} onChange={e => setNewProjectTitle(e.target.value)}
+                  placeholder="프로젝트 제목" autoFocus
+                  style={{ width: "100%", boxSizing: "border-box", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, outline: "none" }}
+                  onKeyDown={e => e.key === "Enter" && handleCreateAdminProject()} />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>고객 (선택)</label>
+                <select value={newProjectCustomerId ?? ""} onChange={e => setNewProjectCustomerId(e.target.value ? Number(e.target.value) : null)}
+                  style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
+                  <option value="">— 고객 없이 등록 —</option>
+                  {customers.map(c => <option key={c.id} value={c.id}>{c.contactName} ({c.email})</option>)}
+                </select>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>거래처 (선택)</label>
+                  <select value={newProjectCompanyId ?? ""} onChange={e => { setNewProjectCompanyId(e.target.value ? Number(e.target.value) : null); setNewProjectContactId(null); }}
+                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
+                    <option value="">— 없음 —</option>
+                    {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>담당자 (선택)</label>
+                  <select value={newProjectContactId ?? ""} onChange={e => setNewProjectContactId(e.target.value ? Number(e.target.value) : null)}
+                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
+                    <option value="">— 없음 —</option>
+                    {contacts
+                      .filter((c: any) => !newProjectCompanyId || c.companyId === newProjectCompanyId)
+                      .map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
+              <GhostBtn onClick={() => { setShowCreateProject(false); setNewProjectTitle(""); }}>취소</GhostBtn>
+              <PrimaryBtn onClick={handleCreateAdminProject} disabled={creatingProject || !newProjectTitle.trim()} style={{ padding: "9px 20px" }}>
+                {creatingProject ? "생성 중..." : "프로젝트 등록"}
+              </PrimaryBtn>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── 프로젝트 탭 ── */}
       {adminTab === "projects" && (
         <Section title={`전체 프로젝트 (${projects.length})`} action={
-          <GhostBtn onClick={() => handleExportCSV("projects")} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
+          <div style={{ display: "flex", gap: 8 }}>
+            <PrimaryBtn onClick={() => { fetchCustomers(); fetchCompanies(); fetchContacts(); setShowCreateProject(true); }} style={{ fontSize: 13, padding: "7px 14px" }}>+ 프로젝트 등록</PrimaryBtn>
+            <GhostBtn onClick={() => handleExportCSV("projects")} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
+          </div>
         }>
           {/* 검색 + 필터 */}
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
@@ -3284,8 +3574,8 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
             <PrimaryBtn onClick={fetchAll} disabled={loading} style={{ padding: "8px 16px", fontSize: 13 }}>
               {loading ? "검색 중..." : "검색"}
             </PrimaryBtn>
-            {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all") && (
-              <GhostBtn onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); }} style={{ padding: "8px 12px", fontSize: 13 }}>
+            {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all") && (
+              <GhostBtn onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectPage(1); }} style={{ padding: "8px 12px", fontSize: 13 }}>
                 초기화
               </GhostBtn>
             )}

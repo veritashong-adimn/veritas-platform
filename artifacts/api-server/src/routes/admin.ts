@@ -470,36 +470,128 @@ router.post("/admin/projects/:id/rematch", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 프로젝트 취소 ─────────────────────────────────────────────────────────
-router.patch("/admin/projects/:id/cancel", ...adminGuard, async (req, res) => {
-  const projectId = Number(req.params.id);
-  if (isNaN(projectId) || projectId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 project id." });
+// ─── 관리자 직접 프로젝트 생성 ────────────────────────────────────────────
+router.post("/admin/projects", ...adminGuard, async (req, res) => {
+  const { title, customerId, companyId, contactId } = req.body as {
+    title?: string; customerId?: number; companyId?: number; contactId?: number;
+  };
+  if (!title?.trim()) {
+    res.status(400).json({ error: "프로젝트 제목은 필수입니다." });
     return;
   }
 
+  let userId: number;
+  if (customerId) {
+    const [customer] = await db.select({ userId: customersTable.userId }).from(customersTable).where(eq(customersTable.id, customerId));
+    if (!customer) { res.status(400).json({ error: "존재하지 않는 고객입니다." }); return; }
+    userId = customer.userId;
+  } else {
+    const adminUser = (req as any).user as { id: number };
+    userId = adminUser.id;
+  }
+
   try {
-    const [project] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId));
-    if (!project) {
-      res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." });
-      return;
-    }
-    if (project.status === "cancelled") {
-      res.status(400).json({ error: "이미 취소된 프로젝트입니다." });
-      return;
-    }
+    const [project] = await db.insert(projectsTable).values({
+      userId,
+      customerId: customerId ?? null,
+      companyId: companyId ?? null,
+      contactId: contactId ?? null,
+      title: title.trim(),
+      adminId: ((req as any).user as { id: number }).id,
+    }).returning();
 
-    const [updated] = await db
-      .update(projectsTable)
-      .set({ status: "cancelled" })
-      .where(eq(projectsTable.id, projectId))
-      .returning();
+    await logEvent("project", project.id, "project_created", req.log);
+    res.status(201).json(project);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to create project");
+    res.status(500).json({ error: "프로젝트 생성 실패." });
+  }
+});
 
-    await logEvent("project", projectId, "admin_project_cancelled", req.log);
+// ─── 프로젝트 기본정보 수정 ────────────────────────────────────────────────
+router.patch("/admin/projects/:id/info", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
+
+  const { title, companyId, contactId } = req.body as { title?: string; companyId?: number | null; contactId?: number | null };
+  const updates: Record<string, any> = {};
+  if (title !== undefined) { if (!title.trim()) { res.status(400).json({ error: "제목은 빈 값일 수 없습니다." }); return; } updates.title = title.trim(); }
+  if (companyId !== undefined) updates.companyId = companyId;
+  if (contactId !== undefined) updates.contactId = contactId;
+  if (Object.keys(updates).length === 0) { res.status(400).json({ error: "변경할 항목이 없습니다." }); return; }
+
+  try {
+    const [project] = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.id, projectId));
+    if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
+    const [updated] = await db.update(projectsTable).set(updates).where(eq(projectsTable.id, projectId)).returning();
+    await logEvent("project", projectId, "admin_info_updated", req.log);
     res.json(updated);
   } catch (err) {
-    req.log.error({ err }, "Admin: failed to cancel project");
-    res.status(500).json({ error: "프로젝트 취소 실패." });
+    req.log.error({ err }, "Admin: failed to update project info");
+    res.status(500).json({ error: "기본정보 수정 실패." });
+  }
+});
+
+// ─── 관리자 견적 생성 ──────────────────────────────────────────────────────
+router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
+
+  const { amount } = req.body as { amount?: number };
+  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+    res.status(400).json({ error: "유효한 견적 금액(원)이 필요합니다." }); return;
+  }
+
+  try {
+    const [project] = await db.select({ id: projectsTable.id, status: projectsTable.status }).from(projectsTable).where(eq(projectsTable.id, projectId));
+    if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
+    if (project.status !== "created") { res.status(400).json({ error: `견적은 '접수됨' 상태에서만 생성 가능합니다. (현재: ${project.status})` }); return; }
+
+    const existing = await db.select({ id: quotesTable.id }).from(quotesTable).where(eq(quotesTable.projectId, projectId));
+    if (existing.length > 0) { res.status(400).json({ error: "이미 견적이 존재합니다." }); return; }
+
+    const result = await db.transaction(async tx => {
+      const [quote] = await tx.insert(quotesTable).values({ projectId, price: String(Number(amount)), status: "sent" }).returning();
+      await tx.update(projectsTable).set({ status: "quoted" }).where(eq(projectsTable.id, projectId));
+      return quote;
+    });
+    await logEvent("project", projectId, "quote_created", req.log);
+    res.status(201).json(result);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to create quote");
+    res.status(500).json({ error: "견적 생성 실패." });
+  }
+});
+
+// ─── 관리자 결제 등록 ──────────────────────────────────────────────────────
+router.post("/admin/projects/:id/payment", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
+
+  const { amount } = req.body as { amount?: number };
+  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+    res.status(400).json({ error: "유효한 결제 금액(원)이 필요합니다." }); return;
+  }
+
+  try {
+    const [project] = await db.select({ id: projectsTable.id, status: projectsTable.status }).from(projectsTable).where(eq(projectsTable.id, projectId));
+    if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
+    if (project.status !== "approved") { res.status(400).json({ error: `결제 등록은 '견적 승인' 상태에서만 가능합니다. (현재: ${project.status})` }); return; }
+
+    const existing = await db.select({ id: paymentsTable.id }).from(paymentsTable).where(and(eq(paymentsTable.projectId, projectId), eq(paymentsTable.status, "paid")));
+    if (existing.length > 0) { res.status(400).json({ error: "이미 결제 완료된 프로젝트입니다." }); return; }
+
+    const result = await db.transaction(async tx => {
+      const [payment] = await tx.insert(paymentsTable).values({ projectId, amount: String(Number(amount)), status: "paid" }).returning();
+      await tx.update(projectsTable).set({ status: "paid" }).where(eq(projectsTable.id, projectId));
+      await tx.update(quotesTable).set({ status: "approved" }).where(eq(quotesTable.projectId, projectId));
+      return payment;
+    });
+    await logEvent("project", projectId, "payment_received", req.log);
+    res.status(201).json(result);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to record payment");
+    res.status(500).json({ error: "결제 등록 실패." });
   }
 });
 
