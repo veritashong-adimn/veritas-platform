@@ -2,6 +2,39 @@ import React, { useState, useEffect } from 'react';
 import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, AdminUser, BOARD_CATEGORY_LABEL } from '../../lib/constants';
 import { StatusBadge, PrimaryBtn, GhostBtn } from '../ui';
 
+/* ────── 상태 변경 검증 ────── */
+function getStatusTransitionBlock(
+  targetStatus: string,
+  detail: ProjectDetail,
+): { blocked: boolean; reason?: string } {
+  const hasPaidPayment = detail.payments?.some((p: any) => p.status === "paid");
+  const hasAssignedTranslator = (detail.tasks ?? []).length > 0;
+
+  if (targetStatus === "paid" && !hasPaidPayment) {
+    return {
+      blocked: true,
+      reason: "결제 기록이 없습니다. '견적·결제·정산' 탭에서 먼저 결제를 등록한 뒤 상태를 변경해주세요.",
+    };
+  }
+  if ((targetStatus === "matched" || targetStatus === "in_progress") && !hasAssignedTranslator) {
+    return {
+      blocked: true,
+      reason: "배정된 번역사가 없습니다. '번역사' 탭에서 번역사를 배정한 뒤 상태를 변경해주세요.",
+    };
+  }
+  return { blocked: false };
+}
+
+/* 현재 상태별 다음 단계 안내 */
+const STATUS_NEXT_HINT: Record<string, { text: string; color: string; bg: string }> = {
+  created:     { text: "견적을 생성한 뒤 '견적됨' 상태로 변경하세요.",               color: "#2563eb", bg: "#eff6ff" },
+  quoted:      { text: "고객 확인 후 '견적 승인됨' 상태로 변경하세요.",               color: "#7c3aed", bg: "#faf5ff" },
+  approved:    { text: "'견적·결제·정산' 탭에서 결제를 등록하면 자동으로 변경됩니다.", color: "#d97706", bg: "#fffbeb" },
+  paid:        { text: "'번역사' 탭에서 번역사를 배정한 뒤 '매칭됨' 으로 변경하세요.", color: "#9333ea", bg: "#fdf4ff" },
+  matched:     { text: "번역사가 작업을 시작하면 '작업중' 상태로 변경하세요.",          color: "#0891b2", bg: "#ecfeff" },
+  in_progress: { text: "번역 완료 후 '완료' 상태로 변경하세요.",                      color: "#059669", bg: "#f0fdf4" },
+};
+
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
   border: '1px solid #d1d5db', fontSize: 14, color: '#111827',
@@ -385,23 +418,59 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
           <>
             {/* 액션 바 */}
             <div style={{ background: "#f9fafb", borderRadius: 10, padding: "10px 12px", marginBottom: 14, border: "1px solid #e5e7eb" }}>
+              {/* 현재 상태 다음 단계 힌트 */}
+              {STATUS_NEXT_HINT[detail.status] && (
+                <div style={{
+                  display: "flex", alignItems: "flex-start", gap: 6,
+                  background: STATUS_NEXT_HINT[detail.status].bg,
+                  border: `1px solid ${STATUS_NEXT_HINT[detail.status].color}30`,
+                  borderRadius: 7, padding: "6px 10px", marginBottom: 8,
+                }}>
+                  <span style={{ fontSize: 12, color: STATUS_NEXT_HINT[detail.status].color, lineHeight: 1.5 }}>
+                    💡 {STATUS_NEXT_HINT[detail.status].text}
+                  </span>
+                </div>
+              )}
+
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                 {/* 상태 변경 */}
-                {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).length > 0 && (
-                  <>
-                    <select value={statusTarget} onChange={e => setStatusTarget(e.target.value)}
-                      style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12 }}>
-                      <option value={detail.status}>{STATUS_LABEL[detail.status] ?? detail.status} (현재)</option>
-                      {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).map(s => (
-                        <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
-                      ))}
-                    </select>
-                    <GhostBtn onClick={handleStatusChange} disabled={changingStatus || statusTarget === detail.status} color="#2563eb" style={{ fontSize: 12, padding: "6px 12px" }}>
-                      {changingStatus ? "변경 중..." : "상태 변경 적용"}
-                    </GhostBtn>
-                    <span style={{ color: "#d1d5db", fontSize: 14 }}>|</span>
-                  </>
-                )}
+                {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).length > 0 && (() => {
+                  const block = statusTarget !== detail.status
+                    ? getStatusTransitionBlock(statusTarget, detail)
+                    : { blocked: false };
+                  return (
+                    <>
+                      <select value={statusTarget} onChange={e => setStatusTarget(e.target.value)}
+                        style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12 }}>
+                        <option value={detail.status}>{STATUS_LABEL[detail.status] ?? detail.status} (현재)</option>
+                        {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).map(s => (
+                          <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
+                        ))}
+                      </select>
+                      <GhostBtn
+                        onClick={handleStatusChange}
+                        disabled={changingStatus || statusTarget === detail.status || block.blocked}
+                        color={block.blocked ? "#9ca3af" : "#2563eb"}
+                        style={{ fontSize: 12, padding: "6px 12px" }}
+                      >
+                        {changingStatus ? "변경 중..." : "상태 변경 적용"}
+                      </GhostBtn>
+                      <span style={{ color: "#d1d5db", fontSize: 14 }}>|</span>
+                      {/* 검증 실패 경고 메시지 */}
+                      {block.blocked && block.reason && (
+                        <div style={{
+                          width: "100%", marginTop: 6,
+                          display: "flex", gap: 6, alignItems: "flex-start",
+                          background: "#fef2f2", border: "1px solid #fca5a5",
+                          borderRadius: 7, padding: "7px 10px",
+                        }}>
+                          <span style={{ fontSize: 16, lineHeight: 1 }}>⚠️</span>
+                          <span style={{ fontSize: 12, color: "#991b1b", lineHeight: 1.5 }}>{block.reason}</span>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
                 {/* 번역사 추천 — 배정이 필요한 상태일 때만 */}
                 {["paid", "matched", "in_progress"].includes(detail.status) && (
                   <GhostBtn onClick={loadCandidates} disabled={loadingCandidates} color="#7c3aed" style={{ fontSize: 12, padding: "6px 12px" }}>
