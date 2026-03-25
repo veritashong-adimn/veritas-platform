@@ -15,14 +15,16 @@ export function signToken(payload: JwtPayload): string {
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) {
+  const queryToken = typeof req.query?.token === "string" ? req.query.token : undefined;
+  const raw = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : queryToken;
+
+  if (!raw) {
     res.status(401).json({ error: "인증이 필요합니다. Authorization: Bearer <token>" });
     return;
   }
 
-  const token = authHeader.slice(7);
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    const payload = jwt.verify(raw, JWT_SECRET) as JwtPayload;
     req.user = { id: payload.id, email: payload.email, role: payload.role };
     next();
   } catch {

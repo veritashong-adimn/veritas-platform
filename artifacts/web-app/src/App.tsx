@@ -2690,6 +2690,28 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
             {/* 견적/결제/정산 */}
             {activeSection === "settlement" && (
               <>
+                {/* 문서 출력 */}
+                <div style={{ background: "#f8fafc", borderRadius: 10, padding: "12px 14px", marginBottom: 16, border: "1px solid #e2e8f0", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#475569", marginRight: 4 }}>문서 출력</span>
+                  <button
+                    onClick={() => {
+                      const url = api(`/api/admin/projects/${projectId}/pdf/quote?token=${encodeURIComponent(token)}`);
+                      window.open(url, "_blank", "noopener");
+                    }}
+                    style={{ display: "flex", alignItems: "center", gap: 5, background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe", borderRadius: 7, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    🖨 견적서 PDF
+                  </button>
+                  <button
+                    onClick={() => {
+                      const url = api(`/api/admin/projects/${projectId}/pdf/statement?token=${encodeURIComponent(token)}`);
+                      window.open(url, "_blank", "noopener");
+                    }}
+                    style={{ display: "flex", alignItems: "center", gap: 5, background: "#f0fdf4", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 7, padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                    🖨 거래명세서 PDF
+                  </button>
+                  <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 4 }}>새 창에서 열린 후 Ctrl+P 또는 인쇄 버튼으로 PDF 저장</span>
+                </div>
+
                 {/* 견적 섹션 */}
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
                   <p style={sectionHd}>견적 ({detail.quotes.length})</p>

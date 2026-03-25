@@ -14,6 +14,7 @@ import companiesRouter from "./companies";
 import productsRouter from "./products";
 import boardRouter from "./board";
 import translatorsRouter from "./translators";
+import documentsRouter from "./documents";
 
 const router: IRouter = Router();
 
@@ -32,5 +33,6 @@ router.use(companiesRouter);
 router.use(productsRouter);
 router.use(boardRouter);
 router.use(translatorsRouter);
+router.use(documentsRouter);
 
 export default router;
