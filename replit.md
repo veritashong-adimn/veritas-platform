@@ -48,6 +48,23 @@ The project is structured as a pnpm monorepo, organizing code into `artifacts` (
 - **Event Log Timeline:** Korean action label mapping + vertical timeline design with icons and color coding; sorted chronologically (oldest first).
 - **Quick Cancel API:** `PATCH /api/admin/projects/:id/cancel` for fast project cancellation from list view.
 
+- **PDF 문서 출력:** `services/document.service.ts` + `services/doc-number.ts` + `routes/documents.ts`
+  - 견적서: `GET /api/admin/projects/:id/pdf/quote?token=JWT`
+  - 거래명세서: `GET /api/admin/projects/:id/pdf/statement?token=JWT`
+  - 렌더링: print-ready HTML (A4, @media print) → 브라우저 인쇄 다이얼로그 → PDF 저장
+  - `PlatformInfo` (발신기관): 환경변수 `PLATFORM_NAME/REPRESENTATIVE/BIZ_NUMBER/ADDRESS/PHONE/EMAIL`
+  - `BankInfo` (계좌): 환경변수 `BANK_NAME/BANK_ACCOUNT/BANK_HOLDER` (미설정 시 "미등록" 표시)
+  - 문서번호: `Q-YYYYMMDD-{quoteId:05d}` / `S-YYYYMMDD-{projectId:05d}` (향후 DB 시퀀스 교체 가능)
+  - `requireAuth` 미들웨어: `Authorization: Bearer` 헤더 외 `?token=` 쿼리 파라미터도 허용 (문서 다운로드 전용)
+
+- **quote_items 설계 (PENDING — 미마이그레이션):**
+  - 초안 파일: `lib/db/src/schema/quote_items.draft.ts`
+  - 컬럼: id, quote_id (FK), product_id (FK optional), product_name, unit, quantity, unit_price, supply_amount, tax_amount, total_amount, memo, created_at
+  - `products` 연결: `product_id` 옵셔널 FK — 선택 시 name/basePrice/unit 자동 채움
+  - API 영향: `routes/quotes.ts` 품목 CRUD 추가, `admin.ts` 견적생성 시 items[] 함께 전달
+  - Frontend 영향: 견적 생성 폼 품목 행 UI + PDF 품목 테이블 렌더링
+  - 실제 마이그레이션 전 확정 필요
+
 **UI/UX Decisions (implied by API):**
 - Frontend will manage JWTs in localStorage for authenticated sessions.
 - Clear separation of concerns between customer, translator, and admin roles with appropriate access controls.

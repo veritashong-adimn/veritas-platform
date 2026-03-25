@@ -5,10 +5,43 @@ import {
 } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
-import { buildQuoteHtml, buildStatementHtml } from "../services/document.service";
+import {
+  buildQuoteHtml, buildStatementHtml,
+  type PlatformInfo, type BankInfo,
+} from "../services/document.service";
+import { quoteDocNumber, statementDocNumber } from "../services/doc-number";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin")];
+
+/**
+ * 플랫폼(발신기관) 정보
+ * 향후: DB settings 테이블 또는 환경변수로 교체
+ */
+const PLATFORM: PlatformInfo = {
+  name: process.env.PLATFORM_NAME ?? "통번역 플랫폼",
+  representativeName: process.env.PLATFORM_REPRESENTATIVE ?? "대표자명",
+  businessNumber: process.env.PLATFORM_BIZ_NUMBER ?? "000-00-00000",
+  address: process.env.PLATFORM_ADDRESS ?? "서울특별시 강남구 테헤란로 000, 00층",
+  phone: process.env.PLATFORM_PHONE ?? "02-000-0000",
+  email: process.env.PLATFORM_EMAIL ?? "contact@platform.com",
+  website: process.env.PLATFORM_WEBSITE,
+};
+
+/**
+ * 계좌 정보 (선택적)
+ * 향후: DB settings 테이블에서 로드
+ */
+const BANK: BankInfo | null =
+  process.env.BANK_NAME && process.env.BANK_ACCOUNT
+    ? {
+        bankName: process.env.BANK_NAME,
+        accountNumber: process.env.BANK_ACCOUNT,
+        accountHolder: process.env.BANK_HOLDER ?? PLATFORM.name,
+      }
+    : null;
+
+// ── 공통 데이터 로더 ─────────────────────────────────────────────────────────
 
 async function loadProjectData(projectId: number) {
   const [project] = await db
@@ -51,10 +84,19 @@ async function loadProjectData(projectId: number) {
 
   const notes = rawNotes.map(n => n.content).join("\n").trim();
 
-  return { project, quote: quotes[0] ?? null, payment: payments[0] ?? null, settlement: settlements[0] ?? null, company, contact, notes };
+  return {
+    project,
+    quote: quotes[0] ?? null,
+    payment: payments[0] ?? null,
+    settlement: settlements[0] ?? null,
+    company,
+    contact,
+    notes,
+  };
 }
 
-// ─── 견적서 HTML 출력 ──────────────────────────────────────────────────────
+// ── 견적서 ───────────────────────────────────────────────────────────────────
+
 router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) {
@@ -67,12 +109,19 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
     if (!data) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
 
     const { project, quote, company, contact, notes } = data;
+    const issuedAt = new Date();
+    const docNumber = quoteDocNumber(quote?.id ?? projectId, issuedAt);
+    const totalAmount = quote?.price != null ? Number(quote.price) : null;
 
     const html = buildQuoteHtml({
+      docNumber,
       projectId: project.id,
       projectTitle: project.title,
       projectStatus: project.status,
-      issuedAt: new Date().toISOString(),
+      issuedAt: issuedAt.toISOString(),
+      validDays: 30,
+      platform: PLATFORM,
+      bank: BANK,
       company: company ? {
         name: company.name,
         businessNumber: company.businessNumber,
@@ -91,14 +140,17 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
       } : null,
       customerEmail: project.customerEmail,
       quoteId: quote?.id ?? null,
-      quoteAmount: quote?.price != null ? Number(quote.price) : null,
       quoteStatus: quote?.status ?? null,
       quoteCreatedAt: quote?.createdAt?.toISOString() ?? null,
+      totalAmount,
+      supplyAmount: totalAmount,
+      taxAmount: 0,
       notes,
     });
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("Cache-Control", "no-store");
     res.send(html);
   } catch (err) {
     req.log.error({ err }, "Documents: failed to build quote PDF");
@@ -106,7 +158,8 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 거래명세서 HTML 출력 ──────────────────────────────────────────────────
+// ── 거래명세서 ───────────────────────────────────────────────────────────────
+
 router.get("/admin/projects/:id/pdf/statement", ...adminGuard, async (req, res) => {
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) {
@@ -119,12 +172,17 @@ router.get("/admin/projects/:id/pdf/statement", ...adminGuard, async (req, res) 
     if (!data) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
 
     const { project, payment, settlement, company, contact, notes } = data;
+    const issuedAt = new Date();
+    const docNumber = statementDocNumber(projectId, issuedAt);
 
     const html = buildStatementHtml({
+      docNumber,
       projectId: project.id,
       projectTitle: project.title,
       projectStatus: project.status,
-      issuedAt: new Date().toISOString(),
+      issuedAt: issuedAt.toISOString(),
+      platform: PLATFORM,
+      bank: BANK,
       company: company ? {
         name: company.name,
         businessNumber: company.businessNumber,
@@ -144,7 +202,9 @@ router.get("/admin/projects/:id/pdf/statement", ...adminGuard, async (req, res) 
       paymentAmount: payment?.amount != null ? Number(payment.amount) : null,
       paymentDate: payment?.createdAt?.toISOString() ?? null,
       paymentStatus: payment?.status ?? null,
-      totalAmount: settlement?.totalAmount != null ? Number(settlement.totalAmount) : (payment?.amount != null ? Number(payment.amount) : null),
+      totalAmount: settlement?.totalAmount != null
+        ? Number(settlement.totalAmount)
+        : (payment?.amount != null ? Number(payment.amount) : null),
       translatorAmount: settlement?.translatorAmount != null ? Number(settlement.translatorAmount) : null,
       platformFee: settlement?.platformFee != null ? Number(settlement.platformFee) : null,
       notes,
@@ -152,6 +212,7 @@ router.get("/admin/projects/:id/pdf/statement", ...adminGuard, async (req, res) 
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("Cache-Control", "no-store");
     res.send(html);
   } catch (err) {
     req.log.error({ err }, "Documents: failed to build statement PDF");
