@@ -346,16 +346,44 @@ router.post("/admin/projects/:id/assign-translator", ...adminGuard, async (req, 
   }
 });
 
+// ─── 상태 전이 허용 맵 (관리자 포함 전체 시스템 공통) ──────────────────
+export const PROJECT_STATUS_TRANSITIONS: Record<string, string[]> = {
+  created:     ["quoted", "cancelled"],
+  quoted:      ["approved", "cancelled"],
+  approved:    ["paid", "cancelled"],
+  paid:        ["matched", "cancelled"],
+  matched:     ["in_progress", "cancelled"],
+  in_progress: ["completed", "cancelled"],
+  completed:   [],
+  cancelled:   [],
+};
+
 // ─── 프로젝트 상태 수동 변경 ──────────────────────────────────────────────
 router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
   const projectId = Number(req.params.id);
-  const { status } = req.body as { status?: string };
+  const { status, force } = req.body as { status?: string; force?: boolean };
 
-  const ALLOWED = ["created", "quoted", "approved", "paid", "matched", "in_progress", "completed", "cancelled"] as const;
-  type AllowedStatus = typeof ALLOWED[number];
+  const ALL_STATUSES = ["created", "quoted", "approved", "paid", "matched", "in_progress", "completed", "cancelled"] as const;
+  type AllowedStatus = typeof ALL_STATUSES[number];
 
-  if (!status || !ALLOWED.includes(status as AllowedStatus)) {
-    res.status(400).json({ error: `status는 ${ALLOWED.join(", ")} 중 하나여야 합니다.` });
+  if (!status || !ALL_STATUSES.includes(status as AllowedStatus)) {
+    res.status(400).json({ error: `status는 ${ALL_STATUSES.join(", ")} 중 하나여야 합니다.` });
+    return;
+  }
+
+  const [project] = await db.select({ status: projectsTable.status }).from(projectsTable).where(eq(projectsTable.id, projectId));
+  if (!project) {
+    res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." });
+    return;
+  }
+
+  const allowed = PROJECT_STATUS_TRANSITIONS[project.status] ?? [];
+  if (!force && !allowed.includes(status)) {
+    res.status(400).json({
+      error: `"${project.status}" 상태에서 "${status}"로 직접 변경할 수 없습니다. 허용 전이: [${allowed.join(", ") || "없음"}]. force:true로 강제 변경 가능합니다.`,
+      allowedTransitions: allowed,
+      currentStatus: project.status,
+    });
     return;
   }
 
@@ -366,16 +394,34 @@ router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
       .where(eq(projectsTable.id, projectId))
       .returning();
 
-    if (!updated) {
-      res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." });
-      return;
-    }
-
-    await logEvent("project", projectId, `admin_status_changed_to_${status}`, req.log);
+    const logAction = force ? `admin_forced_status_to_${status}` : `admin_status_changed_to_${status}`;
+    await logEvent("project", projectId, logAction, req.log);
     res.json(updated);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to update project status");
     res.status(500).json({ error: "상태 변경 실패." });
+  }
+});
+
+// ─── 프로젝트 빠른 취소 ────────────────────────────────────────────────────
+router.patch("/admin/projects/:id/cancel", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 project id." });
+    return;
+  }
+  const [project] = await db.select({ status: projectsTable.status }).from(projectsTable).where(eq(projectsTable.id, projectId));
+  if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
+  if (project.status === "cancelled") { res.status(400).json({ error: "이미 취소된 프로젝트입니다." }); return; }
+  if (project.status === "completed") { res.status(400).json({ error: "완료된 프로젝트는 취소할 수 없습니다." }); return; }
+
+  try {
+    const [updated] = await db.update(projectsTable).set({ status: "cancelled" }).where(eq(projectsTable.id, projectId)).returning();
+    await logEvent("project", projectId, "project_cancelled", req.log);
+    res.json(updated);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to cancel project");
+    res.status(500).json({ error: "프로젝트 취소 실패." });
   }
 });
 

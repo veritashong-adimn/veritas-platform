@@ -42,6 +42,11 @@ The project is structured as a pnpm monorepo, organizing code into `artifacts` (
 - **API Endpoints:** A comprehensive set of RESTful API endpoints are designed to manage all platform functionalities, categorized by domain (Auth, Users, Projects, Settlements, Admin, Payments, Upload, Quotes, Tasks, Logs & Health).
 - **Error Handling & Logging:** Key events are logged, such as project creation, quote approvals, task status changes, using a dedicated `logs` table.
 - **Admin Features:** Extensive admin panels are provided for managing customers, companies, contacts, translators, products, and platform content (board, notes), including data export functionalities.
+- **State Transition Rules:** Explicit allowed transition maps enforced on both backend (400 on invalid transitions) and frontend (dropdown shows only valid next states). Admin can force-override with `force:true`.
+- **Seed Data:** `pnpm --filter @workspace/api-server run seed` creates 2 companies, 3 contacts, 3 translators (with profiles+rates), 2 customers, 6 projects (all status states) for full-flow testing.
+- **Project List UX:** Pagination (20 per page), quick action buttons (상세보기, 취소) per row, filter pills reset page to 1.
+- **Event Log Timeline:** Korean action label mapping + vertical timeline design with icons and color coding; sorted chronologically (oldest first).
+- **Quick Cancel API:** `PATCH /api/admin/projects/:id/cancel` for fast project cancellation from list view.
 
 **UI/UX Decisions (implied by API):**
 - Frontend will manage JWTs in localStorage for authenticated sessions.

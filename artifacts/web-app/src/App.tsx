@@ -1095,6 +1095,49 @@ const AVAILABILITY_LABEL: Record<string, string> = { available: "가능", busy: 
 const ALL_PROJECT_STATUSES = ["created","quoted","approved","paid","matched","in_progress","completed","cancelled"] as const;
 const ALL_PAYMENT_STATUSES = ["pending","paid","failed"] as const;
 
+const PROJECT_STATUS_TRANSITIONS: Record<string, string[]> = {
+  created:     ["quoted", "cancelled"],
+  quoted:      ["approved", "cancelled"],
+  approved:    ["paid", "cancelled"],
+  paid:        ["matched", "cancelled"],
+  matched:     ["in_progress", "cancelled"],
+  in_progress: ["completed", "cancelled"],
+  completed:   [],
+  cancelled:   [],
+};
+
+const ACTION_LABEL: Record<string, { ko: string; color: string; dot: string }> = {
+  project_created:             { ko: "프로젝트 접수",      color: "#2563eb", dot: "🗂️" },
+  quote_created:               { ko: "견적 생성",           color: "#7c3aed", dot: "📋" },
+  quote_approved:              { ko: "견적 승인",           color: "#16a34a", dot: "✅" },
+  payment_requested:           { ko: "결제 요청",           color: "#d97706", dot: "💳" },
+  payment_paid:                { ko: "결제 완료",           color: "#0891b2", dot: "💰" },
+  payment_failed:              { ko: "결제 실패",           color: "#dc2626", dot: "❌" },
+  project_matched:             { ko: "번역사 매칭",         color: "#9333ea", dot: "🔗" },
+  task_assigned:               { ko: "번역사 배정",         color: "#9333ea", dot: "👤" },
+  task_started:                { ko: "작업 시작",           color: "#d97706", dot: "▶️" },
+  task_completed:              { ko: "작업 완료",           color: "#059669", dot: "🎉" },
+  settlement_created:          { ko: "정산 생성",           color: "#7c3aed", dot: "📊" },
+  settlement_paid:             { ko: "정산 완료",           color: "#059669", dot: "💸" },
+  project_cancelled:           { ko: "프로젝트 취소",       color: "#dc2626", dot: "🚫" },
+};
+
+function getActionLabel(action: string): { ko: string; color: string; dot: string } {
+  if (ACTION_LABEL[action]) return ACTION_LABEL[action];
+  if (action.startsWith("admin_forced_status_to_")) {
+    const s = action.replace("admin_forced_status_to_", "");
+    return { ko: `관리자 강제변경 → ${STATUS_LABEL[s] ?? s}`, color: "#dc2626", dot: "⚡" };
+  }
+  if (action.startsWith("admin_status_changed_to_")) {
+    const s = action.replace("admin_status_changed_to_", "");
+    return { ko: `관리자 상태변경 → ${STATUS_LABEL[s] ?? s}`, color: "#6b7280", dot: "🔄" };
+  }
+  if (action.startsWith("admin_assigned_translator_")) {
+    return { ko: "관리자 번역사 배정", color: "#9333ea", dot: "👤" };
+  }
+  return { ko: action, color: "#6b7280", dot: "•" };
+}
+
 function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 32 }}>
@@ -1158,24 +1201,28 @@ function LogModal({ projectId, token, onClose }: { projectId: number; token: str
           ) : logs.length === 0 ? (
             <p style={{ textAlign: "center", color: "#9ca3af", padding: "24px 0", fontSize: 14 }}>로그가 없습니다.</p>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-              {logs.map((log) => (
-                <div key={log.id} style={{
-                  display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 12px",
-                  background: "#f9fafb", borderRadius: 8,
-                }}>
-                  <span style={{ fontSize: 11, color: "#9ca3af", minWidth: 130, marginTop: 1 }}>
-                    {new Date(log.createdAt).toLocaleString("ko-KR")}
-                  </span>
-                  <div style={{ flex: 1 }}>
-                    <span style={{
-                      background: "#eff6ff", color: "#2563eb",
-                      borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 600, marginRight: 8,
-                    }}>{log.entityType}</span>
-                    <span style={{ fontSize: 13, color: "#374151" }}>{log.action}</span>
+            <div style={{ padding: "4px 0" }}>
+              {[...logs].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).map((log, idx, arr) => {
+                const info = getActionLabel(log.action);
+                const isLast = idx === arr.length - 1;
+                return (
+                  <div key={log.id} style={{ display: "flex", gap: 0 }}>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 34, flexShrink: 0 }}>
+                      <div style={{
+                        width: 26, height: 26, borderRadius: "50%",
+                        background: info.color + "18", border: `2px solid ${info.color}`,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 12, flexShrink: 0,
+                      }}>{info.dot}</div>
+                      {!isLast && <div style={{ width: 2, flex: 1, minHeight: 14, background: "#e5e7eb" }} />}
+                    </div>
+                    <div style={{ flex: 1, paddingLeft: 10, paddingBottom: isLast ? 0 : 12, paddingTop: 2 }}>
+                      <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 600, color: info.color }}>{info.ko}</p>
+                      <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>{new Date(log.createdAt).toLocaleString("ko-KR")}</p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -2320,7 +2367,8 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", padding: "10px 12px", background: "#f9fafb", borderRadius: 10, marginBottom: 14 }}>
               <select value={statusTarget} onChange={e => setStatusTarget(e.target.value)}
                 style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12 }}>
-                {ALL_PROJECT_STATUSES.map(s => (
+                <option value={detail.status}>{STATUS_LABEL[detail.status] ?? detail.status} (현재)</option>
+                {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).map(s => (
                   <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
                 ))}
               </select>
@@ -2606,13 +2654,35 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
                 {detail.logs.length === 0 ? (
                   <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "16px 0" }}>이벤트 로그가 없습니다.</p>
                 ) : (
-                  <div style={{ maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
-                    {detail.logs.map(log => (
-                      <div key={log.id} style={{ display: "flex", gap: 14, padding: "7px 10px", background: "#f9fafb", borderRadius: 6, fontSize: 12 }}>
-                        <span style={{ color: "#9ca3af", minWidth: 130 }}>{new Date(log.createdAt).toLocaleString("ko-KR")}</span>
-                        <span style={{ color: "#374151" }}>{log.action}</span>
-                      </div>
-                    ))}
+                  <div style={{ maxHeight: 380, overflowY: "auto", padding: "4px 0" }}>
+                    {[...detail.logs].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).map((log, idx, arr) => {
+                      const info = getActionLabel(log.action);
+                      const isLast = idx === arr.length - 1;
+                      return (
+                        <div key={log.id} style={{ display: "flex", gap: 0, position: "relative" }}>
+                          {/* 세로선 + 아이콘 */}
+                          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 36, flexShrink: 0 }}>
+                            <div style={{
+                              width: 28, height: 28, borderRadius: "50%",
+                              background: info.color + "18", border: `2px solid ${info.color}`,
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                              fontSize: 13, zIndex: 1, flexShrink: 0,
+                            }}>{info.dot}</div>
+                            {!isLast && <div style={{ width: 2, flex: 1, minHeight: 18, background: "#e5e7eb" }} />}
+                          </div>
+                          {/* 내용 */}
+                          <div style={{ flex: 1, paddingLeft: 10, paddingBottom: isLast ? 0 : 14, paddingTop: 3 }}>
+                            <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 600, color: info.color }}>{info.ko}</p>
+                            <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>
+                              {new Date(log.createdAt).toLocaleString("ko-KR")}
+                              {log.entityType && log.entityType !== "project" && (
+                                <span style={{ marginLeft: 6, background: "#f3f4f6", borderRadius: 4, padding: "1px 6px", color: "#6b7280" }}>{log.entityType}</span>
+                              )}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </>
@@ -2638,12 +2708,14 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
   const [usersLoading, setUsersLoading] = useState(false);
   const [customersLoading, setCustomersLoading] = useState(false);
 
-  // project filters
+  // project filters + pagination
+  const PROJECT_PAGE_SIZE = 20;
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [projectSearch, setProjectSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [assignedAdminFilter, setAssignedAdminFilter] = useState<string>("all");
+  const [projectPage, setProjectPage] = useState(1);
 
   // other filters
   const [paymentFilter, setPaymentFilter] = useState<string>("all");
@@ -3219,10 +3291,10 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
             )}
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-            <FilterPill label="전체" active={projectFilter === "all"} onClick={() => setProjectFilter("all")} />
+            <FilterPill label="전체" active={projectFilter === "all"} onClick={() => { setProjectFilter("all"); setProjectPage(1); }} />
             {ALL_PROJECT_STATUSES.map(s => (
               <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
-                active={projectFilter === s} onClick={() => setProjectFilter(s)} />
+                active={projectFilter === s} onClick={() => { setProjectFilter(s); setProjectPage(1); }} />
             ))}
           </div>
 
@@ -3232,49 +3304,94 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
             <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
               해당 조건의 프로젝트가 없습니다.
             </Card>
-          ) : (
-            <Card style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>
-                      {["ID","제목","고객","거래처","담당자","상태","생성일","첨부"].map(h => (
-                        <th key={h} style={tableTh}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {projects.map(p => (
-                      <tr key={p.id}
-                        onClick={() => setDetailModal(p.id)}
-                        style={{ cursor: "pointer", transition: "background 0.1s" }}
-                        onMouseEnter={e => (e.currentTarget.style.background = "#f0f9ff")}
-                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                        <td style={{ ...tableTd, color: "#9ca3af" }}>#{p.id}</td>
-                        <td style={{ ...tableTd, fontWeight: 600, color: "#2563eb", maxWidth: 200 }}>
-                          <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
-                        </td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{p.customerEmail ?? "-"}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.companyName ?? "-"}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.contactName ?? "-"}</td>
-                        <td style={tableTd}><StatusBadge status={p.status} /></td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
-                          {new Date(p.createdAt).toLocaleDateString("ko-KR")}
-                        </td>
-                        <td style={tableTd}>
-                          {p.fileUrl ? (
-                            <a href={p.fileUrl} target="_blank" rel="noreferrer"
-                              onClick={e => e.stopPropagation()}
-                              style={{ color: "#2563eb", fontSize: 12, textDecoration: "none" }}>📎 파일</a>
-                          ) : <span style={{ color: "#d1d5db", fontSize: 12 }}>-</span>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )}
+          ) : (() => {
+            const totalPages = Math.ceil(projects.length / PROJECT_PAGE_SIZE);
+            const safePage = Math.min(projectPage, totalPages);
+            const pagedProjects = projects.slice((safePage - 1) * PROJECT_PAGE_SIZE, safePage * PROJECT_PAGE_SIZE);
+            return (
+              <>
+                <Card style={{ padding: 0, overflow: "hidden" }}>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <thead>
+                        <tr>
+                          {["ID","제목","고객","거래처","담당자","상태","생성일","빠른액션"].map(h => (
+                            <th key={h} style={tableTh}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pagedProjects.map(p => (
+                          <tr key={p.id}
+                            onClick={() => setDetailModal(p.id)}
+                            style={{ cursor: "pointer", transition: "background 0.1s" }}
+                            onMouseEnter={e => (e.currentTarget.style.background = "#f0f9ff")}
+                            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                            <td style={{ ...tableTd, color: "#9ca3af" }}>#{p.id}</td>
+                            <td style={{ ...tableTd, fontWeight: 600, color: "#2563eb", maxWidth: 200 }}>
+                              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
+                            </td>
+                            <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{p.customerEmail ?? "-"}</td>
+                            <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.companyName ?? "-"}</td>
+                            <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.contactName ?? "-"}</td>
+                            <td style={tableTd}><StatusBadge status={p.status} /></td>
+                            <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                              {new Date(p.createdAt).toLocaleDateString("ko-KR")}
+                            </td>
+                            <td style={{ ...tableTd }} onClick={e => e.stopPropagation()}>
+                              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                <button
+                                  onClick={() => setDetailModal(p.id)}
+                                  style={{ background: "#eff6ff", color: "#2563eb", border: "none", borderRadius: 6, padding: "4px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                                  상세보기
+                                </button>
+                                {p.status !== "cancelled" && p.status !== "completed" && (
+                                  <button
+                                    onClick={async () => {
+                                      if (!confirm(`프로젝트 #${p.id}를 취소하시겠습니까?`)) return;
+                                      const res = await fetch(api(`/api/admin/projects/${p.id}/cancel`), {
+                                        method: "PATCH",
+                                        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+                                      });
+                                      if (res.ok) { setToast("프로젝트가 취소되었습니다."); fetchAll(); }
+                                      else { const d = await res.json(); setToast(`오류: ${d.error}`); }
+                                    }}
+                                    style={{ background: "#fef2f2", color: "#dc2626", border: "none", borderRadius: 6, padding: "4px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                                    취소
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+                {/* 페이지네이션 */}
+                {totalPages > 1 && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
+                    <button
+                      onClick={() => setProjectPage(p => Math.max(1, p - 1))}
+                      disabled={safePage <= 1}
+                      style={{ background: safePage <= 1 ? "#f3f4f6" : "#fff", border: "1px solid #d1d5db", borderRadius: 8, padding: "6px 14px", fontSize: 13, cursor: safePage <= 1 ? "default" : "pointer", color: safePage <= 1 ? "#9ca3af" : "#374151" }}>
+                      이전
+                    </button>
+                    <span style={{ fontSize: 13, color: "#6b7280" }}>
+                      {safePage} / {totalPages} 페이지
+                      <span style={{ marginLeft: 6, color: "#9ca3af" }}>({projects.length}건)</span>
+                    </span>
+                    <button
+                      onClick={() => setProjectPage(p => Math.min(totalPages, p + 1))}
+                      disabled={safePage >= totalPages}
+                      style={{ background: safePage >= totalPages ? "#f3f4f6" : "#fff", border: "1px solid #d1d5db", borderRadius: 8, padding: "6px 14px", fontSize: 13, cursor: safePage >= totalPages ? "default" : "pointer", color: safePage >= totalPages ? "#9ca3af" : "#374151" }}>
+                      다음
+                    </button>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </Section>
       )}
 

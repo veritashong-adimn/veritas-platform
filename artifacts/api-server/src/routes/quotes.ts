@@ -23,6 +23,18 @@ router.post("/quotes", requireAuth, async (req, res) => {
     res.status(404).json({ error: `Project ${projectId} not found.` });
     return;
   }
+  if (project.status !== "created") {
+    res.status(400).json({
+      error: `견적 생성은 "접수됨(created)" 상태에서만 가능합니다. 현재 상태: "${project.status}"`,
+    });
+    return;
+  }
+
+  const existingQuote = await db.select({ id: quotesTable.id }).from(quotesTable).where(eq(quotesTable.projectId, projectId)).limit(1);
+  if (existingQuote.length > 0) {
+    res.status(400).json({ error: "이 프로젝트에 이미 견적이 존재합니다." });
+    return;
+  }
 
   try {
     const result = await db.transaction(async (tx) => {
