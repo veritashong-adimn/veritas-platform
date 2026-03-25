@@ -993,7 +993,10 @@ export function AdminDashboard({ user, token }: { user: User; token: string }) {
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                         <td style={{ ...tableTd, color: "#9ca3af" }}>#{t.id}</td>
                         <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{t.projectTitle ?? `프로젝트 #${t.projectId}`}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{t.translatorEmail ?? `번역사 #${t.translatorId}`}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
+                          {(t as any).translatorName || t.translatorEmail || `번역사 #${t.translatorId}`}
+                          {(t as any).translatorName && t.translatorEmail && <span style={{ color: "#9ca3af", fontSize: 11 }}> ({t.translatorEmail})</span>}
+                        </td>
                         <td style={tableTd}><StatusBadge status={t.status} /></td>
                         <td style={tableTd}>{t.projectStatus ? <StatusBadge status={t.projectStatus} /> : "-"}</td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</td>
@@ -1044,7 +1047,10 @@ export function AdminDashboard({ user, token }: { user: User; token: string }) {
                           <td style={{ ...tableTd, fontWeight: 600, color: "#111827", maxWidth: 160 }}>
                             <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.projectTitle ?? `프로젝트 #${s.projectId}`}</div>
                           </td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{s.translatorEmail ?? `번역사 #${s.translatorId}`}</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
+                            {(s as any).translatorName || s.translatorEmail || `번역사 #${s.translatorId}`}
+                            {(s as any).translatorName && s.translatorEmail && <div style={{ color: "#9ca3af", fontSize: 11 }}>{s.translatorEmail}</div>}
+                          </td>
                           <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" }}>{Number(s.totalAmount).toLocaleString()}원</td>
                           <td style={{ ...tableTd, fontWeight: 700, color: "#059669", whiteSpace: "nowrap" }}>{Number(s.translatorAmount).toLocaleString()}원</td>
                           <td style={{ ...tableTd, color: "#9333ea", whiteSpace: "nowrap" }}>{Number(s.platformFee).toLocaleString()}원</td>
@@ -1113,7 +1119,10 @@ export function AdminDashboard({ user, token }: { user: User; token: string }) {
                         onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                         <td style={{ ...tableTd, color: "#9ca3af" }}>#{u.id}</td>
-                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{u.email}</td>
+                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>
+                          {(u as any).name && <div style={{ fontWeight: 700, marginBottom: 2 }}>{(u as any).name}</div>}
+                          <div style={{ fontSize: 12, color: (u as any).name ? "#6b7280" : "#111827" }}>{u.email}</div>
+                        </td>
                         <td style={tableTd}><RoleBadge role={u.role} /></td>
                         <td style={tableTd}>
                           <span style={{
@@ -1627,7 +1636,7 @@ export function AdminDashboard({ user, token }: { user: User; token: string }) {
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["ID","이메일","언어쌍","분야","지역","평점","상태","단가(어절)","활성","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                    <tr>{["ID","이름","언어쌍","분야","지역","평점","상태","단가(어절)","활성","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {translatorList.map(t => {
@@ -1638,7 +1647,9 @@ export function AdminDashboard({ user, token }: { user: User; token: string }) {
                           onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                           <td style={{ ...tableTd, color: "#9ca3af" }}>#{t.id}</td>
-                          <td style={{ ...tableTd, fontWeight: 600, color: "#111827", fontSize: 12 }}>{t.email}</td>
+                          <td style={{ ...tableTd, fontWeight: 600, color: "#111827", fontSize: 12 }}>
+                            {(t as any).name ? <><span style={{ fontWeight: 700 }}>{(t as any).name}</span><br /><span style={{ color: "#6b7280", fontSize: 11 }}>{t.email}</span></> : t.email}
+                          </td>
                           <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{t.languagePairs ?? "-"}</td>
                           <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{t.specializations ?? "-"}</td>
                           <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{t.region ?? "-"}</td>

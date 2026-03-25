@@ -23,6 +23,7 @@ router.get("/admin/settlements", ...adminGuard, async (req, res) => {
         createdAt: settlementsTable.createdAt,
         projectTitle: projectsTable.title,
         translatorEmail: usersTable.email,
+        translatorName: usersTable.name,
       })
       .from(settlementsTable)
       .leftJoin(projectsTable, eq(settlementsTable.projectId, projectsTable.id))

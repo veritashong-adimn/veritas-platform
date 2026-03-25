@@ -20,6 +20,7 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       .select({
         id: usersTable.id,
         email: usersTable.email,
+        name: usersTable.name,
         isActive: usersTable.isActive,
         createdAt: usersTable.createdAt,
         profileId: translatorProfilesTable.id,
@@ -46,6 +47,7 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       const s = search.trim().toLowerCase();
       result = result.filter(t =>
         t.email.toLowerCase().includes(s) ||
+        (t.name ?? "").toLowerCase().includes(s) ||
         (t.languagePairs ?? "").toLowerCase().includes(s) ||
         (t.region ?? "").toLowerCase().includes(s)
       );

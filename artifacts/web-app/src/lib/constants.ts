@@ -81,7 +81,7 @@ export type MatchCandidate = {
   rates: TranslatorRate[];
 };
 export type ProjectDetail = AdminProject & {
-  quotes: Array<{ id: number; amount: number; status: string; createdAt: string }>;
+  quotes: Array<{ id: number; price: string | number; amount?: number; status: string; createdAt: string }>;
   payments: Array<{ id: number; amount: number; status: string; createdAt: string }>;
   tasks: ProjectTaskDetail[];
   settlements: Array<{ id: number; totalAmount: number; translatorAmount: number; platformFee: number; status: string; createdAt: string }>;

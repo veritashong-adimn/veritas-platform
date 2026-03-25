@@ -7,10 +7,11 @@ import { signToken, requireAuth } from "../middlewares/auth";
 const router: IRouter = Router();
 
 router.post("/auth/register", async (req, res) => {
-  const { email: rawEmail, password, role } = req.body as {
+  const { email: rawEmail, password, role, name } = req.body as {
     email?: string;
     password?: string;
     role?: string;
+    name?: string;
   };
 
   if (!rawEmail || !password) {
@@ -38,8 +39,8 @@ router.post("/auth/register", async (req, res) => {
   try {
     const [user] = await db
       .insert(usersTable)
-      .values({ email, password: hashed, role: userRole })
-      .returning({ id: usersTable.id, email: usersTable.email, role: usersTable.role });
+      .values({ email, password: hashed, role: userRole, name: name?.trim() || null })
+      .returning({ id: usersTable.id, email: usersTable.email, role: usersTable.role, name: usersTable.name });
 
     const token = signToken({ id: user.id, email: user.email, role: user.role });
     res.status(201).json({ token, user });

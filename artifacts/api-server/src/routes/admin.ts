@@ -397,6 +397,27 @@ router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
 
     const logAction = force ? `admin_forced_status_to_${status}` : `admin_status_changed_to_${status}`;
     await logEvent("project", projectId, logAction, req.log);
+
+    // 완료 상태 전환 시: 정산이 없으면 자동 생성
+    if (status === "completed") {
+      const [existingSettlement] = await db.select({ id: settlementsTable.id }).from(settlementsTable).where(eq(settlementsTable.projectId, projectId));
+      if (!existingSettlement) {
+        const [payment] = await db.select().from(paymentsTable).where(and(eq(paymentsTable.projectId, projectId), eq(paymentsTable.status, "paid")));
+        const [task] = await db.select().from(tasksTable).where(eq(tasksTable.projectId, projectId));
+        if (payment && task?.translatorId) {
+          const total = Number(payment.amount);
+          const fee = Math.round(total * 0.2);
+          await db.insert(settlementsTable).values({
+            projectId, translatorId: task.translatorId, paymentId: payment.id,
+            totalAmount: String(total), translatorAmount: String(total - fee), platformFee: String(fee),
+            status: "ready",
+          });
+          await logEvent("project", projectId, "settlement_created", req.log);
+          req.log.info({ projectId }, "Settlement auto-created on admin status→completed");
+        }
+      }
+    }
+
     res.json(updated);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to update project status");
@@ -682,6 +703,7 @@ router.get("/admin/tasks", ...adminGuard, async (req, res) => {
         projectTitle: projectsTable.title,
         projectStatus: projectsTable.status,
         translatorEmail: usersTable.email,
+        translatorName: usersTable.name,
       })
       .from(tasksTable)
       .leftJoin(projectsTable, eq(tasksTable.projectId, projectsTable.id))
@@ -772,6 +794,7 @@ router.get("/admin/users", ...adminGuard, async (req, res) => {
       .select({
         id: usersTable.id,
         email: usersTable.email,
+        name: usersTable.name,
         role: usersTable.role,
         isActive: usersTable.isActive,
         createdAt: usersTable.createdAt,
@@ -783,7 +806,10 @@ router.get("/admin/users", ...adminGuard, async (req, res) => {
 
     if (search?.trim()) {
       const s = search.trim().toLowerCase();
-      result = result.filter(u => u.email.toLowerCase().includes(s));
+      result = result.filter(u =>
+        u.email.toLowerCase().includes(s) ||
+        (u.name ?? "").toLowerCase().includes(s)
+      );
     }
 
     if (role?.trim() && ["customer", "translator", "admin"].includes(role.trim())) {
@@ -798,6 +824,26 @@ router.get("/admin/users", ...adminGuard, async (req, res) => {
 });
 
 // ─── 사용자 역할 변경 ─────────────────────────────────────────────────────
+router.patch("/admin/users/:id/name", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  const { name } = req.body as { name?: string };
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+  try {
+    const [updated] = await db
+      .update(usersTable)
+      .set({ name: name?.trim() || null })
+      .where(eq(usersTable.id, userId))
+      .returning({ id: usersTable.id, email: usersTable.email, name: usersTable.name, role: usersTable.role });
+    if (!updated) { res.status(404).json({ error: "사용자를 찾을 수 없습니다." }); return; }
+    res.json(updated);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to update user name");
+    res.status(500).json({ error: "이름 변경 실패." });
+  }
+});
+
 router.patch("/admin/users/:id/role", ...adminGuard, async (req, res) => {
   const userId = Number(req.params.id);
   const { role } = req.body as { role?: string };

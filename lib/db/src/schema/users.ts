@@ -8,6 +8,7 @@ export const usersTable = pgTable("users", {
   id: serial("id").primaryKey(),
   email: text("email").notNull().unique(),
   password: text("password"),
+  name: text("name"),
   role: userRoleEnum("role").notNull().default("customer"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),

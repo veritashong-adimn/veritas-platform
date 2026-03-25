@@ -667,7 +667,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 ) : detail.quotes.map(q => (
                   <div key={q.id} style={{ display: "flex", gap: 14, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, alignItems: "center" }}>
                     <span style={{ color: "#9ca3af" }}>#{q.id}</span>
-                    <span style={{ fontWeight: 700, color: "#0891b2" }}>{Number(q.amount).toLocaleString()}원</span>
+                    <span style={{ fontWeight: 700, color: "#0891b2" }}>{Number((q as any).price ?? (q as any).amount).toLocaleString()}원</span>
                     <StatusBadge status={q.status} />
                     <span style={{ color: "#9ca3af", marginLeft: "auto" }}>{new Date(q.createdAt).toLocaleDateString("ko-KR")}</span>
                   </div>
@@ -693,7 +693,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     </div>
                     {detail.quotes.length > 0 && (
                       <p style={{ margin: "6px 0 0", fontSize: 11, color: "#6b7280" }}>
-                        견적 금액: {Number(detail.quotes[0].amount).toLocaleString()}원
+                        견적 금액: {Number((detail.quotes[0] as any).price ?? (detail.quotes[0] as any).amount).toLocaleString()}원
                       </p>
                     )}
                   </div>
