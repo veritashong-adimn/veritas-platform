@@ -46,10 +46,17 @@ export type ContactInfo = {
   phone?: string | null;
 } | null;
 
-/** 향후 품목 테이블 지원 시 QuoteItem[] 배열로 교체 */
-export type QuoteItemSummary = {
-  label: string;
-  amount: number;
+/** quote_items 테이블의 한 행 */
+export type QuoteItemDoc = {
+  id?: number;
+  productName: string;
+  unit?: string | null;
+  quantity: number | string;
+  unitPrice: number | string;
+  supplyAmount: number | string;
+  taxAmount: number | string;
+  totalAmount: number | string;
+  memo?: string | null;
 };
 
 export type QuoteDoc = {
@@ -71,8 +78,8 @@ export type QuoteDoc = {
   quoteStatus?: string | null;
   quoteCreatedAt?: string | null;
 
-  /** 품목 요약 목록 (현재는 단일 행; 향후 quote_items 연동) */
-  items?: QuoteItemSummary[];
+  /** quote_items 목록 (있으면 품목별 렌더링, 없으면 단일 요약 행) */
+  items?: QuoteItemDoc[];
   /** 공급가액 소계 (items 없을 때 사용) */
   supplyAmount?: number | null;
   /** 세액 */
@@ -298,31 +305,40 @@ function renderBankInfo(bank?: BankInfo | null): string {
 export function buildQuoteHtml(doc: QuoteDoc): string {
   const validDays = doc.validDays ?? 30;
 
-  /* 품목 테이블 행 (현재는 단일 요약 행; 향후 quote_items 배열로 교체) */
-  const itemRows = (doc.items && doc.items.length > 0)
-    ? doc.items.map((item, i) => `
+  /* 품목 테이블 행 — quote_items 배열 or 단일 요약 행 폴백 */
+  const hasItems = doc.items && doc.items.length > 0;
+  const itemRows = hasItems
+    ? doc.items!.map((item, i) => `
       <tr>
-        <td>${i + 1}</td>
-        <td>${esc(item.label)}</td>
-        <td class="ctr">1</td>
-        <td class="num">—</td>
-        <td class="num">${fmt(item.amount)}</td>
-        <td class="num">0원</td>
-        <td class="num">${fmt(item.amount)}</td>
+        <td class="ctr">${i + 1}</td>
+        <td>${esc(item.productName)}${item.memo ? `<br/><span style="font-size:10px;color:#6b7280">${esc(item.memo)}</span>` : ""}</td>
+        <td class="ctr">${esc(String(item.unit ?? "건"))}</td>
+        <td class="num">${Number(item.quantity).toLocaleString("ko-KR")}</td>
+        <td class="num">${Number(item.unitPrice).toLocaleString("ko-KR")}원</td>
+        <td class="num">${Number(item.supplyAmount).toLocaleString("ko-KR")}원</td>
+        <td class="num">${Number(item.taxAmount).toLocaleString("ko-KR")}원</td>
+        <td class="num">${Number(item.totalAmount).toLocaleString("ko-KR")}원</td>
       </tr>`).join("")
     : `<tr>
-        <td>1</td>
-        <td>${esc(doc.projectTitle)} 번역 서비스</td>
         <td class="ctr">1</td>
+        <td>${esc(doc.projectTitle)} 번역 서비스</td>
+        <td class="ctr">건</td>
+        <td class="num">1</td>
         <td class="num">—</td>
         <td class="num">${fmt(doc.supplyAmount ?? doc.totalAmount)}</td>
         <td class="num">${fmt(doc.taxAmount ?? 0)}</td>
         <td class="num">${fmt(doc.totalAmount)}</td>
       </tr>`;
 
-  const supply = doc.supplyAmount ?? doc.totalAmount ?? 0;
-  const tax = doc.taxAmount ?? 0;
-  const total = doc.totalAmount ?? (supply + tax);
+  const supply = hasItems
+    ? doc.items!.reduce((s, it) => s + Number(it.supplyAmount), 0)
+    : (doc.supplyAmount ?? doc.totalAmount ?? 0);
+  const tax = hasItems
+    ? doc.items!.reduce((s, it) => s + Number(it.taxAmount), 0)
+    : (doc.taxAmount ?? 0);
+  const total = hasItems
+    ? doc.items!.reduce((s, it) => s + Number(it.totalAmount), 0)
+    : (doc.totalAmount ?? (supply + tax));
 
   const body = `
   <!-- 문서 헤더 -->
@@ -361,19 +377,20 @@ export function buildQuoteHtml(doc: QuoteDoc): string {
     <table class="item-table">
       <thead>
         <tr>
-          <th style="width:30px">No.</th>
+          <th style="width:28px">No.</th>
           <th>품목명</th>
-          <th style="width:40px">수량</th>
-          <th style="width:80px">단가</th>
-          <th style="width:90px">공급가액</th>
-          <th style="width:80px">세액</th>
-          <th style="width:90px">합계</th>
+          <th style="width:36px">단위</th>
+          <th style="width:44px">수량</th>
+          <th style="width:82px">단가</th>
+          <th style="width:86px">공급가액</th>
+          <th style="width:72px">세액</th>
+          <th style="width:86px">합계</th>
         </tr>
       </thead>
       <tbody>${itemRows}</tbody>
       <tfoot>
         <tr>
-          <td colspan="4" style="text-align:right;color:#6b7280;font-size:11px">소 계</td>
+          <td colspan="5" style="text-align:right;color:#6b7280;font-size:11px">소 계</td>
           <td class="num">${fmt(supply)}</td>
           <td class="num">${fmt(tax)}</td>
           <td class="num">${fmt(total)}</td>

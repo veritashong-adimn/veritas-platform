@@ -1,13 +1,13 @@
 import { Router, type IRouter } from "express";
 import {
   db, projectsTable, quotesTable, paymentsTable, settlementsTable,
-  usersTable, companiesTable, contactsTable, notesTable,
+  usersTable, companiesTable, contactsTable, notesTable, quoteItemsTable,
 } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import {
   buildQuoteHtml, buildStatementHtml,
-  type PlatformInfo, type BankInfo,
+  type PlatformInfo, type BankInfo, type QuoteItemDoc,
 } from "../services/document.service";
 import { quoteDocNumber, statementDocNumber } from "../services/doc-number";
 
@@ -71,6 +71,25 @@ async function loadProjectData(projectId: number) {
       .limit(3),
   ]);
 
+  const quote = quotes[0] ?? null;
+
+  // quote_items 로드
+  let quoteItems: QuoteItemDoc[] = [];
+  if (quote) {
+    const rawItems = await db.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quote.id)).orderBy(quoteItemsTable.id);
+    quoteItems = rawItems.map(it => ({
+      id: it.id,
+      productName: it.productName,
+      unit: it.unit,
+      quantity: it.quantity,
+      unitPrice: it.unitPrice,
+      supplyAmount: it.supplyAmount,
+      taxAmount: it.taxAmount,
+      totalAmount: it.totalAmount,
+      memo: it.memo,
+    }));
+  }
+
   let company = null;
   let contact = null;
   if (project.companyId) {
@@ -86,7 +105,8 @@ async function loadProjectData(projectId: number) {
 
   return {
     project,
-    quote: quotes[0] ?? null,
+    quote,
+    quoteItems,
     payment: payments[0] ?? null,
     settlement: settlements[0] ?? null,
     company,
@@ -108,10 +128,13 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
     const data = await loadProjectData(projectId);
     if (!data) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
 
-    const { project, quote, company, contact, notes } = data;
+    const { project, quote, quoteItems, company, contact, notes } = data;
     const issuedAt = new Date();
     const docNumber = quoteDocNumber(quote?.id ?? projectId, issuedAt);
     const totalAmount = quote?.price != null ? Number(quote.price) : null;
+
+    // quote_items가 있으면 품목 배열로 렌더링, 없으면 단일 요약 행
+    const hasQuoteItems = quoteItems.length > 0;
 
     const html = buildQuoteHtml({
       docNumber,
@@ -142,9 +165,10 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
       quoteId: quote?.id ?? null,
       quoteStatus: quote?.status ?? null,
       quoteCreatedAt: quote?.createdAt?.toISOString() ?? null,
-      totalAmount,
-      supplyAmount: totalAmount,
-      taxAmount: 0,
+      items: hasQuoteItems ? quoteItems : undefined,
+      totalAmount: hasQuoteItems ? null : totalAmount,
+      supplyAmount: hasQuoteItems ? null : totalAmount,
+      taxAmount: hasQuoteItems ? null : 0,
       notes,
     });
 

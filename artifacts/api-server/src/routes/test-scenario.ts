@@ -14,6 +14,7 @@ import {
   db,
   projectsTable, quotesTable, paymentsTable, settlementsTable,
   tasksTable, logsTable, notesTable, usersTable,
+  companiesTable, contactsTable, translatorProfilesTable,
 } from "@workspace/db";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
@@ -74,9 +75,11 @@ class ScenarioRunner {
 
 router.post("/admin/test/run-scenario", ...adminGuard, async (req, res) => {
   const adminUser = (req as any).user as { id: number; email: string };
-  const { quoteAmount = 500000, translatorRatio = 0.6 } = req.body as {
+  const { quoteAmount = 500000, translatorRatio = 0.6, companyId, contactId } = req.body as {
     quoteAmount?: number;
     translatorRatio?: number;
+    companyId?: number;
+    contactId?: number;
   };
 
   const runner = new ScenarioRunner();
@@ -85,15 +88,30 @@ router.post("/admin/test/run-scenario", ...adminGuard, async (req, res) => {
 
   // ── Step 1: 프로젝트 생성 ─────────────────────────────────────────────
   try {
+    // 실제 거래처 데이터 검증
+    let resolvedCompanyId: number | null = null;
+    let resolvedContactId: number | null = null;
+    if (companyId) {
+      const [co] = await db.select({ id: companiesTable.id, name: companiesTable.name }).from(companiesTable).where(eq(companiesTable.id, companyId));
+      if (co) { resolvedCompanyId = co.id; }
+    }
+    if (contactId) {
+      const [ct] = await db.select({ id: contactsTable.id }).from(contactsTable).where(eq(contactsTable.id, contactId));
+      if (ct) { resolvedContactId = ct.id; }
+    }
+
     const [project] = await db.insert(projectsTable).values({
       userId: adminUser.id,
       title: scenarioLabel,
       adminId: adminUser.id,
+      ...(resolvedCompanyId ? { companyId: resolvedCompanyId } : {}),
+      ...(resolvedContactId ? { contactId: resolvedContactId } : {}),
     }).returning();
 
     runner.setProjectId(project.id);
     await logEvent("project", project.id, "scenario_project_created");
-    runner.ok(1, "프로젝트 생성", `#${project.id} "${project.title}" 생성 완료`, { projectId: project.id });
+    const suffix = resolvedCompanyId ? ` (거래처 #${resolvedCompanyId} 연결)` : " (테스트 데이터)";
+    runner.ok(1, "프로젝트 생성", `#${project.id} "${project.title}" 생성 완료${suffix}`, { projectId: project.id });
   } catch (err: any) {
     runner.fail(1, "프로젝트 생성", `실패: ${err?.message ?? String(err)}`);
     return res.status(200).json(buildResponse(runner, startedAt));
@@ -359,12 +377,15 @@ const FEEDBACK_ENTITY_ID = 0;
 
 router.post("/admin/feedback", ...adminGuard, async (req, res) => {
   const adminUser = (req as any).user as { id: number };
-  const { content } = req.body as { content?: string };
+  const { content, tag } = req.body as { content?: string; tag?: string };
 
   if (!content?.trim()) {
     res.status(400).json({ error: "피드백 내용을 입력해 주세요." });
     return;
   }
+
+  const VALID_TAGS = ["bug", "ux", "idea", "urgent", "general"];
+  const safeTag = tag && VALID_TAGS.includes(tag) ? tag : "general";
 
   try {
     const [note] = await db.insert(notesTable).values({
@@ -372,6 +393,7 @@ router.post("/admin/feedback", ...adminGuard, async (req, res) => {
       entityId: FEEDBACK_ENTITY_ID,
       adminId: adminUser.id,
       content: content.trim(),
+      tag: safeTag,
     }).returning();
 
     res.status(201).json(note);
@@ -387,6 +409,7 @@ router.get("/admin/feedback", ...adminGuard, async (req, res) => {
       .select({
         id: notesTable.id,
         content: notesTable.content,
+        tag: notesTable.tag,
         createdAt: notesTable.createdAt,
         adminId: notesTable.adminId,
         adminEmail: usersTable.email,
@@ -420,6 +443,25 @@ router.delete("/admin/feedback/:id", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Failed to delete UX feedback");
     res.status(500).json({ error: "피드백 삭제 실패." });
+  }
+});
+
+// ── 실제 운영 데이터 조회 (시나리오 셀렉터용) ───────────────────────────────
+
+router.get("/admin/test/real-data", ...adminGuard, async (req, res) => {
+  try {
+    const [companies, contacts, translators] = await Promise.all([
+      db.select({ id: companiesTable.id, name: companiesTable.name }).from(companiesTable).orderBy(companiesTable.name),
+      db.select({ id: contactsTable.id, name: contactsTable.name, companyId: contactsTable.companyId }).from(contactsTable).orderBy(contactsTable.name),
+      db.select({ id: usersTable.id, email: usersTable.email })
+        .from(usersTable)
+        .innerJoin(translatorProfilesTable, eq(usersTable.id, translatorProfilesTable.userId))
+        .orderBy(usersTable.email),
+    ]);
+    res.json({ companies, contacts, translators });
+  } catch (err) {
+    req.log.error({ err }, "Failed to fetch real data for test tab");
+    res.status(500).json({ error: "실제 데이터 조회 실패." });
   }
 });
 

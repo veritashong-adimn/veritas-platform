@@ -9,6 +9,7 @@ export const notesTable = pgTable("notes", {
     .notNull()
     .references(() => usersTable.id),
   content: text("content").notNull(),
+  tag: text("tag"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

@@ -4,6 +4,7 @@ import {
   logsTable, quotesTable, settlementsTable, notesTable,
   customersTable, communicationsTable, translatorProfilesTable,
   contactsTable, companiesTable, translatorRatesTable,
+  quoteItemsTable, calcQuoteItemAmounts,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
@@ -537,9 +538,13 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
-  const { amount } = req.body as { amount?: number };
-  if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
-    res.status(400).json({ error: "유효한 견적 금액(원)이 필요합니다." }); return;
+  type ItemInput = { productName: string; unit?: string; quantity?: number; unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string };
+  const { amount, items } = req.body as { amount?: number; items?: ItemInput[] };
+
+  // items 배열이 있으면 합계 자동 계산, 없으면 amount 필수
+  const hasItems = Array.isArray(items) && items.length > 0;
+  if (!hasItems && (!amount || isNaN(Number(amount)) || Number(amount) <= 0)) {
+    res.status(400).json({ error: "견적 금액 또는 품목 목록이 필요합니다." }); return;
   }
 
   try {
@@ -550,8 +555,38 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
     const existing = await db.select({ id: quotesTable.id }).from(quotesTable).where(eq(quotesTable.projectId, projectId));
     if (existing.length > 0) { res.status(400).json({ error: "이미 견적이 존재합니다." }); return; }
 
+    // 품목 기반 합계 계산
+    let totalPrice = Number(amount ?? 0);
+    type CalcItem = ItemInput & { supplyAmount: number; taxAmount: number; totalAmount: number };
+    let calcItems: CalcItem[] = [];
+    if (hasItems) {
+      calcItems = items!.map(it => {
+        const qty = Number(it.quantity ?? 1);
+        const up = Number(it.unitPrice);
+        const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0);
+        return { ...it, supplyAmount, taxAmount, totalAmount };
+      });
+      totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
+    }
+
     const result = await db.transaction(async tx => {
-      const [quote] = await tx.insert(quotesTable).values({ projectId, price: String(Number(amount)), status: "sent" }).returning();
+      const [quote] = await tx.insert(quotesTable).values({ projectId, price: String(totalPrice), status: "sent" }).returning();
+
+      if (calcItems.length > 0) {
+        await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
+          quoteId: quote.id,
+          productId: it.productId ?? null,
+          productName: it.productName,
+          unit: it.unit ?? "건",
+          quantity: String(it.quantity ?? 1),
+          unitPrice: String(it.unitPrice),
+          supplyAmount: String(it.supplyAmount),
+          taxAmount: String(it.taxAmount),
+          totalAmount: String(it.totalAmount),
+          memo: it.memo ?? null,
+        })));
+      }
+
       await tx.update(projectsTable).set({ status: "quoted" }).where(eq(projectsTable.id, projectId));
       return quote;
     });
@@ -560,6 +595,21 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Admin: failed to create quote");
     res.status(500).json({ error: "견적 생성 실패." });
+  }
+});
+
+// ─── 견적 품목 조회 ──────────────────────────────────────────────────────────
+router.get("/admin/projects/:id/quote/items", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
+  try {
+    const [quote] = await db.select({ id: quotesTable.id }).from(quotesTable).where(eq(quotesTable.projectId, projectId)).limit(1);
+    if (!quote) { res.json([]); return; }
+    const items = await db.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quote.id)).orderBy(quoteItemsTable.id);
+    res.json(items);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch quote items");
+    res.status(500).json({ error: "품목 조회 실패." });
   }
 });
 

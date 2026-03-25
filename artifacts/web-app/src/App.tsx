@@ -2212,6 +2212,16 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
   // 견적 생성
   const [quoteAmount, setQuoteAmount] = useState("");
   const [creatingQuote, setCreatingQuote] = useState(false);
+  type QuoteItemForm = { productName: string; unit: string; quantity: string; unitPrice: string; taxRate: "0" | "0.1" };
+  const defaultItem = (): QuoteItemForm => ({ productName: "", unit: "건", quantity: "1", unitPrice: "", taxRate: "0" });
+  const [quoteMode, setQuoteMode] = useState<"simple" | "items">("simple");
+  const [quoteItemForms, setQuoteItemForms] = useState<QuoteItemForm[]>([defaultItem()]);
+  const calcItemTotal = (it: QuoteItemForm) => {
+    const supply = Math.round(Number(it.quantity || 1) * Number(it.unitPrice || 0));
+    const tax = Math.round(supply * Number(it.taxRate));
+    return { supply, tax, total: supply + tax };
+  };
+  const quoteItemsGrandTotal = quoteItemForms.reduce((s, it) => s + calcItemTotal(it).total, 0);
 
   // 결제 등록
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -2336,18 +2346,34 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
   };
 
   const handleCreateQuote = async () => {
-    const amt = Number(quoteAmount.replace(/,/g, ""));
-    if (!amt || amt <= 0) { onToast("유효한 금액을 입력하세요."); return; }
     setCreatingQuote(true);
     try {
+      let body: Record<string, unknown>;
+      if (quoteMode === "items") {
+        const validItems = quoteItemForms.filter(it => it.productName.trim() && Number(it.unitPrice) > 0);
+        if (validItems.length === 0) { onToast("품목명과 단가를 입력하세요."); return; }
+        body = {
+          items: validItems.map(it => ({
+            productName: it.productName.trim(),
+            unit: it.unit || "건",
+            quantity: Number(it.quantity) || 1,
+            unitPrice: Number(it.unitPrice),
+            taxRate: Number(it.taxRate) as 0 | 0.1,
+          })),
+        };
+      } else {
+        const amt = Number(quoteAmount.replace(/,/g, ""));
+        if (!amt || amt <= 0) { onToast("유효한 금액을 입력하세요."); return; }
+        body = { amount: amt };
+      }
       const res = await fetch(api(`/api/admin/projects/${projectId}/quote`), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: amt }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      onToast(`견적 생성 완료 — ${amt.toLocaleString()}원`);
-      setQuoteAmount("");
+      onToast(`견적 생성 완료`);
+      setQuoteAmount(""); setQuoteItemForms([defaultItem()]);
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 견적 생성 실패"); }
     finally { setCreatingQuote(false); }
@@ -2718,20 +2744,86 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
                 </div>
                 {detail.status === "created" && detail.quotes.length === 0 && (
                   <div style={{ background: "#fdf4ff", borderRadius: 10, padding: "12px 14px", marginBottom: 12, border: "1px solid #e9d5ff" }}>
-                    <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: "#7c3aed" }}>견적 생성</p>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <input
-                        type="number" min="0" value={quoteAmount}
-                        onChange={e => setQuoteAmount(e.target.value)}
-                        placeholder="견적 금액 (원)"
-                        style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "7px 10px" }}
-                        onKeyDown={e => e.key === "Enter" && handleCreateQuote()}
-                      />
-                      <PrimaryBtn onClick={handleCreateQuote} disabled={creatingQuote || !quoteAmount}
-                        style={{ fontSize: 12, padding: "7px 14px", background: "#7c3aed", border: "none" }}>
-                        {creatingQuote ? "생성 중..." : "견적 생성"}
-                      </PrimaryBtn>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                      <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#7c3aed" }}>견적 생성</p>
+                      <div style={{ display: "flex", gap: 0, borderRadius: 6, overflow: "hidden", border: "1px solid #d8b4fe" }}>
+                        {(["simple", "items"] as const).map(m => (
+                          <button key={m} onClick={() => setQuoteMode(m)}
+                            style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer",
+                              background: quoteMode === m ? "#7c3aed" : "#fdf4ff", color: quoteMode === m ? "#fff" : "#7c3aed" }}>
+                            {m === "simple" ? "단순 금액" : "품목 입력"}
+                          </button>
+                        ))}
+                      </div>
                     </div>
+
+                    {quoteMode === "simple" ? (
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <input type="number" min="0" value={quoteAmount}
+                          onChange={e => setQuoteAmount(e.target.value)}
+                          placeholder="견적 금액 (원)"
+                          style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "7px 10px" }}
+                          onKeyDown={e => e.key === "Enter" && handleCreateQuote()} />
+                        <PrimaryBtn onClick={handleCreateQuote} disabled={creatingQuote || !quoteAmount}
+                          style={{ fontSize: 12, padding: "7px 14px", background: "#7c3aed", border: "none" }}>
+                          {creatingQuote ? "생성 중..." : "견적 생성"}
+                        </PrimaryBtn>
+                      </div>
+                    ) : (
+                      <div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 48px 64px 88px 72px 28px", gap: 4, marginBottom: 4 }}>
+                          {["품목명", "단위", "수량", "단가(원)", "부가세", ""].map(h => (
+                            <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", padding: "0 2px" }}>{h}</div>
+                          ))}
+                        </div>
+                        {quoteItemForms.map((it, idx) => {
+                          const { supply, tax, total } = calcItemTotal(it);
+                          return (
+                            <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 48px 64px 88px 72px 28px", gap: 4, marginBottom: 4, alignItems: "center" }}>
+                              <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
+                                placeholder="예: 영→한 번역" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }} />
+                              <input value={it.unit} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: e.target.value } : p))}
+                                placeholder="건" style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "center" }} />
+                              <input type="number" value={it.quantity} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: e.target.value } : p))}
+                                min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "right" }} />
+                              <input type="number" value={it.unitPrice} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: e.target.value } : p))}
+                                placeholder="0" min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "right" }} />
+                              <select value={it.taxRate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxRate: e.target.value as "0"|"0.1" } : p))}
+                                style={{ ...inputStyle, fontSize: 11, padding: "6px 4px" }}>
+                                <option value="0">면세</option>
+                                <option value="0.1">10%</option>
+                              </select>
+                              <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))} disabled={quoteItemForms.length <= 1}
+                                style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
+                              {(supply > 0 || tax > 0) && (
+                                <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, fontSize: 11, color: "#6b7280", paddingLeft: 4, paddingBottom: 2 }}>
+                                  <span>공급가액 {supply.toLocaleString()}원</span>
+                                  {tax > 0 && <span>세액 {tax.toLocaleString()}원</span>}
+                                  <span style={{ fontWeight: 700, color: "#7c3aed" }}>합계 {total.toLocaleString()}원</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
+                          <button onClick={() => setQuoteItemForms(prev => [...prev, defaultItem()])}
+                            style={{ fontSize: 12, color: "#7c3aed", background: "none", border: "1px dashed #d8b4fe", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
+                            + 품목 추가
+                          </button>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                            {quoteItemsGrandTotal > 0 && (
+                              <span style={{ fontSize: 12, fontWeight: 700, color: "#7c3aed" }}>
+                                합계: {quoteItemsGrandTotal.toLocaleString()}원
+                              </span>
+                            )}
+                            <PrimaryBtn onClick={handleCreateQuote} disabled={creatingQuote}
+                              style={{ fontSize: 12, padding: "7px 14px", background: "#7c3aed", border: "none" }}>
+                              {creatingQuote ? "생성 중..." : "견적 생성"}
+                            </PrimaryBtn>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
                 {detail.quotes.length === 0 ? (
@@ -3014,10 +3106,24 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
   const [scenarioRatio, setScenarioRatio] = useState("0.6");
   const [scenarioHistory, setScenarioHistory] = useState<Array<{ id: number; title: string; status: string; createdAt: string }>>([]);
   const [scenarioHistoryLoading, setScenarioHistoryLoading] = useState(false);
+  // 실제 운영 데이터 셀렉터
+  const [realData, setRealData] = useState<{ companies: {id:number;name:string}[]; contacts: {id:number;name:string;companyId:number|null}[]; translators: {id:number;email:string}[] } | null>(null);
+  const [scenarioCompanyId, setScenarioCompanyId] = useState<string>("");
+  const [scenarioContactId, setScenarioContactId] = useState<string>("");
   // UX 피드백
-  const [feedbackList, setFeedbackList] = useState<Array<{ id: number; content: string; createdAt: string; adminEmail: string | null }>>([]);
+  const FEEDBACK_TAGS = [
+    { value: "general", label: "일반", color: "#6b7280", bg: "#f3f4f6" },
+    { value: "bug", label: "🐛 버그", color: "#991b1b", bg: "#fef2f2" },
+    { value: "ux", label: "🎨 UX", color: "#1d4ed8", bg: "#eff6ff" },
+    { value: "idea", label: "💡 아이디어", color: "#065f46", bg: "#f0fdf4" },
+    { value: "urgent", label: "🔥 긴급", color: "#92400e", bg: "#fffbeb" },
+  ] as const;
+  type FeedbackTag = "general" | "bug" | "ux" | "idea" | "urgent";
+  const [feedbackList, setFeedbackList] = useState<Array<{ id: number; content: string; tag: string | null; createdAt: string; adminEmail: string | null }>>([]);
   const [feedbackLoading, setFeedbackLoading] = useState(false);
   const [feedbackInput, setFeedbackInput] = useState("");
+  const [feedbackTag, setFeedbackTag] = useState<FeedbackTag>("general");
+  const [feedbackTagFilter, setFeedbackTagFilter] = useState<string>("all");
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
 
   // 관리자 프로젝트 생성 모달
@@ -3290,8 +3396,14 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
     } catch { /* ignore */ }
     finally { setFeedbackLoading(false); }
   };
+  const fetchRealData = async () => {
+    try {
+      const res = await fetch(api("/api/admin/test/real-data"), { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) setRealData(await res.json());
+    } catch { /* ignore */ }
+  };
   useEffect(() => {
-    if (adminTab === "test") { fetchScenarioHistory(); fetchFeedback(); }
+    if (adminTab === "test") { fetchScenarioHistory(); fetchFeedback(); fetchRealData(); }
   }, [adminTab]);
 
   const runScenario = async () => {
@@ -3299,10 +3411,16 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
     setScenarioRunning(true);
     setScenarioResult(null);
     try {
+      const body: Record<string, unknown> = {
+        quoteAmount: Number(scenarioAmount) || 500000,
+        translatorRatio: Number(scenarioRatio) || 0.6,
+      };
+      if (scenarioCompanyId) body.companyId = Number(scenarioCompanyId);
+      if (scenarioContactId) body.contactId = Number(scenarioContactId);
       const res = await fetch(api("/api/admin/test/run-scenario"), {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ quoteAmount: Number(scenarioAmount) || 500000, translatorRatio: Number(scenarioRatio) || 0.6 }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       setScenarioResult(data);
@@ -3318,7 +3436,7 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
       const res = await fetch(api("/api/admin/feedback"), {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ content: feedbackInput.trim() }),
+        body: JSON.stringify({ content: feedbackInput.trim(), tag: feedbackTag }),
       });
       if (res.ok) { setFeedbackInput(""); fetchFeedback(); setToast("피드백이 저장되었습니다."); }
       else { const d = await res.json(); setToast(`오류: ${d.error}`); }
@@ -4532,27 +4650,60 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px 22px", boxShadow: "0 1px 3px rgba(0,0,0,.07)" }}>
               <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800, color: "#111827" }}>🧪 운영 시나리오 자동 실행</h3>
-              <p style={{ margin: "0 0 16px", fontSize: 13, color: "#6b7280" }}>프로젝트 생성 → 견적 → 승인 → 결제 → 번역사 배정 → 진행 → 완료 → 정산까지 순차 실행합니다.</p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+              <p style={{ margin: "0 0 14px", fontSize: 13, color: "#6b7280" }}>프로젝트 생성 → 견적 → 승인 → 결제 → 번역사 배정 → 진행 → 완료 → 정산까지 순차 실행합니다.</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>견적 금액 (원)</label>
-                  <input
-                    value={scenarioAmount} onChange={e => setScenarioAmount(e.target.value)}
-                    type="number" min="10000"
-                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 7, padding: "8px 10px", fontSize: 13, boxSizing: "border-box" as const }} />
+                  <label style={{ fontSize: 11, fontWeight: 600, color: "#374151", display: "block", marginBottom: 3 }}>견적 금액 (원)</label>
+                  <input value={scenarioAmount} onChange={e => setScenarioAmount(e.target.value)} type="number" min="10000"
+                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 7, padding: "7px 10px", fontSize: 13, boxSizing: "border-box" as const }} />
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>번역사 수익 비율 (0~1)</label>
-                  <input
-                    value={scenarioRatio} onChange={e => setScenarioRatio(e.target.value)}
-                    type="number" min="0" max="1" step="0.1"
-                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 7, padding: "8px 10px", fontSize: 13, boxSizing: "border-box" as const }} />
+                  <label style={{ fontSize: 11, fontWeight: 600, color: "#374151", display: "block", marginBottom: 3 }}>번역사 수익 비율 (0~1)</label>
+                  <input value={scenarioRatio} onChange={e => setScenarioRatio(e.target.value)} type="number" min="0" max="1" step="0.1"
+                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 7, padding: "7px 10px", fontSize: 13, boxSizing: "border-box" as const }} />
                 </div>
               </div>
+
+              {/* 실제 거래처/담당자 연결 (선택) */}
+              <div style={{ background: "#f0f9ff", borderRadius: 8, padding: "10px 12px", marginBottom: 12, border: "1px solid #bae6fd" }}>
+                <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 700, color: "#0369a1" }}>실제 거래처 연결 (선택 — 미선택 시 테스트 데이터로 생성)</p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <div>
+                    <label style={{ fontSize: 11, color: "#374151", display: "block", marginBottom: 2 }}>거래처</label>
+                    <select value={scenarioCompanyId} onChange={e => { setScenarioCompanyId(e.target.value); setScenarioContactId(""); }}
+                      style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 6, padding: "6px 8px", fontSize: 12, boxSizing: "border-box" as const }}>
+                      <option value="">— 테스트 거래처 —</option>
+                      {(realData?.companies ?? []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, color: "#374151", display: "block", marginBottom: 2 }}>담당자</label>
+                    <select value={scenarioContactId} onChange={e => setScenarioContactId(e.target.value)}
+                      style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 6, padding: "6px 8px", fontSize: 12, boxSizing: "border-box" as const }}>
+                      <option value="">— 담당자 없음 —</option>
+                      {(realData?.contacts ?? [])
+                        .filter(ct => !scenarioCompanyId || ct.companyId === Number(scenarioCompanyId))
+                        .map(ct => <option key={ct.id} value={ct.id}>{ct.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+                {scenarioCompanyId && (
+                  <p style={{ margin: "6px 0 0", fontSize: 11, color: "#0369a1" }}>
+                    ✅ 실제 거래처 데이터로 프로젝트가 생성됩니다. 최소 입력 항목: 거래처 선택 완료.
+                  </p>
+                )}
+              </div>
+
               <button onClick={runScenario} disabled={scenarioRunning}
                 style={{ width: "100%", padding: "11px 0", background: scenarioRunning ? "#9ca3af" : "#1e3a8a", color: "#fff", border: "none", borderRadius: 9, fontSize: 14, fontWeight: 700, cursor: scenarioRunning ? "not-allowed" : "pointer" }}>
                 {scenarioRunning ? "⏳ 실행 중..." : "▶ 시나리오 실행"}
               </button>
+
+              {/* 실제 운영 데이터 최소 입력 안내 */}
+              <div style={{ marginTop: 12, padding: "10px 12px", background: "#f9fafb", borderRadius: 8, fontSize: 11, color: "#374151", lineHeight: 1.8 }}>
+                <strong style={{ color: "#111827" }}>실제 프로젝트 1건 테스트 최소 요건:</strong><br/>
+                ① 거래처 등록 (거래처 탭) ② 담당자 등록 (담당자 탭) ③ 번역사 계정 + 프로필 등록 (번역사 탭) ④ 제품 마스터 등록 (제품 탭) ⑤ 여기서 거래처/담당자 선택 후 실행
+              </div>
             </div>
 
             {/* 실행 결과 */}
@@ -4632,7 +4783,20 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
           <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px 22px", boxShadow: "0 1px 3px rgba(0,0,0,.07)", display: "flex", flexDirection: "column", gap: 16 }}>
             <div>
               <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800, color: "#111827" }}>💬 불편한 점 메모</h3>
-              <p style={{ margin: "0 0 12px", fontSize: 13, color: "#6b7280" }}>운영 테스트 중 발견한 UX 문제나 개선 아이디어를 기록하세요.</p>
+              <p style={{ margin: "0 0 10px", fontSize: 13, color: "#6b7280" }}>운영 테스트 중 발견한 UX 문제나 개선 아이디어를 유형별로 기록하세요.</p>
+              {/* 유형 선택 */}
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
+                {FEEDBACK_TAGS.map(t => (
+                  <button key={t.value} onClick={() => setFeedbackTag(t.value as FeedbackTag)}
+                    style={{ padding: "3px 10px", fontSize: 11, fontWeight: 700, borderRadius: 20, border: "1.5px solid",
+                      borderColor: feedbackTag === t.value ? t.color : "#e5e7eb",
+                      background: feedbackTag === t.value ? t.bg : "#fff",
+                      color: feedbackTag === t.value ? t.color : "#9ca3af",
+                      cursor: "pointer" }}>
+                    {t.label}
+                  </button>
+                ))}
+              </div>
               <textarea
                 value={feedbackInput} onChange={e => setFeedbackInput(e.target.value)}
                 placeholder="예) 프로젝트 목록에서 상태 필터 초기화 버튼이 눈에 잘 안 띕니다..."
@@ -4651,31 +4815,56 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
 
             <div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <h4 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: "#374151" }}>피드백 목록 ({feedbackList.length})</h4>
+                <h4 style={{ margin: 0, fontSize: 14, fontWeight: 800, color: "#374151" }}>
+                  피드백 목록 ({feedbackList.filter(f => feedbackTagFilter === "all" || f.tag === feedbackTagFilter).length})
+                </h4>
                 <button onClick={fetchFeedback} disabled={feedbackLoading}
                   style={{ fontSize: 12, color: "#2563eb", background: "none", border: "none", cursor: "pointer" }}>
                   {feedbackLoading ? "로딩..." : "새로고침"}
                 </button>
               </div>
-              {feedbackList.length === 0 ? (
+              {/* 태그 필터 */}
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 8 }}>
+                <button onClick={() => setFeedbackTagFilter("all")}
+                  style={{ padding: "2px 8px", fontSize: 11, fontWeight: 700, borderRadius: 20, border: "1.5px solid", borderColor: feedbackTagFilter === "all" ? "#374151" : "#e5e7eb", background: feedbackTagFilter === "all" ? "#f3f4f6" : "#fff", color: feedbackTagFilter === "all" ? "#374151" : "#9ca3af", cursor: "pointer" }}>
+                  전체 ({feedbackList.length})
+                </button>
+                {FEEDBACK_TAGS.map(t => {
+                  const cnt = feedbackList.filter(f => f.tag === t.value).length;
+                  if (cnt === 0) return null;
+                  return (
+                    <button key={t.value} onClick={() => setFeedbackTagFilter(t.value)}
+                      style={{ padding: "2px 8px", fontSize: 11, fontWeight: 700, borderRadius: 20, border: "1.5px solid",
+                        borderColor: feedbackTagFilter === t.value ? t.color : "#e5e7eb",
+                        background: feedbackTagFilter === t.value ? t.bg : "#fff",
+                        color: feedbackTagFilter === t.value ? t.color : "#9ca3af",
+                        cursor: "pointer" }}>
+                      {t.label} ({cnt})
+                    </button>
+                  );
+                })}
+              </div>
+              {feedbackList.filter(f => feedbackTagFilter === "all" || f.tag === feedbackTagFilter).length === 0 ? (
                 <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>아직 저장된 피드백이 없습니다.</p>
               ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 560, overflowY: "auto" }}>
-                  {feedbackList.map(f => (
-                    <div key={f.id} style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                          <span style={{ fontSize: 11, color: "#92400e", fontWeight: 600 }}>{f.adminEmail ?? "관리자"}</span>
-                          <span style={{ fontSize: 11, color: "#b45309" }}>{new Date(f.createdAt).toLocaleString("ko-KR")}</span>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 520, overflowY: "auto" }}>
+                  {feedbackList.filter(f => feedbackTagFilter === "all" || f.tag === feedbackTagFilter).map(f => {
+                    const tagInfo = FEEDBACK_TAGS.find(t => t.value === (f.tag ?? "general")) ?? FEEDBACK_TAGS[0];
+                    return (
+                      <div key={f.id} style={{ background: tagInfo.bg, border: `1px solid`, borderColor: tagInfo.color + "44", borderRadius: 8, padding: "10px 12px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 5 }}>
+                          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <span style={{ fontSize: 10, fontWeight: 800, color: tagInfo.color, background: "#fff", border: `1px solid ${tagInfo.color}33`, borderRadius: 10, padding: "1px 7px" }}>{tagInfo.label}</span>
+                            <span style={{ fontSize: 11, color: "#374151", fontWeight: 600 }}>{f.adminEmail ?? "관리자"}</span>
+                            <span style={{ fontSize: 11, color: "#9ca3af" }}>{new Date(f.createdAt).toLocaleString("ko-KR")}</span>
+                          </div>
+                          <button onClick={() => deleteFeedback(f.id)}
+                            style={{ fontSize: 11, color: "#ef4444", background: "none", border: "none", cursor: "pointer", padding: 0 }}>삭제</button>
                         </div>
-                        <button onClick={() => deleteFeedback(f.id)}
-                          style={{ fontSize: 11, color: "#ef4444", background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-                          삭제
-                        </button>
+                        <p style={{ margin: 0, fontSize: 13, color: "#111827", whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{f.content}</p>
                       </div>
-                      <p style={{ margin: 0, fontSize: 13, color: "#111827", whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{f.content}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
