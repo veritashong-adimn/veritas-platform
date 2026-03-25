@@ -7,6 +7,9 @@ export const logsTable = pgTable("logs", {
   entityType: entityTypeEnum("entity_type").notNull(),
   entityId: integer("entity_id").notNull(),
   action: text("action").notNull(),
+  performedBy: integer("performed_by"),
+  performedByEmail: text("performed_by_email"),
+  metadata: text("metadata"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

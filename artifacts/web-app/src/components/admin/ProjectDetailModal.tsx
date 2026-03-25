@@ -964,33 +964,48 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             {activeSection === "log" && (
               <>
                 {detail.logs.length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "16px 0" }}>이벤트 로그가 없습니다.</p>
+                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "24px 0" }}>아직 이벤트 로그가 없습니다.</p>
                 ) : (
-                  <div style={{ maxHeight: 380, overflowY: "auto", padding: "4px 0" }}>
+                  <div style={{ maxHeight: 420, overflowY: "auto", padding: "4px 0" }}>
                     {[...detail.logs].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).map((log, idx, arr) => {
                       const info = getActionLabel(log.action);
                       const isLast = idx === arr.length - 1;
+                      let metaObj: Record<string, string> | null = null;
+                      try { if (log.metadata) metaObj = JSON.parse(log.metadata); } catch { /* noop */ }
                       return (
                         <div key={log.id} style={{ display: "flex", gap: 0, position: "relative" }}>
                           {/* 세로선 + 아이콘 */}
-                          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 36, flexShrink: 0 }}>
+                          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 38, flexShrink: 0 }}>
                             <div style={{
-                              width: 28, height: 28, borderRadius: "50%",
+                              width: 30, height: 30, borderRadius: "50%",
                               background: info.color + "18", border: `2px solid ${info.color}`,
                               display: "flex", alignItems: "center", justifyContent: "center",
-                              fontSize: 13, zIndex: 1, flexShrink: 0,
+                              fontSize: 14, zIndex: 1, flexShrink: 0,
                             }}>{info.dot}</div>
-                            {!isLast && <div style={{ width: 2, flex: 1, minHeight: 18, background: "#e5e7eb" }} />}
+                            {!isLast && <div style={{ width: 2, flex: 1, minHeight: 16, background: "#e5e7eb" }} />}
                           </div>
                           {/* 내용 */}
-                          <div style={{ flex: 1, paddingLeft: 10, paddingBottom: isLast ? 0 : 14, paddingTop: 3 }}>
-                            <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 600, color: info.color }}>{info.ko}</p>
-                            <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>
-                              {new Date(log.createdAt).toLocaleString("ko-KR")}
-                              {log.entityType && log.entityType !== "project" && (
-                                <span style={{ marginLeft: 6, background: "#f3f4f6", borderRadius: 4, padding: "1px 6px", color: "#6b7280" }}>{log.entityType}</span>
+                          <div style={{ flex: 1, paddingLeft: 10, paddingBottom: isLast ? 0 : 16, paddingTop: 4 }}>
+                            <p style={{ margin: "0 0 3px", fontSize: 13, fontWeight: 600, color: info.color }}>{info.ko}</p>
+                            {/* 메타데이터 (파일명 등) */}
+                            {metaObj?.fileName && (
+                              <p style={{ margin: "0 0 3px", fontSize: 12, color: "#374151", background: "#f9fafb", borderRadius: 4, padding: "2px 7px", display: "inline-block" }}>
+                                📄 {metaObj.fileName}
+                              </p>
+                            )}
+                            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                              <span style={{ fontSize: 11, color: "#9ca3af" }}>
+                                {new Date(log.createdAt).toLocaleString("ko-KR")}
+                              </span>
+                              {log.performedByEmail && (
+                                <span style={{
+                                  fontSize: 11, color: "#6b7280",
+                                  background: "#f3f4f6", borderRadius: 4, padding: "1px 7px",
+                                }}>
+                                  👤 {log.performedByEmail}
+                                </span>
                               )}
-                            </p>
+                            </div>
                           </div>
                         </div>
                       );

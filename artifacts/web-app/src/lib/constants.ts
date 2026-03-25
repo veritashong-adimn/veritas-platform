@@ -45,7 +45,7 @@ export type AdminTask = {
   createdAt: string; projectTitle: string | null; projectStatus: string | null;
   translatorEmail: string | null;
 };
-export type LogEntry = { id: number; entityType: string; entityId: number; action: string; createdAt: string };
+export type LogEntry = { id: number; entityType: string; entityId: number; action: string; performedByEmail: string | null; metadata: string | null; createdAt: string };
 export type NoteEntry = { id: number; content: string; createdAt: string; adminEmail: string | null };
 export type AdminUser = { id: number; email: string; role: Role; isActive: boolean; createdAt: string };
 export type AdminCustomer = {
@@ -214,22 +214,32 @@ export const PROJECT_STATUS_TRANSITIONS: Record<string, string[]> = {
   cancelled:   [],
 };
 export const ACTION_LABEL: Record<string, { ko: string; color: string; dot: string }> = {
-  project_created:             { ko: "프로젝트 접수",      color: "#2563eb", dot: "🗂️" },
-  quote_created:               { ko: "견적 생성",           color: "#7c3aed", dot: "📋" },
-  quote_approved:              { ko: "견적 승인",           color: "#16a34a", dot: "✅" },
-  payment_requested:           { ko: "결제 요청",           color: "#d97706", dot: "💳" },
-  payment_paid:                { ko: "결제 완료",           color: "#0891b2", dot: "💰" },
-  payment_failed:              { ko: "결제 실패",           color: "#dc2626", dot: "❌" },
-  project_matched:             { ko: "번역사 매칭",         color: "#9333ea", dot: "🔗" },
-  task_assigned:               { ko: "번역사 배정",         color: "#9333ea", dot: "👤" },
-  task_started:                { ko: "작업 시작",           color: "#d97706", dot: "▶️" },
-  task_completed:              { ko: "작업 완료",           color: "#059669", dot: "🎉" },
-  settlement_created:          { ko: "정산 생성",           color: "#7c3aed", dot: "📊" },
-  settlement_paid:             { ko: "정산 완료",           color: "#059669", dot: "💸" },
-  project_cancelled:           { ko: "프로젝트 취소",       color: "#dc2626", dot: "🚫" },
-  admin_project_cancelled:     { ko: "관리자 취소",          color: "#dc2626", dot: "🚫" },
-  payment_received:            { ko: "결제 확인",            color: "#059669", dot: "💰" },
-  admin_info_updated:          { ko: "기본정보 수정",         color: "#6b7280", dot: "✏️" },
+  project_created:                  { ko: "프로젝트 접수",         color: "#2563eb", dot: "🗂️" },
+  quote_created:                    { ko: "견적 생성",              color: "#7c3aed", dot: "📋" },
+  quote_updated:                    { ko: "견적 수정",              color: "#7c3aed", dot: "📝" },
+  quote_approved:                   { ko: "견적 승인",              color: "#16a34a", dot: "✅" },
+  payment_requested:                { ko: "결제 요청",              color: "#d97706", dot: "💳" },
+  payment_paid:                     { ko: "결제 완료",              color: "#0891b2", dot: "💰" },
+  payment_failed:                   { ko: "결제 실패",              color: "#dc2626", dot: "❌" },
+  payment_received:                 { ko: "결제 확인",              color: "#059669", dot: "💰" },
+  project_matched:                  { ko: "번역사 매칭",            color: "#9333ea", dot: "🔗" },
+  task_assigned:                    { ko: "번역사 배정",            color: "#9333ea", dot: "👤" },
+  task_started:                     { ko: "작업 시작",              color: "#d97706", dot: "▶️" },
+  task_completed:                   { ko: "작업 완료",              color: "#059669", dot: "🎉" },
+  settlement_created:               { ko: "정산 생성",              color: "#7c3aed", dot: "📊" },
+  settlement_paid:                  { ko: "정산 완료",              color: "#059669", dot: "💸" },
+  project_cancelled:                { ko: "프로젝트 취소",          color: "#dc2626", dot: "🚫" },
+  admin_project_cancelled:          { ko: "관리자 취소",             color: "#dc2626", dot: "🚫" },
+  admin_info_updated:               { ko: "기본정보 수정",           color: "#6b7280", dot: "✏️" },
+  admin_rematch:                    { ko: "번역사 재매칭",           color: "#9333ea", dot: "🔄" },
+  note_added:                       { ko: "메모 추가",               color: "#92400e", dot: "📝" },
+  file_uploaded_source:             { ko: "원본 파일 업로드",        color: "#0369a1", dot: "📁" },
+  file_uploaded_translated:         { ko: "번역본 파일 업로드",      color: "#15803d", dot: "📁" },
+  file_uploaded_attachment:         { ko: "첨부 파일 업로드",        color: "#6b7280", dot: "📎" },
+  file_deleted:                     { ko: "파일 삭제",               color: "#dc2626", dot: "🗑️" },
+  communication_added_email:        { ko: "이메일 커뮤니케이션 기록", color: "#2563eb", dot: "📧" },
+  communication_added_phone:        { ko: "전화 커뮤니케이션 기록",  color: "#059669", dot: "📞" },
+  communication_added_message:      { ko: "메시지 커뮤니케이션 기록", color: "#7c3aed", dot: "💬" },
 };
 export function getActionLabel(action: string): { ko: string; color: string; dot: string } {
   if (ACTION_LABEL[action]) return ACTION_LABEL[action];
@@ -242,7 +252,10 @@ export function getActionLabel(action: string): { ko: string; color: string; dot
     return { ko: `관리자 상태변경 → ${STATUS_LABEL[s] ?? s}`, color: "#6b7280", dot: "🔄" };
   }
   if (action.startsWith("admin_assigned_translator_")) {
-    return { ko: "관리자 번역사 배정", color: "#9333ea", dot: "👤" };
+    return { ko: "번역사 직접 배정", color: "#9333ea", dot: "👤" };
+  }
+  if (action.startsWith("담당자 ")) {
+    return { ko: action, color: "#6b7280", dot: "👤" };
   }
   return { ko: action, color: "#6b7280", dot: "•" };
 }

@@ -339,7 +339,7 @@ router.post("/admin/projects/:id/assign-translator", ...adminGuard, async (req, 
       return task;
     });
 
-    await logEvent("project", projectId, `admin_assigned_translator_${translatorId}`, req.log);
+    await logEvent("project", projectId, `admin_assigned_translator_${translatorId}`, req.log, req.user ?? undefined);
     res.status(201).json({ task: newTask, translatorEmail: translator.email });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to assign translator");
@@ -396,7 +396,7 @@ router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
       .returning();
 
     const logAction = force ? `admin_forced_status_to_${status}` : `admin_status_changed_to_${status}`;
-    await logEvent("project", projectId, logAction, req.log);
+    await logEvent("project", projectId, logAction, req.log, req.user ?? undefined);
 
     // 완료 상태 전환 시: 정산이 없으면 자동 생성
     if (status === "completed") {
@@ -412,7 +412,7 @@ router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
             totalAmount: String(total), translatorAmount: String(total - fee), platformFee: String(fee),
             status: "ready",
           });
-          await logEvent("project", projectId, "settlement_created", req.log);
+          await logEvent("project", projectId, "settlement_created", req.log, req.user ?? undefined);
           req.log.info({ projectId }, "Settlement auto-created on admin status→completed");
         }
       }
@@ -439,7 +439,7 @@ router.patch("/admin/projects/:id/cancel", ...adminGuard, async (req, res) => {
 
   try {
     const [updated] = await db.update(projectsTable).set({ status: "cancelled" }).where(eq(projectsTable.id, projectId)).returning();
-    await logEvent("project", projectId, "project_cancelled", req.log);
+    await logEvent("project", projectId, "project_cancelled", req.log, req.user ?? undefined);
     res.json(updated);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to cancel project");
@@ -484,7 +484,7 @@ router.post("/admin/projects/:id/rematch", ...adminGuard, async (req, res) => {
       return task;
     });
 
-    await logEvent("project", projectId, "admin_rematch", req.log);
+    await logEvent("project", projectId, "admin_rematch", req.log, req.user ?? undefined);
     res.status(201).json({ task: newTask, translatorEmail: randomTranslator.email });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to rematch project");
@@ -522,7 +522,7 @@ router.post("/admin/projects", ...adminGuard, async (req, res) => {
       adminId: ((req as any).user as { id: number }).id,
     }).returning();
 
-    await logEvent("project", project.id, "project_created", req.log);
+    await logEvent("project", project.id, "project_created", req.log, req.user ?? undefined);
     res.status(201).json(project);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to create project");
@@ -546,7 +546,7 @@ router.patch("/admin/projects/:id/info", ...adminGuard, async (req, res) => {
     const [project] = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.id, projectId));
     if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
     const [updated] = await db.update(projectsTable).set(updates).where(eq(projectsTable.id, projectId)).returning();
-    await logEvent("project", projectId, "admin_info_updated", req.log);
+    await logEvent("project", projectId, "admin_info_updated", req.log, req.user ?? undefined);
     res.json(updated);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to update project info");
@@ -611,7 +611,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
       await tx.update(projectsTable).set({ status: "quoted" }).where(eq(projectsTable.id, projectId));
       return quote;
     });
-    await logEvent("project", projectId, "quote_created", req.log);
+    await logEvent("project", projectId, "quote_created", req.log, req.user ?? undefined);
     res.status(201).json(result);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to create quote");
@@ -658,7 +658,7 @@ router.post("/admin/projects/:id/payment", ...adminGuard, async (req, res) => {
       await tx.update(quotesTable).set({ status: "approved" }).where(eq(quotesTable.projectId, projectId));
       return payment;
     });
-    await logEvent("project", projectId, "payment_received", req.log);
+    await logEvent("project", projectId, "payment_received", req.log, req.user ?? undefined);
     res.status(201).json(result);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to record payment");
@@ -996,6 +996,8 @@ router.post("/admin/projects/:id/notes", ...adminGuard, async (req, res) => {
       .values({ entityType: "project", entityId: projectId, adminId: req.user!.id, content: content.trim() })
       .returning();
 
+    await logEvent("project", projectId, "note_added", req.log, req.user ?? undefined);
+
     res.status(201).json({ ...note, adminEmail: req.user!.email });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to add note");
@@ -1086,7 +1088,7 @@ router.patch("/admin/projects/:id/assign", ...adminGuard, async (req, res) => {
       .where(eq(projectsTable.id, projectId))
       .returning();
 
-    await logEvent("project", projectId, `담당자 ${adminId ? `지정 (adminId=${adminId})` : "해제"}`, req.log);
+    await logEvent("project", projectId, `담당자 ${adminId ? `지정 (adminId=${adminId})` : "해제"}`, req.log, req.user ?? undefined);
     res.json(updated);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to assign admin");
@@ -1266,7 +1268,7 @@ router.post("/admin/communications", ...adminGuard, async (req, res) => {
       .returning();
 
     if (projectId) {
-      await logEvent("communication", comm.id, `커뮤니케이션 기록 (type=${commType}, projectId=${projectId})`, req.log);
+      await logEvent("project", projectId, `communication_added_${commType}`, req.log, req.user ?? undefined);
     }
 
     res.status(201).json(comm);

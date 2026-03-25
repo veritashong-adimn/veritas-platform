@@ -4,6 +4,7 @@ import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
+import { logEvent } from "../lib/logEvent";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin")];
@@ -60,7 +61,7 @@ router.post("/admin/projects/:id/files", ...adminGuard, async (req, res) => {
     return;
   }
 
-  const userId = (req as any).userId as number;
+  const userId = req.user!.id;
 
   try {
     const [file] = await db.insert(projectFilesTable).values({
@@ -72,6 +73,9 @@ router.post("/admin/projects/:id/files", ...adminGuard, async (req, res) => {
       mimeType: parsed.data.mimeType,
       uploadedBy: userId,
     }).returning();
+
+    const typeLabel = parsed.data.fileType === "source" ? "원본" : parsed.data.fileType === "translated" ? "번역본" : "첨부";
+    await logEvent("project", projectId, `file_uploaded_${parsed.data.fileType}`, req.log, req.user ?? undefined, JSON.stringify({ fileName: parsed.data.fileName, fileType: typeLabel }));
 
     res.status(201).json(file);
   } catch (err) {
@@ -96,6 +100,8 @@ router.delete("/admin/projects/:id/files/:fileId", ...adminGuard, async (req, re
 
     await db.delete(projectFilesTable)
       .where(and(eq(projectFilesTable.id, fileId), eq(projectFilesTable.projectId, projectId)));
+
+    await logEvent("project", projectId, "file_deleted", req.log, req.user ?? undefined, JSON.stringify({ fileName: file.fileName }));
 
     res.json({ ok: true });
   } catch (err) {
