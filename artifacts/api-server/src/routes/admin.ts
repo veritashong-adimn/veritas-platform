@@ -3,8 +3,9 @@ import {
   db, projectsTable, paymentsTable, tasksTable, usersTable,
   logsTable, quotesTable, settlementsTable, notesTable,
   customersTable, communicationsTable, translatorProfilesTable,
-  contactsTable, companiesTable,
+  contactsTable, companiesTable, translatorRatesTable,
 } from "@workspace/db";
+import bcrypt from "bcryptjs";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
@@ -119,6 +120,11 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
   }
 
   try {
+    const translatorUserAlias = db
+      .select({ id: usersTable.id, email: usersTable.email })
+      .from(usersTable)
+      .as("trans_user");
+
     const [project] = await db
       .select({
         id: projectsTable.id,
@@ -128,6 +134,9 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
         createdAt: projectsTable.createdAt,
         customerEmail: usersTable.email,
         customerId: usersTable.id,
+        contactId: projectsTable.contactId,
+        companyId: projectsTable.companyId,
+        adminId: projectsTable.adminId,
       })
       .from(projectsTable)
       .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))
@@ -138,7 +147,7 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
       return;
     }
 
-    const [quotes, payments, tasks, settlements, logs] = await Promise.all([
+    const [quotes, payments, rawTasks, settlements, logs, notes, communications] = await Promise.all([
       db.select().from(quotesTable).where(eq(quotesTable.projectId, projectId)),
       db.select().from(paymentsTable).where(eq(paymentsTable.projectId, projectId)),
       db
@@ -147,19 +156,193 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
           translatorId: tasksTable.translatorId,
           status: tasksTable.status,
           createdAt: tasksTable.createdAt,
-          translatorEmail: usersTable.email,
+          translatorEmail: translatorUserAlias.email,
         })
         .from(tasksTable)
-        .leftJoin(usersTable, eq(tasksTable.translatorId, usersTable.id))
+        .leftJoin(translatorUserAlias, eq(tasksTable.translatorId, translatorUserAlias.id))
         .where(eq(tasksTable.projectId, projectId)),
       db.select().from(settlementsTable).where(eq(settlementsTable.projectId, projectId)),
       db.select().from(logsTable).where(eq(logsTable.entityId, projectId)).orderBy(logsTable.createdAt),
+      db
+        .select({
+          id: notesTable.id,
+          content: notesTable.content,
+          createdAt: notesTable.createdAt,
+          adminEmail: usersTable.email,
+        })
+        .from(notesTable)
+        .leftJoin(usersTable, eq(notesTable.adminId, usersTable.id))
+        .where(and(eq(notesTable.entityType, "project"), eq(notesTable.entityId, projectId)))
+        .orderBy(notesTable.createdAt),
+      db
+        .select()
+        .from(communicationsTable)
+        .where(eq(communicationsTable.projectId, projectId))
+        .orderBy(communicationsTable.createdAt),
     ]);
 
-    res.json({ ...project, quotes, payments, tasks, settlements, logs });
+    // 거래처 + 담당자
+    let company = null;
+    let contact = null;
+    if (project.companyId) {
+      const [c] = await db.select().from(companiesTable).where(eq(companiesTable.id, project.companyId));
+      company = c ?? null;
+    }
+    if (project.contactId) {
+      const [ct] = await db.select().from(contactsTable).where(eq(contactsTable.id, project.contactId));
+      contact = ct ?? null;
+    }
+
+    // 번역사 프로필 + 단가표
+    const tasks = await Promise.all(
+      rawTasks.map(async (t) => {
+        if (!t.translatorId) return t;
+        const [profile] = await db
+          .select()
+          .from(translatorProfilesTable)
+          .where(eq(translatorProfilesTable.userId, t.translatorId));
+        const rates = await db
+          .select()
+          .from(translatorRatesTable)
+          .where(eq(translatorRatesTable.translatorId, t.translatorId));
+        return { ...t, translatorProfile: profile ?? null, translatorRates: rates };
+      }),
+    );
+
+    res.json({
+      ...project, quotes, payments, tasks, settlements, logs, notes, communications,
+      company, contact,
+    });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch project detail");
     res.status(500).json({ error: "프로젝트 상세 조회 실패." });
+  }
+});
+
+// ─── 번역사 매칭 후보 추천 (top-3) ─────────────────────────────────────────
+router.get("/admin/projects/:id/match-candidates", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 project id." });
+    return;
+  }
+
+  try {
+    const [project] = await db
+      .select({
+        companyId: projectsTable.companyId,
+        contactId: projectsTable.contactId,
+        title: projectsTable.title,
+      })
+      .from(projectsTable)
+      .where(eq(projectsTable.id, projectId));
+
+    if (!project) {
+      res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." });
+      return;
+    }
+
+    const translators = await db
+      .select({
+        id: usersTable.id,
+        email: usersTable.email,
+        isActive: usersTable.isActive,
+      })
+      .from(usersTable)
+      .where(and(eq(usersTable.role, "translator"), eq(usersTable.isActive, true)));
+
+    if (translators.length === 0) {
+      res.json([]);
+      return;
+    }
+
+    const translatorIds = translators.map(t => t.id);
+
+    const [profiles, ratesList] = await Promise.all([
+      db
+        .select()
+        .from(translatorProfilesTable)
+        .where(inArray(translatorProfilesTable.userId, translatorIds)),
+      db
+        .select()
+        .from(translatorRatesTable)
+        .where(inArray(translatorRatesTable.translatorId, translatorIds)),
+    ]);
+
+    const profileMap = new Map(profiles.map(p => [p.userId, p]));
+    const ratesMap = new Map<number, typeof ratesList>();
+    for (const r of ratesList) {
+      if (!ratesMap.has(r.translatorId)) ratesMap.set(r.translatorId, []);
+      ratesMap.get(r.translatorId)!.push(r);
+    }
+
+    const { lp, field } = req.query as { lp?: string; field?: string };
+
+    const scored = translators.map(t => {
+      const profile = profileMap.get(t.id) ?? null;
+      const rates = ratesMap.get(t.id) ?? [];
+      let score = 0;
+
+      if (profile?.availabilityStatus === "available") score += 30;
+      else if (profile?.availabilityStatus === "busy") score += 5;
+
+      if (profile?.rating) score += (profile.rating / 5) * 20;
+
+      if (lp && profile?.languagePairs?.toLowerCase().includes(lp.toLowerCase())) score += 25;
+      if (field && profile?.specializations?.toLowerCase().includes(field.toLowerCase())) score += 25;
+      if (rates.length > 0) score += 5;
+
+      return { id: t.id, email: t.email, profile, rates, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    res.json(scored.slice(0, 3));
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to get match candidates");
+    res.status(500).json({ error: "후보 조회 실패." });
+  }
+});
+
+// ─── 번역사 직접 배정 ───────────────────────────────────────────────────────
+router.post("/admin/projects/:id/assign-translator", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  const { translatorId } = req.body as { translatorId?: number };
+
+  if (isNaN(projectId) || projectId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 project id." });
+    return;
+  }
+  if (!translatorId || isNaN(translatorId)) {
+    res.status(400).json({ error: "translatorId는 필수입니다." });
+    return;
+  }
+
+  try {
+    const [translator] = await db
+      .select()
+      .from(usersTable)
+      .where(and(eq(usersTable.id, translatorId), eq(usersTable.role, "translator"), eq(usersTable.isActive, true)));
+
+    if (!translator) {
+      res.status(404).json({ error: "해당 번역사를 찾을 수 없습니다." });
+      return;
+    }
+
+    const newTask = await db.transaction(async (tx) => {
+      await tx.delete(tasksTable).where(eq(tasksTable.projectId, projectId));
+      const [task] = await tx
+        .insert(tasksTable)
+        .values({ projectId, translatorId })
+        .returning();
+      await tx.update(projectsTable).set({ status: "matched" }).where(eq(projectsTable.id, projectId));
+      return task;
+    });
+
+    await logEvent("project", projectId, `admin_assigned_translator_${translatorId}`, req.log);
+    res.status(201).json({ task: newTask, translatorEmail: translator.email });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to assign translator");
+    res.status(500).json({ error: "번역사 배정 실패." });
   }
 });
 
@@ -462,6 +645,41 @@ router.patch("/admin/users/:id/role", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Admin: failed to update user role");
     res.status(500).json({ error: "역할 변경 실패." });
+  }
+});
+
+// ─── 관리자 비밀번호 재설정 (개발/운영용) ────────────────────────────────
+router.patch("/admin/users/:id/reset-password", ...adminGuard, async (req, res) => {
+  const targetId = Number(req.params.id);
+  const { newPassword } = req.body as { newPassword?: string };
+
+  if (isNaN(targetId) || targetId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." });
+    return;
+  }
+  if (!newPassword || newPassword.length < 6) {
+    res.status(400).json({ error: "새 비밀번호는 최소 6자 이상이어야 합니다." });
+    return;
+  }
+
+  try {
+    const [target] = await db.select({ id: usersTable.id, role: usersTable.role }).from(usersTable).where(eq(usersTable.id, targetId));
+    if (!target) {
+      res.status(404).json({ error: "사용자를 찾을 수 없습니다." });
+      return;
+    }
+    if (target.role === "admin" && target.id !== req.user!.id) {
+      res.status(403).json({ error: "다른 관리자의 비밀번호는 변경할 수 없습니다." });
+      return;
+    }
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await db.update(usersTable).set({ password: hashed }).where(eq(usersTable.id, targetId));
+    req.log.info({ adminId: req.user!.id, targetId }, "Admin reset password for user");
+    res.json({ ok: true, message: "비밀번호가 재설정되었습니다." });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to reset password");
+    res.status(500).json({ error: "비밀번호 재설정 실패." });
   }
 });
 

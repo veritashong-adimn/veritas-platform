@@ -554,6 +554,69 @@ function AuthPage({ onAuth }: { onAuth: (token: string, user: User) => void }) {
   );
 }
 
+const PROJECT_STEPS = [
+  { key: "created", label: "접수" },
+  { key: "quoted", label: "견적" },
+  { key: "approved", label: "승인" },
+  { key: "paid", label: "결제" },
+  { key: "matched", label: "번역사 배정" },
+  { key: "in_progress", label: "번역 중" },
+  { key: "completed", label: "완료" },
+] as const;
+
+const PROJECT_STEP_KEYS = PROJECT_STEPS.map(s => s.key);
+
+function ProjectStatusStepper({ status }: { status: string }) {
+  if (status === "cancelled") {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: 12, color: "#dc2626", fontWeight: 600 }}>✗ 취소됨</span>
+      </div>
+    );
+  }
+  const currentIdx = PROJECT_STEP_KEYS.indexOf(status as typeof PROJECT_STEP_KEYS[number]);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 0, overflowX: "auto", paddingBottom: 2 }}>
+      {PROJECT_STEPS.map((step, i) => {
+        const done = i < currentIdx;
+        const active = i === currentIdx;
+        return (
+          <div key={step.key} style={{ display: "flex", alignItems: "center" }}>
+            <div style={{
+              display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+            }}>
+              <div style={{
+                width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 10, fontWeight: 700,
+                background: done ? "#2563eb" : active ? "#2563eb" : "#e5e7eb",
+                color: (done || active) ? "#fff" : "#9ca3af",
+                border: active ? "2px solid #1d4ed8" : "2px solid transparent",
+                boxShadow: active ? "0 0 0 3px #bfdbfe" : "none",
+              }}>
+                {done ? "✓" : i + 1}
+              </div>
+              <span style={{
+                fontSize: 9, fontWeight: active ? 700 : 500,
+                color: (done || active) ? "#2563eb" : "#9ca3af",
+                whiteSpace: "nowrap",
+              }}>
+                {step.label}
+              </span>
+            </div>
+            {i < PROJECT_STEPS.length - 1 && (
+              <div style={{
+                width: 20, height: 2, marginBottom: 12,
+                background: done ? "#2563eb" : "#e5e7eb",
+                flexShrink: 0,
+              }} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ProjectCard({
   project, token,
   onPaymentRequest,
@@ -563,6 +626,7 @@ function ProjectCard({
   onPaymentRequest: (projectId: number) => void;
 }) {
   const isApproved = project.status === "approved";
+  const isCancelled = project.status === "cancelled";
 
   return (
     <Card style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -577,6 +641,24 @@ function ProjectCard({
         </div>
         <StatusBadge status={project.status} />
       </div>
+
+      {!isCancelled && (
+        <div style={{ paddingTop: 4 }}>
+          <ProjectStatusStepper status={project.status} />
+        </div>
+      )}
+
+      {isCancelled && (
+        <div style={{ padding: "8px 12px", background: "#fef2f2", borderRadius: 8, fontSize: 12, color: "#dc2626" }}>
+          이 프로젝트는 취소되었습니다.
+        </div>
+      )}
+
+      {isApproved && (
+        <div style={{ padding: "8px 12px", background: "#eff6ff", borderRadius: 8, fontSize: 12, color: "#2563eb", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span>견적이 승인되었습니다. 결제를 진행해 주세요.</span>
+        </div>
+      )}
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         {project.fileUrl && (
@@ -921,12 +1003,33 @@ type Communication = {
   type: "email" | "phone" | "message"; content: string; createdAt: string;
   companyName?: string | null; contactName?: string | null;
 };
+type ProjectTaskDetail = {
+  id: number; translatorId: number; status: string; createdAt: string;
+  translatorEmail: string | null;
+  translatorProfile: {
+    languagePairs: string | null; specializations: string | null;
+    rating: number | null; availabilityStatus: string; bio: string | null;
+  } | null;
+  translatorRates: TranslatorRate[];
+};
+type MatchCandidate = {
+  id: number; email: string; score: number;
+  profile: {
+    languagePairs: string | null; specializations: string | null;
+    rating: number | null; availabilityStatus: string; bio: string | null;
+  } | null;
+  rates: TranslatorRate[];
+};
 type ProjectDetail = AdminProject & {
   quotes: Array<{ id: number; amount: number; status: string; createdAt: string }>;
   payments: Array<{ id: number; amount: number; status: string; createdAt: string }>;
-  tasks: Array<{ id: number; translatorId: number; status: string; createdAt: string; translatorEmail: string | null }>;
+  tasks: ProjectTaskDetail[];
   settlements: Array<{ id: number; totalAmount: number; translatorAmount: number; platformFee: number; status: string; createdAt: string }>;
   logs: LogEntry[];
+  notes: NoteEntry[];
+  communications: Communication[];
+  company: { id: number; name: string; representativeName: string | null; email: string | null; phone: string | null; industry: string | null } | null;
+  contact: { id: number; name: string; department: string | null; position: string | null; email: string | null; phone: string | null } | null;
 };
 
 type Company = {
@@ -2030,41 +2133,68 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
   adminList?: AdminUser[];
 }) {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
-  const [notes, setNotes] = useState<NoteEntry[]>([]);
-  const [comms, setComms] = useState<Communication[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [noteInput, setNoteInput] = useState("");
   const [addingNote, setAddingNote] = useState(false);
   const [statusTarget, setStatusTarget] = useState("");
   const [changingStatus, setChangingStatus] = useState(false);
-  const [rematching, setRematching] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [assignAdminId, setAssignAdminId] = useState<string>("");
-  const [assigning, setAssigning] = useState(false);
   const [commType, setCommType] = useState<"email"|"phone"|"message">("message");
   const [commContent, setCommContent] = useState("");
   const [addingComm, setAddingComm] = useState(false);
+  const [candidates, setCandidates] = useState<MatchCandidate[]>([]);
+  const [loadingCandidates, setLoadingCandidates] = useState(false);
+  const [assigning, setAssigning] = useState<number | null>(null);
+  const [showCandidates, setShowCandidates] = useState(false);
+  const [activeSection, setActiveSection] = useState<"info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log">("info");
 
   const authH = { Authorization: `Bearer ${token}` };
 
   const loadDetail = async () => {
+    setLoading(true);
     try {
-      const [dRes, nRes, cRes] = await Promise.all([
-        fetch(api(`/api/admin/projects/${projectId}`), { headers: authH }),
-        fetch(api(`/api/admin/projects/${projectId}/notes`), { headers: authH }),
-        fetch(api(`/api/admin/projects/${projectId}/communications`), { headers: authH }),
-      ]);
-      const [dData, nData, cData] = await Promise.all([dRes.json(), nRes.json(), cRes.json()]);
-      if (dRes.ok) { setDetail(dData); setStatusTarget(dData.status); setAssignAdminId(dData.adminId ? String(dData.adminId) : ""); }
-      else { setErr(dData.error ?? "조회 실패"); }
-      if (nRes.ok) setNotes(Array.isArray(nData) ? nData : []);
-      if (cRes.ok) setComms(Array.isArray(cData) ? cData : []);
+      const res = await fetch(api(`/api/admin/projects/${projectId}`), { headers: authH });
+      const data = await res.json();
+      if (res.ok) {
+        setDetail(data);
+        setStatusTarget(data.status);
+      } else {
+        setErr(data.error ?? "조회 실패");
+      }
     } catch { setErr("서버 연결 실패"); }
     finally { setLoading(false); }
   };
 
   useEffect(() => { loadDetail(); }, [projectId]);
+
+  const loadCandidates = async () => {
+    setLoadingCandidates(true);
+    setShowCandidates(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/match-candidates`), { headers: authH });
+      const data = await res.json();
+      if (res.ok) setCandidates(Array.isArray(data) ? data : []);
+      else onToast(`오류: ${data.error}`);
+    } catch { onToast("오류: 후보 조회 실패"); }
+    finally { setLoadingCandidates(false); }
+  };
+
+  const handleAssignTranslator = async (translatorId: number) => {
+    setAssigning(translatorId);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/assign-translator`), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ translatorId }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast(`번역사 배정 완료 → ${data.translatorEmail}`);
+      setShowCandidates(false);
+      await loadDetail(); onRefresh();
+    } catch { onToast("오류: 배정 실패"); }
+    finally { setAssigning(null); }
+  };
 
   const handleStatusChange = async () => {
     if (!statusTarget || statusTarget === detail?.status) return;
@@ -2080,20 +2210,6 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 상태 변경 실패"); }
     finally { setChangingStatus(false); }
-  };
-
-  const handleRematch = async () => {
-    setRematching(true);
-    try {
-      const res = await fetch(api(`/api/admin/projects/${projectId}/rematch`), {
-        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
-      });
-      const data = await res.json();
-      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      onToast(`재매칭 완료 → ${data.translatorEmail ?? "번역사 배정됨"}`);
-      await loadDetail(); onRefresh();
-    } catch { onToast("오류: 재매칭 실패"); }
-    finally { setRematching(false); }
   };
 
   const handleCancel = async () => {
@@ -2121,26 +2237,10 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      setNotes(prev => [...prev, data]);
+      setDetail(prev => prev ? { ...prev, notes: [...(prev.notes ?? []), data] } : prev);
       setNoteInput("");
     } catch { onToast("오류: 메모 추가 실패"); }
     finally { setAddingNote(false); }
-  };
-
-  const handleAssign = async () => {
-    setAssigning(true);
-    try {
-      const adminId = assignAdminId ? Number(assignAdminId) : null;
-      const res = await fetch(api(`/api/admin/projects/${projectId}/assign`), {
-        method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
-        body: JSON.stringify({ adminId }),
-      });
-      const data = await res.json();
-      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      onToast(adminId ? "담당자가 지정되었습니다." : "담당자가 해제되었습니다.");
-      await loadDetail(); onRefresh();
-    } catch { onToast("오류: 담당자 지정 실패"); }
-    finally { setAssigning(false); }
   };
 
   const handleAddComm = async () => {
@@ -2153,20 +2253,41 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      setComms(prev => [data, ...prev]);
+      setDetail(prev => prev ? { ...prev, communications: [data, ...(prev.communications ?? [])] } : prev);
       setCommContent("");
       onToast("커뮤니케이션 기록이 추가되었습니다.");
     } catch { onToast("오류: 추가 실패"); }
     finally { setAddingComm(false); }
   };
 
+  const AVAIL_STYLE: Record<string, { label: string; color: string }> = {
+    available: { label: "가능", color: "#059669" },
+    busy:      { label: "바쁨", color: "#d97706" },
+    unavailable: { label: "불가", color: "#dc2626" },
+  };
+
   const sectionHd: React.CSSProperties = {
     fontSize: 12, fontWeight: 700, color: "#6b7280",
     textTransform: "uppercase", letterSpacing: "0.06em",
-    margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
+    margin: "16px 0 8px", paddingBottom: 5, borderBottom: "1px solid #f3f4f6",
   };
-  const dl: React.CSSProperties = { display: "flex", gap: 4, fontSize: 13, marginBottom: 6 };
-  const dt: React.CSSProperties = { color: "#9ca3af", minWidth: 80 };
+  const dl: React.CSSProperties = { display: "flex", gap: 6, fontSize: 13, marginBottom: 5, alignItems: "flex-start" };
+  const dt: React.CSSProperties = { color: "#9ca3af", minWidth: 72, flexShrink: 0 };
+  const tabBtnStyle = (active: boolean): React.CSSProperties => ({
+    padding: "5px 12px", fontSize: 12, fontWeight: active ? 700 : 500, borderRadius: 20, cursor: "pointer",
+    border: "1px solid", borderColor: active ? "#2563eb" : "#e5e7eb",
+    background: active ? "#eff6ff" : "#fff", color: active ? "#2563eb" : "#6b7280",
+  });
+
+  const sections: Array<{ key: typeof activeSection; label: string }> = [
+    { key: "info", label: "기본 정보" },
+    { key: "company", label: "거래처/담당자" },
+    { key: "translator", label: "번역사" },
+    { key: "settlement", label: "견적/결제/정산" },
+    { key: "comms", label: "커뮤니케이션" },
+    { key: "notes", label: "메모" },
+    { key: "log", label: "이벤트 로그" },
+  ];
 
   return (
     <div style={{
@@ -2176,13 +2297,16 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
     }}>
       <div style={{
         background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb",
-        width: "100%", maxWidth: 720, padding: "24px 28px",
+        width: "100%", maxWidth: 780, padding: "24px 28px",
         boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
       }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>
-            프로젝트 #{projectId} 상세
-          </h2>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div>
+            <h2 style={{ margin: "0 0 2px", fontSize: 18, fontWeight: 800, color: "#111827" }}>
+              프로젝트 #{projectId} 상세
+            </h2>
+            {detail && <StatusBadge status={detail.status} />}
+          </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#9ca3af", lineHeight: 1, padding: 4 }}>×</button>
         </div>
 
@@ -2192,108 +2316,204 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
           <p style={{ color: "#dc2626", padding: "16px 0" }}>{err}</p>
         ) : detail && (
           <>
-            {/* 기본 정보 */}
-            <p style={sectionHd}>기본 정보</p>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px" }}>
-              <div style={dl}><span style={dt}>제목</span><strong style={{ color: "#111827" }}>{detail.title}</strong></div>
-              <div style={dl}><span style={dt}>고객</span><span style={{ color: "#374151" }}>{detail.customerEmail ?? "-"}</span></div>
-              <div style={dl}><span style={dt}>상태</span><StatusBadge status={detail.status} /></div>
-              <div style={dl}><span style={dt}>등록일</span><span style={{ color: "#374151" }}>{new Date(detail.createdAt).toLocaleString("ko-KR")}</span></div>
-              {detail.fileUrl && (
-                <div style={dl}>
-                  <span style={dt}>첨부파일</span>
-                  <a href={detail.fileUrl} target="_blank" rel="noreferrer" style={{ color: "#2563eb", fontSize: 13 }}>📎 다운로드</a>
-                </div>
-              )}
-            </div>
-
-            {/* 액션 버튼 */}
-            <p style={sectionHd}>관리 액션</p>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+            {/* 액션 바 */}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", padding: "10px 12px", background: "#f9fafb", borderRadius: 10, marginBottom: 14 }}>
               <select value={statusTarget} onChange={e => setStatusTarget(e.target.value)}
-                style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }}>
+                style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12 }}>
                 {ALL_PROJECT_STATUSES.map(s => (
                   <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
                 ))}
               </select>
-              <GhostBtn onClick={handleStatusChange} disabled={changingStatus || statusTarget === detail.status} color="#2563eb">
+              <GhostBtn onClick={handleStatusChange} disabled={changingStatus || statusTarget === detail.status} color="#2563eb" style={{ fontSize: 12, padding: "6px 12px" }}>
                 {changingStatus ? "변경 중..." : "상태 변경"}
               </GhostBtn>
-              <GhostBtn onClick={handleRematch} disabled={rematching} color="#7c3aed">
-                {rematching ? "재매칭 중..." : "번역사 재매칭"}
+              <GhostBtn onClick={loadCandidates} disabled={loadingCandidates} color="#7c3aed" style={{ fontSize: 12, padding: "6px 12px" }}>
+                {loadingCandidates ? "조회 중..." : "번역사 추천"}
               </GhostBtn>
               {detail.status !== "cancelled" && (
-                <GhostBtn onClick={handleCancel} disabled={cancelling} color="#dc2626">
+                <GhostBtn onClick={handleCancel} disabled={cancelling} color="#dc2626" style={{ fontSize: 12, padding: "6px 12px" }}>
                   {cancelling ? "취소 중..." : "프로젝트 취소"}
                 </GhostBtn>
               )}
             </div>
-            {/* 담당자 지정 */}
-            {adminList && adminList.length > 0 && (
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ fontSize: 12, color: "#6b7280", minWidth: 48 }}>담당자</span>
-                <select value={assignAdminId} onChange={e => setAssignAdminId(e.target.value)}
-                  style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13, flex: 1, maxWidth: 260 }}>
-                  <option value="">— 담당자 없음 —</option>
-                  {adminList.map(a => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
-                </select>
-                <GhostBtn onClick={handleAssign} disabled={assigning} color="#059669" style={{ fontSize: 12, padding: "7px 14px" }}>
-                  {assigning ? "처리 중..." : "지정"}
-                </GhostBtn>
+
+            {/* 번역사 추천 후보 */}
+            {showCandidates && (
+              <div style={{ marginBottom: 14, padding: "12px 14px", background: "#faf5ff", borderRadius: 10, border: "1px solid #e9d5ff" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, alignItems: "center" }}>
+                  <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#7c3aed" }}>추천 번역사 (상위 3명)</p>
+                  <button onClick={() => setShowCandidates(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 16 }}>×</button>
+                </div>
+                {loadingCandidates ? (
+                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center" }}>조회 중...</p>
+                ) : candidates.length === 0 ? (
+                  <p style={{ color: "#9ca3af", fontSize: 13 }}>조건에 맞는 번역사가 없습니다.</p>
+                ) : candidates.map((c, i) => {
+                  const av = AVAIL_STYLE[c.profile?.availabilityStatus ?? ""] ?? AVAIL_STYLE.unavailable;
+                  return (
+                    <div key={c.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "8px 10px", background: "#fff", borderRadius: 8, marginBottom: 6, border: "1px solid #e9d5ff" }}>
+                      <span style={{ fontWeight: 700, color: "#7c3aed", fontSize: 16, minWidth: 24 }}>#{i + 1}</span>
+                      <div style={{ flex: 1 }}>
+                        <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 600, color: "#111827" }}>{c.email}</p>
+                        <p style={{ margin: 0, fontSize: 11, color: "#6b7280" }}>
+                          {c.profile?.languagePairs ?? "언어쌍 미설정"} · {c.profile?.specializations ?? "분야 미설정"}
+                          {c.profile?.rating != null && ` · ⭐ ${c.profile.rating.toFixed(1)}`}
+                        </p>
+                      </div>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: av.color, minWidth: 32 }}>{av.label}</span>
+                      <span style={{ fontSize: 11, color: "#6b7280" }}>점수 {c.score}</span>
+                      <PrimaryBtn
+                        onClick={() => handleAssignTranslator(c.id)}
+                        disabled={assigning === c.id}
+                        style={{ fontSize: 12, padding: "5px 12px" }}>
+                        {assigning === c.id ? "배정 중..." : "배정"}
+                      </PrimaryBtn>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
-            {/* 견적 */}
-            {detail.quotes.length > 0 && (
+            {/* 탭 내비 */}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+              {sections.map(s => (
+                <button key={s.key} onClick={() => setActiveSection(s.key)} style={tabBtnStyle(activeSection === s.key)}>
+                  {s.label}
+                </button>
+              ))}
+            </div>
+
+            {/* 기본 정보 */}
+            {activeSection === "info" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px" }}>
+                <div style={dl}><span style={dt}>제목</span><strong style={{ color: "#111827", fontSize: 14 }}>{detail.title}</strong></div>
+                <div style={dl}><span style={dt}>고객</span><span style={{ color: "#374151" }}>{detail.customerEmail ?? "-"}</span></div>
+                <div style={dl}><span style={dt}>상태</span><StatusBadge status={detail.status} /></div>
+                <div style={dl}><span style={dt}>등록일</span><span style={{ color: "#374151" }}>{new Date(detail.createdAt).toLocaleString("ko-KR")}</span></div>
+                <div style={dl}><span style={dt}>거래처</span><span style={{ color: "#374151" }}>{detail.company?.name ?? detail.companyName ?? "-"}</span></div>
+                <div style={dl}><span style={dt}>담당자</span><span style={{ color: "#374151" }}>{detail.contact?.name ?? detail.contactName ?? "-"}</span></div>
+                {detail.fileUrl && (
+                  <div style={{ ...dl, gridColumn: "span 2" }}>
+                    <span style={dt}>첨부파일</span>
+                    <a href={detail.fileUrl} target="_blank" rel="noreferrer" style={{ color: "#2563eb", fontSize: 13 }}>📎 다운로드</a>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 거래처 / 담당자 */}
+            {activeSection === "company" && (
+              <>
+                <p style={sectionHd}>거래처 정보</p>
+                {detail.company ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 20px", padding: "12px", background: "#f9fafb", borderRadius: 8, marginBottom: 12 }}>
+                    <div style={dl}><span style={dt}>회사명</span><strong>{detail.company.name}</strong></div>
+                    <div style={dl}><span style={dt}>업종</span><span>{detail.company.industry ?? "-"}</span></div>
+                    <div style={dl}><span style={dt}>대표자</span><span>{detail.company.representativeName ?? "-"}</span></div>
+                    <div style={dl}><span style={dt}>이메일</span><span>{detail.company.email ?? "-"}</span></div>
+                    <div style={dl}><span style={dt}>전화</span><span>{detail.company.phone ?? "-"}</span></div>
+                  </div>
+                ) : (
+                  <p style={{ color: "#9ca3af", fontSize: 13, padding: "8px 0" }}>연결된 거래처가 없습니다.</p>
+                )}
+
+                <p style={sectionHd}>담당자 정보</p>
+                {detail.contact ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 20px", padding: "12px", background: "#f9fafb", borderRadius: 8 }}>
+                    <div style={dl}><span style={dt}>이름</span><strong>{detail.contact.name}</strong></div>
+                    <div style={dl}><span style={dt}>부서</span><span>{detail.contact.department ?? "-"}</span></div>
+                    <div style={dl}><span style={dt}>직책</span><span>{detail.contact.position ?? "-"}</span></div>
+                    <div style={dl}><span style={dt}>이메일</span><span>{detail.contact.email ?? "-"}</span></div>
+                    <div style={dl}><span style={dt}>전화</span><span>{detail.contact.phone ?? "-"}</span></div>
+                  </div>
+                ) : (
+                  <p style={{ color: "#9ca3af", fontSize: 13, padding: "8px 0" }}>연결된 담당자가 없습니다.</p>
+                )}
+              </>
+            )}
+
+            {/* 번역사 정보 */}
+            {activeSection === "translator" && (
+              <>
+                {detail.tasks.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "24px 0", color: "#9ca3af" }}>
+                    <p style={{ margin: 0 }}>배정된 번역사가 없습니다.</p>
+                    <p style={{ margin: "6px 0 0", fontSize: 12 }}>위 「번역사 추천」 버튼으로 후보를 확인하고 배정하세요.</p>
+                  </div>
+                ) : detail.tasks.map(t => {
+                  const avStyle = AVAIL_STYLE[t.translatorProfile?.availabilityStatus ?? ""] ?? AVAIL_STYLE.unavailable;
+                  return (
+                    <div key={t.id} style={{ marginBottom: 14 }}>
+                      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 8 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>{t.translatorEmail ?? `#${t.translatorId}`}</span>
+                        <StatusBadge status={t.status} />
+                        <span style={{ fontSize: 11, fontWeight: 600, color: avStyle.color }}>가용: {avStyle.label}</span>
+                        <span style={{ fontSize: 11, color: "#9ca3af", marginLeft: "auto" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</span>
+                      </div>
+                      {t.translatorProfile && (
+                        <div style={{ padding: "10px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 20px" }}>
+                          <div style={dl}><span style={dt}>언어쌍</span><span>{t.translatorProfile.languagePairs ?? "-"}</span></div>
+                          <div style={dl}><span style={dt}>전문분야</span><span>{t.translatorProfile.specializations ?? "-"}</span></div>
+                          {t.translatorProfile.rating != null && (
+                            <div style={dl}><span style={dt}>평점</span><span style={{ color: "#d97706", fontWeight: 600 }}>⭐ {t.translatorProfile.rating.toFixed(1)}</span></div>
+                          )}
+                          {t.translatorProfile.bio && (
+                            <div style={{ ...dl, gridColumn: "span 2" }}><span style={dt}>소개</span><span style={{ color: "#374151" }}>{t.translatorProfile.bio}</span></div>
+                          )}
+                        </div>
+                      )}
+                      {t.translatorRates.length > 0 && (
+                        <>
+                          <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase" }}>단가표</p>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                            {t.translatorRates.map(r => (
+                              <div key={r.id} style={{ display: "flex", gap: 10, fontSize: 12, padding: "5px 10px", background: "#f9fafb", borderRadius: 6 }}>
+                                <span style={{ color: "#374151", fontWeight: 600 }}>{r.serviceType}</span>
+                                <span style={{ color: "#6b7280" }}>{r.languagePair}</span>
+                                <span style={{ color: "#059669", fontWeight: 600, marginLeft: "auto" }}>{Number(r.rate).toLocaleString()}원/{r.unit === "word" ? "단어" : r.unit === "page" ? "페이지" : "시간"}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+
+            {/* 견적/결제/정산 */}
+            {activeSection === "settlement" && (
               <>
                 <p style={sectionHd}>견적 ({detail.quotes.length})</p>
-                {detail.quotes.map(q => (
-                  <div key={q.id} style={{ display: "flex", gap: 16, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13 }}>
+                {detail.quotes.length === 0 ? (
+                  <p style={{ color: "#9ca3af", fontSize: 13 }}>견적 없음</p>
+                ) : detail.quotes.map(q => (
+                  <div key={q.id} style={{ display: "flex", gap: 14, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, alignItems: "center" }}>
                     <span style={{ color: "#9ca3af" }}>#{q.id}</span>
                     <span style={{ fontWeight: 700, color: "#0891b2" }}>{Number(q.amount).toLocaleString()}원</span>
                     <StatusBadge status={q.status} />
                     <span style={{ color: "#9ca3af", marginLeft: "auto" }}>{new Date(q.createdAt).toLocaleDateString("ko-KR")}</span>
                   </div>
                 ))}
-              </>
-            )}
 
-            {/* 결제 */}
-            {detail.payments.length > 0 && (
-              <>
                 <p style={sectionHd}>결제 ({detail.payments.length})</p>
-                {detail.payments.map(pm => (
-                  <div key={pm.id} style={{ display: "flex", gap: 16, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13 }}>
+                {detail.payments.length === 0 ? (
+                  <p style={{ color: "#9ca3af", fontSize: 13 }}>결제 없음</p>
+                ) : detail.payments.map(pm => (
+                  <div key={pm.id} style={{ display: "flex", gap: 14, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, alignItems: "center" }}>
                     <span style={{ color: "#9ca3af" }}>#{pm.id}</span>
                     <span style={{ fontWeight: 700, color: "#0891b2" }}>{Number(pm.amount).toLocaleString()}원</span>
                     <StatusBadge status={pm.status} />
                     <span style={{ color: "#9ca3af", marginLeft: "auto" }}>{new Date(pm.createdAt).toLocaleDateString("ko-KR")}</span>
                   </div>
                 ))}
-              </>
-            )}
 
-            {/* 작업 */}
-            {detail.tasks.length > 0 && (
-              <>
-                <p style={sectionHd}>배정된 번역사 ({detail.tasks.length})</p>
-                {detail.tasks.map(t => (
-                  <div key={t.id} style={{ display: "flex", gap: 16, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, flexWrap: "wrap" }}>
-                    <span style={{ color: "#9ca3af" }}>작업#{t.id}</span>
-                    <span style={{ color: "#374151" }}>{t.translatorEmail ?? `번역사 #${t.translatorId}`}</span>
-                    <StatusBadge status={t.status} />
-                    <span style={{ color: "#9ca3af", marginLeft: "auto" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</span>
-                  </div>
-                ))}
-              </>
-            )}
-
-            {/* 정산 */}
-            {detail.settlements.length > 0 && (
-              <>
                 <p style={sectionHd}>정산 ({detail.settlements.length})</p>
-                {detail.settlements.map(s => (
-                  <div key={s.id} style={{ display: "flex", gap: 16, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, flexWrap: "wrap" }}>
+                {detail.settlements.length === 0 ? (
+                  <p style={{ color: "#9ca3af", fontSize: 13 }}>정산 없음</p>
+                ) : detail.settlements.map(s => (
+                  <div key={s.id} style={{ display: "flex", gap: 14, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, flexWrap: "wrap", alignItems: "center" }}>
                     <span style={{ color: "#9ca3af" }}>#{s.id}</span>
                     <span style={{ color: "#0891b2", fontWeight: 600 }}>총 {Number(s.totalAmount).toLocaleString()}원</span>
                     <span style={{ color: "#059669", fontWeight: 600 }}>번역사 {Number(s.translatorAmount).toLocaleString()}원</span>
@@ -2303,47 +2523,35 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
               </>
             )}
 
-            {/* 이벤트 로그 */}
-            {detail.logs.length > 0 && (
+            {/* 커뮤니케이션 */}
+            {activeSection === "comms" && (
               <>
-                <p style={sectionHd}>이벤트 로그 ({detail.logs.length})</p>
-                <div style={{ maxHeight: 180, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
-                  {detail.logs.map(log => (
-                    <div key={log.id} style={{ display: "flex", gap: 12, padding: "7px 10px", background: "#f9fafb", borderRadius: 6, fontSize: 12 }}>
-                      <span style={{ color: "#9ca3af", minWidth: 120 }}>{new Date(log.createdAt).toLocaleString("ko-KR")}</span>
-                      <span style={{ color: "#374151" }}>{log.action}</span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-
-            {/* 커뮤니케이션 기록 */}
-            <p style={sectionHd}>커뮤니케이션 기록 ({comms.length})</p>
-            {detail.projectCustomerId ? (
-              <>
-                <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-                  <select value={commType} onChange={e => setCommType(e.target.value as "email"|"phone"|"message")}
-                    style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }}>
-                    <option value="message">메시지</option>
-                    <option value="email">이메일</option>
-                    <option value="phone">전화</option>
-                  </select>
-                  <input
-                    value={commContent} onChange={e => setCommContent(e.target.value)}
-                    placeholder="내용 입력..."
-                    style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "8px 10px", minWidth: 180 }}
-                    onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleAddComm()}
-                  />
-                  <PrimaryBtn onClick={handleAddComm} disabled={addingComm || !commContent.trim()} style={{ padding: "8px 16px", fontSize: 13 }}>
-                    {addingComm ? "추가 중..." : "기록 추가"}
-                  </PrimaryBtn>
-                </div>
-                {comms.length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>커뮤니케이션 기록이 없습니다.</p>
+                {detail.projectCustomerId ? (
+                  <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                    <select value={commType} onChange={e => setCommType(e.target.value as "email"|"phone"|"message")}
+                      style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }}>
+                      <option value="message">메시지</option>
+                      <option value="email">이메일</option>
+                      <option value="phone">전화</option>
+                    </select>
+                    <input
+                      value={commContent} onChange={e => setCommContent(e.target.value)}
+                      placeholder="내용 입력..."
+                      style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "8px 10px", minWidth: 180 }}
+                      onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleAddComm()}
+                    />
+                    <PrimaryBtn onClick={handleAddComm} disabled={addingComm || !commContent.trim()} style={{ padding: "8px 16px", fontSize: 13 }}>
+                      {addingComm ? "추가 중..." : "기록 추가"}
+                    </PrimaryBtn>
+                  </div>
                 ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto", marginBottom: 8 }}>
-                    {comms.map(c => (
+                  <p style={{ color: "#9ca3af", fontSize: 13, marginBottom: 8 }}>고객이 연결된 프로젝트에서만 커뮤니케이션 기록을 추가할 수 있습니다.</p>
+                )}
+                {(detail.communications ?? []).length === 0 ? (
+                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "16px 0" }}>커뮤니케이션 기록이 없습니다.</p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+                    {(detail.communications ?? []).map(c => (
                       <div key={c.id} style={{ padding: "9px 12px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, alignItems: "center" }}>
                           <span style={{
@@ -2358,39 +2566,56 @@ function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adm
                   </div>
                 )}
               </>
-            ) : (
-              <p style={{ color: "#9ca3af", fontSize: 13, padding: "8px 0" }}>
-                커뮤니케이션 기록은 고객(customers)이 연결된 프로젝트에서만 사용 가능합니다.
-              </p>
             )}
 
-            {/* 관리자 메모 */}
-            <p style={sectionHd}>관리자 메모 ({notes.length})</p>
-            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-              <input
-                value={noteInput} onChange={e => setNoteInput(e.target.value)}
-                placeholder="메모 내용 입력..."
-                style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "8px 10px" }}
-                onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleAddNote()}
-              />
-              <PrimaryBtn onClick={handleAddNote} disabled={addingNote || !noteInput.trim()} style={{ padding: "8px 16px", fontSize: 13 }}>
-                {addingNote ? "추가 중..." : "추가"}
-              </PrimaryBtn>
-            </div>
-            {notes.length === 0 ? (
-              <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "12px 0" }}>메모가 없습니다.</p>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto" }}>
-                {notes.map(n => (
-                  <div key={n.id} style={{ padding: "10px 12px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                      <span style={{ fontSize: 11, color: "#92400e", fontWeight: 600 }}>{n.adminEmail ?? "관리자"}</span>
-                      <span style={{ fontSize: 11, color: "#9ca3af" }}>{new Date(n.createdAt).toLocaleString("ko-KR")}</span>
-                    </div>
-                    <p style={{ margin: 0, fontSize: 13, color: "#374151" }}>{n.content}</p>
+            {/* 메모 */}
+            {activeSection === "notes" && (
+              <>
+                <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                  <input
+                    value={noteInput} onChange={e => setNoteInput(e.target.value)}
+                    placeholder="메모 내용 입력..."
+                    style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "8px 10px" }}
+                    onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleAddNote()}
+                  />
+                  <PrimaryBtn onClick={handleAddNote} disabled={addingNote || !noteInput.trim()} style={{ padding: "8px 16px", fontSize: 13 }}>
+                    {addingNote ? "추가 중..." : "추가"}
+                  </PrimaryBtn>
+                </div>
+                {(detail.notes ?? []).length === 0 ? (
+                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "16px 0" }}>메모가 없습니다.</p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+                    {(detail.notes ?? []).map(n => (
+                      <div key={n.id} style={{ padding: "10px 12px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                          <span style={{ fontSize: 11, color: "#92400e", fontWeight: 600 }}>{n.adminEmail ?? "관리자"}</span>
+                          <span style={{ fontSize: 11, color: "#9ca3af" }}>{new Date(n.createdAt).toLocaleString("ko-KR")}</span>
+                        </div>
+                        <p style={{ margin: 0, fontSize: 13, color: "#374151" }}>{n.content}</p>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                )}
+              </>
+            )}
+
+            {/* 이벤트 로그 */}
+            {activeSection === "log" && (
+              <>
+                {detail.logs.length === 0 ? (
+                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "16px 0" }}>이벤트 로그가 없습니다.</p>
+                ) : (
+                  <div style={{ maxHeight: 320, overflowY: "auto", display: "flex", flexDirection: "column", gap: 3 }}>
+                    {detail.logs.map(log => (
+                      <div key={log.id} style={{ display: "flex", gap: 14, padding: "7px 10px", background: "#f9fafb", borderRadius: 6, fontSize: 12 }}>
+                        <span style={{ color: "#9ca3af", minWidth: 130 }}>{new Date(log.createdAt).toLocaleString("ko-KR")}</span>
+                        <span style={{ color: "#374151" }}>{log.action}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </>
         )}
@@ -2436,6 +2661,9 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
   const [userRoleFilter, setUserRoleFilter] = useState<string>("all");
   const [roleChanging, setRoleChanging] = useState<number | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
+  const [resetPwUserId, setResetPwUserId] = useState<number | null>(null);
+  const [resetPwInput, setResetPwInput] = useState("");
+  const [resetPwLoading, setResetPwLoading] = useState(false);
 
   // companies / products / board state
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -2769,6 +2997,24 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
     finally { setToggling(null); }
   };
 
+  const handleResetPassword = async () => {
+    if (!resetPwUserId || !resetPwInput.trim() || resetPwInput.length < 6) {
+      setToast("오류: 새 비밀번호는 최소 6자 이상이어야 합니다."); return;
+    }
+    setResetPwLoading(true);
+    try {
+      const res = await fetch(api(`/api/admin/users/${resetPwUserId}/reset-password`), {
+        method: "PATCH", headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ newPassword: resetPwInput.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setToast("비밀번호가 재설정되었습니다.");
+      setResetPwUserId(null); setResetPwInput("");
+    } catch { setToast("오류: 비밀번호 재설정 실패"); }
+    finally { setResetPwLoading(false); }
+  };
+
   const filteredPayments = paymentFilter === "all" ? payments : payments.filter(p => p.status === paymentFilter);
 
   const tableTh: React.CSSProperties = {
@@ -2854,6 +3100,31 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
               <button onClick={() => handleDeleteBoardPost(boardPostModal.id)} style={{ background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>삭제</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {resetPwUserId !== null && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 400 }}>
+          <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 400, padding: "28px 32px", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700, color: "#111827" }}>비밀번호 재설정</h3>
+            <p style={{ margin: "0 0 14px", fontSize: 13, color: "#6b7280" }}>
+              사용자 #{resetPwUserId}의 비밀번호를 재설정합니다.
+            </p>
+            <input
+              type="password"
+              value={resetPwInput}
+              onChange={e => setResetPwInput(e.target.value)}
+              placeholder="새 비밀번호 (최소 6자)"
+              onKeyDown={e => e.key === "Enter" && handleResetPassword()}
+              style={{ ...inputStyle, width: "100%", boxSizing: "border-box", marginBottom: 14 }}
+              autoFocus
+            />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <GhostBtn onClick={() => { setResetPwUserId(null); setResetPwInput(""); }}>취소</GhostBtn>
+              <PrimaryBtn onClick={handleResetPassword} disabled={resetPwLoading || resetPwInput.length < 6} style={{ padding: "8px 18px" }}>
+                {resetPwLoading ? "처리 중..." : "재설정"}
+              </PrimaryBtn>
             </div>
           </div>
         </div>
@@ -3186,7 +3457,7 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["ID","이메일","역할","상태","가입일","역할 변경","계정 상태","프로필"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                    <tr>{["ID","이메일","역할","상태","가입일","역할 변경","계정 상태","비밀번호","프로필"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {users.map(u => (
@@ -3239,6 +3510,13 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
                           ) : (
                             <span style={{ fontSize: 12, color: "#9ca3af" }}>—</span>
                           )}
+                        </td>
+                        <td style={tableTd}>
+                          <button
+                            onClick={() => { setResetPwUserId(u.id); setResetPwInput(""); }}
+                            style={{ padding: "4px 10px", fontSize: 11, borderRadius: 6, fontWeight: 600, cursor: "pointer", background: "#fef3c7", color: "#92400e", border: "1px solid #fde68a" }}>
+                            재설정
+                          </button>
                         </td>
                         <td style={tableTd}>
                           {u.role === "translator" ? (
@@ -3746,15 +4024,25 @@ function AdminDashboard({ user, token }: { user: User; token: string }) {
 }
 
 function TranslatorDashboard({ user, token }: { user: User; token: string }) {
+  const [tab, setTab] = useState<"tasks"|"settlement"|"profile">("tasks");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [settlements, setSettlements] = useState<MySettlement[]>([]);
+  const [profile, setProfile] = useState<TranslatorProfile | null>(null);
+  const [rates, setRates] = useState<TranslatorRate[]>([]);
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(true);
+  const [profileLoading, setProfileLoading] = useState(false);
   const [acting, setActing] = useState<number | null>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileForm, setProfileForm] = useState<Partial<TranslatorProfile>>({});
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [rateForm, setRateForm] = useState({ serviceType: "번역", languagePair: "EN-KO", unit: "word", rate: "" });
+  const [addingRate, setAddingRate] = useState(false);
+  const [deletingRate, setDeletingRate] = useState<number | null>(null);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
-  const fetchAll = useCallback(async () => {
+  const fetchTasksAndSettlements = useCallback(async () => {
     setLoading(true);
     try {
       const [tRes, sRes] = await Promise.all([
@@ -3769,21 +4057,86 @@ function TranslatorDashboard({ user, token }: { user: User; token: string }) {
     finally { setLoading(false); }
   }, [user.id, token]);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  const fetchProfile = useCallback(async () => {
+    setProfileLoading(true);
+    try {
+      const [pRes, rRes] = await Promise.all([
+        fetch(api(`/api/translator-profiles/${user.id}`), { headers: authHeaders }),
+        fetch(api(`/api/translator-rates/${user.id}`), { headers: authHeaders }),
+      ]);
+      if (pRes.ok) {
+        const pd = await pRes.json();
+        setProfile(pd);
+        setProfileForm(pd ?? {});
+      }
+      if (rRes.ok) {
+        const rd = await rRes.json();
+        setRates(Array.isArray(rd) ? rd : []);
+      }
+    } catch { setToast("오류: 프로필을 불러올 수 없습니다."); }
+    finally { setProfileLoading(false); }
+  }, [user.id, token]);
+
+  useEffect(() => { fetchTasksAndSettlements(); }, [fetchTasksAndSettlements]);
+  useEffect(() => { if (tab === "profile") fetchProfile(); }, [tab, fetchProfile]);
 
   const doAction = async (taskId: number, action: "start" | "complete") => {
     setActing(taskId);
     try {
       const res = await fetch(api(`/api/tasks/${taskId}/${action}`), {
-        method: "PATCH",
-        headers: { "Authorization": `Bearer ${token}` },
+        method: "PATCH", headers: { "Authorization": `Bearer ${token}` },
       });
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
       setToast(action === "start" ? "작업을 시작했습니다." : "작업을 완료했습니다. 정산이 자동 생성됩니다.");
-      await fetchAll();
+      await fetchTasksAndSettlements();
     } catch { setToast("오류: 상태 변경 실패"); }
     finally { setActing(null); }
+  };
+
+  const saveProfile = async () => {
+    setSavingProfile(true);
+    try {
+      const res = await fetch(api(`/api/translator-profiles/${user.id}`), {
+        method: "PUT", headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...profileForm, userId: user.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setProfile(data); setEditingProfile(false);
+      setToast("프로필이 저장되었습니다.");
+    } catch { setToast("오류: 저장 실패"); }
+    finally { setSavingProfile(false); }
+  };
+
+  const addRate = async () => {
+    if (!rateForm.rate || isNaN(Number(rateForm.rate))) { setToast("단가를 숫자로 입력하세요."); return; }
+    setAddingRate(true);
+    try {
+      const res = await fetch(api(`/api/translator-rates/${user.id}`), {
+        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...rateForm, rate: Number(rateForm.rate), translatorId: user.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setRates(prev => [...prev, data]);
+      setRateForm({ serviceType: "번역", languagePair: "EN-KO", unit: "word", rate: "" });
+      setToast("단가가 추가되었습니다.");
+    } catch { setToast("오류: 단가 추가 실패"); }
+    finally { setAddingRate(false); }
+  };
+
+  const deleteRate = async (rateId: number) => {
+    setDeletingRate(rateId);
+    try {
+      const res = await fetch(api(`/api/translator-rates/${user.id}/${rateId}`), {
+        method: "DELETE", headers: authHeaders,
+      });
+      if (!res.ok) { setToast("오류: 삭제 실패"); return; }
+      setRates(prev => prev.filter(r => r.id !== rateId));
+      setToast("단가가 삭제되었습니다.");
+    } catch { setToast("오류: 삭제 실패"); }
+    finally { setDeletingRate(null); }
   };
 
   const active = tasks.filter(t => t.status !== "done");
@@ -3794,107 +4147,301 @@ function TranslatorDashboard({ user, token }: { user: User; token: string }) {
     ready:   { label: "정산 가능", color: "#d97706", bg: "#fffbeb" },
     paid:    { label: "지급 완료", color: "#059669", bg: "#f0fdf4" },
   };
+  const AVAIL_LABEL: Record<string, string> = { available: "가능", busy: "바쁨", unavailable: "불가" };
+  const tabBtn = (key: typeof tab, label: string) => (
+    <button key={key} onClick={() => setTab(key)} style={{
+      padding: "7px 18px", borderRadius: 20, cursor: "pointer", fontSize: 13, fontWeight: tab === key ? 700 : 500,
+      border: "1px solid", borderColor: tab === key ? "#2563eb" : "#e5e7eb",
+      background: tab === key ? "#eff6ff" : "#fff", color: tab === key ? "#2563eb" : "#6b7280",
+    }}>{label}</button>
+  );
 
   return (
     <>
       <Toast msg={toast} onClose={() => setToast("")} />
-
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>
-          배정된 작업 <span style={{ color: "#6b7280", fontWeight: 400, fontSize: 14 }}>({tasks.length})</span>
-        </h2>
-        <GhostBtn onClick={fetchAll} disabled={loading}>
-          {loading ? "로딩 중..." : "새로고침"}
-        </GhostBtn>
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        {tabBtn("tasks", `작업 (${tasks.length})`)}
+        {tabBtn("settlement", `정산 (${settlements.length})`)}
+        {tabBtn("profile", "프로필 · 단가표")}
       </div>
 
-      {loading ? (
-        <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af", fontSize: 14 }}>
-          불러오는 중...
-        </div>
-      ) : tasks.length === 0 ? (
-        <Card style={{ textAlign: "center", padding: "40px 24px", color: "#9ca3af" }}>
-          <p style={{ margin: 0, fontSize: 32 }}>📋</p>
-          <p style={{ margin: "10px 0 0", fontSize: 14 }}>배정된 작업이 없습니다.</p>
-        </Card>
-      ) : (
+      {/* ── 작업 탭 ── */}
+      {tab === "tasks" && (
         <>
-          {active.length > 0 && (
-            <div style={{ marginBottom: 24 }}>
-              <p style={{ margin: "0 0 12px", fontSize: 13, fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                진행 중 ({active.length})
-              </p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {active.map(t => (
-                  <TaskCard key={t.id} task={t} token={token}
-                    onAction={(id, act) => !acting && doAction(id, act)} />
-                ))}
-              </div>
-            </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+            <GhostBtn onClick={fetchTasksAndSettlements} disabled={loading}>
+              {loading ? "로딩 중..." : "새로고침"}
+            </GhostBtn>
+          </div>
+          {loading ? (
+            <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : tasks.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "40px 24px", color: "#9ca3af" }}>
+              <p style={{ margin: 0, fontSize: 32 }}>📋</p>
+              <p style={{ margin: "10px 0 0", fontSize: 14 }}>배정된 작업이 없습니다.</p>
+            </Card>
+          ) : (
+            <>
+              {active.length > 0 && (
+                <div style={{ marginBottom: 24 }}>
+                  <p style={{ margin: "0 0 12px", fontSize: 13, fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                    진행 중 ({active.length})
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    {active.map(t => (
+                      <TaskCard key={t.id} task={t} token={token}
+                        onAction={(id, act) => !acting && doAction(id, act)} />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {completed.length > 0 && (
+                <div style={{ marginBottom: 24 }}>
+                  <p style={{ margin: "0 0 12px", fontSize: 13, fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                    완료 ({completed.length})
+                  </p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    {completed.map(t => (
+                      <TaskCard key={t.id} task={t} token={token}
+                        onAction={(id, act) => !acting && doAction(id, act)} />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
-          {completed.length > 0 && (
-            <div style={{ marginBottom: 24 }}>
-              <p style={{ margin: "0 0 12px", fontSize: 13, fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                완료 ({completed.length})
-              </p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {completed.map(t => (
-                  <TaskCard key={t.id} task={t} token={token}
-                    onAction={(id, act) => !acting && doAction(id, act)} />
-                ))}
-              </div>
+        </>
+      )}
+
+      {/* ── 정산 탭 ── */}
+      {tab === "settlement" && (
+        <>
+          {settlements.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px 24px", color: "#9ca3af" }}>
+              <p style={{ margin: 0, fontSize: 28 }}>💰</p>
+              <p style={{ margin: "8px 0 0", fontSize: 14 }}>아직 정산 내역이 없습니다.</p>
+            </Card>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {settlements.map(s => {
+                const st = SETTLEMENT_STATUS_STYLE[s.status] ?? SETTLEMENT_STATUS_STYLE.pending;
+                return (
+                  <Card key={s.id} style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 160 }}>
+                      <p style={{ margin: "0 0 3px", fontSize: 11, color: "#9ca3af" }}>
+                        #{s.id} · {new Date(s.createdAt).toLocaleDateString("ko-KR")}
+                      </p>
+                      <p style={{ margin: 0, fontWeight: 700, fontSize: 15, color: "#111827" }}>
+                        {s.projectTitle ?? `프로젝트 #${s.projectId}`}
+                      </p>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <p style={{ margin: "0 0 2px", fontSize: 11, color: "#9ca3af" }}>지급 예정 금액</p>
+                      <p style={{ margin: 0, fontSize: 20, fontWeight: 800, color: "#059669" }}>
+                        {Number(s.translatorAmount).toLocaleString()}<span style={{ fontSize: 13, marginLeft: 3 }}>원</span>
+                      </p>
+                      <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>
+                        총 결제 {Number(s.totalAmount).toLocaleString()}원의 70%
+                      </p>
+                    </div>
+                    <div style={{ minWidth: 90, textAlign: "right" }}>
+                      <span style={{ background: st.bg, color: st.color, padding: "5px 12px", borderRadius: 20, fontSize: 12, fontWeight: 700 }}>
+                        {st.label}
+                      </span>
+                    </div>
+                  </Card>
+                );
+              })}
             </div>
           )}
         </>
       )}
 
-      <div style={{ marginTop: 36 }}>
-        <h2 style={{ margin: "0 0 14px", fontSize: 16, fontWeight: 700, color: "#111827" }}>
-          정산 내역 <span style={{ color: "#6b7280", fontWeight: 400, fontSize: 14 }}>({settlements.length})</span>
-        </h2>
-        {settlements.length === 0 ? (
-          <Card style={{ textAlign: "center", padding: "32px 24px", color: "#9ca3af" }}>
-            <p style={{ margin: 0, fontSize: 28 }}>💰</p>
-            <p style={{ margin: "8px 0 0", fontSize: 14 }}>아직 정산 내역이 없습니다.</p>
-          </Card>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {settlements.map(s => {
-              const style = SETTLEMENT_STATUS_STYLE[s.status] ?? SETTLEMENT_STATUS_STYLE.pending;
-              return (
-                <Card key={s.id} style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-                  <div style={{ flex: 1, minWidth: 160 }}>
-                    <p style={{ margin: "0 0 3px", fontSize: 11, color: "#9ca3af" }}>
-                      #{s.id} · {new Date(s.createdAt).toLocaleDateString("ko-KR")}
+      {/* ── 프로필/단가표 탭 ── */}
+      {tab === "profile" && (
+        <>
+          {profileLoading ? (
+            <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af" }}>불러오는 중...</div>
+          ) : (
+            <>
+              <Card style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+                  <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>기본 프로필</p>
+                  {!editingProfile ? (
+                    <GhostBtn onClick={() => setEditingProfile(true)} style={{ fontSize: 12, padding: "5px 12px" }}>편집</GhostBtn>
+                  ) : (
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <GhostBtn onClick={() => { setEditingProfile(false); setProfileForm(profile ?? {}); }} style={{ fontSize: 12, padding: "5px 12px" }}>취소</GhostBtn>
+                      <PrimaryBtn onClick={saveProfile} disabled={savingProfile} style={{ fontSize: 12, padding: "5px 14px" }}>
+                        {savingProfile ? "저장 중..." : "저장"}
+                      </PrimaryBtn>
+                    </div>
+                  )}
+                </div>
+
+                {!editingProfile ? (
+                  profile ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 20px" }}>
+                      {([
+                        ["언어쌍", profile.languagePairs ?? "-"],
+                        ["전문분야", profile.specializations ?? "-"],
+                        ["학력", `${profile.education ?? "-"}${profile.major ? ` / ${profile.major}` : ""}${profile.graduationYear ? ` (${profile.graduationYear})` : ""}`],
+                        ["지역", profile.region ?? "-"],
+                        ["가용여부", AVAIL_LABEL[profile.availabilityStatus ?? ""] ?? "-"],
+                        ["평점", profile.rating != null ? `⭐ ${Number(profile.rating).toFixed(1)}` : "-"],
+                        ["단어당 단가", profile.ratePerWord != null ? `${Number(profile.ratePerWord).toLocaleString()}원` : "-"],
+                        ["페이지당 단가", profile.ratePerPage != null ? `${Number(profile.ratePerPage).toLocaleString()}원` : "-"],
+                      ] as [string, string][]).map(([k, v]) => (
+                        <div key={k} style={{ display: "flex", gap: 6, fontSize: 13 }}>
+                          <span style={{ color: "#9ca3af", minWidth: 80, flexShrink: 0 }}>{k}</span>
+                          <span style={{ color: "#111827" }}>{v}</span>
+                        </div>
+                      ))}
+                      {profile.bio && (
+                        <div style={{ gridColumn: "span 2", display: "flex", gap: 6, fontSize: 13 }}>
+                          <span style={{ color: "#9ca3af", minWidth: 80 }}>소개</span>
+                          <span style={{ color: "#374151", lineHeight: 1.6 }}>{profile.bio}</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>
+                      프로필이 없습니다. 편집 버튼을 눌러 프로필을 등록하세요.
                     </p>
-                    <p style={{ margin: 0, fontWeight: 700, fontSize: 15, color: "#111827" }}>
-                      {s.projectTitle ?? `프로젝트 #${s.projectId}`}
-                    </p>
+                  )
+                ) : (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
+                    {([
+                      ["languagePairs", "언어쌍", "예: EN-KO, JA-KO"],
+                      ["specializations", "전문분야", "예: IT, 법률, 의료"],
+                      ["region", "지역", "예: 서울"],
+                      ["education", "학교", "예: 서울대학교"],
+                      ["major", "전공", "예: 영문학"],
+                    ] as [keyof TranslatorProfile, string, string][]).map(([field, label, placeholder]) => (
+                      <div key={field}>
+                        <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>{label}</label>
+                        <input
+                          value={(profileForm[field] as string) ?? ""}
+                          onChange={e => setProfileForm(p => ({ ...p, [field]: e.target.value }))}
+                          placeholder={placeholder}
+                          style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}
+                        />
+                      </div>
+                    ))}
+                    <div>
+                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>졸업연도</label>
+                      <input
+                        type="number"
+                        value={profileForm.graduationYear ?? ""}
+                        onChange={e => setProfileForm(p => ({ ...p, graduationYear: e.target.value ? Number(e.target.value) : undefined }))}
+                        placeholder="예: 2015"
+                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>가용 여부</label>
+                      <select
+                        value={profileForm.availabilityStatus ?? "available"}
+                        onChange={e => setProfileForm(p => ({ ...p, availabilityStatus: e.target.value }))}
+                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
+                        <option value="available">가능</option>
+                        <option value="busy">바쁨</option>
+                        <option value="unavailable">불가</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>단어당 단가 (원)</label>
+                      <input
+                        type="number"
+                        value={profileForm.ratePerWord ?? ""}
+                        onChange={e => setProfileForm(p => ({ ...p, ratePerWord: e.target.value ? Number(e.target.value) : undefined }))}
+                        placeholder="예: 50"
+                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>페이지당 단가 (원)</label>
+                      <input
+                        type="number"
+                        value={profileForm.ratePerPage ?? ""}
+                        onChange={e => setProfileForm(p => ({ ...p, ratePerPage: e.target.value ? Number(e.target.value) : undefined }))}
+                        placeholder="예: 20000"
+                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}
+                      />
+                    </div>
+                    <div style={{ gridColumn: "span 2" }}>
+                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>소개</label>
+                      <textarea
+                        value={profileForm.bio ?? ""}
+                        onChange={e => setProfileForm(p => ({ ...p, bio: e.target.value }))}
+                        placeholder="자기소개를 입력하세요..."
+                        rows={3}
+                        style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: 13, padding: "8px 10px", resize: "vertical" }}
+                      />
+                    </div>
                   </div>
-                  <div style={{ textAlign: "right" }}>
-                    <p style={{ margin: "0 0 2px", fontSize: 11, color: "#9ca3af" }}>지급 예정 금액</p>
-                    <p style={{ margin: 0, fontSize: 20, fontWeight: 800, color: "#059669" }}>
-                      {Number(s.translatorAmount).toLocaleString()}
-                      <span style={{ fontSize: 13, marginLeft: 3 }}>원</span>
-                    </p>
-                    <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>
-                      총 결제 {Number(s.totalAmount).toLocaleString()}원의 70%
-                    </p>
+                )}
+              </Card>
+
+              <Card>
+                <p style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#111827" }}>단가표</p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto auto", gap: "8px 10px", alignItems: "center", marginBottom: 10 }}>
+                  <div>
+                    <label style={{ fontSize: 11, color: "#9ca3af", display: "block", marginBottom: 2 }}>서비스 유형</label>
+                    <input value={rateForm.serviceType} onChange={e => setRateForm(p => ({ ...p, serviceType: e.target.value }))}
+                      style={{ ...inputStyle, fontSize: 12, padding: "6px 8px", width: "100%", boxSizing: "border-box" }} />
                   </div>
-                  <div style={{ minWidth: 90, textAlign: "right" }}>
-                    <span style={{
-                      background: style.bg, color: style.color,
-                      padding: "5px 12px", borderRadius: 20, fontSize: 12, fontWeight: 700,
-                    }}>
-                      {style.label}
-                    </span>
+                  <div>
+                    <label style={{ fontSize: 11, color: "#9ca3af", display: "block", marginBottom: 2 }}>언어쌍</label>
+                    <input value={rateForm.languagePair} onChange={e => setRateForm(p => ({ ...p, languagePair: e.target.value }))}
+                      placeholder="EN-KO" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px", width: "100%", boxSizing: "border-box" }} />
                   </div>
-                </Card>
-              );
-            })}
-          </div>
-        )}
-      </div>
+                  <div>
+                    <label style={{ fontSize: 11, color: "#9ca3af", display: "block", marginBottom: 2 }}>단가 (원)</label>
+                    <input type="number" value={rateForm.rate} onChange={e => setRateForm(p => ({ ...p, rate: e.target.value }))}
+                      placeholder="50" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px", width: "100%", boxSizing: "border-box" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, color: "#9ca3af", display: "block", marginBottom: 2 }}>단위</label>
+                    <select value={rateForm.unit} onChange={e => setRateForm(p => ({ ...p, unit: e.target.value }))}
+                      style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }}>
+                      <option value="word">단어</option>
+                      <option value="page">페이지</option>
+                      <option value="hour">시간</option>
+                    </select>
+                  </div>
+                  <div style={{ marginTop: 16 }}>
+                    <PrimaryBtn onClick={addRate} disabled={addingRate || !rateForm.rate} style={{ fontSize: 12, padding: "6px 14px" }}>
+                      {addingRate ? "추가 중..." : "+ 추가"}
+                    </PrimaryBtn>
+                  </div>
+                </div>
+                {rates.length === 0 ? (
+                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "12px 0" }}>단가표가 없습니다. 위에서 추가하세요.</p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {rates.map(r => (
+                      <div key={r.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "8px 12px", background: "#f9fafb", borderRadius: 8, fontSize: 13 }}>
+                        <span style={{ fontWeight: 600, color: "#374151", minWidth: 60 }}>{r.serviceType}</span>
+                        <span style={{ color: "#6b7280" }}>{r.languagePair}</span>
+                        <span style={{ color: "#059669", fontWeight: 700, marginLeft: "auto" }}>
+                          {Number(r.rate).toLocaleString()}원/{r.unit === "word" ? "단어" : r.unit === "page" ? "페이지" : "시간"}
+                        </span>
+                        <button
+                          onClick={() => deleteRate(r.id)}
+                          disabled={deletingRate === r.id}
+                          style={{ padding: "3px 8px", fontSize: 11, borderRadius: 5, background: "#fee2e2", color: "#dc2626", border: "none", cursor: "pointer", fontWeight: 600 }}>
+                          {deletingRate === r.id ? "..." : "삭제"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            </>
+          )}
+        </>
+      )}
     </>
   );
 }

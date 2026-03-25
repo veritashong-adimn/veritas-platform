@@ -1,234 +1,60 @@
-# Workspace
+# Overview
 
-## Overview
+This project is a pnpm workspace monorepo using TypeScript, designed as an MVP for a translation and interpretation platform. The platform aims to connect customers needing translation services with qualified translators, facilitating project management, quoting, task assignment, payments, and settlements.
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+Key capabilities include:
+- User authentication and authorization with JWT (with email normalization, detailed failure logging, and admin password reset API).
+- Project creation and management for customers (with visual status stepper: 접수→견적→승인→결제→번역사 배정→번역 중→완료).
+- Quote generation and approval workflow.
+- Translator matching and task assignment (AI-scored match-candidates top-3, direct assign API).
+- Payment processing and settlement management for translators.
+- Admin CRM dashboard: project detail modal (7-tab UI: 기본정보/거래처·담당자/번역사/견적결제정산/커뮤니케이션/메모/이벤트로그), company/contact management, translator profiles and rate management, user management (activation/role/password-reset), product master, board/bulletin.
+- Translator self-service: profile edit + rate table CRUD via own-auth API endpoints.
+- File upload for project documents.
+- Comprehensive logging of key events.
 
-## Stack
+The business vision is to streamline the process of translation and interpretation services, offering a robust platform for efficient project delivery and fair compensation for translators, while providing detailed administrative oversight.
 
-- **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
-- **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
+# User Preferences
 
-## Structure
+I prefer detailed explanations and iterative development. Ask before making major changes. Do not make changes to files outside the `artifacts/api-server/src` directory.
 
-```text
-artifacts-monorepo/
-├── artifacts/              # Deployable applications
-│   └── api-server/         # Express API server
-├── lib/                    # Shared libraries
-│   ├── api-spec/           # OpenAPI spec + Orval codegen config
-│   ├── api-client-react/   # Generated React Query hooks
-│   ├── api-zod/            # Generated Zod schemas from OpenAPI
-│   └── db/                 # Drizzle ORM schema + DB connection
-├── scripts/                # Utility scripts (single workspace package)
-│   └── src/                # Individual .ts scripts, run via `pnpm --filter @workspace/scripts run <script>`
-├── pnpm-workspace.yaml     # pnpm workspace (artifacts/*, lib/*, lib/integrations/*, scripts)
-├── tsconfig.base.json      # Shared TS options (composite, bundler resolution, es2022)
-├── tsconfig.json           # Root TS project references
-└── package.json            # Root package with hoisted devDeps
-```
+# System Architecture
 
-## TypeScript & Composite Projects
+The project is structured as a pnpm monorepo, organizing code into `artifacts` (deployable applications) and `lib` (shared libraries).
 
-Every package extends `tsconfig.base.json` which sets `composite: true`. The root `tsconfig.json` lists all packages as project references. This means:
+**Technology Stack:**
+- **Monorepo:** pnpm workspaces
+- **Node.js:** v24
+- **TypeScript:** v5.9
+- **API Framework:** Express v5
+- **Database:** PostgreSQL with Drizzle ORM
+- **Validation:** Zod (v4) and `drizzle-zod`
+- **API Codegen:** Orval (from OpenAPI spec)
+- **Build Tool:** esbuild (CJS bundle)
 
-- **Always typecheck from the root** — run `pnpm run typecheck` (which runs `tsc --build --emitDeclarationOnly`). This builds the full dependency graph so that cross-package imports resolve correctly. Running `tsc` inside a single package will fail if its dependencies haven't been built yet.
-- **`emitDeclarationOnly`** — we only emit `.d.ts` files during typecheck; actual JS bundling is handled by esbuild/tsx/vite...etc, not `tsc`.
-- **Project references** — when package A depends on package B, A's `tsconfig.json` must list B in its `references` array. `tsc --build` uses this to determine build order and skip up-to-date packages.
+**Core Architectural Decisions:**
+- **Monorepo Structure:** Facilitates code sharing and consistent tooling across different parts of the application (e.g., API server, shared libraries for database and API specifications).
+- **TypeScript Composite Projects:** Leverages TypeScript's composite project features for efficient type-checking and dependency management across packages, ensuring type safety throughout the monorepo.
+- **API-First Development:** Utilizes an OpenAPI 3.1 specification (`openapi.yaml`) as the single source of truth for the API. Orval generates client-side React Query hooks (`api-client-react`) and server-side Zod schemas (`api-zod`) directly from this spec, ensuring strong type consistency between frontend and backend.
+- **Authentication:** Implements JWT Bearer token authentication with a 7-day expiry and bcryptjs for password hashing. Role-based access control is enforced via Express middleware.
+- **Database Schema:** A normalized PostgreSQL schema manages users, projects, quotes, tasks, payments, settlements, and administrative entities like companies, contacts, and translator rates. Key entities include `users`, `projects`, `quotes`, `tasks`, `payments`, and `settlements`.
+- **API Endpoints:** A comprehensive set of RESTful API endpoints are designed to manage all platform functionalities, categorized by domain (Auth, Users, Projects, Settlements, Admin, Payments, Upload, Quotes, Tasks, Logs & Health).
+- **Error Handling & Logging:** Key events are logged, such as project creation, quote approvals, task status changes, using a dedicated `logs` table.
+- **Admin Features:** Extensive admin panels are provided for managing customers, companies, contacts, translators, products, and platform content (board, notes), including data export functionalities.
 
-## Root Scripts
+**UI/UX Decisions (implied by API):**
+- Frontend will manage JWTs in localStorage for authenticated sessions.
+- Clear separation of concerns between customer, translator, and admin roles with appropriate access controls.
+- Forms for user registration, login, project creation, and administrative data entry.
+- Display of project statuses, payment details, and settlement information.
 
-- `pnpm run build` — runs `typecheck` first, then recursively runs `build` in all packages that define it
-- `pnpm run typecheck` — runs `tsc --build --emitDeclarationOnly` using project references
+# External Dependencies
 
-## Domain
-
-통번역 플랫폼 MVP
-
-## Authentication
-
-- **방식**: JWT Bearer token (7일 만료)
-- **비밀번호**: bcryptjs (saltRound=10) 해싱
-- **미들웨어**: `artifacts/api-server/src/middlewares/auth.ts`
-  - `requireAuth` — Authorization: Bearer 헤더 검증 후 req.user 주입
-  - `requireRole(...roles)` — 역할 기반 접근 제어
-- **인증 필요 API**: POST /projects, POST /quotes, POST /projects/:id/match, PATCH /tasks/:id/start, PATCH /tasks/:id/complete
-- **역할 제한**: customer → 프로젝트 생성, translator → task 작업만
-- **프론트엔드**: 로그인/회원가입 폼, JWT를 localStorage에 저장, 로그아웃 지원
-
-## DB Schema
-
-- `users` — id, email, **password** (nullable, bcrypt hashed), role (customer/translator/admin), **is_active** (boolean default true), created_at
-- `projects` — id, user_id, title, file_url (nullable), status (created/quoted/approved/**paid**/matched/in_progress/completed/**cancelled**), created_at
-- `quotes` — id, project_id, price (numeric), status (pending/sent/approved/rejected), created_at
-- `tasks` — id, project_id, translator_id (FK→users), status (waiting/assigned/working/done), created_at
-- `payments` — id, project_id (FK), amount (numeric 12,2), status (pending/paid/failed), created_at
-- `settlements` — id, project_id, translator_id, total_amount, translator_amount (70%), platform_fee (30%), status (pending/ready/paid), created_at
-- `notes` — id, entity_type (text, default 'project'), entity_id (integer), admin_id (FK→users), content, created_at (범용 메모: project/company/contact/translator)
-- `logs` — id, entity_type (project/quote/task), entity_id, action, created_at
-- `companies` — id, name, businessNumber, industry, address, website, representativeName, email, phone, notes, created_at
-- `contacts` — id, company_id (FK), name, department, position, email, phone, notes, created_at
-- `translator_rates` — id, translator_id (FK→users), serviceType, languagePair, unit (word/page/hour), rate (real), created_at
-
-## Log Events
-
-| 이벤트 | action 값 |
-|--------|-----------|
-| 프로젝트 생성 | project_created |
-| 견적 생성 | quote_created |
-| 견적 승인 | quote_approved |
-| 매칭 실행 | project_matched |
-| 작업 시작 | task_started |
-| 작업 완료 | task_completed |
-
-## API Endpoints
-
-### Auth (공개)
-- `POST /api/auth/register` — 회원가입 (email, password, role) → {token, user}
-- `POST /api/auth/login` — 로그인 (email, password) → {token, user}
-
-### Users
-- `POST /api/users` — 사용자 생성 (레거시, 비밀번호 없음)
-- `GET /api/users/:id` — 사용자 조회
-
-### Projects (🔒 = 인증 필요)
-- `POST /api/projects` 🔒 (customer only) — 프로젝트 생성 (userId는 JWT에서 자동, fileUrl optional)
-- `GET /api/projects` — 프로젝트 목록 (?userId=N 필터)
-- `POST /api/projects/:id/match` 🔒 (customer/admin) — 번역가 랜덤 매칭 (**paid 상태에서만 가능**)
-
-### Settlements (🔒 = 인증 필요)
-- `GET /api/admin/settlements` 🔒 (admin) — 전체 정산 목록 (번역사 이메일, 프로젝트 제목 포함)
-- `PATCH /api/admin/settlements/:id/pay` 🔒 (admin) — 정산 완료 처리 (ready → paid)
-- `GET /api/settlements/my` 🔒 (translator) — 내 정산 내역 (프로젝트 제목 포함)
-
-### 고객·커뮤니케이션
-- `GET /api/admin/customers` 🔒 — 고객 목록 (?search, 프로젝트 수·결제 합계 포함)
-- `POST /api/admin/customers` 🔒 — 고객 등록 (companyName, contactName, email, phone)
-- `GET /api/admin/customers/:id` 🔒 — 고객 상세 (projects 목록, totalPayment, totalSettlement)
-- `PATCH /api/admin/customers/:id` 🔒 — 고객 정보 수정
-- `POST /api/admin/communications` 🔒 — 커뮤니케이션 기록 추가 (customerId, projectId?, type, content)
-- `GET /api/admin/customers/:id/communications` 🔒 — 고객별 커뮤니케이션 목록
-- `GET /api/admin/projects/:id/communications` 🔒 — 프로젝트별 커뮤니케이션 목록
-
-### 거래처·담당자·번역사·상품·게시판 (🔒 admin role 전용)
-- `GET /api/admin/companies` — 거래처 목록 (?search, contactCount/projectCount/totalPayment 포함)
-- `POST /api/admin/companies` — 거래처 등록 (name, businessNumber, industry, address, website, representativeName, email, phone, notes)
-- `GET /api/admin/companies/:id` — 거래처 상세 (contacts, projects, totalQuote/totalPayment/totalSettlement)
-- `PATCH /api/admin/companies/:id` — 거래처 정보 수정 (representativeName, email, phone 포함)
-- `POST /api/admin/companies/:id/contacts` — 담당자 추가 (name, department, position, email, phone, notes)
-- `GET /api/admin/contacts` — 전체 담당자 목록 (?search, 거래처명 포함)
-- `GET /api/admin/contacts/:id` — 담당자 상세 (프로젝트 이력, 커뮤니케이션 이력)
-- `GET /api/admin/translators` — 번역사 목록 (?search, ?languagePair, ?field, ?status, ?minRating)
-- `GET /api/admin/translators/:id` — 번역사 상세 (프로필 + rates)
-- `PATCH /api/admin/translators/:id` — 번역사 프로필 수정
-- `GET /api/admin/translators/:id/rates` — 번역사 단가표 조회
-- `POST /api/admin/translators/:id/rates` — 단가 추가 (serviceType, languagePair, unit, rate)
-- `DELETE /api/admin/translators/:id/rates/:rateId` — 단가 삭제
-- `GET /api/admin/notes` — 범용 메모 조회 (?entityType=company|contact|translator|project, ?entityId=N)
-- `POST /api/admin/notes` — 범용 메모 추가 (entityType, entityId, content)
-- `GET /api/admin/products` — 상품 목록 (?search, active 포함)
-- `POST /api/admin/products` — 상품 등록 (code, name, category, unit, basePrice, languagePair, field)
-- `PATCH /api/admin/products/:id` — 상품 수정
-- `PATCH /api/admin/products/:id/toggle` — 상품 활성/비활성 토글
-- `GET /api/admin/board` — 게시판 목록 (?category: notice/reference/manual, pinned 우선 정렬)
-- `POST /api/admin/board` — 게시물 등록 (category, title, content, pinned, visibleToAll)
-- `GET /api/admin/board/:id` — 게시물 상세
-- `PATCH /api/admin/board/:id` — 게시물 수정
-- `DELETE /api/admin/board/:id` — 게시물 삭제
-- `GET /api/board/public` — 공개 게시판 (visibleToAll=true, 번역사도 접근 가능)
-- `GET /api/admin/translator-profiles/:userId` — 번역사 프로필 조회 (user 정보 + profile)
-- `PATCH /api/admin/translator-profiles/:userId` — 번역사 프로필 저장/수정 (upsert)
-- `GET /api/admin/export/projects` — 프로젝트 CSV 내보내기 (UTF-8 BOM)
-- `GET /api/admin/export/settlements` — 정산 CSV 내보내기 (UTF-8 BOM)
-
-### Admin (🔒 admin role 전용)
-- `GET /api/admin/projects` 🔒 — 전체 프로젝트 + 고객 이메일 (최신순, ?search, ?status, ?dateFrom, ?dateTo 필터)
-- `GET /api/admin/projects/:id` 🔒 — 프로젝트 상세 (견적/결제/작업/정산/로그 포함)
-- `PATCH /api/admin/projects/:id/status` 🔒 — 프로젝트 상태 수동 변경
-- `POST /api/admin/projects/:id/rematch` 🔒 — 번역사 재매칭 (기존 task 삭제 후 재배정)
-- `PATCH /api/admin/projects/:id/cancel` 🔒 — 프로젝트 취소 (→ cancelled)
-- `GET /api/admin/projects/:id/notes` 🔒 — 관리자 메모 목록
-- `POST /api/admin/projects/:id/notes` 🔒 — 관리자 메모 추가
-- `GET /api/admin/payments` 🔒 — 전체 결제 + 프로젝트 제목
-- `GET /api/admin/tasks` 🔒 — 전체 작업 + 번역사 이메일
-- `GET /api/admin/logs/:projectId` 🔒 — 프로젝트 이벤트 로그
-- `GET /api/admin/users` 🔒 — 사용자 목록 (?search, ?role 필터)
-- `PATCH /api/admin/users/:id/role` 🔒 — 사용자 역할 변경 (customer/translator만, admin 변경 불가)
-- `PATCH /api/admin/users/:id/deactivate` 🔒 — 계정 활성화/비활성화 토글 (본인 불가, admin 불가)
-- `PATCH /api/admin/update-email` 🔒 — 본인 이메일 변경 (이메일 형식 검증, 중복 불가, 본인만 변경 가능)
-- Login: 비활성화(is_active=false)된 계정은 403으로 차단됨
-
-### Payments (🔒 = 인증 필요)
-- `POST /api/payments/request` 🔒 — 결제 요청 생성 (approved 상태 프로젝트, 견적 금액 기준)
-- `POST /api/payments/confirm` 🔒 — 결제 확인 ({paymentId, success: bool}) → paid/failed
-- `GET /api/payments` — 결제 목록 (?projectId=N)
-
-### Upload (🔒 = 인증 필요)
-- `POST /api/upload` 🔒 — 파일 업로드 → R2 저장 → fileUrl 반환 (10MB, PDF/DOCX/TXT/이미지/ZIP)
-
-### Quotes
-- `POST /api/quotes` 🔒 — 견적 생성 (project status → quoted)
-- `POST /api/quotes/:id/approve` — 견적 승인 (project status → approved)
-
-### Tasks
-- `GET /api/tasks` — 작업 목록 (?translatorId=N, 프로젝트 정보 JOIN)
-- `PATCH /api/tasks/:id/start` 🔒 (translator) — 작업 시작 (→ working, project → in_progress)
-- `PATCH /api/tasks/:id/complete` 🔒 (translator) — 작업 완료 (→ done, project → completed)
-
-### Logs & Health
-- `GET /api/logs` — 전체 로그 (?entityType=project|quote|task, ?entityId=N)
-- `GET /api/healthz` — 헬스체크
-
-## Packages
-
-### `artifacts/api-server` (`@workspace/api-server`)
-
-Express 5 API server. Routes live in `src/routes/` and use `@workspace/api-zod` for request and response validation and `@workspace/db` for persistence.
-
-- Entry: `src/index.ts` — reads `PORT`, starts Express
-- App setup: `src/app.ts` — mounts CORS, JSON/urlencoded parsing, routes at `/api`
-- Routes: `src/routes/index.ts` mounts sub-routers; `src/routes/health.ts` exposes `GET /health` (full path: `/api/health`)
-- Depends on: `@workspace/db`, `@workspace/api-zod`
-- `pnpm --filter @workspace/api-server run dev` — run the dev server
-- `pnpm --filter @workspace/api-server run build` — production esbuild bundle (`dist/index.cjs`)
-- Build bundles an allowlist of deps (express, cors, pg, drizzle-orm, zod, etc.) and externalizes the rest
-
-### `lib/db` (`@workspace/db`)
-
-Database layer using Drizzle ORM with PostgreSQL. Exports a Drizzle client instance and schema models.
-
-- `src/index.ts` — creates a `Pool` + Drizzle instance, exports schema
-- `src/schema/index.ts` — barrel re-export of all models
-- `src/schema/<modelname>.ts` — table definitions with `drizzle-zod` insert schemas (no models definitions exist right now)
-- `drizzle.config.ts` — Drizzle Kit config (requires `DATABASE_URL`, automatically provided by Replit)
-- Exports: `.` (pool, db, schema), `./schema` (schema only)
-
-Production migrations are handled by Replit when publishing. In development, we just use `pnpm --filter @workspace/db run push`, and we fallback to `pnpm --filter @workspace/db run push-force`.
-
-### `lib/api-spec` (`@workspace/api-spec`)
-
-Owns the OpenAPI 3.1 spec (`openapi.yaml`) and the Orval config (`orval.config.ts`). Running codegen produces output into two sibling packages:
-
-1. `lib/api-client-react/src/generated/` — React Query hooks + fetch client
-2. `lib/api-zod/src/generated/` — Zod schemas
-
-Run codegen: `pnpm --filter @workspace/api-spec run codegen`
-
-### `lib/api-zod` (`@workspace/api-zod`)
-
-Generated Zod schemas from the OpenAPI spec (e.g. `HealthCheckResponse`). Used by `api-server` for response validation.
-
-### `lib/api-client-react` (`@workspace/api-client-react`)
-
-Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHealthCheck`, `healthCheck`).
-
-### `scripts` (`@workspace/scripts`)
-
-Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
+- **PostgreSQL:** Primary database for all application data.
+- **Drizzle ORM:** Object-Relational Mapper for interacting with PostgreSQL.
+- **Express:** Web application framework for building the API server.
+- **Zod:** Schema declaration and validation library, used for API request/response validation and data integrity.
+- **bcryptjs:** Library for hashing and comparing passwords securely.
+- **Orval:** OpenAPI client code generator, used to create strongly typed API clients and schemas.
+- **AWS S3 (or compatible, e.g., Cloudflare R2):** For file storage and management (implied by file upload feature).
