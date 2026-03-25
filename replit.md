@@ -65,11 +65,25 @@ The project is structured as a pnpm monorepo, organizing code into `artifacts` (
   - Frontend 영향: 견적 생성 폼 품목 행 UI + PDF 품목 테이블 렌더링
   - 실제 마이그레이션 전 확정 필요
 
-**UI/UX Decisions (implied by API):**
+**Frontend 구조 (web-app, 2026-03 리팩토링 완료):**
+- 기존 App.tsx 단일 파일(5409줄) → 17개 파일로 분리
+- `src/lib/constants.ts`: 공통 타입, API 클라이언트, 레이블 상수 (ALL_PROJECT_STATUSES, ALL_PAYMENT_STATUSES, ALL_SETTLEMENT_STATUSES 포함)
+- `src/components/ui/index.tsx`: 공통 UI 컴포넌트 (StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill)
+- `src/components/shared/Navbar.tsx`: 네비게이션 바
+- `src/components/projects/index.tsx`: 프로젝트 공통 컴포넌트
+- `src/components/admin/`: LogModal, TranslatorProfileModal, TranslatorDetailModal, CustomerDetailModal, CompanyDetailModal, ContactDetailModal, ProjectDetailModal (7-탭)
+- `src/pages/AuthPage.tsx`: 로그인/회원가입
+- `src/pages/AdminDashboard.tsx`: 어드민 CRM 메인 (~1904줄)
+- `src/pages/CustomerDashboard.tsx`: 고객 대시보드
+- `src/pages/TranslatorDashboard.tsx`: 번역사 대시보드
+- `src/App.tsx`: 라우터 전용 (~100줄)
+
+**UI/UX Decisions:**
 - Frontend will manage JWTs in localStorage for authenticated sessions.
 - Clear separation of concerns between customer, translator, and admin roles with appropriate access controls.
 - Forms for user registration, login, project creation, and administrative data entry.
 - Display of project statuses, payment details, and settlement information.
+- 스타일: Tailwind 미사용, inline styles 방식으로 통일
 
 # External Dependencies
 
