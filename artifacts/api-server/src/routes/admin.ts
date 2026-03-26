@@ -183,11 +183,29 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
     ]);
 
     // 거래처 + 담당자
-    let company = null;
+    let company: (typeof companiesTable.$inferSelect & { prepaidBalance: number | null }) | null = null;
     let contact = null;
     if (project.companyId) {
       const [c] = await db.select().from(companiesTable).where(eq(companiesTable.id, project.companyId));
-      company = c ?? null;
+      if (c) {
+        // 해당 거래처의 최신 선입금 관련 견적에서 잔액 계산
+        const [lastPrepaidQuote] = await db
+          .select({ prepaidBalanceAfter: quotesTable.prepaidBalanceAfter })
+          .from(quotesTable)
+          .innerJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))
+          .where(
+            and(
+              eq(projectsTable.companyId, project.companyId),
+              sql`${quotesTable.quoteType} IN ('prepaid_deduction', 'b2c_prepaid')`
+            )
+          )
+          .orderBy(desc(quotesTable.id))
+          .limit(1);
+        const prepaidBalance = lastPrepaidQuote?.prepaidBalanceAfter != null
+          ? Number(lastPrepaidQuote.prepaidBalanceAfter)
+          : null;
+        company = { ...c, prepaidBalance };
+      }
     }
     if (project.contactId) {
       const [ct] = await db.select().from(contactsTable).where(eq(contactsTable.id, project.contactId));
@@ -577,24 +595,64 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
     batchPeriodStart?: string; batchPeriodEnd?: string; batchItemCount?: number;
   };
 
-  // items 배열이 있으면 합계 자동 계산, 없으면 amount 필수
+  // items 배열이 있으면 합계 자동 계산
+  // prepaid_deduction은 amount를 사용 금액에서 자동 설정하므로 amount 불필요
   const hasItems = Array.isArray(items) && items.length > 0;
-  if (!hasItems && (!amount || isNaN(Number(amount)) || Number(amount) <= 0)) {
+  const isPrepaidDeduction = quoteType === "prepaid_deduction";
+  if (!isPrepaidDeduction && !hasItems && (!amount || isNaN(Number(amount)) || Number(amount) <= 0)) {
     res.status(400).json({ error: "견적 금액 또는 품목 목록이 필요합니다." }); return;
+  }
+  if (isPrepaidDeduction && (!prepaidUsageAmount || Number(prepaidUsageAmount) <= 0)) {
+    res.status(400).json({ error: "선입금 차감 견적서에는 이번 사용 금액이 필요합니다." }); return;
   }
 
   try {
-    const [project] = await db.select({ id: projectsTable.id, status: projectsTable.status }).from(projectsTable).where(eq(projectsTable.id, projectId));
+    const [project] = await db.select({ id: projectsTable.id, status: projectsTable.status, companyId: projectsTable.companyId }).from(projectsTable).where(eq(projectsTable.id, projectId));
     if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
     if (!["created", "quoted"].includes(project.status)) {
       res.status(400).json({ error: `견적은 '접수됨' 또는 '견적 발송' 상태에서만 생성 가능합니다. (현재: ${project.status})` }); return;
+    }
+
+    // 선입금 차감: 거래처의 현재 잔액 자동 조회 및 검증
+    let computedPrepaidBefore: number | null = null;
+    let computedPrepaidAfter: number | null = null;
+    let computedAmount: number | null = null;
+    if (isPrepaidDeduction) {
+      const usageAmt = Number(prepaidUsageAmount);
+      // 거래처의 가장 최근 선입금 관련 견적에서 balance_after 조회
+      let currentBalance = 0;
+      if (project.companyId) {
+        const [lastQ] = await db
+          .select({ prepaidBalanceAfter: quotesTable.prepaidBalanceAfter })
+          .from(quotesTable)
+          .innerJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))
+          .where(
+            and(
+              eq(projectsTable.companyId, project.companyId),
+              sql`${quotesTable.quoteType} IN ('prepaid_deduction', 'b2c_prepaid')`
+            )
+          )
+          .orderBy(desc(quotesTable.id))
+          .limit(1);
+        currentBalance = lastQ?.prepaidBalanceAfter != null ? Number(lastQ.prepaidBalanceAfter) : 0;
+      }
+      if (usageAmt > currentBalance) {
+        res.status(400).json({
+          error: `잔액 부족: 현재 잔액 ${currentBalance.toLocaleString()}원, 사용 요청 ${usageAmt.toLocaleString()}원`,
+          currentBalance,
+        });
+        return;
+      }
+      computedPrepaidBefore = currentBalance;
+      computedPrepaidAfter = currentBalance - usageAmt;
+      computedAmount = usageAmt; // 견적 금액 = 사용 금액
     }
 
     // 기존 견적 삭제 (재생성)
     await db.delete(quotesTable).where(eq(quotesTable.projectId, projectId));
 
     // 품목 기반 합계 계산
-    let totalPrice = Number(amount ?? 0);
+    let totalPrice = isPrepaidDeduction ? (computedAmount ?? 0) : Number(amount ?? 0);
     type CalcItem = ItemInput & { supplyAmount: number; taxAmount: number; totalAmount: number };
     let calcItems: CalcItem[] = [];
     if (hasItems) {
@@ -619,9 +677,14 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
         issueDate: issueDate || null,
         invoiceDueDate: invoiceDueDate || null,
         paymentDueDate: paymentDueDate || null,
-        prepaidBalanceBefore: prepaidBalanceBefore != null ? String(prepaidBalanceBefore) : null,
+        // 선입금 차감은 서버 계산값 우선, 나머지 유형은 프론트 전달값
+        prepaidBalanceBefore: isPrepaidDeduction
+          ? (computedPrepaidBefore != null ? String(computedPrepaidBefore) : null)
+          : (prepaidBalanceBefore != null ? String(prepaidBalanceBefore) : null),
         prepaidUsageAmount: prepaidUsageAmount != null ? String(prepaidUsageAmount) : null,
-        prepaidBalanceAfter: prepaidBalanceAfter != null ? String(prepaidBalanceAfter) : null,
+        prepaidBalanceAfter: isPrepaidDeduction
+          ? (computedPrepaidAfter != null ? String(computedPrepaidAfter) : null)
+          : (prepaidBalanceAfter != null ? String(prepaidBalanceAfter) : null),
         batchPeriodStart: batchPeriodStart || null,
         batchPeriodEnd: batchPeriodEnd || null,
         batchItemCount: batchItemCount ?? null,

@@ -110,9 +110,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [quoteIssueDate, setQuoteIssueDate] = useState("");
   const [quoteInvoiceDueDate, setQuoteInvoiceDueDate] = useState("");
   const [quotePaymentDueDate, setQuotePaymentDueDate] = useState("");
-  const [quotePrepaidBefore, setQuotePrepaidBefore] = useState("");
   const [quotePrepaidUsage, setQuotePrepaidUsage] = useState("");
-  const [quotePrepaidAfter, setQuotePrepaidAfter] = useState("");
   const [quoteBatchStart, setQuoteBatchStart] = useState("");
   const [quoteBatchEnd, setQuoteBatchEnd] = useState("");
   const [quoteBatchCount, setQuoteBatchCount] = useState("");
@@ -302,7 +300,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     setCreatingQuote(true);
     try {
       let body: Record<string, unknown>;
-      if (quoteMode === "items") {
+
+      if (quoteType === "prepaid_deduction") {
+        // 선입금 차감: 사용 금액만 전송 (amount·잔액 전후는 서버 자동 계산)
+        const usageAmt = Number(quotePrepaidUsage.replace(/,/g, ""));
+        if (!usageAmt || usageAmt <= 0) { onToast("이번 사용 금액을 입력하세요."); return; }
+        body = { prepaidUsageAmount: usageAmt };
+      } else if (quoteMode === "items") {
         const validItems = quoteItemForms.filter(it => it.productName.trim() && Number(it.unitPrice) > 0);
         if (validItems.length === 0) { onToast("품목명과 단가를 입력하세요."); return; }
         body = {
@@ -319,6 +323,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         if (!amt || amt <= 0) { onToast("유효한 금액을 입력하세요."); return; }
         body = { amount: amt };
       }
+
       if (quoteNote.trim()) body.note = quoteNote.trim();
       body.taxDocumentType = quoteTaxDocType;
       body.taxCategory = quoteTaxCategory;
@@ -328,12 +333,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       if (quoteIssueDate) body.issueDate = quoteIssueDate;
       if (quoteInvoiceDueDate) body.invoiceDueDate = quoteInvoiceDueDate;
       if (quotePaymentDueDate) body.paymentDueDate = quotePaymentDueDate;
-      // 선입금 차감 전용 필드
-      if (quoteType === "prepaid_deduction") {
-        if (quotePrepaidBefore) body.prepaidBalanceBefore = Number(quotePrepaidBefore.replace(/,/g, ""));
-        if (quotePrepaidUsage) body.prepaidUsageAmount = Number(quotePrepaidUsage.replace(/,/g, ""));
-        if (quotePrepaidAfter) body.prepaidBalanceAfter = Number(quotePrepaidAfter.replace(/,/g, ""));
-      }
       // 누적 견적 전용 필드
       if (quoteType === "accumulated_batch") {
         if (quoteBatchStart) body.batchPeriodStart = quoteBatchStart;
@@ -349,7 +348,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       onToast(`견적 생성 완료`);
       setQuoteAmount(""); setQuoteNote(""); setQuoteItemForms([defaultItem()]); setShowQuoteForm(false);
       setQuoteValidUntil(""); setQuoteIssueDate(""); setQuoteInvoiceDueDate(""); setQuotePaymentDueDate("");
-      setQuotePrepaidBefore(""); setQuotePrepaidUsage(""); setQuotePrepaidAfter("");
+      setQuotePrepaidUsage("");
       setQuoteBatchStart(""); setQuoteBatchEnd(""); setQuoteBatchCount("");
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 견적 생성 실패"); }
@@ -857,36 +856,51 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         </div>
                       </div>
                     );
-                    if (quoteType === "prepaid_deduction") return (
-                      <div style={{ marginBottom: 10 }}>
-                        <div style={{ background: "#fdf4ff", border: "1px solid #d8b4fe", borderRadius: 8, padding: "10px 12px" }}>
-                          <div style={{ fontSize: 10, fontWeight: 800, color: "#7c3aed", marginBottom: 8 }}>선입금 잔액 정보</div>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                            <div>
-                              {qfLbl("차감 전 잔액 (원)")}
-                              <input type="number" min="0" value={quotePrepaidBefore} placeholder="0"
-                                onChange={e => setQuotePrepaidBefore(e.target.value)} style={qfIs} />
+                    if (quoteType === "prepaid_deduction") {
+                      const companyBalance = (detail.company as any)?.prepaidBalance ?? null;
+                      const usageNum = Number(quotePrepaidUsage.replace(/,/g, "") || 0);
+                      const afterBalance = companyBalance != null ? companyBalance - usageNum : null;
+                      const isInsufficient = companyBalance != null && usageNum > 0 && usageNum > companyBalance;
+                      return (
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ background: "#fdf4ff", border: `1px solid ${isInsufficient ? "#f87171" : "#d8b4fe"}`, borderRadius: 8, padding: "10px 12px" }}>
+                            <div style={{ fontSize: 10, fontWeight: 800, color: "#7c3aed", marginBottom: 8 }}>선입금 잔액 정보</div>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                              <div>
+                                {qfLbl("차감 전 잔액 (원)")}
+                                <div style={{ ...qfIs, background: "#f3f4f6", color: "#374151", cursor: "not-allowed", display: "flex", alignItems: "center" }}>
+                                  {companyBalance != null ? companyBalance.toLocaleString() : <span style={{ color: "#9ca3af" }}>잔액 없음</span>}
+                                </div>
+                              </div>
+                              <div>
+                                {qfLbl("이번 사용 금액 (원) *")}
+                                <input
+                                  type="number" min="0" value={quotePrepaidUsage} placeholder="0"
+                                  onChange={e => setQuotePrepaidUsage(e.target.value)}
+                                  style={{ ...qfIs, borderColor: isInsufficient ? "#f87171" : "#d8b4fe" }}
+                                />
+                              </div>
+                              <div>
+                                {qfLbl("차감 후 잔액 (원)")}
+                                <div style={{ ...qfIs, background: isInsufficient ? "#fef2f2" : "#f5f3ff", color: isInsufficient ? "#dc2626" : "#374151", cursor: "not-allowed", display: "flex", alignItems: "center", fontWeight: isInsufficient ? 700 : 400 }}>
+                                  {afterBalance != null ? afterBalance.toLocaleString() : <span style={{ color: "#9ca3af" }}>-</span>}
+                                </div>
+                              </div>
                             </div>
-                            <div>
-                              {qfLbl("이번 사용 금액 (원)")}
-                              <input type="number" min="0" value={quotePrepaidUsage} placeholder="0"
-                                onChange={e => {
-                                  setQuotePrepaidUsage(e.target.value);
-                                  const before = Number(quotePrepaidBefore || 0);
-                                  const usage = Number(e.target.value || 0);
-                                  setQuotePrepaidAfter(String(before - usage));
-                                }} style={qfIs} />
-                            </div>
-                            <div>
-                              {qfLbl("차감 후 잔액 (원)")}
-                              <input type="number" value={quotePrepaidAfter} placeholder="자동 계산"
-                                onChange={e => setQuotePrepaidAfter(e.target.value)}
-                                style={{ ...qfIs, background: "#f5f3ff" }} />
-                            </div>
+                            {isInsufficient && (
+                              <div style={{ marginTop: 8, padding: "6px 10px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fca5a5", fontSize: 11, color: "#dc2626", fontWeight: 700 }}>
+                                ⚠️ 잔액 부족: 사용 금액({usageNum.toLocaleString()}원)이 잔액({companyBalance!.toLocaleString()}원)을 초과합니다. 견적 생성이 불가합니다.
+                              </div>
+                            )}
+                            {companyBalance === null && (
+                              <div style={{ marginTop: 8, fontSize: 11, color: "#6b7280" }}>
+                                ℹ️ 거래처의 선입금 내역이 없습니다. 먼저 B2C 선입금 견적서로 충전 후 사용하세요.
+                              </div>
+                            )}
                           </div>
                         </div>
-                      </div>
-                    );
+                      );
+                    }
                     if (quoteType === "accumulated_batch") return (
                       <div style={{ marginBottom: 10 }}>
                         <div style={{ background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 8, padding: "10px 12px" }}>
@@ -928,15 +942,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           {hasQuotes && <span style={{ fontSize: 11, color: "#9ca3af" }}>기존 견적이 대체됩니다</span>}
                         </div>
                         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                          <div style={{ display: "flex", gap: 0, borderRadius: 6, overflow: "hidden", border: "1px solid #d8b4fe" }}>
-                            {(["simple", "items"] as const).map(m => (
-                              <button key={m} onClick={() => setQuoteMode(m)}
-                                style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer",
-                                  background: quoteMode === m ? "#7c3aed" : "#fdf4ff", color: quoteMode === m ? "#fff" : "#7c3aed" }}>
-                                {m === "simple" ? "단순 금액" : "품목 입력"}
-                              </button>
-                            ))}
-                          </div>
+                          {/* 선입금 차감 유형은 단순/품목 모드 불필요 */}
+                          {quoteType !== "prepaid_deduction" && (
+                            <div style={{ display: "flex", gap: 0, borderRadius: 6, overflow: "hidden", border: "1px solid #d8b4fe" }}>
+                              {(["simple", "items"] as const).map(m => (
+                                <button key={m} onClick={() => setQuoteMode(m)}
+                                  style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer",
+                                    background: quoteMode === m ? "#7c3aed" : "#fdf4ff", color: quoteMode === m ? "#fff" : "#7c3aed" }}>
+                                  {m === "simple" ? "단순 금액" : "품목 입력"}
+                                </button>
+                              ))}
+                            </div>
+                          )}
                           {hasQuotes && (
                             <button onClick={() => setShowQuoteForm(false)}
                               style={{ background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px" }}>×</button>
@@ -958,12 +975,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         </div>
                         <div>
                           <label style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", display: "block", marginBottom: 3 }}>
-                            결제 방식 (거래처 기본: <span style={{ color: "#1d4ed8" }}>{companyBillingType === "prepaid_wallet" ? "선입금" : companyBillingType === "monthly_billing" ? "월 청구" : "건별 후불"}</span>)
+                            청구 방식 (거래처 기본: <span style={{ color: "#1d4ed8" }}>{companyBillingType === "prepaid_wallet" ? "선입금 차감" : companyBillingType === "monthly_billing" ? "월 청구" : "건별 후불"}</span>)
                           </label>
                           <select defaultValue={companyBillingType}
                             style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box", borderColor: "#e2e8f0" }}>
                             <option value="postpaid_per_project">건별 후불</option>
-                            <option value="prepaid_wallet">선입금</option>
+                            <option value="prepaid_wallet">선입금 차감</option>
                             <option value="monthly_billing">월 청구</option>
                           </select>
                         </div>
@@ -994,7 +1011,29 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       {/* 유형별 추가 입력 필드 */}
                       {quoteTypeExtraJsx}
 
-                      {quoteMode === "simple" ? (
+                      {/* 선입금 차감: 비고 + 생성 버튼만 */}
+                      {quoteType === "prepaid_deduction" ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <input
+                            value={quoteNote}
+                            onChange={e => setQuoteNote(e.target.value)}
+                            placeholder="비고/메모 (선택)"
+                            style={{ ...inputStyle, fontSize: 12, padding: "6px 10px" }}
+                          />
+                          {(() => {
+                            const compBal = (detail.company as any)?.prepaidBalance ?? null;
+                            const usageNum2 = Number(quotePrepaidUsage.replace(/,/g, "") || 0);
+                            const isInsufficient2 = compBal != null && usageNum2 > 0 && usageNum2 > compBal;
+                            return (
+                              <PrimaryBtn onClick={handleCreateQuote}
+                                disabled={creatingQuote || !quotePrepaidUsage || isInsufficient2}
+                                style={{ fontSize: 12, padding: "7px 14px", background: isInsufficient2 ? "#9ca3af" : "#7c3aed", border: "none", alignSelf: "flex-end" }}>
+                                {creatingQuote ? "생성 중..." : hasQuotes ? "견적 재생성" : "견적 생성"}
+                              </PrimaryBtn>
+                            );
+                          })()}
+                        </div>
+                      ) : quoteMode === "simple" ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                             <input
