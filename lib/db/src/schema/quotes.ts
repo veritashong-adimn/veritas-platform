@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, numeric, timestamp, pgEnum, text } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, numeric, timestamp, pgEnum, text, varchar } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -13,6 +13,8 @@ export const quotesTable = pgTable("quotes", {
   price: numeric("price", { precision: 12, scale: 2 }).notNull(),
   status: quoteStatusEnum("status").notNull().default("pending"),
   note: text("note"),
+  taxDocumentType: varchar("tax_document_type", { length: 50 }).default("tax_invoice"),
+  taxCategory: varchar("tax_category", { length: 50 }).default("normal"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

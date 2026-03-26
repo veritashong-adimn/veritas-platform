@@ -169,6 +169,8 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
       totalAmount: hasQuoteItems ? null : totalAmount,
       supplyAmount: hasQuoteItems ? null : totalAmount,
       taxAmount: hasQuoteItems ? null : 0,
+      taxDocumentType: (quote?.taxDocumentType ?? "tax_invoice") as "tax_invoice" | "bill",
+      taxCategory: (quote?.taxCategory ?? "normal") as "normal" | "zero_rated" | "consignment" | "consignment_zero_rated",
       notes,
     });
 

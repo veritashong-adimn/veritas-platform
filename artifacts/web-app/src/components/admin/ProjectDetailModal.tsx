@@ -90,6 +90,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   // 견적 생성
   const [quoteAmount, setQuoteAmount] = useState("");
   const [quoteNote, setQuoteNote] = useState("");
+  const [quoteTaxDocType, setQuoteTaxDocType] = useState<"tax_invoice" | "bill">("tax_invoice");
+  const [quoteTaxCategory, setQuoteTaxCategory] = useState<"normal" | "zero_rated" | "consignment" | "consignment_zero_rated">("normal");
   const [showQuoteForm, setShowQuoteForm] = useState(false);
   const [creatingQuote, setCreatingQuote] = useState(false);
   type QuoteItemForm = { productName: string; unit: string; quantity: string; unitPrice: string; taxRate: "0" | "0.1" };
@@ -306,6 +308,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         body = { amount: amt };
       }
       if (quoteNote.trim()) body.note = quoteNote.trim();
+      body.taxDocumentType = quoteTaxDocType;
+      body.taxCategory = quoteTaxCategory;
       const res = await fetch(api(`/api/admin/projects/${projectId}/quote`), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -808,6 +812,28 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         </div>
                       </div>
 
+                      {/* 세무/발행 구분 선택 (공통) */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                        <div>
+                          <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>문서 구분 *</label>
+                          <select value={quoteTaxDocType} onChange={e => setQuoteTaxDocType(e.target.value as "tax_invoice" | "bill")}
+                            style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box", borderColor: "#d8b4fe" }}>
+                            <option value="tax_invoice">세금계산서</option>
+                            <option value="bill">계산서</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>발행 유형 *</label>
+                          <select value={quoteTaxCategory} onChange={e => setQuoteTaxCategory(e.target.value as "normal" | "zero_rated" | "consignment" | "consignment_zero_rated")}
+                            style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box", borderColor: "#d8b4fe" }}>
+                            <option value="normal">일반</option>
+                            <option value="zero_rated">영세율</option>
+                            <option value="consignment">위수탁</option>
+                            <option value="consignment_zero_rated">위수탁영세율</option>
+                          </select>
+                        </div>
+                      </div>
+
                       {quoteMode === "simple" ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -903,15 +929,29 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         )}
                       </div>
                       {formVisible && <QuoteForm />}
-                      {hasQuotes ? detail.quotes.map(q => (
-                        <div key={q.id} style={{ display: "flex", gap: 14, padding: "10px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, alignItems: "flex-start", flexWrap: "wrap" }}>
-                          <span style={{ color: "#9ca3af" }}>#{q.id}</span>
-                          <span style={{ fontWeight: 700, color: "#0891b2" }}>{Number((q as any).price ?? (q as any).amount).toLocaleString()}원</span>
-                          <StatusBadge status={q.status} />
-                          {(q as any).note && <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 4 }}>— {(q as any).note}</span>}
-                          <span style={{ color: "#9ca3af", marginLeft: "auto" }}>{new Date(q.createdAt).toLocaleDateString("ko-KR")}</span>
+                      {hasQuotes ? detail.quotes.map(q => {
+                        const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", bill: "계산서" };
+                        const taxCatLabel: Record<string, string> = { normal: "일반", zero_rated: "영세율", consignment: "위수탁", consignment_zero_rated: "위수탁영세율" };
+                        const tdt = (q as any).taxDocumentType ?? "tax_invoice";
+                        const tc = (q as any).taxCategory ?? "normal";
+                        return (
+                        <div key={q.id} style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 12px", marginBottom: 6, fontSize: 13, border: "1px solid #e5e7eb" }}>
+                          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                            <span style={{ color: "#9ca3af", fontSize: 11 }}>#{q.id}</span>
+                            <span style={{ fontWeight: 700, color: "#0891b2", fontSize: 14 }}>{Number((q as any).price ?? (q as any).amount).toLocaleString()}원</span>
+                            <StatusBadge status={q.status} />
+                            <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 4, background: tdt === "bill" ? "#fef3c7" : "#eff6ff", color: tdt === "bill" ? "#92400e" : "#1d4ed8", border: `1px solid ${tdt === "bill" ? "#fde68a" : "#bfdbfe"}`, fontWeight: 700 }}>
+                              {taxDocLabel[tdt] ?? tdt}
+                            </span>
+                            <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 4, background: tc === "zero_rated" || tc === "consignment_zero_rated" ? "#f0fdf4" : tc === "consignment" ? "#fdf4ff" : "#f8fafc", color: tc === "zero_rated" || tc === "consignment_zero_rated" ? "#166534" : tc === "consignment" ? "#7c3aed" : "#374151", border: "1px solid #e2e8f0" }}>
+                              {taxCatLabel[tc] ?? tc}
+                            </span>
+                            <span style={{ color: "#9ca3af", fontSize: 11, marginLeft: "auto" }}>{new Date(q.createdAt).toLocaleDateString("ko-KR")}</span>
+                          </div>
+                          {(q as any).note && <p style={{ margin: "5px 0 0", fontSize: 12, color: "#6b7280" }}>📝 {(q as any).note}</p>}
                         </div>
-                      )) : !formVisible ? (
+                        );
+                      }) : !formVisible ? (
                         <p style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>등록된 견적이 없습니다.</p>
                       ) : null}
                     </>

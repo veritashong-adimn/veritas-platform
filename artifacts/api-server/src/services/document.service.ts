@@ -88,6 +88,10 @@ export type QuoteDoc = {
   totalAmount: number | null;
 
   notes?: string;
+
+  /** 세무/발행 구분 */
+  taxDocumentType?: "tax_invoice" | "bill";
+  taxCategory?: "normal" | "zero_rated" | "consignment" | "consignment_zero_rated";
 };
 
 export type StatementDoc = {
@@ -302,8 +306,26 @@ function renderBankInfo(bank?: BankInfo | null): string {
 
 // ── 견적서 HTML 빌더 ─────────────────────────────────────────────────────────
 
+// 세무 구분 라벨 맵
+const TAX_DOC_LABEL: Record<string, string> = {
+  tax_invoice: "세금계산서",
+  bill: "계산서",
+};
+const TAX_CAT_LABEL: Record<string, string> = {
+  normal: "일반",
+  zero_rated: "영세율",
+  consignment: "위수탁",
+  consignment_zero_rated: "위수탁영세율",
+};
+
 export function buildQuoteHtml(doc: QuoteDoc): string {
   const validDays = doc.validDays ?? 30;
+  const taxDocType = doc.taxDocumentType ?? "tax_invoice";
+  const taxCat = doc.taxCategory ?? "normal";
+  const isBill = taxDocType === "bill";
+  const isZeroRated = taxCat === "zero_rated";
+  const isConsignment = taxCat === "consignment" || taxCat === "consignment_zero_rated";
+  const isConsignmentZero = taxCat === "consignment_zero_rated";
 
   /* 품목 테이블 행 — quote_items 배열 or 단일 요약 행 폴백 */
   const hasItems = doc.items && doc.items.length > 0;
@@ -346,6 +368,14 @@ export function buildQuoteHtml(doc: QuoteDoc): string {
     <div class="doc-title-block">
       <h1>견 적 서</h1>
       <p>QUOTATION</p>
+      <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap;">
+        <span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:800;background:${isBill ? "#fef3c7" : "#eff6ff"};color:${isBill ? "#92400e" : "#1d4ed8"};border:1px solid ${isBill ? "#fde68a" : "#bfdbfe"}">
+          ${esc(TAX_DOC_LABEL[taxDocType] ?? taxDocType)}
+        </span>
+        <span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:${isConsignment ? "#fdf4ff" : isZeroRated ? "#f0fdf4" : "#f8fafc"};color:${isConsignment ? "#7c3aed" : isZeroRated ? "#166534" : "#374151"};border:1px solid ${isConsignment ? "#d8b4fe" : isZeroRated ? "#bbf7d0" : "#e2e8f0"}">
+          ${esc(TAX_CAT_LABEL[taxCat] ?? taxCat)}
+        </span>
+      </div>
     </div>
     <div class="doc-meta">
       <div><span class="label">문서번호</span><strong>${esc(doc.docNumber)}</strong></div>
@@ -403,10 +433,22 @@ export function buildQuoteHtml(doc: QuoteDoc): string {
   <div class="amount-summary no-break">
     <div class="amount-rows">
       <div class="amt-row"><span class="a-label">공급가액</span><span class="a-value">${fmt(supply)}</span></div>
-      <div class="amt-row"><span class="a-label">부가세 (VAT)</span><span class="a-value">${fmt(tax)}</span></div>
+      ${isBill
+        ? `<div class="amt-row"><span class="a-label" style="color:#92400e">세액 없음 (계산서)</span><span class="a-value" style="color:#9ca3af">—</span></div>`
+        : isZeroRated
+          ? `<div class="amt-row"><span class="a-label">세액 <span style="font-size:10px;background:#dcfce7;color:#166534;padding:1px 5px;border-radius:3px">영세율</span></span><span class="a-value">0원</span></div>`
+          : isConsignment
+            ? `<div class="amt-row"><span class="a-label">부가세 (VAT) <span style="font-size:10px;background:#fdf4ff;color:#7c3aed;padding:1px 5px;border-radius:3px">${isConsignmentZero ? "위수탁영세율" : "위수탁"}</span></span><span class="a-value">${isConsignmentZero ? "0원" : fmt(tax)}</span></div>`
+            : `<div class="amt-row"><span class="a-label">부가세 (VAT 10%)</span><span class="a-value">${fmt(tax)}</span></div>`
+      }
       <div class="amt-row total-row"><span class="a-label">견적 총액</span><span class="a-value">${fmt(total)}</span></div>
     </div>
   </div>
+
+  ${isConsignment ? `
+  <div style="margin-top:8px;padding:8px 12px;background:#fdf4ff;border:1px solid #d8b4fe;border-radius:6px;font-size:11px;color:#7c3aed">
+    ※ 위수탁 거래: 본 견적서는 위수탁 계약에 따른 공급가액으로 작성되었습니다.${isConsignmentZero ? " 영세율이 적용됩니다." : ""}
+  </div>` : ""}
 
   <!-- 계좌 & 안내 -->
   <div class="info-grid no-break">
@@ -414,7 +456,8 @@ export function buildQuoteHtml(doc: QuoteDoc): string {
     <div class="info-box guide">
       <h4>안내 사항</h4>
       <p>· 본 견적서는 발행일로부터 <strong>${validDays}일</strong>간 유효합니다.<br/>
-         · 견적 금액에는 부가세(VAT)가 포함되어 있습니다.<br/>
+         · 발행 구분: <strong>${esc(TAX_DOC_LABEL[taxDocType] ?? taxDocType)}</strong> / <strong>${esc(TAX_CAT_LABEL[taxCat] ?? taxCat)}</strong><br/>
+         ${isBill ? "· 본 계산서는 부가세가 포함되지 않습니다." : isZeroRated ? "· 영세율이 적용되어 세액은 0원입니다." : isConsignment ? "· 위수탁 거래 기준으로 작성되었습니다." : "· 견적 금액에는 부가세(VAT 10%)가 포함됩니다."}<br/>
          · 계약 체결 후 착수금 선납 시 작업이 시작됩니다.<br/>
          · 문의: ${esc(doc.platform.email ?? doc.platform.phone ?? "담당자에게 연락바랍니다")}</p>
     </div>

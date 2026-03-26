@@ -560,7 +560,10 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
   type ItemInput = { productName: string; unit?: string; quantity?: number; unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string };
-  const { amount, items, note } = req.body as { amount?: number; items?: ItemInput[]; note?: string };
+  const { amount, items, note, taxDocumentType, taxCategory } = req.body as {
+    amount?: number; items?: ItemInput[]; note?: string;
+    taxDocumentType?: string; taxCategory?: string;
+  };
 
   // items 배열이 있으면 합계 자동 계산, 없으면 amount 필수
   const hasItems = Array.isArray(items) && items.length > 0;
@@ -593,7 +596,12 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
     }
 
     const result = await db.transaction(async tx => {
-      const [quote] = await tx.insert(quotesTable).values({ projectId, price: String(totalPrice), status: "sent", note: note?.trim() || null }).returning();
+      const [quote] = await tx.insert(quotesTable).values({
+        projectId, price: String(totalPrice), status: "sent",
+        note: note?.trim() || null,
+        taxDocumentType: taxDocumentType || "tax_invoice",
+        taxCategory: taxCategory || "normal",
+      }).returning();
 
       if (calcItems.length > 0) {
         await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
