@@ -820,42 +820,40 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   const hasQuotes = detail.quotes.length > 0;
                   const formVisible = canQuote && (showQuoteForm || !hasQuotes);
                   const companyBillingType = (detail.company as any)?.billingType ?? "postpaid_per_project";
-                  const QF_label = (txt: string) => (
+
+                  // 공통 인라인 스타일 (컴포넌트 정의 금지 — 매 렌더마다 새 참조가 생기면 React가 remount)
+                  const qfIs = { ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, borderColor: "#d8b4fe" };
+                  const qfLbl = (txt: string) => (
                     <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>{txt}</label>
                   );
-                  const QF_input = (props: React.InputHTMLAttributes<HTMLInputElement>) => (
-                    <input {...props} style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, borderColor: "#d8b4fe", ...props.style }} />
-                  );
-                  const QF_sel = (props: React.SelectHTMLAttributes<HTMLSelectElement> & { children: React.ReactNode }) => (
-                    <select {...props} style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, borderColor: "#d8b4fe" }}>{props.children}</select>
-                  );
 
-                  const QuoteTypeExtraFields = () => {
+                  // 견적 유형별 추가 입력 필드 (JSX 변수 — 컴포넌트 아님)
+                  const quoteTypeExtraJsx = (() => {
                     if (quoteType === "b2c_prepaid") return (
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
-                          {QF_label("유효기간 (선택)")}
-                          <QF_input type="date" value={quoteValidUntil} onChange={e => setQuoteValidUntil(e.target.value)} />
+                          {qfLbl("유효기간 (선택)")}
+                          <input type="date" value={quoteValidUntil} onChange={e => setQuoteValidUntil(e.target.value)} style={qfIs} />
                         </div>
                         <div>
-                          {QF_label("입금 기한 (선택)")}
-                          <QF_input type="date" value={quotePaymentDueDate} onChange={e => setQuotePaymentDueDate(e.target.value)} />
+                          {qfLbl("입금 기한 (선택)")}
+                          <input type="date" value={quotePaymentDueDate} onChange={e => setQuotePaymentDueDate(e.target.value)} style={qfIs} />
                         </div>
                       </div>
                     );
                     if (quoteType === "b2b_standard") return (
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
-                          {QF_label("유효기간 (선택)")}
-                          <QF_input type="date" value={quoteValidUntil} onChange={e => setQuoteValidUntil(e.target.value)} />
+                          {qfLbl("유효기간 (선택)")}
+                          <input type="date" value={quoteValidUntil} onChange={e => setQuoteValidUntil(e.target.value)} style={qfIs} />
                         </div>
                         <div>
-                          {QF_label("발행 예정일 (선택)")}
-                          <QF_input type="date" value={quoteIssueDate} onChange={e => setQuoteIssueDate(e.target.value)} />
+                          {qfLbl("발행 예정일 (선택)")}
+                          <input type="date" value={quoteIssueDate} onChange={e => setQuoteIssueDate(e.target.value)} style={qfIs} />
                         </div>
                         <div>
-                          {QF_label("입금 예정일 (선택)")}
-                          <QF_input type="date" value={quotePaymentDueDate} onChange={e => setQuotePaymentDueDate(e.target.value)} />
+                          {qfLbl("입금 예정일 (선택)")}
+                          <input type="date" value={quotePaymentDueDate} onChange={e => setQuotePaymentDueDate(e.target.value)} style={qfIs} />
                         </div>
                       </div>
                     );
@@ -865,22 +863,25 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           <div style={{ fontSize: 10, fontWeight: 800, color: "#7c3aed", marginBottom: 8 }}>선입금 잔액 정보</div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                             <div>
-                              {QF_label("차감 전 잔액 (원)")}
-                              <QF_input type="number" min="0" value={quotePrepaidBefore} onChange={e => setQuotePrepaidBefore(e.target.value)} placeholder="0" />
+                              {qfLbl("차감 전 잔액 (원)")}
+                              <input type="number" min="0" value={quotePrepaidBefore} placeholder="0"
+                                onChange={e => setQuotePrepaidBefore(e.target.value)} style={qfIs} />
                             </div>
                             <div>
-                              {QF_label("이번 사용 금액 (원)")}
-                              <QF_input type="number" min="0" value={quotePrepaidUsage} onChange={e => {
-                                setQuotePrepaidUsage(e.target.value);
-                                const before = Number(quotePrepaidBefore || 0);
-                                const usage = Number(e.target.value || 0);
-                                setQuotePrepaidAfter(String(before - usage));
-                              }} placeholder="0" />
+                              {qfLbl("이번 사용 금액 (원)")}
+                              <input type="number" min="0" value={quotePrepaidUsage} placeholder="0"
+                                onChange={e => {
+                                  setQuotePrepaidUsage(e.target.value);
+                                  const before = Number(quotePrepaidBefore || 0);
+                                  const usage = Number(e.target.value || 0);
+                                  setQuotePrepaidAfter(String(before - usage));
+                                }} style={qfIs} />
                             </div>
                             <div>
-                              {QF_label("차감 후 잔액 (원)")}
-                              <QF_input type="number" value={quotePrepaidAfter} onChange={e => setQuotePrepaidAfter(e.target.value)} placeholder="자동 계산"
-                                style={{ background: "#f5f3ff" }} />
+                              {qfLbl("차감 후 잔액 (원)")}
+                              <input type="number" value={quotePrepaidAfter} placeholder="자동 계산"
+                                onChange={e => setQuotePrepaidAfter(e.target.value)}
+                                style={{ ...qfIs, background: "#f5f3ff" }} />
                             </div>
                           </div>
                         </div>
@@ -892,29 +893,31 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           <div style={{ fontSize: 10, fontWeight: 800, color: "#065f46", marginBottom: 8 }}>누적 청구 정보</div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
                             <div>
-                              {QF_label("대상기간 시작 *")}
-                              <QF_input type="date" value={quoteBatchStart} onChange={e => setQuoteBatchStart(e.target.value)} style={{ borderColor: "#6ee7b7" }} />
+                              {qfLbl("대상기간 시작 *")}
+                              <input type="date" value={quoteBatchStart} onChange={e => setQuoteBatchStart(e.target.value)} style={{ ...qfIs, borderColor: "#6ee7b7" }} />
                             </div>
                             <div>
-                              {QF_label("대상기간 종료 *")}
-                              <QF_input type="date" value={quoteBatchEnd} onChange={e => setQuoteBatchEnd(e.target.value)} style={{ borderColor: "#6ee7b7" }} />
+                              {qfLbl("대상기간 종료 *")}
+                              <input type="date" value={quoteBatchEnd} onChange={e => setQuoteBatchEnd(e.target.value)} style={{ ...qfIs, borderColor: "#6ee7b7" }} />
                             </div>
                             <div>
-                              {QF_label("누적 건수")}
-                              <QF_input type="number" min="0" value={quoteBatchCount} onChange={e => setQuoteBatchCount(e.target.value)} placeholder="0건" style={{ borderColor: "#6ee7b7" }} />
+                              {qfLbl("누적 건수")}
+                              <input type="number" min="0" value={quoteBatchCount} placeholder="0건"
+                                onChange={e => setQuoteBatchCount(e.target.value)} style={{ ...qfIs, borderColor: "#6ee7b7" }} />
                             </div>
                             <div>
-                              {QF_label("입금 예정일")}
-                              <QF_input type="date" value={quotePaymentDueDate} onChange={e => setQuotePaymentDueDate(e.target.value)} style={{ borderColor: "#6ee7b7" }} />
+                              {qfLbl("입금 예정일")}
+                              <input type="date" value={quotePaymentDueDate} onChange={e => setQuotePaymentDueDate(e.target.value)} style={{ ...qfIs, borderColor: "#6ee7b7" }} />
                             </div>
                           </div>
                         </div>
                       </div>
                     );
                     return null;
-                  };
+                  })();
 
-                  const QuoteForm = () => (
+                  // 견적 폼 JSX (컴포넌트 아님 — IIFE로 즉시 계산)
+                  const quoteFormJsx = (
                     <div style={{ background: "#fdf4ff", borderRadius: 10, padding: "14px 16px", marginBottom: 12, border: "1px solid #e9d5ff" }}>
                       {/* 헤더 */}
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -989,12 +992,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       </div>
 
                       {/* 유형별 추가 입력 필드 */}
-                      <QuoteTypeExtraFields />
+                      {quoteTypeExtraJsx}
 
                       {quoteMode === "simple" ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                            <input type="number" min="0" value={quoteAmount}
+                            <input
+                              type="number" min="0"
+                              value={quoteAmount}
                               onChange={e => setQuoteAmount(e.target.value)}
                               placeholder="견적 금액 (원) *"
                               style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "7px 10px" }}
@@ -1074,6 +1079,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       )}
                     </div>
                   );
+
                   return (
                     <>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: formVisible ? 6 : 8 }}>
@@ -1085,7 +1091,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           </button>
                         )}
                       </div>
-                      {formVisible && <QuoteForm />}
+                      {formVisible && quoteFormJsx}
                       {hasQuotes ? detail.quotes.map(q => {
                         const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", bill: "계산서" };
                         const taxCatLabel: Record<string, string> = { normal: "일반", zero_rated: "영세율", consignment: "위수탁", consignment_zero_rated: "위수탁영세율" };
