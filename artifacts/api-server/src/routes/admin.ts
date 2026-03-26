@@ -690,6 +690,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
     quoteType, billingType,
     validUntil, issueDate, invoiceDueDate, paymentDueDate,
     prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
+    prepaidAccountId,
     batchPeriodStart, batchPeriodEnd,
   } = req.body as {
     amount?: number; items?: ItemInput[]; note?: string;
@@ -698,6 +699,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
     validUntil?: string; issueDate?: string;
     invoiceDueDate?: string; paymentDueDate?: string;
     prepaidBalanceBefore?: number; prepaidUsageAmount?: number; prepaidBalanceAfter?: number;
+    prepaidAccountId?: number;
     batchPeriodStart?: string; batchPeriodEnd?: string;
   };
   const selectedProjectIds: number[] = Array.isArray(req.body.selectedProjectIds)
@@ -723,29 +725,39 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
       res.status(400).json({ error: `견적은 '접수됨' 또는 '견적 발송' 상태에서만 생성 가능합니다. (현재: ${project.status})` }); return;
     }
 
-    // 선입금 차감: 거래처의 현재 잔액 자동 조회 및 검증
+    // 선입금 차감: 잔액 자동 조회 및 검증 (신 방식: prepaid_accounts 우선, 구 방식 fallback)
     let computedPrepaidBefore: number | null = null;
     let computedPrepaidAfter: number | null = null;
     let computedAmount: number | null = null;
     if (isPrepaidDeduction) {
       const usageAmt = Number(prepaidUsageAmount);
-      // 거래처의 가장 최근 선입금 관련 견적에서 balance_after 조회
       let currentBalance = 0;
-      if (project.companyId) {
+
+      if (prepaidAccountId) {
+        // ── 신 방식: prepaid_accounts 테이블에서 잔액 조회 ─────────────────────
+        const [acct] = await db
+          .select({ currentBalance: prepaidAccountsTable.currentBalance, status: prepaidAccountsTable.status })
+          .from(prepaidAccountsTable)
+          .where(eq(prepaidAccountsTable.id, prepaidAccountId));
+        if (!acct || acct.status !== "active") {
+          res.status(400).json({ error: "유효하지 않은 선입금 계정입니다." }); return;
+        }
+        currentBalance = Number(acct.currentBalance);
+      } else if (project.companyId) {
+        // ── 구 방식 fallback: quotes 테이블의 prepaidBalanceAfter ─────────────
         const [lastQ] = await db
           .select({ prepaidBalanceAfter: quotesTable.prepaidBalanceAfter })
           .from(quotesTable)
           .innerJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))
-          .where(
-            and(
-              eq(projectsTable.companyId, project.companyId),
-              sql`${quotesTable.quoteType} IN ('prepaid_deduction', 'b2c_prepaid')`
-            )
-          )
+          .where(and(
+            eq(projectsTable.companyId, project.companyId),
+            sql`${quotesTable.quoteType} IN ('prepaid_deduction', 'b2c_prepaid')`
+          ))
           .orderBy(desc(quotesTable.id))
           .limit(1);
         currentBalance = lastQ?.prepaidBalanceAfter != null ? Number(lastQ.prepaidBalanceAfter) : 0;
       }
+
       if (usageAmt > currentBalance) {
         res.status(400).json({
           error: `잔액 부족: 현재 잔액 ${currentBalance.toLocaleString()}원, 사용 요청 ${usageAmt.toLocaleString()}원`,
@@ -755,7 +767,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
       }
       computedPrepaidBefore = currentBalance;
       computedPrepaidAfter = currentBalance - usageAmt;
-      computedAmount = usageAmt; // 견적 금액 = 사용 금액
+      computedAmount = usageAmt;
     }
 
     // 누적 견적: 선택된 프로젝트들의 견적에서 품목 자동 생성 (DB 삭제 전에 조회)

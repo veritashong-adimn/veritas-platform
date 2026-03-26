@@ -435,7 +435,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         if (!selectedPrepaidAcctId) { onToast("차감할 선입금 계정을 선택하세요."); return; }
         const acct = compPrepaidAccounts.find(a => a.id === selectedPrepaidAcctId);
         if (!acct || acct.currentBalance < usageAmt) { onToast(`잔액 부족: 현재 잔액 ${acct?.currentBalance.toLocaleString() ?? 0}원`); return; }
-        body = { prepaidUsageAmount: usageAmt };
+        body = { prepaidUsageAmount: usageAmt, prepaidAccountId: selectedPrepaidAcctId };
       } else if (quoteType === "accumulated_batch") {
         // 누적 견적: 배치 UI의 "세금계산서 발행" 버튼을 사용
         onToast("누적 견적서는 배치 발행 버튼을 사용하세요.");
