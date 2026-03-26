@@ -5,6 +5,7 @@ import {
   customersTable, communicationsTable, translatorProfilesTable,
   contactsTable, companiesTable, translatorRatesTable,
   quoteItemsTable, calcQuoteItemAmounts,
+  billingBatchesTable, billingBatchItemsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
@@ -584,7 +585,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
     quoteType, billingType,
     validUntil, issueDate, invoiceDueDate, paymentDueDate,
     prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
-    batchPeriodStart, batchPeriodEnd, batchItemCount,
+    batchPeriodStart, batchPeriodEnd,
   } = req.body as {
     amount?: number; items?: ItemInput[]; note?: string;
     taxDocumentType?: string; taxCategory?: string;
@@ -592,14 +593,18 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
     validUntil?: string; issueDate?: string;
     invoiceDueDate?: string; paymentDueDate?: string;
     prepaidBalanceBefore?: number; prepaidUsageAmount?: number; prepaidBalanceAfter?: number;
-    batchPeriodStart?: string; batchPeriodEnd?: string; batchItemCount?: number;
+    batchPeriodStart?: string; batchPeriodEnd?: string;
   };
+  const selectedProjectIds: number[] = Array.isArray(req.body.selectedProjectIds)
+    ? (req.body.selectedProjectIds as unknown[]).map(Number).filter(n => !isNaN(n) && n > 0)
+    : [];
 
-  // items 배열이 있으면 합계 자동 계산
-  // prepaid_deduction은 amount를 사용 금액에서 자동 설정하므로 amount 불필요
   const hasItems = Array.isArray(items) && items.length > 0;
   const isPrepaidDeduction = quoteType === "prepaid_deduction";
-  if (!isPrepaidDeduction && !hasItems && (!amount || isNaN(Number(amount)) || Number(amount) <= 0)) {
+  const isAccumulatedBatch = quoteType === "accumulated_batch";
+  const hasSelectedProjects = selectedProjectIds.length > 0;
+
+  if (!isPrepaidDeduction && !(isAccumulatedBatch && hasSelectedProjects) && !hasItems && (!amount || isNaN(Number(amount)) || Number(amount) <= 0)) {
     res.status(400).json({ error: "견적 금액 또는 품목 목록이 필요합니다." }); return;
   }
   if (isPrepaidDeduction && (!prepaidUsageAmount || Number(prepaidUsageAmount) <= 0)) {
@@ -648,6 +653,30 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
       computedAmount = usageAmt; // 견적 금액 = 사용 금액
     }
 
+    // 누적 견적: 선택된 프로젝트들의 견적에서 품목 자동 생성 (DB 삭제 전에 조회)
+    type BatchProjectItem = { projectId: number; title: string; quoteId: number; quotePrice: number; serviceName: string };
+    let batchProjectItems: BatchProjectItem[] = [];
+    if (isAccumulatedBatch && hasSelectedProjects) {
+      // 현재 프로젝트 자신은 제외 (트랜잭션 내에서 기존 견적이 삭제되어 FK 충돌 방지)
+      const filteredPids = selectedProjectIds.filter(pid => pid !== projectId);
+      const projRows = await db.select({ id: projectsTable.id, title: projectsTable.title })
+        .from(projectsTable).where(inArray(projectsTable.id, filteredPids));
+      const projMap = new Map(projRows.map(p => [p.id, p.title]));
+      for (const pid of filteredPids) {
+        const [q] = await db.select().from(quotesTable).where(eq(quotesTable.projectId, pid)).orderBy(desc(quotesTable.id)).limit(1);
+        if (q) {
+          const qItems = await db.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, q.id));
+          batchProjectItems.push({
+            projectId: pid,
+            title: projMap.get(pid) ?? `프로젝트 #${pid}`,
+            quoteId: q.id,
+            quotePrice: Number(q.price),
+            serviceName: qItems[0]?.productName ?? "",
+          });
+        }
+      }
+    }
+
     // 기존 견적 삭제 (재생성)
     await db.delete(quotesTable).where(eq(quotesTable.projectId, projectId));
 
@@ -655,7 +684,24 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
     let totalPrice = isPrepaidDeduction ? (computedAmount ?? 0) : Number(amount ?? 0);
     type CalcItem = ItemInput & { supplyAmount: number; taxAmount: number; totalAmount: number };
     let calcItems: CalcItem[] = [];
-    if (hasItems) {
+
+    if (isAccumulatedBatch && batchProjectItems.length > 0) {
+      // 누적 견적: 각 선택 프로젝트 → 품목 1건 자동 생성
+      calcItems = batchProjectItems.map(bp => {
+        const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(1, bp.quotePrice, 0);
+        return {
+          productName: bp.title,
+          unit: "건",
+          quantity: 1,
+          unitPrice: bp.quotePrice,
+          supplyAmount,
+          taxAmount,
+          totalAmount,
+          memo: bp.serviceName || null,
+        } as CalcItem;
+      });
+      totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
+    } else if (hasItems) {
       calcItems = items!.map(it => {
         const qty = Number(it.quantity ?? 1);
         const up = Number(it.unitPrice);
@@ -664,6 +710,10 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
       });
       totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
     }
+
+    const computedBatchItemCount = isAccumulatedBatch && batchProjectItems.length > 0
+      ? batchProjectItems.length
+      : (calcItems.length > 0 ? calcItems.length : undefined);
 
     const result = await db.transaction(async tx => {
       const [quote] = await tx.insert(quotesTable).values({
@@ -687,13 +737,13 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
           : (prepaidBalanceAfter != null ? String(prepaidBalanceAfter) : null),
         batchPeriodStart: batchPeriodStart || null,
         batchPeriodEnd: batchPeriodEnd || null,
-        batchItemCount: batchItemCount ?? null,
+        batchItemCount: computedBatchItemCount ?? null,
       }).returning();
 
       if (calcItems.length > 0) {
         await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
           quoteId: quote.id,
-          productId: it.productId ?? null,
+          productId: (it as any).productId ?? null,
           productName: it.productName,
           unit: it.unit ?? "건",
           quantity: String(it.quantity ?? 1),
@@ -701,7 +751,26 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
           supplyAmount: String(it.supplyAmount),
           taxAmount: String(it.taxAmount),
           totalAmount: String(it.totalAmount),
-          memo: it.memo ?? null,
+          memo: (it as any).memo ?? null,
+        })));
+      }
+
+      // 누적 견적 배치 레코드 생성 (월말 청구/세금계산서 연계용)
+      if (isAccumulatedBatch && batchProjectItems.length > 0 && project.companyId && batchPeriodStart && batchPeriodEnd) {
+        const [batch] = await tx.insert(billingBatchesTable).values({
+          companyId: project.companyId,
+          periodStart: new Date(batchPeriodStart),
+          periodEnd: new Date(batchPeriodEnd),
+          status: "draft",
+          totalAmount: String(totalPrice),
+          quoteId: quote.id,
+        }).returning();
+        await tx.insert(billingBatchItemsTable).values(batchProjectItems.map(bp => ({
+          batchId: batch.id,
+          projectId: bp.projectId,
+          quoteId: bp.quoteId,
+          amount: String(bp.quotePrice),
+          serviceName: bp.serviceName || null,
         })));
       }
 
@@ -713,6 +782,61 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Admin: failed to create quote");
     res.status(500).json({ error: "견적 생성 실패." });
+  }
+});
+
+// ─── 누적 견적 후보 프로젝트 조회 ─────────────────────────────────────────────
+router.get("/admin/billing-candidates", ...adminGuard, async (req, res) => {
+  const { companyId, start, end } = req.query as { companyId?: string; start?: string; end?: string };
+  if (!companyId || !start || !end) {
+    res.status(400).json({ error: "companyId, start, end가 필요합니다." }); return;
+  }
+  const cid = Number(companyId);
+  if (isNaN(cid) || cid <= 0) { res.status(400).json({ error: "유효하지 않은 companyId." }); return; }
+
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  endDate.setHours(23, 59, 59, 999);
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+    res.status(400).json({ error: "유효하지 않은 날짜 형식." }); return;
+  }
+
+  try {
+    const billableStatuses = ["completed", "paid", "approved", "in_progress", "matched", "quoted"] as const;
+    const projects = await db
+      .select({ id: projectsTable.id, title: projectsTable.title, status: projectsTable.status, createdAt: projectsTable.createdAt })
+      .from(projectsTable)
+      .where(and(
+        eq(projectsTable.companyId, cid),
+        inArray(projectsTable.status, billableStatuses as unknown as string[]),
+        gte(projectsTable.createdAt, startDate),
+        lte(projectsTable.createdAt, endDate),
+      ))
+      .orderBy(desc(projectsTable.createdAt));
+
+    const result = await Promise.all(projects.map(async (p) => {
+      const [quote] = await db.select().from(quotesTable).where(eq(quotesTable.projectId, p.id)).orderBy(desc(quotesTable.id)).limit(1);
+      let serviceName = "";
+      if (quote) {
+        const qItems = await db.select({ productName: quoteItemsTable.productName }).from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quote.id)).limit(1);
+        serviceName = qItems[0]?.productName ?? "";
+      }
+      return {
+        projectId: p.id,
+        title: p.title,
+        status: p.status,
+        createdAt: p.createdAt,
+        quoteId: quote?.id ?? null,
+        quotePrice: quote ? Number(quote.price) : null,
+        quoteStatus: quote?.status ?? null,
+        serviceName,
+      };
+    }));
+
+    res.json(result);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch billing candidates");
+    res.status(500).json({ error: "청구 후보 조회 실패." });
   }
 });
 

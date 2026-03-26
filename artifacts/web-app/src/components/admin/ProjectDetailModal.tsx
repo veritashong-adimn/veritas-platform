@@ -113,7 +113,15 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [quotePrepaidUsage, setQuotePrepaidUsage] = useState("");
   const [quoteBatchStart, setQuoteBatchStart] = useState("");
   const [quoteBatchEnd, setQuoteBatchEnd] = useState("");
-  const [quoteBatchCount, setQuoteBatchCount] = useState("");
+  // 누적 견적 후보 조회 상태
+  type BatchCandidate = {
+    projectId: number; title: string; status: string; createdAt: string;
+    quoteId: number | null; quotePrice: number | null; quoteStatus: string | null; serviceName: string;
+  };
+  const [batchCandidates, setBatchCandidates] = useState<BatchCandidate[]>([]);
+  const [batchSelected, setBatchSelected] = useState<Set<number>>(new Set());
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchQueried, setBatchQueried] = useState(false);
 
   // 결제 등록
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -126,6 +134,28 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [creatingSettlement, setCreatingSettlement] = useState(false);
 
   const authH = { Authorization: `Bearer ${token}` };
+
+  const loadBatchCandidates = async () => {
+    const companyId = detail?.companyId;
+    if (!companyId) { onToast("거래처 정보가 없습니다. 프로젝트에 거래처를 먼저 설정하세요."); return; }
+    if (!quoteBatchStart || !quoteBatchEnd) { onToast("대상기간 시작·종료를 모두 입력하세요."); return; }
+    if (quoteBatchStart > quoteBatchEnd) { onToast("시작일이 종료일보다 늦을 수 없습니다."); return; }
+    setBatchLoading(true);
+    setBatchQueried(false);
+    setBatchCandidates([]);
+    setBatchSelected(new Set());
+    try {
+      const res = await fetch(api(`/api/admin/billing-candidates?companyId=${companyId}&start=${quoteBatchStart}&end=${quoteBatchEnd}`), { headers: authH });
+      const data = await res.json();
+      if (!res.ok) { onToast(`조회 실패: ${data.error}`); return; }
+      setBatchCandidates(data);
+      const autoSelect = new Set<number>((data as { projectId: number; quotePrice: number | null }[])
+        .filter(c => c.quotePrice != null).map(c => c.projectId));
+      setBatchSelected(autoSelect);
+      setBatchQueried(true);
+    } catch { onToast("조회 중 오류가 발생했습니다."); }
+    finally { setBatchLoading(false); }
+  };
 
   const loadDetail = async () => {
     setLoading(true);
@@ -306,6 +336,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         const usageAmt = Number(quotePrepaidUsage.replace(/,/g, ""));
         if (!usageAmt || usageAmt <= 0) { onToast("이번 사용 금액을 입력하세요."); return; }
         body = { prepaidUsageAmount: usageAmt };
+      } else if (quoteType === "accumulated_batch") {
+        // 누적 견적: 조회된 프로젝트에서 선택된 항목 전송
+        if (!batchQueried) { onToast("먼저 '누적 대상 조회' 버튼을 눌러 내역을 조회하세요."); return; }
+        if (batchSelected.size === 0) { onToast("견적에 포함할 항목을 1건 이상 선택하세요."); return; }
+        body = { selectedProjectIds: Array.from(batchSelected) };
       } else if (quoteMode === "items") {
         const validItems = quoteItemForms.filter(it => it.productName.trim() && Number(it.unitPrice) > 0);
         if (validItems.length === 0) { onToast("품목명과 단가를 입력하세요."); return; }
@@ -337,7 +372,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       if (quoteType === "accumulated_batch") {
         if (quoteBatchStart) body.batchPeriodStart = quoteBatchStart;
         if (quoteBatchEnd) body.batchPeriodEnd = quoteBatchEnd;
-        if (quoteBatchCount) body.batchItemCount = Number(quoteBatchCount);
       }
       const res = await fetch(api(`/api/admin/projects/${projectId}/quote`), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
@@ -349,7 +383,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       setQuoteAmount(""); setQuoteNote(""); setQuoteItemForms([defaultItem()]); setShowQuoteForm(false);
       setQuoteValidUntil(""); setQuoteIssueDate(""); setQuoteInvoiceDueDate(""); setQuotePaymentDueDate("");
       setQuotePrepaidUsage("");
-      setQuoteBatchStart(""); setQuoteBatchEnd(""); setQuoteBatchCount("");
+      setQuoteBatchStart(""); setQuoteBatchEnd(""); setBatchCandidates([]); setBatchSelected(new Set()); setBatchQueried(false);
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 견적 생성 실패"); }
     finally { setCreatingQuote(false); }
@@ -901,32 +935,117 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         </div>
                       );
                     }
-                    if (quoteType === "accumulated_batch") return (
-                      <div style={{ marginBottom: 10 }}>
-                        <div style={{ background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 8, padding: "10px 12px" }}>
-                          <div style={{ fontSize: 10, fontWeight: 800, color: "#065f46", marginBottom: 8 }}>누적 청구 정보</div>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8 }}>
-                            <div>
-                              {qfLbl("대상기간 시작 *")}
-                              <input type="date" value={quoteBatchStart} onChange={e => setQuoteBatchStart(e.target.value)} style={{ ...qfIs, borderColor: "#6ee7b7" }} />
+                    if (quoteType === "accumulated_batch") {
+                      const batchSelArr = batchCandidates.filter(c => batchSelected.has(c.projectId));
+                      const batchTotalSupply = batchSelArr.reduce((s, c) => s + (c.quotePrice ?? 0), 0);
+                      const batchTotalVat = 0;
+                      const batchTotal = batchTotalSupply + batchTotalVat;
+                      const statusLabel: Record<string, string> = {
+                        created: "접수", quoted: "견적발송", matched: "번역사배정",
+                        in_progress: "진행중", completed: "완료", paid: "결제완료", cancelled: "취소",
+                      };
+                      return (
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 8, padding: "10px 12px" }}>
+                            <div style={{ fontSize: 10, fontWeight: 800, color: "#065f46", marginBottom: 8 }}>누적 청구 정보</div>
+                            {/* 기간 + 조회 버튼 */}
+                            <div style={{ display: "flex", gap: 8, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 8 }}>
+                              <div>
+                                {qfLbl("대상기간 시작 *")}
+                                <input type="date" value={quoteBatchStart}
+                                  onChange={e => { setQuoteBatchStart(e.target.value); setBatchQueried(false); setBatchCandidates([]); setBatchSelected(new Set()); }}
+                                  style={{ ...qfIs, borderColor: "#6ee7b7", width: 130 }} />
+                              </div>
+                              <div>
+                                {qfLbl("대상기간 종료 *")}
+                                <input type="date" value={quoteBatchEnd}
+                                  onChange={e => { setQuoteBatchEnd(e.target.value); setBatchQueried(false); setBatchCandidates([]); setBatchSelected(new Set()); }}
+                                  style={{ ...qfIs, borderColor: "#6ee7b7", width: 130 }} />
+                              </div>
+                              <div>
+                                {qfLbl("입금 예정일")}
+                                <input type="date" value={quotePaymentDueDate} onChange={e => setQuotePaymentDueDate(e.target.value)} style={{ ...qfIs, borderColor: "#6ee7b7", width: 130 }} />
+                              </div>
+                              <button onClick={loadBatchCandidates} disabled={batchLoading || !quoteBatchStart || !quoteBatchEnd}
+                                style={{ padding: "6px 14px", background: "#065f46", color: "#fff", border: "none", borderRadius: 6, fontWeight: 700, fontSize: 12, cursor: "pointer", marginBottom: 1 }}>
+                                {batchLoading ? "조회중..." : "누적 대상 조회"}
+                              </button>
                             </div>
-                            <div>
-                              {qfLbl("대상기간 종료 *")}
-                              <input type="date" value={quoteBatchEnd} onChange={e => setQuoteBatchEnd(e.target.value)} style={{ ...qfIs, borderColor: "#6ee7b7" }} />
-                            </div>
-                            <div>
-                              {qfLbl("누적 건수")}
-                              <input type="number" min="0" value={quoteBatchCount} placeholder="0건"
-                                onChange={e => setQuoteBatchCount(e.target.value)} style={{ ...qfIs, borderColor: "#6ee7b7" }} />
-                            </div>
-                            <div>
-                              {qfLbl("입금 예정일")}
-                              <input type="date" value={quotePaymentDueDate} onChange={e => setQuotePaymentDueDate(e.target.value)} style={{ ...qfIs, borderColor: "#6ee7b7" }} />
-                            </div>
+
+                            {/* 조회 결과 테이블 */}
+                            {batchQueried && (
+                              <div>
+                                {batchCandidates.length === 0 ? (
+                                  <div style={{ padding: "12px 8px", textAlign: "center", fontSize: 12, color: "#6b7280", background: "#f9fafb", borderRadius: 6 }}>
+                                    해당 기간에 청구 가능한 프로젝트가 없습니다.
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div style={{ overflowX: "auto", maxHeight: 280, overflowY: "auto" }}>
+                                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                                        <thead>
+                                          <tr style={{ background: "#d1fae5", position: "sticky", top: 0 }}>
+                                            <th style={{ padding: "5px 6px", textAlign: "center", width: 30, borderBottom: "1px solid #6ee7b7" }}>
+                                              <input type="checkbox"
+                                                checked={batchCandidates.filter(c => c.quotePrice != null).every(c => batchSelected.has(c.projectId))}
+                                                onChange={e => {
+                                                  if (e.target.checked) setBatchSelected(new Set(batchCandidates.filter(c => c.quotePrice != null).map(c => c.projectId)));
+                                                  else setBatchSelected(new Set());
+                                                }} />
+                                            </th>
+                                            <th style={{ padding: "5px 6px", textAlign: "left", borderBottom: "1px solid #6ee7b7", color: "#065f46" }}>일자</th>
+                                            <th style={{ padding: "5px 6px", textAlign: "left", borderBottom: "1px solid #6ee7b7", color: "#065f46" }}>프로젝트명</th>
+                                            <th style={{ padding: "5px 6px", textAlign: "left", borderBottom: "1px solid #6ee7b7", color: "#065f46" }}>서비스/품목</th>
+                                            <th style={{ padding: "5px 6px", textAlign: "right", borderBottom: "1px solid #6ee7b7", color: "#065f46" }}>금액</th>
+                                            <th style={{ padding: "5px 6px", textAlign: "center", borderBottom: "1px solid #6ee7b7", color: "#065f46" }}>상태</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {batchCandidates.map((c, i) => {
+                                            const hasQuote = c.quotePrice != null;
+                                            const isChecked = batchSelected.has(c.projectId);
+                                            return (
+                                              <tr key={c.projectId} style={{ background: i % 2 === 0 ? "#f0fdf4" : "#fff", opacity: hasQuote ? 1 : 0.5 }}>
+                                                <td style={{ textAlign: "center", padding: "4px 6px" }}>
+                                                  <input type="checkbox" disabled={!hasQuote} checked={isChecked}
+                                                    onChange={e => {
+                                                      const next = new Set(batchSelected);
+                                                      if (e.target.checked) next.add(c.projectId); else next.delete(c.projectId);
+                                                      setBatchSelected(next);
+                                                    }} />
+                                                </td>
+                                                <td style={{ padding: "4px 6px", whiteSpace: "nowrap" }}>{c.createdAt.slice(0, 10)}</td>
+                                                <td style={{ padding: "4px 6px", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.title}>{c.title}</td>
+                                                <td style={{ padding: "4px 6px", color: "#6b7280", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.serviceName || "-"}</td>
+                                                <td style={{ padding: "4px 6px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                                                  {hasQuote ? `${(c.quotePrice!).toLocaleString()}원` : <span style={{ color: "#9ca3af" }}>견적 없음</span>}
+                                                </td>
+                                                <td style={{ textAlign: "center", padding: "4px 6px" }}>
+                                                  <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 4, background: "#d1fae5", color: "#065f46", fontWeight: 600 }}>
+                                                    {statusLabel[c.status] ?? c.status}
+                                                  </span>
+                                                </td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                    {/* 합계 */}
+                                    <div style={{ marginTop: 8, padding: "8px 10px", background: "#065f46", borderRadius: 6, color: "#fff", fontSize: 11, display: "flex", gap: 20, justifyContent: "flex-end", alignItems: "center" }}>
+                                      <span>선택 <strong>{batchSelected.size}건</strong></span>
+                                      <span>공급가액 <strong>{batchTotalSupply.toLocaleString()}원</strong></span>
+                                      <span>VAT <strong>{batchTotalVat.toLocaleString()}원</strong></span>
+                                      <span style={{ fontSize: 13 }}>총액 <strong>{batchTotal.toLocaleString()}원</strong></span>
+                                    </div>
+                                  </>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
-                      </div>
-                    );
+                      );
+                    }
                     return null;
                   })();
 
