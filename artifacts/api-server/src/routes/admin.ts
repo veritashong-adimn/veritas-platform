@@ -258,28 +258,58 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
     ]);
 
     // 거래처 + 담당자
-    let company: (typeof companiesTable.$inferSelect & { prepaidBalance: number | null }) | null = null;
+    let company: (typeof companiesTable.$inferSelect & { prepaidBalance: number | null; prepaidTotalDeposited: number; prepaidTotalUsed: number }) | null = null;
     let contact = null;
     if (project.companyId) {
       const [c] = await db.select().from(companiesTable).where(eq(companiesTable.id, project.companyId));
       if (c) {
-        // 해당 거래처의 최신 선입금 관련 견적에서 잔액 계산
+        // 해당 거래처 전체 프로젝트 ID
+        const companyProjects = await db
+          .select({ id: projectsTable.id })
+          .from(projectsTable)
+          .where(eq(projectsTable.companyId, project.companyId));
+        const companyProjectIds = companyProjects.map(p => p.id);
+
+        // 최신 선입금 잔액 (prepaid_balance_after 기준)
         const [lastPrepaidQuote] = await db
           .select({ prepaidBalanceAfter: quotesTable.prepaidBalanceAfter })
           .from(quotesTable)
           .innerJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))
-          .where(
-            and(
-              eq(projectsTable.companyId, project.companyId),
-              sql`${quotesTable.quoteType} IN ('prepaid_deduction', 'b2c_prepaid')`
-            )
-          )
+          .where(and(
+            eq(projectsTable.companyId, project.companyId),
+            sql`${quotesTable.quoteType} IN ('prepaid_deduction', 'b2c_prepaid')`
+          ))
           .orderBy(desc(quotesTable.id))
           .limit(1);
         const prepaidBalance = lastPrepaidQuote?.prepaidBalanceAfter != null
           ? Number(lastPrepaidQuote.prepaidBalanceAfter)
           : null;
-        company = { ...c, prepaidBalance };
+
+        // 총 입금액 (b2c_prepaid 견적 price 합산)
+        let prepaidTotalDeposited = 0;
+        let prepaidTotalUsed = 0;
+        if (companyProjectIds.length > 0) {
+          const [depRow] = await db
+            .select({ total: sql<number>`COALESCE(SUM(${quotesTable.price}), 0)::int` })
+            .from(quotesTable)
+            .where(and(
+              inArray(quotesTable.projectId, companyProjectIds),
+              sql`${quotesTable.quoteType} = 'b2c_prepaid'`
+            ));
+          prepaidTotalDeposited = depRow?.total ?? 0;
+
+          // 누적 사용액 (prepaid_deduction 견적의 usage_amount 합산)
+          const [usedRow] = await db
+            .select({ total: sql<number>`COALESCE(SUM(${quotesTable.prepaidUsageAmount}), 0)::int` })
+            .from(quotesTable)
+            .where(and(
+              inArray(quotesTable.projectId, companyProjectIds),
+              sql`${quotesTable.quoteType} = 'prepaid_deduction'`
+            ));
+          prepaidTotalUsed = usedRow?.total ?? 0;
+        }
+
+        company = { ...c, prepaidBalance, prepaidTotalDeposited, prepaidTotalUsed };
       }
     }
     if (project.contactId) {
