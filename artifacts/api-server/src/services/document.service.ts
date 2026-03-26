@@ -92,6 +92,28 @@ export type QuoteDoc = {
   /** 세무/발행 구분 */
   taxDocumentType?: "tax_invoice" | "bill";
   taxCategory?: "normal" | "zero_rated" | "consignment" | "consignment_zero_rated";
+
+  // ── 견적서 유형 ────────────────────────────────────────────────────────────
+  /** b2c_prepaid | b2b_standard | prepaid_deduction | accumulated_batch */
+  quoteType?: "b2c_prepaid" | "b2b_standard" | "prepaid_deduction" | "accumulated_batch";
+  /** postpaid_per_project | prepaid_wallet | monthly_billing */
+  billingType?: string;
+
+  // 공통 날짜
+  validUntil?: string | null;
+  issueDate?: string | null;
+  invoiceDueDate?: string | null;
+  paymentDueDate?: string | null;
+
+  // 선입금 차감 (prepaid_deduction)
+  prepaidBalanceBefore?: number | null;
+  prepaidUsageAmount?: number | null;
+  prepaidBalanceAfter?: number | null;
+
+  // 누적 견적 (accumulated_batch)
+  batchPeriodStart?: string | null;
+  batchPeriodEnd?: string | null;
+  batchItemCount?: number | null;
 };
 
 export type StatementDoc = {
@@ -304,9 +326,8 @@ function renderBankInfo(bank?: BankInfo | null): string {
   </div>`;
 }
 
-// ── 견적서 HTML 빌더 ─────────────────────────────────────────────────────────
+// ── 견적서 공통 라벨/헬퍼 ────────────────────────────────────────────────────
 
-// 세무 구분 라벨 맵
 const TAX_DOC_LABEL: Record<string, string> = {
   tax_invoice: "세금계산서",
   bill: "계산서",
@@ -317,18 +338,21 @@ const TAX_CAT_LABEL: Record<string, string> = {
   consignment: "위수탁",
   consignment_zero_rated: "위수탁영세율",
 };
+const QUOTE_TYPE_LABEL: Record<string, string> = {
+  b2c_prepaid: "B2C 선입금",
+  b2b_standard: "B2B 일반",
+  prepaid_deduction: "선입금 차감",
+  accumulated_batch: "누적 견적",
+};
+const BILLING_TYPE_LABEL: Record<string, string> = {
+  postpaid_per_project: "건별 후불",
+  prepaid_wallet: "선입금",
+  monthly_billing: "월 청구",
+};
 
-export function buildQuoteHtml(doc: QuoteDoc): string {
-  const validDays = doc.validDays ?? 30;
-  const taxDocType = doc.taxDocumentType ?? "tax_invoice";
-  const taxCat = doc.taxCategory ?? "normal";
-  const isBill = taxDocType === "bill";
-  const isZeroRated = taxCat === "zero_rated";
-  const isConsignment = taxCat === "consignment" || taxCat === "consignment_zero_rated";
-  const isConsignmentZero = taxCat === "consignment_zero_rated";
-
-  /* 품목 테이블 행 — quote_items 배열 or 단일 요약 행 폴백 */
-  const hasItems = doc.items && doc.items.length > 0;
+/** quote_items 테이블 or 단일 요약 행 렌더 → { itemRows, supply, tax, total } */
+function calcItemData(doc: QuoteDoc) {
+  const hasItems = !!(doc.items && doc.items.length > 0);
   const itemRows = hasItems
     ? doc.items!.map((item, i) => `
       <tr>
@@ -362,46 +386,12 @@ export function buildQuoteHtml(doc: QuoteDoc): string {
     ? doc.items!.reduce((s, it) => s + Number(it.totalAmount), 0)
     : (doc.totalAmount ?? (supply + tax));
 
-  const body = `
-  <!-- 문서 헤더 -->
-  <div class="doc-header">
-    <div class="doc-title-block">
-      <h1>견 적 서</h1>
-      <p>QUOTATION</p>
-      <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap;">
-        <span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:800;background:${isBill ? "#fef3c7" : "#eff6ff"};color:${isBill ? "#92400e" : "#1d4ed8"};border:1px solid ${isBill ? "#fde68a" : "#bfdbfe"}">
-          ${esc(TAX_DOC_LABEL[taxDocType] ?? taxDocType)}
-        </span>
-        <span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:${isConsignment ? "#fdf4ff" : isZeroRated ? "#f0fdf4" : "#f8fafc"};color:${isConsignment ? "#7c3aed" : isZeroRated ? "#166534" : "#374151"};border:1px solid ${isConsignment ? "#d8b4fe" : isZeroRated ? "#bbf7d0" : "#e2e8f0"}">
-          ${esc(TAX_CAT_LABEL[taxCat] ?? taxCat)}
-        </span>
-      </div>
-    </div>
-    <div class="doc-meta">
-      <div><span class="label">문서번호</span><strong>${esc(doc.docNumber)}</strong></div>
-      <div><span class="label">발행일</span><strong>${fmtDate(doc.issuedAt)}</strong></div>
-      <div><span class="label">유효기간</span><strong>발행일로부터 ${validDays}일</strong></div>
-      <div><span class="label">프로젝트</span><strong>#${doc.projectId}</strong></div>
-      ${doc.quoteId ? `<div><span class="label">견적ID</span><strong>Q-${String(doc.quoteId).padStart(5, "0")}</strong></div>` : ""}
-      <div><span class="badge">${esc(STATUS_KO[doc.projectStatus] ?? doc.projectStatus)}</span></div>
-    </div>
-  </div>
+  return { itemRows, supply, tax, total };
+}
 
-  <!-- 발신·수신 -->
-  <div class="party-grid no-break">
-    ${renderSender(doc.platform)}
-    ${renderReceiver(doc.company, doc.contact)}
-  </div>
-
-  <!-- 프로젝트 정보 한 줄 -->
-  <div style="font-size:12px;color:#374151;margin-bottom:12px;padding:8px 12px;background:#f8fafc;border-radius:6px;border-left:3px solid #1e3a8a">
-    <strong>프로젝트:</strong> ${esc(doc.projectTitle)}
-    ${doc.customerEmail ? ` &nbsp;|&nbsp; <strong>고객:</strong> ${esc(doc.customerEmail)}` : ""}
-    ${doc.quoteCreatedAt ? ` &nbsp;|&nbsp; <strong>견적일:</strong> ${fmtDate(doc.quoteCreatedAt)}` : ""}
-    ${doc.quoteStatus ? ` &nbsp;|&nbsp; <strong>견적상태:</strong> ${esc(STATUS_KO[doc.quoteStatus] ?? doc.quoteStatus)}` : ""}
-  </div>
-
-  <!-- 품목 테이블 -->
+/** 품목표 HTML 블록 */
+function renderItemTable(itemRows: string, supply: number, tax: number, total: number): string {
+  return `
   <div style="margin-bottom:0" class="no-break">
     <p class="sec-title">공급 내역</p>
     <table class="item-table">
@@ -427,57 +417,357 @@ export function buildQuoteHtml(doc: QuoteDoc): string {
         </tr>
       </tfoot>
     </table>
-  </div>
+  </div>`;
+}
 
-  <!-- 금액 요약 -->
+/** 서명+푸터 공통 */
+function renderSignatureAndFooter(platform: PlatformInfo): string {
+  return `
+  <div class="sig-area no-break">
+    <div class="sig-box">
+      <p>${esc(platform.name)}</p>
+      <div class="sig-line">(인)</div>
+    </div>
+  </div>
+  <div class="doc-footer">
+    <p>${esc(platform.name)} · ${esc(platform.address ?? "")} · ${esc(platform.phone ?? "")} · ${esc(platform.email ?? "")}</p>
+  </div>`;
+}
+
+/** 공통 문서 헤더 */
+function renderDocHeader(doc: QuoteDoc, h1: string, sub: string, extraBadges = ""): string {
+  const taxDocType = doc.taxDocumentType ?? "tax_invoice";
+  const taxCat = doc.taxCategory ?? "normal";
+  const isBill = taxDocType === "bill";
+  const isZeroRated = taxCat === "zero_rated";
+  const isConsignment = taxCat === "consignment" || taxCat === "consignment_zero_rated";
+
+  const taxBadge = `
+    <span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:800;background:${isBill ? "#fef3c7" : "#eff6ff"};color:${isBill ? "#92400e" : "#1d4ed8"};border:1px solid ${isBill ? "#fde68a" : "#bfdbfe"}">
+      ${esc(TAX_DOC_LABEL[taxDocType] ?? taxDocType)}
+    </span>
+    <span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:${isConsignment ? "#fdf4ff" : isZeroRated ? "#f0fdf4" : "#f8fafc"};color:${isConsignment ? "#7c3aed" : isZeroRated ? "#166534" : "#374151"};border:1px solid ${isConsignment ? "#d8b4fe" : isZeroRated ? "#bbf7d0" : "#e2e8f0"}">
+      ${esc(TAX_CAT_LABEL[taxCat] ?? taxCat)}
+    </span>`;
+
+  return `
+  <div class="doc-header">
+    <div class="doc-title-block">
+      <h1>${h1}</h1>
+      <p>${sub}</p>
+      <div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap;">
+        ${taxBadge}
+        ${extraBadges}
+      </div>
+    </div>
+    <div class="doc-meta">
+      <div><span class="label">문서번호</span><strong>${esc(doc.docNumber)}</strong></div>
+      <div><span class="label">발행일</span><strong>${fmtDate(doc.issuedAt)}</strong></div>
+      <div><span class="label">프로젝트</span><strong>#${doc.projectId}</strong></div>
+      ${doc.quoteId ? `<div><span class="label">견적ID</span><strong>Q-${String(doc.quoteId).padStart(5, "0")}</strong></div>` : ""}
+      <div><span class="badge">${esc(STATUS_KO[doc.projectStatus] ?? doc.projectStatus)}</span></div>
+    </div>
+  </div>`;
+}
+
+/** 공통 프로젝트 정보 바 */
+function renderProjectBar(doc: QuoteDoc): string {
+  return `
+  <div style="font-size:12px;color:#374151;margin-bottom:12px;padding:8px 12px;background:#f8fafc;border-radius:6px;border-left:3px solid #1e3a8a">
+    <strong>프로젝트:</strong> ${esc(doc.projectTitle)}
+    ${doc.customerEmail ? ` &nbsp;|&nbsp; <strong>고객:</strong> ${esc(doc.customerEmail)}` : ""}
+    ${doc.quoteCreatedAt ? ` &nbsp;|&nbsp; <strong>견적일:</strong> ${fmtDate(doc.quoteCreatedAt)}` : ""}
+    ${doc.quoteStatus ? ` &nbsp;|&nbsp; <strong>견적상태:</strong> ${esc(STATUS_KO[doc.quoteStatus] ?? doc.quoteStatus)}` : ""}
+  </div>`;
+}
+
+// ── 세무 분기별 금액 요약 & 안내문 ───────────────────────────────────────────
+
+function renderTaxAmountSummary(doc: QuoteDoc, supply: number, tax: number, total: number, totalLabel = "견적 총액"): string {
+  const taxDocType = doc.taxDocumentType ?? "tax_invoice";
+  const taxCat = doc.taxCategory ?? "normal";
+  const isBill = taxDocType === "bill";
+  const isZeroRated = taxCat === "zero_rated";
+  const isConsignment = taxCat === "consignment" || taxCat === "consignment_zero_rated";
+  const isConsignmentZero = taxCat === "consignment_zero_rated";
+
+  const taxRow = isBill
+    ? `<div class="amt-row"><span class="a-label" style="color:#92400e">세액 없음 (계산서)</span><span class="a-value" style="color:#9ca3af">—</span></div>`
+    : isZeroRated
+      ? `<div class="amt-row"><span class="a-label">세액 <span style="font-size:10px;background:#dcfce7;color:#166534;padding:1px 5px;border-radius:3px">영세율</span></span><span class="a-value">0원</span></div>`
+      : isConsignment
+        ? `<div class="amt-row"><span class="a-label">부가세 (VAT) <span style="font-size:10px;background:#fdf4ff;color:#7c3aed;padding:1px 5px;border-radius:3px">${isConsignmentZero ? "위수탁영세율" : "위수탁"}</span></span><span class="a-value">${isConsignmentZero ? "0원" : fmt(tax)}</span></div>`
+        : `<div class="amt-row"><span class="a-label">부가세 (VAT 10%)</span><span class="a-value">${fmt(tax)}</span></div>`;
+
+  const consignmentNote = isConsignment ? `
+  <div style="margin-top:8px;padding:8px 12px;background:#fdf4ff;border:1px solid #d8b4fe;border-radius:6px;font-size:11px;color:#7c3aed">
+    ※ 위수탁 거래: 본 견적서는 위수탁 계약에 따른 공급가액으로 작성되었습니다.${isConsignmentZero ? " 영세율이 적용됩니다." : ""}
+  </div>` : "";
+
+  return `
   <div class="amount-summary no-break">
     <div class="amount-rows">
       <div class="amt-row"><span class="a-label">공급가액</span><span class="a-value">${fmt(supply)}</span></div>
-      ${isBill
-        ? `<div class="amt-row"><span class="a-label" style="color:#92400e">세액 없음 (계산서)</span><span class="a-value" style="color:#9ca3af">—</span></div>`
-        : isZeroRated
-          ? `<div class="amt-row"><span class="a-label">세액 <span style="font-size:10px;background:#dcfce7;color:#166534;padding:1px 5px;border-radius:3px">영세율</span></span><span class="a-value">0원</span></div>`
-          : isConsignment
-            ? `<div class="amt-row"><span class="a-label">부가세 (VAT) <span style="font-size:10px;background:#fdf4ff;color:#7c3aed;padding:1px 5px;border-radius:3px">${isConsignmentZero ? "위수탁영세율" : "위수탁"}</span></span><span class="a-value">${isConsignmentZero ? "0원" : fmt(tax)}</span></div>`
-            : `<div class="amt-row"><span class="a-label">부가세 (VAT 10%)</span><span class="a-value">${fmt(tax)}</span></div>`
-      }
-      <div class="amt-row total-row"><span class="a-label">견적 총액</span><span class="a-value">${fmt(total)}</span></div>
+      ${taxRow}
+      <div class="amt-row total-row"><span class="a-label">${esc(totalLabel)}</span><span class="a-value">${fmt(total)}</span></div>
+    </div>
+  </div>
+  ${consignmentNote}`;
+}
+
+function renderTaxGuideText(doc: QuoteDoc): string {
+  const taxDocType = doc.taxDocumentType ?? "tax_invoice";
+  const taxCat = doc.taxCategory ?? "normal";
+  const isBill = taxDocType === "bill";
+  const isZeroRated = taxCat === "zero_rated";
+  const isConsignment = taxCat === "consignment" || taxCat === "consignment_zero_rated";
+  if (isBill) return "· 본 계산서는 부가세가 포함되지 않습니다.";
+  if (isZeroRated) return "· 영세율이 적용되어 세액은 0원입니다.";
+  if (isConsignment) return "· 위수탁 거래 기준으로 작성되었습니다.";
+  return "· 견적 금액에는 부가세(VAT 10%)가 포함됩니다.";
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ── 견적서 유형별 빌더 ────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** B2C 선입금 견적서 */
+export function buildB2CPrepaidQuoteHtml(doc: QuoteDoc): string {
+  const { itemRows, supply, tax, total } = calcItemData(doc);
+
+  const body = `
+  ${renderDocHeader(doc, "견 적 서", "B2C PREPAID QUOTATION",
+    `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:#fef3c7;color:#92400e;border:1px solid #fde68a">B2C 선입금</span>`
+  )}
+
+  <div class="party-grid no-break">
+    ${renderSender(doc.platform)}
+    ${renderReceiver(doc.company, doc.contact)}
+  </div>
+
+  ${renderProjectBar(doc)}
+
+  <!-- 유효기간 / 결제 안내 -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+    <div style="border:1px solid #fde68a;border-radius:6px;padding:10px 12px;background:#fffbeb;font-size:12px">
+      <div style="font-size:10px;font-weight:800;color:#92400e;margin-bottom:6px;text-transform:uppercase">견적 유효기간</div>
+      <div style="color:#374151">
+        ${doc.validUntil
+          ? `<strong>${fmtDate(doc.validUntil)}</strong>까지`
+          : `발행일로부터 <strong>${doc.validDays ?? 30}일</strong>`}
+      </div>
+    </div>
+    <div style="border:1px solid #bbf7d0;border-radius:6px;padding:10px 12px;background:#f0fdf4;font-size:12px">
+      <div style="font-size:10px;font-weight:800;color:#166534;margin-bottom:6px;text-transform:uppercase">결제 안내</div>
+      <div style="color:#374151">선입금 완납 후 작업 시작<br/>
+        ${doc.paymentDueDate ? `입금 기한: <strong>${fmtDate(doc.paymentDueDate)}</strong>` : "입금 기한: 견적 확인 후 협의"}
+      </div>
     </div>
   </div>
 
-  ${isConsignment ? `
-  <div style="margin-top:8px;padding:8px 12px;background:#fdf4ff;border:1px solid #d8b4fe;border-radius:6px;font-size:11px;color:#7c3aed">
-    ※ 위수탁 거래: 본 견적서는 위수탁 계약에 따른 공급가액으로 작성되었습니다.${isConsignmentZero ? " 영세율이 적용됩니다." : ""}
-  </div>` : ""}
+  ${renderItemTable(itemRows, supply, tax, total)}
+  ${renderTaxAmountSummary(doc, supply, tax, total, "견적 총액 (선입금)")}
 
-  <!-- 계좌 & 안내 -->
   <div class="info-grid no-break">
     ${renderBankInfo(doc.bank)}
     <div class="info-box guide">
       <h4>안내 사항</h4>
-      <p>· 본 견적서는 발행일로부터 <strong>${validDays}일</strong>간 유효합니다.<br/>
+      <p>· 본 견적서는 B2C 선입금 방식으로 발행되었습니다.<br/>
+         ${renderTaxGuideText(doc)}<br/>
+         · 선입금 확인 후 즉시 작업이 시작됩니다.<br/>
+         · 입금 후 환불은 착수 전까지만 가능합니다.<br/>
+         · 문의: ${esc(doc.platform.email ?? doc.platform.phone ?? "담당자에게 연락바랍니다")}</p>
+    </div>
+  </div>
+
+  ${doc.notes ? `<div class="notes-box no-break"><h4>비고</h4><p>${esc(doc.notes)}</p></div>` : ""}
+  ${renderSignatureAndFooter(doc.platform)}`;
+
+  return baseHtml(`B2C 선입금 견적서 ${doc.docNumber} — ${doc.projectTitle}`, body);
+}
+
+/** B2B 일반 견적서 */
+export function buildB2BStandardQuoteHtml(doc: QuoteDoc): string {
+  const { itemRows, supply, tax, total } = calcItemData(doc);
+  const taxDocType = doc.taxDocumentType ?? "tax_invoice";
+  const taxCat = doc.taxCategory ?? "normal";
+
+  const body = `
+  ${renderDocHeader(doc, "견 적 서", "B2B STANDARD QUOTATION",
+    `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe">B2B 일반</span>`
+  )}
+
+  <div class="party-grid no-break">
+    ${renderSender(doc.platform)}
+    ${renderReceiver(doc.company, doc.contact)}
+  </div>
+
+  ${renderProjectBar(doc)}
+
+  <!-- 발행 일정 정보 -->
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
+    <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;background:#f8fafc;font-size:11px">
+      <div style="font-size:9px;font-weight:800;color:#6b7280;margin-bottom:4px;text-transform:uppercase">세금계산서 구분</div>
+      <strong>${esc(TAX_DOC_LABEL[taxDocType] ?? taxDocType)} / ${esc(TAX_CAT_LABEL[taxCat] ?? taxCat)}</strong>
+    </div>
+    <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;background:#f8fafc;font-size:11px">
+      <div style="font-size:9px;font-weight:800;color:#6b7280;margin-bottom:4px;text-transform:uppercase">발행 예정일</div>
+      <strong>${doc.issueDate ? fmtDate(doc.issueDate) : "결제 완료 후"}</strong>
+    </div>
+    <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;background:#f8fafc;font-size:11px">
+      <div style="font-size:9px;font-weight:800;color:#6b7280;margin-bottom:4px;text-transform:uppercase">입금 예정일</div>
+      <strong>${doc.paymentDueDate ? fmtDate(doc.paymentDueDate) : "협의"}</strong>
+    </div>
+  </div>
+
+  ${renderItemTable(itemRows, supply, tax, total)}
+  ${renderTaxAmountSummary(doc, supply, tax, total)}
+
+  <div class="info-grid no-break">
+    ${renderBankInfo(doc.bank)}
+    <div class="info-box guide">
+      <h4>안내 사항</h4>
+      <p>· ${doc.validUntil ? `본 견적서는 <strong>${fmtDate(doc.validUntil)}</strong>까지 유효합니다.` : `발행일로부터 <strong>${doc.validDays ?? 30}일</strong>간 유효합니다.`}<br/>
          · 발행 구분: <strong>${esc(TAX_DOC_LABEL[taxDocType] ?? taxDocType)}</strong> / <strong>${esc(TAX_CAT_LABEL[taxCat] ?? taxCat)}</strong><br/>
-         ${isBill ? "· 본 계산서는 부가세가 포함되지 않습니다." : isZeroRated ? "· 영세율이 적용되어 세액은 0원입니다." : isConsignment ? "· 위수탁 거래 기준으로 작성되었습니다." : "· 견적 금액에는 부가세(VAT 10%)가 포함됩니다."}<br/>
+         ${renderTaxGuideText(doc)}<br/>
          · 계약 체결 후 착수금 선납 시 작업이 시작됩니다.<br/>
          · 문의: ${esc(doc.platform.email ?? doc.platform.phone ?? "담당자에게 연락바랍니다")}</p>
     </div>
   </div>
 
   ${doc.notes ? `<div class="notes-box no-break"><h4>비고</h4><p>${esc(doc.notes)}</p></div>` : ""}
+  ${renderSignatureAndFooter(doc.platform)}`;
 
-  <!-- 서명란 -->
-  <div class="sig-area no-break">
-    <div class="sig-box">
-      <p>${esc(doc.platform.name)}</p>
-      <div class="sig-line">(인)</div>
+  return baseHtml(`B2B 견적서 ${doc.docNumber} — ${doc.projectTitle}`, body);
+}
+
+/** 선입금 차감 견적서 */
+export function buildPrepaidDeductionQuoteHtml(doc: QuoteDoc): string {
+  const { itemRows, supply, tax, total } = calcItemData(doc);
+
+  const before = doc.prepaidBalanceBefore ?? 0;
+  const usage = doc.prepaidUsageAmount ?? total;
+  const after = doc.prepaidBalanceAfter ?? (before - usage);
+
+  const body = `
+  ${renderDocHeader(doc, "선입금 차감 견적서", "PREPAID DEDUCTION QUOTATION",
+    `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:#fdf4ff;color:#7c3aed;border:1px solid #d8b4fe">선입금 차감</span>`
+  )}
+
+  <div class="party-grid no-break">
+    ${renderSender(doc.platform)}
+    ${renderReceiver(doc.company, doc.contact)}
+  </div>
+
+  ${renderProjectBar(doc)}
+
+  <!-- 선입금 잔액 현황 -->
+  <div style="margin-bottom:12px;border:1px solid #d8b4fe;border-radius:8px;overflow:hidden">
+    <div style="background:#7c3aed;color:#fff;padding:6px 14px;font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase">선입금 잔액 현황</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;text-align:center;font-size:12px">
+      <div style="padding:12px;border-right:1px solid #e2e8f0">
+        <div style="font-size:9px;color:#6b7280;margin-bottom:4px">차감 전 잔액</div>
+        <strong style="font-size:14px;color:#374151">${fmt(before)}</strong>
+      </div>
+      <div style="padding:12px;border-right:1px solid #e2e8f0;background:#fdf4ff">
+        <div style="font-size:9px;color:#7c3aed;margin-bottom:4px">이번 사용 예정금액</div>
+        <strong style="font-size:14px;color:#7c3aed">- ${fmt(usage)}</strong>
+      </div>
+      <div style="padding:12px;background:#f5f3ff">
+        <div style="font-size:9px;color:#6b7280;margin-bottom:4px">차감 후 잔액</div>
+        <strong style="font-size:14px;color:${after < 0 ? "#dc2626" : "#166534"}">${fmt(after)}</strong>
+      </div>
     </div>
   </div>
 
-  <div class="doc-footer">
-    <p>${esc(doc.platform.name)} · ${esc(doc.platform.address ?? "")} · ${esc(doc.platform.phone ?? "")} · ${esc(doc.platform.email ?? "")}</p>
-  </div>`;
+  ${renderItemTable(itemRows, supply, tax, total)}
+  ${renderTaxAmountSummary(doc, supply, tax, total, "차감 금액")}
 
-  return baseHtml(`견적서 ${doc.docNumber} — ${doc.projectTitle}`, body);
+  ${after < 0 ? `
+  <div style="margin-top:8px;padding:8px 12px;background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;font-size:11px;color:#dc2626">
+    ⚠ 잔액 부족: 차감 후 잔액이 음수(-${fmt(Math.abs(after))})입니다. 선입금 충전 또는 별도 결제가 필요합니다.
+  </div>` : ""}
+
+  <div class="info-grid no-break">
+    ${renderBankInfo(doc.bank)}
+    <div class="info-box guide">
+      <h4>안내 사항</h4>
+      <p>· 본 견적서는 고객 선입금 잔액에서 차감하는 방식으로 처리됩니다.<br/>
+         ${renderTaxGuideText(doc)}<br/>
+         · 선입금 잔액 부족 시 별도 입금이 필요합니다.<br/>
+         · 잔액 충전 문의: ${esc(doc.platform.email ?? doc.platform.phone ?? "담당자에게 연락바랍니다")}</p>
+    </div>
+  </div>
+
+  ${doc.notes ? `<div class="notes-box no-break"><h4>비고</h4><p>${esc(doc.notes)}</p></div>` : ""}
+  ${renderSignatureAndFooter(doc.platform)}`;
+
+  return baseHtml(`선입금 차감 견적서 ${doc.docNumber} — ${doc.projectTitle}`, body);
+}
+
+/** 누적 견적서 */
+export function buildAccumulatedBatchQuoteHtml(doc: QuoteDoc): string {
+  const { itemRows, supply, tax, total } = calcItemData(doc);
+
+  const body = `
+  ${renderDocHeader(doc, "누 적 견 적 서", "ACCUMULATED BATCH QUOTATION",
+    `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:#ecfdf5;color:#065f46;border:1px solid #6ee7b7">누적 견적</span>`
+  )}
+
+  <div class="party-grid no-break">
+    ${renderSender(doc.platform)}
+    ${renderReceiver(doc.company, doc.contact)}
+  </div>
+
+  ${renderProjectBar(doc)}
+
+  <!-- 대상 기간 / 건수 / 입금 예정일 -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+    <div style="border:1px solid #6ee7b7;border-radius:6px;padding:10px 12px;background:#ecfdf5;font-size:11px">
+      <div style="font-size:9px;font-weight:800;color:#065f46;margin-bottom:5px;text-transform:uppercase">청구 대상 기간</div>
+      <strong>
+        ${doc.batchPeriodStart ? fmtDate(doc.batchPeriodStart) : "—"}
+        ~ ${doc.batchPeriodEnd ? fmtDate(doc.batchPeriodEnd) : "—"}
+      </strong>
+    </div>
+    <div style="border:1px solid #6ee7b7;border-radius:6px;padding:10px 12px;background:#ecfdf5;font-size:11px">
+      <div style="font-size:9px;font-weight:800;color:#065f46;margin-bottom:5px;text-transform:uppercase">누적 건수</div>
+      <strong>${doc.batchItemCount != null ? `${doc.batchItemCount.toLocaleString("ko-KR")}건` : "—"}</strong>
+    </div>
+    <div style="border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;background:#f8fafc;font-size:11px">
+      <div style="font-size:9px;font-weight:800;color:#6b7280;margin-bottom:5px;text-transform:uppercase">입금 예정일</div>
+      <strong>${doc.paymentDueDate ? fmtDate(doc.paymentDueDate) : doc.invoiceDueDate ? fmtDate(doc.invoiceDueDate) : "협의"}</strong>
+    </div>
+  </div>
+
+  ${renderItemTable(itemRows, supply, tax, total)}
+  ${renderTaxAmountSummary(doc, supply, tax, total, "합계 청구금액")}
+
+  <div class="info-grid no-break">
+    ${renderBankInfo(doc.bank)}
+    <div class="info-box guide">
+      <h4>안내 사항</h4>
+      <p>· 본 견적서는 ${doc.batchPeriodStart ? fmtDate(doc.batchPeriodStart) : ""} ~ ${doc.batchPeriodEnd ? fmtDate(doc.batchPeriodEnd) : ""} 기간의 누적 의뢰 건을 일괄 청구합니다.<br/>
+         ${renderTaxGuideText(doc)}<br/>
+         · 세금계산서는 별도 일정에 따라 발행됩니다.<br/>
+         · 문의: ${esc(doc.platform.email ?? doc.platform.phone ?? "담당자에게 연락바랍니다")}</p>
+    </div>
+  </div>
+
+  ${doc.notes ? `<div class="notes-box no-break"><h4>비고</h4><p>${esc(doc.notes)}</p></div>` : ""}
+  ${renderSignatureAndFooter(doc.platform)}`;
+
+  return baseHtml(`누적 견적서 ${doc.docNumber} — ${doc.projectTitle}`, body);
+}
+
+// ── 견적서 진입점 (유형별 분기) ───────────────────────────────────────────────
+
+export function buildQuoteHtml(doc: QuoteDoc): string {
+  const qt = doc.quoteType ?? "b2b_standard";
+  if (qt === "b2c_prepaid")       return buildB2CPrepaidQuoteHtml(doc);
+  if (qt === "prepaid_deduction") return buildPrepaidDeductionQuoteHtml(doc);
+  if (qt === "accumulated_batch") return buildAccumulatedBatchQuoteHtml(doc);
+  return buildB2BStandardQuoteHtml(doc);   // b2b_standard (기본값)
 }
 
 // ── 거래명세서 HTML 빌더 ──────────────────────────────────────────────────────

@@ -171,6 +171,18 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
       taxAmount: hasQuoteItems ? null : 0,
       taxDocumentType: (quote?.taxDocumentType ?? "tax_invoice") as "tax_invoice" | "bill",
       taxCategory: (quote?.taxCategory ?? "normal") as "normal" | "zero_rated" | "consignment" | "consignment_zero_rated",
+      quoteType: (quote?.quoteType ?? "b2b_standard") as "b2c_prepaid" | "b2b_standard" | "prepaid_deduction" | "accumulated_batch",
+      billingType: quote?.billingType ?? "postpaid_per_project",
+      validUntil: quote?.validUntil ?? null,
+      issueDate: quote?.issueDate ?? null,
+      invoiceDueDate: quote?.invoiceDueDate ?? null,
+      paymentDueDate: quote?.paymentDueDate ?? null,
+      prepaidBalanceBefore: quote?.prepaidBalanceBefore != null ? Number(quote.prepaidBalanceBefore) : null,
+      prepaidUsageAmount: quote?.prepaidUsageAmount != null ? Number(quote.prepaidUsageAmount) : null,
+      prepaidBalanceAfter: quote?.prepaidBalanceAfter != null ? Number(quote.prepaidBalanceAfter) : null,
+      batchPeriodStart: quote?.batchPeriodStart ?? null,
+      batchPeriodEnd: quote?.batchPeriodEnd ?? null,
+      batchItemCount: quote?.batchItemCount ?? null,
       notes,
     });
 

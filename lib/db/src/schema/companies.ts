@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, varchar } from "drizzle-orm/pg-core";
 
 export const companiesTable = pgTable("companies", {
   id: serial("id").primaryKey(),
@@ -11,6 +11,8 @@ export const companiesTable = pgTable("companies", {
   address: text("address"),
   website: text("website"),
   notes: text("notes"),
+  // postpaid_per_project | prepaid_wallet | monthly_billing
+  billingType: varchar("billing_type", { length: 50 }).notNull().default("postpaid_per_project"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

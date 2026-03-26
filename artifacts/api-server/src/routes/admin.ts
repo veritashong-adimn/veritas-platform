@@ -560,9 +560,21 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
   type ItemInput = { productName: string; unit?: string; quantity?: number; unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string };
-  const { amount, items, note, taxDocumentType, taxCategory } = req.body as {
+  const {
+    amount, items, note,
+    taxDocumentType, taxCategory,
+    quoteType, billingType,
+    validUntil, issueDate, invoiceDueDate, paymentDueDate,
+    prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
+    batchPeriodStart, batchPeriodEnd, batchItemCount,
+  } = req.body as {
     amount?: number; items?: ItemInput[]; note?: string;
     taxDocumentType?: string; taxCategory?: string;
+    quoteType?: string; billingType?: string;
+    validUntil?: string; issueDate?: string;
+    invoiceDueDate?: string; paymentDueDate?: string;
+    prepaidBalanceBefore?: number; prepaidUsageAmount?: number; prepaidBalanceAfter?: number;
+    batchPeriodStart?: string; batchPeriodEnd?: string; batchItemCount?: number;
   };
 
   // items 배열이 있으면 합계 자동 계산, 없으면 amount 필수
@@ -601,6 +613,18 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
         note: note?.trim() || null,
         taxDocumentType: taxDocumentType || "tax_invoice",
         taxCategory: taxCategory || "normal",
+        quoteType: quoteType || "b2b_standard",
+        billingType: billingType || "postpaid_per_project",
+        validUntil: validUntil || null,
+        issueDate: issueDate || null,
+        invoiceDueDate: invoiceDueDate || null,
+        paymentDueDate: paymentDueDate || null,
+        prepaidBalanceBefore: prepaidBalanceBefore != null ? String(prepaidBalanceBefore) : null,
+        prepaidUsageAmount: prepaidUsageAmount != null ? String(prepaidUsageAmount) : null,
+        prepaidBalanceAfter: prepaidBalanceAfter != null ? String(prepaidBalanceAfter) : null,
+        batchPeriodStart: batchPeriodStart || null,
+        batchPeriodEnd: batchPeriodEnd || null,
+        batchItemCount: batchItemCount ?? null,
       }).returning();
 
       if (calcItems.length > 0) {
