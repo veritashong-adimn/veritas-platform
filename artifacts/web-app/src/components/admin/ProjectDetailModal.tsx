@@ -1625,7 +1625,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: formVisible ? 6 : 8 }}>
                         <p style={sectionHd}>견적 ({detail.quotes.length})</p>
                         {canQuote && hasQuotes && !showQuoteForm && (
-                          <button onClick={() => setShowQuoteForm(true)}
+                          <button onClick={() => {
+                            const existingQt = (detail.quotes[0] as any)?.quoteType;
+                            if (existingQt) setQuoteType(existingQt as typeof quoteType);
+                            setShowQuoteForm(true);
+                          }}
                             style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#fdf4ff", border: "1px solid #d8b4fe", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
                             ✏️ 수정/재생성
                           </button>
