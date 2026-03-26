@@ -502,31 +502,31 @@ router.post("/admin/projects", ...adminGuard, async (req, res) => {
     return;
   }
 
-  let userId: number;
+  // customerId가 있으면 존재 여부만 확인 (customers 테이블은 userId 미보유)
   if (customerId) {
-    const [customer] = await db.select({ userId: customersTable.userId }).from(customersTable).where(eq(customersTable.id, customerId));
+    const [customer] = await db.select({ id: customersTable.id }).from(customersTable).where(eq(customersTable.id, customerId));
     if (!customer) { res.status(400).json({ error: "존재하지 않는 고객입니다." }); return; }
-    userId = customer.userId;
-  } else {
-    const adminUser = (req as any).user as { id: number };
-    userId = adminUser.id;
   }
+
+  // 프로젝트 userId = 현재 로그인한 관리자 (운영자가 직접 생성하는 경우)
+  const adminUser = (req as any).user as { id: number };
 
   try {
     const [project] = await db.insert(projectsTable).values({
-      userId,
-      customerId: customerId ?? null,
-      companyId: companyId ?? null,
-      contactId: contactId ?? null,
+      userId: adminUser.id,
+      customerId: customerId ? Number(customerId) : null,
+      companyId: companyId ? Number(companyId) : null,
+      contactId: contactId ? Number(contactId) : null,
       title: title.trim(),
-      adminId: ((req as any).user as { id: number }).id,
+      adminId: adminUser.id,
     }).returning();
 
+    req.log.info({ projectId: project.id, customerId, companyId, contactId }, "Admin: project created");
     await logEvent("project", project.id, "project_created", req.log, req.user ?? undefined);
     res.status(201).json(project);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to create project");
-    res.status(500).json({ error: "프로젝트 생성 실패." });
+  } catch (err: any) {
+    req.log.error({ err: err?.message, stack: err?.stack, body: { title, customerId, companyId, contactId } }, "Admin: failed to create project");
+    res.status(500).json({ error: `프로젝트 생성 실패: ${err?.message ?? "알 수 없는 오류"}` });
   }
 });
 
