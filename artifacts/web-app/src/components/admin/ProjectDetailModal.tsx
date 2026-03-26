@@ -116,6 +116,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [compPrepaidAccounts, setCompPrepaidAccounts] = useState<CompPrepaidAcct[]>([]);
   const [loadingCompPrepaid, setLoadingCompPrepaid] = useState(false);
   const [selectedPrepaidAcctId, setSelectedPrepaidAcctId] = useState<number | null>(null);
+  const [quickPrepaidAmount, setQuickPrepaidAmount] = useState("");
+  const [quickPrepaidNote, setQuickPrepaidNote] = useState("");
+  const [registeringPrepaid, setRegisteringPrepaid] = useState(false);
   const [quoteBatchStart, setQuoteBatchStart] = useState("");
   const [quoteBatchEnd, setQuoteBatchEnd] = useState("");
   // 누적 견적 후보 조회 상태
@@ -496,6 +499,36 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 견적 생성 실패"); }
     finally { setCreatingQuote(false); }
+  };
+
+  // 프로젝트 모달 내 선입금 계정 빠른 등록
+  const handleQuickRegisterPrepaid = async () => {
+    const amt = Number(quickPrepaidAmount.replace(/,/g, ""));
+    if (!amt || amt <= 0) { onToast("입금액을 입력하세요."); return; }
+    if (!detail?.company?.id) { onToast("거래처 정보가 없습니다."); return; }
+    setRegisteringPrepaid(true);
+    try {
+      const res = await fetch(api("/api/admin/prepaid-accounts"), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyId: detail.company.id, initialAmount: amt,
+          note: quickPrepaidNote || null, depositDate: new Date().toISOString().slice(0, 10),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast("선입금 계정이 등록되었습니다. 이제 차감 금액을 입력하세요.");
+      setQuickPrepaidAmount(""); setQuickPrepaidNote("");
+      // 계정 목록 갱신 후 자동 선택
+      const listRes = await fetch(api(`/api/admin/prepaid-accounts?companyId=${detail.company.id}`), { headers: authH });
+      if (listRes.ok) {
+        const list = await listRes.json();
+        const active = list.filter((a: CompPrepaidAcct) => a.status === "active");
+        setCompPrepaidAccounts(active);
+        if (active.length > 0) setSelectedPrepaidAcctId(active[0].id);
+      }
+    } catch { onToast("오류: 선입금 계정 등록 실패"); }
+    finally { setRegisteringPrepaid(false); }
   };
 
   const handleCreatePayment = async () => {
@@ -1008,16 +1041,42 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       const isInsufficient = selectedAcct != null && usageNum > 0 && usageNum > curBalance;
                       const shortageAmount = isInsufficient ? usageNum - curBalance : 0;
 
-                      // ─── Case A: 이 거래처의 선입금 계정이 없음 ───────────────────────────
+                      // ─── Case A: 이 거래처의 선입금 계정이 없음 → 인라인 빠른 등록 ───
                       if (!loadingCompPrepaid && compPrepaidAccounts.length === 0) {
                         return (
                           <div style={{ marginBottom: 10 }}>
                             <div style={{ background: "#fef9eb", border: "1px solid #fde68a", borderRadius: 8, padding: "12px 14px" }}>
                               <div style={{ fontSize: 10, fontWeight: 800, color: "#92400e", marginBottom: 8 }}>선입금 차감 — 계정 없음</div>
-                              <div style={{ padding: "10px 12px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fca5a5", fontSize: 12, color: "#dc2626", fontWeight: 600 }}>
-                                ⚠️ 이 거래처에 등록된 선입금 계정이 없습니다.<br/>
-                                <span style={{ fontWeight: 400 }}>선입금 현황 탭에서 이 거래처의 선입금 계정을 먼저 등록한 후 차감 견적서를 생성하세요.</span>
+                              <div style={{ padding: "8px 12px", background: "#fffbeb", borderRadius: 6, border: "1px solid #fde68a", fontSize: 12, color: "#92400e", marginBottom: 12 }}>
+                                ⚠️ 이 거래처에 등록된 선입금 계정이 없습니다. 아래에서 바로 등록할 수 있습니다.
                               </div>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 8 }}>선입금 계정 빠른 등록</div>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                                <div>
+                                  {qfLbl("최초 입금액 (원) *")}
+                                  <input
+                                    type="number" min="0" value={quickPrepaidAmount} placeholder="0"
+                                    onChange={e => setQuickPrepaidAmount(e.target.value)}
+                                    style={{ ...qfIs, borderColor: "#fde68a" }}
+                                  />
+                                </div>
+                                <div>
+                                  {qfLbl("메모 (선택)")}
+                                  <input
+                                    type="text" value={quickPrepaidNote} placeholder="예: 1분기 선입금"
+                                    onChange={e => setQuickPrepaidNote(e.target.value)}
+                                    style={{ ...qfIs, borderColor: "#fde68a" }}
+                                  />
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={handleQuickRegisterPrepaid}
+                                disabled={registeringPrepaid || !quickPrepaidAmount}
+                                style={{ padding: "7px 14px", background: registeringPrepaid || !quickPrepaidAmount ? "#9ca3af" : "#d97706", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: registeringPrepaid || !quickPrepaidAmount ? "not-allowed" : "pointer" }}
+                              >
+                                {registeringPrepaid ? "등록 중..." : "선입금 계정 등록 후 차감 진행"}
+                              </button>
                             </div>
                           </div>
                         );
