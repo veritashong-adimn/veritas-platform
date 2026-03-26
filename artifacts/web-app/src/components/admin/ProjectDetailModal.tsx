@@ -105,7 +105,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
 
   // 결제 등록
   const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [paymentMethod, setPaymentMethod] = useState("");
+  const [paymentNote, setPaymentNote] = useState("");
+  const [showPaymentForm, setShowPaymentForm] = useState(false);
   const [creatingPayment, setCreatingPayment] = useState(false);
+  // 정산 수동 생성
+  const [creatingSettlement, setCreatingSettlement] = useState(false);
 
   const authH = { Authorization: `Bearer ${token}` };
 
@@ -316,19 +322,43 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const handleCreatePayment = async () => {
     const amt = Number(paymentAmount.replace(/,/g, ""));
     if (!amt || amt <= 0) { onToast("유효한 금액을 입력하세요."); return; }
+    if (!paymentDate) { onToast("결제일을 입력하세요."); return; }
     setCreatingPayment(true);
     try {
       const res = await fetch(api(`/api/admin/projects/${projectId}/payment`), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: amt }),
+        body: JSON.stringify({
+          amount: amt,
+          paymentDate,
+          paymentMethod: paymentMethod || undefined,
+          paymentNote: paymentNote || undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       onToast(`결제 등록 완료 — ${amt.toLocaleString()}원`);
       setPaymentAmount("");
+      setPaymentDate(new Date().toISOString().slice(0, 10));
+      setPaymentMethod("");
+      setPaymentNote("");
+      setShowPaymentForm(false);
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 결제 등록 실패"); }
     finally { setCreatingPayment(false); }
+  };
+
+  const handleCreateSettlement = async () => {
+    setCreatingSettlement(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/settlement`), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast("정산이 생성되었습니다.");
+      await loadDetail(); onRefresh();
+    } catch { onToast("오류: 정산 생성 실패"); }
+    finally { setCreatingSettlement(false); }
   };
 
   const handleAddNote = async () => {
@@ -889,53 +919,160 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 })()}
 
                 {/* 결제 섹션 */}
-                <p style={{ ...sectionHd, marginTop: 10 }}>결제 ({detail.payments.length})</p>
-                {detail.status === "approved" && detail.payments.filter((pm: any) => pm.status === "paid").length === 0 && (
-                  <div style={{ background: "#f0fdf4", borderRadius: 10, padding: "12px 14px", marginBottom: 12, border: "1px solid #bbf7d0" }}>
-                    <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: "#059669" }}>결제 확인 등록</p>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <input
-                        type="number" min="0" value={paymentAmount}
-                        onChange={e => setPaymentAmount(e.target.value)}
-                        placeholder="결제 금액 (원)"
-                        style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "7px 10px" }}
-                        onKeyDown={e => e.key === "Enter" && handleCreatePayment()}
-                      />
-                      <PrimaryBtn onClick={handleCreatePayment} disabled={creatingPayment || !paymentAmount}
-                        style={{ fontSize: 12, padding: "7px 14px", background: "#059669", border: "none" }}>
-                        {creatingPayment ? "처리 중..." : "결제 확인"}
-                      </PrimaryBtn>
-                    </div>
-                    {detail.quotes.length > 0 && (
-                      <p style={{ margin: "6px 0 0", fontSize: 11, color: "#6b7280" }}>
-                        견적 금액: {Number((detail.quotes[0] as any).price ?? (detail.quotes[0] as any).amount).toLocaleString()}원
-                      </p>
-                    )}
-                  </div>
-                )}
-                {detail.payments.length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>등록된 결제가 없습니다.</p>
-                ) : detail.payments.map((pm: any) => (
-                  <div key={pm.id} style={{ display: "flex", gap: 14, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, alignItems: "center" }}>
-                    <span style={{ color: "#9ca3af" }}>#{pm.id}</span>
-                    <span style={{ fontWeight: 700, color: "#0891b2" }}>{Number(pm.amount).toLocaleString()}원</span>
-                    <StatusBadge status={pm.status} />
-                    <span style={{ color: "#9ca3af", marginLeft: "auto" }}>{new Date(pm.createdAt).toLocaleDateString("ko-KR")}</span>
-                  </div>
-                ))}
+                {(() => {
+                  const paidPayments = detail.payments.filter((pm: any) => pm.status === "paid");
+                  const canPay = detail.status === "approved";
+                  const hasPayment = paidPayments.length > 0;
+                  const payFormVisible = canPay && (showPaymentForm || !hasPayment);
+
+                  return (
+                    <>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, marginBottom: 4 }}>
+                        <p style={{ ...sectionHd, margin: 0 }}>결제 ({detail.payments.length})</p>
+                        {canPay && hasPayment && (
+                          <button onClick={() => setShowPaymentForm(v => !v)}
+                            style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: showPaymentForm ? "#f3f4f6" : "#fff", cursor: "pointer", color: "#374151" }}>
+                            {showPaymentForm ? "✕ 닫기" : "✏️ 수정 등록"}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* 견적 승인됨 → 결제 등록 유도 메시지 */}
+                      {canPay && !hasPayment && !payFormVisible && (
+                        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 14px", marginBottom: 10 }}>
+                          <p style={{ margin: 0, fontSize: 12, color: "#92400e", fontWeight: 600 }}>💳 견적이 승인되었습니다. 결제를 등록해주세요.</p>
+                        </div>
+                      )}
+
+                      {/* 결제 등록 폼 */}
+                      {payFormVisible && (
+                        <div style={{ background: "#f0fdf4", borderRadius: 10, padding: "14px 16px", marginBottom: 14, border: "1px solid #bbf7d0" }}>
+                          <p style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 700, color: "#059669" }}>
+                            {hasPayment ? "✏️ 결제 재등록" : "💳 결제 등록"}
+                          </p>
+                          {/* 금액 + 결제일 (필수) */}
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                            <div>
+                              <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 3 }}>금액 (원) *</label>
+                              <input type="number" min="0" value={paymentAmount}
+                                onChange={e => setPaymentAmount(e.target.value)}
+                                placeholder="예: 500000"
+                                style={{ ...inputStyle, width: "100%", fontSize: 13, padding: "7px 10px", boxSizing: "border-box" }} />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 3 }}>결제일 *</label>
+                              <input type="date" value={paymentDate}
+                                onChange={e => setPaymentDate(e.target.value)}
+                                style={{ ...inputStyle, width: "100%", fontSize: 13, padding: "7px 10px", boxSizing: "border-box" }} />
+                            </div>
+                          </div>
+                          {/* 결제 수단 (선택) */}
+                          <div style={{ marginBottom: 8 }}>
+                            <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 3 }}>결제 수단 (선택)</label>
+                            <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}
+                              style={{ ...inputStyle, width: "100%", fontSize: 13, padding: "7px 10px", boxSizing: "border-box" }}>
+                              <option value="">— 선택 안 함 —</option>
+                              <option value="bank_transfer">계좌이체</option>
+                              <option value="card">신용/체크카드</option>
+                              <option value="cash">현금</option>
+                              <option value="virtual_account">가상계좌</option>
+                              <option value="other">기타</option>
+                            </select>
+                          </div>
+                          {/* 비고 (선택) */}
+                          <div style={{ marginBottom: 10 }}>
+                            <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 3 }}>비고 (선택)</label>
+                            <input type="text" value={paymentNote}
+                              onChange={e => setPaymentNote(e.target.value)}
+                              placeholder="메모 또는 참고 사항"
+                              style={{ ...inputStyle, width: "100%", fontSize: 13, padding: "7px 10px", boxSizing: "border-box" }} />
+                          </div>
+                          {detail.quotes.length > 0 && (
+                            <p style={{ margin: "0 0 8px", fontSize: 11, color: "#6b7280" }}>
+                              📋 견적 금액: {Number((detail.quotes[0] as any).price ?? (detail.quotes[0] as any).amount).toLocaleString()}원
+                            </p>
+                          )}
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <PrimaryBtn onClick={handleCreatePayment} disabled={creatingPayment || !paymentAmount || !paymentDate}
+                              style={{ fontSize: 12, padding: "7px 18px", background: "#059669", border: "none" }}>
+                              {creatingPayment ? "처리 중..." : hasPayment ? "재등록" : "결제 등록"}
+                            </PrimaryBtn>
+                            {hasPayment && (
+                              <button onClick={() => setShowPaymentForm(false)}
+                                style={{ fontSize: 12, padding: "7px 14px", borderRadius: 7, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>
+                                취소
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 결제 목록 */}
+                      {detail.payments.length === 0 ? (
+                        <p style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>등록된 결제가 없습니다.</p>
+                      ) : detail.payments.map((pm: any) => {
+                        const methodLabel: Record<string, string> = {
+                          bank_transfer: "계좌이체", card: "카드", cash: "현금",
+                          virtual_account: "가상계좌", other: "기타",
+                        };
+                        return (
+                          <div key={pm.id} style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 14px", marginBottom: 8, fontSize: 13, border: "1px solid #e5e7eb" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                              <span style={{ color: "#9ca3af", fontSize: 11 }}>#{pm.id}</span>
+                              <span style={{ fontWeight: 700, color: "#0891b2", fontSize: 15 }}>{Number(pm.amount).toLocaleString()}원</span>
+                              <StatusBadge status={pm.status} />
+                              {pm.paymentMethod && (
+                                <span style={{ fontSize: 11, background: "#e0f2fe", color: "#0369a1", borderRadius: 4, padding: "2px 7px" }}>
+                                  {methodLabel[pm.paymentMethod] ?? pm.paymentMethod}
+                                </span>
+                              )}
+                              <span style={{ color: "#9ca3af", fontSize: 11, marginLeft: "auto" }}>
+                                {pm.paymentDate ? new Date(pm.paymentDate).toLocaleDateString("ko-KR") : new Date(pm.createdAt).toLocaleDateString("ko-KR")}
+                              </span>
+                            </div>
+                            {pm.paymentNote && (
+                              <p style={{ margin: "5px 0 0", fontSize: 12, color: "#6b7280" }}>📝 {pm.paymentNote}</p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </>
+                  );
+                })()}
 
                 {/* 정산 섹션 */}
-                <p style={{ ...sectionHd, marginTop: 10 }}>정산 ({detail.settlements.length})</p>
-                {detail.settlements.length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: 13 }}>등록된 정산이 없습니다.</p>
-                ) : detail.settlements.map((s: any) => (
-                  <div key={s.id} style={{ display: "flex", gap: 14, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, flexWrap: "wrap", alignItems: "center" }}>
-                    <span style={{ color: "#9ca3af" }}>#{s.id}</span>
-                    <span style={{ color: "#0891b2", fontWeight: 600 }}>총 {Number(s.totalAmount).toLocaleString()}원</span>
-                    <span style={{ color: "#059669", fontWeight: 600 }}>번역사 {Number(s.translatorAmount).toLocaleString()}원</span>
-                    <StatusBadge status={s.status} />
-                  </div>
-                ))}
+                {(() => {
+                  const hasPaid = detail.payments.some((pm: any) => pm.status === "paid");
+                  const hasSettlement = detail.settlements.length > 0;
+                  return (
+                    <>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, marginBottom: 4 }}>
+                        <p style={{ ...sectionHd, margin: 0 }}>정산 ({detail.settlements.length})</p>
+                        {hasPaid && !hasSettlement && (
+                          <button onClick={handleCreateSettlement} disabled={creatingSettlement}
+                            style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, border: "1px solid #059669", background: "#f0fdf4", cursor: "pointer", color: "#059669", fontWeight: 600 }}>
+                            {creatingSettlement ? "생성 중..." : "＋ 정산 생성"}
+                          </button>
+                        )}
+                      </div>
+                      {!hasSettlement ? (
+                        <p style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 4 }}>
+                          {hasPaid ? "정산이 아직 생성되지 않았습니다. 위 버튼으로 수동 생성하거나, 상태를 '완료'로 변경하면 자동 생성됩니다." : "등록된 정산이 없습니다."}
+                        </p>
+                      ) : detail.settlements.map((s: any) => (
+                        <div key={s.id} style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 14px", marginBottom: 6, fontSize: 13, border: "1px solid #e5e7eb" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                            <span style={{ color: "#9ca3af", fontSize: 11 }}>#{s.id}</span>
+                            <span style={{ color: "#0891b2", fontWeight: 600 }}>총 {Number(s.totalAmount).toLocaleString()}원</span>
+                            <span style={{ color: "#059669", fontWeight: 600 }}>번역사 {Number(s.translatorAmount).toLocaleString()}원</span>
+                            <span style={{ color: "#6b7280", fontSize: 11 }}>플랫폼 수수료 {Number(s.platformFee).toLocaleString()}원</span>
+                            <StatusBadge status={s.status} />
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  );
+                })()}
               </>
             )}
 

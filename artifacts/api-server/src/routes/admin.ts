@@ -641,7 +641,9 @@ router.post("/admin/projects/:id/payment", ...adminGuard, async (req, res) => {
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
-  const { amount } = req.body as { amount?: number };
+  const { amount, paymentDate, paymentMethod, paymentNote } = req.body as {
+    amount?: number; paymentDate?: string; paymentMethod?: string; paymentNote?: string;
+  };
   if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
     res.status(400).json({ error: "유효한 결제 금액(원)이 필요합니다." }); return;
   }
@@ -655,7 +657,12 @@ router.post("/admin/projects/:id/payment", ...adminGuard, async (req, res) => {
     if (existing.length > 0) { res.status(400).json({ error: "이미 결제 완료된 프로젝트입니다." }); return; }
 
     const result = await db.transaction(async tx => {
-      const [payment] = await tx.insert(paymentsTable).values({ projectId, amount: String(Number(amount)), status: "paid" }).returning();
+      const [payment] = await tx.insert(paymentsTable).values({
+        projectId, amount: String(Number(amount)), status: "paid",
+        paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
+        paymentMethod: paymentMethod || null,
+        paymentNote: paymentNote || null,
+      }).returning();
       await tx.update(projectsTable).set({ status: "paid" }).where(eq(projectsTable.id, projectId));
       await tx.update(quotesTable).set({ status: "approved" }).where(eq(quotesTable.projectId, projectId));
       return payment;
@@ -665,6 +672,36 @@ router.post("/admin/projects/:id/payment", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Admin: failed to record payment");
     res.status(500).json({ error: "결제 등록 실패." });
+  }
+});
+
+// ─── 관리자 정산 수동 생성 ─────────────────────────────────────────────────
+router.post("/admin/projects/:id/settlement", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
+
+  try {
+    const [existingSettlement] = await db.select({ id: settlementsTable.id }).from(settlementsTable).where(eq(settlementsTable.projectId, projectId));
+    if (existingSettlement) { res.status(400).json({ error: "이미 정산이 존재합니다." }); return; }
+
+    const [payment] = await db.select().from(paymentsTable).where(and(eq(paymentsTable.projectId, projectId), eq(paymentsTable.status, "paid")));
+    if (!payment) { res.status(400).json({ error: "결제 완료 데이터가 없습니다. 먼저 결제를 등록해주세요." }); return; }
+
+    const [task] = await db.select().from(tasksTable).where(eq(tasksTable.projectId, projectId));
+    if (!task?.translatorId) { res.status(400).json({ error: "배정된 번역사가 없습니다. 번역사를 배정한 후 정산을 생성해주세요." }); return; }
+
+    const total = Number(payment.amount);
+    const fee = Math.round(total * 0.2);
+    const [settlement] = await db.insert(settlementsTable).values({
+      projectId, translatorId: task.translatorId, paymentId: payment.id,
+      totalAmount: String(total), translatorAmount: String(total - fee), platformFee: String(fee),
+      status: "ready",
+    }).returning();
+    await logEvent("project", projectId, "settlement_created", req.log, req.user ?? undefined);
+    res.status(201).json(settlement);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to create settlement");
+    res.status(500).json({ error: "정산 생성 실패." });
   }
 });
 
