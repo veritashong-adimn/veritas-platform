@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import {
   db, companiesTable, contactsTable, projectsTable,
   paymentsTable, settlementsTable, quotesTable, communicationsTable, usersTable,
+  billingBatchesTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, inArray, sql, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
@@ -96,6 +97,9 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
 
     const projectIds = projects.map(p => p.id);
     let totalQuote = 0, totalPayment = 0, totalSettlement = 0;
+    let prepaidBalance: number | null = null;
+    let activeAccumulatedCount = 0;
+    let lastPaymentDate: string | null = null;
 
     if (projectIds.length > 0) {
       const [qRow] = await db
@@ -115,9 +119,41 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
         .from(settlementsTable)
         .where(inArray(settlementsTable.projectId, projectIds));
       totalSettlement = sRow?.total ?? 0;
+
+      // 선입금 잔액 (최신 선입금/차감 견적의 balance_after)
+      const [lastPrepaid] = await db
+        .select({ prepaidBalanceAfter: quotesTable.prepaidBalanceAfter })
+        .from(quotesTable)
+        .where(and(
+          inArray(quotesTable.projectId, projectIds),
+          inArray(quotesTable.quoteType as any, ["b2c_prepaid", "prepaid_deduction"]),
+          sql`${quotesTable.prepaidBalanceAfter} IS NOT NULL`,
+        ))
+        .orderBy(desc(quotesTable.id))
+        .limit(1);
+      if (lastPrepaid) prepaidBalance = Number(lastPrepaid.prepaidBalanceAfter);
+
+      // 마지막 결제일
+      const [lastPm] = await db
+        .select({ paidAt: paymentsTable.paidAt })
+        .from(paymentsTable)
+        .where(and(inArray(paymentsTable.projectId, projectIds), eq(paymentsTable.status, "paid")))
+        .orderBy(desc(paymentsTable.id))
+        .limit(1);
+      lastPaymentDate = lastPm?.paidAt ? String(lastPm.paidAt) : null;
     }
 
-    res.json({ ...company, contacts, projects, totalQuote, totalPayment, totalSettlement });
+    // 누적 청구 진행 중 건수
+    const activeBatches = await db
+      .select({ id: billingBatchesTable.id })
+      .from(billingBatchesTable)
+      .where(and(eq(billingBatchesTable.companyId, companyId), sql`${billingBatchesTable.status} != 'paid'`));
+    activeAccumulatedCount = activeBatches.length;
+
+    const lastProjectDate = projects.length > 0 ? projects[0].createdAt : null;
+    const unpaidAmount = Math.max(0, totalQuote - totalPayment);
+
+    res.json({ ...company, contacts, projects, totalQuote, totalPayment, totalSettlement, prepaidBalance, activeAccumulatedCount, unpaidAmount, lastProjectDate, lastPaymentDate });
   } catch (err) {
     req.log.error({ err }, "Companies: failed to get detail");
     res.status(500).json({ error: "거래처 상세 조회 실패." });

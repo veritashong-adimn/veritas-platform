@@ -38,7 +38,7 @@ function Section({ title, children, action }: { title: string; children: React.R
 }
 
 export function AdminDashboard({ user, token, onLogout }: { user: User; token: string; onLogout?: () => void }) {
-  const [adminTab, setAdminTab] = useState<"dashboard"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test">("dashboard");
+  const [adminTab, setAdminTab] = useState<"dashboard"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing">("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [payments, setPayments] = useState<AdminPayment[]>([]);
@@ -60,6 +60,25 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
   const [dateTo, setDateTo] = useState("");
   const [assignedAdminFilter, setAssignedAdminFilter] = useState<string>("all");
   const [projectPage, setProjectPage] = useState(1);
+  // 확장 필터 (견적 유형, 청구 방식, 입금 예정일, 빠른 필터)
+  const [projectQuickFilter, setProjectQuickFilter] = useState<string>("all");
+  const [projectQuoteTypeFilter, setProjectQuoteTypeFilter] = useState<string>("all");
+  const [projectBillingTypeFilter, setProjectBillingTypeFilter] = useState<string>("all");
+  const [projectPaymentDueDateFrom, setProjectPaymentDueDateFrom] = useState("");
+  const [projectPaymentDueDateTo, setProjectPaymentDueDateTo] = useState("");
+  const [projectCompanyIdFilter, setProjectCompanyIdFilter] = useState<string>("");
+  const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+
+  // 선입금 현황 탭
+  type PrepaidSummary = { companyId: number; companyName: string; currentBalance: number; totalDeposited: number; totalUsed: number; lastUsedAt: string | null; lastDepositAt: string | null };
+  const [prepaidSummary, setPrepaidSummary] = useState<PrepaidSummary[]>([]);
+  const [prepaidLoading, setPrepaidLoading] = useState(false);
+
+  // 누적 청구 탭
+  type BillingBatch = { id: number; companyId: number; companyName: string | null; periodStart: string | null; periodEnd: string | null; status: string; totalAmount: number; quoteId: number | null; quoteStatus: string | null; itemCount: number; createdAt: string };
+  const [billingBatches, setBillingBatches] = useState<BillingBatch[]>([]);
+  const [billingBatchesLoading, setBillingBatchesLoading] = useState(false);
+  const [billingBatchStatusFilter, setBillingBatchStatusFilter] = useState<string>("all");
 
   // other filters
   const [paymentFilter, setPaymentFilter] = useState<string>("all");
@@ -178,6 +197,12 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
       if (dateFrom) params.set("dateFrom", dateFrom);
       if (dateTo) params.set("dateTo", dateTo);
       if (assignedAdminFilter !== "all") params.set("assignedAdminId", assignedAdminFilter);
+      if (projectQuickFilter !== "all") params.set("quickFilter", projectQuickFilter);
+      if (projectQuoteTypeFilter !== "all") params.set("quoteType", projectQuoteTypeFilter);
+      if (projectBillingTypeFilter !== "all") params.set("billingType", projectBillingTypeFilter);
+      if (projectPaymentDueDateFrom) params.set("paymentDueDateFrom", projectPaymentDueDateFrom);
+      if (projectPaymentDueDateTo) params.set("paymentDueDateTo", projectPaymentDueDateTo);
+      if (projectCompanyIdFilter) params.set("companyId", projectCompanyIdFilter);
       const pUrl = `/api/admin/projects${params.toString() ? "?" + params.toString() : ""}`;
 
       const [pRes, pmRes, tRes, sRes, auRes] = await Promise.all([
@@ -195,7 +220,29 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
       if (auRes.ok) setAdminUsers(Array.isArray(auData) ? auData : []);
     } catch { setToast("오류: 데이터 불러오기 실패"); }
     finally { setLoading(false); }
-  }, [token, projectSearch, projectFilter, dateFrom, dateTo, assignedAdminFilter]);
+  }, [token, projectSearch, projectFilter, dateFrom, dateTo, assignedAdminFilter, projectQuickFilter, projectQuoteTypeFilter, projectBillingTypeFilter, projectPaymentDueDateFrom, projectPaymentDueDateTo, projectCompanyIdFilter]);
+
+  const fetchPrepaidSummary = useCallback(async () => {
+    setPrepaidLoading(true);
+    try {
+      const res = await fetch(api("/api/admin/prepaid-summary"), { headers: authHeaders });
+      const data = await res.json();
+      if (res.ok) setPrepaidSummary(Array.isArray(data) ? data : []);
+    } catch { setToast("오류: 선입금 현황 조회 실패"); }
+    finally { setPrepaidLoading(false); }
+  }, [token]);
+
+  const fetchBillingBatches = useCallback(async () => {
+    setBillingBatchesLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (billingBatchStatusFilter !== "all") params.set("status", billingBatchStatusFilter);
+      const res = await fetch(api(`/api/admin/billing-batches${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      const data = await res.json();
+      if (res.ok) setBillingBatches(Array.isArray(data) ? data : []);
+    } catch { setToast("오류: 누적 청구 조회 실패"); }
+    finally { setBillingBatchesLoading(false); }
+  }, [token, billingBatchStatusFilter]);
 
   const fetchUsers = useCallback(async () => {
     setUsersLoading(true);
@@ -408,6 +455,8 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
   useEffect(() => { if (adminTab === "products") fetchProducts(); }, [adminTab, fetchProducts]);
   useEffect(() => { if (adminTab === "board") fetchBoard(); }, [adminTab, fetchBoard]);
   useEffect(() => { if (adminTab === "translators") fetchTranslators(); }, [adminTab, fetchTranslators]);
+  useEffect(() => { if (adminTab === "prepaid") fetchPrepaidSummary(); }, [adminTab, fetchPrepaidSummary]);
+  useEffect(() => { if (adminTab === "billing") fetchBillingBatches(); }, [adminTab, fetchBillingBatches]);
 
   const fetchScenarioHistory = async () => {
     setScenarioHistoryLoading(true);
@@ -586,6 +635,8 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
         { id: "payments", label: "결제", icon: "💳" },
         { id: "tasks", label: "작업", icon: "⚙️" },
         { id: "settlements", label: "정산", icon: "📊" },
+        { id: "prepaid", label: "선입금 현황", icon: "💼" },
+        { id: "billing", label: "누적 청구", icon: "🗂️" },
       ],
     },
     {
@@ -627,6 +678,8 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
     products: "상품/단가",
     board: "게시판",
     test: "운영 테스트",
+    prepaid: "선입금 현황",
+    billing: "누적 청구 관리",
   };
 
   return (
@@ -974,12 +1027,74 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
             <PrimaryBtn onClick={fetchAll} disabled={loading} style={{ padding: "8px 16px", fontSize: 13 }}>
               {loading ? "검색 중..." : "검색"}
             </PrimaryBtn>
-            {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all") && (
-              <GhostBtn onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectPage(1); }} style={{ padding: "8px 12px", fontSize: 13 }}>
+            {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all" || projectQuickFilter !== "all" || projectQuoteTypeFilter !== "all" || projectBillingTypeFilter !== "all" || projectPaymentDueDateFrom || projectPaymentDueDateTo || projectCompanyIdFilter) && (
+              <GhostBtn onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectQuickFilter("all"); setProjectQuoteTypeFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }} style={{ padding: "8px 12px", fontSize: 13 }}>
                 초기화
               </GhostBtn>
             )}
           </div>
+
+          {/* 빠른 필터 버튼 */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+            <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, marginRight: 4 }}>빠른 필터:</span>
+            {[
+              { id: "all", label: "전체" },
+              { id: "unbilled", label: "미청구" },
+              { id: "unpaid", label: "미수금" },
+              { id: "prepaid_deduction", label: "선입금 차감" },
+              { id: "has_prepaid_balance", label: "잔액 남음" },
+              { id: "accumulated_in_progress", label: "누적 진행중" },
+            ].map(f => (
+              <button key={f.id} onClick={() => { setProjectQuickFilter(f.id); setProjectPage(1); }}
+                style={{ padding: "5px 12px", borderRadius: 16, border: "1px solid", cursor: "pointer", fontSize: 12, fontWeight: 500, transition: "all 0.12s",
+                  background: projectQuickFilter === f.id ? "#2563eb" : "#fff",
+                  borderColor: projectQuickFilter === f.id ? "#2563eb" : "#d1d5db",
+                  color: projectQuickFilter === f.id ? "#fff" : "#374151" }}>
+                {f.label}
+              </button>
+            ))}
+            <GhostBtn onClick={() => setShowAdvancedFilter(v => !v)} style={{ marginLeft: "auto", padding: "5px 12px", fontSize: 12 }}>
+              {showAdvancedFilter ? "상세필터 접기 ▲" : "상세필터 ▼"}
+            </GhostBtn>
+          </div>
+
+          {/* 상세 필터 패널 */}
+          {showAdvancedFilter && (
+            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: "14px 16px", marginBottom: 14, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>견적서 유형</div>
+                <select value={projectQuoteTypeFilter} onChange={e => { setProjectQuoteTypeFilter(e.target.value); setProjectPage(1); }}
+                  style={{ ...inputStyle, width: 140, padding: "7px 10px", fontSize: 13 }}>
+                  <option value="all">전체</option>
+                  <option value="b2b_standard">B2B 표준</option>
+                  <option value="b2c_prepaid">선입금</option>
+                  <option value="prepaid_deduction">선입금 차감</option>
+                  <option value="accumulated_batch">누적 견적</option>
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>청구 방식</div>
+                <select value={projectBillingTypeFilter} onChange={e => { setProjectBillingTypeFilter(e.target.value); setProjectPage(1); }}
+                  style={{ ...inputStyle, width: 150, padding: "7px 10px", fontSize: 13 }}>
+                  <option value="all">전체</option>
+                  <option value="postpaid_per_project">건별 후불</option>
+                  <option value="prepaid_wallet">선입금 지갑</option>
+                  <option value="monthly_billing">월 청구</option>
+                </select>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>입금 예정일</div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
+                    style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }} />
+                  <span style={{ color: "#9ca3af" }}>~</span>
+                  <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
+                    style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }} />
+                </div>
+              </div>
+            </div>
+          )}
+
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
             <FilterPill label="전체" active={projectFilter === "all"} onClick={() => { setProjectFilter("all"); setProjectPage(1); }} />
             {ALL_PROJECT_STATUSES.map(s => (
@@ -1005,7 +1120,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
                       <thead>
                         <tr>
-                          {["ID","제목","고객","거래처","담당자","상태","생성일","빠른액션"].map(h => (
+                          {["ID","제목","고객","거래처","담당자","상태","견적유형","결제","생성일","빠른액션"].map(h => (
                             <th key={h} style={tableTh}>{h}</th>
                           ))}
                         </tr>
@@ -1042,6 +1157,23 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                               <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.companyName ?? "-"}</td>
                               <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.contactName ?? "-"}</td>
                               <td style={tableTd}><StatusBadge status={p.status} /></td>
+                              <td style={{ ...tableTd }}>
+                                {(p as any).quoteType ? (
+                                  <span style={{ padding: "2px 7px", borderRadius: 10, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
+                                    background: (p as any).quoteType === "b2c_prepaid" ? "#fef3c7" : (p as any).quoteType === "prepaid_deduction" ? "#ede9fe" : (p as any).quoteType === "accumulated_batch" ? "#dbeafe" : "#f3f4f6",
+                                    color: (p as any).quoteType === "b2c_prepaid" ? "#92400e" : (p as any).quoteType === "prepaid_deduction" ? "#5b21b6" : (p as any).quoteType === "accumulated_batch" ? "#1e40af" : "#374151"
+                                  }}>
+                                    {{ b2b_standard: "B2B", b2c_prepaid: "선입금", prepaid_deduction: "차감", accumulated_batch: "누적" }[(p as any).quoteType as string] ?? (p as any).quoteType}
+                                  </span>
+                                ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>미발행</span>}
+                              </td>
+                              <td style={{ ...tableTd }}>
+                                {(p as any).hasPaid ? (
+                                  <span style={{ padding: "2px 7px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: "#dcfce7", color: "#15803d" }}>완료</span>
+                                ) : (p as any).hasQuote ? (
+                                  <span style={{ padding: "2px 7px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: "#fef9c3", color: "#92400e" }}>미수금</span>
+                                ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>-</span>}
+                              </td>
                               <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
                                 {new Date(p.createdAt).toLocaleDateString("ko-KR")}
                               </td>
@@ -2089,6 +2221,163 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── 선입금 현황 탭 ── */}
+      {adminTab === "prepaid" && (
+        <Section title="선입금 현황">
+          {prepaidLoading ? (
+            <div style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : prepaidSummary.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
+              선입금 내역이 없습니다.
+            </Card>
+          ) : (
+            <>
+              {/* 요약 카드 */}
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 20 }}>
+                {[
+                  { label: "거래처 수", value: `${prepaidSummary.length}개`, color: "#2563eb", bg: "#eff6ff" },
+                  { label: "총 잔액", value: `${prepaidSummary.reduce((s, c) => s + c.currentBalance, 0).toLocaleString()}원`, color: "#15803d", bg: "#dcfce7" },
+                  { label: "잔액 있는 거래처", value: `${prepaidSummary.filter(c => c.currentBalance > 0).length}개`, color: "#d97706", bg: "#fef3c7" },
+                  { label: "총 입금 누계", value: `${prepaidSummary.reduce((s, c) => s + c.totalDeposited, 0).toLocaleString()}원`, color: "#7c3aed", bg: "#ede9fe" },
+                ].map(stat => (
+                  <div key={stat.label} style={{ background: stat.bg, borderRadius: 10, padding: "14px 20px", minWidth: 160, flex: "1 1 160px" }}>
+                    <div style={{ fontSize: 12, color: stat.color, fontWeight: 700, marginBottom: 4 }}>{stat.label}</div>
+                    <div style={{ fontSize: 20, fontWeight: 800, color: stat.color }}>{stat.value}</div>
+                  </div>
+                ))}
+              </div>
+              <Card style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        {["거래처","현재 잔액","총 입금액","총 사용액","최근 사용일","최근 입금일","프로젝트"].map(h => (
+                          <th key={h} style={tableTh}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {prepaidSummary.map(c => (
+                        <tr key={c.companyId}
+                          onClick={() => { setAdminTab("companies"); setCompanyModal(c.companyId); }}
+                          style={{ cursor: "pointer" }}
+                          onMouseEnter={e => (e.currentTarget.style.background = "#f0f9ff")}
+                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                          <td style={{ ...tableTd, fontWeight: 700, color: "#2563eb" }}>{c.companyName}</td>
+                          <td style={{ ...tableTd, fontWeight: 700, color: c.currentBalance > 0 ? "#15803d" : "#6b7280" }}>
+                            {c.currentBalance.toLocaleString()}원
+                          </td>
+                          <td style={{ ...tableTd, color: "#374151" }}>{c.totalDeposited.toLocaleString()}원</td>
+                          <td style={{ ...tableTd, color: "#374151" }}>{c.totalUsed.toLocaleString()}원</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af" }}>
+                            {c.lastUsedAt ? new Date(c.lastUsedAt).toLocaleDateString("ko-KR") : "-"}
+                          </td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af" }}>
+                            {c.lastDepositAt ? new Date(c.lastDepositAt).toLocaleDateString("ko-KR") : "-"}
+                          </td>
+                          <td style={{ ...tableTd }}>
+                            <button onClick={e => { e.stopPropagation(); setProjectCompanyIdFilter(String(c.companyId)); setProjectQuickFilter("all"); setAdminTab("projects"); }}
+                              style={{ background: "#eff6ff", color: "#2563eb", border: "none", borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
+                              프로젝트 보기
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </>
+          )}
+        </Section>
+      )}
+
+      {/* ── 누적 청구 탭 ── */}
+      {adminTab === "billing" && (
+        <Section title="누적 청구 관리">
+          {/* 상태 필터 */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16, alignItems: "center" }}>
+            {[
+              { id: "all", label: "전체" },
+              { id: "draft", label: "초안" },
+              { id: "sent", label: "발송" },
+              { id: "approved", label: "승인" },
+              { id: "paid", label: "완료" },
+            ].map(f => (
+              <button key={f.id} onClick={() => { setBillingBatchStatusFilter(f.id); fetchBillingBatches(); }}
+                style={{ padding: "6px 14px", borderRadius: 16, border: "1px solid", cursor: "pointer", fontSize: 12, fontWeight: 500,
+                  background: billingBatchStatusFilter === f.id ? "#2563eb" : "#fff",
+                  borderColor: billingBatchStatusFilter === f.id ? "#2563eb" : "#d1d5db",
+                  color: billingBatchStatusFilter === f.id ? "#fff" : "#374151" }}>
+                {f.label}
+              </button>
+            ))}
+            <GhostBtn onClick={fetchBillingBatches} style={{ padding: "6px 14px", fontSize: 12, marginLeft: "auto" }}>새로고침</GhostBtn>
+          </div>
+
+          {billingBatchesLoading ? (
+            <div style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : billingBatches.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
+              누적 청구 내역이 없습니다.
+            </Card>
+          ) : (
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>
+                      {["ID","거래처","청구 기간","건수","합계금액","배치상태","견적상태","생성일"].map(h => (
+                        <th key={h} style={tableTh}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {billingBatches.map(b => {
+                      const statusColor: Record<string, { bg: string; color: string; label: string }> = {
+                        draft:    { bg: "#f3f4f6", color: "#374151", label: "초안" },
+                        sent:     { bg: "#eff6ff", color: "#1d4ed8", label: "발송" },
+                        approved: { bg: "#fef3c7", color: "#92400e", label: "승인" },
+                        paid:     { bg: "#dcfce7", color: "#15803d", label: "완료" },
+                      };
+                      const sc = statusColor[b.status] ?? { bg: "#f3f4f6", color: "#374151", label: b.status };
+                      const qsc = b.quoteStatus ? (statusColor[b.quoteStatus] ?? { bg: "#f3f4f6", color: "#374151", label: b.quoteStatus }) : null;
+                      return (
+                        <tr key={b.id}
+                          onClick={() => { setProjectCompanyIdFilter(String(b.companyId)); setProjectQuoteTypeFilter("accumulated_batch"); setAdminTab("projects"); }}
+                          style={{ cursor: "pointer" }}
+                          onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
+                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                          <td style={{ ...tableTd, color: "#9ca3af" }}>#{b.id}</td>
+                          <td style={{ ...tableTd, fontWeight: 700, color: "#2563eb" }}>{b.companyName ?? "-"}</td>
+                          <td style={{ ...tableTd, fontSize: 12 }}>
+                            {b.periodStart ? new Date(b.periodStart).toLocaleDateString("ko-KR") : "?"} ~{" "}
+                            {b.periodEnd ? new Date(b.periodEnd).toLocaleDateString("ko-KR") : "?"}
+                          </td>
+                          <td style={{ ...tableTd, textAlign: "right" }}>{b.itemCount}건</td>
+                          <td style={{ ...tableTd, fontWeight: 700, textAlign: "right" }}>{b.totalAmount.toLocaleString()}원</td>
+                          <td style={tableTd}>
+                            <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: sc.bg, color: sc.color }}>{sc.label}</span>
+                          </td>
+                          <td style={tableTd}>
+                            {qsc ? (
+                              <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: qsc.bg, color: qsc.color }}>{qsc.label}</span>
+                            ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>미발행</span>}
+                          </td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af" }}>
+                            {new Date(b.createdAt).toLocaleDateString("ko-KR")}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </Section>
       )}
 
           </div>{/* /스크롤 컨텐츠 */}

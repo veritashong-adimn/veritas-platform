@@ -18,36 +18,36 @@ const adminGuard = [requireAuth, requireRole("admin")];
 // ─── 프로젝트 목록 (검색/필터) ────────────────────────────────────────────
 router.get("/admin/projects", ...adminGuard, async (req, res) => {
   try {
-    const { search, status, dateFrom, dateTo, assignedAdminId, companyName, contactName } = req.query as {
+    const {
+      search, status, dateFrom, dateTo, assignedAdminId, companyName, contactName,
+      companyId: companyIdFilter, contactId: contactIdFilter,
+      quoteType: quoteTypeFilter, billingType: billingTypeFilter,
+      paymentDueDateFrom, paymentDueDateTo, quickFilter,
+    } = req.query as {
       search?: string; status?: string; dateFrom?: string; dateTo?: string;
       assignedAdminId?: string; companyName?: string; contactName?: string;
+      companyId?: string; contactId?: string;
+      quoteType?: string; billingType?: string;
+      paymentDueDateFrom?: string; paymentDueDateTo?: string;
+      quickFilter?: string;
     };
 
     const contactAlias = db
       .select({ id: contactsTable.id, name: contactsTable.name, companyId: contactsTable.companyId })
-      .from(contactsTable)
-      .as("proj_contact");
-
+      .from(contactsTable).as("proj_contact");
     const companyAlias = db
       .select({ id: companiesTable.id, name: companiesTable.name })
-      .from(companiesTable)
-      .as("proj_company");
+      .from(companiesTable).as("proj_company");
 
+    // 메인 프로젝트 쿼리
     const rows = await db
       .select({
-        id: projectsTable.id,
-        title: projectsTable.title,
-        status: projectsTable.status,
-        fileUrl: projectsTable.fileUrl,
-        createdAt: projectsTable.createdAt,
-        customerEmail: usersTable.email,
-        customerId: usersTable.id,
-        projectCustomerId: projectsTable.customerId,
-        adminId: projectsTable.adminId,
-        contactId: projectsTable.contactId,
-        companyId: projectsTable.companyId,
-        contactName: contactAlias.name,
-        companyName: companyAlias.name,
+        id: projectsTable.id, title: projectsTable.title, status: projectsTable.status,
+        fileUrl: projectsTable.fileUrl, createdAt: projectsTable.createdAt,
+        customerEmail: usersTable.email, customerId: usersTable.id,
+        projectCustomerId: projectsTable.customerId, adminId: projectsTable.adminId,
+        contactId: projectsTable.contactId, companyId: projectsTable.companyId,
+        contactName: contactAlias.name, companyName: companyAlias.name,
       })
       .from(projectsTable)
       .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))
@@ -55,8 +55,39 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
       .leftJoin(companyAlias, eq(projectsTable.companyId, companyAlias.id))
       .orderBy(projectsTable.createdAt);
 
-    let result = rows.reverse();
+    // 프로젝트별 최신 견적 매핑
+    const quoteRows = await db
+      .select({
+        projectId: quotesTable.projectId, id: quotesTable.id,
+        quoteType: quotesTable.quoteType, billingType: quotesTable.billingType,
+        paymentDueDate: quotesTable.paymentDueDate, price: quotesTable.price, status: quotesTable.status,
+      })
+      .from(quotesTable).orderBy(desc(quotesTable.id));
+    const latestQuoteByProject = new Map<number, typeof quoteRows[0]>();
+    for (const q of quoteRows) {
+      if (q.projectId != null && !latestQuoteByProject.has(q.projectId)) {
+        latestQuoteByProject.set(q.projectId, q);
+      }
+    }
 
+    // 결제 완료 프로젝트 ID 세트
+    const paidRows = await db.select({ projectId: paymentsTable.projectId })
+      .from(paymentsTable).where(eq(paymentsTable.status, "paid"));
+    const paidProjectIds = new Set(paidRows.map(p => p.projectId));
+
+    // 프로젝트 + 견적 + 결제 데이터 병합
+    let result = rows.reverse().map(p => ({
+      ...p,
+      quoteType: latestQuoteByProject.get(p.id)?.quoteType ?? null,
+      billingType: latestQuoteByProject.get(p.id)?.billingType ?? null,
+      paymentDueDate: latestQuoteByProject.get(p.id)?.paymentDueDate ?? null,
+      quotePrice: latestQuoteByProject.get(p.id)?.price ?? null,
+      quoteStatus: latestQuoteByProject.get(p.id)?.status ?? null,
+      hasQuote: latestQuoteByProject.has(p.id),
+      hasPaid: paidProjectIds.has(p.id),
+    }));
+
+    // ── 기존 필터 ──
     if (search?.trim()) {
       const s = search.trim().toLowerCase();
       result = result.filter(p =>
@@ -66,31 +97,22 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
         (p.companyName ?? "").toLowerCase().includes(s)
       );
     }
-
     if (companyName?.trim()) {
       const cn = companyName.trim().toLowerCase();
       result = result.filter(p => (p.companyName ?? "").toLowerCase().includes(cn));
     }
-
     if (contactName?.trim()) {
       const ct = contactName.trim().toLowerCase();
       result = result.filter(p => (p.contactName ?? "").toLowerCase().includes(ct));
     }
-
     if (status?.trim()) {
       const statuses = status.split(",").map(s => s.trim()).filter(Boolean);
-      if (statuses.length > 0) {
-        result = result.filter(p => statuses.includes(p.status));
-      }
+      if (statuses.length > 0) result = result.filter(p => statuses.includes(p.status));
     }
-
     if (dateFrom?.trim()) {
       const from = new Date(dateFrom);
-      if (!isNaN(from.getTime())) {
-        result = result.filter(p => new Date(p.createdAt) >= from);
-      }
+      if (!isNaN(from.getTime())) result = result.filter(p => new Date(p.createdAt) >= from);
     }
-
     if (dateTo?.trim()) {
       const to = new Date(dateTo);
       if (!isNaN(to.getTime())) {
@@ -98,12 +120,64 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
         result = result.filter(p => new Date(p.createdAt) <= to);
       }
     }
-
     if (assignedAdminId?.trim()) {
       const adminIdNum = Number(assignedAdminId);
-      if (!isNaN(adminIdNum)) {
-        result = result.filter(p => p.adminId === adminIdNum);
+      if (!isNaN(adminIdNum)) result = result.filter(p => p.adminId === adminIdNum);
+    }
+
+    // ── 신규 필터 ──
+    if (companyIdFilter?.trim()) {
+      const cid = Number(companyIdFilter);
+      if (!isNaN(cid)) result = result.filter(p => p.companyId === cid);
+    }
+    if (contactIdFilter?.trim()) {
+      const ctid = Number(contactIdFilter);
+      if (!isNaN(ctid)) result = result.filter(p => p.contactId === ctid);
+    }
+    if (quoteTypeFilter?.trim() && quoteTypeFilter !== "all") {
+      result = result.filter(p => p.quoteType === quoteTypeFilter);
+    }
+    if (billingTypeFilter?.trim() && billingTypeFilter !== "all") {
+      result = result.filter(p => p.billingType === billingTypeFilter);
+    }
+    if (paymentDueDateFrom?.trim()) {
+      const from = new Date(paymentDueDateFrom);
+      if (!isNaN(from.getTime()))
+        result = result.filter(p => p.paymentDueDate != null && new Date(p.paymentDueDate as string) >= from);
+    }
+    if (paymentDueDateTo?.trim()) {
+      const to = new Date(paymentDueDateTo);
+      if (!isNaN(to.getTime())) {
+        to.setHours(23, 59, 59, 999);
+        result = result.filter(p => p.paymentDueDate != null && new Date(p.paymentDueDate as string) <= to);
       }
+    }
+
+    // ── 빠른 필터 ──
+    if (quickFilter === "prepaid_deduction") {
+      result = result.filter(p => p.quoteType === "prepaid_deduction");
+    } else if (quickFilter === "accumulated_in_progress") {
+      result = result.filter(p => p.quoteType === "accumulated_batch" && !p.hasPaid);
+    } else if (quickFilter === "unbilled") {
+      result = result.filter(p => !p.hasQuote);
+    } else if (quickFilter === "unpaid") {
+      result = result.filter(p => p.hasQuote && !p.hasPaid && !["cancelled", "created"].includes(p.status));
+    } else if (quickFilter === "has_prepaid_balance") {
+      // 거래처별 선입금 잔액 계산
+      const prepaidQ = await db.select({
+        projectId: quotesTable.projectId, prepaidBalanceAfter: quotesTable.prepaidBalanceAfter,
+      }).from(quotesTable)
+        .where(inArray(quotesTable.quoteType as any, ["b2c_prepaid", "prepaid_deduction"]))
+        .orderBy(desc(quotesTable.id));
+      const projMap = new Map(result.map(p => [p.id, p.companyId]));
+      const compBalanceMap = new Map<number, number>();
+      for (const q of prepaidQ) {
+        if (q.projectId == null || q.prepaidBalanceAfter == null) continue;
+        const cid = projMap.get(q.projectId);
+        if (cid == null || compBalanceMap.has(cid)) continue;
+        compBalanceMap.set(cid, Number(q.prepaidBalanceAfter));
+      }
+      result = result.filter(p => p.companyId != null && (compBalanceMap.get(p.companyId!) ?? 0) > 0);
     }
 
     res.json(result);
@@ -782,6 +856,115 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Admin: failed to create quote");
     res.status(500).json({ error: "견적 생성 실패." });
+  }
+});
+
+// ─── 선입금 현황 조회 ─────────────────────────────────────────────────────────
+router.get("/admin/prepaid-summary", ...adminGuard, async (req, res) => {
+  try {
+    const prepaidQuotes = await db.select({
+      projectId: quotesTable.projectId, quoteType: quotesTable.quoteType,
+      price: quotesTable.price, prepaidBalanceAfter: quotesTable.prepaidBalanceAfter,
+      prepaidUsageAmount: quotesTable.prepaidUsageAmount, createdAt: quotesTable.createdAt,
+    }).from(quotesTable)
+      .where(inArray(quotesTable.quoteType as any, ["b2c_prepaid", "prepaid_deduction"]))
+      .orderBy(desc(quotesTable.id));
+
+    const pids = [...new Set(prepaidQuotes.map(q => q.projectId).filter(Boolean))] as number[];
+    let projCompanyMap = new Map<number, number | null>();
+    if (pids.length > 0) {
+      const projRows = await db.select({ id: projectsTable.id, companyId: projectsTable.companyId })
+        .from(projectsTable).where(inArray(projectsTable.id, pids));
+      projCompanyMap = new Map(projRows.map(p => [p.id, p.companyId]));
+    }
+    const companies = await db.select({ id: companiesTable.id, name: companiesTable.name }).from(companiesTable);
+    const companyNameMap = new Map(companies.map(c => [c.id, c.name]));
+
+    type Summary = { companyId: number; companyName: string; currentBalance: number; totalDeposited: number; totalUsed: number; lastUsedAt: Date | null; lastDepositAt: Date | null };
+    const summaryMap = new Map<number, Summary>();
+    const compBalanceSeen = new Set<number>();
+
+    for (const q of prepaidQuotes) {
+      if (q.projectId == null) continue;
+      const cid = projCompanyMap.get(q.projectId);
+      if (cid == null) continue;
+      if (!summaryMap.has(cid)) {
+        summaryMap.set(cid, { companyId: cid, companyName: companyNameMap.get(cid) ?? `거래처 #${cid}`, currentBalance: 0, totalDeposited: 0, totalUsed: 0, lastUsedAt: null, lastDepositAt: null });
+      }
+      const s = summaryMap.get(cid)!;
+      if (!compBalanceSeen.has(cid) && q.prepaidBalanceAfter != null) {
+        s.currentBalance = Number(q.prepaidBalanceAfter);
+        compBalanceSeen.add(cid);
+      }
+      if (q.quoteType === "b2c_prepaid") {
+        s.totalDeposited += Number(q.price ?? 0);
+        const d = new Date(q.createdAt);
+        if (!s.lastDepositAt || d > s.lastDepositAt) s.lastDepositAt = d;
+      } else if (q.quoteType === "prepaid_deduction") {
+        s.totalUsed += Number(q.prepaidUsageAmount ?? 0);
+        const d = new Date(q.createdAt);
+        if (!s.lastUsedAt || d > s.lastUsedAt) s.lastUsedAt = d;
+      }
+    }
+    res.json(Array.from(summaryMap.values()).sort((a, b) => b.currentBalance - a.currentBalance));
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch prepaid summary");
+    res.status(500).json({ error: "선입금 현황 조회 실패." });
+  }
+});
+
+// ─── 누적 청구 배치 목록 ───────────────────────────────────────────────────────
+router.get("/admin/billing-batches", ...adminGuard, async (req, res) => {
+  try {
+    const { status: statusFilter, companyId: companyIdFilter } = req.query as { status?: string; companyId?: string };
+    const companyAlias2 = db.select({ id: companiesTable.id, name: companiesTable.name }).from(companiesTable).as("bb_company");
+
+    const batches = await db.select({
+      id: billingBatchesTable.id, companyId: billingBatchesTable.companyId,
+      companyName: companyAlias2.name, periodStart: billingBatchesTable.periodStart,
+      periodEnd: billingBatchesTable.periodEnd, status: billingBatchesTable.status,
+      totalAmount: billingBatchesTable.totalAmount, quoteId: billingBatchesTable.quoteId,
+      createdAt: billingBatchesTable.createdAt,
+    }).from(billingBatchesTable)
+      .leftJoin(companyAlias2, eq(billingBatchesTable.companyId, companyAlias2.id))
+      .orderBy(desc(billingBatchesTable.id));
+
+    let result = batches;
+    if (statusFilter?.trim() && statusFilter !== "all") result = result.filter(b => b.status === statusFilter);
+    if (companyIdFilter?.trim()) {
+      const cid = Number(companyIdFilter);
+      if (!isNaN(cid)) result = result.filter(b => b.companyId === cid);
+    }
+
+    const batchIds = result.map(b => b.id);
+    let itemCountMap = new Map<number, number>();
+    if (batchIds.length > 0) {
+      const countRows = await db.select({
+        batchId: billingBatchItemsTable.batchId,
+        count: sql<number>`count(*)::int`,
+      }).from(billingBatchItemsTable)
+        .where(inArray(billingBatchItemsTable.batchId, batchIds))
+        .groupBy(billingBatchItemsTable.batchId);
+      itemCountMap = new Map(countRows.map(r => [r.batchId, r.count]));
+    }
+
+    const quoteIds = result.map(b => b.quoteId).filter(Boolean) as number[];
+    let quoteStatusMap = new Map<number, string>();
+    if (quoteIds.length > 0) {
+      const qRows = await db.select({ id: quotesTable.id, status: quotesTable.status })
+        .from(quotesTable).where(inArray(quotesTable.id, quoteIds));
+      quoteStatusMap = new Map(qRows.map(q => [q.id, q.status]));
+    }
+
+    res.json(result.map(b => ({
+      ...b,
+      totalAmount: Number(b.totalAmount),
+      itemCount: itemCountMap.get(b.id) ?? 0,
+      quoteStatus: b.quoteId ? (quoteStatusMap.get(b.quoteId) ?? null) : null,
+    })));
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch billing batches");
+    res.status(500).json({ error: "누적 청구 목록 조회 실패." });
   }
 });
 

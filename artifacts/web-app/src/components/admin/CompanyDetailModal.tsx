@@ -158,6 +158,27 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 </div>
               ))}
             </div>
+            {/* 확장 요약 */}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+              {(detail as any).prepaidBalance != null && (
+                <div style={{ background: (detail as any).prepaidBalance > 0 ? "#f0fdf4" : "#fef2f2", border: "1px solid", borderColor: (detail as any).prepaidBalance > 0 ? "#bbf7d0" : "#fecaca", borderRadius: 10, padding: "10px 16px", flex: "1 1 120px" }}>
+                  <p style={{ margin: "0 0 2px", fontSize: 11, fontWeight: 600, color: (detail as any).prepaidBalance > 0 ? "#15803d" : "#dc2626" }}>선입금 잔액</p>
+                  <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: (detail as any).prepaidBalance > 0 ? "#15803d" : "#dc2626" }}>{Number((detail as any).prepaidBalance).toLocaleString()}원</p>
+                </div>
+              )}
+              {(detail as any).unpaidAmount > 0 && (
+                <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 16px", flex: "1 1 120px" }}>
+                  <p style={{ margin: "0 0 2px", fontSize: 11, fontWeight: 600, color: "#92400e" }}>미수금</p>
+                  <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: "#92400e" }}>{Number((detail as any).unpaidAmount).toLocaleString()}원</p>
+                </div>
+              )}
+              {(detail as any).activeAccumulatedCount > 0 && (
+                <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: "10px 16px", flex: "1 1 120px" }}>
+                  <p style={{ margin: "0 0 2px", fontSize: 11, fontWeight: 600, color: "#1d4ed8" }}>누적 청구 진행</p>
+                  <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: "#1d4ed8" }}>{(detail as any).activeAccumulatedCount}건</p>
+                </div>
+              )}
+            </div>
 
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 20, marginBottom: 10 }}>
               <p style={{ ...sH, margin: 0 }}>담당자 목록 ({detail.contacts.length})</p>
