@@ -189,12 +189,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const loadCompPrepaidAccounts = async (companyId: number) => {
     setLoadingCompPrepaid(true);
     try {
-      const res = await fetch(api(`/api/admin/prepaid-accounts?companyId=${companyId}`), { headers: authH });
+      const res = await fetch(api(`/api/admin/prepaid-accounts?companyId=${companyId}&_t=${Date.now()}`), { headers: authH, cache: "no-store" });
       if (res.ok) {
         const accounts = await res.json();
         const active = accounts.filter((a: CompPrepaidAcct) => a.status === "active");
         setCompPrepaidAccounts(active);
-        if (active.length > 0 && !selectedPrepaidAcctId) setSelectedPrepaidAcctId(active[0].id);
+        // 항상 첫 번째 계정으로 선택 (클로저 캡처 문제 방지)
+        if (active.length > 0) setSelectedPrepaidAcctId(active[0].id);
       }
     } finally { setLoadingCompPrepaid(false); }
   };
@@ -202,10 +203,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const loadAcctLedger = async (acctId: number) => {
     setLoadingLedger(true);
     try {
-      const res = await fetch(api(`/api/admin/prepaid-accounts/${acctId}`), { headers: authH });
+      const res = await fetch(api(`/api/admin/prepaid-accounts/${acctId}?_t=${Date.now()}`), { headers: authH, cache: "no-store" });
       if (res.ok) {
         const data = await res.json();
         setAcctLedger(data.ledger ?? []);
+        // 계정 잔액도 최신 값으로 동기화
+        setCompPrepaidAccounts(prev => prev.map(a => a.id === acctId ? { ...a, currentBalance: Number(data.currentBalance) } : a));
       }
     } finally { setLoadingLedger(false); }
   };
