@@ -894,94 +894,153 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       const companyBalance = (detail.company as any)?.prepaidBalance ?? null;
                       const totalDeposited: number = (detail.company as any)?.prepaidTotalDeposited ?? 0;
                       const totalUsed: number = (detail.company as any)?.prepaidTotalUsed ?? 0;
-                      const hasHistory = totalDeposited > 0; // b2c_prepaid 내역이 한 번이라도 있었는가
+                      const hasHistory = totalDeposited > 0;
                       const usageNum = Number(quotePrepaidUsage.replace(/,/g, "") || 0);
                       const afterBalance = companyBalance != null ? companyBalance - usageNum : null;
-                      const isInsufficient = companyBalance != null && companyBalance > 0 && usageNum > 0 && usageNum > companyBalance;
                       const isZeroBalance = companyBalance !== null && companyBalance === 0;
+                      const isInsufficient = companyBalance != null && companyBalance > 0 && usageNum > 0 && usageNum > companyBalance;
+                      const shortageAmount = isInsufficient ? usageNum - companyBalance! : 0;
                       const canInput = companyBalance !== null && companyBalance > 0;
 
-                      // Case A: 선입금 내역 자체가 없는 경우
+                      const goToPrepaid = () => setQuoteType("b2c_prepaid");
+
+                      const prepaidActionBtn = (label: string) => (
+                        <button
+                          type="button"
+                          onClick={goToPrepaid}
+                          style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
+                        >
+                          <span>💳</span> {label}
+                        </button>
+                      );
+
+                      // ─── Case A: 선입금 내역 자체가 없음 ───────────────────────────────────
                       if (companyBalance === null && !hasHistory) {
                         return (
                           <div style={{ marginBottom: 10 }}>
                             <div style={{ background: "#fdf4ff", border: "1px solid #d8b4fe", borderRadius: 8, padding: "12px 14px" }}>
-                              <div style={{ fontSize: 10, fontWeight: 800, color: "#7c3aed", marginBottom: 8 }}>선입금 잔액 정보</div>
-                              <div style={{ padding: "12px 14px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fca5a5", fontSize: 12, color: "#dc2626", fontWeight: 600 }}>
-                                ⚠️ 선입금 내역이 없습니다. 먼저 선입금 견적서(B2C 선입금)를 발행하여 잔액을 충전한 후 차감 견적서를 생성하세요.
+                              <div style={{ fontSize: 10, fontWeight: 800, color: "#7c3aed", marginBottom: 8 }}>선입금 잔액 정보 — 선입금 없음</div>
+
+                              <div style={{ padding: "10px 12px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fca5a5", fontSize: 12, color: "#dc2626", fontWeight: 600, marginBottom: 10 }}>
+                                ⚠️ 선입금 내역이 없습니다. 먼저 선입금 견적서를 발행하여 잔액을 충전한 후 차감 견적서를 생성하세요.
                               </div>
+
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 4 }}>
+                                <div>
+                                  {qfLbl("이번 작업 예상 금액 (원)")}
+                                  <input
+                                    type="number" min="0" value={quotePrepaidUsage} placeholder="0"
+                                    onChange={e => setQuotePrepaidUsage(e.target.value)}
+                                    style={{ ...qfIs }}
+                                  />
+                                </div>
+                                <div>
+                                  {qfLbl("필요 선입금 금액")}
+                                  <div style={{ ...qfIs, background: "#f5f3ff", color: "#7c3aed", cursor: "not-allowed", display: "flex", alignItems: "center", fontWeight: 700 }}>
+                                    {usageNum > 0 ? `${usageNum.toLocaleString()}원 이상` : <span style={{ color: "#9ca3af" }}>금액 입력 시 계산</span>}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {prepaidActionBtn("선입금 등록하기 (B2C 선입금 견적서 생성)")}
                             </div>
                           </div>
                         );
                       }
 
+                      // ─── 공통 요약 박스 (Case B / C) ────────────────────────────────────────
+                      const summaryBox = (
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12, padding: "10px 12px", background: "#f5f3ff", borderRadius: 7, border: "1px solid #ede9fe" }}>
+                          {[
+                            { label: "총 입금액 (참고)", value: `${totalDeposited.toLocaleString()}원`, color: "#7c3aed" },
+                            { label: "누적 사용액 (참고)", value: `${totalUsed.toLocaleString()}원`, color: "#6b7280" },
+                            {
+                              label: "현재 선입금 잔액",
+                              value: companyBalance !== null ? `${companyBalance.toLocaleString()}원` : "0원",
+                              color: isZeroBalance ? "#dc2626" : "#15803d",
+                              note: isZeroBalance ? "모두 사용됨" : undefined,
+                              bold: true,
+                            },
+                          ].map(s => (
+                            <div key={s.label} style={{ flex: "1 1 120px", minWidth: 110 }}>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", marginBottom: 2 }}>{s.label}</div>
+                              <div style={{ fontSize: 14, fontWeight: s.bold ? 800 : 600, color: s.color }}>
+                                {s.value}
+                                {s.note && <span style={{ marginLeft: 5, fontSize: 10, fontWeight: 500, color: "#dc2626" }}>({s.note})</span>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+
                       return (
                         <div style={{ marginBottom: 10 }}>
                           <div style={{ background: "#fdf4ff", border: `1px solid ${isInsufficient ? "#f87171" : "#d8b4fe"}`, borderRadius: 8, padding: "12px 14px" }}>
-                            <div style={{ fontSize: 10, fontWeight: 800, color: "#7c3aed", marginBottom: 10 }}>선입금 잔액 정보</div>
-
-                            {/* 참고 정보: 총 입금액 / 누적 사용액 / 현재 잔액 */}
-                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12, padding: "10px 12px", background: "#f5f3ff", borderRadius: 7, border: "1px solid #ede9fe" }}>
-                              {[
-                                { label: "총 입금액 (참고)", value: `${totalDeposited.toLocaleString()}원`, color: "#7c3aed" },
-                                { label: "누적 사용액 (참고)", value: `${totalUsed.toLocaleString()}원`, color: "#6b7280" },
-                                {
-                                  label: "현재 선입금 잔액",
-                                  value: companyBalance !== null
-                                    ? `${companyBalance.toLocaleString()}원`
-                                    : "0원",
-                                  color: isZeroBalance ? "#dc2626" : "#15803d",
-                                  note: isZeroBalance ? "모두 사용됨" : undefined,
-                                  bold: true,
-                                },
-                              ].map(s => (
-                                <div key={s.label} style={{ flex: "1 1 120px", minWidth: 110 }}>
-                                  <div style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", marginBottom: 2 }}>{s.label}</div>
-                                  <div style={{ fontSize: 14, fontWeight: s.bold ? 800 : 600, color: s.color }}>
-                                    {s.value}
-                                    {s.note && <span style={{ marginLeft: 5, fontSize: 10, fontWeight: 500, color: "#dc2626" }}>({s.note})</span>}
-                                  </div>
-                                </div>
-                              ))}
+                            <div style={{ fontSize: 10, fontWeight: 800, color: "#7c3aed", marginBottom: 10 }}>
+                              선입금 잔액 정보
+                              {isZeroBalance && " — 잔액 0원 (모두 사용됨)"}
+                              {isInsufficient && " — 잔액 부족"}
                             </div>
 
-                            {/* Case B: 잔액 0원 (모두 사용됨) */}
+                            {summaryBox}
+
+                            {/* ─── Case B: 잔액 0원 ─── */}
                             {isZeroBalance && (
-                              <div style={{ padding: "8px 12px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fca5a5", fontSize: 12, color: "#dc2626", fontWeight: 600, marginBottom: 8 }}>
-                                ⚠️ 현재 선입금 잔액이 0원입니다 (모두 사용됨). 추가 선입금 충전 후 차감 견적서를 생성하세요.
+                              <div>
+                                <div style={{ padding: "8px 12px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fca5a5", fontSize: 12, color: "#dc2626", fontWeight: 600 }}>
+                                  ⚠️ 현재 선입금 잔액이 <strong>0원</strong>입니다 (모두 사용됨). 추가 선입금을 충전해야 차감 견적서를 생성할 수 있습니다.
+                                </div>
+                                {prepaidActionBtn("선입금 충전하기 (B2C 선입금 견적서 생성)")}
                               </div>
                             )}
 
-                            {/* Case C: 잔액 있음 — 입력 영역 */}
+                            {/* ─── Case C: 잔액 있음 — 입력 영역 ─── */}
                             {canInput && (
-                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                                <div>
-                                  {qfLbl("현재 선입금 잔액 (원)")}
-                                  <div style={{ ...qfIs, background: "#f0fdf4", color: "#15803d", cursor: "not-allowed", display: "flex", alignItems: "center", fontWeight: 700, border: "1px solid #86efac" }}>
-                                    {companyBalance!.toLocaleString()}
+                              <div>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                                  <div>
+                                    {qfLbl("현재 선입금 잔액 (원)")}
+                                    <div style={{ ...qfIs, background: "#f0fdf4", color: "#15803d", cursor: "not-allowed", display: "flex", alignItems: "center", fontWeight: 700, border: "1px solid #86efac" }}>
+                                      {companyBalance!.toLocaleString()}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    {qfLbl("이번 사용 금액 (원) *")}
+                                    <input
+                                      type="number" min="0" value={quotePrepaidUsage} placeholder="0"
+                                      onChange={e => setQuotePrepaidUsage(e.target.value)}
+                                      style={{ ...qfIs, borderColor: isInsufficient ? "#f87171" : "#d8b4fe" }}
+                                    />
+                                  </div>
+                                  <div>
+                                    {qfLbl("차감 후 잔액 (원)")}
+                                    <div style={{ ...qfIs, background: isInsufficient ? "#fef2f2" : "#f5f3ff", color: isInsufficient ? "#dc2626" : "#374151", cursor: "not-allowed", display: "flex", alignItems: "center", fontWeight: isInsufficient ? 700 : 500 }}>
+                                      {afterBalance != null ? afterBalance.toLocaleString() : <span style={{ color: "#9ca3af" }}>-</span>}
+                                    </div>
                                   </div>
                                 </div>
-                                <div>
-                                  {qfLbl("이번 사용 금액 (원) *")}
-                                  <input
-                                    type="number" min="0" value={quotePrepaidUsage} placeholder="0"
-                                    onChange={e => setQuotePrepaidUsage(e.target.value)}
-                                    style={{ ...qfIs, borderColor: isInsufficient ? "#f87171" : "#d8b4fe" }}
-                                  />
-                                </div>
-                                <div>
-                                  {qfLbl("차감 후 잔액 (원)")}
-                                  <div style={{ ...qfIs, background: isInsufficient ? "#fef2f2" : "#f5f3ff", color: isInsufficient ? "#dc2626" : "#374151", cursor: "not-allowed", display: "flex", alignItems: "center", fontWeight: isInsufficient ? 700 : 500 }}>
-                                    {afterBalance != null ? afterBalance.toLocaleString() : <span style={{ color: "#9ca3af" }}>-</span>}
-                                  </div>
-                                </div>
-                              </div>
-                            )}
 
-                            {/* 잔액 부족 경고 */}
-                            {isInsufficient && (
-                              <div style={{ marginTop: 8, padding: "6px 10px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fca5a5", fontSize: 11, color: "#dc2626", fontWeight: 700 }}>
-                                ⚠️ 잔액 부족: 사용 금액({usageNum.toLocaleString()}원)이 현재 잔액({companyBalance!.toLocaleString()}원)을 초과합니다. 견적 생성이 불가합니다.
+                                {/* ─── 잔액 부족 경고 ─── */}
+                                {isInsufficient && (
+                                  <div style={{ marginTop: 8, padding: "10px 12px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fca5a5" }}>
+                                    <div style={{ fontSize: 12, color: "#dc2626", fontWeight: 700, marginBottom: 6 }}>
+                                      ⚠️ 잔액 부족 — 견적 생성 불가
+                                    </div>
+                                    <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                                      {[
+                                        { label: "사용 요청 금액", value: `${usageNum.toLocaleString()}원`, color: "#dc2626" },
+                                        { label: "현재 잔액", value: `${companyBalance!.toLocaleString()}원`, color: "#374151" },
+                                        { label: "부족 금액", value: `${shortageAmount.toLocaleString()}원`, color: "#b45309", bold: true },
+                                      ].map(item => (
+                                        <div key={item.label}>
+                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>{item.label}</div>
+                                          <div style={{ fontSize: 13, fontWeight: item.bold ? 800 : 600, color: item.color }}>{item.value}</div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                    {prepaidActionBtn(`선입금 ${shortageAmount.toLocaleString()}원 이상 추가 충전하기`)}
+                                  </div>
+                                )}
                               </div>
                             )}
                           </div>
