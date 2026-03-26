@@ -109,6 +109,18 @@ export type QuoteDoc = {
   prepaidBalanceBefore?: number | null;
   prepaidUsageAmount?: number | null;
   prepaidBalanceAfter?: number | null;
+  /** 선입금 계정의 모든 거래 내역 (누적 차감 이력) */
+  ledgerHistory?: Array<{
+    id: number;
+    type: "deposit" | "deduction" | "adjustment";
+    amount: number;
+    balanceAfter: number;
+    description?: string | null;
+    projectId?: number | null;
+    projectTitle?: string | null;
+    transactionDate: string | null;
+    createdAt: string | null;
+  }>;
 
   // 누적 견적 (accumulated_batch)
   batchPeriodStart?: string | null;
@@ -649,6 +661,42 @@ export function buildPrepaidDeductionQuoteHtml(doc: QuoteDoc): string {
   const usage = doc.prepaidUsageAmount ?? total;
   const after = doc.prepaidBalanceAfter ?? (before - usage);
 
+  // 거래 유형 한글 레이블
+  const txTypeLabel = (t: string) => t === "deposit" ? "입금" : t === "deduction" ? "차감" : "조정";
+  const txTypeColor = (t: string) => t === "deposit" ? "#166534" : t === "deduction" ? "#7c3aed" : "#374151";
+
+  // 누적 차감 내역 테이블 렌더링
+  const ledgerTableHtml = (doc.ledgerHistory && doc.ledgerHistory.length > 0) ? `
+  <div style="margin-bottom:12px;border:1px solid #d8b4fe;border-radius:8px;overflow:hidden">
+    <div style="background:#6d28d9;color:#fff;padding:6px 14px;font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase">선입금 거래 내역 (누적)</div>
+    <table style="width:100%;border-collapse:collapse;font-size:10px">
+      <thead>
+        <tr style="background:#f5f3ff">
+          <th style="padding:5px 8px;text-align:center;border-bottom:1px solid #e2e8f0;font-weight:700;color:#4b5563;width:80px">날짜</th>
+          <th style="padding:5px 8px;text-align:center;border-bottom:1px solid #e2e8f0;font-weight:700;color:#4b5563;width:48px">구분</th>
+          <th style="padding:5px 8px;text-align:left;border-bottom:1px solid #e2e8f0;font-weight:700;color:#4b5563">내용 / 프로젝트</th>
+          <th style="padding:5px 8px;text-align:right;border-bottom:1px solid #e2e8f0;font-weight:700;color:#4b5563;width:90px">금액</th>
+          <th style="padding:5px 8px;text-align:right;border-bottom:1px solid #e2e8f0;font-weight:700;color:#4b5563;width:90px">잔액</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${doc.ledgerHistory.map((tx, idx) => {
+          const dateStr = tx.transactionDate ? tx.transactionDate.slice(0, 10) : (tx.createdAt ? tx.createdAt.slice(0, 10) : "-");
+          const desc = tx.projectTitle ? `${tx.projectTitle}${tx.description ? " · " + tx.description : ""}` : (tx.description || "-");
+          const amtSign = tx.type === "deposit" ? "+" : tx.type === "deduction" ? "-" : "±";
+          const rowBg = idx % 2 === 0 ? "#fff" : "#faf5ff";
+          return `<tr style="background:${rowBg}">
+            <td style="padding:5px 8px;text-align:center;border-bottom:1px solid #f0e7ff;color:#6b7280">${esc(dateStr)}</td>
+            <td style="padding:5px 8px;text-align:center;border-bottom:1px solid #f0e7ff;font-weight:700;color:${txTypeColor(tx.type)}">${txTypeLabel(tx.type)}</td>
+            <td style="padding:5px 8px;text-align:left;border-bottom:1px solid #f0e7ff;color:#374151">${esc(desc)}</td>
+            <td style="padding:5px 8px;text-align:right;border-bottom:1px solid #f0e7ff;font-weight:700;color:${txTypeColor(tx.type)}">${amtSign}${fmt(tx.amount)}</td>
+            <td style="padding:5px 8px;text-align:right;border-bottom:1px solid #f0e7ff;color:${tx.balanceAfter < 0 ? "#dc2626" : "#374151"}">${fmt(tx.balanceAfter)}</td>
+          </tr>`;
+        }).join("")}
+      </tbody>
+    </table>
+  </div>` : "";
+
   const body = `
   ${renderDocHeader(doc, "선입금 차감 견적서", "PREPAID DEDUCTION QUOTATION",
     `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:#fdf4ff;color:#7c3aed;border:1px solid #d8b4fe">선입금 차감</span>`
@@ -661,9 +709,9 @@ export function buildPrepaidDeductionQuoteHtml(doc: QuoteDoc): string {
 
   ${renderProjectBar(doc)}
 
-  <!-- 선입금 잔액 현황 -->
+  <!-- 선입금 잔액 현황 (이번 거래 요약) -->
   <div style="margin-bottom:12px;border:1px solid #d8b4fe;border-radius:8px;overflow:hidden">
-    <div style="background:#7c3aed;color:#fff;padding:6px 14px;font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase">선입금 잔액 현황</div>
+    <div style="background:#7c3aed;color:#fff;padding:6px 14px;font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase">이번 차감 내역</div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;text-align:center;font-size:12px">
       <div style="padding:12px;border-right:1px solid #e2e8f0">
         <div style="font-size:9px;color:#6b7280;margin-bottom:4px">차감 전 잔액</div>
@@ -679,6 +727,9 @@ export function buildPrepaidDeductionQuoteHtml(doc: QuoteDoc): string {
       </div>
     </div>
   </div>
+
+  <!-- 누적 차감 거래 내역 테이블 -->
+  ${ledgerTableHtml}
 
   ${renderItemTable(itemRows, supply, tax, total)}
   ${renderTaxAmountSummary(doc, supply, tax, total, "차감 금액")}

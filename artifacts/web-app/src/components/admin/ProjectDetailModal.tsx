@@ -113,9 +113,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [quotePrepaidUsage, setQuotePrepaidUsage] = useState("");
   // 선입금 차감 - 거래처 계정 원장
   type CompPrepaidAcct = { id: number; initialAmount: number; currentBalance: number; note: string | null; depositDate: string | null; status: string };
+  type LedgerEntry = { id: number; type: string; amount: number; balanceAfter: number; description: string | null; projectId: number | null; projectTitle: string | null; transactionDate: string | null; createdAt: string | null };
   const [compPrepaidAccounts, setCompPrepaidAccounts] = useState<CompPrepaidAcct[]>([]);
   const [loadingCompPrepaid, setLoadingCompPrepaid] = useState(false);
   const [selectedPrepaidAcctId, setSelectedPrepaidAcctId] = useState<number | null>(null);
+  const [acctLedger, setAcctLedger] = useState<LedgerEntry[]>([]);
+  const [loadingLedger, setLoadingLedger] = useState(false);
   const [quickPrepaidAmount, setQuickPrepaidAmount] = useState("");
   const [quickPrepaidNote, setQuickPrepaidNote] = useState("");
   const [registeringPrepaid, setRegisteringPrepaid] = useState(false);
@@ -194,6 +197,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         if (active.length > 0 && !selectedPrepaidAcctId) setSelectedPrepaidAcctId(active[0].id);
       }
     } finally { setLoadingCompPrepaid(false); }
+  };
+
+  const loadAcctLedger = async (acctId: number) => {
+    setLoadingLedger(true);
+    try {
+      const res = await fetch(api(`/api/admin/prepaid-accounts/${acctId}`), { headers: authH });
+      if (res.ok) {
+        const data = await res.json();
+        setAcctLedger(data.ledger ?? []);
+      }
+    } finally { setLoadingLedger(false); }
   };
 
   const createNewBatch = async (companyId: number) => {
@@ -307,9 +321,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     if (quoteType === "prepaid_deduction" && detail?.companyId) {
       setCompPrepaidAccounts([]);
       setSelectedPrepaidAcctId(null);
+      setAcctLedger([]);
       loadCompPrepaidAccounts(detail.companyId);
     }
   }, [quoteType, detail?.companyId]);
+
+  useEffect(() => {
+    if (selectedPrepaidAcctId) {
+      loadAcctLedger(selectedPrepaidAcctId);
+    } else {
+      setAcctLedger([]);
+    }
+  }, [selectedPrepaidAcctId]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -490,11 +513,15 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             projectId, transactionDate: new Date().toISOString().slice(0, 10),
           }),
         });
+        // 원장 내역 즉시 갱신
+        await loadAcctLedger(selectedPrepaidAcctId);
+        // 계정 잔액도 갱신
+        await loadCompPrepaidAccounts(detail?.companyId ?? 0);
       }
       onToast(`견적 생성 완료`);
       setQuoteAmount(""); setQuoteNote(""); setQuoteItemForms([defaultItem()]); setShowQuoteForm(false);
       setQuoteValidUntil(""); setQuoteIssueDate(""); setQuoteInvoiceDueDate(""); setQuotePaymentDueDate("");
-      setQuotePrepaidUsage(""); setSelectedPrepaidAcctId(null); setCompPrepaidAccounts([]);
+      setQuotePrepaidUsage(""); setSelectedPrepaidAcctId(null); setCompPrepaidAccounts([]); setAcctLedger([]);
       setQuoteBatchStart(""); setQuoteBatchEnd(""); setBatchCandidates([]); setBatchSelected(new Set()); setBatchQueried(false);
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 견적 생성 실패"); }
@@ -1196,6 +1223,47 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                   </div>
                                 )}
                               </div>
+                            )}
+
+                            {/* ─── 누적 거래 내역 테이블 ─── */}
+                            {acctLedger.length > 0 && (
+                              <div style={{ marginTop: 12, borderTop: "1px solid #ede9fe", paddingTop: 10 }}>
+                                <div style={{ fontSize: 10, fontWeight: 800, color: "#6d28d9", marginBottom: 6, letterSpacing: "0.5px" }}>
+                                  거래 내역 ({acctLedger.length}건)
+                                </div>
+                                <div style={{ overflowX: "auto" }}>
+                                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                                    <thead>
+                                      <tr style={{ background: "#f5f3ff" }}>
+                                        {["날짜", "구분", "내용 / 프로젝트", "금액", "잔액"].map(h => (
+                                          <th key={h} style={{ padding: "4px 8px", fontWeight: 700, color: "#4b5563", borderBottom: "1px solid #e2e8f0", whiteSpace: "nowrap", textAlign: h === "금액" || h === "잔액" ? "right" : h === "구분" ? "center" : "left" }}>{h}</th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {acctLedger.map((tx, idx) => {
+                                        const dateStr = tx.transactionDate ? tx.transactionDate.slice(0, 10) : (tx.createdAt ? tx.createdAt.slice(0, 10) : "-");
+                                        const desc = tx.projectTitle ? `${tx.projectTitle}${tx.description ? " · " + tx.description : ""}` : (tx.description || "-");
+                                        const typeLabel = tx.type === "deposit" ? "입금" : tx.type === "deduction" ? "차감" : "조정";
+                                        const typeColor = tx.type === "deposit" ? "#166534" : tx.type === "deduction" ? "#7c3aed" : "#374151";
+                                        const amtSign = tx.type === "deposit" ? "+" : tx.type === "deduction" ? "-" : "±";
+                                        return (
+                                          <tr key={tx.id} style={{ background: idx % 2 === 0 ? "#fff" : "#faf5ff" }}>
+                                            <td style={{ padding: "4px 8px", borderBottom: "1px solid #f0e7ff", color: "#6b7280", whiteSpace: "nowrap" }}>{dateStr}</td>
+                                            <td style={{ padding: "4px 8px", borderBottom: "1px solid #f0e7ff", textAlign: "center", fontWeight: 700, color: typeColor, whiteSpace: "nowrap" }}>{typeLabel}</td>
+                                            <td style={{ padding: "4px 8px", borderBottom: "1px solid #f0e7ff", color: "#374151", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{desc}</td>
+                                            <td style={{ padding: "4px 8px", borderBottom: "1px solid #f0e7ff", textAlign: "right", fontWeight: 700, color: typeColor, whiteSpace: "nowrap" }}>{amtSign}{tx.amount.toLocaleString()}원</td>
+                                            <td style={{ padding: "4px 8px", borderBottom: "1px solid #f0e7ff", textAlign: "right", color: tx.balanceAfter < 0 ? "#dc2626" : "#374151", whiteSpace: "nowrap" }}>{tx.balanceAfter.toLocaleString()}원</td>
+                                          </tr>
+                                        );
+                                      })}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              </div>
+                            )}
+                            {loadingLedger && (
+                              <div style={{ marginTop: 10, fontSize: 11, color: "#9ca3af" }}>거래 내역 불러오는 중...</div>
                             )}
                           </div>
                         </div>

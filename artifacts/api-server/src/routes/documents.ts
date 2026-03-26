@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import {
   db, projectsTable, quotesTable, paymentsTable, settlementsTable,
   usersTable, companiesTable, contactsTable, notesTable, quoteItemsTable,
+  prepaidAccountsTable, prepaidLedgerTable,
 } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
@@ -136,6 +137,51 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
     // quote_items가 있으면 품목 배열로 렌더링, 없으면 단일 요약 행
     const hasQuoteItems = quoteItems.length > 0;
 
+    // prepaid_deduction 견적서인 경우 해당 계정의 누적 원장 내역 조회
+    let ledgerHistory: Array<{
+      id: number; type: "deposit" | "deduction" | "adjustment";
+      amount: number; balanceAfter: number;
+      description?: string | null; projectId?: number | null; projectTitle?: string | null;
+      transactionDate: string | null; createdAt: string | null;
+    }> | undefined = undefined;
+
+    if (quote?.quoteType === "prepaid_deduction" && project.companyId) {
+      // 이 거래처의 활성 선입금 계정 조회
+      const [acct] = await db
+        .select({ id: prepaidAccountsTable.id })
+        .from(prepaidAccountsTable)
+        .where(and(eq(prepaidAccountsTable.companyId, project.companyId), eq(prepaidAccountsTable.status, "active")))
+        .limit(1);
+
+      if (acct) {
+        const ledgerRows = await db
+          .select()
+          .from(prepaidLedgerTable)
+          .where(eq(prepaidLedgerTable.accountId, acct.id))
+          .orderBy(prepaidLedgerTable.transactionDate, prepaidLedgerTable.createdAt);
+
+        // 연결된 프로젝트 제목 조회
+        const pids = ledgerRows.filter(r => r.projectId).map(r => r.projectId as number);
+        let projectTitleMap = new Map<number, string>();
+        if (pids.length > 0) {
+          const ps = await db.select({ id: projectsTable.id, title: projectsTable.title }).from(projectsTable);
+          projectTitleMap = new Map(ps.map(p => [p.id, p.title]));
+        }
+
+        ledgerHistory = ledgerRows.map(r => ({
+          id: r.id,
+          type: r.type as "deposit" | "deduction" | "adjustment",
+          amount: Number(r.amount),
+          balanceAfter: Number(r.balanceAfter),
+          description: r.description,
+          projectId: r.projectId,
+          projectTitle: r.projectId ? (projectTitleMap.get(r.projectId) ?? null) : null,
+          transactionDate: r.transactionDate ? String(r.transactionDate) : null,
+          createdAt: r.createdAt ? r.createdAt.toISOString() : null,
+        }));
+      }
+    }
+
     const html = buildQuoteHtml({
       docNumber,
       projectId: project.id,
@@ -180,6 +226,7 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
       prepaidBalanceBefore: quote?.prepaidBalanceBefore != null ? Number(quote.prepaidBalanceBefore) : null,
       prepaidUsageAmount: quote?.prepaidUsageAmount != null ? Number(quote.prepaidUsageAmount) : null,
       prepaidBalanceAfter: quote?.prepaidBalanceAfter != null ? Number(quote.prepaidBalanceAfter) : null,
+      ledgerHistory,
       batchPeriodStart: quote?.batchPeriodStart ?? null,
       batchPeriodEnd: quote?.batchPeriodEnd ?? null,
       batchItemCount: quote?.batchItemCount ?? null,
