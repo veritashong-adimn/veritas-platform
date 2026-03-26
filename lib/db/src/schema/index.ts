@@ -17,3 +17,4 @@ export * from "./translator_rates";
 export * from "./board_posts";
 export * from "./project_files";
 export * from "./billing_batches";
+export * from "./prepaid_accounts";

@@ -10,7 +10,7 @@ Key capabilities include:
 - Payment processing and settlement management for translators.
 - Admin CRM dashboard: **좌측 사이드바 레이아웃** (dark #1e2433, 220px, 접기/펼치기 가능). 메뉴 그룹: 운영관리(대시보드/프로젝트/결제/작업/정산/**선입금 현황**/**누적 청구**), 사용자/고객(사용자관리/고객관리/거래처/담당자), 번역/단가(번역사/상품·단가), 기타(게시판/운영 테스트). 상단 바에 햄버거+페이지 제목+새로고침. 사이드바 하단 사용자 이메일+로그아웃.
 - **프로젝트 검색 고도화**: 빠른 필터(전체/미청구/미수금/선입금차감/잔액남음/누적진행중), 상세필터(견적서유형/청구방식/입금예정일), 프로젝트 테이블에 견적유형·결제 여부 컬럼 추가. API params: quickFilter, quoteType, billingType, paymentDueDateFrom, paymentDueDateTo, companyId.
-- **선입금 현황 탭**: `GET /api/admin/prepaid-summary` → 거래처별 잔액/입금액/사용액/최근 이용일 집계 테이블.
+- **선입금 계정 원장 시스템 (신규)**: `prepaid_accounts` + `prepaid_ledger` DB 테이블. 거래처별 선입금 계정(최초입금액, 현재잔액)과 모든 거래내역(입금/차감/조정)을 원장 방식으로 관리. API: `GET/POST /api/admin/prepaid-accounts`, `GET /api/admin/prepaid-accounts/:id`, `POST /api/admin/prepaid-accounts/:id/transactions`, `DELETE /api/admin/prepaid-ledger/:entryId`. PrepaidLedgerModal 컴포넌트로 잔액 요약+원장 테이블+거래 추가 지원. 선입금 현황 탭: 계정 카드 그리드(잔액/사용률 바), 신규 계정 등록 폼. CompanyDetailModal에도 거래처별 선입금 계정 카드 + 원장 보기 기능 추가.
 - **누적 청구 탭**: `GET /api/admin/billing-batches` → billing_batches 목록(상태/기간/건수/금액). 상태 필터(전체/초안/발송/승인/완료) 지원.
 - **거래처 상세 확장**: API 응답에 prepaidBalance, unpaidAmount, activeAccumulatedCount, lastProjectDate, lastPaymentDate 추가. CompanyDetailModal에 선입금잔액/미수금/누적청구진행 카드 표시.
 - Project detail modal (7-tab UI: 기본정보/거래처·담당자/번역사/견적결제정산/커뮤니케이션/메모/이벤트로그), company/contact management, translator profiles and rate management, user management (activation/role/password-reset), product master, board/bulletin.

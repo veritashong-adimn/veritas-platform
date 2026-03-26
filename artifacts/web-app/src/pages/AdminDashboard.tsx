@@ -15,6 +15,7 @@ import { CustomerDetailModal } from '../components/admin/CustomerDetailModal';
 import { TranslatorProfileModal } from '../components/admin/TranslatorProfileModal';
 import { TranslatorDetailModal } from '../components/admin/TranslatorDetailModal';
 import { ProjectDetailModal } from '../components/admin/ProjectDetailModal';
+import { PrepaidLedgerModal } from '../components/admin/PrepaidLedgerModal';
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
@@ -69,10 +70,15 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
   const [projectCompanyIdFilter, setProjectCompanyIdFilter] = useState<string>("");
   const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
 
-  // 선입금 현황 탭
-  type PrepaidSummary = { companyId: number; companyName: string; currentBalance: number; totalDeposited: number; totalUsed: number; lastUsedAt: string | null; lastDepositAt: string | null };
-  const [prepaidSummary, setPrepaidSummary] = useState<PrepaidSummary[]>([]);
+  // 선입금 계정 (원장 방식)
+  type PrepaidAccount = { id: number; companyId: number; companyName: string; initialAmount: number; currentBalance: number; status: string; note: string | null; depositDate: string | null; createdAt: string };
+  const [prepaidAccounts, setPrepaidAccounts] = useState<PrepaidAccount[]>([]);
   const [prepaidLoading, setPrepaidLoading] = useState(false);
+  const [selectedPrepaidAccountId, setSelectedPrepaidAccountId] = useState<number | null>(null);
+  const [showCreatePrepaidForm, setShowCreatePrepaidForm] = useState(false);
+  const [createPrepaidForm, setCreatePrepaidForm] = useState({ companyId: "", initialAmount: "", note: "", depositDate: new Date().toISOString().slice(0, 10) });
+  const [savingPrepaid, setSavingPrepaid] = useState(false);
+  const [prepaidCompanyFilter, setPrepaidCompanyFilter] = useState("");
 
   // 누적 청구 탭
   type BillingBatch = { id: number; companyId: number; companyName: string | null; periodStart: string | null; periodEnd: string | null; status: string; totalAmount: number; quoteId: number | null; quoteStatus: string | null; itemCount: number; createdAt: string };
@@ -222,15 +228,37 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
     finally { setLoading(false); }
   }, [token, projectSearch, projectFilter, dateFrom, dateTo, assignedAdminFilter, projectQuickFilter, projectQuoteTypeFilter, projectBillingTypeFilter, projectPaymentDueDateFrom, projectPaymentDueDateTo, projectCompanyIdFilter]);
 
-  const fetchPrepaidSummary = useCallback(async () => {
+  const fetchPrepaidAccounts = useCallback(async () => {
     setPrepaidLoading(true);
     try {
-      const res = await fetch(api("/api/admin/prepaid-summary"), { headers: authHeaders });
+      const res = await fetch(api("/api/admin/prepaid-accounts"), { headers: authHeaders });
       const data = await res.json();
-      if (res.ok) setPrepaidSummary(Array.isArray(data) ? data : []);
-    } catch { setToast("오류: 선입금 현황 조회 실패"); }
+      if (res.ok) setPrepaidAccounts(Array.isArray(data) ? data : []);
+    } catch { setToast("오류: 선입금 계정 조회 실패"); }
     finally { setPrepaidLoading(false); }
   }, [token]);
+
+  const handleCreatePrepaidAccount = async () => {
+    const amt = Number(createPrepaidForm.initialAmount.replace(/,/g, ""));
+    if (!createPrepaidForm.companyId || !amt || amt <= 0) { setToast("거래처와 입금액을 확인하세요."); return; }
+    setSavingPrepaid(true);
+    try {
+      const res = await fetch(api("/api/admin/prepaid-accounts"), {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ companyId: Number(createPrepaidForm.companyId), initialAmount: amt, note: createPrepaidForm.note || undefined, depositDate: createPrepaidForm.depositDate }),
+      });
+      if (res.ok) {
+        setShowCreatePrepaidForm(false);
+        setCreatePrepaidForm({ companyId: "", initialAmount: "", note: "", depositDate: new Date().toISOString().slice(0, 10) });
+        setToast("선입금 계정이 생성되었습니다.");
+        await fetchPrepaidAccounts();
+      } else {
+        const d = await res.json();
+        setToast(`오류: ${d.error ?? "생성 실패"}`);
+      }
+    } finally { setSavingPrepaid(false); }
+  };
 
   const fetchBillingBatches = useCallback(async () => {
     setBillingBatchesLoading(true);
@@ -455,7 +483,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
   useEffect(() => { if (adminTab === "products") fetchProducts(); }, [adminTab, fetchProducts]);
   useEffect(() => { if (adminTab === "board") fetchBoard(); }, [adminTab, fetchBoard]);
   useEffect(() => { if (adminTab === "translators") fetchTranslators(); }, [adminTab, fetchTranslators]);
-  useEffect(() => { if (adminTab === "prepaid") fetchPrepaidSummary(); }, [adminTab, fetchPrepaidSummary]);
+  useEffect(() => { if (adminTab === "prepaid") fetchPrepaidAccounts(); }, [adminTab, fetchPrepaidAccounts]);
   useEffect(() => { if (adminTab === "billing") fetchBillingBatches(); }, [adminTab, fetchBillingBatches]);
 
   const fetchScenarioHistory = async () => {
@@ -2223,75 +2251,144 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
         </div>
       )}
 
-      {/* ── 선입금 현황 탭 ── */}
+      {/* ── 선입금 계정 원장 탭 ── */}
       {adminTab === "prepaid" && (
-        <Section title="선입금 현황">
+        <Section title="선입금 계정 원장"
+          action={
+            <div style={{ display: "flex", gap: 8 }}>
+              <GhostBtn onClick={fetchPrepaidAccounts} style={{ fontSize: 12, padding: "6px 14px" }}>새로고침</GhostBtn>
+              <PrimaryBtn onClick={() => setShowCreatePrepaidForm(true)} style={{ fontSize: 12, padding: "6px 14px" }}>
+                + 선입금 계정 등록
+              </PrimaryBtn>
+            </div>
+          }>
+
+          {/* 신규 선입금 계정 생성 폼 */}
+          {showCreatePrepaidForm && (
+            <Card style={{ border: "2px solid #3b82f6", marginBottom: 20, background: "#eff6ff" }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: "#1e40af", marginBottom: 16 }}>신규 선입금 계정 등록</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+                <div>
+                  <label style={labelStyle}>거래처 ID *</label>
+                  <input value={createPrepaidForm.companyId} onChange={e => setCreatePrepaidForm(p => ({ ...p, companyId: e.target.value }))}
+                    placeholder="거래처 ID (숫자)"
+                    style={{ ...inputStyle, background: "#fff" }} />
+                  <div style={{ fontSize: 11, color: "#6b7280", marginTop: 3 }}>거래처 탭에서 거래처 ID를 확인하세요</div>
+                </div>
+                <div>
+                  <label style={labelStyle}>최초 입금액 (원) *</label>
+                  <input value={createPrepaidForm.initialAmount} onChange={e => setCreatePrepaidForm(p => ({ ...p, initialAmount: e.target.value }))}
+                    placeholder="예: 1000000"
+                    style={{ ...inputStyle, background: "#fff" }} />
+                </div>
+                <div>
+                  <label style={labelStyle}>입금일</label>
+                  <input type="date" value={createPrepaidForm.depositDate} onChange={e => setCreatePrepaidForm(p => ({ ...p, depositDate: e.target.value }))}
+                    style={{ ...inputStyle, background: "#fff" }} />
+                </div>
+                <div>
+                  <label style={labelStyle}>메모 (선택)</label>
+                  <input value={createPrepaidForm.note} onChange={e => setCreatePrepaidForm(p => ({ ...p, note: e.target.value }))}
+                    placeholder="예: 2026년 1분기 선입금"
+                    style={{ ...inputStyle, background: "#fff" }} />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <PrimaryBtn onClick={handleCreatePrepaidAccount} disabled={savingPrepaid}>
+                  {savingPrepaid ? "저장 중..." : "계정 생성"}
+                </PrimaryBtn>
+                <GhostBtn onClick={() => setShowCreatePrepaidForm(false)}>취소</GhostBtn>
+              </div>
+            </Card>
+          )}
+
+          {/* 요약 통계 */}
+          {prepaidAccounts.length > 0 && (
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 20 }}>
+              {[
+                { label: "총 계정 수", value: `${prepaidAccounts.length}개`, color: "#2563eb", bg: "#eff6ff" },
+                { label: "잔액 합계", value: `${prepaidAccounts.reduce((s, a) => s + a.currentBalance, 0).toLocaleString()}원`, color: "#15803d", bg: "#dcfce7" },
+                { label: "잔액 있는 계정", value: `${prepaidAccounts.filter(a => a.currentBalance > 0).length}개`, color: "#d97706", bg: "#fef3c7" },
+                { label: "총 입금 누계", value: `${prepaidAccounts.reduce((s, a) => s + a.initialAmount, 0).toLocaleString()}원`, color: "#7c3aed", bg: "#ede9fe" },
+              ].map(stat => (
+                <div key={stat.label} style={{ background: stat.bg, borderRadius: 10, padding: "14px 20px", minWidth: 155, flex: "1 1 155px" }}>
+                  <div style={{ fontSize: 12, color: stat.color, fontWeight: 700, marginBottom: 4 }}>{stat.label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: stat.color }}>{stat.value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 검색 필터 */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <input value={prepaidCompanyFilter} onChange={e => setPrepaidCompanyFilter(e.target.value)}
+              placeholder="거래처명 검색..." style={{ ...inputStyle, maxWidth: 280 }} />
+          </div>
+
+          {/* 계정 목록 */}
           {prepaidLoading ? (
             <div style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
-          ) : prepaidSummary.length === 0 ? (
-            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>
-              선입금 내역이 없습니다.
+          ) : prepaidAccounts.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: 40, color: "#9ca3af" }}>
+              <div style={{ fontSize: 36, marginBottom: 12 }}>💼</div>
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>선입금 계정이 없습니다</div>
+              <div style={{ fontSize: 13 }}>위의 "선입금 계정 등록" 버튼을 눌러 첫 번째 계정을 만드세요.</div>
             </Card>
           ) : (
-            <>
-              {/* 요약 카드 */}
-              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 20 }}>
-                {[
-                  { label: "거래처 수", value: `${prepaidSummary.length}개`, color: "#2563eb", bg: "#eff6ff" },
-                  { label: "총 잔액", value: `${prepaidSummary.reduce((s, c) => s + c.currentBalance, 0).toLocaleString()}원`, color: "#15803d", bg: "#dcfce7" },
-                  { label: "잔액 있는 거래처", value: `${prepaidSummary.filter(c => c.currentBalance > 0).length}개`, color: "#d97706", bg: "#fef3c7" },
-                  { label: "총 입금 누계", value: `${prepaidSummary.reduce((s, c) => s + c.totalDeposited, 0).toLocaleString()}원`, color: "#7c3aed", bg: "#ede9fe" },
-                ].map(stat => (
-                  <div key={stat.label} style={{ background: stat.bg, borderRadius: 10, padding: "14px 20px", minWidth: 160, flex: "1 1 160px" }}>
-                    <div style={{ fontSize: 12, color: stat.color, fontWeight: 700, marginBottom: 4 }}>{stat.label}</div>
-                    <div style={{ fontSize: 20, fontWeight: 800, color: stat.color }}>{stat.value}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+              {prepaidAccounts.filter(a => !prepaidCompanyFilter || a.companyName.toLowerCase().includes(prepaidCompanyFilter.toLowerCase())).map(account => {
+                const usedAmount = account.initialAmount - account.currentBalance;
+                const usagePercent = account.initialAmount > 0 ? Math.min(100, (usedAmount / account.initialAmount) * 100) : 0;
+                const hasBalance = account.currentBalance > 0;
+                return (
+                  <div key={account.id} onClick={() => setSelectedPrepaidAccountId(account.id)}
+                    style={{ background: "#fff", border: hasBalance ? "1px solid #bfdbfe" : "1px solid #e5e7eb", borderRadius: 12, padding: "18px 20px", cursor: "pointer", transition: "box-shadow 0.15s", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}
+                    onMouseEnter={e => (e.currentTarget.style.boxShadow = "0 4px 16px rgba(37,99,235,0.12)")}
+                    onMouseLeave={e => (e.currentTarget.style.boxShadow = "0 1px 3px rgba(0,0,0,0.06)")}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                      <div>
+                        <div style={{ fontWeight: 800, fontSize: 15, color: "#1e40af" }}>{account.companyName}</div>
+                        {account.depositDate && <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>입금일: {account.depositDate}</div>}
+                        {account.note && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 1 }}>{account.note}</div>}
+                      </div>
+                      <span style={{ background: hasBalance ? "#dcfce7" : "#f3f4f6", color: hasBalance ? "#15803d" : "#6b7280", borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>
+                        {hasBalance ? "잔액 있음" : "소진"}
+                      </span>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                      <div style={{ background: "#f0fdf4", borderRadius: 8, padding: "8px 12px" }}>
+                        <div style={{ fontSize: 10, color: "#15803d", fontWeight: 600 }}>현재 잔액</div>
+                        <div style={{ fontSize: 17, fontWeight: 800, color: hasBalance ? "#15803d" : "#dc2626" }}>{account.currentBalance.toLocaleString()}원</div>
+                      </div>
+                      <div style={{ background: "#fef2f2", borderRadius: 8, padding: "8px 12px" }}>
+                        <div style={{ fontSize: 10, color: "#dc2626", fontWeight: 600 }}>사용 금액</div>
+                        <div style={{ fontSize: 17, fontWeight: 800, color: "#dc2626" }}>{usedAmount.toLocaleString()}원</div>
+                      </div>
+                    </div>
+                    {/* 사용률 바 */}
+                    <div style={{ height: 6, background: "#e5e7eb", borderRadius: 4, overflow: "hidden", marginBottom: 8 }}>
+                      <div style={{ height: "100%", width: `${usagePercent}%`, background: usagePercent > 90 ? "#dc2626" : usagePercent > 60 ? "#f59e0b" : "#22c55e", borderRadius: 4, transition: "width 0.3s" }} />
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div style={{ fontSize: 11, color: "#9ca3af" }}>최초: {account.initialAmount.toLocaleString()}원 · 사용률 {usagePercent.toFixed(0)}%</div>
+                      <div style={{ fontSize: 11, color: "#2563eb", fontWeight: 600 }}>원장 보기 →</div>
+                    </div>
                   </div>
-                ))}
-              </div>
-              <Card style={{ padding: 0, overflow: "hidden" }}>
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr>
-                        {["거래처","현재 잔액","총 입금액","총 사용액","최근 사용일","최근 입금일","프로젝트"].map(h => (
-                          <th key={h} style={tableTh}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {prepaidSummary.map(c => (
-                        <tr key={c.companyId}
-                          onClick={() => { setAdminTab("companies"); setCompanyModal(c.companyId); }}
-                          style={{ cursor: "pointer" }}
-                          onMouseEnter={e => (e.currentTarget.style.background = "#f0f9ff")}
-                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                          <td style={{ ...tableTd, fontWeight: 700, color: "#2563eb" }}>{c.companyName}</td>
-                          <td style={{ ...tableTd, fontWeight: 700, color: c.currentBalance > 0 ? "#15803d" : "#6b7280" }}>
-                            {c.currentBalance.toLocaleString()}원
-                          </td>
-                          <td style={{ ...tableTd, color: "#374151" }}>{c.totalDeposited.toLocaleString()}원</td>
-                          <td style={{ ...tableTd, color: "#374151" }}>{c.totalUsed.toLocaleString()}원</td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af" }}>
-                            {c.lastUsedAt ? new Date(c.lastUsedAt).toLocaleDateString("ko-KR") : "-"}
-                          </td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af" }}>
-                            {c.lastDepositAt ? new Date(c.lastDepositAt).toLocaleDateString("ko-KR") : "-"}
-                          </td>
-                          <td style={{ ...tableTd }}>
-                            <button onClick={e => { e.stopPropagation(); setProjectCompanyIdFilter(String(c.companyId)); setProjectQuickFilter("all"); setAdminTab("projects"); }}
-                              style={{ background: "#eff6ff", color: "#2563eb", border: "none", borderRadius: 6, padding: "3px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                              프로젝트 보기
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
-            </>
+                );
+              })}
+            </div>
           )}
         </Section>
+      )}
+
+      {/* 선입금 원장 모달 */}
+      {selectedPrepaidAccountId !== null && (
+        <PrepaidLedgerModal
+          accountId={selectedPrepaidAccountId}
+          authHeaders={authHeaders}
+          onClose={() => setSelectedPrepaidAccountId(null)}
+          onUpdate={fetchPrepaidAccounts}
+        />
       )}
 
       {/* ── 누적 청구 탭 ── */}

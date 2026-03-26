@@ -103,7 +103,7 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
 
     if (projectIds.length > 0) {
       const [qRow] = await db
-        .select({ total: sql<number>`COALESCE(SUM(${quotesTable.amount}), 0)::int` })
+        .select({ total: sql<number>`COALESCE(SUM(${quotesTable.price}), 0)::int` })
         .from(quotesTable)
         .where(and(inArray(quotesTable.projectId, projectIds), eq(quotesTable.status, "approved")));
       totalQuote = qRow?.total ?? 0;

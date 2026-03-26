@@ -6,6 +6,7 @@ import {
   contactsTable, companiesTable, translatorRatesTable,
   quoteItemsTable, calcQuoteItemAmounts,
   billingBatchesTable, billingBatchItemsTable,
+  prepaidAccountsTable, prepaidLedgerTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
@@ -940,6 +941,191 @@ router.get("/admin/prepaid-summary", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch prepaid summary");
     res.status(500).json({ error: "선입금 현황 조회 실패." });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// 선입금 계정 (Prepaid Account Ledger) API
+// ════════════════════════════════════════════════════════════════════════════
+
+// ─── 거래처의 선입금 계정 목록 + 잔액 ────────────────────────────────────────
+router.get("/admin/prepaid-accounts", ...adminGuard, async (req, res) => {
+  const { companyId } = req.query as { companyId?: string };
+  const cid = companyId ? Number(companyId) : null;
+  try {
+    const where = cid ? eq(prepaidAccountsTable.companyId, cid) : undefined;
+    const accounts = await db.select().from(prepaidAccountsTable)
+      .where(where)
+      .orderBy(desc(prepaidAccountsTable.createdAt));
+
+    const cids = [...new Set(accounts.map(a => a.companyId))];
+    let companyMap = new Map<number, string>();
+    if (cids.length > 0) {
+      const cs = await db.select({ id: companiesTable.id, name: companiesTable.name }).from(companiesTable).where(inArray(companiesTable.id, cids));
+      companyMap = new Map(cs.map(c => [c.id, c.name]));
+    }
+    res.json(accounts.map(a => ({
+      ...a,
+      initialAmount: Number(a.initialAmount),
+      currentBalance: Number(a.currentBalance),
+      companyName: companyMap.get(a.companyId) ?? `거래처 #${a.companyId}`,
+    })));
+  } catch (err) {
+    req.log.error({ err }, "Failed to fetch prepaid accounts");
+    res.status(500).json({ error: "선입금 계정 조회 실패" });
+  }
+});
+
+// ─── 선입금 계정 신규 생성 (최초 입금) ─────────────────────────────────────
+router.post("/admin/prepaid-accounts", ...adminGuard, async (req, res) => {
+  const { companyId, initialAmount, note, depositDate } = req.body as {
+    companyId: number; initialAmount: number; note?: string; depositDate?: string;
+  };
+  if (!companyId || !initialAmount || initialAmount <= 0) {
+    res.status(400).json({ error: "companyId와 initialAmount(>0)가 필요합니다." }); return;
+  }
+  try {
+    const result = await db.transaction(async tx => {
+      const [account] = await tx.insert(prepaidAccountsTable).values({
+        companyId,
+        initialAmount: String(initialAmount),
+        currentBalance: String(initialAmount),
+        status: "active",
+        note: note ?? null,
+        depositDate: depositDate ?? new Date().toISOString().slice(0, 10),
+      }).returning();
+      const [entry] = await tx.insert(prepaidLedgerTable).values({
+        accountId: account.id,
+        projectId: null,
+        type: "deposit",
+        amount: String(initialAmount),
+        balanceAfter: String(initialAmount),
+        description: note ?? "선입금 입금",
+        transactionDate: depositDate ?? new Date().toISOString().slice(0, 10),
+      }).returning();
+      return { account, entry };
+    });
+    res.status(201).json({
+      ...result.account,
+      initialAmount: Number(result.account.initialAmount),
+      currentBalance: Number(result.account.currentBalance),
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to create prepaid account");
+    res.status(500).json({ error: "선입금 계정 생성 실패" });
+  }
+});
+
+// ─── 선입금 계정 상세 + 원장 전체 ──────────────────────────────────────────
+router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
+  const accountId = Number(req.params.id);
+  if (!accountId) { res.status(400).json({ error: "유효하지 않은 계정 ID" }); return; }
+  try {
+    const [account] = await db.select().from(prepaidAccountsTable).where(eq(prepaidAccountsTable.id, accountId));
+    if (!account) { res.status(404).json({ error: "계정을 찾을 수 없습니다." }); return; }
+
+    const ledger = await db.select().from(prepaidLedgerTable)
+      .where(eq(prepaidLedgerTable.accountId, accountId))
+      .orderBy(prepaidLedgerTable.transactionDate, prepaidLedgerTable.createdAt);
+
+    const pids = ledger.filter(e => e.projectId).map(e => e.projectId as number);
+    let projectMap = new Map<number, string>();
+    if (pids.length > 0) {
+      const ps = await db.select({ id: projectsTable.id, title: projectsTable.title }).from(projectsTable).where(inArray(projectsTable.id, pids));
+      projectMap = new Map(ps.map(p => [p.id, p.title]));
+    }
+    const [company] = await db.select({ name: companiesTable.name }).from(companiesTable).where(eq(companiesTable.id, account.companyId));
+
+    res.json({
+      ...account,
+      initialAmount: Number(account.initialAmount),
+      currentBalance: Number(account.currentBalance),
+      companyName: company?.name ?? `거래처 #${account.companyId}`,
+      ledger: ledger.map(e => ({
+        ...e,
+        amount: Number(e.amount),
+        balanceAfter: Number(e.balanceAfter),
+        projectTitle: e.projectId ? (projectMap.get(e.projectId) ?? `프로젝트 #${e.projectId}`) : null,
+      })),
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to fetch prepaid account detail");
+    res.status(500).json({ error: "선입금 계정 상세 조회 실패" });
+  }
+});
+
+// ─── 선입금 계정에 거래 추가 (차감 / 추가입금 / 조정) ──────────────────────
+router.post("/admin/prepaid-accounts/:id/transactions", ...adminGuard, async (req, res) => {
+  const accountId = Number(req.params.id);
+  const { type, amount, description, projectId, transactionDate } = req.body as {
+    type: "deduction" | "deposit" | "adjustment";
+    amount: number;
+    description?: string;
+    projectId?: number;
+    transactionDate?: string;
+  };
+  if (!type || !amount || amount <= 0) {
+    res.status(400).json({ error: "type과 amount(>0)가 필요합니다." }); return;
+  }
+  try {
+    const [account] = await db.select().from(prepaidAccountsTable).where(eq(prepaidAccountsTable.id, accountId));
+    if (!account || account.status !== "active") {
+      res.status(400).json({ error: "유효하지 않은 계정입니다." }); return;
+    }
+    const currentBal = Number(account.currentBalance);
+    if (type === "deduction" && amount > currentBal) {
+      res.status(400).json({ error: `잔액 부족: 현재 잔액 ${currentBal.toLocaleString()}원, 차감 요청 ${amount.toLocaleString()}원` }); return;
+    }
+    const newBalance = type === "deduction"
+      ? currentBal - amount
+      : currentBal + amount;
+
+    const result = await db.transaction(async tx => {
+      await tx.update(prepaidAccountsTable).set({ currentBalance: String(newBalance) }).where(eq(prepaidAccountsTable.id, accountId));
+      const [entry] = await tx.insert(prepaidLedgerTable).values({
+        accountId,
+        projectId: projectId ?? null,
+        type,
+        amount: String(amount),
+        balanceAfter: String(newBalance),
+        description: description ?? (type === "deduction" ? "서비스 차감" : type === "deposit" ? "추가 입금" : "잔액 조정"),
+        transactionDate: transactionDate ?? new Date().toISOString().slice(0, 10),
+      }).returning();
+      return entry;
+    });
+    res.status(201).json({ ...result, amount: Number(result.amount), balanceAfter: Number(result.balanceAfter), currentBalance: newBalance });
+  } catch (err) {
+    req.log.error({ err }, "Failed to add prepaid transaction");
+    res.status(500).json({ error: "거래 추가 실패" });
+  }
+});
+
+// ─── 선입금 원장 항목 삭제 (잔액 재계산) ────────────────────────────────────
+router.delete("/admin/prepaid-ledger/:entryId", ...adminGuard, async (req, res) => {
+  const entryId = Number(req.params.entryId);
+  try {
+    const [entry] = await db.select().from(prepaidLedgerTable).where(eq(prepaidLedgerTable.id, entryId));
+    if (!entry) { res.status(404).json({ error: "항목을 찾을 수 없습니다." }); return; }
+    const [account] = await db.select().from(prepaidAccountsTable).where(eq(prepaidAccountsTable.id, entry.accountId));
+    if (!account) { res.status(404).json({ error: "계정을 찾을 수 없습니다." }); return; }
+
+    await db.transaction(async tx => {
+      await tx.delete(prepaidLedgerTable).where(eq(prepaidLedgerTable.id, entryId));
+      // 잔액 재계산: 모든 남은 항목 기반
+      const remaining = await tx.select().from(prepaidLedgerTable)
+        .where(eq(prepaidLedgerTable.accountId, entry.accountId))
+        .orderBy(prepaidLedgerTable.transactionDate, prepaidLedgerTable.createdAt);
+      let bal = 0;
+      for (const e of remaining) {
+        bal = e.type === "deduction" ? bal - Number(e.amount) : bal + Number(e.amount);
+        await tx.update(prepaidLedgerTable).set({ balanceAfter: String(bal) }).where(eq(prepaidLedgerTable.id, e.id));
+      }
+      await tx.update(prepaidAccountsTable).set({ currentBalance: String(bal) }).where(eq(prepaidAccountsTable.id, entry.accountId));
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "Failed to delete prepaid ledger entry");
+    res.status(500).json({ error: "원장 항목 삭제 실패" });
   }
 });
 

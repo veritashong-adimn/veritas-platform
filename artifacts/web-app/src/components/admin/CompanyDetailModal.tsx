@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { api, CompanyDetail, Contact, NoteEntry } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn } from "../ui";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
+import { PrepaidLedgerModal } from "./PrepaidLedgerModal";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -28,6 +29,9 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [compNotes, setCompNotes] = useState<NoteEntry[]>([]);
   const [compNoteText, setCompNoteText] = useState("");
   const [addingCompNote, setAddingCompNote] = useState(false);
+  type PrepaidAccount = { id: number; companyId: number; companyName: string; initialAmount: number; currentBalance: number; status: string; note: string | null; depositDate: string | null; createdAt: string };
+  const [prepaidAccounts, setPrepaidAccounts] = useState<PrepaidAccount[]>([]);
+  const [selectedLedgerAccountId, setSelectedLedgerAccountId] = useState<number | null>(null);
 
   const authH = { Authorization: `Bearer ${token}` };
 
@@ -50,6 +54,9 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
         });
       }
       if (nRes.ok) setCompNotes(Array.isArray(nData) ? nData : []);
+      // 선입금 계정 로드
+      const paRes = await fetch(api(`/api/admin/prepaid-accounts?companyId=${companyId}`), { headers: authH });
+      if (paRes.ok) setPrepaidAccounts(await paRes.json());
     } catch { onToast("오류: 거래처 정보 불러오기 실패"); }
     finally { setLoading(false); }
   };
@@ -180,6 +187,32 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
               )}
             </div>
 
+            {/* ── 선입금 계정 섹션 ── */}
+            {prepaidAccounts.length > 0 && (
+              <div style={{ marginTop: 18, marginBottom: 4 }}>
+                <p style={sH}>선입금 계정 ({prepaidAccounts.length})</p>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {prepaidAccounts.map(acct => (
+                    <div key={acct.id} onClick={() => setSelectedLedgerAccountId(acct.id)}
+                      style={{ background: acct.currentBalance > 0 ? "#f0fdf4" : "#f9fafb", border: `1px solid ${acct.currentBalance > 0 ? "#86efac" : "#e5e7eb"}`, borderRadius: 10, padding: "10px 14px", cursor: "pointer", minWidth: 170, flex: "1 1 170px" }}
+                      onMouseEnter={e => (e.currentTarget.style.boxShadow = "0 2px 10px rgba(37,99,235,0.12)")}
+                      onMouseLeave={e => (e.currentTarget.style.boxShadow = "none")}>
+                      <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 2 }}>
+                        {acct.depositDate ?? "-"}{acct.note ? ` · ${acct.note}` : ""}
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                        <div style={{ fontSize: 14, fontWeight: 800, color: acct.currentBalance > 0 ? "#15803d" : "#6b7280" }}>
+                          {acct.currentBalance.toLocaleString()}원
+                        </div>
+                        <div style={{ fontSize: 10, color: "#9ca3af" }}>원장 보기 →</div>
+                      </div>
+                      <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>최초: {acct.initialAmount.toLocaleString()}원</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 20, marginBottom: 10 }}>
               <p style={{ ...sH, margin: 0 }}>담당자 목록 ({detail.contacts.length})</p>
               <GhostBtn onClick={() => setShowContactForm(v => !v)} style={{ fontSize: 12, padding: "4px 10px" }}>+ 추가</GhostBtn>
@@ -260,6 +293,16 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
           </>
         )}
       </div>
+
+      {/* 선입금 원장 모달 */}
+      {selectedLedgerAccountId !== null && (
+        <PrepaidLedgerModal
+          accountId={selectedLedgerAccountId}
+          authHeaders={{ Authorization: `Bearer ${token}` }}
+          onClose={() => setSelectedLedgerAccountId(null)}
+          onUpdate={load}
+        />
+      )}
     </div>
   );
 }
