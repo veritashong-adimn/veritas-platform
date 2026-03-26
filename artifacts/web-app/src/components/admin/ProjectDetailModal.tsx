@@ -505,13 +505,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const handleQuickRegisterPrepaid = async () => {
     const amt = Number(quickPrepaidAmount.replace(/,/g, ""));
     if (!amt || amt <= 0) { onToast("입금액을 입력하세요."); return; }
-    if (!detail?.company?.id) { onToast("거래처 정보가 없습니다."); return; }
+    const compId = detail?.companyId;
+    if (!compId) { onToast("이 프로젝트에 거래처가 연결되어 있지 않습니다."); return; }
     setRegisteringPrepaid(true);
     try {
       const res = await fetch(api("/api/admin/prepaid-accounts"), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
         body: JSON.stringify({
-          companyId: detail.company.id, initialAmount: amt,
+          companyId: compId, initialAmount: amt,
           note: quickPrepaidNote || null, depositDate: new Date().toISOString().slice(0, 10),
         }),
       });
@@ -520,7 +521,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       onToast("선입금 계정이 등록되었습니다. 이제 차감 금액을 입력하세요.");
       setQuickPrepaidAmount(""); setQuickPrepaidNote("");
       // 계정 목록 갱신 후 자동 선택
-      const listRes = await fetch(api(`/api/admin/prepaid-accounts?companyId=${detail.company.id}`), { headers: authH });
+      const listRes = await fetch(api(`/api/admin/prepaid-accounts?companyId=${compId}`), { headers: authH });
       if (listRes.ok) {
         const list = await listRes.json();
         const active = list.filter((a: CompPrepaidAcct) => a.status === "active");
@@ -1041,6 +1042,21 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       const isInsufficient = selectedAcct != null && usageNum > 0 && usageNum > curBalance;
                       const shortageAmount = isInsufficient ? usageNum - curBalance : 0;
 
+                      // ─── Case A-0: 프로젝트에 거래처가 없음 ──────────────────────────
+                      if (!detail.companyId) {
+                        return (
+                          <div style={{ marginBottom: 10 }}>
+                            <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "12px 14px" }}>
+                              <div style={{ fontSize: 10, fontWeight: 800, color: "#dc2626", marginBottom: 8 }}>선입금 차감 — 거래처 없음</div>
+                              <div style={{ fontSize: 12, color: "#dc2626" }}>
+                                ⚠️ 이 프로젝트에 거래처가 연결되어 있지 않습니다.<br/>
+                                <span style={{ fontWeight: 400, color: "#374151" }}>프로젝트 기본 정보에서 거래처를 먼저 설정하세요.</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
                       // ─── Case A: 이 거래처의 선입금 계정이 없음 → 인라인 빠른 등록 ───
                       if (!loadingCompPrepaid && compPrepaidAccounts.length === 0) {
                         return (
@@ -1071,7 +1087,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               </div>
                               <button
                                 type="button"
-                                onClick={handleQuickRegisterPrepaid}
+                                onClick={e => { e.stopPropagation(); handleQuickRegisterPrepaid(); }}
                                 disabled={registeringPrepaid || !quickPrepaidAmount}
                                 style={{ padding: "7px 14px", background: registeringPrepaid || !quickPrepaidAmount ? "#9ca3af" : "#d97706", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: registeringPrepaid || !quickPrepaidAmount ? "not-allowed" : "pointer" }}
                               >
