@@ -89,6 +89,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
 
   // 견적 생성
   const [quoteAmount, setQuoteAmount] = useState("");
+  const [quoteNote, setQuoteNote] = useState("");
+  const [showQuoteForm, setShowQuoteForm] = useState(false);
   const [creatingQuote, setCreatingQuote] = useState(false);
   type QuoteItemForm = { productName: string; unit: string; quantity: string; unitPrice: string; taxRate: "0" | "0.1" };
   const defaultItem = (): QuoteItemForm => ({ productName: "", unit: "건", quantity: "1", unitPrice: "", taxRate: "0" });
@@ -297,6 +299,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         if (!amt || amt <= 0) { onToast("유효한 금액을 입력하세요."); return; }
         body = { amount: amt };
       }
+      if (quoteNote.trim()) body.note = quoteNote.trim();
       const res = await fetch(api(`/api/admin/projects/${projectId}/quote`), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -304,7 +307,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       onToast(`견적 생성 완료`);
-      setQuoteAmount(""); setQuoteItemForms([defaultItem()]);
+      setQuoteAmount(""); setQuoteNote(""); setQuoteItemForms([defaultItem()]); setShowQuoteForm(false);
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 견적 생성 실패"); }
     finally { setCreatingQuote(false); }
@@ -745,103 +748,145 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 </div>
 
                 {/* 견적 섹션 */}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-                  <p style={sectionHd}>견적 ({detail.quotes.length})</p>
-                </div>
-                {detail.status === "created" && detail.quotes.length === 0 && (
-                  <div style={{ background: "#fdf4ff", borderRadius: 10, padding: "12px 14px", marginBottom: 12, border: "1px solid #e9d5ff" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                      <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#7c3aed" }}>견적 생성</p>
-                      <div style={{ display: "flex", gap: 0, borderRadius: 6, overflow: "hidden", border: "1px solid #d8b4fe" }}>
-                        {(["simple", "items"] as const).map(m => (
-                          <button key={m} onClick={() => setQuoteMode(m)}
-                            style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer",
-                              background: quoteMode === m ? "#7c3aed" : "#fdf4ff", color: quoteMode === m ? "#fff" : "#7c3aed" }}>
-                            {m === "simple" ? "단순 금액" : "품목 입력"}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {quoteMode === "simple" ? (
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <input type="number" min="0" value={quoteAmount}
-                          onChange={e => setQuoteAmount(e.target.value)}
-                          placeholder="견적 금액 (원)"
-                          style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "7px 10px" }}
-                          onKeyDown={e => e.key === "Enter" && handleCreateQuote()} />
-                        <PrimaryBtn onClick={handleCreateQuote} disabled={creatingQuote || !quoteAmount}
-                          style={{ fontSize: 12, padding: "7px 14px", background: "#7c3aed", border: "none" }}>
-                          {creatingQuote ? "생성 중..." : "견적 생성"}
-                        </PrimaryBtn>
-                      </div>
-                    ) : (
-                      <div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 48px 64px 88px 72px 28px", gap: 4, marginBottom: 4 }}>
-                          {["품목명", "단위", "수량", "단가(원)", "부가세", ""].map(h => (
-                            <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", padding: "0 2px" }}>{h}</div>
-                          ))}
+                {(() => {
+                  const canQuote = detail.status === "created" || detail.status === "quoted";
+                  const hasQuotes = detail.quotes.length > 0;
+                  const formVisible = canQuote && (showQuoteForm || !hasQuotes);
+                  const QuoteForm = () => (
+                    <div style={{ background: "#fdf4ff", borderRadius: 10, padding: "14px 16px", marginBottom: 12, border: "1px solid #e9d5ff" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#7c3aed" }}>
+                            {hasQuotes ? "✏️ 견적 수정/재생성" : "📋 견적 생성"}
+                          </p>
+                          {hasQuotes && <span style={{ fontSize: 11, color: "#9ca3af" }}>기존 견적이 대체됩니다</span>}
                         </div>
-                        {quoteItemForms.map((it, idx) => {
-                          const { supply, tax, total } = calcItemTotal(it);
-                          return (
-                            <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 48px 64px 88px 72px 28px", gap: 4, marginBottom: 4, alignItems: "center" }}>
-                              <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
-                                placeholder="예: 영→한 번역" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }} />
-                              <input value={it.unit} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: e.target.value } : p))}
-                                placeholder="건" style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "center" }} />
-                              <input type="number" value={it.quantity} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: e.target.value } : p))}
-                                min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "right" }} />
-                              <input type="number" value={it.unitPrice} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: e.target.value } : p))}
-                                placeholder="0" min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "right" }} />
-                              <select value={it.taxRate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxRate: e.target.value as "0"|"0.1" } : p))}
-                                style={{ ...inputStyle, fontSize: 11, padding: "6px 4px" }}>
-                                <option value="0">면세</option>
-                                <option value="0.1">10%</option>
-                              </select>
-                              <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))} disabled={quoteItemForms.length <= 1}
-                                style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
-                              {(supply > 0 || tax > 0) && (
-                                <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, fontSize: 11, color: "#6b7280", paddingLeft: 4, paddingBottom: 2 }}>
-                                  <span>공급가액 {supply.toLocaleString()}원</span>
-                                  {tax > 0 && <span>세액 {tax.toLocaleString()}원</span>}
-                                  <span style={{ fontWeight: 700, color: "#7c3aed" }}>합계 {total.toLocaleString()}원</span>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
-                          <button onClick={() => setQuoteItemForms(prev => [...prev, defaultItem()])}
-                            style={{ fontSize: 12, color: "#7c3aed", background: "none", border: "1px dashed #d8b4fe", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
-                            + 품목 추가
-                          </button>
-                          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            {quoteItemsGrandTotal > 0 && (
-                              <span style={{ fontSize: 12, fontWeight: 700, color: "#7c3aed" }}>
-                                합계: {quoteItemsGrandTotal.toLocaleString()}원
-                              </span>
-                            )}
-                            <PrimaryBtn onClick={handleCreateQuote} disabled={creatingQuote}
-                              style={{ fontSize: 12, padding: "7px 14px", background: "#7c3aed", border: "none" }}>
-                              {creatingQuote ? "생성 중..." : "견적 생성"}
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <div style={{ display: "flex", gap: 0, borderRadius: 6, overflow: "hidden", border: "1px solid #d8b4fe" }}>
+                            {(["simple", "items"] as const).map(m => (
+                              <button key={m} onClick={() => setQuoteMode(m)}
+                                style={{ padding: "4px 10px", fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer",
+                                  background: quoteMode === m ? "#7c3aed" : "#fdf4ff", color: quoteMode === m ? "#fff" : "#7c3aed" }}>
+                                {m === "simple" ? "단순 금액" : "품목 입력"}
+                              </button>
+                            ))}
+                          </div>
+                          {hasQuotes && (
+                            <button onClick={() => setShowQuoteForm(false)}
+                              style={{ background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px" }}>×</button>
+                          )}
+                        </div>
+                      </div>
+
+                      {quoteMode === "simple" ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <input type="number" min="0" value={quoteAmount}
+                              onChange={e => setQuoteAmount(e.target.value)}
+                              placeholder="견적 금액 (원) *"
+                              style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "7px 10px" }}
+                              onKeyDown={e => e.key === "Enter" && handleCreateQuote()} />
+                            <PrimaryBtn onClick={handleCreateQuote} disabled={creatingQuote || !quoteAmount}
+                              style={{ fontSize: 12, padding: "7px 14px", background: "#7c3aed", border: "none", whiteSpace: "nowrap" }}>
+                              {creatingQuote ? "생성 중..." : hasQuotes ? "견적 재생성" : "견적 생성"}
                             </PrimaryBtn>
                           </div>
+                          <input
+                            value={quoteNote}
+                            onChange={e => setQuoteNote(e.target.value)}
+                            placeholder="비고/메모 (선택)"
+                            style={{ ...inputStyle, fontSize: 12, padding: "6px 10px" }}
+                          />
                         </div>
+                      ) : (
+                        <div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 48px 64px 88px 72px 28px", gap: 4, marginBottom: 4 }}>
+                            {["품목명", "단위", "수량", "단가(원)", "부가세", ""].map(h => (
+                              <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", padding: "0 2px" }}>{h}</div>
+                            ))}
+                          </div>
+                          {quoteItemForms.map((it, idx) => {
+                            const { supply, tax, total } = calcItemTotal(it);
+                            return (
+                              <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 48px 64px 88px 72px 28px", gap: 4, marginBottom: 4, alignItems: "center" }}>
+                                <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
+                                  placeholder="예: 영→한 번역" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }} />
+                                <input value={it.unit} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: e.target.value } : p))}
+                                  placeholder="건" style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "center" }} />
+                                <input type="number" value={it.quantity} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: e.target.value } : p))}
+                                  min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "right" }} />
+                                <input type="number" value={it.unitPrice} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: e.target.value } : p))}
+                                  placeholder="0" min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "right" }} />
+                                <select value={it.taxRate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxRate: e.target.value as "0"|"0.1" } : p))}
+                                  style={{ ...inputStyle, fontSize: 11, padding: "6px 4px" }}>
+                                  <option value="0">면세</option>
+                                  <option value="0.1">10%</option>
+                                </select>
+                                <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))} disabled={quoteItemForms.length <= 1}
+                                  style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
+                                {(supply > 0 || tax > 0) && (
+                                  <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, fontSize: 11, color: "#6b7280", paddingLeft: 4, paddingBottom: 2 }}>
+                                    <span>공급가액 {supply.toLocaleString()}원</span>
+                                    {tax > 0 && <span>세액 {tax.toLocaleString()}원</span>}
+                                    <span style={{ fontWeight: 700, color: "#7c3aed" }}>합계 {total.toLocaleString()}원</span>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, gap: 8 }}>
+                            <button onClick={() => setQuoteItemForms(prev => [...prev, defaultItem()])}
+                              style={{ fontSize: 12, color: "#7c3aed", background: "none", border: "1px dashed #d8b4fe", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
+                              + 품목 추가
+                            </button>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              {quoteItemsGrandTotal > 0 && (
+                                <span style={{ fontSize: 12, fontWeight: 700, color: "#7c3aed" }}>
+                                  합계: {quoteItemsGrandTotal.toLocaleString()}원
+                                </span>
+                              )}
+                              <PrimaryBtn onClick={handleCreateQuote} disabled={creatingQuote}
+                                style={{ fontSize: 12, padding: "7px 14px", background: "#7c3aed", border: "none" }}>
+                                {creatingQuote ? "생성 중..." : hasQuotes ? "견적 재생성" : "견적 생성"}
+                              </PrimaryBtn>
+                            </div>
+                          </div>
+                          <input
+                            value={quoteNote}
+                            onChange={e => setQuoteNote(e.target.value)}
+                            placeholder="비고/메모 (선택)"
+                            style={{ ...inputStyle, fontSize: 12, padding: "6px 10px", marginTop: 8 }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                  return (
+                    <>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: formVisible ? 6 : 8 }}>
+                        <p style={sectionHd}>견적 ({detail.quotes.length})</p>
+                        {canQuote && hasQuotes && !showQuoteForm && (
+                          <button onClick={() => setShowQuoteForm(true)}
+                            style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#fdf4ff", border: "1px solid #d8b4fe", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+                            ✏️ 수정/재생성
+                          </button>
+                        )}
                       </div>
-                    )}
-                  </div>
-                )}
-                {detail.quotes.length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>등록된 견적이 없습니다.</p>
-                ) : detail.quotes.map(q => (
-                  <div key={q.id} style={{ display: "flex", gap: 14, padding: "8px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, alignItems: "center" }}>
-                    <span style={{ color: "#9ca3af" }}>#{q.id}</span>
-                    <span style={{ fontWeight: 700, color: "#0891b2" }}>{Number((q as any).price ?? (q as any).amount).toLocaleString()}원</span>
-                    <StatusBadge status={q.status} />
-                    <span style={{ color: "#9ca3af", marginLeft: "auto" }}>{new Date(q.createdAt).toLocaleDateString("ko-KR")}</span>
-                  </div>
-                ))}
+                      {formVisible && <QuoteForm />}
+                      {hasQuotes ? detail.quotes.map(q => (
+                        <div key={q.id} style={{ display: "flex", gap: 14, padding: "10px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 6, fontSize: 13, alignItems: "flex-start", flexWrap: "wrap" }}>
+                          <span style={{ color: "#9ca3af" }}>#{q.id}</span>
+                          <span style={{ fontWeight: 700, color: "#0891b2" }}>{Number((q as any).price ?? (q as any).amount).toLocaleString()}원</span>
+                          <StatusBadge status={q.status} />
+                          {(q as any).note && <span style={{ fontSize: 12, color: "#6b7280", marginLeft: 4 }}>— {(q as any).note}</span>}
+                          <span style={{ color: "#9ca3af", marginLeft: "auto" }}>{new Date(q.createdAt).toLocaleDateString("ko-KR")}</span>
+                        </div>
+                      )) : !formVisible ? (
+                        <p style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>등록된 견적이 없습니다.</p>
+                      ) : null}
+                    </>
+                  );
+                })()}
 
                 {/* 결제 섹션 */}
                 <p style={{ ...sectionHd, marginTop: 10 }}>결제 ({detail.payments.length})</p>

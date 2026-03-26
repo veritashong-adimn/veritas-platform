@@ -560,7 +560,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
   type ItemInput = { productName: string; unit?: string; quantity?: number; unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string };
-  const { amount, items } = req.body as { amount?: number; items?: ItemInput[] };
+  const { amount, items, note } = req.body as { amount?: number; items?: ItemInput[]; note?: string };
 
   // items 배열이 있으면 합계 자동 계산, 없으면 amount 필수
   const hasItems = Array.isArray(items) && items.length > 0;
@@ -571,10 +571,12 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
   try {
     const [project] = await db.select({ id: projectsTable.id, status: projectsTable.status }).from(projectsTable).where(eq(projectsTable.id, projectId));
     if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
-    if (project.status !== "created") { res.status(400).json({ error: `견적은 '접수됨' 상태에서만 생성 가능합니다. (현재: ${project.status})` }); return; }
+    if (!["created", "quoted"].includes(project.status)) {
+      res.status(400).json({ error: `견적은 '접수됨' 또는 '견적 발송' 상태에서만 생성 가능합니다. (현재: ${project.status})` }); return;
+    }
 
-    const existing = await db.select({ id: quotesTable.id }).from(quotesTable).where(eq(quotesTable.projectId, projectId));
-    if (existing.length > 0) { res.status(400).json({ error: "이미 견적이 존재합니다." }); return; }
+    // 기존 견적 삭제 (재생성)
+    await db.delete(quotesTable).where(eq(quotesTable.projectId, projectId));
 
     // 품목 기반 합계 계산
     let totalPrice = Number(amount ?? 0);
@@ -591,7 +593,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
     }
 
     const result = await db.transaction(async tx => {
-      const [quote] = await tx.insert(quotesTable).values({ projectId, price: String(totalPrice), status: "sent" }).returning();
+      const [quote] = await tx.insert(quotesTable).values({ projectId, price: String(totalPrice), status: "sent", note: note?.trim() || null }).returning();
 
       if (calcItems.length > 0) {
         await tx.insert(quoteItemsTable).values(calcItems.map(it => ({

@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, numeric, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, numeric, timestamp, pgEnum, text } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -12,6 +12,7 @@ export const quotesTable = pgTable("quotes", {
     .references(() => projectsTable.id),
   price: numeric("price", { precision: 12, scale: 2 }).notNull(),
   status: quoteStatusEnum("status").notNull().default("pending"),
+  note: text("note"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
