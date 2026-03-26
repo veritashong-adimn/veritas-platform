@@ -47,10 +47,11 @@ const sectionHd: React.CSSProperties = {
   margin: '16px 0 8px', paddingBottom: 4, borderBottom: '1px solid #f3f4f6',
 };
 
-export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adminList }: {
+export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adminList, initialSection }: {
   projectId: number; token: string; onClose: () => void;
   onRefresh: () => void; onToast: (msg: string) => void;
   adminList?: AdminUser[];
+  initialSection?: "info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log"|"files";
 }) {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,7 +68,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [assigning, setAssigning] = useState<number | null>(null);
   const [showCandidates, setShowCandidates] = useState(false);
-  const [activeSection, setActiveSection] = useState<"info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log"|"files">("info");
+  const [activeSection, setActiveSection] = useState<"info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log"|"files">(initialSection ?? "info");
 
   type ProjectFile = { id: number; fileType: string; fileName: string; objectPath: string; fileSize: number | null; mimeType: string | null; createdAt: string; uploaderName: string | null; uploaderEmail: string | null };
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);

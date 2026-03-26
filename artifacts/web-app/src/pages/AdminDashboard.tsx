@@ -162,7 +162,9 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
   const [creatingProject, setCreatingProject] = useState(false);
 
   // modals
-  const [detailModal, setDetailModal] = useState<number | null>(null);
+  type DetailModalState = { id: number; initialSection?: "info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log"|"files" };
+  const [detailModal, setDetailModal] = useState<DetailModalState | null>(null);
+  const openDetail = (id: number, initialSection?: DetailModalState["initialSection"]) => setDetailModal({ id, initialSection });
   const [paying, setPaying] = useState<number | null>(null);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
@@ -497,7 +499,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
       setShowCreateProject(false);
       setNewProjectTitle(""); setNewProjectCustomerId(null); setNewProjectCompanyId(null); setNewProjectContactId(null);
       await fetchAll();
-      setDetailModal(data.id);
+      openDetail(data.id);
     } catch { setToast("오류: 프로젝트 생성 실패"); }
     finally { setCreatingProject(false); }
   };
@@ -636,7 +638,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
           token={token}
           onClose={() => setCompanyModal(null)}
           onToast={setToast}
-          onOpenProject={(id) => { setCompanyModal(null); setDetailModal(id); }}
+          onOpenProject={(id) => { setCompanyModal(null); openDetail(id); }}
         />
       )}
       {contactModal !== null && (
@@ -645,7 +647,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
           token={token}
           onClose={() => setContactModal(null)}
           onToast={setToast}
-          onOpenProject={(id) => { setContactModal(null); setDetailModal(id); }}
+          onOpenProject={(id) => { setContactModal(null); openDetail(id); }}
         />
       )}
       {translatorDetailModal !== null && (
@@ -717,11 +719,12 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
       )}
       {detailModal !== null && (
         <ProjectDetailModal
-          projectId={detailModal} token={token}
+          projectId={detailModal.id} token={token}
           onClose={() => setDetailModal(null)}
           onRefresh={fetchAll}
           onToast={setToast}
           adminList={adminUsers}
+          initialSection={detailModal.initialSection}
         />
       )}
       {customerModal !== null && (
@@ -729,7 +732,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
           customerId={customerModal} token={token}
           onClose={() => setCustomerModal(null)}
           onToast={setToast}
-          onOpenProject={(id) => { setCustomerModal(null); setDetailModal(id); }}
+          onOpenProject={(id) => { setCustomerModal(null); openDetail(id); }}
         />
       )}
 
@@ -869,7 +872,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                 <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", padding: "20px 22px" }}>
                   <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#111827" }}>최근 프로젝트</h3>
                   {projects.slice(0, 5).map(p => (
-                    <div key={p.id} onClick={() => setDetailModal(p.id)} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
+                    <div key={p.id} onClick={() => openDetail(p.id)} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
                       <span style={{ fontSize: 13, color: "#374151", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</span>
                       <StatusBadge status={p.status} />
                     </div>
@@ -1008,49 +1011,72 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                         </tr>
                       </thead>
                       <tbody>
-                        {pagedProjects.map(p => (
-                          <tr key={p.id}
-                            onClick={() => setDetailModal(p.id)}
-                            style={{ cursor: "pointer", transition: "background 0.1s" }}
-                            onMouseEnter={e => (e.currentTarget.style.background = "#f0f9ff")}
-                            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                            <td style={{ ...tableTd, color: "#9ca3af" }}>#{p.id}</td>
-                            <td style={{ ...tableTd, fontWeight: 600, color: "#2563eb", maxWidth: 200 }}>
-                              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
-                            </td>
-                            <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{p.customerEmail ?? "-"}</td>
-                            <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.companyName ?? "-"}</td>
-                            <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.contactName ?? "-"}</td>
-                            <td style={tableTd}><StatusBadge status={p.status} /></td>
-                            <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
-                              {new Date(p.createdAt).toLocaleDateString("ko-KR")}
-                            </td>
-                            <td style={{ ...tableTd }} onClick={e => e.stopPropagation()}>
-                              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                                <button
-                                  onClick={() => setDetailModal(p.id)}
-                                  style={{ background: "#eff6ff", color: "#2563eb", border: "none", borderRadius: 6, padding: "4px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-                                  상세보기
-                                </button>
-                                {p.status !== "cancelled" && p.status !== "completed" && (
+                        {pagedProjects.map(p => {
+                          type SectionKey = "info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log"|"files";
+                          const ACTION_MAP: Record<string, { label: string; section: SectionKey; primary?: boolean; green?: boolean }> = {
+                            created:     { label: "견적 생성",   section: "settlement", primary: true },
+                            quoted:      { label: "견적 확인",   section: "settlement", primary: true },
+                            approved:    { label: "결제 등록",   section: "settlement", primary: true },
+                            paid:        { label: "번역사 배정", section: "translator", primary: true },
+                            matched:     { label: "작업 관리",   section: "translator" },
+                            in_progress: { label: "작업 관리",   section: "translator" },
+                            completed:   { label: "정산 확인",   section: "settlement", green: true },
+                            cancelled:   { label: "내용 보기",   section: "info" },
+                          };
+                          const action = ACTION_MAP[p.status] ?? { label: "상세보기", section: "info" as SectionKey };
+                          const primaryBtnStyle: React.CSSProperties = { background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" };
+                          const secondaryBtnStyle: React.CSSProperties = { background: "#eff6ff", color: "#2563eb", border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" };
+                          const greenBtnStyle: React.CSSProperties = { background: "#dcfce7", color: "#15803d", border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" };
+                          const dangerBtnStyle: React.CSSProperties = { background: "#fef2f2", color: "#dc2626", border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" };
+                          return (
+                            <tr key={p.id}
+                              onClick={() => openDetail(p.id)}
+                              style={{ cursor: "pointer", transition: "background 0.1s" }}
+                              onMouseEnter={e => (e.currentTarget.style.background = "#f0f9ff")}
+                              onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                              <td style={{ ...tableTd, color: "#9ca3af" }}>#{p.id}</td>
+                              <td style={{ ...tableTd, fontWeight: 600, color: "#2563eb", maxWidth: 200 }}>
+                                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
+                              </td>
+                              <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{p.customerEmail ?? "-"}</td>
+                              <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.companyName ?? "-"}</td>
+                              <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.contactName ?? "-"}</td>
+                              <td style={tableTd}><StatusBadge status={p.status} /></td>
+                              <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                                {new Date(p.createdAt).toLocaleDateString("ko-KR")}
+                              </td>
+                              <td style={{ ...tableTd }} onClick={e => e.stopPropagation()}>
+                                <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "nowrap" }}>
                                   <button
-                                    onClick={async () => {
-                                      if (!confirm(`프로젝트 #${p.id}를 취소하시겠습니까?`)) return;
-                                      const res = await fetch(api(`/api/admin/projects/${p.id}/cancel`), {
-                                        method: "PATCH",
-                                        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-                                      });
-                                      if (res.ok) { setToast("프로젝트가 취소되었습니다."); fetchAll(); }
-                                      else { const d = await res.json(); setToast(`오류: ${d.error}`); }
-                                    }}
-                                    style={{ background: "#fef2f2", color: "#dc2626", border: "none", borderRadius: 6, padding: "4px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-                                    취소
+                                    onClick={() => openDetail(p.id, action.section)}
+                                    style={action.primary ? primaryBtnStyle : action.green ? greenBtnStyle : secondaryBtnStyle}>
+                                    {action.label}
                                   </button>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
+                                  <button
+                                    onClick={() => openDetail(p.id)}
+                                    style={{ ...secondaryBtnStyle, background: "#f3f4f6", color: "#6b7280" }}>
+                                    보기
+                                  </button>
+                                  {p.status !== "cancelled" && p.status !== "completed" && (
+                                    <button
+                                      onClick={async () => {
+                                        if (!confirm(`프로젝트 #${p.id}를 취소하시겠습니까?`)) return;
+                                        const res = await fetch(api(`/api/admin/projects/${p.id}/cancel`), {
+                                          method: "PATCH",
+                                          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+                                        });
+                                        if (res.ok) { setToast("프로젝트가 취소되었습니다."); fetchAll(); }
+                                        else { const d = await res.json(); setToast(`오류: ${d.error}`); }
+                                      }}
+                                      style={dangerBtnStyle}>
+                                      취소
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
