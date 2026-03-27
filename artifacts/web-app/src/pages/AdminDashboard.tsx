@@ -1244,10 +1244,11 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                             accumulated_batch:{ label: "누적",  bg: "#dbeafe", color: "#1e40af" },
                           };
                           const qs = qt ? QUOTE_STYLE[qt] : null;
-                          const chipStyle = (bg: string, color: string): React.CSSProperties => ({
+                          const chipStyle = (borderColor: string, color: string): React.CSSProperties => ({
                             display: "inline-block", padding: "2px 7px", borderRadius: 10,
-                            fontSize: 11, fontWeight: 600, lineHeight: "18px",
-                            whiteSpace: "nowrap", background: bg, color,
+                            fontSize: 11, fontWeight: 500, lineHeight: "18px",
+                            whiteSpace: "nowrap", background: "transparent",
+                            border: `1px solid ${borderColor}`, color,
                           });
                           return (
                             <tr key={p.id}
@@ -1278,11 +1279,11 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                               <td style={{ ...tableTd, minWidth: 180 }}>
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
                                   <StatusBadge status={p.status} />
-                                  {qs && <span style={chipStyle(qs.bg, qs.color)}>{qs.label}</span>}
+                                  {qs && <span style={chipStyle(qs.color + "66", qs.color)}>{qs.label}</span>}
                                   {(p as any).hasPaid
-                                    ? <span style={chipStyle("#dcfce7", "#15803d")}>결제완료</span>
+                                    ? <span style={chipStyle("#86efac", "#15803d")}>결제완료</span>
                                     : (p as any).hasQuote
-                                      ? <span style={chipStyle("#fef3c7", "#92400e")}>미수금</span>
+                                      ? <span style={chipStyle("#fcd34d", "#92400e")}>미수금</span>
                                       : null}
                                 </div>
                               </td>
