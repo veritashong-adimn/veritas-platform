@@ -1112,25 +1112,25 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
             </div>
 
             {/* ── 재무 필터 카드 ── */}
-            <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "7px 12px" }}>
+            <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 12px" }}>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                <span style={{ fontSize: 10, fontWeight: 800, color: "#1d4ed8", letterSpacing: "0.6px", textTransform: "uppercase", minWidth: 36, marginRight: 2 }}>재무</span>
-                <div style={{ width: 1, height: 14, background: "#93c5fd", marginRight: 4 }} />
+                <span style={{ fontSize: 10, fontWeight: 800, color: "#475569", letterSpacing: "0.6px", textTransform: "uppercase", minWidth: 36, marginRight: 2 }}>재무</span>
+                <div style={{ width: 1, height: 14, background: "#cbd5e1", marginRight: 4 }} />
                 {[
-                  { id: "all",                     label: "전체",        color: "#374151", bg: "#e2e8f0", activeBg: "#475569", activeColor: "#fff" },
-                  { id: "unbilled",                label: "미청구",      color: "#92400e", bg: "#fde68a", activeBg: "#d97706", activeColor: "#fff" },
-                  { id: "unpaid",                  label: "미수금",      color: "#991b1b", bg: "#fecaca", activeBg: "#dc2626", activeColor: "#fff" },
-                  { id: "prepaid_deduction",       label: "선입금 차감", color: "#5b21b6", bg: "#ddd6fe", activeBg: "#7c3aed", activeColor: "#fff" },
-                  { id: "has_prepaid_balance",     label: "잔액 남음",   color: "#065f46", bg: "#a7f3d0", activeBg: "#059669", activeColor: "#fff" },
-                  { id: "accumulated_in_progress", label: "누적 진행중", color: "#1e40af", bg: "#bfdbfe", activeBg: "#2563eb", activeColor: "#fff" },
+                  { id: "all",                     label: "전체",        activeBg: "#475569", activeColor: "#fff" },
+                  { id: "unbilled",                label: "미청구",      activeBg: "#d97706", activeColor: "#fff" },
+                  { id: "unpaid",                  label: "미수금",      activeBg: "#dc2626", activeColor: "#fff" },
+                  { id: "prepaid_deduction",       label: "선입금 차감", activeBg: "#7c3aed", activeColor: "#fff" },
+                  { id: "has_prepaid_balance",     label: "잔액 남음",   activeBg: "#059669", activeColor: "#fff" },
+                  { id: "accumulated_in_progress", label: "누적 진행중", activeBg: "#2563eb", activeColor: "#fff" },
                 ].map(f => {
                   const isActive = projectQuickFilter === f.id;
                   return (
                     <button key={f.id} onClick={() => { setProjectQuickFilter(f.id); setProjectPage(1); }}
-                      style={{ padding: "3px 10px", borderRadius: 12, border: "1px solid transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, transition: "all 0.12s",
-                        background: isActive ? f.activeBg : f.bg,
-                        color: isActive ? f.activeColor : f.color,
-                        borderColor: isActive ? f.activeBg : "transparent" }}>
+                      style={{ padding: "3px 10px", borderRadius: 12, border: "1px solid", cursor: "pointer", fontSize: 12, fontWeight: 600, transition: "all 0.12s",
+                        background: isActive ? f.activeBg : "#f1f5f9",
+                        color: isActive ? f.activeColor : "#64748b",
+                        borderColor: isActive ? f.activeBg : "#e2e8f0" }}>
                       {f.label}
                     </button>
                   );
