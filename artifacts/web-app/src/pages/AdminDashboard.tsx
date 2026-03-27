@@ -1070,133 +1070,140 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
             <GhostBtn onClick={() => handleExportCSV("projects")} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
           </div>
         }>
-          {/* ── 검색 바 ── */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
-            <input
-              value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
-              placeholder="제목, 이메일, 거래처, 담당자 검색..."
-              style={{ ...inputStyle, maxWidth: 320, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
-              onKeyDown={e => e.key === "Enter" && fetchAll()}
-            />
-            <PrimaryBtn onClick={fetchAll} disabled={loading} style={{ padding: "8px 14px", fontSize: 13 }}>
-              {loading ? "검색 중..." : "검색"}
-            </PrimaryBtn>
-            {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all" || projectQuickFilter !== "all" || projectQuoteTypeFilter !== "all" || projectBillingTypeFilter !== "all" || projectPaymentDueDateFrom || projectPaymentDueDateTo || projectCompanyIdFilter) && (
-              <button
-                onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectQuickFilter("all"); setProjectQuoteTypeFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }}
-                style={{ padding: "8px 12px", fontSize: 12, fontWeight: 700, background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca", borderRadius: 8, cursor: "pointer" }}>
-                ✕ 필터 초기화
-              </button>
+          {/* ══════════════════════════════════════════
+               필터 영역 (sticky) 
+          ══════════════════════════════════════════ */}
+          <div style={{ position: "sticky", top: 0, zIndex: 30, background: "#fff", paddingBottom: 8, marginBottom: 2 }}>
+
+            {/* ── 검색 바 ── */}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+              <input
+                value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
+                placeholder="제목, 이메일, 거래처, 담당자 검색..."
+                style={{ ...inputStyle, maxWidth: 320, flex: "1 1 180px", padding: "7px 11px", fontSize: 13 }}
+                onKeyDown={e => e.key === "Enter" && fetchAll()}
+              />
+              <PrimaryBtn onClick={fetchAll} disabled={loading} style={{ padding: "7px 14px", fontSize: 13 }}>
+                {loading ? "검색 중..." : "검색"}
+              </PrimaryBtn>
+              {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all" || projectQuickFilter !== "all" || projectQuoteTypeFilter !== "all" || projectBillingTypeFilter !== "all" || projectPaymentDueDateFrom || projectPaymentDueDateTo || projectCompanyIdFilter) && (
+                <button
+                  onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectQuickFilter("all"); setProjectQuoteTypeFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }}
+                  style={{ padding: "7px 12px", fontSize: 12, fontWeight: 700, background: "#fef2f2", color: "#dc2626", border: "1.5px solid #fca5a5", borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
+                  ✕ 필터 초기화
+                </button>
+              )}
+              <GhostBtn onClick={() => setShowAdvancedFilter(v => !v)} style={{ marginLeft: "auto", padding: "7px 12px", fontSize: 12 }}>
+                {showAdvancedFilter ? "상세필터 접기 ▲" : "⚙ 상세필터 ▼"}
+              </GhostBtn>
+            </div>
+
+            {/* ── 상태 필터 카드 ── */}
+            <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 12px", marginBottom: 5 }}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ fontSize: 10, fontWeight: 800, color: "#475569", letterSpacing: "0.6px", textTransform: "uppercase", minWidth: 36, marginRight: 2 }}>상태</span>
+                <div style={{ width: 1, height: 14, background: "#cbd5e1", marginRight: 4 }} />
+                <FilterPill label="전체" active={projectFilter === "all"} onClick={() => { setProjectFilter("all"); setProjectPage(1); }} />
+                {ALL_PROJECT_STATUSES.map(s => (
+                  <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
+                    active={projectFilter === s} onClick={() => { setProjectFilter(s); setProjectPage(1); }} />
+                ))}
+              </div>
+            </div>
+
+            {/* ── 재무 필터 카드 ── */}
+            <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "7px 12px" }}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ fontSize: 10, fontWeight: 800, color: "#1d4ed8", letterSpacing: "0.6px", textTransform: "uppercase", minWidth: 36, marginRight: 2 }}>재무</span>
+                <div style={{ width: 1, height: 14, background: "#93c5fd", marginRight: 4 }} />
+                {[
+                  { id: "all",                     label: "전체",        color: "#374151", bg: "#e2e8f0", activeBg: "#475569", activeColor: "#fff" },
+                  { id: "unbilled",                label: "미청구",      color: "#92400e", bg: "#fde68a", activeBg: "#d97706", activeColor: "#fff" },
+                  { id: "unpaid",                  label: "미수금",      color: "#991b1b", bg: "#fecaca", activeBg: "#dc2626", activeColor: "#fff" },
+                  { id: "prepaid_deduction",       label: "선입금 차감", color: "#5b21b6", bg: "#ddd6fe", activeBg: "#7c3aed", activeColor: "#fff" },
+                  { id: "has_prepaid_balance",     label: "잔액 남음",   color: "#065f46", bg: "#a7f3d0", activeBg: "#059669", activeColor: "#fff" },
+                  { id: "accumulated_in_progress", label: "누적 진행중", color: "#1e40af", bg: "#bfdbfe", activeBg: "#2563eb", activeColor: "#fff" },
+                ].map(f => {
+                  const isActive = projectQuickFilter === f.id;
+                  return (
+                    <button key={f.id} onClick={() => { setProjectQuickFilter(f.id); setProjectPage(1); }}
+                      style={{ padding: "3px 10px", borderRadius: 12, border: "1px solid transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, transition: "all 0.12s",
+                        background: isActive ? f.activeBg : f.bg,
+                        color: isActive ? f.activeColor : f.color,
+                        borderColor: isActive ? f.activeBg : "transparent" }}>
+                      {f.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* ── 상세 필터 패널 (compact) ── */}
+            {showAdvancedFilter && (
+              <div style={{ marginTop: 6, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+                {/* [기간] */}
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "#2563eb", textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5, borderBottom: "1.5px solid #dbeafe", paddingBottom: 3 }}>기간</div>
+                  <div style={{ marginBottom: 5 }}>
+                    <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, marginBottom: 2 }}>생성일</div>
+                    <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                      <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                        style={{ ...inputStyle, flex: 1, padding: "4px 6px", fontSize: 11 }} />
+                      <span style={{ color: "#9ca3af", fontSize: 10 }}>~</span>
+                      <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                        style={{ ...inputStyle, flex: 1, padding: "4px 6px", fontSize: 11 }} />
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, marginBottom: 2 }}>입금 예정일</div>
+                    <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                      <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
+                        style={{ ...inputStyle, flex: 1, padding: "4px 6px", fontSize: 11 }} />
+                      <span style={{ color: "#9ca3af", fontSize: 10 }}>~</span>
+                      <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
+                        style={{ ...inputStyle, flex: 1, padding: "4px 6px", fontSize: 11 }} />
+                    </div>
+                  </div>
+                </div>
+                {/* [담당] */}
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "#2563eb", textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5, borderBottom: "1.5px solid #dbeafe", paddingBottom: 3 }}>담당</div>
+                  <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, marginBottom: 2 }}>담당자</div>
+                  <select value={assignedAdminFilter} onChange={e => setAssignedAdminFilter(e.target.value)}
+                    style={{ ...inputStyle, width: "100%", padding: "5px 8px", fontSize: 11, cursor: "pointer" }}>
+                    <option value="all">전체 담당자</option>
+                    {adminUsers.map(a => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
+                  </select>
+                </div>
+                {/* [견적/청구] */}
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: "#2563eb", textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5, borderBottom: "1.5px solid #dbeafe", paddingBottom: 3 }}>견적 / 청구</div>
+                  <div style={{ marginBottom: 5 }}>
+                    <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, marginBottom: 2 }}>견적 유형</div>
+                    <select value={projectQuoteTypeFilter} onChange={e => { setProjectQuoteTypeFilter(e.target.value); setProjectPage(1); }}
+                      style={{ ...inputStyle, width: "100%", padding: "5px 8px", fontSize: 11 }}>
+                      <option value="all">전체</option>
+                      <option value="b2b_standard">B2B 표준</option>
+                      <option value="b2c_prepaid">선입금</option>
+                      <option value="prepaid_deduction">선입금 차감</option>
+                      <option value="accumulated_batch">누적 견적</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, marginBottom: 2 }}>청구 방식</div>
+                    <select value={projectBillingTypeFilter} onChange={e => { setProjectBillingTypeFilter(e.target.value); setProjectPage(1); }}
+                      style={{ ...inputStyle, width: "100%", padding: "5px 8px", fontSize: 11 }}>
+                      <option value="all">전체</option>
+                      <option value="postpaid_per_project">건별 후불</option>
+                      <option value="prepaid_wallet">선입금 지갑</option>
+                      <option value="monthly_billing">월 청구</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
             )}
-            <GhostBtn onClick={() => setShowAdvancedFilter(v => !v)} style={{ marginLeft: "auto", padding: "8px 12px", fontSize: 12 }}>
-              {showAdvancedFilter ? "상세필터 접기 ▲" : "⚙ 상세필터 ▼"}
-            </GhostBtn>
           </div>
-
-          {/* ── 필터 그룹 영역 ── */}
-          <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 14px", marginBottom: 10 }}>
-            {/* 상태 필터 그룹 */}
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#374151", minWidth: 42, letterSpacing: "0.3px" }}>상태</span>
-              <div style={{ width: 1, height: 16, background: "#d1d5db", marginRight: 2 }} />
-              <FilterPill label="전체" active={projectFilter === "all"} onClick={() => { setProjectFilter("all"); setProjectPage(1); }} />
-              {ALL_PROJECT_STATUSES.map(s => (
-                <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
-                  active={projectFilter === s} onClick={() => { setProjectFilter(s); setProjectPage(1); }} />
-              ))}
-            </div>
-            {/* 구분선 */}
-            <div style={{ height: 1, background: "#e5e7eb", marginBottom: 8 }} />
-            {/* 재무 필터 그룹 */}
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#374151", minWidth: 42, letterSpacing: "0.3px" }}>재무</span>
-              <div style={{ width: 1, height: 16, background: "#d1d5db", marginRight: 2 }} />
-              {[
-                { id: "all",                    label: "전체",       color: "#374151", bg: "#f3f4f6", activeBg: "#2563eb", activeColor: "#fff" },
-                { id: "unbilled",               label: "미청구",     color: "#92400e", bg: "#fef3c7", activeBg: "#d97706", activeColor: "#fff" },
-                { id: "unpaid",                 label: "미수금",     color: "#991b1b", bg: "#fef2f2", activeBg: "#dc2626", activeColor: "#fff" },
-                { id: "prepaid_deduction",      label: "선입금 차감", color: "#5b21b6", bg: "#ede9fe", activeBg: "#7c3aed", activeColor: "#fff" },
-                { id: "has_prepaid_balance",    label: "잔액 남음",  color: "#065f46", bg: "#d1fae5", activeBg: "#059669", activeColor: "#fff" },
-                { id: "accumulated_in_progress",label: "누적 진행중", color: "#1e40af", bg: "#dbeafe", activeBg: "#2563eb", activeColor: "#fff" },
-              ].map(f => {
-                const isActive = projectQuickFilter === f.id;
-                return (
-                  <button key={f.id} onClick={() => { setProjectQuickFilter(f.id); setProjectPage(1); }}
-                    style={{ padding: "4px 11px", borderRadius: 14, border: "1px solid transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, transition: "all 0.12s",
-                      background: isActive ? f.activeBg : f.bg,
-                      color: isActive ? f.activeColor : f.color,
-                      borderColor: isActive ? f.activeBg : "transparent" }}>
-                    {f.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* ── 상세 필터 패널 ── */}
-          {showAdvancedFilter && (
-            <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: "14px 16px", marginBottom: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
-              {/* [기간] */}
-              <div style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: "#2563eb", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>기간</div>
-                <div style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>생성일</div>
-                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                    <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-                      style={{ ...inputStyle, flex: 1, padding: "6px 8px", fontSize: 12 }} />
-                    <span style={{ color: "#9ca3af", fontSize: 11 }}>~</span>
-                    <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-                      style={{ ...inputStyle, flex: 1, padding: "6px 8px", fontSize: 12 }} />
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>입금 예정일</div>
-                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                    <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
-                      style={{ ...inputStyle, flex: 1, padding: "6px 8px", fontSize: 12 }} />
-                    <span style={{ color: "#9ca3af", fontSize: 11 }}>~</span>
-                    <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
-                      style={{ ...inputStyle, flex: 1, padding: "6px 8px", fontSize: 12 }} />
-                  </div>
-                </div>
-              </div>
-              {/* [담당] */}
-              <div style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: "#2563eb", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>담당</div>
-                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>담당자</div>
-                <select value={assignedAdminFilter} onChange={e => setAssignedAdminFilter(e.target.value)}
-                  style={{ ...inputStyle, width: "100%", padding: "7px 10px", fontSize: 12, cursor: "pointer" }}>
-                  <option value="all">전체 담당자</option>
-                  {adminUsers.map(a => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
-                </select>
-              </div>
-              {/* [견적/청구] */}
-              <div style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: "#2563eb", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>견적 / 청구</div>
-                <div style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>견적 유형</div>
-                  <select value={projectQuoteTypeFilter} onChange={e => { setProjectQuoteTypeFilter(e.target.value); setProjectPage(1); }}
-                    style={{ ...inputStyle, width: "100%", padding: "7px 10px", fontSize: 12 }}>
-                    <option value="all">전체</option>
-                    <option value="b2b_standard">B2B 표준</option>
-                    <option value="b2c_prepaid">선입금</option>
-                    <option value="prepaid_deduction">선입금 차감</option>
-                    <option value="accumulated_batch">누적 견적</option>
-                  </select>
-                </div>
-                <div>
-                  <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>청구 방식</div>
-                  <select value={projectBillingTypeFilter} onChange={e => { setProjectBillingTypeFilter(e.target.value); setProjectPage(1); }}
-                    style={{ ...inputStyle, width: "100%", padding: "7px 10px", fontSize: 12 }}>
-                    <option value="all">전체</option>
-                    <option value="postpaid_per_project">건별 후불</option>
-                    <option value="prepaid_wallet">선입금 지갑</option>
-                    <option value="monthly_billing">월 청구</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-          )}
+          {/* 필터 영역 끝 */}
 
           {loading ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
