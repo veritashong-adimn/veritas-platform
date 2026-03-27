@@ -1670,37 +1670,39 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         </div>
                       ) : (
                         <div>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 48px 64px 88px 72px 28px", gap: 4, marginBottom: 4 }}>
-                            {["품목명", "단위", "수량", "단가(원)", "부가세", ""].map(h => (
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 40px 52px 84px 44px 82px 82px 24px", gap: 4, marginBottom: 4 }}>
+                            {["품목명", "단위", "수량", "단가(원)", "세율", "부가세(원)", "합계(원)", ""].map(h => (
                               <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", padding: "0 2px" }}>{h}</div>
                             ))}
                           </div>
                           {quoteItemForms.map((it, idx) => {
                             const { supply, tax, total } = calcItemTotal(it);
+                            const roSt: React.CSSProperties = { ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "right", background: "#f8fafc", color: tax > 0 ? "#7c3aed" : "#374151", fontWeight: tax > 0 ? 700 : 400, cursor: "default" };
                             return (
-                              <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 48px 64px 88px 72px 28px", gap: 4, marginBottom: 4, alignItems: "center" }}>
+                              <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 40px 52px 84px 44px 82px 82px 24px", gap: 4, marginBottom: 4, alignItems: "center" }}>
                                 <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
                                   placeholder="예: 영→한 번역" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }} />
                                 <input value={it.unit} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: e.target.value } : p))}
-                                  placeholder="건" style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "center" }} />
+                                  placeholder="건" style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "center" }} />
                                 <input type="number" value={it.quantity} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: e.target.value } : p))}
-                                  min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "right" }} />
+                                  min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "right" }} />
                                 <input type="number" value={it.unitPrice} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: e.target.value } : p))}
                                   placeholder="0" min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", textAlign: "right" }} />
                                 <select value={it.taxRate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxRate: e.target.value as "0"|"0.1" } : p))}
-                                  style={{ ...inputStyle, fontSize: 11, padding: "6px 4px" }}>
+                                  style={{ ...inputStyle, fontSize: 11, padding: "6px 2px" }}>
                                   <option value="0">면세</option>
                                   <option value="0.1">10%</option>
                                 </select>
+                                {/* 부가세 자동 계산 표시 */}
+                                <input readOnly value={supply > 0 && it.taxRate !== "0" ? tax.toLocaleString() : it.taxRate === "0" && supply > 0 ? "면세" : ""}
+                                  placeholder="공급가 입력시 자동"
+                                  style={{ ...roSt, color: tax > 0 ? "#7c3aed" : "#9ca3af", fontWeight: tax > 0 ? 700 : 400 }} />
+                                {/* 합계 자동 계산 표시 */}
+                                <input readOnly value={supply > 0 ? total.toLocaleString() : ""}
+                                  placeholder="자동 계산"
+                                  style={{ ...roSt, color: supply > 0 ? "#065f46" : "#9ca3af", fontWeight: supply > 0 ? 800 : 400, borderColor: supply > 0 ? "#6ee7b7" : undefined }} />
                                 <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))} disabled={quoteItemForms.length <= 1}
                                   style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
-                                {(supply > 0 || tax > 0) && (
-                                  <div style={{ gridColumn: "1 / -1", display: "flex", gap: 8, fontSize: 11, color: "#6b7280", paddingLeft: 4, paddingBottom: 2 }}>
-                                    <span>공급가액 {supply.toLocaleString()}원</span>
-                                    {tax > 0 && <span>세액 {tax.toLocaleString()}원</span>}
-                                    <span style={{ fontWeight: 700, color: "#7c3aed" }}>합계 {total.toLocaleString()}원</span>
-                                  </div>
-                                )}
                               </div>
                             );
                           })}
