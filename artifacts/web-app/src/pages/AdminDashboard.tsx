@@ -1298,9 +1298,8 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                                         if (res.ok) { setToast("프로젝트가 취소되었습니다."); fetchAll(); }
                                         else { const d = await res.json(); setToast(`오류: ${d.error}`); }
                                       }}
-                                      style={{ background: "transparent", color: "#d1d5db", border: "none", borderRadius: 4, padding: "4px 6px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}
-                                      title="프로젝트 취소">
-                                      ✕
+                                      style={{ background: "transparent", color: "#ef4444", border: "1px solid #fca5a5", borderRadius: 6, padding: "4px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
+                                      취소
                                     </button>
                                   )}
                                 </div>
