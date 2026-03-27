@@ -650,8 +650,8 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
     borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap",
   };
   const tableTd: React.CSSProperties = {
-    padding: "11px 12px", fontSize: 13, color: "#374151",
-    borderBottom: "1px solid #f3f4f6", verticalAlign: "middle",
+    padding: "9px 12px", fontSize: 13, color: "#374151",
+    borderBottom: "1px solid #edf0f3", verticalAlign: "middle",
   };
 
   const SIDEBAR_GROUPS: { label: string; accentColor: string; isDashboard?: boolean; items: { id: string; label: string; icon: string; iconColor?: string }[] }[] = [
@@ -1247,39 +1247,39 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                           return (
                             <tr key={p.id}
                               onClick={() => openDetail(p.id)}
-                              style={{ cursor: "pointer", transition: "background 0.08s" }}
+                              style={{ cursor: "pointer", transition: "background 0.1s" }}
                               onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
-                              onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                              <td style={{ ...tableTd, color: "#9ca3af", fontSize: 12, width: 44 }}>#{p.id}</td>
-                              <td style={{ ...tableTd, fontWeight: 600, color: "#1e40af", maxWidth: 220 }}>
-                                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 }}>{p.title}</div>
-                                {p.customerEmail && <div style={{ fontSize: 11, color: "#9ca3af", fontWeight: 400, marginTop: 1 }}>{p.customerEmail}</div>}
+                              onMouseLeave={e => (e.currentTarget.style.background = "")}>
+                              <td style={{ ...tableTd, color: "#c0c8d4", fontSize: 12, width: 44 }}>#{p.id}</td>
+                              <td style={{ ...tableTd, maxWidth: 220 }}>
+                                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 600, color: "#111827" }}>{p.title}</div>
+                                {p.customerEmail && <div style={{ fontSize: 11, color: "#b0b8c4", fontWeight: 400, marginTop: 1 }}>{p.customerEmail}</div>}
                               </td>
                               <td style={{ ...tableTd, fontSize: 12 }}>
-                                <div style={{ fontWeight: 600, color: "#374151" }}>{p.companyName ?? "-"}</div>
-                                {(p as any).contactName && <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>{(p as any).contactName}</div>}
+                                <div style={{ fontWeight: 500, color: "#374151" }}>{p.companyName ?? "-"}</div>
+                                {(p as any).contactName && <div style={{ fontSize: 11, color: "#b0b8c4", marginTop: 1 }}>{(p as any).contactName}</div>}
                               </td>
                               <td style={tableTd}><StatusBadge status={p.status} /></td>
-                              <td style={{ ...tableTd }}>
+                              <td style={tableTd}>
                                 {qs ? (
-                                  <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", background: qs.bg, color: qs.color }}>{qs.label}</span>
+                                  <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", lineHeight: "18px", background: qs.bg, color: qs.color }}>{qs.label}</span>
                                 ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>-</span>}
                               </td>
-                              <td style={{ ...tableTd }}>
+                              <td style={tableTd}>
                                 {(p as any).hasPaid ? (
-                                  <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: "#dcfce7", color: "#15803d", whiteSpace: "nowrap" }}>결제완료</span>
+                                  <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, lineHeight: "18px", background: "#dcfce7", color: "#15803d", whiteSpace: "nowrap" }}>결제완료</span>
                                 ) : (p as any).hasQuote ? (
-                                  <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: "#fef3c7", color: "#92400e", whiteSpace: "nowrap" }}>미수금</span>
+                                  <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, lineHeight: "18px", background: "#fef3c7", color: "#92400e", whiteSpace: "nowrap" }}>미수금</span>
                                 ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>-</span>}
                               </td>
-                              <td style={{ ...tableTd, fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                              <td style={{ ...tableTd, fontSize: 11, color: "#b0b8c4", whiteSpace: "nowrap" }}>
                                 {new Date(p.createdAt).toLocaleDateString("ko-KR")}
                               </td>
-                              <td style={{ ...tableTd, width: 110 }} onClick={e => e.stopPropagation()}>
-                                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                              <td style={{ ...tableTd, width: 130 }} onClick={e => e.stopPropagation()}>
+                                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                                   <button
                                     onClick={() => openDetail(p.id, action.section)}
-                                    style={{ background: action.bg, color: action.color, border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                                    style={{ background: action.bg, color: action.color, border: "none", borderRadius: 6, padding: "4px 11px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
                                     {action.label}
                                   </button>
                                   {p.status !== "cancelled" && p.status !== "completed" && (
