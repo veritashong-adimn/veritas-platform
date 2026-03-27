@@ -1217,73 +1217,74 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
             const pagedProjects = projects.slice((safePage - 1) * PROJECT_PAGE_SIZE, safePage * PROJECT_PAGE_SIZE);
             return (
               <>
-                <Card style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden", background: "#fff" }}>
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
                       <thead>
-                        <tr>
-                          {["ID","제목","고객","거래처","담당자","상태","견적유형","결제","생성일","빠른액션"].map(h => (
-                            <th key={h} style={tableTh}>{h}</th>
+                        <tr style={{ background: "#f8fafc" }}>
+                          {["ID","제목","거래처 · 담당자","상태","견적","재무","생성일","액션"].map(h => (
+                            <th key={h} style={{ ...tableTh, background: "transparent", fontSize: 11, letterSpacing: "0.2px" }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {pagedProjects.map(p => {
                           type SectionKey = "info"|"finance"|"work"|"settlement"|"history";
-                          const ACTION_MAP: Record<string, { label: string; section: SectionKey; primary?: boolean; green?: boolean }> = {
-                            created:     { label: "견적 생성",   section: "finance",     primary: true },
-                            quoted:      { label: "견적 확인",   section: "finance",     primary: true },
-                            approved:    { label: "결제 등록",   section: "finance",     primary: true },
-                            paid:        { label: "번역사 배정", section: "work",        primary: true },
-                            matched:     { label: "작업 관리",   section: "work" },
-                            in_progress: { label: "작업 관리",   section: "work" },
-                            completed:   { label: "정산 확인",   section: "settlement",  green: true },
-                            cancelled:   { label: "내용 보기",   section: "info" },
+                          const ACTION_MAP: Record<string, { label: string; section: SectionKey; color: string; bg: string }> = {
+                            created:     { label: "견적 생성",   section: "finance",    color: "#fff",     bg: "#2563eb" },
+                            quoted:      { label: "견적 확인",   section: "finance",    color: "#fff",     bg: "#2563eb" },
+                            approved:    { label: "결제 등록",   section: "finance",    color: "#fff",     bg: "#0891b2" },
+                            paid:        { label: "번역사 배정", section: "work",       color: "#fff",     bg: "#7c3aed" },
+                            matched:     { label: "작업 보기",   section: "work",       color: "#fff",     bg: "#6d28d9" },
+                            in_progress: { label: "작업 보기",   section: "work",       color: "#fff",     bg: "#6d28d9" },
+                            completed:   { label: "정산 확인",   section: "settlement", color: "#fff",     bg: "#059669" },
+                            cancelled:   { label: "내용 보기",   section: "info",       color: "#6b7280",  bg: "#f3f4f6" },
                           };
-                          const action = ACTION_MAP[p.status] ?? { label: "상세보기", section: "info" as SectionKey };
-                          const primaryBtnStyle: React.CSSProperties = { background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" };
-                          const secondaryBtnStyle: React.CSSProperties = { background: "#eff6ff", color: "#2563eb", border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" };
-                          const greenBtnStyle: React.CSSProperties = { background: "#dcfce7", color: "#15803d", border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" };
-                          const dangerBtnStyle: React.CSSProperties = { background: "#fef2f2", color: "#dc2626", border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" };
+                          const action = ACTION_MAP[p.status] ?? { label: "상세보기", section: "info" as SectionKey, color: "#6b7280", bg: "#f3f4f6" };
+                          const qt = (p as any).quoteType as string | undefined;
+                          const QUOTE_STYLE: Record<string, { label: string; bg: string; color: string }> = {
+                            b2b_standard:     { label: "B2B",  bg: "#f1f5f9", color: "#475569" },
+                            b2c_prepaid:      { label: "선입금", bg: "#fef3c7", color: "#92400e" },
+                            prepaid_deduction:{ label: "차감",  bg: "#ede9fe", color: "#5b21b6" },
+                            accumulated_batch:{ label: "누적",  bg: "#dbeafe", color: "#1e40af" },
+                          };
+                          const qs = qt ? QUOTE_STYLE[qt] : null;
                           return (
                             <tr key={p.id}
                               onClick={() => openDetail(p.id)}
-                              style={{ cursor: "pointer", transition: "background 0.1s" }}
-                              onMouseEnter={e => (e.currentTarget.style.background = "#f0f9ff")}
+                              style={{ cursor: "pointer", transition: "background 0.08s" }}
+                              onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
                               onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                              <td style={{ ...tableTd, color: "#9ca3af" }}>#{p.id}</td>
-                              <td style={{ ...tableTd, fontWeight: 600, color: "#2563eb", maxWidth: 200 }}>
-                                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</div>
+                              <td style={{ ...tableTd, color: "#9ca3af", fontSize: 12, width: 44 }}>#{p.id}</td>
+                              <td style={{ ...tableTd, fontWeight: 600, color: "#1e40af", maxWidth: 220 }}>
+                                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 }}>{p.title}</div>
+                                {p.customerEmail && <div style={{ fontSize: 11, color: "#9ca3af", fontWeight: 400, marginTop: 1 }}>{p.customerEmail}</div>}
                               </td>
-                              <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{p.customerEmail ?? "-"}</td>
-                              <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.companyName ?? "-"}</td>
-                              <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.contactName ?? "-"}</td>
+                              <td style={{ ...tableTd, fontSize: 12 }}>
+                                <div style={{ fontWeight: 600, color: "#374151" }}>{p.companyName ?? "-"}</div>
+                                {(p as any).contactName && <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1 }}>{(p as any).contactName}</div>}
+                              </td>
                               <td style={tableTd}><StatusBadge status={p.status} /></td>
                               <td style={{ ...tableTd }}>
-                                {(p as any).quoteType ? (
-                                  <span style={{ padding: "2px 7px", borderRadius: 10, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
-                                    background: (p as any).quoteType === "b2c_prepaid" ? "#fef3c7" : (p as any).quoteType === "prepaid_deduction" ? "#ede9fe" : (p as any).quoteType === "accumulated_batch" ? "#dbeafe" : "#f3f4f6",
-                                    color: (p as any).quoteType === "b2c_prepaid" ? "#92400e" : (p as any).quoteType === "prepaid_deduction" ? "#5b21b6" : (p as any).quoteType === "accumulated_batch" ? "#1e40af" : "#374151"
-                                  }}>
-                                    {{ b2b_standard: "B2B", b2c_prepaid: "선입금", prepaid_deduction: "차감", accumulated_batch: "누적" }[(p as any).quoteType as string] ?? (p as any).quoteType}
-                                  </span>
-                                ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>미발행</span>}
+                                {qs ? (
+                                  <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", background: qs.bg, color: qs.color }}>{qs.label}</span>
+                                ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>-</span>}
                               </td>
                               <td style={{ ...tableTd }}>
                                 {(p as any).hasPaid ? (
-                                  <span style={{ padding: "2px 7px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: "#dcfce7", color: "#15803d" }}>완료</span>
+                                  <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: "#dcfce7", color: "#15803d", whiteSpace: "nowrap" }}>결제완료</span>
                                 ) : (p as any).hasQuote ? (
-                                  <span style={{ padding: "2px 7px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: "#fef9c3", color: "#92400e" }}>미수금</span>
+                                  <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: "#fef3c7", color: "#92400e", whiteSpace: "nowrap" }}>미수금</span>
                                 ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>-</span>}
                               </td>
-                              <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
+                              <td style={{ ...tableTd, fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>
                                 {new Date(p.createdAt).toLocaleDateString("ko-KR")}
                               </td>
-                              <td style={{ ...tableTd }} onClick={e => e.stopPropagation()}>
-                                <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "nowrap" }}>
+                              <td style={{ ...tableTd, width: 110 }} onClick={e => e.stopPropagation()}>
+                                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                                   <button
                                     onClick={() => openDetail(p.id, action.section)}
-                                    style={action.green ? greenBtnStyle : primaryBtnStyle}>
+                                    style={{ background: action.bg, color: action.color, border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
                                     {action.label}
                                   </button>
                                   {p.status !== "cancelled" && p.status !== "completed" && (
@@ -1297,8 +1298,9 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                                         if (res.ok) { setToast("프로젝트가 취소되었습니다."); fetchAll(); }
                                         else { const d = await res.json(); setToast(`오류: ${d.error}`); }
                                       }}
-                                      style={{ ...dangerBtnStyle, padding: "4px 7px" }}>
-                                      취소
+                                      style={{ background: "transparent", color: "#d1d5db", border: "none", borderRadius: 4, padding: "4px 6px", fontSize: 11, cursor: "pointer", fontWeight: 600 }}
+                                      title="프로젝트 취소">
+                                      ✕
                                     </button>
                                   )}
                                 </div>
@@ -1309,7 +1311,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                       </tbody>
                     </table>
                   </div>
-                </Card>
+                </div>
                 {/* 페이지네이션 */}
                 {totalPages > 1 && (
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>
