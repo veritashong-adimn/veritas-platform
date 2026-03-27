@@ -5,7 +5,7 @@ import {
   customersTable, communicationsTable, translatorProfilesTable,
   contactsTable, companiesTable, translatorRatesTable,
   quoteItemsTable, calcQuoteItemAmounts,
-  billingBatchesTable, billingBatchItemsTable,
+  billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
   prepaidAccountsTable, prepaidLedgerTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
@@ -1213,7 +1213,15 @@ router.get("/admin/billing-batches/active", ...adminGuard, async (req, res) => {
       projectMap = new Map(ps.map(p => [p.id, p.title]));
     }
     const enriched = items.map(i => ({ ...i, amount: Number(i.amount), projectTitle: projectMap.get(i.projectId) ?? `프로젝트 #${i.projectId}` }));
-    res.json({ ...batch, totalAmount: Number(batch.totalAmount), items: enriched });
+    // 작업 항목도 함께 반환
+    const workItems = await db.select().from(billingBatchWorkItemsTable)
+      .where(eq(billingBatchWorkItemsTable.batchId, batch.id))
+      .orderBy(billingBatchWorkItemsTable.sortOrder, billingBatchWorkItemsTable.createdAt);
+    const workItemsEnriched = workItems.map(w => ({
+      ...w, quantity: Number(w.quantity), unitPrice: Number(w.unitPrice), amount: Number(w.amount),
+    }));
+    const workTotal = workItemsEnriched.reduce((s, w) => s + w.amount, 0);
+    res.json({ ...batch, totalAmount: workTotal > 0 ? workTotal : Number(batch.totalAmount), items: enriched, workItems: workItemsEnriched });
   } catch (err) {
     req.log.error({ err }, "Failed to fetch active batch");
     res.status(500).json({ error: "활성 배치 조회 실패" });
@@ -1281,6 +1289,80 @@ router.delete("/admin/billing-batches/:batchId/items/:itemId", ...adminGuard, as
   }
 });
 
+// ─── 누적 배치 작업 항목(work items) CRUD ───────────────────────────────────
+
+router.post("/admin/billing-batches/:batchId/work-items", ...adminGuard, async (req, res) => {
+  const batchId = Number(req.params.batchId);
+  const { workDate, projectName, language, description, quantity, unitPrice, amount, sortOrder } = req.body as {
+    workDate?: string; projectName?: string; language?: string; description?: string;
+    quantity?: number; unitPrice?: number; amount?: number; sortOrder?: number;
+  };
+  try {
+    const [batch] = await db.select({ id: billingBatchesTable.id, status: billingBatchesTable.status }).from(billingBatchesTable).where(eq(billingBatchesTable.id, batchId));
+    if (!batch || batch.status !== "draft") { res.status(400).json({ error: "유효하지 않은 배치입니다." }); return; }
+    const qty = Number(quantity ?? 1);
+    const price = Number(unitPrice ?? 0);
+    const amt = amount != null ? Number(amount) : qty * price;
+    const [item] = await db.insert(billingBatchWorkItemsTable).values({
+      batchId, workDate: workDate ?? null, projectName: projectName ?? null,
+      language: language ?? null, description: description ?? null,
+      quantity: String(qty), unitPrice: String(price), amount: String(amt),
+      sortOrder: sortOrder ?? 0,
+    }).returning();
+    res.status(201).json({ ...item, quantity: Number(item.quantity), unitPrice: Number(item.unitPrice), amount: Number(item.amount) });
+  } catch (err) {
+    req.log.error({ err }, "Failed to add work item");
+    res.status(500).json({ error: "작업 항목 추가 실패" });
+  }
+});
+
+router.put("/admin/billing-batches/:batchId/work-items/:itemId", ...adminGuard, async (req, res) => {
+  const batchId = Number(req.params.batchId);
+  const itemId = Number(req.params.itemId);
+  const { workDate, projectName, language, description, quantity, unitPrice, amount, sortOrder } = req.body as {
+    workDate?: string; projectName?: string; language?: string; description?: string;
+    quantity?: number; unitPrice?: number; amount?: number; sortOrder?: number;
+  };
+  try {
+    const [batch] = await db.select({ status: billingBatchesTable.status }).from(billingBatchesTable).where(eq(billingBatchesTable.id, batchId));
+    if (!batch || batch.status !== "draft") { res.status(400).json({ error: "유효하지 않은 배치입니다." }); return; }
+    const qty = quantity != null ? Number(quantity) : undefined;
+    const price = unitPrice != null ? Number(unitPrice) : undefined;
+    const amt = amount != null ? Number(amount) : (qty != null && price != null ? qty * price : undefined);
+    const updateData: Record<string, unknown> = { updatedAt: new Date() };
+    if (workDate !== undefined) updateData.workDate = workDate;
+    if (projectName !== undefined) updateData.projectName = projectName;
+    if (language !== undefined) updateData.language = language;
+    if (description !== undefined) updateData.description = description;
+    if (qty !== undefined) updateData.quantity = String(qty);
+    if (price !== undefined) updateData.unitPrice = String(price);
+    if (amt !== undefined) updateData.amount = String(amt);
+    if (sortOrder !== undefined) updateData.sortOrder = sortOrder;
+    const [updated] = await db.update(billingBatchWorkItemsTable)
+      .set(updateData as Partial<typeof billingBatchWorkItemsTable.$inferInsert>)
+      .where(and(eq(billingBatchWorkItemsTable.id, itemId), eq(billingBatchWorkItemsTable.batchId, batchId)))
+      .returning();
+    if (!updated) { res.status(404).json({ error: "항목을 찾을 수 없습니다." }); return; }
+    res.json({ ...updated, quantity: Number(updated.quantity), unitPrice: Number(updated.unitPrice), amount: Number(updated.amount) });
+  } catch (err) {
+    req.log.error({ err }, "Failed to update work item");
+    res.status(500).json({ error: "작업 항목 수정 실패" });
+  }
+});
+
+router.delete("/admin/billing-batches/:batchId/work-items/:itemId", ...adminGuard, async (req, res) => {
+  const batchId = Number(req.params.batchId);
+  const itemId = Number(req.params.itemId);
+  try {
+    await db.delete(billingBatchWorkItemsTable)
+      .where(and(eq(billingBatchWorkItemsTable.id, itemId), eq(billingBatchWorkItemsTable.batchId, batchId)));
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "Failed to delete work item");
+    res.status(500).json({ error: "작업 항목 삭제 실패" });
+  }
+});
+
 // ─── 누적 배치 확정 발행 (견적서 생성) ──────────────────────────────────────
 router.post("/admin/billing-batches/:batchId/issue", ...adminGuard, async (req, res) => {
   const batchId = Number(req.params.batchId);
@@ -1289,12 +1371,54 @@ router.post("/admin/billing-batches/:batchId/issue", ...adminGuard, async (req, 
   try {
     const [batch] = await db.select().from(billingBatchesTable).where(eq(billingBatchesTable.id, batchId));
     if (!batch || batch.status !== "draft") { res.status(400).json({ error: "배치가 유효하지 않거나 이미 발행되었습니다." }); return; }
-    const items = await db.select().from(billingBatchItemsTable).where(eq(billingBatchItemsTable.batchId, batchId));
-    if (items.length === 0) { res.status(400).json({ error: "배치에 항목이 없습니다." }); return; }
-    const totalAmount = items.reduce((s, i) => s + Number(i.amount), 0);
-    const pids = items.map(i => i.projectId);
-    const projects = await db.select({ id: projectsTable.id, title: projectsTable.title }).from(projectsTable).where(inArray(projectsTable.id, pids));
-    const projectMap = new Map(projects.map(p => [p.id, p.title]));
+
+    // 작업 항목(work items) 우선, 없으면 기존 project items fallback
+    const workItems = await db.select().from(billingBatchWorkItemsTable)
+      .where(eq(billingBatchWorkItemsTable.batchId, batchId))
+      .orderBy(billingBatchWorkItemsTable.sortOrder, billingBatchWorkItemsTable.createdAt);
+
+    const legacyItems = await db.select().from(billingBatchItemsTable).where(eq(billingBatchItemsTable.batchId, batchId));
+
+    if (workItems.length === 0 && legacyItems.length === 0) {
+      res.status(400).json({ error: "배치에 작업 항목이 없습니다. 항목을 먼저 추가하세요." }); return;
+    }
+
+    let totalAmount = 0;
+    let quoteItemValues: Parameters<typeof db.insert>[0] extends never ? never : { quoteId: number; sortOrder: number; productName: string; unit: string | null; quantity: string; unitPrice: string; supplyAmount: string; taxAmount: string; totalAmount: string; memo: string | null }[] = [];
+
+    if (workItems.length > 0) {
+      // 작업 항목 기반 발행
+      totalAmount = workItems.reduce((s, w) => s + Number(w.amount), 0);
+      quoteItemValues = workItems.map((w, idx) => {
+        const label = [w.projectName, w.language, w.description].filter(Boolean).join(" / ");
+        return {
+          quoteId: 0, sortOrder: idx + 1,
+          productName: label || `작업항목 #${idx + 1}`,
+          unit: "식",
+          quantity: String(Number(w.quantity)),
+          unitPrice: String(Number(w.unitPrice)),
+          supplyAmount: String(Number(w.amount)),
+          taxAmount: "0",
+          totalAmount: String(Number(w.amount)),
+          memo: w.workDate ?? null,
+        };
+      });
+    } else {
+      // 기존 project items fallback
+      const pids = legacyItems.map(i => i.projectId);
+      const projects = await db.select({ id: projectsTable.id, title: projectsTable.title }).from(projectsTable).where(inArray(projectsTable.id, pids));
+      const projectMap = new Map(projects.map(p => [p.id, p.title]));
+      totalAmount = legacyItems.reduce((s, i) => s + Number(i.amount), 0);
+      quoteItemValues = legacyItems.map((item, idx) => ({
+        quoteId: 0, sortOrder: idx + 1,
+        productName: projectMap.get(item.projectId) ?? `프로젝트 #${item.projectId}`,
+        unit: "건", quantity: "1",
+        unitPrice: String(Number(item.amount)), supplyAmount: String(Number(item.amount)),
+        taxAmount: "0", totalAmount: String(Number(item.amount)),
+        memo: item.serviceName || null,
+      }));
+    }
+
     const quote = await db.transaction(async tx => {
       await tx.delete(quotesTable).where(eq(quotesTable.projectId, projectId));
       const [q] = await tx.insert(quotesTable).values({
@@ -1303,25 +1427,14 @@ router.post("/admin/billing-batches/:batchId/issue", ...adminGuard, async (req, 
         status: "draft",
         quoteType: "accumulated_batch" as string,
         billingType: "monthly_billing" as string,
-        batchItemCount: items.length,
+        batchItemCount: workItems.length > 0 ? workItems.length : legacyItems.length,
         batchPeriodStart: batch.periodStart,
         batchPeriodEnd: batch.periodEnd,
         issueDate: issueDate ? new Date(issueDate) : new Date(),
         paymentDueDate: paymentDueDate ? new Date(paymentDueDate) : null,
         taxDocumentType: (taxDocumentType ?? "tax_invoice") as string,
       }).returning();
-      await tx.insert(quoteItemsTable).values(items.map((item, idx) => ({
-        quoteId: q.id,
-        sortOrder: idx + 1,
-        productName: projectMap.get(item.projectId) ?? `프로젝트 #${item.projectId}`,
-        unit: "건",
-        quantity: "1",
-        unitPrice: String(Number(item.amount)),
-        supplyAmount: String(Number(item.amount)),
-        taxAmount: "0",
-        totalAmount: String(Number(item.amount)),
-        memo: item.serviceName || null,
-      })));
+      await tx.insert(quoteItemsTable).values(quoteItemValues.map(v => ({ ...v, quoteId: q.id })));
       await tx.update(billingBatchesTable).set({ status: "issued", quoteId: q.id, totalAmount: String(totalAmount) }).where(eq(billingBatchesTable.id, batchId));
       await tx.update(projectsTable).set({ status: "quoted" }).where(eq(projectsTable.id, projectId));
       return q;

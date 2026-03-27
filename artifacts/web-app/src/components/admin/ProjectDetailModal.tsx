@@ -136,11 +136,19 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
 
   // 누적 배치 (건별 누적 방식)
   type ActiveBatchItem = { id: number; projectId: number; projectTitle: string; amount: number; serviceName: string | null; createdAt: string };
-  type ActiveBatch = { id: number; companyId: number; status: string; totalAmount: number; note: string | null; periodStart: string; periodEnd: string; items: ActiveBatchItem[] };
+  type WorkItem = { id: number; batchId: number; sortOrder: number; workDate: string | null; projectName: string | null; language: string | null; description: string | null; quantity: number; unitPrice: number; amount: number };
+  type ActiveBatch = { id: number; companyId: number; status: string; totalAmount: number; note: string | null; periodStart: string; periodEnd: string; items: ActiveBatchItem[]; workItems: WorkItem[] };
   const [activeBatch, setActiveBatch] = useState<ActiveBatch | null | "loading">(null);
-  const [activeBatchOp, setActiveBatchOp] = useState(false); // add/remove/issue 중
+  const [activeBatchOp, setActiveBatchOp] = useState(false);
   const [issueDateBatch, setIssueDateBatch] = useState(() => new Date().toISOString().slice(0, 10));
   const [paymentDueDateBatch, setPaymentDueDateBatch] = useState("");
+  // 작업 항목 인라인 추가 폼
+  type NewWorkItemForm = { workDate: string; projectName: string; language: string; description: string; quantity: string; unitPrice: string; amount: string };
+  const emptyNewWI = (): NewWorkItemForm => ({ workDate: new Date().toISOString().slice(0, 10), projectName: detail?.title ?? "", language: "", description: "", quantity: "1", unitPrice: "", amount: "" });
+  const [showAddWI, setShowAddWI] = useState(false);
+  const [newWI, setNewWI] = useState<NewWorkItemForm>(emptyNewWI);
+  const [editingWIId, setEditingWIId] = useState<number | null>(null);
+  const [editWI, setEditWI] = useState<NewWorkItemForm>(emptyNewWI);
 
   // 결제 등록
   const [paymentAmount, setPaymentAmount] = useState("");
@@ -257,6 +265,52 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       onToast("누적 견적서가 발행되었습니다.");
       await loadDetail();
       setShowQuoteForm(false);
+    } finally { setActiveBatchOp(false); }
+  };
+
+  // ── 작업 항목 추가 ─────────────────────────────────────────────────────────
+  const addWorkItem = async (batchId: number, form: { workDate: string; projectName: string; language: string; description: string; quantity: string; unitPrice: string; amount: string }) => {
+    setActiveBatchOp(true);
+    try {
+      const qty = parseFloat(form.quantity) || 1;
+      const price = parseFloat(form.unitPrice) || 0;
+      const amt = form.amount !== "" ? parseFloat(form.amount) : qty * price;
+      const res = await fetch(api(`/api/admin/billing-batches/${batchId}/work-items`), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ workDate: form.workDate || null, projectName: form.projectName || null, language: form.language || null, description: form.description || null, quantity: qty, unitPrice: price, amount: amt }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(data.error ?? "항목 추가 실패"); return; }
+      setShowAddWI(false);
+      setNewWI(emptyNewWI());
+      await loadActiveBatch((activeBatch as ActiveBatch).companyId);
+    } finally { setActiveBatchOp(false); }
+  };
+
+  const saveWorkItem = async (batchId: number, itemId: number, form: { workDate: string; projectName: string; language: string; description: string; quantity: string; unitPrice: string; amount: string }) => {
+    setActiveBatchOp(true);
+    try {
+      const qty = parseFloat(form.quantity) || 1;
+      const price = parseFloat(form.unitPrice) || 0;
+      const amt = form.amount !== "" ? parseFloat(form.amount) : qty * price;
+      const res = await fetch(api(`/api/admin/billing-batches/${batchId}/work-items/${itemId}`), {
+        method: "PUT", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ workDate: form.workDate || null, projectName: form.projectName || null, language: form.language || null, description: form.description || null, quantity: qty, unitPrice: price, amount: amt }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(data.error ?? "항목 수정 실패"); return; }
+      setEditingWIId(null);
+      await loadActiveBatch((activeBatch as ActiveBatch).companyId);
+    } finally { setActiveBatchOp(false); }
+  };
+
+  const deleteWorkItem = async (batchId: number, itemId: number) => {
+    if (!confirm("이 작업 항목을 삭제하시겠습니까?")) return;
+    setActiveBatchOp(true);
+    try {
+      const res = await fetch(api(`/api/admin/billing-batches/${batchId}/work-items/${itemId}`), { method: "DELETE", headers: authH });
+      if (!res.ok) { onToast("삭제 실패"); return; }
+      await loadActiveBatch((activeBatch as ActiveBatch).companyId);
     } finally { setActiveBatchOp(false); }
   };
 
@@ -494,11 +548,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       if (quoteIssueDate) body.issueDate = quoteIssueDate;
       if (quoteInvoiceDueDate) body.invoiceDueDate = quoteInvoiceDueDate;
       if (quotePaymentDueDate) body.paymentDueDate = quotePaymentDueDate;
-      // 누적 견적 전용 필드
-      if (quoteType === "accumulated_batch") {
-        if (quoteBatchStart) body.batchPeriodStart = quoteBatchStart;
-        if (quoteBatchEnd) body.batchPeriodEnd = quoteBatchEnd;
-      }
+      // 배치 기간 (필요시 본문에 추가)
+      if (quoteBatchStart) body.batchPeriodStart = quoteBatchStart;
+      if (quoteBatchEnd) body.batchPeriodEnd = quoteBatchEnd;
       const res = await fetch(api(`/api/admin/projects/${projectId}/quote`), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1276,125 +1328,157 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       const companyId = detail.companyId;
                       const batchData = activeBatch === "loading" ? null : activeBatch;
                       const isLoading = activeBatch === "loading";
-                      const isInBatch = batchData != null && batchData.items.some(i => i.projectId === projectId);
-                      const myBatchItem = batchData?.items.find(i => i.projectId === projectId);
-
+                      const wis = batchData?.workItems ?? [];
+                      const wiTotal = wis.reduce((s, w) => s + w.amount, 0);
+                      const thSt = { padding: "4px 6px", textAlign: "left" as const, color: "#065f46", borderBottom: "1px solid #6ee7b7", fontSize: 10, fontWeight: 700 };
+                      const tdSt = { padding: "4px 5px", fontSize: 11, verticalAlign: "middle" as const };
+                      const inpSt = { width: "100%", fontSize: 11, padding: "2px 4px", border: "1px solid #6ee7b7", borderRadius: 4, boxSizing: "border-box" as const };
                       return (
                         <div style={{ marginBottom: 10 }}>
                           <div style={{ background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 8, padding: "12px 14px" }}>
-                            <div style={{ fontSize: 10, fontWeight: 800, color: "#065f46", marginBottom: 10 }}>
-                              🗂️ 누적 청구 배치
-                            </div>
+                            <div style={{ fontSize: 10, fontWeight: 800, color: "#065f46", marginBottom: 10 }}>🗂️ 누적 청구 배치</div>
 
-                            {/* 거래처 없음 경고 */}
                             {!companyId && (
                               <div style={{ padding: "8px 10px", background: "#fef3c7", borderRadius: 6, border: "1px solid #fcd34d", fontSize: 12, color: "#92400e", marginBottom: 8 }}>
                                 ⚠️ 이 프로젝트에 거래처를 먼저 설정해야 누적 배치를 사용할 수 있습니다.
                               </div>
                             )}
 
-                            {/* 로딩 */}
                             {isLoading && (
                               <div style={{ textAlign: "center", fontSize: 12, color: "#6b7280", padding: "12px 0" }}>배치 정보 로딩 중...</div>
                             )}
 
-                            {/* 진행 중인 배치 없음 */}
                             {!isLoading && batchData === null && companyId && (
                               <div>
                                 <div style={{ padding: "10px 12px", background: "#f0fdf4", borderRadius: 6, border: "1px solid #bbf7d0", fontSize: 12, color: "#065f46", marginBottom: 10 }}>
-                                  진행 중인 누적 배치가 없습니다. 새 배치를 시작하면 이 거래처의 여러 번역 건을 월말에 한꺼번에 청구할 수 있습니다.
+                                  진행 중인 누적 배치가 없습니다. 새 배치를 시작하여 작업 항목을 건별로 입력하고 월말에 합산 발행하세요.
                                 </div>
-                                <button
-                                  type="button"
-                                  onClick={() => createNewBatch(companyId)}
-                                  disabled={activeBatchOp}
+                                <button type="button" onClick={() => createNewBatch(companyId)} disabled={activeBatchOp}
                                   style={{ padding: "7px 16px", background: "#065f46", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                                   {activeBatchOp ? "생성 중..." : "🆕 새 누적 배치 시작"}
                                 </button>
                               </div>
                             )}
 
-                            {/* 진행 중인 배치 있음 */}
                             {!isLoading && batchData != null && (
                               <div>
-                                {/* 배치 요약 헤더 */}
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, padding: "8px 10px", background: "#d1fae5", borderRadius: 6 }}>
+                                {/* 배치 헤더 */}
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, padding: "7px 10px", background: "#d1fae5", borderRadius: 6 }}>
                                   <div>
                                     <span style={{ fontSize: 11, fontWeight: 700, color: "#065f46" }}>배치 #{batchData.id}</span>
-                                    <span style={{ fontSize: 10, color: "#6b7280", marginLeft: 8 }}>
-                                      {batchData.periodStart?.slice(0, 10)} ~ {batchData.periodEnd?.slice(0, 10)}
-                                    </span>
+                                    <span style={{ fontSize: 10, color: "#6b7280", marginLeft: 8 }}>{batchData.periodStart?.slice(0, 10)} ~ {batchData.periodEnd?.slice(0, 10)}</span>
                                   </div>
                                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                                     <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#065f46", color: "#fff", fontWeight: 700 }}>진행 중</span>
-                                    <span style={{ fontSize: 11, fontWeight: 800, color: "#065f46" }}>{batchData.totalAmount.toLocaleString()}원</span>
+                                    <span style={{ fontSize: 12, fontWeight: 800, color: "#065f46" }}>{wiTotal.toLocaleString()}원</span>
                                   </div>
                                 </div>
 
-                                {/* 이 프로젝트 배치 포함 여부 */}
-                                {isInBatch ? (
-                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 10px", background: "#f0fdf4", borderRadius: 6, border: "1px solid #6ee7b7", marginBottom: 8, fontSize: 12 }}>
-                                    <span style={{ color: "#065f46", fontWeight: 600 }}>✅ 이 프로젝트가 배치에 포함되어 있습니다 ({myBatchItem!.amount.toLocaleString()}원)</span>
-                                    <button type="button" onClick={() => removeFromActiveBatch(batchData.id, myBatchItem!.id)} disabled={activeBatchOp}
-                                      style={{ fontSize: 11, padding: "3px 10px", background: "#fef2f2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 5, cursor: "pointer" }}>
-                                      {activeBatchOp ? "..." : "배치에서 제거"}
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 10px", background: "#fefce8", borderRadius: 6, border: "1px solid #fde68a", marginBottom: 8, fontSize: 12 }}>
-                                    <span style={{ color: "#92400e" }}>이 프로젝트가 아직 배치에 포함되지 않았습니다.</span>
-                                    <button type="button" onClick={() => addToActiveBatch(batchData.id)} disabled={activeBatchOp}
-                                      style={{ fontSize: 11, padding: "3px 10px", background: "#065f46", color: "#fff", border: "none", borderRadius: 5, cursor: "pointer", fontWeight: 700 }}>
-                                      {activeBatchOp ? "..." : "➕ 이 프로젝트 배치에 추가"}
-                                    </button>
-                                  </div>
-                                )}
-
-                                {/* 누적 항목 테이블 */}
-                                {batchData.items.length === 0 ? (
-                                  <div style={{ textAlign: "center", fontSize: 12, color: "#9ca3af", padding: "10px 0" }}>아직 추가된 건이 없습니다.</div>
-                                ) : (
-                                  <div style={{ overflowX: "auto", maxHeight: 220, overflowY: "auto", marginBottom: 8 }}>
-                                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                                      <thead>
-                                        <tr style={{ background: "#d1fae5", position: "sticky", top: 0 }}>
-                                          <th style={{ padding: "4px 6px", textAlign: "left", color: "#065f46", borderBottom: "1px solid #6ee7b7" }}>추가일</th>
-                                          <th style={{ padding: "4px 6px", textAlign: "left", color: "#065f46", borderBottom: "1px solid #6ee7b7" }}>프로젝트명</th>
-                                          <th style={{ padding: "4px 6px", textAlign: "left", color: "#065f46", borderBottom: "1px solid #6ee7b7" }}>서비스</th>
-                                          <th style={{ padding: "4px 6px", textAlign: "right", color: "#065f46", borderBottom: "1px solid #6ee7b7" }}>금액</th>
-                                          <th style={{ padding: "4px 6px", textAlign: "center", borderBottom: "1px solid #6ee7b7" }}></th>
+                                {/* 작업 항목 테이블 */}
+                                <div style={{ overflowX: "auto", marginBottom: 6 }}>
+                                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
+                                    <thead>
+                                      <tr style={{ background: "#d1fae5" }}>
+                                        <th style={{ ...thSt, width: 86 }}>작업일</th>
+                                        <th style={{ ...thSt }}>프로젝트명</th>
+                                        <th style={{ ...thSt, width: 80 }}>언어</th>
+                                        <th style={{ ...thSt }}>내용</th>
+                                        <th style={{ ...thSt, width: 50, textAlign: "right" }}>수량</th>
+                                        <th style={{ ...thSt, width: 80, textAlign: "right" }}>단가</th>
+                                        <th style={{ ...thSt, width: 80, textAlign: "right" }}>금액</th>
+                                        <th style={{ ...thSt, width: 48, textAlign: "center" }}></th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {wis.length === 0 && !showAddWI && (
+                                        <tr>
+                                          <td colSpan={8} style={{ textAlign: "center", fontSize: 12, color: "#9ca3af", padding: "12px 0" }}>
+                                            아직 작업 항목이 없습니다. 아래 버튼으로 추가하세요.
+                                          </td>
                                         </tr>
-                                      </thead>
-                                      <tbody>
-                                        {batchData.items.map((item, i) => (
-                                          <tr key={item.id} style={{ background: item.projectId === projectId ? "#f0fdf4" : i % 2 === 0 ? "#fff" : "#f9fafb" }}>
-                                            <td style={{ padding: "4px 6px", whiteSpace: "nowrap", color: "#6b7280" }}>{item.createdAt?.slice(0, 10)}</td>
-                                            <td style={{ padding: "4px 6px", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: item.projectId === projectId ? 700 : 400 }} title={item.projectTitle}>
-                                              {item.projectTitle}
-                                              {item.projectId === projectId && <span style={{ marginLeft: 4, fontSize: 9, background: "#065f46", color: "#fff", borderRadius: 3, padding: "1px 4px" }}>현재</span>}
-                                            </td>
-                                            <td style={{ padding: "4px 6px", color: "#6b7280", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.serviceName || "-"}</td>
-                                            <td style={{ padding: "4px 6px", textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>{item.amount.toLocaleString()}원</td>
-                                            <td style={{ padding: "4px 6px", textAlign: "center" }}>
-                                              <button type="button" onClick={() => removeFromActiveBatch(batchData.id, item.id)} disabled={activeBatchOp}
-                                                style={{ fontSize: 10, padding: "1px 6px", background: "#fef2f2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 4, cursor: "pointer" }}>✕</button>
+                                      )}
+                                      {wis.map((w, i) => {
+                                        const isEditing = editingWIId === w.id;
+                                        if (isEditing) {
+                                          return (
+                                            <tr key={w.id} style={{ background: "#fefce8" }}>
+                                              <td style={tdSt}><input type="date" value={editWI.workDate} onChange={e => setEditWI(p => ({ ...p, workDate: e.target.value }))} style={inpSt} /></td>
+                                              <td style={tdSt}><input value={editWI.projectName} onChange={e => setEditWI(p => ({ ...p, projectName: e.target.value }))} style={inpSt} placeholder="프로젝트명" /></td>
+                                              <td style={tdSt}><input value={editWI.language} onChange={e => setEditWI(p => ({ ...p, language: e.target.value }))} style={inpSt} placeholder="KO→EN" /></td>
+                                              <td style={tdSt}><input value={editWI.description} onChange={e => setEditWI(p => ({ ...p, description: e.target.value }))} style={inpSt} placeholder="내용" /></td>
+                                              <td style={{ ...tdSt, textAlign: "right" }}><input type="number" value={editWI.quantity} onChange={e => setEditWI(p => ({ ...p, quantity: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} /></td>
+                                              <td style={{ ...tdSt, textAlign: "right" }}><input type="number" value={editWI.unitPrice} onChange={e => setEditWI(p => ({ ...p, unitPrice: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} /></td>
+                                              <td style={{ ...tdSt, textAlign: "right" }}><input type="number" value={editWI.amount} onChange={e => setEditWI(p => ({ ...p, amount: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} placeholder="자동" /></td>
+                                              <td style={{ ...tdSt, textAlign: "center" }}>
+                                                <button type="button" onClick={() => saveWorkItem(batchData.id, w.id, editWI)} disabled={activeBatchOp}
+                                                  style={{ fontSize: 10, padding: "2px 6px", background: "#065f46", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer", marginBottom: 2, display: "block", width: "100%" }}>저장</button>
+                                                <button type="button" onClick={() => setEditingWIId(null)}
+                                                  style={{ fontSize: 10, padding: "2px 6px", background: "#f3f4f6", color: "#374151", border: "1px solid #d1d5db", borderRadius: 3, cursor: "pointer", display: "block", width: "100%" }}>취소</button>
+                                              </td>
+                                            </tr>
+                                          );
+                                        }
+                                        return (
+                                          <tr key={w.id} style={{ background: i % 2 === 0 ? "#fff" : "#f0fdf4" }}>
+                                            <td style={{ ...tdSt, color: "#6b7280" }}>{w.workDate || "-"}</td>
+                                            <td style={{ ...tdSt, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={w.projectName ?? ""}>{w.projectName || "-"}</td>
+                                            <td style={{ ...tdSt, color: "#6b7280" }}>{w.language || "-"}</td>
+                                            <td style={{ ...tdSt, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={w.description ?? ""}>{w.description || "-"}</td>
+                                            <td style={{ ...tdSt, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{w.quantity}</td>
+                                            <td style={{ ...tdSt, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{w.unitPrice > 0 ? w.unitPrice.toLocaleString() : "-"}</td>
+                                            <td style={{ ...tdSt, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{w.amount.toLocaleString()}원</td>
+                                            <td style={{ ...tdSt, textAlign: "center" }}>
+                                              <button type="button" disabled={activeBatchOp}
+                                                onClick={() => { setEditingWIId(w.id); setEditWI({ workDate: w.workDate ?? "", projectName: w.projectName ?? "", language: w.language ?? "", description: w.description ?? "", quantity: String(w.quantity), unitPrice: String(w.unitPrice), amount: String(w.amount) }); }}
+                                                style={{ fontSize: 10, padding: "1px 5px", background: "#e0f2fe", color: "#0369a1", border: "1px solid #7dd3fc", borderRadius: 3, cursor: "pointer", marginBottom: 2, display: "block", width: "100%" }}>수정</button>
+                                              <button type="button" disabled={activeBatchOp} onClick={() => deleteWorkItem(batchData.id, w.id)}
+                                                style={{ fontSize: 10, padding: "1px 5px", background: "#fef2f2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 3, cursor: "pointer", display: "block", width: "100%" }}>삭제</button>
                                             </td>
                                           </tr>
-                                        ))}
-                                      </tbody>
+                                        );
+                                      })}
+
+                                      {/* 항목 추가 폼 행 */}
+                                      {showAddWI && (
+                                        <tr style={{ background: "#f0fdf4" }}>
+                                          <td style={tdSt}><input type="date" value={newWI.workDate} onChange={e => setNewWI(p => ({ ...p, workDate: e.target.value }))} style={inpSt} /></td>
+                                          <td style={tdSt}><input value={newWI.projectName} onChange={e => setNewWI(p => ({ ...p, projectName: e.target.value }))} style={inpSt} placeholder="프로젝트명" /></td>
+                                          <td style={tdSt}><input value={newWI.language} onChange={e => setNewWI(p => ({ ...p, language: e.target.value }))} style={inpSt} placeholder="KO→EN" /></td>
+                                          <td style={tdSt}><input value={newWI.description} onChange={e => setNewWI(p => ({ ...p, description: e.target.value }))} style={inpSt} placeholder="내용" /></td>
+                                          <td style={{ ...tdSt }}><input type="number" value={newWI.quantity} onChange={e => setNewWI(p => ({ ...p, quantity: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} /></td>
+                                          <td style={{ ...tdSt }}><input type="number" value={newWI.unitPrice} onChange={e => setNewWI(p => ({ ...p, unitPrice: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} placeholder="단가" /></td>
+                                          <td style={{ ...tdSt }}><input type="number" value={newWI.amount} onChange={e => setNewWI(p => ({ ...p, amount: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} placeholder="(수량×단가)" /></td>
+                                          <td style={{ ...tdSt, textAlign: "center" }}>
+                                            <button type="button" onClick={() => addWorkItem(batchData.id, newWI)} disabled={activeBatchOp}
+                                              style={{ fontSize: 10, padding: "2px 6px", background: "#065f46", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer", marginBottom: 2, display: "block", width: "100%" }}>추가</button>
+                                            <button type="button" onClick={() => { setShowAddWI(false); setNewWI(emptyNewWI()); }}
+                                              style={{ fontSize: 10, padding: "2px 6px", background: "#f3f4f6", color: "#374151", border: "1px solid #d1d5db", borderRadius: 3, cursor: "pointer", display: "block", width: "100%" }}>취소</button>
+                                          </td>
+                                        </tr>
+                                      )}
+                                    </tbody>
+                                    {wis.length > 0 && (
                                       <tfoot>
                                         <tr style={{ background: "#065f46" }}>
-                                          <td colSpan={3} style={{ padding: "5px 6px", color: "#d1fae5", fontSize: 11, fontWeight: 700 }}>합계 ({batchData.items.length}건)</td>
-                                          <td style={{ padding: "5px 6px", textAlign: "right", color: "#fff", fontSize: 12, fontWeight: 800 }}>{batchData.totalAmount.toLocaleString()}원</td>
+                                          <td colSpan={6} style={{ padding: "5px 6px", color: "#d1fae5", fontSize: 11, fontWeight: 700 }}>합계 ({wis.length}건)</td>
+                                          <td style={{ padding: "5px 6px", textAlign: "right", color: "#fff", fontSize: 12, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{wiTotal.toLocaleString()}원</td>
                                           <td></td>
                                         </tr>
                                       </tfoot>
-                                    </table>
-                                  </div>
+                                    )}
+                                  </table>
+                                </div>
+
+                                {/* 항목 추가 버튼 */}
+                                {!showAddWI && (
+                                  <button type="button" onClick={() => { setShowAddWI(true); setNewWI(emptyNewWI()); }} disabled={activeBatchOp}
+                                    style={{ fontSize: 11, padding: "4px 12px", background: "#f0fdf4", color: "#065f46", border: "1px solid #6ee7b7", borderRadius: 5, cursor: "pointer", fontWeight: 600, marginBottom: 8 }}>
+                                    ➕ 작업 항목 추가
+                                  </button>
                                 )}
 
                                 {/* 발행 영역 */}
-                                {batchData.items.length > 0 && (
+                                {wis.length > 0 && (
                                   <div style={{ marginTop: 8, padding: "10px 12px", background: "#f0fdf4", borderRadius: 7, border: "1px solid #6ee7b7" }}>
                                     <div style={{ fontSize: 11, fontWeight: 700, color: "#065f46", marginBottom: 8 }}>📄 세금계산서 발행 (배치 확정)</div>
                                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
@@ -1406,12 +1490,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         {qfLbl("입금 예정일")}
                                         <input type="date" value={paymentDueDateBatch} onChange={e => setPaymentDueDateBatch(e.target.value)} style={{ ...qfIs, borderColor: "#6ee7b7", width: 130 }} />
                                       </div>
-                                      <button
-                                        type="button"
-                                        onClick={() => issueBatch(batchData.id)}
-                                        disabled={activeBatchOp || !issueDateBatch}
+                                      <button type="button" onClick={() => issueBatch(batchData.id)} disabled={activeBatchOp || !issueDateBatch}
                                         style={{ padding: "7px 16px", background: activeBatchOp ? "#9ca3af" : "#065f46", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: 1 }}>
-                                        {activeBatchOp ? "발행 중..." : `🧾 ${batchData.items.length}건 합산 세금계산서 발행`}
+                                        {activeBatchOp ? "발행 중..." : `🧾 ${wis.length}건 합산 세금계산서 발행`}
                                       </button>
                                     </div>
                                     <div style={{ marginTop: 6, fontSize: 10, color: "#6b7280" }}>

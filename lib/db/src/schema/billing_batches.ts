@@ -25,5 +25,22 @@ export const billingBatchItemsTable = pgTable("billing_batch_items", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+/** 누적 견적서 작업 항목 — 통번역 건별 수기 입력 */
+export const billingBatchWorkItemsTable = pgTable("billing_batch_work_items", {
+  id: serial("id").primaryKey(),
+  batchId: integer("batch_id").notNull().references(() => billingBatchesTable.id, { onDelete: "cascade" }),
+  sortOrder: integer("sort_order").notNull().default(0),
+  workDate: varchar("work_date", { length: 20 }),
+  projectName: varchar("project_name", { length: 500 }),
+  language: varchar("language", { length: 100 }),
+  description: text("description"),
+  quantity: numeric("quantity", { precision: 15, scale: 4 }).notNull().default("1"),
+  unitPrice: numeric("unit_price", { precision: 15, scale: 2 }).notNull().default("0"),
+  amount: numeric("amount", { precision: 15, scale: 2 }).notNull().default("0"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 export type BillingBatch = typeof billingBatchesTable.$inferSelect;
 export type BillingBatchItem = typeof billingBatchItemsTable.$inferSelect;
+export type BillingBatchWorkItem = typeof billingBatchWorkItemsTable.$inferSelect;
