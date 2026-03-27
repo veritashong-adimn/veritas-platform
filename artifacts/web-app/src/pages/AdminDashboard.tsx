@@ -1138,62 +1138,57 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
               </div>
             </div>
 
-            {/* ── 상세 필터 패널 (compact) ── */}
+            {/* ── 상세 필터 패널 ── */}
             {showAdvancedFilter && (
-              <div style={{ marginTop: 6, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+              <div style={{ marginTop: 4, borderTop: "1px solid #f0f0f0", paddingTop: 8, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
                 {/* [기간] */}
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 800, color: "#2563eb", textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5, borderBottom: "1.5px solid #dbeafe", paddingBottom: 3 }}>기간</div>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 6 }}>기간</div>
                   <div style={{ marginBottom: 5 }}>
-                    <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, marginBottom: 2 }}>생성일</div>
+                    <div style={{ fontSize: 10, color: "#b0b8c4", marginBottom: 2 }}>생성일</div>
                     <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
                       <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-                        style={{ ...inputStyle, flex: 1, padding: "4px 6px", fontSize: 11 }} />
-                      <span style={{ color: "#9ca3af", fontSize: 10 }}>~</span>
+                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
+                      <span style={{ color: "#d1d5db", fontSize: 10 }}>~</span>
                       <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-                        style={{ ...inputStyle, flex: 1, padding: "4px 6px", fontSize: 11 }} />
+                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
                     </div>
                   </div>
                   <div>
-                    <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, marginBottom: 2 }}>입금 예정일</div>
+                    <div style={{ fontSize: 10, color: "#b0b8c4", marginBottom: 2 }}>입금 예정일</div>
                     <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
                       <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
-                        style={{ ...inputStyle, flex: 1, padding: "4px 6px", fontSize: 11 }} />
-                      <span style={{ color: "#9ca3af", fontSize: 10 }}>~</span>
+                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
+                      <span style={{ color: "#d1d5db", fontSize: 10 }}>~</span>
                       <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
-                        style={{ ...inputStyle, flex: 1, padding: "4px 6px", fontSize: 11 }} />
+                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
                     </div>
                   </div>
                 </div>
                 {/* [담당] */}
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 800, color: "#2563eb", textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5, borderBottom: "1.5px solid #dbeafe", paddingBottom: 3 }}>담당</div>
-                  <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, marginBottom: 2 }}>담당자</div>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 6 }}>담당</div>
                   <select value={assignedAdminFilter} onChange={e => setAssignedAdminFilter(e.target.value)}
-                    style={{ ...inputStyle, width: "100%", padding: "5px 8px", fontSize: 11, cursor: "pointer" }}>
+                    style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11, cursor: "pointer" }}>
                     <option value="all">전체 담당자</option>
                     {adminUsers.map(a => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
                   </select>
                 </div>
                 {/* [견적/청구] */}
                 <div>
-                  <div style={{ fontSize: 10, fontWeight: 800, color: "#2563eb", textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5, borderBottom: "1.5px solid #dbeafe", paddingBottom: 3 }}>견적 / 청구</div>
+                  <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 6 }}>견적 / 청구</div>
                   <div style={{ marginBottom: 5 }}>
-                    <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, marginBottom: 2 }}>견적 유형</div>
                     <select value={projectQuoteTypeFilter} onChange={e => { setProjectQuoteTypeFilter(e.target.value); setProjectPage(1); }}
-                      style={{ ...inputStyle, width: "100%", padding: "5px 8px", fontSize: 11 }}>
-                      <option value="all">전체</option>
+                      style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11, marginBottom: 4 }}>
+                      <option value="all">견적 유형 전체</option>
                       <option value="b2b_standard">B2B 표준</option>
                       <option value="b2c_prepaid">선입금</option>
                       <option value="prepaid_deduction">선입금 차감</option>
                       <option value="accumulated_batch">누적 견적</option>
                     </select>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, marginBottom: 2 }}>청구 방식</div>
                     <select value={projectBillingTypeFilter} onChange={e => { setProjectBillingTypeFilter(e.target.value); setProjectPage(1); }}
-                      style={{ ...inputStyle, width: "100%", padding: "5px 8px", fontSize: 11 }}>
-                      <option value="all">전체</option>
+                      style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11 }}>
+                      <option value="all">청구 방식 전체</option>
                       <option value="postpaid_per_project">건별 후불</option>
                       <option value="prepaid_wallet">선입금 지갑</option>
                       <option value="monthly_billing">월 청구</option>
