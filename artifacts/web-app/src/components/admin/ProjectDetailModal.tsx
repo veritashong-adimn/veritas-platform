@@ -93,6 +93,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [quoteTaxDocType, setQuoteTaxDocType] = useState<"tax_invoice" | "bill">("tax_invoice");
   const [quoteTaxCategory, setQuoteTaxCategory] = useState<"normal" | "zero_rated" | "consignment" | "consignment_zero_rated">("normal");
   const [quoteType, setQuoteType] = useState<"b2b_standard" | "b2c_prepaid" | "prepaid_deduction" | "accumulated_batch">("b2b_standard");
+  const [quoteBillingType, setQuoteBillingType] = useState<string>("postpaid_per_project");
+  const changeQuoteType = (val: typeof quoteType) => {
+    setQuoteType(val);
+    if (val === "accumulated_batch") setQuoteBillingType("monthly_billing");
+    else if (val === "prepaid_deduction") setQuoteBillingType("prepaid_wallet");
+  };
   const [showQuoteForm, setShowQuoteForm] = useState(false);
   const [creatingQuote, setCreatingQuote] = useState(false);
   type QuoteItemForm = { productName: string; unit: string; quantity: string; unitPrice: string; taxRate: "0" | "0.1" };
@@ -1406,8 +1412,16 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                               <td style={tdSt}><input value={editWI.projectName} onChange={e => setEditWI(p => ({ ...p, projectName: e.target.value }))} style={inpSt} placeholder="프로젝트명" /></td>
                                               <td style={tdSt}><input value={editWI.language} onChange={e => setEditWI(p => ({ ...p, language: e.target.value }))} style={inpSt} placeholder="KO→EN" /></td>
                                               <td style={tdSt}><input value={editWI.description} onChange={e => setEditWI(p => ({ ...p, description: e.target.value }))} style={inpSt} placeholder="내용" /></td>
-                                              <td style={{ ...tdSt, textAlign: "right" }}><input type="number" value={editWI.quantity} onChange={e => setEditWI(p => ({ ...p, quantity: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} /></td>
-                                              <td style={{ ...tdSt, textAlign: "right" }}><input type="number" value={editWI.unitPrice} onChange={e => setEditWI(p => ({ ...p, unitPrice: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} /></td>
+                                              <td style={{ ...tdSt, textAlign: "right" }}><input type="number" value={editWI.quantity} onChange={e => {
+                                                const qty = parseFloat(e.target.value) || 0;
+                                                const price = parseFloat(editWI.unitPrice) || 0;
+                                                setEditWI(p => ({ ...p, quantity: e.target.value, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
+                                              }} style={{ ...inpSt, textAlign: "right" }} /></td>
+                                              <td style={{ ...tdSt, textAlign: "right" }}><input type="number" value={editWI.unitPrice} onChange={e => {
+                                                const price = parseFloat(e.target.value) || 0;
+                                                const qty = parseFloat(editWI.quantity) || 0;
+                                                setEditWI(p => ({ ...p, unitPrice: e.target.value, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
+                                              }} style={{ ...inpSt, textAlign: "right" }} /></td>
                                               <td style={{ ...tdSt, textAlign: "right" }}><input type="number" value={editWI.amount} onChange={e => setEditWI(p => ({ ...p, amount: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} placeholder="자동" /></td>
                                               <td style={{ ...tdSt, textAlign: "center" }}>
                                                 <button type="button" onClick={() => saveWorkItem(batchData.id, w.id, editWI)} disabled={activeBatchOp}
@@ -1445,8 +1459,16 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                           <td style={tdSt}><input value={newWI.projectName} onChange={e => setNewWI(p => ({ ...p, projectName: e.target.value }))} style={inpSt} placeholder="프로젝트명" /></td>
                                           <td style={tdSt}><input value={newWI.language} onChange={e => setNewWI(p => ({ ...p, language: e.target.value }))} style={inpSt} placeholder="KO→EN" /></td>
                                           <td style={tdSt}><input value={newWI.description} onChange={e => setNewWI(p => ({ ...p, description: e.target.value }))} style={inpSt} placeholder="내용" /></td>
-                                          <td style={{ ...tdSt }}><input type="number" value={newWI.quantity} onChange={e => setNewWI(p => ({ ...p, quantity: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} /></td>
-                                          <td style={{ ...tdSt }}><input type="number" value={newWI.unitPrice} onChange={e => setNewWI(p => ({ ...p, unitPrice: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} placeholder="단가" /></td>
+                                          <td style={{ ...tdSt }}><input type="number" value={newWI.quantity} onChange={e => {
+                                            const qty = parseFloat(e.target.value) || 0;
+                                            const price = parseFloat(newWI.unitPrice) || 0;
+                                            setNewWI(p => ({ ...p, quantity: e.target.value, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
+                                          }} style={{ ...inpSt, textAlign: "right" }} /></td>
+                                          <td style={{ ...tdSt }}><input type="number" value={newWI.unitPrice} onChange={e => {
+                                            const price = parseFloat(e.target.value) || 0;
+                                            const qty = parseFloat(newWI.quantity) || 0;
+                                            setNewWI(p => ({ ...p, unitPrice: e.target.value, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
+                                          }} style={{ ...inpSt, textAlign: "right" }} placeholder="단가" /></td>
                                           <td style={{ ...tdSt }}><input type="number" value={newWI.amount} onChange={e => setNewWI(p => ({ ...p, amount: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} placeholder="(수량×단가)" /></td>
                                           <td style={{ ...tdSt, textAlign: "center" }}>
                                             <button type="button" onClick={() => addWorkItem(batchData.id, newWI)} disabled={activeBatchOp}
@@ -1544,7 +1566,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
                           <label style={{ fontSize: 10, fontWeight: 700, color: "#1e3a8a", display: "block", marginBottom: 3 }}>견적서 유형 *</label>
-                          <select value={quoteType} onChange={e => setQuoteType(e.target.value as typeof quoteType)}
+                          <select value={quoteType} onChange={e => changeQuoteType(e.target.value as typeof quoteType)}
                             style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box", borderColor: "#93c5fd", background: "#eff6ff" }}>
                             <option value="b2b_standard">B2B 일반 견적서</option>
                             <option value="b2c_prepaid">B2C 선입금 견적서</option>
@@ -1556,12 +1578,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           <label style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", display: "block", marginBottom: 3 }}>
                             청구 방식 (거래처 기본: <span style={{ color: "#1d4ed8" }}>{companyBillingType === "prepaid_wallet" ? "선입금 차감" : companyBillingType === "monthly_billing" ? "월 청구" : "건별 후불"}</span>)
                           </label>
-                          <select defaultValue={companyBillingType}
-                            style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box", borderColor: "#e2e8f0" }}>
-                            <option value="postpaid_per_project">건별 후불</option>
-                            <option value="prepaid_wallet">선입금 차감</option>
-                            <option value="monthly_billing">월 청구</option>
-                          </select>
+                          {quoteType === "accumulated_batch" ? (
+                            <div style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, background: "#ecfdf5", borderColor: "#6ee7b7", color: "#065f46", fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+                              🗂️ 월 청구 <span style={{ fontSize: 9, color: "#6b7280", fontWeight: 400 }}>(누적 견적 고정)</span>
+                            </div>
+                          ) : (
+                            <select value={quoteBillingType || companyBillingType} onChange={e => setQuoteBillingType(e.target.value)}
+                              style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box", borderColor: "#e2e8f0" }}>
+                              <option value="postpaid_per_project">건별 후불</option>
+                              <option value="prepaid_wallet">선입금 차감</option>
+                              <option value="monthly_billing">월 청구</option>
+                            </select>
+                          )}
                         </div>
                       </div>
 
@@ -1711,7 +1739,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         {canQuote && hasQuotes && !showQuoteForm && (
                           <button onClick={() => {
                             const existingQt = (detail.quotes[0] as any)?.quoteType;
-                            if (existingQt) setQuoteType(existingQt as typeof quoteType);
+                            if (existingQt) changeQuoteType(existingQt as typeof quoteType);
+                            const existingBt = (detail.quotes[0] as any)?.billingType;
+                            if (existingBt) setQuoteBillingType(existingBt);
                             setShowQuoteForm(true);
                           }}
                             style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#fdf4ff", border: "1px solid #d8b4fe", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>

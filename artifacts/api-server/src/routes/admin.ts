@@ -1424,7 +1424,7 @@ router.post("/admin/billing-batches/:batchId/issue", ...adminGuard, async (req, 
       const [q] = await tx.insert(quotesTable).values({
         projectId,
         price: String(totalAmount),
-        status: "draft",
+        status: "pending",
         quoteType: "accumulated_batch" as string,
         billingType: "monthly_billing" as string,
         batchItemCount: workItems.length > 0 ? workItems.length : legacyItems.length,
