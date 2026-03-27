@@ -1073,7 +1073,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
           {/* ══════════════════════════════════════════
                필터 영역 (sticky) 
           ══════════════════════════════════════════ */}
-          <div style={{ position: "sticky", top: 0, zIndex: 30, background: "#fff", paddingBottom: 8, marginBottom: 2 }}>
+          <div style={{ position: "sticky", top: 0, zIndex: 30, background: "#fff", paddingBottom: 8, marginBottom: 18 }}>
 
             {/* ── 검색 바 ── */}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
@@ -1101,8 +1101,8 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
             {/* ── 상태 필터 카드 ── */}
             <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 12px", marginBottom: 5 }}>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                <span style={{ fontSize: 10, fontWeight: 800, color: "#475569", letterSpacing: "0.6px", textTransform: "uppercase", minWidth: 36, marginRight: 2 }}>상태</span>
-                <div style={{ width: 1, height: 14, background: "#cbd5e1", marginRight: 4 }} />
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#374151", letterSpacing: "0.3px", minWidth: 36, marginRight: 2 }}>상태</span>
+                <div style={{ width: 1, height: 14, background: "#d1d5db", marginRight: 4 }} />
                 <FilterPill label="전체" active={projectFilter === "all"} onClick={() => { setProjectFilter("all"); setProjectPage(1); }} />
                 {ALL_PROJECT_STATUSES.map(s => (
                   <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
@@ -1114,8 +1114,8 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
             {/* ── 재무 필터 카드 ── */}
             <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 12px" }}>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                <span style={{ fontSize: 10, fontWeight: 800, color: "#475569", letterSpacing: "0.6px", textTransform: "uppercase", minWidth: 36, marginRight: 2 }}>재무</span>
-                <div style={{ width: 1, height: 14, background: "#cbd5e1", marginRight: 4 }} />
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#374151", letterSpacing: "0.3px", minWidth: 36, marginRight: 2 }}>재무</span>
+                <div style={{ width: 1, height: 14, background: "#d1d5db", marginRight: 4 }} />
                 {[
                   { id: "all",                     label: "전체",        activeBg: "#475569", activeColor: "#fff" },
                   { id: "unbilled",                label: "미청구",      activeBg: "#d97706", activeColor: "#fff" },
