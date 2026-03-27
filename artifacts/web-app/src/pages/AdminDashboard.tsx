@@ -1217,7 +1217,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                     <table style={{ width: "100%", borderCollapse: "collapse" }}>
                       <thead>
                         <tr style={{ background: "#f8fafc" }}>
-                          {["ID","제목","거래처 · 담당자","상태","견적","재무","생성일","액션"].map(h => (
+                          {["ID","프로젝트","거래처 · 담당자","상태 / 재무","등록일","액션"].map(h => (
                             <th key={h} style={{ ...tableTh, background: "transparent", fontSize: 11, letterSpacing: "0.2px" }}>{h}</th>
                           ))}
                         </tr>
@@ -1244,37 +1244,55 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                             accumulated_batch:{ label: "누적",  bg: "#dbeafe", color: "#1e40af" },
                           };
                           const qs = qt ? QUOTE_STYLE[qt] : null;
+                          const chipStyle = (bg: string, color: string): React.CSSProperties => ({
+                            display: "inline-block", padding: "2px 7px", borderRadius: 10,
+                            fontSize: 11, fontWeight: 600, lineHeight: "18px",
+                            whiteSpace: "nowrap", background: bg, color,
+                          });
                           return (
                             <tr key={p.id}
                               onClick={() => openDetail(p.id)}
                               style={{ cursor: "pointer", transition: "background 0.1s" }}
                               onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
                               onMouseLeave={e => (e.currentTarget.style.background = "")}>
-                              <td style={{ ...tableTd, color: "#c0c8d4", fontSize: 12, width: 44 }}>#{p.id}</td>
-                              <td style={{ ...tableTd, maxWidth: 220 }}>
+
+                              {/* ID */}
+                              <td style={{ ...tableTd, color: "#d1d5db", fontSize: 11, width: 40 }}>#{p.id}</td>
+
+                              {/* 프로젝트 제목 + 이메일 */}
+                              <td style={{ ...tableTd, maxWidth: 240 }}>
                                 <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 600, color: "#111827" }}>{p.title}</div>
-                                {p.customerEmail && <div style={{ fontSize: 11, color: "#b0b8c4", fontWeight: 400, marginTop: 1 }}>{p.customerEmail}</div>}
+                                {p.customerEmail && <div style={{ fontSize: 11, color: "#c0c8d4", marginTop: 1 }}>{p.customerEmail}</div>}
                               </td>
-                              <td style={{ ...tableTd, fontSize: 12 }}>
-                                <div style={{ fontWeight: 500, color: "#374151" }}>{p.companyName ?? "-"}</div>
-                                {(p as any).contactName && <div style={{ fontSize: 11, color: "#b0b8c4", marginTop: 1 }}>{(p as any).contactName}</div>}
+
+                              {/* 거래처 · 담당자 (한 줄) */}
+                              <td style={{ ...tableTd, fontSize: 12, color: "#4b5563", whiteSpace: "nowrap" }}>
+                                {p.companyName ?? "-"}
+                                {(p as any).contactName && (
+                                  <span style={{ color: "#c0c8d4", margin: "0 4px" }}>·</span>
+                                )}
+                                {(p as any).contactName && <span style={{ color: "#9ca3af" }}>{(p as any).contactName}</span>}
                               </td>
-                              <td style={tableTd}><StatusBadge status={p.status} /></td>
-                              <td style={tableTd}>
-                                {qs ? (
-                                  <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", lineHeight: "18px", background: qs.bg, color: qs.color }}>{qs.label}</span>
-                                ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>-</span>}
+
+                              {/* 상태 / 견적 / 재무 — 한 셀 통합 */}
+                              <td style={{ ...tableTd, minWidth: 180 }}>
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+                                  <StatusBadge status={p.status} />
+                                  {qs && <span style={chipStyle(qs.bg, qs.color)}>{qs.label}</span>}
+                                  {(p as any).hasPaid
+                                    ? <span style={chipStyle("#dcfce7", "#15803d")}>결제완료</span>
+                                    : (p as any).hasQuote
+                                      ? <span style={chipStyle("#fef3c7", "#92400e")}>미수금</span>
+                                      : null}
+                                </div>
                               </td>
-                              <td style={tableTd}>
-                                {(p as any).hasPaid ? (
-                                  <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, lineHeight: "18px", background: "#dcfce7", color: "#15803d", whiteSpace: "nowrap" }}>결제완료</span>
-                                ) : (p as any).hasQuote ? (
-                                  <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, lineHeight: "18px", background: "#fef3c7", color: "#92400e", whiteSpace: "nowrap" }}>미수금</span>
-                                ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>-</span>}
-                              </td>
-                              <td style={{ ...tableTd, fontSize: 11, color: "#b0b8c4", whiteSpace: "nowrap" }}>
+
+                              {/* 등록일 */}
+                              <td style={{ ...tableTd, fontSize: 11, color: "#c0c8d4", whiteSpace: "nowrap" }}>
                                 {new Date(p.createdAt).toLocaleDateString("ko-KR")}
                               </td>
+
+                              {/* 액션 */}
                               <td style={{ ...tableTd, width: 130 }} onClick={e => e.stopPropagation()}>
                                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                                   <button
