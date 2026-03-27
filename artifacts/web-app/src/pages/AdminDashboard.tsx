@@ -654,43 +654,60 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
     borderBottom: "1px solid #f3f4f6", verticalAlign: "middle",
   };
 
-  const SIDEBAR_GROUPS = [
+  const SIDEBAR_GROUPS: { label: string; accentColor: string; isDashboard?: boolean; items: { id: string; label: string; icon: string; iconColor?: string }[] }[] = [
     {
-      label: "운영관리",
+      label: "대시보드",
+      accentColor: "#2563eb",
+      isDashboard: true,
       items: [
         { id: "dashboard", label: "대시보드", icon: "◉" },
-        { id: "projects", label: "프로젝트", icon: "📋" },
-        { id: "payments", label: "결제", icon: "💳" },
-        { id: "tasks", label: "작업", icon: "⚙️" },
-        { id: "settlements", label: "정산", icon: "📊" },
-        { id: "prepaid", label: "선입금 현황", icon: "💼" },
-        { id: "billing", label: "누적 청구", icon: "🗂️" },
       ],
     },
     {
-      label: "사용자/고객",
+      label: "프로젝트 관리",
+      accentColor: "#3b82f6",
       items: [
-        { id: "users", label: "사용자관리", icon: "👤" },
-        { id: "customers", label: "고객관리", icon: "🏠" },
+        { id: "projects", label: "프로젝트", icon: "📋" },
+        { id: "tasks", label: "작업", icon: "⚙️" },
+      ],
+    },
+    {
+      label: "재무·정산",
+      accentColor: "#10b981",
+      items: [
+        { id: "prepaid", label: "선입금 관리", icon: "💰", iconColor: "#10b981" },
+        { id: "payments", label: "결제", icon: "💳", iconColor: "#10b981" },
+        { id: "billing", label: "누적 청구", icon: "📑", iconColor: "#10b981" },
+        { id: "settlements", label: "정산", icon: "📊", iconColor: "#10b981" },
+      ],
+    },
+    {
+      label: "고객·거래처",
+      accentColor: "#8b5cf6",
+      items: [
         { id: "companies", label: "거래처", icon: "🏢" },
         { id: "contacts", label: "담당자", icon: "📇" },
+        { id: "customers", label: "고객관리", icon: "🏠" },
       ],
     },
     {
-      label: "번역/단가",
+      label: "리소스",
+      accentColor: "#f59e0b",
       items: [
         { id: "translators", label: "번역사", icon: "🌐" },
-        { id: "products", label: "상품/단가", icon: "💰" },
+        { id: "products", label: "상품/단가", icon: "🏷️" },
       ],
     },
     {
-      label: "기타",
+      label: "시스템",
+      accentColor: "#6b7280",
       items: [
+        { id: "users", label: "사용자관리", icon: "👤" },
         { id: "board", label: "게시판", icon: "📌" },
         { id: "test", label: "운영 테스트", icon: "🧪" },
       ],
     },
-  ] as const;
+  ];
 
   const PAGE_TITLE: Record<string, string> = {
     dashboard: "대시보드",
@@ -706,8 +723,8 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
     products: "상품/단가",
     board: "게시판",
     test: "운영 테스트",
-    prepaid: "선입금 현황",
-    billing: "누적 청구 관리",
+    prepaid: "선입금 관리",
+    billing: "누적 청구",
   };
 
   return (
@@ -839,32 +856,51 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
           </div>
 
           {/* 메뉴 그룹 */}
-          <nav style={{ flex: 1, overflowY: "auto", padding: "12px 0" }}>
-            {SIDEBAR_GROUPS.map(group => (
-              <div key={group.label}>
-                <div style={{ padding: "8px 20px 4px", fontSize: 10, fontWeight: 700, color: "#5a6478", textTransform: "uppercase", letterSpacing: "0.8px", whiteSpace: "nowrap" }}>
-                  {group.label}
-                </div>
+          <nav style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
+            {SIDEBAR_GROUPS.map((group, gi) => (
+              <div key={group.label} style={{ marginBottom: group.isDashboard ? 4 : 2 }}>
+                {!group.isDashboard && (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 6,
+                    padding: "10px 20px 3px 16px",
+                    borderLeft: `3px solid ${group.accentColor}`,
+                    marginTop: gi > 0 ? 6 : 0,
+                  }}>
+                    <span style={{ fontSize: 9, fontWeight: 700, color: group.accentColor, textTransform: "uppercase", letterSpacing: "0.9px", whiteSpace: "nowrap" }}>
+                      {group.label}
+                    </span>
+                  </div>
+                )}
                 {group.items.map(item => {
                   const isActive = adminTab === item.id;
+                  const hasIconColor = !!(item as { iconColor?: string }).iconColor;
+                  const iconColor = (item as { iconColor?: string }).iconColor;
                   return (
                     <button
                       key={item.id}
                       onClick={() => setAdminTab(item.id as typeof adminTab)}
                       style={{
                         display: "flex", alignItems: "center", gap: 10,
-                        width: "100%", padding: "8px 20px", border: "none", cursor: "pointer",
-                        background: isActive ? "#2563eb" : "transparent",
+                        width: "100%", padding: "8px 20px 8px 20px", border: "none", cursor: "pointer",
+                        background: isActive ? group.accentColor : "transparent",
                         color: isActive ? "#fff" : "#c1c8d4",
                         fontSize: 13, fontWeight: isActive ? 600 : 400,
                         textAlign: "left", whiteSpace: "nowrap",
                         borderRadius: 0, transition: "background 0.12s, color 0.12s",
+                        borderLeft: isActive ? "none" : hasIconColor && !isActive ? `3px solid transparent` : "none",
                       }}
-                      onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "#2d3547"; }}
-                      onMouseLeave={e => { if (!isActive) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                      onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLButtonElement).style.background = "#2d3547"; } }}
+                      onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; } }}
                     >
-                      <span style={{ fontSize: 15, lineHeight: 1, flexShrink: 0 }}>{item.icon}</span>
-                      <span>{item.label}</span>
+                      <span style={{
+                        fontSize: 15, lineHeight: 1, flexShrink: 0,
+                        filter: hasIconColor && !isActive ? `drop-shadow(0 0 3px ${iconColor}88)` : "none",
+                      }}>
+                        {item.icon}
+                      </span>
+                      <span style={{ color: isActive ? "#fff" : hasIconColor && !isActive ? "#a7f3d0" : "#c1c8d4" }}>
+                        {item.label}
+                      </span>
                     </button>
                   );
                 })}
