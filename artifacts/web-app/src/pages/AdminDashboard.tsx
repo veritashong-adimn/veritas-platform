@@ -1070,73 +1070,113 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
             <GhostBtn onClick={() => handleExportCSV("projects")} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
           </div>
         }>
-          {/* ── 상단 검색 + 빠른 필터 ── */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+          {/* ── 검색 바 ── */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
             <input
               value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
               placeholder="제목, 이메일, 거래처, 담당자 검색..."
-              style={{ ...inputStyle, maxWidth: 300, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+              style={{ ...inputStyle, maxWidth: 320, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
               onKeyDown={e => e.key === "Enter" && fetchAll()}
             />
             <PrimaryBtn onClick={fetchAll} disabled={loading} style={{ padding: "8px 14px", fontSize: 13 }}>
               {loading ? "검색 중..." : "검색"}
             </PrimaryBtn>
             {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all" || projectQuickFilter !== "all" || projectQuoteTypeFilter !== "all" || projectBillingTypeFilter !== "all" || projectPaymentDueDateFrom || projectPaymentDueDateTo || projectCompanyIdFilter) && (
-              <GhostBtn onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectQuickFilter("all"); setProjectQuoteTypeFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }} style={{ padding: "8px 10px", fontSize: 13 }}>
-                초기화
-              </GhostBtn>
+              <button
+                onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectQuickFilter("all"); setProjectQuoteTypeFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }}
+                style={{ padding: "8px 12px", fontSize: 12, fontWeight: 700, background: "#fef2f2", color: "#dc2626", border: "1px solid #fecaca", borderRadius: 8, cursor: "pointer" }}>
+                ✕ 필터 초기화
+              </button>
             )}
             <GhostBtn onClick={() => setShowAdvancedFilter(v => !v)} style={{ marginLeft: "auto", padding: "8px 12px", fontSize: 12 }}>
               {showAdvancedFilter ? "상세필터 접기 ▲" : "⚙ 상세필터 ▼"}
             </GhostBtn>
           </div>
 
-          {/* 빠른 필터 칩 */}
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
-            {[
-              { id: "all", label: "전체" },
-              { id: "unbilled", label: "미청구" },
-              { id: "unpaid", label: "미수금" },
-              { id: "prepaid_deduction", label: "선입금 차감" },
-              { id: "has_prepaid_balance", label: "잔액 남음" },
-              { id: "accumulated_in_progress", label: "누적 진행중" },
-            ].map(f => (
-              <button key={f.id} onClick={() => { setProjectQuickFilter(f.id); setProjectPage(1); }}
-                style={{ padding: "5px 12px", borderRadius: 16, border: "1px solid", cursor: "pointer", fontSize: 12, fontWeight: 500, transition: "all 0.12s",
-                  background: projectQuickFilter === f.id ? "#2563eb" : "#fff",
-                  borderColor: projectQuickFilter === f.id ? "#2563eb" : "#d1d5db",
-                  color: projectQuickFilter === f.id ? "#fff" : "#374151" }}>
-                {f.label}
-              </button>
-            ))}
+          {/* ── 필터 그룹 영역 ── */}
+          <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 14px", marginBottom: 10 }}>
+            {/* 상태 필터 그룹 */}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#374151", minWidth: 42, letterSpacing: "0.3px" }}>상태</span>
+              <div style={{ width: 1, height: 16, background: "#d1d5db", marginRight: 2 }} />
+              <FilterPill label="전체" active={projectFilter === "all"} onClick={() => { setProjectFilter("all"); setProjectPage(1); }} />
+              {ALL_PROJECT_STATUSES.map(s => (
+                <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
+                  active={projectFilter === s} onClick={() => { setProjectFilter(s); setProjectPage(1); }} />
+              ))}
+            </div>
+            {/* 구분선 */}
+            <div style={{ height: 1, background: "#e5e7eb", marginBottom: 8 }} />
+            {/* 재무 필터 그룹 */}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#374151", minWidth: 42, letterSpacing: "0.3px" }}>재무</span>
+              <div style={{ width: 1, height: 16, background: "#d1d5db", marginRight: 2 }} />
+              {[
+                { id: "all",                    label: "전체",       color: "#374151", bg: "#f3f4f6", activeBg: "#2563eb", activeColor: "#fff" },
+                { id: "unbilled",               label: "미청구",     color: "#92400e", bg: "#fef3c7", activeBg: "#d97706", activeColor: "#fff" },
+                { id: "unpaid",                 label: "미수금",     color: "#991b1b", bg: "#fef2f2", activeBg: "#dc2626", activeColor: "#fff" },
+                { id: "prepaid_deduction",      label: "선입금 차감", color: "#5b21b6", bg: "#ede9fe", activeBg: "#7c3aed", activeColor: "#fff" },
+                { id: "has_prepaid_balance",    label: "잔액 남음",  color: "#065f46", bg: "#d1fae5", activeBg: "#059669", activeColor: "#fff" },
+                { id: "accumulated_in_progress",label: "누적 진행중", color: "#1e40af", bg: "#dbeafe", activeBg: "#2563eb", activeColor: "#fff" },
+              ].map(f => {
+                const isActive = projectQuickFilter === f.id;
+                return (
+                  <button key={f.id} onClick={() => { setProjectQuickFilter(f.id); setProjectPage(1); }}
+                    style={{ padding: "4px 11px", borderRadius: 14, border: "1px solid transparent", cursor: "pointer", fontSize: 12, fontWeight: 600, transition: "all 0.12s",
+                      background: isActive ? f.activeBg : f.bg,
+                      color: isActive ? f.activeColor : f.color,
+                      borderColor: isActive ? f.activeBg : "transparent" }}>
+                    {f.label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
-          {/* ── 상세 필터 패널 (접기/펼치기) ── */}
+          {/* ── 상세 필터 패널 ── */}
           {showAdvancedFilter && (
-            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: "14px 16px", marginBottom: 12 }}>
-              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 12 }}>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>생성일 범위</div>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10, padding: "14px 16px", marginBottom: 12, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
+              {/* [기간] */}
+              <div style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: "#2563eb", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>기간</div>
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>생성일</div>
+                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                     <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-                      style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 12 }} />
-                    <span style={{ color: "#9ca3af" }}>~</span>
+                      style={{ ...inputStyle, flex: 1, padding: "6px 8px", fontSize: 12 }} />
+                    <span style={{ color: "#9ca3af", fontSize: 11 }}>~</span>
                     <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-                      style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 12 }} />
+                      style={{ ...inputStyle, flex: 1, padding: "6px 8px", fontSize: 12 }} />
                   </div>
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>담당자</div>
-                  <select value={assignedAdminFilter} onChange={e => setAssignedAdminFilter(e.target.value)}
-                    style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 12, cursor: "pointer" }}>
-                    <option value="all">전체 담당자</option>
-                    {adminUsers.map(a => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
-                  </select>
+                  <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>입금 예정일</div>
+                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
+                      style={{ ...inputStyle, flex: 1, padding: "6px 8px", fontSize: 12 }} />
+                    <span style={{ color: "#9ca3af", fontSize: 11 }}>~</span>
+                    <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
+                      style={{ ...inputStyle, flex: 1, padding: "6px 8px", fontSize: 12 }} />
+                  </div>
                 </div>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>견적서 유형</div>
+              </div>
+              {/* [담당] */}
+              <div style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: "#2563eb", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>담당</div>
+                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>담당자</div>
+                <select value={assignedAdminFilter} onChange={e => setAssignedAdminFilter(e.target.value)}
+                  style={{ ...inputStyle, width: "100%", padding: "7px 10px", fontSize: 12, cursor: "pointer" }}>
+                  <option value="all">전체 담당자</option>
+                  {adminUsers.map(a => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
+                </select>
+              </div>
+              {/* [견적/청구] */}
+              <div style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 12px" }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: "#2563eb", textTransform: "uppercase", letterSpacing: "0.8px", marginBottom: 8 }}>견적 / 청구</div>
+                <div style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>견적 유형</div>
                   <select value={projectQuoteTypeFilter} onChange={e => { setProjectQuoteTypeFilter(e.target.value); setProjectPage(1); }}
-                    style={{ ...inputStyle, width: 140, padding: "7px 10px", fontSize: 12 }}>
+                    style={{ ...inputStyle, width: "100%", padding: "7px 10px", fontSize: 12 }}>
                     <option value="all">전체</option>
                     <option value="b2b_standard">B2B 표준</option>
                     <option value="b2c_prepaid">선입금</option>
@@ -1145,34 +1185,15 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                   </select>
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>청구 방식</div>
+                  <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 3 }}>청구 방식</div>
                   <select value={projectBillingTypeFilter} onChange={e => { setProjectBillingTypeFilter(e.target.value); setProjectPage(1); }}
-                    style={{ ...inputStyle, width: 140, padding: "7px 10px", fontSize: 12 }}>
+                    style={{ ...inputStyle, width: "100%", padding: "7px 10px", fontSize: 12 }}>
                     <option value="all">전체</option>
                     <option value="postpaid_per_project">건별 후불</option>
                     <option value="prepaid_wallet">선입금 지갑</option>
                     <option value="monthly_billing">월 청구</option>
                   </select>
                 </div>
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>입금 예정일</div>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
-                      style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 12 }} />
-                    <span style={{ color: "#9ca3af" }}>~</span>
-                    <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
-                      style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 12 }} />
-                  </div>
-                </div>
-              </div>
-              {/* 상태 필터 pills — 상세 필터 패널 내부 */}
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: "#6b7280" }}>상태:</span>
-                <FilterPill label="전체" active={projectFilter === "all"} onClick={() => { setProjectFilter("all"); setProjectPage(1); }} />
-                {ALL_PROJECT_STATUSES.map(s => (
-                  <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
-                    active={projectFilter === s} onClick={() => { setProjectFilter(s); setProjectPage(1); }} />
-                ))}
               </div>
             </div>
           )}
@@ -1255,13 +1276,8 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                                 <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "nowrap" }}>
                                   <button
                                     onClick={() => openDetail(p.id, action.section)}
-                                    style={action.primary ? primaryBtnStyle : action.green ? greenBtnStyle : secondaryBtnStyle}>
+                                    style={action.green ? greenBtnStyle : primaryBtnStyle}>
                                     {action.label}
-                                  </button>
-                                  <button
-                                    onClick={() => openDetail(p.id)}
-                                    style={{ ...secondaryBtnStyle, background: "#f3f4f6", color: "#6b7280" }}>
-                                    보기
                                   </button>
                                   {p.status !== "cancelled" && p.status !== "completed" && (
                                     <button
@@ -1274,7 +1290,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                                         if (res.ok) { setToast("프로젝트가 취소되었습니다."); fetchAll(); }
                                         else { const d = await res.json(); setToast(`오류: ${d.error}`); }
                                       }}
-                                      style={dangerBtnStyle}>
+                                      style={{ ...dangerBtnStyle, padding: "4px 7px" }}>
                                       취소
                                     </button>
                                   )}
