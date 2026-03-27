@@ -187,7 +187,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
   const [creatingProject, setCreatingProject] = useState(false);
 
   // modals
-  type DetailModalState = { id: number; initialSection?: "info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log"|"files" };
+  type DetailModalState = { id: number; initialSection?: "info"|"finance"|"work"|"settlement"|"history" };
   const [detailModal, setDetailModal] = useState<DetailModalState | null>(null);
   const openDetail = (id: number, initialSection?: DetailModalState["initialSection"]) => setDetailModal({ id, initialSection });
   const [paying, setPaying] = useState<number | null>(null);
@@ -1070,37 +1070,29 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
             <GhostBtn onClick={() => handleExportCSV("projects")} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
           </div>
         }>
-          {/* 검색 + 필터 */}
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+          {/* ── 상단 검색 + 빠른 필터 ── */}
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
             <input
               value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
               placeholder="제목, 이메일, 거래처, 담당자 검색..."
-              style={{ ...inputStyle, maxWidth: 280, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+              style={{ ...inputStyle, maxWidth: 300, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
               onKeyDown={e => e.key === "Enter" && fetchAll()}
             />
-            <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-              style={{ ...inputStyle, width: "auto", padding: "8px 10px", fontSize: 13 }} />
-            <span style={{ color: "#9ca3af", fontSize: 13 }}>~</span>
-            <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-              style={{ ...inputStyle, width: "auto", padding: "8px 10px", fontSize: 13 }} />
-            <select value={assignedAdminFilter} onChange={e => setAssignedAdminFilter(e.target.value)}
-              style={{ ...inputStyle, width: "auto", padding: "8px 10px", fontSize: 13, cursor: "pointer" }}>
-              <option value="all">전체 담당자</option>
-              {adminUsers.map(a => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
-            </select>
-            <PrimaryBtn onClick={fetchAll} disabled={loading} style={{ padding: "8px 16px", fontSize: 13 }}>
+            <PrimaryBtn onClick={fetchAll} disabled={loading} style={{ padding: "8px 14px", fontSize: 13 }}>
               {loading ? "검색 중..." : "검색"}
             </PrimaryBtn>
             {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all" || projectQuickFilter !== "all" || projectQuoteTypeFilter !== "all" || projectBillingTypeFilter !== "all" || projectPaymentDueDateFrom || projectPaymentDueDateTo || projectCompanyIdFilter) && (
-              <GhostBtn onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectQuickFilter("all"); setProjectQuoteTypeFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }} style={{ padding: "8px 12px", fontSize: 13 }}>
+              <GhostBtn onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectQuickFilter("all"); setProjectQuoteTypeFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }} style={{ padding: "8px 10px", fontSize: 13 }}>
                 초기화
               </GhostBtn>
             )}
+            <GhostBtn onClick={() => setShowAdvancedFilter(v => !v)} style={{ marginLeft: "auto", padding: "8px 12px", fontSize: 12 }}>
+              {showAdvancedFilter ? "상세필터 접기 ▲" : "⚙ 상세필터 ▼"}
+            </GhostBtn>
           </div>
 
-          {/* 빠른 필터 버튼 */}
+          {/* 빠른 필터 칩 */}
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
-            <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, marginRight: 4 }}>빠른 필터:</span>
             {[
               { id: "all", label: "전체" },
               { id: "unbilled", label: "미청구" },
@@ -1117,55 +1109,73 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                 {f.label}
               </button>
             ))}
-            <GhostBtn onClick={() => setShowAdvancedFilter(v => !v)} style={{ marginLeft: "auto", padding: "5px 12px", fontSize: 12 }}>
-              {showAdvancedFilter ? "상세필터 접기 ▲" : "상세필터 ▼"}
-            </GhostBtn>
           </div>
 
-          {/* 상세 필터 패널 */}
+          {/* ── 상세 필터 패널 (접기/펼치기) ── */}
           {showAdvancedFilter && (
-            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: "14px 16px", marginBottom: 14, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end" }}>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>견적서 유형</div>
-                <select value={projectQuoteTypeFilter} onChange={e => { setProjectQuoteTypeFilter(e.target.value); setProjectPage(1); }}
-                  style={{ ...inputStyle, width: 140, padding: "7px 10px", fontSize: 13 }}>
-                  <option value="all">전체</option>
-                  <option value="b2b_standard">B2B 표준</option>
-                  <option value="b2c_prepaid">선입금</option>
-                  <option value="prepaid_deduction">선입금 차감</option>
-                  <option value="accumulated_batch">누적 견적</option>
-                </select>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>청구 방식</div>
-                <select value={projectBillingTypeFilter} onChange={e => { setProjectBillingTypeFilter(e.target.value); setProjectPage(1); }}
-                  style={{ ...inputStyle, width: 150, padding: "7px 10px", fontSize: 13 }}>
-                  <option value="all">전체</option>
-                  <option value="postpaid_per_project">건별 후불</option>
-                  <option value="prepaid_wallet">선입금 지갑</option>
-                  <option value="monthly_billing">월 청구</option>
-                </select>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>입금 예정일</div>
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
-                    style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }} />
-                  <span style={{ color: "#9ca3af" }}>~</span>
-                  <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
-                    style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }} />
+            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: "14px 16px", marginBottom: 12 }}>
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>생성일 범위</div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                      style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 12 }} />
+                    <span style={{ color: "#9ca3af" }}>~</span>
+                    <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                      style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 12 }} />
+                  </div>
                 </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>담당자</div>
+                  <select value={assignedAdminFilter} onChange={e => setAssignedAdminFilter(e.target.value)}
+                    style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 12, cursor: "pointer" }}>
+                    <option value="all">전체 담당자</option>
+                    {adminUsers.map(a => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>견적서 유형</div>
+                  <select value={projectQuoteTypeFilter} onChange={e => { setProjectQuoteTypeFilter(e.target.value); setProjectPage(1); }}
+                    style={{ ...inputStyle, width: 140, padding: "7px 10px", fontSize: 12 }}>
+                    <option value="all">전체</option>
+                    <option value="b2b_standard">B2B 표준</option>
+                    <option value="b2c_prepaid">선입금</option>
+                    <option value="prepaid_deduction">선입금 차감</option>
+                    <option value="accumulated_batch">누적 견적</option>
+                  </select>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>청구 방식</div>
+                  <select value={projectBillingTypeFilter} onChange={e => { setProjectBillingTypeFilter(e.target.value); setProjectPage(1); }}
+                    style={{ ...inputStyle, width: 140, padding: "7px 10px", fontSize: 12 }}>
+                    <option value="all">전체</option>
+                    <option value="postpaid_per_project">건별 후불</option>
+                    <option value="prepaid_wallet">선입금 지갑</option>
+                    <option value="monthly_billing">월 청구</option>
+                  </select>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 4 }}>입금 예정일</div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
+                      style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 12 }} />
+                    <span style={{ color: "#9ca3af" }}>~</span>
+                    <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
+                      style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 12 }} />
+                  </div>
+                </div>
+              </div>
+              {/* 상태 필터 pills — 상세 필터 패널 내부 */}
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#6b7280" }}>상태:</span>
+                <FilterPill label="전체" active={projectFilter === "all"} onClick={() => { setProjectFilter("all"); setProjectPage(1); }} />
+                {ALL_PROJECT_STATUSES.map(s => (
+                  <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
+                    active={projectFilter === s} onClick={() => { setProjectFilter(s); setProjectPage(1); }} />
+                ))}
               </div>
             </div>
           )}
-
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-            <FilterPill label="전체" active={projectFilter === "all"} onClick={() => { setProjectFilter("all"); setProjectPage(1); }} />
-            {ALL_PROJECT_STATUSES.map(s => (
-              <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
-                active={projectFilter === s} onClick={() => { setProjectFilter(s); setProjectPage(1); }} />
-            ))}
-          </div>
 
           {loading ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
@@ -1191,15 +1201,15 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                       </thead>
                       <tbody>
                         {pagedProjects.map(p => {
-                          type SectionKey = "info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log"|"files";
+                          type SectionKey = "info"|"finance"|"work"|"settlement"|"history";
                           const ACTION_MAP: Record<string, { label: string; section: SectionKey; primary?: boolean; green?: boolean }> = {
-                            created:     { label: "견적 생성",   section: "settlement", primary: true },
-                            quoted:      { label: "견적 확인",   section: "settlement", primary: true },
-                            approved:    { label: "결제 등록",   section: "settlement", primary: true },
-                            paid:        { label: "번역사 배정", section: "translator", primary: true },
-                            matched:     { label: "작업 관리",   section: "translator" },
-                            in_progress: { label: "작업 관리",   section: "translator" },
-                            completed:   { label: "정산 확인",   section: "settlement", green: true },
+                            created:     { label: "견적 생성",   section: "finance",     primary: true },
+                            quoted:      { label: "견적 확인",   section: "finance",     primary: true },
+                            approved:    { label: "결제 등록",   section: "finance",     primary: true },
+                            paid:        { label: "번역사 배정", section: "work",        primary: true },
+                            matched:     { label: "작업 관리",   section: "work" },
+                            in_progress: { label: "작업 관리",   section: "work" },
+                            completed:   { label: "정산 확인",   section: "settlement",  green: true },
                             cancelled:   { label: "내용 보기",   section: "info" },
                           };
                           const action = ACTION_MAP[p.status] ?? { label: "상세보기", section: "info" as SectionKey };

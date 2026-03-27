@@ -51,7 +51,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   projectId: number; token: string; onClose: () => void;
   onRefresh: () => void; onToast: (msg: string) => void;
   adminList?: AdminUser[];
-  initialSection?: "info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log"|"files";
+  initialSection?: "info"|"finance"|"work"|"settlement"|"history";
 }) {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -68,7 +68,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [assigning, setAssigning] = useState<number | null>(null);
   const [showCandidates, setShowCandidates] = useState(false);
-  const [activeSection, setActiveSection] = useState<"info"|"company"|"translator"|"settlement"|"comms"|"notes"|"log"|"files">(initialSection ?? "info");
+  const [activeSection, setActiveSection] = useState<"info"|"finance"|"work"|"settlement"|"history">(initialSection ?? "info");
 
   type ProjectFile = { id: number; fileType: string; fileName: string; objectPath: string; fileSize: number | null; mimeType: string | null; createdAt: string; uploaderName: string | null; uploaderEmail: string | null };
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
@@ -374,7 +374,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     finally { setFilesLoading(false); }
   };
 
-  useEffect(() => { if (activeSection === "files") fetchFiles(); }, [activeSection]);
+  useEffect(() => { if (activeSection === "history") fetchFiles(); }, [activeSection]);
   useEffect(() => {
     if (quoteType === "accumulated_batch" && detail?.companyId) {
       loadActiveBatch(detail.companyId);
@@ -720,14 +720,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   });
 
   const sections: Array<{ key: typeof activeSection; label: string }> = [
-    { key: "info", label: "기본 정보" },
-    { key: "settlement", label: "견적/결제/정산" },
-    { key: "translator", label: "번역사" },
-    { key: "company", label: "거래처/담당자" },
-    { key: "files", label: `📎 파일 (${projectFiles.length})` },
-    { key: "comms", label: "커뮤니케이션" },
-    { key: "notes", label: "메모" },
-    { key: "log", label: "이벤트 로그" },
+    { key: "info", label: "기본정보" },
+    { key: "finance", label: "견적/결제" },
+    { key: "work", label: "작업" },
+    { key: "settlement", label: "정산" },
+    { key: "history", label: `기록${projectFiles.length > 0 ? ` (📎${projectFiles.length})` : ""}` },
   ];
 
   return (
@@ -962,8 +959,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               </>
             )}
 
-            {/* 거래처 / 담당자 */}
-            {activeSection === "company" && (
+            {/* 거래처 / 담당자 — 기본정보 탭 하단에 함께 표시 */}
+            {activeSection === "info" && (
               <>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                   <p style={sectionHd}>거래처 정보 <Opt /></p>
@@ -1003,8 +1000,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               </>
             )}
 
-            {/* 번역사 정보 */}
-            {activeSection === "translator" && (
+            {/* 작업 (번역사 배정 / 작업 관리) */}
+            {activeSection === "work" && (
               <>
                 {detail.tasks.length === 0 ? (
                   <div style={{ textAlign: "center", padding: "24px 0", color: "#9ca3af" }}>
@@ -1053,8 +1050,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               </>
             )}
 
-            {/* 견적/결제/정산 */}
-            {activeSection === "settlement" && (
+            {/* 견적/결제 탭 */}
+            {activeSection === "finance" && (
               <>
                 {/* 문서 출력 */}
                 <div style={{ background: "#f8fafc", borderRadius: 10, padding: "12px 14px", marginBottom: 16, border: "1px solid #e2e8f0", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -1914,13 +1911,45 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   );
                 })()}
 
-                {/* 정산 섹션 */}
+                {/* 정산 요약 카드 (견적/결제 탭 하단) */}
+                {(() => {
+                  const hasPaid = detail.payments.some((pm: any) => pm.status === "paid");
+                  const hasSettlement = detail.settlements.length > 0;
+                  return (
+                    <div style={{ background: hasSettlement ? "#f0fdf4" : "#f9fafb", border: `1px solid ${hasSettlement ? "#bbf7d0" : "#e5e7eb"}`, borderRadius: 10, padding: "12px 16px", marginTop: 16 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: hasSettlement ? 8 : 0 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: hasSettlement ? "#065f46" : "#6b7280" }}>
+                          📊 정산 {hasSettlement ? `(${detail.settlements.length}건)` : "— 미생성"}
+                        </span>
+                        <button onClick={() => setActiveSection("settlement")}
+                          style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, border: "1px solid #059669", background: "#fff", cursor: "pointer", color: "#059669", fontWeight: 600 }}>
+                          정산 탭으로 →
+                        </button>
+                      </div>
+                      {hasSettlement && detail.settlements.map((s: any) => (
+                        <div key={s.id} style={{ fontSize: 12, color: "#374151", display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          <span style={{ color: "#0891b2", fontWeight: 700 }}>총 {Number(s.totalAmount).toLocaleString()}원</span>
+                          <StatusBadge status={s.status} />
+                        </div>
+                      ))}
+                      {!hasSettlement && hasPaid && (
+                        <p style={{ margin: "4px 0 0", fontSize: 11, color: "#9ca3af" }}>결제 완료 후 정산 생성 가능</p>
+                      )}
+                    </div>
+                  );
+                })()}
+              </>
+            )}
+
+            {/* 정산 탭 */}
+            {activeSection === "settlement" && (
+              <>
                 {(() => {
                   const hasPaid = detail.payments.some((pm: any) => pm.status === "paid");
                   const hasSettlement = detail.settlements.length > 0;
                   return (
                     <>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, marginBottom: 4 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
                         <p style={{ ...sectionHd, margin: 0 }}>정산 ({detail.settlements.length})</p>
                         {hasPaid && !hasSettlement && (
                           <button onClick={handleCreateSettlement} disabled={creatingSettlement}
@@ -1944,14 +1973,20 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           </div>
                         </div>
                       ))}
+                      <div style={{ marginTop: 12 }}>
+                        <button onClick={() => setActiveSection("finance")}
+                          style={{ fontSize: 11, padding: "4px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb", cursor: "pointer", color: "#6b7280" }}>
+                          ← 견적/결제 탭으로
+                        </button>
+                      </div>
                     </>
                   );
                 })()}
               </>
             )}
 
-            {/* 파일 관리 */}
-            {activeSection === "files" && (
+            {/* 기록 탭 (파일 / 커뮤니케이션 / 메모 / 이벤트 로그) */}
+            {activeSection === "history" && (
               <>
                 {/* 업로드 영역 */}
                 <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: "16px 18px", marginBottom: 16 }}>
@@ -2045,14 +2080,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     </tbody>
                   </table>
                 )}
-              </>
-            )}
 
-            {/* 커뮤니케이션 */}
-            {activeSection === "comms" && (
-              <>
+                {/* 커뮤니케이션 */}
+                <p style={{ ...sectionHd, marginTop: 20 }}>커뮤니케이션</p>
                 {detail.projectCustomerId ? (
-                  <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
                     <select value={commType} onChange={e => setCommType(e.target.value as "email"|"phone"|"message")}
                       style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }}>
                       <option value="message">메시지</option>
@@ -2073,9 +2105,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   <p style={{ color: "#9ca3af", fontSize: 13, marginBottom: 8 }}>고객이 연결된 프로젝트에서만 커뮤니케이션 기록을 추가할 수 있습니다.</p>
                 )}
                 {(detail.communications ?? []).length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "16px 0" }}>커뮤니케이션 기록이 없습니다.</p>
+                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "10px 0" }}>커뮤니케이션 기록이 없습니다.</p>
                 ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 220, overflowY: "auto", marginBottom: 8 }}>
                     {(detail.communications ?? []).map(c => (
                       <div key={c.id} style={{ padding: "9px 12px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, alignItems: "center" }}>
@@ -2090,13 +2122,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     ))}
                   </div>
                 )}
-              </>
-            )}
 
-            {/* 메모 */}
-            {activeSection === "notes" && (
-              <>
-                <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+                {/* 메모 */}
+                <p style={{ ...sectionHd, marginTop: 16 }}>메모</p>
+                <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
                   <input
                     value={noteInput} onChange={e => setNoteInput(e.target.value)}
                     placeholder="메모 내용 입력..."
@@ -2108,9 +2137,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   </PrimaryBtn>
                 </div>
                 {(detail.notes ?? []).length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "16px 0" }}>메모가 없습니다.</p>
+                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>메모가 없습니다.</p>
                 ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto", marginBottom: 8 }}>
                     {(detail.notes ?? []).map(n => (
                       <div key={n.id} style={{ padding: "10px 12px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
@@ -2122,16 +2151,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     ))}
                   </div>
                 )}
-              </>
-            )}
 
-            {/* 이벤트 로그 */}
-            {activeSection === "log" && (
-              <>
+                {/* 이벤트 로그 */}
+                <p style={{ ...sectionHd, marginTop: 16 }}>이벤트 로그</p>
                 {detail.logs.length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "24px 0" }}>아직 이벤트 로그가 없습니다.</p>
+                  <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "16px 0" }}>아직 이벤트 로그가 없습니다.</p>
                 ) : (
-                  <div style={{ maxHeight: 420, overflowY: "auto", padding: "4px 0" }}>
+                  <div style={{ maxHeight: 320, overflowY: "auto", padding: "4px 0" }}>
                     {[...detail.logs].sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).map((log, idx, arr) => {
                       const info = getActionLabel(log.action);
                       const isLast = idx === arr.length - 1;
@@ -2139,7 +2165,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       try { if (log.metadata) metaObj = JSON.parse(log.metadata); } catch { /* noop */ }
                       return (
                         <div key={log.id} style={{ display: "flex", gap: 0, position: "relative" }}>
-                          {/* 세로선 + 아이콘 */}
                           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", width: 38, flexShrink: 0 }}>
                             <div style={{
                               width: 30, height: 30, borderRadius: "50%",
@@ -2149,24 +2174,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             }}>{info.dot}</div>
                             {!isLast && <div style={{ width: 2, flex: 1, minHeight: 16, background: "#e5e7eb" }} />}
                           </div>
-                          {/* 내용 */}
                           <div style={{ flex: 1, paddingLeft: 10, paddingBottom: isLast ? 0 : 16, paddingTop: 4 }}>
                             <p style={{ margin: "0 0 3px", fontSize: 13, fontWeight: 600, color: info.color }}>{info.ko}</p>
-                            {/* 메타데이터 (파일명 등) */}
                             {metaObj?.fileName && (
                               <p style={{ margin: "0 0 3px", fontSize: 12, color: "#374151", background: "#f9fafb", borderRadius: 4, padding: "2px 7px", display: "inline-block" }}>
                                 📄 {metaObj.fileName}
                               </p>
                             )}
                             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                              <span style={{ fontSize: 11, color: "#9ca3af" }}>
-                                {new Date(log.createdAt).toLocaleString("ko-KR")}
-                              </span>
+                              <span style={{ fontSize: 11, color: "#9ca3af" }}>{new Date(log.createdAt).toLocaleString("ko-KR")}</span>
                               {log.performedByEmail && (
-                                <span style={{
-                                  fontSize: 11, color: "#6b7280",
-                                  background: "#f3f4f6", borderRadius: 4, padding: "1px 7px",
-                                }}>
+                                <span style={{ fontSize: 11, color: "#6b7280", background: "#f3f4f6", borderRadius: 4, padding: "1px 7px" }}>
                                   👤 {log.performedByEmail}
                                 </span>
                               )}
