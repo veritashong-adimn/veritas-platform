@@ -56,6 +56,8 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
         contactName: contactAlias.name, companyName: companyAlias.name,
         divisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
         billingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.billingCompanyId})`,
+        payerCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.payerCompanyId})`,
+        requestingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.requestingCompanyId})`,
       })
       .from(projectsTable)
       .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))
@@ -231,6 +233,8 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
         payerCompanyId: projectsTable.payerCompanyId,
         divisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
         billingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.billingCompanyId})`,
+        payerCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.payerCompanyId})`,
+        requestingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.requestingCompanyId})`,
       })
       .from(projectsTable)
       .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))

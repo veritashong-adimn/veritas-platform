@@ -38,6 +38,9 @@ export type AdminProject = {
   financialStatus?: string | null;
   divisionName?: string | null;
   billingCompanyName?: string | null;
+  payerCompanyName?: string | null;
+  requestingCompanyName?: string | null;
+  requestingCompanyId?: number | null;
   requestingDivisionId?: number | null;
   billingCompanyId?: number | null;
   payerCompanyId?: number | null;

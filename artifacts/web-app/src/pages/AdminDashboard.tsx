@@ -1345,16 +1345,66 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                                 {p.customerEmail && <div style={{ fontSize: 11, color: "#c0c8d4", marginTop: 1 }}>{p.customerEmail}</div>}
                               </td>
 
-                              {/* 거래처 · 담당자 (+ 브랜드) */}
-                              <td style={{ ...tableTd, fontSize: 12, maxWidth: 180 }}>
-                                <div style={{ color: "#4b5563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                  {p.companyName ?? "-"}
-                                  {(p as any).contactName && <><span style={{ color: "#c0c8d4", margin: "0 4px" }}>·</span><span style={{ color: "#9ca3af" }}>{(p as any).contactName}</span></>}
-                                </div>
-                                {(p as any).divisionName && (
-                                  <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 500, marginTop: 1 }}>{(p as any).divisionName}</div>
-                                )}
-                              </td>
+                              {/* 의뢰/청구/납부 구조 조건부 표시 */}
+                              {(() => {
+                                const pp = p as any;
+                                const reqId = pp.requestingCompanyId ?? p.companyId;
+                                const billId = pp.billingCompanyId ?? reqId;
+                                const payId = pp.payerCompanyId ?? reqId;
+                                const isComplex = (billId && billId !== reqId) || (payId && payId !== reqId);
+
+                                const reqName = pp.requestingCompanyName ?? p.companyName;
+                                const billName = pp.billingCompanyName ?? reqName;
+                                const payName = pp.payerCompanyName ?? reqName;
+                                const contact = pp.contactName as string | null;
+
+                                if (!isComplex) {
+                                  // ── 단순 모드 ──
+                                  const displayName = pp.divisionName
+                                    ? `${pp.divisionName} (${reqName ?? "-"})`
+                                    : (reqName ?? p.companyName ?? "-");
+                                  return (
+                                    <td style={{ ...tableTd, fontSize: 12, maxWidth: 180 }}>
+                                      <div style={{ color: "#4b5563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>
+                                        {displayName}
+                                      </div>
+                                      {contact && (
+                                        <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                          {contact}
+                                        </div>
+                                      )}
+                                    </td>
+                                  );
+                                }
+
+                                // ── 복합 모드 (B2B) ──
+                                const reqDisplay = pp.divisionName
+                                  ? <><span style={{ color: "#7c3aed", fontWeight: 600 }}>{pp.divisionName}</span><span style={{ color: "#9ca3af" }}> ({reqName})</span></>
+                                  : <span style={{ fontWeight: 500, color: "#374151" }}>{reqName ?? "-"}</span>;
+
+                                return (
+                                  <td style={{ ...tableTd, fontSize: 11, maxWidth: 200 }}>
+                                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                      {reqDisplay}
+                                    </div>
+                                    {contact && (
+                                      <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                        {contact}
+                                      </div>
+                                    )}
+                                    {billId && billId !== reqId && (
+                                      <div style={{ fontSize: 10, color: "#0369a1", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                        청구: {billName}
+                                      </div>
+                                    )}
+                                    {payId && payId !== reqId && (
+                                      <div style={{ fontSize: 10, color: "#059669", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                        납부: {payName}
+                                      </div>
+                                    )}
+                                  </td>
+                                );
+                              })()}
 
                               {/* 업무 상태 / 재무 상태 */}
                               <td style={{ ...tableTd, minWidth: 200 }}>
