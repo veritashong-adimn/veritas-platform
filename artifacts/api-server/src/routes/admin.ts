@@ -734,10 +734,20 @@ router.patch("/admin/projects/:id/info", ...adminGuard, async (req, res) => {
   if (Object.keys(updates).length === 0) { res.status(400).json({ error: "변경할 항목이 없습니다." }); return; }
 
   try {
-    const [project] = await db.select({ id: projectsTable.id }).from(projectsTable).where(eq(projectsTable.id, projectId));
+    const [project] = await db
+      .select({ id: projectsTable.id, billingCompanyId: projectsTable.billingCompanyId, payerCompanyId: projectsTable.payerCompanyId })
+      .from(projectsTable).where(eq(projectsTable.id, projectId));
     if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
     const [updated] = await db.update(projectsTable).set(updates).where(eq(projectsTable.id, projectId)).returning();
     await logEvent("project", projectId, "admin_info_updated", req.log, req.user ?? undefined);
+    if (billingCompanyId !== undefined && billingCompanyId !== project.billingCompanyId) {
+      await logEvent("project", projectId, "billing_company_changed", req.log, req.user ?? undefined,
+        JSON.stringify({ from: project.billingCompanyId, to: billingCompanyId }));
+    }
+    if (payerCompanyId !== undefined && payerCompanyId !== project.payerCompanyId) {
+      await logEvent("project", projectId, "payer_company_changed", req.log, req.user ?? undefined,
+        JSON.stringify({ from: project.payerCompanyId, to: payerCompanyId }));
+    }
     res.json(updated);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to update project info");

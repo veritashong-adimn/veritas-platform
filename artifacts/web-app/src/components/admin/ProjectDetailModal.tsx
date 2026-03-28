@@ -79,7 +79,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [editDivisionId, setEditDivisionId] = useState<number | null>(null);
   const [editBillingCompanyId, setEditBillingCompanyId] = useState<number | null>(null);
   const [editPayerCompanyId, setEditPayerCompanyId] = useState<number | null>(null);
-  const [showAdvancedBillingEdit, setShowAdvancedBillingEdit] = useState(false);
+  const [billingWarnConfirmed, setBillingWarnConfirmed] = useState(false);
   const [editDivisionsList, setEditDivisionsList] = useState<{id: number; name: string; type: string | null}[]>([]);
   const [savingInfo, setSavingInfo] = useState(false);
   const [companiesList, setCompaniesList] = useState<{id: number; name: string}[]>([]);
@@ -510,9 +510,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     setEditDivisionId((detail as any).requestingDivisionId ?? null);
     setEditBillingCompanyId((detail as any).billingCompanyId ?? null);
     setEditPayerCompanyId((detail as any).payerCompanyId ?? null);
-    setShowAdvancedBillingEdit(
-      !!((detail as any).billingCompanyId || (detail as any).payerCompanyId)
-    );
+    setBillingWarnConfirmed(false);
     // 선택된 거래처의 divisions 로드
     if (cid) {
       try {
@@ -537,8 +535,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
           companyId: editCompanyId,
           contactId: editContactId,
           requestingDivisionId: editDivisionId,
-          billingCompanyId: showAdvancedBillingEdit ? editBillingCompanyId : null,
-          payerCompanyId: showAdvancedBillingEdit ? editPayerCompanyId : null,
+          billingCompanyId: editBillingCompanyId,
+          payerCompanyId: editPayerCompanyId,
         }),
       });
       const data = await res.json();
@@ -1054,34 +1052,80 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           </select>
                         </div>
                       )}
-                      {/* 청구처/입금처 분리 */}
-                      <div>
-                        <button type="button" onClick={() => setShowAdvancedBillingEdit(v => !v)}
-                          style={{ fontSize: 12, color: "#0369a1", background: "none", border: "none", cursor: "pointer", padding: "2px 0", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
-                          <span>{showAdvancedBillingEdit ? "▼" : "▶"}</span>
-                          청구처 / 납부처 분리 (대형 고객사)
-                        </button>
-                        {showAdvancedBillingEdit && (
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8, padding: "10px 12px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
-                            <div>
-                              <label style={{ fontSize: 11, color: "#0369a1", fontWeight: 600, display: "block", marginBottom: 4 }}>청구처 (세금계산서 수신)</label>
-                              <select value={editBillingCompanyId ?? editCompanyId ?? ""} onChange={e => setEditBillingCompanyId(e.target.value ? Number(e.target.value) : null)}
-                                style={{ ...inputStyle, width: "100%", fontSize: 12 }}>
-                                <option value="">의뢰처와 동일</option>
-                                {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                              </select>
-                            </div>
-                            <div>
-                              <label style={{ fontSize: 11, color: "#0369a1", fontWeight: 600, display: "block", marginBottom: 4 }}>납부처 (실제 입금 주체)</label>
-                              <select value={editPayerCompanyId ?? editCompanyId ?? ""} onChange={e => setEditPayerCompanyId(e.target.value ? Number(e.target.value) : null)}
-                                style={{ ...inputStyle, width: "100%", fontSize: 12 }}>
-                                <option value="">의뢰처와 동일</option>
-                                {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                              </select>
-                            </div>
+                      {/* 청구 대상 / 납부 주체 */}
+                      {(() => {
+                        const hasPaidPayment = detail?.payments?.some((pm: any) => pm.status === "paid") ?? false;
+                        const hasSettlement = (detail?.settlements?.length ?? 0) > 0;
+                        const isPaidFinancial = (detail as any)?.financialStatus === "paid";
+                        const isBlocked = hasPaidPayment || hasSettlement || isPaidFinancial;
+                        const hasQuotes = (detail?.quotes?.length ?? 0) > 0;
+                        const isWarn = !isBlocked && hasQuotes;
+                        const reqCompanyName = editCompanyId
+                          ? (companiesList.find(c => c.id === editCompanyId)?.name ?? "요청 거래처")
+                          : "요청 거래처";
+                        const billingName = editBillingCompanyId
+                          ? (companiesList.find(c => c.id === editBillingCompanyId)?.name ?? "-")
+                          : reqCompanyName;
+                        const payerName = editPayerCompanyId
+                          ? (companiesList.find(c => c.id === editPayerCompanyId)?.name ?? "-")
+                          : billingName;
+                        return (
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            {isBlocked && (
+                              <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px" }}>
+                                <p style={{ margin: 0, fontSize: 12, color: "#dc2626", fontWeight: 600 }}>🔒 청구 대상 / 납부 주체 변경 불가</p>
+                                <p style={{ margin: "4px 0 0", fontSize: 11, color: "#b91c1c" }}>이미 청구 또는 입금이 진행된 프로젝트입니다. 기존 청구를 취소/정정 후 변경하세요.</p>
+                                <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                                  <div style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: 6, padding: "6px 10px" }}>
+                                    <p style={{ margin: 0, fontSize: 10, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase" }}>청구 대상</p>
+                                    <p style={{ margin: "2px 0 0", fontSize: 13, fontWeight: 700, color: "#374151" }}>{billingName}</p>
+                                  </div>
+                                  <div style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: 6, padding: "6px 10px" }}>
+                                    <p style={{ margin: 0, fontSize: 10, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase" }}>💰 납부 주체</p>
+                                    <p style={{ margin: "2px 0 0", fontSize: 13, fontWeight: 700, color: "#374151" }}>{payerName}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                            {isWarn && !billingWarnConfirmed && (
+                              <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 12px" }}>
+                                <p style={{ margin: 0, fontSize: 12, color: "#92400e", fontWeight: 600 }}>⚠️ 견적서/거래명세서 발행 이력이 있습니다</p>
+                                <p style={{ margin: "3px 0 6px", fontSize: 11, color: "#78350f" }}>기존 견적서/거래명세서 내용과 달라질 수 있습니다. 계속 수정하시겠습니까?</p>
+                                <button type="button" onClick={() => setBillingWarnConfirmed(true)}
+                                  style={{ fontSize: 11, fontWeight: 700, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 5, padding: "3px 10px", cursor: "pointer" }}>
+                                  확인 후 수정
+                                </button>
+                              </div>
+                            )}
+                            {!isBlocked && (isWarn ? billingWarnConfirmed : true) && (
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, padding: "10px 12px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
+                                <div>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+                                    <label style={{ fontSize: 11, color: "#0369a1", fontWeight: 700 }}>청구 대상</label>
+                                    <span style={{ fontSize: 9, color: "#0369a1", background: "#e0f2fe", borderRadius: 3, padding: "1px 4px", fontWeight: 600 }}>세금계산서 기준</span>
+                                  </div>
+                                  <select value={editBillingCompanyId ?? ""} onChange={e => setEditBillingCompanyId(e.target.value ? Number(e.target.value) : null)}
+                                    style={{ ...inputStyle, width: "100%", fontSize: 12, borderColor: "#bae6fd" }}>
+                                    <option value="">— 요청 거래처와 동일 —</option>
+                                    {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                  </select>
+                                </div>
+                                <div>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+                                    <label style={{ fontSize: 11, color: "#059669", fontWeight: 700 }}>💰 납부 주체</label>
+                                    <span style={{ fontSize: 9, color: "#059669", background: "#d1fae5", borderRadius: 3, padding: "1px 4px", fontWeight: 600 }}>입금 기준</span>
+                                  </div>
+                                  <select value={editPayerCompanyId ?? ""} onChange={e => setEditPayerCompanyId(e.target.value ? Number(e.target.value) : null)}
+                                    style={{ ...inputStyle, width: "100%", fontSize: 12, borderColor: "#a7f3d0" }}>
+                                    <option value="">— 청구 대상과 동일 —</option>
+                                    {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                  </select>
+                                </div>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
+                        );
+                      })()}
                     </div>
                     <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
                       <PrimaryBtn onClick={handleSaveInfo} disabled={savingInfo || !editTitle.trim()} style={{ fontSize: 12, padding: "6px 16px" }}>
