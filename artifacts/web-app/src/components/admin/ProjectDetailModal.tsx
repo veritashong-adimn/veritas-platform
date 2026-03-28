@@ -81,6 +81,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [editPayerCompanyId, setEditPayerCompanyId] = useState<number | null>(null);
   const [billingWarnConfirmed, setBillingWarnConfirmed] = useState(false);
   const [editDivisionsList, setEditDivisionsList] = useState<{id: number; name: string; type: string | null}[]>([]);
+  // 정정 절차 폼
+  const [showCorrectionForm, setShowCorrectionForm] = useState(false);
+  const [correctionBillingId, setCorrectionBillingId] = useState<number | null>(null);
+  const [correctionPayerId, setCorrectionPayerId] = useState<number | null>(null);
+  const [correctionReason, setCorrectionReason] = useState("");
+  const [correctionMemo, setCorrectionMemo] = useState("");
+  const [submittingCorrection, setSubmittingCorrection] = useState(false);
   const [savingInfo, setSavingInfo] = useState(false);
   const [companiesList, setCompaniesList] = useState<{id: number; name: string}[]>([]);
   const [contactsList, setContactsList] = useState<{id: number; name: string; companyId: number | null}[]>([]);
@@ -511,6 +518,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     setEditBillingCompanyId((detail as any).billingCompanyId ?? null);
     setEditPayerCompanyId((detail as any).payerCompanyId ?? null);
     setBillingWarnConfirmed(false);
+    setShowCorrectionForm(false);
+    setCorrectionReason(""); setCorrectionMemo("");
     // 선택된 거래처의 divisions 로드
     if (cid) {
       try {
@@ -546,6 +555,30 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 저장 실패"); }
     finally { setSavingInfo(false); }
+  };
+
+  const handleBillingCorrection = async () => {
+    if (!correctionReason.trim()) { onToast("정정 사유를 선택해주세요."); return; }
+    if (!correctionMemo.trim()) { onToast("상세 메모를 입력해주세요."); return; }
+    setSubmittingCorrection(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/billing-correction`), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          billingCompanyId: correctionBillingId,
+          payerCompanyId: correctionPayerId,
+          reason: correctionReason.trim(),
+          memo: correctionMemo.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast("청구/납부 정보가 정정되었습니다.");
+      setShowCorrectionForm(false);
+      setCorrectionReason(""); setCorrectionMemo("");
+      await loadDetail(); onRefresh();
+    } catch { onToast("오류: 정정 처리 실패"); }
+    finally { setSubmittingCorrection(false); }
   };
 
   const handleCreateQuote = async () => {
@@ -1054,12 +1087,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       )}
                       {/* 청구 대상 / 납부 주체 */}
                       {(() => {
-                        const hasPaidPayment = detail?.payments?.some((pm: any) => pm.status === "paid") ?? false;
-                        const hasSettlement = (detail?.settlements?.length ?? 0) > 0;
-                        const isPaidFinancial = (detail as any)?.financialStatus === "paid";
-                        const isBlocked = hasPaidPayment || hasSettlement || isPaidFinancial;
-                        const hasQuotes = (detail?.quotes?.length ?? 0) > 0;
-                        const isWarn = !isBlocked && hasQuotes;
+                        const payments = detail?.payments ?? [];
+                        const settlements = detail?.settlements ?? [];
+                        const quotes = detail?.quotes ?? [];
+                        const financialStatus = (detail as any)?.financialStatus ?? "unbilled";
+                        // 4단계 조건 판별
+                        const isFullyLocked = settlements.some((s: any) => s.status === "paid");
+                        const isCorrection = !isFullyLocked && (
+                          payments.length > 0 ||
+                          ["billed", "receivable", "paid"].includes(financialStatus) ||
+                          settlements.length > 0
+                        );
+                        const isWarn = !isFullyLocked && !isCorrection && quotes.length > 0;
                         const reqCompanyName = editCompanyId
                           ? (companiesList.find(c => c.id === editCompanyId)?.name ?? "요청 거래처")
                           : "요청 거래처";
@@ -1069,24 +1108,125 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         const payerName = editPayerCompanyId
                           ? (companiesList.find(c => c.id === editPayerCompanyId)?.name ?? "-")
                           : billingName;
+                        // 정정 폼용 현재값 이름
+                        const corrBillingName = correctionBillingId !== null
+                          ? (companiesList.find(c => c.id === correctionBillingId)?.name ?? "-")
+                          : billingName;
+                        const corrPayerName = correctionPayerId !== null
+                          ? (companiesList.find(c => c.id === correctionPayerId)?.name ?? "-")
+                          : payerName;
                         return (
                           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                            {isBlocked && (
-                              <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px" }}>
-                                <p style={{ margin: 0, fontSize: 12, color: "#dc2626", fontWeight: 600 }}>🔒 청구 대상 / 납부 주체 변경 불가</p>
-                                <p style={{ margin: "4px 0 0", fontSize: 11, color: "#b91c1c" }}>이미 청구 또는 입금이 진행된 프로젝트입니다. 기존 청구를 취소/정정 후 변경하세요.</p>
-                                <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                            {/* ── Level 4: 완전 잠금 ── */}
+                            {isFullyLocked && (
+                              <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "10px 14px" }}>
+                                <p style={{ margin: 0, fontSize: 12, color: "#dc2626", fontWeight: 700 }}>🔒 청구/납부 정보 변경 완전 잠금</p>
+                                <p style={{ margin: "4px 0 8px", fontSize: 11, color: "#b91c1c" }}>정산이 최종 완료된 프로젝트입니다. 청구/납부 정보를 변경할 수 없습니다.</p>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
                                   <div style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: 6, padding: "6px 10px" }}>
-                                    <p style={{ margin: 0, fontSize: 10, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase" }}>청구 대상</p>
+                                    <p style={{ margin: 0, fontSize: 10, color: "#9ca3af", fontWeight: 600 }}>청구 대상</p>
                                     <p style={{ margin: "2px 0 0", fontSize: 13, fontWeight: 700, color: "#374151" }}>{billingName}</p>
                                   </div>
                                   <div style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: 6, padding: "6px 10px" }}>
-                                    <p style={{ margin: 0, fontSize: 10, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase" }}>💰 납부 주체</p>
+                                    <p style={{ margin: 0, fontSize: 10, color: "#9ca3af", fontWeight: 600 }}>💰 납부 주체</p>
                                     <p style={{ margin: "2px 0 0", fontSize: 13, fontWeight: 700, color: "#374151" }}>{payerName}</p>
                                   </div>
                                 </div>
                               </div>
                             )}
+                            {/* ── Level 3: 정정 절차 ── */}
+                            {isCorrection && (
+                              <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "10px 14px" }}>
+                                <p style={{ margin: 0, fontSize: 12, color: "#c2410c", fontWeight: 700 }}>📋 청구/납부 정보 — 정정 절차 필요</p>
+                                <p style={{ margin: "3px 0 8px", fontSize: 11, color: "#9a3412" }}>입금·정산·세금계산서 발행 이력이 있습니다. 직접 수정 대신 정정 절차를 통해 변경하세요.</p>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
+                                  <div style={{ background: "#fff", border: "1px solid #fed7aa", borderRadius: 6, padding: "6px 10px" }}>
+                                    <p style={{ margin: 0, fontSize: 10, color: "#9ca3af", fontWeight: 600 }}>현재 청구 대상</p>
+                                    <p style={{ margin: "2px 0 0", fontSize: 13, fontWeight: 700, color: "#374151" }}>{billingName}</p>
+                                  </div>
+                                  <div style={{ background: "#fff", border: "1px solid #fed7aa", borderRadius: 6, padding: "6px 10px" }}>
+                                    <p style={{ margin: 0, fontSize: 10, color: "#9ca3af", fontWeight: 600 }}>현재 💰 납부 주체</p>
+                                    <p style={{ margin: "2px 0 0", fontSize: 13, fontWeight: 700, color: "#374151" }}>{payerName}</p>
+                                  </div>
+                                </div>
+                                {!showCorrectionForm ? (
+                                  <button type="button"
+                                    onClick={() => {
+                                      setCorrectionBillingId(editBillingCompanyId);
+                                      setCorrectionPayerId(editPayerCompanyId);
+                                      setCorrectionReason(""); setCorrectionMemo("");
+                                      setShowCorrectionForm(true);
+                                    }}
+                                    style={{ fontSize: 11, fontWeight: 700, color: "#c2410c", background: "#ffedd5", border: "1px solid #fed7aa", borderRadius: 5, padding: "4px 12px", cursor: "pointer" }}>
+                                    청구/납부 정보 정정 신청
+                                  </button>
+                                ) : (
+                                  <div style={{ background: "#fff", border: "1px solid #fed7aa", borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+                                    <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#c2410c" }}>정정 신청서</p>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                      <div>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+                                          <label style={{ fontSize: 11, color: "#0369a1", fontWeight: 700 }}>변경할 청구 대상</label>
+                                          <span style={{ fontSize: 9, color: "#0369a1", background: "#e0f2fe", borderRadius: 3, padding: "1px 4px", fontWeight: 600 }}>세금계산서 기준</span>
+                                        </div>
+                                        <select value={correctionBillingId ?? ""}
+                                          onChange={e => setCorrectionBillingId(e.target.value ? Number(e.target.value) : null)}
+                                          style={{ ...inputStyle, fontSize: 12, borderColor: "#bae6fd" }}>
+                                          <option value="">— 요청 거래처와 동일 —</option>
+                                          {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                        </select>
+                                        <p style={{ margin: "3px 0 0", fontSize: 10, color: "#6b7280" }}>현재: {billingName} → {corrBillingName}</p>
+                                      </div>
+                                      <div>
+                                        <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+                                          <label style={{ fontSize: 11, color: "#059669", fontWeight: 700 }}>💰 변경할 납부 주체</label>
+                                          <span style={{ fontSize: 9, color: "#059669", background: "#d1fae5", borderRadius: 3, padding: "1px 4px", fontWeight: 600 }}>입금 기준</span>
+                                        </div>
+                                        <select value={correctionPayerId ?? ""}
+                                          onChange={e => setCorrectionPayerId(e.target.value ? Number(e.target.value) : null)}
+                                          style={{ ...inputStyle, fontSize: 12, borderColor: "#a7f3d0" }}>
+                                          <option value="">— 청구 대상과 동일 —</option>
+                                          {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                        </select>
+                                        <p style={{ margin: "3px 0 0", fontSize: 10, color: "#6b7280" }}>현재: {payerName} → {corrPayerName}</p>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <label style={{ fontSize: 11, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>정정 사유 <span style={{ color: "#dc2626" }}>*</span></label>
+                                      <select value={correctionReason} onChange={e => setCorrectionReason(e.target.value)}
+                                        style={{ ...inputStyle, fontSize: 12 }}>
+                                        <option value="">— 사유를 선택하세요 —</option>
+                                        <option value="고객 요청">고객 요청</option>
+                                        <option value="오입력 정정">오입력 정정</option>
+                                        <option value="계열사 변경">계열사 변경</option>
+                                        <option value="계약 변경">계약 변경</option>
+                                        <option value="부분 입금 정정">부분 입금 정정</option>
+                                        <option value="환불 처리">환불 처리</option>
+                                        <option value="기타">기타</option>
+                                      </select>
+                                    </div>
+                                    <div>
+                                      <label style={{ fontSize: 11, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>상세 메모 <span style={{ color: "#dc2626" }}>*</span></label>
+                                      <textarea value={correctionMemo} onChange={e => setCorrectionMemo(e.target.value)}
+                                        placeholder="정정 사유 및 관련 상황을 상세히 입력하세요."
+                                        rows={3}
+                                        style={{ ...inputStyle, resize: "vertical", fontSize: 12 }} />
+                                    </div>
+                                    <div style={{ display: "flex", gap: 8 }}>
+                                      <button type="button" onClick={handleBillingCorrection} disabled={submittingCorrection || !correctionReason || !correctionMemo.trim()}
+                                        style={{ fontSize: 11, fontWeight: 700, color: "#fff", background: correctionReason && correctionMemo.trim() ? "#ea580c" : "#d1d5db", border: "none", borderRadius: 5, padding: "5px 14px", cursor: correctionReason && correctionMemo.trim() ? "pointer" : "not-allowed" }}>
+                                        {submittingCorrection ? "처리 중..." : "정정 제출"}
+                                      </button>
+                                      <button type="button" onClick={() => setShowCorrectionForm(false)}
+                                        style={{ fontSize: 11, color: "#6b7280", background: "#f3f4f6", border: "1px solid #e5e7eb", borderRadius: 5, padding: "5px 12px", cursor: "pointer" }}>
+                                        취소
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {/* ── Level 2: 경고 후 수정 ── */}
                             {isWarn && !billingWarnConfirmed && (
                               <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 12px" }}>
                                 <p style={{ margin: 0, fontSize: 12, color: "#92400e", fontWeight: 600 }}>⚠️ 견적서/거래명세서 발행 이력이 있습니다</p>
@@ -1097,7 +1237,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 </button>
                               </div>
                             )}
-                            {!isBlocked && (isWarn ? billingWarnConfirmed : true) && (
+                            {/* ── Level 1: 자유 수정 (Level 2 경고 확인 후 포함) ── */}
+                            {!isFullyLocked && !isCorrection && (isWarn ? billingWarnConfirmed : true) && (
                               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, padding: "10px 12px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
                                 <div>
                                   <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>

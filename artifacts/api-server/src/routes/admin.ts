@@ -755,6 +755,61 @@ router.patch("/admin/projects/:id/info", ...adminGuard, async (req, res) => {
   }
 });
 
+// ─── 청구/납부 정정 절차 ────────────────────────────────────────────────────
+router.post("/admin/projects/:id/billing-correction", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
+
+  const { billingCompanyId, payerCompanyId, reason, memo } = req.body as {
+    billingCompanyId?: number | null;
+    payerCompanyId?: number | null;
+    reason: string;
+    memo: string;
+  };
+
+  if (!reason || !reason.trim()) { res.status(400).json({ error: "정정 사유를 선택해주세요." }); return; }
+  if (!memo || !memo.trim()) { res.status(400).json({ error: "상세 메모를 입력해주세요." }); return; }
+  if (billingCompanyId === undefined && payerCompanyId === undefined) {
+    res.status(400).json({ error: "변경할 항목이 없습니다." }); return;
+  }
+
+  try {
+    const [project] = await db
+      .select({ id: projectsTable.id, billingCompanyId: projectsTable.billingCompanyId, payerCompanyId: projectsTable.payerCompanyId })
+      .from(projectsTable).where(eq(projectsTable.id, projectId));
+    if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
+
+    // 완전 잠금 여부 확인 (정산 paid 상태)
+    const paidSettlements = await db.select({ id: settlementsTable.id })
+      .from(settlementsTable)
+      .where(and(eq(settlementsTable.projectId, projectId), eq(settlementsTable.status, "paid")));
+    if (paidSettlements.length > 0) {
+      res.status(403).json({ error: "정산이 완료된 프로젝트입니다. 청구/납부 정보를 변경할 수 없습니다." }); return;
+    }
+
+    const updates: Record<string, any> = {};
+    if (billingCompanyId !== undefined) updates.billingCompanyId = billingCompanyId;
+    if (payerCompanyId !== undefined) updates.payerCompanyId = payerCompanyId;
+    await db.update(projectsTable).set(updates).where(eq(projectsTable.id, projectId));
+
+    if (billingCompanyId !== undefined && billingCompanyId !== project.billingCompanyId) {
+      await logEvent("project", projectId, "billing_company_corrected", req.log, req.user ?? undefined,
+        JSON.stringify({ from: project.billingCompanyId, to: billingCompanyId, reason: reason.trim(), memo: memo.trim() }));
+    }
+    if (payerCompanyId !== undefined && payerCompanyId !== project.payerCompanyId) {
+      await logEvent("project", projectId, "payer_company_corrected", req.log, req.user ?? undefined,
+        JSON.stringify({ from: project.payerCompanyId, to: payerCompanyId, reason: reason.trim(), memo: memo.trim() }));
+    }
+    await logEvent("project", projectId, "billing_correction_submitted", req.log, req.user ?? undefined,
+      JSON.stringify({ reason: reason.trim(), memo: memo.trim() }));
+
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "Admin: billing correction failed");
+    res.status(500).json({ error: "정정 처리 실패." });
+  }
+});
+
 // ─── 관리자 견적 생성 ──────────────────────────────────────────────────────
 router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
   const projectId = Number(req.params.id);
