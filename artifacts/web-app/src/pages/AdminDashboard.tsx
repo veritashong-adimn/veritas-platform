@@ -1041,41 +1041,28 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
               {/* ── 요청 주체 ── */}
               <div style={{ borderRadius: 10, border: "1px solid #e5e7eb", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10, background: "#fafafa" }}>
                 <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>요청 주체</p>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <div>
-                    <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>거래처</label>
-                    <select value={newProjectCompanyId ?? ""} onChange={async e => {
-                        const cid = e.target.value ? Number(e.target.value) : null;
-                        setNewProjectCompanyId(cid);
-                        setNewProjectContactId(null);
-                        setNewProjectDivisionId(null);
-                        setNewProjectBillingCompanyId(null);
-                        setNewProjectPayerCompanyId(null);
-                        setShowBillingOverride(false);
-                        setShowPayerOverride(false);
-                        setCompanyDivisions([]);
-                        if (cid) {
-                          const res = await fetch(api(`/api/admin/companies/${cid}/divisions`), { headers: authHeaders });
-                          if (res.ok) setCompanyDivisions(await res.json());
-                        }
-                      }}
-                      style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
-                      <option value="">— 선택 —</option>
-                      {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>담당자</label>
-                    <select value={newProjectContactId ?? ""} onChange={e => setNewProjectContactId(e.target.value ? Number(e.target.value) : null)}
-                      style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
-                      <option value="">— 없음 —</option>
-                      {(contacts as any[])
-                        .filter(c => !newProjectCompanyId || c.companyId === newProjectCompanyId)
-                        .map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
-                  </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>거래처</label>
+                  <select value={newProjectCompanyId ?? ""} onChange={async e => {
+                      const cid = e.target.value ? Number(e.target.value) : null;
+                      setNewProjectCompanyId(cid);
+                      setNewProjectContactId(null);
+                      setNewProjectDivisionId(null);
+                      setNewProjectBillingCompanyId(null);
+                      setNewProjectPayerCompanyId(null);
+                      setShowBillingOverride(false);
+                      setShowPayerOverride(false);
+                      setCompanyDivisions([]);
+                      if (cid) {
+                        const res = await fetch(api(`/api/admin/companies/${cid}/divisions`), { headers: authHeaders });
+                        if (res.ok) setCompanyDivisions(await res.json());
+                      }
+                    }}
+                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
+                    <option value="">— 선택 —</option>
+                    {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
                 </div>
-                {/* 브랜드/부서 — 거래처에 divisions가 있을 때만 표시 */}
                 {companyDivisions.length > 0 && (
                   <div>
                     <label style={{ fontSize: 12, fontWeight: 600, color: "#7c3aed", display: "block", marginBottom: 4 }}>브랜드 / 부서</label>
@@ -1086,6 +1073,16 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                     </select>
                   </div>
                 )}
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>담당자</label>
+                  <select value={newProjectContactId ?? ""} onChange={e => setNewProjectContactId(e.target.value ? Number(e.target.value) : null)}
+                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
+                    <option value="">— 없음 —</option>
+                    {(contacts as any[])
+                      .filter(c => !newProjectCompanyId || c.companyId === newProjectCompanyId)
+                      .map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </div>
               </div>
 
               {/* ── 청구 대상 ── */}
@@ -1096,19 +1093,19 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                     {!showBillingOverride && (
                       <p style={{ margin: "3px 0 0", fontSize: 12, color: "#374151" }}>
                         {newProjectCompanyId
-                          ? (companies.find(c => c.id === newProjectCompanyId) as any)?.name ?? "거래처와 동일"
+                          ? (companies.find(c => c.id === newProjectCompanyId) as any)?.name ?? "요청 거래처와 동일"
                           : "거래처 선택 후 자동 설정"}
                       </p>
                     )}
                   </div>
                   <button type="button" onClick={() => { setShowBillingOverride(v => !v); if (showBillingOverride) setNewProjectBillingCompanyId(null); }}
                     style={{ fontSize: 12, color: showBillingOverride ? "#6b7280" : "#2563eb", background: "none", border: "none", cursor: "pointer", fontWeight: 600, padding: "2px 6px", borderRadius: 6, textDecoration: "underline" }}>
-                    {showBillingOverride ? "취소" : "다르게 설정"}
+                    {showBillingOverride ? "요청과 동일" : "다르게 설정"}
                   </button>
                 </div>
                 {showBillingOverride && (
                   <div>
-                    <label style={{ fontSize: 12, fontWeight: 600, color: "#0369a1", display: "block", marginBottom: 4 }}>세금계산서 발행 거래처</label>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#0369a1", display: "block", marginBottom: 4 }}>청구 대상</label>
                     <select value={newProjectBillingCompanyId ?? ""} onChange={e => setNewProjectBillingCompanyId(e.target.value ? Number(e.target.value) : null)}
                       style={{ width: "100%", border: "1px solid #bae6fd", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
                       <option value="">— 선택 —</option>
@@ -1125,20 +1122,22 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                     <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>납부 주체</p>
                     {!showPayerOverride && (
                       <p style={{ margin: "3px 0 0", fontSize: 12, color: "#374151" }}>
-                        {newProjectCompanyId
-                          ? (companies.find(c => c.id === newProjectCompanyId) as any)?.name ?? "거래처와 동일"
-                          : "거래처 선택 후 자동 설정"}
+                        {newProjectBillingCompanyId
+                          ? (companies.find(c => c.id === newProjectBillingCompanyId) as any)?.name ?? "청구 대상과 동일"
+                          : newProjectCompanyId
+                            ? (companies.find(c => c.id === newProjectCompanyId) as any)?.name ?? "요청 거래처와 동일"
+                            : "거래처 선택 후 자동 설정"}
                       </p>
                     )}
                   </div>
                   <button type="button" onClick={() => { setShowPayerOverride(v => !v); if (showPayerOverride) setNewProjectPayerCompanyId(null); }}
                     style={{ fontSize: 12, color: showPayerOverride ? "#6b7280" : "#2563eb", background: "none", border: "none", cursor: "pointer", fontWeight: 600, padding: "2px 6px", borderRadius: 6, textDecoration: "underline" }}>
-                    {showPayerOverride ? "취소" : "다르게 설정"}
+                    {showPayerOverride ? "청구와 동일" : "다르게 설정"}
                   </button>
                 </div>
                 {showPayerOverride && (
                   <div>
-                    <label style={{ fontSize: 12, fontWeight: 600, color: "#059669", display: "block", marginBottom: 4 }}>실제 납부 거래처</label>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#059669", display: "block", marginBottom: 4 }}>납부 주체</label>
                     <select value={newProjectPayerCompanyId ?? ""} onChange={e => setNewProjectPayerCompanyId(e.target.value ? Number(e.target.value) : null)}
                       style={{ width: "100%", border: "1px solid #a7f3d0", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
                       <option value="">— 선택 —</option>
@@ -1148,14 +1147,17 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                 )}
               </div>
 
-              {/* ── 고객 (내부 사용자) ── */}
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>고객 계정 <span style={{ fontWeight: 400, color: "#9ca3af" }}>(선택 — 플랫폼 내부 사용자)</span></label>
-                <select value={newProjectCustomerId ?? ""} onChange={e => setNewProjectCustomerId(e.target.value ? Number(e.target.value) : null)}
-                  style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
-                  <option value="">— 없음 —</option>
-                  {customers.map(c => <option key={c.id} value={c.id}>{c.contactName} ({c.email})</option>)}
-                </select>
+              {/* ── 플랫폼 사용자 ── */}
+              <div style={{ borderRadius: 10, border: "1px solid #e5e7eb", padding: "12px 14px", background: "#fafafa" }}>
+                <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>플랫폼 사용자</p>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>고객 계정 <span style={{ fontWeight: 400, color: "#9ca3af" }}>(선택)</span></label>
+                  <select value={newProjectCustomerId ?? ""} onChange={e => setNewProjectCustomerId(e.target.value ? Number(e.target.value) : null)}
+                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
+                    <option value="">— 없음 —</option>
+                    {customers.map(c => <option key={c.id} value={c.id}>{c.contactName} ({c.email})</option>)}
+                  </select>
+                </div>
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
