@@ -1681,35 +1681,82 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["ID","회사명","담당자","이메일","전화","프로젝트","총 결제","등록일"].map(h => (
-                      <th key={h} style={tableTh}>{h}</th>
-                    ))}</tr>
+                    <tr style={{ background: "#f8fafc" }}>
+                      {["ID","고객사","등급","프로젝트 현황","총 매출","미수금","최근 거래","등록일"].map(h => (
+                        <th key={h} style={{ ...tableTh, background: "transparent", fontSize: 11, letterSpacing: "0.2px" }}>{h}</th>
+                      ))}
+                    </tr>
                   </thead>
                   <tbody>
-                    {customers.map(c => (
-                      <tr key={c.id}
-                        onClick={() => setCustomerModal(c.id)}
-                        style={{ cursor: "pointer" }}
-                        onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
-                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                        <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
-                        <td style={{ ...tableTd, fontWeight: 700, color: "#111827" }}>{c.companyName}</td>
-                        <td style={tableTd}>{c.contactName}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{c.email}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{c.phone ?? "-"}</td>
-                        <td style={{ ...tableTd, textAlign: "center" }}>
-                          <span style={{ padding: "2px 10px", borderRadius: 12, background: "#eff6ff", color: "#2563eb", fontSize: 12, fontWeight: 600 }}>
-                            {c.projectCount}건
-                          </span>
-                        </td>
-                        <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap" }}>
-                          {Number(c.totalPayment).toLocaleString()}원
-                        </td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
-                          {new Date(c.createdAt).toLocaleDateString("ko-KR")}
-                        </td>
-                      </tr>
-                    ))}
+                    {customers.map(c => {
+                      const grade = c.projectCount === 0
+                        ? { label: "신규", bg: "#f0fdf4", color: "#16a34a", border: "#86efac" }
+                        : (Number(c.totalPayment) >= 3000000 || c.projectCount >= 5)
+                          ? { label: "VIP", bg: "#fdf4ff", color: "#9333ea", border: "#d8b4fe" }
+                          : { label: "일반", bg: "#f8fafc", color: "#64748b", border: "#cbd5e1" };
+                      const lastDate = c.lastTransactionAt
+                        ? new Date(c.lastTransactionAt).toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" }).replace(/\. /g, ".").replace(/\.$/, "")
+                        : null;
+                      return (
+                        <tr key={c.id}
+                          onClick={() => setCustomerModal(c.id)}
+                          style={{ cursor: "pointer", transition: "background 0.1s" }}
+                          onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
+                          onMouseLeave={e => (e.currentTarget.style.background = "")}>
+
+                          {/* ID */}
+                          <td style={{ ...tableTd, color: "#d1d5db", fontSize: 11, width: 40 }}>#{c.id}</td>
+
+                          {/* 고객사 + 담당자 · 연락처 */}
+                          <td style={{ ...tableTd, maxWidth: 200 }}>
+                            <div style={{ fontWeight: 600, fontSize: 13, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.companyName}</div>
+                            <div style={{ fontSize: 11, color: "#c0c8d4", marginTop: 1 }}>
+                              {c.contactName}
+                              {c.phone && <span style={{ marginLeft: 6 }}>{c.phone}</span>}
+                            </div>
+                          </td>
+
+                          {/* 등급 */}
+                          <td style={{ ...tableTd, width: 64 }}>
+                            <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, lineHeight: "18px", background: grade.bg, color: grade.color, border: `1px solid ${grade.border}` }}>
+                              {grade.label}
+                            </span>
+                          </td>
+
+                          {/* 프로젝트 현황 */}
+                          <td style={{ ...tableTd, minWidth: 110 }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                              <span style={{ fontSize: 12, color: "#374151", fontWeight: 500 }}>전체 {c.projectCount}건</span>
+                              {c.inProgressCount > 0 && (
+                                <span style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600 }}>진행 중 {c.inProgressCount}건</span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* 총 매출 */}
+                          <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap", fontSize: 12 }}>
+                            {Number(c.totalPayment).toLocaleString()}원
+                          </td>
+
+                          {/* 미수금 */}
+                          <td style={{ ...tableTd, width: 90 }}>
+                            {Number(c.unpaidAmount) > 0
+                              ? <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, lineHeight: "18px", background: "transparent", border: "1px solid #fcd34d", color: "#92400e", whiteSpace: "nowrap" }}>{Number(c.unpaidAmount).toLocaleString()}원</span>
+                              : <span style={{ color: "#d1d5db", fontSize: 11 }}>-</span>}
+                          </td>
+
+                          {/* 최근 거래 */}
+                          <td style={{ ...tableTd, fontSize: 11, color: lastDate ? "#6b7280" : "#d1d5db", whiteSpace: "nowrap" }}>
+                            {lastDate ?? "-"}
+                          </td>
+
+                          {/* 등록일 */}
+                          <td style={{ ...tableTd, fontSize: 11, color: "#c0c8d4", whiteSpace: "nowrap" }}>
+                            {new Date(c.createdAt).toLocaleDateString("ko-KR")}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

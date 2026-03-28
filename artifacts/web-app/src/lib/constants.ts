@@ -52,6 +52,7 @@ export type AdminCustomer = {
   id: number; companyName: string; contactName: string; email: string;
   phone: string | null; createdAt: string;
   projectCount: number; totalPayment: number;
+  unpaidAmount: number; lastTransactionAt: string | null; inProgressCount: number;
 };
 export type CustomerProjectItem = { id: number; title: string; status: string; createdAt: string };
 export type CustomerDetail = AdminCustomer & {

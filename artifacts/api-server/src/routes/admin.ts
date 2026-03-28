@@ -2030,6 +2030,23 @@ router.get("/admin/customers", ...adminGuard, async (req, res) => {
         createdAt: customersTable.createdAt,
         projectCount: sql<number>`COUNT(DISTINCT ${projectsTable.id})::int`,
         totalPayment: sql<number>`COALESCE(SUM(${paymentsTable.amount}) FILTER (WHERE ${paymentsTable.status} = 'paid'), 0)::int`,
+        unpaidAmount: sql<number>`(
+          SELECT COALESCE(SUM(q.price), 0)::int
+          FROM projects p2
+          JOIN quotes q ON q.project_id = p2.id
+          WHERE p2.customer_id = ${customersTable.id} AND q.status = 'approved'
+        )`,
+        lastTransactionAt: sql<string | null>`(
+          SELECT MAX(pay.created_at)::text
+          FROM projects p2
+          JOIN payments pay ON pay.project_id = p2.id
+          WHERE p2.customer_id = ${customersTable.id} AND pay.status = 'paid'
+        )`,
+        inProgressCount: sql<number>`(
+          SELECT COUNT(p2.id)::int FROM projects p2
+          WHERE p2.customer_id = ${customersTable.id}
+            AND p2.status IN ('in_progress','matched','paid','approved')
+        )`,
       })
       .from(customersTable)
       .leftJoin(projectsTable, eq(projectsTable.customerId, customersTable.id))
