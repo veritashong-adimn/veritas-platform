@@ -14,6 +14,13 @@ export const projectStatusEnum = pgEnum("project_status", [
   "cancelled",
 ]);
 
+export const financialStatusEnum = pgEnum("financial_status", [
+  "unbilled",
+  "billed",
+  "receivable",
+  "paid",
+]);
+
 export const projectsTable = pgTable("projects", {
   id: serial("id").primaryKey(),
   userId: integer("user_id")
@@ -30,6 +37,7 @@ export const projectsTable = pgTable("projects", {
   title: text("title").notNull(),
   fileUrl: text("file_url"),
   status: projectStatusEnum("status").notNull().default("created"),
+  financialStatus: financialStatusEnum("financial_status").notNull().default("unbilled"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

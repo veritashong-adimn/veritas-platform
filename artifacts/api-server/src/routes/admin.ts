@@ -20,12 +20,12 @@ const adminGuard = [requireAuth, requireRole("admin")];
 router.get("/admin/projects", ...adminGuard, async (req, res) => {
   try {
     const {
-      search, status, dateFrom, dateTo, assignedAdminId, companyName, contactName,
+      search, status, financialStatus: financialStatusFilter, dateFrom, dateTo, assignedAdminId, companyName, contactName,
       companyId: companyIdFilter, contactId: contactIdFilter,
       quoteType: quoteTypeFilter, billingType: billingTypeFilter,
       paymentDueDateFrom, paymentDueDateTo, quickFilter,
     } = req.query as {
-      search?: string; status?: string; dateFrom?: string; dateTo?: string;
+      search?: string; status?: string; financialStatus?: string; dateFrom?: string; dateTo?: string;
       assignedAdminId?: string; companyName?: string; contactName?: string;
       companyId?: string; contactId?: string;
       quoteType?: string; billingType?: string;
@@ -44,6 +44,7 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
     const rows = await db
       .select({
         id: projectsTable.id, title: projectsTable.title, status: projectsTable.status,
+        financialStatus: projectsTable.financialStatus,
         fileUrl: projectsTable.fileUrl, createdAt: projectsTable.createdAt,
         customerEmail: usersTable.email, customerId: usersTable.id,
         projectCustomerId: projectsTable.customerId, adminId: projectsTable.adminId,
@@ -115,6 +116,9 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
     if (status?.trim()) {
       const statuses = status.split(",").map(s => s.trim()).filter(Boolean);
       if (statuses.length > 0) result = result.filter(p => statuses.includes(p.status));
+    }
+    if (financialStatusFilter?.trim() && financialStatusFilter !== "all") {
+      result = result.filter(p => p.financialStatus === financialStatusFilter);
     }
     if (dateFrom?.trim()) {
       const from = new Date(dateFrom);
@@ -213,6 +217,7 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
         id: projectsTable.id,
         title: projectsTable.title,
         status: projectsTable.status,
+        financialStatus: projectsTable.financialStatus,
         fileUrl: projectsTable.fileUrl,
         createdAt: projectsTable.createdAt,
         customerEmail: usersTable.email,
@@ -220,6 +225,12 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
         contactId: projectsTable.contactId,
         companyId: projectsTable.companyId,
         adminId: projectsTable.adminId,
+        requestingCompanyId: projectsTable.requestingCompanyId,
+        requestingDivisionId: projectsTable.requestingDivisionId,
+        billingCompanyId: projectsTable.billingCompanyId,
+        payerCompanyId: projectsTable.payerCompanyId,
+        divisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
+        billingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.billingCompanyId})`,
       })
       .from(projectsTable)
       .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))
@@ -481,20 +492,45 @@ router.post("/admin/projects/:id/assign-translator", ...adminGuard, async (req, 
 export const PROJECT_STATUS_TRANSITIONS: Record<string, string[]> = {
   created:     ["quoted", "cancelled"],
   quoted:      ["approved", "cancelled"],
-  approved:    ["paid", "cancelled"],
-  paid:        ["matched", "cancelled"],
+  approved:    ["matched", "cancelled"],
   matched:     ["in_progress", "cancelled"],
   in_progress: ["completed", "cancelled"],
   completed:   [],
   cancelled:   [],
+  paid:        ["matched", "cancelled"],  // 레거시 호환용
 };
+
+// ─── 재무 상태 변경 ──────────────────────────────────────────────────────
+router.patch("/admin/projects/:id/financial-status", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  const { financialStatus } = req.body as { financialStatus?: string };
+  const VALID = ["unbilled", "billed", "receivable", "paid"] as const;
+  type FinancialStatus = typeof VALID[number];
+  if (!financialStatus || !VALID.includes(financialStatus as FinancialStatus)) {
+    res.status(400).json({ error: `financialStatus는 ${VALID.join(", ")} 중 하나여야 합니다.` });
+    return;
+  }
+  try {
+    const [updated] = await db
+      .update(projectsTable)
+      .set({ financialStatus: financialStatus as FinancialStatus })
+      .where(eq(projectsTable.id, projectId))
+      .returning();
+    if (!updated) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
+    await logEvent("project", projectId, `admin_financial_status_to_${financialStatus}`, req.log, req.user ?? undefined);
+    res.json(updated);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to update financial status");
+    res.status(500).json({ error: "재무 상태 변경 실패." });
+  }
+});
 
 // ─── 프로젝트 상태 수동 변경 ──────────────────────────────────────────────
 router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
   const projectId = Number(req.params.id);
   const { status, force } = req.body as { status?: string; force?: boolean };
 
-  const ALL_STATUSES = ["created", "quoted", "approved", "paid", "matched", "in_progress", "completed", "cancelled"] as const;
+  const ALL_STATUSES = ["created", "quoted", "approved", "matched", "in_progress", "completed", "cancelled"] as const;
   type AllowedStatus = typeof ALL_STATUSES[number];
 
   if (!status || !ALL_STATUSES.includes(status as AllowedStatus)) {

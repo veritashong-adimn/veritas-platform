@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, AdminUser, BOARD_CATEGORY_LABEL } from '../../lib/constants';
+import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, ALL_FINANCIAL_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, AdminUser, BOARD_CATEGORY_LABEL } from '../../lib/constants';
 import { StatusBadge, PrimaryBtn, GhostBtn } from '../ui';
 import { ReviewMemoPanel } from './ReviewMemoPanel';
 
@@ -8,15 +8,8 @@ function getStatusTransitionBlock(
   targetStatus: string,
   detail: ProjectDetail,
 ): { blocked: boolean; reason?: string } {
-  const hasPaidPayment = detail.payments?.some((p: any) => p.status === "paid");
   const hasAssignedTranslator = (detail.tasks ?? []).length > 0;
 
-  if (targetStatus === "paid" && !hasPaidPayment) {
-    return {
-      blocked: true,
-      reason: "결제 기록이 없습니다. '견적·결제·정산' 탭에서 먼저 결제를 등록한 뒤 상태를 변경해주세요.",
-    };
-  }
   if ((targetStatus === "matched" || targetStatus === "in_progress") && !hasAssignedTranslator) {
     return {
       blocked: true,
@@ -28,12 +21,11 @@ function getStatusTransitionBlock(
 
 /* 현재 상태별 다음 단계 안내 */
 const STATUS_NEXT_HINT: Record<string, { text: string; color: string; bg: string }> = {
-  created:     { text: "견적을 생성한 뒤 '견적됨' 상태로 변경하세요.",               color: "#2563eb", bg: "#eff6ff" },
-  quoted:      { text: "고객 확인 후 '견적 승인됨' 상태로 변경하세요.",               color: "#7c3aed", bg: "#faf5ff" },
-  approved:    { text: "'견적·결제·정산' 탭에서 결제를 등록하면 자동으로 변경됩니다.", color: "#d97706", bg: "#fffbeb" },
-  paid:        { text: "'통번역사' 탭에서 통번역사를 배정한 뒤 '매칭됨' 으로 변경하세요.", color: "#9333ea", bg: "#fdf4ff" },
-  matched:     { text: "통번역사가 작업을 시작하면 '작업중' 상태로 변경하세요.",          color: "#0891b2", bg: "#ecfeff" },
-  in_progress: { text: "번역 완료 후 '완료' 상태로 변경하세요.",                      color: "#059669", bg: "#f0fdf4" },
+  created:     { text: "견적을 생성한 뒤 '견적 발송' 상태로 변경하세요.",                color: "#2563eb", bg: "#eff6ff" },
+  quoted:      { text: "고객 확인 후 '견적 승인' 상태로 변경하세요.",                   color: "#7c3aed", bg: "#faf5ff" },
+  approved:    { text: "'통번역사' 탭에서 통번역사를 배정한 뒤 '배정됨' 으로 변경하세요.", color: "#9333ea", bg: "#fdf4ff" },
+  matched:     { text: "통번역사가 작업을 시작하면 '진행 중' 상태로 변경하세요.",          color: "#0891b2", bg: "#ecfeff" },
+  in_progress: { text: "작업 완료 후 '완료' 상태로 변경하세요.",                        color: "#059669", bg: "#f0fdf4" },
 };
 
 const inputStyle: React.CSSProperties = {
@@ -61,6 +53,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [statusTarget, setStatusTarget] = useState("");
   const [changingStatus, setChangingStatus] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [financialStatusTarget, setFinancialStatusTarget] = useState("");
+  const [changingFinancialStatus, setChangingFinancialStatus] = useState(false);
   const [commType, setCommType] = useState<"email"|"phone"|"message">("message");
   const [commContent, setCommContent] = useState("");
   const [addingComm, setAddingComm] = useState(false);
@@ -82,6 +76,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [editTitle, setEditTitle] = useState("");
   const [editCompanyId, setEditCompanyId] = useState<number | null>(null);
   const [editContactId, setEditContactId] = useState<number | null>(null);
+  const [editDivisionId, setEditDivisionId] = useState<number | null>(null);
+  const [editBillingCompanyId, setEditBillingCompanyId] = useState<number | null>(null);
+  const [editPayerCompanyId, setEditPayerCompanyId] = useState<number | null>(null);
+  const [showAdvancedBillingEdit, setShowAdvancedBillingEdit] = useState(false);
+  const [editDivisionsList, setEditDivisionsList] = useState<{id: number; name: string; type: string | null}[]>([]);
   const [savingInfo, setSavingInfo] = useState(false);
   const [companiesList, setCompaniesList] = useState<{id: number; name: string}[]>([]);
   const [contactsList, setContactsList] = useState<{id: number; name: string; companyId: number | null}[]>([]);
@@ -328,6 +327,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       if (res.ok) {
         setDetail(data);
         setStatusTarget(data.status);
+        setFinancialStatusTarget(data.financialStatus ?? "unbilled");
       } else {
         setErr(data.error ?? "조회 실패");
       }
@@ -449,10 +449,26 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      onToast(`상태가 "${STATUS_LABEL[statusTarget] ?? statusTarget}"로 변경되었습니다.`);
+      onToast(`업무 상태가 "${STATUS_LABEL[statusTarget] ?? statusTarget}"로 변경되었습니다.`);
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 상태 변경 실패"); }
     finally { setChangingStatus(false); }
+  };
+
+  const handleFinancialStatusChange = async () => {
+    if (!financialStatusTarget || financialStatusTarget === detail?.financialStatus) return;
+    setChangingFinancialStatus(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/financial-status`), {
+        method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ financialStatus: financialStatusTarget }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast(`재무 상태가 "${FINANCIAL_STATUS_LABEL[financialStatusTarget] ?? financialStatusTarget}"로 변경되었습니다.`);
+      await loadDetail(); onRefresh();
+    } catch { onToast("오류: 재무 상태 변경 실패"); }
+    finally { setChangingFinancialStatus(false); }
   };
 
   const handleCancel = async () => {
@@ -488,8 +504,25 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     if (!detail) return;
     await loadMeta();
     setEditTitle(detail.title);
-    setEditCompanyId(detail.company?.id ?? (detail as any).companyId ?? null);
+    const cid = detail.company?.id ?? (detail as any).companyId ?? null;
+    setEditCompanyId(cid);
     setEditContactId(detail.contact?.id ?? (detail as any).contactId ?? null);
+    setEditDivisionId((detail as any).requestingDivisionId ?? null);
+    setEditBillingCompanyId((detail as any).billingCompanyId ?? null);
+    setEditPayerCompanyId((detail as any).payerCompanyId ?? null);
+    setShowAdvancedBillingEdit(
+      !!((detail as any).billingCompanyId || (detail as any).payerCompanyId)
+    );
+    // 선택된 거래처의 divisions 로드
+    if (cid) {
+      try {
+        const res = await fetch(api(`/api/admin/companies/${cid}/divisions`), { headers: authH });
+        if (res.ok) setEditDivisionsList(await res.json());
+        else setEditDivisionsList([]);
+      } catch { setEditDivisionsList([]); }
+    } else {
+      setEditDivisionsList([]);
+    }
     setEditingInfo(true);
   };
 
@@ -499,7 +532,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     try {
       const res = await fetch(api(`/api/admin/projects/${projectId}/info`), {
         method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
-        body: JSON.stringify({ title: editTitle.trim(), companyId: editCompanyId, contactId: editContactId }),
+        body: JSON.stringify({
+          title: editTitle.trim(),
+          companyId: editCompanyId,
+          contactId: editContactId,
+          requestingDivisionId: editDivisionId,
+          billingCompanyId: showAdvancedBillingEdit ? editBillingCompanyId : null,
+          payerCompanyId: showAdvancedBillingEdit ? editPayerCompanyId : null,
+        }),
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
@@ -818,8 +858,35 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     </>
                   );
                 })()}
+                {/* 재무 상태 변경 */}
+                <div style={{ width: "100%", marginTop: 10, paddingTop: 10, borderTop: "1px dashed #e5e7eb" }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>재무 상태</div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    {ALL_FINANCIAL_STATUSES.map(fs => {
+                      const isActive = (detail.financialStatus ?? "unbilled") === fs;
+                      const target = financialStatusTarget === fs;
+                      const fStyle = FINANCIAL_STATUS_STYLE[fs] ?? { background: "#f3f4f6", color: "#6b7280" };
+                      return (
+                        <button key={fs} onClick={() => setFinancialStatusTarget(fs)}
+                          style={{ padding: "4px 12px", borderRadius: 8, border: `2px solid ${target ? (fStyle.color as string) : "#e5e7eb"}`,
+                            fontWeight: target || isActive ? 700 : 400, fontSize: 12, cursor: "pointer",
+                            background: target ? (fStyle.background as string) : isActive ? "#f9fafb" : "#fff",
+                            color: target || isActive ? (fStyle.color as string) : "#6b7280" }}>
+                          {FINANCIAL_STATUS_LABEL[fs]}
+                          {isActive && " ✓"}
+                        </button>
+                      );
+                    })}
+                    <GhostBtn onClick={handleFinancialStatusChange}
+                      disabled={changingFinancialStatus || financialStatusTarget === (detail.financialStatus ?? "unbilled")}
+                      color="#059669" style={{ fontSize: 12, padding: "4px 12px" }}>
+                      {changingFinancialStatus ? "변경 중..." : "재무 상태 적용"}
+                    </GhostBtn>
+                  </div>
+                </div>
+
                 {/* 통번역사 추천 — 배정이 필요한 상태일 때만 */}
-                {["paid", "matched", "in_progress"].includes(detail.status) && (
+                {["approved", "matched", "in_progress"].includes(detail.status) && (
                   <GhostBtn onClick={loadCandidates} disabled={loadingCandidates} color="#7c3aed" style={{ fontSize: 12, padding: "6px 12px" }}>
                     {loadingCandidates ? "조회 중..." : "통번역사 추천"}
                   </GhostBtn>
@@ -902,7 +969,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         <span style={{ color: "#374151" }}>{new Date(detail.createdAt).toLocaleString("ko-KR")}</span>
                       </div>
                       <div style={dl}>
-                        <span style={dt}>거래처<Opt /></span>
+                        <span style={dt}>거래처 (의뢰처)<Opt /></span>
                         {(detail.company?.name ?? (detail as any).companyName)
                           ? <span style={{ color: "#374151" }}>{detail.company?.name ?? (detail as any).companyName}</span>
                           : <span style={{ color: "#f59e0b", fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>⚠ 미연결</span>}
@@ -913,6 +980,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           ? <span style={{ color: "#374151" }}>{detail.contact?.name ?? (detail as any).contactName}</span>
                           : <span style={{ color: "#f59e0b", fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}>⚠ 미연결</span>}
                       </div>
+                      {(detail as any).divisionName && (
+                        <div style={dl}>
+                          <span style={dt}>브랜드 / 부서</span>
+                          <span style={{ color: "#7c3aed", fontWeight: 600, fontSize: 12 }}>{(detail as any).divisionName}</span>
+                        </div>
+                      )}
+                      {(detail as any).billingCompanyName && (detail as any).billingCompanyName !== (detail.company?.name ?? (detail as any).companyName) && (
+                        <div style={dl}>
+                          <span style={dt}>청구처</span>
+                          <span style={{ color: "#0369a1", fontWeight: 600, fontSize: 12 }}>{(detail as any).billingCompanyName}</span>
+                        </div>
+                      )}
                       {detail.fileUrl && (
                         <div style={{ ...dl, gridColumn: "span 2" }}>
                           <span style={dt}>첨부파일</span>
@@ -937,9 +1016,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                         <div>
-                          <label style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 4 }}>거래처</label>
-                          <select value={editCompanyId ?? ""} onChange={e => { setEditCompanyId(e.target.value ? Number(e.target.value) : null); setEditContactId(null); }}
-                            style={{ ...inputStyle, width: "100%" }}>
+                          <label style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 4 }}>거래처 (의뢰처)</label>
+                          <select value={editCompanyId ?? ""} onChange={async e => {
+                            const cid = e.target.value ? Number(e.target.value) : null;
+                            setEditCompanyId(cid); setEditContactId(null); setEditDivisionId(null);
+                            if (cid) {
+                              try {
+                                const res = await fetch(api(`/api/admin/companies/${cid}/divisions`), { headers: authH });
+                                if (res.ok) setEditDivisionsList(await res.json());
+                                else setEditDivisionsList([]);
+                              } catch { setEditDivisionsList([]); }
+                            } else { setEditDivisionsList([]); }
+                          }} style={{ ...inputStyle, width: "100%" }}>
                             <option value="">미연결</option>
                             {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                           </select>
@@ -954,6 +1042,45 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               .map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                           </select>
                         </div>
+                      </div>
+                      {/* 브랜드/부서 선택 */}
+                      {editDivisionsList.length > 0 && (
+                        <div>
+                          <label style={{ fontSize: 12, color: "#7c3aed", fontWeight: 600, display: "block", marginBottom: 4 }}>브랜드 / 부서</label>
+                          <select value={editDivisionId ?? ""} onChange={e => setEditDivisionId(e.target.value ? Number(e.target.value) : null)}
+                            style={{ ...inputStyle, width: "100%", borderColor: "#e9d5ff" }}>
+                            <option value="">전체 (부서 없음)</option>
+                            {editDivisionsList.map(d => <option key={d.id} value={d.id}>{d.name}{d.type ? ` (${d.type})` : ""}</option>)}
+                          </select>
+                        </div>
+                      )}
+                      {/* 청구처/입금처 분리 */}
+                      <div>
+                        <button type="button" onClick={() => setShowAdvancedBillingEdit(v => !v)}
+                          style={{ fontSize: 12, color: "#0369a1", background: "none", border: "none", cursor: "pointer", padding: "2px 0", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+                          <span>{showAdvancedBillingEdit ? "▼" : "▶"}</span>
+                          청구처 / 납부처 분리 (대형 고객사)
+                        </button>
+                        {showAdvancedBillingEdit && (
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8, padding: "10px 12px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
+                            <div>
+                              <label style={{ fontSize: 11, color: "#0369a1", fontWeight: 600, display: "block", marginBottom: 4 }}>청구처 (세금계산서 수신)</label>
+                              <select value={editBillingCompanyId ?? editCompanyId ?? ""} onChange={e => setEditBillingCompanyId(e.target.value ? Number(e.target.value) : null)}
+                                style={{ ...inputStyle, width: "100%", fontSize: 12 }}>
+                                <option value="">의뢰처와 동일</option>
+                                {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                              </select>
+                            </div>
+                            <div>
+                              <label style={{ fontSize: 11, color: "#0369a1", fontWeight: 600, display: "block", marginBottom: 4 }}>납부처 (실제 입금 주체)</label>
+                              <select value={editPayerCompanyId ?? editCompanyId ?? ""} onChange={e => setEditPayerCompanyId(e.target.value ? Number(e.target.value) : null)}
+                                style={{ ...inputStyle, width: "100%", fontSize: 12 }}>
+                                <option value="">의뢰처와 동일</option>
+                                {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                              </select>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 8, marginTop: 12 }}>

@@ -35,6 +35,12 @@ export type AdminProject = {
   projectCustomerId: number | null; adminId: number | null;
   contactId: number | null; companyId: number | null;
   contactName: string | null; companyName: string | null;
+  financialStatus?: string | null;
+  divisionName?: string | null;
+  billingCompanyName?: string | null;
+  requestingDivisionId?: number | null;
+  billingCompanyId?: number | null;
+  payerCompanyId?: number | null;
 };
 export type AdminPayment = {
   id: number; projectId: number; amount: number; status: string;
@@ -174,10 +180,22 @@ export function getDefaultPage(role: Role): NavPage {
 
 export const STATUS_LABEL: Record<string, string> = {
   created: "접수됨", quoted: "견적 발송", approved: "견적 승인",
-  paid: "결제 완료", matched: "통번역사 배정", in_progress: "번역 중",
+  paid: "결제 완료", matched: "통번역사 배정", in_progress: "진행 중",
   completed: "완료", cancelled: "취소됨", waiting: "대기", assigned: "배정됨",
   working: "작업 중", done: "완료",
   pending: "대기", ready: "정산 가능",
+};
+export const FINANCIAL_STATUS_LABEL: Record<string, string> = {
+  unbilled:   "미청구",
+  billed:     "청구 완료",
+  receivable: "미수금",
+  paid:       "입금 완료",
+};
+export const FINANCIAL_STATUS_STYLE: Record<string, React.CSSProperties> = {
+  unbilled:   { background: "#f3f4f6", color: "#6b7280" },
+  billed:     { background: "#eff6ff", color: "#2563eb" },
+  receivable: { background: "#fef3c7", color: "#b45309" },
+  paid:       { background: "#f0fdf4", color: "#15803d" },
 };
 export const STATUS_STYLE: Record<string, React.CSSProperties> = {
   created:     { background: "#f3f4f6", color: "#6b7280" },
@@ -206,14 +224,14 @@ export const ROLE_LABEL: Record<Role, string> = {
 };
 export const BOARD_CATEGORY_LABEL: Record<string, string> = { notice: "공지", reference: "통역자료", manual: "내부매뉴얼" };
 export const AVAILABILITY_LABEL: Record<string, string> = { available: "가능", busy: "바쁨", unavailable: "불가" };
-export const ALL_PROJECT_STATUSES = ["created","quoted","approved","paid","matched","in_progress","completed","cancelled"] as const;
+export const ALL_PROJECT_STATUSES = ["created","quoted","approved","matched","in_progress","completed","cancelled"] as const;
+export const ALL_FINANCIAL_STATUSES = ["unbilled","billed","receivable","paid"] as const;
 export const ALL_PAYMENT_STATUSES = ["pending","paid","failed"] as const;
 export const ALL_SETTLEMENT_STATUSES = ["pending", "ready", "paid"] as const;
 export const PROJECT_STATUS_TRANSITIONS: Record<string, string[]> = {
   created:     ["quoted", "cancelled"],
   quoted:      ["approved", "cancelled"],
-  approved:    ["paid", "cancelled"],
-  paid:        ["matched", "cancelled"],
+  approved:    ["matched", "cancelled"],
   matched:     ["in_progress", "cancelled"],
   in_progress: ["completed", "cancelled"],
   completed:   [],
