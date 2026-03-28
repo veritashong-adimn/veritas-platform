@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   api, User, AdminProject, AdminPayment, AdminTask, AdminSettlement, AdminUser,
   AdminCustomer, AdminContact, Company, Contact, Product, BoardPost, TranslatorProfile,
@@ -35,6 +35,62 @@ function Section({ title, children, action }: { title: string; children: React.R
         {action}
       </div>
       {children}
+    </div>
+  );
+}
+
+type SSItem = { id: number; label: string; sub?: string };
+function SearchableSelect({ items, value, onChange, placeholder, accentBorder = "#6366f1", maxResults = 20 }: {
+  items: SSItem[]; value: number | null; onChange: (id: number | null) => void;
+  placeholder?: string; accentBorder?: string; maxResults?: number;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [debounced, setDebounced] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { const t = setTimeout(() => setDebounced(query), 300); return () => clearTimeout(t); }, [query]);
+  useEffect(() => {
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
+  const selected = value != null ? items.find(i => i.id === value) : null;
+  const q = debounced.toLowerCase();
+  const filtered = q
+    ? items.filter(i => i.label.toLowerCase().includes(q) || (i.sub ?? "").toLowerCase().includes(q)).slice(0, maxResults)
+    : items.slice(0, maxResults);
+  const displayValue = open ? query : (selected?.label ?? "");
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <div style={{ display: "flex", alignItems: "center", border: `1px solid ${open ? accentBorder : "#d1d5db"}`, borderRadius: 8, background: "#fff", transition: "border-color 0.15s" }}>
+        <input
+          value={displayValue}
+          onChange={e => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => { setOpen(true); setQuery(""); }}
+          placeholder={placeholder ?? "이름으로 검색..."}
+          style={{ flex: 1, padding: "9px 12px", fontSize: 14, border: "none", outline: "none", background: "transparent", borderRadius: 8, minWidth: 0 }}
+        />
+        {value != null && (
+          <button type="button" onClick={() => { onChange(null); setQuery(""); setOpen(false); }}
+            style={{ padding: "0 10px", fontSize: 18, lineHeight: 1, color: "#9ca3af", background: "none", border: "none", cursor: "pointer", flexShrink: 0 }}>×</button>
+        )}
+        <span style={{ padding: "0 10px", color: "#9ca3af", fontSize: 12, flexShrink: 0, userSelect: "none" }}>{open ? "▲" : "▼"}</span>
+      </div>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, boxShadow: "0 6px 24px rgba(0,0,0,0.12)", zIndex: 600, maxHeight: 224, overflowY: "auto" }}>
+          {filtered.length === 0
+            ? <p style={{ margin: 0, padding: "10px 14px", fontSize: 13, color: "#9ca3af" }}>검색 결과 없음</p>
+            : filtered.map(item => (
+                <button key={item.id} type="button"
+                  onClick={() => { onChange(item.id); setQuery(""); setOpen(false); }}
+                  style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 14px", fontSize: 13, color: "#111827", background: item.id === value ? "#f0fdf4" : "transparent", border: "none", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
+                  <span style={{ fontWeight: 600 }}>{item.label}</span>
+                  {item.sub && <span style={{ marginLeft: 8, fontSize: 11, color: "#6b7280" }}>{item.sub}</span>}
+                </button>
+              ))
+          }
+        </div>
+      )}
     </div>
   );
 }
@@ -1043,8 +1099,12 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                 <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>요청 주체</p>
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>거래처</label>
-                  <select value={newProjectCompanyId ?? ""} onChange={async e => {
-                      const cid = e.target.value ? Number(e.target.value) : null;
+                  <SearchableSelect
+                    items={companies.map(c => ({ id: c.id, label: c.name }))}
+                    value={newProjectCompanyId}
+                    placeholder="회사명으로 검색..."
+                    accentBorder="#6366f1"
+                    onChange={async (cid) => {
                       setNewProjectCompanyId(cid);
                       setNewProjectContactId(null);
                       setNewProjectDivisionId(null);
@@ -1058,10 +1118,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                         if (res.ok) setCompanyDivisions(await res.json());
                       }
                     }}
-                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
-                    <option value="">— 선택 —</option>
-                    {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
+                  />
                 </div>
                 {companyDivisions.length > 0 && (
                   <div>
@@ -1075,13 +1132,15 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                 )}
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>담당자</label>
-                  <select value={newProjectContactId ?? ""} onChange={e => setNewProjectContactId(e.target.value ? Number(e.target.value) : null)}
-                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
-                    <option value="">— 없음 —</option>
-                    {(contacts as any[])
+                  <SearchableSelect
+                    items={(contacts as Contact[])
                       .filter(c => !newProjectCompanyId || c.companyId === newProjectCompanyId)
-                      .map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
+                      .map(c => ({ id: c.id, label: c.name, sub: [c.email, c.phone].filter(Boolean).join(" · ") || undefined }))}
+                    value={newProjectContactId}
+                    placeholder="이름 · 이메일 · 전화번호 검색..."
+                    accentBorder="#6366f1"
+                    onChange={setNewProjectContactId}
+                  />
                 </div>
               </div>
 
@@ -1109,11 +1168,13 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                 {showBillingOverride && (
                   <div>
                     <label style={{ fontSize: 12, fontWeight: 600, color: "#0369a1", display: "block", marginBottom: 4 }}>청구 대상</label>
-                    <select value={newProjectBillingCompanyId ?? ""} onChange={e => setNewProjectBillingCompanyId(e.target.value ? Number(e.target.value) : null)}
-                      style={{ width: "100%", border: "1px solid #bae6fd", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
-                      <option value="">— 선택 —</option>
-                      {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
+                    <SearchableSelect
+                      items={companies.map(c => ({ id: c.id, label: c.name }))}
+                      value={newProjectBillingCompanyId}
+                      placeholder="회사명으로 검색..."
+                      accentBorder="#0369a1"
+                      onChange={setNewProjectBillingCompanyId}
+                    />
                   </div>
                 )}
               </div>
@@ -1144,11 +1205,13 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                 {showPayerOverride && (
                   <div>
                     <label style={{ fontSize: 12, fontWeight: 600, color: "#059669", display: "block", marginBottom: 4 }}>납부 주체</label>
-                    <select value={newProjectPayerCompanyId ?? ""} onChange={e => setNewProjectPayerCompanyId(e.target.value ? Number(e.target.value) : null)}
-                      style={{ width: "100%", border: "1px solid #a7f3d0", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
-                      <option value="">— 선택 —</option>
-                      {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
+                    <SearchableSelect
+                      items={companies.map(c => ({ id: c.id, label: c.name }))}
+                      value={newProjectPayerCompanyId}
+                      placeholder="회사명으로 검색..."
+                      accentBorder="#059669"
+                      onChange={setNewProjectPayerCompanyId}
+                    />
                   </div>
                 )}
               </div>
