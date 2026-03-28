@@ -1089,7 +1089,10 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
               <div style={{ borderRadius: 10, border: "1px solid #e5e7eb", padding: "12px 14px", background: "#fafafa" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: showBillingOverride ? 10 : 0 }}>
                   <div>
-                    <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>청구 대상</p>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>청구 대상</p>
+                      <span style={{ fontSize: 10, color: "#0369a1", background: "#e0f2fe", borderRadius: 4, padding: "1px 5px", fontWeight: 600 }}>세금계산서 기준</span>
+                    </div>
                     {!showBillingOverride && (
                       <p style={{ margin: "3px 0 0", fontSize: 12, color: "#374151" }}>
                         {newProjectCompanyId
@@ -1119,7 +1122,10 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
               <div style={{ borderRadius: 10, border: "1px solid #e5e7eb", padding: "12px 14px", background: "#fafafa" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: showPayerOverride ? 10 : 0 }}>
                   <div>
-                    <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>납부 주체</p>
+                    <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                      <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>💰 납부 주체</p>
+                      <span style={{ fontSize: 10, color: "#059669", background: "#d1fae5", borderRadius: 4, padding: "1px 5px", fontWeight: 600 }}>입금 기준</span>
+                    </div>
                     {!showPayerOverride && (
                       <p style={{ margin: "3px 0 0", fontSize: 12, color: "#374151" }}>
                         {newProjectBillingCompanyId
