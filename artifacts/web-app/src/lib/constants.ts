@@ -98,8 +98,12 @@ export type Company = {
   representativeName: string | null; email: string | null; phone: string | null;
   createdAt: string; contactCount: number; projectCount: number; totalPayment: number;
 };
+export type Division = {
+  id: number; companyId: number; name: string; type: string | null; createdAt: string;
+  projectCount?: number; totalPayment?: number; contactCount?: number;
+};
 export type Contact = {
-  id: number; companyId: number; name: string; department: string | null; position: string | null;
+  id: number; companyId: number; divisionId: number | null; name: string; department: string | null; position: string | null;
   email: string | null; phone: string | null; notes: string | null; createdAt: string;
 };
 export type AdminContact = {
@@ -126,7 +130,8 @@ export type ContactDetail = {
 };
 export type CompanyDetail = Company & {
   contacts: Contact[];
-  projects: Array<{ id: number; title: string; status: string; createdAt: string }>;
+  divisions: Division[];
+  projects: Array<{ id: number; title: string; status: string; createdAt: string; requestingDivisionId?: number | null }>;
   totalQuote: number; totalSettlement: number;
 };
 export type Product = {

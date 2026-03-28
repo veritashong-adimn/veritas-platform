@@ -184,6 +184,11 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
   const [newProjectCustomerId, setNewProjectCustomerId] = useState<number | null>(null);
   const [newProjectCompanyId, setNewProjectCompanyId] = useState<number | null>(null);
   const [newProjectContactId, setNewProjectContactId] = useState<number | null>(null);
+  const [newProjectDivisionId, setNewProjectDivisionId] = useState<number | null>(null);
+  const [newProjectBillingCompanyId, setNewProjectBillingCompanyId] = useState<number | null>(null);
+  const [newProjectPayerCompanyId, setNewProjectPayerCompanyId] = useState<number | null>(null);
+  const [showAdvancedBilling, setShowAdvancedBilling] = useState(false);
+  const [companyDivisions, setCompanyDivisions] = useState<{id:number;name:string;type:string|null}[]>([]);
   const [creatingProject, setCreatingProject] = useState(false);
 
   // modals
@@ -568,13 +573,19 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
           customerId: newProjectCustomerId ?? undefined,
           companyId: newProjectCompanyId ?? undefined,
           contactId: newProjectContactId ?? undefined,
+          requestingDivisionId: newProjectDivisionId ?? undefined,
+          billingCompanyId: showAdvancedBilling ? (newProjectBillingCompanyId ?? undefined) : undefined,
+          payerCompanyId: showAdvancedBilling ? (newProjectPayerCompanyId ?? undefined) : undefined,
         }),
       });
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
       setToast(`프로젝트 #${data.id} 생성 완료`);
       setShowCreateProject(false);
-      setNewProjectTitle(""); setNewProjectCustomerId(null); setNewProjectCompanyId(null); setNewProjectContactId(null);
+      setNewProjectTitle(""); setNewProjectCustomerId(null); setNewProjectCompanyId(null);
+      setNewProjectContactId(null); setNewProjectDivisionId(null);
+      setNewProjectBillingCompanyId(null); setNewProjectPayerCompanyId(null);
+      setShowAdvancedBilling(false); setCompanyDivisions([]);
       await fetchAll();
       openDetail(data.id);
     } catch { setToast("오류: 프로젝트 생성 실패"); }
@@ -1031,10 +1042,21 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                   {customers.map(c => <option key={c.id} value={c.id}>{c.contactName} ({c.email})</option>)}
                 </select>
               </div>
+              {/* 거래처 + 담당자 */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>거래처 (선택)</label>
-                  <select value={newProjectCompanyId ?? ""} onChange={e => { setNewProjectCompanyId(e.target.value ? Number(e.target.value) : null); setNewProjectContactId(null); }}
+                  <select value={newProjectCompanyId ?? ""} onChange={async e => {
+                      const cid = e.target.value ? Number(e.target.value) : null;
+                      setNewProjectCompanyId(cid);
+                      setNewProjectContactId(null);
+                      setNewProjectDivisionId(null);
+                      setCompanyDivisions([]);
+                      if (cid) {
+                        const res = await fetch(api(`/api/admin/companies/${cid}/divisions`), { headers: authHeaders });
+                        if (res.ok) setCompanyDivisions(await res.json());
+                      }
+                    }}
                     style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
                     <option value="">— 없음 —</option>
                     {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -1051,9 +1073,52 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                   </select>
                 </div>
               </div>
+
+              {/* 브랜드/부서 (거래처 선택 시에만 표시) */}
+              {newProjectCompanyId && (
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>브랜드 / 부서 (선택)</label>
+                  <select value={newProjectDivisionId ?? ""} onChange={e => setNewProjectDivisionId(e.target.value ? Number(e.target.value) : null)}
+                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
+                    <option value="">— 본사 직접 의뢰 —</option>
+                    {companyDivisions.map(d => <option key={d.id} value={d.id}>{d.name}{d.type ? ` (${d.type})` : ""}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {/* 청구/입금 주체 분리 (선택적) */}
+              <div>
+                <button onClick={() => setShowAdvancedBilling(v => !v)}
+                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 12, color: "#6b7280", display: "flex", alignItems: "center", gap: 4 }}>
+                  <span>{showAdvancedBilling ? "▼" : "▶"}</span>
+                  청구/입금 주체 따로 설정 (대형 거래처 전용)
+                </button>
+                {showAdvancedBilling && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8, padding: "12px 14px", background: "#f9fafb", borderRadius: 8, border: "1px solid #e5e7eb" }}>
+                    <div>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>세금계산서 발행 거래처</label>
+                      <select value={newProjectBillingCompanyId ?? newProjectCompanyId ?? ""} onChange={e => setNewProjectBillingCompanyId(e.target.value ? Number(e.target.value) : null)}
+                        style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 10px", fontSize: 13, background: "#fff" }}>
+                        <option value="">— 의뢰 거래처와 동일 —</option>
+                        {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </select>
+                      <p style={{ margin: "3px 0 0", fontSize: 11, color: "#9ca3af" }}>미선택 시 의뢰 거래처로 자동 설정</p>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>실제 입금 주체</label>
+                      <select value={newProjectPayerCompanyId ?? newProjectCompanyId ?? ""} onChange={e => setNewProjectPayerCompanyId(e.target.value ? Number(e.target.value) : null)}
+                        style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "8px 10px", fontSize: 13, background: "#fff" }}>
+                        <option value="">— 의뢰 거래처와 동일 —</option>
+                        {companies.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                      </select>
+                      <p style={{ margin: "3px 0 0", fontSize: 11, color: "#9ca3af" }}>미선택 시 의뢰 거래처로 자동 설정</p>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
-              <GhostBtn onClick={() => { setShowCreateProject(false); setNewProjectTitle(""); }}>취소</GhostBtn>
+              <GhostBtn onClick={() => { setShowCreateProject(false); setNewProjectTitle(""); setShowAdvancedBilling(false); setCompanyDivisions([]); }}>취소</GhostBtn>
               <PrimaryBtn onClick={handleCreateAdminProject} disabled={creatingProject || !newProjectTitle.trim()} style={{ padding: "9px 20px" }}>
                 {creatingProject ? "생성 중..." : "프로젝트 등록"}
               </PrimaryBtn>
@@ -1266,13 +1331,15 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                                 {p.customerEmail && <div style={{ fontSize: 11, color: "#c0c8d4", marginTop: 1 }}>{p.customerEmail}</div>}
                               </td>
 
-                              {/* 거래처 · 담당자 (한 줄) */}
-                              <td style={{ ...tableTd, fontSize: 12, color: "#4b5563", whiteSpace: "nowrap" }}>
-                                {p.companyName ?? "-"}
-                                {(p as any).contactName && (
-                                  <span style={{ color: "#c0c8d4", margin: "0 4px" }}>·</span>
+                              {/* 거래처 · 담당자 (+ 브랜드) */}
+                              <td style={{ ...tableTd, fontSize: 12, maxWidth: 180 }}>
+                                <div style={{ color: "#4b5563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {p.companyName ?? "-"}
+                                  {(p as any).contactName && <><span style={{ color: "#c0c8d4", margin: "0 4px" }}>·</span><span style={{ color: "#9ca3af" }}>{(p as any).contactName}</span></>}
+                                </div>
+                                {(p as any).divisionName && (
+                                  <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 500, marginTop: 1 }}>{(p as any).divisionName}</div>
                                 )}
-                                {(p as any).contactName && <span style={{ color: "#9ca3af" }}>{(p as any).contactName}</span>}
                               </td>
 
                               {/* 상태 / 견적 / 재무 — 한 셀 통합 */}

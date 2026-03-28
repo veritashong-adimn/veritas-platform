@@ -10,6 +10,7 @@ export * from "./notes";
 export * from "./customers";
 export * from "./communications";
 export * from "./companies";
+export * from "./divisions";
 export * from "./contacts";
 export * from "./products";
 export * from "./translator_profiles";

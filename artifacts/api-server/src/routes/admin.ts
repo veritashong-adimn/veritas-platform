@@ -3,7 +3,7 @@ import {
   db, projectsTable, paymentsTable, tasksTable, usersTable,
   logsTable, quotesTable, settlementsTable, notesTable,
   customersTable, communicationsTable, translatorProfilesTable,
-  contactsTable, companiesTable, translatorRatesTable,
+  contactsTable, companiesTable, translatorRatesTable, divisionsTable,
   quoteItemsTable, calcQuoteItemAmounts,
   billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
   prepaidAccountsTable, prepaidLedgerTable,
@@ -48,7 +48,13 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
         customerEmail: usersTable.email, customerId: usersTable.id,
         projectCustomerId: projectsTable.customerId, adminId: projectsTable.adminId,
         contactId: projectsTable.contactId, companyId: projectsTable.companyId,
+        requestingCompanyId: projectsTable.requestingCompanyId,
+        requestingDivisionId: projectsTable.requestingDivisionId,
+        billingCompanyId: projectsTable.billingCompanyId,
+        payerCompanyId: projectsTable.payerCompanyId,
         contactName: contactAlias.name, companyName: companyAlias.name,
+        divisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
+        billingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.billingCompanyId})`,
       })
       .from(projectsTable)
       .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))
@@ -618,22 +624,29 @@ router.post("/admin/projects/:id/rematch", ...adminGuard, async (req, res) => {
 
 // ─── 관리자 직접 프로젝트 생성 ────────────────────────────────────────────
 router.post("/admin/projects", ...adminGuard, async (req, res) => {
-  const { title, customerId, companyId, contactId } = req.body as {
+  const { title, customerId, companyId, contactId,
+    requestingCompanyId, requestingDivisionId, billingCompanyId, payerCompanyId,
+  } = req.body as {
     title?: string; customerId?: number; companyId?: number; contactId?: number;
+    requestingCompanyId?: number; requestingDivisionId?: number;
+    billingCompanyId?: number; payerCompanyId?: number;
   };
   if (!title?.trim()) {
     res.status(400).json({ error: "프로젝트 제목은 필수입니다." });
     return;
   }
 
-  // customerId가 있으면 존재 여부만 확인 (customers 테이블은 userId 미보유)
   if (customerId) {
     const [customer] = await db.select({ id: customersTable.id }).from(customersTable).where(eq(customersTable.id, customerId));
     if (!customer) { res.status(400).json({ error: "존재하지 않는 고객입니다." }); return; }
   }
 
-  // 프로젝트 userId = 현재 로그인한 관리자 (운영자가 직접 생성하는 경우)
   const adminUser = (req as any).user as { id: number };
+
+  // 기본값: 별도 지정 없으면 companyId를 청구/입금 주체로 자동 설정
+  const effectiveBillingId = billingCompanyId ?? companyId ?? null;
+  const effectivePayerId = payerCompanyId ?? companyId ?? null;
+  const effectiveRequestingId = requestingCompanyId ?? companyId ?? null;
 
   try {
     const [project] = await db.insert(projectsTable).values({
@@ -641,6 +654,10 @@ router.post("/admin/projects", ...adminGuard, async (req, res) => {
       customerId: customerId ? Number(customerId) : null,
       companyId: companyId ? Number(companyId) : null,
       contactId: contactId ? Number(contactId) : null,
+      requestingCompanyId: effectiveRequestingId ? Number(effectiveRequestingId) : null,
+      requestingDivisionId: requestingDivisionId ? Number(requestingDivisionId) : null,
+      billingCompanyId: effectiveBillingId ? Number(effectiveBillingId) : null,
+      payerCompanyId: effectivePayerId ? Number(effectivePayerId) : null,
       title: title.trim(),
       adminId: adminUser.id,
     }).returning();
@@ -659,11 +676,21 @@ router.patch("/admin/projects/:id/info", ...adminGuard, async (req, res) => {
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
-  const { title, companyId, contactId } = req.body as { title?: string; companyId?: number | null; contactId?: number | null };
+  const { title, companyId, contactId,
+    requestingCompanyId, requestingDivisionId, billingCompanyId, payerCompanyId,
+  } = req.body as {
+    title?: string; companyId?: number | null; contactId?: number | null;
+    requestingCompanyId?: number | null; requestingDivisionId?: number | null;
+    billingCompanyId?: number | null; payerCompanyId?: number | null;
+  };
   const updates: Record<string, any> = {};
   if (title !== undefined) { if (!title.trim()) { res.status(400).json({ error: "제목은 빈 값일 수 없습니다." }); return; } updates.title = title.trim(); }
   if (companyId !== undefined) updates.companyId = companyId;
   if (contactId !== undefined) updates.contactId = contactId;
+  if (requestingCompanyId !== undefined) updates.requestingCompanyId = requestingCompanyId;
+  if (requestingDivisionId !== undefined) updates.requestingDivisionId = requestingDivisionId;
+  if (billingCompanyId !== undefined) updates.billingCompanyId = billingCompanyId;
+  if (payerCompanyId !== undefined) updates.payerCompanyId = payerCompanyId;
   if (Object.keys(updates).length === 0) { res.status(400).json({ error: "변경할 항목이 없습니다." }); return; }
 
   try {

@@ -6,6 +6,7 @@ export const contactsTable = pgTable("contacts", {
   companyId: integer("company_id")
     .notNull()
     .references(() => companiesTable.id),
+  divisionId: integer("division_id"),
   name: text("name").notNull(),
   department: text("department"),
   position: text("position"),

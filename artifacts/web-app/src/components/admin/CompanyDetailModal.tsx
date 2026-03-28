@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { api, CompanyDetail, Contact, NoteEntry } from "../../lib/constants";
+import React, { useState, useEffect } from "react";
+import { api, CompanyDetail, Contact, Division, NoteEntry } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn } from "../ui";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { PrepaidLedgerModal } from "./PrepaidLedgerModal";
@@ -32,6 +32,11 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   type PrepaidAccount = { id: number; companyId: number; companyName: string; initialAmount: number; currentBalance: number; status: string; note: string | null; depositDate: string | null; createdAt: string };
   const [prepaidAccounts, setPrepaidAccounts] = useState<PrepaidAccount[]>([]);
   const [selectedLedgerAccountId, setSelectedLedgerAccountId] = useState<number | null>(null);
+  const [showDivForm, setShowDivForm] = useState(false);
+  const [divForm, setDivForm] = useState({ name: "", type: "" });
+  const [addingDiv, setAddingDiv] = useState(false);
+  const [editDivId, setEditDivId] = useState<number | null>(null);
+  const [editDivForm, setEditDivForm] = useState({ name: "", type: "" });
 
   const authH = { Authorization: `Bearer ${token}` };
 
@@ -109,6 +114,48 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       onToast("담당자가 추가되었습니다.");
     } catch { onToast("오류: 담당자 추가 실패"); }
     finally { setAddingContact(false); }
+  };
+
+  const handleAddDiv = async () => {
+    if (!divForm.name.trim()) { onToast("브랜드/부서명을 입력하세요."); return; }
+    setAddingDiv(true);
+    try {
+      const res = await fetch(api(`/api/admin/companies/${companyId}/divisions`), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify(divForm),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      setDetail(prev => prev ? { ...prev, divisions: [...prev.divisions, { ...data, projectCount: 0, totalPayment: 0, contactCount: 0 }] } : prev);
+      setDivForm({ name: "", type: "" });
+      setShowDivForm(false);
+      onToast("브랜드/부서가 추가되었습니다.");
+    } catch { onToast("오류: 추가 실패"); }
+    finally { setAddingDiv(false); }
+  };
+
+  const handleSaveDiv = async (divId: number) => {
+    try {
+      const res = await fetch(api(`/api/admin/divisions/${divId}`), {
+        method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify(editDivForm),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      setDetail(prev => prev ? { ...prev, divisions: prev.divisions.map(d => d.id === divId ? { ...d, ...data } : d) } : prev);
+      setEditDivId(null);
+      onToast("수정되었습니다.");
+    } catch { onToast("오류: 수정 실패"); }
+  };
+
+  const handleDeleteDiv = async (divId: number, name: string) => {
+    if (!confirm(`"${name}" 브랜드/부서를 삭제하시겠습니까?`)) return;
+    try {
+      const res = await fetch(api(`/api/admin/divisions/${divId}`), { method: "DELETE", headers: authH });
+      if (!res.ok) { onToast("삭제 실패"); return; }
+      setDetail(prev => prev ? { ...prev, divisions: prev.divisions.filter(d => d.id !== divId) } : prev);
+      onToast("삭제되었습니다.");
+    } catch { onToast("오류: 삭제 실패"); }
   };
 
   return (
@@ -212,6 +259,76 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 </div>
               </div>
             )}
+
+            {/* ── 브랜드/부서 섹션 ── */}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 20, marginBottom: 10 }}>
+              <p style={{ ...sH, margin: 0 }}>브랜드 / 부서 ({detail.divisions.length})</p>
+              <GhostBtn onClick={() => setShowDivForm(v => !v)} style={{ fontSize: 12, padding: "4px 10px" }}>+ 추가</GhostBtn>
+            </div>
+            {showDivForm && (
+              <div style={{ background: "#f9fafb", borderRadius: 10, padding: "14px 16px", marginBottom: 12, border: "1px solid #e5e7eb" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px" }}>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>브랜드/부서명 *</label>
+                    <input value={divForm.name} onChange={e => setDivForm(p => ({ ...p, name: e.target.value }))}
+                      style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} placeholder="예: 까르띠에" />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>유형 (선택)</label>
+                    <input value={divForm.type} onChange={e => setDivForm(p => ({ ...p, type: e.target.value }))}
+                      style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} placeholder="brand / department / team" />
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  <PrimaryBtn onClick={handleAddDiv} disabled={addingDiv} style={{ fontSize: 13, padding: "7px 16px" }}>
+                    {addingDiv ? "추가 중..." : "추가"}
+                  </PrimaryBtn>
+                  <GhostBtn onClick={() => setShowDivForm(false)} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
+                </div>
+              </div>
+            )}
+            {detail.divisions.length === 0
+              ? <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>등록된 브랜드/부서가 없습니다.</p>
+              : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+                  {detail.divisions.map((d: Division) => (
+                    editDivId === d.id
+                      ? (
+                        <div key={d.id} style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 14px", border: "1px solid #e5e7eb" }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            <input value={editDivForm.name} onChange={e => setEditDivForm(p => ({ ...p, name: e.target.value }))}
+                              style={{ ...inputStyle, fontSize: 13, padding: "5px 8px" }} placeholder="브랜드/부서명" />
+                            <input value={editDivForm.type} onChange={e => setEditDivForm(p => ({ ...p, type: e.target.value }))}
+                              style={{ ...inputStyle, fontSize: 13, padding: "5px 8px" }} placeholder="유형" />
+                          </div>
+                          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                            <PrimaryBtn onClick={() => handleSaveDiv(d.id)} style={{ fontSize: 12, padding: "5px 12px" }}>저장</PrimaryBtn>
+                            <GhostBtn onClick={() => setEditDivId(null)} style={{ fontSize: 12, padding: "5px 12px" }}>취소</GhostBtn>
+                          </div>
+                        </div>
+                      ) : (
+                        <div key={d.id} style={{ display: "flex", gap: 12, padding: "10px 14px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6", alignItems: "center", flexWrap: "wrap" }}>
+                          <div style={{ flex: 1, minWidth: 120 }}>
+                            <span style={{ fontWeight: 700, fontSize: 13, color: "#111827" }}>{d.name}</span>
+                            {d.type && <span style={{ marginLeft: 6, fontSize: 11, color: "#9ca3af", padding: "1px 6px", background: "#f3f4f6", borderRadius: 6 }}>{d.type}</span>}
+                          </div>
+                          <div style={{ display: "flex", gap: 12, fontSize: 12, color: "#6b7280" }}>
+                            <span>프로젝트 <strong style={{ color: "#2563eb" }}>{d.projectCount ?? 0}건</strong></span>
+                            <span>매출 <strong style={{ color: "#059669" }}>{Number(d.totalPayment ?? 0).toLocaleString()}원</strong></span>
+                            <span>담당자 <strong>{d.contactCount ?? 0}명</strong></span>
+                          </div>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button onClick={() => { setEditDivId(d.id); setEditDivForm({ name: d.name, type: d.type ?? "" }); }}
+                              style={{ background: "none", border: "1px solid #e5e7eb", borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", color: "#6b7280" }}>수정</button>
+                            <button onClick={() => handleDeleteDiv(d.id, d.name)}
+                              style={{ background: "none", border: "1px solid #fca5a5", borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", color: "#ef4444" }}>삭제</button>
+                          </div>
+                        </div>
+                      )
+                  ))}
+                </div>
+              )
+            }
 
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 20, marginBottom: 10 }}>
               <p style={{ ...sH, margin: 0 }}>담당자 목록 ({detail.contacts.length})</p>

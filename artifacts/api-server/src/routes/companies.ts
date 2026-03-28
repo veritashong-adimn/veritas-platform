@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import {
   db, companiesTable, contactsTable, projectsTable,
   paymentsTable, settlementsTable, quotesTable, communicationsTable, usersTable,
-  billingBatchesTable,
+  billingBatchesTable, divisionsTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, inArray, sql, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
@@ -87,10 +87,31 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
     const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
     if (!company) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
 
-    const contacts = await db.select().from(contactsTable).where(eq(contactsTable.companyId, companyId));
+    const contacts = await db
+      .select({
+        id: contactsTable.id, companyId: contactsTable.companyId, divisionId: contactsTable.divisionId,
+        name: contactsTable.name, department: contactsTable.department, position: contactsTable.position,
+        email: contactsTable.email, phone: contactsTable.phone, notes: contactsTable.notes,
+        createdAt: contactsTable.createdAt,
+      })
+      .from(contactsTable)
+      .where(eq(contactsTable.companyId, companyId));
+
+    const divisions = await db
+      .select({
+        id: divisionsTable.id, companyId: divisionsTable.companyId,
+        name: divisionsTable.name, type: divisionsTable.type, createdAt: divisionsTable.createdAt,
+      })
+      .from(divisionsTable)
+      .where(eq(divisionsTable.companyId, companyId))
+      .orderBy(divisionsTable.name);
 
     const projects = await db
-      .select({ id: projectsTable.id, title: projectsTable.title, status: projectsTable.status, createdAt: projectsTable.createdAt })
+      .select({
+        id: projectsTable.id, title: projectsTable.title, status: projectsTable.status,
+        createdAt: projectsTable.createdAt,
+        requestingDivisionId: sql<number | null>`${projectsTable.requestingDivisionId}`,
+      })
       .from(projectsTable)
       .where(eq(projectsTable.companyId, companyId))
       .orderBy(desc(projectsTable.createdAt));
@@ -122,11 +143,11 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
 
       // 선입금 잔액 (최신 선입금/차감 견적의 balance_after)
       const [lastPrepaid] = await db
-        .select({ prepaidBalanceAfter: quotesTable.prepaidBalanceAfter })
+        .select({ prepaidBalanceAfter: sql<string | null>`${quotesTable.prepaidBalanceAfter}` })
         .from(quotesTable)
         .where(and(
           inArray(quotesTable.projectId, projectIds),
-          inArray(quotesTable.quoteType as any, ["b2c_prepaid", "prepaid_deduction"]),
+          sql`${quotesTable.quoteType} IN ('b2c_prepaid', 'prepaid_deduction')`,
           sql`${quotesTable.prepaidBalanceAfter} IS NOT NULL`,
         ))
         .orderBy(desc(quotesTable.id))
@@ -135,12 +156,12 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
 
       // 마지막 결제일
       const [lastPm] = await db
-        .select({ paidAt: paymentsTable.paidAt })
+        .select({ paymentDate: paymentsTable.paymentDate })
         .from(paymentsTable)
         .where(and(inArray(paymentsTable.projectId, projectIds), eq(paymentsTable.status, "paid")))
         .orderBy(desc(paymentsTable.id))
         .limit(1);
-      lastPaymentDate = lastPm?.paidAt ? String(lastPm.paidAt) : null;
+      lastPaymentDate = lastPm?.paymentDate ? String(lastPm.paymentDate) : null;
     }
 
     // 누적 청구 진행 중 건수
@@ -153,7 +174,36 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
     const lastProjectDate = projects.length > 0 ? projects[0].createdAt : null;
     const unpaidAmount = Math.max(0, totalQuote - totalPayment);
 
-    res.json({ ...company, contacts, projects, totalQuote, totalPayment, totalSettlement, prepaidBalance, activeAccumulatedCount, unpaidAmount, lastProjectDate, lastPaymentDate });
+    // 브랜드별 프로젝트 수 및 매출 집계
+    const divisionStats: Record<number, { projectCount: number; payment: number }> = {};
+    for (const p of projects) {
+      const did = p.requestingDivisionId;
+      if (did != null) {
+        if (!divisionStats[did]) divisionStats[did] = { projectCount: 0, payment: 0 };
+        divisionStats[did].projectCount++;
+      }
+    }
+    if (projectIds.length > 0) {
+      const pmRows = await db
+        .select({ projectId: paymentsTable.projectId, amount: paymentsTable.amount })
+        .from(paymentsTable)
+        .where(and(inArray(paymentsTable.projectId, projectIds), eq(paymentsTable.status, "paid")));
+      for (const pm of pmRows) {
+        const p = projects.find(pr => pr.id === pm.projectId);
+        if (p?.requestingDivisionId != null) {
+          if (!divisionStats[p.requestingDivisionId]) divisionStats[p.requestingDivisionId] = { projectCount: 0, payment: 0 };
+          divisionStats[p.requestingDivisionId].payment += Number(pm.amount);
+        }
+      }
+    }
+    const divisionsWithStats = divisions.map(d => ({
+      ...d,
+      projectCount: divisionStats[d.id]?.projectCount ?? 0,
+      totalPayment: divisionStats[d.id]?.payment ?? 0,
+      contactCount: contacts.filter(c => c.divisionId === d.id).length,
+    }));
+
+    res.json({ ...company, contacts, divisions: divisionsWithStats, projects, totalQuote, totalPayment, totalSettlement, prepaidBalance, activeAccumulatedCount, unpaidAmount, lastProjectDate, lastPaymentDate });
   } catch (err) {
     req.log.error({ err }, "Companies: failed to get detail");
     res.status(500).json({ error: "거래처 상세 조회 실패." });
@@ -211,6 +261,82 @@ router.delete("/admin/companies/:id", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Companies: failed to delete");
     res.status(500).json({ error: "거래처 삭제 실패." });
+  }
+});
+
+// ─── 브랜드/부서 목록 ────────────────────────────────────────────────────────
+router.get("/admin/companies/:id/divisions", ...adminGuard, async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 company id." }); return;
+  }
+  try {
+    const rows = await db.select().from(divisionsTable)
+      .where(eq(divisionsTable.companyId, companyId))
+      .orderBy(divisionsTable.name);
+    res.json(rows);
+  } catch (err) {
+    req.log.error({ err }, "Divisions: failed to list");
+    res.status(500).json({ error: "브랜드/부서 조회 실패." });
+  }
+});
+
+// ─── 브랜드/부서 생성 ────────────────────────────────────────────────────────
+router.post("/admin/companies/:id/divisions", ...adminGuard, async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 company id." }); return;
+  }
+  const { name, type } = req.body as { name?: string; type?: string };
+  if (!name?.trim()) {
+    res.status(400).json({ error: "브랜드/부서명은 필수입니다." }); return;
+  }
+  try {
+    const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
+    if (!company) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+    const [div] = await db.insert(divisionsTable)
+      .values({ companyId, name: name.trim(), type: type?.trim() || null })
+      .returning();
+    res.status(201).json(div);
+  } catch (err) {
+    req.log.error({ err }, "Divisions: failed to create");
+    res.status(500).json({ error: "브랜드/부서 생성 실패." });
+  }
+});
+
+// ─── 브랜드/부서 수정 ────────────────────────────────────────────────────────
+router.patch("/admin/divisions/:id", ...adminGuard, async (req, res) => {
+  const divId = Number(req.params.id);
+  if (isNaN(divId) || divId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 division id." }); return;
+  }
+  const { name, type } = req.body as { name?: string; type?: string };
+  try {
+    const [existing] = await db.select().from(divisionsTable).where(eq(divisionsTable.id, divId));
+    if (!existing) { res.status(404).json({ error: "브랜드/부서를 찾을 수 없습니다." }); return; }
+    const [updated] = await db.update(divisionsTable)
+      .set({ name: name?.trim() ?? existing.name, type: type ?? existing.type })
+      .where(eq(divisionsTable.id, divId))
+      .returning();
+    res.json(updated);
+  } catch (err) {
+    req.log.error({ err }, "Divisions: failed to update");
+    res.status(500).json({ error: "브랜드/부서 수정 실패." });
+  }
+});
+
+// ─── 브랜드/부서 삭제 ────────────────────────────────────────────────────────
+router.delete("/admin/divisions/:id", ...adminGuard, async (req, res) => {
+  const divId = Number(req.params.id);
+  if (isNaN(divId) || divId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 division id." }); return;
+  }
+  try {
+    await db.delete(divisionsTable).where(eq(divisionsTable.id, divId));
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "Divisions: failed to delete");
+    res.status(500).json({ error: "브랜드/부서 삭제 실패." });
   }
 });
 
@@ -342,11 +468,7 @@ router.get("/admin/contacts/:id", ...adminGuard, async (req, res) => {
             createdAt: communicationsTable.createdAt,
           })
           .from(communicationsTable)
-          .where(
-            projectIds.length === 1
-              ? eq(communicationsTable.projectId, projectIds[0])
-              : sql`${communicationsTable.projectId} = ANY(ARRAY[${sql.join(projectIds.map(id => sql`${id}`), sql`, `)}])`
-          )
+          .where(inArray(communicationsTable.projectId, projectIds))
           .orderBy(desc(communicationsTable.createdAt))
       : [];
 
