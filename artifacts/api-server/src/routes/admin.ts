@@ -710,7 +710,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
-  type ItemInput = { productName: string; unit?: string; quantity?: number; unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string };
+  type ItemInput = { productName: string; languagePair?: string; unit?: string; quantity?: number; unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string };
   const {
     amount, items, note,
     taxDocumentType, taxCategory,
@@ -741,8 +741,8 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
   if (!isPrepaidDeduction && !(isAccumulatedBatch && hasSelectedProjects) && !hasItems && (!amount || isNaN(Number(amount)) || Number(amount) <= 0)) {
     res.status(400).json({ error: "견적 금액 또는 품목 목록이 필요합니다." }); return;
   }
-  if (isPrepaidDeduction && (!prepaidUsageAmount || Number(prepaidUsageAmount) <= 0)) {
-    res.status(400).json({ error: "선입금 차감 견적서에는 이번 사용 금액이 필요합니다." }); return;
+  if (isPrepaidDeduction && !hasItems && (!prepaidUsageAmount || Number(prepaidUsageAmount) <= 0)) {
+    res.status(400).json({ error: "선입금 차감 견적서에는 이번 사용 금액 또는 품목 목록이 필요합니다." }); return;
   }
 
   try {
@@ -757,7 +757,15 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
     let computedPrepaidAfter: number | null = null;
     let computedAmount: number | null = null;
     if (isPrepaidDeduction) {
-      const usageAmt = Number(prepaidUsageAmount);
+      // items가 있으면 items 합계를 사용 금액으로 사용, 없으면 prepaidUsageAmount 사용
+      const usageAmt = hasItems
+        ? items!.reduce((s, it) => {
+            const qty = Number(it.quantity ?? 1);
+            const up = Number(it.unitPrice);
+            const tax = Math.round(Math.round(qty * up) * (it.taxRate ?? 0));
+            return s + Math.round(qty * up) + tax;
+          }, 0)
+        : Number(prepaidUsageAmount);
       let currentBalance = 0;
 
       if (prepaidAccountId) {
@@ -829,6 +837,9 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
     type CalcItem = ItemInput & { supplyAmount: number; taxAmount: number; totalAmount: number };
     let calcItems: CalcItem[] = [];
 
+    // 선입금 차감 + items 있을 때도 아이템 처리 허용
+    const shouldProcessItems = hasItems && (!isPrepaidDeduction || hasItems);
+
     if (isAccumulatedBatch && batchProjectItems.length > 0) {
       // 누적 견적: 각 선택 프로젝트 → 품목 1건 자동 생성
       calcItems = batchProjectItems.map(bp => {
@@ -845,14 +856,17 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
         } as CalcItem;
       });
       totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
-    } else if (hasItems) {
+    } else if (shouldProcessItems) {
       calcItems = items!.map(it => {
         const qty = Number(it.quantity ?? 1);
         const up = Number(it.unitPrice);
         const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0);
         return { ...it, supplyAmount, taxAmount, totalAmount };
       });
-      totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
+      // 선입금 차감은 서버 계산값(computedAmount) 우선, items 합계는 이미 일치함
+      if (!isPrepaidDeduction) {
+        totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
+      }
     }
 
     const computedBatchItemCount = isAccumulatedBatch && batchProjectItems.length > 0
@@ -875,7 +889,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
         prepaidBalanceBefore: isPrepaidDeduction
           ? (computedPrepaidBefore != null ? String(computedPrepaidBefore) : null)
           : (prepaidBalanceBefore != null ? String(prepaidBalanceBefore) : null),
-        prepaidUsageAmount: prepaidUsageAmount != null ? String(prepaidUsageAmount) : null,
+        prepaidUsageAmount: isPrepaidDeduction && computedAmount != null ? String(computedAmount) : (prepaidUsageAmount != null ? String(prepaidUsageAmount) : null),
         prepaidBalanceAfter: isPrepaidDeduction
           ? (computedPrepaidAfter != null ? String(computedPrepaidAfter) : null)
           : (prepaidBalanceAfter != null ? String(prepaidBalanceAfter) : null),
@@ -889,6 +903,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
           quoteId: quote.id,
           productId: (it as any).productId ?? null,
           productName: it.productName,
+          languagePair: (it as any).languagePair ?? null,
           unit: it.unit ?? "건",
           quantity: String(it.quantity ?? 1),
           unitPrice: String(it.unitPrice),

@@ -5,6 +5,7 @@ This project is a pnpm workspace monorepo using TypeScript, designed as an MVP f
 Key capabilities include:
 - User authentication and authorization with JWT (with email normalization, detailed failure logging, and admin password reset API).
 - Project creation and management for customers (with visual status stepper: 접수→견적→승인→결제→번역사 배정→번역 중→완료).
+- **견적 항목 기반 구조 (신규)**: 모든 견적 유형(B2B 일반/선입금 차감)에 항목(QuoteItem) 기반 입력 통합. `quote_items` 테이블에 `language_pair` 컬럼 추가. 항목명/언어쌍/단위/수량/단가/세율 입력 → 부가세·합계 자동계산 → 총합계 = 견적금액. 선입금 차감 유형도 이번 항목 합계로 차감금액 자동결정(수동 입력 제거). 기존 단순금액 입력 방식 제거(항목 방식으로 통합).
 - Quote generation and approval workflow.
 - Translator matching and task assignment (AI-scored match-candidates top-3, direct assign API).
 - Payment processing and settlement management for translators.

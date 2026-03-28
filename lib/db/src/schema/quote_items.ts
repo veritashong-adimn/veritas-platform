@@ -18,6 +18,8 @@ export const quoteItemsTable = pgTable("quote_items", {
 
   productName: text("product_name").notNull(),
 
+  languagePair: text("language_pair"),
+
   unit: text("unit").notNull().default("건"),
 
   quantity: numeric("quantity", { precision: 10, scale: 2 }).notNull().default("1"),
