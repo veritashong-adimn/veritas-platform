@@ -55,7 +55,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, onClose, onToa
         }
       }
       if (nRes.ok) setNotes(Array.isArray(nData) ? nData : []);
-    } catch { onToast("오류: 번역사 정보 불러오기 실패"); }
+    } catch { onToast("오류: 통번역사 정보 불러오기 실패"); }
     finally { setLoading(false); }
   };
   useEffect(() => { load(); }, [userId]);
@@ -76,7 +76,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, onClose, onToa
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       setProfile(data);
-      onToast("번역사 프로필이 저장되었습니다.");
+      onToast("통번역사 프로필이 저장되었습니다.");
     } catch { onToast("오류: 저장 실패"); }
     finally { setSaving(false); }
   };
@@ -141,14 +141,14 @@ export function TranslatorDetailModal({ userId, userEmail, token, onClose, onToa
       <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb", width: "100%", maxWidth: 820, padding: "24px 28px", boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>번역사 상세</h2>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>통번역사 상세</h2>
             <p style={{ margin: "4px 0 0", fontSize: 13, color: "#6b7280" }}>{userEmail}</p>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#9ca3af" }}>×</button>
         </div>
         {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : (
           <>
-            <ReviewMemoPanel storageKey={`translator_${userId}`} label="이 번역사 검수 메모" />
+            <ReviewMemoPanel storageKey={`translator_${userId}`} label="이 통번역사 검수 메모" />
             <p style={sH}>프로필 편집</p>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", marginBottom: 12 }}>
               <F label="언어쌍" field="languagePairs" placeholder="예: 한→영, 영→한" />

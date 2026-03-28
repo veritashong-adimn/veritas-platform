@@ -20,7 +20,7 @@ function getStatusTransitionBlock(
   if ((targetStatus === "matched" || targetStatus === "in_progress") && !hasAssignedTranslator) {
     return {
       blocked: true,
-      reason: "배정된 번역사가 없습니다. '번역사' 탭에서 번역사를 배정한 뒤 상태를 변경해주세요.",
+      reason: "배정된 통번역사가 없습니다. '통번역사' 탭에서 통번역사를 배정한 뒤 상태를 변경해주세요.",
     };
   }
   return { blocked: false };
@@ -31,8 +31,8 @@ const STATUS_NEXT_HINT: Record<string, { text: string; color: string; bg: string
   created:     { text: "견적을 생성한 뒤 '견적됨' 상태로 변경하세요.",               color: "#2563eb", bg: "#eff6ff" },
   quoted:      { text: "고객 확인 후 '견적 승인됨' 상태로 변경하세요.",               color: "#7c3aed", bg: "#faf5ff" },
   approved:    { text: "'견적·결제·정산' 탭에서 결제를 등록하면 자동으로 변경됩니다.", color: "#d97706", bg: "#fffbeb" },
-  paid:        { text: "'번역사' 탭에서 번역사를 배정한 뒤 '매칭됨' 으로 변경하세요.", color: "#9333ea", bg: "#fdf4ff" },
-  matched:     { text: "번역사가 작업을 시작하면 '작업중' 상태로 변경하세요.",          color: "#0891b2", bg: "#ecfeff" },
+  paid:        { text: "'통번역사' 탭에서 통번역사를 배정한 뒤 '매칭됨' 으로 변경하세요.", color: "#9333ea", bg: "#fdf4ff" },
+  matched:     { text: "통번역사가 작업을 시작하면 '작업중' 상태로 변경하세요.",          color: "#0891b2", bg: "#ecfeff" },
   in_progress: { text: "번역 완료 후 '완료' 상태로 변경하세요.",                      color: "#059669", bg: "#f0fdf4" },
 };
 
@@ -358,7 +358,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      onToast(`번역사 배정 완료 → ${data.translatorEmail}`);
+      onToast(`통번역사 배정 완료 → ${data.translatorEmail}`);
       setShowCandidates(false);
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 배정 실패"); }
@@ -818,10 +818,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     </>
                   );
                 })()}
-                {/* 번역사 추천 — 배정이 필요한 상태일 때만 */}
+                {/* 통번역사 추천 — 배정이 필요한 상태일 때만 */}
                 {["paid", "matched", "in_progress"].includes(detail.status) && (
                   <GhostBtn onClick={loadCandidates} disabled={loadingCandidates} color="#7c3aed" style={{ fontSize: 12, padding: "6px 12px" }}>
-                    {loadingCandidates ? "조회 중..." : "번역사 추천"}
+                    {loadingCandidates ? "조회 중..." : "통번역사 추천"}
                   </GhostBtn>
                 )}
                 {/* 프로젝트 취소 */}
@@ -833,17 +833,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               </div>
             </div>
 
-            {/* 번역사 추천 후보 */}
+            {/* 통번역사 추천 후보 */}
             {showCandidates && (
               <div style={{ marginBottom: 14, padding: "12px 14px", background: "#faf5ff", borderRadius: 10, border: "1px solid #e9d5ff" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, alignItems: "center" }}>
-                  <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#7c3aed" }}>추천 번역사 (상위 3명)</p>
+                  <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#7c3aed" }}>추천 통번역사 (상위 3명)</p>
                   <button onClick={() => setShowCandidates(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 16 }}>×</button>
                 </div>
                 {loadingCandidates ? (
                   <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center" }}>조회 중...</p>
                 ) : candidates.length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: 13 }}>조건에 맞는 번역사가 없습니다.</p>
+                  <p style={{ color: "#9ca3af", fontSize: 13 }}>조건에 맞는 통번역사가 없습니다.</p>
                 ) : candidates.map((c, i) => {
                   const av = AVAIL_STYLE[c.profile?.availabilityStatus ?? ""] ?? AVAIL_STYLE.unavailable;
                   return (
@@ -1008,13 +1008,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               </>
             )}
 
-            {/* 작업 (번역사 배정 / 작업 관리) */}
+            {/* 작업 (통번역사 배정 / 작업 관리) */}
             {activeSection === "work" && (
               <>
                 {detail.tasks.length === 0 ? (
                   <div style={{ textAlign: "center", padding: "24px 0", color: "#9ca3af" }}>
-                    <p style={{ margin: 0 }}>배정된 번역사가 없습니다.</p>
-                    <p style={{ margin: "6px 0 0", fontSize: 12 }}>위 「번역사 추천」 버튼으로 후보를 확인하고 배정하세요.</p>
+                    <p style={{ margin: 0 }}>배정된 통번역사가 없습니다.</p>
+                    <p style={{ margin: "6px 0 0", fontSize: 12 }}>위 「통번역사 추천」 버튼으로 후보를 확인하고 배정하세요.</p>
                   </div>
                 ) : detail.tasks.map(t => {
                   const avStyle = AVAIL_STYLE[t.translatorProfile?.availabilityStatus ?? ""] ?? AVAIL_STYLE.unavailable;
@@ -1953,7 +1953,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                             <span style={{ color: "#9ca3af", fontSize: 11 }}>#{s.id}</span>
                             <span style={{ color: "#0891b2", fontWeight: 600 }}>총 {Number(s.totalAmount).toLocaleString()}원</span>
-                            <span style={{ color: "#059669", fontWeight: 600 }}>번역사 {Number(s.translatorAmount).toLocaleString()}원</span>
+                            <span style={{ color: "#059669", fontWeight: 600 }}>통번역사 {Number(s.translatorAmount).toLocaleString()}원</span>
                             <span style={{ color: "#6b7280", fontSize: 11 }}>플랫폼 수수료 {Number(s.platformFee).toLocaleString()}원</span>
                             <StatusBadge status={s.status} />
                           </div>

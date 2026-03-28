@@ -174,7 +174,7 @@ export function getDefaultPage(role: Role): NavPage {
 
 export const STATUS_LABEL: Record<string, string> = {
   created: "접수됨", quoted: "견적 발송", approved: "견적 승인",
-  paid: "결제 완료", matched: "번역사 배정", in_progress: "번역 중",
+  paid: "결제 완료", matched: "통번역사 배정", in_progress: "번역 중",
   completed: "완료", cancelled: "취소됨", waiting: "대기", assigned: "배정됨",
   working: "작업 중", done: "완료",
   pending: "대기", ready: "정산 가능",
@@ -202,7 +202,7 @@ export const ROLE_STYLE: Record<Role, React.CSSProperties> = {
   admin:      { background: "#fef2f2", color: "#dc2626" },
 };
 export const ROLE_LABEL: Record<Role, string> = {
-  customer: "고객", translator: "번역사", admin: "관리자",
+  customer: "고객", translator: "통번역사", admin: "관리자",
 };
 export const BOARD_CATEGORY_LABEL: Record<string, string> = { notice: "공지", reference: "통역자료", manual: "내부매뉴얼" };
 export const AVAILABILITY_LABEL: Record<string, string> = { available: "가능", busy: "바쁨", unavailable: "불가" };
@@ -228,8 +228,8 @@ export const ACTION_LABEL: Record<string, { ko: string; color: string; dot: stri
   payment_paid:                     { ko: "결제 완료",              color: "#0891b2", dot: "💰" },
   payment_failed:                   { ko: "결제 실패",              color: "#dc2626", dot: "❌" },
   payment_received:                 { ko: "결제 확인",              color: "#059669", dot: "💰" },
-  project_matched:                  { ko: "번역사 매칭",            color: "#9333ea", dot: "🔗" },
-  task_assigned:                    { ko: "번역사 배정",            color: "#9333ea", dot: "👤" },
+  project_matched:                  { ko: "통번역사 매칭",            color: "#9333ea", dot: "🔗" },
+  task_assigned:                    { ko: "통번역사 배정",            color: "#9333ea", dot: "👤" },
   task_started:                     { ko: "작업 시작",              color: "#d97706", dot: "▶️" },
   task_completed:                   { ko: "작업 완료",              color: "#059669", dot: "🎉" },
   settlement_created:               { ko: "정산 생성",              color: "#7c3aed", dot: "📊" },
@@ -237,7 +237,7 @@ export const ACTION_LABEL: Record<string, { ko: string; color: string; dot: stri
   project_cancelled:                { ko: "프로젝트 취소",          color: "#dc2626", dot: "🚫" },
   admin_project_cancelled:          { ko: "관리자 취소",             color: "#dc2626", dot: "🚫" },
   admin_info_updated:               { ko: "기본정보 수정",           color: "#6b7280", dot: "✏️" },
-  admin_rematch:                    { ko: "번역사 재매칭",           color: "#9333ea", dot: "🔄" },
+  admin_rematch:                    { ko: "통번역사 재매칭",           color: "#9333ea", dot: "🔄" },
   note_added:                       { ko: "메모 추가",               color: "#92400e", dot: "📝" },
   file_uploaded_source:             { ko: "원본 파일 업로드",        color: "#0369a1", dot: "📁" },
   file_uploaded_translated:         { ko: "번역본 파일 업로드",      color: "#15803d", dot: "📁" },
@@ -258,7 +258,7 @@ export function getActionLabel(action: string): { ko: string; color: string; dot
     return { ko: `관리자 상태변경 → ${STATUS_LABEL[s] ?? s}`, color: "#6b7280", dot: "🔄" };
   }
   if (action.startsWith("admin_assigned_translator_")) {
-    return { ko: "번역사 직접 배정", color: "#9333ea", dot: "👤" };
+    return { ko: "통번역사 직접 배정", color: "#9333ea", dot: "👤" };
   }
   if (action.startsWith("담당자 ")) {
     return { ko: action, color: "#6b7280", dot: "👤" };
@@ -272,7 +272,7 @@ export const PROJECT_STEPS = [
   { key: "quoted", label: "견적" },
   { key: "approved", label: "승인" },
   { key: "paid", label: "결제" },
-  { key: "matched", label: "번역사 배정" },
+  { key: "matched", label: "통번역사 배정" },
   { key: "in_progress", label: "번역 중" },
   { key: "completed", label: "완료" },
 ] as const;

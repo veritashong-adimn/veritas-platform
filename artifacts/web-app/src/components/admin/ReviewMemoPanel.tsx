@@ -90,7 +90,7 @@ export function ReviewMemoPanel({ storageKey, label = "검수 메모" }: ReviewM
             ref={textareaRef}
             value={text}
             onChange={e => { setText(e.target.value); setSaved(false); }}
-            placeholder={"이 화면에서 확인이 필요한 항목, 수정 요청 사항, 누락 값 등을 메모하세요.\n예) 거래처 연결 확인 필요 / 견적 금액 재확인 / 번역사 배정 대기 중..."}
+            placeholder={"이 화면에서 확인이 필요한 항목, 수정 요청 사항, 누락 값 등을 메모하세요.\n예) 거래처 연결 확인 필요 / 견적 금액 재확인 / 통번역사 배정 대기 중..."}
             rows={4}
             style={{
               width: "100%", boxSizing: "border-box",

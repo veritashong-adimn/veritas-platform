@@ -381,7 +381,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
       const res = await fetch(api(`/api/admin/translators${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) setTranslatorList(Array.isArray(data) ? data : []);
-    } catch { setToast("오류: 번역사 조회 실패"); }
+    } catch { setToast("오류: 통번역사 조회 실패"); }
     finally { setTranslatorsLoading(false); }
   }, [token, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorRatingFilter]);
 
@@ -705,7 +705,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
       label: "리소스",
       accentColor: "#f59e0b",
       items: [
-        { id: "translators", label: "번역사", icon: "🌐" },
+        { id: "translators", label: "통번역사", icon: "🌐" },
         { id: "products", label: "상품/단가", icon: "🏷️" },
       ],
     },
@@ -730,7 +730,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
     customers: "고객관리",
     companies: "거래처",
     contacts: "담당자",
-    translators: "번역사",
+    translators: "통번역사",
     products: "상품/단가",
     board: "게시판",
     test: "운영 테스트",
@@ -1294,7 +1294,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                             created:     { label: "견적 생성",   section: "finance",    color: "#fff",     bg: "#2563eb" },
                             quoted:      { label: "견적 확인",   section: "finance",    color: "#fff",     bg: "#2563eb" },
                             approved:    { label: "결제 등록",   section: "finance",    color: "#fff",     bg: "#0891b2" },
-                            paid:        { label: "번역사 배정", section: "work",       color: "#fff",     bg: "#7c3aed" },
+                            paid:        { label: "통번역사 배정", section: "work",       color: "#fff",     bg: "#7c3aed" },
                             matched:     { label: "작업 보기",   section: "work",       color: "#fff",     bg: "#6d28d9" },
                             in_progress: { label: "작업 보기",   section: "work",       color: "#fff",     bg: "#6d28d9" },
                             completed:   { label: "정산 확인",   section: "settlement", color: "#fff",     bg: "#059669" },
@@ -1477,7 +1477,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["ID","프로젝트","번역사","작업 상태","프로젝트 상태","생성일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                    <tr>{["ID","프로젝트","통번역사","작업 상태","프로젝트 상태","생성일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {tasks.map(t => (
@@ -1487,7 +1487,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                         <td style={{ ...tableTd, color: "#9ca3af" }}>#{t.id}</td>
                         <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{t.projectTitle ?? `프로젝트 #${t.projectId}`}</td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
-                          {(t as any).translatorName || t.translatorEmail || `번역사 #${t.translatorId}`}
+                          {(t as any).translatorName || t.translatorEmail || `통번역사 #${t.translatorId}`}
                           {(t as any).translatorName && t.translatorEmail && <span style={{ color: "#9ca3af", fontSize: 11 }}> ({t.translatorEmail})</span>}
                         </td>
                         <td style={tableTd}><StatusBadge status={t.status} /></td>
@@ -1529,7 +1529,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
-                      <tr>{["ID","프로젝트","번역사","총 결제금액","번역사 지급액","플랫폼 수수료","상태","생성일","액션"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                      <tr>{["ID","프로젝트","통번역사","총 결제금액","통번역사 지급액","플랫폼 수수료","상태","생성일","액션"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                     </thead>
                     <tbody>
                       {filtered.map(s => (
@@ -1541,7 +1541,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                             <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.projectTitle ?? `프로젝트 #${s.projectId}`}</div>
                           </td>
                           <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
-                            {(s as any).translatorName || s.translatorEmail || `번역사 #${s.translatorId}`}
+                            {(s as any).translatorName || s.translatorEmail || `통번역사 #${s.translatorId}`}
                             {(s as any).translatorName && s.translatorEmail && <div style={{ color: "#9ca3af", fontSize: 11 }}>{s.translatorEmail}</div>}
                           </td>
                           <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" }}>{Number(s.totalAmount).toLocaleString()}원</td>
@@ -1587,7 +1587,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
               style={{ ...inputStyle, width: "auto", padding: "8px 10px", fontSize: 13, cursor: "pointer" }}>
               <option value="all">전체 역할</option>
               <option value="customer">고객</option>
-              <option value="translator">번역사</option>
+              <option value="translator">통번역사</option>
               <option value="admin">관리자</option>
             </select>
             <PrimaryBtn onClick={fetchUsers} disabled={usersLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
@@ -1637,7 +1637,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                               onChange={e => handleRoleChange(u.id, e.target.value)}
                               style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, cursor: "pointer", background: "#fff" }}>
                               <option value="customer">고객</option>
-                              <option value="translator">번역사</option>
+                              <option value="translator">통번역사</option>
                             </select>
                           ) : (
                             <span style={{ fontSize: 12, color: "#9ca3af" }}>변경 불가</span>
@@ -2080,7 +2080,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                 </label>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer" }}>
                   <input type="checkbox" checked={boardForm.visibleToAll} onChange={e => setBoardForm(p => ({ ...p, visibleToAll: e.target.checked }))} />
-                  번역사에게 공개
+                  통번역사에게 공개
                 </label>
               </div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -2142,9 +2142,9 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
         </Section>
       )}
 
-      {/* ── 번역사 탭 ── */}
+      {/* ── 통번역사 탭 ── */}
       {adminTab === "translators" && (
-        <Section title={`번역사 관리 (${translatorList.length})`}>
+        <Section title={`통번역사 관리 (${translatorList.length})`}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
             <input value={translatorSearch} onChange={e => setTranslatorSearch(e.target.value)}
               placeholder="이메일, 언어쌍, 지역 검색..."
@@ -2170,7 +2170,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
           {translatorsLoading ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
           ) : translatorList.length === 0 ? (
-            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 번역사가 없습니다.</Card>
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 통번역사가 없습니다.</Card>
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
@@ -2227,7 +2227,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px 22px", boxShadow: "0 1px 3px rgba(0,0,0,.07)" }}>
               <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800, color: "#111827" }}>🧪 운영 시나리오 자동 실행</h3>
-              <p style={{ margin: "0 0 14px", fontSize: 13, color: "#6b7280" }}>프로젝트 생성 → 견적 → 승인 → 결제 → 번역사 배정 → 진행 → 완료 → 정산까지 순차 실행합니다.</p>
+              <p style={{ margin: "0 0 14px", fontSize: 13, color: "#6b7280" }}>프로젝트 생성 → 견적 → 승인 → 결제 → 통번역사 배정 → 진행 → 완료 → 정산까지 순차 실행합니다.</p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                 <div>
                   <label style={{ fontSize: 11, fontWeight: 600, color: "#374151", display: "block", marginBottom: 3 }}>견적 금액 (원)</label>
@@ -2235,7 +2235,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                     style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 7, padding: "7px 10px", fontSize: 13, boxSizing: "border-box" as const }} />
                 </div>
                 <div>
-                  <label style={{ fontSize: 11, fontWeight: 600, color: "#374151", display: "block", marginBottom: 3 }}>번역사 수익 비율 (0~1)</label>
+                  <label style={{ fontSize: 11, fontWeight: 600, color: "#374151", display: "block", marginBottom: 3 }}>통번역사 수익 비율 (0~1)</label>
                   <input value={scenarioRatio} onChange={e => setScenarioRatio(e.target.value)} type="number" min="0" max="1" step="0.1"
                     style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 7, padding: "7px 10px", fontSize: 13, boxSizing: "border-box" as const }} />
                 </div>
@@ -2279,7 +2279,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
               {/* 실제 운영 데이터 최소 입력 안내 */}
               <div style={{ marginTop: 12, padding: "10px 12px", background: "#f9fafb", borderRadius: 8, fontSize: 11, color: "#374151", lineHeight: 1.8 }}>
                 <strong style={{ color: "#111827" }}>실제 프로젝트 1건 테스트 최소 요건:</strong><br/>
-                ① 거래처 등록 (거래처 탭) ② 담당자 등록 (담당자 탭) ③ 번역사 계정 + 프로필 등록 (번역사 탭) ④ 제품 마스터 등록 (제품 탭) ⑤ 여기서 거래처/담당자 선택 후 실행
+                ① 거래처 등록 (거래처 탭) ② 담당자 등록 (담당자 탭) ③ 통번역사 계정 + 프로필 등록 (통번역사 탭) ④ 제품 마스터 등록 (제품 탭) ⑤ 여기서 거래처/담당자 선택 후 실행
               </div>
             </div>
 

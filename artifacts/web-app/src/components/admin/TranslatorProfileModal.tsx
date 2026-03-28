@@ -59,7 +59,7 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      onToast("번역사 프로필이 저장되었습니다.");
+      onToast("통번역사 프로필이 저장되었습니다.");
     } catch { onToast("오류: 저장 실패"); }
     finally { setSaving(false); }
   };
@@ -77,7 +77,7 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
       <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb", width: "100%", maxWidth: 680, padding: "24px 28px", boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <div>
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>번역사 프로필</h2>
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>통번역사 프로필</h2>
             <p style={{ margin: "4px 0 0", fontSize: 13, color: "#6b7280" }}>{userEmail}</p>
           </div>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#9ca3af" }}>×</button>

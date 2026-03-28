@@ -103,7 +103,7 @@ export function AuthPage({ onAuth }: { onAuth: (token: string, user: User) => vo
                       <input type="radio" name="role" value={r} checked={role === r}
                         onChange={() => setRole(r)} style={{ accentColor: "#2563eb" }} />
                       <span style={{ fontSize: 13, fontWeight: 600, color: role === r ? "#1d4ed8" : "#374151" }}>
-                        {r === "customer" ? "고객" : "번역사"}
+                        {r === "customer" ? "고객" : "통번역사"}
                       </span>
                     </label>
                   ))}
