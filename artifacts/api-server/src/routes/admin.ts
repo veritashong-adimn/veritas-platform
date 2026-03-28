@@ -1088,6 +1088,34 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
       const ps = await db.select({ id: projectsTable.id, title: projectsTable.title }).from(projectsTable).where(inArray(projectsTable.id, pids));
       projectMap = new Map(ps.map(p => [p.id, p.title]));
     }
+
+    // 차감 건에 대해 quote_items 에서 공급가·부가세 합계 계산
+    const deductPids = ledger.filter(e => e.type === "deduction" && e.projectId).map(e => e.projectId as number);
+    type TaxSummary = { supplyAmount: number; taxAmount: number };
+    const taxByProjectId = new Map<number, TaxSummary>();
+    if (deductPids.length > 0) {
+      const quotes = await db.select({ id: quotesTable.id, projectId: quotesTable.projectId })
+        .from(quotesTable).where(inArray(quotesTable.projectId, deductPids));
+      const quoteIds = quotes.map(q => q.id);
+      if (quoteIds.length > 0) {
+        const items = await db.select({
+          quoteId: quoteItemsTable.quoteId,
+          supplyAmount: quoteItemsTable.supplyAmount,
+          taxAmount: quoteItemsTable.taxAmount,
+        }).from(quoteItemsTable).where(inArray(quoteItemsTable.quoteId, quoteIds));
+        const quoteToProject = new Map(quotes.map(q => [q.id, q.projectId as number]));
+        for (const it of items) {
+          const pid = quoteToProject.get(it.quoteId);
+          if (!pid) continue;
+          const prev = taxByProjectId.get(pid) ?? { supplyAmount: 0, taxAmount: 0 };
+          taxByProjectId.set(pid, {
+            supplyAmount: prev.supplyAmount + Number(it.supplyAmount),
+            taxAmount: prev.taxAmount + Number(it.taxAmount),
+          });
+        }
+      }
+    }
+
     const [company] = await db.select({ name: companiesTable.name }).from(companiesTable).where(eq(companiesTable.id, account.companyId));
 
     res.json({
@@ -1095,12 +1123,17 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
       initialAmount: Number(account.initialAmount),
       currentBalance: Number(account.currentBalance),
       companyName: company?.name ?? `거래처 #${account.companyId}`,
-      ledger: ledger.map(e => ({
-        ...e,
-        amount: Number(e.amount),
-        balanceAfter: Number(e.balanceAfter),
-        projectTitle: e.projectId ? (projectMap.get(e.projectId) ?? `프로젝트 #${e.projectId}`) : null,
-      })),
+      ledger: ledger.map(e => {
+        const tax = e.type === "deduction" && e.projectId ? (taxByProjectId.get(e.projectId) ?? null) : null;
+        return {
+          ...e,
+          amount: Number(e.amount),
+          balanceAfter: Number(e.balanceAfter),
+          projectTitle: e.projectId ? (projectMap.get(e.projectId) ?? `프로젝트 #${e.projectId}`) : null,
+          supplyAmount: tax?.supplyAmount ?? null,
+          taxAmount: tax?.taxAmount ?? null,
+        };
+      }),
     });
   } catch (err) {
     req.log.error({ err }, "Failed to fetch prepaid account detail");

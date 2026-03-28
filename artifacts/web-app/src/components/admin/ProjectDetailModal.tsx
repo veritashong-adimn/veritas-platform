@@ -119,7 +119,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [quotePrepaidUsage, setQuotePrepaidUsage] = useState("");
   // 선입금 차감 - 거래처 계정 원장
   type CompPrepaidAcct = { id: number; initialAmount: number; currentBalance: number; note: string | null; depositDate: string | null; status: string };
-  type LedgerEntry = { id: number; type: string; amount: number; balanceAfter: number; description: string | null; projectId: number | null; projectTitle: string | null; transactionDate: string | null; createdAt: string | null };
+  type LedgerEntry = { id: number; type: string; amount: number; balanceAfter: number; description: string | null; projectId: number | null; projectTitle: string | null; transactionDate: string | null; createdAt: string | null; supplyAmount: number | null; taxAmount: number | null };
   const [compPrepaidAccounts, setCompPrepaidAccounts] = useState<CompPrepaidAcct[]>([]);
   const [loadingCompPrepaid, setLoadingCompPrepaid] = useState(false);
   const [selectedPrepaidAcctId, setSelectedPrepaidAcctId] = useState<number | null>(null);
@@ -1299,8 +1299,16 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
                                     <thead>
                                       <tr style={{ background: "#f5f3ff" }}>
-                                        {["날짜", "구분", "내용 / 프로젝트", "금액", "잔액"].map(h => (
-                                          <th key={h} style={{ padding: "4px 8px", fontWeight: 700, color: "#4b5563", borderBottom: "1px solid #e2e8f0", whiteSpace: "nowrap", textAlign: h === "금액" || h === "잔액" ? "right" : h === "구분" ? "center" : "left" }}>{h}</th>
+                                        {[
+                                          { h: "날짜", align: "left" as const },
+                                          { h: "구분", align: "center" as const },
+                                          { h: "내용 / 프로젝트", align: "left" as const },
+                                          { h: "공급가", align: "right" as const },
+                                          { h: "부가세", align: "right" as const },
+                                          { h: "합계", align: "right" as const },
+                                          { h: "잔액", align: "right" as const },
+                                        ].map(({ h, align }) => (
+                                          <th key={h} style={{ padding: "5px 8px", fontWeight: 700, color: "#4b5563", borderBottom: "2px solid #d8b4fe", whiteSpace: "nowrap", textAlign: align, fontSize: 10 }}>{h}</th>
                                         ))}
                                       </tr>
                                     </thead>
@@ -1310,14 +1318,32 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         const desc = tx.projectTitle ? `${tx.projectTitle}${tx.description ? " · " + tx.description : ""}` : (tx.description || "-");
                                         const typeLabel = tx.type === "deposit" ? "입금" : tx.type === "deduction" ? "차감" : "조정";
                                         const typeColor = tx.type === "deposit" ? "#166534" : tx.type === "deduction" ? "#7c3aed" : "#374151";
-                                        const amtSign = tx.type === "deposit" ? "+" : tx.type === "deduction" ? "-" : "±";
+                                        const bgColor = tx.type === "deduction" ? (idx % 2 === 0 ? "#fdf4ff" : "#f5f0ff") : (idx % 2 === 0 ? "#fff" : "#f9fafb");
+                                        const isDeduct = tx.type === "deduction";
+                                        const tdBase: React.CSSProperties = { padding: "5px 8px", borderBottom: "1px solid #f0e7ff", whiteSpace: "nowrap" };
                                         return (
-                                          <tr key={tx.id} style={{ background: idx % 2 === 0 ? "#fff" : "#faf5ff" }}>
-                                            <td style={{ padding: "4px 8px", borderBottom: "1px solid #f0e7ff", color: "#6b7280", whiteSpace: "nowrap" }}>{dateStr}</td>
-                                            <td style={{ padding: "4px 8px", borderBottom: "1px solid #f0e7ff", textAlign: "center", fontWeight: 700, color: typeColor, whiteSpace: "nowrap" }}>{typeLabel}</td>
-                                            <td style={{ padding: "4px 8px", borderBottom: "1px solid #f0e7ff", color: "#374151", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{desc}</td>
-                                            <td style={{ padding: "4px 8px", borderBottom: "1px solid #f0e7ff", textAlign: "right", fontWeight: 700, color: typeColor, whiteSpace: "nowrap" }}>{amtSign}{tx.amount.toLocaleString()}원</td>
-                                            <td style={{ padding: "4px 8px", borderBottom: "1px solid #f0e7ff", textAlign: "right", color: tx.balanceAfter < 0 ? "#dc2626" : "#374151", whiteSpace: "nowrap" }}>{tx.balanceAfter.toLocaleString()}원</td>
+                                          <tr key={tx.id} style={{ background: bgColor }}>
+                                            <td style={{ ...tdBase, color: "#6b7280" }}>{dateStr}</td>
+                                            <td style={{ ...tdBase, textAlign: "center" }}>
+                                              <span style={{ background: isDeduct ? "#ede9fe" : tx.type === "deposit" ? "#dcfce7" : "#f3f4f6", color: typeColor, fontWeight: 700, fontSize: 10, borderRadius: 4, padding: "1px 6px" }}>{typeLabel}</span>
+                                            </td>
+                                            <td style={{ ...tdBase, color: "#374151", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>{desc}</td>
+                                            {/* 공급가 */}
+                                            <td style={{ ...tdBase, textAlign: "right", color: "#374151" }}>
+                                              {isDeduct && tx.supplyAmount != null ? tx.supplyAmount.toLocaleString() : <span style={{ color: "#d1d5db" }}>-</span>}
+                                            </td>
+                                            {/* 부가세 */}
+                                            <td style={{ ...tdBase, textAlign: "right", color: isDeduct && tx.taxAmount != null && tx.taxAmount > 0 ? "#7c3aed" : "#374151" }}>
+                                              {isDeduct && tx.taxAmount != null ? (tx.taxAmount > 0 ? tx.taxAmount.toLocaleString() : "0") : <span style={{ color: "#d1d5db" }}>-</span>}
+                                            </td>
+                                            {/* 합계 */}
+                                            <td style={{ ...tdBase, textAlign: "right", fontWeight: 800, color: typeColor }}>
+                                              {tx.type === "deposit" ? "+" : tx.type === "deduction" ? "-" : "±"}{tx.amount.toLocaleString()}
+                                            </td>
+                                            {/* 잔액 */}
+                                            <td style={{ ...tdBase, textAlign: "right", fontWeight: 700, color: tx.balanceAfter < 0 ? "#dc2626" : "#15803d" }}>
+                                              {tx.balanceAfter.toLocaleString()}
+                                            </td>
                                           </tr>
                                         );
                                       })}

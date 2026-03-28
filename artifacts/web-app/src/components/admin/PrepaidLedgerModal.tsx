@@ -13,6 +13,8 @@ interface LedgerEntry {
   description: string | null;
   transactionDate: string;
   createdAt: string;
+  supplyAmount: number | null;
+  taxAmount: number | null;
 }
 
 interface PrepaidAccount {
@@ -214,33 +216,55 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
-                    {["날짜", "구분", "금액", "서비스 내용", "연결 프로젝트", "잔액", ""].map(h => (
-                      <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 700, color: "#6b7280", borderBottom: "1px solid #e5e7eb" }}>{h}</th>
+                    {[
+                      { h: "날짜", align: "left" as const },
+                      { h: "구분", align: "left" as const },
+                      { h: "내용 / 프로젝트", align: "left" as const },
+                      { h: "공급가", align: "right" as const },
+                      { h: "부가세", align: "right" as const },
+                      { h: "합계", align: "right" as const },
+                      { h: "잔액", align: "right" as const },
+                      { h: "", align: "left" as const },
+                    ].map(({ h, align }) => (
+                      <th key={h} style={{ padding: "10px 14px", textAlign: align, fontSize: 11, fontWeight: 700, color: "#6b7280", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {account.ledger.map((e, idx) => {
                     const tc = typeColor[e.type] ?? typeColor.adjustment;
+                    const isDeduct = e.type === "deduction";
+                    const bgRow = isDeduct ? (idx % 2 === 0 ? "#fdf4ff" : "#f5f0ff") : (idx % 2 === 0 ? "#fff" : "#f9fafb");
+                    const desc = e.projectTitle
+                      ? `${e.description ?? ""} #${e.projectId} ${e.projectTitle}`.trim()
+                      : (e.description ?? "-");
+                    const tdBase: React.CSSProperties = { padding: "10px 14px", borderBottom: "1px solid #f3f4f6", whiteSpace: "nowrap" };
                     return (
-                      <tr key={e.id} style={{ background: idx % 2 === 0 ? "#fff" : "#f9fafb", borderBottom: "1px solid #f3f4f6" }}>
-                        <td style={{ padding: "10px 14px", fontSize: 13, color: "#374151", whiteSpace: "nowrap" }}>{e.transactionDate}</td>
-                        <td style={{ padding: "10px 14px" }}>
+                      <tr key={e.id} style={{ background: bgRow }}>
+                        <td style={{ ...tdBase, fontSize: 13, color: "#374151" }}>{e.transactionDate}</td>
+                        <td style={{ ...tdBase }}>
                           <span style={{ background: tc.bg, color: tc.color, borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>
                             {typeLabel[e.type] ?? e.type}
                           </span>
                         </td>
-                        <td style={{ padding: "10px 14px", fontWeight: 700, fontSize: 14, color: tc.color, whiteSpace: "nowrap" }}>
+                        <td style={{ ...tdBase, fontSize: 12, color: "#374151", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{desc}</td>
+                        {/* 공급가 */}
+                        <td style={{ ...tdBase, textAlign: "right", fontSize: 13, color: "#374151" }}>
+                          {isDeduct && e.supplyAmount != null ? `${fmt(e.supplyAmount)}원` : <span style={{ color: "#d1d5db" }}>-</span>}
+                        </td>
+                        {/* 부가세 */}
+                        <td style={{ ...tdBase, textAlign: "right", fontSize: 13, color: isDeduct && e.taxAmount != null && e.taxAmount > 0 ? "#7c3aed" : "#374151" }}>
+                          {isDeduct && e.taxAmount != null ? `${fmt(e.taxAmount)}원` : <span style={{ color: "#d1d5db" }}>-</span>}
+                        </td>
+                        {/* 합계 */}
+                        <td style={{ ...tdBase, textAlign: "right", fontWeight: 800, fontSize: 15, color: tc.color }}>
                           {tc.prefix}{fmt(e.amount)}원
                         </td>
-                        <td style={{ padding: "10px 14px", fontSize: 13, color: "#374151" }}>{e.description ?? "-"}</td>
-                        <td style={{ padding: "10px 14px", fontSize: 12, color: "#2563eb" }}>
-                          {e.projectTitle ? `#${e.projectId} ${e.projectTitle}` : "-"}
-                        </td>
-                        <td style={{ padding: "10px 14px", fontWeight: 800, fontSize: 15, color: e.balanceAfter > 0 ? "#15803d" : e.balanceAfter === 0 ? "#6b7280" : "#dc2626", whiteSpace: "nowrap" }}>
+                        {/* 잔액 */}
+                        <td style={{ ...tdBase, textAlign: "right", fontWeight: 800, fontSize: 15, color: e.balanceAfter > 0 ? "#15803d" : e.balanceAfter === 0 ? "#6b7280" : "#dc2626" }}>
                           {fmt(e.balanceAfter)}원
                         </td>
-                        <td style={{ padding: "10px 14px" }}>
+                        <td style={{ ...tdBase }}>
                           <button onClick={() => handleDeleteEntry(e.id)} disabled={deleteId === e.id}
                             style={{ background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: 12, padding: "2px 6px", borderRadius: 4 }}
                             title="이 항목 삭제">
@@ -252,11 +276,11 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
                   })}
                   {/* 합계 행 */}
                   <tr style={{ background: "#f0f9ff", borderTop: "2px solid #bfdbfe" }}>
-                    <td colSpan={2} style={{ padding: "12px 14px", fontWeight: 700, fontSize: 13, color: "#1e40af" }}>최종 잔액</td>
+                    <td colSpan={3} style={{ padding: "12px 14px", fontWeight: 700, fontSize: 13, color: "#1e40af" }}>최종 잔액</td>
                     <td style={{ padding: "12px 14px" }} />
                     <td style={{ padding: "12px 14px" }} />
                     <td style={{ padding: "12px 14px" }} />
-                    <td style={{ padding: "12px 14px", fontWeight: 900, fontSize: 18, color: account.currentBalance > 0 ? "#15803d" : "#dc2626" }}>
+                    <td style={{ padding: "12px 14px", textAlign: "right", fontWeight: 900, fontSize: 18, color: account.currentBalance > 0 ? "#15803d" : "#dc2626" }}>
                       {fmt(account.currentBalance)}원
                     </td>
                     <td />
