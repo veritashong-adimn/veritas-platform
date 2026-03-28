@@ -686,10 +686,10 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
       label: "재무·정산",
       accentColor: "#10b981",
       items: [
-        { id: "prepaid", label: "선입금 관리", icon: "💰", iconColor: "#10b981" },
         { id: "payments", label: "결제", icon: "💳", iconColor: "#10b981" },
-        { id: "billing", label: "누적 청구", icon: "📑", iconColor: "#10b981" },
         { id: "settlements", label: "정산", icon: "📊", iconColor: "#10b981" },
+        { id: "billing", label: "누적 청구", icon: "📑", iconColor: "#10b981" },
+        { id: "prepaid", label: "선입금 관리", icon: "💰", iconColor: "#10b981" },
       ],
     },
     {
