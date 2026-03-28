@@ -550,6 +550,13 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
   useEffect(() => { if (adminTab === "translators") fetchTranslators(); }, [adminTab, fetchTranslators]);
   useEffect(() => { if (adminTab === "prepaid") fetchPrepaidAccounts(); }, [adminTab, fetchPrepaidAccounts]);
   useEffect(() => { if (adminTab === "billing") fetchBillingBatches(); }, [adminTab, fetchBillingBatches]);
+  useEffect(() => {
+    if (showCreateProject && user.role === "customer" && customers.length > 0) {
+      const match = customers.find(c => c.email === user.email);
+      if (match) setNewProjectCustomerId(match.id);
+    }
+    if (!showCreateProject) setNewProjectCustomerId(null);
+  }, [showCreateProject, customers, user.role, user.email]);
 
   const fetchScenarioHistory = async () => {
     setScenarioHistoryLoading(true);
@@ -1220,12 +1227,19 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
               <div style={{ borderRadius: 10, border: "1px solid #e5e7eb", padding: "12px 14px", background: "#fafafa" }}>
                 <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>플랫폼 사용자</p>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>고객 계정 <span style={{ fontWeight: 400, color: "#9ca3af" }}>(선택)</span></label>
-                  <select value={newProjectCustomerId ?? ""} onChange={e => setNewProjectCustomerId(e.target.value ? Number(e.target.value) : null)}
-                    style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
-                    <option value="">— 없음 —</option>
-                    {customers.map(c => <option key={c.id} value={c.id}>{c.contactName} ({c.email})</option>)}
-                  </select>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>
+                    고객 계정
+                    {user.role === "customer"
+                      ? <span style={{ fontWeight: 400, color: "#059669", marginLeft: 6 }}>(자동 선택됨)</span>
+                      : <span style={{ fontWeight: 400, color: "#9ca3af", marginLeft: 6 }}>(선택 안 하면 내부 등록)</span>}
+                  </label>
+                  <SearchableSelect
+                    items={customers.map(c => ({ id: c.id, label: c.contactName, sub: c.email }))}
+                    value={newProjectCustomerId}
+                    placeholder="선택 안함 (내부 등록)"
+                    accentBorder="#374151"
+                    onChange={setNewProjectCustomerId}
+                  />
                 </div>
               </div>
             </div>
