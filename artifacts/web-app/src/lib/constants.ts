@@ -112,13 +112,20 @@ export type Division = {
   projectCount?: number; totalPayment?: number; contactCount?: number;
 };
 export type Contact = {
-  id: number; companyId: number; divisionId: number | null; name: string; department: string | null; position: string | null;
-  email: string | null; phone: string | null; notes: string | null; createdAt: string;
+  id: number; companyId: number; divisionId: number | null; name: string;
+  department: string | null; position: string | null;
+  email: string | null; phone: string | null; mobile: string | null; officePhone: string | null;
+  notes: string | null; memo: string | null;
+  isPrimary: boolean; isQuoteContact: boolean; isBillingContact: boolean; isActive: boolean;
+  createdAt: string; updatedAt: string;
 };
 export type AdminContact = {
   id: number; companyId: number; companyName: string | null;
   name: string; department: string | null; position: string | null;
-  email: string | null; phone: string | null; notes: string | null; createdAt: string;
+  email: string | null; phone: string | null; mobile: string | null; officePhone: string | null;
+  notes: string | null; memo: string | null;
+  isPrimary: boolean; isQuoteContact: boolean; isBillingContact: boolean; isActive: boolean;
+  createdAt: string; updatedAt: string;
 };
 export type TranslatorRate = {
   id: number; translatorId: number; serviceType: string; languagePair: string;

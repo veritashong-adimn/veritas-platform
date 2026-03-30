@@ -117,11 +117,15 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
       .select({
         id: contactsTable.id, companyId: contactsTable.companyId, divisionId: contactsTable.divisionId,
         name: contactsTable.name, department: contactsTable.department, position: contactsTable.position,
-        email: contactsTable.email, phone: contactsTable.phone, notes: contactsTable.notes,
-        createdAt: contactsTable.createdAt,
+        email: contactsTable.email, phone: contactsTable.phone, mobile: contactsTable.mobile,
+        officePhone: contactsTable.officePhone, notes: contactsTable.notes, memo: contactsTable.memo,
+        isPrimary: contactsTable.isPrimary, isQuoteContact: contactsTable.isQuoteContact,
+        isBillingContact: contactsTable.isBillingContact, isActive: contactsTable.isActive,
+        createdAt: contactsTable.createdAt, updatedAt: contactsTable.updatedAt,
       })
       .from(contactsTable)
-      .where(eq(contactsTable.companyId, companyId));
+      .where(eq(contactsTable.companyId, companyId))
+      .orderBy(desc(contactsTable.isPrimary), contactsTable.name);
 
     const divisions = await db
       .select({
@@ -413,9 +417,14 @@ router.get("/admin/companies/:id/contacts", ...adminGuard, async (req, res) => {
   if (isNaN(companyId) || companyId <= 0) {
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
-
+  const { isActive } = req.query as { isActive?: string };
   try {
-    const rows = await db.select().from(contactsTable).where(eq(contactsTable.companyId, companyId)).orderBy(desc(contactsTable.createdAt));
+    const conds = [eq(contactsTable.companyId, companyId)];
+    if (isActive === "true") conds.push(eq(contactsTable.isActive, true));
+    if (isActive === "false") conds.push(eq(contactsTable.isActive, false));
+    const rows = await db.select().from(contactsTable)
+      .where(and(...conds))
+      .orderBy(desc(contactsTable.isPrimary), contactsTable.name);
     res.json(rows);
   } catch (err) {
     req.log.error({ err }, "Contacts: failed to list");
@@ -423,93 +432,135 @@ router.get("/admin/companies/:id/contacts", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 담당자 목록 (독립, 전체) ────────────────────────────────────────────────
-router.get("/admin/contacts", ...adminGuard, async (req, res) => {
+// ─── 공통: 전체 담당자 목록 (GET /admin/contacts  &  GET /admin/company-contacts) ─
+async function listContacts(req: any, res: any) {
   try {
-    const { search, companyId: companyIdQ } = req.query as { search?: string; companyId?: string };
+    const { keyword, companyId: companyIdQ, isActive } = req.query as {
+      keyword?: string; companyId?: string; isActive?: string;
+    };
+
+    const conds: ReturnType<typeof eq>[] = [];
+    if (companyIdQ) conds.push(eq(contactsTable.companyId, Number(companyIdQ)));
+    if (isActive === "true") conds.push(eq(contactsTable.isActive, true));
+    if (isActive === "false") conds.push(eq(contactsTable.isActive, false));
+
     const rows = await db
       .select({
-        id: contactsTable.id,
-        companyId: contactsTable.companyId,
-        name: contactsTable.name,
-        department: contactsTable.department,
-        position: contactsTable.position,
-        email: contactsTable.email,
-        phone: contactsTable.phone,
-        notes: contactsTable.notes,
-        createdAt: contactsTable.createdAt,
+        id: contactsTable.id, companyId: contactsTable.companyId, divisionId: contactsTable.divisionId,
+        name: contactsTable.name, department: contactsTable.department, position: contactsTable.position,
+        email: contactsTable.email, phone: contactsTable.phone, mobile: contactsTable.mobile,
+        officePhone: contactsTable.officePhone, notes: contactsTable.notes, memo: contactsTable.memo,
+        isPrimary: contactsTable.isPrimary, isQuoteContact: contactsTable.isQuoteContact,
+        isBillingContact: contactsTable.isBillingContact, isActive: contactsTable.isActive,
+        createdAt: contactsTable.createdAt, updatedAt: contactsTable.updatedAt,
         companyName: companiesTable.name,
       })
       .from(contactsTable)
       .leftJoin(companiesTable, eq(contactsTable.companyId, companiesTable.id))
-      .orderBy(desc(contactsTable.createdAt));
+      .where(conds.length > 0 ? and(...conds) : undefined)
+      .orderBy(desc(contactsTable.isPrimary), contactsTable.name);
 
     let result = rows;
-    if (companyIdQ) result = result.filter(c => c.companyId === Number(companyIdQ));
-    if (search?.trim()) {
-      const s = search.trim().toLowerCase();
+    if (keyword?.trim()) {
+      const s = keyword.trim().toLowerCase();
       result = result.filter(c =>
         c.name.toLowerCase().includes(s) ||
         (c.email ?? "").toLowerCase().includes(s) ||
-        (c.companyName ?? "").toLowerCase().includes(s) ||
-        (c.department ?? "").toLowerCase().includes(s)
+        (c.mobile ?? "").toLowerCase().includes(s) ||
+        (c.phone ?? "").toLowerCase().includes(s) ||
+        (c.companyName ?? "").toLowerCase().includes(s)
       );
     }
     res.json(result);
   } catch (err) {
-    req.log.error({ err }, "Contacts: failed to list all");
+    req.log.error({ err }, "Contacts: failed to list");
     res.status(500).json({ error: "담당자 조회 실패." });
   }
-});
+}
+
+router.get("/admin/contacts", ...adminGuard, listContacts);
+router.get("/admin/company-contacts", ...adminGuard, listContacts);
+
+// ─── 공통: 담당자 생성 헬퍼 ──────────────────────────────────────────────────
+async function createContact(req: any, res: any, targetCompanyId: number) {
+  const {
+    name, department, position, email, phone, mobile, officePhone, notes, memo,
+    isPrimary, isQuoteContact, isBillingContact, isActive,
+  } = req.body as {
+    name?: string; department?: string; position?: string; email?: string; phone?: string;
+    mobile?: string; officePhone?: string; notes?: string; memo?: string;
+    isPrimary?: boolean; isQuoteContact?: boolean; isBillingContact?: boolean; isActive?: boolean;
+  };
+
+  if (!name?.trim()) { res.status(400).json({ error: "담당자명은 필수입니다." }); return; }
+  if (!mobile?.trim() && !email?.trim()) {
+    res.status(400).json({ error: "휴대폰 또는 이메일 중 하나 이상 입력해주세요." }); return;
+  }
+  if (email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    res.status(400).json({ error: "이메일 형식이 올바르지 않습니다." }); return;
+  }
+
+  const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, targetCompanyId));
+  if (!company) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+
+  // isPrimary = true 이면 기존 기본 담당자 해제
+  if (isPrimary) {
+    await db.update(contactsTable)
+      .set({ isPrimary: false, updatedAt: new Date() })
+      .where(and(eq(contactsTable.companyId, targetCompanyId), eq(contactsTable.isPrimary, true)));
+  }
+
+  const [contact] = await db
+    .insert(contactsTable)
+    .values({
+      companyId: targetCompanyId, name: name.trim(),
+      department: department ?? null, position: position ?? null,
+      email: email?.trim() ?? null, phone: phone?.trim() ?? null,
+      mobile: mobile?.trim() ?? null, officePhone: officePhone?.trim() ?? null,
+      notes: notes ?? null, memo: memo ?? null,
+      isPrimary: isPrimary ?? false,
+      isQuoteContact: isQuoteContact ?? false,
+      isBillingContact: isBillingContact ?? false,
+      isActive: isActive !== false,
+    })
+    .returning();
+
+  await logEvent("company", targetCompanyId, "company_contact_created", undefined, (req as any).user?.id,
+    JSON.stringify({ contactId: contact.id, name: contact.name, isPrimary: contact.isPrimary }));
+
+  res.status(201).json(contact);
+}
 
 // ─── 담당자 독립 생성 ────────────────────────────────────────────────────────
 router.post("/admin/contacts", ...adminGuard, async (req, res) => {
-  const { companyId, name, department, position, email, phone, notes } = req.body as {
-    companyId?: number; name?: string; department?: string;
-    position?: string; email?: string; phone?: string; notes?: string;
-  };
+  const companyId = Number(req.body.companyId);
+  if (!companyId || isNaN(companyId)) { res.status(400).json({ error: "거래처 ID는 필수입니다." }); return; }
+  try { await createContact(req, res, companyId); }
+  catch (err) { req.log.error({ err }, "Contacts: failed to create"); res.status(500).json({ error: "담당자 생성 실패." }); }
+});
 
-  if (!name?.trim()) {
-    res.status(400).json({ error: "담당자명은 필수입니다." }); return;
-  }
-  if (!companyId || isNaN(companyId)) {
-    res.status(400).json({ error: "거래처 ID는 필수입니다." }); return;
-  }
-
-  try {
-    const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
-    if (!company) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
-
-    const [contact] = await db
-      .insert(contactsTable)
-      .values({ companyId, name: name.trim(), department, position, email, phone, notes })
-      .returning();
-    res.status(201).json(contact);
-  } catch (err) {
-    req.log.error({ err }, "Contacts: failed to create (standalone)");
-    res.status(500).json({ error: "담당자 생성 실패." });
-  }
+router.post("/admin/company-contacts", ...adminGuard, async (req, res) => {
+  const companyId = Number(req.body.companyId);
+  if (!companyId || isNaN(companyId)) { res.status(400).json({ error: "거래처 ID는 필수입니다." }); return; }
+  try { await createContact(req, res, companyId); }
+  catch (err) { req.log.error({ err }, "Contacts: failed to create"); res.status(500).json({ error: "담당자 생성 실패." }); }
 });
 
 // ─── 담당자 상세 ─────────────────────────────────────────────────────────────
 router.get("/admin/contacts/:id", ...adminGuard, async (req, res) => {
   const contactId = Number(req.params.id);
-  if (isNaN(contactId) || contactId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 contact id." }); return;
-  }
+  if (isNaN(contactId) || contactId <= 0) { res.status(400).json({ error: "유효하지 않은 contact id." }); return; }
 
   try {
     const [contact] = await db
       .select({
-        id: contactsTable.id,
-        companyId: contactsTable.companyId,
-        name: contactsTable.name,
-        department: contactsTable.department,
-        position: contactsTable.position,
-        email: contactsTable.email,
-        phone: contactsTable.phone,
-        notes: contactsTable.notes,
-        createdAt: contactsTable.createdAt,
+        id: contactsTable.id, companyId: contactsTable.companyId, divisionId: contactsTable.divisionId,
+        name: contactsTable.name, department: contactsTable.department, position: contactsTable.position,
+        email: contactsTable.email, phone: contactsTable.phone, mobile: contactsTable.mobile,
+        officePhone: contactsTable.officePhone, notes: contactsTable.notes, memo: contactsTable.memo,
+        isPrimary: contactsTable.isPrimary, isQuoteContact: contactsTable.isQuoteContact,
+        isBillingContact: contactsTable.isBillingContact, isActive: contactsTable.isActive,
+        createdAt: contactsTable.createdAt, updatedAt: contactsTable.updatedAt,
         companyName: companiesTable.name,
       })
       .from(contactsTable)
@@ -520,21 +571,15 @@ router.get("/admin/contacts/:id", ...adminGuard, async (req, res) => {
 
     const projects = await db
       .select({ id: projectsTable.id, title: projectsTable.title, status: projectsTable.status, createdAt: projectsTable.createdAt })
-      .from(projectsTable)
-      .where(eq(projectsTable.contactId, contactId))
-      .orderBy(desc(projectsTable.createdAt));
+      .from(projectsTable).where(eq(projectsTable.contactId, contactId)).orderBy(desc(projectsTable.createdAt));
 
     const projectIds = projects.map(p => p.id);
     const communications = projectIds.length > 0
-      ? await db
-          .select({
-            id: communicationsTable.id,
-            type: communicationsTable.type,
-            content: communicationsTable.content,
-            projectId: communicationsTable.projectId,
-            createdAt: communicationsTable.createdAt,
-          })
-          .from(communicationsTable)
+      ? await db.select({
+          id: communicationsTable.id, type: communicationsTable.type,
+          content: communicationsTable.content, projectId: communicationsTable.projectId,
+          createdAt: communicationsTable.createdAt,
+        }).from(communicationsTable)
           .where(inArray(communicationsTable.projectId, projectIds))
           .orderBy(desc(communicationsTable.createdAt))
       : [];
@@ -546,82 +591,131 @@ router.get("/admin/contacts/:id", ...adminGuard, async (req, res) => {
   }
 });
 
+router.get("/admin/company-contacts/:id", ...adminGuard, async (req, res) => {
+  req.params.id = req.params.id;
+  const contactId = Number(req.params.id);
+  if (isNaN(contactId) || contactId <= 0) { res.status(400).json({ error: "유효하지 않은 contact id." }); return; }
+  try {
+    const [contact] = await db.select().from(contactsTable)
+      .leftJoin(companiesTable, eq(contactsTable.companyId, companiesTable.id))
+      .where(eq(contactsTable.id, contactId));
+    if (!contact) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
+    res.json({ ...contact.contacts, companyName: contact.companies?.name ?? null });
+  } catch (err) { res.status(500).json({ error: "담당자 조회 실패." }); }
+});
+
 // ─── 담당자 생성 (회사별) ─────────────────────────────────────────────────────
 router.post("/admin/companies/:id/contacts", ...adminGuard, async (req, res) => {
   const companyId = Number(req.params.id);
-  if (isNaN(companyId) || companyId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 company id." }); return;
-  }
-
-  const { name, department, position, email, phone, notes } = req.body as {
-    name?: string; department?: string; position?: string; email?: string; phone?: string; notes?: string;
-  };
-
-  if (!name?.trim()) {
-    res.status(400).json({ error: "담당자명은 필수입니다." }); return;
-  }
-
-  try {
-    const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
-    if (!company) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
-
-    const [contact] = await db
-      .insert(contactsTable)
-      .values({ companyId, name: name.trim(), department, position, email, phone, notes })
-      .returning();
-    res.status(201).json(contact);
-  } catch (err) {
-    req.log.error({ err }, "Contacts: failed to create");
-    res.status(500).json({ error: "담당자 생성 실패." });
-  }
+  if (isNaN(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 company id." }); return; }
+  try { await createContact(req, res, companyId); }
+  catch (err) { req.log.error({ err }, "Contacts: failed to create"); res.status(500).json({ error: "담당자 생성 실패." }); }
 });
 
 // ─── 담당자 수정 ─────────────────────────────────────────────────────────────
+async function patchContact(req: any, res: any, contactId: number) {
+  const {
+    name, department, position, email, phone, mobile, officePhone, notes, memo,
+    isPrimary, isQuoteContact, isBillingContact, isActive,
+  } = req.body;
+
+  const [existing] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId));
+  if (!existing) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
+
+  if (email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    res.status(400).json({ error: "이메일 형식이 올바르지 않습니다." }); return;
+  }
+
+  const prevPrimary = existing.isPrimary;
+
+  // isPrimary 변경 → 기존 기본 담당자 자동 해제
+  if (isPrimary === true && !existing.isPrimary) {
+    await db.update(contactsTable)
+      .set({ isPrimary: false, updatedAt: new Date() })
+      .where(and(eq(contactsTable.companyId, existing.companyId), eq(contactsTable.isPrimary, true), ne(contactsTable.id, contactId)));
+  }
+
+  const [updated] = await db
+    .update(contactsTable)
+    .set({
+      name: name?.trim() ?? existing.name,
+      department: department !== undefined ? department : existing.department,
+      position: position !== undefined ? position : existing.position,
+      email: email !== undefined ? (email?.trim() || null) : existing.email,
+      phone: phone !== undefined ? (phone?.trim() || null) : existing.phone,
+      mobile: mobile !== undefined ? (mobile?.trim() || null) : existing.mobile,
+      officePhone: officePhone !== undefined ? (officePhone?.trim() || null) : existing.officePhone,
+      notes: notes !== undefined ? notes : existing.notes,
+      memo: memo !== undefined ? memo : existing.memo,
+      isPrimary: isPrimary !== undefined ? isPrimary : existing.isPrimary,
+      isQuoteContact: isQuoteContact !== undefined ? isQuoteContact : existing.isQuoteContact,
+      isBillingContact: isBillingContact !== undefined ? isBillingContact : existing.isBillingContact,
+      isActive: isActive !== undefined ? isActive : existing.isActive,
+      updatedAt: new Date(),
+    })
+    .where(eq(contactsTable.id, contactId))
+    .returning();
+
+  const performer = (req as any).user?.id;
+  await logEvent("company", existing.companyId, "company_contact_updated", undefined, performer,
+    JSON.stringify({ contactId, name: updated.name, isPrimary: updated.isPrimary, prevPrimary }));
+  if (isPrimary === true && !prevPrimary) {
+    await logEvent("company", existing.companyId, "company_contact_primary_changed", undefined, performer,
+      JSON.stringify({ contactId, name: updated.name }));
+  }
+
+  res.json(updated);
+}
+
 router.patch("/admin/contacts/:id", ...adminGuard, async (req, res) => {
   const contactId = Number(req.params.id);
-  if (isNaN(contactId) || contactId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 contact id." }); return;
-  }
-
-  const { name, department, position, email, phone, notes } = req.body;
-
-  try {
-    const [existing] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId));
-    if (!existing) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
-
-    const [updated] = await db
-      .update(contactsTable)
-      .set({
-        name: name?.trim() ?? existing.name,
-        department: department ?? existing.department,
-        position: position ?? existing.position,
-        email: email ?? existing.email,
-        phone: phone ?? existing.phone,
-        notes: notes ?? existing.notes,
-      })
-      .where(eq(contactsTable.id, contactId))
-      .returning();
-    res.json(updated);
-  } catch (err) {
-    req.log.error({ err }, "Contacts: failed to update");
-    res.status(500).json({ error: "담당자 수정 실패." });
-  }
+  if (isNaN(contactId) || contactId <= 0) { res.status(400).json({ error: "유효하지 않은 contact id." }); return; }
+  try { await patchContact(req, res, contactId); }
+  catch (err) { req.log.error({ err }, "Contacts: failed to update"); res.status(500).json({ error: "담당자 수정 실패." }); }
 });
 
-// ─── 담당자 삭제 ─────────────────────────────────────────────────────────────
+router.patch("/admin/company-contacts/:id", ...adminGuard, async (req, res) => {
+  const contactId = Number(req.params.id);
+  if (isNaN(contactId) || contactId <= 0) { res.status(400).json({ error: "유효하지 않은 contact id." }); return; }
+  try { await patchContact(req, res, contactId); }
+  catch (err) { req.log.error({ err }, "Contacts: failed to update"); res.status(500).json({ error: "담당자 수정 실패." }); }
+});
+
+// ─── 담당자 삭제 (soft delete) ───────────────────────────────────────────────
+async function deleteContact(req: any, res: any, contactId: number) {
+  const [existing] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId));
+  if (!existing) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
+
+  const hasProjects = await db.select({ id: projectsTable.id }).from(projectsTable)
+    .where(eq(projectsTable.contactId, contactId)).limit(1);
+
+  if (hasProjects.length > 0) {
+    // 프로젝트 연결 이력 있으면 비활성 처리
+    await db.update(contactsTable).set({ isActive: false, updatedAt: new Date() })
+      .where(eq(contactsTable.id, contactId));
+    await logEvent("company", existing.companyId, "company_contact_deleted", undefined, (req as any).user?.id,
+      JSON.stringify({ contactId, name: existing.name, reason: "soft_delete_has_projects" }));
+    res.json({ ok: true, softDeleted: true });
+  } else {
+    await db.delete(contactsTable).where(eq(contactsTable.id, contactId));
+    await logEvent("company", existing.companyId, "company_contact_deleted", undefined, (req as any).user?.id,
+      JSON.stringify({ contactId, name: existing.name, reason: "hard_delete" }));
+    res.json({ ok: true, softDeleted: false });
+  }
+}
+
 router.delete("/admin/contacts/:id", ...adminGuard, async (req, res) => {
   const contactId = Number(req.params.id);
-  if (isNaN(contactId) || contactId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 contact id." }); return;
-  }
+  if (isNaN(contactId) || contactId <= 0) { res.status(400).json({ error: "유효하지 않은 contact id." }); return; }
+  try { await deleteContact(req, res, contactId); }
+  catch (err) { req.log.error({ err }, "Contacts: failed to delete"); res.status(500).json({ error: "담당자 삭제 실패." }); }
+});
 
-  try {
-    await db.delete(contactsTable).where(eq(contactsTable.id, contactId));
-    res.json({ ok: true });
-  } catch (err) {
-    req.log.error({ err }, "Contacts: failed to delete");
-    res.status(500).json({ error: "담당자 삭제 실패." });
-  }
+router.delete("/admin/company-contacts/:id", ...adminGuard, async (req, res) => {
+  const contactId = Number(req.params.id);
+  if (isNaN(contactId) || contactId <= 0) { res.status(400).json({ error: "유효하지 않은 contact id." }); return; }
+  try { await deleteContact(req, res, contactId); }
+  catch (err) { req.log.error({ err }, "Contacts: failed to delete"); res.status(500).json({ error: "담당자 삭제 실패." }); }
 });
 
 export default router;

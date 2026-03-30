@@ -422,7 +422,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
     setContactsLoading(true);
     try {
       const params = new URLSearchParams();
-      if (contactSearch.trim()) params.set("search", contactSearch.trim());
+      if (contactSearch.trim()) params.set("keyword", contactSearch.trim());
       const res = await fetch(api(`/api/admin/contacts${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) setContacts(Array.isArray(data) ? data : []);
@@ -2162,10 +2162,13 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
       {/* ── 담당자 탭 ── */}
       {adminTab === "contacts" && (
         <Section title={`담당자 관리 (${contacts.length})`}>
+          <p style={{ fontSize: 12, color: "#9ca3af", margin: "0 0 12px" }}>
+            하나의 거래처에 여러 명의 담당자를 등록할 수 있습니다. 기본 담당자는 거래처별 1명만 지정됩니다.
+          </p>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
             <input value={contactSearch} onChange={e => setContactSearch(e.target.value)}
-              placeholder="이름, 이메일, 부서, 거래처 검색..."
-              style={{ ...inputStyle, maxWidth: 320, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+              placeholder="이름, 이메일, 휴대폰, 거래처 검색..."
+              style={{ ...inputStyle, maxWidth: 340, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
               onKeyDown={e => e.key === "Enter" && fetchContacts()} />
             <PrimaryBtn onClick={fetchContacts} disabled={contactsLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
               {contactsLoading ? "검색 중..." : "검색"}
@@ -2180,21 +2183,33 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["ID","이름","부서/직책","이메일","전화","거래처","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                    <tr>{["ID","거래처","담당자명","부서/직책","휴대폰","이메일","역할","상태","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {contacts.map(c => (
-                      <tr key={c.id} onClick={() => setContactModal(c.id)} style={{ cursor: "pointer" }}
+                      <tr key={c.id} onClick={() => setContactModal(c.id)} style={{ cursor: "pointer", opacity: (c as any).isActive !== false ? 1 : 0.6 }}
                         onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                         <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{c.companyName ?? "-"}</td>
                         <td style={{ ...tableTd, fontWeight: 700, color: "#111827" }}>{c.name}</td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
                           {[c.department, c.position].filter(Boolean).join(" / ") || "-"}
                         </td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{(c as any).mobile ?? c.phone ?? "-"}</td>
                         <td style={{ ...tableTd, color: "#2563eb", fontSize: 12 }}>{c.email ?? "-"}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{c.phone ?? "-"}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{c.companyName ?? "-"}</td>
+                        <td style={{ ...tableTd }}>
+                          <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                            {(c as any).isPrimary && <span style={{ fontSize: 10, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>기본</span>}
+                            {(c as any).isQuoteContact && <span style={{ fontSize: 10, background: "#d1fae5", color: "#065f46", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>견적</span>}
+                            {(c as any).isBillingContact && <span style={{ fontSize: 10, background: "#ede9fe", color: "#5b21b6", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>청구</span>}
+                          </div>
+                        </td>
+                        <td style={{ ...tableTd, fontSize: 12 }}>
+                          <span style={{ background: (c as any).isActive !== false ? "#d1fae5" : "#f3f4f6", color: (c as any).isActive !== false ? "#065f46" : "#9ca3af", borderRadius: 4, padding: "2px 7px", fontSize: 11, fontWeight: 600 }}>
+                            {(c as any).isActive !== false ? "활성" : "비활성"}
+                          </span>
+                        </td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</td>
                       </tr>
                     ))}
