@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { api, CustomerDetail, Communication, COMM_TYPE_LABEL, COMM_TYPE_COLOR } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn } from "../ui";
+import { DraggableModal } from "./DraggableModal";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -80,12 +81,7 @@ export function CustomerDetailModal({ customerId, token, onClose, onToast, onOpe
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 300, overflowY: "auto", padding: "20px 16px" }}>
-      <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb", width: "100%", maxWidth: 760, padding: "24px 28px", boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>고객 #{customerId} 상세</h2>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#9ca3af", lineHeight: 1, padding: 4 }}>×</button>
-        </div>
+    <DraggableModal title={`고객 #${customerId} 상세`} onClose={onClose} width={760} zIndex={300} bodyPadding="20px 28px">
 
         {loading ? (
           <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p>
@@ -189,7 +185,6 @@ export function CustomerDetailModal({ customerId, token, onClose, onToast, onOpe
             )}
           </>
         )}
-      </div>
-    </div>
+    </DraggableModal>
   );
 }

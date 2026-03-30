@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { api } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn } from "../ui";
+import { DraggableModal } from "./DraggableModal";
 
 interface LedgerEntry {
   id: number;
@@ -105,19 +106,10 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
     }
   };
 
-  const overlay: React.CSSProperties = {
-    position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
-    display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200, padding: 16,
-  };
-  const modal: React.CSSProperties = {
-    background: "#fff", borderRadius: 16, width: "100%", maxWidth: 780,
-    maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
-  };
-
   if (loading) return (
-    <div style={overlay} onClick={onClose}>
-      <div style={{ ...modal, padding: 40, textAlign: "center", color: "#9ca3af" }}>불러오는 중...</div>
-    </div>
+    <DraggableModal title="선입금 계정 원장" onClose={onClose} width={780} zIndex={1200}>
+      <p style={{ textAlign: "center", color: "#9ca3af", padding: "32px 0" }}>불러오는 중...</p>
+    </DraggableModal>
   );
   if (!account) return null;
 
@@ -129,17 +121,15 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
   } as const;
 
   return (
-    <div style={overlay} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={modal}>
+    <DraggableModal title="선입금 계정 원장" subtitle={account.companyName} onClose={onClose} width={780} zIndex={1200} bodyPadding="0">
         {/* Header */}
-        <div style={{ background: "linear-gradient(135deg, #1e40af 0%, #3b82f6 100%)", borderRadius: "16px 16px 0 0", padding: "24px 28px", color: "#fff" }}>
+        <div style={{ background: "linear-gradient(135deg, #1e40af 0%, #3b82f6 100%)", padding: "20px 28px", color: "#fff" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
             <div>
               <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.8, marginBottom: 4, letterSpacing: "0.05em" }}>선입금 계정 원장</div>
               <div style={{ fontSize: 22, fontWeight: 800 }}>{account.companyName}</div>
               {account.note && <div style={{ fontSize: 13, opacity: 0.85, marginTop: 4 }}>{account.note}</div>}
             </div>
-            <button onClick={onClose} style={{ background: "rgba(255,255,255,0.2)", border: "none", borderRadius: 8, color: "#fff", cursor: "pointer", padding: "8px 14px", fontSize: 13, fontWeight: 600 }}>닫기</button>
           </div>
           {/* 잔액 summary */}
           <div style={{ display: "flex", gap: 16, marginTop: 20, flexWrap: "wrap" }}>
@@ -290,7 +280,6 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </DraggableModal>
   );
 }

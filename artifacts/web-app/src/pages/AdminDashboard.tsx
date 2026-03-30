@@ -10,6 +10,7 @@ import {
 } from '../lib/constants';
 import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill } from '../components/ui';
 import { LogModal } from '../components/admin/LogModal';
+import { DraggableModal } from '../components/admin/DraggableModal';
 import { CompanyDetailModal } from '../components/admin/CompanyDetailModal';
 import { ContactDetailModal } from '../components/admin/ContactDetailModal';
 import { CustomerDetailModal } from '../components/admin/CustomerDetailModal';
@@ -878,53 +879,54 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
         />
       )}
       {boardPostModal !== null && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", zIndex: 300, overflowY: "auto", padding: "20px 16px" }}>
-          <div style={{ background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb", width: "100%", maxWidth: 680, padding: "24px 28px", boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 12 }}>
-              <div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6 }}>
-                  {boardPostModal.pinned && <span style={{ background: "#fef3c7", color: "#d97706", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>📌 고정</span>}
-                  <span style={{ background: "#eff6ff", color: "#2563eb", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>{BOARD_CATEGORY_LABEL[boardPostModal.category] ?? boardPostModal.category}</span>
-                  {boardPostModal.visibleToAll && <span style={{ background: "#f0fdf4", color: "#059669", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>공개</span>}
-                </div>
-                <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: "#111827" }}>{boardPostModal.title}</h2>
-                <p style={{ margin: "4px 0 0", fontSize: 12, color: "#9ca3af" }}>{boardPostModal.authorEmail} · {new Date(boardPostModal.createdAt).toLocaleDateString("ko-KR")}</p>
-              </div>
-              <button onClick={() => setBoardPostModal(null)} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#9ca3af" }}>×</button>
+        <DraggableModal
+          title={boardPostModal.title}
+          subtitle={`${boardPostModal.authorEmail} · ${new Date(boardPostModal.createdAt).toLocaleDateString("ko-KR")}`}
+          onClose={() => setBoardPostModal(null)}
+          width={680}
+          zIndex={300}
+          bodyPadding="20px 28px"
+          headerExtra={
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {boardPostModal.pinned && <span style={{ background: "#fef3c7", color: "#d97706", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>📌 고정</span>}
+              <span style={{ background: "#eff6ff", color: "#2563eb", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>{BOARD_CATEGORY_LABEL[boardPostModal.category] ?? boardPostModal.category}</span>
+              {boardPostModal.visibleToAll && <span style={{ background: "#f0fdf4", color: "#059669", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>공개</span>}
             </div>
-            <div style={{ background: "#f9fafb", borderRadius: 10, padding: "16px 18px", fontSize: 14, color: "#374151", lineHeight: 1.7, whiteSpace: "pre-wrap", marginBottom: 16, border: "1px solid #e5e7eb" }}>
-              {boardPostModal.content ?? "내용 없음"}
-            </div>
-            <div style={{ display: "flex", justifyContent: "flex-end" }}>
-              <button onClick={() => handleDeleteBoardPost(boardPostModal.id)} style={{ background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>삭제</button>
-            </div>
+          }
+        >
+          <div style={{ background: "#f9fafb", borderRadius: 10, padding: "16px 18px", fontSize: 14, color: "#374151", lineHeight: 1.7, whiteSpace: "pre-wrap", marginBottom: 16, border: "1px solid #e5e7eb" }}>
+            {boardPostModal.content ?? "내용 없음"}
           </div>
-        </div>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button onClick={() => handleDeleteBoardPost(boardPostModal.id)} style={{ background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>삭제</button>
+          </div>
+        </DraggableModal>
       )}
       {resetPwUserId !== null && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 400 }}>
-          <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 400, padding: "28px 32px", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
-            <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700, color: "#111827" }}>비밀번호 재설정</h3>
-            <p style={{ margin: "0 0 14px", fontSize: 13, color: "#6b7280" }}>
-              사용자 #{resetPwUserId}의 비밀번호를 재설정합니다.
-            </p>
-            <input
-              type="password"
-              value={resetPwInput}
-              onChange={e => setResetPwInput(e.target.value)}
-              placeholder="새 비밀번호 (최소 6자)"
-              onKeyDown={e => e.key === "Enter" && handleResetPassword()}
-              style={{ ...inputStyle, width: "100%", boxSizing: "border-box", marginBottom: 14 }}
-              autoFocus
-            />
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <GhostBtn onClick={() => { setResetPwUserId(null); setResetPwInput(""); }}>취소</GhostBtn>
-              <PrimaryBtn onClick={handleResetPassword} disabled={resetPwLoading || resetPwInput.length < 6} style={{ padding: "8px 18px" }}>
-                {resetPwLoading ? "처리 중..." : "재설정"}
-              </PrimaryBtn>
-            </div>
+        <DraggableModal
+          title="비밀번호 재설정"
+          subtitle={`사용자 #${resetPwUserId}의 비밀번호를 재설정합니다.`}
+          onClose={() => { setResetPwUserId(null); setResetPwInput(""); }}
+          width={400}
+          zIndex={400}
+          bodyPadding="20px 28px"
+        >
+          <input
+            type="password"
+            value={resetPwInput}
+            onChange={e => setResetPwInput(e.target.value)}
+            placeholder="새 비밀번호 (최소 6자)"
+            onKeyDown={e => e.key === "Enter" && handleResetPassword()}
+            style={{ ...inputStyle, width: "100%", boxSizing: "border-box", marginBottom: 14 }}
+            autoFocus
+          />
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <GhostBtn onClick={() => { setResetPwUserId(null); setResetPwInput(""); }}>취소</GhostBtn>
+            <PrimaryBtn onClick={handleResetPassword} disabled={resetPwLoading || resetPwInput.length < 6} style={{ padding: "8px 18px" }}>
+              {resetPwLoading ? "처리 중..." : "재설정"}
+            </PrimaryBtn>
           </div>
-        </div>
+        </DraggableModal>
       )}
       {detailModal !== null && (
         <ProjectDetailModal
@@ -1123,9 +1125,14 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
 
       {/* 관리자 프로젝트 생성 모달 */}
       {showCreateProject && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 400 }}>
-          <div style={{ background: "#fff", borderRadius: 14, width: "100%", maxWidth: 480, padding: "28px 32px", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
-            <h3 style={{ margin: "0 0 18px", fontSize: 17, fontWeight: 800, color: "#111827" }}>프로젝트 직접 등록</h3>
+        <DraggableModal
+          title="프로젝트 직접 등록"
+          subtitle="거래처, 담당자, 의뢰/청구/납부 주체를 지정하여 프로젝트를 직접 등록합니다."
+          onClose={() => { setShowCreateProject(false); setNewProjectTitle(""); setShowBillingOverride(false); setShowPayerOverride(false); setNewProjectCompanyId(null); setNewProjectContactId(null); setNewProjectDivisionId(null); setNewProjectBillingCompanyId(null); setNewProjectPayerCompanyId(null); setCompanyDivisions([]); }}
+          width={520}
+          zIndex={400}
+          bodyPadding="20px 28px"
+        >
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <div>
                 <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>제목 *</label>
@@ -1282,8 +1289,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                 {creatingProject ? "생성 중..." : "프로젝트 등록"}
               </PrimaryBtn>
             </div>
-          </div>
-        </div>
+        </DraggableModal>
       )}
 
       {/* ── 프로젝트 탭 ── */}
@@ -2201,18 +2207,15 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
         }>
           {/* ── 담당자 등록 모달 ── */}
           {showCreateContactModal && (
-            <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}
-              onClick={e => { if (e.target === e.currentTarget) setShowCreateContactModal(false); }}>
-              <div style={{ background: "#fff", borderRadius: 16, width: "100%", maxWidth: 560, maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
-                <div style={{ padding: "20px 24px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <div>
-                    <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#111827" }}>담당자 등록</h2>
-                    <p style={{ margin: "4px 0 0", fontSize: 12, color: "#9ca3af" }}>하나의 거래처에 여러 명의 담당자를 등록할 수 있습니다.</p>
-                  </div>
-                  <button onClick={() => setShowCreateContactModal(false)}
-                    style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#9ca3af", lineHeight: 1 }}>✕</button>
-                </div>
-                <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 14 }}>
+            <DraggableModal
+              title="담당자 등록"
+              subtitle="하나의 거래처에 여러 명의 담당자를 등록할 수 있습니다."
+              onClose={() => setShowCreateContactModal(false)}
+              width={560}
+              zIndex={1000}
+              bodyPadding="20px 24px"
+            >
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   {/* 거래처 선택 */}
                   <div>
                     <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 6 }}>
@@ -2337,8 +2340,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
                     <GhostBtn onClick={() => setShowCreateContactModal(false)} style={{ fontSize: 14, padding: "10px 20px" }}>취소</GhostBtn>
                   </div>
                 </div>
-              </div>
-            </div>
+            </DraggableModal>
           )}
 
           <p style={{ fontSize: 12, color: "#9ca3af", margin: "0 0 12px" }}>

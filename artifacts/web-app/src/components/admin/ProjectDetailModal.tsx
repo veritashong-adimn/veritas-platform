@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, ALL_FINANCIAL_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, AdminUser, BOARD_CATEGORY_LABEL } from '../../lib/constants';
 import { StatusBadge, PrimaryBtn, GhostBtn } from '../ui';
 import { ReviewMemoPanel } from './ReviewMemoPanel';
+import { DraggableModal } from './DraggableModal';
 
 /* ────── 상태 변경 검증 ────── */
 function getStatusTransitionBlock(
@@ -807,26 +808,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   ];
 
   return (
-    <div style={{
-      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
-      display: "flex", alignItems: "flex-start", justifyContent: "center",
-      zIndex: 300, overflowY: "auto", padding: "20px 16px",
-    }}>
-      <div style={{
-        background: "#fff", borderRadius: 14, border: "1px solid #e5e7eb",
-        width: "100%", maxWidth: 780, padding: "24px 28px",
-        boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-          <div>
-            <h2 style={{ margin: "0 0 2px", fontSize: 18, fontWeight: 800, color: "#111827" }}>
-              프로젝트 #{projectId} 상세
-            </h2>
-            {detail && <StatusBadge status={detail.status} />}
-          </div>
-          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#9ca3af", lineHeight: 1, padding: 4 }}>×</button>
-        </div>
-
+    <DraggableModal
+      title={`프로젝트 #${projectId} 상세`}
+      onClose={onClose}
+      width={820}
+      zIndex={300}
+      bodyPadding="20px 28px"
+      headerExtra={detail ? <StatusBadge status={detail.status} /> : undefined}
+    >
         {loading ? (
           <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p>
         ) : err ? (
@@ -2497,7 +2486,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             )}
           </>
         )}
-      </div>
-    </div>
+    </DraggableModal>
   );
 }
