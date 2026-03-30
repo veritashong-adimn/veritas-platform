@@ -26,6 +26,8 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [addingContact, setAddingContact] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editForm, setEditForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: "" });
+  const [originalName, setOriginalName] = useState("");
+  const [nameChangeReason, setNameChangeReason] = useState("");
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [compNotes, setCompNotes] = useState<NoteEntry[]>([]);
   const [compNoteText, setCompNoteText] = useState("");
@@ -51,6 +53,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       const [data, nData] = await Promise.all([dRes.json(), nRes.json()]);
       if (dRes.ok) {
         setDetail(data);
+        setOriginalName(data.name);
         setEditForm({
           name: data.name,
           businessNumber: data.businessNumber ?? "",
@@ -103,16 +106,29 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
     setFormErrors(errs);
     if (Object.keys(errs).length > 0) return;
 
+    // 상호 변경 시 사유 필수
+    const isNameChanged = editForm.name.trim() !== originalName;
+    if (isNameChanged && !nameChangeReason.trim()) {
+      errs.nameChangeReason = "상호 변경 시 변경 사유를 입력해주세요.";
+    }
+    setFormErrors(errs);
+    if (Object.keys(errs).length > 0) return;
+
     try {
+      const body: Record<string, any> = { ...editForm };
+      if (isNameChanged) body.nameChangeReason = nameChangeReason.trim();
       const res = await fetch(api(`/api/admin/companies/${companyId}`), {
         method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
-        body: JSON.stringify(editForm),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       setDetail(prev => prev ? { ...prev, ...data } : prev);
+      setOriginalName(data.name);
       setFormErrors({});
+      setNameChangeReason("");
       setEditMode(false);
+      await load();
       onToast("거래처 정보가 수정되었습니다.");
     } catch { onToast("오류: 수정 실패"); }
   };
@@ -228,6 +244,36 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                   </div>
                 )}
                 <GhostBtn onClick={() => setEditMode(true)} style={{ width: "fit-content", fontSize: 12, padding: "5px 12px", marginTop: 4 }}>정보 수정</GhostBtn>
+                {/* 상호 변경 이력 */}
+                {(() => {
+                  const history = (detail as any).nameHistory ?? [];
+                  const previousNames = history.filter((h: any) => h.nameType === "previous" || h.nameType === "alias");
+                  if (previousNames.length === 0) return null;
+                  return (
+                    <div style={{ marginTop: 10, background: "#f9fafb", borderRadius: 8, padding: "10px 12px", border: "1px solid #f3f4f6" }}>
+                      <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>상호 변경 이력</p>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                        {previousNames.map((h: any) => (
+                          <div key={h.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12 }}>
+                            <span style={{ background: "#e5e7eb", borderRadius: 4, padding: "1px 6px", color: "#374151", fontWeight: 600, whiteSpace: "nowrap", marginTop: 1 }}>
+                              {h.nameType === "alias" ? "별칭" : "이전 상호"}
+                            </span>
+                            <div style={{ flex: 1 }}>
+                              <span style={{ color: "#374151", fontWeight: 600 }}>{h.companyName}</span>
+                              {h.validFrom && (
+                                <span style={{ color: "#9ca3af", marginLeft: 6 }}>
+                                  {h.validFrom}{h.validTo ? ` ~ ${h.validTo}` : ""}
+                                </span>
+                              )}
+                              {h.reason && <span style={{ color: "#9ca3af", marginLeft: 6 }}>· {h.reason}</span>}
+                              {h.changedByEmail && <span style={{ color: "#9ca3af", marginLeft: 6 }}>({h.changedByEmail})</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
@@ -238,6 +284,21 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.name ? "#fca5a5" : undefined }} />
                   {formErrors.name && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.name}</p>}
                 </div>
+                {/* 상호 변경 감지 시 사유 입력란 표시 */}
+                {editForm.name.trim() !== originalName && editForm.name.trim() !== "" && (
+                  <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "10px 12px" }}>
+                    <p style={{ margin: "0 0 6px", fontSize: 12, color: "#92400e", fontWeight: 600 }}>⚠️ 거래처명(상호) 변경이 감지되었습니다</p>
+                    <p style={{ margin: "0 0 8px", fontSize: 11, color: "#78350f" }}>
+                      <strong>{originalName}</strong> → <strong>{editForm.name.trim()}</strong>
+                      <br />이전 상호는 변경 이력으로 자동 저장됩니다.
+                    </p>
+                    <label style={{ fontSize: 12, color: "#92400e", fontWeight: 700, display: "block", marginBottom: 3 }}>변경 사유 <span style={{ color: "#dc2626" }}>*</span></label>
+                    <input value={nameChangeReason} onChange={e => setNameChangeReason(e.target.value)}
+                      placeholder="예: 법인 전환, 합병, 상호 변경 등"
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.nameChangeReason ? "#fca5a5" : "#fcd34d" }} />
+                    {formErrors.nameChangeReason && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.nameChangeReason}</p>}
+                  </div>
+                )}
                 {/* 2행: 사업자등록번호 / 대표자명 / 등록일 */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
                   <div>
@@ -308,7 +369,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <PrimaryBtn onClick={handleSaveEdit} style={{ fontSize: 13, padding: "7px 16px" }}>저장</PrimaryBtn>
-                  <GhostBtn onClick={() => { setEditMode(false); setFormErrors({}); }} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
+                  <GhostBtn onClick={() => { setEditMode(false); setFormErrors({}); setNameChangeReason(""); }} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
                 </div>
               </div>
             )}

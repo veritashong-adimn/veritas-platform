@@ -2,10 +2,11 @@ import { Router, type IRouter } from "express";
 import {
   db, companiesTable, contactsTable, projectsTable,
   paymentsTable, settlementsTable, quotesTable, communicationsTable, usersTable,
-  billingBatchesTable, divisionsTable,
+  billingBatchesTable, divisionsTable, companyNameHistoryTable,
 } from "@workspace/db";
-import { eq, and, ilike, or, inArray, sql, desc } from "drizzle-orm";
+import { eq, and, ilike, or, inArray, sql, desc, ne } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
+import { logEvent } from "../lib/logEvent";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin")];
@@ -21,8 +22,10 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
         name: companiesTable.name,
         businessNumber: companiesTable.businessNumber,
         industry: companiesTable.industry,
+        businessCategory: companiesTable.businessCategory,
         address: companiesTable.address,
         website: companiesTable.website,
+        registeredAt: companiesTable.registeredAt,
         createdAt: companiesTable.createdAt,
         contactCount: sql<number>`COUNT(DISTINCT ${contactsTable.id})::int`,
         projectCount: sql<number>`COUNT(DISTINCT ${projectsTable.id})::int`,
@@ -38,10 +41,18 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
     let result = rows;
     if (search?.trim()) {
       const s = search.trim().toLowerCase();
+      // 이름 이력 테이블에서 과거 상호로 매칭되는 company_id 조회
+      const historyMatches = await db
+        .select({ companyId: companyNameHistoryTable.companyId })
+        .from(companyNameHistoryTable)
+        .where(ilike(companyNameHistoryTable.companyName, `%${s}%`));
+      const historyIds = new Set(historyMatches.map(h => h.companyId));
+
       result = result.filter(c =>
         c.name.toLowerCase().includes(s) ||
         (c.businessNumber ?? "").toLowerCase().includes(s) ||
-        (c.industry ?? "").toLowerCase().includes(s)
+        (c.industry ?? "").toLowerCase().includes(s) ||
+        historyIds.has(c.id)
       );
     }
 
@@ -72,6 +83,18 @@ router.post("/admin/companies", ...adminGuard, async (req, res) => {
       .insert(companiesTable)
       .values({ name: name.trim(), businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt: registeredAt ?? today })
       .returning();
+
+    // 최초 상호를 이력으로 기록
+    await db.insert(companyNameHistoryTable).values({
+      companyId: company.id,
+      companyName: company.name,
+      nameType: "current",
+      validFrom: today,
+      changedBy: (req as any).user?.id ?? null,
+      changedByEmail: (req as any).user?.email ?? null,
+      reason: "최초 등록",
+    });
+
     res.status(201).json(company);
   } catch (err) {
     req.log.error({ err }, "Companies: failed to create");
@@ -174,6 +197,13 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
       .where(and(eq(billingBatchesTable.companyId, companyId), sql`${billingBatchesTable.status} != 'paid'`));
     activeAccumulatedCount = activeBatches.length;
 
+    // 상호 변경 이력
+    const nameHistory = await db
+      .select()
+      .from(companyNameHistoryTable)
+      .where(eq(companyNameHistoryTable.companyId, companyId))
+      .orderBy(desc(companyNameHistoryTable.changedAt));
+
     const lastProjectDate = projects.length > 0 ? projects[0].createdAt : null;
     const unpaidAmount = Math.max(0, totalQuote - totalPayment);
 
@@ -206,7 +236,7 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
       contactCount: contacts.filter(c => c.divisionId === d.id).length,
     }));
 
-    res.json({ ...company, contacts, divisions: divisionsWithStats, projects, totalQuote, totalPayment, totalSettlement, prepaidBalance, activeAccumulatedCount, unpaidAmount, lastProjectDate, lastPaymentDate });
+    res.json({ ...company, contacts, divisions: divisionsWithStats, projects, totalQuote, totalPayment, totalSettlement, prepaidBalance, activeAccumulatedCount, unpaidAmount, lastProjectDate, lastPaymentDate, nameHistory });
   } catch (err) {
     req.log.error({ err }, "Companies: failed to get detail");
     res.status(500).json({ error: "거래처 상세 조회 실패." });
@@ -220,16 +250,20 @@ router.patch("/admin/companies/:id", ...adminGuard, async (req, res) => {
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
 
-  const { name, businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt } = req.body;
+  const { name, businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt, nameChangeReason } = req.body;
 
   try {
     const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
     if (!existing) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
 
+    const newName = name?.trim() ?? existing.name;
+    const today = new Date().toISOString().slice(0, 10);
+    const performer = (req as any).user as { id: number; email: string } | undefined;
+
     const [updated] = await db
       .update(companiesTable)
       .set({
-        name: name?.trim() ?? existing.name,
+        name: newName,
         businessNumber: businessNumber !== undefined ? (businessNumber || null) : existing.businessNumber,
         representativeName: representativeName !== undefined ? (representativeName || null) : existing.representativeName,
         email: email !== undefined ? (email || null) : existing.email,
@@ -243,6 +277,34 @@ router.patch("/admin/companies/:id", ...adminGuard, async (req, res) => {
       })
       .where(eq(companiesTable.id, companyId))
       .returning();
+
+    // 상호 변경 이력 기록
+    if (newName !== existing.name) {
+      // 이전 상호: 기존 current 레코드의 valid_to 종료 처리
+      await db
+        .update(companyNameHistoryTable)
+        .set({ validTo: today, nameType: "previous" })
+        .where(and(
+          eq(companyNameHistoryTable.companyId, companyId),
+          eq(companyNameHistoryTable.nameType, "current"),
+        ));
+
+      // 새 상호: current 이력 추가
+      await db.insert(companyNameHistoryTable).values({
+        companyId,
+        companyName: newName,
+        nameType: "current",
+        validFrom: today,
+        changedBy: performer?.id ?? null,
+        changedByEmail: performer?.email ?? null,
+        reason: nameChangeReason?.trim() || "상호 변경",
+      });
+
+      // logEvent 기록
+      await logEvent("company", companyId, "company_name_changed", req.log, performer,
+        JSON.stringify({ from: existing.name, to: newName, reason: nameChangeReason?.trim() || "상호 변경" }));
+    }
+
     res.json(updated);
   } catch (err) {
     req.log.error({ err }, "Companies: failed to update");
