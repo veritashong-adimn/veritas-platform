@@ -25,7 +25,8 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [contactForm, setContactForm] = useState({ name: "", department: "", position: "", email: "", phone: "", notes: "" });
   const [addingContact, setAddingContact] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", industry: "", address: "", website: "", notes: "", representativeName: "", email: "", phone: "" });
+  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: "" });
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [compNotes, setCompNotes] = useState<NoteEntry[]>([]);
   const [compNoteText, setCompNoteText] = useState("");
   const [addingCompNote, setAddingCompNote] = useState(false);
@@ -51,11 +52,17 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       if (dRes.ok) {
         setDetail(data);
         setEditForm({
-          name: data.name, businessNumber: data.businessNumber ?? "",
-          industry: data.industry ?? "", address: data.address ?? "",
-          website: data.website ?? "", notes: data.notes ?? "",
+          name: data.name,
+          businessNumber: data.businessNumber ?? "",
           representativeName: data.representativeName ?? "",
-          email: data.email ?? "", phone: data.phone ?? "",
+          email: data.email ?? "",
+          phone: data.phone ?? "",
+          industry: data.industry ?? "",
+          businessCategory: (data as any).businessCategory ?? "",
+          address: data.address ?? "",
+          website: data.website ?? "",
+          notes: data.notes ?? "",
+          registeredAt: (data as any).registeredAt ?? "",
         });
       }
       if (nRes.ok) setCompNotes(Array.isArray(nData) ? nData : []);
@@ -85,6 +92,17 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   };
 
   const handleSaveEdit = async () => {
+    const errs: Record<string, string> = {};
+    if (!editForm.name.trim()) errs.name = "거래처명은 필수입니다.";
+    if (editForm.businessNumber.trim()) {
+      const bn = editForm.businessNumber.replace(/-/g, "");
+      if (!/^\d{10}$/.test(bn)) errs.businessNumber = "사업자등록번호 형식: 000-00-00000";
+    }
+    if (editForm.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(editForm.email.trim())) errs.email = "이메일 형식이 올바르지 않습니다.";
+    if (editForm.website.trim() && !/^https?:\/\/.+/.test(editForm.website.trim())) errs.website = "웹사이트는 http:// 또는 https://로 시작해야 합니다.";
+    setFormErrors(errs);
+    if (Object.keys(errs).length > 0) return;
+
     try {
       const res = await fetch(api(`/api/admin/companies/${companyId}`), {
         method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
@@ -93,6 +111,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       setDetail(prev => prev ? { ...prev, ...data } : prev);
+      setFormErrors({});
       setEditMode(false);
       onToast("거래처 정보가 수정되었습니다.");
     } catch { onToast("오류: 수정 실패"); }
@@ -170,29 +189,126 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
             <ReviewMemoPanel storageKey={`company_${companyId}`} label="이 거래처 검수 메모" />
             <p style={sH}>거래처 정보</p>
             {!editMode ? (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px", marginBottom: 8 }}>
-                {([["회사명", detail.name], ["사업자번호", detail.businessNumber ?? "-"], ["업종", detail.industry ?? "-"], ["주소", detail.address ?? "-"], ["웹사이트", detail.website ?? "-"], ["대표자명", detail.representativeName ?? "-"], ["이메일", detail.email ?? "-"], ["전화", detail.phone ?? "-"]] as [string,string][]).map(([l, v]) => (
-                  <div key={l} style={{ display: "flex", gap: 4, fontSize: 13, marginBottom: 4 }}>
-                    <span style={{ color: "#9ca3af", minWidth: 80 }}>{l}</span>
-                    <span style={{ color: "#374151", fontWeight: l === "회사명" ? 700 : 400 }}>{v}</span>
+              <div style={{ marginBottom: 10 }}>
+                {/* 기본정보 그리드 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px 0", marginBottom: 10 }}>
+                  {([
+                    ["거래처명", detail.name, true],
+                    ["사업자번호", detail.businessNumber ?? "-", false],
+                    ["대표자명", detail.representativeName ?? "-", false],
+                    ["등록일", (detail as any).registeredAt ?? "-", false],
+                    ["전화번호", detail.phone ?? "-", false],
+                    ["이메일", detail.email ?? "-", false],
+                    ["웹사이트", detail.website ?? "-", false],
+                    ["업태", detail.industry ?? "-", false],
+                    ["종목", (detail as any).businessCategory ?? "-", false],
+                  ] as [string, string, boolean][]).map(([l, v, bold]) => (
+                    <div key={l} style={{ display: "flex", flexDirection: "column", gap: 1, paddingRight: 12 }}>
+                      <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase" }}>{l}</span>
+                      <span style={{ fontSize: 13, color: "#374151", fontWeight: bold ? 700 : 400 }}>
+                        {l === "웹사이트" && v !== "-"
+                          ? <a href={v} target="_blank" rel="noreferrer" style={{ color: "#2563eb" }}>{v}</a>
+                          : v}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                {/* 주소 */}
+                {detail.address && (
+                  <div style={{ display: "flex", gap: 6, fontSize: 13, marginBottom: 6 }}>
+                    <span style={{ color: "#9ca3af", minWidth: 56, fontSize: 10, fontWeight: 600, textTransform: "uppercase", paddingTop: 2 }}>주소</span>
+                    <span style={{ color: "#374151" }}>{detail.address}</span>
                   </div>
-                ))}
-                <GhostBtn onClick={() => setEditMode(true)} style={{ width: "fit-content", fontSize: 12, padding: "5px 12px" }}>정보 수정</GhostBtn>
+                )}
+                {/* 메모 */}
+                {detail.notes && (
+                  <div style={{ background: "#f9fafb", borderRadius: 8, padding: "8px 12px", marginBottom: 6 }}>
+                    <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase" }}>메모</span>
+                    <p style={{ margin: "4px 0 0", fontSize: 13, color: "#374151", whiteSpace: "pre-wrap" }}>{detail.notes}</p>
+                  </div>
+                )}
+                <GhostBtn onClick={() => setEditMode(true)} style={{ width: "fit-content", fontSize: 12, padding: "5px 12px", marginTop: 4 }}>정보 수정</GhostBtn>
               </div>
             ) : (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", marginBottom: 12 }}>
-                {(["name","businessNumber","industry","address","website","representativeName","email","phone"] as const).map(f => (
-                  <div key={f}>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>
-                      {f === "name" ? "회사명*" : f === "businessNumber" ? "사업자번호" : f === "industry" ? "업종" : f === "address" ? "주소" : f === "website" ? "웹사이트" : f === "representativeName" ? "대표자명" : f === "email" ? "이메일" : "전화"}
-                    </label>
-                    <input value={editForm[f]} onChange={e => setEditForm(p => ({ ...p, [f]: e.target.value }))}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
+                {/* 1행: 거래처명 */}
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>거래처명 <span style={{ color: "#dc2626" }}>*</span></label>
+                  <input value={editForm.name} onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))}
+                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.name ? "#fca5a5" : undefined }} />
+                  {formErrors.name && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.name}</p>}
+                </div>
+                {/* 2행: 사업자등록번호 / 대표자명 / 등록일 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>사업자등록번호</label>
+                    <input value={editForm.businessNumber} onChange={e => setEditForm(p => ({ ...p, businessNumber: e.target.value }))}
+                      placeholder="000-00-00000"
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.businessNumber ? "#fca5a5" : undefined }} />
+                    {formErrors.businessNumber && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.businessNumber}</p>}
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대표자명</label>
+                    <input value={editForm.representativeName} onChange={e => setEditForm(p => ({ ...p, representativeName: e.target.value }))}
+                      placeholder="홍길동" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>등록일</label>
+                    <input type="date" value={editForm.registeredAt} onChange={e => setEditForm(p => ({ ...p, registeredAt: e.target.value }))}
                       style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
                   </div>
-                ))}
-                <div style={{ gridColumn: "span 2", display: "flex", gap: 8 }}>
+                </div>
+                {/* 3행: 전화 / 이메일 / 웹사이트 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>전화번호</label>
+                    <input value={editForm.phone} onChange={e => setEditForm(p => ({ ...p, phone: e.target.value }))}
+                      placeholder="02-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>이메일</label>
+                    <input value={editForm.email} onChange={e => setEditForm(p => ({ ...p, email: e.target.value }))}
+                      placeholder="contact@company.com"
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.email ? "#fca5a5" : undefined }} />
+                    {formErrors.email && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.email}</p>}
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>웹사이트</label>
+                    <input value={editForm.website} onChange={e => setEditForm(p => ({ ...p, website: e.target.value }))}
+                      placeholder="https://example.com"
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.website ? "#fca5a5" : undefined }} />
+                    {formErrors.website && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.website}</p>}
+                  </div>
+                </div>
+                {/* 4행: 업태 / 종목 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>업태</label>
+                    <input value={editForm.industry} onChange={e => setEditForm(p => ({ ...p, industry: e.target.value }))}
+                      placeholder="제조업, 서비스업 등" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>종목</label>
+                    <input value={editForm.businessCategory} onChange={e => setEditForm(p => ({ ...p, businessCategory: e.target.value }))}
+                      placeholder="통역, 번역, 소프트웨어 등" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                </div>
+                {/* 5행: 주소 */}
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>주소</label>
+                  <input value={editForm.address} onChange={e => setEditForm(p => ({ ...p, address: e.target.value }))}
+                    placeholder="서울시 강남구 테헤란로 123" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                </div>
+                {/* 6행: 메모 */}
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>메모</label>
+                  <textarea value={editForm.notes} onChange={e => setEditForm(p => ({ ...p, notes: e.target.value }))}
+                    rows={3} placeholder="거래처 관련 특이사항을 입력하세요."
+                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", resize: "vertical" }} />
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
                   <PrimaryBtn onClick={handleSaveEdit} style={{ fontSize: 13, padding: "7px 16px" }}>저장</PrimaryBtn>
-                  <GhostBtn onClick={() => setEditMode(false)} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
+                  <GhostBtn onClick={() => { setEditMode(false); setFormErrors({}); }} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
                 </div>
               </div>
             )}

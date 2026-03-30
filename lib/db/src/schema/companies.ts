@@ -8,9 +8,11 @@ export const companiesTable = pgTable("companies", {
   email: text("email"),
   phone: text("phone"),
   industry: text("industry"),
+  businessCategory: text("business_category"),
   address: text("address"),
   website: text("website"),
   notes: text("notes"),
+  registeredAt: text("registered_at"),
   // postpaid_per_project | prepaid_wallet | monthly_billing
   billingType: varchar("billing_type", { length: 50 }).notNull().default("postpaid_per_project"),
   createdAt: timestamp("created_at").notNull().defaultNow(),

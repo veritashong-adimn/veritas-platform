@@ -170,7 +170,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
   const [companySearch, setCompanySearch] = useState("");
   const [companyModal, setCompanyModal] = useState<number | null>(null);
   const [showCompanyForm, setShowCompanyForm] = useState(false);
-  const [companyForm, setCompanyForm] = useState({ name: "", businessNumber: "", industry: "", address: "", website: "", notes: "" });
+  const [companyForm, setCompanyForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10) });
   const [savingCompany, setSavingCompany] = useState(false);
 
   const [products, setProducts] = useState<Product[]>([]);
@@ -456,7 +456,7 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
       setToast("거래처가 등록되었습니다.");
-      setCompanyForm({ name: "", businessNumber: "", industry: "", address: "", website: "", notes: "" });
+      setCompanyForm({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10) });
       setShowCompanyForm(false);
       await fetchCompanies();
     } catch { setToast("오류: 거래처 등록 실패"); }
@@ -2035,23 +2035,78 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
         }>
           {showCompanyForm && (
             <Card style={{ marginBottom: 16, padding: "16px 20px" }}>
-              <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#111827" }}>새 거래처 등록</p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
-                {([["name","회사명 *"],["businessNumber","사업자번호"],["industry","업종"],["address","주소"],["website","웹사이트"]] as const).map(([f, l]) => (
-                  <div key={f}>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>{l}</label>
-                    <input value={companyForm[f]} onChange={e => setCompanyForm(p => ({ ...p, [f]: e.target.value }))}
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+              <p style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#111827" }}>새 거래처 등록</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {/* 1행: 거래처명 */}
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>거래처명 <span style={{ color: "#dc2626" }}>*</span></label>
+                  <input value={companyForm.name} onChange={e => setCompanyForm(p => ({ ...p, name: e.target.value }))}
+                    placeholder="(주)아크로네이처" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                </div>
+                {/* 2행: 사업자등록번호 / 대표자명 / 등록일 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>사업자등록번호</label>
+                    <input value={companyForm.businessNumber} onChange={e => setCompanyForm(p => ({ ...p, businessNumber: e.target.value }))}
+                      placeholder="000-00-00000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
                   </div>
-                ))}
-                <div style={{ gridColumn: "span 2" }}>
-                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>메모</label>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대표자명</label>
+                    <input value={companyForm.representativeName} onChange={e => setCompanyForm(p => ({ ...p, representativeName: e.target.value }))}
+                      placeholder="홍길동" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>등록일</label>
+                    <input type="date" value={companyForm.registeredAt} onChange={e => setCompanyForm(p => ({ ...p, registeredAt: e.target.value }))}
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                </div>
+                {/* 3행: 전화 / 이메일 / 웹사이트 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>전화번호</label>
+                    <input value={companyForm.phone} onChange={e => setCompanyForm(p => ({ ...p, phone: e.target.value }))}
+                      placeholder="02-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>이메일</label>
+                    <input type="email" value={companyForm.email} onChange={e => setCompanyForm(p => ({ ...p, email: e.target.value }))}
+                      placeholder="contact@company.com" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>웹사이트</label>
+                    <input value={companyForm.website} onChange={e => setCompanyForm(p => ({ ...p, website: e.target.value }))}
+                      placeholder="https://example.com" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                </div>
+                {/* 4행: 업태 / 종목 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>업태</label>
+                    <input value={companyForm.industry} onChange={e => setCompanyForm(p => ({ ...p, industry: e.target.value }))}
+                      placeholder="제조업, 서비스업 등" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>종목</label>
+                    <input value={companyForm.businessCategory} onChange={e => setCompanyForm(p => ({ ...p, businessCategory: e.target.value }))}
+                      placeholder="통역, 번역, 소프트웨어 등" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                </div>
+                {/* 5행: 주소 */}
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>주소</label>
+                  <input value={companyForm.address} onChange={e => setCompanyForm(p => ({ ...p, address: e.target.value }))}
+                    placeholder="서울시 강남구 테헤란로 123" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                </div>
+                {/* 6행: 메모 */}
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>메모</label>
                   <textarea value={companyForm.notes} onChange={e => setCompanyForm(p => ({ ...p, notes: e.target.value }))}
-                    rows={2} style={{ ...inputStyle, width: "100%", boxSizing: "border-box", fontSize: 13, padding: "7px 10px", resize: "vertical" }} />
+                    rows={2} placeholder="거래처 관련 특이사항을 입력하세요." style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", resize: "vertical" }} />
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                <PrimaryBtn onClick={handleCreateCompany} disabled={savingCompany} style={{ fontSize: 13, padding: "8px 18px" }}>
+              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                <PrimaryBtn onClick={handleCreateCompany} disabled={savingCompany || !companyForm.name.trim()} style={{ fontSize: 13, padding: "8px 18px" }}>
                   {savingCompany ? "등록 중..." : "등록"}
                 </PrimaryBtn>
                 <GhostBtn onClick={() => setShowCompanyForm(false)} style={{ fontSize: 13, padding: "8px 14px" }}>취소</GhostBtn>

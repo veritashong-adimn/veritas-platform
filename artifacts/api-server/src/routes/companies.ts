@@ -54,20 +54,23 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
 
 // ─── 거래처 생성 ─────────────────────────────────────────────────────────────
 router.post("/admin/companies", ...adminGuard, async (req, res) => {
-  const { name, businessNumber, representativeName, email, phone, industry, address, website, notes } = req.body as {
+  const { name, businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt } = req.body as {
     name?: string; businessNumber?: string; representativeName?: string;
-    email?: string; phone?: string; industry?: string;
-    address?: string; website?: string; notes?: string;
+    email?: string; phone?: string; industry?: string; businessCategory?: string;
+    address?: string; website?: string; notes?: string; registeredAt?: string;
   };
 
   if (!name?.trim()) {
     res.status(400).json({ error: "거래처명은 필수입니다." }); return;
   }
 
+  // 오늘 날짜를 기본 등록일로
+  const today = new Date().toISOString().slice(0, 10);
+
   try {
     const [company] = await db
       .insert(companiesTable)
-      .values({ name: name.trim(), businessNumber, representativeName, email, phone, industry, address, website, notes })
+      .values({ name: name.trim(), businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt: registeredAt ?? today })
       .returning();
     res.status(201).json(company);
   } catch (err) {
@@ -217,7 +220,7 @@ router.patch("/admin/companies/:id", ...adminGuard, async (req, res) => {
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
 
-  const { name, businessNumber, representativeName, email, phone, industry, address, website, notes } = req.body;
+  const { name, businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt } = req.body;
 
   try {
     const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
@@ -227,14 +230,16 @@ router.patch("/admin/companies/:id", ...adminGuard, async (req, res) => {
       .update(companiesTable)
       .set({
         name: name?.trim() ?? existing.name,
-        businessNumber: businessNumber ?? existing.businessNumber,
-        representativeName: representativeName ?? existing.representativeName,
-        email: email ?? existing.email,
-        phone: phone ?? existing.phone,
-        industry: industry ?? existing.industry,
-        address: address ?? existing.address,
-        website: website ?? existing.website,
-        notes: notes ?? existing.notes,
+        businessNumber: businessNumber !== undefined ? (businessNumber || null) : existing.businessNumber,
+        representativeName: representativeName !== undefined ? (representativeName || null) : existing.representativeName,
+        email: email !== undefined ? (email || null) : existing.email,
+        phone: phone !== undefined ? (phone || null) : existing.phone,
+        industry: industry !== undefined ? (industry || null) : existing.industry,
+        businessCategory: businessCategory !== undefined ? (businessCategory || null) : existing.businessCategory,
+        address: address !== undefined ? (address || null) : existing.address,
+        website: website !== undefined ? (website || null) : existing.website,
+        notes: notes !== undefined ? (notes || null) : existing.notes,
+        registeredAt: registeredAt !== undefined ? (registeredAt || null) : existing.registeredAt,
       })
       .where(eq(companiesTable.id, companyId))
       .returning();
