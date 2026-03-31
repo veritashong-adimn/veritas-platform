@@ -17,6 +17,7 @@ import { ContactDetailModal } from '../components/admin/ContactDetailModal';
 import { CustomerDetailModal } from '../components/admin/CustomerDetailModal';
 import { TranslatorProfileModal } from '../components/admin/TranslatorProfileModal';
 import { TranslatorDetailModal } from '../components/admin/TranslatorDetailModal';
+import { TranslatorCreateModal } from '../components/admin/TranslatorCreateModal';
 import { ProjectDetailModal } from '../components/admin/ProjectDetailModal';
 import { PrepaidLedgerModal } from '../components/admin/PrepaidLedgerModal';
 
@@ -234,8 +235,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [translatorSearch, setTranslatorSearch] = useState("");
   const [translatorLangFilter, setTranslatorLangFilter] = useState("");
   const [translatorStatusFilter, setTranslatorStatusFilter] = useState("all");
+  const [translatorGradeFilter, setTranslatorGradeFilter] = useState("all");
   const [translatorRatingFilter, setTranslatorRatingFilter] = useState("");
   const [translatorDetailModal, setTranslatorDetailModal] = useState<{ userId: number; email: string } | null>(null);
+  const [showTranslatorCreateModal, setShowTranslatorCreateModal] = useState(false);
 
   // 운영 테스트 시나리오
   type ScenarioStep = { step: number; name: string; status: "ok"|"error"|"skipped"; detail: string; data?: Record<string, unknown> };
@@ -494,13 +497,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       if (translatorSearch.trim()) params.set("search", translatorSearch.trim());
       if (translatorLangFilter.trim()) params.set("languagePair", translatorLangFilter.trim());
       if (translatorStatusFilter !== "all") params.set("status", translatorStatusFilter);
+      if (translatorGradeFilter !== "all") params.set("grade", translatorGradeFilter);
       if (translatorRatingFilter.trim()) params.set("minRating", translatorRatingFilter.trim());
       const res = await fetch(api(`/api/admin/translators${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) setTranslatorList(Array.isArray(data) ? data : []);
     } catch { setToast("오류: 통번역사 조회 실패"); }
     finally { setTranslatorsLoading(false); }
-  }, [token, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorRatingFilter]);
+  }, [token, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter]);
 
   const handleCreateCompany = async () => {
     if (!companyForm.name.trim()) { setToast("회사명을 입력하세요."); return; }
@@ -923,6 +927,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           userEmail={translatorDetailModal.email}
           token={token}
           onClose={() => setTranslatorDetailModal(null)}
+          onToast={setToast}
+        />
+      )}
+      {showTranslatorCreateModal && (
+        <TranslatorCreateModal
+          token={token}
+          onClose={() => setShowTranslatorCreateModal(false)}
+          onCreated={(newT) => {
+            setTranslatorList(prev => [newT, ...prev]);
+          }}
           onToast={setToast}
         />
       )}
@@ -2793,18 +2807,24 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
       {/* ── 통번역사 탭 ── */}
       {adminTab === "translators" && (
-        <Section title={`통번역사 관리 (${translatorList.length})`}>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
+        <Section title={`통번역사 관리 (${translatorList.length})`} action={
+          <PrimaryBtn onClick={() => setShowTranslatorCreateModal(true)} style={{ padding: "8px 16px", fontSize: 13 }}>
+            + 통번역사 등록
+          </PrimaryBtn>
+        }>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
             <input value={translatorSearch} onChange={e => setTranslatorSearch(e.target.value)}
-              placeholder="이메일, 언어쌍, 지역 검색..."
-              style={{ ...inputStyle, maxWidth: 260, flex: "1 1 180px", padding: "8px 12px", fontSize: 13 }}
+              placeholder="이름, 이메일, 언어쌍, 지역 검색..."
+              style={{ ...inputStyle, maxWidth: 240, flex: "1 1 180px", padding: "8px 12px", fontSize: 13 }}
               onKeyDown={e => e.key === "Enter" && fetchTranslators()} />
             <input value={translatorLangFilter} onChange={e => setTranslatorLangFilter(e.target.value)}
               placeholder="언어쌍 (예: 한→영)"
-              style={{ ...inputStyle, maxWidth: 160, padding: "8px 12px", fontSize: 13 }} />
-            <input value={translatorRatingFilter} onChange={e => setTranslatorRatingFilter(e.target.value)}
-              placeholder="최소 평점 (1~5)"
-              style={{ ...inputStyle, maxWidth: 130, padding: "8px 12px", fontSize: 13 }} />
+              style={{ ...inputStyle, maxWidth: 150, padding: "8px 12px", fontSize: 13 }} />
+            <select value={translatorGradeFilter} onChange={e => setTranslatorGradeFilter(e.target.value)}
+              style={{ ...inputStyle, padding: "8px 12px", fontSize: 13, minWidth: 90 }}>
+              <option value="all">전체 등급</option>
+              {["S","A","B","C"].map(g => <option key={g} value={g}>{g}등급</option>)}
+            </select>
             <select value={translatorStatusFilter} onChange={e => setTranslatorStatusFilter(e.target.value)}
               style={{ ...inputStyle, padding: "8px 12px", fontSize: 13, minWidth: 100 }}>
               <option value="all">전체 상태</option>
@@ -2812,6 +2832,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               <option value="busy">바쁨</option>
               <option value="unavailable">불가</option>
             </select>
+            <input value={translatorRatingFilter} onChange={e => setTranslatorRatingFilter(e.target.value)}
+              placeholder="최소 평점"
+              style={{ ...inputStyle, maxWidth: 100, padding: "8px 12px", fontSize: 13 }} />
             <PrimaryBtn onClick={fetchTranslators} disabled={translatorsLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
               {translatorsLoading ? "검색 중..." : "검색"}
             </PrimaryBtn>
@@ -2819,42 +2842,75 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           {translatorsLoading ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
           ) : translatorList.length === 0 ? (
-            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 통번역사가 없습니다.</Card>
+            <Card style={{ textAlign: "center", padding: "40px 32px" }}>
+              <div style={{ color: "#9ca3af", fontSize: 14, marginBottom: 12 }}>등록된 통번역사가 없습니다.</div>
+              <PrimaryBtn onClick={() => setShowTranslatorCreateModal(true)} style={{ fontSize: 13, padding: "8px 20px" }}>
+                + 첫 통번역사 등록
+              </PrimaryBtn>
+            </Card>
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["ID","이름","언어쌍","분야","지역","평점","상태","단가(어절)","활성","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                    <tr>{["ID","이름 / 이메일","등급","언어쌍","전문분야","지역","대표 단가","평점","상태","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {translatorList.map(t => {
                       const statusColor = t.availabilityStatus === "available" ? "#059669" : t.availabilityStatus === "busy" ? "#d97706" : "#dc2626";
                       const statusBg = t.availabilityStatus === "available" ? "#f0fdf4" : t.availabilityStatus === "busy" ? "#fffbeb" : "#fef2f2";
+                      const gradeColor: Record<string, { bg: string; color: string }> = {
+                        S: { bg: "#fef3c7", color: "#92400e" },
+                        A: { bg: "#ede9fe", color: "#5b21b6" },
+                        B: { bg: "#dbeafe", color: "#1e40af" },
+                        C: { bg: "#f3f4f6", color: "#374151" },
+                      };
+                      const gc = t.grade && gradeColor[t.grade] ? gradeColor[t.grade] : null;
                       return (
                         <tr key={t.id} onClick={() => setTranslatorDetailModal({ userId: t.id, email: t.email })} style={{ cursor: "pointer" }}
                           onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                          <td style={{ ...tableTd, color: "#9ca3af" }}>#{t.id}</td>
-                          <td style={{ ...tableTd, fontWeight: 600, color: "#111827", fontSize: 12 }}>
-                            {(t as any).name ? <><span style={{ fontWeight: 700 }}>{(t as any).name}</span><br /><span style={{ color: "#6b7280", fontSize: 11 }}>{t.email}</span></> : t.email}
-                          </td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{t.languagePairs ?? "-"}</td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{t.specializations ?? "-"}</td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{t.region ?? "-"}</td>
-                          <td style={{ ...tableTd, textAlign: "center" }}>
-                            {t.rating != null ? <span style={{ fontWeight: 700, color: "#d97706" }}>★ {t.rating.toFixed(1)}</span> : <span style={{ color: "#9ca3af" }}>-</span>}
+                          <td style={{ ...tableTd, color: "#9ca3af", whiteSpace: "nowrap" }}>#{t.id}</td>
+                          <td style={{ ...tableTd, minWidth: 130 }}>
+                            {t.name
+                              ? <><span style={{ fontWeight: 700, fontSize: 13, color: "#111827" }}>{t.name}</span><br /><span style={{ color: "#6b7280", fontSize: 11 }}>{t.email}</span></>
+                              : <span style={{ fontSize: 13, color: "#374151" }}>{t.email}</span>}
+                            {t.phone && <div style={{ fontSize: 11, color: "#9ca3af" }}>{t.phone}</div>}
                           </td>
                           <td style={{ ...tableTd, textAlign: "center" }}>
+                            {gc
+                              ? <span style={{ padding: "2px 9px", borderRadius: 10, background: gc.bg, color: gc.color, fontSize: 11, fontWeight: 800 }}>{t.grade}</span>
+                              : <span style={{ color: "#d1d5db" }}>-</span>}
+                          </td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#374151", maxWidth: 160, whiteSpace: "normal" }}>
+                            {t.languagePairs ? (
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                                {t.languagePairs.split(",").map((lp, i) => (
+                                  <span key={i} style={{ background: "#eff6ff", color: "#1d4ed8", borderRadius: 4, padding: "1px 6px", fontSize: 11, whiteSpace: "nowrap" }}>{lp.trim()}</span>
+                                ))}
+                              </div>
+                            ) : <span style={{ color: "#d1d5db" }}>-</span>}
+                          </td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", maxWidth: 140, whiteSpace: "normal" }}>
+                            {t.specializations
+                              ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden" }}>{t.specializations}</span>
+                              : <span style={{ color: "#d1d5db" }}>-</span>}
+                          </td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>{t.region ?? "-"}</td>
+                          <td style={{ ...tableTd, fontSize: 12, textAlign: "right", whiteSpace: "nowrap" }}>
+                            {t.ratePerWord != null
+                              ? <span style={{ fontWeight: 700, color: "#059669" }}>{Number(t.ratePerWord).toLocaleString()}원<span style={{ fontWeight: 400, color: "#9ca3af" }}>/어절</span></span>
+                              : t.ratePerPage != null
+                                ? <span style={{ fontWeight: 700, color: "#059669" }}>{Number(t.ratePerPage).toLocaleString()}원<span style={{ fontWeight: 400, color: "#9ca3af" }}>/pg</span></span>
+                                : <span style={{ color: "#d1d5db" }}>미설정</span>}
+                          </td>
+                          <td style={{ ...tableTd, textAlign: "center" }}>
+                            {t.rating != null ? <span style={{ fontWeight: 700, color: "#d97706" }}>★ {Number(t.rating).toFixed(1)}</span> : <span style={{ color: "#d1d5db" }}>-</span>}
+                          </td>
+                          <td style={{ ...tableTd, textAlign: "center", whiteSpace: "nowrap" }}>
                             <span style={{ padding: "2px 8px", borderRadius: 10, background: statusBg, color: statusColor, fontSize: 11, fontWeight: 700 }}>
                               {AVAILABILITY_LABEL[t.availabilityStatus ?? "available"] ?? t.availabilityStatus}
                             </span>
-                          </td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#374151", textAlign: "right" }}>
-                            {t.ratePerWord != null ? `${t.ratePerWord.toFixed(1)}원` : "-"}
-                          </td>
-                          <td style={{ ...tableTd, textAlign: "center" }}>
-                            <span style={{ width: 10, height: 10, borderRadius: "50%", display: "inline-block", background: t.isActive ? "#059669" : "#d1d5db" }} />
                           </td>
                           <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</td>
                         </tr>

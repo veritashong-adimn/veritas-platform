@@ -13,6 +13,7 @@ export const translatorProfilesTable = pgTable("translator_profiles", {
   education: text("education"),
   major: text("major"),
   graduationYear: integer("graduation_year"),
+  phone: text("phone"),
   region: text("region"),
   grade: text("grade"),
   rating: real("rating"),

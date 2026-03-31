@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import bcrypt from "bcryptjs";
 import {
   db, usersTable, translatorProfilesTable, translatorRatesTable,
   translatorProductsTable, productsTable,
@@ -28,6 +29,7 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         languagePairs: translatorProfilesTable.languagePairs,
         languageLevel: translatorProfilesTable.languageLevel,
         specializations: translatorProfilesTable.specializations,
+        phone: translatorProfilesTable.phone,
         region: translatorProfilesTable.region,
         grade: translatorProfilesTable.grade,
         rating: translatorProfilesTable.rating,
@@ -80,6 +82,56 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Translators: failed to list");
     res.status(500).json({ error: "번역사 조회 실패." });
+  }
+});
+
+// ─── 통번역사 등록 ─────────────────────────────────────────────────────────────
+router.post("/admin/translators", ...adminGuard, async (req, res) => {
+  const {
+    email, password, name, phone, region,
+    languagePairs, languageLevel, specializations,
+    grade, bio, ratePerWord, ratePerPage,
+    resumeUrl, portfolioUrl, availabilityStatus,
+  } = req.body;
+
+  if (!email?.trim()) { res.status(400).json({ error: "이메일은 필수입니다." }); return; }
+  if (!password?.trim()) { res.status(400).json({ error: "비밀번호는 필수입니다." }); return; }
+
+  try {
+    const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.email, email.trim())).limit(1);
+    if (existing.length > 0) { res.status(409).json({ error: "이미 등록된 이메일입니다." }); return; }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const [newUser] = await db.insert(usersTable).values({
+      email: email.trim(), password: passwordHash,
+      name: name?.trim() || null, role: "translator", isActive: true,
+    }).returning();
+
+    const [profile] = await db.insert(translatorProfilesTable).values({
+      userId: newUser.id,
+      phone: phone?.trim() || null, region: region?.trim() || null,
+      languagePairs: languagePairs?.trim() || null, languageLevel: languageLevel || null,
+      specializations: specializations?.trim() || null,
+      grade: grade || null, bio: bio?.trim() || null,
+      ratePerWord: ratePerWord ? Number(ratePerWord) : null,
+      ratePerPage: ratePerPage ? Number(ratePerPage) : null,
+      resumeUrl: resumeUrl?.trim() || null, portfolioUrl: portfolioUrl?.trim() || null,
+      availabilityStatus: availabilityStatus ?? "available",
+    }).returning();
+
+    res.status(201).json({
+      id: newUser.id, email: newUser.email, name: newUser.name,
+      isActive: newUser.isActive, createdAt: newUser.createdAt,
+      profileId: profile.id, languagePairs: profile.languagePairs,
+      languageLevel: profile.languageLevel, specializations: profile.specializations,
+      phone: profile.phone, region: profile.region, grade: profile.grade,
+      rating: profile.rating, availabilityStatus: profile.availabilityStatus,
+      bio: profile.bio, ratePerWord: profile.ratePerWord, ratePerPage: profile.ratePerPage,
+      resumeUrl: profile.resumeUrl, portfolioUrl: profile.portfolioUrl,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Translators: failed to create");
+    res.status(500).json({ error: "통번역사 등록 실패." });
   }
 });
 
@@ -140,7 +192,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
 
   const {
     languagePairs, languageLevel, specializations, education, major,
-    graduationYear, region, grade, rating, availabilityStatus, bio,
+    graduationYear, phone, region, grade, rating, availabilityStatus, bio,
     ratePerWord, ratePerPage, resumeUrl, portfolioUrl,
   } = req.body;
 
@@ -153,7 +205,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
     const profileData = {
       languagePairs, languageLevel, specializations, education, major,
       graduationYear: graduationYear ? Number(graduationYear) : undefined,
-      region, grade: grade ?? null,
+      phone: phone ?? null, region, grade: grade ?? null,
       rating: rating ? Number(rating) : undefined,
       availabilityStatus: availabilityStatus ?? "available",
       bio, ratePerWord: ratePerWord ? Number(ratePerWord) : undefined,

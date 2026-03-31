@@ -140,10 +140,13 @@ export type TranslatorRate = {
   unit: string; rate: number; createdAt: string;
 };
 export type TranslatorListItem = {
-  id: number; email: string; isActive: boolean; createdAt: string;
-  profileId: number | null; languagePairs: string | null; specializations: string | null;
-  region: string | null; rating: number | null; availabilityStatus: string | null;
+  id: number; email: string; name: string | null; isActive: boolean; createdAt: string;
+  profileId: number | null; languagePairs: string | null; languageLevel: string | null;
+  specializations: string | null; phone: string | null;
+  region: string | null; grade: string | null;
+  rating: number | null; availabilityStatus: string | null;
   bio: string | null; ratePerWord: number | null; ratePerPage: number | null;
+  resumeUrl: string | null; portfolioUrl: string | null;
 };
 export type ContactDetail = {
   id: number; companyId: number; companyName: string | null;
