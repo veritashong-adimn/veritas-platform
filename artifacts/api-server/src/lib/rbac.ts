@@ -60,6 +60,9 @@ export const ALL_PERMISSIONS: Array<{ key: string; name: string; category: "menu
 
   // 기능 권한 - 사용자
   { key: "user.manage",     name: "사용자 관리",    category: "action" },
+
+  // 기능 권한 - 통번역사 민감정보
+  { key: "translator.sensitive", name: "통번역사 민감정보 (주민번호·계좌)", category: "action" },
 ];
 
 // ─── 기본 역할 정의 ──────────────────────────────────────────────────────────
@@ -101,12 +104,14 @@ export const DEFAULT_ROLES: Array<{
     isSystem: true,
     permissions: [
       "menu.dashboard", "menu.project", "menu.payment", "menu.settlement", "menu.company",
+      "menu.translator",
       "project.view",
       "quote.view",
       "settlement.view", "settlement.pay",
       "payment.view", "payment.create", "payment.update",
       "company.view",
       "billing.view", "prepaid.manage",
+      "translator.sensitive",
     ],
   },
   {

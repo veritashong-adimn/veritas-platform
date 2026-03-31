@@ -3,6 +3,7 @@ import { api, TranslatorProfile, TranslatorRate, TranslatorProduct, NoteEntry, P
 import { PrimaryBtn, GhostBtn } from "../ui";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { DraggableModal } from "./DraggableModal";
+import { SensitiveInfoModal } from "./SensitiveInfoModal";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -13,10 +14,12 @@ const inputStyle: React.CSSProperties = {
 const GRADE_OPTIONS = ["S", "A", "B", "C"];
 const LANG_LEVEL_OPTIONS = ["일반", "비즈니스", "전문"];
 
-export function TranslatorDetailModal({ userId, userEmail, token, onClose, onToast }: {
+export function TranslatorDetailModal({ userId, userEmail, token, permissions = [], onClose, onToast }: {
   userId: number; userEmail: string; token: string;
+  permissions?: string[];
   onClose: () => void; onToast: (msg: string) => void;
 }) {
+  const hasPerm = (key: string) => permissions.includes(key);
   const [profile, setProfile] = useState<TranslatorProfile | null>(null);
   const [rates, setRates] = useState<TranslatorRate[]>([]);
   const [notes, setNotes] = useState<NoteEntry[]>([]);
@@ -32,6 +35,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, onClose, onToa
   const [addingTp, setAddingTp] = useState(false);
   const [editingTpId, setEditingTpId] = useState<number | null>(null);
   const [editTpPrice, setEditTpPrice] = useState("");
+  const [showSensitive, setShowSensitive] = useState(false);
 
   const [form, setForm] = useState({
     languagePairs: "", languageLevel: "", specializations: "", education: "", major: "",
@@ -203,6 +207,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, onClose, onToa
   const assignedProductIds = new Set(translatorProducts.map(p => p.productId));
 
   return (
+    <>
     <DraggableModal title="통번역사 상세" subtitle={userEmail} onClose={onClose} width={860} zIndex={300} bodyPadding="20px 28px">
       {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : (
         <>
@@ -389,11 +394,35 @@ export function TranslatorDetailModal({ userId, userEmail, token, onClose, onToa
               ))}
             </div>
           )}
-          <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+          <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            {hasPerm("translator.sensitive") ? (
+              <button
+                onClick={() => setShowSensitive(true)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6,
+                  background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8,
+                  padding: "8px 14px", fontSize: 13, fontWeight: 600, color: "#92400e",
+                  cursor: "pointer",
+                }}
+              >
+                🔒 정산 정보 관리
+              </button>
+            ) : <span />}
             <GhostBtn onClick={onClose} style={{ fontSize: 14, padding: "9px 20px" }}>닫기</GhostBtn>
           </div>
         </>
       )}
     </DraggableModal>
+
+    {showSensitive && hasPerm("translator.sensitive") && (
+      <SensitiveInfoModal
+        userId={userId}
+        userName={profile?.bio ? `${userEmail} (${profile.bio})` : userEmail}
+        token={token}
+        onClose={() => setShowSensitive(false)}
+        onToast={onToast}
+      />
+    )}
+    </>
   );
 }

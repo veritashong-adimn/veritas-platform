@@ -20,6 +20,7 @@ export * from "./product_options";
 export * from "./translator_profiles";
 export * from "./translator_rates";
 export * from "./translator_products";
+export * from "./translator_sensitive";
 export * from "./board_posts";
 export * from "./project_files";
 export * from "./billing_batches";

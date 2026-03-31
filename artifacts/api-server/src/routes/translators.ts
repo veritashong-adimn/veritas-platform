@@ -2,10 +2,11 @@ import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
 import {
   db, usersTable, translatorProfilesTable, translatorRatesTable,
-  translatorProductsTable, productsTable,
+  translatorProductsTable, productsTable, translatorSensitiveTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, sql, desc, gte, lte, inArray } from "drizzle-orm";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
+import { encrypt, decrypt, maskResidentNumber } from "../lib/encrypt";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin")];
@@ -542,6 +543,121 @@ router.delete("/translator-rates/:id/:rateId", requireAuth, async (req, res) => 
   } catch (err) {
     req.log.error({ err }, "TranslatorRates: self delete failed");
     res.status(500).json({ error: "단가 삭제 실패." });
+  }
+});
+
+// ─── 민감정보 조회 (마스킹) ──────────────────────────────────────────────────
+router.get("/admin/translators/:id/sensitive", ...adminGuard, requirePermission("translator.sensitive"), async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+  try {
+    const [row] = await db
+      .select()
+      .from(translatorSensitiveTable)
+      .where(eq(translatorSensitiveTable.translatorId, userId));
+
+    // 접근 로그
+    req.log.info({
+      actor: req.user!.email,
+      actorId: req.user!.id,
+      targetUserId: userId,
+      action: "sensitive.view",
+    }, "민감정보 조회");
+
+    if (!row) {
+      res.json({ exists: false, residentNumberMasked: null, bankName: null, bankAccount: null, accountHolder: null });
+      return;
+    }
+
+    const residentNumberMasked = row.residentNumber
+      ? maskResidentNumber(decrypt(row.residentNumber))
+      : null;
+
+    res.json({
+      exists: true,
+      residentNumberMasked,
+      bankName: row.bankName,
+      bankAccount: row.bankAccount,
+      accountHolder: row.accountHolder,
+      updatedAt: row.updatedAt,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Sensitive: failed to read");
+    res.status(500).json({ error: "민감정보 조회 실패." });
+  }
+});
+
+// ─── 민감정보 등록/수정 ────────────────────────────────────────────────────
+router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission("translator.sensitive"), async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+  const { residentNumber, bankName, bankAccount, accountHolder } = req.body;
+
+  try {
+    // 번역사 존재 확인
+    const [user] = await db
+      .select({ id: usersTable.id })
+      .from(usersTable)
+      .where(and(eq(usersTable.id, userId), eq(usersTable.role, "translator")));
+    if (!user) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
+
+    const encryptedRn = residentNumber?.trim()
+      ? encrypt(residentNumber.trim().replace(/-/g, ""))
+      : null;
+
+    const existing = await db
+      .select({ id: translatorSensitiveTable.id })
+      .from(translatorSensitiveTable)
+      .where(eq(translatorSensitiveTable.translatorId, userId));
+
+    const payload = {
+      residentNumber: encryptedRn,
+      bankName: bankName?.trim() || null,
+      bankAccount: bankAccount?.trim() || null,
+      accountHolder: accountHolder?.trim() || null,
+      updatedAt: new Date(),
+    };
+
+    let result;
+    if (existing.length === 0) {
+      [result] = await db.insert(translatorSensitiveTable)
+        .values({ translatorId: userId, ...payload })
+        .returning();
+    } else {
+      [result] = await db.update(translatorSensitiveTable)
+        .set(payload)
+        .where(eq(translatorSensitiveTable.translatorId, userId))
+        .returning();
+    }
+
+    // 변경 로그
+    req.log.info({
+      actor: req.user!.email,
+      actorId: req.user!.id,
+      targetUserId: userId,
+      action: "sensitive.update",
+      changedFields: Object.keys(req.body).filter(k => req.body[k] != null),
+    }, "민감정보 수정");
+
+    const residentNumberMasked = result.residentNumber
+      ? maskResidentNumber(decrypt(result.residentNumber))
+      : null;
+
+    res.json({
+      exists: true,
+      residentNumberMasked,
+      bankName: result.bankName,
+      bankAccount: result.bankAccount,
+      accountHolder: result.accountHolder,
+      updatedAt: result.updatedAt,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Sensitive: failed to save");
+    res.status(500).json({ error: "민감정보 저장 실패." });
   }
 });
 

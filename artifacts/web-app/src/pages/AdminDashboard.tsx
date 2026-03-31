@@ -926,6 +926,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           userId={translatorDetailModal.userId}
           userEmail={translatorDetailModal.email}
           token={token}
+          permissions={permissions}
           onClose={() => setTranslatorDetailModal(null)}
           onToast={setToast}
         />
