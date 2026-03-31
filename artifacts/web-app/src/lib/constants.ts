@@ -339,7 +339,7 @@ export const PRODUCT_MAIN_CATEGORIES = ["통역", "번역", "통번역", "통역
 export type ProductMainCategory = typeof PRODUCT_MAIN_CATEGORIES[number];
 
 export const PRODUCT_SUB_CATEGORIES: Record<string, string[]> = {
-  "통역": ["동시통역", "순차통역", "위스퍼링", "전화통역", "화상통역", "기타통역"],
+  "통역": ["동시통역", "위스퍼링통역", "순차통역", "수행통역", "전시회통역", "화상통역", "기타통역"],
   "번역": ["전문번역", "일반번역", "출판번역", "영상번역", "자막번역", "SW번역", "기타번역"],
   "통번역": ["통번역패키지", "기타"],
   "통역장비": ["부스", "수신기", "송신기", "마이크", "믹서", "기타장비"],
