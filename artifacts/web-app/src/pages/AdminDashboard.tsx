@@ -934,6 +934,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {showTranslatorCreateModal && (
         <TranslatorCreateModal
           token={token}
+          permissions={permissions}
           onClose={() => setShowTranslatorCreateModal(false)}
           onCreated={(newT) => {
             setTranslatorList(prev => [newT, ...prev]);

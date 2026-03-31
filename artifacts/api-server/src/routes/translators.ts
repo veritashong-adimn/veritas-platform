@@ -567,7 +567,7 @@ router.get("/admin/translators/:id/sensitive", ...adminGuard, requirePermission(
     }, "민감정보 조회");
 
     if (!row) {
-      res.json({ exists: false, residentNumberMasked: null, bankName: null, bankAccount: null, accountHolder: null });
+      res.json({ exists: false, residentNumberMasked: null, bankName: null, bankAccount: null, accountHolder: null, paymentMethod: null });
       return;
     }
 
@@ -581,6 +581,7 @@ router.get("/admin/translators/:id/sensitive", ...adminGuard, requirePermission(
       bankName: row.bankName,
       bankAccount: row.bankAccount,
       accountHolder: row.accountHolder,
+      paymentMethod: row.paymentMethod,
       updatedAt: row.updatedAt,
     });
   } catch (err) {
@@ -595,7 +596,7 @@ router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission
   if (isNaN(userId) || userId <= 0) {
     res.status(400).json({ error: "유효하지 않은 user id." }); return;
   }
-  const { residentNumber, bankName, bankAccount, accountHolder } = req.body;
+  const { residentNumber, bankName, bankAccount, accountHolder, paymentMethod } = req.body;
 
   try {
     // 번역사 존재 확인
@@ -619,6 +620,7 @@ router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission
       bankName: bankName?.trim() || null,
       bankAccount: bankAccount?.trim() || null,
       accountHolder: accountHolder?.trim() || null,
+      paymentMethod: paymentMethod?.trim() || null,
       updatedAt: new Date(),
     };
 
@@ -653,6 +655,7 @@ router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission
       bankName: result.bankName,
       bankAccount: result.bankAccount,
       accountHolder: result.accountHolder,
+      paymentMethod: result.paymentMethod,
       updatedAt: result.updatedAt,
     });
   } catch (err) {

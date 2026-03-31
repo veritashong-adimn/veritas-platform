@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { api } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn } from "../ui";
 import { DraggableModal } from "./DraggableModal";
@@ -16,12 +16,19 @@ const sH: React.CSSProperties = {
   letterSpacing: "0.06em", margin: "18px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
 };
 
+const PAYMENT_METHODS = [
+  { value: "withholding_3_3", label: "3.3% 원천징수" },
+  { value: "overseas_remittance", label: "해외송금" },
+  { value: "tax_invoice", label: "세금계산서" },
+];
+
 type SensitiveData = {
   exists: boolean;
   residentNumberMasked: string | null;
   bankName: string | null;
   bankAccount: string | null;
   accountHolder: string | null;
+  paymentMethod: string | null;
   updatedAt?: string;
 };
 
@@ -37,22 +44,28 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
   const [saving, setSaving] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState({
-    residentNumber: "", bankName: "", bankAccount: "", accountHolder: "",
+    residentFront: "",
+    residentBack: "",
+    bankName: "", bankAccount: "", accountHolder: "",
+    paymentMethod: "",
   });
 
+  const backRef = useRef<HTMLInputElement>(null);
   const authH = { Authorization: `Bearer ${token}` };
 
   useEffect(() => {
     setLoading(true);
     fetch(api(`/api/admin/translators/${userId}/sensitive`), { headers: authH })
       .then(r => r.json())
-      .then(d => {
+      .then((d: SensitiveData) => {
         setData(d);
         setForm({
-          residentNumber: "",
+          residentFront: "",
+          residentBack: "",
           bankName: d.bankName ?? "",
           bankAccount: d.bankAccount ?? "",
           accountHolder: d.accountHolder ?? "",
+          paymentMethod: d.paymentMethod ?? "",
         });
         if (!d.exists) setEditMode(true);
       })
@@ -63,13 +76,15 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
   const handleSave = async () => {
     setSaving(true);
     try {
+      const rn = `${form.residentFront.trim()}${form.residentBack.trim()}`;
       const body: Record<string, string | undefined> = {
         bankName: form.bankName.trim() || undefined,
         bankAccount: form.bankAccount.trim() || undefined,
         accountHolder: form.accountHolder.trim() || undefined,
+        paymentMethod: form.paymentMethod || undefined,
       };
-      if (form.residentNumber.trim()) {
-        body.residentNumber = form.residentNumber.trim();
+      if (rn.length >= 6) {
+        body.residentNumber = rn;
       }
 
       const res = await fetch(api(`/api/admin/translators/${userId}/sensitive`), {
@@ -79,7 +94,7 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
       const d = await res.json();
       if (!res.ok) { onToast(`오류: ${d.error}`); return; }
       setData(d);
-      setForm(p => ({ ...p, residentNumber: "" }));
+      setForm(p => ({ ...p, residentFront: "", residentBack: "" }));
       setEditMode(false);
       onToast("정산 정보가 저장되었습니다.");
     } catch { onToast("오류: 저장 실패"); }
@@ -87,16 +102,19 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
   };
 
   const handleEnterEdit = () => {
-    setForm(p => ({ ...p, residentNumber: "" }));
+    setForm(p => ({ ...p, residentFront: "", residentBack: "" }));
     setEditMode(true);
   };
 
+  const paymentMethodLabel = (val: string | null) =>
+    PAYMENT_METHODS.find(m => m.value === val)?.label ?? val ?? "미등록";
+
   return (
     <DraggableModal
-      title="정산 정보 관리"
+      title="정산/세무 정보 관리"
       subtitle={`${userName} — 민감 개인정보`}
       onClose={onClose}
-      width={520}
+      width={560}
       zIndex={400}
       bodyPadding="20px 28px"
     >
@@ -118,16 +136,28 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
         <p style={{ color: "#9ca3af", textAlign: "center", padding: "24px 0" }}>불러오는 중...</p>
       ) : (
         <>
-          {/* 현재 저장 상태 표시 */}
+          {/* 뷰 모드 */}
           {data && !editMode && (
             <>
               <p style={sH}>저장된 정보</p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+
+              {/* 주민등록번호 */}
+              <div style={{ marginBottom: 12 }}>
                 <InfoField label="주민등록번호" value={data.residentNumberMasked ?? "미등록"} sensitive />
-                <InfoField label="은행명" value={data.bankName ?? "미등록"} />
-                <InfoField label="계좌번호" value={data.bankAccount ?? "미등록"} />
-                <InfoField label="예금주" value={data.accountHolder ?? "미등록"} />
               </div>
+
+              {/* 계좌 정보 */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12 }}>
+                <InfoField label="은행명" value={data.bankName ?? "미등록"} />
+                <InfoField label="예금주" value={data.accountHolder ?? "미등록"} />
+                <InfoField label="계좌번호" value={data.bankAccount ?? "미등록"} mono />
+              </div>
+
+              {/* 지급방식 */}
+              <div style={{ marginBottom: 12 }}>
+                <InfoField label="지급 방식" value={paymentMethodLabel(data.paymentMethod)} />
+              </div>
+
               {data.updatedAt && (
                 <p style={{ fontSize: 11, color: "#9ca3af", marginBottom: 12 }}>
                   마지막 수정: {new Date(data.updatedAt).toLocaleString("ko-KR")}
@@ -150,8 +180,10 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
           {/* 편집 모드 */}
           {editMode && (
             <>
-              <p style={sH}>정보 입력</p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
+              <p style={sH}>정산/세무 정보 입력</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14, marginBottom: 16 }}>
+
+                {/* 주민등록번호 분리 입력 */}
                 <div>
                   <label style={labelSt}>
                     주민등록번호
@@ -161,19 +193,57 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
                       </span>
                     )}
                   </label>
-                  <input
-                    type="password"
-                    value={form.residentNumber}
-                    onChange={e => setForm(p => ({ ...p, residentNumber: e.target.value }))}
-                    placeholder="주민등록번호 13자리 (숫자만 입력)"
-                    maxLength={14}
-                    autoComplete="off"
-                    style={{ ...inputStyle, fontFamily: "monospace", letterSpacing: 2 }}
-                  />
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input
+                      type="password"
+                      value={form.residentFront}
+                      onChange={e => {
+                        const v = e.target.value.replace(/\D/g, "").slice(0, 6);
+                        setForm(p => ({ ...p, residentFront: v }));
+                        if (v.length === 6) backRef.current?.focus();
+                      }}
+                      placeholder="앞 6자리"
+                      maxLength={6}
+                      autoComplete="off"
+                      style={{ ...inputStyle, width: 120, textAlign: "center", fontFamily: "monospace", letterSpacing: 2 }}
+                    />
+                    <span style={{ fontSize: 18, color: "#d1d5db", fontWeight: 700, flexShrink: 0 }}>-</span>
+                    <input
+                      ref={backRef}
+                      type="password"
+                      value={form.residentBack}
+                      onChange={e => {
+                        const v = e.target.value.replace(/\D/g, "").slice(0, 7);
+                        setForm(p => ({ ...p, residentBack: v }));
+                      }}
+                      placeholder="뒤 7자리"
+                      maxLength={7}
+                      autoComplete="off"
+                      style={{ ...inputStyle, width: 130, textAlign: "center", fontFamily: "monospace", letterSpacing: 2 }}
+                    />
+                    <span style={{ fontSize: 11, color: "#9ca3af", flexShrink: 0 }}>AES-256 암호화 저장</span>
+                  </div>
                   <p style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
-                    AES-256-GCM 암호화 저장됩니다. 조회 시 앞 6자리만 표시됩니다.
+                    저장 후 조회 시 앞 6자리만 표시됩니다 (예: 900101-***)
                   </p>
                 </div>
+
+                {/* 지급방식 */}
+                <div>
+                  <label style={labelSt}>지급 방식</label>
+                  <select
+                    value={form.paymentMethod}
+                    onChange={e => setForm(p => ({ ...p, paymentMethod: e.target.value }))}
+                    style={inputStyle}
+                  >
+                    <option value="">선택 안 함</option>
+                    {PAYMENT_METHODS.map(m => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 은행 정보 */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
                   <div>
                     <label style={labelSt}>은행명</label>
@@ -192,6 +262,7 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
                     placeholder="예: 123-456-789012" style={{ ...inputStyle, fontFamily: "monospace", letterSpacing: 1 }} />
                 </div>
               </div>
+
               <div style={{ display: "flex", gap: 8 }}>
                 <PrimaryBtn onClick={handleSave} disabled={saving} style={{ fontSize: 13, padding: "9px 20px" }}>
                   {saving ? "저장 중..." : "저장"}
@@ -209,7 +280,9 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
   );
 }
 
-function InfoField({ label, value, sensitive = false }: { label: string; value: string; sensitive?: boolean }) {
+function InfoField({ label, value, sensitive = false, mono = false }: {
+  label: string; value: string; sensitive?: boolean; mono?: boolean;
+}) {
   return (
     <div style={{
       padding: "10px 12px", background: sensitive ? "#fef3c7" : "#f9fafb",
@@ -219,7 +292,7 @@ function InfoField({ label, value, sensitive = false }: { label: string; value: 
       <div style={{
         fontSize: 14, fontWeight: 700,
         color: value === "미등록" ? "#d1d5db" : sensitive ? "#92400e" : "#111827",
-        fontFamily: sensitive ? "monospace" : undefined,
+        fontFamily: (sensitive || mono) ? "monospace" : undefined,
         letterSpacing: sensitive ? 1 : undefined,
       }}>
         {sensitive && value !== "미등록" ? `🔒 ${value}` : value}

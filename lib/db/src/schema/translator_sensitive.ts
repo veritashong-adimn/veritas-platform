@@ -11,6 +11,7 @@ export const translatorSensitiveTable = pgTable("translator_sensitive", {
   bankName: text("bank_name"),
   bankAccount: text("bank_account"),
   accountHolder: text("account_holder"),
+  paymentMethod: text("payment_method"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
