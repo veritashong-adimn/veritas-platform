@@ -1,11 +1,12 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   api, User, AdminProject, AdminPayment, AdminTask, AdminSettlement, AdminUser,
-  AdminCustomer, AdminContact, Company, Contact, Product, BoardPost, TranslatorProfile,
+  AdminCustomer, AdminContact, Company, Contact, Product, ProductOption, BoardPost, TranslatorProfile,
   TranslatorListItem, TranslatorRate, NoteEntry, Communication,
   STATUS_LABEL, FEEDBACK_TAGS, COMM_TYPE_LABEL, COMM_TYPE_COLOR,
   PROJECT_STATUS_TRANSITIONS, getActionLabel, BOARD_CATEGORY_LABEL, AVAILABILITY_LABEL,
   ALL_PROJECT_STATUSES, ALL_FINANCIAL_STATUSES, ALL_PAYMENT_STATUSES, ALL_SETTLEMENT_STATUSES,
+  PRODUCT_MAIN_CATEGORIES, PRODUCT_SUB_CATEGORIES, PRODUCT_UNITS, PRODUCT_OPTION_TYPES,
   FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE,
 } from '../lib/constants';
 import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill } from '../components/ui';
@@ -198,7 +199,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [productsLoading, setProductsLoading] = useState(false);
   const [productSearch, setProductSearch] = useState("");
   const [showProductForm, setShowProductForm] = useState(false);
-  const [productForm, setProductForm] = useState({ code: "", name: "", category: "", unit: "건", basePrice: "", languagePair: "", field: "" });
+  type ProductFormType = { code: string; name: string; mainCategory: string; subCategory: string; unit: string; basePrice: string; description: string; options: { optionType: string; optionValue: string }[] };
+  const emptyProductForm: ProductFormType = { code: "", name: "", mainCategory: "", subCategory: "", unit: "건", basePrice: "", description: "", options: [] };
+  const [productForm, setProductForm] = useState<ProductFormType>(emptyProductForm);
   const [editingProduct, setEditingProduct] = useState<number | null>(null);
   const [savingProduct, setSavingProduct] = useState(false);
 
@@ -523,7 +526,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     }
     setSavingProduct(true);
     try {
-      const payload = { ...productForm, basePrice: Number(productForm.basePrice) };
+      const payload = {
+        code: productForm.code.trim(),
+        name: productForm.name.trim(),
+        mainCategory: productForm.mainCategory || null,
+        subCategory: productForm.subCategory || null,
+        unit: productForm.unit,
+        basePrice: Number(productForm.basePrice),
+        description: productForm.description || null,
+        options: productForm.options.filter(o => o.optionType.trim() && o.optionValue.trim()),
+      };
       const url = editingProduct ? `/api/admin/products/${editingProduct}` : "/api/admin/products";
       const method = editingProduct ? "PATCH" : "POST";
       const res = await fetch(api(url), {
@@ -533,7 +545,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
       setToast(editingProduct ? "상품이 수정되었습니다." : "상품이 등록되었습니다.");
-      setProductForm({ code: "", name: "", category: "", unit: "건", basePrice: "", languagePair: "", field: "" });
+      setProductForm(emptyProductForm);
       setEditingProduct(null);
       setShowProductForm(false);
       await fetchProducts();
@@ -2487,84 +2499,194 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {/* ── 상품/단가 탭 ── */}
       {adminTab === "products" && (
         <Section title={`상품/단가 관리 (${products.length})`} action={
-          <PrimaryBtn onClick={() => { setShowProductForm(v => !v); setEditingProduct(null); setProductForm({ code: "", name: "", category: "", unit: "건", basePrice: "", languagePair: "", field: "" }); }} style={{ fontSize: 13, padding: "7px 14px" }}>
-            {showProductForm && !editingProduct ? "취소" : "+ 상품 등록"}
-          </PrimaryBtn>
+          hasPerm("product.manage") ? (
+            <PrimaryBtn onClick={() => { setShowProductForm(v => !v); setEditingProduct(null); setProductForm(emptyProductForm); }} style={{ fontSize: 13, padding: "7px 14px" }}>
+              {showProductForm && !editingProduct ? "취소" : "+ 상품 등록"}
+            </PrimaryBtn>
+          ) : undefined
         }>
+          {/* ── 등록/수정 폼 ── */}
           {showProductForm && (
-            <Card style={{ marginBottom: 16, padding: "16px 20px" }}>
-              <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#111827" }}>{editingProduct ? "상품 수정" : "새 상품 등록"}</p>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
-                {([["code","상품 코드 *"],["name","상품명 *"],["category","분류"],["unit","단위"],["basePrice","기본단가 *"],["languagePair","언어 조합"],["field","전문 분야"]] as const).map(([f, l]) => (
-                  <div key={f}>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>{l}</label>
-                    <input value={productForm[f]} onChange={e => setProductForm(p => ({ ...p, [f]: e.target.value }))}
-                      type={f === "basePrice" ? "number" : "text"}
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
-                  </div>
-                ))}
+            <Card style={{ marginBottom: 16, padding: "20px 24px" }}>
+              <p style={{ margin: "0 0 16px", fontSize: 14, fontWeight: 700, color: "#111827" }}>{editingProduct ? "상품 수정" : "새 상품 등록"}</p>
+
+              {/* 1행: 코드 / 상품명 */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "0 16px", marginBottom: 12 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>상품 코드 <span style={{ color: "#dc2626" }}>*</span></label>
+                  <input value={productForm.code} onChange={e => setProductForm(p => ({ ...p, code: e.target.value }))}
+                    placeholder="예: TRN-001" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>상품명 <span style={{ color: "#dc2626" }}>*</span></label>
+                  <input value={productForm.name} onChange={e => setProductForm(p => ({ ...p, name: e.target.value }))}
+                    placeholder="예: 동시통역 서비스" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+                </div>
               </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+
+              {/* 2행: 대분류 / 중분류 / 단위 / 기본단가 */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "0 12px", marginBottom: 12 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대분류</label>
+                  <select value={productForm.mainCategory} onChange={e => setProductForm(p => ({ ...p, mainCategory: e.target.value, subCategory: "" }))}
+                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
+                    <option value="">선택</option>
+                    {PRODUCT_MAIN_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>중분류</label>
+                  <select value={productForm.subCategory} onChange={e => setProductForm(p => ({ ...p, subCategory: e.target.value }))}
+                    disabled={!productForm.mainCategory}
+                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box", opacity: productForm.mainCategory ? 1 : 0.5 }}>
+                    <option value="">선택</option>
+                    {(PRODUCT_SUB_CATEGORIES[productForm.mainCategory] ?? []).map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>단위</label>
+                  <select value={productForm.unit} onChange={e => setProductForm(p => ({ ...p, unit: e.target.value }))}
+                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
+                    {PRODUCT_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>기본단가 <span style={{ color: "#dc2626" }}>*</span></label>
+                  <input value={productForm.basePrice} onChange={e => setProductForm(p => ({ ...p, basePrice: e.target.value }))}
+                    type="number" min="0" placeholder="0"
+                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+                </div>
+              </div>
+
+              {/* 3행: 설명 */}
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>설명 (선택)</label>
+                <input value={productForm.description} onChange={e => setProductForm(p => ({ ...p, description: e.target.value }))}
+                  placeholder="상품에 대한 간단한 설명" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+              </div>
+
+              {/* 옵션 섹션 */}
+              <div style={{ background: "#f9fafb", borderRadius: 10, padding: "14px 16px", border: "1px solid #e5e7eb" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#374151" }}>옵션 설정 <span style={{ fontWeight: 400, color: "#9ca3af", fontSize: 12 }}>(언어, 방식, 시간 등)</span></p>
+                  <button onClick={() => setProductForm(p => ({ ...p, options: [...p.options, { optionType: "언어", optionValue: "" }] }))}
+                    style={{ fontSize: 12, color: "#2563eb", background: "none", border: "1px solid #bfdbfe", borderRadius: 6, padding: "3px 10px", cursor: "pointer", fontWeight: 600 }}>
+                    + 옵션 추가
+                  </button>
+                </div>
+                {productForm.options.length === 0 ? (
+                  <p style={{ margin: 0, fontSize: 12, color: "#9ca3af", textAlign: "center" }}>옵션이 없습니다. 필요 시 추가하세요.</p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {productForm.options.map((opt, idx) => (
+                      <div key={idx} style={{ display: "grid", gridTemplateColumns: "140px 1fr 32px", gap: 8, alignItems: "center" }}>
+                        <select value={opt.optionType} onChange={e => setProductForm(p => ({ ...p, options: p.options.map((o, i) => i === idx ? { ...o, optionType: e.target.value } : o) }))}
+                          style={{ ...inputStyle, fontSize: 13, padding: "6px 8px", boxSizing: "border-box" }}>
+                          {PRODUCT_OPTION_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                        <input value={opt.optionValue} onChange={e => setProductForm(p => ({ ...p, options: p.options.map((o, i) => i === idx ? { ...o, optionValue: e.target.value } : o) }))}
+                          placeholder={opt.optionType === "언어" ? "예: 한→영, 한→일" : opt.optionType === "방식" ? "예: 동시, 순차" : "예: 4시간, 8시간"}
+                          style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+                        <button onClick={() => setProductForm(p => ({ ...p, options: p.options.filter((_, i) => i !== idx) }))}
+                          style={{ background: "none", border: "1px solid #fca5a5", borderRadius: 6, width: 32, height: 32, cursor: "pointer", color: "#ef4444", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
                 <PrimaryBtn onClick={handleSaveProduct} disabled={savingProduct} style={{ fontSize: 13, padding: "8px 18px" }}>
                   {savingProduct ? "저장 중..." : "저장"}
                 </PrimaryBtn>
-                <GhostBtn onClick={() => { setShowProductForm(false); setEditingProduct(null); }} style={{ fontSize: 13, padding: "8px 14px" }}>취소</GhostBtn>
+                <GhostBtn onClick={() => { setShowProductForm(false); setEditingProduct(null); setProductForm(emptyProductForm); }} style={{ fontSize: 13, padding: "8px 14px" }}>취소</GhostBtn>
               </div>
             </Card>
           )}
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+
+          {/* ── 검색 필터 ── */}
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
             <input value={productSearch} onChange={e => setProductSearch(e.target.value)}
-              placeholder="상품명, 코드 검색..."
-              style={{ ...inputStyle, maxWidth: 300, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+              placeholder="상품명, 코드, 분류 검색..."
+              style={{ ...inputStyle, maxWidth: 280, flex: "1 1 180px", padding: "8px 12px", fontSize: 13 }}
               onKeyDown={e => e.key === "Enter" && fetchProducts()} />
             <PrimaryBtn onClick={fetchProducts} disabled={productsLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
               {productsLoading ? "검색 중..." : "검색"}
             </PrimaryBtn>
           </div>
+
+          {/* ── 상품 목록 ── */}
           {productsLoading ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
           ) : products.length === 0 ? (
             <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 상품이 없습니다.</Card>
           ) : (
-            <Card style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>{["코드","상품명","분류","단위","기본단가","언어조합","분야","상태","관리"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {products.map(p => (
-                      <tr key={p.id}
-                        onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                        <td style={{ ...tableTd, fontFamily: "monospace", fontSize: 12, color: "#6b7280" }}>{p.code}</td>
-                        <td style={{ ...tableTd, fontWeight: 700, color: "#111827" }}>{p.name}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.category ?? "-"}</td>
-                        <td style={{ ...tableTd, fontSize: 12 }}>{p.unit}</td>
-                        <td style={{ ...tableTd, fontWeight: 600, color: "#2563eb", whiteSpace: "nowrap" }}>{Number(p.basePrice).toLocaleString()}원</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.languagePair ?? "-"}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{p.field ?? "-"}</td>
-                        <td style={tableTd}>
-                          <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 12, fontWeight: 600, background: p.active ? "#f0fdf4" : "#f3f4f6", color: p.active ? "#059669" : "#9ca3af" }}>
-                            {p.active ? "활성" : "비활성"}
-                          </span>
-                        </td>
-                        <td style={{ ...tableTd, whiteSpace: "nowrap" }}>
-                          <div style={{ display: "flex", gap: 6 }}>
-                            <button onClick={() => { setEditingProduct(p.id); setProductForm({ code: p.code, name: p.name, category: p.category ?? "", unit: p.unit, basePrice: String(p.basePrice), languagePair: p.languagePair ?? "", field: p.field ?? "" }); setShowProductForm(true); }}
-                              style={{ padding: "3px 8px", fontSize: 11, borderRadius: 6, cursor: "pointer", background: "#eff6ff", color: "#2563eb", border: "none", fontWeight: 600 }}>수정</button>
-                            <button onClick={() => handleToggleProduct(p.id)}
-                              style={{ padding: "3px 8px", fontSize: 11, borderRadius: 6, cursor: "pointer", background: p.active ? "#fef2f2" : "#f0fdf4", color: p.active ? "#dc2626" : "#059669", border: "none", fontWeight: 600 }}>
-                              {p.active ? "비활성" : "활성"}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {products.map(p => (
+                <Card key={p.id} style={{ padding: "14px 18px", opacity: p.active ? 1 : 0.6 }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                    {/* 왼쪽: 코드 + 이름 + 분류 */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                        <span style={{ fontFamily: "monospace", fontSize: 11, color: "#9ca3af", background: "#f3f4f6", padding: "1px 6px", borderRadius: 4 }}>{p.code}</span>
+                        <span style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>{p.name}</span>
+                        {!p.active && <span style={{ fontSize: 11, background: "#f3f4f6", color: "#9ca3af", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>비활성</span>}
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: p.description || (p.options && p.options.length > 0) ? 8 : 0 }}>
+                        {p.mainCategory && (
+                          <span style={{ fontSize: 11, background: "#ede9fe", color: "#5b21b6", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>{p.mainCategory}</span>
+                        )}
+                        {p.subCategory && (
+                          <span style={{ fontSize: 11, background: "#f3f4f6", color: "#374151", borderRadius: 5, padding: "2px 8px" }}>{p.subCategory}</span>
+                        )}
+                        <span style={{ fontSize: 11, background: "#f0fdf4", color: "#059669", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>
+                          {Number(p.basePrice).toLocaleString()}원 / {p.unit}
+                        </span>
+                      </div>
+                      {p.description && <p style={{ margin: "0 0 6px", fontSize: 12, color: "#6b7280" }}>{p.description}</p>}
+                      {p.options && p.options.length > 0 && (
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                          {p.options.map((o: ProductOption) => (
+                            <span key={o.id} style={{ fontSize: 11, background: "#eff6ff", color: "#1d4ed8", borderRadius: 5, padding: "2px 8px", border: "1px solid #bfdbfe" }}>
+                              {o.optionType}: {o.optionValue}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {/* 오른쪽: 관리 버튼 */}
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      {hasPerm("product.manage") && (
+                        <button onClick={() => {
+                          setEditingProduct(p.id);
+                          setProductForm({
+                            code: p.code, name: p.name,
+                            mainCategory: p.mainCategory ?? "",
+                            subCategory: p.subCategory ?? "",
+                            unit: p.unit, basePrice: String(p.basePrice),
+                            description: p.description ?? "",
+                            options: (p.options ?? []).map((o: ProductOption) => ({ optionType: o.optionType, optionValue: o.optionValue })),
+                          });
+                          setShowProductForm(true);
+                          window.scrollTo({ top: 0, behavior: "smooth" });
+                        }}
+                          style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#eff6ff", color: "#2563eb", border: "none", fontWeight: 600 }}>
+                          수정
+                        </button>
+                      )}
+                      {hasPerm("product.manage") && (
+                        <button onClick={() => handleToggleProduct(p.id)}
+                          style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: p.active ? "#fef2f2" : "#f0fdf4", color: p.active ? "#dc2626" : "#059669", border: "none", fontWeight: 600 }}>
+                          {p.active ? "비활성" : "활성"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
           )}
         </Section>
       )}

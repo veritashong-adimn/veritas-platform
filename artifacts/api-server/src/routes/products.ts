@@ -1,15 +1,17 @@
 import { Router, type IRouter } from "express";
-import { db, productsTable } from "@workspace/db";
-import { eq, desc, ilike, or } from "drizzle-orm";
+import { db, productsTable, productOptionsTable } from "@workspace/db";
+import { eq, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin")];
 
-// ─── 상품 목록 ───────────────────────────────────────────────────────────────
+// ─── 상품 목록 (옵션 포함) ────────────────────────────────────────────────────
 router.get("/admin/products", ...adminGuard, async (req, res) => {
   try {
-    const { search, category, activeOnly } = req.query as { search?: string; category?: string; activeOnly?: string };
+    const { search, mainCategory, activeOnly } = req.query as {
+      search?: string; mainCategory?: string; activeOnly?: string;
+    };
 
     let rows = await db.select().from(productsTable).orderBy(desc(productsTable.createdAt));
 
@@ -18,31 +20,39 @@ router.get("/admin/products", ...adminGuard, async (req, res) => {
       rows = rows.filter(p =>
         p.name.toLowerCase().includes(s) ||
         p.code.toLowerCase().includes(s) ||
-        (p.languagePair ?? "").toLowerCase().includes(s) ||
-        (p.field ?? "").toLowerCase().includes(s)
+        (p.mainCategory ?? "").toLowerCase().includes(s) ||
+        (p.subCategory ?? "").toLowerCase().includes(s)
       );
     }
 
-    if (category?.trim()) {
-      rows = rows.filter(p => p.category === category);
+    if (mainCategory?.trim()) {
+      rows = rows.filter(p => p.mainCategory === mainCategory.trim());
     }
 
     if (activeOnly === "true") {
       rows = rows.filter(p => p.active);
     }
 
-    res.json(rows);
+    const allOptions = await db.select().from(productOptionsTable).orderBy(productOptionsTable.sortOrder);
+
+    const result = rows.map(p => ({
+      ...p,
+      options: allOptions.filter(o => o.productId === p.id),
+    }));
+
+    res.json(result);
   } catch (err) {
     req.log.error({ err }, "Products: failed to list");
     res.status(500).json({ error: "상품 조회 실패." });
   }
 });
 
-// ─── 상품 생성 ───────────────────────────────────────────────────────────────
+// ─── 상품 생성 ────────────────────────────────────────────────────────────────
 router.post("/admin/products", ...adminGuard, async (req, res) => {
-  const { code, name, category, unit, basePrice, languagePair, field } = req.body as {
-    code?: string; name?: string; category?: string; unit?: string;
-    basePrice?: number; languagePair?: string; field?: string;
+  const { code, name, mainCategory, subCategory, unit, basePrice, description, options } = req.body as {
+    code?: string; name?: string; mainCategory?: string; subCategory?: string;
+    unit?: string; basePrice?: number; description?: string;
+    options?: { optionType: string; optionValue: string; sortOrder?: number }[];
   };
 
   if (!code?.trim() || !name?.trim()) {
@@ -53,19 +63,39 @@ router.post("/admin/products", ...adminGuard, async (req, res) => {
     const [product] = await db
       .insert(productsTable)
       .values({
-        code: code.trim(), name: name.trim(), category,
-        unit: unit ?? "건", basePrice: basePrice ?? 0,
-        languagePair, field,
+        code: code.trim(),
+        name: name.trim(),
+        mainCategory: mainCategory?.trim() || null,
+        subCategory: subCategory?.trim() || null,
+        unit: unit ?? "건",
+        basePrice: basePrice ?? 0,
+        description: description?.trim() || null,
       })
       .returning();
-    res.status(201).json(product);
+
+    const optionRows = [];
+    if (options && options.length > 0) {
+      for (let i = 0; i < options.length; i++) {
+        const o = options[i];
+        if (!o.optionType?.trim() || !o.optionValue?.trim()) continue;
+        const [opt] = await db.insert(productOptionsTable).values({
+          productId: product.id,
+          optionType: o.optionType.trim(),
+          optionValue: o.optionValue.trim(),
+          sortOrder: o.sortOrder ?? i,
+        }).returning();
+        optionRows.push(opt);
+      }
+    }
+
+    res.status(201).json({ ...product, options: optionRows });
   } catch (err) {
     req.log.error({ err }, "Products: failed to create");
     res.status(500).json({ error: "상품 생성 실패." });
   }
 });
 
-// ─── 상품 단건 조회 ──────────────────────────────────────────────────────────
+// ─── 상품 단건 조회 (옵션 포함) ──────────────────────────────────────────────
 router.get("/admin/products/:id", ...adminGuard, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {
@@ -75,21 +105,28 @@ router.get("/admin/products/:id", ...adminGuard, async (req, res) => {
   try {
     const [product] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
     if (!product) { res.status(404).json({ error: "상품을 찾을 수 없습니다." }); return; }
-    res.json(product);
+    const options = await db.select().from(productOptionsTable)
+      .where(eq(productOptionsTable.productId, productId))
+      .orderBy(productOptionsTable.sortOrder);
+    res.json({ ...product, options });
   } catch (err) {
     req.log.error({ err }, "Products: failed to get");
     res.status(500).json({ error: "상품 조회 실패." });
   }
 });
 
-// ─── 상품 수정 ───────────────────────────────────────────────────────────────
+// ─── 상품 수정 ────────────────────────────────────────────────────────────────
 router.patch("/admin/products/:id", ...adminGuard, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {
     res.status(400).json({ error: "유효하지 않은 product id." }); return;
   }
 
-  const { code, name, category, unit, basePrice, languagePair, field, active } = req.body;
+  const { code, name, mainCategory, subCategory, unit, basePrice, description, active, options } = req.body as {
+    code?: string; name?: string; mainCategory?: string; subCategory?: string;
+    unit?: string; basePrice?: number; description?: string; active?: boolean;
+    options?: { optionType: string; optionValue: string; sortOrder?: number }[];
+  };
 
   try {
     const [existing] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
@@ -100,23 +137,44 @@ router.patch("/admin/products/:id", ...adminGuard, async (req, res) => {
       .set({
         code: code?.trim() ?? existing.code,
         name: name?.trim() ?? existing.name,
-        category: category ?? existing.category,
+        mainCategory: mainCategory !== undefined ? (mainCategory?.trim() || null) : existing.mainCategory,
+        subCategory: subCategory !== undefined ? (subCategory?.trim() || null) : existing.subCategory,
         unit: unit ?? existing.unit,
         basePrice: basePrice ?? existing.basePrice,
-        languagePair: languagePair ?? existing.languagePair,
-        field: field ?? existing.field,
+        description: description !== undefined ? (description?.trim() || null) : existing.description,
         active: active !== undefined ? Boolean(active) : existing.active,
       })
       .where(eq(productsTable.id, productId))
       .returning();
-    res.json(updated);
+
+    let optionRows: typeof productOptionsTable.$inferSelect[] = [];
+    if (options !== undefined) {
+      await db.delete(productOptionsTable).where(eq(productOptionsTable.productId, productId));
+      for (let i = 0; i < options.length; i++) {
+        const o = options[i];
+        if (!o.optionType?.trim() || !o.optionValue?.trim()) continue;
+        const [opt] = await db.insert(productOptionsTable).values({
+          productId: productId,
+          optionType: o.optionType.trim(),
+          optionValue: o.optionValue.trim(),
+          sortOrder: o.sortOrder ?? i,
+        }).returning();
+        optionRows.push(opt);
+      }
+    } else {
+      optionRows = await db.select().from(productOptionsTable)
+        .where(eq(productOptionsTable.productId, productId))
+        .orderBy(productOptionsTable.sortOrder);
+    }
+
+    res.json({ ...updated, options: optionRows });
   } catch (err) {
     req.log.error({ err }, "Products: failed to update");
     res.status(500).json({ error: "상품 수정 실패." });
   }
 });
 
-// ─── 상품 비활성화 토글 ──────────────────────────────────────────────────────
+// ─── 상품 활성/비활성 토글 ────────────────────────────────────────────────────
 router.patch("/admin/products/:id/toggle", ...adminGuard, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {
@@ -139,7 +197,7 @@ router.patch("/admin/products/:id/toggle", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 상품 삭제 ───────────────────────────────────────────────────────────────
+// ─── 상품 삭제 ────────────────────────────────────────────────────────────────
 router.delete("/admin/products/:id", ...adminGuard, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {

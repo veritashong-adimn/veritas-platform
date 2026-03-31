@@ -16,6 +16,7 @@ export * from "./companies";
 export * from "./divisions";
 export * from "./contacts";
 export * from "./products";
+export * from "./product_options";
 export * from "./translator_profiles";
 export * from "./translator_rates";
 export * from "./board_posts";

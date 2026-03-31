@@ -158,10 +158,16 @@ export type CompanyDetail = Company & {
   projects: Array<{ id: number; title: string; status: string; createdAt: string; requestingDivisionId?: number | null }>;
   totalQuote: number; totalSettlement: number;
 };
+export type ProductOption = {
+  id: number; productId: number; optionType: string; optionValue: string; sortOrder: number | null;
+};
 export type Product = {
-  id: number; code: string; name: string; category: string | null;
-  unit: string; basePrice: number; languagePair: string | null;
-  field: string | null; active: boolean; createdAt: string;
+  id: number; code: string; name: string;
+  mainCategory: string | null; subCategory: string | null;
+  unit: string; basePrice: number; description: string | null;
+  active: boolean; createdAt: string;
+  options: ProductOption[];
+  category: string | null; languagePair: string | null; field: string | null;
 };
 export type BoardPost = {
   id: number; category: string; title: string; content?: string;
@@ -328,3 +334,22 @@ export const FEEDBACK_TAGS = [
   { value: "urgent", label: "🔥 긴급", color: "#92400e", bg: "#fffbeb" },
 ] as const;
 export type FeedbackTag = "general" | "bug" | "ux" | "idea" | "urgent";
+
+export const PRODUCT_MAIN_CATEGORIES = ["통역", "번역", "통번역", "통역장비", "프로젝트", "교통비", "식대", "숙박"] as const;
+export type ProductMainCategory = typeof PRODUCT_MAIN_CATEGORIES[number];
+
+export const PRODUCT_SUB_CATEGORIES: Record<string, string[]> = {
+  "통역": ["동시통역", "순차통역", "위스퍼링", "전화통역", "화상통역", "기타통역"],
+  "번역": ["전문번역", "일반번역", "출판번역", "영상번역", "자막번역", "SW번역", "기타번역"],
+  "통번역": ["통번역패키지", "기타"],
+  "통역장비": ["부스", "수신기", "송신기", "마이크", "믹서", "기타장비"],
+  "프로젝트": ["기획", "관리", "컨설팅", "기타"],
+  "교통비": ["국내교통", "해외교통"],
+  "식대": ["일반식대", "특식"],
+  "숙박": ["국내숙박", "해외숙박"],
+};
+
+export const PRODUCT_UNITS = ["시간", "일", "건", "페이지", "회"] as const;
+export type ProductUnit = typeof PRODUCT_UNITS[number];
+
+export const PRODUCT_OPTION_TYPES = ["언어", "방식", "시간", "기타"] as const;
