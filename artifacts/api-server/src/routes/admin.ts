@@ -10,7 +10,7 @@ import {
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 
 const router: IRouter = Router();
@@ -663,7 +663,7 @@ router.post("/admin/projects/:id/rematch", ...adminGuard, async (req, res) => {
 });
 
 // ─── 관리자 직접 프로젝트 생성 ────────────────────────────────────────────
-router.post("/admin/projects", ...adminGuard, async (req, res) => {
+router.post("/admin/projects", ...adminGuard, requirePermission("project.create"), async (req, res) => {
   const { title, customerId, companyId, contactId,
     requestingCompanyId, requestingDivisionId, billingCompanyId, payerCompanyId,
   } = req.body as {
@@ -1136,7 +1136,7 @@ router.get("/admin/prepaid-accounts", ...adminGuard, async (req, res) => {
 });
 
 // ─── 선입금 계정 신규 생성 (최초 입금) ─────────────────────────────────────
-router.post("/admin/prepaid-accounts", ...adminGuard, async (req, res) => {
+router.post("/admin/prepaid-accounts", ...adminGuard, requirePermission("prepaid.manage"), async (req, res) => {
   const { companyId, initialAmount, note, depositDate } = req.body as {
     companyId: number; initialAmount: number; note?: string; depositDate?: string;
   };
@@ -1943,7 +1943,7 @@ router.patch("/admin/users/:id/name", ...adminGuard, async (req, res) => {
   }
 });
 
-router.patch("/admin/users/:id/role", ...adminGuard, async (req, res) => {
+router.patch("/admin/users/:id/role", ...adminGuard, requirePermission("user.manage"), async (req, res) => {
   const userId = Number(req.params.id);
   const { role } = req.body as { role?: string };
 
@@ -2017,7 +2017,7 @@ router.patch("/admin/users/:id/reset-password", ...adminGuard, async (req, res) 
 });
 
 // ─── 사용자 활성화/비활성화 ───────────────────────────────────────────────
-router.patch("/admin/users/:id/deactivate", ...adminGuard, async (req, res) => {
+router.patch("/admin/users/:id/deactivate", ...adminGuard, requirePermission("user.manage"), async (req, res) => {
   const userId = Number(req.params.id);
 
   if (userId === req.user!.id) {

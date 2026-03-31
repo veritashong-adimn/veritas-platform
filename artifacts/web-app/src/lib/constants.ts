@@ -3,9 +3,17 @@ export const api = (path: string) => `${BASE}${path}`;
 
 export const TOKEN_KEY = "auth_token";
 export const USER_KEY = "auth_user";
+export const PERM_KEY = "auth_permissions";
 
 export type Role = "customer" | "translator" | "admin";
-export type User = { id: number; email: string; role: Role };
+export type User = {
+  id: number;
+  email: string;
+  role: Role;
+  name?: string | null;
+  roleId?: number | null;
+  permissions?: string[];
+};
 export type NavPage = "dashboard" | "admin";
 
 export type Project = {
@@ -56,7 +64,7 @@ export type AdminTask = {
 };
 export type LogEntry = { id: number; entityType: string; entityId: number; action: string; performedByEmail: string | null; metadata: string | null; createdAt: string };
 export type NoteEntry = { id: number; content: string; createdAt: string; adminEmail: string | null };
-export type AdminUser = { id: number; email: string; role: Role; isActive: boolean; createdAt: string };
+export type AdminUser = { id: number; email: string; role: Role; isActive: boolean; createdAt: string; name?: string; roleId?: number | null };
 export type AdminCustomer = {
   id: number; companyName: string; contactName: string; email: string;
   phone: string | null; createdAt: string;
@@ -170,19 +178,26 @@ export type TranslatorProfile = {
   bio?: string | null; ratePerWord?: number | null; ratePerPage?: number | null;
 };
 
-export function saveSession(token: string, user: User) {
+export function saveSession(token: string, user: User, permissions?: string[]) {
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY, JSON.stringify(user));
+  if (permissions) localStorage.setItem(PERM_KEY, JSON.stringify(permissions));
 }
 export function clearSession() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(PERM_KEY);
 }
-export function loadSession(): { token: string; user: User } | null {
+export function loadSession(): { token: string; user: User; permissions: string[] } | null {
   const token = localStorage.getItem(TOKEN_KEY);
   const raw = localStorage.getItem(USER_KEY);
   if (!token || !raw) return null;
-  try { return { token, user: JSON.parse(raw) as User }; } catch { return null; }
+  try {
+    const user = JSON.parse(raw) as User;
+    const rawPerms = localStorage.getItem(PERM_KEY);
+    const permissions: string[] = rawPerms ? JSON.parse(rawPerms) : (user.permissions ?? []);
+    return { token, user, permissions };
+  } catch { return null; }
 }
 export function getDefaultPage(role: Role): NavPage {
   return role === "admin" ? "admin" : "dashboard";

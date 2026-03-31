@@ -3,8 +3,19 @@ import bcrypt from "bcryptjs";
 import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { signToken, requireAuth } from "../middlewares/auth";
+import { getPermissionsForRole, ALL_PERMISSIONS } from "../lib/rbac";
 
 const router: IRouter = Router();
+
+/** 사용자의 권한 목록을 반환 (admin + roleId 없음 → 전체 권한) */
+async function resolvePermissions(user: { role: string; roleId?: number | null }): Promise<string[]> {
+  if (user.role === "admin" && !user.roleId) {
+    return ALL_PERMISSIONS.map(p => p.key);
+  }
+  if (!user.roleId) return [];
+  const perms = await getPermissionsForRole(user.roleId);
+  return Array.from(perms);
+}
 
 router.post("/auth/register", async (req, res) => {
   const { email: rawEmail, password, role, name } = req.body as {
@@ -40,10 +51,11 @@ router.post("/auth/register", async (req, res) => {
     const [user] = await db
       .insert(usersTable)
       .values({ email, password: hashed, role: userRole, name: name?.trim() || null })
-      .returning({ id: usersTable.id, email: usersTable.email, role: usersTable.role, name: usersTable.name });
+      .returning({ id: usersTable.id, email: usersTable.email, role: usersTable.role, name: usersTable.name, roleId: usersTable.roleId });
 
-    const token = signToken({ id: user.id, email: user.email, role: user.role });
-    res.status(201).json({ token, user });
+    const token = signToken({ id: user.id, email: user.email, role: user.role, roleId: user.roleId });
+    const permissions = await resolvePermissions(user);
+    res.status(201).json({ token, user: { ...user, permissions } });
   } catch (err) {
     req.log.error({ err }, "Register failed");
     res.status(400).json({ error: "이미 사용 중인 이메일입니다." });
@@ -91,8 +103,20 @@ router.post("/auth/login", async (req, res) => {
   }
 
   req.log.info({ email, userId: user.id, role: user.role }, "Login success");
-  const token = signToken({ id: user.id, email: user.email, role: user.role });
-  res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
+  const token = signToken({ id: user.id, email: user.email, role: user.role, roleId: user.roleId });
+  const permissions = await resolvePermissions(user);
+
+  res.json({
+    token,
+    user: { id: user.id, email: user.email, role: user.role, name: user.name, roleId: user.roleId, permissions },
+  });
+});
+
+/** 현재 로그인 사용자의 권한 목록 재조회 */
+router.get("/auth/permissions", requireAuth, async (req, res) => {
+  const user = req.user!;
+  const permissions = await resolvePermissions(user);
+  res.json({ permissions });
 });
 
 router.patch("/auth/change-password", requireAuth, async (req, res) => {

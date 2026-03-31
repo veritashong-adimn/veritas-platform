@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { seedAdmin } from "./lib/seedAdmin";
+import { seedRbac } from "./lib/rbac";
 
 const rawPort = process.env["PORT"];
 
@@ -19,6 +20,10 @@ if (Number.isNaN(port) || port <= 0) {
 seedAdmin()
   .catch((err) => {
     logger.error({ err }, "Admin seed failed — continuing startup");
+  })
+  .then(() => seedRbac())
+  .catch((err) => {
+    logger.error({ err }, "RBAC seed failed — continuing startup");
   })
   .finally(() => {
     app.listen(port, (err) => {

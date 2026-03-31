@@ -25,6 +25,7 @@ function AccessDenied({ onBack }: { onBack: () => void }) {
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [permissions, setPermissions] = useState<string[]>([]);
   const [page, setPage] = useState<NavPage>("dashboard");
 
   useEffect(() => {
@@ -32,14 +33,17 @@ export default function App() {
     if (session) {
       setToken(session.token);
       setUser(session.user);
+      setPermissions(session.permissions);
       setPage(getDefaultPage(session.user.role));
     }
   }, []);
 
-  const handleAuth = (t: string, u: User) => {
-    saveSession(t, u);
+  const handleAuth = (t: string, u: User, perms?: string[]) => {
+    const p = perms ?? u.permissions ?? [];
+    saveSession(t, u, p);
     setToken(t);
     setUser(u);
+    setPermissions(p);
     setPage(getDefaultPage(u.role));
   };
 
@@ -47,6 +51,7 @@ export default function App() {
     clearSession();
     setToken(null);
     setUser(null);
+    setPermissions([]);
     setPage("dashboard");
   };
 
@@ -54,7 +59,7 @@ export default function App() {
     if (!user || !token) return;
     const updated = { ...user, email: newEmail };
     setUser(updated);
-    saveSession(token, updated);
+    saveSession(token, updated, permissions);
   };
 
   const handlePageChange = (p: NavPage) => {
@@ -91,7 +96,7 @@ export default function App() {
   if (isAdmin) {
     return (
       <div style={{ fontFamily: "'Pretendard', 'Apple SD Gothic Neo', system-ui, sans-serif" }}>
-        <AdminDashboard user={user} token={token} onLogout={handleLogout} />
+        <AdminDashboard user={user} token={token} permissions={permissions} onLogout={handleLogout} />
       </div>
     );
   }

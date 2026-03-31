@@ -96,8 +96,15 @@ function SearchableSelect({ items, value, onChange, placeholder, accentBorder = 
   );
 }
 
-export function AdminDashboard({ user, token, onLogout }: { user: User; token: string; onLogout?: () => void }) {
-  const [adminTab, setAdminTab] = useState<"dashboard"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing">("dashboard");
+export function AdminDashboard({ user, token, permissions = [], onLogout }: { user: User; token: string; permissions?: string[]; onLogout?: () => void }) {
+  // RBAC: admin without roleId = full access (backward compat)
+  const hasPerm = (key: string | undefined): boolean => {
+    if (!key) return true;
+    if (user.role === "admin" && !user.roleId) return true;
+    return permissions.includes(key);
+  };
+
+  const [adminTab, setAdminTab] = useState<"dashboard"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions">("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [payments, setPayments] = useState<AdminPayment[]>([]);
@@ -164,6 +171,19 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
   const [resetPwUserId, setResetPwUserId] = useState<number | null>(null);
   const [resetPwInput, setResetPwInput] = useState("");
   const [resetPwLoading, setResetPwLoading] = useState(false);
+
+  // ── RBAC role management state ──────────────────────────────
+  type RbacRole = { id: number; name: string; description: string | null; isSystem: boolean; createdAt: string; permissionCount: number; permissions: string[] };
+  type RbacPerm = { key: string; name: string; category: "menu" | "action" };
+  const [rbacRoles, setRbacRoles] = useState<RbacRole[]>([]);
+  const [rbacAllPerms, setRbacAllPerms] = useState<RbacPerm[]>([]);
+  const [rbacSelectedRole, setRbacSelectedRole] = useState<RbacRole | null>(null);
+  const [rbacRolePerms, setRbacRolePerms] = useState<Set<string>>(new Set());
+  const [rbacRoleName, setRbacRoleName] = useState("");
+  const [rbacRoleDesc, setRbacRoleDesc] = useState("");
+  const [rbacCreating, setRbacCreating] = useState(false);
+  const [rbacSaving, setRbacSaving] = useState(false);
+  const [rbacUserRoleMap, setRbacUserRoleMap] = useState<Map<number, number | null>>(new Map());
 
   // companies / products / board state
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -585,6 +605,18 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
   useEffect(() => { if (adminTab === "prepaid") fetchPrepaidAccounts(); }, [adminTab, fetchPrepaidAccounts]);
   useEffect(() => { if (adminTab === "billing") fetchBillingBatches(); }, [adminTab, fetchBillingBatches]);
   useEffect(() => {
+    if (adminTab !== "roles") return;
+    const authH = { Authorization: `Bearer ${token}` };
+    Promise.all([
+      fetch(api("/api/admin/roles"), { headers: authH }).then(r => r.json()),
+      fetch(api("/api/admin/permissions"), { headers: authH }).then(r => r.json()),
+    ]).then(([roles, perms]) => {
+      setRbacRoles(Array.isArray(roles) ? roles : []);
+      setRbacAllPerms(Array.isArray(perms) ? perms : []);
+    }).catch(() => setToast("역할 목록 조회 실패"));
+    if (users.length === 0) fetchUsers();
+  }, [adminTab, token]);
+  useEffect(() => {
     if (showCreateProject && user.role === "customer" && customers.length > 0) {
       const match = customers.find(c => c.email === user.email);
       if (match) setNewProjectCustomerId(match.id);
@@ -778,48 +810,57 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
     {
       label: "프로젝트 관리",
       accentColor: "#3b82f6",
+      perm: "menu.project",
       items: [
-        { id: "projects", label: "프로젝트", icon: "📋" },
-        { id: "tasks", label: "작업", icon: "⚙️" },
+        { id: "projects", label: "프로젝트", icon: "📋", perm: "menu.project" },
+        { id: "tasks", label: "작업", icon: "⚙️", perm: "menu.project" },
       ],
     },
     {
       label: "재무·정산",
       accentColor: "#10b981",
+      perm: "menu.settlement",
       items: [
-        { id: "payments", label: "결제", icon: "💳", iconColor: "#10b981" },
-        { id: "settlements", label: "정산", icon: "📊", iconColor: "#10b981" },
-        { id: "billing", label: "누적 청구", icon: "📑", iconColor: "#10b981" },
-        { id: "prepaid", label: "선입금 관리", icon: "💰", iconColor: "#10b981" },
+        { id: "payments", label: "결제", icon: "💳", iconColor: "#10b981", perm: "menu.payment" },
+        { id: "settlements", label: "정산", icon: "📊", iconColor: "#10b981", perm: "menu.settlement" },
+        { id: "billing", label: "누적 청구", icon: "📑", iconColor: "#10b981", perm: "menu.settlement" },
+        { id: "prepaid", label: "선입금 관리", icon: "💰", iconColor: "#10b981", perm: "menu.settlement" },
       ],
     },
     {
       label: "고객·거래처",
       accentColor: "#8b5cf6",
+      perm: "menu.company",
       items: [
-        { id: "companies", label: "거래처", icon: "🏢" },
-        { id: "contacts", label: "담당자", icon: "📇" },
-        { id: "customers", label: "고객관리", icon: "🏠" },
+        { id: "companies", label: "거래처", icon: "🏢", perm: "menu.company" },
+        { id: "contacts", label: "담당자", icon: "📇", perm: "menu.contact" },
+        { id: "customers", label: "고객관리", icon: "🏠", perm: "menu.customer" },
       ],
     },
     {
       label: "리소스",
       accentColor: "#f59e0b",
+      perm: "menu.translator",
       items: [
-        { id: "translators", label: "통번역사", icon: "🌐" },
-        { id: "products", label: "상품/단가", icon: "🏷️" },
+        { id: "translators", label: "통번역사", icon: "🌐", perm: "menu.translator" },
+        { id: "products", label: "상품/단가", icon: "🏷️", perm: "menu.product" },
       ],
     },
     {
       label: "시스템",
       accentColor: "#6b7280",
+      perm: "menu.user",
       items: [
-        { id: "users", label: "사용자관리", icon: "👤" },
-        { id: "board", label: "게시판", icon: "📌" },
-        { id: "test", label: "운영 테스트", icon: "🧪" },
+        { id: "users", label: "사용자관리", icon: "👤", perm: "menu.user" },
+        { id: "roles", label: "역할관리", icon: "🔑", perm: "menu.permission" },
+        { id: "board", label: "게시판", icon: "📌", perm: "menu.board" },
+        { id: "test", label: "운영 테스트", icon: "🧪", perm: "menu.user" },
       ],
     },
-  ];
+  ].map(group => ({
+    ...group,
+    items: group.items.filter(item => hasPerm((item as { perm?: string }).perm)),
+  })).filter(group => group.items.length > 0);
 
   const PAGE_TITLE: Record<string, string> = {
     dashboard: "대시보드",
@@ -837,6 +878,8 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
     test: "운영 테스트",
     prepaid: "선입금 관리",
     billing: "누적 청구",
+    roles: "역할관리",
+    permissions: "권한설정",
   };
 
   return (
@@ -3124,6 +3167,195 @@ export function AdminDashboard({ user, token, onLogout }: { user: User; token: s
               </div>
             </Card>
           )}
+        </Section>
+      )}
+
+      {/* ── 역할 관리 탭 ─────────────────────────────────────────────────── */}
+      {adminTab === "roles" && (
+        <Section title="역할 및 권한 관리">
+          <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 20, alignItems: "start" }}>
+            {/* 좌: 역할 목록 */}
+            <div>
+              <Card style={{ padding: 0, overflow: "hidden" }}>
+                <div style={{ padding: "14px 16px", borderBottom: "1px solid #f0f0f0", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>역할 목록</span>
+                  <button onClick={() => { setRbacCreating(v => !v); setRbacRoleName(""); setRbacRoleDesc(""); }}
+                    style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: rbacCreating ? "#fef2f2" : "#f9fafb", fontSize: 12, fontWeight: 600, cursor: "pointer", color: rbacCreating ? "#dc2626" : "#374151" }}>
+                    {rbacCreating ? "취소" : "+ 신규"}
+                  </button>
+                </div>
+                {rbacCreating && (
+                  <div style={{ padding: "12px 16px", borderBottom: "1px solid #f0f0f0", background: "#f8fafc" }}>
+                    <input value={rbacRoleName} onChange={e => setRbacRoleName(e.target.value)} placeholder="역할명 *"
+                      style={{ ...inputStyle, marginBottom: 6, fontSize: 13 }} />
+                    <input value={rbacRoleDesc} onChange={e => setRbacRoleDesc(e.target.value)} placeholder="설명 (선택)"
+                      style={{ ...inputStyle, marginBottom: 8, fontSize: 13 }} />
+                    <button onClick={async () => {
+                      if (!rbacRoleName.trim()) { setToast("역할명을 입력하세요."); return; }
+                      const res = await fetch(api("/api/admin/roles"), { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ name: rbacRoleName.trim(), description: rbacRoleDesc.trim() || undefined }) });
+                      const d = await res.json();
+                      if (!res.ok) { setToast(d.error ?? "역할 생성 실패"); return; }
+                      setRbacRoles(prev => [...prev, { ...d, permissionCount: 0, permissions: [] }]);
+                      setRbacCreating(false); setRbacRoleName(""); setRbacRoleDesc(""); setToast("역할이 생성되었습니다.");
+                    }} style={{ width: "100%", padding: "6px 0", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>저장</button>
+                  </div>
+                )}
+                <div>
+                  {rbacRoles.map(r => (
+                    <div key={r.id} onClick={() => {
+                      setRbacSelectedRole(r);
+                      setRbacRolePerms(new Set(r.permissions));
+                      fetch(api(`/api/admin/roles/${r.id}/permissions`), { headers: { Authorization: `Bearer ${token}` } })
+                        .then(res => res.json()).then(keys => setRbacRolePerms(new Set(Array.isArray(keys) ? keys : [])));
+                    }}
+                      style={{ padding: "12px 16px", cursor: "pointer", borderBottom: "1px solid #f9fafb", background: rbacSelectedRole?.id === r.id ? "#eff6ff" : "#fff",
+                        borderLeft: rbacSelectedRole?.id === r.id ? "3px solid #2563eb" : "3px solid transparent", transition: "all 0.1s" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontWeight: 600, fontSize: 13, color: rbacSelectedRole?.id === r.id ? "#1d4ed8" : "#111827" }}>{r.name}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          {r.isSystem && <span style={{ fontSize: 10, padding: "1px 6px", background: "#e0e7ff", color: "#3730a3", borderRadius: 4, fontWeight: 600 }}>시스템</span>}
+                          {!r.isSystem && (
+                            <button onClick={async e => {
+                              e.stopPropagation();
+                              if (!confirm(`"${r.name}" 역할을 삭제하시겠습니까?`)) return;
+                              const res = await fetch(api(`/api/admin/roles/${r.id}`), { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+                              const d = await res.json();
+                              if (!res.ok) { setToast(d.error ?? "삭제 실패"); return; }
+                              setRbacRoles(prev => prev.filter(x => x.id !== r.id));
+                              if (rbacSelectedRole?.id === r.id) setRbacSelectedRole(null);
+                              setToast("역할이 삭제되었습니다.");
+                            }} style={{ padding: "2px 6px", border: "1px solid #fca5a5", borderRadius: 4, background: "#fff", color: "#dc2626", fontSize: 11, cursor: "pointer" }}>삭제</button>
+                          )}
+                        </div>
+                      </div>
+                      {r.description && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#6b7280" }}>{r.description}</p>}
+                      <p style={{ margin: "3px 0 0", fontSize: 11, color: "#9ca3af" }}>권한 {r.permissionCount}개</p>
+                    </div>
+                  ))}
+                  {rbacRoles.length === 0 && <p style={{ padding: "20px 16px", color: "#9ca3af", fontSize: 13, textAlign: "center" }}>역할이 없습니다.</p>}
+                </div>
+              </Card>
+
+              {/* 사용자 역할 지정 */}
+              {users.length > 0 && rbacRoles.length > 0 && (
+                <Card style={{ marginTop: 16, padding: 0, overflow: "hidden" }}>
+                  <div style={{ padding: "12px 16px", borderBottom: "1px solid #f0f0f0" }}>
+                    <span style={{ fontWeight: 700, fontSize: 13, color: "#111827" }}>사용자 역할 지정</span>
+                  </div>
+                  <div style={{ maxHeight: 280, overflowY: "auto" }}>
+                    {users.filter(u => u.role === "admin").map(u => (
+                      <div key={u.id} style={{ padding: "8px 16px", borderBottom: "1px solid #f9fafb", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                        <div>
+                          <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#374151" }}>{u.name || u.email}</p>
+                          <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>{u.email}</p>
+                        </div>
+                        <select defaultValue={(u as any).roleId ?? ""}
+                          onChange={async e => {
+                            const rid = e.target.value ? Number(e.target.value) : null;
+                            const res = await fetch(api(`/api/admin/users/${u.id}/rbac-role`), { method: "PATCH", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ roleId: rid }) });
+                            if (!res.ok) { setToast("역할 지정 실패"); return; }
+                            setToast(`${u.email} 역할 지정 완료`);
+                          }}
+                          style={{ ...inputStyle, width: "auto", padding: "4px 8px", fontSize: 12, minWidth: 100 }}>
+                          <option value="">전체 권한</option>
+                          {rbacRoles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
+            </div>
+
+            {/* 우: 권한 설정 패널 */}
+            <div>
+              {rbacSelectedRole ? (
+                <Card style={{ padding: 0, overflow: "hidden" }}>
+                  <div style={{ padding: "14px 20px", borderBottom: "1px solid #f0f0f0", display: "flex", alignItems: "center", justifyContent: "space-between", background: "#f8fafc" }}>
+                    <div>
+                      <span style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>"{rbacSelectedRole.name}" 권한 설정</span>
+                      {rbacSelectedRole.description && <p style={{ margin: "2px 0 0", fontSize: 12, color: "#6b7280" }}>{rbacSelectedRole.description}</p>}
+                    </div>
+                    <button onClick={async () => {
+                      setRbacSaving(true);
+                      try {
+                        const res = await fetch(api(`/api/admin/roles/${rbacSelectedRole.id}/permissions`), { method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ keys: Array.from(rbacRolePerms) }) });
+                        const d = await res.json();
+                        if (!res.ok) { setToast(d.error ?? "저장 실패"); return; }
+                        setRbacRoles(prev => prev.map(r => r.id === rbacSelectedRole.id ? { ...r, permissionCount: d.count, permissions: Array.from(rbacRolePerms) } : r));
+                        setToast("권한 설정이 저장되었습니다.");
+                      } finally { setRbacSaving(false); }
+                    }} disabled={rbacSaving}
+                      style={{ padding: "8px 20px", background: rbacSaving ? "#93c5fd" : "#2563eb", color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                      {rbacSaving ? "저장 중..." : "권한 저장"}
+                    </button>
+                  </div>
+                  <div style={{ padding: 20 }}>
+                    {/* 메뉴 권한 */}
+                    <div style={{ marginBottom: 24 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                        <h4 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#374151" }}>메뉴 접근 권한</h4>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button onClick={() => {
+                            const menuKeys = rbacAllPerms.filter(p => p.category === "menu").map(p => p.key);
+                            setRbacRolePerms(prev => { const n = new Set(prev); menuKeys.forEach(k => n.add(k)); return n; });
+                          }} style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "1px solid #d1d5db", borderRadius: 6, background: "#f9fafb", cursor: "pointer", color: "#374151" }}>전체 선택</button>
+                          <button onClick={() => {
+                            const menuKeys = new Set(rbacAllPerms.filter(p => p.category === "menu").map(p => p.key));
+                            setRbacRolePerms(prev => { const n = new Set(prev); menuKeys.forEach(k => n.delete(k)); return n; });
+                          }} style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "1px solid #d1d5db", borderRadius: 6, background: "#f9fafb", cursor: "pointer", color: "#374151" }}>전체 해제</button>
+                        </div>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
+                        {rbacAllPerms.filter(p => p.category === "menu").map(p => (
+                          <label key={p.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", border: `1px solid ${rbacRolePerms.has(p.key) ? "#3b82f6" : "#e5e7eb"}`, borderRadius: 8, cursor: "pointer", background: rbacRolePerms.has(p.key) ? "#eff6ff" : "#fff", transition: "all 0.1s" }}>
+                            <input type="checkbox" checked={rbacRolePerms.has(p.key)} onChange={e => {
+                              setRbacRolePerms(prev => { const n = new Set(prev); e.target.checked ? n.add(p.key) : n.delete(p.key); return n; });
+                            }} style={{ width: 15, height: 15, cursor: "pointer" }} />
+                            <span style={{ fontSize: 13, fontWeight: rbacRolePerms.has(p.key) ? 600 : 400, color: rbacRolePerms.has(p.key) ? "#1d4ed8" : "#374151" }}>{p.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    {/* 기능 권한 */}
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                        <h4 style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#374151" }}>기능 실행 권한</h4>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button onClick={() => {
+                            const actionKeys = rbacAllPerms.filter(p => p.category === "action").map(p => p.key);
+                            setRbacRolePerms(prev => { const n = new Set(prev); actionKeys.forEach(k => n.add(k)); return n; });
+                          }} style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "1px solid #d1d5db", borderRadius: 6, background: "#f9fafb", cursor: "pointer", color: "#374151" }}>전체 선택</button>
+                          <button onClick={() => {
+                            const actionKeys = new Set(rbacAllPerms.filter(p => p.category === "action").map(p => p.key));
+                            setRbacRolePerms(prev => { const n = new Set(prev); actionKeys.forEach(k => n.delete(k)); return n; });
+                          }} style={{ padding: "3px 10px", fontSize: 11, fontWeight: 600, border: "1px solid #d1d5db", borderRadius: 6, background: "#f9fafb", cursor: "pointer", color: "#374151" }}>전체 해제</button>
+                        </div>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
+                        {rbacAllPerms.filter(p => p.category === "action").map(p => (
+                          <label key={p.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", border: `1px solid ${rbacRolePerms.has(p.key) ? "#10b981" : "#e5e7eb"}`, borderRadius: 8, cursor: "pointer", background: rbacRolePerms.has(p.key) ? "#f0fdf4" : "#fff", transition: "all 0.1s" }}>
+                            <input type="checkbox" checked={rbacRolePerms.has(p.key)} onChange={e => {
+                              setRbacRolePerms(prev => { const n = new Set(prev); e.target.checked ? n.add(p.key) : n.delete(p.key); return n; });
+                            }} style={{ width: 15, height: 15, cursor: "pointer" }} />
+                            <div>
+                              <p style={{ margin: 0, fontSize: 12, fontWeight: rbacRolePerms.has(p.key) ? 600 : 400, color: rbacRolePerms.has(p.key) ? "#065f46" : "#374151" }}>{p.name}</p>
+                              <p style={{ margin: 0, fontSize: 10, color: "#9ca3af" }}>{p.key}</p>
+                            </div>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              ) : (
+                <Card style={{ padding: "48px 24px", textAlign: "center" }}>
+                  <p style={{ margin: 0, fontSize: 32 }}>🔑</p>
+                  <p style={{ margin: "12px 0 0", fontSize: 14, color: "#6b7280" }}>좌측에서 역할을 선택하면<br />권한 설정 화면이 표시됩니다.</p>
+                </Card>
+              )}
+            </div>
+          </div>
         </Section>
       )}
 

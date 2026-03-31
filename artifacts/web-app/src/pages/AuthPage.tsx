@@ -11,7 +11,7 @@ const labelStyle: React.CSSProperties = {
   display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6,
 };
 
-export function AuthPage({ onAuth }: { onAuth: (token: string, user: User) => void }) {
+export function AuthPage({ onAuth }: { onAuth: (token: string, user: User, permissions?: string[]) => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -32,7 +32,7 @@ export function AuthPage({ onAuth }: { onAuth: (token: string, user: User) => vo
       });
       const data = await res.json();
       if (!res.ok) { setMsg(data.error ?? "오류가 발생했습니다."); return; }
-      onAuth(data.token, data.user);
+      onAuth(data.token, data.user, data.user?.permissions ?? []);
     } catch { setMsg("서버에 연결할 수 없습니다."); }
     finally { setLoading(false); }
   };

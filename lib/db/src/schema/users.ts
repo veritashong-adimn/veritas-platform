@@ -1,6 +1,7 @@
-import { pgTable, serial, text, timestamp, pgEnum, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, pgEnum, boolean, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { rolesTable } from "./roles";
 
 export const userRoleEnum = pgEnum("user_role", ["customer", "translator", "admin"]);
 
@@ -10,6 +11,7 @@ export const usersTable = pgTable("users", {
   password: text("password"),
   name: text("name"),
   role: userRoleEnum("role").notNull().default("customer"),
+  roleId: integer("role_id").references(() => rolesTable.id, { onDelete: "set null" }),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });

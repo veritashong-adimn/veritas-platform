@@ -4,6 +4,7 @@ declare namespace Express {
       id: number;
       email: string;
       role: "customer" | "translator" | "admin";
+      roleId?: number | null;
     };
   }
 }
