@@ -5,7 +5,7 @@ import {
   billingBatchesTable, divisionsTable, companyNameHistoryTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, inArray, sql, desc, ne } from "drizzle-orm";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 
 const router: IRouter = Router();
@@ -64,7 +64,7 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
 });
 
 // ─── 거래처 생성 ─────────────────────────────────────────────────────────────
-router.post("/admin/companies", ...adminGuard, async (req, res) => {
+router.post("/admin/companies", ...adminGuard, requirePermission("company.create"), async (req, res) => {
   const { name, businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt } = req.body as {
     name?: string; businessNumber?: string; representativeName?: string;
     email?: string; phone?: string; industry?: string; businessCategory?: string;
@@ -248,7 +248,7 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
 });
 
 // ─── 거래처 수정 ─────────────────────────────────────────────────────────────
-router.patch("/admin/companies/:id", ...adminGuard, async (req, res) => {
+router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.update"), async (req, res) => {
   const companyId = Number(req.params.id);
   if (isNaN(companyId) || companyId <= 0) {
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
@@ -532,14 +532,14 @@ async function createContact(req: any, res: any, targetCompanyId: number) {
 }
 
 // ─── 담당자 독립 생성 ────────────────────────────────────────────────────────
-router.post("/admin/contacts", ...adminGuard, async (req, res) => {
+router.post("/admin/contacts", ...adminGuard, requirePermission("contact.create"), async (req, res) => {
   const companyId = Number(req.body.companyId);
   if (!companyId || isNaN(companyId)) { res.status(400).json({ error: "거래처 ID는 필수입니다." }); return; }
   try { await createContact(req, res, companyId); }
   catch (err) { req.log.error({ err }, "Contacts: failed to create"); res.status(500).json({ error: "담당자 생성 실패." }); }
 });
 
-router.post("/admin/company-contacts", ...adminGuard, async (req, res) => {
+router.post("/admin/company-contacts", ...adminGuard, requirePermission("contact.create"), async (req, res) => {
   const companyId = Number(req.body.companyId);
   if (!companyId || isNaN(companyId)) { res.status(400).json({ error: "거래처 ID는 필수입니다." }); return; }
   try { await createContact(req, res, companyId); }
@@ -667,7 +667,7 @@ async function patchContact(req: any, res: any, contactId: number) {
   res.json(updated);
 }
 
-router.patch("/admin/contacts/:id", ...adminGuard, async (req, res) => {
+router.patch("/admin/contacts/:id", ...adminGuard, requirePermission("contact.update"), async (req, res) => {
   const contactId = Number(req.params.id);
   if (isNaN(contactId) || contactId <= 0) { res.status(400).json({ error: "유효하지 않은 contact id." }); return; }
   try { await patchContact(req, res, contactId); }

@@ -596,7 +596,7 @@ router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
 });
 
 // ─── 프로젝트 빠른 취소 ────────────────────────────────────────────────────
-router.patch("/admin/projects/:id/cancel", ...adminGuard, async (req, res) => {
+router.patch("/admin/projects/:id/cancel", ...adminGuard, requirePermission("project.update"), async (req, res) => {
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) {
     res.status(400).json({ error: "유효하지 않은 project id." });
@@ -712,7 +712,7 @@ router.post("/admin/projects", ...adminGuard, requirePermission("project.create"
 });
 
 // ─── 프로젝트 기본정보 수정 ────────────────────────────────────────────────
-router.patch("/admin/projects/:id/info", ...adminGuard, async (req, res) => {
+router.patch("/admin/projects/:id/info", ...adminGuard, requirePermission("project.update"), async (req, res) => {
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
@@ -811,7 +811,7 @@ router.post("/admin/projects/:id/billing-correction", ...adminGuard, async (req,
 });
 
 // ─── 관리자 견적 생성 ──────────────────────────────────────────────────────
-router.post("/admin/projects/:id/quote", ...adminGuard, async (req, res) => {
+router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
@@ -1697,7 +1697,7 @@ router.get("/admin/projects/:id/quote/items", ...adminGuard, async (req, res) =>
 });
 
 // ─── 관리자 결제 등록 ──────────────────────────────────────────────────────
-router.post("/admin/projects/:id/payment", ...adminGuard, async (req, res) => {
+router.post("/admin/projects/:id/payment", ...adminGuard, requirePermission("payment.create"), async (req, res) => {
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
@@ -1736,7 +1736,7 @@ router.post("/admin/projects/:id/payment", ...adminGuard, async (req, res) => {
 });
 
 // ─── 관리자 정산 수동 생성 ─────────────────────────────────────────────────
-router.post("/admin/projects/:id/settlement", ...adminGuard, async (req, res) => {
+router.post("/admin/projects/:id/settlement", ...adminGuard, requirePermission("settlement.pay"), async (req, res) => {
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
@@ -1895,6 +1895,7 @@ router.get("/admin/users", ...adminGuard, async (req, res) => {
         email: usersTable.email,
         name: usersTable.name,
         role: usersTable.role,
+        roleId: usersTable.roleId,
         isActive: usersTable.isActive,
         createdAt: usersTable.createdAt,
       })

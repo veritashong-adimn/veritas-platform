@@ -605,14 +605,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   useEffect(() => { if (adminTab === "prepaid") fetchPrepaidAccounts(); }, [adminTab, fetchPrepaidAccounts]);
   useEffect(() => { if (adminTab === "billing") fetchBillingBatches(); }, [adminTab, fetchBillingBatches]);
   useEffect(() => {
-    if (adminTab !== "roles") return;
+    if (adminTab !== "roles" && adminTab !== "users") return;
     const authH = { Authorization: `Bearer ${token}` };
     Promise.all([
-      fetch(api("/api/admin/roles"), { headers: authH }).then(r => r.json()),
-      fetch(api("/api/admin/permissions"), { headers: authH }).then(r => r.json()),
+      fetch(api("/api/admin/roles"), { headers: authH }).then(r => r.ok ? r.json() : []),
+      adminTab === "roles"
+        ? fetch(api("/api/admin/permissions"), { headers: authH }).then(r => r.ok ? r.json() : [])
+        : Promise.resolve(null),
     ]).then(([roles, perms]) => {
       setRbacRoles(Array.isArray(roles) ? roles : []);
-      setRbacAllPerms(Array.isArray(perms) ? perms : []);
+      if (perms !== null) setRbacAllPerms(Array.isArray(perms) ? perms : []);
     }).catch(() => setToast("역할 목록 조회 실패"));
     if (users.length === 0) fetchUsers();
   }, [adminTab, token]);
@@ -1339,7 +1341,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {adminTab === "projects" && (
         <Section title={`전체 프로젝트 (${projects.length})`} action={
           <div style={{ display: "flex", gap: 8 }}>
-            <PrimaryBtn onClick={() => { fetchCustomers(); fetchCompanies(); fetchContacts(); setShowCreateProject(true); }} style={{ fontSize: 13, padding: "7px 14px" }}>+ 프로젝트 등록</PrimaryBtn>
+            {hasPerm("project.create") && <PrimaryBtn onClick={() => { fetchCustomers(); fetchCompanies(); fetchContacts(); setShowCreateProject(true); }} style={{ fontSize: 13, padding: "7px 14px" }}>+ 프로젝트 등록</PrimaryBtn>}
             <GhostBtn onClick={() => handleExportCSV("projects")} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
           </div>
         }>
@@ -1887,7 +1889,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["ID","이메일","역할","상태","가입일","역할 변경","계정 상태","비밀번호","프로필"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                    <tr>{["ID","이메일","역할","상태","가입일","시스템 역할(RBAC)","역할 변경","계정 상태","비밀번호","프로필"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {users.map(u => (
@@ -1911,6 +1913,34 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         </td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
                           {new Date(u.createdAt).toLocaleDateString("ko-KR")}
+                        </td>
+                        {/* 시스템 역할(RBAC) 컬럼 - admin 계정에 내부 권한 역할 지정 */}
+                        <td style={tableTd}>
+                          {u.role === "admin" ? (
+                            <select
+                              value={u.roleId ?? ""}
+                              disabled={roleChanging === u.id}
+                              onChange={async e => {
+                                setRoleChanging(u.id);
+                                try {
+                                  const rid = e.target.value ? Number(e.target.value) : null;
+                                  const res = await fetch(api(`/api/admin/users/${u.id}/rbac-role`), {
+                                    method: "PATCH",
+                                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                                    body: JSON.stringify({ roleId: rid }),
+                                  });
+                                  if (!res.ok) { setToast("역할 지정 실패"); return; }
+                                  setUsers(prev => prev.map(x => x.id === u.id ? { ...x, roleId: rid } as AdminUser : x));
+                                  setToast("RBAC 역할이 변경되었습니다.");
+                                } finally { setRoleChanging(null); }
+                              }}
+                              style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid #e9d5ff", fontSize: 12, cursor: "pointer", background: "#faf5ff", color: "#7c3aed", fontWeight: 600 }}>
+                              <option value="">전체 권한</option>
+                              {rbacRoles.map(r => <option key={r.id} value={r.id}>{r.name}{r.description ? ` — ${r.description}` : ""}</option>)}
+                            </select>
+                          ) : (
+                            <span style={{ fontSize: 11, color: "#d1d5db" }}>—</span>
+                          )}
                         </td>
                         <td style={tableTd}>
                           {u.role !== "admin" ? (
@@ -2118,9 +2148,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {/* ── 거래처 탭 ── */}
       {adminTab === "companies" && (
         <Section title={`거래처 관리 (${companies.length})`} action={
-          <PrimaryBtn onClick={() => setShowCompanyForm(v => !v)} style={{ fontSize: 13, padding: "7px 14px" }}>
-            {showCompanyForm ? "취소" : "+ 거래처 등록"}
-          </PrimaryBtn>
+          hasPerm("company.create") ? (
+            <PrimaryBtn onClick={() => setShowCompanyForm(v => !v)} style={{ fontSize: 13, padding: "7px 14px" }}>
+              {showCompanyForm ? "취소" : "+ 거래처 등록"}
+            </PrimaryBtn>
+          ) : undefined
         }>
           {showCompanyForm && (
             <Card style={{ marginBottom: 16, padding: "16px 20px" }}>
