@@ -8,6 +8,7 @@ export const productOptionsTable = pgTable("product_options", {
     .references(() => productsTable.id, { onDelete: "cascade" }),
   optionType: text("option_type").notNull(),
   optionValue: text("option_value").notNull(),
+  price: integer("price").default(0),
   sortOrder: integer("sort_order").default(0),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
