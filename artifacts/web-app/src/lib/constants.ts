@@ -349,7 +349,7 @@ export const PRODUCT_SUB_CATEGORIES: Record<string, string[]> = {
   "숙박": ["국내숙박", "해외숙박"],
 };
 
-export const PRODUCT_UNITS = ["시간", "일", "건", "페이지", "회"] as const;
+export const PRODUCT_UNITS = ["시간", "일", "월", "페이지", "단어", "글자", "회"] as const;
 export type ProductUnit = typeof PRODUCT_UNITS[number];
 
 export const PRODUCT_OPTION_TYPES = ["언어", "방식", "시간", "기타"] as const;
