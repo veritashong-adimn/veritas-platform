@@ -1,8 +1,9 @@
 import { Router, type IRouter } from "express";
 import {
   db, usersTable, translatorProfilesTable, translatorRatesTable,
+  translatorProductsTable, productsTable,
 } from "@workspace/db";
-import { eq, and, ilike, or, sql, desc, gte, lte } from "drizzle-orm";
+import { eq, and, ilike, or, sql, desc, gte, lte, inArray } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 
 const router: IRouter = Router();
@@ -11,9 +12,9 @@ const adminGuard = [requireAuth, requireRole("admin")];
 // ─── 번역사 목록 (검색/필터) ──────────────────────────────────────────────────
 router.get("/admin/translators", ...adminGuard, async (req, res) => {
   try {
-    const { search, languagePair, specialization, status, minRating } = req.query as {
+    const { search, languagePair, specialization, status, minRating, grade } = req.query as {
       search?: string; languagePair?: string; specialization?: string;
-      status?: string; minRating?: string;
+      status?: string; minRating?: string; grade?: string;
     };
 
     const rows = await db
@@ -25,8 +26,10 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         createdAt: usersTable.createdAt,
         profileId: translatorProfilesTable.id,
         languagePairs: translatorProfilesTable.languagePairs,
+        languageLevel: translatorProfilesTable.languageLevel,
         specializations: translatorProfilesTable.specializations,
         region: translatorProfilesTable.region,
+        grade: translatorProfilesTable.grade,
         rating: translatorProfilesTable.rating,
         availabilityStatus: translatorProfilesTable.availabilityStatus,
         bio: translatorProfilesTable.bio,
@@ -35,6 +38,8 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         education: translatorProfilesTable.education,
         major: translatorProfilesTable.major,
         graduationYear: translatorProfilesTable.graduationYear,
+        resumeUrl: translatorProfilesTable.resumeUrl,
+        portfolioUrl: translatorProfilesTable.portfolioUrl,
       })
       .from(usersTable)
       .leftJoin(translatorProfilesTable, eq(translatorProfilesTable.userId, usersTable.id))
@@ -67,6 +72,9 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       const mr = Number(minRating);
       result = result.filter(t => t.rating !== null && (t.rating ?? 0) >= mr);
     }
+    if (grade?.trim()) {
+      result = result.filter(t => t.grade === grade.trim());
+    }
 
     res.json(result);
   } catch (err) {
@@ -91,10 +99,31 @@ router.get("/admin/translators/:id", ...adminGuard, async (req, res) => {
     const [profile] = await db.select().from(translatorProfilesTable).where(eq(translatorProfilesTable.userId, userId));
     const rates = await db.select().from(translatorRatesTable).where(eq(translatorRatesTable.translatorId, userId)).orderBy(desc(translatorRatesTable.createdAt));
 
+    const translatorProducts = await db
+      .select({
+        id: translatorProductsTable.id,
+        translatorId: translatorProductsTable.translatorId,
+        productId: translatorProductsTable.productId,
+        productName: productsTable.name,
+        productCode: productsTable.code,
+        mainCategory: productsTable.mainCategory,
+        subCategory: productsTable.subCategory,
+        productUnit: productsTable.unit,
+        productBasePrice: productsTable.basePrice,
+        unitPrice: translatorProductsTable.unitPrice,
+        note: translatorProductsTable.note,
+        createdAt: translatorProductsTable.createdAt,
+      })
+      .from(translatorProductsTable)
+      .leftJoin(productsTable, eq(translatorProductsTable.productId, productsTable.id))
+      .where(eq(translatorProductsTable.translatorId, userId))
+      .orderBy(translatorProductsTable.createdAt);
+
     res.json({
       user: { id: user.id, email: user.email, isActive: user.isActive, createdAt: user.createdAt },
       profile: profile ?? null,
       rates,
+      translatorProducts,
     });
   } catch (err) {
     req.log.error({ err }, "Translators: failed to get detail");
@@ -110,9 +139,9 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
   }
 
   const {
-    languagePairs, specializations, education, major,
-    graduationYear, region, rating, availabilityStatus, bio,
-    ratePerWord, ratePerPage,
+    languagePairs, languageLevel, specializations, education, major,
+    graduationYear, region, grade, rating, availabilityStatus, bio,
+    ratePerWord, ratePerPage, resumeUrl, portfolioUrl,
   } = req.body;
 
   try {
@@ -122,12 +151,14 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
     if (!user) { res.status(404).json({ error: "번역사를 찾을 수 없습니다." }); return; }
 
     const profileData = {
-      languagePairs, specializations, education, major,
+      languagePairs, languageLevel, specializations, education, major,
       graduationYear: graduationYear ? Number(graduationYear) : undefined,
-      region, rating: rating ? Number(rating) : undefined,
+      region, grade: grade ?? null,
+      rating: rating ? Number(rating) : undefined,
       availabilityStatus: availabilityStatus ?? "available",
       bio, ratePerWord: ratePerWord ? Number(ratePerWord) : undefined,
       ratePerPage: ratePerPage ? Number(ratePerPage) : undefined,
+      resumeUrl: resumeUrl ?? null, portfolioUrl: portfolioUrl ?? null,
       updatedAt: new Date(),
     };
 
@@ -146,13 +177,130 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
   }
 });
 
+// ─── 수행 상품 목록 ────────────────────────────────────────────────────────────
+router.get("/admin/translators/:id/products", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+  try {
+    const items = await db
+      .select({
+        id: translatorProductsTable.id,
+        translatorId: translatorProductsTable.translatorId,
+        productId: translatorProductsTable.productId,
+        productName: productsTable.name,
+        productCode: productsTable.code,
+        mainCategory: productsTable.mainCategory,
+        subCategory: productsTable.subCategory,
+        productUnit: productsTable.unit,
+        productBasePrice: productsTable.basePrice,
+        unitPrice: translatorProductsTable.unitPrice,
+        note: translatorProductsTable.note,
+        createdAt: translatorProductsTable.createdAt,
+      })
+      .from(translatorProductsTable)
+      .leftJoin(productsTable, eq(translatorProductsTable.productId, productsTable.id))
+      .where(eq(translatorProductsTable.translatorId, userId))
+      .orderBy(translatorProductsTable.createdAt);
+    res.json(items);
+  } catch (err) {
+    req.log.error({ err }, "TranslatorProducts: failed to list");
+    res.status(500).json({ error: "수행 상품 조회 실패." });
+  }
+});
+
+// ─── 수행 상품 추가 ────────────────────────────────────────────────────────────
+router.post("/admin/translators/:id/products", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+  const { productId, unitPrice, note } = req.body as {
+    productId?: number; unitPrice?: number; note?: string;
+  };
+  if (!productId) {
+    res.status(400).json({ error: "productId는 필수입니다." }); return;
+  }
+  try {
+    const [existing] = await db.select({ id: translatorProductsTable.id })
+      .from(translatorProductsTable)
+      .where(and(eq(translatorProductsTable.translatorId, userId), eq(translatorProductsTable.productId, productId)));
+    if (existing) {
+      res.status(409).json({ error: "이미 등록된 상품입니다." }); return;
+    }
+
+    const [row] = await db.insert(translatorProductsTable)
+      .values({ translatorId: userId, productId, unitPrice: unitPrice ?? null, note: note ?? null })
+      .returning();
+
+    const [withProduct] = await db
+      .select({
+        id: translatorProductsTable.id,
+        translatorId: translatorProductsTable.translatorId,
+        productId: translatorProductsTable.productId,
+        productName: productsTable.name,
+        productCode: productsTable.code,
+        mainCategory: productsTable.mainCategory,
+        subCategory: productsTable.subCategory,
+        productUnit: productsTable.unit,
+        productBasePrice: productsTable.basePrice,
+        unitPrice: translatorProductsTable.unitPrice,
+        note: translatorProductsTable.note,
+        createdAt: translatorProductsTable.createdAt,
+      })
+      .from(translatorProductsTable)
+      .leftJoin(productsTable, eq(translatorProductsTable.productId, productsTable.id))
+      .where(eq(translatorProductsTable.id, row.id));
+
+    res.status(201).json(withProduct);
+  } catch (err) {
+    req.log.error({ err }, "TranslatorProducts: failed to add");
+    res.status(500).json({ error: "수행 상품 추가 실패." });
+  }
+});
+
+// ─── 수행 상품 단가 수정 ──────────────────────────────────────────────────────
+router.patch("/admin/translators/:id/products/:tpId", ...adminGuard, async (req, res) => {
+  const tpId = Number(req.params.tpId);
+  if (isNaN(tpId) || tpId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 id." }); return;
+  }
+  const { unitPrice, note } = req.body as { unitPrice?: number | null; note?: string | null };
+  try {
+    const [row] = await db.update(translatorProductsTable)
+      .set({ unitPrice: unitPrice ?? null, note: note ?? null })
+      .where(eq(translatorProductsTable.id, tpId))
+      .returning();
+    if (!row) { res.status(404).json({ error: "수행 상품을 찾을 수 없습니다." }); return; }
+    res.json(row);
+  } catch (err) {
+    req.log.error({ err }, "TranslatorProducts: failed to update");
+    res.status(500).json({ error: "수행 상품 수정 실패." });
+  }
+});
+
+// ─── 수행 상품 삭제 ────────────────────────────────────────────────────────────
+router.delete("/admin/translators/:id/products/:tpId", ...adminGuard, async (req, res) => {
+  const tpId = Number(req.params.tpId);
+  if (isNaN(tpId) || tpId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 id." }); return;
+  }
+  try {
+    await db.delete(translatorProductsTable).where(eq(translatorProductsTable.id, tpId));
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "TranslatorProducts: failed to delete");
+    res.status(500).json({ error: "수행 상품 삭제 실패." });
+  }
+});
+
 // ─── 단가 목록 ────────────────────────────────────────────────────────────────
 router.get("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
   const userId = Number(req.params.id);
   if (isNaN(userId) || userId <= 0) {
     res.status(400).json({ error: "유효하지 않은 user id." }); return;
   }
-
   try {
     const rates = await db.select().from(translatorRatesTable).where(eq(translatorRatesTable.translatorId, userId)).orderBy(desc(translatorRatesTable.createdAt));
     res.json(rates);
@@ -168,15 +316,12 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
   if (isNaN(userId) || userId <= 0) {
     res.status(400).json({ error: "유효하지 않은 user id." }); return;
   }
-
   const { serviceType, languagePair, unit, rate } = req.body as {
     serviceType?: string; languagePair?: string; unit?: string; rate?: number;
   };
-
   if (!serviceType?.trim() || !languagePair?.trim() || !rate) {
     res.status(400).json({ error: "서비스 유형, 언어조합, 단가는 필수입니다." }); return;
   }
-
   try {
     const [newRate] = await db
       .insert(translatorRatesTable)
@@ -195,7 +340,6 @@ router.delete("/admin/translators/:id/rates/:rateId", ...adminGuard, async (req,
   if (isNaN(rateId) || rateId <= 0) {
     res.status(400).json({ error: "유효하지 않은 rate id." }); return;
   }
-
   try {
     await db.delete(translatorRatesTable).where(eq(translatorRatesTable.id, rateId));
     res.json({ ok: true });
@@ -215,10 +359,7 @@ router.get("/translator-profiles/:id", requireAuth, async (req, res) => {
     res.status(403).json({ error: "본인 프로필만 조회할 수 있습니다." }); return;
   }
   try {
-    const [profile] = await db
-      .select()
-      .from(translatorProfilesTable)
-      .where(eq(translatorProfilesTable.userId, targetId));
+    const [profile] = await db.select().from(translatorProfilesTable).where(eq(translatorProfilesTable.userId, targetId));
     if (!profile) { res.json(null); return; }
     res.json(profile);
   } catch (err) {
@@ -237,13 +378,14 @@ router.put("/translator-profiles/:id", requireAuth, async (req, res) => {
   }
 
   const {
-    languagePairs, specializations, education, major, graduationYear,
-    region, availabilityStatus, bio, ratePerWord, ratePerPage,
+    languagePairs, languageLevel, specializations, education, major, graduationYear,
+    region, availabilityStatus, bio, ratePerWord, ratePerPage, resumeUrl, portfolioUrl,
   } = req.body as {
-    languagePairs?: string; specializations?: string;
+    languagePairs?: string; languageLevel?: string; specializations?: string;
     education?: string; major?: string; graduationYear?: number;
     region?: string; availabilityStatus?: string;
     bio?: string; ratePerWord?: number; ratePerPage?: number;
+    resumeUrl?: string; portfolioUrl?: string;
   };
 
   try {
@@ -255,6 +397,7 @@ router.put("/translator-profiles/:id", requireAuth, async (req, res) => {
     const vals = {
       userId: targetId,
       languagePairs: languagePairs ?? null,
+      languageLevel: languageLevel ?? null,
       specializations: specializations ?? null,
       education: education ?? null,
       major: major ?? null,
@@ -264,6 +407,8 @@ router.put("/translator-profiles/:id", requireAuth, async (req, res) => {
       bio: bio ?? null,
       ratePerWord: ratePerWord ?? null,
       ratePerPage: ratePerPage ?? null,
+      resumeUrl: resumeUrl ?? null,
+      portfolioUrl: portfolioUrl ?? null,
     };
 
     let result;
@@ -295,10 +440,7 @@ router.get("/translator-rates/:id", requireAuth, async (req, res) => {
     res.status(403).json({ error: "본인 단가만 조회할 수 있습니다." }); return;
   }
   try {
-    const ratesList = await db
-      .select()
-      .from(translatorRatesTable)
-      .where(eq(translatorRatesTable.translatorId, targetId));
+    const ratesList = await db.select().from(translatorRatesTable).where(eq(translatorRatesTable.translatorId, targetId));
     res.json(ratesList);
   } catch (err) {
     req.log.error({ err }, "TranslatorRates: failed to get");
@@ -314,20 +456,15 @@ router.post("/translator-rates/:id", requireAuth, async (req, res) => {
   if (req.user!.role !== "admin" && req.user!.id !== targetId) {
     res.status(403).json({ error: "본인 단가만 추가할 수 있습니다." }); return;
   }
-
   const { serviceType, languagePair, unit, rate } = req.body as {
     serviceType: string; languagePair: string; unit?: string; rate: number;
   };
   if (!serviceType || !languagePair || rate == null) {
     res.status(400).json({ error: "serviceType, languagePair, rate는 필수입니다." }); return;
   }
-
   try {
     const [row] = await db.insert(translatorRatesTable).values({
-      translatorId: targetId,
-      serviceType, languagePair,
-      unit: unit ?? "word",
-      rate,
+      translatorId: targetId, serviceType, languagePair, unit: unit ?? "word", rate,
     }).returning();
     res.status(201).json(row);
   } catch (err) {

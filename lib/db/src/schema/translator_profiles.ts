@@ -8,16 +8,20 @@ export const translatorProfilesTable = pgTable("translator_profiles", {
     .unique()
     .references(() => usersTable.id),
   languagePairs: text("language_pairs"),
+  languageLevel: text("language_level"),
   specializations: text("specializations"),
   education: text("education"),
   major: text("major"),
   graduationYear: integer("graduation_year"),
   region: text("region"),
+  grade: text("grade"),
   rating: real("rating"),
   availabilityStatus: text("availability_status").notNull().default("available"),
   bio: text("bio"),
   ratePerWord: integer("rate_per_word"),
   ratePerPage: integer("rate_per_page"),
+  resumeUrl: text("resume_url"),
+  portfolioUrl: text("portfolio_url"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 

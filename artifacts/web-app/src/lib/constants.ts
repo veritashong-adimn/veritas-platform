@@ -177,11 +177,23 @@ export type BoardPost = {
 };
 export type TranslatorProfile = {
   id?: number; userId: number;
-  languagePairs?: string | null; specializations?: string | null;
+  languagePairs?: string | null; languageLevel?: string | null;
+  specializations?: string | null;
   education?: string | null; major?: string | null;
   graduationYear?: number | null; region?: string | null;
+  grade?: string | null;
   rating?: number | null; availabilityStatus?: string;
   bio?: string | null; ratePerWord?: number | null; ratePerPage?: number | null;
+  resumeUrl?: string | null; portfolioUrl?: string | null;
+};
+
+export type TranslatorProduct = {
+  id: number; translatorId: number; productId: number;
+  productName: string | null; productCode: string | null;
+  mainCategory: string | null; subCategory: string | null;
+  productUnit: string | null; productBasePrice: number | null;
+  unitPrice: number | null; note: string | null;
+  createdAt: string;
 };
 
 export function saveSession(token: string, user: User, permissions?: string[]) {
