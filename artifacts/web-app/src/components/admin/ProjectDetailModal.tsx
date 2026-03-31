@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, ALL_FINANCIAL_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, AdminUser, BOARD_CATEGORY_LABEL } from '../../lib/constants';
+import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, ALL_FINANCIAL_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, AdminUser, BOARD_CATEGORY_LABEL, Product } from '../../lib/constants';
 import { StatusBadge, PrimaryBtn, GhostBtn } from '../ui';
 import { ReviewMemoPanel } from './ReviewMemoPanel';
 import { DraggableModal } from './DraggableModal';
@@ -108,8 +108,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   };
   const [showQuoteForm, setShowQuoteForm] = useState(false);
   const [creatingQuote, setCreatingQuote] = useState(false);
-  type QuoteItemForm = { productName: string; languagePair: string; unit: string; quantity: string; unitPrice: string; taxRate: "0" | "0.1" };
-  const defaultItem = (): QuoteItemForm => ({ productName: "", languagePair: "", unit: "건", quantity: "1", unitPrice: "", taxRate: "0" });
+  type QuoteItemForm = { productId: number | null; productName: string; languagePair: string; unit: string; quantity: string; unitPrice: string; taxRate: "0" | "0.1" };
+  const defaultItem = (): QuoteItemForm => ({ productId: null, productName: "", languagePair: "", unit: "건", quantity: "1", unitPrice: "", taxRate: "0" });
   const [quoteMode, setQuoteMode] = useState<"simple" | "items">("items");
   const [quoteItemForms, setQuoteItemForms] = useState<QuoteItemForm[]>([defaultItem()]);
   const calcItemTotal = (it: QuoteItemForm) => {
@@ -174,6 +174,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [creatingSettlement, setCreatingSettlement] = useState(false);
 
   const authH = { Authorization: `Bearer ${token}` };
+
+  const [quoteProducts, setQuoteProducts] = useState<Product[]>([]);
+  useEffect(() => {
+    fetch(api("/api/admin/products"), { headers: authH })
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setQuoteProducts(Array.isArray(d) ? d.filter((p: Product) => p.active) : []))
+      .catch(() => {});
+  }, [token]);
 
   const loadBatchCandidates = async () => {
     const companyId = detail?.companyId;
@@ -600,6 +608,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         if (!acct || acct.currentBalance < usageAmt) { onToast(`잔액 부족: 현재 잔액 ${acct?.currentBalance.toLocaleString() ?? 0}원`); return; }
         body = {
           items: validItems.map(it => ({
+            productId: it.productId ?? undefined,
             productName: it.productName.trim(),
             languagePair: it.languagePair.trim() || undefined,
             unit: it.unit || "건",
@@ -614,6 +623,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         if (validItems.length === 0) { onToast("품목명과 단가를 입력하세요."); return; }
         body = {
           items: validItems.map(it => ({
+            productId: it.productId ?? undefined,
             productName: it.productName.trim(),
             languagePair: it.languagePair.trim() || undefined,
             unit: it.unit || "건",
@@ -1948,9 +1958,39 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             const { supply, tax, total } = calcItemTotal(it);
                             const roSt: React.CSSProperties = { ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right", background: "#f8fafc", cursor: "default" };
                             return (
-                              <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 76px 40px 52px 80px 44px 76px 76px 24px", gap: 4, marginBottom: 4, alignItems: "center" }}>
-                                <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
-                                  placeholder="예: 영→한 번역" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }} />
+                              <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 76px 40px 52px 80px 44px 76px 76px 24px", gap: 4, marginBottom: 6, alignItems: "center" }}>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                  <select
+                                    value={it.productId ?? ""}
+                                    onChange={e => {
+                                      const pid = e.target.value ? Number(e.target.value) : null;
+                                      if (pid) {
+                                        const prod = quoteProducts.find(p => p.id === pid);
+                                        if (prod) {
+                                          setQuoteItemForms(prev => prev.map((p, i) => i === idx ? {
+                                            ...p,
+                                            productId: prod.id,
+                                            productName: prod.name,
+                                            unit: prod.unit,
+                                            unitPrice: String(prod.basePrice),
+                                          } : p));
+                                          return;
+                                        }
+                                      }
+                                      setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productId: null } : p));
+                                    }}
+                                    style={{ ...inputStyle, fontSize: 11, padding: "5px 4px", color: it.productId ? "#1e40af" : "#9ca3af" }}
+                                  >
+                                    <option value="">상품 선택...</option>
+                                    {quoteProducts.map(p => (
+                                      <option key={p.id} value={p.id}>
+                                        {p.mainCategory ? `[${p.mainCategory}] ` : ""}{p.name} — {Number(p.basePrice).toLocaleString()}원/{p.unit}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
+                                    placeholder="항목명 직접 입력" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }} />
+                                </div>
                                 <input value={it.languagePair} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, languagePair: e.target.value } : p))}
                                   placeholder="EN→KO" style={{ ...inputStyle, fontSize: 11, padding: "6px 4px", textAlign: "center" }} />
                                 <input value={it.unit} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: e.target.value } : p))}
