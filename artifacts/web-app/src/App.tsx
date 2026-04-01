@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { User, NavPage, saveSession, clearSession, loadSession, getDefaultPage } from "./lib/constants";
+import { User, NavPage, saveSession, clearSession, loadSession, getDefaultPage, api } from "./lib/constants";
 import { Card, GhostBtn } from "./components/ui";
 import { Navbar } from "./components/shared/Navbar";
 import { AuthPage } from "./pages/AuthPage";
@@ -35,6 +35,18 @@ export default function App() {
       setUser(session.user);
       setPermissions(session.permissions);
       setPage(getDefaultPage(session.user.role));
+      // 최신 권한 목록을 서버에서 새로고침 (캐시 불일치 방지)
+      fetch(api("/api/auth/permissions"), {
+        headers: { Authorization: `Bearer ${session.token}` },
+      })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          if (d?.permissions) {
+            setPermissions(d.permissions);
+            saveSession(session.token, session.user, d.permissions);
+          }
+        })
+        .catch(() => {});
     }
   }, []);
 
