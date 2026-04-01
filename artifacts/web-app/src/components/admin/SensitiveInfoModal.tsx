@@ -19,6 +19,7 @@ const sH: React.CSSProperties = {
 const PAYMENT_METHODS = [
   { value: "withholding_3_3", label: "3.3% 원천징수" },
   { value: "overseas_remittance", label: "해외송금" },
+  { value: "paypal", label: "페이팔송금" },
   { value: "tax_invoice", label: "세금계산서" },
 ];
 
