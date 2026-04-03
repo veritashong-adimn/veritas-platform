@@ -2,35 +2,50 @@ import React, { useState, useEffect, useRef } from "react";
 import { api, Product } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn } from "../ui";
 import { DraggableModal } from "./DraggableModal";
+import { PAYMENT_METHODS } from "./SensitiveInfoModal";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
   border: "1px solid #d1d5db", fontSize: 13, color: "#111827",
   outline: "none", boxSizing: "border-box", background: "#fff",
 };
+const inpAmber: React.CSSProperties = { ...inputStyle, borderColor: "#fcd34d", background: "#fffbeb" };
 const labelSt: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 };
+const labelAmber: React.CSSProperties = { ...labelSt, color: "#92400e" };
 const sH: React.CSSProperties = {
   fontSize: 12, fontWeight: 700, color: "#6b7280", textTransform: "uppercase",
   letterSpacing: "0.06em", margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
 };
+const sHAmber: React.CSSProperties = { ...sH, color: "#92400e", borderBottomColor: "#fde68a" };
 const errStyle: React.CSSProperties = { color: "#dc2626", fontSize: 12, marginTop: 2 };
+const grid2: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 14px" };
+const grid3: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px 14px" };
 
 const GRADES = ["S", "A", "B", "C"];
 const LANG_LEVELS = ["일반", "비즈니스", "전문"];
 const COMMON_SPECIALIZATIONS = ["IT", "법률", "의료/제약", "금융", "특허", "문학/출판", "기술/공학", "마케팅", "방송/미디어", "게임"];
-const PAYMENT_METHODS = [
-  { value: "withholding_3_3", label: "3.3% 원천징수" },
-  { value: "overseas_remittance", label: "해외송금" },
-  { value: "paypal", label: "페이팔송금" },
-  { value: "tax_invoice", label: "세금계산서" },
+const CURRENCIES = ["KRW", "USD", "EUR", "JPY", "GBP", "CAD", "AUD", "CNY", "HKD", "SGD"];
+const FEE_PAYER_OPTIONS = [
+  { value: "sender",    label: "송금인 부담 (당사)" },
+  { value: "recipient", label: "수취인 부담 (통번역사)" },
+  { value: "split",     label: "공동 부담" },
 ];
 
+const emptySensitive = () => ({
+  paymentMethod: "",
+  residentFront: "", residentBack: "",
+  bankName: "", bankAccount: "", accountHolder: "",
+  businessNumber: "", businessName: "", businessOwner: "", taxInvoiceEmail: "",
+  paypalEmail: "", englishName: "", country: "", currency: "",
+  remittanceMemo: "", addressEn: "", bankNameEn: "", swiftCode: "",
+  routingNumber: "", iban: "",
+  baseCurrency: "", remittanceFeePayer: "", settlementMemo: "",
+  paymentHold: false,
+});
+
 export function TranslatorCreateModal({ token, permissions = [], onClose, onCreated, onToast }: {
-  token: string;
-  permissions?: string[];
-  onClose: () => void;
-  onCreated: (translator: any) => void;
-  onToast: (msg: string) => void;
+  token: string; permissions?: string[];
+  onClose: () => void; onCreated: (translator: any) => void; onToast: (msg: string) => void;
 }) {
   const hasPerm = (key: string) => permissions.includes(key) || permissions.includes("*");
 
@@ -40,20 +55,12 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   const [selectedProducts, setSelectedProducts] = useState<Array<{ productId: number; unitPrice: string }>>([]);
   const [selectedSpecs, setSelectedSpecs] = useState<string[]>([]);
   const [customSpec, setCustomSpec] = useState("");
-
   const [form, setForm] = useState({
     email: "", password: "", confirmPassword: "", name: "", phone: "", region: "",
-    languagePairs: "", languageLevel: "",
-    grade: "", bio: "", ratePerWord: "", ratePerPage: "",
+    languagePairs: "", languageLevel: "", grade: "", bio: "", ratePerWord: "", ratePerPage: "",
     resumeUrl: "", availabilityStatus: "available",
   });
-
-  const [sensitiveForm, setSensitiveForm] = useState({
-    residentFront: "", residentBack: "",
-    bankName: "", bankAccount: "", accountHolder: "",
-    paymentMethod: "",
-  });
-
+  const [sf, setSF] = useState(emptySensitive());
   const backRef = useRef<HTMLInputElement>(null);
   const authH = { Authorization: `Bearer ${token}` };
 
@@ -68,27 +75,18 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
     setForm(p => ({ ...p, [key]: val }));
     setErrors(p => { const n = { ...p }; delete n[key]; return n; });
   };
+  const setSf = (key: keyof ReturnType<typeof emptySensitive>, val: string | boolean) =>
+    setSF(p => ({ ...p, [key]: val }));
 
-  const setSF = (key: keyof typeof sensitiveForm, val: string) => {
-    setSensitiveForm(p => ({ ...p, [key]: val }));
-  };
-
-  const toggleSpec = (s: string) => {
+  const toggleSpec = (s: string) =>
     setSelectedSpecs(p => p.includes(s) ? p.filter(x => x !== s) : [...p, s]);
-  };
-
   const addProduct = (productId: number) => {
     if (selectedProducts.find(p => p.productId === productId)) return;
     setSelectedProducts(p => [...p, { productId, unitPrice: "" }]);
   };
-
-  const removeProduct = (productId: number) => {
-    setSelectedProducts(p => p.filter(x => x.productId !== productId));
-  };
-
-  const setProductPrice = (productId: number, unitPrice: string) => {
-    setSelectedProducts(p => p.map(x => x.productId === productId ? { ...x, unitPrice } : x));
-  };
+  const removeProduct = (id: number) => setSelectedProducts(p => p.filter(x => x.productId !== id));
+  const setProductPrice = (id: number, price: string) =>
+    setSelectedProducts(p => p.map(x => x.productId === id ? { ...x, unitPrice: price } : x));
 
   const validate = () => {
     const e: Record<string, string> = {};
@@ -119,8 +117,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           region: form.region.trim() || undefined,
           languagePairs: form.languagePairs.trim() || undefined,
           languageLevel: form.languageLevel || undefined,
-          specializations,
-          grade: form.grade || undefined,
+          specializations, grade: form.grade || undefined,
           bio: form.bio.trim() || undefined,
           ratePerWord: form.ratePerWord ? Number(form.ratePerWord) : undefined,
           ratePerPage: form.ratePerPage ? Number(form.ratePerPage) : undefined,
@@ -137,7 +134,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 
       const userId = data.id;
 
-      // 수행 상품 추가
       for (const sp of selectedProducts) {
         if (!sp.productId) continue;
         await fetch(api(`/api/admin/translators/${userId}/products`), {
@@ -146,28 +142,28 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         });
       }
 
-      // 정산/세무 정보 저장 (권한 있고 하나라도 입력된 경우)
-      if (hasPerm("translator.sensitive")) {
-        const rn = `${sensitiveForm.residentFront.trim()}${sensitiveForm.residentBack.trim()}`;
-        const hasSensitiveData =
-          rn.length >= 6 || sensitiveForm.bankName.trim() ||
-          sensitiveForm.bankAccount.trim() || sensitiveForm.accountHolder.trim() ||
-          sensitiveForm.paymentMethod;
+      // 정산/지급 정보 저장
+      if (hasPerm("translator.sensitive") && sf.paymentMethod) {
+        const rn = `${sf.residentFront.trim()}${sf.residentBack.trim()}`;
+        const sbody: Record<string, unknown> = {
+          paymentMethod: sf.paymentMethod || null,
+          bankName: sf.bankName || null, bankAccount: sf.bankAccount || null, accountHolder: sf.accountHolder || null,
+          businessNumber: sf.businessNumber || null, businessName: sf.businessName || null,
+          businessOwner: sf.businessOwner || null, taxInvoiceEmail: sf.taxInvoiceEmail || null,
+          paypalEmail: sf.paypalEmail || null, englishName: sf.englishName || null,
+          country: sf.country || null, currency: sf.currency || null,
+          remittanceMemo: sf.remittanceMemo || null, addressEn: sf.addressEn || null,
+          bankNameEn: sf.bankNameEn || null, swiftCode: sf.swiftCode || null,
+          routingNumber: sf.routingNumber || null, iban: sf.iban || null,
+          baseCurrency: sf.baseCurrency || null, remittanceFeePayer: sf.remittanceFeePayer || null,
+          paymentHold: sf.paymentHold, settlementMemo: sf.settlementMemo || null,
+        };
+        if (rn.length >= 6) sbody.residentNumber = rn;
 
-        if (hasSensitiveData) {
-          const sbody: Record<string, string | undefined> = {
-            bankName: sensitiveForm.bankName.trim() || undefined,
-            bankAccount: sensitiveForm.bankAccount.trim() || undefined,
-            accountHolder: sensitiveForm.accountHolder.trim() || undefined,
-            paymentMethod: sensitiveForm.paymentMethod || undefined,
-          };
-          if (rn.length >= 6) sbody.residentNumber = rn;
-
-          await fetch(api(`/api/admin/translators/${userId}/sensitive`), {
-            method: "POST", headers: { ...authH, "Content-Type": "application/json" },
-            body: JSON.stringify(sbody),
-          });
-        }
+        await fetch(api(`/api/admin/translators/${userId}/sensitive`), {
+          method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+          body: JSON.stringify(sbody),
+        });
       }
 
       onToast(`통번역사 "${data.name ?? data.email}"이(가) 등록되었습니다.`);
@@ -190,12 +186,30 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
     </div>
   );
 
+  const SA = ({ label, field, placeholder = "", type = "text", mono = false }: {
+    label: string; field: keyof ReturnType<typeof emptySensitive>; placeholder?: string; type?: string; mono?: boolean;
+  }) => (
+    <div>
+      <label style={labelAmber}>{label}</label>
+      <input type={type} value={sf[field] as string} onChange={e => setSf(field, e.target.value)}
+        placeholder={placeholder}
+        style={{ ...inpAmber, fontFamily: mono ? "monospace" : undefined }} />
+    </div>
+  );
+
+  const isDomesticWith = sf.paymentMethod === "domestic_withholding";
+  const isDomesticBiz  = sf.paymentMethod === "domestic_business";
+  const isPaypal       = sf.paymentMethod === "overseas_paypal";
+  const isBank         = sf.paymentMethod === "overseas_bank";
+  const isOther        = sf.paymentMethod === "other";
+  const hasMethod      = !!sf.paymentMethod;
+
   return (
-    <DraggableModal title="통번역사 등록" subtitle="새 통번역사 계정 생성" onClose={onClose} width={760} zIndex={310} bodyPadding="20px 28px">
+    <DraggableModal title="통번역사 등록" subtitle="새 통번역사 계정 생성" onClose={onClose} width={800} zIndex={310} bodyPadding="20px 28px">
 
       {/* ── 기본 정보 ── */}
       <p style={sH}>기본 정보</p>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
+      <div style={grid2}>
         <F label="이메일" field="email" type="email" placeholder="example@email.com" required />
         <F label="이름" field="name" placeholder="홍길동" required />
         <F label="비밀번호" field="password" type="password" placeholder="8자 이상" required />
@@ -206,7 +220,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 
       {/* ── 언어 ── */}
       <p style={sH}>언어</p>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
+      <div style={grid2}>
         <div>
           <label style={labelSt}>언어쌍</label>
           <input value={form.languagePairs} onChange={e => setF("languagePairs", e.target.value)}
@@ -226,14 +240,13 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       <p style={sH}>전문분야</p>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
         {COMMON_SPECIALIZATIONS.map(s => (
-          <button key={s} onClick={() => toggleSpec(s)}
-            style={{
-              padding: "5px 12px", borderRadius: 20, fontSize: 12, cursor: "pointer",
-              border: selectedSpecs.includes(s) ? "1.5px solid #2563eb" : "1.5px solid #e5e7eb",
-              background: selectedSpecs.includes(s) ? "#eff6ff" : "#f9fafb",
-              color: selectedSpecs.includes(s) ? "#1d4ed8" : "#374151",
-              fontWeight: selectedSpecs.includes(s) ? 700 : 400,
-            }}>{s}</button>
+          <button key={s} onClick={() => toggleSpec(s)} style={{
+            padding: "5px 12px", borderRadius: 20, fontSize: 12, cursor: "pointer",
+            border: selectedSpecs.includes(s) ? "1.5px solid #2563eb" : "1.5px solid #e5e7eb",
+            background: selectedSpecs.includes(s) ? "#eff6ff" : "#f9fafb",
+            color: selectedSpecs.includes(s) ? "#1d4ed8" : "#374151",
+            fontWeight: selectedSpecs.includes(s) ? 700 : 400,
+          }}>{s}</button>
         ))}
       </div>
       <div>
@@ -249,9 +262,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           style={{ ...inputStyle, flex: 1 }}>
           <option value="">상품 선택하여 추가...</option>
           {availableProducts.filter(p => !assignedProductIds.has(p.id)).map(p => (
-            <option key={p.id} value={p.id}>
-              {p.mainCategory ? `[${p.mainCategory}] ` : ""}{p.name}
-            </option>
+            <option key={p.id} value={p.id}>{p.mainCategory ? `[${p.mainCategory}] ` : ""}{p.name}</option>
           ))}
         </select>
       </div>
@@ -265,8 +276,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                   {prod?.mainCategory ? <span style={{ fontSize: 11, color: "#6b7280", marginRight: 4 }}>[{prod.mainCategory}]</span> : null}
                   {prod?.name ?? `#${sp.productId}`}
                 </span>
-                <input type="number" value={sp.unitPrice}
-                  onChange={e => setProductPrice(sp.productId, e.target.value)}
+                <input type="number" value={sp.unitPrice} onChange={e => setProductPrice(sp.productId, e.target.value)}
                   placeholder="단가(원)" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }} />
                 <span style={{ fontSize: 11, color: "#6b7280" }}>{prod?.unit ?? ""}</span>
                 <button onClick={() => removeProduct(sp.productId)}
@@ -279,7 +289,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 
       {/* ── 등급 & 단가 ── */}
       <p style={sH}>등급 & 기본 단가</p>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px 16px" }}>
+      <div style={grid3}>
         <div>
           <label style={labelSt}>등급</label>
           <select value={form.grade} onChange={e => setF("grade", e.target.value)} style={inputStyle}>
@@ -293,7 +303,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 
       {/* ── 파일/기타 ── */}
       <p style={sH}>파일 & 기타</p>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
+      <div style={grid2}>
         <F label="이력서 URL" field="resumeUrl" placeholder="https://drive.google.com/..." />
         <div>
           <label style={labelSt}>가용 상태</label>
@@ -306,96 +316,162 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       </div>
       <div style={{ marginTop: 10 }}>
         <label style={labelSt}>소개/메모</label>
-        <textarea value={form.bio} onChange={e => setF("bio", e.target.value)}
-          rows={3} placeholder="통번역사 소개, 특이사항 등..."
-          style={{ ...inputStyle, resize: "vertical" }} />
+        <textarea value={form.bio} onChange={e => setF("bio", e.target.value)} rows={3}
+          placeholder="통번역사 소개, 특이사항 등..." style={{ ...inputStyle, resize: "vertical" }} />
       </div>
 
-      {/* ── 정산/세무 정보 (권한자만) ── */}
+      {/* ── 정산/지급 정보 (권한자만) ── */}
       {hasPerm("translator.sensitive") && (
         <>
-          <p style={{ ...sH, color: "#92400e", borderBottomColor: "#fed7aa" }}>
-            🔒 정산/세무 정보
+          <p style={sHAmber}>
+            🔒 정산/지급 정보
             <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: "#9ca3af", textTransform: "none", letterSpacing: 0 }}>
-              암호화 저장 · admin/finance 권한만 열람 가능
+              암호화 저장 · admin/finance 권한만 열람 가능 · 나중에 입력해도 됩니다
             </span>
           </p>
-          <div style={{
-            background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 10,
-            padding: "14px 16px", marginBottom: 14,
-          }}>
-            <p style={{ fontSize: 12, color: "#92400e", margin: "0 0 12px 0" }}>
-              ※ 입력하지 않아도 등록 가능합니다. 나중에 통번역사 상세에서 별도 입력할 수 있습니다.
-            </p>
+          <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 10, padding: "16px 18px" }}>
 
-            {/* 주민등록번호 분리 입력 */}
-            <div style={{ marginBottom: 12 }}>
-              <label style={{ ...labelSt, color: "#92400e" }}>주민등록번호</label>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input
-                  type="password"
-                  value={sensitiveForm.residentFront}
-                  onChange={e => {
-                    const v = e.target.value.replace(/\D/g, "").slice(0, 6);
-                    setSF("residentFront", v);
-                    if (v.length === 6) backRef.current?.focus();
-                  }}
-                  placeholder="앞 6자리"
-                  maxLength={6}
-                  autoComplete="off"
-                  style={{ width: 120, padding: "9px 12px", borderRadius: 8, border: "1px solid #fcd34d", fontSize: 13, textAlign: "center", fontFamily: "monospace", letterSpacing: 2, boxSizing: "border-box", background: "#fffbeb" }}
-                />
-                <span style={{ fontSize: 18, color: "#d97706", fontWeight: 700, flexShrink: 0 }}>-</span>
-                <input
-                  ref={backRef}
-                  type="password"
-                  value={sensitiveForm.residentBack}
-                  onChange={e => {
-                    const v = e.target.value.replace(/\D/g, "").slice(0, 7);
-                    setSF("residentBack", v);
-                  }}
-                  placeholder="뒤 7자리"
-                  maxLength={7}
-                  autoComplete="off"
-                  style={{ width: 130, padding: "9px 12px", borderRadius: 8, border: "1px solid #fcd34d", fontSize: 13, textAlign: "center", fontFamily: "monospace", letterSpacing: 2, boxSizing: "border-box", background: "#fffbeb" }}
-                />
-                <span style={{ fontSize: 11, color: "#b45309", flexShrink: 0 }}>AES-256 암호화</span>
-              </div>
+            {/* 지급방식 선택 */}
+            <p style={{ fontSize: 12, fontWeight: 700, color: "#92400e", margin: "0 0 10px" }}>지급 방식 선택</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginBottom: 16 }}>
+              {PAYMENT_METHODS.map(m => (
+                <button key={m.value} onClick={() => setSf("paymentMethod", m.value === sf.paymentMethod ? "" : m.value)}
+                  style={{
+                    padding: "8px 6px", borderRadius: 8, fontSize: 11, cursor: "pointer", textAlign: "center", lineHeight: 1.3,
+                    border: sf.paymentMethod === m.value ? "2px solid #d97706" : "1.5px solid #fde68a",
+                    background: sf.paymentMethod === m.value ? "#fde68a" : "#fffbeb",
+                    color: sf.paymentMethod === m.value ? "#78350f" : "#92400e",
+                    fontWeight: sf.paymentMethod === m.value ? 700 : 400,
+                  }}>{m.label}</button>
+              ))}
             </div>
 
-            {/* 지급방식 */}
-            <div style={{ marginBottom: 12 }}>
-              <label style={{ ...labelSt, color: "#92400e" }}>지급 방식</label>
-              <select
-                value={sensitiveForm.paymentMethod}
-                onChange={e => setSF("paymentMethod", e.target.value)}
-                style={{ ...inputStyle, borderColor: "#fcd34d", background: "#fffbeb", fontSize: 13 }}
-              >
-                <option value="">선택 안 함</option>
-                {PAYMENT_METHODS.map(m => (
-                  <option key={m.value} value={m.value}>{m.label}</option>
-                ))}
-              </select>
-            </div>
+            {/* ── 국내 3.3% 원천징수 ── */}
+            {isDomesticWith && (
+              <>
+                <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>주민등록번호</p>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input type="password" value={sf.residentFront}
+                      onChange={e => { const v = e.target.value.replace(/\D/g, "").slice(0, 6); setSf("residentFront", v); if (v.length === 6) backRef.current?.focus(); }}
+                      placeholder="앞 6자리" maxLength={6} autoComplete="off"
+                      style={{ width: 110, padding: "9px 12px", borderRadius: 8, border: "1px solid #fcd34d", fontSize: 13, textAlign: "center", fontFamily: "monospace", letterSpacing: 2, boxSizing: "border-box", background: "#fffbeb" }} />
+                    <span style={{ fontSize: 18, color: "#d97706", fontWeight: 700 }}>-</span>
+                    <input ref={backRef} type="password" value={sf.residentBack}
+                      onChange={e => setSf("residentBack", e.target.value.replace(/\D/g, "").slice(0, 7))}
+                      placeholder="뒤 7자리" maxLength={7} autoComplete="off"
+                      style={{ width: 125, padding: "9px 12px", borderRadius: 8, border: "1px solid #fcd34d", fontSize: 13, textAlign: "center", fontFamily: "monospace", letterSpacing: 2, boxSizing: "border-box", background: "#fffbeb" }} />
+                    <span style={{ fontSize: 11, color: "#b45309" }}>AES-256 암호화</span>
+                  </div>
+                </div>
+                <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>계좌정보</p>
+                <div style={{ ...grid3, marginBottom: 4 }}>
+                  <SA label="은행명" field="bankName" placeholder="국민은행" />
+                  <SA label="예금주" field="accountHolder" placeholder="홍길동" />
+                  <SA label="계좌번호" field="bankAccount" placeholder="123-456-789012" mono />
+                </div>
+              </>
+            )}
 
-            {/* 은행 정보 */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px", marginBottom: 12 }}>
-              <div>
-                <label style={{ ...labelSt, color: "#92400e" }}>은행명</label>
-                <input value={sensitiveForm.bankName} onChange={e => setSF("bankName", e.target.value)}
-                  placeholder="예: 국민은행" style={{ ...inputStyle, borderColor: "#fcd34d", background: "#fffbeb", fontSize: 13 }} />
+            {/* ── 국내 사업자 ── */}
+            {isDomesticBiz && (
+              <>
+                <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>사업자 정보</p>
+                <div style={{ ...grid2, marginBottom: 12 }}>
+                  <SA label="사업자등록번호" field="businessNumber" placeholder="000-00-00000" mono />
+                  <SA label="상호" field="businessName" placeholder="(주)회사명" />
+                  <SA label="대표자명" field="businessOwner" placeholder="홍길동" />
+                  <SA label="세금계산서 이메일" field="taxInvoiceEmail" placeholder="tax@company.com" type="email" />
+                </div>
+                <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>계좌정보</p>
+                <div style={{ ...grid3, marginBottom: 4 }}>
+                  <SA label="은행명" field="bankName" placeholder="국민은행" />
+                  <SA label="예금주" field="accountHolder" placeholder="홍길동" />
+                  <SA label="계좌번호" field="bankAccount" placeholder="123-456-789012" mono />
+                </div>
+              </>
+            )}
+
+            {/* ── 해외 PayPal ── */}
+            {isPaypal && (
+              <>
+                <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>PayPal 정보</p>
+                <div style={{ ...grid2, marginBottom: 12 }}>
+                  <SA label="PayPal 계정 이메일" field="paypalEmail" placeholder="paypal@email.com" type="email" />
+                  <SA label="영문이름 (Full Name)" field="englishName" placeholder="Hong Gil Dong" />
+                  <SA label="국가" field="country" placeholder="South Korea" />
+                  <div>
+                    <label style={labelAmber}>통화</label>
+                    <select value={sf.currency} onChange={e => setSf("currency", e.target.value)} style={inpAmber}>
+                      <option value="">선택 안 함</option>
+                      {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <SA label="송금 메모 (선택)" field="remittanceMemo" placeholder="프로젝트명 또는 메모" />
+              </>
+            )}
+
+            {/* ── 해외 은행송금 ── */}
+            {isBank && (
+              <>
+                <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>수취인 정보</p>
+                <div style={{ ...grid2, marginBottom: 12 }}>
+                  <SA label="영문이름 (Full Name)" field="englishName" placeholder="Hong Gil Dong" />
+                  <SA label="국가" field="country" placeholder="United States" />
+                  <div>
+                    <label style={labelAmber}>통화</label>
+                    <select value={sf.currency} onChange={e => setSf("currency", e.target.value)} style={inpAmber}>
+                      <option value="">선택 안 함</option>
+                      {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <SA label="거주지 영문주소" field="addressEn" placeholder="123 Main St, City, State" />
+                </div>
+                <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>해외 은행 정보</p>
+                <div style={{ ...grid2, marginBottom: 12 }}>
+                  <SA label="은행명(영문)" field="bankNameEn" placeholder="Bank of America" />
+                  <SA label="계좌번호" field="bankAccount" placeholder="Account Number" mono />
+                  <SA label="SWIFT Code" field="swiftCode" placeholder="AAAABBCC" mono />
+                  <SA label="Routing Number" field="routingNumber" placeholder="021000021" mono />
+                </div>
+                <SA label="IBAN (선택)" field="iban" placeholder="GB33BUKB20201555555555" mono />
+              </>
+            )}
+
+            {/* ── 기타 ── */}
+            {isOther && (
+              <SA label="정산 방식 설명" field="settlementMemo" placeholder="지급 방식 및 기타 정보를 입력하세요" />
+            )}
+
+            {/* ── 공통 추가 정보 ── */}
+            {hasMethod && (
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px dashed #fde68a" }}>
+                <div style={{ ...grid2, marginBottom: 10 }}>
+                  <div>
+                    <label style={labelAmber}>기본 통화</label>
+                    <select value={sf.baseCurrency} onChange={e => setSf("baseCurrency", e.target.value)} style={inpAmber}>
+                      <option value="">선택 안 함</option>
+                      {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  {(isPaypal || isBank) && (
+                    <div>
+                      <label style={labelAmber}>해외송금 수수료 부담</label>
+                      <select value={sf.remittanceFeePayer} onChange={e => setSf("remittanceFeePayer", e.target.value)} style={inpAmber}>
+                        <option value="">선택 안 함</option>
+                        {FEE_PAYER_OPTIONS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+                <div style={{ marginBottom: 8 }}>
+                  <label style={labelAmber}>정산 메모 (내부용)</label>
+                  <input value={sf.settlementMemo} onChange={e => setSf("settlementMemo", e.target.value)}
+                    placeholder="특이사항, 지급 조건 등" style={inpAmber} />
+                </div>
               </div>
-              <div>
-                <label style={{ ...labelSt, color: "#92400e" }}>예금주</label>
-                <input value={sensitiveForm.accountHolder} onChange={e => setSF("accountHolder", e.target.value)}
-                  placeholder="예금주명" style={{ ...inputStyle, borderColor: "#fcd34d", background: "#fffbeb", fontSize: 13 }} />
-              </div>
-            </div>
-            <div>
-              <label style={{ ...labelSt, color: "#92400e" }}>계좌번호</label>
-              <input value={sensitiveForm.bankAccount} onChange={e => setSF("bankAccount", e.target.value)}
-                placeholder="예: 123-456-789012" style={{ ...inputStyle, borderColor: "#fcd34d", background: "#fffbeb", fontSize: 13, fontFamily: "monospace", letterSpacing: 1 }} />
-            </div>
+            )}
           </div>
         </>
       )}

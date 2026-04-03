@@ -567,7 +567,7 @@ router.get("/admin/translators/:id/sensitive", ...adminGuard, requirePermission(
     }, "민감정보 조회");
 
     if (!row) {
-      res.json({ exists: false, residentNumberMasked: null, bankName: null, bankAccount: null, accountHolder: null, paymentMethod: null });
+      res.json({ exists: false, residentNumberMasked: null });
       return;
     }
 
@@ -577,11 +577,29 @@ router.get("/admin/translators/:id/sensitive", ...adminGuard, requirePermission(
 
     res.json({
       exists: true,
+      paymentMethod: row.paymentMethod,
       residentNumberMasked,
       bankName: row.bankName,
       bankAccount: row.bankAccount,
       accountHolder: row.accountHolder,
-      paymentMethod: row.paymentMethod,
+      businessNumber: row.businessNumber,
+      businessName: row.businessName,
+      businessOwner: row.businessOwner,
+      taxInvoiceEmail: row.taxInvoiceEmail,
+      paypalEmail: row.paypalEmail,
+      englishName: row.englishName,
+      country: row.country,
+      currency: row.currency,
+      remittanceMemo: row.remittanceMemo,
+      addressEn: row.addressEn,
+      bankNameEn: row.bankNameEn,
+      swiftCode: row.swiftCode,
+      routingNumber: row.routingNumber,
+      iban: row.iban,
+      baseCurrency: row.baseCurrency,
+      remittanceFeePayer: row.remittanceFeePayer,
+      paymentHold: row.paymentHold,
+      settlementMemo: row.settlementMemo,
       updatedAt: row.updatedAt,
     });
   } catch (err) {
@@ -596,36 +614,62 @@ router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission
   if (isNaN(userId) || userId <= 0) {
     res.status(400).json({ error: "유효하지 않은 user id." }); return;
   }
-  const { residentNumber, bankName, bankAccount, accountHolder, paymentMethod } = req.body;
+  const {
+    residentNumber,
+    paymentMethod,
+    bankName, bankAccount, accountHolder,
+    businessNumber, businessName, businessOwner, taxInvoiceEmail,
+    paypalEmail, englishName, country, currency, remittanceMemo,
+    addressEn, bankNameEn, swiftCode, routingNumber, iban,
+    baseCurrency, remittanceFeePayer, paymentHold, settlementMemo,
+  } = req.body;
 
   try {
-    // 번역사 존재 확인
     const [user] = await db
       .select({ id: usersTable.id })
       .from(usersTable)
       .where(and(eq(usersTable.id, userId), eq(usersTable.role, "translator")));
     if (!user) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
 
-    const encryptedRn = residentNumber?.trim()
-      ? encrypt(residentNumber.trim().replace(/-/g, ""))
-      : null;
-
-    const existing = await db
-      .select({ id: translatorSensitiveTable.id })
+    const [existing] = await db
+      .select()
       .from(translatorSensitiveTable)
       .where(eq(translatorSensitiveTable.translatorId, userId));
 
+    // 주민번호: 제공된 경우에만 암호화 처리, 미제공 시 기존값 유지
+    const encryptedRn = residentNumber?.trim()
+      ? encrypt(residentNumber.trim().replace(/-/g, ""))
+      : (residentNumber === "" ? null : existing?.residentNumber ?? null);
+
     const payload = {
       residentNumber: encryptedRn,
+      paymentMethod: paymentMethod?.trim() || null,
       bankName: bankName?.trim() || null,
       bankAccount: bankAccount?.trim() || null,
       accountHolder: accountHolder?.trim() || null,
-      paymentMethod: paymentMethod?.trim() || null,
+      businessNumber: businessNumber?.trim() || null,
+      businessName: businessName?.trim() || null,
+      businessOwner: businessOwner?.trim() || null,
+      taxInvoiceEmail: taxInvoiceEmail?.trim() || null,
+      paypalEmail: paypalEmail?.trim() || null,
+      englishName: englishName?.trim() || null,
+      country: country?.trim() || null,
+      currency: currency?.trim() || null,
+      remittanceMemo: remittanceMemo?.trim() || null,
+      addressEn: addressEn?.trim() || null,
+      bankNameEn: bankNameEn?.trim() || null,
+      swiftCode: swiftCode?.trim() || null,
+      routingNumber: routingNumber?.trim() || null,
+      iban: iban?.trim() || null,
+      baseCurrency: baseCurrency?.trim() || null,
+      remittanceFeePayer: remittanceFeePayer?.trim() || null,
+      paymentHold: paymentHold === true || paymentHold === "true" ? true : false,
+      settlementMemo: settlementMemo?.trim() || null,
       updatedAt: new Date(),
     };
 
     let result;
-    if (existing.length === 0) {
+    if (!existing) {
       [result] = await db.insert(translatorSensitiveTable)
         .values({ translatorId: userId, ...payload })
         .returning();
@@ -636,7 +680,6 @@ router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission
         .returning();
     }
 
-    // 변경 로그
     req.log.info({
       actor: req.user!.email,
       actorId: req.user!.id,
@@ -651,11 +694,29 @@ router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission
 
     res.json({
       exists: true,
+      paymentMethod: result.paymentMethod,
       residentNumberMasked,
       bankName: result.bankName,
       bankAccount: result.bankAccount,
       accountHolder: result.accountHolder,
-      paymentMethod: result.paymentMethod,
+      businessNumber: result.businessNumber,
+      businessName: result.businessName,
+      businessOwner: result.businessOwner,
+      taxInvoiceEmail: result.taxInvoiceEmail,
+      paypalEmail: result.paypalEmail,
+      englishName: result.englishName,
+      country: result.country,
+      currency: result.currency,
+      remittanceMemo: result.remittanceMemo,
+      addressEn: result.addressEn,
+      bankNameEn: result.bankNameEn,
+      swiftCode: result.swiftCode,
+      routingNumber: result.routingNumber,
+      iban: result.iban,
+      baseCurrency: result.baseCurrency,
+      remittanceFeePayer: result.remittanceFeePayer,
+      paymentHold: result.paymentHold,
+      settlementMemo: result.settlementMemo,
       updatedAt: result.updatedAt,
     });
   } catch (err) {
