@@ -36,10 +36,21 @@ export default function App() {
       setPermissions(session.permissions);
       setPage(getDefaultPage(session.user.role));
       // 최신 권한 목록을 서버에서 새로고침 (캐시 불일치 방지)
+      // 401이면 토큰 만료 → 자동 로그아웃
       fetch(api("/api/auth/permissions"), {
         headers: { Authorization: `Bearer ${session.token}` },
       })
-        .then(r => r.ok ? r.json() : null)
+        .then(r => {
+          if (r.status === 401) {
+            clearSession();
+            setToken(null);
+            setUser(null);
+            setPermissions([]);
+            setPage("dashboard");
+            return null;
+          }
+          return r.ok ? r.json() : null;
+        })
         .then(d => {
           if (d?.permissions) {
             setPermissions(d.permissions);
