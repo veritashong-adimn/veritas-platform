@@ -109,6 +109,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   const [adminTab, setAdminTab] = useState<"dashboard"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions">("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem("admin_sidebar_sections");
+      return saved ? JSON.parse(saved) : {};
+    } catch { return {}; }
+  });
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [payments, setPayments] = useState<AdminPayment[]>([]);
   const [tasks, setTasks] = useState<AdminTask[]>([]);
@@ -595,6 +601,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     } catch { setToast("오류: 삭제 실패"); }
   };
 
+  const toggleSection = (key: string) => {
+    setOpenSections(prev => {
+      const isCurrentlyOpen = prev[key] !== false;
+      return { ...prev, [key]: !isCurrentlyOpen };
+    });
+  };
+
   const handleExportCSV = async (type: "projects" | "settlements") => {
     try {
       const res = await fetch(api(`/api/admin/export/${type}`), { headers: authHeaders });
@@ -621,6 +634,19 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   useEffect(() => { if (adminTab === "translators") fetchTranslators(); }, [adminTab, fetchTranslators]);
   useEffect(() => { if (adminTab === "prepaid") fetchPrepaidAccounts(); }, [adminTab, fetchPrepaidAccounts]);
   useEffect(() => { if (adminTab === "billing") fetchBillingBatches(); }, [adminTab, fetchBillingBatches]);
+
+  // 아코디언 상태 localStorage 저장
+  useEffect(() => {
+    try { localStorage.setItem("admin_sidebar_sections", JSON.stringify(openSections)); } catch {}
+  }, [openSections]);
+
+  // 현재 탭이 속한 섹션 자동 펼침
+  useEffect(() => {
+    const activeGroup = ADMIN_NAV_GROUPS.find(g => g.items.some(item => item.id === adminTab));
+    if (activeGroup && !activeGroup.isDashboard) {
+      setOpenSections(prev => prev[activeGroup.key] === false ? prev : { ...prev, [activeGroup.key]: true });
+    }
+  }, [adminTab]);
   useEffect(() => {
     if (adminTab !== "roles" && adminTab !== "users") return;
     const authH = { Authorization: `Bearer ${token}` };
@@ -965,57 +991,80 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <div style={{ fontSize: 11, color: "#8892a4", marginTop: 3, whiteSpace: "nowrap" }}>관리자 CRM</div>
           </div>
 
-          {/* 메뉴 그룹 */}
+          {/* 메뉴 그룹 (아코디언) */}
           <nav style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
-            {SIDEBAR_GROUPS.map((group, gi) => (
-              <div key={group.label} style={{ marginBottom: group.isDashboard ? 4 : 2 }}>
-                {!group.isDashboard && (
-                  <div style={{
-                    display: "flex", alignItems: "center", gap: 6,
-                    padding: "10px 20px 3px 16px",
-                    borderLeft: `3px solid ${group.accentColor}`,
-                    marginTop: gi > 0 ? 6 : 0,
-                  }}>
-                    <span style={{ fontSize: 9, fontWeight: 700, color: group.accentColor, textTransform: "uppercase", letterSpacing: "0.9px", whiteSpace: "nowrap" }}>
-                      {group.label}
-                    </span>
-                  </div>
-                )}
-                {group.items.map(item => {
-                  const isActive = adminTab === item.id;
-                  const hasIconColor = !!(item as { iconColor?: string }).iconColor;
-                  const iconColor = (item as { iconColor?: string }).iconColor;
-                  return (
+            {SIDEBAR_GROUPS.map((group, gi) => {
+              const isOpen = group.isDashboard || openSections[group.key] !== false;
+              const hasActiveItem = group.items.some(item => item.id === adminTab);
+              return (
+                <div key={group.key} style={{ marginBottom: group.isDashboard ? 4 : 1 }}>
+                  {/* 섹션 헤더 (대시보드 제외) */}
+                  {!group.isDashboard && (
                     <button
-                      key={item.id}
-                      onClick={() => setAdminTab(item.id as typeof adminTab)}
+                      onClick={() => toggleSection(group.key)}
                       style={{
-                        display: "flex", alignItems: "center", gap: 10,
-                        width: "100%", padding: "8px 20px 8px 20px", border: "none", cursor: "pointer",
-                        background: isActive ? group.accentColor : "transparent",
-                        color: isActive ? "#fff" : "#c1c8d4",
-                        fontSize: 13, fontWeight: isActive ? 600 : 400,
-                        textAlign: "left", whiteSpace: "nowrap",
-                        borderRadius: 0, transition: "background 0.12s, color 0.12s",
-                        borderLeft: isActive ? "none" : hasIconColor && !isActive ? `3px solid transparent` : "none",
+                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                        width: "100%", border: "none", cursor: "pointer",
+                        padding: "9px 14px 4px 16px",
+                        background: "transparent",
+                        borderLeft: `3px solid ${hasActiveItem ? group.accentColor : "#2d3547"}`,
+                        marginTop: gi > 0 ? 4 : 0,
+                        transition: "background 0.12s",
                       }}
-                      onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLButtonElement).style.background = "#2d3547"; } }}
-                      onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; } }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "#252d3f"; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
                     >
                       <span style={{
-                        fontSize: 15, lineHeight: 1, flexShrink: 0,
-                        filter: hasIconColor && !isActive ? `drop-shadow(0 0 3px ${iconColor}88)` : "none",
+                        fontSize: 9, fontWeight: 700,
+                        color: hasActiveItem ? group.accentColor : "#6b7a95",
+                        textTransform: "uppercase", letterSpacing: "0.9px", whiteSpace: "nowrap",
+                        transition: "color 0.12s",
                       }}>
-                        {item.icon}
+                        {group.label}
                       </span>
-                      <span style={{ color: isActive ? "#fff" : hasIconColor && !isActive ? "#a7f3d0" : "#c1c8d4" }}>
-                        {item.label}
-                      </span>
+                      <span style={{
+                        fontSize: 9, color: hasActiveItem ? group.accentColor : "#4a5568",
+                        transition: "transform 0.18s, color 0.12s",
+                        display: "inline-block",
+                        transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
+                      }}>▶</span>
                     </button>
-                  );
-                })}
-              </div>
-            ))}
+                  )}
+                  {/* 메뉴 아이템 (섹션이 열려 있을 때만) */}
+                  {isOpen && group.items.map(item => {
+                    const isActive = adminTab === item.id;
+                    const hasIconColor = !!item.iconColor;
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => setAdminTab(item.id as typeof adminTab)}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 10,
+                          width: "100%", padding: "8px 20px 8px 20px", border: "none", cursor: "pointer",
+                          background: isActive ? group.accentColor : "transparent",
+                          color: isActive ? "#fff" : "#c1c8d4",
+                          fontSize: 13, fontWeight: isActive ? 600 : 400,
+                          textAlign: "left", whiteSpace: "nowrap",
+                          borderRadius: 0, transition: "background 0.12s, color 0.12s",
+                        }}
+                        onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLButtonElement).style.background = "#2d3547"; } }}
+                        onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; } }}
+                      >
+                        <span style={{
+                          fontSize: 15, lineHeight: 1, flexShrink: 0,
+                          filter: hasIconColor && !isActive ? `drop-shadow(0 0 3px ${item.iconColor}88)` : "none",
+                        }}>
+                          {item.icon}
+                        </span>
+                        <span style={{ color: isActive ? "#fff" : hasIconColor && !isActive ? "#a7f3d0" : "#c1c8d4" }}>
+                          {item.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
           </nav>
 
           {/* 사용자 정보 + 로그아웃 */}

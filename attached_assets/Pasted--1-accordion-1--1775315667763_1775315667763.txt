@@ -1,0 +1,145 @@
+사이드바에 1단 섹션 접힘(accordion) 기능을 추가해 주세요.
+
+목표:
+- 1단 섹션(예: 영업·프로젝트, 청구·결제 등)은 접고 펼칠 수 있어야 함
+- 현재 활성 메뉴가 속한 섹션은 자동으로 펼쳐져 있어야 함
+- 사용자가 직접 열고 닫은 상태는 유지되어야 함 (localStorage 사용)
+- 2단 메뉴(프로젝트, 작업 등)는 항상 펼쳐진 상태 유지 (접지 않음)
+
+---
+
+1. 상태 구조 설계
+
+각 섹션의 열림/닫힘 상태를 관리하는 state를 추가해 주세요.
+
+예:
+const [openSections, setOpenSections] = useState<Record<string, boolean>>({})
+
+섹션 key는 고유값 사용 (예: "project", "finance", "settlement")
+
+---
+
+2. 초기 상태 로딩
+
+컴포넌트 mount 시 localStorage에서 불러오기
+
+예:
+useEffect(() => {
+  const saved = localStorage.getItem("admin_sidebar_sections")
+  if (saved) {
+    setOpenSections(JSON.parse(saved))
+  }
+}, [])
+
+---
+
+3. 상태 저장
+
+openSections 변경될 때마다 localStorage 저장
+
+예:
+useEffect(() => {
+  localStorage.setItem("admin_sidebar_sections", JSON.stringify(openSections))
+}, [openSections])
+
+---
+
+4. 섹션 클릭 토글
+
+섹션 제목 클릭 시 해당 섹션만 토글
+
+예:
+const toggleSection = (key: string) => {
+  setOpenSections(prev => ({
+    ...prev,
+    [key]: !prev[key]
+  }))
+}
+
+---
+
+5. 현재 활성 경로 기준 자동 펼침 (중요)
+
+현재 URL(pathname)을 기준으로
+해당 메뉴가 속한 섹션은 자동으로 열리도록 처리
+
+예:
+useEffect(() => {
+  ADMIN_NAV_GROUPS.forEach(section => {
+    const hasActive = section.items.some(item => pathname.startsWith(item.path))
+    if (hasActive) {
+      setOpenSections(prev => ({
+        ...prev,
+        [section.key]: true
+      }))
+    }
+  })
+}, [pathname])
+
+---
+
+6. 렌더링 구조
+
+섹션 구조:
+
+- 섹션 헤더 (클릭 가능)
+- 열려 있을 때만 하위 메뉴 표시
+
+예:
+
+{ADMIN_NAV_GROUPS.map(section => (
+  <div key={section.key}>
+    
+    <div onClick={() => toggleSection(section.key)}>
+      {section.title}
+      {/* 오른쪽에 화살표 아이콘 */}
+      {openSections[section.key] ? "▼" : "▶"}
+    </div>
+
+    {openSections[section.key] && (
+      <div>
+        {section.items.map(item => (
+          <NavLink to={item.path}>
+            {item.label}
+          </NavLink>
+        ))}
+      </div>
+    )}
+    
+  </div>
+))}
+
+---
+
+7. UX 디테일
+
+- 현재 활성 메뉴는 highlight 처리
+- 섹션 헤더 hover 스타일 추가
+- 화살표 아이콘 회전 애니메이션 (optional)
+- 섹션 간 간격 유지
+
+---
+
+8. 금지 사항
+
+- 메뉴 구조 변경 금지
+- path 변경 금지
+- 기능 추가 금지
+- 2단 메뉴 접힘 기능 구현하지 말 것
+
+---
+
+9. 최종 확인
+
+아래 3가지 확인:
+
+1) 현재 페이지 이동 시 해당 섹션 자동 펼침 되는지
+2) 사용자가 접은 상태가 새로고침 후에도 유지되는지
+3) 다른 섹션 열고 닫아도 기존 상태 유지되는지
+
+---
+
+결과:
+- 사이드바가 접히는 구조로 정리
+- 스크롤 길이 감소
+- 사용성 개선

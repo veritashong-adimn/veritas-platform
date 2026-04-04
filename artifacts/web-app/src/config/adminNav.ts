@@ -7,6 +7,7 @@ export type NavItem = {
 };
 
 export type NavGroup = {
+  key: string;
   label: string;
   accentColor: string;
   isDashboard?: boolean;
@@ -16,6 +17,7 @@ export type NavGroup = {
 
 export const ADMIN_NAV_GROUPS: NavGroup[] = [
   {
+    key: "dashboard",
     label: "대시보드",
     accentColor: "#2563eb",
     isDashboard: true,
@@ -24,6 +26,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    key: "project",
     label: "프로젝트 관리",
     accentColor: "#3b82f6",
     perm: "menu.project",
@@ -33,6 +36,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    key: "finance",
     label: "재무·정산",
     accentColor: "#10b981",
     perm: "menu.settlement",
@@ -44,6 +48,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    key: "customer",
     label: "고객·거래처",
     accentColor: "#8b5cf6",
     perm: "menu.company",
@@ -54,6 +59,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    key: "resource",
     label: "리소스",
     accentColor: "#f59e0b",
     perm: "menu.translator",
@@ -63,6 +69,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    key: "system",
     label: "시스템",
     accentColor: "#6b7280",
     perm: "menu.user",
