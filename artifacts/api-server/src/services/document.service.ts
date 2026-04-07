@@ -570,7 +570,7 @@ export function buildB2CPrepaidQuoteHtml(doc: QuoteDoc): string {
       <div style="color:#374151">
         ${doc.validUntil
           ? `<strong>${fmtDate(doc.validUntil)}</strong>까지`
-          : `발행일로부터 <strong>${doc.validDays ?? 30}일</strong>`}
+          : `-`}
       </div>
     </div>
     <div style="border:1px solid #bbf7d0;border-radius:6px;padding:10px 12px;background:#f0fdf4;font-size:12px">
@@ -626,7 +626,7 @@ export function buildB2BStandardQuoteHtml(doc: QuoteDoc): string {
     </div>
     <div style="border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;background:#eff6ff;font-size:11px">
       <div style="font-size:9px;font-weight:800;color:#1d4ed8;margin-bottom:4px;text-transform:uppercase">견적유효기간</div>
-      <strong>${doc.validUntil ? fmtDate(doc.validUntil) : `발행일로부터 ${doc.validDays ?? 30}일`}</strong>
+      <strong>${doc.validUntil ? fmtDate(doc.validUntil) : `-`}</strong>
     </div>
   </div>
 
