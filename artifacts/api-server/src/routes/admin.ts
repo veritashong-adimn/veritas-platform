@@ -509,7 +509,7 @@ export const PROJECT_STATUS_TRANSITIONS: Record<string, string[]> = {
   created:     ["quoted", "cancelled"],
   quoted:      ["approved", "cancelled"],
   approved:    ["matched", "cancelled"],
-  matched:     ["in_progress", "cancelled"],
+  matched:     ["in_progress", "approved", "quoted", "cancelled"],
   in_progress: ["completed", "cancelled"],
   completed:   [],
   cancelled:   [],
