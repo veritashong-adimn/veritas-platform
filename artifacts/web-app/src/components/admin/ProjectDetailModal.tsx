@@ -65,6 +65,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [assigning, setAssigning] = useState<number | null>(null);
   const [showCandidates, setShowCandidates] = useState(false);
   const [expandedCandidate, setExpandedCandidate] = useState<number | null>(null);
+  const [expandedSearchResult, setExpandedSearchResult] = useState<number | null>(null);
   const [translatorSearch, setTranslatorSearch] = useState("");
   const [translatorSearchResults, setTranslatorSearchResults] = useState<any[]>([]);
   const [searchingTranslator, setSearchingTranslator] = useState(false);
@@ -1146,7 +1147,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 )}
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, alignItems: "center" }}>
                   <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#7c3aed" }}>추천 통번역사 (상위 3명)</p>
-                  <button onClick={() => { setShowCandidates(false); setTranslatorSearch(""); setTranslatorSearchResults([]); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 16 }}>×</button>
+                  <button onClick={() => { setShowCandidates(false); setTranslatorSearch(""); setTranslatorSearchResults([]); setExpandedCandidate(null); setExpandedSearchResult(null); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 16 }}>×</button>
                 </div>
                 {loadingCandidates ? (
                   <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center" }}>조회 중...</p>
@@ -1238,25 +1239,67 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", margin: "6px 0" }}>검색 중...</p>
                       ) : translatorSearchResults.length === 0 ? (
                         <p style={{ color: "#9ca3af", fontSize: 13, margin: "6px 0" }}>검색 결과가 없습니다.</p>
-                      ) : translatorSearchResults.map(t => (
-                        <div key={t.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 10px", background: "#fff", borderRadius: 8, marginBottom: 5, border: "1px solid #e9d5ff" }}>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {t.name ?? t.email}
-                            </p>
-                            <p style={{ margin: 0, fontSize: 11, color: "#6b7280" }}>
-                              {t.languagePairs ?? "언어쌍 미설정"} · {t.specializations ?? "분야 미설정"}
-                              {t.phone && ` · ${t.phone}`}
-                            </p>
+                      ) : translatorSearchResults.map(t => {
+                        const av = AVAIL_STYLE[t.availabilityStatus ?? ""] ?? AVAIL_STYLE.unavailable;
+                        const isExpanded = expandedSearchResult === t.id;
+                        const hasDetail = !!(t.education || t.major || t.region || t.grade || t.bio);
+                        return (
+                          <div key={t.id} style={{ background: "#fff", borderRadius: 8, marginBottom: 5, border: "1px solid #e9d5ff", overflow: "hidden" }}>
+                            {/* 기본 정보 행 */}
+                            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 12px" }}>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                {/* 이름 + 가용상태 */}
+                                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                                  <span style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>
+                                    {t.name ?? "(이름 미설정)"}
+                                  </span>
+                                  <span style={{ fontSize: 10, fontWeight: 600, color: av.color }}>{av.label}</span>
+                                </div>
+                                {/* 전화 + 이메일 */}
+                                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>
+                                  {t.phone && <span style={{ marginRight: 8 }}>📞 {t.phone}</span>}
+                                  <span>✉ {t.email}</span>
+                                </div>
+                                {/* 언어 + 전문분야 + 평점 */}
+                                <div style={{ fontSize: 11, color: "#6b7280" }}>
+                                  {t.languagePairs ?? "언어쌍 미설정"}
+                                  {t.specializations && ` · ${t.specializations}`}
+                                  {t.rating != null && <span style={{ color: "#d97706", marginLeft: 6 }}>⭐ {Number(t.rating).toFixed(1)}</span>}
+                                </div>
+                              </div>
+                              {/* 버튼 영역 */}
+                              <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                                <PrimaryBtn
+                                  onClick={() => handleAssignTranslator(t.id)}
+                                  disabled={assigning === t.id}
+                                  style={{ fontSize: 12, padding: "5px 14px" }}>
+                                  {assigning === t.id ? "배정 중..." : "배정"}
+                                </PrimaryBtn>
+                                {hasDetail && (
+                                  <button
+                                    onClick={() => setExpandedSearchResult(isExpanded ? null : t.id)}
+                                    style={{ fontSize: 11, padding: "3px 8px", border: "1px solid #d8b4fe", borderRadius: 6, background: isExpanded ? "#f5f3ff" : "#fff", color: "#7c3aed", cursor: "pointer", fontWeight: 600 }}>
+                                    {isExpanded ? "접기 ▲" : "상세 ▼"}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                            {/* 상세정보 펼침 */}
+                            {isExpanded && (
+                              <div style={{ padding: "8px 12px 10px 12px", borderTop: "1px solid #f3e8ff", background: "#faf5ff", fontSize: 12, color: "#4b5563" }}>
+                                {(t.education || t.major || t.graduationYear) && (
+                                  <div style={{ marginBottom: 3 }}>
+                                    🎓 {[t.education, t.major, t.graduationYear && `${t.graduationYear}년 졸`].filter(Boolean).join(" · ")}
+                                  </div>
+                                )}
+                                {t.region && <div style={{ marginBottom: 3 }}>📍 {t.region}</div>}
+                                {t.grade && <div style={{ marginBottom: 3 }}>🏅 등급: {t.grade}</div>}
+                                {t.bio && <div style={{ color: "#6b7280", fontStyle: "italic", lineHeight: 1.5 }}>{t.bio}</div>}
+                              </div>
+                            )}
                           </div>
-                          <PrimaryBtn
-                            onClick={() => handleAssignTranslator(t.id)}
-                            disabled={assigning === t.id}
-                            style={{ fontSize: 12, padding: "5px 12px", flexShrink: 0 }}>
-                            {assigning === t.id ? "배정 중..." : "배정"}
-                          </PrimaryBtn>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
