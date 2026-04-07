@@ -49,9 +49,11 @@ router.get("/admin/products", ...adminGuard, async (req, res) => {
 
 // ─── 상품 생성 ────────────────────────────────────────────────────────────────
 router.post("/admin/products", ...adminGuard, async (req, res) => {
-  const { code, name, mainCategory, subCategory, unit, basePrice, description, options } = req.body as {
+  const { code, name, mainCategory, subCategory, unit, basePrice, description,
+    productType, interpretationDuration, overtimePrice, options } = req.body as {
     code?: string; name?: string; mainCategory?: string; subCategory?: string;
     unit?: string; basePrice?: number; description?: string;
+    productType?: string; interpretationDuration?: string; overtimePrice?: number;
     options?: { optionType: string; optionValue: string; sortOrder?: number }[];
   };
 
@@ -70,6 +72,9 @@ router.post("/admin/products", ...adminGuard, async (req, res) => {
         unit: unit ?? "건",
         basePrice: basePrice ?? 0,
         description: description?.trim() || null,
+        productType: productType ?? "translation",
+        interpretationDuration: interpretationDuration?.trim() || null,
+        overtimePrice: overtimePrice ?? null,
       })
       .returning();
 
@@ -122,9 +127,11 @@ router.patch("/admin/products/:id", ...adminGuard, async (req, res) => {
     res.status(400).json({ error: "유효하지 않은 product id." }); return;
   }
 
-  const { code, name, mainCategory, subCategory, unit, basePrice, description, active, options } = req.body as {
+  const { code, name, mainCategory, subCategory, unit, basePrice, description, active,
+    productType, interpretationDuration, overtimePrice, options } = req.body as {
     code?: string; name?: string; mainCategory?: string; subCategory?: string;
     unit?: string; basePrice?: number; description?: string; active?: boolean;
+    productType?: string; interpretationDuration?: string; overtimePrice?: number | null;
     options?: { optionType: string; optionValue: string; sortOrder?: number }[];
   };
 
@@ -143,6 +150,9 @@ router.patch("/admin/products/:id", ...adminGuard, async (req, res) => {
         basePrice: basePrice ?? existing.basePrice,
         description: description !== undefined ? (description?.trim() || null) : existing.description,
         active: active !== undefined ? Boolean(active) : existing.active,
+        productType: productType ?? existing.productType,
+        interpretationDuration: interpretationDuration !== undefined ? (interpretationDuration?.trim() || null) : existing.interpretationDuration,
+        overtimePrice: overtimePrice !== undefined ? (overtimePrice ?? null) : existing.overtimePrice,
       })
       .where(eq(productsTable.id, productId))
       .returning();

@@ -207,8 +207,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [productsLoading, setProductsLoading] = useState(false);
   const [productSearch, setProductSearch] = useState("");
   const [showProductForm, setShowProductForm] = useState(false);
-  type ProductFormType = { code: string; name: string; mainCategory: string; subCategory: string; unit: string; basePrice: string; description: string; options: { optionType: string; optionValue: string }[] };
-  const emptyProductForm: ProductFormType = { code: "", name: "", mainCategory: "", subCategory: "", unit: "건", basePrice: "", description: "", options: [] };
+  type ProductFormType = { code: string; name: string; mainCategory: string; subCategory: string; unit: string; basePrice: string; description: string; productType: string; interpretationDuration: string; overtimePrice: string; options: { optionType: string; optionValue: string }[] };
+  const emptyProductForm: ProductFormType = { code: "", name: "", mainCategory: "", subCategory: "", unit: "건", basePrice: "", description: "", productType: "translation", interpretationDuration: "", overtimePrice: "", options: [] };
   const [productForm, setProductForm] = useState<ProductFormType>(emptyProductForm);
   const [editingProduct, setEditingProduct] = useState<number | null>(null);
   const [savingProduct, setSavingProduct] = useState(false);
@@ -542,9 +542,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         name: productForm.name.trim(),
         mainCategory: productForm.mainCategory || null,
         subCategory: productForm.subCategory || null,
-        unit: productForm.unit,
+        unit: productForm.productType === "interpretation" ? "시간" : productForm.unit,
         basePrice: Number(productForm.basePrice),
         description: productForm.description || null,
+        productType: productForm.productType,
+        interpretationDuration: productForm.interpretationDuration.trim() || null,
+        overtimePrice: productForm.overtimePrice ? Number(productForm.overtimePrice) : null,
         options: productForm.options.filter(o => o.optionType.trim() && o.optionValue.trim()),
       };
       const url = editingProduct ? `/api/admin/products/${editingProduct}` : "/api/admin/products";
@@ -2539,7 +2542,21 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 </div>
               </div>
 
-              {/* 2행: 대분류 / 중분류 / 단위 / 기본단가 */}
+              {/* 1.5행: 상품 유형 */}
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 6 }}>상품 유형 <span style={{ color: "#dc2626" }}>*</span></label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {[{ v: "translation", label: "번역", color: "#2563eb", bg: "#eff6ff" }, { v: "interpretation", label: "통역", color: "#7c3aed", bg: "#f5f3ff" }].map(({ v, label, color, bg }) => (
+                    <button key={v} type="button"
+                      onClick={() => setProductForm(p => ({ ...p, productType: v }))}
+                      style={{ padding: "6px 18px", fontSize: 13, fontWeight: 700, borderRadius: 8, cursor: "pointer", border: `2px solid ${productForm.productType === v ? color : "#e5e7eb"}`, background: productForm.productType === v ? bg : "#fff", color: productForm.productType === v ? color : "#9ca3af", transition: "all 0.15s" }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 2행: 대분류 / 중분류 / 단위(번역) or 기본기간(통역) / 기본단가 */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "0 12px", marginBottom: 12 }}>
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대분류</label>
@@ -2558,13 +2575,22 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     {(PRODUCT_SUB_CATEGORIES[productForm.mainCategory] ?? []).map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>단위</label>
-                  <select value={productForm.unit} onChange={e => setProductForm(p => ({ ...p, unit: e.target.value }))}
-                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
-                    {PRODUCT_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-                  </select>
-                </div>
+                {productForm.productType === "interpretation" ? (
+                  <div>
+                    <label style={{ fontSize: 12, color: "#7c3aed", display: "block", marginBottom: 3 }}>기본 진행시간 (예: 4h)</label>
+                    <input value={productForm.interpretationDuration} onChange={e => setProductForm(p => ({ ...p, interpretationDuration: e.target.value }))}
+                      placeholder="예: 4h, 반일, 종일"
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+                  </div>
+                ) : (
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>단위</label>
+                    <select value={productForm.unit} onChange={e => setProductForm(p => ({ ...p, unit: e.target.value }))}
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
+                      {PRODUCT_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>기본단가 <span style={{ color: "#dc2626" }}>*</span></label>
                   <input value={productForm.basePrice} onChange={e => setProductForm(p => ({ ...p, basePrice: e.target.value }))}
@@ -2572,6 +2598,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
                 </div>
               </div>
+
+              {/* 2.5행: 초과 단가 (통역 전용) */}
+              {productForm.productType === "interpretation" && (
+                <div style={{ marginBottom: 12, background: "#faf5ff", borderRadius: 8, padding: "10px 14px", border: "1px solid #e9d5ff" }}>
+                  <label style={{ fontSize: 12, color: "#7c3aed", display: "block", marginBottom: 3 }}>초과 단가 (1시간당)</label>
+                  <input value={productForm.overtimePrice} onChange={e => setProductForm(p => ({ ...p, overtimePrice: e.target.value }))}
+                    type="number" min="0" placeholder="기본 시간 초과 시 적용 단가 (선택)"
+                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+                </div>
+              )}
 
               {/* 3행: 설명 */}
               <div style={{ marginBottom: 16 }}>
@@ -2647,6 +2683,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
                         <span style={{ fontFamily: "monospace", fontSize: 11, color: "#9ca3af", background: "#f3f4f6", padding: "1px 6px", borderRadius: 4 }}>{p.code}</span>
                         <span style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>{p.name}</span>
+                        <span style={{ fontSize: 11, borderRadius: 5, padding: "2px 8px", fontWeight: 700, background: p.productType === "interpretation" ? "#f5f3ff" : "#eff6ff", color: p.productType === "interpretation" ? "#7c3aed" : "#2563eb" }}>
+                          {p.productType === "interpretation" ? "🎤 통역" : "📄 번역"}
+                        </span>
                         {!p.active && <span style={{ fontSize: 11, background: "#f3f4f6", color: "#9ca3af", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>비활성</span>}
                       </div>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: p.description || (p.options && p.options.length > 0) ? 8 : 0 }}>
@@ -2657,8 +2696,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           <span style={{ fontSize: 11, background: "#f3f4f6", color: "#374151", borderRadius: 5, padding: "2px 8px" }}>{p.subCategory}</span>
                         )}
                         <span style={{ fontSize: 11, background: "#f0fdf4", color: "#059669", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>
-                          {Number(p.basePrice).toLocaleString()}원 / {p.unit}
+                          {Number(p.basePrice).toLocaleString()}원{p.productType === "interpretation" ? "" : ` / ${p.unit}`}
                         </span>
+                        {p.productType === "interpretation" && p.interpretationDuration && (
+                          <span style={{ fontSize: 11, background: "#faf5ff", color: "#7c3aed", borderRadius: 5, padding: "2px 8px" }}>기본 {p.interpretationDuration}</span>
+                        )}
+                        {p.productType === "interpretation" && p.overtimePrice != null && (
+                          <span style={{ fontSize: 11, background: "#fff7ed", color: "#c2410c", borderRadius: 5, padding: "2px 8px" }}>초과 {Number(p.overtimePrice).toLocaleString()}원/h</span>
+                        )}
                       </div>
                       {p.description && <p style={{ margin: "0 0 6px", fontSize: 12, color: "#6b7280" }}>{p.description}</p>}
                       {p.options && p.options.length > 0 && (
@@ -2682,6 +2727,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             subCategory: p.subCategory ?? "",
                             unit: p.unit, basePrice: String(p.basePrice),
                             description: p.description ?? "",
+                            productType: p.productType ?? "translation",
+                            interpretationDuration: p.interpretationDuration ?? "",
+                            overtimePrice: p.overtimePrice != null ? String(p.overtimePrice) : "",
                             options: (p.options ?? []).map((o: ProductOption) => ({ optionType: o.optionType, optionValue: o.optionValue })),
                           });
                           setShowProductForm(true);

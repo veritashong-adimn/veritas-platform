@@ -119,8 +119,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   };
   const [showQuoteForm, setShowQuoteForm] = useState(false);
   const [creatingQuote, setCreatingQuote] = useState(false);
-  type QuoteItemForm = { productId: number | null; productName: string; languagePair: string; unit: string; quantity: string; unitPrice: string; taxRate: "0" | "0.1" };
-  const defaultItem = (): QuoteItemForm => ({ productId: null, productName: "", languagePair: "", unit: "건", quantity: "1", unitPrice: "", taxRate: "0" });
+  type QuoteItemForm = { productId: number | null; productName: string; languagePair: string; unit: string; quantity: string; unitPrice: string; taxRate: "0" | "0.1"; productType: string; interpretationDuration: string; };
+  const defaultItem = (): QuoteItemForm => ({ productId: null, productName: "", languagePair: "", unit: "건", quantity: "1", unitPrice: "", taxRate: "0", productType: "translation", interpretationDuration: "" });
   const [quoteMode, setQuoteMode] = useState<"simple" | "items">("items");
   const [quoteItemForms, setQuoteItemForms] = useState<QuoteItemForm[]>([defaultItem()]);
   const calcItemTotal = (it: QuoteItemForm) => {
@@ -2310,75 +2310,109 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       {/* 항목 입력 그리드 — 누적 배치 제외 모든 유형 공통 */}
                       {quoteType !== "accumulated_batch" && (
                         <div>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 76px 40px 52px 80px 44px 76px 76px 24px", gap: 4, marginBottom: 4 }}>
-                            {["항목명", "언어쌍", "단위", "수량", "단가(원)", "세율", "부가세(원)", "합계(원)", ""].map(h => (
-                              <div key={h} style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", padding: "0 2px" }}>{h}</div>
-                            ))}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, color: "#6b7280" }}>견적 항목 — 상품 선택 시 번역(📄)·통역(🎤) 자동 구분</span>
                           </div>
                           {quoteItemForms.map((it, idx) => {
                             const { supply, tax, total } = calcItemTotal(it);
                             const roSt: React.CSSProperties = { ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right", background: "#f8fafc", cursor: "default" };
                             return (
-                              <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 76px 40px 52px 80px 44px 76px 76px 24px", gap: 4, marginBottom: 6, alignItems: "center" }}>
-                                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                                  <select
-                                    value={it.productId ?? ""}
-                                    onChange={e => {
-                                      const pid = e.target.value ? Number(e.target.value) : null;
-                                      if (pid) {
-                                        const prod = quoteProducts.find(p => p.id === pid);
-                                        if (prod) {
-                                          setQuoteItemForms(prev => prev.map((p, i) => i === idx ? {
-                                            ...p,
-                                            productId: prod.id,
-                                            productName: prod.name,
-                                            unit: prod.unit,
-                                            unitPrice: String(prod.basePrice),
-                                          } : p));
-                                          return;
+                              <div key={idx} style={{ marginBottom: 6 }}>
+                                {/* 상품 선택 + 항목명 */}
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 4, marginBottom: 3, alignItems: "center" }}>
+                                  <div style={{ display: "flex", gap: 4 }}>
+                                    <select
+                                      value={it.productId ?? ""}
+                                      onChange={e => {
+                                        const pid = e.target.value ? Number(e.target.value) : null;
+                                        if (pid) {
+                                          const prod = quoteProducts.find(p => p.id === pid);
+                                          if (prod) {
+                                            setQuoteItemForms(prev => prev.map((p, i) => i === idx ? {
+                                              ...p,
+                                              productId: prod.id,
+                                              productName: prod.name,
+                                              unit: prod.unit,
+                                              unitPrice: String(prod.basePrice),
+                                              productType: (prod as any).productType ?? "translation",
+                                              interpretationDuration: (prod as any).interpretationDuration ?? "",
+                                              quantity: (prod as any).productType === "interpretation" ? "1" : p.quantity,
+                                            } : p));
+                                            return;
+                                          }
                                         }
-                                      }
-                                      setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productId: null } : p));
-                                    }}
-                                    style={{ ...inputStyle, fontSize: 11, padding: "5px 4px", color: it.productId ? "#1e40af" : "#9ca3af" }}
-                                  >
-                                    <option value="">상품 선택...</option>
-                                    {quoteProducts.map(p => (
-                                      <option key={p.id} value={p.id}>
-                                        {p.mainCategory ? `[${p.mainCategory}] ` : ""}{p.name} — {Number(p.basePrice).toLocaleString()}원/{p.unit}
-                                      </option>
-                                    ))}
-                                  </select>
-                                  <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
-                                    placeholder="항목명 직접 입력" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }} />
+                                        setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productId: null } : p));
+                                      }}
+                                      style={{ ...inputStyle, fontSize: 11, padding: "5px 4px", color: it.productId ? "#1e40af" : "#9ca3af", flex: "0 0 180px" }}
+                                    >
+                                      <option value="">상품 선택...</option>
+                                      {quoteProducts.map(p => (
+                                        <option key={p.id} value={p.id}>
+                                          {(p as any).productType === "interpretation" ? "🎤 " : "📄 "}{p.mainCategory ? `[${p.mainCategory}] ` : ""}{p.name} — {Number(p.basePrice).toLocaleString()}원/{p.unit}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
+                                      placeholder="항목명 직접 입력" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px", flex: 1 }} />
+                                  </div>
+                                  <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))} disabled={quoteItemForms.length <= 1}
+                                    style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 4px", flexShrink: 0 }}>×</button>
                                 </div>
-                                <input value={it.languagePair} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, languagePair: e.target.value } : p))}
-                                  placeholder="EN→KO" style={{ ...inputStyle, fontSize: 11, padding: "6px 4px", textAlign: "center" }} />
-                                <select value={it.unit} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: e.target.value } : p))}
-                                  style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "center" }}>
-                                  <option value="건">건</option>
-                                  <option value="어절">어절</option>
-                                  <option value="글자">글자</option>
-                                  <option value="페이지">페이지</option>
-                                  <option value="시간">시간</option>
-                                </select>
-                                <input type="number" value={it.quantity} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: e.target.value } : p))}
-                                  min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "right" }} />
-                                <input type="number" value={it.unitPrice} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: e.target.value } : p))}
-                                  placeholder="0" min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right" }} />
-                                <select value={it.taxRate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxRate: e.target.value as "0"|"0.1" } : p))}
-                                  style={{ ...inputStyle, fontSize: 11, padding: "6px 2px" }}>
-                                  <option value="0">면세</option>
-                                  <option value="0.1">10%</option>
-                                </select>
-                                <input readOnly value={supply > 0 && it.taxRate !== "0" ? tax.toLocaleString() : supply > 0 ? "면세" : ""}
-                                  placeholder="자동"
-                                  style={{ ...roSt, color: tax > 0 ? "#7c3aed" : "#9ca3af", fontWeight: tax > 0 ? 700 : 400 }} />
-                                <input readOnly value={supply > 0 ? total.toLocaleString() : ""}
-                                  placeholder="자동"
-                                  style={{ ...roSt, color: supply > 0 ? "#065f46" : "#9ca3af", fontWeight: supply > 0 ? 800 : 400, borderColor: supply > 0 ? "#6ee7b7" : undefined }} />
-                                <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))} disabled={quoteItemForms.length <= 1}
-                                  style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
+
+                                {it.productType === "interpretation" ? (
+                                  /* ── 통역 상품 행 ── */
+                                  <div style={{ display: "grid", gridTemplateColumns: "76px 1fr 44px 76px 76px", gap: 4, alignItems: "center", background: "#faf5ff", borderRadius: 6, padding: "6px 8px", border: "1px solid #e9d5ff" }}>
+                                    <input value={it.languagePair} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, languagePair: e.target.value } : p))}
+                                      placeholder="언어쌍" style={{ ...inputStyle, fontSize: 11, padding: "6px 4px", textAlign: "center" }} />
+                                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                      <span style={{ fontSize: 11, color: "#7c3aed", whiteSpace: "nowrap" }}>진행시간</span>
+                                      <input value={it.interpretationDuration} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretationDuration: e.target.value } : p))}
+                                        placeholder={it.interpretationDuration || "예: 4h"} style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", flex: 1 }} />
+                                    </div>
+                                    <select value={it.taxRate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxRate: e.target.value as "0"|"0.1" } : p))}
+                                      style={{ ...inputStyle, fontSize: 11, padding: "6px 2px" }}>
+                                      <option value="0">면세</option>
+                                      <option value="0.1">10%</option>
+                                    </select>
+                                    <div>
+                                      <div style={{ fontSize: 9, color: "#7c3aed", marginBottom: 1 }}>총금액(원)</div>
+                                      <input type="number" value={it.unitPrice} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: e.target.value, quantity: "1" } : p))}
+                                        placeholder="0" min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right", borderColor: "#d8b4fe" }} />
+                                    </div>
+                                    <input readOnly value={supply > 0 ? total.toLocaleString() : ""}
+                                      placeholder="합계"
+                                      style={{ ...roSt, color: supply > 0 ? "#065f46" : "#9ca3af", fontWeight: supply > 0 ? 800 : 400, borderColor: supply > 0 ? "#6ee7b7" : undefined }} />
+                                  </div>
+                                ) : (
+                                  /* ── 번역 상품 행 ── */
+                                  <div style={{ display: "grid", gridTemplateColumns: "76px 40px 52px 80px 44px 76px 76px", gap: 4, alignItems: "center" }}>
+                                    <input value={it.languagePair} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, languagePair: e.target.value } : p))}
+                                      placeholder="EN→KO" style={{ ...inputStyle, fontSize: 11, padding: "6px 4px", textAlign: "center" }} />
+                                    <select value={it.unit} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: e.target.value } : p))}
+                                      style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "center" }}>
+                                      <option value="건">건</option>
+                                      <option value="어절">어절</option>
+                                      <option value="글자">글자</option>
+                                      <option value="페이지">페이지</option>
+                                      <option value="시간">시간</option>
+                                    </select>
+                                    <input type="number" value={it.quantity} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: e.target.value } : p))}
+                                      min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "right" }} />
+                                    <input type="number" value={it.unitPrice} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: e.target.value } : p))}
+                                      placeholder="0" min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right" }} />
+                                    <select value={it.taxRate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxRate: e.target.value as "0"|"0.1" } : p))}
+                                      style={{ ...inputStyle, fontSize: 11, padding: "6px 2px" }}>
+                                      <option value="0">면세</option>
+                                      <option value="0.1">10%</option>
+                                    </select>
+                                    <input readOnly value={supply > 0 && it.taxRate !== "0" ? tax.toLocaleString() : supply > 0 ? "면세" : ""}
+                                      placeholder="자동"
+                                      style={{ ...roSt, color: tax > 0 ? "#7c3aed" : "#9ca3af", fontWeight: tax > 0 ? 700 : 400 }} />
+                                    <input readOnly value={supply > 0 ? total.toLocaleString() : ""}
+                                      placeholder="자동"
+                                      style={{ ...roSt, color: supply > 0 ? "#065f46" : "#9ca3af", fontWeight: supply > 0 ? 800 : 400, borderColor: supply > 0 ? "#6ee7b7" : undefined }} />
+                                  </div>
+                                )}
                               </div>
                             );
                           })}

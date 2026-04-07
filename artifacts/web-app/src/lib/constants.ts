@@ -173,6 +173,7 @@ export type Product = {
   active: boolean; createdAt: string;
   options: ProductOption[];
   category: string | null; languagePair: string | null; field: string | null;
+  productType: string; interpretationDuration: string | null; overtimePrice: number | null;
 };
 export type BoardPost = {
   id: number; category: string; title: string; content?: string;
