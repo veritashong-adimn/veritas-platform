@@ -1547,14 +1547,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         {pagedProjects.map(p => {
                           type SectionKey = "info"|"finance"|"work"|"settlement"|"history";
                           const ACTION_MAP: Record<string, { label: string; section: SectionKey; color: string; bg: string }> = {
-                            created:     { label: "견적 생성",     section: "finance",    color: "#fff",     bg: "#2563eb" },
-                            quoted:      { label: "견적 확인",     section: "finance",    color: "#fff",     bg: "#2563eb" },
-                            approved:    { label: "통번역사 배정", section: "work",       color: "#fff",     bg: "#7c3aed" },
-                            matched:     { label: "작업 보기",     section: "work",       color: "#fff",     bg: "#6d28d9" },
-                            in_progress: { label: "작업 보기",     section: "work",       color: "#fff",     bg: "#6d28d9" },
-                            completed:   { label: "정산 확인",     section: "settlement", color: "#fff",     bg: "#059669" },
-                            cancelled:   { label: "내용 보기",     section: "info",       color: "#6b7280",  bg: "#f3f4f6" },
-                            paid:        { label: "통번역사 배정", section: "work",       color: "#fff",     bg: "#7c3aed" },
+                            created:     { label: "견적 생성",     section: "finance",    color: "#fff",    bg: "#2563eb" },
+                            quoted:      { label: "견적 확인",     section: "finance",    color: "#fff",    bg: "#2563eb" },
+                            approved:    { label: "통번역사 배정", section: "work",       color: "#fff",    bg: "#7c3aed" },
+                            matched:     { label: "작업 보기",     section: "work",       color: "#fff",    bg: "#6d28d9" },
+                            in_progress: { label: "작업 보기",     section: "work",       color: "#fff",    bg: "#6d28d9" },
+                            completed:   { label: "정산 확인",     section: "settlement", color: "#fff",    bg: "#059669" },
+                            cancelled:   { label: "상세보기",      section: "info",       color: "#6b7280", bg: "#f3f4f6" },
                           };
                           const action = ACTION_MAP[p.status] ?? { label: "상세보기", section: "info" as SectionKey, color: "#6b7280", bg: "#f3f4f6" };
                           const qt = (p as any).quoteType as string | undefined;
