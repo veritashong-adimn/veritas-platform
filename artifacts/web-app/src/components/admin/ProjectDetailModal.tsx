@@ -24,7 +24,7 @@ function getStatusTransitionBlock(
 const STATUS_NEXT_HINT: Record<string, { text: string; color: string; bg: string }> = {
   created:     { text: "견적을 생성한 뒤 '견적 발송' 상태로 변경하세요.",                color: "#2563eb", bg: "#eff6ff" },
   quoted:      { text: "고객 확인 후 '견적 승인' 상태로 변경하세요.",                   color: "#7c3aed", bg: "#faf5ff" },
-  approved:    { text: "'통번역사' 탭에서 통번역사를 배정한 뒤 '배정됨' 으로 변경하세요.", color: "#9333ea", bg: "#fdf4ff" },
+  approved:    { text: "통번역사가 배정되었습니다. '배정됨' 상태로 변경하세요.",              color: "#9333ea", bg: "#fdf4ff" },
   matched:     { text: "통번역사가 작업을 시작하면 '진행 중' 상태로 변경하세요.",          color: "#0891b2", bg: "#ecfeff" },
   in_progress: { text: "작업 완료 후 '완료' 상태로 변경하세요.",                        color: "#059669", bg: "#f0fdf4" },
 };
@@ -866,29 +866,58 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             {/* 액션 바 */}
             <div style={{ background: "#f9fafb", borderRadius: 10, padding: "10px 12px", marginBottom: 14, border: "1px solid #e5e7eb" }}>
               {/* 현재 상태 다음 단계 힌트 */}
-              {STATUS_NEXT_HINT[detail.status] && (
-                <div style={{
-                  display: "flex", alignItems: "flex-start", gap: 6,
-                  background: STATUS_NEXT_HINT[detail.status].bg,
-                  border: `1px solid ${STATUS_NEXT_HINT[detail.status].color}30`,
-                  borderRadius: 7, padding: "6px 10px", marginBottom: 8,
-                }}>
-                  <span style={{ fontSize: 12, color: STATUS_NEXT_HINT[detail.status].color, lineHeight: 1.5 }}>
-                    💡 {STATUS_NEXT_HINT[detail.status].text}
-                  </span>
-                </div>
-              )}
+              {(() => {
+                const noTranslatorBlock = ["approved", "matched", "in_progress"].includes(detail.status) && (detail.tasks ?? []).length === 0;
+                if (noTranslatorBlock) {
+                  return (
+                    <div style={{
+                      display: "flex", alignItems: "flex-start", gap: 10,
+                      background: "#fdf4ff", border: "1px solid #d8b4fe",
+                      borderRadius: 7, padding: "10px 12px", marginBottom: 8,
+                    }}>
+                      <span style={{ fontSize: 15, lineHeight: 1.2, flexShrink: 0 }}>⚠️</span>
+                      <div style={{ flex: 1 }}>
+                        <span style={{ fontSize: 12, color: "#7c3aed", lineHeight: 1.6 }}>
+                          배정된 통번역사가 없습니다. 먼저 <strong>'통번역사 추천'</strong>에서 통번역사를 배정한 후 상태를 변경하세요.
+                        </span>
+                        <div style={{ marginTop: 8 }}>
+                          <GhostBtn onClick={loadCandidates} disabled={loadingCandidates} color="#7c3aed"
+                            style={{ fontSize: 12, padding: "6px 14px", fontWeight: 700, background: "#f3e8ff" }}>
+                            {loadingCandidates ? "조회 중..." : "통번역사 추천/배정"}
+                          </GhostBtn>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+                if (!STATUS_NEXT_HINT[detail.status]) return null;
+                return (
+                  <div style={{
+                    display: "flex", alignItems: "flex-start", gap: 6,
+                    background: STATUS_NEXT_HINT[detail.status].bg,
+                    border: `1px solid ${STATUS_NEXT_HINT[detail.status].color}30`,
+                    borderRadius: 7, padding: "6px 10px", marginBottom: 8,
+                  }}>
+                    <span style={{ fontSize: 12, color: STATUS_NEXT_HINT[detail.status].color, lineHeight: 1.5 }}>
+                      💡 {STATUS_NEXT_HINT[detail.status].text}
+                    </span>
+                  </div>
+                );
+              })()}
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                 {/* 상태 변경 */}
                 {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).length > 0 && (() => {
-                  const block = statusTarget !== detail.status
+                  const noTranslatorBlock = ["approved", "matched", "in_progress"].includes(detail.status) && (detail.tasks ?? []).length === 0;
+                  const block = (!noTranslatorBlock && statusTarget !== detail.status)
                     ? getStatusTransitionBlock(statusTarget, detail)
                     : { blocked: false };
+                  const isBlocked = noTranslatorBlock || block.blocked;
                   return (
                     <>
                       <select value={statusTarget} onChange={e => setStatusTarget(e.target.value)}
-                        style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12 }}>
+                        disabled={noTranslatorBlock}
+                        style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12, opacity: noTranslatorBlock ? 0.45 : 1, cursor: noTranslatorBlock ? "not-allowed" : "default" }}>
                         <option value={detail.status}>{STATUS_LABEL[detail.status] ?? detail.status} (현재)</option>
                         {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).map(s => (
                           <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
@@ -896,15 +925,15 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       </select>
                       <GhostBtn
                         onClick={handleStatusChange}
-                        disabled={changingStatus || statusTarget === detail.status || block.blocked}
-                        color={block.blocked ? "#9ca3af" : "#2563eb"}
+                        disabled={changingStatus || statusTarget === detail.status || isBlocked}
+                        color={isBlocked ? "#9ca3af" : "#2563eb"}
                         style={{ fontSize: 12, padding: "6px 12px" }}
                       >
                         {changingStatus ? "변경 중..." : "상태 변경 적용"}
                       </GhostBtn>
                       <span style={{ color: "#d1d5db", fontSize: 14 }}>|</span>
-                      {/* 검증 실패 경고 메시지 */}
-                      {block.blocked && block.reason && (
+                      {/* 검증 실패 경고 메시지 — 번역사 미배정 경우는 위 통합 경고로 처리 */}
+                      {!noTranslatorBlock && block.blocked && block.reason && (
                         <div style={{
                           width: "100%", marginTop: 6,
                           display: "flex", gap: 6, alignItems: "flex-start",
@@ -945,8 +974,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   </div>
                 </div>
 
-                {/* 통번역사 추천 — 배정이 필요한 상태일 때만 */}
-                {["approved", "matched", "in_progress"].includes(detail.status) && (
+                {/* 통번역사 추천 — 이미 배정된 경우 재배정용으로만 표시 (미배정 시 위 통합 경고에 표시됨) */}
+                {["approved", "matched", "in_progress"].includes(detail.status) && (detail.tasks ?? []).length > 0 && (
                   <GhostBtn onClick={loadCandidates} disabled={loadingCandidates} color="#7c3aed" style={{ fontSize: 12, padding: "6px 12px" }}>
                     {loadingCandidates ? "조회 중..." : "통번역사 추천"}
                   </GhostBtn>
@@ -1360,7 +1389,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 {detail.tasks.length === 0 ? (
                   <div style={{ textAlign: "center", padding: "24px 0", color: "#9ca3af" }}>
                     <p style={{ margin: 0 }}>배정된 통번역사가 없습니다.</p>
-                    <p style={{ margin: "6px 0 0", fontSize: 12 }}>위 「통번역사 추천」 버튼으로 후보를 확인하고 배정하세요.</p>
+                    <p style={{ margin: "6px 0 0", fontSize: 12 }}>상단 '통번역사 추천/배정' 버튼으로 통번역사를 배정하세요.</p>
                   </div>
                 ) : detail.tasks.map(t => {
                   const avStyle = AVAIL_STYLE[t.translatorProfile?.availabilityStatus ?? ""] ?? AVAIL_STYLE.unavailable;
