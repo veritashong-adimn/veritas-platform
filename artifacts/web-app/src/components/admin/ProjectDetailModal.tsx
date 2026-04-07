@@ -1463,7 +1463,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
 
                 {/* 견적 섹션 */}
                 {(() => {
-                  const canQuote = detail.status === "created" || detail.status === "quoted";
+                  const canQuote = !["cancelled"].includes(detail.status);
                   const hasQuotes = detail.quotes.length > 0;
                   const formVisible = canQuote && (showQuoteForm || !hasQuotes);
                   const companyBillingType = (detail.company as any)?.billingType ?? "postpaid_per_project";
