@@ -2068,8 +2068,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               }
                               return (
                                 <PrimaryBtn onClick={handleCreateQuote}
-                                  disabled={creatingQuote || cannotCreate || quoteItemsGrandTotal === 0}
-                                  style={{ fontSize: 12, padding: "7px 14px", background: (cannotCreate || quoteItemsGrandTotal === 0) ? "#9ca3af" : "#7c3aed", border: "none", alignSelf: "flex-end" }}>
+                                  disabled={creatingQuote || cannotCreate || (!hasQuotes && quoteItemsGrandTotal === 0)}
+                                  style={{ fontSize: 12, padding: "7px 14px", background: (cannotCreate || (!hasQuotes && quoteItemsGrandTotal === 0)) ? "#9ca3af" : "#7c3aed", border: "none", alignSelf: "flex-end" }}>
                                   {creatingQuote ? "생성 중..." : hasQuotes ? "견적 재생성" : "견적 생성"}
                                 </PrimaryBtn>
                               );
