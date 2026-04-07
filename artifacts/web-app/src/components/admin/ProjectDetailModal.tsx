@@ -898,49 +898,93 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 const currentIdx = isCancelled ? -1 : STEP_KEYS.indexOf(detail.status as typeof STEP_KEYS[number]);
                 const hasTranslator = (detail.tasks ?? []).length > 0;
                 const transitions = PROJECT_STATUS_TRANSITIONS[detail.status] ?? [];
+
+                // 다음 단계 계산
+                const nextStepKey = (!isCancelled && currentIdx >= 0 && currentIdx < STEP_KEYS.length - 1)
+                  ? STEP_KEYS[currentIdx + 1] : null;
+                const nextStepHint = nextStepKey === "matched" && !hasTranslator
+                  ? "통번역사 배정 (배정하기 버튼 클릭)"
+                  : nextStepKey ? STEP_LABELS[nextStepKey] : null;
+
                 const elements: React.ReactNode[] = [];
                 STEP_KEYS.forEach((stepKey, idx) => {
                   const isDone = !isCancelled && idx < currentIdx;
                   const isCurrent = !isCancelled && idx === currentIdx;
+                  const isMatchedStep = stepKey === "matched";
                   const canTransition = !isCurrent && transitions.includes(stepKey);
                   const isClickable = canTransition && !changingStatus;
-                  const label = (stepKey === "matched" && isCurrent)
-                    ? (hasTranslator ? "배정 완료" : "배정 필요")
-                    : STEP_LABELS[stepKey];
-                  const circleColor = isDone ? "#16a34a" : isCurrent ? "#2563eb" : "#d1d5db";
+
+                  // 원 색상: 완료=초록채움, 현재=파란채움, 미완=회색테두리
+                  const circleBg = isDone ? "#16a34a" : isCurrent ? "#2563eb" : "#f3f4f6";
+                  const circleBorder = isDone ? "#16a34a" : isCurrent ? "#2563eb" : "#d1d5db";
+                  const circleText = (isDone || isCurrent) ? "#fff" : "#9ca3af";
+
                   if (idx > 0) {
                     elements.push(
-                      <div key={`ln-${idx}`} style={{ flex: 1, height: 2, minWidth: 8, background: isDone ? "#dcfce7" : "#e5e7eb", alignSelf: "flex-start", marginTop: 13 }} />
+                      <div key={`ln-${idx}`} style={{
+                        flex: 1, height: 2, minWidth: 8,
+                        background: isDone ? "#bbf7d0" : "#e5e7eb",
+                        alignSelf: "flex-start", marginTop: 14,
+                      }} />
                     );
                   }
                   elements.push(
                     <div key={stepKey}
                       onClick={() => {
                         if (!isClickable) return;
-                        if (stepKey === "matched" && !hasTranslator) { loadCandidates(); return; }
+                        if (isMatchedStep && !hasTranslator) { loadCandidates(); return; }
                         applyStatus(stepKey);
                       }}
-                      title={isClickable ? `"${STEP_LABELS[stepKey]}"로 변경` : undefined}
+                      title={isClickable
+                        ? (isMatchedStep && !hasTranslator ? "통번역사 배정하기" : `"${STEP_LABELS[stepKey]}"로 변경`)
+                        : undefined}
                       style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, flexShrink: 0, cursor: isClickable ? "pointer" : "default" }}
                     >
+                      {/* 원 */}
                       <div style={{
-                        width: 26, height: 26, borderRadius: "50%",
-                        border: `2px solid ${circleColor}`,
-                        background: isDone ? "#16a34a" : isCurrent ? "#eff6ff" : "#f9fafb",
+                        width: 28, height: 28, borderRadius: "50%",
+                        border: `2px solid ${circleBorder}`,
+                        background: circleBg,
                         display: "flex", alignItems: "center", justifyContent: "center",
-                        fontSize: 11, fontWeight: 700,
-                        color: isDone ? "#fff" : circleColor,
+                        fontSize: 11, fontWeight: 800, color: circleText,
                         boxShadow: isCurrent ? "0 0 0 3px #bfdbfe" : undefined,
-                        transition: "box-shadow 0.15s",
                       }}>
                         {isDone ? "✓" : idx + 1}
                       </div>
-                      <span style={{ fontSize: 10, color: isDone ? "#15803d" : isCurrent ? "#1d4ed8" : "#9ca3af", fontWeight: isCurrent ? 700 : 400, textAlign: "center", whiteSpace: "nowrap", maxWidth: 62, lineHeight: 1.3 }}>
-                        {label}
-                      </span>
+
+                      {/* 라벨 영역 */}
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+                        <span style={{
+                          fontSize: 10, textAlign: "center", whiteSpace: "nowrap", lineHeight: 1.3,
+                          fontWeight: (isCurrent || isDone) ? 700 : 400,
+                          color: isDone ? "#15803d" : isCurrent ? "#1d4ed8" : "#9ca3af",
+                        }}>
+                          {STEP_LABELS[stepKey]}
+                        </span>
+
+                        {/* "(현재)" 배지 */}
+                        {isCurrent && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, color: "#2563eb",
+                            background: "#dbeafe", borderRadius: 3, padding: "1px 4px",
+                            whiteSpace: "nowrap",
+                          }}>현재</span>
+                        )}
+
+                        {/* 통번역사 배정 상태 배지 */}
+                        {isMatchedStep && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 600, whiteSpace: "nowrap",
+                            color: hasTranslator ? "#16a34a" : "#d97706",
+                          }}>
+                            {hasTranslator ? "(완료)" : "(필요)"}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   );
                 });
+
                 return (
                   <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px dashed #e5e7eb" }}>
                     {isCancelled && (
@@ -951,6 +995,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     <div style={{ display: "flex", alignItems: "flex-start", overflowX: "auto", paddingBottom: 2 }}>
                       {elements}
                     </div>
+                    {/* 다음 단계 안내 */}
+                    {nextStepHint && !isCancelled && (
+                      <div style={{ marginTop: 7, fontSize: 11, color: "#4f46e5", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+                        👉 다음 단계: <span style={{ color: "#1d4ed8" }}>{nextStepHint}</span>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
