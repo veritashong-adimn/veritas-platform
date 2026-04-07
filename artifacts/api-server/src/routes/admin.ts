@@ -397,6 +397,7 @@ router.get("/admin/projects/:id/match-candidates", ...adminGuard, async (req, re
       .select({
         id: usersTable.id,
         email: usersTable.email,
+        name: usersTable.name,
         isActive: usersTable.isActive,
       })
       .from(usersTable)
@@ -443,7 +444,7 @@ router.get("/admin/projects/:id/match-candidates", ...adminGuard, async (req, re
       if (field && profile?.specializations?.toLowerCase().includes(field.toLowerCase())) score += 25;
       if (rates.length > 0) score += 5;
 
-      return { id: t.id, email: t.email, profile, rates, score };
+      return { id: t.id, email: t.email, name: t.name, profile, rates, score };
     });
 
     scored.sort((a, b) => b.score - a.score);

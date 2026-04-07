@@ -64,6 +64,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [assigning, setAssigning] = useState<number | null>(null);
   const [showCandidates, setShowCandidates] = useState(false);
+  const [expandedCandidate, setExpandedCandidate] = useState<number | null>(null);
   const [translatorSearch, setTranslatorSearch] = useState("");
   const [translatorSearchResults, setTranslatorSearchResults] = useState<any[]>([]);
   const [searchingTranslator, setSearchingTranslator] = useState(false);
@@ -1153,24 +1154,70 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   <p style={{ color: "#9ca3af", fontSize: 13 }}>조건에 맞는 통번역사가 없습니다.</p>
                 ) : candidates.map((c, i) => {
                   const av = AVAIL_STYLE[c.profile?.availabilityStatus ?? ""] ?? AVAIL_STYLE.unavailable;
+                  const isExpanded = expandedCandidate === c.id;
+                  const hasDetail = !!(c.profile?.education || c.profile?.major || c.profile?.region || c.profile?.grade || c.profile?.bio);
                   return (
-                    <div key={c.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "8px 10px", background: "#fff", borderRadius: 8, marginBottom: 6, border: "1px solid #e9d5ff" }}>
-                      <span style={{ fontWeight: 700, color: "#7c3aed", fontSize: 16, minWidth: 24 }}>#{i + 1}</span>
-                      <div style={{ flex: 1 }}>
-                        <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 600, color: "#111827" }}>{c.email}</p>
-                        <p style={{ margin: 0, fontSize: 11, color: "#6b7280" }}>
-                          {c.profile?.languagePairs ?? "언어쌍 미설정"} · {c.profile?.specializations ?? "분야 미설정"}
-                          {c.profile?.rating != null && ` · ⭐ ${c.profile.rating.toFixed(1)}`}
-                        </p>
+                    <div key={c.id} style={{ background: "#fff", borderRadius: 8, marginBottom: 6, border: "1px solid #e9d5ff", overflow: "hidden" }}>
+                      {/* 기본 정보 행 */}
+                      <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 12px" }}>
+                        <span style={{ fontWeight: 800, color: "#7c3aed", fontSize: 15, minWidth: 24, paddingTop: 1 }}>#{i + 1}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          {/* 이름 + 가용상태 */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>
+                              {c.name ?? "(이름 미설정)"}
+                            </span>
+                            <span style={{ fontSize: 10, fontWeight: 600, color: av.color }}>{av.label}</span>
+                          </div>
+                          {/* 전화 + 이메일 */}
+                          <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>
+                            {c.profile?.phone && <span style={{ marginRight: 8 }}>📞 {c.profile.phone}</span>}
+                            <span>✉ {c.email}</span>
+                          </div>
+                          {/* 언어 + 전문분야 + 점수 */}
+                          <div style={{ fontSize: 11, color: "#6b7280" }}>
+                            {c.profile?.languagePairs ?? "언어쌍 미설정"}
+                            {c.profile?.specializations && ` · ${c.profile.specializations}`}
+                            {c.profile?.rating != null && <span style={{ color: "#d97706", marginLeft: 6 }}>⭐ {c.profile.rating.toFixed(1)}</span>}
+                            <span style={{ color: "#9ca3af", marginLeft: 6 }}>점수 {c.score.toFixed(1)}</span>
+                          </div>
+                        </div>
+                        {/* 버튼 영역 */}
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                          <PrimaryBtn
+                            onClick={() => handleAssignTranslator(c.id)}
+                            disabled={assigning === c.id}
+                            style={{ fontSize: 12, padding: "5px 14px" }}>
+                            {assigning === c.id ? "배정 중..." : "배정"}
+                          </PrimaryBtn>
+                          {hasDetail && (
+                            <button
+                              onClick={() => setExpandedCandidate(isExpanded ? null : c.id)}
+                              style={{ fontSize: 11, padding: "3px 8px", border: "1px solid #d8b4fe", borderRadius: 6, background: isExpanded ? "#f5f3ff" : "#fff", color: "#7c3aed", cursor: "pointer", fontWeight: 600 }}>
+                              {isExpanded ? "접기 ▲" : "상세 ▼"}
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <span style={{ fontSize: 11, fontWeight: 600, color: av.color, minWidth: 32 }}>{av.label}</span>
-                      <span style={{ fontSize: 11, color: "#6b7280" }}>점수 {c.score}</span>
-                      <PrimaryBtn
-                        onClick={() => handleAssignTranslator(c.id)}
-                        disabled={assigning === c.id}
-                        style={{ fontSize: 12, padding: "5px 12px" }}>
-                        {assigning === c.id ? "배정 중..." : "배정"}
-                      </PrimaryBtn>
+                      {/* 상세정보 펼침 */}
+                      {isExpanded && (
+                        <div style={{ padding: "8px 12px 10px 46px", borderTop: "1px solid #f3e8ff", background: "#faf5ff", fontSize: 12, color: "#4b5563" }}>
+                          {(c.profile?.education || c.profile?.major || c.profile?.graduationYear) && (
+                            <div style={{ marginBottom: 3 }}>
+                              🎓 {[c.profile.education, c.profile.major, c.profile.graduationYear && `${c.profile.graduationYear}년 졸`].filter(Boolean).join(" · ")}
+                            </div>
+                          )}
+                          {c.profile?.region && (
+                            <div style={{ marginBottom: 3 }}>📍 {c.profile.region}</div>
+                          )}
+                          {c.profile?.grade && (
+                            <div style={{ marginBottom: 3 }}>🏅 등급: {c.profile.grade}</div>
+                          )}
+                          {c.profile?.bio && (
+                            <div style={{ color: "#6b7280", fontStyle: "italic", lineHeight: 1.5 }}>{c.profile.bio}</div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}

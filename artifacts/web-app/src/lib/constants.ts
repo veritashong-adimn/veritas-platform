@@ -91,10 +91,12 @@ export type ProjectTaskDetail = {
   translatorRates: TranslatorRate[];
 };
 export type MatchCandidate = {
-  id: number; email: string; score: number;
+  id: number; email: string; name: string | null; score: number;
   profile: {
     languagePairs: string | null; specializations: string | null;
     rating: number | null; availabilityStatus: string; bio: string | null;
+    phone: string | null; region: string | null; grade: string | null;
+    education: string | null; major: string | null; graduationYear: number | null;
   } | null;
   rates: TranslatorRate[];
 };
