@@ -20,13 +20,13 @@ function getStatusTransitionBlock(
   return { blocked: false };
 }
 
-/* 현재 상태별 다음 단계 안내 */
+/* 현재 상태별 안내 */
 const STATUS_NEXT_HINT: Record<string, { text: string; color: string; bg: string }> = {
-  created:     { text: "견적을 생성한 뒤 '견적 발송' 상태로 변경하세요.",                color: "#2563eb", bg: "#eff6ff" },
-  quoted:      { text: "고객 확인 후 '견적 승인' 상태로 변경하세요.",                   color: "#7c3aed", bg: "#faf5ff" },
+  created:     { text: "견적 생성 또는 드롭다운으로 상태를 변경할 수 있습니다.",           color: "#2563eb", bg: "#eff6ff" },
+  quoted:      { text: "드롭다운으로 상태를 변경할 수 있습니다.",                        color: "#7c3aed", bg: "#faf5ff" },
   approved:    { text: "통번역사를 배정하려면 아래 '통번역사 추천' 버튼을 사용하세요.\n견적을 수정하려면 '견적 발송' 단계로 되돌리세요.", color: "#9333ea", bg: "#fdf4ff" },
-  matched:     { text: "통번역사가 작업을 시작하면 '진행 중' 상태로 변경하세요.",          color: "#0891b2", bg: "#ecfeff" },
-  in_progress: { text: "작업 완료 후 '완료' 상태로 변경하세요.",                        color: "#059669", bg: "#f0fdf4" },
+  matched:     { text: "통번역사 배정 또는 드롭다운으로 상태를 변경할 수 있습니다.",        color: "#0891b2", bg: "#ecfeff" },
+  in_progress: { text: "드롭다운으로 상태를 변경할 수 있습니다.",                        color: "#059669", bg: "#f0fdf4" },
 };
 
 const inputStyle: React.CSSProperties = {
@@ -917,13 +917,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 const hasTranslator = (detail.tasks ?? []).length > 0;
                 const transitions = PROJECT_STATUS_TRANSITIONS[detail.status] ?? [];
 
-                // 다음 단계 계산
-                const nextStepKey = (!isCancelled && currentIdx >= 0 && currentIdx < STEP_KEYS.length - 1)
-                  ? STEP_KEYS[currentIdx + 1] : null;
-                const nextStepHint = nextStepKey === "matched" && !hasTranslator
-                  ? "통번역사 배정 (배정하기 버튼 클릭)"
-                  : nextStepKey ? STEP_LABELS[nextStepKey] : null;
-
                 const elements: React.ReactNode[] = [];
                 STEP_KEYS.forEach((stepKey, idx) => {
                   const isDone = !isCancelled && idx < currentIdx;
@@ -1013,16 +1006,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     <div style={{ display: "flex", alignItems: "flex-start", overflowX: "auto", paddingBottom: 2 }}>
                       {elements}
                     </div>
-                    {/* 다음 단계 안내 */}
-                    {nextStepHint && !isCancelled && (
-                      <div style={{ marginTop: 7, fontSize: 11, color: "#4f46e5", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
-                        👉 다음 단계: <span style={{ color: "#1d4ed8" }}>{nextStepHint}</span>
-                      </div>
-                    )}
                   </div>
                 );
               })()}
-              {/* 현재 상태 다음 단계 힌트 */}
+              {/* 현재 상태 안내 */}
               {(() => {
                 const noTranslatorBlock = ["approved", "matched", "in_progress"].includes(detail.status) && (detail.tasks ?? []).length === 0;
                 if (noTranslatorBlock) {
