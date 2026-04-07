@@ -482,6 +482,23 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     finally { setChangingStatus(false); }
   };
 
+  const applyStatus = async (newStatus: string) => {
+    if (!newStatus || newStatus === detail?.status) return;
+    setChangingStatus(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}/status`), {
+        method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast(`상태가 "${STATUS_LABEL[newStatus] ?? newStatus}"로 변경되었습니다.`);
+      setStatusTarget(newStatus);
+      await loadDetail(); onRefresh();
+    } catch { onToast("오류: 상태 변경 실패"); }
+    finally { setChangingStatus(false); }
+  };
+
   const handleFinancialStatusChange = async () => {
     if (!financialStatusTarget || financialStatusTarget === detail?.financialStatus) return;
     setChangingFinancialStatus(true);
@@ -870,6 +887,73 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             <ReviewMemoPanel storageKey={`project_${projectId}`} label="이 프로젝트 검수 메모" />
             {/* 액션 바 */}
             <div style={{ background: "#f9fafb", borderRadius: 10, padding: "10px 12px", marginBottom: 14, border: "1px solid #e5e7eb" }}>
+              {/* ── Progress Step Bar ── */}
+              {(() => {
+                const STEP_KEYS = ["created", "quoted", "approved", "matched", "in_progress", "completed"] as const;
+                const STEP_LABELS: Record<string, string> = {
+                  created: "접수됨", quoted: "견적 발송", approved: "견적 승인",
+                  matched: "통번역사 배정", in_progress: "진행 중", completed: "완료",
+                };
+                const isCancelled = detail.status === "cancelled";
+                const currentIdx = isCancelled ? -1 : STEP_KEYS.indexOf(detail.status as typeof STEP_KEYS[number]);
+                const hasTranslator = (detail.tasks ?? []).length > 0;
+                const transitions = PROJECT_STATUS_TRANSITIONS[detail.status] ?? [];
+                const elements: React.ReactNode[] = [];
+                STEP_KEYS.forEach((stepKey, idx) => {
+                  const isDone = !isCancelled && idx < currentIdx;
+                  const isCurrent = !isCancelled && idx === currentIdx;
+                  const canTransition = !isCurrent && transitions.includes(stepKey);
+                  const isClickable = canTransition && !changingStatus;
+                  const label = (stepKey === "matched" && isCurrent)
+                    ? (hasTranslator ? "배정 완료" : "배정 필요")
+                    : STEP_LABELS[stepKey];
+                  const circleColor = isDone ? "#16a34a" : isCurrent ? "#2563eb" : "#d1d5db";
+                  if (idx > 0) {
+                    elements.push(
+                      <div key={`ln-${idx}`} style={{ flex: 1, height: 2, minWidth: 8, background: isDone ? "#dcfce7" : "#e5e7eb", alignSelf: "flex-start", marginTop: 13 }} />
+                    );
+                  }
+                  elements.push(
+                    <div key={stepKey}
+                      onClick={() => {
+                        if (!isClickable) return;
+                        if (stepKey === "matched" && !hasTranslator) { loadCandidates(); return; }
+                        applyStatus(stepKey);
+                      }}
+                      title={isClickable ? `"${STEP_LABELS[stepKey]}"로 변경` : undefined}
+                      style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, flexShrink: 0, cursor: isClickable ? "pointer" : "default" }}
+                    >
+                      <div style={{
+                        width: 26, height: 26, borderRadius: "50%",
+                        border: `2px solid ${circleColor}`,
+                        background: isDone ? "#16a34a" : isCurrent ? "#eff6ff" : "#f9fafb",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 11, fontWeight: 700,
+                        color: isDone ? "#fff" : circleColor,
+                        boxShadow: isCurrent ? "0 0 0 3px #bfdbfe" : undefined,
+                        transition: "box-shadow 0.15s",
+                      }}>
+                        {isDone ? "✓" : idx + 1}
+                      </div>
+                      <span style={{ fontSize: 10, color: isDone ? "#15803d" : isCurrent ? "#1d4ed8" : "#9ca3af", fontWeight: isCurrent ? 700 : 400, textAlign: "center", whiteSpace: "nowrap", maxWidth: 62, lineHeight: 1.3 }}>
+                        {label}
+                      </span>
+                    </div>
+                  );
+                });
+                return (
+                  <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px dashed #e5e7eb" }}>
+                    {isCancelled && (
+                      <div style={{ marginBottom: 6, display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", background: "#fee2e2", borderRadius: 6, fontSize: 11, fontWeight: 700, color: "#dc2626" }}>
+                        🚫 취소된 프로젝트
+                      </div>
+                    )}
+                    <div style={{ display: "flex", alignItems: "flex-start", overflowX: "auto", paddingBottom: 2 }}>
+                      {elements}
+                    </div>
+                  </div>
+                );
+              })()}
               {/* 현재 상태 다음 단계 힌트 */}
               {(() => {
                 const noTranslatorBlock = ["approved", "matched", "in_progress"].includes(detail.status) && (detail.tasks ?? []).length === 0;
