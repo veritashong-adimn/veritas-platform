@@ -507,12 +507,12 @@ router.post("/admin/projects/:id/assign-translator", ...adminGuard, async (req, 
 // ─── 상태 전이 허용 맵 (관리자 포함 전체 시스템 공통) ──────────────────
 export const PROJECT_STATUS_TRANSITIONS: Record<string, string[]> = {
   created:     ["quoted", "cancelled"],
-  quoted:      ["approved", "cancelled"],
+  quoted:      ["created", "approved", "cancelled"],
   approved:    ["quoted", "matched", "cancelled"],
   matched:     ["in_progress", "approved", "quoted", "cancelled"],
-  in_progress: ["completed", "cancelled"],
-  completed:   [],
-  cancelled:   [],
+  in_progress: ["matched", "completed", "cancelled"],
+  completed:   ["in_progress"],
+  cancelled:   ["created"],
   paid:        ["matched", "cancelled"],  // 레거시 호환용
 };
 

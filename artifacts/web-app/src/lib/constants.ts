@@ -276,12 +276,12 @@ export const ALL_PAYMENT_STATUSES = ["pending","paid","failed"] as const;
 export const ALL_SETTLEMENT_STATUSES = ["pending", "ready", "paid"] as const;
 export const PROJECT_STATUS_TRANSITIONS: Record<string, string[]> = {
   created:     ["quoted", "cancelled"],
-  quoted:      ["approved", "cancelled"],
+  quoted:      ["created", "approved", "cancelled"],
   approved:    ["quoted", "matched", "cancelled"],
   matched:     ["in_progress", "approved", "quoted", "cancelled"],
-  in_progress: ["completed", "cancelled"],
-  completed:   [],
-  cancelled:   [],
+  in_progress: ["matched", "completed", "cancelled"],
+  completed:   ["in_progress"],
+  cancelled:   ["created"],
 };
 export const ACTION_LABEL: Record<string, { ko: string; color: string; dot: string }> = {
   project_created:                  { ko: "프로젝트 접수",         color: "#2563eb", dot: "🗂️" },
