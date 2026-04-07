@@ -622,7 +622,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         };
       } else {
         const validItems = quoteItemForms.filter(it => it.productName.trim() && Number(it.unitPrice) > 0);
-        if (!hasQuotes && validItems.length === 0) { onToast("품목명과 단가를 입력하세요."); return; }
+        const isRegenerate = (detail?.quotes?.length ?? 0) > 0;
+        if (!isRegenerate && validItems.length === 0) { onToast("품목명과 단가를 입력하세요."); return; }
         body = {
           items: validItems.map(it => ({
             productId: it.productId ?? undefined,
