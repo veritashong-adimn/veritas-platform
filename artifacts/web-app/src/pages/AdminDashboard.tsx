@@ -2891,6 +2891,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                                 ))}
                               </div>
                             ) : <span style={{ color: "#d1d5db" }}>-</span>}
+                            {t.education && (
+                              <div style={{ marginTop: 3, fontSize: 11, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                🎓 {t.education}
+                              </div>
+                            )}
                           </td>
                           <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", maxWidth: 140, whiteSpace: "normal" }}>
                             {t.specializations
