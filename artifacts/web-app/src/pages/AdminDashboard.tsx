@@ -1462,8 +1462,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11 }}>
                       <option value="all">전체</option>
                       <option value="postpaid_per_project">건별 후불</option>
-                      <option value="prepaid_wallet">선입금 지갑</option>
-                      <option value="monthly_billing">월 청구</option>
+                      <option value="monthly_billing">누적 청구</option>
+                      <option value="prepaid_wallet">선입금 차감</option>
                     </select>
                   </div>
                 </div>
