@@ -64,6 +64,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [assigning, setAssigning] = useState<number | null>(null);
   const [showCandidates, setShowCandidates] = useState(false);
+  const [translatorSearch, setTranslatorSearch] = useState("");
+  const [translatorSearchResults, setTranslatorSearchResults] = useState<any[]>([]);
+  const [searchingTranslator, setSearchingTranslator] = useState(false);
   const [activeSection, setActiveSection] = useState<"info"|"finance"|"work"|"settlement"|"history">(initialSection ?? "info");
 
   type ProjectFile = { id: number; fileType: string; fileName: string; objectPath: string; fileSize: number | null; mimeType: string | null; createdAt: string; uploaderName: string | null; uploaderEmail: string | null };
@@ -387,10 +390,25 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       onToast(`통번역사 배정 완료 → ${data.translatorEmail}`);
       setShowCandidates(false);
+      setTranslatorSearch("");
+      setTranslatorSearchResults([]);
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 배정 실패"); }
     finally { setAssigning(null); }
   };
+
+  useEffect(() => {
+    if (!translatorSearch.trim()) { setTranslatorSearchResults([]); return; }
+    const t = setTimeout(async () => {
+      setSearchingTranslator(true);
+      try {
+        const res = await fetch(api(`/api/admin/translators?search=${encodeURIComponent(translatorSearch.trim())}`), { headers: authH });
+        if (res.ok) setTranslatorSearchResults(await res.json());
+      } catch { /* silent */ }
+      finally { setSearchingTranslator(false); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [translatorSearch]);
 
   const fetchFiles = async () => {
     setFilesLoading(true);
@@ -1140,7 +1158,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 )}
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, alignItems: "center" }}>
                   <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#7c3aed" }}>추천 통번역사 (상위 3명)</p>
-                  <button onClick={() => setShowCandidates(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 16 }}>×</button>
+                  <button onClick={() => { setShowCandidates(false); setTranslatorSearch(""); setTranslatorSearchResults([]); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 16 }}>×</button>
                 </div>
                 {loadingCandidates ? (
                   <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center" }}>조회 중...</p>
@@ -1169,6 +1187,45 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     </div>
                   );
                 })}
+
+                {/* ── 통번역사 직접 검색 ── */}
+                <div style={{ marginTop: 12, borderTop: "1px solid #e9d5ff", paddingTop: 10 }}>
+                  <p style={{ margin: "0 0 6px", fontSize: 13, fontWeight: 700, color: "#7c3aed" }}>🔍 통번역사 검색</p>
+                  <input
+                    type="text"
+                    placeholder="이름, 이메일, 전화번호로 검색"
+                    value={translatorSearch}
+                    onChange={e => setTranslatorSearch(e.target.value)}
+                    style={{ width: "100%", padding: "7px 10px", borderRadius: 7, border: "1px solid #d8b4fe", fontSize: 13, outline: "none", boxSizing: "border-box" }}
+                  />
+                  {translatorSearch.trim() && (
+                    <div style={{ marginTop: 6 }}>
+                      {searchingTranslator ? (
+                        <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", margin: "6px 0" }}>검색 중...</p>
+                      ) : translatorSearchResults.length === 0 ? (
+                        <p style={{ color: "#9ca3af", fontSize: 13, margin: "6px 0" }}>검색 결과가 없습니다.</p>
+                      ) : translatorSearchResults.map(t => (
+                        <div key={t.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 10px", background: "#fff", borderRadius: 8, marginBottom: 5, border: "1px solid #e9d5ff" }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {t.name ?? t.email}
+                            </p>
+                            <p style={{ margin: 0, fontSize: 11, color: "#6b7280" }}>
+                              {t.languagePairs ?? "언어쌍 미설정"} · {t.specializations ?? "분야 미설정"}
+                              {t.phone && ` · ${t.phone}`}
+                            </p>
+                          </div>
+                          <PrimaryBtn
+                            onClick={() => handleAssignTranslator(t.id)}
+                            disabled={assigning === t.id}
+                            style={{ fontSize: 12, padding: "5px 12px", flexShrink: 0 }}>
+                            {assigning === t.id ? "배정 중..." : "배정"}
+                          </PrimaryBtn>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
