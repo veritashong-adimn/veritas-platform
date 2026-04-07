@@ -11,7 +11,7 @@ function getStatusTransitionBlock(
 ): { blocked: boolean; reason?: string } {
   const hasAssignedTranslator = (detail.tasks ?? []).length > 0;
 
-  if ((targetStatus === "matched" || targetStatus === "in_progress") && !hasAssignedTranslator) {
+  if ((targetStatus === "matched" || targetStatus === "in_progress" || targetStatus === "completed") && !hasAssignedTranslator) {
     return {
       blocked: true,
       reason: "배정된 통번역사가 없습니다. '통번역사' 탭에서 통번역사를 배정한 뒤 상태를 변경해주세요.",
@@ -908,16 +908,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                 {/* 상태 변경 */}
                 {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).length > 0 && (() => {
-                  const noTranslatorBlock = ["approved", "matched", "in_progress"].includes(detail.status) && (detail.tasks ?? []).length === 0;
-                  const block = (!noTranslatorBlock && statusTarget !== detail.status)
+                  const block = statusTarget !== detail.status
                     ? getStatusTransitionBlock(statusTarget, detail)
                     : { blocked: false };
-                  const isBlocked = noTranslatorBlock || block.blocked;
+                  const isBlocked = block.blocked;
                   return (
                     <>
                       <select value={statusTarget} onChange={e => setStatusTarget(e.target.value)}
-                        disabled={noTranslatorBlock}
-                        style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12, opacity: noTranslatorBlock ? 0.45 : 1, cursor: noTranslatorBlock ? "not-allowed" : "default" }}>
+                        style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12 }}>
                         <option value={detail.status}>{STATUS_LABEL[detail.status] ?? detail.status} (현재)</option>
                         {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).map(s => (
                           <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
@@ -932,8 +930,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         {changingStatus ? "변경 중..." : "상태 변경 적용"}
                       </GhostBtn>
                       <span style={{ color: "#d1d5db", fontSize: 14 }}>|</span>
-                      {/* 검증 실패 경고 메시지 — 번역사 미배정 경우는 위 통합 경고로 처리 */}
-                      {!noTranslatorBlock && block.blocked && block.reason && (
+                      {/* 검증 실패 경고 메시지 */}
+                      {block.blocked && block.reason && (
                         <div style={{
                           width: "100%", marginTop: 6,
                           display: "flex", gap: 6, alignItems: "flex-start",
