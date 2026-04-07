@@ -24,7 +24,7 @@ function getStatusTransitionBlock(
 const STATUS_NEXT_HINT: Record<string, { text: string; color: string; bg: string }> = {
   created:     { text: "견적을 생성한 뒤 '견적 발송' 상태로 변경하세요.",                color: "#2563eb", bg: "#eff6ff" },
   quoted:      { text: "고객 확인 후 '견적 승인' 상태로 변경하세요.",                   color: "#7c3aed", bg: "#faf5ff" },
-  approved:    { text: "통번역사가 배정되었습니다. '배정됨' 상태로 변경하세요.",              color: "#9333ea", bg: "#fdf4ff" },
+  approved:    { text: "통번역사가 배정되어 있습니다. 드롭다운에서 '통번역사 배정' 상태로 변경하거나, 견적 수정이 필요하면 '견적 발송'으로 되돌리세요.", color: "#9333ea", bg: "#fdf4ff" },
   matched:     { text: "통번역사가 작업을 시작하면 '진행 중' 상태로 변경하세요.",          color: "#0891b2", bg: "#ecfeff" },
   in_progress: { text: "작업 완료 후 '완료' 상태로 변경하세요.",                        color: "#059669", bg: "#f0fdf4" },
 };
