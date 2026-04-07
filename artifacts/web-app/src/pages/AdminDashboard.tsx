@@ -1550,7 +1550,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             created:     { label: "견적 생성",     section: "finance",    color: "#fff",    bg: "#2563eb" },
                             quoted:      { label: "견적 확인",     section: "finance",    color: "#fff",    bg: "#2563eb" },
                             approved:    { label: "통번역사 배정", section: "work",       color: "#fff",    bg: "#7c3aed" },
-                            matched:     { label: "작업 보기",     section: "work",       color: "#fff",    bg: "#6d28d9" },
+                            matched:     { label: "통번역사 배정", section: "work",       color: "#fff",    bg: "#7c3aed" },
                             in_progress: { label: "작업 보기",     section: "work",       color: "#fff",    bg: "#6d28d9" },
                             completed:   { label: "정산 확인",     section: "settlement", color: "#fff",    bg: "#059669" },
                             cancelled:   { label: "상세보기",      section: "info",       color: "#6b7280", bg: "#f3f4f6" },
