@@ -1390,60 +1390,82 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             {/* ── 상세 필터 패널 ── */}
             {showAdvancedFilter && (
               <div style={{ marginTop: 4, borderTop: "1px solid #f0f0f0", paddingTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
-                {/* 세부 필터 그리드 */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
-                  {/* [기간] */}
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 6 }}>기간</div>
-                    <div style={{ marginBottom: 5 }}>
-                      <div style={{ fontSize: 10, color: "#b0b8c4", marginBottom: 2 }}>생성일</div>
-                      <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
-                        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-                          style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
-                        <span style={{ color: "#d1d5db", fontSize: 10 }}>~</span>
-                        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-                          style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 10, color: "#b0b8c4", marginBottom: 2 }}>입금 예정일</div>
-                      <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
-                        <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
-                          style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
-                        <span style={{ color: "#d1d5db", fontSize: 10 }}>~</span>
-                        <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
-                          style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
-                      </div>
-                    </div>
-                  </div>
+                {/* 3열 그리드: 담당 / 거래처 / 재무 상태 / 견적 유형 / 청구 방식 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                   {/* [담당] */}
                   <div>
-                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 6 }}>담당</div>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>담당</div>
                     <select value={assignedAdminFilter} onChange={e => setAssignedAdminFilter(e.target.value)}
                       style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11, cursor: "pointer" }}>
                       <option value="all">전체 담당자</option>
                       {adminUsers.map(a => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
                     </select>
                   </div>
-                  {/* [견적/청구] */}
+                  {/* [거래처] */}
                   <div>
-                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 6 }}>견적 / 청구</div>
-                    <div style={{ marginBottom: 5 }}>
-                      <select value={projectQuoteTypeFilter} onChange={e => { setProjectQuoteTypeFilter(e.target.value); setProjectPage(1); }}
-                        style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11, marginBottom: 4 }}>
-                        <option value="all">견적 유형 전체</option>
-                        <option value="b2b_standard">B2B 표준</option>
-                        <option value="b2c_prepaid">선입금</option>
-                        <option value="prepaid_deduction">선입금 차감</option>
-                        <option value="accumulated_batch">누적 견적</option>
-                      </select>
-                      <select value={projectBillingTypeFilter} onChange={e => { setProjectBillingTypeFilter(e.target.value); setProjectPage(1); }}
-                        style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11 }}>
-                        <option value="all">청구 방식 전체</option>
-                        <option value="postpaid_per_project">건별 후불</option>
-                        <option value="prepaid_wallet">선입금 지갑</option>
-                        <option value="monthly_billing">월 청구</option>
-                      </select>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>거래처</div>
+                    <select value={projectCompanyIdFilter} onChange={e => { setProjectCompanyIdFilter(e.target.value); setProjectPage(1); }}
+                      style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11, cursor: "pointer" }}>
+                      <option value="">전체 거래처</option>
+                      {companies.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
+                    </select>
+                  </div>
+                  {/* [재무 상태] */}
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>재무 상태</div>
+                    <select value={projectFinancialFilter} onChange={e => { setProjectFinancialFilter(e.target.value); setProjectPage(1); }}
+                      style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11, cursor: "pointer" }}>
+                      <option value="all">전체</option>
+                      <option value="unbilled">미청구</option>
+                      <option value="billed">청구 완료</option>
+                      <option value="receivable">미수금</option>
+                      <option value="paid">입금 완료</option>
+                    </select>
+                  </div>
+                  {/* [견적 유형] */}
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>견적 유형</div>
+                    <select value={projectQuoteTypeFilter} onChange={e => { setProjectQuoteTypeFilter(e.target.value); setProjectPage(1); }}
+                      style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11 }}>
+                      <option value="all">전체</option>
+                      <option value="b2b_standard">B2B 표준</option>
+                      <option value="b2c_prepaid">선입금</option>
+                      <option value="prepaid_deduction">선입금 차감</option>
+                      <option value="accumulated_batch">누적 견적</option>
+                    </select>
+                  </div>
+                  {/* [청구 방식] */}
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>청구 방식</div>
+                    <select value={projectBillingTypeFilter} onChange={e => { setProjectBillingTypeFilter(e.target.value); setProjectPage(1); }}
+                      style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11 }}>
+                      <option value="all">전체</option>
+                      <option value="postpaid_per_project">건별 후불</option>
+                      <option value="prepaid_wallet">선입금 지갑</option>
+                      <option value="monthly_billing">월 청구</option>
+                    </select>
+                  </div>
+                </div>
+                {/* 날짜 행: 생성일 / 입금 예정일 */}
+                <div style={{ display: "flex", gap: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>생성일</div>
+                    <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                      <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
+                      <span style={{ color: "#d1d5db", fontSize: 10 }}>~</span>
+                      <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
+                    </div>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>입금 예정일</div>
+                    <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                      <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
+                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
+                      <span style={{ color: "#d1d5db", fontSize: 10 }}>~</span>
+                      <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
+                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
                     </div>
                   </div>
                 </div>
