@@ -575,9 +575,7 @@ export function buildB2CPrepaidQuoteHtml(doc: QuoteDoc): string {
     </div>
     <div style="border:1px solid #bbf7d0;border-radius:6px;padding:10px 12px;background:#f0fdf4;font-size:12px">
       <div style="font-size:10px;font-weight:800;color:#166534;margin-bottom:6px;text-transform:uppercase">결제 안내</div>
-      <div style="color:#374151">선입금 완납 후 작업 시작<br/>
-        ${doc.paymentDueDate ? `입금 기한: <strong>${fmtDate(doc.paymentDueDate)}</strong>` : "입금 기한: 견적 확인 후 협의"}
-      </div>
+      <div style="color:#374151">선입금 완납 후 작업 시작</div>
     </div>
   </div>
 
@@ -621,18 +619,14 @@ export function buildB2BStandardQuoteHtml(doc: QuoteDoc): string {
   ${renderProjectBar(doc)}
 
   <!-- 발행 일정 정보 -->
-  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
     <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;background:#f8fafc;font-size:11px">
       <div style="font-size:9px;font-weight:800;color:#6b7280;margin-bottom:4px;text-transform:uppercase">세금계산서 구분</div>
       <strong>${esc(TAX_DOC_LABEL[taxDocType] ?? taxDocType)} / ${esc(TAX_CAT_LABEL[taxCat] ?? taxCat)}</strong>
     </div>
-    <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;background:#f8fafc;font-size:11px">
-      <div style="font-size:9px;font-weight:800;color:#6b7280;margin-bottom:4px;text-transform:uppercase">발행 예정일</div>
-      <strong>${doc.issueDate ? fmtDate(doc.issueDate) : "결제 완료 후"}</strong>
-    </div>
-    <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;background:#f8fafc;font-size:11px">
-      <div style="font-size:9px;font-weight:800;color:#6b7280;margin-bottom:4px;text-transform:uppercase">입금 예정일</div>
-      <strong>${doc.paymentDueDate ? fmtDate(doc.paymentDueDate) : "협의"}</strong>
+    <div style="border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;background:#eff6ff;font-size:11px">
+      <div style="font-size:9px;font-weight:800;color:#1d4ed8;margin-bottom:4px;text-transform:uppercase">견적유효기간</div>
+      <strong>${doc.validUntil ? fmtDate(doc.validUntil) : `발행일로부터 ${doc.validDays ?? 30}일`}</strong>
     </div>
   </div>
 
@@ -643,8 +637,7 @@ export function buildB2BStandardQuoteHtml(doc: QuoteDoc): string {
     ${renderBankInfo(doc.bank)}
     <div class="info-box guide">
       <h4>안내 사항</h4>
-      <p>· ${doc.validUntil ? `본 견적서는 <strong>${fmtDate(doc.validUntil)}</strong>까지 유효합니다.` : `발행일로부터 <strong>${doc.validDays ?? 30}일</strong>간 유효합니다.`}<br/>
-         · 발행 구분: <strong>${esc(TAX_DOC_LABEL[taxDocType] ?? taxDocType)}</strong> / <strong>${esc(TAX_CAT_LABEL[taxCat] ?? taxCat)}</strong><br/>
+      <p>· 발행 구분: <strong>${esc(TAX_DOC_LABEL[taxDocType] ?? taxDocType)}</strong> / <strong>${esc(TAX_CAT_LABEL[taxCat] ?? taxCat)}</strong><br/>
          ${renderTaxGuideText(doc)}<br/>
          · 계약 체결 후 착수금 선납 시 작업이 시작됩니다.<br/>
          · 문의: ${esc(doc.platform.email ?? doc.platform.phone ?? "담당자에게 연락바랍니다")}</p>
@@ -776,8 +769,8 @@ export function buildAccumulatedBatchQuoteHtml(doc: QuoteDoc): string {
 
   ${renderProjectBar(doc)}
 
-  <!-- 대상 기간 / 건수 / 입금 예정일 -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+  <!-- 대상 기간 / 건수 -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
     <div style="border:1px solid #6ee7b7;border-radius:6px;padding:10px 12px;background:#ecfdf5;font-size:11px">
       <div style="font-size:9px;font-weight:800;color:#065f46;margin-bottom:5px;text-transform:uppercase">청구 대상 기간</div>
       <strong>
@@ -788,10 +781,6 @@ export function buildAccumulatedBatchQuoteHtml(doc: QuoteDoc): string {
     <div style="border:1px solid #6ee7b7;border-radius:6px;padding:10px 12px;background:#ecfdf5;font-size:11px">
       <div style="font-size:9px;font-weight:800;color:#065f46;margin-bottom:5px;text-transform:uppercase">누적 건수</div>
       <strong>${doc.batchItemCount != null ? `${doc.batchItemCount.toLocaleString("ko-KR")}건` : "—"}</strong>
-    </div>
-    <div style="border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;background:#f8fafc;font-size:11px">
-      <div style="font-size:9px;font-weight:800;color:#6b7280;margin-bottom:5px;text-transform:uppercase">입금 예정일</div>
-      <strong>${doc.paymentDueDate ? fmtDate(doc.paymentDueDate) : doc.invoiceDueDate ? fmtDate(doc.invoiceDueDate) : "협의"}</strong>
     </div>
   </div>
 
