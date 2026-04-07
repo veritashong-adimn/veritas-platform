@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, ALL_FINANCIAL_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, AdminUser, BOARD_CATEGORY_LABEL, Product } from '../../lib/constants';
 import { StatusBadge, PrimaryBtn, GhostBtn } from '../ui';
 import { ReviewMemoPanel } from './ReviewMemoPanel';
@@ -52,6 +52,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [noteInput, setNoteInput] = useState("");
   const [addingNote, setAddingNote] = useState(false);
   const [statusTarget, setStatusTarget] = useState("");
+  const serverStatusRef = useRef<string>("");   // 서버에서 확인된 마지막 상태
   const [changingStatus, setChangingStatus] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [financialStatusTarget, setFinancialStatusTarget] = useState("");
@@ -348,7 +349,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       const data = await res.json();
       if (res.ok) {
         setDetail(data);
-        setStatusTarget(data.status);
+        // 서버 상태가 실제로 변경됐을 때만 드롭다운 리셋 (사용자 선택 유지)
+        if (serverStatusRef.current !== data.status) {
+          serverStatusRef.current = data.status;
+          setStatusTarget(data.status);
+        }
         setFinancialStatusTarget(data.financialStatus ?? "unbilled");
       } else {
         setErr(data.error ?? "조회 실패");
