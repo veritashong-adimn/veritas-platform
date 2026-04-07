@@ -246,7 +246,12 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
     }
 
     const [quotes, payments, rawTasks, settlements, logs, notes, communications] = await Promise.all([
-      db.select().from(quotesTable).where(eq(quotesTable.projectId, projectId)),
+      db.select().from(quotesTable).where(eq(quotesTable.projectId, projectId)).then(qs =>
+        Promise.all(qs.map(async q => {
+          const items = await db.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, q.id)).orderBy(quoteItemsTable.id);
+          return { ...q, items };
+        }))
+      ),
       db.select().from(paymentsTable).where(eq(paymentsTable.projectId, projectId)),
       db
         .select({

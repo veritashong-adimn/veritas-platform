@@ -622,7 +622,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         };
       } else {
         const validItems = quoteItemForms.filter(it => it.productName.trim() && Number(it.unitPrice) > 0);
-        if (validItems.length === 0) { onToast("품목명과 단가를 입력하세요."); return; }
+        if (!hasQuotes && validItems.length === 0) { onToast("품목명과 단가를 입력하세요."); return; }
         body = {
           items: validItems.map(it => ({
             productId: it.productId ?? undefined,
@@ -2098,6 +2098,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             if (eq0?.paymentDueDate) setQuotePaymentDueDate(eq0.paymentDueDate);
                             if (eq0?.batchPeriodStart) setQuoteBatchStart(eq0.batchPeriodStart);
                             if (eq0?.batchPeriodEnd) setQuoteBatchEnd(eq0.batchPeriodEnd);
+                            if (Array.isArray(eq0?.items) && eq0.items.length > 0) {
+                              setQuoteItemForms(eq0.items.map((it: any) => ({
+                                productId: it.productId ?? null,
+                                productName: it.productName ?? "",
+                                languagePair: it.languagePair ?? "",
+                                unit: it.unit ?? "건",
+                                quantity: String(it.quantity ?? "1"),
+                                unitPrice: String(it.unitPrice ?? ""),
+                                taxRate: (Number(it.taxAmount) > 0 ? "0.1" : "0") as "0" | "0.1",
+                              })));
+                            }
                             setShowQuoteForm(true);
                           }}
                             style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#fdf4ff", border: "1px solid #d8b4fe", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
