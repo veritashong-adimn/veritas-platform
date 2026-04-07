@@ -120,10 +120,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   };
   const quoteItemsGrandTotal = quoteItemForms.reduce((s, it) => s + calcItemTotal(it).total, 0);
   // quote_type별 추가 필드
-  const [quoteValidUntil, setQuoteValidUntil] = useState("");
-  const [quoteIssueDate, setQuoteIssueDate] = useState("");
+  const _dateDefault = (days: number) => { const d = new Date(); d.setDate(d.getDate() + days); return d.toISOString().split("T")[0]; };
+  const [quoteValidUntil, setQuoteValidUntil] = useState(() => _dateDefault(15));
+  const [quoteIssueDate, setQuoteIssueDate] = useState(() => _dateDefault(0));
   const [quoteInvoiceDueDate, setQuoteInvoiceDueDate] = useState("");
-  const [quotePaymentDueDate, setQuotePaymentDueDate] = useState("");
+  const [quotePaymentDueDate, setQuotePaymentDueDate] = useState(() => _dateDefault(30));
   const [quotePrepaidUsage, setQuotePrepaidUsage] = useState("");
   // 선입금 차감 - 거래처 계정 원장
   type CompPrepaidAcct = { id: number; initialAmount: number; currentBalance: number; note: string | null; depositDate: string | null; status: string };
@@ -676,7 +677,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       }
       onToast(`견적 생성 완료`);
       setQuoteAmount(""); setQuoteNote(""); setQuoteItemForms([defaultItem()]); setShowQuoteForm(false);
-      setQuoteValidUntil(""); setQuoteIssueDate(""); setQuoteInvoiceDueDate(""); setQuotePaymentDueDate("");
+      setQuoteValidUntil(_dateDefault(15)); setQuoteIssueDate(_dateDefault(0)); setQuoteInvoiceDueDate(""); setQuotePaymentDueDate(_dateDefault(30));
       setQuotePrepaidUsage(""); setSelectedPrepaidAcctId(null); setCompPrepaidAccounts([]); setAcctLedger([]);
       setQuoteBatchStart(""); setQuoteBatchEnd(""); setBatchCandidates([]); setBatchSelected(new Set()); setBatchQueried(false);
       setQuoteBillingType("postpaid_per_project"); setQuotePaymentMethod("card");
@@ -1418,7 +1419,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     if (quoteType === "b2c_prepaid") return (
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
-                          {qfLbl("유효기간 (선택)")}
+                          {qfLbl("견적유효기간 (선택)")}
                           <input type="date" value={quoteValidUntil} onChange={e => setQuoteValidUntil(e.target.value)} style={qfIs} />
                         </div>
                         <div>
@@ -1430,7 +1431,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     if (quoteType === "b2b_standard") return (
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
-                          {qfLbl("유효기간 (선택)")}
+                          {qfLbl("견적유효기간 (선택)")}
                           <input type="date" value={quoteValidUntil} onChange={e => setQuoteValidUntil(e.target.value)} style={qfIs} />
                         </div>
                         <div>
