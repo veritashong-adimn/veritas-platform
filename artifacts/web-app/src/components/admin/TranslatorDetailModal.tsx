@@ -254,7 +254,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             <F label="포트폴리오 URL" field="portfolioUrl" placeholder="https://..." />
           </div>
           <div style={{ marginBottom: 12 }}>
-            <label style={labelSt}>소개/메모</label>
+            <label style={labelSt}>상세정보</label>
             <textarea value={form.bio} onChange={e => setForm(p => ({ ...p, bio: e.target.value }))}
               rows={3} style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", resize: "vertical" }} />
           </div>

@@ -315,9 +315,9 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         </div>
       </div>
       <div style={{ marginTop: 10 }}>
-        <label style={labelSt}>소개/메모</label>
+        <label style={labelSt}>상세정보</label>
         <textarea value={form.bio} onChange={e => setF("bio", e.target.value)} rows={3}
-          placeholder="통번역사 소개, 특이사항 등..." style={{ ...inputStyle, resize: "vertical" }} />
+          placeholder="출신학교, 경력 요약, 전문분야, 통역/번역 특징, 주의사항 등을 입력" style={{ ...inputStyle, resize: "vertical" }} />
       </div>
 
       {/* ── 정산/지급 정보 (권한자만) ── */}
