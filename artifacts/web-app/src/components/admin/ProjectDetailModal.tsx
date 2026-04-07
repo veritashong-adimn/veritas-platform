@@ -97,7 +97,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   // 견적 생성
   const [quoteAmount, setQuoteAmount] = useState("");
   const [quoteNote, setQuoteNote] = useState("");
-  const [quoteTaxDocType, setQuoteTaxDocType] = useState<"tax_invoice" | "bill">("tax_invoice");
+  const [quoteTaxDocType, setQuoteTaxDocType] = useState<"tax_invoice" | "zero_tax_invoice" | "bill">("tax_invoice");
   const [quoteTaxCategory, setQuoteTaxCategory] = useState<"normal" | "zero_rated" | "consignment" | "consignment_zero_rated">("normal");
   const [quoteType, setQuoteType] = useState<"b2b_standard" | "b2c_prepaid" | "prepaid_deduction" | "accumulated_batch">("b2b_standard");
   const [quoteBillingType, setQuoteBillingType] = useState<string>("postpaid_per_project");
@@ -1945,9 +1945,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
                           <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>문서 구분 *</label>
-                          <select value={quoteTaxDocType} onChange={e => setQuoteTaxDocType(e.target.value as "tax_invoice" | "bill")}
+                          <select value={quoteTaxDocType} onChange={e => setQuoteTaxDocType(e.target.value as "tax_invoice" | "zero_tax_invoice" | "bill")}
                             style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box", borderColor: "#d8b4fe" }}>
                             <option value="tax_invoice">세금계산서</option>
+                            <option value="zero_tax_invoice">세금계산서(영세율)</option>
                             <option value="bill">계산서</option>
                           </select>
                         </div>
@@ -2097,7 +2098,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       </div>
                       {formVisible && quoteFormJsx}
                       {hasQuotes ? detail.quotes.map(q => {
-                        const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", bill: "계산서" };
+                        const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", zero_tax_invoice: "세금계산서(영세율)", bill: "계산서" };
                         const taxCatLabel: Record<string, string> = { normal: "일반", zero_rated: "영세율", consignment: "위수탁", consignment_zero_rated: "위수탁영세율" };
                         const qtLabel: Record<string, [string, string, string]> = {
                           b2b_standard:      ["B2B 일반", "#eff6ff", "#1d4ed8"],

@@ -90,7 +90,7 @@ export type QuoteDoc = {
   notes?: string;
 
   /** 세무/발행 구분 */
-  taxDocumentType?: "tax_invoice" | "bill";
+  taxDocumentType?: "tax_invoice" | "zero_tax_invoice" | "bill";
   taxCategory?: "normal" | "zero_rated" | "consignment" | "consignment_zero_rated";
 
   // ── 견적서 유형 ────────────────────────────────────────────────────────────
@@ -342,6 +342,7 @@ function renderBankInfo(bank?: BankInfo | null): string {
 
 const TAX_DOC_LABEL: Record<string, string> = {
   tax_invoice: "세금계산서",
+  zero_tax_invoice: "세금계산서(영세율)",
   bill: "계산서",
 };
 const TAX_CAT_LABEL: Record<string, string> = {
@@ -499,9 +500,10 @@ function renderTaxAmountSummary(doc: QuoteDoc, supply: number, tax: number, tota
   const taxDocType = doc.taxDocumentType ?? "tax_invoice";
   const taxCat = doc.taxCategory ?? "normal";
   const isBill = taxDocType === "bill";
-  const isZeroRated = taxCat === "zero_rated";
-  const isConsignment = taxCat === "consignment" || taxCat === "consignment_zero_rated";
-  const isConsignmentZero = taxCat === "consignment_zero_rated";
+  const isZeroTaxInvoice = taxDocType === "zero_tax_invoice";
+  const isZeroRated = isZeroTaxInvoice || taxCat === "zero_rated";
+  const isConsignment = !isZeroTaxInvoice && (taxCat === "consignment" || taxCat === "consignment_zero_rated");
+  const isConsignmentZero = !isZeroTaxInvoice && taxCat === "consignment_zero_rated";
 
   const taxRow = isBill
     ? `<div class="amt-row"><span class="a-label" style="color:#92400e">세액 없음 (계산서)</span><span class="a-value" style="color:#9ca3af">—</span></div>`
@@ -531,9 +533,11 @@ function renderTaxGuideText(doc: QuoteDoc): string {
   const taxDocType = doc.taxDocumentType ?? "tax_invoice";
   const taxCat = doc.taxCategory ?? "normal";
   const isBill = taxDocType === "bill";
-  const isZeroRated = taxCat === "zero_rated";
-  const isConsignment = taxCat === "consignment" || taxCat === "consignment_zero_rated";
+  const isZeroTaxInvoice = taxDocType === "zero_tax_invoice";
+  const isZeroRated = isZeroTaxInvoice || taxCat === "zero_rated";
+  const isConsignment = !isZeroTaxInvoice && (taxCat === "consignment" || taxCat === "consignment_zero_rated");
   if (isBill) return "· 본 계산서는 부가세가 포함되지 않습니다.";
+  if (isZeroTaxInvoice) return "· 세금계산서(영세율) — 영세율이 적용되어 세액은 0원입니다.";
   if (isZeroRated) return "· 영세율이 적용되어 세액은 0원입니다.";
   if (isConsignment) return "· 위수탁 거래 기준으로 작성되었습니다.";
   return "· 견적 금액에는 부가세(VAT 10%)가 포함됩니다.";
