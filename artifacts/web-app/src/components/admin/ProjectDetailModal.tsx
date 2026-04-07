@@ -2086,10 +2086,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         <p style={sectionHd}>견적 ({detail.quotes.length})</p>
                         {canQuote && hasQuotes && !showQuoteForm && (
                           <button onClick={() => {
-                            const existingQt = (detail.quotes[0] as any)?.quoteType;
-                            if (existingQt) changeQuoteType(existingQt as typeof quoteType);
-                            const existingBt = (detail.quotes[0] as any)?.billingType;
-                            if (existingBt) setQuoteBillingType(existingBt);
+                            const eq0 = detail.quotes[0] as any;
+                            if (eq0?.quoteType) changeQuoteType(eq0.quoteType as typeof quoteType);
+                            if (eq0?.billingType) setQuoteBillingType(eq0.billingType);
+                            if (eq0?.taxDocumentType) setQuoteTaxDocType(eq0.taxDocumentType as typeof quoteTaxDocType);
+                            if (eq0?.taxCategory) setQuoteTaxCategory(eq0.taxCategory as typeof quoteTaxCategory);
+                            if (eq0?.paymentMethod) setQuotePaymentMethod(eq0.paymentMethod);
+                            if (eq0?.validUntil) setQuoteValidUntil(eq0.validUntil);
+                            if (eq0?.issueDate) setQuoteIssueDate(eq0.issueDate);
+                            if (eq0?.invoiceDueDate) setQuoteInvoiceDueDate(eq0.invoiceDueDate);
+                            if (eq0?.paymentDueDate) setQuotePaymentDueDate(eq0.paymentDueDate);
+                            if (eq0?.batchPeriodStart) setQuoteBatchStart(eq0.batchPeriodStart);
+                            if (eq0?.batchPeriodEnd) setQuoteBatchEnd(eq0.batchPeriodEnd);
                             setShowQuoteForm(true);
                           }}
                             style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#fdf4ff", border: "1px solid #d8b4fe", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
