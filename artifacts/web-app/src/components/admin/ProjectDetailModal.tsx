@@ -93,6 +93,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [companiesList, setCompaniesList] = useState<{id: number; name: string}[]>([]);
   const [contactsList, setContactsList] = useState<{id: number; name: string; companyId: number | null}[]>([]);
   const [loadingMeta, setLoadingMeta] = useState(false);
+  // 완료 상태 수정 확인 모달
+  const [completedConfirmShow, setCompletedConfirmShow] = useState(false);
+  const [completedConfirmAction, setCompletedConfirmAction] = useState<(() => void) | null>(null);
+  const [completedEditForce, setCompletedEditForce] = useState(false);
 
   // 견적 생성
   const [quoteAmount, setQuoteAmount] = useState("");
@@ -520,6 +524,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
 
   const startEditInfo = async () => {
     if (!detail) return;
+    // 완료 상태에서는 confirm modal 먼저
+    if (detail.status === "completed") {
+      setCompletedConfirmAction(() => () => _doStartEditInfo());
+      setCompletedConfirmShow(true);
+      return;
+    }
+    await _doStartEditInfo();
+  };
+
+  const _doStartEditInfo = async () => {
+    if (!detail) return;
     await loadMeta();
     setEditTitle(detail.title);
     const cid = detail.company?.id ?? (detail as any).companyId ?? null;
@@ -557,12 +572,19 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
           requestingDivisionId: editDivisionId,
           billingCompanyId: editBillingCompanyId,
           payerCompanyId: editPayerCompanyId,
+          forceEdit: completedEditForce || undefined,
         }),
       });
       const data = await res.json();
+      if (res.status === 409 && data.code === "completed_confirm_required") {
+        // 백엔드에서 완료 상태 확인 요청 — 모달 표시
+        setCompletedConfirmAction(() => () => { setCompletedEditForce(true); handleSaveInfo(); });
+        setCompletedConfirmShow(true);
+        return;
+      }
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      onToast("기본정보가 수정되었습니다.");
-      setEditingInfo(false);
+      onToast(completedEditForce ? "기본정보가 수정되었습니다. (상태: 진행 중으로 변경)" : "기본정보가 수정되었습니다.");
+      setEditingInfo(false); setCompletedEditForce(false);
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 저장 실패"); }
     finally { setSavingInfo(false); }
@@ -941,6 +963,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             {/* 통번역사 추천 후보 */}
             {showCandidates && (
               <div style={{ marginBottom: 14, padding: "12px 14px", background: "#faf5ff", borderRadius: 10, border: "1px solid #e9d5ff" }}>
+                {["in_progress", "completed"].includes(detail.status) && (
+                  <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "7px 10px", marginBottom: 10, fontSize: 12, color: "#92400e", display: "flex", alignItems: "center", gap: 6 }}>
+                    ⚠️ 이 변경은 현재 상태를 되돌립니다 (프로젝트: 견적승인 / 배정: 대기)
+                  </div>
+                )}
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, alignItems: "center" }}>
                   <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#7c3aed" }}>추천 통번역사 (상위 3명)</p>
                   <button onClick={() => setShowCandidates(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 16 }}>×</button>
@@ -1898,6 +1925,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         </div>
                       </div>
 
+                      {/* 상태 롤백 경고 배너 */}
+                      {hasQuotes && ["approved", "matched", "in_progress", "completed"].includes(detail.status) && (
+                        <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "7px 10px", marginBottom: 10, fontSize: 12, color: "#92400e", display: "flex", alignItems: "center", gap: 6 }}>
+                          ⚠️ 이 변경은 현재 상태를 되돌립니다 (프로젝트: 견적발송 / 견적: 검토대기)
+                        </div>
+                      )}
+
                       {/* 견적서 유형 선택 */}
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
@@ -2087,30 +2121,38 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         <p style={sectionHd}>견적 ({detail.quotes.length})</p>
                         {canQuote && hasQuotes && !showQuoteForm && (
                           <button onClick={() => {
-                            const eq0 = detail.quotes[0] as any;
-                            if (eq0?.quoteType) changeQuoteType(eq0.quoteType as typeof quoteType);
-                            if (eq0?.billingType) setQuoteBillingType(eq0.billingType);
-                            if (eq0?.taxDocumentType) setQuoteTaxDocType(eq0.taxDocumentType as typeof quoteTaxDocType);
-                            if (eq0?.taxCategory) setQuoteTaxCategory(eq0.taxCategory as typeof quoteTaxCategory);
-                            if (eq0?.paymentMethod) setQuotePaymentMethod(eq0.paymentMethod);
-                            if (eq0?.validUntil) setQuoteValidUntil(eq0.validUntil);
-                            if (eq0?.issueDate) setQuoteIssueDate(eq0.issueDate);
-                            if (eq0?.invoiceDueDate) setQuoteInvoiceDueDate(eq0.invoiceDueDate);
-                            if (eq0?.paymentDueDate) setQuotePaymentDueDate(eq0.paymentDueDate);
-                            if (eq0?.batchPeriodStart) setQuoteBatchStart(eq0.batchPeriodStart);
-                            if (eq0?.batchPeriodEnd) setQuoteBatchEnd(eq0.batchPeriodEnd);
-                            if (Array.isArray(eq0?.items) && eq0.items.length > 0) {
-                              setQuoteItemForms(eq0.items.map((it: any) => ({
-                                productId: it.productId ?? null,
-                                productName: it.productName ?? "",
-                                languagePair: it.languagePair ?? "",
-                                unit: it.unit ?? "건",
-                                quantity: String(it.quantity ?? "1"),
-                                unitPrice: String(it.unitPrice ?? ""),
-                                taxRate: (Number(it.taxAmount) > 0 ? "0.1" : "0") as "0" | "0.1",
-                              })));
+                            const doOpen = () => {
+                              const eq0 = detail.quotes[0] as any;
+                              if (eq0?.quoteType) changeQuoteType(eq0.quoteType as typeof quoteType);
+                              if (eq0?.billingType) setQuoteBillingType(eq0.billingType);
+                              if (eq0?.taxDocumentType) setQuoteTaxDocType(eq0.taxDocumentType as typeof quoteTaxDocType);
+                              if (eq0?.taxCategory) setQuoteTaxCategory(eq0.taxCategory as typeof quoteTaxCategory);
+                              if (eq0?.paymentMethod) setQuotePaymentMethod(eq0.paymentMethod);
+                              if (eq0?.validUntil) setQuoteValidUntil(eq0.validUntil);
+                              if (eq0?.issueDate) setQuoteIssueDate(eq0.issueDate);
+                              if (eq0?.invoiceDueDate) setQuoteInvoiceDueDate(eq0.invoiceDueDate);
+                              if (eq0?.paymentDueDate) setQuotePaymentDueDate(eq0.paymentDueDate);
+                              if (eq0?.batchPeriodStart) setQuoteBatchStart(eq0.batchPeriodStart);
+                              if (eq0?.batchPeriodEnd) setQuoteBatchEnd(eq0.batchPeriodEnd);
+                              if (Array.isArray(eq0?.items) && eq0.items.length > 0) {
+                                setQuoteItemForms(eq0.items.map((it: any) => ({
+                                  productId: it.productId ?? null,
+                                  productName: it.productName ?? "",
+                                  languagePair: it.languagePair ?? "",
+                                  unit: it.unit ?? "건",
+                                  quantity: String(it.quantity ?? "1"),
+                                  unitPrice: String(it.unitPrice ?? ""),
+                                  taxRate: (Number(it.taxAmount) > 0 ? "0.1" : "0") as "0" | "0.1",
+                                })));
+                              }
+                              setShowQuoteForm(true);
+                            };
+                            if (detail.status === "completed") {
+                              setCompletedConfirmAction(() => doOpen);
+                              setCompletedConfirmShow(true);
+                            } else {
+                              doOpen();
                             }
-                            setShowQuoteForm(true);
                           }}
                             style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#fdf4ff", border: "1px solid #d8b4fe", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
                             ✏️ 수정/재생성
@@ -2579,6 +2621,34 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             )}
           </>
         )}
+      {/* 완료 상태 수정 확인 모달 */}
+      {completedConfirmShow && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={() => setCompletedConfirmShow(false)}>
+          <div style={{ background: "#fff", borderRadius: 12, padding: "24px 28px", maxWidth: 380, width: "90%", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}
+            onClick={e => e.stopPropagation()}>
+            <p style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 700, color: "#111827" }}>⚠️ 완료된 프로젝트 수정</p>
+            <p style={{ margin: "0 0 20px", fontSize: 13, color: "#374151", lineHeight: 1.6 }}>
+              이 변경은 현재 상태를 되돌립니다.<br />
+              프로젝트 상태가 <strong>진행 중</strong>으로 변경됩니다.<br />
+              계속하시겠습니까?
+            </p>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => setCompletedConfirmShow(false)}
+                style={{ padding: "8px 18px", borderRadius: 7, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, cursor: "pointer", color: "#374151" }}>
+                취소
+              </button>
+              <button onClick={() => {
+                setCompletedConfirmShow(false);
+                if (completedConfirmAction) { completedConfirmAction(); setCompletedConfirmAction(null); }
+              }}
+                style={{ padding: "8px 18px", borderRadius: 7, border: "none", background: "#dc2626", fontSize: 13, cursor: "pointer", color: "#fff", fontWeight: 600 }}>
+                확인 (수정 진행)
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </DraggableModal>
   );
 }

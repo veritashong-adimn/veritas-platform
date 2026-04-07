@@ -479,17 +479,24 @@ router.post("/admin/projects/:id/assign-translator", ...adminGuard, async (req, 
       return;
     }
 
+    // 재배정 여부 확인
+    const existingTasks = await db.select({ id: tasksTable.id }).from(tasksTable).where(eq(tasksTable.projectId, projectId));
+    const isReassignment = existingTasks.length > 0;
+
     const newTask = await db.transaction(async (tx) => {
       await tx.delete(tasksTable).where(eq(tasksTable.projectId, projectId));
       const [task] = await tx
         .insert(tasksTable)
-        .values({ projectId, translatorId })
+        .values({ projectId, translatorId, status: "waiting" })
         .returning();
-      await tx.update(projectsTable).set({ status: "matched" }).where(eq(projectsTable.id, projectId));
+      // 재배정 시: project.status = "approved" (롤백), 첫 배정 시: "matched"
+      const newStatus = isReassignment ? "approved" : "matched";
+      await tx.update(projectsTable).set({ status: newStatus }).where(eq(projectsTable.id, projectId));
       return task;
     });
 
-    await logEvent("project", projectId, `admin_assigned_translator_${translatorId}`, req.log, req.user ?? undefined);
+    const logType = isReassignment ? "translator_reassigned" : `admin_assigned_translator_${translatorId}`;
+    await logEvent("project", projectId, logType, req.log, req.user ?? undefined);
     res.status(201).json({ task: newTask, translatorEmail: translator.email });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to assign translator");
@@ -723,10 +730,12 @@ router.patch("/admin/projects/:id/info", ...adminGuard, requirePermission("proje
 
   const { title, companyId, contactId,
     requestingCompanyId, requestingDivisionId, billingCompanyId, payerCompanyId,
+    forceEdit,
   } = req.body as {
     title?: string; companyId?: number | null; contactId?: number | null;
     requestingCompanyId?: number | null; requestingDivisionId?: number | null;
     billingCompanyId?: number | null; payerCompanyId?: number | null;
+    forceEdit?: boolean;
   };
   const updates: Record<string, any> = {};
   if (title !== undefined) { if (!title.trim()) { res.status(400).json({ error: "제목은 빈 값일 수 없습니다." }); return; } updates.title = title.trim(); }
@@ -740,11 +749,19 @@ router.patch("/admin/projects/:id/info", ...adminGuard, requirePermission("proje
 
   try {
     const [project] = await db
-      .select({ id: projectsTable.id, billingCompanyId: projectsTable.billingCompanyId, payerCompanyId: projectsTable.payerCompanyId })
+      .select({ id: projectsTable.id, status: projectsTable.status, billingCompanyId: projectsTable.billingCompanyId, payerCompanyId: projectsTable.payerCompanyId })
       .from(projectsTable).where(eq(projectsTable.id, projectId));
     if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
+    // 완료 상태에서 강제 수정 처리
+    if (project.status === "completed") {
+      if (!forceEdit) {
+        res.status(409).json({ code: "completed_confirm_required", error: "완료된 프로젝트입니다. 수정 시 '진행 중' 상태로 변경됩니다. 계속하시겠습니까?" });
+        return;
+      }
+      updates.status = "in_progress";
+    }
     const [updated] = await db.update(projectsTable).set(updates).where(eq(projectsTable.id, projectId)).returning();
-    await logEvent("project", projectId, "admin_info_updated", req.log, req.user ?? undefined);
+    await logEvent("project", projectId, "project_updated", req.log, req.user ?? undefined);
     if (billingCompanyId !== undefined && billingCompanyId !== project.billingCompanyId) {
       await logEvent("project", projectId, "billing_company_changed", req.log, req.user ?? undefined,
         JSON.stringify({ from: project.billingCompanyId, to: billingCompanyId }));
@@ -858,9 +875,8 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
   try {
     const [project] = await db.select({ id: projectsTable.id, status: projectsTable.status, companyId: projectsTable.companyId }).from(projectsTable).where(eq(projectsTable.id, projectId));
     if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
-    if (!["created", "quoted"].includes(project.status)) {
-      res.status(400).json({ error: `견적은 '접수됨' 또는 '견적 발송' 상태에서만 생성 가능합니다. (현재: ${project.status})` }); return;
-    }
+    // 재생성 여부: "created" 이외 상태면 이미 견적이 존재했던 것으로 판단
+    const isRegeneration = project.status !== "created";
 
     // 선입금 차감: 잔액 자동 조회 및 검증 (신 방식: prepaid_accounts 우선, 구 방식 fallback)
     let computedPrepaidBefore: number | null = null;
@@ -985,7 +1001,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
 
     const result = await db.transaction(async tx => {
       const [quote] = await tx.insert(quotesTable).values({
-        projectId, price: String(totalPrice), status: "sent",
+        projectId, price: String(totalPrice), status: isRegeneration ? "pending" : "sent",
         note: note?.trim() || null,
         taxDocumentType: taxDocumentType || "tax_invoice",
         taxCategory: taxCategory || "normal",
@@ -1047,7 +1063,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
       await tx.update(projectsTable).set({ status: "quoted" }).where(eq(projectsTable.id, projectId));
       return quote;
     });
-    await logEvent("project", projectId, "quote_created", req.log, req.user ?? undefined);
+    await logEvent("project", projectId, isRegeneration ? "quote_updated" : "quote_created", req.log, req.user ?? undefined);
     res.status(201).json(result);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to create quote");
