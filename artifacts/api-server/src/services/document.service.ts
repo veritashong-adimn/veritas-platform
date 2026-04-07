@@ -66,7 +66,6 @@ export type QuoteDoc = {
   projectTitle: string;
   projectStatus: string;
   issuedAt: string;
-  validDays?: number;
 
   platform: PlatformInfo;
   bank?: BankInfo | null;

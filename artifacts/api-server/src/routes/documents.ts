@@ -184,7 +184,6 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
       projectTitle: project.title,
       projectStatus: project.status,
       issuedAt: issuedAt.toISOString(),
-      validDays: 30,
       platform,
       bank,
       company: company ? {
