@@ -107,7 +107,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     return permissions.includes(key);
   };
 
-  const [adminTab, setAdminTab] = useState<"dashboard"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions">("dashboard");
+  const [adminTab, setAdminTab] = useState<"dashboard"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings">("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
     try {
@@ -634,6 +634,31 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   useEffect(() => { if (adminTab === "translators") fetchTranslators(); }, [adminTab, fetchTranslators]);
   useEffect(() => { if (adminTab === "prepaid") fetchPrepaidAccounts(); }, [adminTab, fetchPrepaidAccounts]);
   useEffect(() => { if (adminTab === "billing") fetchBillingBatches(); }, [adminTab, fetchBillingBatches]);
+
+  // ── 환경설정 상태 ─────────────────────────────────────────────────────────
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsForm, setSettingsForm] = useState({
+    companyName: "", businessNumber: "", ceoName: "", address: "", email: "", phone: "",
+    bankName: "", accountNumber: "", accountHolder: "",
+  });
+  const fetchSettings = async () => {
+    const res = await fetch(api("/api/admin/settings"), { headers: { Authorization: `Bearer ${token}` } });
+    if (res.ok) {
+      const d = await res.json();
+      setSettingsForm({
+        companyName: d.companyName ?? "",
+        businessNumber: d.businessNumber ?? "",
+        ceoName: d.ceoName ?? "",
+        address: d.address ?? "",
+        email: d.email ?? "",
+        phone: d.phone ?? "",
+        bankName: d.bankName ?? "",
+        accountNumber: d.accountNumber ?? "",
+        accountHolder: d.accountHolder ?? "",
+      });
+    }
+  };
+  useEffect(() => { if (adminTab === "settings") fetchSettings(); }, [adminTab]);
 
   // 아코디언 상태 localStorage 저장
   useEffect(() => {
@@ -2898,6 +2923,85 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               </div>
             </Card>
           )}
+        </Section>
+      )}
+
+      {/* ── 환경설정 탭 ── */}
+      {adminTab === "settings" && (
+        <Section title="환경설정">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
+            {/* 공급자 정보 */}
+            <Card style={{ padding: "20px 22px" }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: "#111827", marginBottom: 16, paddingBottom: 10, borderBottom: "1px solid #f0f0f0" }}>🏢 공급자 정보</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {[
+                  { label: "상호명", key: "companyName", placeholder: "예) 주식회사 통번역 플랫폼" },
+                  { label: "사업자등록번호", key: "businessNumber", placeholder: "예) 123-45-67890" },
+                  { label: "대표자명", key: "ceoName", placeholder: "예) 홍길동" },
+                  { label: "이메일", key: "email", placeholder: "예) contact@example.com" },
+                  { label: "연락처", key: "phone", placeholder: "예) 02-1234-5678" },
+                ].map(({ label, key, placeholder }) => (
+                  <div key={key}>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>{label}</div>
+                    <input value={(settingsForm as any)[key]} onChange={e => setSettingsForm(f => ({ ...f, [key]: e.target.value }))}
+                      placeholder={placeholder}
+                      style={{ ...inputStyle, fontSize: 13 }} />
+                  </div>
+                ))}
+                <div>
+                  <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>주소</div>
+                  <textarea value={settingsForm.address} onChange={e => setSettingsForm(f => ({ ...f, address: e.target.value }))}
+                    placeholder="예) 서울특별시 강남구 테헤란로 123"
+                    rows={2}
+                    style={{ ...inputStyle, fontSize: 13, resize: "vertical" }} />
+                </div>
+              </div>
+            </Card>
+            {/* 입금 계좌 */}
+            <Card style={{ padding: "20px 22px" }}>
+              <div style={{ fontWeight: 700, fontSize: 15, color: "#111827", marginBottom: 16, paddingBottom: 10, borderBottom: "1px solid #f0f0f0" }}>🏦 입금 계좌</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {[
+                  { label: "은행명", key: "bankName", placeholder: "예) 신한은행" },
+                  { label: "계좌번호", key: "accountNumber", placeholder: "예) 123-456-789012" },
+                  { label: "예금주", key: "accountHolder", placeholder: "예) 주식회사 통번역 플랫폼" },
+                ].map(({ label, key, placeholder }) => (
+                  <div key={key}>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>{label}</div>
+                    <input value={(settingsForm as any)[key]} onChange={e => setSettingsForm(f => ({ ...f, [key]: e.target.value }))}
+                      placeholder={placeholder}
+                      style={{ ...inputStyle, fontSize: 13 }} />
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 16, padding: "12px 14px", background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0" }}>
+                <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+                  💡 입금 계좌 정보는 견적서·거래명세서 PDF에 자동으로 표시됩니다.<br />
+                  비워두면 계좌 정보 섹션이 PDF에서 생략됩니다.
+                </div>
+              </div>
+            </Card>
+          </div>
+          {/* 저장 버튼 */}
+          <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <button
+              onClick={async () => {
+                setSettingsSaving(true);
+                try {
+                  const res = await fetch(api("/api/admin/settings"), {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                    body: JSON.stringify(settingsForm),
+                  });
+                  if (res.ok) { setToast("설정이 저장되었습니다."); }
+                  else { const d = await res.json(); setToast(d.error ?? "저장 실패"); }
+                } finally { setSettingsSaving(false); }
+              }}
+              disabled={settingsSaving}
+              style={{ padding: "9px 24px", borderRadius: 8, border: "none", background: "#2563eb", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: settingsSaving ? 0.7 : 1 }}>
+              {settingsSaving ? "저장 중…" : "💾 저장"}
+            </button>
+          </div>
         </Section>
       )}
 

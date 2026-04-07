@@ -74,10 +74,11 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     accentColor: "#6b7280",
     perm: "menu.user",
     items: [
-      { id: "users",  label: "사용자관리", icon: "👤", perm: "menu.user" },
-      { id: "roles",  label: "역할관리",   icon: "🔑", perm: "menu.permission" },
-      { id: "board",  label: "게시판",     icon: "📌", perm: "menu.board" },
-      { id: "test",   label: "운영 테스트", icon: "🧪", perm: "menu.user" },
+      { id: "users",    label: "사용자관리", icon: "👤", perm: "menu.user" },
+      { id: "roles",    label: "역할관리",   icon: "🔑", perm: "menu.permission" },
+      { id: "board",    label: "게시판",     icon: "📌", perm: "menu.board" },
+      { id: "settings", label: "환경설정",   icon: "⚙️" },
+      { id: "test",     label: "운영 테스트", icon: "🧪", perm: "menu.user" },
     ],
   },
 ];
@@ -99,5 +100,6 @@ export const ADMIN_PAGE_TITLE: Record<string, string> = {
   roles:       "역할관리",
   permissions: "권한설정",
   board:       "게시판",
+  settings:    "환경설정",
   test:        "운영 테스트",
 };

@@ -26,3 +26,4 @@ export * from "./project_files";
 export * from "./billing_batches";
 export * from "./prepaid_accounts";
 export * from "./company_name_history";
+export * from "./settings";

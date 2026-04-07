@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import {
   db, projectsTable, quotesTable, paymentsTable, settlementsTable,
   usersTable, companiesTable, contactsTable, notesTable, quoteItemsTable,
-  prepaidAccountsTable, prepaidLedgerTable,
+  prepaidAccountsTable, prepaidLedgerTable, settingsTable,
 } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
@@ -15,32 +15,27 @@ import { quoteDocNumber, statementDocNumber } from "../services/doc-number";
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin")];
 
-/**
- * 플랫폼(발신기관) 정보
- * 향후: DB settings 테이블 또는 환경변수로 교체
- */
-const PLATFORM: PlatformInfo = {
-  name: process.env.PLATFORM_NAME ?? "통번역 플랫폼",
-  representativeName: process.env.PLATFORM_REPRESENTATIVE ?? "대표자명",
-  businessNumber: process.env.PLATFORM_BIZ_NUMBER ?? "000-00-00000",
-  address: process.env.PLATFORM_ADDRESS ?? "서울특별시 강남구 테헤란로 000, 00층",
-  phone: process.env.PLATFORM_PHONE ?? "02-000-0000",
-  email: process.env.PLATFORM_EMAIL ?? "contact@platform.com",
-  website: process.env.PLATFORM_WEBSITE,
-};
-
-/**
- * 계좌 정보 (선택적)
- * 향후: DB settings 테이블에서 로드
- */
-const BANK: BankInfo | null =
-  process.env.BANK_NAME && process.env.BANK_ACCOUNT
-    ? {
-        bankName: process.env.BANK_NAME,
-        accountNumber: process.env.BANK_ACCOUNT,
-        accountHolder: process.env.BANK_HOLDER ?? PLATFORM.name,
-      }
-    : null;
+/** settings 테이블에서 플랫폼·계좌 정보를 동적으로 로드 */
+async function loadPlatformAndBank(): Promise<{ platform: PlatformInfo; bank: BankInfo | null }> {
+  const rows = await db.select().from(settingsTable).limit(1);
+  const s = rows[0] ?? {};
+  const platform: PlatformInfo = {
+    name: s.companyName || process.env.PLATFORM_NAME || "통번역 플랫폼",
+    representativeName: s.ceoName || process.env.PLATFORM_REPRESENTATIVE || undefined,
+    businessNumber: s.businessNumber || process.env.PLATFORM_BIZ_NUMBER || undefined,
+    address: s.address || process.env.PLATFORM_ADDRESS || undefined,
+    phone: s.phone || process.env.PLATFORM_PHONE || undefined,
+    email: s.email || process.env.PLATFORM_EMAIL || undefined,
+    website: process.env.PLATFORM_WEBSITE,
+  };
+  const bank: BankInfo | null =
+    s.bankName && s.accountNumber
+      ? { bankName: s.bankName, accountNumber: s.accountNumber, accountHolder: s.accountHolder || platform.name }
+      : (process.env.BANK_NAME && process.env.BANK_ACCOUNT
+          ? { bankName: process.env.BANK_NAME, accountNumber: process.env.BANK_ACCOUNT, accountHolder: process.env.BANK_HOLDER || platform.name }
+          : null);
+  return { platform, bank };
+}
 
 // ── 공통 데이터 로더 ─────────────────────────────────────────────────────────
 
@@ -130,6 +125,7 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
     if (!data) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
 
     const { project, quote, quoteItems, company, contact, notes } = data;
+    const { platform, bank } = await loadPlatformAndBank();
     const issuedAt = new Date();
     const docNumber = quoteDocNumber(quote?.id ?? projectId, issuedAt);
     const totalAmount = quote?.price != null ? Number(quote.price) : null;
@@ -189,8 +185,8 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
       projectStatus: project.status,
       issuedAt: issuedAt.toISOString(),
       validDays: 30,
-      platform: PLATFORM,
-      bank: BANK,
+      platform,
+      bank,
       company: company ? {
         name: company.name,
         businessNumber: company.businessNumber,
@@ -257,6 +253,7 @@ router.get("/admin/projects/:id/pdf/statement", ...adminGuard, async (req, res) 
     if (!data) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
 
     const { project, payment, settlement, company, contact, notes } = data;
+    const { platform, bank } = await loadPlatformAndBank();
     const issuedAt = new Date();
     const docNumber = statementDocNumber(projectId, issuedAt);
 
@@ -266,8 +263,8 @@ router.get("/admin/projects/:id/pdf/statement", ...adminGuard, async (req, res) 
       projectTitle: project.title,
       projectStatus: project.status,
       issuedAt: issuedAt.toISOString(),
-      platform: PLATFORM,
-      bank: BANK,
+      platform,
+      bank,
       company: company ? {
         name: company.name,
         businessNumber: company.businessNumber,

@@ -6,7 +6,7 @@ import {
   contactsTable, companiesTable, translatorRatesTable, divisionsTable,
   quoteItemsTable, calcQuoteItemAmounts,
   billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
-  prepaidAccountsTable, prepaidLedgerTable,
+  prepaidAccountsTable, prepaidLedgerTable, settingsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
@@ -2588,6 +2588,55 @@ router.get("/admin/export/settlements", ...adminGuard, async (req, res) => {
     req.log.error({ err }, "Admin: failed to export settlements");
     res.status(500).json({ error: "내보내기 실패." });
   }
+});
+
+// ── 환경설정 (공급자 정보 + 입금계좌) ─────────────────────────────────────────
+
+router.get("/admin/settings", ...adminGuard, async (_req, res) => {
+  try {
+    const rows = await db.select().from(settingsTable).limit(1);
+    if (rows.length === 0) {
+      res.json({});
+    } else {
+      res.json(rows[0]);
+    }
+  } catch (e) { res.status(500).json({ error: "설정 조회 실패" }); }
+});
+
+router.patch("/admin/settings", ...adminGuard, async (req, res) => {
+  try {
+    const {
+      companyName, businessNumber, ceoName, address, email, phone,
+      bankName, accountNumber, accountHolder,
+    } = req.body as {
+      companyName?: string; businessNumber?: string; ceoName?: string;
+      address?: string; email?: string; phone?: string;
+      bankName?: string; accountNumber?: string; accountHolder?: string;
+    };
+
+    const existing = await db.select({ id: settingsTable.id }).from(settingsTable).limit(1);
+
+    const payload = {
+      companyName: companyName?.trim() || null,
+      businessNumber: businessNumber?.trim() || null,
+      ceoName: ceoName?.trim() || null,
+      address: address?.trim() || null,
+      email: email?.trim() || null,
+      phone: phone?.trim() || null,
+      bankName: bankName?.trim() || null,
+      accountNumber: accountNumber?.trim() || null,
+      accountHolder: accountHolder?.trim() || null,
+      updatedAt: new Date(),
+    };
+
+    if (existing.length === 0) {
+      const [row] = await db.insert(settingsTable).values(payload).returning();
+      res.json(row);
+    } else {
+      const [row] = await db.update(settingsTable).set(payload).where(eq(settingsTable.id, existing[0].id)).returning();
+      res.json(row);
+    }
+  } catch (e) { res.status(500).json({ error: "설정 저장 실패" }); }
 });
 
 export default router;
