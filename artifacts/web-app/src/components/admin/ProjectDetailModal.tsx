@@ -880,15 +880,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       background: "#fdf4ff", border: "1px solid #d8b4fe",
                       borderRadius: 7, padding: "10px 12px", marginBottom: 8,
                     }}>
-                      <span style={{ fontSize: 15, lineHeight: 1.2, flexShrink: 0 }}>⚠️</span>
+                      <span style={{ fontSize: 15, lineHeight: 1.2, flexShrink: 0 }}>ℹ️</span>
                       <div style={{ flex: 1 }}>
                         <span style={{ fontSize: 12, color: "#7c3aed", lineHeight: 1.6 }}>
-                          배정된 통번역사가 없습니다. 먼저 <strong>'통번역사 추천'</strong>에서 통번역사를 배정한 후 상태를 변경하세요.
+                          아직 통번역사가 배정되지 않았습니다.<br />
+                          아래 <strong>'통번역사 배정하기'</strong> 버튼으로 배정하면 상태가 자동으로 변경됩니다.
+                          <span style={{ color: "#a78bfa", fontWeight: 400 }}> (드롭다운으로 직접 변경할 수 없습니다)</span>
                         </span>
                         <div style={{ marginTop: 8 }}>
                           <GhostBtn onClick={loadCandidates} disabled={loadingCandidates} color="#7c3aed"
                             style={{ fontSize: 12, padding: "6px 14px", fontWeight: 700, background: "#f3e8ff" }}>
-                            {loadingCandidates ? "조회 중..." : "통번역사 추천/배정"}
+                            {loadingCandidates ? "조회 중..." : "통번역사 배정하기"}
                           </GhostBtn>
                         </div>
                       </div>
@@ -922,9 +924,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       <select value={statusTarget} onChange={e => setStatusTarget(e.target.value)}
                         style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12 }}>
                         <option value={detail.status}>{STATUS_LABEL[detail.status] ?? detail.status} (현재)</option>
-                        {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).map(s => (
-                          <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
-                        ))}
+                        {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? [])
+                          .filter(s => s !== "matched" || (detail.tasks ?? []).length > 0)
+                          .map(s => (
+                            <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
+                          ))}
                       </select>
                       <GhostBtn
                         onClick={handleStatusChange}
