@@ -1904,7 +1904,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         </div>
                         <div>
                           <label style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", display: "block", marginBottom: 3 }}>
-                            청구 방식 (거래처 기본: <span style={{ color: "#1d4ed8" }}>{companyBillingType === "prepaid_wallet" ? "선입금 차감" : companyBillingType === "monthly_billing" ? "누적 청구" : "건별 후불"}</span>)
+                            청구 방식 (거래처 기본: <span style={{ color: "#1d4ed8" }}>{companyBillingType === "prepaid_wallet" ? "선입금 차감" : companyBillingType === "monthly_billing" ? "누적 청구" : companyBillingType === "prepay_upfront" ? "선결제(카드/현금)" : "건별 후불"}</span>)
                           </label>
                           {quoteType === "accumulated_batch" ? (
                             <div style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, background: "#ecfdf5", borderColor: "#6ee7b7", color: "#065f46", fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
@@ -1916,6 +1916,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               <option value="postpaid_per_project">건별 후불</option>
                               <option value="monthly_billing">누적 청구</option>
                               <option value="prepaid_wallet">선입금 차감</option>
+                              <option value="prepay_upfront">선결제(카드/현금)</option>
                             </select>
                           )}
                         </div>
