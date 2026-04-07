@@ -248,14 +248,19 @@ const COMMON_CSS = `
   /* ── 푸터 ───────────────────────────────── */
   .doc-footer{margin-top:18px;padding-top:10px;border-top:1px solid #e2e8f0;text-align:center;font-size:10px;color:#9ca3af;line-height:1.9}
 
-  /* ── 인쇄 버튼 ──────────────────────────── */
-  .print-btn{position:fixed;bottom:20px;right:20px;background:#1e3a8a;color:#fff;border:none;border-radius:10px;padding:11px 20px;font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 4px 14px rgba(30,58,138,.4);z-index:100;display:flex;align-items:center;gap:6px}
-  .print-badge{background:#fff;color:#1e3a8a;border-radius:4px;padding:1px 6px;font-size:11px}
+  /* ── 상단 액션 바 ────────────────────────── */
+  .action-bar{position:fixed;top:0;left:0;right:0;height:48px;background:#1e293b;display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:0 24px;z-index:200;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+  .action-bar-title{flex:1;font-size:13px;font-weight:600;color:#cbd5e1;letter-spacing:.2px}
+  .btn-pdf{background:#2563eb;color:#fff;border:none;border-radius:7px;padding:8px 18px;font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:5px}
+  .btn-close{background:transparent;color:#94a3b8;border:1px solid #475569;border-radius:7px;padding:8px 14px;font-size:12px;font-weight:600;cursor:pointer}
+  .btn-pdf:hover{background:#1d4ed8}
+  .btn-close:hover{background:#334155;color:#e2e8f0}
+  body{padding-top:56px}
 
   @media print{
-    html,body{background:#fff}
+    html,body{background:#fff;padding-top:0}
+    .action-bar{display:none}
     .a4{width:100%;margin:0;padding:12mm 14mm 10mm;box-shadow:none}
-    .print-btn{display:none}
     @page{size:A4 portrait;margin:8mm 10mm}
     .no-break{page-break-inside:avoid}
   }
@@ -273,19 +278,14 @@ function baseHtml(title: string, body: string): string {
 <style>${COMMON_CSS}</style>
 </head>
 <body>
+<div class="action-bar">
+  <span class="action-bar-title">📄 ${esc(title)}</span>
+  <button class="btn-pdf" onclick="window.print()">🖨 PDF 출력</button>
+  <button class="btn-close" onclick="window.close()">✕ 닫기</button>
+</div>
 <div class="a4">
 ${body}
 </div>
-<button class="print-btn" onclick="window.print()">
-  🖨 인쇄 / PDF 저장 <span class="print-badge">Ctrl+P</span>
-</button>
-<script>
-(function(){
-  if(window.location.hash==='#noprint') return;
-  var t=setTimeout(function(){window.print();},700);
-  window.addEventListener('beforeprint',function(){clearTimeout(t);},{once:true});
-})();
-</script>
 </body>
 </html>`;
 }
