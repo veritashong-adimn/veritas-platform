@@ -1413,13 +1413,34 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   {/* [재무 상태] */}
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>재무 상태</div>
-                    <select value={projectFinancialFilter} onChange={e => { setProjectFinancialFilter(e.target.value); setProjectPage(1); }}
+                    <select
+                      value={
+                        projectQuickFilter === "prepaid_deduction" ? "prepaid_used" :
+                        projectQuickFilter === "has_prepaid_balance" ? "balance" :
+                        projectQuickFilter === "accumulated_in_progress" ? "ongoing" :
+                        projectFinancialFilter
+                      }
+                      onChange={e => {
+                        const v = e.target.value;
+                        if (v === "prepaid_used") {
+                          setProjectQuickFilter("prepaid_deduction"); setProjectFinancialFilter("all"); setProjectPage(1);
+                        } else if (v === "balance") {
+                          setProjectQuickFilter("has_prepaid_balance"); setProjectFinancialFilter("all"); setProjectPage(1);
+                        } else if (v === "ongoing") {
+                          setProjectQuickFilter("accumulated_in_progress"); setProjectFinancialFilter("all"); setProjectPage(1);
+                        } else {
+                          setProjectFinancialFilter(v); setProjectQuickFilter("all"); setProjectPage(1);
+                        }
+                      }}
                       style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11, cursor: "pointer" }}>
                       <option value="all">전체</option>
                       <option value="unbilled">미청구</option>
                       <option value="billed">청구 완료</option>
                       <option value="receivable">미수금</option>
                       <option value="paid">입금 완료</option>
+                      <option value="prepaid_used">선입금 차감</option>
+                      <option value="balance">잔액 남음</option>
+                      <option value="ongoing">누적 진행중</option>
                     </select>
                   </div>
                   {/* [견적 유형] */}
