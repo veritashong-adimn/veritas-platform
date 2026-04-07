@@ -58,6 +58,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   const [form, setForm] = useState({
     email: "", password: "", confirmPassword: "", name: "", phone: "", region: "",
     languagePairs: "", languageLevel: "", grade: "", bio: "", ratePerWord: "", ratePerPage: "",
+    unitType: "eojeol", unitPrice: "",
     resumeUrl: "", availabilityStatus: "available",
   });
   const [sf, setSF] = useState(emptySensitive());
@@ -121,6 +122,8 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           bio: form.bio.trim() || undefined,
           ratePerWord: form.ratePerWord ? Number(form.ratePerWord) : undefined,
           ratePerPage: form.ratePerPage ? Number(form.ratePerPage) : undefined,
+          unitType: form.unitType || "eojeol",
+          unitPrice: form.unitPrice ? Number(form.unitPrice) : undefined,
           resumeUrl: form.resumeUrl.trim() || undefined,
           availabilityStatus: form.availabilityStatus,
         }),
@@ -297,8 +300,16 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
             {GRADES.map(g => <option key={g} value={g}>{g}등급</option>)}
           </select>
         </div>
-        <F label="기본 단가/어절 (원)" field="ratePerWord" type="number" placeholder="예: 40" />
-        <F label="기본 단가/페이지 (원)" field="ratePerPage" type="number" placeholder="예: 30000" />
+        <div>
+          <label style={labelSt}>단가 단위</label>
+          <select value={form.unitType} onChange={e => setF("unitType", e.target.value)} style={inputStyle}>
+            <option value="eojeol">어절</option>
+            <option value="char">글자</option>
+            <option value="page">페이지</option>
+            <option value="hour">시간</option>
+          </select>
+        </div>
+        <F label="기본 단가 (원)" field="unitPrice" type="number" placeholder="예: 40" />
       </div>
 
       {/* ── 파일/기타 ── */}

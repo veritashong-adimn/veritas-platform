@@ -40,7 +40,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [form, setForm] = useState({
     languagePairs: "", languageLevel: "", specializations: "", education: "", major: "",
     graduationYear: "", region: "", grade: "", rating: "", availabilityStatus: "available",
-    bio: "", ratePerWord: "", ratePerPage: "", resumeUrl: "", portfolioUrl: "",
+    bio: "", ratePerWord: "", ratePerPage: "", unitType: "eojeol", unitPrice: "",
+    resumeUrl: "", portfolioUrl: "",
   });
 
   const authH = { Authorization: `Bearer ${token}` };
@@ -69,6 +70,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             availabilityStatus: p.availabilityStatus ?? "available",
             bio: p.bio ?? "", ratePerWord: p.ratePerWord ? String(p.ratePerWord) : "",
             ratePerPage: p.ratePerPage ? String(p.ratePerPage) : "",
+            unitType: (p as any).unitType ?? "eojeol",
+            unitPrice: (p as any).unitPrice ? String((p as any).unitPrice) : "",
             resumeUrl: p.resumeUrl ?? "", portfolioUrl: p.portfolioUrl ?? "",
           });
         }
@@ -92,6 +95,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           rating: form.rating ? Number(form.rating) : null,
           ratePerWord: form.ratePerWord ? Number(form.ratePerWord) : null,
           ratePerPage: form.ratePerPage ? Number(form.ratePerPage) : null,
+          unitType: form.unitType || "eojeol",
+          unitPrice: form.unitPrice ? Number(form.unitPrice) : null,
           grade: form.grade || null,
           languageLevel: form.languageLevel || null,
           resumeUrl: form.resumeUrl || null,
@@ -248,8 +253,21 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 <option value="unavailable">불가</option>
               </select>
             </div>
-            <F label="기본 단가 (어절)" field="ratePerWord" type="number" />
-            <F label="기본 단가 (페이지)" field="ratePerPage" type="number" />
+            <div>
+              <label style={labelSt}>기본 단가</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                <select value={form.unitType} onChange={e => setForm(p => ({ ...p, unitType: e.target.value }))}
+                  style={{ ...inputStyle, fontSize: 13, padding: "7px 8px", flex: "0 0 90px" }}>
+                  <option value="eojeol">어절</option>
+                  <option value="char">글자</option>
+                  <option value="page">페이지</option>
+                  <option value="hour">시간</option>
+                </select>
+                <input type="number" value={form.unitPrice}
+                  onChange={e => setForm(p => ({ ...p, unitPrice: e.target.value }))}
+                  placeholder="단가(원)" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", flex: 1 }} />
+              </div>
+            </div>
             <F label="이력서 URL" field="resumeUrl" placeholder="https://..." />
             <F label="포트폴리오 URL" field="portfolioUrl" placeholder="https://..." />
           </div>
@@ -347,9 +365,11 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               placeholder="언어조합" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
             <select value={rateForm.unit} onChange={e => setRateForm(p => ({ ...p, unit: e.target.value }))}
               style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }}>
-              <option value="word">어절</option>
+              <option value="eojeol">어절</option>
+              <option value="char">글자</option>
               <option value="page">페이지</option>
               <option value="hour">시간</option>
+              <option value="word">단어(구형)</option>
             </select>
             <input type="number" value={rateForm.rate} onChange={e => setRateForm(p => ({ ...p, rate: e.target.value }))}
               placeholder="단가(원)" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
@@ -363,7 +383,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 <div key={r.id} style={{ display: "flex", gap: 12, alignItems: "center", padding: "8px 12px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6", fontSize: 13 }}>
                   <span style={{ fontWeight: 600, color: "#374151", minWidth: 80 }}>{r.serviceType}</span>
                   <span style={{ color: "#2563eb", minWidth: 80 }}>{r.languagePair}</span>
-                  <span style={{ color: "#6b7280", minWidth: 50 }}>{r.unit === "word" ? "어절" : r.unit === "page" ? "페이지" : "시간"}</span>
+                  <span style={{ color: "#6b7280", minWidth: 50 }}>{r.unit === "word" || r.unit === "eojeol" ? "어절" : r.unit === "char" ? "글자" : r.unit === "page" ? "페이지" : r.unit === "hour" ? "시간" : r.unit}</span>
                   <span style={{ fontWeight: 700, color: "#059669", flex: 1 }}>{r.rate.toLocaleString()}원</span>
                   <button onClick={() => handleDeleteRate(r.id)} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, cursor: "pointer" }}>삭제</button>
                 </div>

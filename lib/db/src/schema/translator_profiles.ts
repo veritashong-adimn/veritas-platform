@@ -21,6 +21,8 @@ export const translatorProfilesTable = pgTable("translator_profiles", {
   bio: text("bio"),
   ratePerWord: integer("rate_per_word"),
   ratePerPage: integer("rate_per_page"),
+  unitType: text("unit_type").default("eojeol"),
+  unitPrice: integer("unit_price"),
   resumeUrl: text("resume_url"),
   portfolioUrl: text("portfolio_url"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

@@ -38,6 +38,8 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         bio: translatorProfilesTable.bio,
         ratePerWord: translatorProfilesTable.ratePerWord,
         ratePerPage: translatorProfilesTable.ratePerPage,
+        unitType: translatorProfilesTable.unitType,
+        unitPrice: translatorProfilesTable.unitPrice,
         education: translatorProfilesTable.education,
         major: translatorProfilesTable.major,
         graduationYear: translatorProfilesTable.graduationYear,
@@ -92,7 +94,7 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
   const {
     email, password, name, phone, region,
     languagePairs, languageLevel, specializations,
-    grade, bio, ratePerWord, ratePerPage,
+    grade, bio, ratePerWord, ratePerPage, unitType, unitPrice,
     resumeUrl, portfolioUrl, availabilityStatus,
   } = req.body;
 
@@ -117,6 +119,8 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
       grade: grade || null, bio: bio?.trim() || null,
       ratePerWord: ratePerWord ? Number(ratePerWord) : null,
       ratePerPage: ratePerPage ? Number(ratePerPage) : null,
+      unitType: unitType ?? "eojeol",
+      unitPrice: unitPrice ? Number(unitPrice) : null,
       resumeUrl: resumeUrl?.trim() || null, portfolioUrl: portfolioUrl?.trim() || null,
       availabilityStatus: availabilityStatus ?? "available",
     }).returning();
@@ -195,7 +199,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
   const {
     languagePairs, languageLevel, specializations, education, major,
     graduationYear, phone, region, grade, rating, availabilityStatus, bio,
-    ratePerWord, ratePerPage, resumeUrl, portfolioUrl,
+    ratePerWord, ratePerPage, unitType, unitPrice, resumeUrl, portfolioUrl,
   } = req.body;
 
   try {
@@ -212,6 +216,8 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
       availabilityStatus: availabilityStatus ?? "available",
       bio, ratePerWord: ratePerWord ? Number(ratePerWord) : undefined,
       ratePerPage: ratePerPage ? Number(ratePerPage) : undefined,
+      unitType: unitType ?? undefined,
+      unitPrice: unitPrice != null ? Number(unitPrice) : undefined,
       resumeUrl: resumeUrl ?? null, portfolioUrl: portfolioUrl ?? null,
       updatedAt: new Date(),
     };

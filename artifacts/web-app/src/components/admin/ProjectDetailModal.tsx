@@ -1696,7 +1696,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               <div key={r.id} style={{ display: "flex", gap: 10, fontSize: 12, padding: "5px 10px", background: "#f9fafb", borderRadius: 6 }}>
                                 <span style={{ color: "#374151", fontWeight: 600 }}>{r.serviceType}</span>
                                 <span style={{ color: "#6b7280" }}>{r.languagePair}</span>
-                                <span style={{ color: "#059669", fontWeight: 600, marginLeft: "auto" }}>{Number(r.rate).toLocaleString()}원/{r.unit === "word" ? "단어" : r.unit === "page" ? "페이지" : "시간"}</span>
+                                <span style={{ color: "#059669", fontWeight: 600, marginLeft: "auto" }}>{Number(r.rate).toLocaleString()}원/{r.unit === "word" || r.unit === "eojeol" ? "어절" : r.unit === "char" ? "글자" : r.unit === "page" ? "페이지" : r.unit === "hour" ? "시간" : r.unit}</span>
                               </div>
                             ))}
                           </div>
@@ -2354,8 +2354,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 </div>
                                 <input value={it.languagePair} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, languagePair: e.target.value } : p))}
                                   placeholder="EN→KO" style={{ ...inputStyle, fontSize: 11, padding: "6px 4px", textAlign: "center" }} />
-                                <input value={it.unit} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: e.target.value } : p))}
-                                  placeholder="건" style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "center" }} />
+                                <select value={it.unit} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: e.target.value } : p))}
+                                  style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "center" }}>
+                                  <option value="건">건</option>
+                                  <option value="어절">어절</option>
+                                  <option value="글자">글자</option>
+                                  <option value="페이지">페이지</option>
+                                  <option value="시간">시간</option>
+                                </select>
                                 <input type="number" value={it.quantity} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: e.target.value } : p))}
                                   min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "right" }} />
                                 <input type="number" value={it.unitPrice} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: e.target.value } : p))}
