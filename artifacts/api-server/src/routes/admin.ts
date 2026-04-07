@@ -819,7 +819,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
   const {
     amount, items, note,
     taxDocumentType, taxCategory,
-    quoteType, billingType,
+    quoteType, billingType, paymentMethod,
     validUntil, issueDate, invoiceDueDate, paymentDueDate,
     prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
     prepaidAccountId,
@@ -827,7 +827,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
   } = req.body as {
     amount?: number; items?: ItemInput[]; note?: string;
     taxDocumentType?: string; taxCategory?: string;
-    quoteType?: string; billingType?: string;
+    quoteType?: string; billingType?: string; paymentMethod?: string;
     validUntil?: string; issueDate?: string;
     invoiceDueDate?: string; paymentDueDate?: string;
     prepaidBalanceBefore?: number; prepaidUsageAmount?: number; prepaidBalanceAfter?: number;
@@ -986,6 +986,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
         taxCategory: taxCategory || "normal",
         quoteType: quoteType || "b2b_standard",
         billingType: billingType || "postpaid_per_project",
+        paymentMethod: billingType === "prepay_upfront" ? (paymentMethod || "card") : null,
         validUntil: validUntil || null,
         issueDate: issueDate || null,
         invoiceDueDate: invoiceDueDate || null,

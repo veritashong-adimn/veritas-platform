@@ -21,8 +21,10 @@ export const quotesTable = pgTable("quotes", {
   // ── 견적서 유형 ────────────────────────────────────────
   // b2c_prepaid | b2b_standard | prepaid_deduction | accumulated_batch
   quoteType: varchar("quote_type", { length: 50 }).notNull().default("b2b_standard"),
-  // postpaid_per_project | prepaid_wallet | monthly_billing
+  // postpaid_per_project | prepaid_wallet | monthly_billing | prepay_upfront
   billingType: varchar("billing_type", { length: 50 }).notNull().default("postpaid_per_project"),
+  // card | cash | bank (prepay_upfront 청구방식에서만 사용)
+  paymentMethod: varchar("payment_method", { length: 50 }),
 
   // ── 공통 날짜 ──────────────────────────────────────────
   validUntil: date("valid_until"),

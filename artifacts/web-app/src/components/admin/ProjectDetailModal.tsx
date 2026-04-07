@@ -101,6 +101,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [quoteTaxCategory, setQuoteTaxCategory] = useState<"normal" | "zero_rated" | "consignment" | "consignment_zero_rated">("normal");
   const [quoteType, setQuoteType] = useState<"b2b_standard" | "b2c_prepaid" | "prepaid_deduction" | "accumulated_batch">("b2b_standard");
   const [quoteBillingType, setQuoteBillingType] = useState<string>("postpaid_per_project");
+  const [quotePaymentMethod, setQuotePaymentMethod] = useState<string>("card");
   const changeQuoteType = (val: typeof quoteType) => {
     setQuoteType(val);
     if (val === "accumulated_batch") setQuoteBillingType("monthly_billing");
@@ -638,6 +639,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       body.taxDocumentType = quoteTaxDocType;
       body.taxCategory = quoteTaxCategory;
       body.quoteType = quoteType;
+      body.billingType = quoteBillingType || companyBillingType;
+      if ((quoteBillingType || companyBillingType) === "prepay_upfront") {
+        body.paymentMethod = quotePaymentMethod;
+      }
       // 공통 날짜 필드
       if (quoteValidUntil) body.validUntil = quoteValidUntil;
       if (quoteIssueDate) body.issueDate = quoteIssueDate;
@@ -674,6 +679,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       setQuoteValidUntil(""); setQuoteIssueDate(""); setQuoteInvoiceDueDate(""); setQuotePaymentDueDate("");
       setQuotePrepaidUsage(""); setSelectedPrepaidAcctId(null); setCompPrepaidAccounts([]); setAcctLedger([]);
       setQuoteBatchStart(""); setQuoteBatchEnd(""); setBatchCandidates([]); setBatchSelected(new Set()); setBatchQueried(false);
+      setQuoteBillingType("postpaid_per_project"); setQuotePaymentMethod("card");
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 견적 생성 실패"); }
     finally { setCreatingQuote(false); }
@@ -1922,6 +1928,19 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         </div>
                       </div>
 
+                      {/* 결제수단 — 선결제(prepay_upfront) 선택 시만 노출 */}
+                      {(quoteBillingType || companyBillingType) === "prepay_upfront" && (
+                        <div style={{ marginBottom: 10 }}>
+                          <label style={{ fontSize: 10, fontWeight: 700, color: "#059669", display: "block", marginBottom: 3 }}>결제수단 *</label>
+                          <select value={quotePaymentMethod} onChange={e => setQuotePaymentMethod(e.target.value)}
+                            style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, borderColor: "#6ee7b7" }}>
+                            <option value="card">카드</option>
+                            <option value="cash">현금</option>
+                            <option value="bank">계좌이체</option>
+                          </select>
+                        </div>
+                      )}
+
                       {/* 세무/발행 구분 선택 */}
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
@@ -2086,10 +2105,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           prepaid_deduction: ["선입금 차감", "#fdf4ff", "#7c3aed"],
                           accumulated_batch: ["누적 견적", "#ecfdf5", "#065f46"],
                         };
+                        const pmLabel: Record<string, string> = { card: "카드", cash: "현금", bank: "계좌이체" };
+                        const btLabelMap: Record<string, string> = {
+                          postpaid_per_project: "건별 후불", monthly_billing: "누적 청구",
+                          prepaid_wallet: "선입금 차감", prepay_upfront: "선결제",
+                        };
                         const tdt = (q as any).taxDocumentType ?? "tax_invoice";
                         const tc = (q as any).taxCategory ?? "normal";
                         const qt = (q as any).quoteType ?? "b2b_standard";
+                        const bt = (q as any).billingType ?? "postpaid_per_project";
+                        const pm = (q as any).paymentMethod ?? null;
                         const [qtText, qtBg, qtColor] = qtLabel[qt] ?? ["기본", "#f8fafc", "#374151"];
+                        const btText = bt === "prepay_upfront" && pm ? `선결제(${pmLabel[pm] ?? pm})` : (btLabelMap[bt] ?? bt);
                         return (
                         <div key={q.id} style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 12px", marginBottom: 6, fontSize: 13, border: "1px solid #e5e7eb" }}>
                           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
@@ -2098,6 +2125,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             <StatusBadge status={q.status} />
                             <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 4, background: qtBg, color: qtColor, border: `1px solid ${qtColor}33`, fontWeight: 800 }}>
                               {qtText}
+                            </span>
+                            <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 4, background: bt === "prepay_upfront" ? "#ecfdf5" : "#f8fafc", color: bt === "prepay_upfront" ? "#065f46" : "#374151", border: "1px solid #d1fae5", fontWeight: 700 }}>
+                              {btText}
                             </span>
                             <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 4, background: tdt === "bill" ? "#fef3c7" : "#eff6ff", color: tdt === "bill" ? "#92400e" : "#1d4ed8", border: `1px solid ${tdt === "bill" ? "#fde68a" : "#bfdbfe"}`, fontWeight: 700 }}>
                               {taxDocLabel[tdt] ?? tdt}
