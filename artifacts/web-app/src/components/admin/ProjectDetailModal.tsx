@@ -972,12 +972,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         )}
 
                         {/* 통번역사 배정 상태 배지 */}
-                        {isMatchedStep && (
+                        {isMatchedStep && !hasTranslator && (
                           <span style={{
                             fontSize: 9, fontWeight: 600, whiteSpace: "nowrap",
-                            color: hasTranslator ? "#16a34a" : "#d97706",
+                            color: "#d97706",
                           }}>
-                            {hasTranslator ? "(완료)" : "(필요)"}
+                            (필요)
                           </span>
                         )}
                       </div>
