@@ -5,7 +5,7 @@
       "commands": [
         "corepack enable",
         "corepack prepare pnpm@10.26.1 --activate",
-        "pnpm install --frozen-lockfile --prefer-offline"
+        "pnpm install --no-frozen-lockfile"
       ]
     }
   }
