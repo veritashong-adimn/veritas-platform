@@ -11,7 +11,12 @@
   },
   "private": true,
   "devDependencies": {
-    "typescript": "~5.9.2",
-    "prettier": "^3.8.1"
+    "drizzle-kit": "^0.31.10",
+    "prettier": "^3.8.1",
+    "typescript": "~5.9.2"
+  },
+  "dependencies": {
+    "drizzle-orm": "catalog:",
+    "pg": "^8.20.0"
   }
 }

@@ -40,7 +40,7 @@ catalogs:
       specifier: ^2.1.1
       version: 2.1.1
     drizzle-orm:
-      specifier: ^0.45.1
+      specifier: 0.45.2
       version: 0.45.2
     framer-motion:
       specifier: ^12.23.24
@@ -156,7 +156,17 @@ overrides:
 importers:
 
   .:
+    dependencies:
+      drizzle-orm:
+        specifier: 'catalog:'
+        version: 0.45.2(@types/pg@8.20.0)(pg@8.20.0)
+      pg:
+        specifier: ^8.20.0
+        version: 8.20.0
     devDependencies:
+      drizzle-kit:
+        specifier: ^0.31.10
+        version: 0.31.10
       prettier:
         specifier: ^3.8.1
         version: 3.8.1
