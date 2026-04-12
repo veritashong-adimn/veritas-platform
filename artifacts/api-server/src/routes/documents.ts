@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import {
   db, projectsTable, quotesTable, paymentsTable, settlementsTable,
   usersTable, companiesTable, contactsTable, notesTable, quoteItemsTable,
-  prepaidAccountsTable, prepaidLedgerTable, settingsTable,
+  prepaidAccountsTable, prepaidLedgerTable, settingsTable, divisionsTable,
 } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
@@ -47,6 +47,8 @@ async function loadProjectData(projectId: number) {
       status: projectsTable.status,
       companyId: projectsTable.companyId,
       contactId: projectsTable.contactId,
+      requestingCompanyId: projectsTable.requestingCompanyId,
+      requestingDivisionId: projectsTable.requestingDivisionId,
       customerEmail: usersTable.email,
     })
     .from(projectsTable)
@@ -86,15 +88,24 @@ async function loadProjectData(projectId: number) {
     }));
   }
 
+  // 문서에 표시할 거래처: requestingCompanyId 우선, 없으면 companyId
+  const docCompanyId = project.requestingCompanyId ?? project.companyId;
+
   let company = null;
   let contact = null;
-  if (project.companyId) {
-    const [c] = await db.select().from(companiesTable).where(eq(companiesTable.id, project.companyId));
+  let divisionName: string | null = null;
+
+  if (docCompanyId) {
+    const [c] = await db.select().from(companiesTable).where(eq(companiesTable.id, docCompanyId));
     company = c ?? null;
   }
   if (project.contactId) {
     const [ct] = await db.select().from(contactsTable).where(eq(contactsTable.id, project.contactId));
     contact = ct ?? null;
+  }
+  if (project.requestingDivisionId) {
+    const [div] = await db.select({ name: divisionsTable.name }).from(divisionsTable).where(eq(divisionsTable.id, project.requestingDivisionId));
+    divisionName = div?.name ?? null;
   }
 
   const notes = rawNotes.map(n => n.content).join("\n").trim();
@@ -107,6 +118,7 @@ async function loadProjectData(projectId: number) {
     settlement: settlements[0] ?? null,
     company,
     contact,
+    divisionName,
     notes,
   };
 }
@@ -124,7 +136,7 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
     const data = await loadProjectData(projectId);
     if (!data) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
 
-    const { project, quote, quoteItems, company, contact, notes } = data;
+    const { project, quote, quoteItems, company, contact, divisionName, notes } = data;
     const { platform, bank } = await loadPlatformAndBank();
     const issuedAt = new Date();
     const docNumber = quoteDocNumber(quote?.id ?? projectId, issuedAt);
@@ -188,6 +200,7 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
       bank,
       company: company ? {
         name: company.name,
+        divisionName: divisionName ?? undefined,
         businessNumber: company.businessNumber,
         representativeName: company.representativeName,
         address: company.address,
@@ -251,7 +264,7 @@ router.get("/admin/projects/:id/pdf/statement", ...adminGuard, async (req, res) 
     const data = await loadProjectData(projectId);
     if (!data) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
 
-    const { project, payment, settlement, company, contact, notes } = data;
+    const { project, payment, settlement, company, contact, divisionName, notes } = data;
     const { platform, bank } = await loadPlatformAndBank();
     const issuedAt = new Date();
     const docNumber = statementDocNumber(projectId, issuedAt);
@@ -266,6 +279,7 @@ router.get("/admin/projects/:id/pdf/statement", ...adminGuard, async (req, res) 
       bank,
       company: company ? {
         name: company.name,
+        divisionName: divisionName ?? undefined,
         businessNumber: company.businessNumber,
         representativeName: company.representativeName,
         address: company.address,

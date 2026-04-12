@@ -1626,7 +1626,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 </div>
                 {detail.company ? (
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 20px", padding: "12px", background: "#f9fafb", borderRadius: 8, marginBottom: 12 }}>
-                    <div style={dl}><span style={dt}>회사명</span><strong>{detail.company.name}</strong></div>
+                    <div style={dl}><span style={dt}>회사명</span>
+                      <strong>{detail.company.name}</strong>
+                      {(detail as any).divisionName && <span style={{ marginLeft: 6, fontSize: 11, background: "#ede9fe", color: "#7c3aed", borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>{(detail as any).divisionName}</span>}
+                    </div>
                     <div style={dl}><span style={dt}>업종</span>{detail.company.industry ? <span>{detail.company.industry}</span> : <Empty />}</div>
                     <div style={dl}><span style={dt}>대표자</span>{detail.company.representativeName ? <span>{detail.company.representativeName}</span> : <Empty />}</div>
                     <div style={dl}><span style={dt}>이메일</span>{detail.company.email ? <span>{detail.company.email}</span> : <Empty />}</div>

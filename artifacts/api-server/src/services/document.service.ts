@@ -30,6 +30,7 @@ export type BankInfo = {
 
 export type CompanyInfo = {
   name: string | null;
+  divisionName?: string | null;
   businessNumber?: string | null;
   representativeName?: string | null;
   address?: string | null;
@@ -306,10 +307,11 @@ function renderSender(p: PlatformInfo): string {
 
 function renderReceiver(co: CompanyInfo, ct: ContactInfo): string {
   if (!co) return `<div class="party-box receiver"><h3>공급받는자 (수신)</h3><p style="color:#9ca3af;font-size:12px">거래처 정보 없음</p></div>`;
+  const displayName = co.name && co.divisionName ? `${co.name}(${co.divisionName})` : (co.name ?? "");
   return `
   <div class="party-box receiver">
     <h3>공급받는자 (수신)</h3>
-    <div class="f"><span class="fl">상호</span><span class="fv"><strong>${esc(co.name)}</strong></span></div>
+    <div class="f"><span class="fl">상호</span><span class="fv"><strong>${esc(displayName)}</strong></span></div>
     ${co.businessNumber ? `<div class="f"><span class="fl">사업자번호</span><span class="fv">${esc(co.businessNumber)}</span></div>` : ""}
     ${co.representativeName ? `<div class="f"><span class="fl">대표자</span><span class="fv">${esc(co.representativeName)}</span></div>` : ""}
     ${co.industry ? `<div class="f"><span class="fl">업종</span><span class="fv">${esc(co.industry)}</span></div>` : ""}
