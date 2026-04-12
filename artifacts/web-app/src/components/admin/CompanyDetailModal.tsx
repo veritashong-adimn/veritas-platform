@@ -17,9 +17,10 @@ const sH: React.CSSProperties = {
   margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
 };
 
-export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject }: {
+export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject, onRefresh }: {
   companyId: number; token: string; onClose: () => void;
   onToast: (msg: string) => void; onOpenProject: (id: number) => void;
+  onRefresh?: () => void;
 }) {
   const [detail, setDetail] = useState<CompanyDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -141,6 +142,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       setNameChangeReason("");
       setEditMode(false);
       await load();
+      onRefresh?.();
       onToast("거래처 정보가 수정되었습니다.");
     } catch { onToast("오류: 수정 실패"); }
   };

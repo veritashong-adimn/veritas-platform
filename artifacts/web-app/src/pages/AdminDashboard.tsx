@@ -962,6 +962,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onClose={() => setCompanyModal(null)}
           onToast={setToast}
           onOpenProject={(id) => { setCompanyModal(null); openDetail(id); }}
+          onRefresh={fetchCompanies}
         />
       )}
       {contactModal !== null && (
