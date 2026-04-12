@@ -11,6 +11,7 @@ import {
   type PlatformInfo, type BankInfo, type QuoteItemDoc,
 } from "../services/document.service";
 import { quoteDocNumber, statementDocNumber } from "../services/doc-number";
+import { getSettings } from "../lib/getSettings";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -138,7 +139,11 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
     if (!data) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
 
     const { project, quote, quoteItems, company, contact, divisionName, notes } = data;
-    const { platform, bank } = await loadPlatformAndBank();
+    const [{ platform, bank }, stg] = await Promise.all([loadPlatformAndBank(), getSettings()]);
+    // 설정에 서명 이미지가 있으면 platform에 병합
+    if (stg.signatureImageUrl) (platform as PlatformInfo).signatureImageUrl = stg.signatureImageUrl;
+    // 견적서 안내문: 설정값을 프로젝트 노트 뒤에 추가
+    const combinedNotes = [notes, stg.quoteNotes].filter(Boolean).join("\n\n") || undefined;
     const issuedAt = new Date();
     const docNumber = quoteDocNumber(quote?.id ?? projectId, issuedAt);
     const totalAmount = quote?.price != null ? Number(quote.price) : null;
@@ -239,7 +244,7 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
       batchPeriodStart: quote?.batchPeriodStart ?? null,
       batchPeriodEnd: quote?.batchPeriodEnd ?? null,
       batchItemCount: quote?.batchItemCount ?? null,
-      notes,
+      notes: combinedNotes,
     });
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -266,7 +271,9 @@ router.get("/admin/projects/:id/pdf/statement", ...adminGuard, async (req, res) 
     if (!data) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
 
     const { project, payment, settlement, company, contact, divisionName, notes } = data;
-    const { platform, bank } = await loadPlatformAndBank();
+    const [{ platform, bank }, stgS] = await Promise.all([loadPlatformAndBank(), getSettings()]);
+    if (stgS.signatureImageUrl) (platform as PlatformInfo).signatureImageUrl = stgS.signatureImageUrl;
+    const combinedNotesS = [notes, stgS.quoteNotes].filter(Boolean).join("\n\n") || undefined;
     const issuedAt = new Date();
     const docNumber = statementDocNumber(projectId, issuedAt);
 
@@ -303,7 +310,7 @@ router.get("/admin/projects/:id/pdf/statement", ...adminGuard, async (req, res) 
         : (payment?.amount != null ? Number(payment.amount) : null),
       translatorAmount: settlement?.translatorAmount != null ? Number(settlement.translatorAmount) : null,
       platformFee: settlement?.platformFee != null ? Number(settlement.platformFee) : null,
-      notes,
+      notes: combinedNotesS,
     });
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");

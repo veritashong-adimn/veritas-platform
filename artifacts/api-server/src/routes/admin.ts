@@ -12,6 +12,7 @@ import bcrypt from "bcryptjs";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
+import { getSettings, invalidateSettingsCache } from "../lib/getSettings";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -588,15 +589,21 @@ router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
         const [payment] = await db.select().from(paymentsTable).where(and(eq(paymentsTable.projectId, projectId), eq(paymentsTable.status, "paid")));
         const [task] = await db.select().from(tasksTable).where(eq(tasksTable.projectId, projectId));
         if (payment && task?.translatorId) {
+          const stg = await getSettings();
           const total = Number(payment.amount);
-          const fee = Math.round(total * 0.2);
+          const translatorRaw = Math.round(total * (stg.settlementRatio / 100));
+          const withheld = stg.applyWithholdingTax ? Math.round(translatorRaw * 0.033) : 0;
+          const translatorPay = translatorRaw - withheld;
+          const fee = total - translatorPay;
           await db.insert(settlementsTable).values({
             projectId, translatorId: task.translatorId, paymentId: payment.id,
-            totalAmount: String(total), translatorAmount: String(total - fee), platformFee: String(fee),
+            totalAmount: String(total),
+            translatorAmount: String(translatorPay),
+            platformFee: String(fee),
             status: "ready",
           });
           await logEvent("project", projectId, "settlement_created", req.log, req.user ?? undefined);
-          req.log.info({ projectId }, "Settlement auto-created on admin status→completed");
+          req.log.info({ projectId, settlementRatio: stg.settlementRatio, applyWithholdingTax: stg.applyWithholdingTax }, "Settlement auto-created on admin status→completed");
         }
       }
     }
@@ -874,6 +881,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
   }
 
   try {
+    const stgQ = await getSettings();
     const [project] = await db.select({ id: projectsTable.id, status: projectsTable.status, companyId: projectsTable.companyId }).from(projectsTable).where(eq(projectsTable.id, projectId));
     if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
     // 재생성 여부: "created" 이외 상태면 이미 견적이 존재했던 것으로 판단
@@ -1007,12 +1015,20 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
         taxDocumentType: taxDocumentType || "tax_invoice",
         taxCategory: taxCategory || "normal",
         quoteType: quoteType || "b2b_standard",
-        billingType: billingType || "postpaid_per_project",
+        billingType: billingType || stgQ.defaultBillingType,
         paymentMethod: billingType === "prepay_upfront" ? (paymentMethod || "card") : null,
-        validUntil: validUntil || null,
-        issueDate: issueDate || null,
+        validUntil: validUntil || (() => {
+          const base = issueDate ? new Date(issueDate) : new Date();
+          base.setDate(base.getDate() + stgQ.quoteValidityDays);
+          return base.toISOString().slice(0, 10);
+        })(),
+        issueDate: issueDate || new Date().toISOString().slice(0, 10),
         invoiceDueDate: invoiceDueDate || null,
-        paymentDueDate: paymentDueDate || null,
+        paymentDueDate: paymentDueDate || (() => {
+          const base = new Date();
+          base.setDate(base.getDate() + stgQ.paymentDueDays);
+          return base.toISOString().slice(0, 10);
+        })(),
         // 선입금 차감은 서버 계산값 우선, 나머지 유형은 프론트 전달값
         prepaidBalanceBefore: isPrepaidDeduction
           ? (computedPrepaidBefore != null ? String(computedPrepaidBefore) : null)
@@ -1773,15 +1789,24 @@ router.post("/admin/projects/:id/settlement", ...adminGuard, requirePermission("
     const [task] = await db.select().from(tasksTable).where(eq(tasksTable.projectId, projectId));
     if (!task?.translatorId) { res.status(400).json({ error: "배정된 번역사가 없습니다. 번역사를 배정한 후 정산을 생성해주세요." }); return; }
 
+    const stg = await getSettings();
     const total = Number(payment.amount);
-    const fee = Math.round(total * 0.2);
+    const translatorRaw = Math.round(total * (stg.settlementRatio / 100));
+    const withheld = stg.applyWithholdingTax ? Math.round(translatorRaw * 0.033) : 0;
+    const translatorPay = translatorRaw - withheld;
+    const fee = total - translatorPay;
     const [settlement] = await db.insert(settlementsTable).values({
       projectId, translatorId: task.translatorId, paymentId: payment.id,
-      totalAmount: String(total), translatorAmount: String(total - fee), platformFee: String(fee),
+      totalAmount: String(total),
+      translatorAmount: String(translatorPay),
+      platformFee: String(fee),
       status: "ready",
     }).returning();
     await logEvent("project", projectId, "settlement_created", req.log, req.user ?? undefined);
-    res.status(201).json(settlement);
+    res.status(201).json({
+      ...settlement,
+      _calc: { settlementRatio: stg.settlementRatio, withheld, applyWithholdingTax: stg.applyWithholdingTax },
+    });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to create settlement");
     res.status(500).json({ error: "정산 생성 실패." });
@@ -2775,13 +2800,14 @@ router.patch("/admin/settings", ...adminGuard, async (req, res) => {
     };
 
     const existing = await db.select({ id: settingsTable.id }).from(settingsTable).limit(1);
+    let row;
     if (existing.length === 0) {
-      const [row] = await db.insert(settingsTable).values(payload as never).returning();
-      res.json(row);
+      [row] = await db.insert(settingsTable).values(payload as never).returning();
     } else {
-      const [row] = await db.update(settingsTable).set(payload as never).where(eq(settingsTable.id, existing[0].id)).returning();
-      res.json(row);
+      [row] = await db.update(settingsTable).set(payload as never).where(eq(settingsTable.id, existing[0].id)).returning();
     }
+    invalidateSettingsCache(); // 캐시 무효화 → 이후 모든 요청에 최신 설정 적용
+    res.json(row);
   } catch (e) { res.status(500).json({ error: "설정 저장 실패" }); }
 });
 

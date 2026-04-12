@@ -20,6 +20,8 @@ export type PlatformInfo = {
   phone?: string;
   email?: string;
   website?: string;
+  /** 서명 이미지 URL (Object Storage) — 설정에서 관리 */
+  signatureImageUrl?: string | null;
 };
 
 export type BankInfo = {
@@ -446,11 +448,14 @@ function renderItemTable(itemRows: string, supply: number, tax: number, total: n
 
 /** 서명+푸터 공통 */
 function renderSignatureAndFooter(platform: PlatformInfo): string {
+  const sigContent = platform.signatureImageUrl
+    ? `<img src="${esc(platform.signatureImageUrl)}" alt="서명" style="max-height:48px;max-width:140px;object-fit:contain;display:block;margin:0 auto 2px" />`
+    : `<div class="sig-line">(인)</div>`;
   return `
   <div class="sig-area no-break">
     <div class="sig-box">
       <p>${esc(platform.name)}</p>
-      <div class="sig-line">(인)</div>
+      ${sigContent}
     </div>
   </div>
   <div class="doc-footer">
