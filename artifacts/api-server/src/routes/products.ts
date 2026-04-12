@@ -4,7 +4,7 @@ import { eq, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 
 const router: IRouter = Router();
-const adminGuard = [requireAuth, requireRole("admin")];
+const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
 // ─── 상품 목록 (옵션 포함) ────────────────────────────────────────────────────
 router.get("/admin/products", ...adminGuard, async (req, res) => {

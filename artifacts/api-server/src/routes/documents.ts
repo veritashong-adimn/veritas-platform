@@ -13,7 +13,7 @@ import {
 import { quoteDocNumber, statementDocNumber } from "../services/doc-number";
 
 const router: IRouter = Router();
-const adminGuard = [requireAuth, requireRole("admin")];
+const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
 /** settings 테이블에서 플랫폼·계좌 정보를 동적으로 로드 */
 async function loadPlatformAndBank(): Promise<{ platform: PlatformInfo; bank: BankInfo | null }> {

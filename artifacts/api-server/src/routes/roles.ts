@@ -5,7 +5,7 @@ import { requireAuth, requireRole } from "../middlewares/auth";
 import { ALL_PERMISSIONS, invalidatePermCache, getPermissionsForRole } from "../lib/rbac";
 
 const router: IRouter = Router();
-const adminGuard = [requireAuth, requireRole("admin")];
+const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
 // ─── 전체 권한 목록 ───────────────────────────────────────────────────────────
 router.get("/admin/permissions", ...adminGuard, async (_req, res) => {

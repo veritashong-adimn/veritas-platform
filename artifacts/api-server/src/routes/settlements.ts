@@ -6,7 +6,7 @@ import { logEvent } from "../lib/logEvent";
 
 const router: IRouter = Router();
 
-const adminGuard = [requireAuth, requireRole("admin")];
+const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
 router.get("/admin/settlements", ...adminGuard, async (req, res) => {
   try {

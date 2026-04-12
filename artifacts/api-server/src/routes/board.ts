@@ -4,7 +4,7 @@ import { eq, desc, and } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 
 const router: IRouter = Router();
-const adminGuard = [requireAuth, requireRole("admin")];
+const adminGuard = [requireAuth, requireRole("admin", "staff")];
 const authGuard = [requireAuth];
 
 // ─── 게시글 목록 ─────────────────────────────────────────────────────────────

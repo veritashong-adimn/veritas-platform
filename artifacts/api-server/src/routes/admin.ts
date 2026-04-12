@@ -14,7 +14,7 @@ import { requireAuth, requireRole, requirePermission } from "../middlewares/auth
 import { logEvent } from "../lib/logEvent";
 
 const router: IRouter = Router();
-const adminGuard = [requireAuth, requireRole("admin")];
+const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
 // ─── 프로젝트 목록 (검색/필터) ────────────────────────────────────────────
 router.get("/admin/projects", ...adminGuard, async (req, res) => {

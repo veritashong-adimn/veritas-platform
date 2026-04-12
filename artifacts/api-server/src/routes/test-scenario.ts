@@ -20,7 +20,7 @@ import { requireAuth, requireRole } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 
 const router: IRouter = Router();
-const adminGuard = [requireAuth, requireRole("admin")];
+const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
 // ────────────────────────────────────────────────────────────────────────────
 // 내부 헬퍼 타입

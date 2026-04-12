@@ -9,7 +9,7 @@ import { requireAuth, requireRole, requirePermission } from "../middlewares/auth
 import { encrypt, decrypt, maskResidentNumber } from "../lib/encrypt";
 
 const router: IRouter = Router();
-const adminGuard = [requireAuth, requireRole("admin")];
+const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
 // ─── 번역사 목록 (검색/필터) ──────────────────────────────────────────────────
 router.get("/admin/translators", ...adminGuard, async (req, res) => {
@@ -415,7 +415,7 @@ router.get("/translator-profiles/:id", requireAuth, async (req, res) => {
   if (isNaN(targetId) || targetId <= 0) {
     res.status(400).json({ error: "유효하지 않은 id." }); return;
   }
-  if (req.user!.role !== "admin" && req.user!.id !== targetId) {
+  if (req.user!.role !== "admin" && req.user!.role !== "staff" && req.user!.id !== targetId) {
     res.status(403).json({ error: "본인 프로필만 조회할 수 있습니다." }); return;
   }
   try {
@@ -433,7 +433,7 @@ router.put("/translator-profiles/:id", requireAuth, async (req, res) => {
   if (isNaN(targetId) || targetId <= 0) {
     res.status(400).json({ error: "유효하지 않은 id." }); return;
   }
-  if (req.user!.role !== "admin" && req.user!.id !== targetId) {
+  if (req.user!.role !== "admin" && req.user!.role !== "staff" && req.user!.id !== targetId) {
     res.status(403).json({ error: "본인 프로필만 수정할 수 있습니다." }); return;
   }
 
@@ -496,7 +496,7 @@ router.get("/translator-rates/:id", requireAuth, async (req, res) => {
   if (isNaN(targetId) || targetId <= 0) {
     res.status(400).json({ error: "유효하지 않은 id." }); return;
   }
-  if (req.user!.role !== "admin" && req.user!.id !== targetId) {
+  if (req.user!.role !== "admin" && req.user!.role !== "staff" && req.user!.id !== targetId) {
     res.status(403).json({ error: "본인 단가만 조회할 수 있습니다." }); return;
   }
   try {
@@ -513,7 +513,7 @@ router.post("/translator-rates/:id", requireAuth, async (req, res) => {
   if (isNaN(targetId) || targetId <= 0) {
     res.status(400).json({ error: "유효하지 않은 id." }); return;
   }
-  if (req.user!.role !== "admin" && req.user!.id !== targetId) {
+  if (req.user!.role !== "admin" && req.user!.role !== "staff" && req.user!.id !== targetId) {
     res.status(403).json({ error: "본인 단가만 추가할 수 있습니다." }); return;
   }
   const { serviceType, languagePair, unit, rate } = req.body as {
@@ -539,7 +539,7 @@ router.delete("/translator-rates/:id/:rateId", requireAuth, async (req, res) => 
   if (isNaN(targetId) || isNaN(rateId)) {
     res.status(400).json({ error: "유효하지 않은 id." }); return;
   }
-  if (req.user!.role !== "admin" && req.user!.id !== targetId) {
+  if (req.user!.role !== "admin" && req.user!.role !== "staff" && req.user!.id !== targetId) {
     res.status(403).json({ error: "본인 단가만 삭제할 수 있습니다." }); return;
   }
   try {

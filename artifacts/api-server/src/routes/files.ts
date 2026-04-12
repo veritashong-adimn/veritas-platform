@@ -7,7 +7,7 @@ import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage"
 import { logEvent } from "../lib/logEvent";
 
 const router: IRouter = Router();
-const adminGuard = [requireAuth, requireRole("admin")];
+const adminGuard = [requireAuth, requireRole("admin", "staff")];
 const objectStorage = new ObjectStorageService();
 
 const RegisterFileBody = z.object({

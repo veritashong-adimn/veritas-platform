@@ -15,7 +15,7 @@ function AccessDenied({ onBack }: { onBack: () => void }) {
         접근 권한이 없습니다
       </h2>
       <p style={{ margin: "0 0 20px", fontSize: 14, color: "#6b7280" }}>
-        관리자 계정만 접근할 수 있는 페이지입니다.
+        내부 운영자(관리자/직원) 계정만 접근할 수 있는 페이지입니다.
       </p>
       <GhostBtn onClick={onBack}>홈으로 돌아가기</GhostBtn>
     </Card>
@@ -85,14 +85,16 @@ export default function App() {
     saveSession(token, updated, permissions);
   };
 
+  const isInternalUser = (role: string) => role === "admin" || role === "staff";
+
   const handlePageChange = (p: NavPage) => {
-    if (p === "admin" && user?.role !== "admin") return;
+    if (p === "admin" && !isInternalUser(user?.role ?? "")) return;
     setPage(p);
   };
 
   if (!token || !user) return <AuthPage onAuth={handleAuth} />;
 
-  const isAdmin = user.role === "admin";
+  const isAdmin = isInternalUser(user.role);
   const showAdminPage = page === "admin";
 
   if (showAdminPage && !isAdmin) {
