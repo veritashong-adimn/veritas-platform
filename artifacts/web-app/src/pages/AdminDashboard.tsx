@@ -744,24 +744,43 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   // ── 환경설정 상태 ─────────────────────────────────────────────────────────
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"company"|"bank"|"document"|"payment"|"settlement">("company");
   const [settingsForm, setSettingsForm] = useState({
+    // 공급자 정보
     companyName: "", businessNumber: "", ceoName: "", address: "", email: "", phone: "",
+    // 입금 계좌
     bankName: "", accountNumber: "", accountHolder: "",
+    // 문서 설정
+    quoteValidityDays: "14", taxRate: "10", quoteNotes: "", signatureImageUrl: "",
+    // 결제 설정
+    defaultBillingType: "postpaid_per_project", paymentDueDays: "7", allowPartialPayment: false,
+    // 정산 설정
+    settlementRatio: "70", settlementCycle: "monthly", applyWithholdingTax: true,
   });
   const fetchSettings = async () => {
     const res = await fetch(api("/api/admin/settings"), { headers: { Authorization: `Bearer ${token}` } });
     if (res.ok) {
       const d = await res.json();
       setSettingsForm({
-        companyName: d.companyName ?? "",
-        businessNumber: d.businessNumber ?? "",
-        ceoName: d.ceoName ?? "",
-        address: d.address ?? "",
-        email: d.email ?? "",
-        phone: d.phone ?? "",
-        bankName: d.bankName ?? "",
-        accountNumber: d.accountNumber ?? "",
-        accountHolder: d.accountHolder ?? "",
+        companyName:     d.companyName     ?? "",
+        businessNumber:  d.businessNumber  ?? "",
+        ceoName:         d.ceoName         ?? "",
+        address:         d.address         ?? "",
+        email:           d.email           ?? "",
+        phone:           d.phone           ?? "",
+        bankName:        d.bankName        ?? "",
+        accountNumber:   d.accountNumber   ?? "",
+        accountHolder:   d.accountHolder   ?? "",
+        quoteValidityDays: String(d.quoteValidityDays ?? "14"),
+        taxRate:           String(d.taxRate            ?? "10"),
+        quoteNotes:        d.quoteNotes         ?? "",
+        signatureImageUrl: d.signatureImageUrl  ?? "",
+        defaultBillingType:  d.defaultBillingType  ?? "postpaid_per_project",
+        paymentDueDays:      String(d.paymentDueDays ?? "7"),
+        allowPartialPayment: Boolean(d.allowPartialPayment ?? false),
+        settlementRatio:     String(d.settlementRatio  ?? "70"),
+        settlementCycle:     d.settlementCycle     ?? "monthly",
+        applyWithholdingTax: Boolean(d.applyWithholdingTax ?? true),
       });
     }
   };
@@ -3621,83 +3640,195 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       )}
 
       {/* ── 환경설정 탭 ── */}
-      {adminTab === "settings" && (
-        <Section title="환경설정">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
-            {/* 공급자 정보 */}
-            <Card style={{ padding: "20px 22px" }}>
-              <div style={{ fontWeight: 700, fontSize: 15, color: "#111827", marginBottom: 16, paddingBottom: 10, borderBottom: "1px solid #f0f0f0" }}>🏢 공급자 정보</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {[
-                  { label: "상호명", key: "companyName", placeholder: "예) 주식회사 통번역 플랫폼" },
-                  { label: "사업자등록번호", key: "businessNumber", placeholder: "예) 123-45-67890" },
-                  { label: "대표자명", key: "ceoName", placeholder: "예) 홍길동" },
-                  { label: "이메일", key: "email", placeholder: "예) contact@example.com" },
-                  { label: "연락처", key: "phone", placeholder: "예) 02-1234-5678" },
-                ].map(({ label, key, placeholder }) => (
-                  <div key={key}>
-                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>{label}</div>
-                    <input value={(settingsForm as any)[key]} onChange={e => setSettingsForm(f => ({ ...f, [key]: e.target.value }))}
-                      placeholder={placeholder}
-                      style={{ ...inputStyle, fontSize: 13 }} />
-                  </div>
-                ))}
-                <div>
-                  <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>주소</div>
-                  <textarea value={settingsForm.address} onChange={e => setSettingsForm(f => ({ ...f, address: e.target.value }))}
-                    placeholder="예) 서울특별시 강남구 테헤란로 123"
-                    rows={2}
-                    style={{ ...inputStyle, fontSize: 13, resize: "vertical" }} />
-                </div>
-              </div>
-            </Card>
-            {/* 입금 계좌 */}
-            <Card style={{ padding: "20px 22px" }}>
-              <div style={{ fontWeight: 700, fontSize: 15, color: "#111827", marginBottom: 16, paddingBottom: 10, borderBottom: "1px solid #f0f0f0" }}>🏦 입금 계좌</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {[
-                  { label: "은행명", key: "bankName", placeholder: "예) 신한은행" },
-                  { label: "계좌번호", key: "accountNumber", placeholder: "예) 123-456-789012" },
-                  { label: "예금주", key: "accountHolder", placeholder: "예) 주식회사 통번역 플랫폼" },
-                ].map(({ label, key, placeholder }) => (
-                  <div key={key}>
-                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>{label}</div>
-                    <input value={(settingsForm as any)[key]} onChange={e => setSettingsForm(f => ({ ...f, [key]: e.target.value }))}
-                      placeholder={placeholder}
-                      style={{ ...inputStyle, fontSize: 13 }} />
-                  </div>
-                ))}
-              </div>
-              <div style={{ marginTop: 16, padding: "12px 14px", background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0" }}>
-                <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
-                  💡 입금 계좌 정보는 견적서·거래명세서 PDF에 자동으로 표시됩니다.<br />
-                  비워두면 계좌 정보 섹션이 PDF에서 생략됩니다.
-                </div>
-              </div>
-            </Card>
+      {adminTab === "settings" && (() => {
+        const sf = settingsForm;
+        const set = (k: string) => (v: string | boolean) => setSettingsForm(f => ({ ...f, [k]: v }));
+        const field = (label: string, key: string, placeholder = "", type = "text") => (
+          <div key={key}>
+            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>{label}</div>
+            <input type={type} value={(sf as any)[key]} onChange={e => set(key)(e.target.value)}
+              placeholder={placeholder} style={{ ...inputStyle, fontSize: 13 }} />
           </div>
-          {/* 저장 버튼 */}
-          <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 10 }}>
-            <button
-              onClick={async () => {
-                setSettingsSaving(true);
-                try {
-                  const res = await fetch(api("/api/admin/settings"), {
-                    method: "PATCH",
-                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-                    body: JSON.stringify(settingsForm),
-                  });
-                  if (res.ok) { setToast("설정이 저장되었습니다."); }
-                  else { const d = await res.json(); setToast(d.error ?? "저장 실패"); }
-                } finally { setSettingsSaving(false); }
-              }}
-              disabled={settingsSaving}
+        );
+        const saveBtn = (
+          <div style={{ marginTop: 20, display: "flex", justifyContent: "flex-end" }}>
+            <button onClick={async () => {
+              setSettingsSaving(true);
+              try {
+                const res = await fetch(api("/api/admin/settings"), {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                  body: JSON.stringify(settingsForm),
+                });
+                if (res.ok) { setToast("설정이 저장되었습니다."); }
+                else { const d = await res.json(); setToast(d.error ?? "저장 실패"); }
+              } finally { setSettingsSaving(false); }
+            }} disabled={settingsSaving}
               style={{ padding: "9px 24px", borderRadius: 8, border: "none", background: "#2563eb", color: "#fff", fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: settingsSaving ? 0.7 : 1 }}>
               {settingsSaving ? "저장 중…" : "💾 저장"}
             </button>
           </div>
-        </Section>
-      )}
+        );
+        const STABS = [
+          { id: "company",    label: "🏢 공급자 정보" },
+          { id: "bank",       label: "🏦 입금 계좌" },
+          { id: "document",   label: "📄 문서 설정" },
+          { id: "payment",    label: "💳 결제 설정" },
+          { id: "settlement", label: "🧾 정산 설정" },
+        ] as const;
+        return (
+          <Section title="환경설정">
+            {/* 설정 탭 바 */}
+            <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "2px solid #e5e7eb", paddingBottom: 0 }}>
+              {STABS.map(t => (
+                <button key={t.id} onClick={() => setSettingsTab(t.id)}
+                  style={{ padding: "8px 16px", border: "none", background: "none", cursor: "pointer", fontSize: 13, fontWeight: settingsTab === t.id ? 700 : 500, color: settingsTab === t.id ? "#2563eb" : "#6b7280", borderBottom: settingsTab === t.id ? "2px solid #2563eb" : "2px solid transparent", marginBottom: -2, borderRadius: 0, whiteSpace: "nowrap" }}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {/* 공급자 정보 */}
+            {settingsTab === "company" && (
+              <Card style={{ padding: "22px 24px", maxWidth: 560 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: "#111827", marginBottom: 16, paddingBottom: 10, borderBottom: "1px solid #f0f0f0" }}>🏢 공급자 정보</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {field("상호명", "companyName", "예) ㈜베리타스")}
+                  {field("사업자등록번호", "businessNumber", "예) 123-45-67890")}
+                  {field("대표자명", "ceoName", "예) 최향미")}
+                  {field("이메일", "email", "예) service@veritasco.co.kr")}
+                  {field("연락처", "phone", "예) 1600-1736")}
+                  <div>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>주소</div>
+                    <textarea value={sf.address} onChange={e => set("address")(e.target.value)}
+                      placeholder="예) 인천광역시 연수구 인천타워대로 323, B동 2406호"
+                      rows={2} style={{ ...inputStyle, fontSize: 13, resize: "vertical" }} />
+                  </div>
+                </div>
+                {saveBtn}
+              </Card>
+            )}
+
+            {/* 입금 계좌 */}
+            {settingsTab === "bank" && (
+              <Card style={{ padding: "22px 24px", maxWidth: 480 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: "#111827", marginBottom: 16, paddingBottom: 10, borderBottom: "1px solid #f0f0f0" }}>🏦 입금 계좌</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  {field("은행명", "bankName", "예) 국민은행")}
+                  {field("계좌번호", "accountNumber", "예) 420401-04-111464")}
+                  {field("예금주", "accountHolder", "예) ㈜베리타스")}
+                </div>
+                <div style={{ marginTop: 16, padding: "12px 14px", background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0" }}>
+                  <div style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+                    💡 입금 계좌 정보는 견적서·거래명세서 PDF에 자동으로 표시됩니다.<br />
+                    비워두면 계좌 정보 섹션이 PDF에서 생략됩니다.
+                  </div>
+                </div>
+                {saveBtn}
+              </Card>
+            )}
+
+            {/* 문서 설정 */}
+            {settingsTab === "document" && (
+              <Card style={{ padding: "22px 24px", maxWidth: 560 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: "#111827", marginBottom: 16, paddingBottom: 10, borderBottom: "1px solid #f0f0f0" }}>📄 문서 설정</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  {field("견적 유효기간 기본값 (일)", "quoteValidityDays", "예) 14", "number")}
+                  {field("기본 세율 (%)", "taxRate", "예) 10", "number")}
+                  <div>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>견적서 안내문</div>
+                    <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 4 }}>모든 견적서 하단에 자동 출력됩니다.</div>
+                    <textarea value={sf.quoteNotes} onChange={e => set("quoteNotes")(e.target.value)}
+                      placeholder={"예) 본 견적서는 발행일로부터 14일간 유효합니다.\n문의: service@veritasco.co.kr"}
+                      rows={4} style={{ ...inputStyle, fontSize: 13, resize: "vertical" }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>서명 이미지 URL</div>
+                    <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 4 }}>Object Storage에 업로드된 서명 이미지 주소를 입력하세요.</div>
+                    <input value={sf.signatureImageUrl} onChange={e => set("signatureImageUrl")(e.target.value)}
+                      placeholder="예) https://storage.example.com/signature.png"
+                      style={{ ...inputStyle, fontSize: 13 }} />
+                    {sf.signatureImageUrl && (
+                      <div style={{ marginTop: 8, padding: 8, background: "#f8fafc", borderRadius: 6, border: "1px solid #e2e8f0", textAlign: "center" }}>
+                        <img src={sf.signatureImageUrl} alt="서명 미리보기" style={{ maxHeight: 60, maxWidth: "100%", objectFit: "contain" }}
+                          onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {saveBtn}
+              </Card>
+            )}
+
+            {/* 결제 설정 */}
+            {settingsTab === "payment" && (
+              <Card style={{ padding: "22px 24px", maxWidth: 480 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: "#111827", marginBottom: 16, paddingBottom: 10, borderBottom: "1px solid #f0f0f0" }}>💳 결제 설정</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  <div>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>기본 결제 방식</div>
+                    <select value={sf.defaultBillingType} onChange={e => set("defaultBillingType")(e.target.value)}
+                      style={{ ...inputStyle, fontSize: 13 }}>
+                      <option value="postpaid_per_project">건별 후불</option>
+                      <option value="prepaid_wallet">선입금</option>
+                      <option value="monthly_billing">누적 청구 (월정산)</option>
+                    </select>
+                  </div>
+                  {field("결제 기한 (일)", "paymentDueDays", "예) 7", "number")}
+                  <div>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>부분입금 허용</div>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+                      <input type="checkbox" checked={sf.allowPartialPayment}
+                        onChange={e => set("allowPartialPayment")(e.target.checked)}
+                        style={{ width: 16, height: 16, cursor: "pointer" }} />
+                      <span>부분입금을 허용합니다 (미수금 처리 가능)</span>
+                    </label>
+                    <div style={{ marginTop: 6, fontSize: 11, color: "#9ca3af" }}>
+                      활성화 시 총액보다 적은 금액으로도 결제 처리가 가능합니다.
+                    </div>
+                  </div>
+                </div>
+                {saveBtn}
+              </Card>
+            )}
+
+            {/* 정산 설정 */}
+            {settingsTab === "settlement" && (
+              <Card style={{ padding: "22px 24px", maxWidth: 480 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: "#111827", marginBottom: 16, paddingBottom: 10, borderBottom: "1px solid #f0f0f0" }}>🧾 정산 설정</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                  {field("정산 비율 (%)", "settlementRatio", "예) 70", "number")}
+                  <div>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>정산 주기</div>
+                    <select value={sf.settlementCycle} onChange={e => set("settlementCycle")(e.target.value)}
+                      style={{ ...inputStyle, fontSize: 13 }}>
+                      <option value="weekly">주간 (매주)</option>
+                      <option value="biweekly">격주</option>
+                      <option value="monthly">월간 (매월)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>3.3% 원천세 적용</div>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13 }}>
+                      <input type="checkbox" checked={sf.applyWithholdingTax}
+                        onChange={e => set("applyWithholdingTax")(e.target.checked)}
+                        style={{ width: 16, height: 16, cursor: "pointer" }} />
+                      <span>3.3% 원천세를 정산 금액에서 공제합니다</span>
+                    </label>
+                    <div style={{ marginTop: 6, padding: "10px 12px", background: "#fefce8", borderRadius: 6, border: "1px solid #fde68a" }}>
+                      <div style={{ fontSize: 11, color: "#92400e", lineHeight: 1.6 }}>
+                        ⚠️ 원천세 적용 시 정산 금액 = 지급액 × 정산비율 × (1 − 3.3%)<br />
+                        프리랜서(개인 사업자가 아닌 통번역사)에게 지급 시 원천징수 의무가 발생합니다.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {saveBtn}
+              </Card>
+            )}
+          </Section>
+        );
+      })()}
 
       {/* ── 운영 테스트 탭 ── */}
       {adminTab === "test" && (

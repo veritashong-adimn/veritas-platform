@@ -2728,50 +2728,58 @@ router.get("/admin/export/settlements", ...adminGuard, async (req, res) => {
   }
 });
 
-// ── 환경설정 (공급자 정보 + 입금계좌) ─────────────────────────────────────────
+// ── 환경설정 ─────────────────────────────────────────────────────────────────
 
 router.get("/admin/settings", ...adminGuard, async (_req, res) => {
   try {
     const rows = await db.select().from(settingsTable).limit(1);
-    if (rows.length === 0) {
-      res.json({});
-    } else {
-      res.json(rows[0]);
-    }
+    res.json(rows[0] ?? {});
   } catch (e) { res.status(500).json({ error: "설정 조회 실패" }); }
 });
 
 router.patch("/admin/settings", ...adminGuard, async (req, res) => {
   try {
-    const {
-      companyName, businessNumber, ceoName, address, email, phone,
-      bankName, accountNumber, accountHolder,
-    } = req.body as {
-      companyName?: string; businessNumber?: string; ceoName?: string;
-      address?: string; email?: string; phone?: string;
-      bankName?: string; accountNumber?: string; accountHolder?: string;
-    };
+    const b = req.body as Record<string, unknown>;
 
-    const existing = await db.select({ id: settingsTable.id }).from(settingsTable).limit(1);
+    const str  = (k: string) => (typeof b[k] === "string" ? (b[k] as string).trim() || null : undefined);
+    const num  = (k: string) => (b[k] !== undefined ? (b[k] === "" ? null : String(b[k])) : undefined);
+    const int  = (k: string) => (b[k] !== undefined ? (b[k] === "" || b[k] === null ? null : Number(b[k])) : undefined);
+    const bool = (k: string) => (b[k] !== undefined ? Boolean(b[k]) : undefined);
 
-    const payload = {
-      companyName: companyName?.trim() || null,
-      businessNumber: businessNumber?.trim() || null,
-      ceoName: ceoName?.trim() || null,
-      address: address?.trim() || null,
-      email: email?.trim() || null,
-      phone: phone?.trim() || null,
-      bankName: bankName?.trim() || null,
-      accountNumber: accountNumber?.trim() || null,
-      accountHolder: accountHolder?.trim() || null,
+    const payload: Record<string, unknown> = {
+      // 공급자 정보
+      ...(b.companyName    !== undefined && { companyName:    str("companyName")    }),
+      ...(b.businessNumber !== undefined && { businessNumber: str("businessNumber") }),
+      ...(b.ceoName        !== undefined && { ceoName:        str("ceoName")        }),
+      ...(b.address        !== undefined && { address:        str("address")        }),
+      ...(b.email          !== undefined && { email:          str("email")          }),
+      ...(b.phone          !== undefined && { phone:          str("phone")          }),
+      // 입금 계좌
+      ...(b.bankName       !== undefined && { bankName:       str("bankName")       }),
+      ...(b.accountNumber  !== undefined && { accountNumber:  str("accountNumber")  }),
+      ...(b.accountHolder  !== undefined && { accountHolder:  str("accountHolder")  }),
+      // 문서 설정
+      ...(b.quoteValidityDays  !== undefined && { quoteValidityDays:  int("quoteValidityDays")  }),
+      ...(b.taxRate            !== undefined && { taxRate:            num("taxRate")            }),
+      ...(b.quoteNotes         !== undefined && { quoteNotes:         str("quoteNotes")         }),
+      ...(b.signatureImageUrl  !== undefined && { signatureImageUrl:  str("signatureImageUrl")  }),
+      // 결제 설정
+      ...(b.defaultBillingType  !== undefined && { defaultBillingType:  str("defaultBillingType")   }),
+      ...(b.paymentDueDays      !== undefined && { paymentDueDays:      int("paymentDueDays")        }),
+      ...(b.allowPartialPayment !== undefined && { allowPartialPayment: bool("allowPartialPayment")  }),
+      // 정산 설정
+      ...(b.settlementRatio     !== undefined && { settlementRatio:     num("settlementRatio")       }),
+      ...(b.settlementCycle     !== undefined && { settlementCycle:     str("settlementCycle")       }),
+      ...(b.applyWithholdingTax !== undefined && { applyWithholdingTax: bool("applyWithholdingTax")  }),
       updatedAt: new Date(),
     };
 
+    const existing = await db.select({ id: settingsTable.id }).from(settingsTable).limit(1);
     if (existing.length === 0) {
-      const [row] = await db.insert(settingsTable).values(payload).returning();
+      const [row] = await db.insert(settingsTable).values(payload as never).returning();
       res.json(row);
     } else {
-      const [row] = await db.update(settingsTable).set(payload).where(eq(settingsTable.id, existing[0].id)).returning();
+      const [row] = await db.update(settingsTable).set(payload as never).where(eq(settingsTable.id, existing[0].id)).returning();
       res.json(row);
     }
   } catch (e) { res.status(500).json({ error: "설정 저장 실패" }); }
