@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { ADMIN_NAV_GROUPS, ADMIN_PAGE_TITLE } from '../config/adminNav';
+import { ADMIN_NAV_GROUPS, ADMIN_PAGE_TITLE, STAFF_DEFAULT_PERMS } from '../config/adminNav';
 import {
   api, User, AdminProject, AdminPayment, AdminTask, AdminSettlement, AdminUser,
   AdminCustomer, AdminContact, Company, Contact, Product, ProductOption, BoardPost, TranslatorProfile,
@@ -101,9 +101,11 @@ function SearchableSelect({ items, value, onChange, placeholder, accentBorder = 
 
 export function AdminDashboard({ user, token, permissions = [], onLogout }: { user: User; token: string; permissions?: string[]; onLogout?: () => void }) {
   // RBAC: admin without roleId = full access (backward compat)
+  // staff without roleId = STAFF_DEFAULT_PERMS + 서버에서 받은 permissions
   const hasPerm = (key: string | undefined): boolean => {
     if (!key) return true;
     if (user.role === "admin" && !user.roleId) return true;
+    if (user.role === "staff" && !user.roleId && STAFF_DEFAULT_PERMS.includes(key)) return true;
     return permissions.includes(key);
   };
 

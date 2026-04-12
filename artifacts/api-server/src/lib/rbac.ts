@@ -17,6 +17,7 @@ export const ALL_PERMISSIONS: Array<{ key: string; name: string; category: "menu
   { key: "menu.user",       name: "사용자관리",     category: "menu" },
   { key: "menu.board",      name: "게시판",         category: "menu" },
   { key: "menu.permission", name: "역할/권한관리",  category: "menu" },
+  { key: "menu.settings",   name: "환경설정",       category: "menu" },
 
   // 기능 권한 - 프로젝트
   { key: "project.view",    name: "프로젝트 조회",  category: "action" },

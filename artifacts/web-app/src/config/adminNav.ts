@@ -15,6 +15,25 @@ export type NavGroup = {
   items: NavItem[];
 };
 
+/**
+ * staff(roleId 미할당) 기본 노출 권한.
+ * 실무 수행에 필요한 메뉴만 포함. admin 전용 메뉴 제외.
+ */
+export const STAFF_DEFAULT_PERMS: string[] = [
+  "menu.project",
+  "menu.company",
+  "menu.contact",
+  "menu.customer",
+  "menu.translator",
+  "menu.product",
+  "menu.board",
+];
+
+/**
+ * 재무·정산 메뉴는 별도 권한 부여 시에만 노출 (선택적).
+ * admin 전용: menu.user, menu.permission, menu.settings
+ */
+
 export const ADMIN_NAV_GROUPS: NavGroup[] = [
   {
     key: "dashboard",
@@ -39,7 +58,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     key: "finance",
     label: "재무·정산",
     accentColor: "#10b981",
-    perm: "menu.settlement",
+    perm: "menu.payment",
     items: [
       { id: "payments",    label: "결제",       icon: "💳", iconColor: "#10b981", perm: "menu.payment" },
       { id: "settlements", label: "정산",       icon: "📊", iconColor: "#10b981", perm: "menu.settlement" },
@@ -77,7 +96,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
       { id: "users",    label: "사용자관리", icon: "👤", perm: "menu.user" },
       { id: "roles",    label: "역할관리",   icon: "🔑", perm: "menu.permission" },
       { id: "board",    label: "게시판",     icon: "📌", perm: "menu.board" },
-      { id: "settings", label: "환경설정",   icon: "⚙️" },
+      { id: "settings", label: "환경설정",   icon: "⚙️", perm: "menu.settings" },
       { id: "test",     label: "운영 테스트", icon: "🧪", perm: "menu.user" },
     ],
   },
