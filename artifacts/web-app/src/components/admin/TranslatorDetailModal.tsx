@@ -21,6 +21,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 }) {
   const hasPerm = (key: string) => permissions.includes(key);
   const [profile, setProfile] = useState<TranslatorProfile | null>(null);
+  const [userInfo, setUserInfo] = useState<{ name: string; email: string; isActive: boolean } | null>(null);
   const [rates, setRates] = useState<TranslatorRate[]>([]);
   const [notes, setNotes] = useState<NoteEntry[]>([]);
   const [translatorProducts, setTranslatorProducts] = useState<TranslatorProduct[]>([]);
@@ -38,6 +39,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [showSensitive, setShowSensitive] = useState(false);
 
   const [form, setForm] = useState({
+    phone: "",
     languagePairs: "", languageLevel: "", specializations: "", education: "", major: "",
     graduationYear: "", region: "", grade: "", rating: "", availabilityStatus: "available",
     bio: "", ratePerWord: "", ratePerPage: "", unitType: "eojeol", unitPrice: "",
@@ -56,25 +58,26 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
       ]);
       const [dData, nData, pData] = await Promise.all([dRes.json(), nRes.json(), pRes.json()]);
       if (dRes.ok) {
+        const u = dData.user;
+        setUserInfo({ name: u?.name ?? "", email: u?.email ?? userEmail, isActive: u?.isActive ?? true });
         const p: TranslatorProfile | null = dData.profile;
         setProfile(p);
         setRates(Array.isArray(dData.rates) ? dData.rates : []);
         setTranslatorProducts(Array.isArray(dData.translatorProducts) ? dData.translatorProducts : []);
-        if (p) {
-          setForm({
-            languagePairs: p.languagePairs ?? "", languageLevel: p.languageLevel ?? "",
-            specializations: p.specializations ?? "", education: p.education ?? "", major: p.major ?? "",
-            graduationYear: p.graduationYear ? String(p.graduationYear) : "",
-            region: p.region ?? "", grade: p.grade ?? "",
-            rating: p.rating ? String(p.rating) : "",
-            availabilityStatus: p.availabilityStatus ?? "available",
-            bio: p.bio ?? "", ratePerWord: p.ratePerWord ? String(p.ratePerWord) : "",
-            ratePerPage: p.ratePerPage ? String(p.ratePerPage) : "",
-            unitType: p.unitType ?? "eojeol",
-            unitPrice: p.unitPrice ? String(p.unitPrice) : "",
-            resumeUrl: p.resumeUrl ?? "", portfolioUrl: p.portfolioUrl ?? "",
-          });
-        }
+        setForm({
+          phone: p?.phone ?? "",
+          languagePairs: p?.languagePairs ?? "", languageLevel: p?.languageLevel ?? "",
+          specializations: p?.specializations ?? "", education: p?.education ?? "", major: p?.major ?? "",
+          graduationYear: p?.graduationYear ? String(p.graduationYear) : "",
+          region: p?.region ?? "", grade: p?.grade ?? "",
+          rating: p?.rating ? String(p.rating) : "",
+          availabilityStatus: p?.availabilityStatus ?? "available",
+          bio: p?.bio ?? "", ratePerWord: p?.ratePerWord ? String(p.ratePerWord) : "",
+          ratePerPage: p?.ratePerPage ? String(p.ratePerPage) : "",
+          unitType: p?.unitType ?? "eojeol",
+          unitPrice: p?.unitPrice ? String(p.unitPrice) : "",
+          resumeUrl: p?.resumeUrl ?? "", portfolioUrl: p?.portfolioUrl ?? "",
+        });
       }
       if (nRes.ok) setNotes(Array.isArray(nData) ? nData : []);
       if (pRes.ok) setAvailableProducts(Array.isArray(pData) ? pData.filter((p: Product) => p.active) : []);
@@ -91,6 +94,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
         body: JSON.stringify({
           ...form,
+          phone: form.phone.trim() || null,
           graduationYear: form.graduationYear ? Number(form.graduationYear) : null,
           rating: form.rating ? Number(form.rating) : null,
           ratePerWord: form.ratePerWord ? Number(form.ratePerWord) : null,
@@ -218,18 +222,72 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         <>
           <ReviewMemoPanel storageKey={`translator_${userId}`} label="이 통번역사 검수 메모" />
 
+          {/* ── 기본 정보 ── */}
+          <p style={sH}>기본 정보</p>
+          <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 20px" }}>
+              {/* 이름 — 읽기 전용 */}
+              <div>
+                <label style={{ ...labelSt, fontSize: 11 }}>이름</label>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#111827", padding: "6px 0" }}>
+                  {userInfo?.name || <span style={{ color: "#9ca3af" }}>—</span>}
+                </div>
+              </div>
+              {/* 이메일 — 읽기 전용 */}
+              <div>
+                <label style={{ ...labelSt, fontSize: 11 }}>이메일</label>
+                <div style={{ fontSize: 13, color: "#374151", padding: "6px 0", wordBreak: "break-all" }}>
+                  {userInfo?.email || userEmail}
+                </div>
+              </div>
+              {/* 휴대폰 — 편집 가능 */}
+              <div>
+                <label style={{ ...labelSt, fontSize: 11 }}>휴대폰번호 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(수정 가능)</span></label>
+                <input
+                  type="tel"
+                  value={form.phone}
+                  onChange={e => setForm(p => ({ ...p, phone: e.target.value }))}
+                  placeholder="010-0000-0000"
+                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
+                />
+              </div>
+              {/* 지역 — 편집 가능 */}
+              <div>
+                <label style={{ ...labelSt, fontSize: 11 }}>지역 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(수정 가능)</span></label>
+                <input
+                  type="text"
+                  value={form.region}
+                  onChange={e => setForm(p => ({ ...p, region: e.target.value }))}
+                  placeholder="서울, 경기..."
+                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
+                />
+              </div>
+              {/* 언어쌍 */}
+              <div>
+                <label style={{ ...labelSt, fontSize: 11 }}>언어쌍 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(수정 가능)</span></label>
+                <input
+                  type="text"
+                  value={form.languagePairs}
+                  onChange={e => setForm(p => ({ ...p, languagePairs: e.target.value }))}
+                  placeholder="예: 한→영, 영→한"
+                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
+                />
+              </div>
+              {/* 언어 레벨 */}
+              <div>
+                <label style={{ ...labelSt, fontSize: 11 }}>언어 레벨 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(수정 가능)</span></label>
+                <select value={form.languageLevel} onChange={e => setForm(p => ({ ...p, languageLevel: e.target.value }))}
+                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}>
+                  <option value="">선택 안 함</option>
+                  {LANG_LEVEL_OPTIONS.map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+
           {/* ── 프로필 편집 ── */}
           <p style={sH}>프로필 편집</p>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", marginBottom: 12 }}>
-            <F label="언어쌍" field="languagePairs" placeholder="예: 한→영, 영→한" />
-            <div>
-              <label style={labelSt}>언어 레벨</label>
-              <select value={form.languageLevel} onChange={e => setForm(p => ({ ...p, languageLevel: e.target.value }))}
-                style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}>
-                <option value="">선택 안 함</option>
-                {LANG_LEVEL_OPTIONS.map(l => <option key={l} value={l}>{l}</option>)}
-              </select>
-            </div>
             <F label="전문분야" field="specializations" placeholder="예: 법률, IT, 의학" />
             <div>
               <label style={labelSt}>등급</label>
@@ -239,10 +297,9 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 {GRADE_OPTIONS.map(g => <option key={g} value={g}>{g}등급</option>)}
               </select>
             </div>
-            <F label="학력" field="education" />
-            <F label="전공" field="major" />
-            <F label="졸업연도" field="graduationYear" type="number" />
-            <F label="지역" field="region" />
+            <F label="학력" field="education" placeholder="예: 서울대학교" />
+            <F label="전공" field="major" placeholder="예: 영어영문학" />
+            <F label="졸업연도" field="graduationYear" type="number" placeholder="예: 2018" />
             <F label="평점 (1-5)" field="rating" type="number" placeholder="예: 4.5" />
             <div>
               <label style={labelSt}>가용 상태</label>
@@ -272,7 +329,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             <F label="포트폴리오 URL" field="portfolioUrl" placeholder="https://..." />
           </div>
           <div style={{ marginBottom: 12 }}>
-            <label style={labelSt}>상세정보</label>
+            <label style={labelSt}>상세정보 (경력·특이사항)</label>
             <textarea value={form.bio} onChange={e => setForm(p => ({ ...p, bio: e.target.value }))}
               rows={3} style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", resize: "vertical" }} />
           </div>

@@ -183,7 +183,7 @@ router.get("/admin/translators/:id", ...adminGuard, async (req, res) => {
       .orderBy(translatorProductsTable.createdAt);
 
     res.json({
-      user: { id: user.id, email: user.email, isActive: user.isActive, createdAt: user.createdAt },
+      user: { id: user.id, email: user.email, name: user.name, isActive: user.isActive, createdAt: user.createdAt },
       profile: profile ?? null,
       rates,
       translatorProducts,

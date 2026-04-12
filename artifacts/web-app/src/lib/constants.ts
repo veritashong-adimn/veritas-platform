@@ -208,6 +208,7 @@ export type BoardPost = {
 };
 export type TranslatorProfile = {
   id?: number; userId: number;
+  phone?: string | null;
   languagePairs?: string | null; languageLevel?: string | null;
   specializations?: string | null;
   education?: string | null; major?: string | null;
