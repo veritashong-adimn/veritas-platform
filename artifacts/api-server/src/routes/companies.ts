@@ -14,7 +14,7 @@ const adminGuard = [requireAuth, requireRole("admin", "staff")];
 // ─── 거래처 목록 ─────────────────────────────────────────────────────────────
 router.get("/admin/companies", ...adminGuard, async (req, res) => {
   try {
-    const { search } = req.query as { search?: string };
+    const { search, companyType, vendorType } = req.query as { search?: string; companyType?: string; vendorType?: string };
 
     const rows = await db
       .select({
@@ -27,6 +27,8 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
         website: companiesTable.website,
         registeredAt: companiesTable.registeredAt,
         createdAt: companiesTable.createdAt,
+        companyType: companiesTable.companyType,
+        vendorType: companiesTable.vendorType,
         contactCount: sql<number>`COUNT(DISTINCT ${contactsTable.id})::int`,
         projectCount: sql<number>`COUNT(DISTINCT ${projectsTable.id})::int`,
         totalPayment: sql<number>`COALESCE(SUM(${paymentsTable.amount}) FILTER (WHERE ${paymentsTable.status} = 'paid'), 0)::int`,
@@ -41,7 +43,6 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
     let result = rows;
     if (search?.trim()) {
       const s = search.trim().toLowerCase();
-      // 이름 이력 테이블에서 과거 상호로 매칭되는 company_id 조회
       const historyMatches = await db
         .select({ companyId: companyNameHistoryTable.companyId })
         .from(companyNameHistoryTable)
@@ -55,6 +56,12 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
         historyIds.has(c.id)
       );
     }
+    if (companyType === "client" || companyType === "vendor") {
+      result = result.filter(c => c.companyType === companyType);
+    }
+    if (vendorType) {
+      result = result.filter(c => c.vendorType === vendorType);
+    }
 
     res.json(result);
   } catch (err) {
@@ -65,15 +72,19 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
 
 // ─── 거래처 생성 ─────────────────────────────────────────────────────────────
 router.post("/admin/companies", ...adminGuard, requirePermission("company.create"), async (req, res) => {
-  const { name, businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt } = req.body as {
+  const { name, businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt, companyType, vendorType } = req.body as {
     name?: string; businessNumber?: string; representativeName?: string;
     email?: string; phone?: string; industry?: string; businessCategory?: string;
     address?: string; website?: string; notes?: string; registeredAt?: string;
+    companyType?: string; vendorType?: string;
   };
 
   if (!name?.trim()) {
     res.status(400).json({ error: "거래처명은 필수입니다." }); return;
   }
+
+  const resolvedCompanyType = companyType === "vendor" ? "vendor" : "client";
+  const resolvedVendorType = resolvedCompanyType === "vendor" ? (vendorType || null) : null;
 
   // 오늘 날짜를 기본 등록일로
   const today = new Date().toISOString().slice(0, 10);
@@ -81,7 +92,7 @@ router.post("/admin/companies", ...adminGuard, requirePermission("company.create
   try {
     const [company] = await db
       .insert(companiesTable)
-      .values({ name: name.trim(), businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt: registeredAt ?? today })
+      .values({ name: name.trim(), businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt: registeredAt ?? today, companyType: resolvedCompanyType, vendorType: resolvedVendorType })
       .returning();
 
     // 최초 상호를 이력으로 기록
@@ -254,7 +265,7 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
 
-  const { name, businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt, nameChangeReason } = req.body;
+  const { name, businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt, nameChangeReason, companyType, vendorType } = req.body;
 
   try {
     const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
@@ -263,6 +274,9 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
     const newName = name?.trim() ?? existing.name;
     const today = new Date().toISOString().slice(0, 10);
     const performer = (req as any).user as { id: number; email: string } | undefined;
+
+    const resolvedCompanyType = companyType === "vendor" ? "vendor" : companyType === "client" ? "client" : existing.companyType;
+    const resolvedVendorType = resolvedCompanyType === "vendor" ? (vendorType !== undefined ? (vendorType || null) : existing.vendorType) : null;
 
     const [updated] = await db
       .update(companiesTable)
@@ -278,6 +292,8 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
         website: website !== undefined ? (website || null) : existing.website,
         notes: notes !== undefined ? (notes || null) : existing.notes,
         registeredAt: registeredAt !== undefined ? (registeredAt || null) : existing.registeredAt,
+        companyType: resolvedCompanyType,
+        vendorType: resolvedVendorType,
       })
       .where(eq(companiesTable.id, companyId))
       .returning();
@@ -485,11 +501,12 @@ router.get("/admin/company-contacts", ...adminGuard, listContacts);
 async function createContact(req: any, res: any, targetCompanyId: number) {
   const {
     name, department, position, email, phone, mobile, officePhone, notes, memo,
-    isPrimary, isQuoteContact, isBillingContact, isActive,
+    isPrimary, isQuoteContact, isBillingContact, isActive, divisionId,
   } = req.body as {
     name?: string; department?: string; position?: string; email?: string; phone?: string;
     mobile?: string; officePhone?: string; notes?: string; memo?: string;
     isPrimary?: boolean; isQuoteContact?: boolean; isBillingContact?: boolean; isActive?: boolean;
+    divisionId?: number | null;
   };
 
   if (!name?.trim()) { res.status(400).json({ error: "담당자명은 필수입니다." }); return; }
@@ -522,6 +539,7 @@ async function createContact(req: any, res: any, targetCompanyId: number) {
       isQuoteContact: isQuoteContact ?? false,
       isBillingContact: isBillingContact ?? false,
       isActive: isActive !== false,
+      divisionId: divisionId ? Number(divisionId) : null,
     })
     .returning();
 
@@ -616,7 +634,7 @@ router.post("/admin/companies/:id/contacts", ...adminGuard, async (req, res) => 
 async function patchContact(req: any, res: any, contactId: number) {
   const {
     name, department, position, email, phone, mobile, officePhone, notes, memo,
-    isPrimary, isQuoteContact, isBillingContact, isActive,
+    isPrimary, isQuoteContact, isBillingContact, isActive, divisionId,
   } = req.body;
 
   const [existing] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId));
@@ -651,6 +669,7 @@ async function patchContact(req: any, res: any, contactId: number) {
       isQuoteContact: isQuoteContact !== undefined ? isQuoteContact : existing.isQuoteContact,
       isBillingContact: isBillingContact !== undefined ? isBillingContact : existing.isBillingContact,
       isActive: isActive !== undefined ? isActive : existing.isActive,
+      divisionId: divisionId !== undefined ? (divisionId ? Number(divisionId) : null) : existing.divisionId,
       updatedAt: new Date(),
     })
     .where(eq(contactsTable.id, contactId))

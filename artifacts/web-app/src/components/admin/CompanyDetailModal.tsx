@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { api, CompanyDetail, Contact, Division, NoteEntry } from "../../lib/constants";
+import { api, CompanyDetail, Contact, Division, NoteEntry, VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn } from "../ui";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { PrepaidLedgerModal } from "./PrepaidLedgerModal";
@@ -23,7 +23,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [detail, setDetail] = useState<CompanyDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [showContactForm, setShowContactForm] = useState(false);
-  const emptyContactForm = { name: "", department: "", position: "", email: "", phone: "", mobile: "", officePhone: "", memo: "", isPrimary: false, isQuoteContact: false, isBillingContact: false, isActive: true };
+  const emptyContactForm = { name: "", department: "", position: "", email: "", phone: "", mobile: "", officePhone: "", memo: "", isPrimary: false, isQuoteContact: false, isBillingContact: false, isActive: true, divisionId: null as number | null };
   const [contactForm, setContactForm] = useState(emptyContactForm);
   const [contactFormErrors, setContactFormErrors] = useState<Record<string, string>>({});
   const [addingContact, setAddingContact] = useState(false);
@@ -33,7 +33,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [savingContact, setSavingContact] = useState(false);
   const [showInactiveContacts, setShowInactiveContacts] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: "" });
+  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: "", companyType: "client", vendorType: "" });
   const [originalName, setOriginalName] = useState("");
   const [nameChangeReason, setNameChangeReason] = useState("");
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
@@ -74,6 +74,8 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
           website: data.website ?? "",
           notes: data.notes ?? "",
           registeredAt: (data as any).registeredAt ?? "",
+          companyType: (data as any).companyType ?? "client",
+          vendorType: (data as any).vendorType ?? "",
         });
       }
       if (nRes.ok) setCompNotes(Array.isArray(nData) ? nData : []);
@@ -178,6 +180,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       officePhone: c.officePhone ?? "", memo: c.memo ?? "",
       isPrimary: c.isPrimary, isQuoteContact: c.isQuoteContact,
       isBillingContact: c.isBillingContact, isActive: c.isActive,
+      divisionId: (c as any).divisionId ?? null,
     });
     setEditContactErrors({});
   };
@@ -268,6 +271,8 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px 0", marginBottom: 10 }}>
                   {([
                     ["거래처명", detail.name, true],
+                    ["거래처 유형", (detail as any).companyType === "vendor" ? "외주업체" : "고객사", false],
+                    ...((detail as any).vendorType ? [["외주 유형", VENDOR_TYPE_LABELS[(detail as any).vendorType] ?? (detail as any).vendorType, false] as [string, string, boolean]] : []),
                     ["사업자번호", detail.businessNumber ?? "-", false],
                     ["대표자명", detail.representativeName ?? "-", false],
                     ["등록일", (detail as any).registeredAt ?? "-", false],
@@ -604,6 +609,16 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                         placeholder="예: 홍길동" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: errs.name ? "#fca5a5" : undefined }} />
                       {errs.name && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{errs.name}</p>}
                     </div>
+                    {detail.divisions.length > 0 && (
+                      <div style={{ gridColumn: "1/-1" }}>
+                        <label style={{ fontSize: 12, color: "#7c3aed", display: "block", marginBottom: 2 }}>브랜드 / 부서 연결</label>
+                        <select value={cf.divisionId ?? ""} onChange={e => setCf(p => ({ ...p, divisionId: e.target.value ? Number(e.target.value) : null }))}
+                          style={{ width: "100%", border: "1px solid #e9d5ff", borderRadius: 8, padding: "7px 10px", fontSize: 13, background: "#fff" }}>
+                          <option value="">— 본사 직접 —</option>
+                          {detail.divisions.map((d: any) => <option key={d.id} value={d.id}>{d.name}{d.type ? ` (${d.type})` : ""}</option>)}
+                        </select>
+                      </div>
+                    )}
                     <div>
                       <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 2 }}>부서</label>
                       <input value={cf.department} onChange={e => setCf(p => ({ ...p, department: e.target.value }))}
@@ -672,6 +687,16 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                               style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: editContactErrors.name ? "#fca5a5" : undefined }} />
                             {editContactErrors.name && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{editContactErrors.name}</p>}
                           </div>
+                          {detail.divisions.length > 0 && (
+                            <div style={{ gridColumn: "1/-1" }}>
+                              <label style={{ fontSize: 12, color: "#7c3aed", display: "block", marginBottom: 2 }}>브랜드 / 부서 연결</label>
+                              <select value={editContactForm.divisionId ?? ""} onChange={e => setEditContactForm(p => ({ ...p, divisionId: e.target.value ? Number(e.target.value) : null }))}
+                                style={{ width: "100%", border: "1px solid #e9d5ff", borderRadius: 8, padding: "7px 10px", fontSize: 13, background: "#fff" }}>
+                                <option value="">— 본사 직접 —</option>
+                                {detail.divisions.map((d: any) => <option key={d.id} value={d.id}>{d.name}{d.type ? ` (${d.type})` : ""}</option>)}
+                              </select>
+                            </div>
+                          )}
                           <div>
                             <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 2 }}>부서</label>
                             <input value={editContactForm.department} onChange={e => setEditContactForm(p => ({ ...p, department: e.target.value }))}
@@ -737,6 +762,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                               <span style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>{c.name}</span>
                               {c.position && <span style={{ fontSize: 12, color: "#6b7280" }}>{c.position}</span>}
                               {c.department && <span style={{ fontSize: 12, color: "#9ca3af" }}>· {c.department}</span>}
+                              {(c as any).divisionId && (() => { const div = detail.divisions.find((d: any) => d.id === (c as any).divisionId); return div ? <span style={{ fontSize: 11, background: "#ede9fe", color: "#7c3aed", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>{div.name}</span> : null; })()}
                               {!c.isActive && <span style={{ fontSize: 11, background: "#f3f4f6", color: "#9ca3af", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>비활성</span>}
                             </div>
                             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: c.memo ? 6 : 0 }}>
@@ -773,7 +799,10 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.background = "#eff6ff"; (e.currentTarget as HTMLDivElement).style.borderColor = "#bfdbfe"; }}
                     onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = "#f9fafb"; (e.currentTarget as HTMLDivElement).style.borderColor = "transparent"; }}>
                     <span style={{ color: "#9ca3af", minWidth: 36 }}>#{p.id}</span>
-                    <span style={{ fontWeight: 600, color: "#111827", flex: 1 }}>{p.title}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontWeight: 600, color: "#111827" }}>{p.title}</span>
+                      {(p as any).requestingDivisionId && (() => { const div = detail.divisions.find((d: any) => d.id === (p as any).requestingDivisionId); return div ? <span style={{ marginLeft: 6, fontSize: 11, background: "#ede9fe", color: "#7c3aed", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>{div.name}</span> : null; })()}
+                    </div>
                     <StatusBadge status={p.status} />
                     <span style={{ color: "#9ca3af", fontSize: 12 }}>{new Date(p.createdAt).toLocaleDateString("ko-KR")}</span>
                   </div>

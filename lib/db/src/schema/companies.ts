@@ -15,6 +15,10 @@ export const companiesTable = pgTable("companies", {
   registeredAt: text("registered_at"),
   // postpaid_per_project | prepaid_wallet | monthly_billing
   billingType: varchar("billing_type", { length: 50 }).notNull().default("postpaid_per_project"),
+  // client (고객사) | vendor (외주업체)
+  companyType: varchar("company_type", { length: 30 }).notNull().default("client"),
+  // vendor 전용: interpretation_equipment | editing | translation_agency | cleaning | water_supply | etc
+  vendorType: varchar("vendor_type", { length: 50 }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

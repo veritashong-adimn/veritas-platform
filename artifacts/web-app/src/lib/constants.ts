@@ -116,11 +116,30 @@ export type ProjectDetail = AdminProject & {
   company: { id: number; name: string; representativeName: string | null; email: string | null; phone: string | null; industry: string | null } | null;
   contact: { id: number; name: string; department: string | null; position: string | null; email: string | null; phone: string | null } | null;
 };
+export type CompanyType = "client" | "vendor";
+export type VendorType = "interpretation_equipment" | "editing" | "translation_agency" | "cleaning" | "water_supply" | "etc" | string;
+export const VENDOR_TYPE_LABELS: Record<string, string> = {
+  interpretation_equipment: "통역장비",
+  editing: "편집/감수",
+  translation_agency: "통번역업체",
+  cleaning: "청소",
+  water_supply: "생수",
+  etc: "기타",
+};
+export const VENDOR_TYPE_OPTIONS = [
+  { value: "interpretation_equipment", label: "통역장비" },
+  { value: "editing",                  label: "편집/감수" },
+  { value: "translation_agency",       label: "통번역업체" },
+  { value: "cleaning",                 label: "청소" },
+  { value: "water_supply",             label: "생수" },
+  { value: "etc",                      label: "기타" },
+];
 export type Company = {
   id: number; name: string; businessNumber: string | null; industry: string | null;
   address: string | null; website: string | null; notes: string | null;
   representativeName: string | null; email: string | null; phone: string | null;
   createdAt: string; contactCount: number; projectCount: number; totalPayment: number;
+  companyType: CompanyType; vendorType: VendorType | null;
 };
 export type Division = {
   id: number; companyId: number; name: string; type: string | null; createdAt: string;
@@ -154,6 +173,7 @@ export type TranslatorListItem = {
   rating: number | null; availabilityStatus: string | null;
   bio: string | null; ratePerWord: number | null; ratePerPage: number | null;
   resumeUrl: string | null; portfolioUrl: string | null;
+  education: string | null; major: string | null;
 };
 export type ContactDetail = {
   id: number; companyId: number; companyName: string | null;

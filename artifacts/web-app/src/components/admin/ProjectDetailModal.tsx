@@ -705,8 +705,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       body.taxDocumentType = quoteTaxDocType;
       body.taxCategory = quoteTaxCategory;
       body.quoteType = quoteType;
-      body.billingType = quoteBillingType || companyBillingType;
-      if ((quoteBillingType || companyBillingType) === "prepay_upfront") {
+      const _companyBillingType = (detail?.company as any)?.billingType ?? "postpaid_per_project";
+      body.billingType = quoteBillingType || _companyBillingType;
+      if ((quoteBillingType || _companyBillingType) === "prepay_upfront") {
         body.paymentMethod = quotePaymentMethod;
       }
       // 공통 날짜 필드

@@ -9,6 +9,7 @@ import {
   ALL_PROJECT_STATUSES, ALL_FINANCIAL_STATUSES, ALL_PAYMENT_STATUSES, ALL_SETTLEMENT_STATUSES,
   PRODUCT_MAIN_CATEGORIES, PRODUCT_SUB_CATEGORIES, PRODUCT_UNITS, PRODUCT_OPTION_TYPES,
   FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE,
+  VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS,
 } from '../lib/constants';
 import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill } from '../components/ui';
 import { LogModal } from '../components/admin/LogModal';
@@ -215,8 +216,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [companySearch, setCompanySearch] = useState("");
   const [companyModal, setCompanyModal] = useState<number | null>(null);
   const [showCompanyForm, setShowCompanyForm] = useState(false);
-  const [companyForm, setCompanyForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10) });
+  const [companyForm, setCompanyForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10), companyType: "client", vendorType: "" });
   const [savingCompany, setSavingCompany] = useState(false);
+  const [companyTypeFilter, setCompanyTypeFilter] = useState<"all"|"client"|"vendor">("all");
+  const [companyVendorTypeFilter, setCompanyVendorTypeFilter] = useState<string>("all");
 
   const [products, setProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(false);
@@ -539,7 +542,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
       setToast("거래처가 등록되었습니다.");
-      setCompanyForm({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10) });
+      setCompanyForm({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10), companyType: "client", vendorType: "" });
       setShowCompanyForm(false);
       await fetchCompanies();
     } catch { setToast("오류: 거래처 등록 실패"); }
@@ -2550,6 +2553,32 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <Card style={{ marginBottom: 16, padding: "16px 20px" }}>
               <p style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#111827" }}>새 거래처 등록</p>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {/* 0행: 거래처 유형 */}
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 6 }}>거래처 유형 <span style={{ color: "#dc2626" }}>*</span></label>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    {[{ v: "client", label: "고객사", color: "#1d4ed8", bg: "#eff6ff", border: "#93c5fd" }, { v: "vendor", label: "외주업체", color: "#7c3aed", bg: "#f5f3ff", border: "#c4b5fd" }].map(opt => (
+                      <button key={opt.v} type="button" onClick={() => setCompanyForm(p => ({ ...p, companyType: opt.v, vendorType: "" }))}
+                        style={{ padding: "7px 18px", borderRadius: 20, fontSize: 13, fontWeight: 700, cursor: "pointer", transition: "all 0.12s",
+                          background: companyForm.companyType === opt.v ? opt.bg : "#f9fafb",
+                          color: companyForm.companyType === opt.v ? opt.color : "#6b7280",
+                          border: `2px solid ${companyForm.companyType === opt.v ? opt.border : "#e5e7eb"}`,
+                        }}>
+                        {opt.label}
+                      </button>
+                    ))}
+                    {companyForm.companyType === "vendor" && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 12, color: "#6b7280" }}>외주 유형:</span>
+                        <select value={companyForm.vendorType} onChange={e => setCompanyForm(p => ({ ...p, vendorType: e.target.value }))}
+                          style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, color: "#374151", background: "#fff" }}>
+                          <option value="">선택 안 함</option>
+                          {VENDOR_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                </div>
                 {/* 1행: 거래처명 */}
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>거래처명 <span style={{ color: "#dc2626" }}>*</span></label>
@@ -2626,49 +2655,115 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               </div>
             </Card>
           )}
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-            <input value={companySearch} onChange={e => setCompanySearch(e.target.value)}
-              placeholder="회사명, 사업자번호 검색..."
-              style={{ ...inputStyle, maxWidth: 300, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
-              onKeyDown={e => e.key === "Enter" && fetchCompanies()} />
-            <PrimaryBtn onClick={fetchCompanies} disabled={companiesLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
-              {companiesLoading ? "검색 중..." : "검색"}
-            </PrimaryBtn>
-          </div>
-          {companiesLoading ? (
-            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
-          ) : companies.length === 0 ? (
-            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 거래처가 없습니다.</Card>
-          ) : (
-            <Card style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>{["ID","회사명","업종","담당자","프로젝트","총 결제","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {companies.map(c => (
-                      <tr key={c.id} onClick={() => setCompanyModal(c.id)} style={{ cursor: "pointer" }}
-                        onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
-                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                        <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
-                        <td style={{ ...tableTd, fontWeight: 700, color: "#111827" }}>{c.name}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{c.industry ?? "-"}</td>
-                        <td style={{ ...tableTd, textAlign: "center" }}>
-                          <span style={{ padding: "2px 8px", borderRadius: 10, background: "#f3f4f6", color: "#374151", fontSize: 12 }}>{c.contactCount}명</span>
-                        </td>
-                        <td style={{ ...tableTd, textAlign: "center" }}>
-                          <span style={{ padding: "2px 8px", borderRadius: 10, background: "#eff6ff", color: "#2563eb", fontSize: 12, fontWeight: 600 }}>{c.projectCount}건</span>
-                        </td>
-                        <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap" }}>{Number(c.totalPayment).toLocaleString()}원</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          {/* ── 거래처 유형 필터 탭 ── */}
+          {(() => {
+            const TYPE_TABS = [
+              { value: "all",    label: "전체",    activeBg: "#374151" },
+              { value: "client", label: "고객사",  activeBg: "#1d4ed8" },
+              { value: "vendor", label: "외주업체", activeBg: "#7c3aed" },
+            ];
+            const filteredCompanies = companies.filter(c => {
+              if (companyTypeFilter !== "all" && c.companyType !== companyTypeFilter) return false;
+              if (companyVendorTypeFilter !== "all" && c.vendorType !== companyVendorTypeFilter) return false;
+              return true;
+            });
+            return (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#6b7280", marginRight: 4, whiteSpace: "nowrap" }}>거래처 유형</span>
+                  {TYPE_TABS.map(tab => {
+                    const isActive = companyTypeFilter === tab.value;
+                    return (
+                      <button key={tab.value} onClick={() => { setCompanyTypeFilter(tab.value as "all"|"client"|"vendor"); setCompanyVendorTypeFilter("all"); }}
+                        style={{ padding: "6px 14px", borderRadius: 20, fontSize: 13, fontWeight: isActive ? 700 : 500, cursor: "pointer", transition: "all 0.12s",
+                          border: isActive ? `2px solid ${tab.activeBg}` : "2px solid #e5e7eb",
+                          background: isActive ? tab.activeBg : "#fff",
+                          color: isActive ? "#fff" : "#374151",
+                        }}>
+                        {tab.label}
+                        <span style={{ marginLeft: 5, fontSize: 11, opacity: 0.8 }}>
+                          ({companies.filter(c => tab.value === "all" ? true : c.companyType === tab.value).length})
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {/* 외주 유형별 서브 필터 */}
+                  {companyTypeFilter === "vendor" && (
+                    <select value={companyVendorTypeFilter} onChange={e => setCompanyVendorTypeFilter(e.target.value)}
+                      style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 12, color: "#374151", background: "#fff", marginLeft: 4 }}>
+                      <option value="all">전체 외주유형</option>
+                      {VENDOR_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <input value={companySearch} onChange={e => setCompanySearch(e.target.value)}
+                    placeholder="회사명, 사업자번호 검색..."
+                    style={{ ...inputStyle, maxWidth: 300, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+                    onKeyDown={e => e.key === "Enter" && fetchCompanies()} />
+                  <PrimaryBtn onClick={fetchCompanies} disabled={companiesLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
+                    {companiesLoading ? "검색 중..." : "검색"}
+                  </PrimaryBtn>
+                </div>
+                {/* ── 목록 ── */}
+                <div style={{ marginTop: 14 }}>
+                  {companiesLoading ? (
+                    <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+                  ) : filteredCompanies.length === 0 ? (
+                    <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>해당하는 거래처가 없습니다.</Card>
+                  ) : (
+                    <Card style={{ padding: 0, overflow: "hidden" }}>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                          <thead>
+                            <tr>{["ID","거래처명 / 유형","업종","담당자","프로젝트","총 결제","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                          </thead>
+                          <tbody>
+                            {filteredCompanies.map(c => (
+                              <tr key={c.id} onClick={() => setCompanyModal(c.id)} style={{ cursor: "pointer" }}
+                                onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
+                                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                                <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
+                                <td style={{ ...tableTd }}>
+                                  <div style={{ fontWeight: 700, color: "#111827", marginBottom: 3 }}>{c.name}</div>
+                                  <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                                    {/* 거래처 유형 뱃지 */}
+                                    <span style={{
+                                      fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 8,
+                                      background: c.companyType === "vendor" ? "#f5f3ff" : "#eff6ff",
+                                      color: c.companyType === "vendor" ? "#7c3aed" : "#1d4ed8",
+                                      border: `1px solid ${c.companyType === "vendor" ? "#ddd6fe" : "#bfdbfe"}`,
+                                    }}>
+                                      {c.companyType === "vendor" ? "외주업체" : "고객사"}
+                                    </span>
+                                    {/* 외주 유형 뱃지 */}
+                                    {c.vendorType && (
+                                      <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 8, background: "#faf5ff", color: "#9333ea", border: "1px solid #e9d5ff" }}>
+                                        {VENDOR_TYPE_LABELS[c.vendorType] ?? c.vendorType}
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{c.industry ?? "-"}</td>
+                                <td style={{ ...tableTd, textAlign: "center" }}>
+                                  <span style={{ padding: "2px 8px", borderRadius: 10, background: "#f3f4f6", color: "#374151", fontSize: 12 }}>{c.contactCount}명</span>
+                                </td>
+                                <td style={{ ...tableTd, textAlign: "center" }}>
+                                  <span style={{ padding: "2px 8px", borderRadius: 10, background: "#eff6ff", color: "#2563eb", fontSize: 12, fontWeight: 600 }}>{c.projectCount}건</span>
+                                </td>
+                                <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap" }}>{Number(c.totalPayment).toLocaleString()}원</td>
+                                <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Card>
+                  )}
+                </div>
               </div>
-            </Card>
-          )}
+            );
+          })()}
         </Section>
       )}
 
