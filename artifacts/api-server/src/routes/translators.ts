@@ -4,6 +4,7 @@ import { randomBytes } from "crypto";
 import {
   db, usersTable, translatorProfilesTable, translatorRatesTable,
   translatorProductsTable, productsTable, translatorSensitiveTable,
+  tasksTable, settlementsTable, logsTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, sql, desc, gte, lte, inArray } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
@@ -769,6 +770,62 @@ router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission
   } catch (err) {
     req.log.error({ err }, "Sensitive: failed to save");
     res.status(500).json({ error: "민감정보 저장 실패." });
+  }
+});
+
+// ─── 통번역사 삭제 ────────────────────────────────────────────────────────────
+router.delete("/admin/translators/:id", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 사용자 id." }); return;
+  }
+  const force = req.query.force === "true";
+
+  try {
+    const [existing] = await db.select().from(usersTable).where(and(eq(usersTable.id, userId), eq(usersTable.role, "translator")));
+    if (!existing) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
+
+    if (force) {
+      if (process.env.ENABLE_FORCE_DELETE !== "true") {
+        res.status(403).json({ error: "강제 삭제는 현재 비활성화되어 있습니다. (ENABLE_FORCE_DELETE=true 설정 필요)" }); return;
+      }
+      if (req.user?.role !== "admin") {
+        res.status(403).json({ error: "강제 삭제는 관리자만 가능합니다." }); return;
+      }
+    }
+
+    const [taskCount] = await db.select({ count: sql<number>`count(*)::int` }).from(tasksTable).where(eq(tasksTable.translatorId, userId));
+    const [settlementCount] = await db.select({ count: sql<number>`count(*)::int` }).from(settlementsTable).where(eq(settlementsTable.translatorId, userId));
+
+    const hasLinks = (taskCount?.count ?? 0) > 0 || (settlementCount?.count ?? 0) > 0;
+
+    if (hasLinks && !force) {
+      const reasons: string[] = [];
+      if ((taskCount?.count ?? 0) > 0) reasons.push(`작업 ${taskCount?.count}건`);
+      if ((settlementCount?.count ?? 0) > 0) reasons.push(`정산 ${settlementCount?.count}건`);
+      res.status(409).json({
+        error: `이 통번역사는 연결된 데이터가 있어 삭제할 수 없습니다. (${reasons.join(", ")})`,
+        reasons,
+        canForceDelete: true,
+      });
+      return;
+    }
+
+    await db.delete(usersTable).where(eq(usersTable.id, userId));
+
+    await db.insert(logsTable).values({
+      entityType: "translator",
+      entityId: userId,
+      action: force ? "force_deleted" : "deleted",
+      performedBy: req.user?.id ?? null,
+      performedByEmail: req.user?.email ?? null,
+      metadata: JSON.stringify({ name: existing.name, email: existing.email, force, taskCount: taskCount?.count, settlementCount: settlementCount?.count }),
+    });
+
+    res.json({ ok: true, force });
+  } catch (err) {
+    req.log.error({ err }, "Translators: failed to delete");
+    res.status(500).json({ error: "통번역사 삭제 실패." });
   }
 });
 

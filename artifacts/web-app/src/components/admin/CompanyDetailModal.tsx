@@ -17,13 +17,17 @@ const sH: React.CSSProperties = {
   margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
 };
 
-export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject, onRefresh }: {
+export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject, onRefresh, onDeleted }: {
   companyId: number; token: string; onClose: () => void;
   onToast: (msg: string) => void; onOpenProject: (id: number) => void;
   onRefresh?: () => void;
+  onDeleted?: () => void;
 }) {
   const [detail, setDetail] = useState<CompanyDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteCanForce, setDeleteCanForce] = useState(false);
   const [showContactForm, setShowContactForm] = useState(false);
   const emptyContactForm = { name: "", department: "", position: "", email: "", phone: "", mobile: "", officePhone: "", memo: "", isPrimary: false, isQuoteContact: false, isBillingContact: false, isActive: true, divisionId: null as number | null };
   const [contactForm, setContactForm] = useState(emptyContactForm);
@@ -252,6 +256,39 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
     } catch { onToast("오류: 수정 실패"); }
   };
 
+  const handleDeleteCompany = async (force = false) => {
+    if (!force) {
+      if (!confirm("이 거래처를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.")) return;
+    } else {
+      if (!confirm("연결된 담당자, 프로젝트 등 모든 데이터가 함께 삭제됩니다.\n정말 강제 삭제하시겠습니까?")) return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(api(`/api/admin/companies/${companyId}${force ? "?force=true" : ""}`), {
+        method: "DELETE", headers: authH,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 409 && data.canForceDelete) {
+          setDeleteError(data.error);
+          setDeleteCanForce(true);
+        } else {
+          setDeleteError(data.error ?? "삭제 실패");
+        }
+        return;
+      }
+      onToast("거래처가 삭제되었습니다.");
+      onRefresh?.();
+      onDeleted?.();
+      onClose();
+    } catch {
+      setDeleteError("오류가 발생했습니다.");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleDeleteDiv = async (divId: number, name: string) => {
     if (!confirm(`"${name}" 브랜드/부서를 삭제하시겠습니까?`)) return;
     try {
@@ -264,7 +301,27 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
 
   return (
     <>
-    <DraggableModal title={`거래처 #${companyId} 상세`} onClose={onClose} width={800} zIndex={300} bodyPadding="20px 28px">
+    <DraggableModal title={`거래처 #${companyId} 상세`} onClose={onClose} width={800} zIndex={300} bodyPadding="20px 28px"
+      headerExtra={
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+          <button onClick={() => handleDeleteCompany(false)} disabled={deleting}
+            style={{ fontSize: 11, padding: "3px 10px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>
+            {deleting ? "삭제 중…" : "거래처 삭제"}
+          </button>
+          {deleteError && (
+            <div style={{ fontSize: 11, color: "#dc2626", maxWidth: 240, textAlign: "right" }}>
+              {deleteError}
+              {deleteCanForce && (
+                <button onClick={() => handleDeleteCompany(true)} disabled={deleting}
+                  style={{ marginLeft: 6, fontSize: 11, padding: "2px 8px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 700 }}>
+                  강제 삭제
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      }
+    >
         {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : !detail ? <p style={{ color: "#dc2626" }}>데이터를 불러올 수 없습니다.</p> : (
           <>
             <ReviewMemoPanel storageKey={`company_${companyId}`} label="이 거래처 검수 메모" />

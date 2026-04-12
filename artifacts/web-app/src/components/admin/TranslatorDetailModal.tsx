@@ -14,13 +14,17 @@ const inputStyle: React.CSSProperties = {
 const GRADE_OPTIONS = ["S", "A", "B", "C"];
 const LANG_LEVEL_OPTIONS = ["일반", "비즈니스", "전문"];
 
-export function TranslatorDetailModal({ userId, userEmail, token, permissions = [], onClose, onToast }: {
+export function TranslatorDetailModal({ userId, userEmail, token, permissions = [], onClose, onToast, onDeleted }: {
   userId: number; userEmail: string; token: string;
   permissions?: string[];
   onClose: () => void; onToast: (msg: string) => void;
+  onDeleted?: () => void;
 }) {
   const hasPerm = (key: string) => permissions.includes(key);
   const [profile, setProfile] = useState<TranslatorProfile | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteCanForce, setDeleteCanForce] = useState(false);
   const [userInfo, setUserInfo] = useState<{ name: string; email: string; isActive: boolean; invitePending?: boolean } | null>(null);
   const [reinviting, setReinviting] = useState(false);
   const [rates, setRates] = useState<TranslatorRate[]>([]);
@@ -230,9 +234,61 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     finally { setReinviting(false); }
   };
 
+  const handleDeleteTranslator = async (force = false) => {
+    if (!force) {
+      if (!confirm("이 통번역사를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.")) return;
+    } else {
+      if (!confirm("연결된 작업/정산 데이터가 함께 영향을 받을 수 있습니다.\n정말 강제 삭제하시겠습니까?")) return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const res = await fetch(api(`/api/admin/translators/${userId}${force ? "?force=true" : ""}`), {
+        method: "DELETE", headers: authH,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        if (res.status === 409 && data.canForceDelete) {
+          setDeleteError(data.error);
+          setDeleteCanForce(true);
+        } else {
+          setDeleteError(data.error ?? "삭제 실패");
+        }
+        return;
+      }
+      onToast("통번역사가 삭제되었습니다.");
+      onDeleted?.();
+      onClose();
+    } catch {
+      setDeleteError("오류가 발생했습니다.");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <>
-    <DraggableModal title="통번역사 상세" subtitle={userEmail} onClose={onClose} width={860} zIndex={300} bodyPadding="20px 28px">
+    <DraggableModal title="통번역사 상세" subtitle={userEmail} onClose={onClose} width={860} zIndex={300} bodyPadding="20px 28px"
+      headerExtra={
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+          <button onClick={() => handleDeleteTranslator(false)} disabled={deleting}
+            style={{ fontSize: 11, padding: "3px 10px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>
+            {deleting ? "삭제 중…" : "통번역사 삭제"}
+          </button>
+          {deleteError && (
+            <div style={{ fontSize: 11, color: "#dc2626", maxWidth: 240, textAlign: "right" }}>
+              {deleteError}
+              {deleteCanForce && (
+                <button onClick={() => handleDeleteTranslator(true)} disabled={deleting}
+                  style={{ marginLeft: 6, fontSize: 11, padding: "2px 8px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 700 }}>
+                  강제 삭제
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      }
+    >
       {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : (
         <>
           <ReviewMemoPanel storageKey={`translator_${userId}`} label="이 통번역사 검수 메모" />

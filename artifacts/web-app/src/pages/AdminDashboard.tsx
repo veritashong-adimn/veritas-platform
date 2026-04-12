@@ -1021,6 +1021,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onToast={setToast}
           onOpenProject={(id) => { setCompanyModal(null); openDetail(id); }}
           onRefresh={fetchCompanies}
+          onDeleted={() => { setCompanyModal(null); fetchCompanies(); }}
         />
       )}
       {contactModal !== null && (
@@ -1040,6 +1041,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           permissions={permissions}
           onClose={() => setTranslatorDetailModal(null)}
           onToast={setToast}
+          onDeleted={() => { setTranslatorDetailModal(null); fetchTranslators(); }}
         />
       )}
       {showTranslatorCreateModal && (

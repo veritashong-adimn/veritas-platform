@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import {
   db, companiesTable, contactsTable, projectsTable,
   paymentsTable, settlementsTable, quotesTable, communicationsTable, usersTable,
-  billingBatchesTable, divisionsTable, companyNameHistoryTable,
+  billingBatchesTable, divisionsTable, companyNameHistoryTable, logsTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, inArray, sql, desc, ne } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
@@ -344,13 +344,56 @@ router.delete("/admin/companies/:id", ...adminGuard, async (req, res) => {
   if (isNaN(companyId) || companyId <= 0) {
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
+  const force = req.query.force === "true";
 
   try {
     const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
     if (!existing) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
 
+    if (force) {
+      if (process.env.ENABLE_FORCE_DELETE !== "true") {
+        res.status(403).json({ error: "강제 삭제는 현재 비활성화되어 있습니다. (ENABLE_FORCE_DELETE=true 설정 필요)" }); return;
+      }
+      if (req.user?.role !== "admin") {
+        res.status(403).json({ error: "강제 삭제는 관리자만 가능합니다." }); return;
+      }
+    }
+
+    const [contactCount] = await db.select({ count: sql<number>`count(*)::int` }).from(contactsTable).where(eq(contactsTable.companyId, companyId));
+    const [projectCount] = await db.select({ count: sql<number>`count(*)::int` }).from(projectsTable)
+      .where(or(
+        eq(projectsTable.companyId, companyId),
+        eq(projectsTable.requestingCompanyId, companyId),
+        eq(projectsTable.billingCompanyId, companyId),
+        eq(projectsTable.payerCompanyId, companyId),
+      ));
+
+    const hasLinks = (contactCount?.count ?? 0) > 0 || (projectCount?.count ?? 0) > 0;
+
+    if (hasLinks && !force) {
+      const reasons: string[] = [];
+      if ((contactCount?.count ?? 0) > 0) reasons.push(`담당자 ${contactCount?.count}건`);
+      if ((projectCount?.count ?? 0) > 0) reasons.push(`프로젝트 ${projectCount?.count}건`);
+      res.status(409).json({
+        error: `이 거래처는 연결된 데이터가 있어 삭제할 수 없습니다. (${reasons.join(", ")})`,
+        reasons,
+        canForceDelete: true,
+      });
+      return;
+    }
+
     await db.delete(companiesTable).where(eq(companiesTable.id, companyId));
-    res.json({ ok: true });
+
+    await db.insert(logsTable).values({
+      entityType: "company",
+      entityId: companyId,
+      action: force ? "force_deleted" : "deleted",
+      performedBy: req.user?.id ?? null,
+      performedByEmail: req.user?.email ?? null,
+      metadata: JSON.stringify({ name: existing.name, force, contactCount: contactCount?.count, projectCount: projectCount?.count }),
+    });
+
+    res.json({ ok: true, force });
   } catch (err) {
     req.log.error({ err }, "Companies: failed to delete");
     res.status(500).json({ error: "거래처 삭제 실패." });
