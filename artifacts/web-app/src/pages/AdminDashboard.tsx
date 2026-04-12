@@ -389,7 +389,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     try {
       const params = new URLSearchParams();
       if (userSearch.trim()) params.set("search", userSearch.trim());
-      if (userRoleFilter !== "all") params.set("role", userRoleFilter);
+      if (userRoleFilter !== "all") params.set("roleType", userRoleFilter);
       const res = await fetch(api(`/api/admin/users${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) setUsers(Array.isArray(data) ? data : []);
@@ -1926,7 +1926,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
       {/* ── 사용자 관리 탭 ── */}
       {adminTab === "users" && (
-        <Section title={`사용자 관리 (${users.length})`} action={
+        <Section title={`사용자 관리 (${users.length}명${userRoleFilter !== "all" ? ` · ${{"admin":"관리자","staff":"직원","client":"고객","linguist":"통번역사"}[userRoleFilter] ?? userRoleFilter}` : ""})`} action={
           <PrimaryBtn
             onClick={() => { setShowCreateStaff(v => !v); }}
             style={{ fontSize: 13, padding: "7px 14px", background: showCreateStaff ? "#6b7280" : "#1d4ed8" }}>
@@ -2018,20 +2018,35 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
             <input
               value={userSearch} onChange={e => setUserSearch(e.target.value)}
-              placeholder="이메일 검색..."
-              style={{ ...inputStyle, maxWidth: 260, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+              placeholder="이름·이메일·부서·직책 검색..."
+              style={{ ...inputStyle, maxWidth: 280, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+              onKeyDown={e => e.key === "Enter" && fetchUsers()}
             />
-            <select value={userRoleFilter} onChange={e => setUserRoleFilter(e.target.value)}
-              style={{ ...inputStyle, width: "auto", padding: "8px 10px", fontSize: 13, cursor: "pointer" }}>
-              <option value="all">전체 역할</option>
-              <option value="admin">관리자</option>
-              <option value="staff">직원</option>
-              <option value="client">고객</option>
-              <option value="linguist">통번역사</option>
-            </select>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", whiteSpace: "nowrap" }}>사용자 유형</span>
+              <select value={userRoleFilter} onChange={e => { setUserRoleFilter(e.target.value); }}
+                style={{ ...inputStyle, width: "auto", padding: "8px 10px", fontSize: 13, cursor: "pointer", minWidth: 110 }}>
+                <option value="all">전체 유형</option>
+                <option value="admin">관리자</option>
+                <option value="staff">직원</option>
+                <option value="client">고객</option>
+                <option value="linguist">통번역사</option>
+              </select>
+            </div>
             <PrimaryBtn onClick={fetchUsers} disabled={usersLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
               {usersLoading ? "검색 중..." : "검색"}
             </PrimaryBtn>
+            {userRoleFilter !== "all" && (
+              <button
+                onClick={() => setUserRoleFilter("all")}
+                style={{
+                  background: "none", border: "1px solid #d1d5db", borderRadius: 6,
+                  padding: "7px 10px", fontSize: 12, color: "#6b7280", cursor: "pointer",
+                  display: "flex", alignItems: "center", gap: 4,
+                }}>
+                ✕ 필터 초기화
+              </button>
+            )}
           </div>
 
           {usersLoading ? (

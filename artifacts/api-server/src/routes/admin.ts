@@ -1910,7 +1910,9 @@ router.patch("/admin/update-email", ...adminGuard, async (req, res) => {
 // ─── 사용자 목록 ───────────────────────────────────────────────────────────
 router.get("/admin/users", ...adminGuard, async (req, res) => {
   try {
-    const { search, role } = req.query as { search?: string; role?: string };
+    const { search, roleType, role: roleLegacy } = req.query as { search?: string; roleType?: string; role?: string };
+    // roleType 우선, 하위 호환을 위해 role도 지원
+    const roleFilter = (roleType ?? roleLegacy ?? "").trim();
 
     const rows = await db
       .select({
@@ -1941,13 +1943,13 @@ router.get("/admin/users", ...adminGuard, async (req, res) => {
     }
 
     const allRoles = ["customer", "translator", "admin", "staff", "client", "linguist"];
-    if (role?.trim() && allRoles.includes(role.trim())) {
-      if (role.trim() === "client") {
+    if (roleFilter && allRoles.includes(roleFilter)) {
+      if (roleFilter === "client") {
         result = result.filter(u => u.role === "client" || u.role === "customer");
-      } else if (role.trim() === "linguist") {
+      } else if (roleFilter === "linguist") {
         result = result.filter(u => u.role === "linguist" || u.role === "translator");
       } else {
-        result = result.filter(u => u.role === role.trim());
+        result = result.filter(u => u.role === roleFilter);
       }
     }
 
