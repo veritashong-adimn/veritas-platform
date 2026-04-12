@@ -23,6 +23,8 @@ export const usersTable = pgTable("users", {
   department: text("department"),
   jobTitle: text("job_title"),
   companyId: integer("company_id"),
+  lastLoginAt: timestamp("last_login_at"),
+  lastActivityAt: timestamp("last_activity_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

@@ -11,6 +11,7 @@ export interface JwtPayload {
   email: string;
   role: UserRole;
   roleId?: number | null;
+  sessionId?: string;
 }
 
 export function signToken(payload: JwtPayload): string {
@@ -29,7 +30,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 
   try {
     const payload = jwt.verify(raw, JWT_SECRET) as JwtPayload;
-    req.user = { id: payload.id, email: payload.email, role: payload.role, roleId: payload.roleId ?? null };
+    req.user = { id: payload.id, email: payload.email, role: payload.role, roleId: payload.roleId ?? null, sessionId: payload.sessionId };
     next();
   } catch {
     res.status(401).json({ error: "토큰이 유효하지 않거나 만료되었습니다." });

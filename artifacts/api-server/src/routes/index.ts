@@ -19,6 +19,7 @@ import testScenarioRouter from "./test-scenario";
 import storageRouter from "./storage";
 import filesRouter from "./files";
 import rolesRouter from "./roles";
+import activityRouter from "./activity";
 
 const router: IRouter = Router();
 
@@ -42,5 +43,6 @@ router.use(testScenarioRouter);
 router.use(storageRouter);
 router.use(filesRouter);
 router.use(rolesRouter);
+router.use(activityRouter);
 
 export default router;

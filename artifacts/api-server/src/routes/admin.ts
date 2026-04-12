@@ -1914,6 +1914,8 @@ router.get("/admin/users", ...adminGuard, async (req, res) => {
     // roleType 우선, 하위 호환을 위해 role도 지원
     const roleFilter = (roleType ?? roleLegacy ?? "").trim();
 
+    const onlineThreshold = new Date(Date.now() - 5 * 60 * 1000);
+
     const rows = await db
       .select({
         id: usersTable.id,
@@ -1926,11 +1928,18 @@ router.get("/admin/users", ...adminGuard, async (req, res) => {
         department: usersTable.department,
         jobTitle: usersTable.jobTitle,
         companyId: usersTable.companyId,
+        lastLoginAt: usersTable.lastLoginAt,
+        lastActivityAt: usersTable.lastActivityAt,
       })
       .from(usersTable)
       .orderBy(usersTable.createdAt);
 
-    let result = rows.reverse();
+    const enriched = rows.map(u => ({
+      ...u,
+      isOnline: u.lastActivityAt ? u.lastActivityAt >= onlineThreshold : false,
+    }));
+
+    let result = enriched.reverse();
 
     if (search?.trim()) {
       const s = search.trim().toLowerCase();

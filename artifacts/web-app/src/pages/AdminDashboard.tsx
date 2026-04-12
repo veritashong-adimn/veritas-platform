@@ -127,6 +127,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(true);
   const [usersLoading, setUsersLoading] = useState(false);
+
+  // 접속 통계
+  type ActivityStats = { summary: { today: number; week: number; month: number; year: number; currentlyOnline: number }; loginCount: number; uniqueUsers: number; byRole: { roleType: string; count: number }[] };
+  const [activityStats, setActivityStats] = useState<ActivityStats | null>(null);
+  const [activityPeriod, setActivityPeriod] = useState<"today"|"week"|"month"|"year">("today");
+  type UserStat = { userId: number; loginCount: number; totalActiveMinutes: number; lastLoginAt: string | null; user: { name: string | null; email: string; role: string } | null };
+  const [userStats, setUserStats] = useState<UserStat[]>([]);
+  const [showActivityStats, setShowActivityStats] = useState(false);
   const [customersLoading, setCustomersLoading] = useState(false);
 
   // project filters + pagination
@@ -634,8 +642,35 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     } catch { setToast("오류: CSV 내보내기 실패"); }
   };
 
+  // ── Heartbeat: 3분마다 마지막 활동 시간 갱신 ────────────────────────────
+  useEffect(() => {
+    const sendHeartbeat = () => {
+      if (!token) return;
+      fetch(api("/api/auth/heartbeat"), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => {});
+    };
+    sendHeartbeat();
+    const interval = setInterval(sendHeartbeat, 3 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [token]);
+
+  // ── 접속 통계 조회 ────────────────────────────────────────────────────────
+  const fetchActivityStats = useCallback(async (period: string = "today") => {
+    if (!token) return;
+    try {
+      const [statsRes, userStatsRes] = await Promise.all([
+        fetch(api(`/api/admin/activity/stats?period=${period}`), { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(api("/api/admin/activity/user-stats?limit=20"), { headers: { Authorization: `Bearer ${token}` } }),
+      ]);
+      if (statsRes.ok) setActivityStats(await statsRes.json());
+      if (userStatsRes.ok) setUserStats(await userStatsRes.json());
+    } catch {}
+  }, [token]);
+
   useEffect(() => { fetchAll(); }, [fetchAll]);
-  useEffect(() => { if (adminTab === "users") fetchUsers(); }, [adminTab, fetchUsers]);
+  useEffect(() => { if (adminTab === "users") { fetchUsers(); fetchActivityStats(activityPeriod); } }, [adminTab, fetchUsers, fetchActivityStats, activityPeriod]);
   useEffect(() => { if (adminTab === "customers") fetchCustomers(); }, [adminTab, fetchCustomers]);
   useEffect(() => { if (adminTab === "companies") fetchCompanies(); }, [adminTab, fetchCompanies]);
   useEffect(() => { if (adminTab === "contacts") { fetchContacts(); if (companies.length === 0) fetchCompanies(); } }, [adminTab, fetchContacts]);
@@ -2015,6 +2050,113 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             </Card>
           )}
 
+          {/* ── 접속 통계 패널 ── */}
+          {(() => {
+            const PERIOD_LABELS: Record<string,string> = { today: "오늘", week: "이번 주", month: "이번 달", year: "올해" };
+            const ROLE_COLORS: Record<string,string> = { admin: "#7c3aed", staff: "#0891b2", client: "#059669", linguist: "#d97706", customer: "#059669", translator: "#d97706" };
+            const ROLE_NAMES: Record<string,string> = { admin: "관리자", staff: "직원", client: "고객", linguist: "통번역사", customer: "고객", translator: "통번역사" };
+            return (
+              <div style={{ marginBottom: 18 }}>
+                {/* 상단: 요약 카드 + 통계 토글 버튼 */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                  {/* 현재 온라인 */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 10, padding: "8px 14px" }}>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#22c55e", display: "inline-block", boxShadow: "0 0 4px #22c55e" }} />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#166534" }}>현재 온라인</span>
+                    <span style={{ fontSize: 16, fontWeight: 800, color: "#16a34a" }}>{activityStats?.summary.currentlyOnline ?? users.filter(u => u.isOnline).length}명</span>
+                  </div>
+                  {/* 기간별 요약 */}
+                  {(["today","week","month","year"] as const).map(p => (
+                    <div key={p} style={{
+                      background: activityPeriod === p ? "#eff6ff" : "#f9fafb",
+                      border: `1px solid ${activityPeriod === p ? "#93c5fd" : "#e5e7eb"}`,
+                      borderRadius: 10, padding: "8px 14px", cursor: "pointer",
+                      transition: "all 0.12s",
+                    }} onClick={() => { setActivityPeriod(p); fetchActivityStats(p); }}>
+                      <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>{PERIOD_LABELS[p]} 접속자</div>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: activityPeriod === p ? "#1d4ed8" : "#374151" }}>
+                        {activityStats?.summary[p] ?? "—"}명
+                      </div>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => setShowActivityStats(v => !v)}
+                    style={{ marginLeft: "auto", padding: "8px 14px", borderRadius: 8, border: "1px solid #d1d5db", background: showActivityStats ? "#f3f4f6" : "#fff", fontSize: 12, color: "#374151", cursor: "pointer", fontWeight: 600 }}>
+                    {showActivityStats ? "▲ 통계 접기" : "▼ 상세 통계"}
+                  </button>
+                </div>
+
+                {/* 상세 통계 패널 */}
+                {showActivityStats && (
+                  <Card style={{ marginBottom: 14, padding: "16px 20px", background: "#fafafa", border: "1px solid #e5e7eb" }}>
+                    <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+                      {/* 역할별 접속 분포 */}
+                      <div style={{ flex: "1 1 200px" }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 10 }}>역할별 접속 분포 ({PERIOD_LABELS[activityPeriod]})</div>
+                        {(activityStats?.byRole ?? []).length === 0
+                          ? <div style={{ fontSize: 12, color: "#9ca3af" }}>데이터 없음</div>
+                          : (activityStats?.byRole ?? []).map(r => (
+                            <div key={r.roleType} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 8, background: ROLE_COLORS[r.roleType] + "22", color: ROLE_COLORS[r.roleType] ?? "#374151" }}>
+                                {ROLE_NAMES[r.roleType] ?? r.roleType}
+                              </span>
+                              <span style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>{r.count}명</span>
+                            </div>
+                          ))
+                        }
+                      </div>
+                      {/* 사용자별 이용 현황 */}
+                      <div style={{ flex: "2 1 320px" }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 10 }}>사용자별 누적 이용 현황 (TOP 20)</div>
+                        {userStats.length === 0
+                          ? <div style={{ fontSize: 12, color: "#9ca3af" }}>데이터 없음 (로그인 후 집계됩니다)</div>
+                          : (
+                            <div style={{ overflowX: "auto" }}>
+                              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                                <thead>
+                                  <tr style={{ background: "#f3f4f6" }}>
+                                    {["사용자","역할","로그인 횟수","총 이용시간","마지막 로그인"].map(h => (
+                                      <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 700, color: "#374151", whiteSpace: "nowrap" }}>{h}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {userStats.map(s => (
+                                    <tr key={s.userId} style={{ borderTop: "1px solid #f3f4f6" }}>
+                                      <td style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>
+                                        <div style={{ fontWeight: 600, color: "#111827" }}>{s.user?.name ?? "—"}</div>
+                                        <div style={{ fontSize: 11, color: "#9ca3af" }}>{s.user?.email}</div>
+                                      </td>
+                                      <td style={{ padding: "5px 10px" }}>
+                                        <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 7px", borderRadius: 8, background: ROLE_COLORS[s.user?.role ?? ""] + "22", color: ROLE_COLORS[s.user?.role ?? ""] ?? "#374151" }}>
+                                          {ROLE_NAMES[s.user?.role ?? ""] ?? s.user?.role}
+                                        </span>
+                                      </td>
+                                      <td style={{ padding: "5px 10px", fontWeight: 700, color: "#1d4ed8" }}>{s.loginCount}회</td>
+                                      <td style={{ padding: "5px 10px", color: "#374151" }}>
+                                        {s.totalActiveMinutes >= 60
+                                          ? `${Math.floor(s.totalActiveMinutes/60)}시간 ${s.totalActiveMinutes%60}분`
+                                          : `${s.totalActiveMinutes}분`
+                                        }
+                                      </td>
+                                      <td style={{ padding: "5px 10px", color: "#6b7280", whiteSpace: "nowrap" }}>
+                                        {s.lastLoginAt ? new Date(s.lastLoginAt).toLocaleString("ko-KR", { month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit" }) : "—"}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )
+                        }
+                      </div>
+                    </div>
+                  </Card>
+                )}
+              </div>
+            );
+          })()}
+
           {/* ── 사용자 유형 필터 탭 ── */}
           {(() => {
             const ROLE_TABS: { value: string; label: string; color: string; bg: string; activeBg: string }[] = [
@@ -2085,7 +2227,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["ID","이메일/이름","유형","부서/직책","상태","가입일","시스템 권한(RBAC)","역할 변경","계정 상태","비밀번호","프로필"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                    <tr>{["ID","이메일/이름","유형","부서/직책","상태","접속","마지막 로그인","마지막 활동","가입일","시스템 권한(RBAC)","역할 변경","계정 상태","비밀번호","프로필"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {users.map(u => (
@@ -2117,6 +2259,47 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           }}>
                             {u.isActive ? "활성" : "비활성"}
                           </span>
+                        </td>
+                        {/* 접속 상태 */}
+                        <td style={{ ...tableTd, textAlign: "center" }}>
+                          {u.isOnline ? (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 9px", borderRadius: 20, background: "#f0fdf4", border: "1px solid #86efac", fontSize: 11, fontWeight: 700, color: "#16a34a" }}>
+                              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 3px #22c55e" }} />온라인
+                            </span>
+                          ) : (
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 9px", borderRadius: 20, background: "#f3f4f6", border: "1px solid #e5e7eb", fontSize: 11, fontWeight: 600, color: "#9ca3af" }}>
+                              <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#d1d5db" }} />오프라인
+                            </span>
+                          )}
+                        </td>
+                        {/* 마지막 로그인 */}
+                        <td style={{ ...tableTd, fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}>
+                          {u.lastLoginAt ? (() => {
+                            const d = new Date(u.lastLoginAt);
+                            const now = new Date();
+                            const diff = now.getTime() - d.getTime();
+                            const mins = Math.floor(diff / 60000);
+                            const hours = Math.floor(mins / 60);
+                            const days = Math.floor(hours / 24);
+                            if (mins < 1) return "방금";
+                            if (mins < 60) return `${mins}분 전`;
+                            if (hours < 24) return `오늘 ${d.toLocaleTimeString("ko-KR", { hour:"2-digit", minute:"2-digit" })}`;
+                            if (days < 7) return `${days}일 전`;
+                            return d.toLocaleDateString("ko-KR", { month:"2-digit", day:"2-digit" });
+                          })() : <span style={{ color: "#d1d5db" }}>—</span>}
+                        </td>
+                        {/* 마지막 활동 */}
+                        <td style={{ ...tableTd, fontSize: 11, color: "#6b7280", whiteSpace: "nowrap" }}>
+                          {u.lastActivityAt ? (() => {
+                            const d = new Date(u.lastActivityAt);
+                            const diff = Date.now() - d.getTime();
+                            const mins = Math.floor(diff / 60000);
+                            const hours = Math.floor(mins / 60);
+                            if (mins < 1) return "방금";
+                            if (mins < 60) return `${mins}분 전`;
+                            if (hours < 24) return `${hours}시간 전`;
+                            return d.toLocaleDateString("ko-KR", { month:"2-digit", day:"2-digit" });
+                          })() : <span style={{ color: "#d1d5db" }}>—</span>}
                         </td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
                           {new Date(u.createdAt).toLocaleDateString("ko-KR")}

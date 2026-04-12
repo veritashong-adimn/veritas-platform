@@ -68,6 +68,7 @@ export type AdminUser = {
   id: number; email: string; role: Role; isActive: boolean; createdAt: string;
   name?: string; roleId?: number | null;
   department?: string | null; jobTitle?: string | null; companyId?: number | null;
+  lastLoginAt?: string | null; lastActivityAt?: string | null; isOnline?: boolean;
 };
 export type AdminCustomer = {
   id: number; companyName: string; contactName: string; email: string;

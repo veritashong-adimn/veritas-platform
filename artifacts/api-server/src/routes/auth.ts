@@ -1,9 +1,18 @@
 import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
-import { db, usersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { randomUUID } from "crypto";
+import { db, usersTable, userSessionsTable } from "@workspace/db";
+import { eq, and, gte, sql } from "drizzle-orm";
 import { signToken, requireAuth } from "../middlewares/auth";
 import { getPermissionsForRole, ALL_PERMISSIONS } from "../lib/rbac";
+
+/** 오늘 날짜 키 (YYYY-MM-DD, KST) */
+function todayKey(): string {
+  return new Date().toLocaleDateString("sv-SE", { timeZone: "Asia/Seoul" });
+}
+
+/** 마지막 활동 기준 온라인 판정 (5분 이내) */
+export const ONLINE_THRESHOLD_MS = 5 * 60 * 1000;
 
 const router: IRouter = Router();
 
@@ -103,7 +112,29 @@ router.post("/auth/login", async (req, res) => {
   }
 
   req.log.info({ email, userId: user.id, role: user.role }, "Login success");
-  const token = signToken({ id: user.id, email: user.email, role: user.role, roleId: user.roleId });
+
+  const sessionId = randomUUID();
+  const now = new Date();
+
+  // 세션 기록 저장 (비동기, 실패해도 로그인 차단 안 함)
+  Promise.all([
+    db.insert(userSessionsTable).values({
+      userId: user.id,
+      sessionId,
+      roleType: user.role,
+      loginAt: now,
+      lastActivityAt: now,
+      ipAddress: (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? null,
+      userAgent: req.headers["user-agent"] ?? null,
+      isOnline: true,
+      dateKey: todayKey(),
+    }),
+    db.update(usersTable)
+      .set({ lastLoginAt: now, lastActivityAt: now })
+      .where(eq(usersTable.id, user.id)),
+  ]).catch(err => req.log.error({ err }, "Session record failed"));
+
+  const token = signToken({ id: user.id, email: user.email, role: user.role, roleId: user.roleId, sessionId });
   const permissions = await resolvePermissions(user);
 
   res.json({
@@ -164,6 +195,47 @@ router.patch("/auth/change-password", requireAuth, async (req, res) => {
     .where(eq(usersTable.id, userId));
 
   req.log.info({ userId }, "Password changed");
+  res.json({ ok: true });
+});
+
+/** Heartbeat: 마지막 활동 시간 갱신 (로그인 후 주기적으로 호출) */
+router.post("/auth/heartbeat", requireAuth, async (req, res) => {
+  const user = req.user!;
+  const now = new Date();
+
+  await Promise.all([
+    db.update(usersTable)
+      .set({ lastActivityAt: now })
+      .where(eq(usersTable.id, user.id)),
+    user.sessionId
+      ? db.update(userSessionsTable)
+          .set({ lastActivityAt: now, isOnline: true })
+          .where(and(
+            eq(userSessionsTable.userId, user.id),
+            eq(userSessionsTable.sessionId, user.sessionId),
+          ))
+      : Promise.resolve(),
+  ]);
+
+  res.json({ ok: true, lastActivityAt: now });
+});
+
+/** Logout: 세션을 오프라인 처리 */
+router.post("/auth/logout", requireAuth, async (req, res) => {
+  const user = req.user!;
+  const now = new Date();
+
+  await Promise.all([
+    user.sessionId
+      ? db.update(userSessionsTable)
+          .set({ logoutAt: now, isOnline: false })
+          .where(and(
+            eq(userSessionsTable.userId, user.id),
+            eq(userSessionsTable.sessionId, user.sessionId),
+          ))
+      : Promise.resolve(),
+  ]);
+
   res.json({ ok: true });
 });
 
