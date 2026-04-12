@@ -3,7 +3,7 @@ import { logger } from "./lib/logger";
 import { seedAdmin } from "./lib/seedAdmin";
 import { seedRbac } from "./lib/rbac";
 
-const port = Number(process.env["PORT"] || 8080);
+const PORT = process.env.PORT;
 
 seedAdmin()
   .catch((err) => {
@@ -14,8 +14,8 @@ seedAdmin()
     logger.error({ err }, "RBAC seed failed — continuing startup");
   })
   .finally(() => {
-    app.listen(port, "0.0.0.0", () => {
-      console.log(`Server listening on port ${port}`);
-      logger.info({ port }, "Server listening");
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server listening on port ${PORT}`);
+      logger.info({ port: PORT }, "Server listening");
     });
   });
