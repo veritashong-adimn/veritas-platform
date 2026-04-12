@@ -21,10 +21,15 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
         id: companiesTable.id,
         name: companiesTable.name,
         businessNumber: companiesTable.businessNumber,
+        representativeName: companiesTable.representativeName,
+        email: companiesTable.email,
+        phone: companiesTable.phone,
+        mobile: companiesTable.mobile,
         industry: companiesTable.industry,
         businessCategory: companiesTable.businessCategory,
         address: companiesTable.address,
         website: companiesTable.website,
+        notes: companiesTable.notes,
         registeredAt: companiesTable.registeredAt,
         createdAt: companiesTable.createdAt,
         companyType: companiesTable.companyType,
@@ -72,9 +77,9 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
 
 // ─── 거래처 생성 ─────────────────────────────────────────────────────────────
 router.post("/admin/companies", ...adminGuard, requirePermission("company.create"), async (req, res) => {
-  const { name, businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt, companyType, vendorType } = req.body as {
+  const { name, businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, registeredAt, companyType, vendorType } = req.body as {
     name?: string; businessNumber?: string; representativeName?: string;
-    email?: string; phone?: string; industry?: string; businessCategory?: string;
+    email?: string; phone?: string; mobile?: string; industry?: string; businessCategory?: string;
     address?: string; website?: string; notes?: string; registeredAt?: string;
     companyType?: string; vendorType?: string;
   };
@@ -92,7 +97,7 @@ router.post("/admin/companies", ...adminGuard, requirePermission("company.create
   try {
     const [company] = await db
       .insert(companiesTable)
-      .values({ name: name.trim(), businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt: registeredAt ?? today, companyType: resolvedCompanyType, vendorType: resolvedVendorType })
+      .values({ name: name.trim(), businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, registeredAt: registeredAt ?? today, companyType: resolvedCompanyType, vendorType: resolvedVendorType })
       .returning();
 
     // 최초 상호를 이력으로 기록
@@ -265,7 +270,7 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
 
-  const { name, businessNumber, representativeName, email, phone, industry, businessCategory, address, website, notes, registeredAt, nameChangeReason, companyType, vendorType } = req.body;
+  const { name, businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, registeredAt, nameChangeReason, companyType, vendorType } = req.body;
 
   try {
     const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
@@ -286,6 +291,7 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
         representativeName: representativeName !== undefined ? (representativeName || null) : existing.representativeName,
         email: email !== undefined ? (email || null) : existing.email,
         phone: phone !== undefined ? (phone || null) : existing.phone,
+        mobile: mobile !== undefined ? (mobile || null) : existing.mobile,
         industry: industry !== undefined ? (industry || null) : existing.industry,
         businessCategory: businessCategory !== undefined ? (businessCategory || null) : existing.businessCategory,
         address: address !== undefined ? (address || null) : existing.address,
@@ -482,8 +488,11 @@ async function listContacts(req: any, res: any) {
       result = result.filter(c =>
         c.name.toLowerCase().includes(s) ||
         (c.email ?? "").toLowerCase().includes(s) ||
+        (c.mobile ?? "").replace(/-/g, "").includes(s.replace(/-/g, "")) ||
         (c.mobile ?? "").toLowerCase().includes(s) ||
-        (c.phone ?? "").toLowerCase().includes(s) ||
+        (c.officePhone ?? "").replace(/-/g, "").includes(s.replace(/-/g, "")) ||
+        (c.officePhone ?? "").toLowerCase().includes(s) ||
+        (c.phone ?? "").replace(/-/g, "").includes(s.replace(/-/g, "")) ||
         (c.companyName ?? "").toLowerCase().includes(s)
       );
     }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { api, CompanyDetail, Contact, Division, NoteEntry, VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn } from "../ui";
+import { formatPhone } from "../../lib/utils";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { PrepaidLedgerModal } from "./PrepaidLedgerModal";
 import { DraggableModal } from "./DraggableModal";
@@ -33,7 +34,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [savingContact, setSavingContact] = useState(false);
   const [showInactiveContacts, setShowInactiveContacts] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: "", companyType: "client", vendorType: "" });
+  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", mobile: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: "", companyType: "client", vendorType: "" });
   const [originalName, setOriginalName] = useState("");
   const [nameChangeReason, setNameChangeReason] = useState("");
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
@@ -68,6 +69,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
           representativeName: data.representativeName ?? "",
           email: data.email ?? "",
           phone: data.phone ?? "",
+          mobile: (data as any).mobile ?? "",
           industry: data.industry ?? "",
           businessCategory: (data as any).businessCategory ?? "",
           address: data.address ?? "",
@@ -276,7 +278,8 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     ["사업자번호", detail.businessNumber ?? "-", false],
                     ["대표자명", detail.representativeName ?? "-", false],
                     ["등록일", (detail as any).registeredAt ?? "-", false],
-                    ["전화번호", detail.phone ?? "-", false],
+                    ["대표전화", detail.phone ?? "-", false],
+                    ["휴대폰", (detail as any).mobile ?? "-", false],
                     ["이메일", detail.email ?? "-", false],
                     ["웹사이트", detail.website ?? "-", false],
                     ["업태", detail.industry ?? "-", false],
@@ -382,12 +385,17 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                       style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
                   </div>
                 </div>
-                {/* 3행: 전화 / 이메일 / 웹사이트 */}
+                {/* 3행: 대표전화 / 휴대폰 / 이메일 */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
                   <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>전화번호</label>
-                    <input value={editForm.phone} onChange={e => setEditForm(p => ({ ...p, phone: e.target.value }))}
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대표전화</label>
+                    <input value={editForm.phone} onChange={e => setEditForm(p => ({ ...p, phone: formatPhone(e.target.value) }))}
                       placeholder="02-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>휴대폰</label>
+                    <input value={editForm.mobile} onChange={e => setEditForm(p => ({ ...p, mobile: formatPhone(e.target.value) }))}
+                      placeholder="010-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
                   </div>
                   <div>
                     <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>이메일</label>
@@ -396,6 +404,9 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                       style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.email ? "#fca5a5" : undefined }} />
                     {formErrors.email && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.email}</p>}
                   </div>
+                </div>
+                {/* 3.5행: 웹사이트 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "0 12px" }}>
                   <div>
                     <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>웹사이트</label>
                     <input value={editForm.website} onChange={e => setEditForm(p => ({ ...p, website: e.target.value }))}
@@ -631,7 +642,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     </div>
                     <div>
                       <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 2 }}>휴대폰 <span style={{ color: "#9ca3af", fontSize: 11 }}>(권장)</span></label>
-                      <input value={cf.mobile} onChange={e => setCf(p => ({ ...p, mobile: e.target.value }))}
+                      <input value={cf.mobile} onChange={e => setCf(p => ({ ...p, mobile: formatPhone(e.target.value) }))}
                         placeholder="예: 010-1234-5678" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: errs.mobile ? "#fca5a5" : undefined }} />
                       {errs.mobile && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{errs.mobile}</p>}
                     </div>
@@ -643,7 +654,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     </div>
                     <div>
                       <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 2 }}>직장전화</label>
-                      <input value={cf.officePhone} onChange={e => setCf(p => ({ ...p, officePhone: e.target.value }))}
+                      <input value={cf.officePhone} onChange={e => setCf(p => ({ ...p, officePhone: formatPhone(e.target.value) }))}
                         placeholder="예: 02-1234-5678" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
                     </div>
                     <div style={{ gridColumn: "1/-1" }}>
@@ -709,7 +720,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                           </div>
                           <div>
                             <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 2 }}>휴대폰</label>
-                            <input value={editContactForm.mobile} onChange={e => setEditContactForm(p => ({ ...p, mobile: e.target.value }))}
+                            <input value={editContactForm.mobile} onChange={e => setEditContactForm(p => ({ ...p, mobile: formatPhone(e.target.value) }))}
                               style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: editContactErrors.mobile ? "#fca5a5" : undefined }} />
                             {editContactErrors.mobile && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{editContactErrors.mobile}</p>}
                           </div>
@@ -721,7 +732,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                           </div>
                           <div>
                             <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 2 }}>직장전화</label>
-                            <input value={editContactForm.officePhone} onChange={e => setEditContactForm(p => ({ ...p, officePhone: e.target.value }))}
+                            <input value={editContactForm.officePhone} onChange={e => setEditContactForm(p => ({ ...p, officePhone: formatPhone(e.target.value) }))}
                               style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
                           </div>
                           <div style={{ gridColumn: "1/-1" }}>

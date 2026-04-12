@@ -12,6 +12,7 @@ import {
   VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS,
 } from '../lib/constants';
 import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill } from '../components/ui';
+import { formatPhone } from '../lib/utils';
 import { LogModal } from '../components/admin/LogModal';
 import { DraggableModal } from '../components/admin/DraggableModal';
 import { CompanyDetailModal } from '../components/admin/CompanyDetailModal';
@@ -216,7 +217,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [companySearch, setCompanySearch] = useState("");
   const [companyModal, setCompanyModal] = useState<number | null>(null);
   const [showCompanyForm, setShowCompanyForm] = useState(false);
-  const [companyForm, setCompanyForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10), companyType: "client", vendorType: "" });
+  const [companyForm, setCompanyForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", mobile: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10), companyType: "client", vendorType: "" });
   const [savingCompany, setSavingCompany] = useState(false);
   const [companyTypeFilter, setCompanyTypeFilter] = useState<"all"|"client"|"vendor">("all");
   const [companyVendorTypeFilter, setCompanyVendorTypeFilter] = useState<string>("all");
@@ -542,7 +543,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
       setToast("거래처가 등록되었습니다.");
-      setCompanyForm({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10), companyType: "client", vendorType: "" });
+      setCompanyForm({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", mobile: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10), companyType: "client", vendorType: "" });
       setShowCompanyForm(false);
       await fetchCompanies();
     } catch { setToast("오류: 거래처 등록 실패"); }
@@ -2603,18 +2604,26 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
                   </div>
                 </div>
-                {/* 3행: 전화 / 이메일 / 웹사이트 */}
+                {/* 3행: 대표전화 / 휴대폰 / 이메일 */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
                   <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>전화번호</label>
-                    <input value={companyForm.phone} onChange={e => setCompanyForm(p => ({ ...p, phone: e.target.value }))}
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대표전화</label>
+                    <input value={companyForm.phone} onChange={e => setCompanyForm(p => ({ ...p, phone: formatPhone(e.target.value) }))}
                       placeholder="02-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>휴대폰</label>
+                    <input value={companyForm.mobile} onChange={e => setCompanyForm(p => ({ ...p, mobile: formatPhone(e.target.value) }))}
+                      placeholder="010-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
                   </div>
                   <div>
                     <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>이메일</label>
                     <input type="email" value={companyForm.email} onChange={e => setCompanyForm(p => ({ ...p, email: e.target.value }))}
                       placeholder="contact@company.com" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
                   </div>
+                </div>
+                {/* 3.5행: 웹사이트 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "0 12px" }}>
                   <div>
                     <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>웹사이트</label>
                     <input value={companyForm.website} onChange={e => setCompanyForm(p => ({ ...p, website: e.target.value }))}

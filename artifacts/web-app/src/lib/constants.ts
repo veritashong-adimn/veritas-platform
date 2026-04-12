@@ -137,7 +137,7 @@ export const VENDOR_TYPE_OPTIONS = [
 export type Company = {
   id: number; name: string; businessNumber: string | null; industry: string | null;
   address: string | null; website: string | null; notes: string | null;
-  representativeName: string | null; email: string | null; phone: string | null;
+  representativeName: string | null; email: string | null; phone: string | null; mobile: string | null;
   createdAt: string; contactCount: number; projectCount: number; totalPayment: number;
   companyType: CompanyType; vendorType: VendorType | null;
 };

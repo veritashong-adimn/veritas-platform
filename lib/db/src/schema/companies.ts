@@ -7,6 +7,7 @@ export const companiesTable = pgTable("companies", {
   representativeName: text("representative_name"),
   email: text("email"),
   phone: text("phone"),
+  mobile: text("mobile"),
   industry: text("industry"),
   businessCategory: text("business_category"),
   address: text("address"),
