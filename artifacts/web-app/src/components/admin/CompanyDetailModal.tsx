@@ -365,6 +365,42 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     {formErrors.nameChangeReason && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.nameChangeReason}</p>}
                   </div>
                 )}
+                {/* 1.5행: 거래처 유형 / 외주유형 */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, background: "#f9fafb", borderRadius: 10, padding: "12px 14px", border: "1px solid #f3f4f6" }}>
+                  <div>
+                    <label style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 6 }}>거래처 유형</label>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {[
+                        { v: "client", label: "고객사", bg: "#eff6ff", color: "#1d4ed8", border: "#93c5fd" },
+                        { v: "vendor", label: "외주업체", bg: "#f5f3ff", color: "#7c3aed", border: "#c4b5fd" },
+                      ].map(opt => (
+                        <button key={opt.v} type="button"
+                          onClick={() => setEditForm(p => ({ ...p, companyType: opt.v, vendorType: opt.v === "client" ? "" : p.vendorType }))}
+                          style={{
+                            padding: "6px 18px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
+                            background: editForm.companyType === opt.v ? opt.bg : "#fff",
+                            color: editForm.companyType === opt.v ? opt.color : "#9ca3af",
+                            border: `2px solid ${editForm.companyType === opt.v ? opt.border : "#e5e7eb"}`,
+                            transition: "all 0.15s",
+                          }}>
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {editForm.companyType === "vendor" && (
+                    <div>
+                      <label style={{ fontSize: 12, color: "#7c3aed", fontWeight: 600, display: "block", marginBottom: 4 }}>외주유형</label>
+                      <select value={editForm.vendorType}
+                        onChange={e => setEditForm(p => ({ ...p, vendorType: e.target.value }))}
+                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: "#ddd6fe" }}>
+                        <option value="">— 선택 안 함 —</option>
+                        {VENDOR_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+
                 {/* 2행: 사업자등록번호 / 대표자명 / 등록일 */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
                   <div>
