@@ -5,7 +5,7 @@ export const TOKEN_KEY = "auth_token";
 export const USER_KEY = "auth_user";
 export const PERM_KEY = "auth_permissions";
 
-export type Role = "customer" | "translator" | "admin";
+export type Role = "admin" | "staff" | "client" | "linguist" | "customer" | "translator";
 export type User = {
   id: number;
   email: string;
@@ -64,7 +64,11 @@ export type AdminTask = {
 };
 export type LogEntry = { id: number; entityType: string; entityId: number; action: string; performedByEmail: string | null; metadata: string | null; createdAt: string };
 export type NoteEntry = { id: number; content: string; createdAt: string; adminEmail: string | null };
-export type AdminUser = { id: number; email: string; role: Role; isActive: boolean; createdAt: string; name?: string; roleId?: number | null };
+export type AdminUser = {
+  id: number; email: string; role: Role; isActive: boolean; createdAt: string;
+  name?: string; roleId?: number | null;
+  department?: string | null; jobTitle?: string | null; companyId?: number | null;
+};
 export type AdminCustomer = {
   id: number; companyName: string; contactName: string; email: string;
   phone: string | null; createdAt: string;
@@ -224,7 +228,7 @@ export function loadSession(): { token: string; user: User; permissions: string[
   } catch { return null; }
 }
 export function getDefaultPage(role: Role): NavPage {
-  return role === "admin" ? "admin" : "dashboard";
+  return (role === "admin" || role === "staff") ? "admin" : "dashboard";
 }
 
 export const STATUS_LABEL: Record<string, string> = {
@@ -264,12 +268,20 @@ export const STATUS_STYLE: Record<string, React.CSSProperties> = {
   failed:      { background: "#fef2f2", color: "#dc2626" },
 };
 export const ROLE_STYLE: Record<Role, React.CSSProperties> = {
+  admin:      { background: "#fef2f2", color: "#dc2626" },
+  staff:      { background: "#fff7ed", color: "#ea580c" },
+  client:     { background: "#eff6ff", color: "#2563eb" },
+  linguist:   { background: "#faf5ff", color: "#7c3aed" },
   customer:   { background: "#eff6ff", color: "#2563eb" },
   translator: { background: "#faf5ff", color: "#7c3aed" },
-  admin:      { background: "#fef2f2", color: "#dc2626" },
 };
 export const ROLE_LABEL: Record<Role, string> = {
-  customer: "고객", translator: "통번역사", admin: "관리자",
+  admin:      "관리자",
+  staff:      "직원",
+  client:     "고객",
+  linguist:   "통번역사",
+  customer:   "고객",
+  translator: "통번역사",
 };
 export const BOARD_CATEGORY_LABEL: Record<string, string> = { notice: "공지", reference: "통역자료", manual: "내부매뉴얼" };
 export const AVAILABILITY_LABEL: Record<string, string> = { available: "가능", busy: "바쁨", unavailable: "불가" };

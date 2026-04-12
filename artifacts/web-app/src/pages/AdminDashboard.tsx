@@ -1901,9 +1901,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <select value={userRoleFilter} onChange={e => setUserRoleFilter(e.target.value)}
               style={{ ...inputStyle, width: "auto", padding: "8px 10px", fontSize: 13, cursor: "pointer" }}>
               <option value="all">전체 역할</option>
-              <option value="customer">고객</option>
-              <option value="translator">통번역사</option>
               <option value="admin">관리자</option>
+              <option value="staff">직원</option>
+              <option value="client">고객</option>
+              <option value="linguist">통번역사</option>
             </select>
             <PrimaryBtn onClick={fetchUsers} disabled={usersLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
               {usersLoading ? "검색 중..." : "검색"}
@@ -1919,7 +1920,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["ID","이메일","역할","상태","가입일","시스템 역할(RBAC)","역할 변경","계정 상태","비밀번호","프로필"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                    <tr>{["ID","이메일/이름","유형","부서/직책","상태","가입일","시스템 권한(RBAC)","역할 변경","계정 상태","비밀번호","프로필"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {users.map(u => (
@@ -1928,10 +1929,21 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                         <td style={{ ...tableTd, color: "#9ca3af" }}>#{u.id}</td>
                         <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>
-                          {(u as any).name && <div style={{ fontWeight: 700, marginBottom: 2 }}>{(u as any).name}</div>}
-                          <div style={{ fontSize: 12, color: (u as any).name ? "#6b7280" : "#111827" }}>{u.email}</div>
+                          {u.name && <div style={{ fontWeight: 700, marginBottom: 2 }}>{u.name}</div>}
+                          <div style={{ fontSize: 12, color: u.name ? "#6b7280" : "#111827" }}>{u.email}</div>
                         </td>
                         <td style={tableTd}><RoleBadge role={u.role} /></td>
+                        <td style={tableTd}>
+                          {(u.role === "admin" || u.role === "staff") ? (
+                            <div style={{ fontSize: 12 }}>
+                              {u.department && <div style={{ fontWeight: 600, color: "#374151" }}>{u.department}</div>}
+                              {u.jobTitle && <div style={{ color: "#6b7280" }}>{u.jobTitle}</div>}
+                              {!u.department && !u.jobTitle && <span style={{ color: "#d1d5db" }}>—</span>}
+                            </div>
+                          ) : (
+                            <span style={{ fontSize: 11, color: "#d1d5db" }}>—</span>
+                          )}
+                        </td>
                         <td style={tableTd}>
                           <span style={{
                             padding: "3px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600,
@@ -1944,9 +1956,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
                           {new Date(u.createdAt).toLocaleDateString("ko-KR")}
                         </td>
-                        {/* 시스템 역할(RBAC) 컬럼 - admin 계정에 내부 권한 역할 지정 */}
+                        {/* 시스템 권한(RBAC) — admin/staff에만 표시 */}
                         <td style={tableTd}>
-                          {u.role === "admin" ? (
+                          {(u.role === "admin" || u.role === "staff") ? (
                             <select
                               value={u.roleId ?? ""}
                               disabled={roleChanging === u.id}
@@ -1959,13 +1971,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                                     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
                                     body: JSON.stringify({ roleId: rid }),
                                   });
-                                  if (!res.ok) { setToast("역할 지정 실패"); return; }
+                                  if (!res.ok) { setToast("권한 지정 실패"); return; }
                                   setUsers(prev => prev.map(x => x.id === u.id ? { ...x, roleId: rid } as AdminUser : x));
-                                  setToast("RBAC 역할이 변경되었습니다.");
+                                  setToast("RBAC 권한이 변경되었습니다.");
                                 } finally { setRoleChanging(null); }
                               }}
                               style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid #e9d5ff", fontSize: 12, cursor: "pointer", background: "#faf5ff", color: "#7c3aed", fontWeight: 600 }}>
-                              <option value="">전체 권한</option>
+                              <option value="">{u.role === "admin" && !u.roleId ? "전체 권한" : "권한 선택"}</option>
                               {rbacRoles.map(r => <option key={r.id} value={r.id}>{r.name}{r.description ? ` — ${r.description}` : ""}</option>)}
                             </select>
                           ) : (
@@ -1973,21 +1985,23 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           )}
                         </td>
                         <td style={tableTd}>
-                          {u.role !== "admin" ? (
+                          {u.id !== user.id ? (
                             <select
                               value={u.role}
                               disabled={roleChanging === u.id}
                               onChange={e => handleRoleChange(u.id, e.target.value)}
                               style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, cursor: "pointer", background: "#fff" }}>
-                              <option value="customer">고객</option>
-                              <option value="translator">통번역사</option>
+                              <option value="admin">관리자</option>
+                              <option value="staff">직원</option>
+                              <option value="client">고객</option>
+                              <option value="linguist">통번역사</option>
                             </select>
                           ) : (
-                            <span style={{ fontSize: 12, color: "#9ca3af" }}>변경 불가</span>
+                            <span style={{ fontSize: 12, color: "#9ca3af" }}>본인 계정</span>
                           )}
                         </td>
                         <td style={tableTd}>
-                          {u.role !== "admin" ? (
+                          {u.id !== user.id ? (
                             <button
                               onClick={() => handleToggleActive(u.id)}
                               disabled={toggling === u.id}
@@ -2001,7 +2015,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               {toggling === u.id ? "처리 중..." : u.isActive ? "비활성화" : "활성화"}
                             </button>
                           ) : (
-                            <span style={{ fontSize: 12, color: "#9ca3af" }}>—</span>
+                            <span style={{ fontSize: 12, color: "#9ca3af" }}>본인</span>
                           )}
                         </td>
                         <td style={tableTd}>

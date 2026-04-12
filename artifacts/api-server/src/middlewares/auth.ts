@@ -4,10 +4,12 @@ import { getPermissionsForRole } from "../lib/rbac";
 
 const JWT_SECRET = process.env.JWT_SECRET ?? "translation-platform-jwt-secret-dev";
 
+export type UserRole = "admin" | "staff" | "client" | "linguist" | "customer" | "translator";
+
 export interface JwtPayload {
   id: number;
   email: string;
-  role: "customer" | "translator" | "admin";
+  role: UserRole;
   roleId?: number | null;
 }
 
@@ -34,13 +36,13 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   }
 }
 
-export function requireRole(...roles: Array<"customer" | "translator" | "admin">) {
+export function requireRole(...roles: UserRole[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     if (!req.user) {
       res.status(401).json({ error: "인증이 필요합니다." });
       return;
     }
-    if (!roles.includes(req.user.role)) {
+    if (!roles.includes(req.user.role as UserRole)) {
       res.status(403).json({ error: `접근 권한이 없습니다. 필요 역할: ${roles.join(", ")}` });
       return;
     }
@@ -50,8 +52,8 @@ export function requireRole(...roles: Array<"customer" | "translator" | "admin">
 
 /**
  * RBAC 권한 체크 미들웨어
- * - admin + roleId 없음 → 전체 권한 허용 (하위 호환)
- * - roleId 지정 시 → 해당 역할의 권한 목록에서 key 확인
+ * - admin (roleId 없음) → 전체 권한 허용 (하위 호환)
+ * - staff / admin (roleId 있음) → 해당 역할의 권한 목록에서 key 확인
  */
 export function requirePermission(key: string) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
