@@ -2015,39 +2015,66 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             </Card>
           )}
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
-            <input
-              value={userSearch} onChange={e => setUserSearch(e.target.value)}
-              placeholder="이름·이메일·부서·직책 검색..."
-              style={{ ...inputStyle, maxWidth: 280, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
-              onKeyDown={e => e.key === "Enter" && fetchUsers()}
-            />
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", whiteSpace: "nowrap" }}>사용자 유형</span>
-              <select value={userRoleFilter} onChange={e => { setUserRoleFilter(e.target.value); }}
-                style={{ ...inputStyle, width: "auto", padding: "8px 10px", fontSize: 13, cursor: "pointer", minWidth: 110 }}>
-                <option value="all">전체 유형</option>
-                <option value="admin">관리자</option>
-                <option value="staff">직원</option>
-                <option value="client">고객</option>
-                <option value="linguist">통번역사</option>
-              </select>
-            </div>
-            <PrimaryBtn onClick={fetchUsers} disabled={usersLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
-              {usersLoading ? "검색 중..." : "검색"}
-            </PrimaryBtn>
-            {userRoleFilter !== "all" && (
-              <button
-                onClick={() => setUserRoleFilter("all")}
-                style={{
-                  background: "none", border: "1px solid #d1d5db", borderRadius: 6,
-                  padding: "7px 10px", fontSize: 12, color: "#6b7280", cursor: "pointer",
-                  display: "flex", alignItems: "center", gap: 4,
-                }}>
-                ✕ 필터 초기화
-              </button>
-            )}
-          </div>
+          {/* ── 사용자 유형 필터 탭 ── */}
+          {(() => {
+            const ROLE_TABS: { value: string; label: string; color: string; bg: string; activeBg: string }[] = [
+              { value: "all",      label: "전체",    color: "#374151", bg: "#f3f4f6", activeBg: "#1d4ed8" },
+              { value: "admin",    label: "관리자",  color: "#374151", bg: "#f3f4f6", activeBg: "#7c3aed" },
+              { value: "staff",    label: "직원",    color: "#374151", bg: "#f3f4f6", activeBg: "#0891b2" },
+              { value: "client",   label: "고객",    color: "#374151", bg: "#f3f4f6", activeBg: "#059669" },
+              { value: "linguist", label: "통번역사", color: "#374151", bg: "#f3f4f6", activeBg: "#d97706" },
+            ];
+            return (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "#6b7280", marginRight: 4, whiteSpace: "nowrap" }}>사용자 유형</span>
+                  {ROLE_TABS.map(tab => {
+                    const isActive = userRoleFilter === tab.value;
+                    return (
+                      <button
+                        key={tab.value}
+                        onClick={() => setUserRoleFilter(tab.value)}
+                        style={{
+                          padding: "6px 14px", borderRadius: 20, fontSize: 13, fontWeight: isActive ? 700 : 500,
+                          border: isActive ? `2px solid ${tab.activeBg}` : "2px solid #e5e7eb",
+                          background: isActive ? tab.activeBg : "#fff",
+                          color: isActive ? "#fff" : "#374151",
+                          cursor: "pointer", transition: "all 0.12s", whiteSpace: "nowrap",
+                        }}
+                      >
+                        {tab.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <input
+                    value={userSearch} onChange={e => setUserSearch(e.target.value)}
+                    placeholder="이름·이메일·부서·직책 검색..."
+                    onKeyDown={e => e.key === "Enter" && fetchUsers()}
+                    style={{
+                      flex: "1 1 200px", maxWidth: 300, padding: "8px 12px", borderRadius: 8,
+                      border: "1px solid #d1d5db", fontSize: 13, color: "#111827",
+                      outline: "none", boxSizing: "border-box" as const, background: "#fff",
+                    }}
+                  />
+                  <PrimaryBtn onClick={fetchUsers} disabled={usersLoading} style={{ padding: "8px 18px", fontSize: 13 }}>
+                    {usersLoading ? "검색 중..." : "검색"}
+                  </PrimaryBtn>
+                  {(userSearch.trim() || userRoleFilter !== "all") && (
+                    <button
+                      onClick={() => { setUserSearch(""); setUserRoleFilter("all"); }}
+                      style={{
+                        background: "none", border: "1px solid #d1d5db", borderRadius: 8,
+                        padding: "7px 12px", fontSize: 12, color: "#6b7280", cursor: "pointer",
+                      }}>
+                      초기화
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {usersLoading ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
