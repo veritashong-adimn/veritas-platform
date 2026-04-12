@@ -19,21 +19,22 @@ const adminGuard = [requireAuth, requireRole("admin", "staff")];
 async function loadPlatformAndBank(): Promise<{ platform: PlatformInfo; bank: BankInfo | null }> {
   const rows = await db.select().from(settingsTable).limit(1);
   const s = rows[0] ?? {};
+  // settings 테이블 → 환경변수 → ㈜베리타스 기본값 순으로 적용 (향후 settings UI 연동 가능)
   const platform: PlatformInfo = {
-    name: s.companyName || process.env.PLATFORM_NAME || "통번역 플랫폼",
-    representativeName: s.ceoName || process.env.PLATFORM_REPRESENTATIVE || undefined,
-    businessNumber: s.businessNumber || process.env.PLATFORM_BIZ_NUMBER || undefined,
-    address: s.address || process.env.PLATFORM_ADDRESS || undefined,
-    phone: s.phone || process.env.PLATFORM_PHONE || undefined,
-    email: s.email || process.env.PLATFORM_EMAIL || undefined,
-    website: process.env.PLATFORM_WEBSITE,
+    name:               s.companyName          || process.env.PLATFORM_NAME           || "㈜베리타스",
+    representativeName: s.ceoName              || process.env.PLATFORM_REPRESENTATIVE || "최향미",
+    businessNumber:     s.businessNumber       || process.env.PLATFORM_BIZ_NUMBER     || undefined,
+    address:            s.address              || process.env.PLATFORM_ADDRESS         || "인천광역시 연수구 인천타워대로 323, B동 2406호 (송도동, 센트로드)",
+    phone:              s.phone                || process.env.PLATFORM_PHONE           || "1600-1736",
+    email:              s.email                || process.env.PLATFORM_EMAIL           || "service@veritasco.co.kr",
+    website:            process.env.PLATFORM_WEBSITE,
   };
   const bank: BankInfo | null =
     s.bankName && s.accountNumber
       ? { bankName: s.bankName, accountNumber: s.accountNumber, accountHolder: s.accountHolder || platform.name }
       : (process.env.BANK_NAME && process.env.BANK_ACCOUNT
           ? { bankName: process.env.BANK_NAME, accountNumber: process.env.BANK_ACCOUNT, accountHolder: process.env.BANK_HOLDER || platform.name }
-          : null);
+          : { bankName: "국민은행", accountNumber: "420401-04-111464", accountHolder: "㈜베리타스" });
   return { platform, bank };
 }
 

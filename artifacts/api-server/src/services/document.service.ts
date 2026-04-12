@@ -499,7 +499,7 @@ function renderProjectBar(doc: QuoteDoc): string {
   return `
   <div style="font-size:12px;color:#374151;margin-bottom:12px;padding:8px 12px;background:#f8fafc;border-radius:6px;border-left:3px solid #1e3a8a">
     <strong>프로젝트:</strong> ${esc(doc.projectTitle)}
-    ${doc.customerEmail ? ` &nbsp;|&nbsp; <strong>고객:</strong> ${esc(doc.customerEmail)}` : ""}
+    ${doc.customerEmail ? ` &nbsp;|&nbsp; <strong>담당자:</strong> ${esc(doc.customerEmail)}` : ""}
     ${doc.quoteCreatedAt ? ` &nbsp;|&nbsp; <strong>견적일:</strong> ${fmtDate(doc.quoteCreatedAt)}` : ""}
     ${doc.quoteStatus ? ` &nbsp;|&nbsp; <strong>견적상태:</strong> ${esc(STATUS_KO[doc.quoteStatus] ?? doc.quoteStatus)}` : ""}
   </div>`;
@@ -864,7 +864,7 @@ export function buildStatementHtml(doc: StatementDoc): string {
   <!-- 프로젝트 정보 -->
   <div style="font-size:12px;color:#374151;margin-bottom:12px;padding:8px 12px;background:#f8fafc;border-radius:6px;border-left:3px solid #1e3a8a">
     <strong>프로젝트:</strong> ${esc(doc.projectTitle)}
-    ${doc.customerEmail ? ` &nbsp;|&nbsp; <strong>고객:</strong> ${esc(doc.customerEmail)}` : ""}
+    ${doc.customerEmail ? ` &nbsp;|&nbsp; <strong>담당자:</strong> ${esc(doc.customerEmail)}` : ""}
     ${doc.paymentStatus ? ` &nbsp;|&nbsp; <strong>결제상태:</strong> ${esc(STATUS_KO[doc.paymentStatus] ?? doc.paymentStatus)}` : ""}
   </div>
 
