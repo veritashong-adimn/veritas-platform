@@ -305,9 +305,19 @@ function renderSender(p: PlatformInfo): string {
   </div>`;
 }
 
-function renderReceiver(co: CompanyInfo, ct: ContactInfo): string {
+/** 파일명 슬러그: "회사명_브랜드" 형식 (언더바, showDivision=false 시 회사명만) */
+function companyFileSlug(co: CompanyInfo, showDivision = true): string {
+  if (!co?.name) return "";
+  const base = co.name.replace(/\s+/g, "");
+  if (showDivision && co.divisionName) return `${base}_${co.divisionName.replace(/\s+/g, "")}`;
+  return base;
+}
+
+function renderReceiver(co: CompanyInfo, ct: ContactInfo, showDivision = true): string {
   if (!co) return `<div class="party-box receiver"><h3>공급받는자 (수신)</h3><p style="color:#9ca3af;font-size:12px">거래처 정보 없음</p></div>`;
-  const displayName = co.name && co.divisionName ? `${co.name}(${co.divisionName})` : (co.name ?? "");
+  const displayName = showDivision && co.name && co.divisionName
+    ? `${co.name}(${co.divisionName})`
+    : (co.name ?? "");
   return `
   <div class="party-box receiver">
     <h3>공급받는자 (수신)</h3>
@@ -559,7 +569,7 @@ export function buildB2CPrepaidQuoteHtml(doc: QuoteDoc): string {
 
   <div class="party-grid no-break">
     ${renderSender(doc.platform)}
-    ${renderReceiver(doc.company, doc.contact)}
+    ${renderReceiver(doc.company, doc.contact, true)}
   </div>
 
   ${renderProjectBar(doc)}
@@ -598,7 +608,8 @@ export function buildB2CPrepaidQuoteHtml(doc: QuoteDoc): string {
   ${doc.notes ? `<div class="notes-box no-break"><h4>비고</h4><p>${esc(doc.notes)}</p></div>` : ""}
   ${renderSignatureAndFooter(doc.platform)}`;
 
-  return baseHtml(`B2C 선입금 견적서 ${doc.docNumber} — ${doc.projectTitle}`, body);
+  const slug = companyFileSlug(doc.company, true);
+  return baseHtml(`${slug ? slug + "_" : ""}B2C선입금견적서_${doc.docNumber}`, body);
 }
 
 /** B2B 일반 견적서 */
@@ -606,6 +617,8 @@ export function buildB2BStandardQuoteHtml(doc: QuoteDoc): string {
   const { itemRows, supply, tax, total } = calcItemData(doc);
   const taxDocType = doc.taxDocumentType ?? "tax_invoice";
   const taxCat = doc.taxCategory ?? "normal";
+  // 세금계산서(tax_invoice, zero_tax_invoice)는 법적 문서 — division 미포함
+  const showDivision = taxDocType !== "tax_invoice" && taxDocType !== "zero_tax_invoice";
 
   const body = `
   ${renderDocHeader(doc, "견 적 서", "B2B STANDARD QUOTATION",
@@ -614,7 +627,7 @@ export function buildB2BStandardQuoteHtml(doc: QuoteDoc): string {
 
   <div class="party-grid no-break">
     ${renderSender(doc.platform)}
-    ${renderReceiver(doc.company, doc.contact)}
+    ${renderReceiver(doc.company, doc.contact, showDivision)}
   </div>
 
   ${renderProjectBar(doc)}
@@ -648,7 +661,8 @@ export function buildB2BStandardQuoteHtml(doc: QuoteDoc): string {
   ${doc.notes ? `<div class="notes-box no-break"><h4>비고</h4><p>${esc(doc.notes)}</p></div>` : ""}
   ${renderSignatureAndFooter(doc.platform)}`;
 
-  return baseHtml(`B2B 견적서 ${doc.docNumber} — ${doc.projectTitle}`, body);
+  const slug = companyFileSlug(doc.company, showDivision);
+  return baseHtml(`${slug ? slug + "_" : ""}B2B견적서_${doc.docNumber}`, body);
 }
 
 /** 선입금 차감 견적서 */
@@ -702,7 +716,7 @@ export function buildPrepaidDeductionQuoteHtml(doc: QuoteDoc): string {
 
   <div class="party-grid no-break">
     ${renderSender(doc.platform)}
-    ${renderReceiver(doc.company, doc.contact)}
+    ${renderReceiver(doc.company, doc.contact, true)}
   </div>
 
   ${renderProjectBar(doc)}
@@ -751,7 +765,8 @@ export function buildPrepaidDeductionQuoteHtml(doc: QuoteDoc): string {
   ${doc.notes ? `<div class="notes-box no-break"><h4>비고</h4><p>${esc(doc.notes)}</p></div>` : ""}
   ${renderSignatureAndFooter(doc.platform)}`;
 
-  return baseHtml(`선입금 차감 견적서 ${doc.docNumber} — ${doc.projectTitle}`, body);
+  const slug = companyFileSlug(doc.company, true);
+  return baseHtml(`${slug ? slug + "_" : ""}선입금차감견적서_${doc.docNumber}`, body);
 }
 
 /** 누적 견적서 */
@@ -765,7 +780,7 @@ export function buildAccumulatedBatchQuoteHtml(doc: QuoteDoc): string {
 
   <div class="party-grid no-break">
     ${renderSender(doc.platform)}
-    ${renderReceiver(doc.company, doc.contact)}
+    ${renderReceiver(doc.company, doc.contact, true)}
   </div>
 
   ${renderProjectBar(doc)}
@@ -802,7 +817,8 @@ export function buildAccumulatedBatchQuoteHtml(doc: QuoteDoc): string {
   ${doc.notes ? `<div class="notes-box no-break"><h4>비고</h4><p>${esc(doc.notes)}</p></div>` : ""}
   ${renderSignatureAndFooter(doc.platform)}`;
 
-  return baseHtml(`누적 견적서 ${doc.docNumber} — ${doc.projectTitle}`, body);
+  const slug = companyFileSlug(doc.company, true);
+  return baseHtml(`${slug ? slug + "_" : ""}누적견적서_${doc.docNumber}`, body);
 }
 
 // ── 견적서 진입점 (유형별 분기) ───────────────────────────────────────────────
@@ -842,7 +858,7 @@ export function buildStatementHtml(doc: StatementDoc): string {
   <!-- 발신·수신 -->
   <div class="party-grid no-break">
     ${renderSender(doc.platform)}
-    ${renderReceiver(doc.company, doc.contact)}
+    ${renderReceiver(doc.company, doc.contact, true)}
   </div>
 
   <!-- 프로젝트 정보 -->
@@ -925,5 +941,6 @@ export function buildStatementHtml(doc: StatementDoc): string {
     <p>${esc(doc.platform.name)} · ${esc(doc.platform.address ?? "")} · ${esc(doc.platform.phone ?? "")} · ${esc(doc.platform.email ?? "")}</p>
   </div>`;
 
-  return baseHtml(`거래명세서 ${doc.docNumber} — ${doc.projectTitle}`, body);
+  const slug = companyFileSlug(doc.company, true);
+  return baseHtml(`${slug ? slug + "_" : ""}거래명세서_${doc.docNumber}`, body);
 }
