@@ -128,12 +128,17 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
     res.status(201).json({
       id: newUser.id, email: newUser.email, name: newUser.name,
       isActive: newUser.isActive, createdAt: newUser.createdAt,
-      profileId: profile.id, languagePairs: profile.languagePairs,
-      languageLevel: profile.languageLevel, specializations: profile.specializations,
-      phone: profile.phone, region: profile.region, grade: profile.grade,
-      rating: profile.rating, availabilityStatus: profile.availabilityStatus,
-      bio: profile.bio, ratePerWord: profile.ratePerWord, ratePerPage: profile.ratePerPage,
+      profileId: profile.id,
+      languagePairs: profile.languagePairs, languageLevel: profile.languageLevel,
+      specializations: profile.specializations,
+      phone: profile.phone, region: profile.region,
+      grade: profile.grade, rating: profile.rating,
+      availabilityStatus: profile.availabilityStatus,
+      bio: profile.bio,
+      ratePerWord: profile.ratePerWord, ratePerPage: profile.ratePerPage,
+      unitType: profile.unitType, unitPrice: profile.unitPrice,
       resumeUrl: profile.resumeUrl, portfolioUrl: profile.portfolioUrl,
+      education: profile.education, major: profile.major, graduationYear: profile.graduationYear,
     });
   } catch (err) {
     req.log.error({ err }, "Translators: failed to create");

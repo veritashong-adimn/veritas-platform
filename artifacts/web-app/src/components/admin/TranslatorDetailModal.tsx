@@ -70,8 +70,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             availabilityStatus: p.availabilityStatus ?? "available",
             bio: p.bio ?? "", ratePerWord: p.ratePerWord ? String(p.ratePerWord) : "",
             ratePerPage: p.ratePerPage ? String(p.ratePerPage) : "",
-            unitType: (p as any).unitType ?? "eojeol",
-            unitPrice: (p as any).unitPrice ? String((p as any).unitPrice) : "",
+            unitType: p.unitType ?? "eojeol",
+            unitPrice: p.unitPrice ? String(p.unitPrice) : "",
             resumeUrl: p.resumeUrl ?? "", portfolioUrl: p.portfolioUrl ?? "",
           });
         }

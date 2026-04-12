@@ -57,7 +57,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   const [customSpec, setCustomSpec] = useState("");
   const [form, setForm] = useState({
     email: "", password: "", confirmPassword: "", name: "", phone: "", region: "",
-    languagePairs: "", languageLevel: "", grade: "", bio: "", ratePerWord: "", ratePerPage: "",
+    languagePairs: "", languageLevel: "", grade: "", bio: "",
     unitType: "eojeol", unitPrice: "",
     resumeUrl: "", availabilityStatus: "available",
   });
@@ -120,8 +120,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           languageLevel: form.languageLevel || undefined,
           specializations, grade: form.grade || undefined,
           bio: form.bio.trim() || undefined,
-          ratePerWord: form.ratePerWord ? Number(form.ratePerWord) : undefined,
-          ratePerPage: form.ratePerPage ? Number(form.ratePerPage) : undefined,
           unitType: form.unitType || "eojeol",
           unitPrice: form.unitPrice ? Number(form.unitPrice) : undefined,
           resumeUrl: form.resumeUrl.trim() || undefined,

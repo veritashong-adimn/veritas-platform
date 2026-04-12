@@ -215,6 +215,7 @@ export type TranslatorProfile = {
   grade?: string | null;
   rating?: number | null; availabilityStatus?: string;
   bio?: string | null; ratePerWord?: number | null; ratePerPage?: number | null;
+  unitType?: string | null; unitPrice?: number | null;
   resumeUrl?: string | null; portfolioUrl?: string | null;
 };
 
