@@ -5,17 +5,26 @@ import { seedRbac } from "./lib/rbac";
 
 const PORT = process.env.PORT;
 
-seedAdmin()
-  .catch((err) => {
-    logger.error({ err }, "Admin seed failed — continuing startup");
-  })
-  .then(() => seedRbac())
-  .catch((err) => {
-    logger.error({ err }, "RBAC seed failed — continuing startup");
-  })
-  .finally(() => {
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server listening on port ${PORT}`);
-      logger.info({ port: PORT }, "Server listening");
-    });
+async function startServer() {
+  try {
+    await seedAdmin();
+  } catch (err) {
+    console.error("[Seed] seedAdmin failed — continuing:", (err as Error).message);
+  }
+
+  try {
+    await seedRbac();
+  } catch (err) {
+    console.error("[Seed] seedRbac failed — continuing:", (err as Error).message);
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server listening on port ${PORT}`);
+    logger.info({ port: PORT }, "Server listening");
   });
+}
+
+startServer().catch((err) => {
+  console.error("[Startup] Fatal error:", err);
+  process.exit(1);
+});

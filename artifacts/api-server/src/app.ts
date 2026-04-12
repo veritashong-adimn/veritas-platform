@@ -30,7 +30,16 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.get("/", (_req, res) => res.send("OK"));
-app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/api/health", async (_req, res) => {
+  let dbStatus = "ok";
+  try {
+    const { pool } = await import("@workspace/db");
+    await pool.query("SELECT 1");
+  } catch {
+    dbStatus = "unavailable";
+  }
+  res.json({ status: "ok", db: dbStatus });
+});
 
 app.use("/api", router);
 
