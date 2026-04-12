@@ -219,6 +219,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [showCompanyForm, setShowCompanyForm] = useState(false);
   const [companyForm, setCompanyForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", mobile: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10), companyType: "client", vendorType: "" });
   const [savingCompany, setSavingCompany] = useState(false);
+  const [createdCompanyId, setCreatedCompanyId] = useState<number | null>(null);
+  const [createdCompanyName, setCreatedCompanyName] = useState("");
+  const [newCompanyDivForm, setNewCompanyDivForm] = useState({ name: "", type: "" });
+  const [newCompanyDivisions, setNewCompanyDivisions] = useState<{id:number;name:string;type:string|null}[]>([]);
+  const [savingNewCompanyDiv, setSavingNewCompanyDiv] = useState(false);
+  const emptyNewCompanyContactForm = { name: "", position: "", mobile: "", phone: "", email: "", memo: "", isPrimary: false, isQuoteContact: false, isBillingContact: false, divisionId: null as number | null };
+  const [newCompanyContactForm, setNewCompanyContactForm] = useState(emptyNewCompanyContactForm);
+  const [newCompanyContacts, setNewCompanyContacts] = useState<{id:number;name:string;divisionId:number|null;divisionName?:string}[]>([]);
+  const [savingNewCompanyContact, setSavingNewCompanyContact] = useState(false);
   const [companyTypeFilter, setCompanyTypeFilter] = useState<"all"|"client"|"vendor">("all");
   const [companyVendorTypeFilter, setCompanyVendorTypeFilter] = useState<string>("all");
 
@@ -542,12 +551,61 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       });
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
-      setToast("거래처가 등록되었습니다.");
-      setCompanyForm({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", mobile: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10), companyType: "client", vendorType: "" });
-      setShowCompanyForm(false);
+      setCreatedCompanyId(data.id);
+      setCreatedCompanyName(data.name);
+      setNewCompanyDivisions([]);
+      setNewCompanyContacts([]);
+      setNewCompanyDivForm({ name: "", type: "" });
+      setNewCompanyContactForm(emptyNewCompanyContactForm);
+      setToast("거래처가 등록되었습니다. 브랜드/담당자를 추가하거나 완료하세요.");
       await fetchCompanies();
     } catch { setToast("오류: 거래처 등록 실패"); }
     finally { setSavingCompany(false); }
+  };
+
+  const handleAddNewCompanyDivision = async () => {
+    if (!newCompanyDivForm.name.trim() || !createdCompanyId) return;
+    setSavingNewCompanyDiv(true);
+    try {
+      const res = await fetch(api(`/api/admin/companies/${createdCompanyId}/divisions`), {
+        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newCompanyDivForm.name.trim(), type: newCompanyDivForm.type || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setNewCompanyDivisions(prev => [...prev, data]);
+      setNewCompanyDivForm({ name: "", type: "" });
+    } catch { setToast("오류: 브랜드/부서 추가 실패"); }
+    finally { setSavingNewCompanyDiv(false); }
+  };
+
+  const handleAddNewCompanyContact = async () => {
+    if (!newCompanyContactForm.name.trim() || !createdCompanyId) return;
+    setSavingNewCompanyContact(true);
+    try {
+      const res = await fetch(api(`/api/admin/companies/${createdCompanyId}/contacts`), {
+        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...newCompanyContactForm, companyId: createdCompanyId }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      const divName = newCompanyContactForm.divisionId ? newCompanyDivisions.find(d => d.id === newCompanyContactForm.divisionId)?.name : undefined;
+      setNewCompanyContacts(prev => [...prev, { id: data.id, name: data.name, divisionId: data.divisionId, divisionName: divName }]);
+      setNewCompanyContactForm(emptyNewCompanyContactForm);
+      setToast("담당자가 추가되었습니다.");
+    } catch { setToast("오류: 담당자 추가 실패"); }
+    finally { setSavingNewCompanyContact(false); }
+  };
+
+  const handleDoneCompanyCreate = () => {
+    setCreatedCompanyId(null);
+    setCreatedCompanyName("");
+    setNewCompanyDivisions([]);
+    setNewCompanyContacts([]);
+    setNewCompanyDivForm({ name: "", type: "" });
+    setNewCompanyContactForm(emptyNewCompanyContactForm);
+    setCompanyForm({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", mobile: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10), companyType: "client", vendorType: "" });
+    setShowCompanyForm(false);
   };
 
   const handleSaveProduct = async () => {
@@ -1331,7 +1389,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   <SearchableSelect
                     items={(contacts as Contact[])
                       .filter(c => !newProjectCompanyId || c.companyId === newProjectCompanyId)
-                      .map(c => ({ id: c.id, label: c.name, sub: [c.email, c.phone].filter(Boolean).join(" · ") || undefined }))}
+                      .filter(c => !newProjectDivisionId || c.divisionId === newProjectDivisionId || c.divisionId === null)
+                      .map(c => {
+                        const divName = c.divisionId ? companyDivisions.find(d => d.id === c.divisionId)?.name : null;
+                        const subParts = [divName ? `📌 ${divName}` : null, c.email, c.phone].filter(Boolean) as string[];
+                        return { id: c.id, label: c.name, sub: subParts.join(" · ") || undefined };
+                      })}
                     value={newProjectContactId}
                     placeholder="이름 · 이메일 · 전화번호 검색..."
                     accentBorder="#6366f1"
@@ -1680,7 +1743,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                                 if (!isComplex) {
                                   // ── 단순 모드 ──
                                   const displayName = pp.divisionName
-                                    ? `${pp.divisionName} (${reqName ?? "-"})`
+                                    ? `${reqName ?? "-"}(${pp.divisionName})`
                                     : (reqName ?? p.companyName ?? "-");
                                   return (
                                     <td style={{ ...tableTd, fontSize: 12, maxWidth: 180 }}>
@@ -1698,7 +1761,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
                                 // ── 복합 모드 (B2B) ──
                                 const reqDisplay = pp.divisionName
-                                  ? <><span style={{ color: "#7c3aed", fontWeight: 600 }}>{pp.divisionName}</span><span style={{ color: "#9ca3af" }}> ({reqName})</span></>
+                                  ? <><span style={{ fontWeight: 500, color: "#374151" }}>{reqName}</span><span style={{ color: "#7c3aed", fontWeight: 700 }}>({pp.divisionName})</span></>
                                   : <span style={{ fontWeight: 500, color: "#374151" }}>{reqName ?? "-"}</span>;
 
                                 return (
@@ -2546,13 +2609,121 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {adminTab === "companies" && (
         <Section title={`거래처 관리 (${companies.length})`} action={
           hasPerm("company.create") ? (
-            <PrimaryBtn onClick={() => setShowCompanyForm(v => !v)} style={{ fontSize: 13, padding: "7px 14px" }}>
+            <PrimaryBtn onClick={() => { setShowCompanyForm(v => !v); setCreatedCompanyId(null); setCreatedCompanyName(""); }} style={{ fontSize: 13, padding: "7px 14px" }}>
               {showCompanyForm ? "취소" : "+ 거래처 등록"}
             </PrimaryBtn>
           ) : undefined
         }>
           {showCompanyForm && (
             <Card style={{ marginBottom: 16, padding: "16px 20px" }}>
+              {createdCompanyId !== null ? (
+                /* ── 단계 2/3: 브랜드/담당자 추가 ── */
+                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                  {/* 완료 배너 */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 10, padding: "10px 14px" }}>
+                    <span style={{ fontSize: 18 }}>✓</span>
+                    <div>
+                      <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#166534" }}>{createdCompanyName} 등록 완료</p>
+                      <p style={{ margin: 0, fontSize: 12, color: "#15803d" }}>브랜드/부서와 담당자를 추가하거나 완료하세요.</p>
+                    </div>
+                    <button onClick={handleDoneCompanyCreate} style={{ marginLeft: "auto", padding: "6px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700, background: "#166534", color: "#fff", border: "none", cursor: "pointer" }}>완료</button>
+                  </div>
+
+                  {/* 단계 2: 브랜드/부서 */}
+                  <div style={{ border: "1px solid #e9d5ff", borderRadius: 10, padding: "12px 14px", background: "#faf5ff" }}>
+                    <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#7c3aed", textTransform: "uppercase", letterSpacing: "0.06em" }}>브랜드 / 부서 추가</p>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                      <input value={newCompanyDivForm.name} onChange={e => setNewCompanyDivForm(p => ({ ...p, name: e.target.value }))}
+                        placeholder="예: 반클리프아펠, 개발팀, 마케팅부" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", flex: 2 }} />
+                      <input value={newCompanyDivForm.type} onChange={e => setNewCompanyDivForm(p => ({ ...p, type: e.target.value }))}
+                        placeholder="유형 (선택)" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", flex: 1 }} />
+                      <button onClick={handleAddNewCompanyDivision} disabled={savingNewCompanyDiv || !newCompanyDivForm.name.trim()}
+                        style={{ padding: "7px 14px", borderRadius: 8, fontSize: 13, fontWeight: 700, background: "#7c3aed", color: "#fff", border: "none", cursor: "pointer", whiteSpace: "nowrap" }}>
+                        {savingNewCompanyDiv ? "추가 중..." : "+ 추가"}
+                      </button>
+                    </div>
+                    {newCompanyDivisions.length > 0 ? (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {newCompanyDivisions.map(d => (
+                          <span key={d.id} style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 20, background: "#ede9fe", color: "#6d28d9", border: "1px solid #ddd6fe" }}>
+                            {d.name}{d.type ? ` (${d.type})` : ""}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p style={{ margin: 0, fontSize: 12, color: "#a78bfa" }}>아직 추가된 브랜드/부서가 없습니다.</p>
+                    )}
+                  </div>
+
+                  {/* 단계 3: 담당자 */}
+                  <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: "12px 14px", background: "#f9fafb" }}>
+                    <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#374151", textTransform: "uppercase", letterSpacing: "0.06em" }}>담당자 추가</p>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 12px", marginBottom: 8 }}>
+                      <div>
+                        <label style={{ fontSize: 11, color: "#6b7280", display: "block", marginBottom: 3 }}>담당자명 *</label>
+                        <input value={newCompanyContactForm.name} onChange={e => setNewCompanyContactForm(p => ({ ...p, name: e.target.value }))}
+                          placeholder="홍길동" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 11, color: "#6b7280", display: "block", marginBottom: 3 }}>직책</label>
+                        <input value={newCompanyContactForm.position} onChange={e => setNewCompanyContactForm(p => ({ ...p, position: e.target.value }))}
+                          placeholder="과장" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 11, color: "#6b7280", display: "block", marginBottom: 3 }}>휴대폰</label>
+                        <input value={newCompanyContactForm.mobile} onChange={e => setNewCompanyContactForm(p => ({ ...p, mobile: formatPhone(e.target.value) }))}
+                          placeholder="010-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 11, color: "#6b7280", display: "block", marginBottom: 3 }}>이메일</label>
+                        <input type="email" value={newCompanyContactForm.email} onChange={e => setNewCompanyContactForm(p => ({ ...p, email: e.target.value }))}
+                          placeholder="name@company.com" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+                      </div>
+                      {newCompanyDivisions.length > 0 && (
+                        <div style={{ gridColumn: "1 / -1" }}>
+                          <label style={{ fontSize: 11, color: "#7c3aed", display: "block", marginBottom: 3, fontWeight: 700 }}>소속 브랜드/부서</label>
+                          <select value={newCompanyContactForm.divisionId ?? ""} onChange={e => setNewCompanyContactForm(p => ({ ...p, divisionId: e.target.value ? Number(e.target.value) : null }))}
+                            style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }}>
+                            <option value="">— 본사 직속 (브랜드 미지정) —</option>
+                            {newCompanyDivisions.map(d => <option key={d.id} value={d.id}>{d.name}{d.type ? ` (${d.type})` : ""}</option>)}
+                          </select>
+                        </div>
+                      )}
+                      <div style={{ gridColumn: "1 / -1" }}>
+                        <label style={{ fontSize: 11, color: "#6b7280", display: "block", marginBottom: 3 }}>메모</label>
+                        <input value={newCompanyContactForm.memo} onChange={e => setNewCompanyContactForm(p => ({ ...p, memo: e.target.value }))}
+                          placeholder="메모" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+                      </div>
+                      <div style={{ gridColumn: "1 / -1", display: "flex", gap: 14, alignItems: "center" }}>
+                        {[{ key: "isPrimary", label: "기본 담당자" }, { key: "isQuoteContact", label: "견적 담당" }, { key: "isBillingContact", label: "청구 담당" }].map(({ key, label }) => (
+                          <label key={key} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" }}>
+                            <input type="checkbox" checked={(newCompanyContactForm as any)[key]} onChange={e => setNewCompanyContactForm(p => ({ ...p, [key]: e.target.checked }))} />
+                            {label}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <button onClick={handleAddNewCompanyContact} disabled={savingNewCompanyContact || !newCompanyContactForm.name.trim()}
+                      style={{ padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700, background: "#374151", color: "#fff", border: "none", cursor: "pointer" }}>
+                      {savingNewCompanyContact ? "추가 중..." : "+ 담당자 추가"}
+                    </button>
+                    {newCompanyContacts.length > 0 && (
+                      <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {newCompanyContacts.map(c => (
+                          <span key={c.id} style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 20, background: "#f3f4f6", color: "#374151", border: "1px solid #e5e7eb" }}>
+                            {c.name}{c.divisionName ? ` / ${c.divisionName}` : ""}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <button onClick={handleDoneCompanyCreate} style={{ padding: "9px 24px", borderRadius: 10, fontSize: 14, fontWeight: 700, background: "#111827", color: "#fff", border: "none", cursor: "pointer" }}>등록 완료</button>
+                  </div>
+                </div>
+              ) : (
+              <>
               <p style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#111827" }}>새 거래처 등록</p>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {/* 0행: 거래처 유형 */}
@@ -2661,8 +2832,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 <PrimaryBtn onClick={handleCreateCompany} disabled={savingCompany || !companyForm.name.trim()} style={{ fontSize: 13, padding: "8px 18px" }}>
                   {savingCompany ? "등록 중..." : "등록"}
                 </PrimaryBtn>
-                <GhostBtn onClick={() => setShowCompanyForm(false)} style={{ fontSize: 13, padding: "8px 14px" }}>취소</GhostBtn>
+                <GhostBtn onClick={() => { setShowCompanyForm(false); setCreatedCompanyId(null); }} style={{ fontSize: 13, padding: "8px 14px" }}>취소</GhostBtn>
               </div>
+              </>
+              )}
             </Card>
           )}
           {/* ── 거래처 유형 필터 탭 ── */}
