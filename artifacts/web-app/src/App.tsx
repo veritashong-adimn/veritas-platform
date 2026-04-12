@@ -6,6 +6,7 @@ import { AuthPage } from "./pages/AuthPage";
 import { CustomerDashboard } from "./pages/CustomerDashboard";
 import { TranslatorDashboard } from "./pages/TranslatorDashboard";
 import { AdminDashboard } from "./pages/AdminDashboard";
+import { SetPasswordPage } from "./pages/SetPasswordPage";
 
 function AccessDenied({ onBack }: { onBack: () => void }) {
   return (
@@ -91,6 +92,11 @@ export default function App() {
     if (p === "admin" && !isInternalUser(user?.role ?? "")) return;
     setPage(p);
   };
+
+  // set-password 초대 링크 처리: 로그인 없이 접근 가능
+  if (window.location.pathname === "/set-password") {
+    return <SetPasswordPage />;
+  }
 
   if (!token || !user) return <AuthPage onAuth={handleAuth} />;
 

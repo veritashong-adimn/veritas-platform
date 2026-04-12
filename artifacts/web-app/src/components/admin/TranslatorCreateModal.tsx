@@ -56,11 +56,12 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   const [selectedSpecs, setSelectedSpecs] = useState<string[]>([]);
   const [customSpec, setCustomSpec] = useState("");
   const [form, setForm] = useState({
-    email: "", password: "", confirmPassword: "", name: "", phone: "", region: "",
+    email: "", name: "", phone: "", region: "",
     languagePairs: "", languageLevel: "", grade: "", bio: "",
     unitType: "eojeol", unitPrice: "",
     resumeUrl: "", availabilityStatus: "available",
   });
+  const [createdInvite, setCreatedInvite] = useState<{ email: string; inviteToken: string } | null>(null);
   const [sf, setSF] = useState(emptySensitive());
   const backRef = useRef<HTMLInputElement>(null);
   const authH = { Authorization: `Bearer ${token}` };
@@ -93,9 +94,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
     const e: Record<string, string> = {};
     if (!form.email.trim()) e.email = "이메일을 입력하세요.";
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = "올바른 이메일 형식이 아닙니다.";
-    if (!form.password) e.password = "비밀번호를 입력하세요.";
-    else if (form.password.length < 8) e.password = "비밀번호는 8자 이상이어야 합니다.";
-    if (form.password !== form.confirmPassword) e.confirmPassword = "비밀번호가 일치하지 않습니다.";
     if (!form.name.trim()) e.name = "이름을 입력하세요.";
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -113,7 +111,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       const res = await fetch(api("/api/admin/translators"), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
         body: JSON.stringify({
-          email: form.email.trim(), password: form.password,
+          email: form.email.trim(),
           name: form.name.trim(), phone: form.phone.trim() || undefined,
           region: form.region.trim() || undefined,
           languagePairs: form.languagePairs.trim() || undefined,
@@ -132,6 +130,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         else onToast(`오류: ${data.error}`);
         return;
       }
+      setCreatedInvite({ email: data.email, inviteToken: data.inviteToken });
 
       const userId = data.id;
 
@@ -169,7 +168,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 
       onToast(`통번역사 "${data.name ?? data.email}"이(가) 등록되었습니다.`);
       onCreated(data);
-      onClose();
+      // 초대 링크 화면으로 전환 (onClose는 사용자가 확인 후 호출)
     } catch { onToast("오류: 등록 실패"); }
     finally { setSaving(false); }
   };
@@ -205,16 +204,57 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   const isOther        = sf.paymentMethod === "other";
   const hasMethod      = !!sf.paymentMethod;
 
+  const inviteUrl = createdInvite
+    ? `${window.location.origin}/set-password?token=${createdInvite.inviteToken}`
+    : "";
+
+  if (createdInvite) {
+    return (
+      <DraggableModal title="등록 완료" subtitle="초대 링크를 발송하거나 복사해 전달하세요" onClose={onClose} width={600} zIndex={310} bodyPadding="28px 32px">
+        <div style={{ textAlign: "center", padding: "8px 0 20px" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>✅</div>
+          <p style={{ fontSize: 16, fontWeight: 700, color: "#111827", marginBottom: 4 }}>
+            {createdInvite.email}
+          </p>
+          <p style={{ fontSize: 13, color: "#6b7280", marginBottom: 24 }}>
+            계정이 생성되었습니다. 아래 링크를 통번역사에게 전달하면 비밀번호를 직접 설정할 수 있습니다.
+          </p>
+          <div style={{ background: "#f3f4f6", borderRadius: 10, padding: "14px 16px", marginBottom: 20, textAlign: "left" }}>
+            <p style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>비밀번호 설정 링크</p>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input readOnly value={inviteUrl} style={{
+                flex: 1, padding: "8px 10px", fontSize: 12, fontFamily: "monospace",
+                borderRadius: 6, border: "1px solid #d1d5db", background: "#fff",
+                color: "#374151", outline: "none",
+              }} onClick={e => (e.target as HTMLInputElement).select()} />
+              <button
+                onClick={() => { navigator.clipboard.writeText(inviteUrl); onToast("초대 링크가 복사되었습니다."); }}
+                style={{ padding: "8px 14px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#1d4ed8", fontSize: 12, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                복사
+              </button>
+            </div>
+          </div>
+          <div style={{ background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 14px", marginBottom: 24, textAlign: "left" }}>
+            <p style={{ fontSize: 12, color: "#92400e", margin: 0 }}>
+              ⚠️ 이 링크는 비밀번호 설정 전까지만 유효합니다. 설정 완료 후 자동으로 만료됩니다.
+            </p>
+          </div>
+          <PrimaryBtn onClick={onClose} style={{ width: "100%", fontSize: 14, padding: "10px 0" }}>
+            확인
+          </PrimaryBtn>
+        </div>
+      </DraggableModal>
+    );
+  }
+
   return (
-    <DraggableModal title="통번역사 등록" subtitle="새 통번역사 계정 생성" onClose={onClose} width={800} zIndex={310} bodyPadding="20px 28px">
+    <DraggableModal title="통번역사 등록" subtitle="초대 기반 계정 생성 — 비밀번호는 통번역사가 직접 설정합니다" onClose={onClose} width={800} zIndex={310} bodyPadding="20px 28px">
 
       {/* ── 기본 정보 ── */}
       <p style={sH}>기본 정보</p>
       <div style={grid2}>
         <F label="이메일" field="email" type="email" placeholder="example@email.com" required />
         <F label="이름" field="name" placeholder="홍길동" required />
-        <F label="비밀번호" field="password" type="password" placeholder="8자 이상" required />
-        <F label="비밀번호 확인" field="confirmPassword" type="password" placeholder="비밀번호 재입력" required />
         <F label="휴대폰" field="phone" placeholder="010-0000-0000" />
         <F label="지역" field="region" placeholder="서울, 경기..." />
       </div>

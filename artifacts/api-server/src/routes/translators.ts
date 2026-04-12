@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
+import { randomBytes } from "crypto";
 import {
   db, usersTable, translatorProfilesTable, translatorRatesTable,
   translatorProductsTable, productsTable, translatorSensitiveTable,
@@ -7,6 +8,10 @@ import {
 import { eq, and, ilike, or, sql, desc, gte, lte, inArray } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { encrypt, decrypt, maskResidentNumber } from "../lib/encrypt";
+
+function generateInviteToken(): string {
+  return randomBytes(32).toString("hex");
+}
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -89,26 +94,26 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 통번역사 등록 ─────────────────────────────────────────────────────────────
+// ─── 통번역사 등록 (초대 기반) ────────────────────────────────────────────────
 router.post("/admin/translators", ...adminGuard, async (req, res) => {
   const {
-    email, password, name, phone, region,
+    email, name, phone, region,
     languagePairs, languageLevel, specializations,
     grade, bio, ratePerWord, ratePerPage, unitType, unitPrice,
     resumeUrl, portfolioUrl, availabilityStatus,
   } = req.body;
 
   if (!email?.trim()) { res.status(400).json({ error: "이메일은 필수입니다." }); return; }
-  if (!password?.trim()) { res.status(400).json({ error: "비밀번호는 필수입니다." }); return; }
 
   try {
     const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.email, email.trim())).limit(1);
     if (existing.length > 0) { res.status(409).json({ error: "이미 등록된 이메일입니다." }); return; }
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const inviteToken = generateInviteToken();
     const [newUser] = await db.insert(usersTable).values({
-      email: email.trim(), password: passwordHash,
-      name: name?.trim() || null, role: "translator", isActive: true,
+      email: email.trim(), password: null,
+      name: name?.trim() || null, role: "translator",
+      isActive: false, inviteToken,
     }).returning();
 
     const [profile] = await db.insert(translatorProfilesTable).values({
@@ -127,7 +132,9 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
 
     res.status(201).json({
       id: newUser.id, email: newUser.email, name: newUser.name,
-      isActive: newUser.isActive, createdAt: newUser.createdAt,
+      isActive: newUser.isActive, inviteToken: newUser.inviteToken,
+      inviteStatus: "pending",
+      createdAt: newUser.createdAt,
       profileId: profile.id,
       languagePairs: profile.languagePairs, languageLevel: profile.languageLevel,
       specializations: profile.specializations,
@@ -182,8 +189,13 @@ router.get("/admin/translators/:id", ...adminGuard, async (req, res) => {
       .where(eq(translatorProductsTable.translatorId, userId))
       .orderBy(translatorProductsTable.createdAt);
 
+    const inviteStatus = !user.password ? "pending" : "active";
     res.json({
-      user: { id: user.id, email: user.email, name: user.name, isActive: user.isActive, createdAt: user.createdAt },
+      user: {
+        id: user.id, email: user.email, name: user.name,
+        isActive: user.isActive, inviteToken: user.inviteToken,
+        inviteStatus, createdAt: user.createdAt,
+      },
       profile: profile ?? null,
       rates,
       translatorProducts,
@@ -239,6 +251,29 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Translators: failed to update profile");
     res.status(500).json({ error: "번역사 프로필 저장 실패." });
+  }
+});
+
+// ─── 초대 링크 재생성 ──────────────────────────────────────────────────────────
+router.post("/admin/translators/:id/reinvite", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+  try {
+    const [user] = await db.select({ id: usersTable.id, password: usersTable.password })
+      .from(usersTable)
+      .where(and(eq(usersTable.id, userId), eq(usersTable.role, "translator")));
+    if (!user) { res.status(404).json({ error: "번역사를 찾을 수 없습니다." }); return; }
+    if (user.password) {
+      res.status(400).json({ error: "이미 비밀번호를 설정한 계정입니다." }); return;
+    }
+    const inviteToken = generateInviteToken();
+    await db.update(usersTable).set({ inviteToken, isActive: false }).where(eq(usersTable.id, userId));
+    res.json({ inviteToken });
+  } catch (err) {
+    req.log.error({ err }, "Translators: failed to reinvite");
+    res.status(500).json({ error: "초대 링크 재생성 실패." });
   }
 });
 

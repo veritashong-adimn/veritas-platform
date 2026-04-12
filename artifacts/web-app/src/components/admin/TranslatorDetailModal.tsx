@@ -21,7 +21,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 }) {
   const hasPerm = (key: string) => permissions.includes(key);
   const [profile, setProfile] = useState<TranslatorProfile | null>(null);
-  const [userInfo, setUserInfo] = useState<{ name: string; email: string; isActive: boolean } | null>(null);
+  const [userInfo, setUserInfo] = useState<{ name: string; email: string; isActive: boolean; invitePending?: boolean } | null>(null);
+  const [reinviting, setReinviting] = useState(false);
   const [rates, setRates] = useState<TranslatorRate[]>([]);
   const [notes, setNotes] = useState<NoteEntry[]>([]);
   const [translatorProducts, setTranslatorProducts] = useState<TranslatorProduct[]>([]);
@@ -59,7 +60,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
       const [dData, nData, pData] = await Promise.all([dRes.json(), nRes.json(), pRes.json()]);
       if (dRes.ok) {
         const u = dData.user;
-        setUserInfo({ name: u?.name ?? "", email: u?.email ?? userEmail, isActive: u?.isActive ?? true });
+        setUserInfo({ name: u?.name ?? "", email: u?.email ?? userEmail, isActive: u?.isActive ?? true, invitePending: dData.user?.inviteStatus === "pending" });
         const p: TranslatorProfile | null = dData.profile;
         setProfile(p);
         setRates(Array.isArray(dData.rates) ? dData.rates : []);
@@ -215,6 +216,20 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 
   const assignedProductIds = new Set(translatorProducts.map(p => p.productId));
 
+  const handleReinvite = async () => {
+    setReinviting(true);
+    try {
+      const res = await fetch(api(`/api/admin/translators/${userId}/reinvite`), { method: "POST", headers: authH });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      const inviteUrl = `${window.location.origin}/set-password?token=${data.inviteToken}`;
+      await navigator.clipboard.writeText(inviteUrl);
+      onToast("새 초대 링크가 생성되어 클립보드에 복사되었습니다.");
+      setUserInfo(prev => prev ? { ...prev, invitePending: true } : prev);
+    } catch { onToast("오류: 초대 링크 재생성 실패"); }
+    finally { setReinviting(false); }
+  };
+
   return (
     <>
     <DraggableModal title="통번역사 상세" subtitle={userEmail} onClose={onClose} width={860} zIndex={300} bodyPadding="20px 28px">
@@ -223,7 +238,28 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           <ReviewMemoPanel storageKey={`translator_${userId}`} label="이 통번역사 검수 메모" />
 
           {/* ── 기본 정보 ── */}
-          <p style={sH}>기본 정보</p>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, marginTop: 16 }}>
+            <p style={{ ...sH, margin: 0, border: "none", paddingBottom: 0 }}>기본 정보</p>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {userInfo?.invitePending ? (
+                <>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#fef3c7", color: "#92400e", borderRadius: 20, padding: "3px 10px", fontSize: 11, fontWeight: 700 }}>
+                    ⏳ 초대 대기
+                  </span>
+                  <button
+                    onClick={handleReinvite}
+                    disabled={reinviting}
+                    style={{ fontSize: 11, padding: "3px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb", color: "#374151", cursor: reinviting ? "not-allowed" : "pointer", fontWeight: 600 }}>
+                    {reinviting ? "처리 중..." : "🔗 링크 재발급"}
+                  </button>
+                </>
+              ) : (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#d1fae5", color: "#065f46", borderRadius: 20, padding: "3px 10px", fontSize: 11, fontWeight: 700 }}>
+                  ✓ 계정 활성
+                </span>
+              )}
+            </div>
+          </div>
           <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 16 }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 20px" }}>
               {/* 이름 — 읽기 전용 */}

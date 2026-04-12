@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
-import { randomUUID } from "crypto";
+import { randomUUID, randomBytes } from "crypto";
 import { db, usersTable, userSessionsTable } from "@workspace/db";
 import { eq, and, gte, sql } from "drizzle-orm";
 import { signToken, requireAuth } from "../middlewares/auth";
@@ -93,8 +93,8 @@ router.post("/auth/login", async (req, res) => {
   }
 
   if (!user.password) {
-    req.log.warn({ email }, "Login failed: no password set (OAuth account?)");
-    res.status(401).json({ error: "이메일 또는 비밀번호가 올바르지 않습니다." });
+    req.log.warn({ email }, "Login failed: password not set (invite pending)");
+    res.status(403).json({ error: "비밀번호가 설정되지 않은 계정입니다. 초대 이메일의 링크를 통해 비밀번호를 설정해 주세요.", code: "INVITE_PENDING" });
     return;
   }
 
@@ -237,6 +237,60 @@ router.post("/auth/logout", requireAuth, async (req, res) => {
   ]);
 
   res.json({ ok: true });
+});
+
+// ─── 초대 토큰으로 비밀번호 설정 ─────────────────────────────────────────────
+router.post("/auth/set-password", async (req, res) => {
+  const { token, password } = req.body as { token?: string; password?: string };
+
+  if (!token?.trim()) {
+    res.status(400).json({ error: "초대 토큰이 필요합니다." });
+    return;
+  }
+  if (!password || password.length < 8) {
+    res.status(400).json({ error: "비밀번호는 8자 이상이어야 합니다." });
+    return;
+  }
+
+  try {
+    const [user] = await db
+      .select({ id: usersTable.id, email: usersTable.email, inviteToken: usersTable.inviteToken })
+      .from(usersTable)
+      .where(eq(usersTable.inviteToken, token.trim()));
+
+    if (!user) {
+      res.status(404).json({ error: "유효하지 않거나 만료된 초대 링크입니다." });
+      return;
+    }
+
+    const hashed = await bcrypt.hash(password, 10);
+    await db.update(usersTable)
+      .set({ password: hashed, isActive: true, inviteToken: null })
+      .where(eq(usersTable.id, user.id));
+
+    res.json({ ok: true, email: user.email });
+  } catch (err) {
+    res.status(500).json({ error: "비밀번호 설정 실패." });
+  }
+});
+
+// ─── 초대 토큰 검증 (비밀번호 설정 페이지 진입 시) ──────────────────────────
+router.get("/auth/invite/:token", async (req, res) => {
+  const { token } = req.params;
+  try {
+    const [user] = await db
+      .select({ id: usersTable.id, email: usersTable.email, name: usersTable.name })
+      .from(usersTable)
+      .where(eq(usersTable.inviteToken, token));
+
+    if (!user) {
+      res.status(404).json({ error: "유효하지 않거나 만료된 초대 링크입니다." });
+      return;
+    }
+    res.json({ email: user.email, name: user.name });
+  } catch {
+    res.status(500).json({ error: "초대 링크 확인 실패." });
+  }
 });
 
 export default router;

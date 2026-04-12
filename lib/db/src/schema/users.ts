@@ -20,6 +20,7 @@ export const usersTable = pgTable("users", {
   role: userRoleEnum("role").notNull().default("client"),
   roleId: integer("role_id").references(() => rolesTable.id, { onDelete: "set null" }),
   isActive: boolean("is_active").notNull().default(true),
+  inviteToken: text("invite_token"),
   department: text("department"),
   jobTitle: text("job_title"),
   companyId: integer("company_id"),
