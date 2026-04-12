@@ -181,6 +181,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [resetPwInput, setResetPwInput] = useState("");
   const [resetPwLoading, setResetPwLoading] = useState(false);
 
+  // 내부 직원 등록
+  const [showCreateStaff, setShowCreateStaff] = useState(false);
+  const [newStaff, setNewStaff] = useState({ name: "", email: "", password: "", department: "", jobTitle: "", role: "staff" as "admin" | "staff", isActive: true });
+  const [creatingStaff, setCreatingStaff] = useState(false);
+
   // ── RBAC role management state ──────────────────────────────
   type RbacRole = { id: number; name: string; description: string | null; isSystem: boolean; createdAt: string; permissionCount: number; permissions: string[] };
   type RbacPerm = { key: string; name: string; category: "menu" | "action" };
@@ -825,6 +830,34 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       setToast("역할이 변경되었습니다.");
     } catch { setToast("오류: 역할 변경 실패"); }
     finally { setRoleChanging(null); }
+  };
+
+  const handleCreateStaff = async () => {
+    if (!newStaff.name.trim()) { setToast("오류: 이름은 필수입니다."); return; }
+    if (!newStaff.email.trim()) { setToast("오류: 이메일은 필수입니다."); return; }
+    if (newStaff.password.length < 6) { setToast("오류: 비밀번호는 최소 6자 이상입니다."); return; }
+    setCreatingStaff(true);
+    try {
+      const res = await fetch(api("/api/admin/users/internal"), {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newStaff.name.trim(),
+          email: newStaff.email.trim().toLowerCase(),
+          password: newStaff.password,
+          role: newStaff.role,
+          department: newStaff.department.trim() || undefined,
+          jobTitle: newStaff.jobTitle.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setShowCreateStaff(false);
+      setNewStaff({ name: "", email: "", password: "", department: "", jobTitle: "", role: "staff", isActive: true });
+      setToast("내부 직원이 등록되었습니다.");
+      fetchUsers();
+    } catch { setToast("오류: 직원 등록 실패"); }
+    finally { setCreatingStaff(false); }
   };
 
   const handleToggleActive = async (userId: number) => {
@@ -1891,7 +1924,95 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
       {/* ── 사용자 관리 탭 ── */}
       {adminTab === "users" && (
-        <Section title={`사용자 관리 (${users.length})`}>
+        <Section title={`사용자 관리 (${users.length})`} action={
+          <PrimaryBtn
+            onClick={() => { setShowCreateStaff(v => !v); }}
+            style={{ fontSize: 13, padding: "7px 14px", background: showCreateStaff ? "#6b7280" : "#1d4ed8" }}>
+            {showCreateStaff ? "✕ 닫기" : "+ 직원 등록"}
+          </PrimaryBtn>
+        }>
+
+          {/* ── 내부 직원 등록 폼 ── */}
+          {showCreateStaff && (
+            <Card style={{ marginBottom: 18, padding: "20px 24px", border: "2px solid #dbeafe", background: "#f8faff" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+                <span style={{ fontSize: 16, fontWeight: 800, color: "#1d4ed8" }}>내부 직원 등록</span>
+                <span style={{
+                  fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10,
+                  background: "#dbeafe", color: "#1d4ed8",
+                }}>내부 전용 — 고객/통번역사 등록과 별개입니다</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 20px" }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>이름 *</label>
+                  <input
+                    value={newStaff.name}
+                    onChange={e => setNewStaff(f => ({ ...f, name: e.target.value }))}
+                    placeholder="홍길동"
+                    style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", width: "100%", boxSizing: "border-box" as const }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>이메일 *</label>
+                  <input
+                    value={newStaff.email}
+                    onChange={e => setNewStaff(f => ({ ...f, email: e.target.value }))}
+                    placeholder="hong@company.com"
+                    type="email"
+                    style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", width: "100%", boxSizing: "border-box" as const }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>초기 비밀번호 * (6자 이상)</label>
+                  <input
+                    value={newStaff.password}
+                    onChange={e => setNewStaff(f => ({ ...f, password: e.target.value }))}
+                    placeholder="••••••••"
+                    type="password"
+                    style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", width: "100%", boxSizing: "border-box" as const }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>역할 *</label>
+                  <select
+                    value={newStaff.role}
+                    onChange={e => setNewStaff(f => ({ ...f, role: e.target.value as "admin" | "staff" }))}
+                    style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", width: "100%", boxSizing: "border-box" as const, cursor: "pointer" }}>
+                    <option value="staff">직원 (staff)</option>
+                    <option value="admin">관리자 (admin)</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>부서</label>
+                  <input
+                    value={newStaff.department}
+                    onChange={e => setNewStaff(f => ({ ...f, department: e.target.value }))}
+                    placeholder="예: 운영팀, PM팀, 영업팀"
+                    style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", width: "100%", boxSizing: "border-box" as const }}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>직책</label>
+                  <input
+                    value={newStaff.jobTitle}
+                    onChange={e => setNewStaff(f => ({ ...f, jobTitle: e.target.value }))}
+                    placeholder="예: PM, 운영담당, 정산담당"
+                    style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", width: "100%", boxSizing: "border-box" as const }}
+                  />
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 16, alignItems: "center" }}>
+                <PrimaryBtn onClick={handleCreateStaff} disabled={creatingStaff} style={{ fontSize: 13, padding: "9px 20px" }}>
+                  {creatingStaff ? "등록 중..." : "직원 등록"}
+                </PrimaryBtn>
+                <GhostBtn onClick={() => { setShowCreateStaff(false); setNewStaff({ name: "", email: "", password: "", department: "", jobTitle: "", role: "staff", isActive: true }); }} style={{ fontSize: 13, padding: "9px 14px" }}>
+                  취소
+                </GhostBtn>
+                <span style={{ fontSize: 12, color: "#9ca3af", marginLeft: 8 }}>* 등록 후 사용자 목록에 즉시 반영됩니다</span>
+              </div>
+            </Card>
+          )}
+
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
             <input
               value={userSearch} onChange={e => setUserSearch(e.target.value)}
