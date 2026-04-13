@@ -140,6 +140,10 @@ export type Company = {
   representativeName: string | null; email: string | null; phone: string | null; mobile: string | null;
   createdAt: string; contactCount: number; projectCount: number; totalPayment: number;
   companyType: CompanyType; vendorType: VendorType | null;
+  /** 소속 브랜드/부서명 목록 */
+  divisionNames?: string[];
+  /** 검색어와 매칭된 브랜드/부서명 (검색 시만 존재) */
+  matchedDivisionName?: string | null;
 };
 export type Division = {
   id: number; companyId: number; name: string; type: string | null; createdAt: string;

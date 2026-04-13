@@ -45,22 +45,60 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
       .groupBy(companiesTable.id)
       .orderBy(desc(companiesTable.createdAt));
 
-    let result = rows;
+    // divisions 전체 로드 (companyId → name[] 맵)
+    const allDivisions = await db
+      .select({ id: divisionsTable.id, companyId: divisionsTable.companyId, name: divisionsTable.name })
+      .from(divisionsTable);
+    const divisionsByCompany = new Map<number, { id: number; name: string }[]>();
+    for (const d of allDivisions) {
+      if (!divisionsByCompany.has(d.companyId)) divisionsByCompany.set(d.companyId, []);
+      divisionsByCompany.get(d.companyId)!.push({ id: d.id, name: d.name });
+    }
+
+    // 기본 응답에 divisionNames 추가
+    type ResultRow = typeof rows[number] & { divisionNames: string[]; matchedDivisionName: string | null };
+    let result: ResultRow[] = rows.map(c => ({
+      ...c,
+      divisionNames: (divisionsByCompany.get(c.id) ?? []).map(d => d.name),
+      matchedDivisionName: null as string | null,
+    }));
+
     if (search?.trim()) {
       const s = search.trim().toLowerCase();
+
+      // 상호 변경 이력 매칭
       const historyMatches = await db
         .select({ companyId: companyNameHistoryTable.companyId })
         .from(companyNameHistoryTable)
         .where(ilike(companyNameHistoryTable.companyName, `%${s}%`));
       const historyIds = new Set(historyMatches.map(h => h.companyId));
 
-      result = result.filter(c =>
-        c.name.toLowerCase().includes(s) ||
-        (c.businessNumber ?? "").toLowerCase().includes(s) ||
-        (c.industry ?? "").toLowerCase().includes(s) ||
-        historyIds.has(c.id)
-      );
+      // 담당자 이름 매칭
+      const contactMatches = await db
+        .select({ companyId: contactsTable.companyId })
+        .from(contactsTable)
+        .where(ilike(contactsTable.name, `%${s}%`));
+      const contactMatchIds = new Set(contactMatches.map(m => m.companyId).filter(Boolean) as number[]);
+
+      result = result
+        .map(c => {
+          const divs = divisionsByCompany.get(c.id) ?? [];
+          const matchedDiv = divs.find(d => d.name.toLowerCase().includes(s));
+          return { ...c, matchedDivisionName: matchedDiv?.name ?? null };
+        })
+        .filter(c =>
+          c.name.toLowerCase().includes(s) ||
+          (c.businessNumber ?? "").replace(/-/g, "").includes(s.replace(/-/g, "")) ||
+          (c.phone ?? "").replace(/-/g, "").includes(s.replace(/-/g, "")) ||
+          (c.mobile ?? "").replace(/-/g, "").includes(s.replace(/-/g, "")) ||
+          (c.email ?? "").toLowerCase().includes(s) ||
+          (c.representativeName ?? "").toLowerCase().includes(s) ||
+          c.matchedDivisionName !== null ||
+          historyIds.has(c.id) ||
+          contactMatchIds.has(c.id)
+        );
     }
+
     if (companyType === "client" || companyType === "vendor") {
       result = result.filter(c => c.companyType === companyType);
     }

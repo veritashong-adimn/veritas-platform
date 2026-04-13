@@ -1375,9 +1375,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>거래처</label>
                   <SearchableSelect
-                    items={companies.map(c => ({ id: c.id, label: c.name }))}
+                    items={companies.map(c => ({ id: c.id, label: c.name, sub: (c.divisionNames?.length ?? 0) > 0 ? c.divisionNames!.slice(0, 3).join(" · ") : undefined }))}
                     value={newProjectCompanyId}
-                    placeholder="회사명으로 검색..."
+                    placeholder="회사명, 브랜드명으로 검색..."
                     accentBorder="#6366f1"
                     onChange={async (cid) => {
                       setNewProjectCompanyId(cid);
@@ -1449,9 +1449,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   <div>
                     <label style={{ fontSize: 12, fontWeight: 600, color: "#0369a1", display: "block", marginBottom: 4 }}>청구 대상</label>
                     <SearchableSelect
-                      items={companies.map(c => ({ id: c.id, label: c.name }))}
+                      items={companies.map(c => ({ id: c.id, label: c.name, sub: (c.divisionNames?.length ?? 0) > 0 ? c.divisionNames!.slice(0, 3).join(" · ") : undefined }))}
                       value={newProjectBillingCompanyId}
-                      placeholder="회사명으로 검색..."
+                      placeholder="회사명, 브랜드명으로 검색..."
                       accentBorder="#0369a1"
                       onChange={setNewProjectBillingCompanyId}
                     />
@@ -1486,9 +1486,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   <div>
                     <label style={{ fontSize: 12, fontWeight: 600, color: "#059669", display: "block", marginBottom: 4 }}>납부 주체</label>
                     <SearchableSelect
-                      items={companies.map(c => ({ id: c.id, label: c.name }))}
+                      items={companies.map(c => ({ id: c.id, label: c.name, sub: (c.divisionNames?.length ?? 0) > 0 ? c.divisionNames!.slice(0, 3).join(" · ") : undefined }))}
                       value={newProjectPayerCompanyId}
-                      placeholder="회사명으로 검색..."
+                      placeholder="회사명, 브랜드명으로 검색..."
                       accentBorder="#059669"
                       onChange={setNewProjectPayerCompanyId}
                     />
@@ -2778,6 +2778,32 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>거래처명 <span style={{ color: "#dc2626" }}>*</span></label>
                   <input value={companyForm.name} onChange={e => setCompanyForm(p => ({ ...p, name: e.target.value }))}
                     placeholder="(주)아크로네이처" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  {/* 중복 경고: 기존 거래처 이름 또는 브랜드명 매칭 */}
+                  {companyForm.name.trim().length >= 2 && (() => {
+                    const q = companyForm.name.trim().toLowerCase();
+                    const dupes = companies.filter(c =>
+                      c.name.toLowerCase().includes(q) ||
+                      (c.divisionNames ?? []).some(d => d.toLowerCase().includes(q))
+                    ).slice(0, 3);
+                    if (dupes.length === 0) return null;
+                    return (
+                      <div style={{ marginTop: 6, padding: "8px 12px", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8 }}>
+                        <p style={{ margin: "0 0 5px", fontSize: 11, fontWeight: 700, color: "#92400e" }}>⚠ 유사 거래처가 이미 등록되어 있습니다</p>
+                        {dupes.map(c => {
+                          const matchedDiv = (c.divisionNames ?? []).find(d => d.toLowerCase().includes(q));
+                          return (
+                            <div key={c.id} style={{ fontSize: 12, color: "#78350f", marginTop: 2 }}>
+                              <button type="button" onClick={() => setCompanyModal(c.id)}
+                                style={{ background: "none", border: "none", cursor: "pointer", color: "#b45309", fontWeight: 700, padding: 0, textDecoration: "underline", fontSize: 12 }}>
+                                {c.name}{matchedDiv ? `(${matchedDiv})` : ""}
+                              </button>
+                              <span style={{ color: "#92400e", marginLeft: 6 }}>→ 클릭하면 상세보기</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                 </div>
                 {/* 2행: 사업자등록번호 / 대표자명 / 등록일 */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
@@ -2902,8 +2928,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <input value={companySearch} onChange={e => setCompanySearch(e.target.value)}
-                    placeholder="회사명, 사업자번호 검색..."
-                    style={{ ...inputStyle, maxWidth: 300, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
+                    placeholder="회사명, 브랜드명, 사업자번호, 전화, 이메일, 담당자..."
+                    style={{ ...inputStyle, maxWidth: 340, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
                     onKeyDown={e => e.key === "Enter" && fetchCompanies()} />
                   <PrimaryBtn onClick={fetchCompanies} disabled={companiesLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
                     {companiesLoading ? "검색 중..." : "검색"}
@@ -2929,7 +2955,19 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                                 onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                                 <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
                                 <td style={{ ...tableTd }}>
-                                  <div style={{ fontWeight: 700, color: "#111827", marginBottom: 3 }}>{c.name}</div>
+                                  <div style={{ fontWeight: 700, color: "#111827", marginBottom: 2 }}>
+                                    {c.name}
+                                    {/* 검색어에 매칭된 브랜드명 강조 표기 */}
+                                    {c.matchedDivisionName && (
+                                      <span style={{ fontWeight: 600, color: "#7c3aed", marginLeft: 4 }}>({c.matchedDivisionName})</span>
+                                    )}
+                                  </div>
+                                  {/* 매칭 없는 경우 소속 브랜드 목록 보조 표기 (최대 3개) */}
+                                  {!c.matchedDivisionName && (c.divisionNames?.length ?? 0) > 0 && (
+                                    <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 3 }}>
+                                      {c.divisionNames!.slice(0, 3).join(" · ")}{c.divisionNames!.length > 3 ? ` 외 ${c.divisionNames!.length - 3}개` : ""}
+                                    </div>
+                                  )}
                                   <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                                     {/* 거래처 유형 뱃지 */}
                                     <span style={{
@@ -2996,27 +3034,34 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     </label>
                     <input value={companySearchQuery}
                       onChange={e => { setCompanySearchQuery(e.target.value); setNewContactForm(p => ({ ...p, companyId: null })); }}
-                      placeholder="거래처명 검색..."
+                      placeholder="회사명, 브랜드명 검색..."
                       style={{ ...inputStyle, fontSize: 13, padding: "8px 12px", marginBottom: 6, borderColor: newContactErrors.companyId ? "#fca5a5" : undefined }} />
                     {newContactErrors.companyId && <p style={{ margin: "0 0 6px", fontSize: 11, color: "#dc2626" }}>{newContactErrors.companyId}</p>}
                     {companySearchQuery.trim() && newContactForm.companyId === null && (
                       <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, maxHeight: 180, overflowY: "auto", background: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }}>
-                        {companies
-                          .filter(c => c.name.toLowerCase().includes(companySearchQuery.toLowerCase()))
-                          .slice(0, 10)
-                          .map(c => (
-                            <div key={c.id}
-                              onClick={() => { setNewContactForm(p => ({ ...p, companyId: c.id })); setCompanySearchQuery(c.name); }}
-                              style={{ padding: "9px 14px", cursor: "pointer", fontSize: 13, color: "#111827", borderBottom: "1px solid #f9fafb" }}
-                              onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
-                              onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                              <span style={{ fontWeight: 600 }}>{c.name}</span>
-                              {(c as any).businessNumber && <span style={{ color: "#9ca3af", marginLeft: 8, fontSize: 12 }}>{(c as any).businessNumber}</span>}
-                            </div>
-                          ))}
-                        {companies.filter(c => c.name.toLowerCase().includes(companySearchQuery.toLowerCase())).length === 0 && (
-                          <p style={{ padding: "12px 14px", color: "#9ca3af", fontSize: 13, margin: 0 }}>검색 결과가 없습니다.</p>
-                        )}
+                        {(() => {
+                          const q = companySearchQuery.toLowerCase();
+                          const filtered = companies.filter(c =>
+                            c.name.toLowerCase().includes(q) ||
+                            (c.divisionNames ?? []).some(d => d.toLowerCase().includes(q)) ||
+                            (c.businessNumber ?? "").replace(/-/g,"").includes(q.replace(/-/g,""))
+                          ).slice(0, 10);
+                          if (filtered.length === 0) return <p style={{ padding: "12px 14px", color: "#9ca3af", fontSize: 13, margin: 0 }}>검색 결과가 없습니다.</p>;
+                          return filtered.map(c => {
+                            const matchedDiv = (c.divisionNames ?? []).find(d => d.toLowerCase().includes(q));
+                            return (
+                              <div key={c.id}
+                                onClick={() => { setNewContactForm(p => ({ ...p, companyId: c.id })); setCompanySearchQuery(c.name); }}
+                                style={{ padding: "9px 14px", cursor: "pointer", fontSize: 13, color: "#111827", borderBottom: "1px solid #f9fafb" }}
+                                onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
+                                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                                <span style={{ fontWeight: 600 }}>{c.name}</span>
+                                {matchedDiv && <span style={{ color: "#7c3aed", fontWeight: 700, marginLeft: 4 }}>({matchedDiv})</span>}
+                                {c.businessNumber && <span style={{ color: "#9ca3af", marginLeft: 8, fontSize: 12 }}>{c.businessNumber}</span>}
+                              </div>
+                            );
+                          });
+                        })()}
                       </div>
                     )}
                     {newContactForm.companyId !== null && (
