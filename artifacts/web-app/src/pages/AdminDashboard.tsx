@@ -11,7 +11,7 @@ import {
   FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE,
   VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS,
 } from '../lib/constants';
-import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill } from '../components/ui';
+import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../components/ui';
 import { formatPhone } from '../lib/utils';
 import { LogModal } from '../components/admin/LogModal';
 import { DraggableModal } from '../components/admin/DraggableModal';
@@ -46,6 +46,11 @@ function Section({ title, children, action }: { title: string; children: React.R
 }
 
 type SSItem = { id: number; label: string; sub?: string };
+/**
+ * SearchableSelect — 검색형 드롭다운
+ * 동작: 클릭/포커스로 열림, 외부 mousedown·ESC·선택 완료 시만 닫힘
+ * 키보드: ↑/↓ 탐색, Enter 선택, ESC 닫기
+ */
 function SearchableSelect({ items, value, onChange, placeholder, accentBorder = "#6366f1", maxResults = 20 }: {
   items: SSItem[]; value: number | null; onChange: (id: number | null) => void;
   placeholder?: string; accentBorder?: string; maxResults?: number;
@@ -53,26 +58,60 @@ function SearchableSelect({ items, value, onChange, placeholder, accentBorder = 
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [debounced, setDebounced] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => { const t = setTimeout(() => setDebounced(query), 300); return () => clearTimeout(t); }, [query]);
+  const [highlightIdx, setHighlightIdx] = useState(-1);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { const t = setTimeout(() => setDebounced(query), 250); return () => clearTimeout(t); }, [query]);
+
+  // 외부 클릭(mousedown) 시에만 닫힘 — blur 이벤트로 닫히지 않음
   useEffect(() => {
-    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const h = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, []);
+
   const selected = value != null ? items.find(i => i.id === value) : null;
   const q = debounced.toLowerCase();
-  const filtered = q
-    ? items.filter(i => i.label.toLowerCase().includes(q) || (i.sub ?? "").toLowerCase().includes(q)).slice(0, maxResults)
-    : items.slice(0, maxResults);
+  const filtered = (q
+    ? items.filter(i => i.label.toLowerCase().includes(q) || (i.sub ?? "").toLowerCase().includes(q))
+    : items
+  ).slice(0, maxResults);
+
   const displayValue = open ? query : (selected?.label ?? "");
+
+  // 하이라이트 항목 자동 스크롤
+  useEffect(() => {
+    if (!open || highlightIdx < 0 || !listRef.current) return;
+    const item = listRef.current.children[highlightIdx] as HTMLElement | undefined;
+    item?.scrollIntoView?.({ block: "nearest" });
+  }, [highlightIdx, open]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") { e.preventDefault(); setOpen(false); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHighlightIdx(i => Math.min(i + 1, filtered.length - 1)); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)); return; }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (highlightIdx >= 0 && highlightIdx < filtered.length) {
+        onChange(filtered[highlightIdx].id);
+        setQuery(""); setOpen(false); setHighlightIdx(-1);
+      }
+    }
+  };
+
   return (
-    <div ref={ref} style={{ position: "relative" }}>
+    <div ref={containerRef} style={{ position: "relative" }}>
       <div style={{ display: "flex", alignItems: "center", border: `1px solid ${open ? accentBorder : "#d1d5db"}`, borderRadius: 8, background: "#fff", transition: "border-color 0.15s" }}>
         <input
           value={displayValue}
-          onChange={e => { setQuery(e.target.value); setOpen(true); }}
-          onFocus={() => { setOpen(true); setQuery(""); }}
+          onChange={e => { setQuery(e.target.value); setOpen(true); setHighlightIdx(-1); }}
+          onFocus={() => { setOpen(true); if (selected) setQuery(""); }}
+          onKeyDown={handleKeyDown}
           placeholder={placeholder ?? "이름으로 검색..."}
           style={{ flex: 1, padding: "9px 12px", fontSize: 14, border: "none", outline: "none", background: "transparent", borderRadius: 8, minWidth: 0 }}
         />
@@ -80,20 +119,31 @@ function SearchableSelect({ items, value, onChange, placeholder, accentBorder = 
           <button type="button" onClick={() => { onChange(null); setQuery(""); setOpen(false); }}
             style={{ padding: "0 10px", fontSize: 18, lineHeight: 1, color: "#9ca3af", background: "none", border: "none", cursor: "pointer", flexShrink: 0 }}>×</button>
         )}
-        <span style={{ padding: "0 10px", color: "#9ca3af", fontSize: 12, flexShrink: 0, userSelect: "none" }}>{open ? "▲" : "▼"}</span>
+        <span onClick={() => setOpen(o => !o)}
+          style={{ padding: "0 10px", color: "#9ca3af", fontSize: 12, flexShrink: 0, userSelect: "none", cursor: "pointer" }}>
+          {open ? "▲" : "▼"}
+        </span>
       </div>
       {open && (
-        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, boxShadow: "0 6px 24px rgba(0,0,0,0.12)", zIndex: 600, maxHeight: 224, overflowY: "auto" }}>
+        <div ref={listRef}
+          style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, boxShadow: "0 6px 24px rgba(0,0,0,0.12)", zIndex: 600, maxHeight: 224, overflowY: "auto" }}
+          onMouseDown={e => e.stopPropagation()}
+        >
           {filtered.length === 0
             ? <p style={{ margin: 0, padding: "10px 14px", fontSize: 13, color: "#9ca3af" }}>검색 결과 없음</p>
-            : filtered.map(item => (
-                <button key={item.id} type="button"
-                  onClick={() => { onChange(item.id); setQuery(""); setOpen(false); }}
-                  style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 14px", fontSize: 13, color: "#111827", background: item.id === value ? "#f0fdf4" : "transparent", border: "none", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
-                  <span style={{ fontWeight: 600 }}>{item.label}</span>
-                  {item.sub && <span style={{ marginLeft: 8, fontSize: 11, color: "#6b7280" }}>{item.sub}</span>}
-                </button>
-              ))
+            : filtered.map((item, idx) => {
+                const isHighlit = idx === highlightIdx;
+                return (
+                  <button key={item.id} type="button"
+                    onMouseEnter={() => setHighlightIdx(idx)}
+                    onMouseLeave={() => setHighlightIdx(-1)}
+                    onClick={() => { onChange(item.id); setQuery(""); setOpen(false); setHighlightIdx(-1); }}
+                    style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 14px", fontSize: 13, color: "#111827", background: isHighlit ? "#eff6ff" : item.id === value ? "#f0fdf4" : "transparent", border: "none", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
+                    <span style={{ fontWeight: 600 }}>{item.label}</span>
+                    {item.sub && <span style={{ marginLeft: 8, fontSize: 11, color: "#6b7280" }}>{item.sub}</span>}
+                  </button>
+                );
+              })
           }
         </div>
       )}
@@ -1398,11 +1448,17 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 {companyDivisions.length > 0 && (
                   <div>
                     <label style={{ fontSize: 12, fontWeight: 600, color: "#7c3aed", display: "block", marginBottom: 4 }}>브랜드 / 부서</label>
-                    <select value={newProjectDivisionId ?? ""} onChange={e => setNewProjectDivisionId(e.target.value ? Number(e.target.value) : null)}
-                      style={{ width: "100%", border: "1px solid #e9d5ff", borderRadius: 8, padding: "9px 12px", fontSize: 14, background: "#fff" }}>
-                      <option value="">— 본사 직접 의뢰 —</option>
-                      {companyDivisions.map(d => <option key={d.id} value={d.id}>{d.name}{d.type ? ` (${d.type})` : ""}</option>)}
-                    </select>
+                    <ClickSelect
+                      value={String(newProjectDivisionId ?? "")}
+                      onChange={val => setNewProjectDivisionId(val ? Number(val) : null)}
+                      options={[
+                        { value: "", label: "— 본사 직접 의뢰 —" },
+                        ...companyDivisions.map(d => ({ value: String(d.id), label: d.name + (d.type ? ` (${d.type})` : "") })),
+                      ]}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", border: "1px solid #e9d5ff", background: "#faf5ff", color: "#7c3aed", fontWeight: 600, fontSize: 14, padding: "9px 12px" }}
+                      menuStyle={{ minWidth: "100%" }}
+                    />
                   </div>
                 )}
                 <div>
@@ -2396,13 +2452,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         {/* 시스템 권한(RBAC) — admin/staff에만 표시 */}
                         <td style={tableTd}>
                           {(u.role === "admin" || u.role === "staff") ? (
-                            <select
-                              value={u.roleId ?? ""}
+                            <ClickSelect
                               disabled={roleChanging === u.id}
-                              onChange={async e => {
+                              value={String(u.roleId ?? "")}
+                              onChange={async (val) => {
                                 setRoleChanging(u.id);
                                 try {
-                                  const rid = e.target.value ? Number(e.target.value) : null;
+                                  const rid = val ? Number(val) : null;
                                   const res = await fetch(api(`/api/admin/users/${u.id}/rbac-role`), {
                                     method: "PATCH",
                                     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
@@ -2413,26 +2469,30 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                                   setToast("RBAC 권한이 변경되었습니다.");
                                 } finally { setRoleChanging(null); }
                               }}
-                              style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid #e9d5ff", fontSize: 12, cursor: "pointer", background: "#faf5ff", color: "#7c3aed", fontWeight: 600 }}>
-                              <option value="">{u.role === "admin" && !u.roleId ? "전체 권한" : "권한 선택"}</option>
-                              {rbacRoles.map(r => <option key={r.id} value={r.id}>{r.name}{r.description ? ` — ${r.description}` : ""}</option>)}
-                            </select>
+                              options={[
+                                { value: "", label: u.role === "admin" && !u.roleId ? "전체 권한" : "권한 선택" },
+                                ...rbacRoles.map(r => ({ value: String(r.id), label: r.name + (r.description ? ` — ${r.description}` : "") })),
+                              ]}
+                              triggerStyle={{ border: "1px solid #e9d5ff", background: "#faf5ff", color: "#7c3aed", fontWeight: 700, fontSize: 12 }}
+                            />
                           ) : (
                             <span style={{ fontSize: 11, color: "#d1d5db" }}>—</span>
                           )}
                         </td>
                         <td style={tableTd}>
                           {u.id !== user.id ? (
-                            <select
-                              value={u.role}
+                            <ClickSelect
                               disabled={roleChanging === u.id}
-                              onChange={e => handleRoleChange(u.id, e.target.value)}
-                              style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12, cursor: "pointer", background: "#fff" }}>
-                              <option value="admin">관리자</option>
-                              <option value="staff">직원</option>
-                              <option value="client">고객</option>
-                              <option value="linguist">통번역사</option>
-                            </select>
+                              value={u.role}
+                              onChange={val => handleRoleChange(u.id, val)}
+                              options={[
+                                { value: "admin", label: "관리자" },
+                                { value: "staff", label: "직원" },
+                                { value: "client", label: "고객" },
+                                { value: "linguist", label: "통번역사" },
+                              ]}
+                              triggerStyle={{ fontSize: 12 }}
+                            />
                           ) : (
                             <span style={{ fontSize: 12, color: "#9ca3af" }}>본인 계정</span>
                           )}

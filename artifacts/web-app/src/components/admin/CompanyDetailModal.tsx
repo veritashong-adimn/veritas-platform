@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api, CompanyDetail, Contact, Division, NoteEntry, VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS } from "../../lib/constants";
-import { StatusBadge, PrimaryBtn, GhostBtn } from "../ui";
+import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { formatPhone } from "../../lib/utils";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { PrepaidLedgerModal } from "./PrepaidLedgerModal";
@@ -718,11 +718,17 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     {detail.divisions.length > 0 && (
                       <div style={{ gridColumn: "1/-1" }}>
                         <label style={{ fontSize: 12, color: "#7c3aed", display: "block", marginBottom: 2 }}>브랜드 / 부서 연결</label>
-                        <select value={cf.divisionId ?? ""} onChange={e => setCf(p => ({ ...p, divisionId: e.target.value ? Number(e.target.value) : null }))}
-                          style={{ width: "100%", border: "1px solid #e9d5ff", borderRadius: 8, padding: "7px 10px", fontSize: 13, background: "#fff" }}>
-                          <option value="">— 본사 직접 —</option>
-                          {detail.divisions.map((d: any) => <option key={d.id} value={d.id}>{d.name}{d.type ? ` (${d.type})` : ""}</option>)}
-                        </select>
+                        <ClickSelect
+                          value={String(cf.divisionId ?? "")}
+                          onChange={val => setCf(p => ({ ...p, divisionId: val ? Number(val) : null }))}
+                          options={[
+                            { value: "", label: "— 본사 직접 —" },
+                            ...detail.divisions.map((d: any) => ({ value: String(d.id), label: d.name + (d.type ? ` (${d.type})` : "") })),
+                          ]}
+                          style={{ width: "100%" }}
+                          triggerStyle={{ width: "100%", border: "1px solid #e9d5ff", background: "#faf5ff", color: "#7c3aed", fontWeight: 600, fontSize: 13, padding: "7px 10px" }}
+                          menuStyle={{ minWidth: "100%" }}
+                        />
                       </div>
                     )}
                     <div>
@@ -796,11 +802,17 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                           {detail.divisions.length > 0 && (
                             <div style={{ gridColumn: "1/-1" }}>
                               <label style={{ fontSize: 12, color: "#7c3aed", display: "block", marginBottom: 2 }}>브랜드 / 부서 연결</label>
-                              <select value={editContactForm.divisionId ?? ""} onChange={e => setEditContactForm(p => ({ ...p, divisionId: e.target.value ? Number(e.target.value) : null }))}
-                                style={{ width: "100%", border: "1px solid #e9d5ff", borderRadius: 8, padding: "7px 10px", fontSize: 13, background: "#fff" }}>
-                                <option value="">— 본사 직접 —</option>
-                                {detail.divisions.map((d: any) => <option key={d.id} value={d.id}>{d.name}{d.type ? ` (${d.type})` : ""}</option>)}
-                              </select>
+                              <ClickSelect
+                                value={String(editContactForm.divisionId ?? "")}
+                                onChange={val => setEditContactForm(p => ({ ...p, divisionId: val ? Number(val) : null }))}
+                                options={[
+                                  { value: "", label: "— 본사 직접 —" },
+                                  ...detail.divisions.map((d: any) => ({ value: String(d.id), label: d.name + (d.type ? ` (${d.type})` : "") })),
+                                ]}
+                                style={{ width: "100%" }}
+                                triggerStyle={{ width: "100%", border: "1px solid #e9d5ff", background: "#faf5ff", color: "#7c3aed", fontWeight: 600, fontSize: 13, padding: "7px 10px" }}
+                                menuStyle={{ minWidth: "100%" }}
+                              />
                             </div>
                           )}
                           <div>
