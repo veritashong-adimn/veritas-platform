@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api, Product } from "../../lib/constants";
-import { PrimaryBtn, GhostBtn } from "../ui";
+import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 import { PAYMENT_METHODS } from "./SensitiveInfoModal";
 
@@ -270,10 +270,9 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         </div>
         <div>
           <label style={labelSt}>언어 레벨</label>
-          <select value={form.languageLevel} onChange={e => setF("languageLevel", e.target.value)} style={inputStyle}>
-            <option value="">선택 안 함</option>
-            {LANG_LEVELS.map(l => <option key={l} value={l}>{l}</option>)}
-          </select>
+          <ClickSelect value={form.languageLevel} onChange={v => setF("languageLevel", v)}
+            style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8 }}
+            options={[{ value: "", label: "선택 안 함" }, ...LANG_LEVELS.map(l => ({ value: l, label: l }))]} />
         </div>
       </div>
 
@@ -299,13 +298,14 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       {/* ── 가능 상품 & 단가 ── */}
       <p style={sH}>가능 상품 & 단가</p>
       <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-        <select defaultValue="" onChange={e => { if (e.target.value) { addProduct(Number(e.target.value)); e.target.value = ""; } }}
-          style={{ ...inputStyle, flex: 1 }}>
-          <option value="">상품 선택하여 추가...</option>
-          {availableProducts.filter(p => !assignedProductIds.has(p.id)).map(p => (
-            <option key={p.id} value={p.id}>{p.mainCategory ? `[${p.mainCategory}] ` : ""}{p.name}</option>
-          ))}
-        </select>
+        <ClickSelect value="" onChange={v => { if (v) addProduct(Number(v)); }}
+          style={{ flex: 1 }} triggerStyle={{ fontSize: 13, padding: "9px 12px", borderRadius: 8, width: "100%" }}
+          options={[
+            { value: "", label: "상품 선택하여 추가..." },
+            ...availableProducts.filter(p => !assignedProductIds.has(p.id))
+              .map(p => ({ value: String(p.id), label: (p.mainCategory ? `[${p.mainCategory}] ` : "") + p.name })),
+          ]}
+        />
       </div>
       {selectedProducts.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 4 }}>
@@ -333,19 +333,18 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       <div style={grid3}>
         <div>
           <label style={labelSt}>등급</label>
-          <select value={form.grade} onChange={e => setF("grade", e.target.value)} style={inputStyle}>
-            <option value="">등급 없음</option>
-            {GRADES.map(g => <option key={g} value={g}>{g}등급</option>)}
-          </select>
+          <ClickSelect value={form.grade} onChange={v => setF("grade", v)}
+            style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8 }}
+            options={[{ value: "", label: "등급 없음" }, ...GRADES.map(g => ({ value: g, label: `${g}등급` }))]} />
         </div>
         <div>
           <label style={labelSt}>단가 단위</label>
-          <select value={form.unitType} onChange={e => setF("unitType", e.target.value)} style={inputStyle}>
-            <option value="eojeol">어절</option>
-            <option value="char">글자</option>
-            <option value="page">페이지</option>
-            <option value="hour">시간</option>
-          </select>
+          <ClickSelect value={form.unitType} onChange={v => setF("unitType", v)}
+            style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8 }}
+            options={[
+              { value: "eojeol", label: "어절" }, { value: "char", label: "글자" },
+              { value: "page", label: "페이지" }, { value: "hour", label: "시간" },
+            ]} />
         </div>
         <F label="기본 단가 (원)" field="unitPrice" type="number" placeholder="예: 40" />
       </div>
@@ -356,11 +355,11 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         <F label="이력서 URL" field="resumeUrl" placeholder="https://drive.google.com/..." />
         <div>
           <label style={labelSt}>가용 상태</label>
-          <select value={form.availabilityStatus} onChange={e => setF("availabilityStatus", e.target.value)} style={inputStyle}>
-            <option value="available">가능</option>
-            <option value="busy">바쁨</option>
-            <option value="unavailable">불가</option>
-          </select>
+          <ClickSelect value={form.availabilityStatus} onChange={v => setF("availabilityStatus", v)}
+            style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8 }}
+            options={[
+              { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
+            ]} />
         </div>
       </div>
       <div style={{ marginTop: 10 }}>
@@ -451,10 +450,9 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                   <SA label="국가" field="country" placeholder="South Korea" />
                   <div>
                     <label style={labelAmber}>통화</label>
-                    <select value={sf.currency} onChange={e => setSf("currency", e.target.value)} style={inpAmber}>
-                      <option value="">선택 안 함</option>
-                      {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                    <ClickSelect value={sf.currency} onChange={v => setSf("currency", v)}
+                      style={{ width: "100%" }} triggerStyle={{ ...inpAmber, width: "100%", boxSizing: "border-box" as const }}
+                      options={[{ value: "", label: "선택 안 함" }, ...CURRENCIES.map(c => ({ value: c, label: c }))]} />
                   </div>
                 </div>
                 <SA label="송금 메모 (선택)" field="remittanceMemo" placeholder="프로젝트명 또는 메모" />
@@ -470,10 +468,9 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                   <SA label="국가" field="country" placeholder="United States" />
                   <div>
                     <label style={labelAmber}>통화</label>
-                    <select value={sf.currency} onChange={e => setSf("currency", e.target.value)} style={inpAmber}>
-                      <option value="">선택 안 함</option>
-                      {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                    <ClickSelect value={sf.currency} onChange={v => setSf("currency", v)}
+                      style={{ width: "100%" }} triggerStyle={{ ...inpAmber, width: "100%", boxSizing: "border-box" as const }}
+                      options={[{ value: "", label: "선택 안 함" }, ...CURRENCIES.map(c => ({ value: c, label: c }))]} />
                   </div>
                   <SA label="거주지 영문주소" field="addressEn" placeholder="123 Main St, City, State" />
                 </div>
@@ -499,18 +496,16 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                 <div style={{ ...grid2, marginBottom: 10 }}>
                   <div>
                     <label style={labelAmber}>기본 통화</label>
-                    <select value={sf.baseCurrency} onChange={e => setSf("baseCurrency", e.target.value)} style={inpAmber}>
-                      <option value="">선택 안 함</option>
-                      {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                    <ClickSelect value={sf.baseCurrency} onChange={v => setSf("baseCurrency", v)}
+                      style={{ width: "100%" }} triggerStyle={{ ...inpAmber, width: "100%", boxSizing: "border-box" as const }}
+                      options={[{ value: "", label: "선택 안 함" }, ...CURRENCIES.map(c => ({ value: c, label: c }))]} />
                   </div>
                   {(isPaypal || isBank) && (
                     <div>
                       <label style={labelAmber}>해외송금 수수료 부담</label>
-                      <select value={sf.remittanceFeePayer} onChange={e => setSf("remittanceFeePayer", e.target.value)} style={inpAmber}>
-                        <option value="">선택 안 함</option>
-                        {FEE_PAYER_OPTIONS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
-                      </select>
+                      <ClickSelect value={sf.remittanceFeePayer} onChange={v => setSf("remittanceFeePayer", v)}
+                        style={{ width: "100%" }} triggerStyle={{ ...inpAmber, width: "100%", boxSizing: "border-box" as const }}
+                        options={[{ value: "", label: "선택 안 함" }, ...FEE_PAYER_OPTIONS.map(f => ({ value: f.value, label: f.label }))]} />
                     </div>
                   )}
                 </div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api, TranslatorProfile, TranslatorRate, TranslatorProduct, NoteEntry, Product } from "../../lib/constants";
-import { PrimaryBtn, GhostBtn } from "../ui";
+import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { DraggableModal } from "./DraggableModal";
 import { SensitiveInfoModal } from "./SensitiveInfoModal";
@@ -368,11 +368,9 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               {/* 언어 레벨 */}
               <div>
                 <label style={{ ...labelSt, fontSize: 11 }}>언어 레벨 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(수정 가능)</span></label>
-                <select value={form.languageLevel} onChange={e => setForm(p => ({ ...p, languageLevel: e.target.value }))}
-                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}>
-                  <option value="">선택 안 함</option>
-                  {LANG_LEVEL_OPTIONS.map(l => <option key={l} value={l}>{l}</option>)}
-                </select>
+                <ClickSelect value={form.languageLevel} onChange={v => setForm(p => ({ ...p, languageLevel: v }))}
+                  style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                  options={[{ value: "", label: "선택 안 함" }, ...LANG_LEVEL_OPTIONS.map(l => ({ value: l, label: l }))]} />
               </div>
             </div>
           </div>
@@ -383,11 +381,9 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             <F label="전문분야" field="specializations" placeholder="예: 법률, IT, 의학" />
             <div>
               <label style={labelSt}>등급</label>
-              <select value={form.grade} onChange={e => setForm(p => ({ ...p, grade: e.target.value }))}
-                style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}>
-                <option value="">등급 없음</option>
-                {GRADE_OPTIONS.map(g => <option key={g} value={g}>{g}등급</option>)}
-              </select>
+              <ClickSelect value={form.grade} onChange={v => setForm(p => ({ ...p, grade: v }))}
+                style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                options={[{ value: "", label: "등급 없음" }, ...GRADE_OPTIONS.map(g => ({ value: g, label: `${g}등급` }))]} />
             </div>
             <F label="학력" field="education" placeholder="예: 서울대학교" />
             <F label="전공" field="major" placeholder="예: 영어영문학" />
@@ -395,23 +391,21 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             <F label="평점 (1-5)" field="rating" type="number" placeholder="예: 4.5" />
             <div>
               <label style={labelSt}>가용 상태</label>
-              <select value={form.availabilityStatus} onChange={e => setForm(p => ({ ...p, availabilityStatus: e.target.value }))}
-                style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}>
-                <option value="available">가능</option>
-                <option value="busy">바쁨</option>
-                <option value="unavailable">불가</option>
-              </select>
+              <ClickSelect value={form.availabilityStatus} onChange={v => setForm(p => ({ ...p, availabilityStatus: v }))}
+                style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                options={[
+                  { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
+                ]} />
             </div>
             <div>
               <label style={labelSt}>기본 단가</label>
               <div style={{ display: "flex", gap: 6 }}>
-                <select value={form.unitType} onChange={e => setForm(p => ({ ...p, unitType: e.target.value }))}
-                  style={{ ...inputStyle, fontSize: 13, padding: "7px 8px", flex: "0 0 90px" }}>
-                  <option value="eojeol">어절</option>
-                  <option value="char">글자</option>
-                  <option value="page">페이지</option>
-                  <option value="hour">시간</option>
-                </select>
+                <ClickSelect value={form.unitType} onChange={v => setForm(p => ({ ...p, unitType: v }))}
+                  triggerStyle={{ fontSize: 13, padding: "7px 8px", borderRadius: 8, flex: "0 0 90px" }}
+                  options={[
+                    { value: "eojeol", label: "어절" }, { value: "char", label: "글자" },
+                    { value: "page", label: "페이지" }, { value: "hour", label: "시간" },
+                  ]} />
                 <input type="number" value={form.unitPrice}
                   onChange={e => setForm(p => ({ ...p, unitPrice: e.target.value }))}
                   placeholder="단가(원)" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", flex: 1 }} />
@@ -446,15 +440,13 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 1fr auto", gap: "6px 8px", alignItems: "end", marginBottom: 10 }}>
             <div>
               <label style={labelSt}>상품 선택</label>
-              <select value={tpForm.productId} onChange={e => setTpForm(p => ({ ...p, productId: e.target.value }))}
-                style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }}>
-                <option value="">상품 선택...</option>
-                {availableProducts.filter(p => !assignedProductIds.has(p.id)).map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.mainCategory ? `[${p.mainCategory}] ` : ""}{p.name}
-                  </option>
-                ))}
-              </select>
+              <ClickSelect value={tpForm.productId} onChange={v => setTpForm(p => ({ ...p, productId: v }))}
+                style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "6px 10px", borderRadius: 8 }}
+                options={[
+                  { value: "", label: "상품 선택..." },
+                  ...availableProducts.filter(p => !assignedProductIds.has(p.id))
+                    .map(p => ({ value: String(p.id), label: (p.mainCategory ? `[${p.mainCategory}] ` : "") + p.name })),
+                ]} />
             </div>
             <div>
               <label style={labelSt}>단가 (원)</label>
@@ -512,14 +504,13 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               placeholder="서비스 유형" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
             <input value={rateForm.languagePair} onChange={e => setRateForm(p => ({ ...p, languagePair: e.target.value }))}
               placeholder="언어조합" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
-            <select value={rateForm.unit} onChange={e => setRateForm(p => ({ ...p, unit: e.target.value }))}
-              style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }}>
-              <option value="eojeol">어절</option>
-              <option value="char">글자</option>
-              <option value="page">페이지</option>
-              <option value="hour">시간</option>
-              <option value="word">단어(구형)</option>
-            </select>
+            <ClickSelect value={rateForm.unit} onChange={v => setRateForm(p => ({ ...p, unit: v }))}
+              triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 8 }}
+              options={[
+                { value: "eojeol", label: "어절" }, { value: "char", label: "글자" },
+                { value: "page", label: "페이지" }, { value: "hour", label: "시간" },
+                { value: "word", label: "단어(구형)" },
+              ]} />
             <input type="number" value={rateForm.rate} onChange={e => setRateForm(p => ({ ...p, rate: e.target.value }))}
               placeholder="단가(원)" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
             <PrimaryBtn onClick={handleAddRate} disabled={addingRate} style={{ fontSize: 12, padding: "6px 12px", whiteSpace: "nowrap" }}>

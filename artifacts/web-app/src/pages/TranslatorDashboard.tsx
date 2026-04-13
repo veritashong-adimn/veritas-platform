@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from "react";
 import { api, User, Task, TranslatorProfile, TranslatorRate, MySettlement } from "../lib/constants";
-import { Card, Toast, PrimaryBtn, GhostBtn } from "../components/ui";
+import { Card, Toast, PrimaryBtn, GhostBtn, ClickSelect } from "../components/ui";
 import { TaskCard } from "../components/projects";
 
 const inputStyle: React.CSSProperties = {
@@ -324,15 +324,12 @@ export function TranslatorDashboard({ user, token }: { user: User; token: string
                     </div>
                     <div>
                       <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>가용 여부</label>
-                      <select
-                        value={profileForm.availabilityStatus ?? "available"}
-                        onChange={e => setProfileForm(p => ({ ...p, availabilityStatus: e.target.value }))}
-                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
-                      >
-                        <option value="available">가능</option>
-                        <option value="busy">바쁨</option>
-                        <option value="unavailable">불가</option>
-                      </select>
+                      <ClickSelect value={profileForm.availabilityStatus ?? "available"}
+                        onChange={v => setProfileForm(p => ({ ...p, availabilityStatus: v }))}
+                        style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                        options={[
+                          { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
+                        ]} />
                     </div>
                     <div style={{ gridColumn: "span 2" }}>
                       <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>소개</label>
@@ -356,12 +353,11 @@ export function TranslatorDashboard({ user, token }: { user: User; token: string
                     placeholder="서비스 유형" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
                   <input value={rateForm.languagePair} onChange={e => setRateForm(p => ({ ...p, languagePair: e.target.value }))}
                     placeholder="언어조합" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
-                  <select value={rateForm.unit} onChange={e => setRateForm(p => ({ ...p, unit: e.target.value }))}
-                    style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }}>
-                    <option value="word">어절</option>
-                    <option value="page">페이지</option>
-                    <option value="hour">시간</option>
-                  </select>
+                  <ClickSelect value={rateForm.unit} onChange={v => setRateForm(p => ({ ...p, unit: v }))}
+                    triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 8 }}
+                    options={[
+                      { value: "word", label: "어절" }, { value: "page", label: "페이지" }, { value: "hour", label: "시간" },
+                    ]} />
                   <input type="number" value={rateForm.rate} onChange={e => setRateForm(p => ({ ...p, rate: e.target.value }))}
                     placeholder="단가(원)" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
                   <PrimaryBtn onClick={addRate} disabled={addingRate} style={{ fontSize: 12, padding: "6px 12px", whiteSpace: "nowrap" }}>

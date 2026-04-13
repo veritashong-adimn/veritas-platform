@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api } from "../../lib/constants";
-import { PrimaryBtn, GhostBtn } from "../ui";
+import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 
 const inp: React.CSSProperties = {
@@ -404,18 +404,16 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
                   <div style={{ ...grid2, marginBottom:10 }}>
                     <div>
                       <label style={lbl}>기본 통화</label>
-                      <select value={form.baseCurrency} onChange={e => sf("baseCurrency", e.target.value)} style={inp}>
-                        <option value="">선택 안 함</option>
-                        {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
+                      <ClickSelect value={form.baseCurrency} onChange={v => sf("baseCurrency", v)}
+                        style={{ width: "100%" }} triggerStyle={{ ...inp, width: "100%", boxSizing: "border-box" as const }}
+                        options={[{ value: "", label: "선택 안 함" }, ...CURRENCIES.map(c => ({ value: c, label: c }))]} />
                     </div>
                     {(isPaypal || isBank) && (
                       <div>
                         <label style={lbl}>해외송금 수수료 부담</label>
-                        <select value={form.remittanceFeePayer} onChange={e => sf("remittanceFeePayer", e.target.value)} style={inp}>
-                          <option value="">선택 안 함</option>
-                          {FEE_PAYER_OPTIONS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
-                        </select>
+                        <ClickSelect value={form.remittanceFeePayer} onChange={v => sf("remittanceFeePayer", v)}
+                          style={{ width: "100%" }} triggerStyle={{ ...inp, width: "100%", boxSizing: "border-box" as const }}
+                          options={[{ value: "", label: "선택 안 함" }, ...FEE_PAYER_OPTIONS.map(f => ({ value: f.value, label: f.label }))]} />
                       </div>
                     )}
                   </div>
@@ -467,10 +465,9 @@ function CurrencySelect({ value, onChange, label }: { value: string; onChange: (
   return (
     <div>
       <label style={lbl}>{label}</label>
-      <select value={value} onChange={e => onChange(e.target.value)} style={inp}>
-        <option value="">선택 안 함</option>
-        {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-      </select>
+      <ClickSelect value={value} onChange={onChange}
+        style={{ width: "100%" }} triggerStyle={{ ...inp, width: "100%", boxSizing: "border-box" as const }}
+        options={[{ value: "", label: "선택 안 함" }, ...CURRENCIES.map(c => ({ value: c, label: c }))]} />
     </div>
   );
 }

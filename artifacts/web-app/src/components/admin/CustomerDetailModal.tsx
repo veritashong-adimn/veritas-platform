@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api, CustomerDetail, Communication, COMM_TYPE_LABEL, COMM_TYPE_COLOR } from "../../lib/constants";
-import { StatusBadge, PrimaryBtn, GhostBtn } from "../ui";
+import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 
 const inputStyle: React.CSSProperties = {
@@ -153,12 +153,11 @@ export function CustomerDetailModal({ customerId, token, onClose, onToast, onOpe
 
             <p style={sH}>커뮤니케이션 기록 ({comms.length})</p>
             <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-              <select value={commType} onChange={e => setCommType(e.target.value as "email"|"phone"|"message")}
-                style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }}>
-                <option value="message">메시지</option>
-                <option value="email">이메일</option>
-                <option value="phone">전화</option>
-              </select>
+              <ClickSelect value={commType} onChange={v => setCommType(v as "email"|"phone"|"message")}
+                triggerStyle={{ fontSize: 13, padding: "7px 10px" }}
+                options={[
+                  { value: "message", label: "메시지" }, { value: "email", label: "이메일" }, { value: "phone", label: "전화" },
+                ]} />
               <input value={commContent} onChange={e => setCommContent(e.target.value)} placeholder="내용 입력..."
                 style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "8px 10px", minWidth: 200 }}
                 onKeyDown={e => e.key === "Enter" && !e.shiftKey && handleAddComm()} />

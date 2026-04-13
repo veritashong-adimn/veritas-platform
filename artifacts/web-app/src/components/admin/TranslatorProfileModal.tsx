@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api, TranslatorProfile } from "../../lib/constants";
-import { PrimaryBtn, GhostBtn } from "../ui";
+import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 
 const inputStyle: React.CSSProperties = {
@@ -93,12 +93,11 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>가용 상태</label>
-                  <select value={form.availabilityStatus} onChange={e => setForm(p => ({ ...p, availabilityStatus: e.target.value }))}
-                    style={{ ...inputStyle, width: "100%", padding: "7px 10px", fontSize: 13 }}>
-                    <option value="available">가능</option>
-                    <option value="busy">바쁨</option>
-                    <option value="unavailable">불가</option>
-                  </select>
+                  <ClickSelect value={form.availabilityStatus} onChange={v => setForm(p => ({ ...p, availabilityStatus: v }))}
+                    style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                    options={[
+                      { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
+                    ]} />
                 </div>
                 <F label="평점 (0-5)" field="rating" type="number" placeholder="4.5" />
                 <F label="단어당 단가 (원)" field="ratePerWord" type="number" placeholder="50" />

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, ALL_FINANCIAL_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, AdminUser, BOARD_CATEGORY_LABEL, Product } from '../../lib/constants';
-import { StatusBadge, PrimaryBtn, GhostBtn } from '../ui';
+import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
 import { ReviewMemoPanel } from './ReviewMemoPanel';
 import { DraggableModal } from './DraggableModal';
 
@@ -1063,15 +1063,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   const isBlocked = block.blocked;
                   return (
                     <>
-                      <select value={statusTarget} onChange={e => setStatusTarget(e.target.value)}
-                        style={{ ...inputStyle, width: "auto", padding: "6px 10px", fontSize: 12 }}>
-                        <option value={detail.status}>{STATUS_LABEL[detail.status] ?? detail.status} (현재)</option>
-                        {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? [])
-                          .filter(s => s !== "matched" || (detail.tasks ?? []).length > 0)
-                          .map(s => (
-                            <option key={s} value={s}>{STATUS_LABEL[s] ?? s}</option>
-                          ))}
-                      </select>
+                      <ClickSelect
+                        value={statusTarget}
+                        onChange={setStatusTarget}
+                        triggerStyle={{ fontSize: 12, padding: "6px 10px" }}
+                        options={[
+                          { value: detail.status, label: `${STATUS_LABEL[detail.status] ?? detail.status} (현재)` },
+                          ...(PROJECT_STATUS_TRANSITIONS[detail.status] ?? [])
+                            .filter(s => s !== "matched" || (detail.tasks ?? []).length > 0)
+                            .map(s => ({ value: s, label: STATUS_LABEL[s] ?? s })),
+                        ]}
+                      />
                       <GhostBtn
                         onClick={handleStatusChange}
                         disabled={changingStatus || statusTarget === detail.status || isBlocked}
@@ -1387,41 +1389,57 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                         <div>
                           <label style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 4 }}>거래처 (의뢰처)</label>
-                          <select value={editCompanyId ?? ""} onChange={async e => {
-                            const cid = e.target.value ? Number(e.target.value) : null;
-                            setEditCompanyId(cid); setEditContactId(null); setEditDivisionId(null);
-                            if (cid) {
-                              try {
-                                const res = await fetch(api(`/api/admin/companies/${cid}/divisions`), { headers: authH });
-                                if (res.ok) setEditDivisionsList(await res.json());
-                                else setEditDivisionsList([]);
-                              } catch { setEditDivisionsList([]); }
-                            } else { setEditDivisionsList([]); }
-                          }} style={{ ...inputStyle, width: "100%" }}>
-                            <option value="">미연결</option>
-                            {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                          </select>
+                          <ClickSelect
+                            value={String(editCompanyId ?? "")}
+                            onChange={async v => {
+                              const cid = v ? Number(v) : null;
+                              setEditCompanyId(cid); setEditContactId(null); setEditDivisionId(null);
+                              if (cid) {
+                                try {
+                                  const res = await fetch(api(`/api/admin/companies/${cid}/divisions`), { headers: authH });
+                                  if (res.ok) setEditDivisionsList(await res.json());
+                                  else setEditDivisionsList([]);
+                                } catch { setEditDivisionsList([]); }
+                              } else { setEditDivisionsList([]); }
+                            }}
+                            style={{ width: "100%" }}
+                            triggerStyle={{ width: "100%", fontSize: 13, borderRadius: 8 }}
+                            options={[
+                              { value: "", label: "미연결" },
+                              ...companiesList.map(c => ({ value: String(c.id), label: c.name })),
+                            ]}
+                          />
                         </div>
                         <div>
                           <label style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 4 }}>담당자</label>
-                          <select value={editContactId ?? ""} onChange={e => setEditContactId(e.target.value ? Number(e.target.value) : null)}
-                            style={{ ...inputStyle, width: "100%" }}>
-                            <option value="">미연결</option>
-                            {contactsList
-                              .filter(c => !editCompanyId || c.companyId === editCompanyId)
-                              .map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                          </select>
+                          <ClickSelect
+                            value={String(editContactId ?? "")}
+                            onChange={v => setEditContactId(v ? Number(v) : null)}
+                            style={{ width: "100%" }}
+                            triggerStyle={{ width: "100%", fontSize: 13, borderRadius: 8 }}
+                            options={[
+                              { value: "", label: "미연결" },
+                              ...contactsList
+                                .filter(c => !editCompanyId || c.companyId === editCompanyId)
+                                .map(c => ({ value: String(c.id), label: c.name })),
+                            ]}
+                          />
                         </div>
                       </div>
                       {/* 브랜드/부서 선택 */}
                       {editDivisionsList.length > 0 && (
                         <div>
                           <label style={{ fontSize: 12, color: "#7c3aed", fontWeight: 600, display: "block", marginBottom: 4 }}>브랜드 / 부서</label>
-                          <select value={editDivisionId ?? ""} onChange={e => setEditDivisionId(e.target.value ? Number(e.target.value) : null)}
-                            style={{ ...inputStyle, width: "100%", borderColor: "#e9d5ff" }}>
-                            <option value="">전체 (부서 없음)</option>
-                            {editDivisionsList.map(d => <option key={d.id} value={d.id}>{d.name}{d.type ? ` (${d.type})` : ""}</option>)}
-                          </select>
+                          <ClickSelect
+                            value={String(editDivisionId ?? "")}
+                            onChange={v => setEditDivisionId(v ? Number(v) : null)}
+                            style={{ width: "100%" }}
+                            triggerStyle={{ width: "100%", fontSize: 13, borderRadius: 8, border: "1px solid #e9d5ff", background: "#faf5ff", color: "#7c3aed" }}
+                            options={[
+                              { value: "", label: "전체 (부서 없음)" },
+                              ...editDivisionsList.map(d => ({ value: String(d.id), label: d.name + (d.type ? ` (${d.type})` : "") })),
+                            ]}
+                          />
                         </div>
                       )}
                       {/* 청구 대상 / 납부 주체 */}
@@ -1508,12 +1526,16 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                           <label style={{ fontSize: 11, color: "#0369a1", fontWeight: 700 }}>변경할 청구 대상</label>
                                           <span style={{ fontSize: 9, color: "#0369a1", background: "#e0f2fe", borderRadius: 3, padding: "1px 4px", fontWeight: 600 }}>세금계산서 기준</span>
                                         </div>
-                                        <select value={correctionBillingId ?? ""}
-                                          onChange={e => setCorrectionBillingId(e.target.value ? Number(e.target.value) : null)}
-                                          style={{ ...inputStyle, fontSize: 12, borderColor: "#bae6fd" }}>
-                                          <option value="">— 요청 거래처와 동일 —</option>
-                                          {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                        </select>
+                                        <ClickSelect
+                                          value={String(correctionBillingId ?? "")}
+                                          onChange={v => setCorrectionBillingId(v ? Number(v) : null)}
+                                          style={{ width: "100%" }}
+                                          triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #bae6fd" }}
+                                          options={[
+                                            { value: "", label: "— 요청 거래처와 동일 —" },
+                                            ...companiesList.map(c => ({ value: String(c.id), label: c.name })),
+                                          ]}
+                                        />
                                         <p style={{ margin: "3px 0 0", fontSize: 10, color: "#6b7280" }}>현재: {billingName} → {corrBillingName}</p>
                                       </div>
                                       <div>
@@ -1521,28 +1543,37 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                           <label style={{ fontSize: 11, color: "#059669", fontWeight: 700 }}>💰 변경할 납부 주체</label>
                                           <span style={{ fontSize: 9, color: "#059669", background: "#d1fae5", borderRadius: 3, padding: "1px 4px", fontWeight: 600 }}>입금 기준</span>
                                         </div>
-                                        <select value={correctionPayerId ?? ""}
-                                          onChange={e => setCorrectionPayerId(e.target.value ? Number(e.target.value) : null)}
-                                          style={{ ...inputStyle, fontSize: 12, borderColor: "#a7f3d0" }}>
-                                          <option value="">— 청구 대상과 동일 —</option>
-                                          {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                        </select>
+                                        <ClickSelect
+                                          value={String(correctionPayerId ?? "")}
+                                          onChange={v => setCorrectionPayerId(v ? Number(v) : null)}
+                                          style={{ width: "100%" }}
+                                          triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a7f3d0" }}
+                                          options={[
+                                            { value: "", label: "— 청구 대상과 동일 —" },
+                                            ...companiesList.map(c => ({ value: String(c.id), label: c.name })),
+                                          ]}
+                                        />
                                         <p style={{ margin: "3px 0 0", fontSize: 10, color: "#6b7280" }}>현재: {payerName} → {corrPayerName}</p>
                                       </div>
                                     </div>
                                     <div>
                                       <label style={{ fontSize: 11, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>정정 사유 <span style={{ color: "#dc2626" }}>*</span></label>
-                                      <select value={correctionReason} onChange={e => setCorrectionReason(e.target.value)}
-                                        style={{ ...inputStyle, fontSize: 12 }}>
-                                        <option value="">— 사유를 선택하세요 —</option>
-                                        <option value="고객 요청">고객 요청</option>
-                                        <option value="오입력 정정">오입력 정정</option>
-                                        <option value="계열사 변경">계열사 변경</option>
-                                        <option value="계약 변경">계약 변경</option>
-                                        <option value="부분 입금 정정">부분 입금 정정</option>
-                                        <option value="환불 처리">환불 처리</option>
-                                        <option value="기타">기타</option>
-                                      </select>
+                                      <ClickSelect
+                                        value={correctionReason}
+                                        onChange={setCorrectionReason}
+                                        style={{ width: "100%" }}
+                                        triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7 }}
+                                        options={[
+                                          { value: "", label: "— 사유를 선택하세요 —" },
+                                          { value: "고객 요청", label: "고객 요청" },
+                                          { value: "오입력 정정", label: "오입력 정정" },
+                                          { value: "계열사 변경", label: "계열사 변경" },
+                                          { value: "계약 변경", label: "계약 변경" },
+                                          { value: "부분 입금 정정", label: "부분 입금 정정" },
+                                          { value: "환불 처리", label: "환불 처리" },
+                                          { value: "기타", label: "기타" },
+                                        ]}
+                                      />
                                     </div>
                                     <div>
                                       <label style={{ fontSize: 11, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>상세 메모 <span style={{ color: "#dc2626" }}>*</span></label>
@@ -1584,22 +1615,32 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     <label style={{ fontSize: 11, color: "#0369a1", fontWeight: 700 }}>청구 대상</label>
                                     <span style={{ fontSize: 9, color: "#0369a1", background: "#e0f2fe", borderRadius: 3, padding: "1px 4px", fontWeight: 600 }}>세금계산서 기준</span>
                                   </div>
-                                  <select value={editBillingCompanyId ?? ""} onChange={e => setEditBillingCompanyId(e.target.value ? Number(e.target.value) : null)}
-                                    style={{ ...inputStyle, width: "100%", fontSize: 12, borderColor: "#bae6fd" }}>
-                                    <option value="">— 요청 거래처와 동일 —</option>
-                                    {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                  </select>
+                                  <ClickSelect
+                                    value={String(editBillingCompanyId ?? "")}
+                                    onChange={v => setEditBillingCompanyId(v ? Number(v) : null)}
+                                    style={{ width: "100%" }}
+                                    triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #bae6fd" }}
+                                    options={[
+                                      { value: "", label: "— 요청 거래처와 동일 —" },
+                                      ...companiesList.map(c => ({ value: String(c.id), label: c.name })),
+                                    ]}
+                                  />
                                 </div>
                                 <div>
                                   <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
                                     <label style={{ fontSize: 11, color: "#059669", fontWeight: 700 }}>💰 납부 주체</label>
                                     <span style={{ fontSize: 9, color: "#059669", background: "#d1fae5", borderRadius: 3, padding: "1px 4px", fontWeight: 600 }}>입금 기준</span>
                                   </div>
-                                  <select value={editPayerCompanyId ?? ""} onChange={e => setEditPayerCompanyId(e.target.value ? Number(e.target.value) : null)}
-                                    style={{ ...inputStyle, width: "100%", fontSize: 12, borderColor: "#a7f3d0" }}>
-                                    <option value="">— 청구 대상과 동일 —</option>
-                                    {companiesList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                  </select>
+                                  <ClickSelect
+                                    value={String(editPayerCompanyId ?? "")}
+                                    onChange={v => setEditPayerCompanyId(v ? Number(v) : null)}
+                                    style={{ width: "100%" }}
+                                    triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a7f3d0" }}
+                                    options={[
+                                      { value: "", label: "— 청구 대상과 동일 —" },
+                                      ...companiesList.map(c => ({ value: String(c.id), label: c.name })),
+                                    ]}
+                                  />
                                 </div>
                               </div>
                             )}
@@ -1862,13 +1903,16 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             {compPrepaidAccounts.length > 1 && (
                               <div style={{ marginBottom: 10 }}>
                                 {qfLbl("차감할 선입금 계정 선택")}
-                                <select value={selectedPrepaidAcctId ?? ""} onChange={e => setSelectedPrepaidAcctId(Number(e.target.value))} style={{ ...qfIs }}>
-                                  {compPrepaidAccounts.map(a => (
-                                    <option key={a.id} value={a.id}>
-                                      {a.depositDate ?? "-"}{a.note ? ` · ${a.note}` : ""} — 잔액 {a.currentBalance.toLocaleString()}원
-                                    </option>
-                                  ))}
-                                </select>
+                                <ClickSelect
+                                  value={String(selectedPrepaidAcctId ?? "")}
+                                  onChange={v => setSelectedPrepaidAcctId(Number(v))}
+                                  style={{ width: "100%" }}
+                                  triggerStyle={{ width: "100%", fontSize: 12, padding: "5px 8px", borderRadius: 7 }}
+                                  options={compPrepaidAccounts.map(a => ({
+                                    value: String(a.id),
+                                    label: `${a.depositDate ?? "-"}${a.note ? ` · ${a.note}` : ""} — 잔액 ${a.currentBalance.toLocaleString()}원`,
+                                  }))}
+                                />
                               </div>
                             )}
 
@@ -2244,13 +2288,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
                           <label style={{ fontSize: 10, fontWeight: 700, color: "#1e3a8a", display: "block", marginBottom: 3 }}>견적서 유형 *</label>
-                          <select value={quoteType} onChange={e => changeQuoteType(e.target.value as typeof quoteType)}
-                            style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box", borderColor: "#93c5fd", background: "#eff6ff" }}>
-                            <option value="b2b_standard">B2B 일반 견적서</option>
-                            <option value="b2c_prepaid">B2C 선입금 견적서</option>
-                            <option value="prepaid_deduction">선입금 차감 견적서</option>
-                            <option value="accumulated_batch">누적 견적서</option>
-                          </select>
+                          <ClickSelect
+                            value={quoteType}
+                            onChange={v => changeQuoteType(v as typeof quoteType)}
+                            style={{ width: "100%" }}
+                            triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #93c5fd", background: "#eff6ff" }}
+                            options={[
+                              { value: "b2b_standard", label: "B2B 일반 견적서" },
+                              { value: "b2c_prepaid", label: "B2C 선입금 견적서" },
+                              { value: "prepaid_deduction", label: "선입금 차감 견적서" },
+                              { value: "accumulated_batch", label: "누적 견적서" },
+                            ]}
+                          />
                         </div>
                         <div>
                           <label style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", display: "block", marginBottom: 3 }}>
@@ -2261,13 +2310,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               🗂️ 누적 청구 <span style={{ fontSize: 9, color: "#6b7280", fontWeight: 400 }}>(누적 견적 고정)</span>
                             </div>
                           ) : (
-                            <select value={quoteBillingType || companyBillingType} onChange={e => setQuoteBillingType(e.target.value)}
-                              style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box", borderColor: "#e2e8f0" }}>
-                              <option value="postpaid_per_project">건별 후불</option>
-                              <option value="monthly_billing">누적 청구</option>
-                              <option value="prepaid_wallet">선입금 차감</option>
-                              <option value="prepay_upfront">선결제(카드/현금)</option>
-                            </select>
+                            <ClickSelect
+                              value={quoteBillingType || companyBillingType}
+                              onChange={setQuoteBillingType}
+                              style={{ width: "100%" }}
+                              triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7 }}
+                              options={[
+                                { value: "postpaid_per_project", label: "건별 후불" },
+                                { value: "monthly_billing", label: "누적 청구" },
+                                { value: "prepaid_wallet", label: "선입금 차감" },
+                                { value: "prepay_upfront", label: "선결제(카드/현금)" },
+                              ]}
+                            />
                           )}
                         </div>
                       </div>
@@ -2276,12 +2330,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       {(quoteBillingType || companyBillingType) === "prepay_upfront" && (
                         <div style={{ marginBottom: 10 }}>
                           <label style={{ fontSize: 10, fontWeight: 700, color: "#059669", display: "block", marginBottom: 3 }}>결제수단 *</label>
-                          <select value={quotePaymentMethod} onChange={e => setQuotePaymentMethod(e.target.value)}
-                            style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, borderColor: "#6ee7b7" }}>
-                            <option value="card">카드</option>
-                            <option value="cash">현금</option>
-                            <option value="bank">계좌이체</option>
-                          </select>
+                          <ClickSelect
+                            value={quotePaymentMethod}
+                            onChange={setQuotePaymentMethod}
+                            style={{ width: "100%" }}
+                            triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #6ee7b7" }}
+                            options={[
+                              { value: "card", label: "카드" },
+                              { value: "cash", label: "현금" },
+                              { value: "bank", label: "계좌이체" },
+                            ]}
+                          />
                         </div>
                       )}
 
@@ -2289,22 +2348,30 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
                           <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>문서 구분 *</label>
-                          <select value={quoteTaxDocType} onChange={e => setQuoteTaxDocType(e.target.value as "tax_invoice" | "zero_tax_invoice" | "bill")}
-                            style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box", borderColor: "#d8b4fe" }}>
-                            <option value="tax_invoice">세금계산서</option>
-                            <option value="zero_tax_invoice">세금계산서(영세율)</option>
-                            <option value="bill">계산서</option>
-                          </select>
+                          <ClickSelect
+                            value={quoteTaxDocType}
+                            onChange={v => setQuoteTaxDocType(v as "tax_invoice" | "zero_tax_invoice" | "bill")}
+                            style={{ width: "100%" }}
+                            triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #d8b4fe" }}
+                            options={[
+                              { value: "tax_invoice", label: "세금계산서" },
+                              { value: "zero_tax_invoice", label: "세금계산서(영세율)" },
+                              { value: "bill", label: "계산서" },
+                            ]}
+                          />
                         </div>
                         <div>
                           <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>발행 유형 *</label>
-                          <select value={quoteTaxCategory} onChange={e => setQuoteTaxCategory(e.target.value as "normal" | "zero_rated" | "consignment" | "consignment_zero_rated")}
-                            style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box", borderColor: "#d8b4fe" }}>
-                            <option value="normal">일반</option>
-                            <option value="zero_rated">영세율</option>
-                            <option value="consignment">위수탁</option>
-                            <option value="consignment_zero_rated">위수탁영세율</option>
-                          </select>
+                          <ClickSelect
+                            value={quoteTaxCategory}
+                            onChange={v => setQuoteTaxCategory(v as "normal" | "zero_rated" | "consignment" | "consignment_zero_rated")}
+                            style={{ width: "100%" }}
+                            triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #d8b4fe" }}
+                            options={[
+                              { value: "normal", label: "일반" }, { value: "zero_rated", label: "영세율" },
+                              { value: "consignment", label: "위수탁" }, { value: "consignment_zero_rated", label: "위수탁영세율" },
+                            ]}
+                          />
                         </div>
                       </div>
 
@@ -2325,20 +2392,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* 상품 선택 + 항목명 */}
                                 <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 4, marginBottom: 3, alignItems: "center" }}>
                                   <div style={{ display: "flex", gap: 4 }}>
-                                    <select
-                                      value={it.productId ?? ""}
-                                      onChange={e => {
-                                        const pid = e.target.value ? Number(e.target.value) : null;
+                                    <ClickSelect
+                                      value={String(it.productId ?? "")}
+                                      onChange={v => {
+                                        const pid = v ? Number(v) : null;
                                         if (pid) {
                                           const prod = quoteProducts.find(p => p.id === pid);
                                           if (prod) {
                                             setQuoteItemForms(prev => prev.map((p, i) => i === idx ? {
                                               ...p,
-                                              productId: prod.id,
-                                              productName: prod.name,
-                                              unit: prod.unit,
-                                              unitPrice: String(prod.basePrice),
-                                              productType: (prod as any).productType ?? "translation",
+                                              productId: prod.id, productName: prod.name, unit: prod.unit,
+                                              unitPrice: String(prod.basePrice), productType: (prod as any).productType ?? "translation",
                                               interpretationDuration: (prod as any).interpretationDuration ?? "",
                                               quantity: (prod as any).productType === "interpretation" ? "1" : p.quantity,
                                             } : p));
@@ -2347,15 +2411,16 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         }
                                         setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productId: null } : p));
                                       }}
-                                      style={{ ...inputStyle, fontSize: 11, padding: "5px 4px", color: it.productId ? "#1e40af" : "#9ca3af", flex: "0 0 180px" }}
-                                    >
-                                      <option value="">상품 선택...</option>
-                                      {quoteProducts.map(p => (
-                                        <option key={p.id} value={p.id}>
-                                          {(p as any).productType === "interpretation" ? "🎤 " : "📄 "}{p.mainCategory ? `[${p.mainCategory}] ` : ""}{p.name} — {Number(p.basePrice).toLocaleString()}원/{p.unit}
-                                        </option>
-                                      ))}
-                                    </select>
+                                      style={{ flex: "0 0 180px" }}
+                                      triggerStyle={{ fontSize: 11, padding: "5px 4px", borderRadius: 7, color: it.productId ? "#1e40af" : "#9ca3af", width: "180px" }}
+                                      options={[
+                                        { value: "", label: "상품 선택..." },
+                                        ...quoteProducts.map(p => ({
+                                          value: String(p.id),
+                                          label: `${(p as any).productType === "interpretation" ? "🎤 " : "📄 "}${p.mainCategory ? `[${p.mainCategory}] ` : ""}${p.name} — ${Number(p.basePrice).toLocaleString()}원/${p.unit}`,
+                                        })),
+                                      ]}
+                                    />
                                     <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
                                       placeholder="항목명 직접 입력" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px", flex: 1 }} />
                                   </div>
@@ -2373,11 +2438,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       <input value={it.interpretationDuration} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretationDuration: e.target.value } : p))}
                                         placeholder={it.interpretationDuration || "예: 4h"} style={{ ...inputStyle, fontSize: 12, padding: "6px 6px", flex: 1 }} />
                                     </div>
-                                    <select value={it.taxRate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxRate: e.target.value as "0"|"0.1" } : p))}
-                                      style={{ ...inputStyle, fontSize: 11, padding: "6px 2px" }}>
-                                      <option value="0">면세</option>
-                                      <option value="0.1">10%</option>
-                                    </select>
+                                    <ClickSelect
+                                      value={it.taxRate}
+                                      onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxRate: v as "0"|"0.1" } : p))}
+                                      triggerStyle={{ fontSize: 11, padding: "6px 2px", borderRadius: 6, width: 52 }}
+                                      options={[{ value: "0", label: "면세" }, { value: "0.1", label: "10%" }]}
+                                    />
                                     <div>
                                       <div style={{ fontSize: 9, color: "#7c3aed", marginBottom: 1 }}>총금액(원)</div>
                                       <input type="number" value={it.unitPrice} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: e.target.value, quantity: "1" } : p))}
@@ -2392,23 +2458,26 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                   <div style={{ display: "grid", gridTemplateColumns: "76px 40px 52px 80px 44px 76px 76px", gap: 4, alignItems: "center" }}>
                                     <input value={it.languagePair} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, languagePair: e.target.value } : p))}
                                       placeholder="EN→KO" style={{ ...inputStyle, fontSize: 11, padding: "6px 4px", textAlign: "center" }} />
-                                    <select value={it.unit} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: e.target.value } : p))}
-                                      style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "center" }}>
-                                      <option value="건">건</option>
-                                      <option value="어절">어절</option>
-                                      <option value="글자">글자</option>
-                                      <option value="페이지">페이지</option>
-                                      <option value="시간">시간</option>
-                                    </select>
+                                    <ClickSelect
+                                      value={it.unit}
+                                      onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: v } : p))}
+                                      triggerStyle={{ fontSize: 12, padding: "6px 4px", borderRadius: 6, width: 52 }}
+                                      options={[
+                                        { value: "건", label: "건" }, { value: "어절", label: "어절" },
+                                        { value: "글자", label: "글자" }, { value: "페이지", label: "페이지" },
+                                        { value: "시간", label: "시간" },
+                                      ]}
+                                    />
                                     <input type="number" value={it.quantity} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: e.target.value } : p))}
                                       min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "right" }} />
                                     <input type="number" value={it.unitPrice} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: e.target.value } : p))}
                                       placeholder="0" min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right" }} />
-                                    <select value={it.taxRate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxRate: e.target.value as "0"|"0.1" } : p))}
-                                      style={{ ...inputStyle, fontSize: 11, padding: "6px 2px" }}>
-                                      <option value="0">면세</option>
-                                      <option value="0.1">10%</option>
-                                    </select>
+                                    <ClickSelect
+                                      value={it.taxRate}
+                                      onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxRate: v as "0"|"0.1" } : p))}
+                                      triggerStyle={{ fontSize: 11, padding: "6px 2px", borderRadius: 6, width: 52 }}
+                                      options={[{ value: "0", label: "면세" }, { value: "0.1", label: "10%" }]}
+                                    />
                                     <input readOnly value={supply > 0 && it.taxRate !== "0" ? tax.toLocaleString() : supply > 0 ? "면세" : ""}
                                       placeholder="자동"
                                       style={{ ...roSt, color: tax > 0 ? "#7c3aed" : "#9ca3af", fontWeight: tax > 0 ? 700 : 400 }} />
@@ -2610,15 +2679,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           {/* 결제 수단 (선택) */}
                           <div style={{ marginBottom: 8 }}>
                             <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 3 }}>결제 수단 (선택)</label>
-                            <select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}
-                              style={{ ...inputStyle, width: "100%", fontSize: 13, padding: "7px 10px", boxSizing: "border-box" }}>
-                              <option value="">— 선택 안 함 —</option>
-                              <option value="bank_transfer">계좌이체</option>
-                              <option value="card">신용/체크카드</option>
-                              <option value="cash">현금</option>
-                              <option value="virtual_account">가상계좌</option>
-                              <option value="other">기타</option>
-                            </select>
+                            <ClickSelect
+                              value={paymentMethod}
+                              onChange={setPaymentMethod}
+                              style={{ width: "100%" }}
+                              triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                              options={[
+                                { value: "", label: "— 선택 안 함 —" },
+                                { value: "bank_transfer", label: "계좌이체" }, { value: "card", label: "신용/체크카드" },
+                                { value: "cash", label: "현금" }, { value: "virtual_account", label: "가상계좌" },
+                                { value: "other", label: "기타" },
+                              ]}
+                            />
                           </div>
                           {/* 비고 (선택) */}
                           <div style={{ marginBottom: 10 }}>
@@ -2762,12 +2834,16 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: "16px 18px", marginBottom: 16 }}>
                   <p style={sectionHd}>파일 업로드</p>
                   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    <select value={uploadFileType} onChange={e => setUploadFileType(e.target.value as "source"|"translated"|"attachment")}
-                      style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }}>
-                      <option value="source">📄 원본 파일</option>
-                      <option value="translated">✅ 번역본</option>
-                      <option value="attachment">📎 기타 첨부</option>
-                    </select>
+                    <ClickSelect
+                      value={uploadFileType}
+                      onChange={v => setUploadFileType(v as "source"|"translated"|"attachment")}
+                      triggerStyle={{ fontSize: 13, padding: "7px 10px" }}
+                      options={[
+                        { value: "source", label: "📄 원본 파일" },
+                        { value: "translated", label: "✅ 번역본" },
+                        { value: "attachment", label: "📎 기타 첨부" },
+                      ]}
+                    />
                     <label style={{
                       display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 16px",
                       background: uploadingFile ? "#e5e7eb" : "#2563eb", color: uploadingFile ? "#9ca3af" : "#fff",
@@ -2855,12 +2931,16 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 <p style={{ ...sectionHd, marginTop: 20 }}>커뮤니케이션</p>
                 {detail.projectCustomerId ? (
                   <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-                    <select value={commType} onChange={e => setCommType(e.target.value as "email"|"phone"|"message")}
-                      style={{ ...inputStyle, width: "auto", padding: "7px 10px", fontSize: 13 }}>
-                      <option value="message">메시지</option>
-                      <option value="email">이메일</option>
-                      <option value="phone">전화</option>
-                    </select>
+                    <ClickSelect
+                      value={commType}
+                      onChange={v => setCommType(v as "email"|"phone"|"message")}
+                      triggerStyle={{ fontSize: 13, padding: "7px 10px" }}
+                      options={[
+                        { value: "message", label: "메시지" },
+                        { value: "email", label: "이메일" },
+                        { value: "phone", label: "전화" },
+                      ]}
+                    />
                     <input
                       value={commContent} onChange={e => setCommContent(e.target.value)}
                       placeholder="내용 입력..."

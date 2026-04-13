@@ -450,12 +450,9 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                   {editForm.companyType === "vendor" && (
                     <div>
                       <label style={{ fontSize: 12, color: "#7c3aed", fontWeight: 600, display: "block", marginBottom: 4 }}>외주유형</label>
-                      <select value={editForm.vendorType}
-                        onChange={e => setEditForm(p => ({ ...p, vendorType: e.target.value }))}
-                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: "#ddd6fe" }}>
-                        <option value="">— 선택 안 함 —</option>
-                        {VENDOR_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                      </select>
+                      <ClickSelect value={editForm.vendorType} onChange={v => setEditForm(p => ({ ...p, vendorType: v }))}
+                        style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8, borderColor: "#ddd6fe" }}
+                        options={[{ value: "", label: "— 선택 안 함 —" }, ...VENDOR_TYPE_OPTIONS.map(o => ({ value: o.value, label: o.label }))]} />
                     </div>
                   )}
                 </div>

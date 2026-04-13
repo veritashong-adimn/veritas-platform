@@ -106,31 +106,31 @@ function SearchableSelect({ items, value, onChange, placeholder, accentBorder = 
 
   return (
     <div ref={containerRef} style={{ position: "relative" }}>
-      <div style={{ display: "flex", alignItems: "center", border: `1px solid ${open ? accentBorder : "#d1d5db"}`, borderRadius: 8, background: "#fff", transition: "border-color 0.15s" }}>
+      <div style={{ display: "flex", alignItems: "center", border: `1px solid ${open ? accentBorder : "#d1d5db"}`, borderRadius: 7, background: "#fff", transition: "border-color 0.12s" }}>
         <input
           value={displayValue}
           onChange={e => { setQuery(e.target.value); setOpen(true); setHighlightIdx(-1); }}
           onFocus={() => { setOpen(true); if (selected) setQuery(""); }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder ?? "이름으로 검색..."}
-          style={{ flex: 1, padding: "9px 12px", fontSize: 14, border: "none", outline: "none", background: "transparent", borderRadius: 8, minWidth: 0 }}
+          style={{ flex: 1, padding: "7px 10px", fontSize: 13, border: "none", outline: "none", background: "transparent", borderRadius: 7, minWidth: 0 }}
         />
         {value != null && (
           <button type="button" onClick={() => { onChange(null); setQuery(""); setOpen(false); }}
-            style={{ padding: "0 10px", fontSize: 18, lineHeight: 1, color: "#9ca3af", background: "none", border: "none", cursor: "pointer", flexShrink: 0 }}>×</button>
+            style={{ padding: "0 8px", fontSize: 15, lineHeight: 1, color: "#94a3b8", background: "none", border: "none", cursor: "pointer", flexShrink: 0 }}>×</button>
         )}
         <span onClick={() => setOpen(o => !o)}
-          style={{ padding: "0 10px", color: "#9ca3af", fontSize: 12, flexShrink: 0, userSelect: "none", cursor: "pointer" }}>
+          style={{ padding: "0 8px", color: "#94a3b8", fontSize: 9, flexShrink: 0, userSelect: "none", cursor: "pointer" }}>
           {open ? "▲" : "▼"}
         </span>
       </div>
       {open && (
         <div ref={listRef}
-          style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, boxShadow: "0 6px 24px rgba(0,0,0,0.12)", zIndex: 600, maxHeight: 224, overflowY: "auto" }}
+          style={{ position: "absolute", top: "calc(100% + 2px)", left: 0, right: 0, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 7, boxShadow: "0 4px 18px rgba(0,0,0,0.1)", zIndex: 600, maxHeight: 208, overflowY: "auto", scrollbarWidth: "thin" }}
           onMouseDown={e => e.stopPropagation()}
         >
           {filtered.length === 0
-            ? <p style={{ margin: 0, padding: "10px 14px", fontSize: 13, color: "#9ca3af" }}>검색 결과 없음</p>
+            ? <p style={{ margin: 0, padding: "7px 10px", fontSize: 12, color: "#94a3b8" }}>검색 결과 없음</p>
             : filtered.map((item, idx) => {
                 const isHighlit = idx === highlightIdx;
                 return (
@@ -138,9 +138,9 @@ function SearchableSelect({ items, value, onChange, placeholder, accentBorder = 
                     onMouseEnter={() => setHighlightIdx(idx)}
                     onMouseLeave={() => setHighlightIdx(-1)}
                     onClick={() => { onChange(item.id); setQuery(""); setOpen(false); setHighlightIdx(-1); }}
-                    style={{ display: "block", width: "100%", textAlign: "left", padding: "9px 14px", fontSize: 13, color: "#111827", background: isHighlit ? "#eff6ff" : item.id === value ? "#f0fdf4" : "transparent", border: "none", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
+                    style={{ display: "block", width: "100%", textAlign: "left", padding: "5px 10px", fontSize: 12, color: "#111827", background: isHighlit ? "#eff6ff" : item.id === value ? "#f0f9ff" : "transparent", border: "none", borderBottom: "1px solid #f8fafc", cursor: "pointer" }}>
                     <span style={{ fontWeight: 600 }}>{item.label}</span>
-                    {item.sub && <span style={{ marginLeft: 8, fontSize: 11, color: "#6b7280" }}>{item.sub}</span>}
+                    {item.sub && <span style={{ marginLeft: 6, fontSize: 10, color: "#94a3b8" }}>{item.sub}</span>}
                   </button>
                 );
               })
@@ -1638,77 +1638,86 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   {/* [담당] */}
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>담당</div>
-                    <select value={assignedAdminFilter} onChange={e => setAssignedAdminFilter(e.target.value)}
-                      style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11, cursor: "pointer" }}>
-                      <option value="all">전체 담당자</option>
-                      {adminUsers.map(a => <option key={a.id} value={String(a.id)}>{a.email}</option>)}
-                    </select>
+                    <ClickSelect
+                      value={assignedAdminFilter}
+                      onChange={setAssignedAdminFilter}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 11 }}
+                      options={[
+                        { value: "all", label: "전체 담당자" },
+                        ...adminUsers.map(a => ({ value: String(a.id), label: a.email })),
+                      ]}
+                    />
                   </div>
                   {/* [거래처] */}
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>거래처</div>
-                    <select value={projectCompanyIdFilter} onChange={e => { setProjectCompanyIdFilter(e.target.value); setProjectPage(1); }}
-                      style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11, cursor: "pointer" }}>
-                      <option value="">전체 거래처</option>
-                      {companies.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-                    </select>
+                    <ClickSelect
+                      value={projectCompanyIdFilter}
+                      onChange={v => { setProjectCompanyIdFilter(v); setProjectPage(1); }}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 11 }}
+                      options={[
+                        { value: "", label: "전체 거래처" },
+                        ...companies.map(c => ({ value: String(c.id), label: c.name })),
+                      ]}
+                    />
                   </div>
                   {/* [재무 상태] */}
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>재무 상태</div>
-                    <select
+                    <ClickSelect
                       value={
                         projectQuickFilter === "prepaid_deduction" ? "prepaid_used" :
                         projectQuickFilter === "has_prepaid_balance" ? "balance" :
                         projectQuickFilter === "accumulated_in_progress" ? "ongoing" :
                         projectFinancialFilter
                       }
-                      onChange={e => {
-                        const v = e.target.value;
-                        if (v === "prepaid_used") {
-                          setProjectQuickFilter("prepaid_deduction"); setProjectFinancialFilter("all"); setProjectPage(1);
-                        } else if (v === "balance") {
-                          setProjectQuickFilter("has_prepaid_balance"); setProjectFinancialFilter("all"); setProjectPage(1);
-                        } else if (v === "ongoing") {
-                          setProjectQuickFilter("accumulated_in_progress"); setProjectFinancialFilter("all"); setProjectPage(1);
-                        } else {
-                          setProjectFinancialFilter(v); setProjectQuickFilter("all"); setProjectPage(1);
-                        }
+                      onChange={v => {
+                        if (v === "prepaid_used") { setProjectQuickFilter("prepaid_deduction"); setProjectFinancialFilter("all"); setProjectPage(1); }
+                        else if (v === "balance") { setProjectQuickFilter("has_prepaid_balance"); setProjectFinancialFilter("all"); setProjectPage(1); }
+                        else if (v === "ongoing") { setProjectQuickFilter("accumulated_in_progress"); setProjectFinancialFilter("all"); setProjectPage(1); }
+                        else { setProjectFinancialFilter(v); setProjectQuickFilter("all"); setProjectPage(1); }
                       }}
-                      style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11, cursor: "pointer" }}>
-                      <option value="all">전체</option>
-                      <option value="unbilled">미청구</option>
-                      <option value="billed">청구 완료</option>
-                      <option value="receivable">미수금</option>
-                      <option value="paid">입금 완료</option>
-                      <option value="prepaid_used">선입금 차감</option>
-                      <option value="balance">잔액 남음</option>
-                      <option value="ongoing">누적 진행중</option>
-                    </select>
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 11 }}
+                      options={[
+                        { value: "all", label: "전체" }, { value: "unbilled", label: "미청구" },
+                        { value: "billed", label: "청구 완료" }, { value: "receivable", label: "미수금" },
+                        { value: "paid", label: "입금 완료" }, { value: "prepaid_used", label: "선입금 차감" },
+                        { value: "balance", label: "잔액 남음" }, { value: "ongoing", label: "누적 진행중" },
+                      ]}
+                    />
                   </div>
                   {/* [견적 유형] */}
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>견적 유형</div>
-                    <select value={projectQuoteTypeFilter} onChange={e => { setProjectQuoteTypeFilter(e.target.value); setProjectPage(1); }}
-                      style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11 }}>
-                      <option value="all">전체</option>
-                      <option value="b2b_standard">B2B 표준</option>
-                      <option value="b2c_prepaid">선입금</option>
-                      <option value="prepaid_deduction">선입금 차감</option>
-                      <option value="accumulated_batch">누적 견적</option>
-                    </select>
+                    <ClickSelect
+                      value={projectQuoteTypeFilter}
+                      onChange={v => { setProjectQuoteTypeFilter(v); setProjectPage(1); }}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 11 }}
+                      options={[
+                        { value: "all", label: "전체" }, { value: "b2b_standard", label: "B2B 표준" },
+                        { value: "b2c_prepaid", label: "선입금" }, { value: "prepaid_deduction", label: "선입금 차감" },
+                        { value: "accumulated_batch", label: "누적 견적" },
+                      ]}
+                    />
                   </div>
                   {/* [청구 방식] */}
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>청구 방식</div>
-                    <select value={projectBillingTypeFilter} onChange={e => { setProjectBillingTypeFilter(e.target.value); setProjectPage(1); }}
-                      style={{ ...inputStyle, width: "100%", padding: "4px 8px", fontSize: 11 }}>
-                      <option value="all">전체</option>
-                      <option value="postpaid_per_project">건별 후불</option>
-                      <option value="monthly_billing">누적 청구</option>
-                      <option value="prepaid_wallet">선입금 차감</option>
-                      <option value="prepay_upfront">선결제(카드/현금)</option>
-                    </select>
+                    <ClickSelect
+                      value={projectBillingTypeFilter}
+                      onChange={v => { setProjectBillingTypeFilter(v); setProjectPage(1); }}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 11 }}
+                      options={[
+                        { value: "all", label: "전체" }, { value: "postpaid_per_project", label: "건별 후불" },
+                        { value: "monthly_billing", label: "누적 청구" }, { value: "prepaid_wallet", label: "선입금 차감" },
+                        { value: "prepay_upfront", label: "선결제(카드/현금)" },
+                      ]}
+                    />
                   </div>
                 </div>
                 {/* 날짜 행: 생성일 / 입금 예정일 */}
@@ -2156,13 +2165,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 </div>
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>역할 *</label>
-                  <select
+                  <ClickSelect
                     value={newStaff.role}
-                    onChange={e => setNewStaff(f => ({ ...f, role: e.target.value as "admin" | "staff" }))}
-                    style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", width: "100%", boxSizing: "border-box" as const, cursor: "pointer" }}>
-                    <option value="staff">직원 (staff)</option>
-                    <option value="admin">관리자 (admin)</option>
-                  </select>
+                    onChange={v => setNewStaff(f => ({ ...f, role: v as "admin" | "staff" }))}
+                    style={{ width: "100%" }}
+                    triggerStyle={{ width: "100%", fontSize: 13, padding: "8px 10px", borderRadius: 8 }}
+                    options={[
+                      { value: "staff", label: "직원 (staff)" },
+                      { value: "admin", label: "관리자 (admin)" },
+                    ]}
+                  />
                 </div>
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>부서</label>
@@ -2763,11 +2775,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       {newCompanyDivisions.length > 0 && (
                         <div style={{ gridColumn: "1 / -1" }}>
                           <label style={{ fontSize: 11, color: "#7c3aed", display: "block", marginBottom: 3, fontWeight: 700 }}>소속 브랜드/부서</label>
-                          <select value={newCompanyContactForm.divisionId ?? ""} onChange={e => setNewCompanyContactForm(p => ({ ...p, divisionId: e.target.value ? Number(e.target.value) : null }))}
-                            style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }}>
-                            <option value="">— 본사 직속 (브랜드 미지정) —</option>
-                            {newCompanyDivisions.map(d => <option key={d.id} value={d.id}>{d.name}{d.type ? ` (${d.type})` : ""}</option>)}
-                          </select>
+                          <ClickSelect
+                            value={String(newCompanyContactForm.divisionId ?? "")}
+                            onChange={v => setNewCompanyContactForm(p => ({ ...p, divisionId: v ? Number(v) : null }))}
+                            style={{ width: "100%" }}
+                            triggerStyle={{ width: "100%", fontSize: 13, padding: "6px 10px", borderRadius: 8, border: "1px solid #e9d5ff", background: "#faf5ff", color: "#7c3aed" }}
+                            options={[
+                              { value: "", label: "— 본사 직속 (브랜드 미지정) —" },
+                              ...newCompanyDivisions.map(d => ({ value: String(d.id), label: d.name + (d.type ? ` (${d.type})` : "") })),
+                            ]}
+                          />
                         </div>
                       )}
                       <div style={{ gridColumn: "1 / -1" }}>
@@ -2824,11 +2841,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     {companyForm.companyType === "vendor" && (
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span style={{ fontSize: 12, color: "#6b7280" }}>외주 유형:</span>
-                        <select value={companyForm.vendorType} onChange={e => setCompanyForm(p => ({ ...p, vendorType: e.target.value }))}
-                          style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, color: "#374151", background: "#fff" }}>
-                          <option value="">선택 안 함</option>
-                          {VENDOR_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                        </select>
+                        <ClickSelect
+                          value={companyForm.vendorType}
+                          onChange={v => setCompanyForm(p => ({ ...p, vendorType: v }))}
+                          triggerStyle={{ fontSize: 13, padding: "6px 10px" }}
+                          options={[
+                            { value: "", label: "선택 안 함" },
+                            ...VENDOR_TYPE_OPTIONS.map(o => ({ value: o.value, label: o.label })),
+                          ]}
+                        />
                       </div>
                     )}
                   </div>
@@ -2979,11 +3000,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   })}
                   {/* 외주 유형별 서브 필터 */}
                   {companyTypeFilter === "vendor" && (
-                    <select value={companyVendorTypeFilter} onChange={e => setCompanyVendorTypeFilter(e.target.value)}
-                      style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 12, color: "#374151", background: "#fff", marginLeft: 4 }}>
-                      <option value="all">전체 외주유형</option>
-                      {VENDOR_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                    </select>
+                    <ClickSelect
+                      value={companyVendorTypeFilter}
+                      onChange={setCompanyVendorTypeFilter}
+                      triggerStyle={{ fontSize: 12, padding: "6px 10px", marginLeft: 4 }}
+                      options={[
+                        { value: "all", label: "전체 외주유형" },
+                        ...VENDOR_TYPE_OPTIONS.map(o => ({ value: o.value, label: o.label })),
+                      ]}
+                    />
                   )}
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -3326,20 +3351,23 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "0 12px", marginBottom: 12 }}>
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대분류</label>
-                  <select value={productForm.mainCategory} onChange={e => setProductForm(p => ({ ...p, mainCategory: e.target.value, subCategory: "" }))}
-                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
-                    <option value="">선택</option>
-                    {PRODUCT_MAIN_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
+                  <ClickSelect
+                    value={productForm.mainCategory}
+                    onChange={v => setProductForm(p => ({ ...p, mainCategory: v, subCategory: "" }))}
+                    style={{ width: "100%" }}
+                    triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                    options={[{ value: "", label: "선택" }, ...PRODUCT_MAIN_CATEGORIES.map(c => ({ value: c, label: c }))]}
+                  />
                 </div>
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>중분류</label>
-                  <select value={productForm.subCategory} onChange={e => setProductForm(p => ({ ...p, subCategory: e.target.value }))}
-                    disabled={!productForm.mainCategory}
-                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box", opacity: productForm.mainCategory ? 1 : 0.5 }}>
-                    <option value="">선택</option>
-                    {(PRODUCT_SUB_CATEGORIES[productForm.mainCategory] ?? []).map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
+                  <ClickSelect
+                    value={productForm.subCategory}
+                    onChange={v => setProductForm(p => ({ ...p, subCategory: v }))}
+                    style={{ width: "100%", opacity: productForm.mainCategory ? 1 : 0.5, pointerEvents: productForm.mainCategory ? undefined : "none" }}
+                    triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                    options={[{ value: "", label: "선택" }, ...(PRODUCT_SUB_CATEGORIES[productForm.mainCategory] ?? []).map(s => ({ value: s, label: s }))]}
+                  />
                 </div>
                 {productForm.productType === "interpretation" ? (
                   <div>
@@ -3351,10 +3379,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 ) : (
                   <div>
                     <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>단위</label>
-                    <select value={productForm.unit} onChange={e => setProductForm(p => ({ ...p, unit: e.target.value }))}
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
-                      {PRODUCT_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-                    </select>
+                    <ClickSelect
+                      value={productForm.unit}
+                      onChange={v => setProductForm(p => ({ ...p, unit: v }))}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                      options={PRODUCT_UNITS.map(u => ({ value: u, label: u }))}
+                    />
                   </div>
                 )}
                 <div>
@@ -3397,10 +3428,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {productForm.options.map((opt, idx) => (
                       <div key={idx} style={{ display: "grid", gridTemplateColumns: "140px 1fr 32px", gap: 8, alignItems: "center" }}>
-                        <select value={opt.optionType} onChange={e => setProductForm(p => ({ ...p, options: p.options.map((o, i) => i === idx ? { ...o, optionType: e.target.value } : o) }))}
-                          style={{ ...inputStyle, fontSize: 13, padding: "6px 8px", boxSizing: "border-box" }}>
-                          {PRODUCT_OPTION_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                        </select>
+                        <ClickSelect
+                          value={opt.optionType}
+                          onChange={v => setProductForm(p => ({ ...p, options: p.options.map((o, i) => i === idx ? { ...o, optionType: v } : o) }))}
+                          triggerStyle={{ fontSize: 13, padding: "6px 8px", borderRadius: 7, width: "100%" }}
+                          options={PRODUCT_OPTION_TYPES.map(t => ({ value: t, label: t }))}
+                        />
                         <input value={opt.optionValue} onChange={e => setProductForm(p => ({ ...p, options: p.options.map((o, i) => i === idx ? { ...o, optionValue: e.target.value } : o) }))}
                           placeholder={opt.optionType === "언어" ? "예: 한→영, 한→일" : opt.optionType === "방식" ? "예: 동시, 순차" : "예: 4시간, 8시간"}
                           style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
@@ -3533,12 +3566,17 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px", marginBottom: 10 }}>
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>카테고리</label>
-                  <select value={boardForm.category} onChange={e => setBoardForm(p => ({ ...p, category: e.target.value }))}
-                    style={{ ...inputStyle, width: "100%", padding: "7px 10px", fontSize: 13 }}>
-                    <option value="notice">공지</option>
-                    <option value="reference">통역자료</option>
-                    <option value="manual">내부매뉴얼</option>
-                  </select>
+                  <ClickSelect
+                    value={boardForm.category}
+                    onChange={v => setBoardForm(p => ({ ...p, category: v }))}
+                    style={{ width: "100%" }}
+                    triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                    options={[
+                      { value: "notice", label: "공지" },
+                      { value: "reference", label: "통역자료" },
+                      { value: "manual", label: "내부매뉴얼" },
+                    ]}
+                  />
                 </div>
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 2 }}>제목 *</label>
@@ -3635,18 +3673,21 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <input value={translatorLangFilter} onChange={e => setTranslatorLangFilter(e.target.value)}
               placeholder="언어쌍 (예: 한→영)"
               style={{ ...inputStyle, maxWidth: 150, padding: "8px 12px", fontSize: 13 }} />
-            <select value={translatorGradeFilter} onChange={e => setTranslatorGradeFilter(e.target.value)}
-              style={{ ...inputStyle, padding: "8px 12px", fontSize: 13, minWidth: 90 }}>
-              <option value="all">전체 등급</option>
-              {["S","A","B","C"].map(g => <option key={g} value={g}>{g}등급</option>)}
-            </select>
-            <select value={translatorStatusFilter} onChange={e => setTranslatorStatusFilter(e.target.value)}
-              style={{ ...inputStyle, padding: "8px 12px", fontSize: 13, minWidth: 100 }}>
-              <option value="all">전체 상태</option>
-              <option value="available">가능</option>
-              <option value="busy">바쁨</option>
-              <option value="unavailable">불가</option>
-            </select>
+            <ClickSelect
+              value={translatorGradeFilter}
+              onChange={setTranslatorGradeFilter}
+              triggerStyle={{ fontSize: 13, padding: "8px 12px", minWidth: 90, borderRadius: 8 }}
+              options={[{ value: "all", label: "전체 등급" }, ...["S","A","B","C"].map(g => ({ value: g, label: `${g}등급` }))]}
+            />
+            <ClickSelect
+              value={translatorStatusFilter}
+              onChange={setTranslatorStatusFilter}
+              triggerStyle={{ fontSize: 13, padding: "8px 12px", minWidth: 100, borderRadius: 8 }}
+              options={[
+                { value: "all", label: "전체 상태" }, { value: "available", label: "가능" },
+                { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
+              ]}
+            />
             <input value={translatorRatingFilter} onChange={e => setTranslatorRatingFilter(e.target.value)}
               placeholder="최소 평점"
               style={{ ...inputStyle, maxWidth: 100, padding: "8px 12px", fontSize: 13 }} />
@@ -3872,12 +3913,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div>
                     <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>기본 결제 방식</div>
-                    <select value={sf.defaultBillingType} onChange={e => set("defaultBillingType")(e.target.value)}
-                      style={{ ...inputStyle, fontSize: 13 }}>
-                      <option value="postpaid_per_project">건별 후불</option>
-                      <option value="prepaid_wallet">선입금</option>
-                      <option value="monthly_billing">누적 청구 (월정산)</option>
-                    </select>
+                    <ClickSelect
+                      value={sf.defaultBillingType}
+                      onChange={v => set("defaultBillingType")(v)}
+                      triggerStyle={{ fontSize: 13, borderRadius: 8 }}
+                      options={[
+                        { value: "postpaid_per_project", label: "건별 후불" },
+                        { value: "prepaid_wallet", label: "선입금" },
+                        { value: "monthly_billing", label: "누적 청구 (월정산)" },
+                      ]}
+                    />
                   </div>
                   {field("결제 기한 (일)", "paymentDueDays", "예) 7", "number")}
                   <div>
@@ -3905,12 +3950,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   {field("정산 비율 (%)", "settlementRatio", "예) 70", "number")}
                   <div>
                     <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>정산 주기</div>
-                    <select value={sf.settlementCycle} onChange={e => set("settlementCycle")(e.target.value)}
-                      style={{ ...inputStyle, fontSize: 13 }}>
-                      <option value="weekly">주간 (매주)</option>
-                      <option value="biweekly">격주</option>
-                      <option value="monthly">월간 (매월)</option>
-                    </select>
+                    <ClickSelect
+                      value={sf.settlementCycle}
+                      onChange={v => set("settlementCycle")(v)}
+                      triggerStyle={{ fontSize: 13, borderRadius: 8 }}
+                      options={[
+                        { value: "weekly", label: "주간 (매주)" },
+                        { value: "biweekly", label: "격주" },
+                        { value: "monthly", label: "월간 (매월)" },
+                      ]}
+                    />
                   </div>
                   <div>
                     <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 8 }}>3.3% 원천세 적용</div>
@@ -3963,21 +4012,31 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                   <div>
                     <label style={{ fontSize: 11, color: "#374151", display: "block", marginBottom: 2 }}>거래처</label>
-                    <select value={scenarioCompanyId} onChange={e => { setScenarioCompanyId(e.target.value); setScenarioContactId(""); }}
-                      style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 6, padding: "6px 8px", fontSize: 12, boxSizing: "border-box" as const }}>
-                      <option value="">— 테스트 거래처 —</option>
-                      {(realData?.companies ?? []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
+                    <ClickSelect
+                      value={scenarioCompanyId}
+                      onChange={v => { setScenarioCompanyId(v); setScenarioContactId(""); }}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 6 }}
+                      options={[
+                        { value: "", label: "— 테스트 거래처 —" },
+                        ...(realData?.companies ?? []).map(c => ({ value: String(c.id), label: c.name })),
+                      ]}
+                    />
                   </div>
                   <div>
                     <label style={{ fontSize: 11, color: "#374151", display: "block", marginBottom: 2 }}>담당자</label>
-                    <select value={scenarioContactId} onChange={e => setScenarioContactId(e.target.value)}
-                      style={{ width: "100%", border: "1px solid #d1d5db", borderRadius: 6, padding: "6px 8px", fontSize: 12, boxSizing: "border-box" as const }}>
-                      <option value="">— 담당자 없음 —</option>
-                      {(realData?.contacts ?? [])
-                        .filter(ct => !scenarioCompanyId || ct.companyId === Number(scenarioCompanyId))
-                        .map(ct => <option key={ct.id} value={ct.id}>{ct.name}</option>)}
-                    </select>
+                    <ClickSelect
+                      value={scenarioContactId}
+                      onChange={setScenarioContactId}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 6 }}
+                      options={[
+                        { value: "", label: "— 담당자 없음 —" },
+                        ...(realData?.contacts ?? [])
+                          .filter(ct => !scenarioCompanyId || ct.companyId === Number(scenarioCompanyId))
+                          .map(ct => ({ value: String(ct.id), label: ct.name })),
+                      ]}
+                    />
                   </div>
                 </div>
                 {scenarioCompanyId && (
@@ -4470,17 +4529,20 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#374151" }}>{u.name || u.email}</p>
                           <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>{u.email}</p>
                         </div>
-                        <select defaultValue={(u as any).roleId ?? ""}
-                          onChange={async e => {
-                            const rid = e.target.value ? Number(e.target.value) : null;
+                        <ClickSelect
+                          value={String((u as any).roleId ?? "")}
+                          onChange={async v => {
+                            const rid = v ? Number(v) : null;
                             const res = await fetch(api(`/api/admin/users/${u.id}/rbac-role`), { method: "PATCH", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ roleId: rid }) });
                             if (!res.ok) { setToast("역할 지정 실패"); return; }
                             setToast(`${u.email} 역할 지정 완료`);
                           }}
-                          style={{ ...inputStyle, width: "auto", padding: "4px 8px", fontSize: 12, minWidth: 100 }}>
-                          <option value="">전체 권한</option>
-                          {rbacRoles.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
-                        </select>
+                          triggerStyle={{ fontSize: 12, padding: "4px 8px", minWidth: 100, borderRadius: 7 }}
+                          options={[
+                            { value: "", label: "전체 권한" },
+                            ...rbacRoles.map(r => ({ value: String(r.id), label: r.name })),
+                          ]}
+                        />
                       </div>
                     ))}
                   </div>
