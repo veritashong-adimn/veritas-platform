@@ -290,6 +290,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [productForm, setProductForm] = useState<ProductFormType>(emptyProductForm);
   const [editingProduct, setEditingProduct] = useState<number | null>(null);
   const [savingProduct, setSavingProduct] = useState(false);
+  const [productImporting, setProductImporting] = useState(false);
+  const [productImportResult, setProductImportResult] = useState<{ created: number; updated: number; errors: { row: number; message: string }[] } | null>(null);
+  const productImportRef = useRef<HTMLInputElement>(null);
 
   const [boardPosts, setBoardPosts] = useState<BoardPost[]>([]);
   const [boardLoading, setBoardLoading] = useState(false);
@@ -692,6 +695,35 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       await fetchProducts();
     } catch { setToast("오류: 상품 저장 실패"); }
     finally { setSavingProduct(false); }
+  };
+
+  const handleProductExcelDownload = async (type: "template" | "export") => {
+    const url = api(`/api/admin/products/${type}`);
+    const res = await fetch(url, { headers: authHeaders });
+    if (!res.ok) { setToast("다운로드 실패"); return; }
+    const blob = await res.blob();
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = type === "template" ? "상품_템플릿.xlsx" : `상품목록_${new Date().toISOString().slice(0,10)}.xlsx`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  const handleProductImport = async (file: File) => {
+    setProductImporting(true);
+    setProductImportResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(api("/api/admin/products/import"), { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form });
+      const data = await res.json();
+      if (!res.ok) { setToast(data.error ?? "업로드 실패"); return; }
+      setProductImportResult(data);
+      if (data.created > 0 || data.updated > 0) await fetchProducts();
+    } finally {
+      setProductImporting(false);
+      if (productImportRef.current) productImportRef.current.value = "";
+    }
   };
 
   const handleToggleProduct = async (id: number) => {
@@ -3308,12 +3340,53 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {/* ── 상품/단가 탭 ── */}
       {adminTab === "products" && (
         <Section title={`상품/단가 관리 (${products.length})`} action={
-          hasPerm("product.manage") ? (
-            <PrimaryBtn onClick={() => { setShowProductForm(v => !v); setEditingProduct(null); setProductForm(emptyProductForm); }} style={{ fontSize: 13, padding: "7px 14px" }}>
-              {showProductForm && !editingProduct ? "취소" : "+ 상품 등록"}
-            </PrimaryBtn>
-          ) : undefined
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+            {/* 엑셀 버튼 그룹 */}
+            <button onClick={() => handleProductExcelDownload("template")}
+              style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, border: "1px solid #d1d5db", background: "#f9fafb", color: "#374151", cursor: "pointer", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+              📋 템플릿
+            </button>
+            <button onClick={() => handleProductExcelDownload("export")}
+              style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, border: "1px solid #bbf7d0", background: "#f0fdf4", color: "#059669", cursor: "pointer", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}>
+              ⬇ 엑셀 내보내기
+            </button>
+            <label style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#2563eb", cursor: productImporting ? "not-allowed" : "pointer", fontWeight: 600, display: "flex", alignItems: "center", gap: 4, opacity: productImporting ? 0.6 : 1 }}>
+              {productImporting ? "처리 중..." : "⬆ 엑셀 업로드"}
+              <input ref={productImportRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleProductImport(f); }} />
+            </label>
+            {hasPerm("product.manage") && (
+              <PrimaryBtn onClick={() => { setShowProductForm(v => !v); setEditingProduct(null); setProductForm(emptyProductForm); setProductImportResult(null); }} style={{ fontSize: 13, padding: "7px 14px" }}>
+                {showProductForm && !editingProduct ? "취소" : "+ 상품 등록"}
+              </PrimaryBtn>
+            )}
+          </div>
         }>
+          {/* ── 엑셀 업로드 결과 ── */}
+          {productImportResult && (
+            <div style={{ background: productImportResult.errors.length === 0 ? "#f0fdf4" : "#fffbeb", border: `1px solid ${productImportResult.errors.length === 0 ? "#bbf7d0" : "#fde68a"}`, borderRadius: 10, padding: "14px 18px", marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: productImportResult.errors.length > 0 ? 10 : 0 }}>
+                <div style={{ display: "flex", gap: 16 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>✅ 신규 등록: {productImportResult.created}건</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#2563eb" }}>🔄 수정: {productImportResult.updated}건</span>
+                  {productImportResult.errors.length > 0 && (
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#dc2626" }}>⚠ 오류: {productImportResult.errors.length}건</span>
+                  )}
+                </div>
+                <button onClick={() => setProductImportResult(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 18, lineHeight: 1 }}>×</button>
+              </div>
+              {productImportResult.errors.length > 0 && (
+                <div style={{ maxHeight: 130, overflowY: "auto", background: "#fff8f0", borderRadius: 6, padding: "8px 12px" }}>
+                  {productImportResult.errors.map((e, i) => (
+                    <p key={i} style={{ margin: "2px 0", fontSize: 12, color: "#92400e" }}>
+                      <strong>{e.row}행:</strong> {e.message}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ── 등록/수정 폼 ── */}
           {showProductForm && (
             <Card style={{ marginBottom: 16, padding: "20px 24px" }}>
