@@ -171,16 +171,16 @@ const CS = {
   },
   menu: {
     position: "absolute" as const, zIndex: 9999, top: "calc(100% + 2px)", left: 0,
-    minWidth: "100%", maxHeight: 208, overflowY: "auto" as const, overflowX: "hidden" as const,
-    background: "#fff", border: "1px solid #e2e8f0", borderRadius: 7,
-    boxShadow: "0 4px 18px rgba(0,0,0,0.10)", scrollbarWidth: "thin" as const,
+    minWidth: "100%", maxHeight: 220, overflowY: "auto" as const, overflowX: "hidden" as const,
+    background: "#fff", border: "1px solid #e2e8f0", borderRadius: 6,
+    boxShadow: "0 4px 16px rgba(0,0,0,0.10)", scrollbarWidth: "thin" as const,
+    padding: "2px 0",
   },
   item: {
-    padding: "5px 10px", fontSize: 12, cursor: "pointer",
-    userSelect: "none" as const, transition: "background 0.08s",
-    borderBottom: "1px solid #f8fafc",
+    padding: "4px 10px", fontSize: 12, lineHeight: "1.35", cursor: "pointer",
+    userSelect: "none" as const, transition: "background 0.07s",
   },
-  chevron: { fontSize: 9, color: "#94a3b8", flexShrink: 0, lineHeight: 1 },
+  chevron: { fontSize: 8, color: "#9ca3af", flexShrink: 0, lineHeight: 1 },
 } as const;
 
 // ─── ClickSelect ─────────────────────────────────────────────────────────────
@@ -289,22 +289,20 @@ export function ClickSelect({
                 onClick={() => { if (!opt.disabled) { onChange(opt.value); setOpen(false); } }}
                 style={{
                   ...CS.item,
-                  color: opt.disabled ? "#cbd5e1" : "#111827",
+                  display: "flex", alignItems: "center", gap: 4,
+                  color: opt.disabled ? "#d1d5db" : isSel ? "#1d4ed8" : "#111827",
                   background: isHi ? "#eff6ff" : isSel ? "#f0f9ff" : "transparent",
                   cursor: opt.disabled ? "not-allowed" : "pointer",
                 }}
               >
-                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                  {isSel && <span style={{ fontSize: 9, color: "#2563eb", flexShrink: 0 }}>✓</span>}
-                  <span style={{ fontWeight: isSel ? 600 : 400, color: isSel ? "#1d4ed8" : "inherit" }}>
-                    {opt.label}
+                <span style={{ fontSize: 8, color: "#2563eb", flexShrink: 0, opacity: isSel ? 1 : 0, lineHeight: 1 }}>✓</span>
+                <span style={{ fontWeight: isSel ? 600 : 500, flex: "0 0 auto", whiteSpace: "nowrap" }}>
+                  {opt.label}
+                </span>
+                {opt.sub && (
+                  <span style={{ fontSize: 10.5, color: isHi ? "#64748b" : "#9ca3af", marginLeft: "auto", flexShrink: 0, whiteSpace: "nowrap", fontWeight: 400 }}>
+                    {opt.sub}
                   </span>
-                  {opt.sub && !isSel && (
-                    <span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 2 }}>{opt.sub}</span>
-                  )}
-                </div>
-                {opt.sub && isSel && (
-                  <div style={{ fontSize: 10, color: "#64748b", marginTop: 1, paddingLeft: 14 }}>{opt.sub}</div>
                 )}
               </div>
             );

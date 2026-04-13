@@ -2483,7 +2483,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               }}
                               options={[
                                 { value: "", label: u.role === "admin" && !u.roleId ? "전체 권한" : "권한 선택" },
-                                ...rbacRoles.map(r => ({ value: String(r.id), label: r.name + (r.description ? ` — ${r.description}` : "") })),
+                                ...rbacRoles.map(r => ({ value: String(r.id), label: r.name, sub: r.description ?? undefined })),
                               ]}
                               triggerStyle={{ border: "1px solid #e9d5ff", background: "#faf5ff", color: "#7c3aed", fontWeight: 700, fontSize: 12 }}
                             />
@@ -4540,7 +4540,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           triggerStyle={{ fontSize: 12, padding: "4px 8px", minWidth: 100, borderRadius: 7 }}
                           options={[
                             { value: "", label: "전체 권한" },
-                            ...rbacRoles.map(r => ({ value: String(r.id), label: r.name })),
+                            ...rbacRoles.map(r => ({ value: String(r.id), label: r.name, sub: r.description ?? undefined })),
                           ]}
                         />
                       </div>
