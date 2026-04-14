@@ -4853,37 +4853,59 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <input placeholder="프로젝트 ID" value={tuFilter.projectId}
               onChange={e => setTuFilter(p => ({ ...p, projectId: e.target.value }))}
               style={{ padding: "6px 10px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13, width: 110 }} />
-            <select value={tuFilter.sourceLang} onChange={e => setTuFilter(p => ({ ...p, sourceLang: e.target.value }))}
-              style={{ padding: "6px 8px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 12 }}>
-              <option value="">원문 언어</option>
-              <option value="ko">한국어</option><option value="en">영어</option>
-              <option value="ja">일본어</option><option value="zh">중국어</option>
-            </select>
-            <select value={tuFilter.targetLang} onChange={e => setTuFilter(p => ({ ...p, targetLang: e.target.value }))}
-              style={{ padding: "6px 8px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 12 }}>
-              <option value="">번역 언어</option>
-              <option value="ko">한국어</option><option value="en">영어</option>
-              <option value="ja">일본어</option><option value="zh">중국어</option>
-            </select>
-            <select value={tuFilter.domain} onChange={e => setTuFilter(p => ({ ...p, domain: e.target.value }))}
-              style={{ padding: "6px 8px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 12 }}>
-              <option value="">도메인</option>
-              {["general","legal","finance","medical","it","marketing","technical","other"].map(d =>
-                <option key={d} value={d}>{d}</option>)}
-            </select>
-            <select value={tuFilter.securityLevel} onChange={e => setTuFilter(p => ({ ...p, securityLevel: e.target.value }))}
-              style={{ padding: "6px 8px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 12 }}>
-              <option value="">보안등급</option>
-              {["public","internal","restricted","confidential"].map(s =>
-                <option key={s} value={s}>{s}</option>)}
-            </select>
-            <select value={tuFilter.status} onChange={e => setTuFilter(p => ({ ...p, status: e.target.value }))}
-              style={{ padding: "6px 8px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 12 }}>
-              <option value="">전체 상태</option>
-              <option value="active">active</option>
-              <option value="excluded">excluded</option>
-              <option value="flagged">flagged</option>
-            </select>
+            <ClickSelect
+              value={tuFilter.sourceLang}
+              onChange={v => setTuFilter(p => ({ ...p, sourceLang: v }))}
+              options={[
+                { value: "", label: "원문 언어" },
+                { value: "ko", label: "한국어" },
+                { value: "en", label: "영어" },
+                { value: "ja", label: "일본어" },
+                { value: "zh", label: "중국어" },
+              ]}
+              triggerStyle={{ fontSize: 12, padding: "6px 8px" }}
+            />
+            <ClickSelect
+              value={tuFilter.targetLang}
+              onChange={v => setTuFilter(p => ({ ...p, targetLang: v }))}
+              options={[
+                { value: "", label: "번역 언어" },
+                { value: "ko", label: "한국어" },
+                { value: "en", label: "영어" },
+                { value: "ja", label: "일본어" },
+                { value: "zh", label: "중국어" },
+              ]}
+              triggerStyle={{ fontSize: 12, padding: "6px 8px" }}
+            />
+            <ClickSelect
+              value={tuFilter.domain}
+              onChange={v => setTuFilter(p => ({ ...p, domain: v }))}
+              options={[
+                { value: "", label: "도메인" },
+                ...["general","legal","finance","medical","it","marketing","technical","other"].map(d => ({ value: d, label: d })),
+              ]}
+              triggerStyle={{ fontSize: 12, padding: "6px 8px" }}
+            />
+            <ClickSelect
+              value={tuFilter.securityLevel}
+              onChange={v => setTuFilter(p => ({ ...p, securityLevel: v }))}
+              options={[
+                { value: "", label: "보안등급" },
+                ...["public","internal","restricted","confidential"].map(s => ({ value: s, label: s })),
+              ]}
+              triggerStyle={{ fontSize: 12, padding: "6px 8px" }}
+            />
+            <ClickSelect
+              value={tuFilter.status}
+              onChange={v => setTuFilter(p => ({ ...p, status: v }))}
+              options={[
+                { value: "", label: "전체 상태" },
+                { value: "active", label: "active" },
+                { value: "excluded", label: "excluded" },
+                { value: "flagged", label: "flagged" },
+              ]}
+              triggerStyle={{ fontSize: 12, padding: "6px 8px" }}
+            />
             <GhostBtn onClick={() => fetchTuUnits(1, tuFilter)} disabled={tuLoading}>검색</GhostBtn>
             <GhostBtn onClick={() => { setTuFilter({ projectId: "", sourceLang: "", targetLang: "", domain: "", qualityLevel: "", securityLevel: "", status: "active", q: "" }); fetchTuUnits(1, { projectId: "", sourceLang: "", targetLang: "", domain: "", qualityLevel: "", securityLevel: "", status: "active", q: "" }); }}>초기화</GhostBtn>
             <div style={{ flex: 1 }} />
