@@ -68,13 +68,18 @@ export function DraggableModal({
       document.body.style.userSelect = "";
       document.body.style.cursor = "";
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
+    window.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
+      window.removeEventListener("keydown", onKey);
     };
-  }, []);
+  }, [onClose]);
 
   const dialogStyle: React.CSSProperties = maximized
     ? { position: "fixed", inset: 0, borderRadius: 0, maxWidth: "none", maxHeight: "none" }
@@ -86,7 +91,6 @@ export function DraggableModal({
     <>
       <div
         style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: zIndex - 1 }}
-        onClick={onClose}
       />
       <div
         ref={dialogRef}

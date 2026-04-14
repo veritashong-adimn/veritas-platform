@@ -3051,10 +3051,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         )}
       {/* 완료 상태 수정 확인 모달 */}
       {completedConfirmShow && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={() => setCompletedConfirmShow(false)}>
-          <div style={{ background: "#fff", borderRadius: 12, padding: "24px 28px", maxWidth: 380, width: "90%", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}
-            onClick={e => e.stopPropagation()}>
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 12, padding: "24px 28px", maxWidth: 380, width: "90%", boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
             <p style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 700, color: "#111827" }}>⚠️ 완료된 프로젝트 수정</p>
             <p style={{ margin: "0 0 20px", fontSize: 13, color: "#374151", lineHeight: 1.6 }}>
               이 변경은 현재 상태를 되돌립니다.<br />

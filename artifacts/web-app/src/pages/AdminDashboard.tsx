@@ -934,6 +934,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       fetchTuUnits(1, tuFilter);
     }
   }, [adminTab]);
+  useEffect(() => {
+    if (!tuSelected) return;
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setTuSelected(null); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [tuSelected]);
 
   // 아코디언 상태 localStorage 저장
   useEffect(() => {
