@@ -88,6 +88,15 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    key: "data",
+    label: "데이터 자산",
+    accentColor: "#0ea5e9",
+    perm: "menu.user",
+    items: [
+      { id: "data-layer", label: "번역 데이터", icon: "🗃️", perm: "menu.user" },
+    ],
+  },
+  {
     key: "system",
     label: "시스템",
     accentColor: "#6b7280",
@@ -121,4 +130,5 @@ export const ADMIN_PAGE_TITLE: Record<string, string> = {
   board:       "게시판",
   settings:    "환경설정",
   test:        "운영 테스트",
+  "data-layer": "번역 데이터",
 };

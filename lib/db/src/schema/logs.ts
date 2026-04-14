@@ -1,6 +1,6 @@
 import { pgTable, serial, text, integer, timestamp, pgEnum } from "drizzle-orm/pg-core";
 
-export const entityTypeEnum = pgEnum("entity_type", ["project", "quote", "task", "communication", "company", "translator"]);
+export const entityTypeEnum = pgEnum("entity_type", ["project", "quote", "task", "communication", "company", "translator", "translation_unit"]);
 
 export const logsTable = pgTable("logs", {
   id: serial("id").primaryKey(),

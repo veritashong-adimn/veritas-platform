@@ -13,6 +13,7 @@ import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-or
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import { getSettings, invalidateSettingsCache } from "../lib/getSettings";
+import { tryBuildOnProjectComplete } from "../services/translationUnitService";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -606,6 +607,9 @@ router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
           req.log.info({ projectId, settlementRatio: stg.settlementRatio, applyWithholdingTax: stg.applyWithholdingTax }, "Settlement auto-created on admin status→completed");
         }
       }
+
+      // 데이터 레이어: 비치명적 자동 축적 시도
+      tryBuildOnProjectComplete(projectId, req.log).catch(() => {});
     }
 
     res.json(updated);

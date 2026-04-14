@@ -28,3 +28,5 @@ export * from "./prepaid_accounts";
 export * from "./company_name_history";
 export * from "./settings";
 export * from "./user_sessions";
+export * from "./translation_units";
+export * from "./translation_unit_logs";

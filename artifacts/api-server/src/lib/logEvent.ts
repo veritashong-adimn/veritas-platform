@@ -1,7 +1,7 @@
 import { db, logsTable } from "@workspace/db";
 import type { Logger } from "pino";
 
-type EntityType = "project" | "quote" | "task" | "communication" | "company" | "translator";
+type EntityType = "project" | "quote" | "task" | "communication" | "company" | "translator" | "translation_unit";
 
 export interface LogPerformer {
   id: number;
