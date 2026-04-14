@@ -286,14 +286,24 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [productsLoading, setProductsLoading] = useState(false);
   const [productSearch, setProductSearch] = useState("");
   const [showProductForm, setShowProductForm] = useState(false);
-  type ProductFormType = { code: string; name: string; mainCategory: string; subCategory: string; unit: string; basePrice: string; description: string; productType: string; interpretationDuration: string; overtimePrice: string; options: { optionType: string; optionValue: string }[] };
-  const emptyProductForm: ProductFormType = { code: "", name: "", mainCategory: "", subCategory: "", unit: "건", basePrice: "", description: "", productType: "translation", interpretationDuration: "", overtimePrice: "", options: [] };
+  type ProductFormType = { serviceType: string; languagePair: string; category: string; name: string; mainCategory: string; subCategory: string; unit: string; basePrice: string; description: string; productType: string; interpretationDuration: string; overtimePrice: string; options: { optionType: string; optionValue: string }[] };
+  const emptyProductForm: ProductFormType = { serviceType: "TR", languagePair: "KOEN", category: "GEN", name: "", mainCategory: "", subCategory: "", unit: "건", basePrice: "", description: "", productType: "translation", interpretationDuration: "", overtimePrice: "", options: [] };
   const [productForm, setProductForm] = useState<ProductFormType>(emptyProductForm);
   const [editingProduct, setEditingProduct] = useState<number | null>(null);
   const [savingProduct, setSavingProduct] = useState(false);
   const [productImporting, setProductImporting] = useState(false);
   const [productImportResult, setProductImportResult] = useState<{ created: number; updated: number; errors: { row: number; message: string }[] } | null>(null);
   const productImportRef = useRef<HTMLInputElement>(null);
+  type ProductRequest = { id: number; serviceType: string; languagePair: string; category: string; name: string; unit: string | null; description: string | null; requestedByEmail: string | null; status: "pending" | "approved" | "rejected"; approvedProductId: number | null; rejectionReason: string | null; createdAt: string };
+  const [productRequests, setProductRequests] = useState<ProductRequest[]>([]);
+  const [productRequestsLoading, setProductRequestsLoading] = useState(false);
+  const [productRequestStatusFilter, setProductRequestStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
+  const emptyRequestForm = { serviceType: "TR", languagePair: "KOEN", category: "GEN", name: "", unit: "건", description: "" };
+  const [requestForm, setRequestForm] = useState(emptyRequestForm);
+  const [showRequestForm, setShowRequestForm] = useState(false);
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+  const [rejectingRequestId, setRejectingRequestId] = useState<number | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
 
   // ── 데이터 레이어 ──────────────────────────────────────────────────────────
   type TuUnit = {
@@ -728,25 +738,58 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     setShowCompanyForm(false);
   };
 
+  const fetchProductRequests = async () => {
+    setProductRequestsLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (productRequestStatusFilter !== "all") params.set("status", productRequestStatusFilter);
+      const res = await fetch(api(`/api/admin/product-requests?${params}`), { headers: authHeaders });
+      if (res.ok) setProductRequests(await res.json());
+    } catch { /* ignore */ }
+    finally { setProductRequestsLoading(false); }
+  };
+
   const handleSaveProduct = async () => {
-    if (!productForm.code.trim() || !productForm.name.trim() || !productForm.basePrice) {
-      setToast("코드, 상품명, 기본단가는 필수입니다."); return;
+    if (editingProduct) {
+      // 수정: name/basePrice/description/unit/options 만 변경 가능
+      if (!productForm.name.trim() || !productForm.basePrice) {
+        setToast("상품명, 기본단가는 필수입니다."); return;
+      }
+    } else {
+      // 신규: serviceType/languagePair/category/name/basePrice 필수
+      if (!productForm.serviceType.trim() || !productForm.languagePair.trim() || !productForm.category.trim() || !productForm.name.trim() || !productForm.basePrice) {
+        setToast("서비스유형, 언어쌍, 카테고리, 상품명, 기본단가는 필수입니다."); return;
+      }
     }
     setSavingProduct(true);
     try {
-      const payload = {
-        code: productForm.code.trim(),
-        name: productForm.name.trim(),
-        mainCategory: productForm.mainCategory || null,
-        subCategory: productForm.subCategory || null,
-        unit: productForm.productType === "interpretation" ? "시간" : productForm.unit,
-        basePrice: Number(productForm.basePrice),
-        description: productForm.description || null,
-        productType: productForm.productType,
-        interpretationDuration: productForm.interpretationDuration.trim() || null,
-        overtimePrice: productForm.overtimePrice ? Number(productForm.overtimePrice) : null,
-        options: productForm.options.filter(o => o.optionType.trim() && o.optionValue.trim()),
-      };
+      const payload = editingProduct
+        ? {
+          name: productForm.name.trim(),
+          mainCategory: productForm.mainCategory || null,
+          subCategory: productForm.subCategory || null,
+          unit: productForm.productType === "interpretation" ? "시간" : productForm.unit,
+          basePrice: Number(productForm.basePrice),
+          description: productForm.description || null,
+          interpretationDuration: productForm.interpretationDuration.trim() || null,
+          overtimePrice: productForm.overtimePrice ? Number(productForm.overtimePrice) : null,
+          options: productForm.options.filter(o => o.optionType.trim() && o.optionValue.trim()),
+        }
+        : {
+          serviceType: productForm.serviceType.trim().toUpperCase(),
+          languagePair: productForm.languagePair.trim().toUpperCase(),
+          category: productForm.category.trim().toUpperCase(),
+          name: productForm.name.trim(),
+          mainCategory: productForm.mainCategory || null,
+          subCategory: productForm.subCategory || null,
+          unit: productForm.productType === "interpretation" ? "시간" : productForm.unit,
+          basePrice: Number(productForm.basePrice),
+          description: productForm.description || null,
+          productType: productForm.productType,
+          interpretationDuration: productForm.interpretationDuration.trim() || null,
+          overtimePrice: productForm.overtimePrice ? Number(productForm.overtimePrice) : null,
+          options: productForm.options.filter(o => o.optionType.trim() && o.optionValue.trim()),
+        };
       const url = editingProduct ? `/api/admin/products/${editingProduct}` : "/api/admin/products";
       const method = editingProduct ? "PATCH" : "POST";
       const res = await fetch(api(url), {
@@ -754,14 +797,80 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
-      setToast(editingProduct ? "상품이 수정되었습니다." : "상품이 등록되었습니다.");
+      if (!res.ok) {
+        if (data.isDuplicate) {
+          setToast(`중복: 이미 같은 서비스/언어/카테고리 상품이 있습니다. (${data.existing?.[0]?.code})`);
+        } else {
+          setToast(`오류: ${data.error}`);
+        }
+        return;
+      }
+      setToast(editingProduct ? "상품이 수정되었습니다." : `상품이 등록되었습니다. (코드: ${data.code})`);
       setProductForm(emptyProductForm);
       setEditingProduct(null);
       setShowProductForm(false);
       await fetchProducts();
     } catch { setToast("오류: 상품 저장 실패"); }
     finally { setSavingProduct(false); }
+  };
+
+  const handleSubmitRequest = async () => {
+    if (!requestForm.serviceType.trim() || !requestForm.languagePair.trim() || !requestForm.category.trim() || !requestForm.name.trim()) {
+      setToast("서비스유형, 언어쌍, 카테고리, 상품명은 필수입니다."); return;
+    }
+    setSubmittingRequest(true);
+    try {
+      const res = await fetch(api("/api/admin/product-requests"), {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serviceType: requestForm.serviceType.trim().toUpperCase(),
+          languagePair: requestForm.languagePair.trim().toUpperCase(),
+          category: requestForm.category.trim().toUpperCase(),
+          name: requestForm.name.trim(),
+          unit: requestForm.unit || "건",
+          description: requestForm.description.trim() || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      const dupMsg = data.hasDuplicate ? " (중복 상품 있음 — 관리자 검토 필요)" : "";
+      setToast(`상품 등록 요청이 제출되었습니다.${dupMsg}`);
+      setRequestForm(emptyRequestForm);
+      setShowRequestForm(false);
+      fetchProductRequests();
+    } catch { setToast("오류: 요청 제출 실패"); }
+    finally { setSubmittingRequest(false); }
+  };
+
+  const handleApproveRequest = async (id: number) => {
+    try {
+      const res = await fetch(api(`/api/admin/product-requests/${id}/approve`), {
+        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setToast(`승인 실패: ${data.error}`); return;
+      }
+      setToast(`승인 완료. 상품 코드: ${data.product?.code}`);
+      fetchProductRequests();
+      fetchProducts();
+    } catch { setToast("오류: 승인 실패"); }
+  };
+
+  const handleRejectRequest = async (id: number) => {
+    try {
+      const res = await fetch(api(`/api/admin/product-requests/${id}/reject`), {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: rejectReason.trim() || null }),
+      });
+      if (!res.ok) { const d = await res.json(); setToast(`거절 실패: ${d.error}`); return; }
+      setToast("요청이 거절되었습니다.");
+      setRejectingRequestId(null);
+      setRejectReason("");
+      fetchProductRequests();
+    } catch { setToast("오류: 거절 처리 실패"); }
   };
 
   const handleProductExcelDownload = async (type: "template" | "export") => {
@@ -885,7 +994,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   useEffect(() => { if (adminTab === "customers") fetchCustomers(); }, [adminTab, fetchCustomers]);
   useEffect(() => { if (adminTab === "companies") fetchCompanies(); }, [adminTab, fetchCompanies]);
   useEffect(() => { if (adminTab === "contacts") { fetchContacts(); if (companies.length === 0) fetchCompanies(); } }, [adminTab, fetchContacts]);
-  useEffect(() => { if (adminTab === "products") fetchProducts(); }, [adminTab, fetchProducts]);
+  useEffect(() => {
+    if (adminTab === "products") {
+      fetchProducts();
+      fetchProductRequests();
+    }
+  }, [adminTab, fetchProducts]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (adminTab === "products") fetchProductRequests();
+  }, [adminTab, productRequestStatusFilter]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (adminTab === "board") fetchBoard(); }, [adminTab, fetchBoard]);
   useEffect(() => { if (adminTab === "translators") fetchTranslators(); }, [adminTab, fetchTranslators]);
   useEffect(() => { if (adminTab === "prepaid") fetchPrepaidAccounts(); }, [adminTab, fetchPrepaidAccounts]);
@@ -3438,6 +3555,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
       {/* ── 상품/단가 탭 ── */}
       {adminTab === "products" && (
+        <>
         <Section title={`상품/단가 관리 (${products.length})`} action={
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
             {/* 엑셀 버튼 그룹 */}
@@ -3489,20 +3607,50 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           {/* ── 등록/수정 폼 ── */}
           {showProductForm && (
             <Card style={{ marginBottom: 16, padding: "20px 24px" }}>
-              <p style={{ margin: "0 0 16px", fontSize: 14, fontWeight: 700, color: "#111827" }}>{editingProduct ? "상품 수정" : "새 상품 등록"}</p>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>{editingProduct ? "상품 수정" : "새 상품 등록 (코드 자동 생성)"}</p>
+                {editingProduct && (
+                  <span style={{ fontFamily: "monospace", fontSize: 12, color: "#6b7280", background: "#f3f4f6", padding: "3px 8px", borderRadius: 5 }}>
+                    {products.find(p => p.id === editingProduct)?.code ?? ""}
+                  </span>
+                )}
+              </div>
 
-              {/* 1행: 코드 / 상품명 */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "0 16px", marginBottom: 12 }}>
-                <div>
-                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>상품 코드 <span style={{ color: "#dc2626" }}>*</span></label>
-                  <input value={productForm.code} onChange={e => setProductForm(p => ({ ...p, code: e.target.value }))}
-                    placeholder="예: TRN-001" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+              {/* 신규 상품: 서비스유형 / 언어쌍 / 카테고리 (코드 자동 생성에 사용) */}
+              {!editingProduct && (
+                <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: "12px 16px", marginBottom: 12 }}>
+                  <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#1d4ed8" }}>코드 자동 생성 정보 <span style={{ fontWeight: 400, color: "#6b7280" }}>(등록 시 [서비스]-[언어]-[카테고리]-[번호] 형식으로 자동 부여)</span></p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>서비스 유형 코드 <span style={{ color: "#dc2626" }}>*</span></label>
+                      <input value={productForm.serviceType} onChange={e => setProductForm(p => ({ ...p, serviceType: e.target.value.toUpperCase() }))}
+                        placeholder="TR (번역) / IN (통역)" maxLength={4}
+                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box", fontFamily: "monospace" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>언어쌍 코드 <span style={{ color: "#dc2626" }}>*</span></label>
+                      <input value={productForm.languagePair} onChange={e => setProductForm(p => ({ ...p, languagePair: e.target.value.toUpperCase() }))}
+                        placeholder="KOEN / KOJA / KOEN" maxLength={8}
+                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box", fontFamily: "monospace" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>카테고리 코드 <span style={{ color: "#dc2626" }}>*</span></label>
+                      <input value={productForm.category} onChange={e => setProductForm(p => ({ ...p, category: e.target.value.toUpperCase() }))}
+                        placeholder="GEN / CONF / LEGAL" maxLength={6}
+                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box", fontFamily: "monospace" }} />
+                    </div>
+                  </div>
+                  <p style={{ margin: "6px 0 0", fontSize: 11, color: "#6b7280" }}>
+                    예) TR + KOEN + GEN → <code style={{ background: "#dbeafe", padding: "1px 4px", borderRadius: 3 }}>TR-KOEN-GEN-001</code>
+                  </p>
                 </div>
-                <div>
-                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>상품명 <span style={{ color: "#dc2626" }}>*</span></label>
-                  <input value={productForm.name} onChange={e => setProductForm(p => ({ ...p, name: e.target.value }))}
-                    placeholder="예: 동시통역 서비스" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
-                </div>
+              )}
+
+              {/* 상품명 */}
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>상품명 <span style={{ color: "#dc2626" }}>*</span></label>
+                <input value={productForm.name} onChange={e => setProductForm(p => ({ ...p, name: e.target.value }))}
+                  placeholder="예: 동시통역 서비스" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
               </div>
 
               {/* 1.5행: 상품 유형 */}
@@ -3693,7 +3841,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         <button onClick={() => {
                           setEditingProduct(p.id);
                           setProductForm({
-                            code: p.code, name: p.name,
+                            serviceType: "TR", languagePair: "KOEN", category: "GEN",
+                            name: p.name,
                             mainCategory: p.mainCategory ?? "",
                             subCategory: p.subCategory ?? "",
                             unit: p.unit, basePrice: String(p.basePrice),
@@ -3723,6 +3872,174 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             </div>
           )}
         </Section>
+
+        {/* ── 상품 등록 요청 섹션 ── */}
+        <Section
+          title={`상품 등록 요청 (${productRequests.filter(r => r.status === "pending").length}건 대기)`}
+          action={
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {/* 상태 필터 */}
+              {(["all","pending","approved","rejected"] as const).map(s => (
+                <button key={s} onClick={() => setProductRequestStatusFilter(s)}
+                  style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 600, border: "none",
+                    background: productRequestStatusFilter === s ? (s === "pending" ? "#fef3c7" : s === "approved" ? "#dcfce7" : s === "rejected" ? "#fee2e2" : "#1d4ed8") : "#f3f4f6",
+                    color: productRequestStatusFilter === s ? (s === "pending" ? "#92400e" : s === "approved" ? "#166534" : s === "rejected" ? "#991b1b" : "#fff") : "#6b7280",
+                  }}>
+                  {s === "all" ? "전체" : s === "pending" ? "⏳ 대기" : s === "approved" ? "✅ 승인" : "❌ 거절"}
+                </button>
+              ))}
+              <button onClick={() => { setShowRequestForm(v => !v); setRequestForm(emptyRequestForm); }}
+                style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 700,
+                  background: showRequestForm ? "#f3f4f6" : "#faf5ff", color: showRequestForm ? "#6b7280" : "#7c3aed",
+                  border: "1px solid #e9d5ff" }}>
+                {showRequestForm ? "취소" : "+ 등록 요청"}
+              </button>
+            </div>
+          }>
+
+          {/* ── 요청 폼 ── */}
+          {showRequestForm && (
+            <Card style={{ marginBottom: 14, padding: "18px 22px", border: "1px solid #e9d5ff", background: "#faf5ff" }}>
+              <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#6d28d9" }}>상품 등록 요청 <span style={{ fontSize: 12, fontWeight: 400, color: "#9ca3af" }}>— 관리자 승인 후 자동 코드 부여</span></p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px", marginBottom: 10 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>서비스 유형 코드 <span style={{ color: "#dc2626" }}>*</span></label>
+                  <input value={requestForm.serviceType} onChange={e => setRequestForm(p => ({ ...p, serviceType: e.target.value.toUpperCase() }))}
+                    placeholder="TR / IN" maxLength={4}
+                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box", fontFamily: "monospace" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>언어쌍 코드 <span style={{ color: "#dc2626" }}>*</span></label>
+                  <input value={requestForm.languagePair} onChange={e => setRequestForm(p => ({ ...p, languagePair: e.target.value.toUpperCase() }))}
+                    placeholder="KOEN / KOJA" maxLength={8}
+                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box", fontFamily: "monospace" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>카테고리 코드 <span style={{ color: "#dc2626" }}>*</span></label>
+                  <input value={requestForm.category} onChange={e => setRequestForm(p => ({ ...p, category: e.target.value.toUpperCase() }))}
+                    placeholder="GEN / CONF / LEGAL" maxLength={6}
+                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box", fontFamily: "monospace" }} />
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "0 12px", marginBottom: 10 }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>상품명 <span style={{ color: "#dc2626" }}>*</span></label>
+                  <input value={requestForm.name} onChange={e => setRequestForm(p => ({ ...p, name: e.target.value }))}
+                    placeholder="예: 한영 법률번역" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>단위</label>
+                  <input value={requestForm.unit} onChange={e => setRequestForm(p => ({ ...p, unit: e.target.value }))}
+                    placeholder="건 / 어절 / 시간" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+                </div>
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>요청 사유 / 설명 (선택)</label>
+                <input value={requestForm.description} onChange={e => setRequestForm(p => ({ ...p, description: e.target.value }))}
+                  placeholder="신규 상품이 필요한 이유나 설명을 입력하세요"
+                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={handleSubmitRequest} disabled={submittingRequest}
+                  style={{ padding: "7px 18px", fontSize: 13, fontWeight: 700, borderRadius: 8, cursor: submittingRequest ? "not-allowed" : "pointer",
+                    background: "#7c3aed", color: "#fff", border: "none", opacity: submittingRequest ? 0.6 : 1 }}>
+                  {submittingRequest ? "제출 중..." : "요청 제출"}
+                </button>
+                <button onClick={() => { setShowRequestForm(false); setRequestForm(emptyRequestForm); }}
+                  style={{ padding: "7px 14px", fontSize: 13, borderRadius: 8, cursor: "pointer", background: "none", border: "1px solid #d1d5db", color: "#6b7280" }}>
+                  취소
+                </button>
+              </div>
+            </Card>
+          )}
+
+          {/* ── 요청 목록 ── */}
+          {productRequestsLoading ? (
+            <div style={{ textAlign: "center", padding: "24px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : productRequests.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "24px", color: "#9ca3af", fontSize: 14 }}>
+              {productRequestStatusFilter === "pending" ? "대기 중인 요청이 없습니다." : "상품 등록 요청이 없습니다."}
+            </Card>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {productRequests.map(req => (
+                <Card key={req.id} style={{ padding: "14px 18px", borderLeft: `4px solid ${req.status === "pending" ? "#f59e0b" : req.status === "approved" ? "#10b981" : "#ef4444"}` }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                        {/* 상태 뱃지 */}
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 4,
+                          background: req.status === "pending" ? "#fef3c7" : req.status === "approved" ? "#dcfce7" : "#fee2e2",
+                          color: req.status === "pending" ? "#92400e" : req.status === "approved" ? "#166534" : "#991b1b" }}>
+                          {req.status === "pending" ? "⏳ 대기" : req.status === "approved" ? "✅ 승인" : "❌ 거절"}
+                        </span>
+                        {/* 자동 생성 코드 미리보기 */}
+                        <code style={{ fontFamily: "monospace", fontSize: 12, color: "#7c3aed", background: "#f5f3ff", padding: "2px 7px", borderRadius: 4 }}>
+                          {req.serviceType}-{req.languagePair}-{req.category}-???
+                        </code>
+                        <span style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>{req.name}</span>
+                        {req.unit && <span style={{ fontSize: 11, color: "#6b7280", background: "#f3f4f6", padding: "1px 6px", borderRadius: 4 }}>/{req.unit}</span>}
+                      </div>
+                      {req.description && (
+                        <p style={{ margin: "0 0 4px", fontSize: 12, color: "#6b7280" }}>{req.description}</p>
+                      )}
+                      <div style={{ display: "flex", gap: 10, fontSize: 11, color: "#9ca3af" }}>
+                        <span>요청자: {req.requestedByEmail ?? "알 수 없음"}</span>
+                        <span>·</span>
+                        <span>{new Date(req.createdAt).toLocaleDateString("ko-KR")}</span>
+                        {req.status === "approved" && req.approvedProductId && (
+                          <span style={{ color: "#059669", fontWeight: 600 }}>· 상품 #{req.approvedProductId} 생성됨</span>
+                        )}
+                        {req.status === "rejected" && req.rejectionReason && (
+                          <span style={{ color: "#dc2626" }}>· 거절 사유: {req.rejectionReason}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 승인/거절 버튼 (관리자 + 대기 상태만) */}
+                    {user.role === "admin" && req.status === "pending" && (
+                      <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                        <button onClick={() => handleApproveRequest(req.id)}
+                          style={{ padding: "5px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6, cursor: "pointer",
+                            background: "#dcfce7", color: "#166534", border: "none" }}>
+                          승인
+                        </button>
+                        <button onClick={() => { setRejectingRequestId(req.id); setRejectReason(""); }}
+                          style={{ padding: "5px 12px", fontSize: 12, fontWeight: 700, borderRadius: 6, cursor: "pointer",
+                            background: "#fee2e2", color: "#991b1b", border: "none" }}>
+                          거절
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 거절 사유 입력 패널 */}
+                  {rejectingRequestId === req.id && (
+                    <div style={{ marginTop: 10, padding: "10px 14px", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8 }}>
+                      <label style={{ fontSize: 12, color: "#92400e", display: "block", marginBottom: 4 }}>거절 사유 (선택)</label>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <input value={rejectReason} onChange={e => setRejectReason(e.target.value)}
+                          placeholder="거절 사유를 입력하세요 (생략 가능)"
+                          style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "6px 10px" }} />
+                        <button onClick={() => handleRejectRequest(req.id)}
+                          style={{ padding: "6px 14px", fontSize: 12, fontWeight: 700, borderRadius: 6, cursor: "pointer",
+                            background: "#ef4444", color: "#fff", border: "none", whiteSpace: "nowrap" }}>
+                          거절 확정
+                        </button>
+                        <button onClick={() => setRejectingRequestId(null)}
+                          style={{ padding: "6px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer",
+                            background: "none", border: "1px solid #d1d5db", color: "#6b7280" }}>
+                          취소
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              ))}
+            </div>
+          )}
+        </Section>
+        </>
       )}
 
       {/* ── 게시판 탭 ── */}
