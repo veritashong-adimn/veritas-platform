@@ -311,7 +311,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [tuLimit] = useState(50);
   const [tuLoading, setTuLoading] = useState(false);
   const [tuStats, setTuStats] = useState<TuStats | null>(null);
-  const [tuSelected, setTuSelected] = useState<TuUnit | null>(null);
+  const [tuSelectedId, setTuSelectedId] = useState<number | null>(null);
+  const [tuDetailData, setTuDetailData] = useState<TuUnit | null>(null);
   const [tuFilter, setTuFilter] = useState({ projectId: "", sourceLang: "", targetLang: "", domain: "", qualityLevel: "", securityLevel: "", status: "active", q: "" });
   const [tuAddOpen, setTuAddOpen] = useState(false);
   const [tuAddForm, setTuAddForm] = useState({ projectId: "", sourceText: "", targetText: "", sourceLang: "ko", targetLang: "en", domain: "general" });
@@ -585,7 +586,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   const fetchTuDetail = useCallback(async (id: number) => {
     const res = await fetch(api(`/api/admin/translation-units/${id}`), { headers: authHeaders });
-    if (res.ok) { const d = await res.json(); setTuSelected(d); }
+    if (res.ok) {
+      const d = await res.json();
+      console.log("[translation-panel] detail fetched for id:", id);
+      setTuDetailData(d);
+    }
   }, [token]);
 
   const fetchBoard = useCallback(async () => {
@@ -935,11 +940,28 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     }
   }, [adminTab]);
   useEffect(() => {
-    if (!tuSelected) return;
-    const h = (e: KeyboardEvent) => { if (e.key === "Escape") setTuSelected(null); };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, [tuSelected]);
+    if (tuSelectedId === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        console.log("[translation-panel] close reason: ESC key, selectedId:", tuSelectedId);
+        setTuSelectedId(null);
+        setTuDetailData(null);
+      }
+    };
+    const onVis = () => console.log("[translation-panel] visibilitychange — hidden:", document.hidden, "selectedId:", tuSelectedId);
+    const onBlur = () => console.log("[translation-panel] window blur — selectedId:", tuSelectedId);
+    const onFocus = () => console.log("[translation-panel] window focus — selectedId:", tuSelectedId);
+    window.addEventListener("keydown", onKey);
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [tuSelectedId]);
 
   // 아코디언 상태 localStorage 저장
   useEffect(() => {
@@ -4947,10 +4969,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       <div style={{ marginTop: 8 }}>번역 데이터가 없습니다.<br /><span style={{ fontSize: 12 }}>프로젝트를 완료하거나 + 번역 쌍 추가 버튼으로 직접 입력하세요.</span></div>
                     </td></tr>
                   ) : tuUnits.map(u => {
-                    const isSelected = tuSelected?.id === u.id;
+                    const isSelected = tuSelectedId === u.id;
                     return (
                       <tr key={u.id}
-                        onClick={() => { setTuSelected(u); fetchTuDetail(u.id); }}
+                        onClick={() => {
+                          console.log("[translation-panel] open: unit", u.id);
+                          setTuSelectedId(u.id);
+                          setTuDetailData(u);
+                          fetchTuDetail(u.id);
+                        }}
                         style={{ cursor: "pointer", background: isSelected ? "#eff6ff" : "transparent", borderBottom: "1px solid #f3f4f6" }}
                         onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLTableRowElement).style.background = "#f9fafb"; }}
                         onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLTableRowElement).style.background = "transparent"; }}
@@ -5008,98 +5035,111 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               )}
             </Card>
 
-            {/* 상세 패널 */}
-            {tuSelected && (
+            {/* 상세 패널 — tuSelectedId로 열림/닫힘 제어, tuDetailData로 내용 표시 */}
+            {tuSelectedId !== null && (
               <Card style={{ width: 360, flexShrink: 0, padding: 16, fontSize: 13 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                  <p style={{ margin: 0, fontWeight: 700, color: "#111827" }}>유닛 #{tuSelected.id} 상세</p>
-                  <button onClick={() => setTuSelected(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 18 }}>×</button>
+                  <p style={{ margin: 0, fontWeight: 700, color: "#111827" }}>
+                    유닛 #{tuSelectedId} 상세
+                    {tuDetailData === null && <span style={{ marginLeft: 8, fontSize: 11, color: "#9ca3af" }}>로딩 중...</span>}
+                  </p>
+                  <button
+                    onClick={() => {
+                      console.log("[translation-panel] close reason: manual × button, selectedId:", tuSelectedId);
+                      setTuSelectedId(null);
+                      setTuDetailData(null);
+                    }}
+                    style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 18 }}>×</button>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "80px 1fr", gap: "6px 8px", marginBottom: 12, fontSize: 12 }}>
-                  <span style={{ color: "#6b7280" }}>프로젝트</span><span>{tuSelected.projectId}</span>
-                  <span style={{ color: "#6b7280" }}>순번</span><span>{tuSelected.segmentIndex}</span>
-                  <span style={{ color: "#6b7280" }}>언어쌍</span><span>{tuSelected.sourceLang}→{tuSelected.targetLang}</span>
-                  <span style={{ color: "#6b7280" }}>도메인</span><span>{tuSelected.domain ?? "-"}</span>
-                  <span style={{ color: "#6b7280" }}>품질</span><span>{tuSelected.qualityLevel ?? "unknown"}</span>
-                  <span style={{ color: "#6b7280" }}>보안등급</span><span>{tuSelected.securityLevel}</span>
-                  <span style={{ color: "#6b7280" }}>익명화</span><span>{tuSelected.isAnonymized ? "✓" : "-"}</span>
-                  <span style={{ color: "#6b7280" }}>원문 글자</span><span>{tuSelected.sourceCharCount}</span>
-                  <span style={{ color: "#6b7280" }}>번역 글자</span><span>{tuSelected.targetCharCount}</span>
-                  <span style={{ color: "#6b7280" }}>생성일</span><span>{new Date(tuSelected.createdAt).toLocaleString("ko-KR")}</span>
-                  <span style={{ color: "#6b7280" }}>수정일</span><span>{new Date(tuSelected.updatedAt).toLocaleString("ko-KR")}</span>
-                </div>
-
-                <div style={{ marginBottom: 10 }}>
-                  <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#6b7280" }}>원문</p>
-                  <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.6, maxHeight: 120, overflowY: "auto" }}>{tuSelected.sourceText}</div>
-                </div>
-                <div style={{ marginBottom: 10 }}>
-                  <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#6b7280" }}>번역문</p>
-                  <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.6, maxHeight: 120, overflowY: "auto" }}>{tuSelected.targetText}</div>
-                </div>
-                {tuSelected.isAnonymized && (
+                {tuDetailData && (
                   <>
+                    <div style={{ display: "grid", gridTemplateColumns: "80px 1fr", gap: "6px 8px", marginBottom: 12, fontSize: 12 }}>
+                      <span style={{ color: "#6b7280" }}>프로젝트</span><span>{tuDetailData.projectId}</span>
+                      <span style={{ color: "#6b7280" }}>순번</span><span>{tuDetailData.segmentIndex}</span>
+                      <span style={{ color: "#6b7280" }}>언어쌍</span><span>{tuDetailData.sourceLang}→{tuDetailData.targetLang}</span>
+                      <span style={{ color: "#6b7280" }}>도메인</span><span>{tuDetailData.domain ?? "-"}</span>
+                      <span style={{ color: "#6b7280" }}>품질</span><span>{tuDetailData.qualityLevel ?? "unknown"}</span>
+                      <span style={{ color: "#6b7280" }}>보안등급</span><span>{tuDetailData.securityLevel}</span>
+                      <span style={{ color: "#6b7280" }}>익명화</span><span>{tuDetailData.isAnonymized ? "✓" : "-"}</span>
+                      <span style={{ color: "#6b7280" }}>원문 글자</span><span>{tuDetailData.sourceCharCount}</span>
+                      <span style={{ color: "#6b7280" }}>번역 글자</span><span>{tuDetailData.targetCharCount}</span>
+                      <span style={{ color: "#6b7280" }}>생성일</span><span>{new Date(tuDetailData.createdAt).toLocaleString("ko-KR")}</span>
+                      <span style={{ color: "#6b7280" }}>수정일</span><span>{new Date(tuDetailData.updatedAt).toLocaleString("ko-KR")}</span>
+                    </div>
+
                     <div style={{ marginBottom: 10 }}>
-                      <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#7c3aed" }}>익명화 원문</p>
-                      <div style={{ background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.6, maxHeight: 100, overflowY: "auto" }}>{tuSelected.anonymizedSourceText ?? "-"}</div>
+                      <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#6b7280" }}>원문</p>
+                      <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.6, maxHeight: 120, overflowY: "auto" }}>{tuDetailData.sourceText}</div>
                     </div>
                     <div style={{ marginBottom: 10 }}>
-                      <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#7c3aed" }}>익명화 번역문</p>
-                      <div style={{ background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.6, maxHeight: 100, overflowY: "auto" }}>{tuSelected.anonymizedTargetText ?? "-"}</div>
+                      <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#6b7280" }}>번역문</p>
+                      <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.6, maxHeight: 120, overflowY: "auto" }}>{tuDetailData.targetText}</div>
                     </div>
-                  </>
-                )}
-
-                {/* 액션 버튼 */}
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
-                  {!tuSelected.isAnonymized && (
-                    <button
-                      disabled={tuActionLoading}
-                      onClick={async () => {
-                        setTuActionLoading(true);
-                        try {
-                          const res = await fetch(api(`/api/admin/translation-units/${tuSelected.id}/anonymize`), { method: "POST", headers: authHeaders });
-                          if (res.ok) { setToast("익명화 완료"); fetchTuDetail(tuSelected.id); fetchTuUnits(tuPage, tuFilter); }
-                          else { const d = await res.json(); setToast("오류: " + (d.error ?? "실패")); }
-                        } catch { setToast("오류: 익명화 실패"); }
-                        finally { setTuActionLoading(false); }
-                      }}
-                      style={{ padding: "5px 12px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer", opacity: tuActionLoading ? 0.6 : 1 }}>
-                      익명화
-                    </button>
-                  )}
-                  {tuSelected.status !== "excluded" && (
-                    <button
-                      disabled={tuActionLoading}
-                      onClick={async () => {
-                        if (!confirm("이 유닛을 제외 처리하시겠습니까?")) return;
-                        setTuActionLoading(true);
-                        try {
-                          const res = await fetch(api(`/api/admin/translation-units/${tuSelected.id}/exclude`), { method: "PATCH", headers: authHeaders });
-                          if (res.ok) { setToast("제외 처리 완료"); fetchTuDetail(tuSelected.id); fetchTuStats(); fetchTuUnits(tuPage, tuFilter); }
-                          else { const d = await res.json(); setToast("오류: " + (d.error ?? "실패")); }
-                        } catch { setToast("오류: 제외 처리 실패"); }
-                        finally { setTuActionLoading(false); }
-                      }}
-                      style={{ padding: "5px 12px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer", opacity: tuActionLoading ? 0.6 : 1 }}>
-                      제외
-                    </button>
-                  )}
-                </div>
-
-                {/* 변경 로그 */}
-                {tuSelected.logs && tuSelected.logs.length > 0 && (
-                  <div>
-                    <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 600, color: "#6b7280" }}>변경 이력</p>
-                    <div style={{ maxHeight: 150, overflowY: "auto", background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 6, padding: "6px 8px" }}>
-                      {tuSelected.logs.map(l => (
-                        <div key={l.id} style={{ fontSize: 11, color: "#374151", marginBottom: 4, paddingBottom: 4, borderBottom: "1px solid #f3f4f6" }}>
-                          <span style={{ fontWeight: 600, color: "#0ea5e9" }}>{l.action}</span>
-                          <span style={{ color: "#9ca3af", marginLeft: 8 }}>{new Date(l.createdAt).toLocaleString("ko-KR")}</span>
+                    {tuDetailData.isAnonymized && (
+                      <>
+                        <div style={{ marginBottom: 10 }}>
+                          <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#7c3aed" }}>익명화 원문</p>
+                          <div style={{ background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.6, maxHeight: 100, overflowY: "auto" }}>{tuDetailData.anonymizedSourceText ?? "-"}</div>
                         </div>
-                      ))}
+                        <div style={{ marginBottom: 10 }}>
+                          <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 600, color: "#7c3aed" }}>익명화 번역문</p>
+                          <div style={{ background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 6, padding: "8px 10px", fontSize: 12, lineHeight: 1.6, maxHeight: 100, overflowY: "auto" }}>{tuDetailData.anonymizedTargetText ?? "-"}</div>
+                        </div>
+                      </>
+                    )}
+
+                    {/* 액션 버튼 */}
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                      {!tuDetailData.isAnonymized && (
+                        <button
+                          disabled={tuActionLoading}
+                          onClick={async () => {
+                            setTuActionLoading(true);
+                            try {
+                              const res = await fetch(api(`/api/admin/translation-units/${tuSelectedId}/anonymize`), { method: "POST", headers: authHeaders });
+                              if (res.ok) { setToast("익명화 완료"); fetchTuDetail(tuSelectedId); fetchTuUnits(tuPage, tuFilter); }
+                              else { const d = await res.json(); setToast("오류: " + (d.error ?? "실패")); }
+                            } catch { setToast("오류: 익명화 실패"); }
+                            finally { setTuActionLoading(false); }
+                          }}
+                          style={{ padding: "5px 12px", background: "#7c3aed", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer", opacity: tuActionLoading ? 0.6 : 1 }}>
+                          익명화
+                        </button>
+                      )}
+                      {tuDetailData.status !== "excluded" && (
+                        <button
+                          disabled={tuActionLoading}
+                          onClick={async () => {
+                            if (!confirm("이 유닛을 제외 처리하시겠습니까?")) return;
+                            setTuActionLoading(true);
+                            try {
+                              const res = await fetch(api(`/api/admin/translation-units/${tuSelectedId}/exclude`), { method: "PATCH", headers: authHeaders });
+                              if (res.ok) { setToast("제외 처리 완료"); fetchTuDetail(tuSelectedId); fetchTuStats(); fetchTuUnits(tuPage, tuFilter); }
+                              else { const d = await res.json(); setToast("오류: " + (d.error ?? "실패")); }
+                            } catch { setToast("오류: 제외 처리 실패"); }
+                            finally { setTuActionLoading(false); }
+                          }}
+                          style={{ padding: "5px 12px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, cursor: "pointer", opacity: tuActionLoading ? 0.6 : 1 }}>
+                          제외
+                        </button>
+                      )}
                     </div>
-                  </div>
+
+                    {/* 변경 로그 */}
+                    {tuDetailData.logs && tuDetailData.logs.length > 0 && (
+                      <div>
+                        <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 600, color: "#6b7280" }}>변경 이력</p>
+                        <div style={{ maxHeight: 150, overflowY: "auto", background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 6, padding: "6px 8px" }}>
+                          {tuDetailData.logs.map(l => (
+                            <div key={l.id} style={{ fontSize: 11, color: "#374151", marginBottom: 4, paddingBottom: 4, borderBottom: "1px solid #f3f4f6" }}>
+                              <span style={{ fontWeight: 600, color: "#0ea5e9" }}>{l.action}</span>
+                              <span style={{ color: "#9ca3af", marginLeft: 8 }}>{new Date(l.createdAt).toLocaleString("ko-KR")}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </Card>
             )}
