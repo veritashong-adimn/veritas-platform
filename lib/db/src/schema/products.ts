@@ -17,6 +17,7 @@ export const productsTable = pgTable("products", {
   productType: text("product_type").notNull().default("translation"),
   interpretationDuration: text("interpretation_duration"),
   overtimePrice: integer("overtime_price"),
+  deactivationReason: text("deactivation_reason"),
 });
 
 export type Product = typeof productsTable.$inferSelect;

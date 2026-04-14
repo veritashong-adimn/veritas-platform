@@ -10,12 +10,40 @@ const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 const adminOnly = [requireAuth, requireRole("admin")];
 
+// ─── 상수 ─────────────────────────────────────────────────────────────────────
+const VALID_SERVICE_TYPES = ["TR", "IN"] as const;
+const VALID_LANG_PAIRS = ["KOEN", "ENKO", "KOCN", "KOJA"] as const;
+const VALID_CATEGORIES_TR = ["GEN", "TECH", "MED", "LAW"] as const;
+const VALID_CATEGORIES_IN = ["SIM", "CON", "MIT", "EXH"] as const;
+const VALID_UNITS_TR = ["어절", "글자", "페이지", "건"] as const;
+const VALID_UNITS_IN = ["시간"] as const;
+
+const LANG_PAIR_LABEL: Record<string, string> = {
+  KOEN: "한영", ENKO: "영한", KOCN: "한중", KOJA: "한일",
+};
+const CATEGORY_LABEL_TR: Record<string, string> = {
+  GEN: "일반번역", TECH: "기술번역", MED: "의료번역", LAW: "법률번역",
+};
+const CATEGORY_LABEL_IN: Record<string, string> = {
+  SIM: "동시통역", CON: "순차통역", MIT: "미팅통역", EXH: "전시통역",
+};
+
+function autoProductName(svcType: string, langPair: string, category: string): string {
+  const langLabel = LANG_PAIR_LABEL[langPair] ?? langPair;
+  if (svcType === "IN") {
+    const catLabel = CATEGORY_LABEL_IN[category] ?? `${category}통역`;
+    return `${langLabel} ${catLabel}`;
+  }
+  const catLabel = CATEGORY_LABEL_TR[category] ?? `${category}번역`;
+  return `${langLabel} ${catLabel}`;
+}
+
 // ─── 엑셀 공통 설정 ──────────────────────────────────────────────────────────
 const EXCEL_HEADERS = [
-  "상품코드", "상품명*", "상품유형*(번역/통역)", "대분류", "중분류",
-  "단가단위(어절/글자/페이지/시간/건)", "기본단가*", "기본진행시간(통역용)", "초과단가(통역용)", "비고",
+  "서비스유형*(TR/IN)", "언어쌍*(KOEN/ENKO/KOCN/KOJA)", "카테고리*(GEN/TECH/MED/LAW/SIM/CON/MIT/EXH)",
+  "상품명*", "단위*(어절/글자/페이지/건/시간)", "기본단가*", "기본진행시간(통역용)", "초과단가(통역용)", "비고",
 ];
-const COL_WIDTHS = [12, 20, 16, 12, 12, 22, 10, 16, 14, 24];
+const COL_WIDTHS = [18, 24, 36, 20, 22, 10, 16, 14, 24];
 const UNIT_MAP: Record<string, string> = {
   eojeol: "어절", char: "글자", page: "페이지", hour: "시간", 건: "건",
 };
@@ -26,11 +54,10 @@ const excelUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize
 
 function productToRow(p: typeof productsTable.$inferSelect): (string | number)[] {
   return [
-    p.code,
+    p.productType === "interpretation" ? "IN" : "TR",
+    p.languagePair ?? "",
+    p.category ?? "",
     p.name,
-    p.productType === "interpretation" ? "통역" : "번역",
-    p.mainCategory ?? "",
-    p.subCategory ?? "",
     UNIT_MAP[p.unit ?? "건"] ?? p.unit ?? "건",
     p.basePrice ?? 0,
     p.interpretationDuration ?? "",
@@ -76,8 +103,9 @@ async function findDuplicate(serviceType: string, languagePair: string, category
 // ─── 상품 목록 ────────────────────────────────────────────────────────────────
 router.get("/admin/products", ...adminGuard, async (req, res) => {
   try {
-    const { search, mainCategory, activeOnly } = req.query as {
+    const { search, mainCategory, activeOnly, serviceType, languagePair, category } = req.query as {
       search?: string; mainCategory?: string; activeOnly?: string;
+      serviceType?: string; languagePair?: string; category?: string;
     };
 
     let rows = await db.select().from(productsTable).orderBy(productsTable.active, desc(productsTable.createdAt));
@@ -98,8 +126,27 @@ router.get("/admin/products", ...adminGuard, async (req, res) => {
       rows = rows.filter(p => p.mainCategory === mainCategory.trim());
     }
 
+    if (serviceType?.trim()) {
+      const svc = serviceType.trim().toUpperCase();
+      rows = rows.filter(p =>
+        svc === "TR" ? p.productType === "translation" : svc === "IN" ? p.productType === "interpretation" : true
+      );
+    }
+
+    if (languagePair?.trim()) {
+      const lp = languagePair.trim().toUpperCase();
+      rows = rows.filter(p => (p.languagePair ?? "").toUpperCase() === lp);
+    }
+
+    if (category?.trim()) {
+      const cat = category.trim().toUpperCase();
+      rows = rows.filter(p => (p.category ?? "").toUpperCase() === cat);
+    }
+
     if (activeOnly === "true") {
       rows = rows.filter(p => p.active);
+    } else if (activeOnly === "false") {
+      rows = rows.filter(p => !p.active);
     }
 
     // 활성 상품 먼저 표시
@@ -233,12 +280,12 @@ router.get("/admin/products/export", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 엑셀 업로드 (일괄 등록) ──────────────────────────────────────────────────
+// ─── 엑셀 업로드 (일괄 등록 — 신규 표준 컬럼) ────────────────────────────────
 router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), async (req, res) => {
   if (!req.file) { res.status(400).json({ error: "파일이 없습니다." }); return; }
 
-  type ImportResult = { created: number; updated: number; errors: { row: number; message: string }[] };
-  const result: ImportResult = { created: 0, updated: 0, errors: [] };
+  type ImportResult = { created: number; skipped: number; errors: { row: number; message: string }[] };
+  const result: ImportResult = { created: 0, skipped: 0, errors: [] };
 
   try {
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
@@ -250,55 +297,61 @@ router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), 
     }
 
     const dataRows = rows.slice(1);
-    const existing = await db.select().from(productsTable);
-    const codeMap = new Map(existing.map(p => [p.code.trim().toLowerCase(), p]));
 
     for (let i = 0; i < dataRows.length; i++) {
       const rowNum = i + 2;
       const r = dataRows[i];
-      const codeRaw = String(r[0] ?? "").trim();
-      const name = String(r[1] ?? "").trim();
-      const typeRaw = String(r[2] ?? "").trim();
-      const mainCategory = String(r[3] ?? "").trim() || null;
-      const subCategory = String(r[4] ?? "").trim() || null;
-      const unitRaw = String(r[5] ?? "").trim();
-      const basePriceRaw = Number(r[6] ?? 0);
-      const interpretationDuration = String(r[7] ?? "").trim() || null;
-      const overtimePriceRaw = r[8] !== "" ? Number(r[8]) : null;
-      const description = String(r[9] ?? "").trim() || null;
+      // 새 컬럼 순서: 서비스유형 | 언어쌍 | 카테고리 | 상품명 | 단위 | 기본단가 | 진행시간 | 초과단가 | 비고
+      const svcRaw = String(r[0] ?? "").trim().toUpperCase();
+      const langRaw = String(r[1] ?? "").trim().toUpperCase();
+      const catRaw = String(r[2] ?? "").trim().toUpperCase();
+      const nameRaw = String(r[3] ?? "").trim();
+      const unitRaw = String(r[4] ?? "").trim();
+      const basePriceRaw = Number(r[5] ?? 0);
+      const interpretationDuration = String(r[6] ?? "").trim() || null;
+      const overtimePriceRaw = r[7] !== "" ? Number(r[7]) : null;
+      const description = String(r[8] ?? "").trim() || null;
 
-      if (!name && !codeRaw) continue;
-      if (!name) { result.errors.push({ row: rowNum, message: "상품명 누락" }); continue; }
-      if (!["번역", "통역"].includes(typeRaw)) {
-        result.errors.push({ row: rowNum, message: `상품유형 오류: '${typeRaw}' (번역 또는 통역)` }); continue;
+      // 빈 행 스킵
+      if (!svcRaw && !langRaw && !catRaw && !nameRaw) continue;
+
+      // 필수 필드 검증
+      if (!VALID_SERVICE_TYPES.includes(svcRaw as typeof VALID_SERVICE_TYPES[number])) {
+        result.errors.push({ row: rowNum, message: `서비스유형 오류: '${svcRaw}' (TR 또는 IN)` }); continue;
       }
+      if (!VALID_LANG_PAIRS.includes(langRaw as typeof VALID_LANG_PAIRS[number])) {
+        result.errors.push({ row: rowNum, message: `언어쌍 오류: '${langRaw}' (KOEN/ENKO/KOCN/KOJA)` }); continue;
+      }
+      const validCats = svcRaw === "IN" ? VALID_CATEGORIES_IN : VALID_CATEGORIES_TR;
+      if (!validCats.includes(catRaw as never)) {
+        result.errors.push({ row: rowNum, message: `카테고리 오류: '${catRaw}' (서비스유형에 맞는 값 사용)` }); continue;
+      }
+      const name = nameRaw || autoProductName(svcRaw, langRaw, catRaw);
       if (isNaN(basePriceRaw) || basePriceRaw < 0) {
-        result.errors.push({ row: rowNum, message: `기본단가 숫자 오류: '${r[6]}'` }); continue;
+        result.errors.push({ row: rowNum, message: `기본단가 숫자 오류: '${r[5]}'` }); continue;
       }
 
-      const productType = typeRaw === "통역" ? "interpretation" : "translation";
-      const svcType = productType === "interpretation" ? "IN" : "TR";
-      const unit = (UNIT_MAP_REV[unitRaw] ?? unitRaw) || "건";
+      const validUnits = svcRaw === "IN" ? VALID_UNITS_IN : VALID_UNITS_TR;
+      const unit = validUnits.includes(unitRaw as never) ? unitRaw : (svcRaw === "IN" ? "시간" : "어절");
       const basePrice = Math.round(basePriceRaw);
       const overtimePrice = overtimePriceRaw !== null && !isNaN(overtimePriceRaw) ? Math.round(overtimePriceRaw) : null;
+      const productType = svcRaw === "IN" ? "interpretation" : "translation";
 
-      // 코드가 지정된 경우 기존 상품 업데이트, 없으면 자동 생성
-      const existingProduct = codeRaw && codeRaw !== "(자동생성)" ? codeMap.get(codeRaw.toLowerCase()) : undefined;
+      // 중복 체크
+      const dupes = await findDuplicate(svcRaw, langRaw, catRaw);
+      if (dupes.length > 0) {
+        result.errors.push({ row: rowNum, message: `중복 상품 존재: ${dupes[0].code} (${dupes[0].name})` });
+        result.skipped++;
+        continue;
+      }
+
       try {
-        if (existingProduct) {
-          await db.update(productsTable).set({
-            name, mainCategory, subCategory, unit, basePrice, description,
-            productType, interpretationDuration, overtimePrice,
-          }).where(eq(productsTable.id, existingProduct.id));
-          result.updated++;
-        } else {
-          const code = await generateProductCode(svcType, "GEN", mainCategory?.slice(0, 4).toUpperCase() || "GEN");
-          await db.insert(productsTable).values({
-            code, name, mainCategory, subCategory, unit, basePrice, description,
-            productType, interpretationDuration, overtimePrice,
-          });
-          result.created++;
-        }
+        const code = await generateProductCode(svcRaw, langRaw, catRaw);
+        await db.insert(productsTable).values({
+          code, name, unit, basePrice, description, productType,
+          languagePair: langRaw, category: catRaw, interpretationDuration, overtimePrice,
+        });
+        result.created++;
       } catch (rowErr) {
         result.errors.push({ row: rowNum, message: `DB 저장 오류: ${(rowErr as Error).message}` });
       }
@@ -603,18 +656,32 @@ router.patch("/admin/products/:id/toggle", ...adminOnly, async (req, res) => {
     res.status(400).json({ error: "유효하지 않은 product id." }); return;
   }
 
+  const { reason } = req.body as { reason?: string };
+
   try {
     const [existing] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
     if (!existing) { res.status(404).json({ error: "상품을 찾을 수 없습니다." }); return; }
 
+    // 비활성화 시 사유 필수
+    if (existing.active && !reason?.trim()) {
+      res.status(400).json({ error: "비활성화 사유를 입력해주세요." }); return;
+    }
+
+    const setData: Partial<typeof productsTable.$inferInsert> = { active: !existing.active };
+    if (existing.active) {
+      setData.deactivationReason = reason!.trim();
+    } else {
+      setData.deactivationReason = null;
+    }
+
     const [updated] = await db
       .update(productsTable)
-      .set({ active: !existing.active })
+      .set(setData)
       .where(eq(productsTable.id, productId))
       .returning();
 
     await logEvent("product", productId, existing.active ? "product_deactivated" : "product_activated",
-      req.log, req.user as any);
+      req.log, req.user as any, existing.active ? JSON.stringify({ reason: reason?.trim() }) : undefined);
 
     res.json(updated);
   } catch (err) {
@@ -630,18 +697,21 @@ router.delete("/admin/products/:id", ...adminOnly, async (req, res) => {
     res.status(400).json({ error: "유효하지 않은 product id." }); return;
   }
 
+  const { reason } = req.body as { reason?: string };
+  const deactivationReason = reason?.trim() || "삭제 요청 → 비활성 처리";
+
   try {
     const [existing] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
     if (!existing) { res.status(404).json({ error: "상품을 찾을 수 없습니다." }); return; }
 
     const [updated] = await db
       .update(productsTable)
-      .set({ active: false })
+      .set({ active: false, deactivationReason })
       .where(eq(productsTable.id, productId))
       .returning();
 
     await logEvent("product", productId, "product_deactivated", req.log, req.user as any,
-      JSON.stringify({ reason: "삭제 요청 → 비활성 처리" }));
+      JSON.stringify({ reason: deactivationReason }));
 
     res.json({ ok: true, deactivated: true, product: updated });
   } catch (err) {

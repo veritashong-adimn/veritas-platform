@@ -10,8 +10,8 @@ Key capabilities include:
 - Payment processing and settlement management for translators.
 - Admin CRM dashboard with enhanced project search, a new prepaid account ledger system, and an accumulated billing tab.
 - Comprehensive management of translator settlement and payment information, including sensitive data with robust security.
-- Separation of translation and interpretation product structures.
-- Support for divisions within large client companies.
+- Separation of translation and interpretation product structures with automatic code generation (`[SVC]-[LANG]-[CAT]-NNN`), dropdown-based form, duplicate warning, deactivation reason modal, and multi-filter search (serviceType/languagePair/category/active).
+- Support for divisions within large client companies: divisions table (company_id FK, name, type), project-level requesting/billing/payer separation, full CRUD API, and stats display in company detail modal.
 - A new data layer for translation data assetization (`translation_units`), enabling advanced search, anonymization, and history tracking.
 - Detailed project, company, contact, translator, and product management modals.
 - File management (upload/download/delete) for project documents using GCS presigned URLs.
