@@ -190,7 +190,19 @@ export type CompanyDetail = Company & {
   contacts: Contact[];
   divisions: Division[];
   projects: Array<{ id: number; title: string; status: string; createdAt: string; requestingDivisionId?: number | null }>;
-  totalQuote: number; totalSettlement: number;
+  totalQuote: number;
+  totalPayment: number;
+  totalSettlement: number;
+  prepaidBalance: number | null;
+  activeAccumulatedCount: number;
+  unpaidAmount: number;
+  lastProjectDate: string | null;
+  lastPaymentDate: string | null;
+  nameHistory?: Array<{
+    id: number; companyId: number; companyName: string; nameType: string;
+    validFrom: string | null; validTo: string | null; reason: string | null;
+    changedByEmail: string | null; changedAt: string;
+  }>;
 };
 export type ProductOption = {
   id: number; productId: number; optionType: string; optionValue: string; sortOrder: number | null;

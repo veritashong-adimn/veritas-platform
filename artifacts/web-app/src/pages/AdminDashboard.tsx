@@ -33,13 +33,14 @@ const labelStyle: React.CSSProperties = {
   display: 'block', fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 6,
 };
 
-function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
+function Section({ title, sub, children, action }: { title: string; sub?: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 32 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: sub ? 4 : 14 }}>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>{title}</h2>
         {action}
       </div>
+      {sub && <p style={{ margin: "0 0 12px", fontSize: 12, color: "#6b7280" }}>{sub}</p>}
       {children}
     </div>
   );
@@ -1955,13 +1956,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
                                 if (!isComplex) {
                                   // ── 단순 모드 ──
-                                  const displayName = pp.divisionName
-                                    ? `${reqName ?? "-"}(${pp.divisionName})`
-                                    : (reqName ?? p.companyName ?? "-");
+                                  const baseName = reqName ?? p.companyName ?? "-";
                                   return (
                                     <td style={{ ...tableTd, fontSize: 12, maxWidth: 180 }}>
-                                      <div style={{ color: "#4b5563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>
-                                        {displayName}
+                                      <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", overflow: "hidden" }}>
+                                        <span style={{ color: "#4b5563", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{baseName}</span>
+                                        {pp.divisionName && (
+                                          <span style={{ flexShrink: 0, background: "#ede9fe", color: "#7c3aed", borderRadius: 4, padding: "1px 6px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
+                                            {pp.divisionName}
+                                          </span>
+                                        )}
                                       </div>
                                       {contact && (
                                         <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -1974,7 +1978,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
                                 // ── 복합 모드 (B2B) ──
                                 const reqDisplay = pp.divisionName
-                                  ? <><span style={{ fontWeight: 500, color: "#374151" }}>{reqName}</span><span style={{ color: "#7c3aed", fontWeight: 700 }}>({pp.divisionName})</span></>
+                                  ? <><span style={{ fontWeight: 500, color: "#374151" }}>{reqName}</span><span style={{ marginLeft: 4, background: "#ede9fe", color: "#7c3aed", borderRadius: 4, padding: "1px 6px", fontSize: 11, fontWeight: 700 }}>{pp.divisionName}</span></>
                                   : <span style={{ fontWeight: 500, color: "#374151" }}>{reqName ?? "-"}</span>;
 
                                 return (
