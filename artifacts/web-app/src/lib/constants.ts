@@ -215,6 +215,7 @@ export type Product = {
   options: ProductOption[];
   category: string | null; languagePair: string | null; field: string | null;
   productType: string; interpretationDuration: string | null; overtimePrice: number | null;
+  deactivationReason: string | null;
 };
 export type BoardPost = {
   id: number; category: string; title: string; content?: string;
