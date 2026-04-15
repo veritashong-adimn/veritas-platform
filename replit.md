@@ -52,7 +52,7 @@ The project is structured as a pnpm monorepo, organizing code into `artifacts` (
 - **Project List UX:** Features pagination, quick action buttons, and filter pills.
 - **Event Log Timeline:** Displays event logs in a chronologically sorted vertical timeline with Korean action labels, icons, and color coding.
 - **PDF Document Output:** Generates PDF versions of quotes and statements, supporting authentication via `?token=` query parameter for downloads. Documents include dynamic platform and bank information based on environment variables.
-- **Frontend Structure:** Refactored into modular components and pages for better maintainability, including shared UI components, project-specific components, and admin modals.
+- **Frontend Structure:** Refactored into modular components and pages for better maintainability, including shared UI components, project-specific components, and admin modals. AdminDashboard.tsx is broken into dedicated sub-components: `ProductManagementTab.tsx` (상품 관리), `ProjectManagementTab.tsx` (프로젝트 탭 — 필터, 페이지네이션, 생성 모달 포함, 독립 fetch 로직), `CompanyDetailModal.tsx`, `ProjectDetailModal.tsx` 등.
 - **UI/UX Decisions:** JWTs managed in localStorage. Clear separation of concerns between customer, translator, and admin roles. Forms for all data entry. Uses inline styles instead of Tailwind.
 
 # External Dependencies
