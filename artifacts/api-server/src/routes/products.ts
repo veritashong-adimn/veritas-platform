@@ -184,9 +184,20 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
   }
 
   const svcType = serviceType?.trim().toUpperCase() || (productType === "interpretation" ? "IN" : "TR");
-  const langPair = languagePair?.trim().toUpperCase() || "GEN";
+  const langPair = languagePair?.trim().toUpperCase() || "KOEN";
   const cat = category?.trim().toUpperCase() || "GEN";
   const resolvedProductType = svcType === "IN" ? "interpretation" : "translation";
+
+  if (!VALID_SERVICE_TYPES.includes(svcType as typeof VALID_SERVICE_TYPES[number])) {
+    res.status(400).json({ error: `serviceType은 ${VALID_SERVICE_TYPES.join(" 또는 ")} 이어야 합니다.` }); return;
+  }
+  if (!VALID_LANG_PAIRS.includes(langPair as typeof VALID_LANG_PAIRS[number])) {
+    res.status(400).json({ error: `languagePair은 ${VALID_LANG_PAIRS.join("/")} 중 하나여야 합니다.` }); return;
+  }
+  const validCats = svcType === "IN" ? VALID_CATEGORIES_IN : VALID_CATEGORIES_TR;
+  if (!(validCats as readonly string[]).includes(cat)) {
+    res.status(400).json({ error: `${svcType} 서비스의 category는 ${[...validCats].join("/")} 중 하나여야 합니다.` }); return;
+  }
 
   try {
     // 중복 체크

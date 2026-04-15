@@ -109,6 +109,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [deactivatingProductId, setDeactivatingProductId] = useState<number | null>(null);
   const [deactivationReason, setDeactivationReason] = useState("");
   const [productDupeWarning, setProductDupeWarning] = useState<{ existing: {id: number; code: string; name: string}[] } | null>(null);
+  const [productNameCustom, setProductNameCustom] = useState(false);
+  const [requestNameCustom, setRequestNameCustom] = useState(false);
 
   const fetchProducts = useCallback(async () => {
     setProductsLoading(true);
@@ -147,12 +149,13 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   }, [productRequestStatusFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSaveProduct = async () => {
+    const effectiveName = productForm.name.trim() || autoProductName(productForm.serviceType, productForm.languagePair, productForm.category);
     if (editingProduct) {
-      if (!productForm.name.trim() || !productForm.basePrice) {
+      if (!effectiveName || !productForm.basePrice) {
         setToast("상품명, 기본단가는 필수입니다."); return;
       }
     } else {
-      if (!productForm.serviceType.trim() || !productForm.languagePair.trim() || !productForm.category.trim() || !productForm.name.trim() || !productForm.basePrice) {
+      if (!productForm.serviceType.trim() || !productForm.languagePair.trim() || !productForm.category.trim() || !effectiveName || !productForm.basePrice) {
         setToast("서비스유형, 언어쌍, 카테고리, 상품명, 기본단가는 필수입니다."); return;
       }
     }
@@ -160,7 +163,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     try {
       const payload = editingProduct
         ? {
-          name: productForm.name.trim(),
+          name: effectiveName,
           mainCategory: productForm.mainCategory || null,
           subCategory: productForm.subCategory || null,
           unit: productForm.productType === "interpretation" ? "시간" : productForm.unit,
@@ -174,7 +177,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           serviceType: productForm.serviceType.trim().toUpperCase(),
           languagePair: productForm.languagePair.trim().toUpperCase(),
           category: productForm.category.trim().toUpperCase(),
-          name: productForm.name.trim(),
+          name: effectiveName,
           mainCategory: productForm.mainCategory || null,
           subCategory: productForm.subCategory || null,
           unit: productForm.productType === "interpretation" ? "시간" : productForm.unit,
@@ -212,7 +215,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   };
 
   const handleSubmitRequest = async () => {
-    if (!requestForm.serviceType.trim() || !requestForm.languagePair.trim() || !requestForm.category.trim() || !requestForm.name.trim()) {
+    const effectiveReqName = requestForm.name.trim() || autoProductName(requestForm.serviceType, requestForm.languagePair, requestForm.category);
+    if (!requestForm.serviceType.trim() || !requestForm.languagePair.trim() || !requestForm.category.trim() || !effectiveReqName) {
       setToast("서비스유형, 언어쌍, 카테고리, 상품명은 필수입니다."); return;
     }
     setSubmittingRequest(true);
@@ -224,7 +228,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           serviceType: requestForm.serviceType.trim().toUpperCase(),
           languagePair: requestForm.languagePair.trim().toUpperCase(),
           category: requestForm.category.trim().toUpperCase(),
-          name: requestForm.name.trim(),
+          name: effectiveReqName,
           unit: requestForm.unit || "건",
           description: requestForm.description.trim() || null,
         }),
@@ -234,6 +238,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
       const dupMsg = data.hasDuplicate ? " (중복 상품 있음 — 관리자 검토 필요)" : "";
       setToast(`상품 등록 요청이 제출되었습니다.${dupMsg}`);
       setRequestForm(emptyRequestForm);
+      setRequestNameCustom(false);
       setShowRequestForm(false);
       fetchProductRequests();
     } catch { setToast("오류: 요청 제출 실패"); }
@@ -352,7 +357,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               onChange={e => { const f = e.target.files?.[0]; if (f) handleProductImport(f); }} />
           </label>
           {hasPerm("product.manage") && (
-            <PrimaryBtn onClick={() => { setShowProductForm(v => !v); setEditingProduct(null); setProductForm(emptyProductForm); setProductImportResult(null); }} style={{ fontSize: 13, padding: "7px 14px" }}>
+            <PrimaryBtn onClick={() => { setShowProductForm(v => !v); setEditingProduct(null); setProductForm(emptyProductForm); setProductImportResult(null); setProductNameCustom(false); }} style={{ fontSize: 13, padding: "7px 14px" }}>
               {showProductForm && !editingProduct ? "취소" : "+ 상품 등록"}
             </PrimaryBtn>
           )}
@@ -402,48 +407,48 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
                   <div>
                     <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>서비스 유형 <span style={{ color: "#dc2626" }}>*</span></label>
-                    <select value={productForm.serviceType}
-                      onChange={e => {
-                        const svc = e.target.value;
+                    <ClickSelect
+                      value={productForm.serviceType}
+                      onChange={svc => {
                         const defCat = svc === "IN" ? "SIM" : "GEN";
                         const defUnit = svc === "IN" ? "시간" : "어절";
                         const newProdType = svc === "IN" ? "interpretation" : "translation";
-                        const autoName = autoProductName(svc, productForm.languagePair, defCat);
-                        setProductForm(p => ({ ...p, serviceType: svc, category: defCat, unit: defUnit, productType: newProdType, name: p.name || autoName }));
+                        const an = autoProductName(svc, productForm.languagePair, defCat);
+                        setProductForm(p => ({ ...p, serviceType: svc, category: defCat, unit: defUnit, productType: newProdType, name: productNameCustom ? p.name : an }));
                         setProductDupeWarning(null);
                       }}
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
-                      <option value="TR">TR — 번역</option>
-                      <option value="IN">IN — 통역</option>
-                    </select>
+                      options={[{ value: "TR", label: "📄 번역 (TR)" }, { value: "IN", label: "🎤 통역 (IN)" }]}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                    />
                   </div>
                   <div>
                     <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>언어쌍 <span style={{ color: "#dc2626" }}>*</span></label>
-                    <select value={productForm.languagePair}
-                      onChange={e => {
-                        const lang = e.target.value;
-                        const autoName = autoProductName(productForm.serviceType, lang, productForm.category);
-                        setProductForm(p => ({ ...p, languagePair: lang, name: p.name || autoName }));
+                    <ClickSelect
+                      value={productForm.languagePair}
+                      onChange={lang => {
+                        const an = autoProductName(productForm.serviceType, lang, productForm.category);
+                        setProductForm(p => ({ ...p, languagePair: lang, name: productNameCustom ? p.name : an }));
                         setProductDupeWarning(null);
                       }}
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
-                      {LANG_PAIR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                    </select>
+                      options={LANG_PAIR_OPTIONS}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                    />
                   </div>
                   <div>
                     <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>카테고리 <span style={{ color: "#dc2626" }}>*</span></label>
-                    <select value={productForm.category}
-                      onChange={e => {
-                        const cat = e.target.value;
-                        const autoName = autoProductName(productForm.serviceType, productForm.languagePair, cat);
-                        setProductForm(p => ({ ...p, category: cat, name: p.name || autoName }));
+                    <ClickSelect
+                      value={productForm.category}
+                      onChange={cat => {
+                        const an = autoProductName(productForm.serviceType, productForm.languagePair, cat);
+                        setProductForm(p => ({ ...p, category: cat, name: productNameCustom ? p.name : an }));
                         setProductDupeWarning(null);
                       }}
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
-                      {(productForm.serviceType === "IN" ? CATEGORY_OPTIONS_IN : CATEGORY_OPTIONS_TR).map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
+                      options={productForm.serviceType === "IN" ? CATEGORY_OPTIONS_IN : CATEGORY_OPTIONS_TR}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                    />
                   </div>
                 </div>
                 {/* 중복 경고 */}
@@ -466,9 +471,32 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
 
             {/* 상품명 */}
             <div style={{ marginBottom: 12 }}>
-              <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>상품명 <span style={{ color: "#dc2626" }}>*</span></label>
-              <input value={productForm.name} onChange={e => setProductForm(p => ({ ...p, name: e.target.value }))}
-                placeholder="예: 동시통역 서비스" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 3 }}>
+                <label style={{ fontSize: 12, color: "#6b7280" }}>상품명 <span style={{ color: "#dc2626" }}>*</span></label>
+                {!editingProduct && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (productNameCustom) {
+                        const an = autoProductName(productForm.serviceType, productForm.languagePair, productForm.category);
+                        setProductForm(p => ({ ...p, name: an }));
+                      }
+                      setProductNameCustom(v => !v);
+                    }}
+                    style={{ fontSize: 11, color: productNameCustom ? "#9ca3af" : "#2563eb", background: "none", border: "none", cursor: "pointer", padding: "0 2px", textDecoration: "underline" }}>
+                    {productNameCustom ? "↩ 자동 생성으로" : "✏ 이름 직접 입력"}
+                  </button>
+                )}
+              </div>
+              {!editingProduct && !productNameCustom ? (
+                <div style={{ padding: "9px 12px", borderRadius: 8, background: "#f3f4f6", border: "1px solid #e5e7eb", fontSize: 13, color: "#111827", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 11, color: "#9ca3af" }}>자동</span>
+                  {productForm.name || autoProductName(productForm.serviceType, productForm.languagePair, productForm.category)}
+                </div>
+              ) : (
+                <input value={productForm.name} onChange={e => setProductForm(p => ({ ...p, name: e.target.value }))}
+                  placeholder="예: 동시통역 서비스" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+              )}
             </div>
 
             {/* 상품 유형 */}
@@ -745,7 +773,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 {s === "all" ? "전체" : s === "pending" ? "⏳ 대기" : s === "approved" ? "✅ 승인" : "❌ 거절"}
               </button>
             ))}
-            <button onClick={() => { setShowRequestForm(v => !v); setRequestForm(emptyRequestForm); }}
+            <button onClick={() => { setShowRequestForm(v => !v); setRequestForm(emptyRequestForm); setRequestNameCustom(false); }}
               style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, cursor: "pointer", fontWeight: 700,
                 background: showRequestForm ? "#f3f4f6" : "#faf5ff", color: showRequestForm ? "#6b7280" : "#7c3aed",
                 border: "1px solid #e9d5ff" }}>
@@ -761,44 +789,44 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px", marginBottom: 10 }}>
               <div>
                 <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>서비스 유형 <span style={{ color: "#dc2626" }}>*</span></label>
-                <select value={requestForm.serviceType}
-                  onChange={e => {
-                    const svc = e.target.value;
+                <ClickSelect
+                  value={requestForm.serviceType}
+                  onChange={svc => {
                     const defCat = svc === "IN" ? "SIM" : "GEN";
                     const defUnit = svc === "IN" ? "시간" : "어절";
-                    const autoName = autoProductName(svc, requestForm.languagePair, defCat);
-                    setRequestForm(p => ({ ...p, serviceType: svc, category: defCat, unit: defUnit, name: p.name || autoName }));
+                    const an = autoProductName(svc, requestForm.languagePair, defCat);
+                    setRequestForm(p => ({ ...p, serviceType: svc, category: defCat, unit: defUnit, name: requestNameCustom ? p.name : an }));
                   }}
-                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
-                  <option value="TR">TR — 번역</option>
-                  <option value="IN">IN — 통역</option>
-                </select>
+                  options={[{ value: "TR", label: "📄 번역 (TR)" }, { value: "IN", label: "🎤 통역 (IN)" }]}
+                  style={{ width: "100%" }}
+                  triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                />
               </div>
               <div>
                 <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>언어쌍 <span style={{ color: "#dc2626" }}>*</span></label>
-                <select value={requestForm.languagePair}
-                  onChange={e => {
-                    const lang = e.target.value;
-                    const autoName = autoProductName(requestForm.serviceType, lang, requestForm.category);
-                    setRequestForm(p => ({ ...p, languagePair: lang, name: p.name || autoName }));
+                <ClickSelect
+                  value={requestForm.languagePair}
+                  onChange={lang => {
+                    const an = autoProductName(requestForm.serviceType, lang, requestForm.category);
+                    setRequestForm(p => ({ ...p, languagePair: lang, name: requestNameCustom ? p.name : an }));
                   }}
-                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
-                  {LANG_PAIR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
+                  options={LANG_PAIR_OPTIONS}
+                  style={{ width: "100%" }}
+                  triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                />
               </div>
               <div>
                 <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>카테고리 <span style={{ color: "#dc2626" }}>*</span></label>
-                <select value={requestForm.category}
-                  onChange={e => {
-                    const cat = e.target.value;
-                    const autoName = autoProductName(requestForm.serviceType, requestForm.languagePair, cat);
-                    setRequestForm(p => ({ ...p, category: cat, name: p.name || autoName }));
+                <ClickSelect
+                  value={requestForm.category}
+                  onChange={cat => {
+                    const an = autoProductName(requestForm.serviceType, requestForm.languagePair, cat);
+                    setRequestForm(p => ({ ...p, category: cat, name: requestNameCustom ? p.name : an }));
                   }}
-                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
-                  {(requestForm.serviceType === "IN" ? CATEGORY_OPTIONS_IN : CATEGORY_OPTIONS_TR).map(o => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
+                  options={requestForm.serviceType === "IN" ? CATEGORY_OPTIONS_IN : CATEGORY_OPTIONS_TR}
+                  style={{ width: "100%" }}
+                  triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                />
               </div>
             </div>
             <div style={{ background: "#f5f3ff", borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#5b21b6" }}>
@@ -809,20 +837,41 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "0 12px", marginBottom: 10 }}>
               <div>
-                <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>상품명 <span style={{ color: "#dc2626" }}>*</span></label>
-                <input value={requestForm.name} onChange={e => setRequestForm(p => ({ ...p, name: e.target.value }))}
-                  placeholder={`예: ${autoProductName(requestForm.serviceType, requestForm.languagePair, requestForm.category)}`}
-                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 3 }}>
+                  <label style={{ fontSize: 12, color: "#374151" }}>상품명 <span style={{ color: "#dc2626" }}>*</span></label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (requestNameCustom) {
+                        const an = autoProductName(requestForm.serviceType, requestForm.languagePair, requestForm.category);
+                        setRequestForm(p => ({ ...p, name: an }));
+                      }
+                      setRequestNameCustom(v => !v);
+                    }}
+                    style={{ fontSize: 11, color: requestNameCustom ? "#9ca3af" : "#7c3aed", background: "none", border: "none", cursor: "pointer", padding: "0 2px", textDecoration: "underline" }}>
+                    {requestNameCustom ? "↩ 자동 생성으로" : "✏ 이름 직접 입력"}
+                  </button>
+                </div>
+                {!requestNameCustom ? (
+                  <div style={{ padding: "9px 12px", borderRadius: 8, background: "#f5f3ff", border: "1px solid #e9d5ff", fontSize: 13, color: "#111827", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 11, color: "#9ca3af" }}>자동</span>
+                    {requestForm.name || autoProductName(requestForm.serviceType, requestForm.languagePair, requestForm.category)}
+                  </div>
+                ) : (
+                  <input value={requestForm.name} onChange={e => setRequestForm(p => ({ ...p, name: e.target.value }))}
+                    placeholder={`예: ${autoProductName(requestForm.serviceType, requestForm.languagePair, requestForm.category)}`}
+                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }} />
+                )}
               </div>
               <div>
                 <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>단위</label>
-                <select value={requestForm.unit}
-                  onChange={e => setRequestForm(p => ({ ...p, unit: e.target.value }))}
-                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", width: "100%", boxSizing: "border-box" }}>
-                  {(requestForm.serviceType === "IN" ? ["시간"] : ["어절", "글자", "페이지", "건"]).map(u => (
-                    <option key={u} value={u}>{u}</option>
-                  ))}
-                </select>
+                <ClickSelect
+                  value={requestForm.unit}
+                  onChange={u => setRequestForm(p => ({ ...p, unit: u }))}
+                  options={(requestForm.serviceType === "IN" ? ["시간"] : ["어절", "글자", "페이지", "건"]).map(u => ({ value: u, label: u }))}
+                  style={{ width: "100%" }}
+                  triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                />
               </div>
             </div>
             <div style={{ marginBottom: 14 }}>
@@ -837,7 +886,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   background: "#7c3aed", color: "#fff", border: "none", opacity: submittingRequest ? 0.6 : 1 }}>
                 {submittingRequest ? "제출 중..." : "요청 제출"}
               </button>
-              <button onClick={() => { setShowRequestForm(false); setRequestForm(emptyRequestForm); }}
+              <button onClick={() => { setShowRequestForm(false); setRequestForm(emptyRequestForm); setRequestNameCustom(false); }}
                 style={{ padding: "7px 14px", fontSize: 13, borderRadius: 8, cursor: "pointer", background: "none", border: "1px solid #d1d5db", color: "#6b7280" }}>
                 취소
               </button>
