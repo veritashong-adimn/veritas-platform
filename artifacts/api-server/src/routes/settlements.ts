@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, settlementsTable, projectsTable, usersTable, paymentsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 
@@ -8,6 +8,7 @@ const router: IRouter = Router();
 
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
+// ── 정산 목록 ─────────────────────────────────────────────────────────────────
 router.get("/admin/settlements", ...adminGuard, async (req, res) => {
   try {
     const rows = await db
@@ -20,6 +21,8 @@ router.get("/admin/settlements", ...adminGuard, async (req, res) => {
         translatorAmount: settlementsTable.translatorAmount,
         platformFee: settlementsTable.platformFee,
         status: settlementsTable.status,
+        paidDate: settlementsTable.paidDate,
+        paymentMemo: settlementsTable.paymentMemo,
         createdAt: settlementsTable.createdAt,
         projectTitle: projectsTable.title,
         translatorEmail: usersTable.email,
@@ -37,6 +40,7 @@ router.get("/admin/settlements", ...adminGuard, async (req, res) => {
   }
 });
 
+// ── 단건 지급 완료 처리 ───────────────────────────────────────────────────────
 router.patch("/admin/settlements/:id/pay",
   ...adminGuard,
   requirePermission("settlement.pay"),
@@ -66,9 +70,11 @@ router.patch("/admin/settlements/:id/pay",
     }
 
     try {
+      const paymentMemo = typeof req.body?.paymentMemo === "string" ? req.body.paymentMemo.trim() || null : null;
+
       const [updated] = await db
         .update(settlementsTable)
-        .set({ status: "paid" })
+        .set({ status: "paid", paidDate: new Date(), paymentMemo })
         .where(eq(settlementsTable.id, settlementId))
         .returning();
 
@@ -81,6 +87,58 @@ router.patch("/admin/settlements/:id/pay",
   }
 );
 
+// ── 일괄 지급 완료 처리 ───────────────────────────────────────────────────────
+router.patch("/admin/settlements/batch-pay",
+  ...adminGuard,
+  requirePermission("settlement.pay"),
+  async (req, res) => {
+    const { ids, paymentMemo } = req.body as { ids?: unknown; paymentMemo?: unknown };
+
+    if (!Array.isArray(ids) || ids.length === 0) {
+      res.status(400).json({ error: "ids 배열이 필요합니다." });
+      return;
+    }
+
+    const validIds = ids.map(Number).filter(n => !isNaN(n) && n > 0);
+    if (validIds.length === 0) {
+      res.status(400).json({ error: "유효한 id가 없습니다." });
+      return;
+    }
+
+    const memo = typeof paymentMemo === "string" ? paymentMemo.trim() || null : null;
+
+    try {
+      const targets = await db
+        .select({ id: settlementsTable.id, projectId: settlementsTable.projectId, status: settlementsTable.status })
+        .from(settlementsTable)
+        .where(inArray(settlementsTable.id, validIds));
+
+      const readyIds = targets.filter(t => t.status === "ready").map(t => t.id);
+
+      if (readyIds.length === 0) {
+        res.status(400).json({ error: "지급 처리 가능한(ready 상태) 정산 건이 없습니다." });
+        return;
+      }
+
+      const updated = await db
+        .update(settlementsTable)
+        .set({ status: "paid", paidDate: new Date(), paymentMemo: memo })
+        .where(inArray(settlementsTable.id, readyIds))
+        .returning();
+
+      for (const t of targets.filter(t => readyIds.includes(t.id))) {
+        await logEvent("project", t.projectId, "settlement_paid", req.log);
+      }
+
+      res.json({ updated: updated.length, skipped: validIds.length - readyIds.length, items: updated });
+    } catch (err) {
+      req.log.error({ err }, "Failed to batch-pay settlements");
+      res.status(500).json({ error: "일괄 정산 처리 실패." });
+    }
+  }
+);
+
+// ── 번역사 본인 정산 내역 ──────────────────────────────────────────────────────
 router.get("/settlements/my", requireAuth, requireRole("translator"), async (req, res) => {
   const translatorId = req.user!.id;
   try {
@@ -92,6 +150,7 @@ router.get("/settlements/my", requireAuth, requireRole("translator"), async (req
         translatorAmount: settlementsTable.translatorAmount,
         platformFee: settlementsTable.platformFee,
         status: settlementsTable.status,
+        paidDate: settlementsTable.paidDate,
         createdAt: settlementsTable.createdAt,
         projectTitle: projectsTable.title,
       })

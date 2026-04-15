@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, numeric, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, numeric, timestamp, text, pgEnum } from "drizzle-orm/pg-core";
 import { projectsTable } from "./projects";
 import { usersTable } from "./users";
 import { paymentsTable } from "./payments";
@@ -19,6 +19,8 @@ export const settlementsTable = pgTable("settlements", {
   translatorAmount: numeric("translator_amount", { precision: 12, scale: 2 }).notNull(),
   platformFee: numeric("platform_fee", { precision: 12, scale: 2 }).notNull(),
   status: settlementStatusEnum("status").notNull().default("pending"),
+  paidDate: timestamp("paid_date"),
+  paymentMemo: text("payment_memo"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
