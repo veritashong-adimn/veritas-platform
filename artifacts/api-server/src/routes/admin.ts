@@ -584,6 +584,7 @@ router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
     await logEvent("project", projectId, logAction, req.log, req.user ?? undefined);
 
     // 완료 상태 전환 시: 정산이 없으면 자동 생성
+    let settlementCreated = false;
     if (status === "completed") {
       const [existingSettlement] = await db.select({ id: settlementsTable.id }).from(settlementsTable).where(eq(settlementsTable.projectId, projectId));
       if (!existingSettlement) {
@@ -603,6 +604,7 @@ router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
             platformFee: String(fee),
             status: "ready",
           });
+          settlementCreated = true;
           await logEvent("project", projectId, "settlement_created", req.log, req.user ?? undefined);
           req.log.info({ projectId, settlementRatio: stg.settlementRatio, applyWithholdingTax: stg.applyWithholdingTax }, "Settlement auto-created on admin status→completed");
         }
@@ -612,7 +614,7 @@ router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
       tryBuildOnProjectComplete(projectId, req.log).catch(() => {});
     }
 
-    res.json(updated);
+    res.json({ ...updated, settlementCreated });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to update project status");
     res.status(500).json({ error: "상태 변경 실패." });

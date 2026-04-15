@@ -496,7 +496,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      onToast(`업무 상태가 "${STATUS_LABEL[statusTarget] ?? statusTarget}"로 변경되었습니다.`);
+      if (data.settlementCreated) {
+        onToast(`업무 상태가 "완료"로 변경되었습니다. 정산이 자동 생성되었습니다.`);
+      } else {
+        onToast(`업무 상태가 "${STATUS_LABEL[statusTarget] ?? statusTarget}"로 변경되었습니다.`);
+      }
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 상태 변경 실패"); }
     finally { setChangingStatus(false); }
@@ -512,7 +516,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      onToast(`상태가 "${STATUS_LABEL[newStatus] ?? newStatus}"로 변경되었습니다.`);
+      if (data.settlementCreated) {
+        onToast(`상태가 "완료"로 변경되었습니다. 정산이 자동 생성되었습니다.`);
+      } else {
+        onToast(`상태가 "${STATUS_LABEL[newStatus] ?? newStatus}"로 변경되었습니다.`);
+      }
       setStatusTarget(newStatus);
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 상태 변경 실패"); }
