@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { ADMIN_NAV_GROUPS, ADMIN_PAGE_TITLE, STAFF_DEFAULT_PERMS } from '../config/adminNav';
 import {
   api, User, AdminProject, AdminPayment, AdminTask, AdminSettlement, AdminUser,
@@ -212,6 +212,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   // other filters
   const [paymentFilter, setPaymentFilter] = useState<string>("all");
   const [settlementFilter, setSettlementFilter] = useState<string>("all");
+  const [settlementMonthFilter, setSettlementMonthFilter] = useState<string>("all");
 
   // customer management
   const [customerSearch, setCustomerSearch] = useState("");
@@ -924,6 +925,40 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   const filteredPayments = paymentFilter === "all" ? payments : payments.filter(p => p.status === paymentFilter);
 
+  // ── 정산 탭 useMemo ──────────────────────────────────────────────────────────
+  const settlementMonths = useMemo(() => {
+    const monthSet = new Set<string>();
+    settlements.forEach(s => {
+      const m = s.createdAt.slice(0, 7);
+      monthSet.add(m);
+    });
+    return Array.from(monthSet).sort((a, b) => b.localeCompare(a));
+  }, [settlements]);
+
+  const filteredSettlements = useMemo(() => {
+    return settlements.filter(s => {
+      if (settlementFilter !== "all" && s.status !== settlementFilter) return false;
+      if (settlementMonthFilter !== "all" && s.createdAt.slice(0, 7) !== settlementMonthFilter) return false;
+      return true;
+    });
+  }, [settlements, settlementFilter, settlementMonthFilter]);
+
+  const settlementStats = useMemo(() => {
+    const now = new Date();
+    const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const unpaidTotal = settlements
+      .filter(s => s.status === "ready")
+      .reduce((sum, s) => sum + Number(s.translatorAmount), 0);
+    const unpaidCount = settlements.filter(s => s.status === "ready").length;
+    const thisMonthUnpaid = settlements
+      .filter(s => s.status === "ready" && s.createdAt.slice(0, 7) === thisMonth)
+      .reduce((sum, s) => sum + Number(s.translatorAmount), 0);
+    const paidTotal = settlements
+      .filter(s => s.status === "paid")
+      .reduce((sum, s) => sum + Number(s.translatorAmount), 0);
+    return { unpaidTotal, unpaidCount, thisMonthUnpaid, paidTotal };
+  }, [settlements]);
+
   const tableTh: React.CSSProperties = {
     padding: "10px 12px", textAlign: "left", fontSize: 12,
     fontWeight: 600, color: "#6b7280", background: "#f9fafb",
@@ -1351,75 +1386,134 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       )}
 
       {/* ── 정산 탭 ── */}
-      {adminTab === "settlements" && (() => {
-        const filtered = settlementFilter === "all" ? settlements : settlements.filter(s => s.status === settlementFilter);
-        return (
-          <Section
-            title={`정산 현황 (${filtered.length})`}
-            action={
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                <GhostBtn onClick={() => handleExportCSV("settlements")} style={{ fontSize: 12, padding: "6px 12px" }}>⬇ CSV</GhostBtn>
-                <FilterPill label="전체" active={settlementFilter === "all"} onClick={() => setSettlementFilter("all")} />
-                {ALL_SETTLEMENT_STATUSES.map(s => (
-                  <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
-                    active={settlementFilter === s} onClick={() => setSettlementFilter(s)} />
-                ))}
+      {adminTab === "settlements" && (
+        <Section
+          title={`정산 현황 (${filteredSettlements.length})`}
+          action={
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              <GhostBtn onClick={() => handleExportCSV("settlements")} style={{ fontSize: 12, padding: "6px 12px" }}>⬇ CSV</GhostBtn>
+              <FilterPill label="전체" active={settlementFilter === "all"} onClick={() => setSettlementFilter("all")} />
+              {ALL_SETTLEMENT_STATUSES.map(s => (
+                <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
+                  active={settlementFilter === s} onClick={() => setSettlementFilter(s)} />
+              ))}
+            </div>
+          }
+        >
+          {/* ── 통계 카드 3종 ── */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 20 }}>
+            {/* 카드 1: 이번 달 정산 예정 */}
+            <div style={{ background: "#fff", border: "1px solid #fecaca", borderRadius: 12, padding: "16px 20px", position: "relative", overflow: "hidden" }}>
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #ef4444, #f87171)" }} />
+              <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 700, color: "#ef4444", textTransform: "uppercase", letterSpacing: "0.06em" }}>이번 달 정산 예정</p>
+              <p style={{ margin: "0 0 2px", fontSize: 22, fontWeight: 800, color: "#111827", letterSpacing: "-0.5px" }}>
+                {settlementStats.thisMonthUnpaid.toLocaleString()}원
+              </p>
+              <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>미지급 상태 기준</p>
+            </div>
+            {/* 카드 2: 미지급 건수 */}
+            <div style={{ background: "#fff", border: "1px solid #fed7aa", borderRadius: 12, padding: "16px 20px", position: "relative", overflow: "hidden" }}>
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #f97316, #fb923c)" }} />
+              <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 700, color: "#f97316", textTransform: "uppercase", letterSpacing: "0.06em" }}>미지급 건수</p>
+              <p style={{ margin: "0 0 2px", fontSize: 22, fontWeight: 800, color: "#111827", letterSpacing: "-0.5px" }}>
+                {settlementStats.unpaidCount}건
+              </p>
+              <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>
+                합계 {settlementStats.unpaidTotal.toLocaleString()}원
+              </p>
+            </div>
+            {/* 카드 3: 지급 완료 총액 */}
+            <div style={{ background: "#fff", border: "1px solid #bbf7d0", borderRadius: 12, padding: "16px 20px", position: "relative", overflow: "hidden" }}>
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #059669, #34d399)" }} />
+              <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 700, color: "#059669", textTransform: "uppercase", letterSpacing: "0.06em" }}>지급 완료 총액</p>
+              <p style={{ margin: "0 0 2px", fontSize: 22, fontWeight: 800, color: "#111827", letterSpacing: "-0.5px" }}>
+                {settlementStats.paidTotal.toLocaleString()}원
+              </p>
+              <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>누적 지급 완료</p>
+            </div>
+          </div>
+
+          {/* ── 월별 필터 ── */}
+          {settlementMonths.length > 0 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginRight: 2, whiteSpace: "nowrap" }}>월별</span>
+              <button
+                onClick={() => setSettlementMonthFilter("all")}
+                style={{ padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: settlementMonthFilter === "all" ? 700 : 500, cursor: "pointer",
+                  background: settlementMonthFilter === "all" ? "#374151" : "#f3f4f6",
+                  color: settlementMonthFilter === "all" ? "#fff" : "#374151",
+                  border: "none" }}>
+                전체
+              </button>
+              {settlementMonths.map(m => {
+                const [y, mo] = m.split("-");
+                const isActive = settlementMonthFilter === m;
+                return (
+                  <button key={m} onClick={() => setSettlementMonthFilter(m)}
+                    style={{ padding: "4px 12px", borderRadius: 20, fontSize: 12, fontWeight: isActive ? 700 : 500, cursor: "pointer",
+                      background: isActive ? "#1d4ed8" : "#f3f4f6",
+                      color: isActive ? "#fff" : "#374151",
+                      border: "none" }}>
+                    {y}.{mo}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── 목록 ── */}
+          {loading ? (
+            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
+          ) : filteredSettlements.length === 0 ? (
+            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>정산 내역이 없습니다.</Card>
+          ) : (
+            <Card style={{ padding: 0, overflow: "hidden" }}>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr>{["ID","프로젝트","통번역사","총 결제금액","통번역사 지급액","플랫폼 수수료","상태","생성일","액션"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {filteredSettlements.map(s => (
+                      <tr key={s.id}
+                        onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <td style={{ ...tableTd, color: "#9ca3af" }}>#{s.id}</td>
+                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827", maxWidth: 160 }}>
+                          <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.projectTitle ?? `프로젝트 #${s.projectId}`}</div>
+                        </td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
+                          {(s as any).translatorName || s.translatorEmail || `통번역사 #${s.translatorId}`}
+                          {(s as any).translatorName && s.translatorEmail && <div style={{ color: "#9ca3af", fontSize: 11 }}>{s.translatorEmail}</div>}
+                        </td>
+                        <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" }}>{Number(s.totalAmount).toLocaleString()}원</td>
+                        <td style={{ ...tableTd, fontWeight: 700, color: "#059669", whiteSpace: "nowrap" }}>{Number(s.translatorAmount).toLocaleString()}원</td>
+                        <td style={{ ...tableTd, color: "#9333ea", whiteSpace: "nowrap" }}>{Number(s.platformFee).toLocaleString()}원</td>
+                        <td style={tableTd}><StatusBadge status={s.status} /></td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(s.createdAt).toLocaleDateString("ko-KR")}</td>
+                        <td style={tableTd}>
+                          {s.status === "ready" && (
+                            <button onClick={() => runSettlementPay(s.id)} disabled={paying === s.id} style={{
+                              padding: "4px 10px", fontSize: 12, borderRadius: 6,
+                              cursor: paying === s.id ? "not-allowed" : "pointer",
+                              background: paying === s.id ? "#86efac" : "#059669",
+                              border: "none", color: "#fff", fontWeight: 600, whiteSpace: "nowrap",
+                            }}>
+                              {paying === s.id ? "처리 중..." : "정산 완료 처리"}
+                            </button>
+                          )}
+                          {s.status === "paid" && <span style={{ color: "#059669", fontSize: 12, fontWeight: 600 }}>✓ 완료</span>}
+                          {s.status === "pending" && <span style={{ color: "#9ca3af", fontSize: 12 }}>대기 중</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
-            }
-          >
-            {loading ? (
-              <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
-            ) : filtered.length === 0 ? (
-              <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>정산 내역이 없습니다.</Card>
-            ) : (
-              <Card style={{ padding: 0, overflow: "hidden" }}>
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                    <thead>
-                      <tr>{["ID","프로젝트","통번역사","총 결제금액","통번역사 지급액","플랫폼 수수료","상태","생성일","액션"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
-                    </thead>
-                    <tbody>
-                      {filtered.map(s => (
-                        <tr key={s.id}
-                          onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                          <td style={{ ...tableTd, color: "#9ca3af" }}>#{s.id}</td>
-                          <td style={{ ...tableTd, fontWeight: 600, color: "#111827", maxWidth: 160 }}>
-                            <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.projectTitle ?? `프로젝트 #${s.projectId}`}</div>
-                          </td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
-                            {(s as any).translatorName || s.translatorEmail || `통번역사 #${s.translatorId}`}
-                            {(s as any).translatorName && s.translatorEmail && <div style={{ color: "#9ca3af", fontSize: 11 }}>{s.translatorEmail}</div>}
-                          </td>
-                          <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" }}>{Number(s.totalAmount).toLocaleString()}원</td>
-                          <td style={{ ...tableTd, fontWeight: 700, color: "#059669", whiteSpace: "nowrap" }}>{Number(s.translatorAmount).toLocaleString()}원</td>
-                          <td style={{ ...tableTd, color: "#9333ea", whiteSpace: "nowrap" }}>{Number(s.platformFee).toLocaleString()}원</td>
-                          <td style={tableTd}><StatusBadge status={s.status} /></td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(s.createdAt).toLocaleDateString("ko-KR")}</td>
-                          <td style={tableTd}>
-                            {s.status === "ready" && (
-                              <button onClick={() => runSettlementPay(s.id)} disabled={paying === s.id} style={{
-                                padding: "4px 10px", fontSize: 12, borderRadius: 6,
-                                cursor: paying === s.id ? "not-allowed" : "pointer",
-                                background: paying === s.id ? "#86efac" : "#059669",
-                                border: "none", color: "#fff", fontWeight: 600, whiteSpace: "nowrap",
-                              }}>
-                                {paying === s.id ? "처리 중..." : "정산 완료 처리"}
-                              </button>
-                            )}
-                            {s.status === "paid" && <span style={{ color: "#059669", fontSize: 12, fontWeight: 600 }}>✓ 완료</span>}
-                            {s.status === "pending" && <span style={{ color: "#9ca3af", fontSize: 12 }}>대기 중</span>}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
-            )}
-          </Section>
-        );
-      })()}
+            </Card>
+          )}
+        </Section>
+      )}
 
       {/* ── 사용자 관리 탭 ── */}
       {adminTab === "users" && (
