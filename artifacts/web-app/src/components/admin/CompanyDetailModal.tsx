@@ -250,9 +250,15 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      setDetail(prev => prev ? { ...prev, divisions: prev.divisions.map(d => d.id === divId ? { ...d, ...data } : d) } : prev);
+      setDetail(prev => prev ? {
+        ...prev,
+        divisions: prev.divisions.map(d =>
+          d.id === divId ? { ...d, name: data.name ?? editDivForm.name, type: data.type ?? editDivForm.type } : d
+        ),
+      } : prev);
       setEditDivId(null);
       onToast("수정되었습니다.");
+      load();
     } catch { onToast("오류: 수정 실패"); }
   };
 

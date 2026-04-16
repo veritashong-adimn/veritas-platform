@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, settlementsTable, projectsTable, usersTable, paymentsTable } from "@workspace/db";
+import { db, settlementsTable, projectsTable, usersTable, paymentsTable, companiesTable } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
@@ -27,9 +27,11 @@ router.get("/admin/settlements", ...adminGuard, async (req, res) => {
         projectTitle: projectsTable.title,
         translatorEmail: usersTable.email,
         translatorName: usersTable.name,
+        companyName: companiesTable.name,
       })
       .from(settlementsTable)
       .leftJoin(projectsTable, eq(settlementsTable.projectId, projectsTable.id))
+      .leftJoin(companiesTable, eq(projectsTable.companyId, companiesTable.id))
       .leftJoin(usersTable, eq(settlementsTable.translatorId, usersTable.id))
       .orderBy(settlementsTable.createdAt);
 

@@ -32,6 +32,7 @@ export type AdminSettlement = {
   status: string; createdAt: string;
   paidDate: string | null; paymentMemo: string | null;
   projectTitle: string | null; translatorEmail: string | null;
+  companyName: string | null;
 };
 export type MySettlement = {
   id: number; projectId: number;

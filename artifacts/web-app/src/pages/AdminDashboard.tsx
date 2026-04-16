@@ -630,6 +630,48 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     } catch { setToast("오류: CSV 내보내기 실패"); }
   };
 
+  const handleExportFilteredCSV = () => {
+    try {
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
+      const headers = [
+        "거래처명", "프로젝트명", "번역사",
+        "공급가액", "부가세(10%)", "합계",
+        "통번역사 지급액", "플랫폼 수수료",
+        "정산 상태", "생성일", "지급 완료일", "메모",
+      ];
+      const rows = filteredSettlements.map(s => {
+        const total     = Math.round(Number(s.totalAmount));
+        const supply    = Math.round(total / 1.1);
+        const vat       = total - supply;
+        const statusKo  = ({"pending":"대기","ready":"정산 가능","paid":"지급 완료"} as Record<string,string>)[s.status] ?? s.status;
+        return [
+          esc(s.companyName  ?? ""),
+          esc(s.projectTitle ?? `프로젝트 #${s.projectId}`),
+          esc((s as any).translatorName || s.translatorEmail || `#${s.translatorId}`),
+          supply, vat, total,
+          Math.round(Number(s.translatorAmount)),
+          Math.round(Number(s.platformFee)),
+          statusKo,
+          new Date(s.createdAt).toLocaleDateString("ko-KR"),
+          s.paidDate ? new Date(s.paidDate).toLocaleDateString("ko-KR") : "",
+          esc(s.paymentMemo ?? ""),
+        ].join(",");
+      });
+      const csv  = [headers.join(","), ...rows].join("\r\n");
+      const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+      const url  = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href  = url;
+      link.setAttribute("download", `정산내역_${dateStr}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setToast(`정산 내역 ${filteredSettlements.length}건을 다운로드했습니다.`);
+    } catch { setToast("오류: CSV 내보내기 실패"); }
+  };
+
   // ── Heartbeat: 3분마다 마지막 활동 시간 갱신 ────────────────────────────
   useEffect(() => {
     const sendHeartbeat = () => {
@@ -1510,37 +1552,52 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               </div>
             )}
 
-            {/* ── 지급 완료일 기간 필터 ── */}
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 16,
-              padding: "10px 14px", background: "#f9fafb", borderRadius: 10, border: "1px solid #e5e7eb" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", whiteSpace: "nowrap" }}>지급일</span>
-              <input
-                type="date"
-                value={paidDateFrom}
-                onChange={e => setPaidDateFrom(e.target.value)}
-                max={paidDateTo || undefined}
-                style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }}
-              />
-              <span style={{ fontSize: 12, color: "#9ca3af" }}>~</span>
-              <input
-                type="date"
-                value={paidDateTo}
-                onChange={e => setPaidDateTo(e.target.value)}
-                min={paidDateFrom || undefined}
-                style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }}
-              />
-              {(paidDateFrom || paidDateTo) && (
-                <button type="button" onClick={() => { setPaidDateFrom(""); setPaidDateTo(""); }}
-                  style={{ padding: "5px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer",
-                    background: "#fff", border: "1px solid #e5e7eb", color: "#6b7280", fontWeight: 500, whiteSpace: "nowrap" }}>
-                  초기화
+            {/* ── 지급 완료일 기간 필터 + 다운로드 ── */}
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center",
+                padding: "10px 14px", background: "#f9fafb", borderRadius: 10, border: "1px solid #e5e7eb" }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", whiteSpace: "nowrap" }}>지급일</span>
+                <input
+                  type="date"
+                  value={paidDateFrom}
+                  onChange={e => setPaidDateFrom(e.target.value)}
+                  max={paidDateTo || undefined}
+                  style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }}
+                />
+                <span style={{ fontSize: 12, color: "#9ca3af" }}>~</span>
+                <input
+                  type="date"
+                  value={paidDateTo}
+                  onChange={e => setPaidDateTo(e.target.value)}
+                  min={paidDateFrom || undefined}
+                  style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }}
+                />
+                {(paidDateFrom || paidDateTo) && (
+                  <button type="button" onClick={() => { setPaidDateFrom(""); setPaidDateTo(""); }}
+                    style={{ padding: "5px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer",
+                      background: "#fff", border: "1px solid #e5e7eb", color: "#6b7280", fontWeight: 500, whiteSpace: "nowrap" }}>
+                    초기화
+                  </button>
+                )}
+                <button type="button" onClick={handleExportFilteredCSV}
+                  style={{ ...inputStyle, padding: "5px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer",
+                    background: "#1d4ed8", border: "1px solid #1d4ed8", color: "#fff", fontWeight: 600,
+                    whiteSpace: "nowrap", marginLeft: "auto" }}>
+                  📥 내역 다운로드
                 </button>
-              )}
-              {(paidDateFrom || paidDateTo) && (
-                <span style={{ fontSize: 11, color: "#1d4ed8", fontWeight: 600, whiteSpace: "nowrap" }}>
-                  기간 필터 적용 중
-                </span>
-              )}
+              </div>
+              {/* ── 동적 안내 문구 ── */}
+              {(() => {
+                const isFiltered = settlementFilter !== "all" || settlementMonthFilter !== "all" || !!paidDateFrom || !!paidDateTo;
+                return (
+                  <p style={{ margin: "6px 0 0", fontSize: 12,
+                    color: isFiltered ? "#1d4ed8" : "#9ca3af", fontWeight: isFiltered ? 600 : 400 }}>
+                    {isFiltered
+                      ? `총 ${filteredSettlements.length}건의 정산 내역이 필터링되었습니다.`
+                      : `전체 ${filteredSettlements.length}건 표시 중`}
+                  </p>
+                );
+              })()}
             </div>
 
             {/* ── 목록 ── */}
