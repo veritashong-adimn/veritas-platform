@@ -213,6 +213,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [paymentFilter, setPaymentFilter] = useState<string>("all");
   const [settlementFilter, setSettlementFilter] = useState<string>("all");
   const [settlementMonthFilter, setSettlementMonthFilter] = useState<string>("all");
+  const [paidDateFrom, setPaidDateFrom] = useState<string>("");
+  const [paidDateTo, setPaidDateTo] = useState<string>("");
 
   // customer management
   const [customerSearch, setCustomerSearch] = useState("");
@@ -962,9 +964,19 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     return settlements.filter(s => {
       if (settlementFilter !== "all" && s.status !== settlementFilter) return false;
       if (settlementMonthFilter !== "all" && s.createdAt.slice(0, 7) !== settlementMonthFilter) return false;
+      if (paidDateFrom || paidDateTo) {
+        if (!s.paidDate) return false;
+        const pd = new Date(s.paidDate);
+        if (paidDateFrom && pd < new Date(paidDateFrom)) return false;
+        if (paidDateTo) {
+          const toEnd = new Date(paidDateTo);
+          toEnd.setHours(23, 59, 59, 999);
+          if (pd > toEnd) return false;
+        }
+      }
       return true;
     });
-  }, [settlements, settlementFilter, settlementMonthFilter]);
+  }, [settlements, settlementFilter, settlementMonthFilter, paidDateFrom, paidDateTo]);
 
   const settlementStats = useMemo(() => {
     const now = new Date();
@@ -1428,12 +1440,20 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             action={
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
                 {someSelected && (
-                  <button onClick={runBatchPay} disabled={batchPaying} style={{
-                    padding: "6px 14px", fontSize: 12, borderRadius: 8, fontWeight: 700, cursor: batchPaying ? "not-allowed" : "pointer",
-                    background: batchPaying ? "#86efac" : "#059669", border: "none", color: "#fff", whiteSpace: "nowrap",
-                  }}>
-                    {batchPaying ? "처리 중..." : `선택 ${selectedSettlements.size}건 일괄 지급 완료`}
-                  </button>
+                  <>
+                    <button type="button" onClick={runBatchPay} disabled={batchPaying} style={{
+                      padding: "6px 14px", fontSize: 12, borderRadius: 8, fontWeight: 700, cursor: batchPaying ? "not-allowed" : "pointer",
+                      background: batchPaying ? "#86efac" : "#059669", border: "none", color: "#fff", whiteSpace: "nowrap",
+                    }}>
+                      {batchPaying ? "처리 중..." : `선택 ${selectedSettlements.size}건 일괄 지급 완료`}
+                    </button>
+                    <button type="button" onClick={() => setSelectedSettlements(new Set())} style={{
+                      padding: "6px 12px", fontSize: 12, borderRadius: 8, fontWeight: 600, cursor: "pointer",
+                      background: "#f3f4f6", border: "1px solid #e5e7eb", color: "#374151", whiteSpace: "nowrap",
+                    }}>
+                      선택 취소
+                    </button>
+                  </>
                 )}
                 <GhostBtn onClick={() => handleExportCSV("settlements")} style={{ fontSize: 12, padding: "6px 12px" }}>⬇ CSV</GhostBtn>
                 <FilterPill label="전체" active={settlementFilter === "all"} onClick={() => setSettlementFilter("all")} />
@@ -1489,6 +1509,39 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 })}
               </div>
             )}
+
+            {/* ── 지급 완료일 기간 필터 ── */}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 16,
+              padding: "10px 14px", background: "#f9fafb", borderRadius: 10, border: "1px solid #e5e7eb" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", whiteSpace: "nowrap" }}>지급일</span>
+              <input
+                type="date"
+                value={paidDateFrom}
+                onChange={e => setPaidDateFrom(e.target.value)}
+                max={paidDateTo || undefined}
+                style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }}
+              />
+              <span style={{ fontSize: 12, color: "#9ca3af" }}>~</span>
+              <input
+                type="date"
+                value={paidDateTo}
+                onChange={e => setPaidDateTo(e.target.value)}
+                min={paidDateFrom || undefined}
+                style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", width: 140 }}
+              />
+              {(paidDateFrom || paidDateTo) && (
+                <button type="button" onClick={() => { setPaidDateFrom(""); setPaidDateTo(""); }}
+                  style={{ padding: "5px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer",
+                    background: "#fff", border: "1px solid #e5e7eb", color: "#6b7280", fontWeight: 500, whiteSpace: "nowrap" }}>
+                  초기화
+                </button>
+              )}
+              {(paidDateFrom || paidDateTo) && (
+                <span style={{ fontSize: 11, color: "#1d4ed8", fontWeight: 600, whiteSpace: "nowrap" }}>
+                  기간 필터 적용 중
+                </span>
+              )}
+            </div>
 
             {/* ── 목록 ── */}
             {loading ? (
