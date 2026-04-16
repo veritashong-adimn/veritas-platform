@@ -24,6 +24,20 @@ The business vision is to streamline the process of translation and interpretati
 
 I prefer detailed explanations and iterative development. Ask before making major changes. Do not make changes to files outside the `artifacts/api-server/src` directory.
 
+## 코드 무게 관리 규칙 (Code Weight Management)
+
+파일이 무거워지기 전에 먼저 알리고 분리 여부를 확인한다.
+
+- **프론트엔드 컴포넌트/페이지**: 1,000줄 초과 → 분리 신호. 새 탭/기능 추가 전 먼저 보고
+- **API 라우트 파일**: 1,500줄 초과 → 도메인별 분리 검토
+- **AdminDashboard.tsx 현황**: 현재 ~3,990줄. 4,000줄 초과 또는 새 탭 추가 전 먼저 알림
+
+**분리 대상 (우선순위 순)**:
+1. `SettlementTab` → `SettlementManagementTab.tsx` (~700줄 분리 가능)
+2. `BillingTab` → `BillingManagementTab.tsx` (~640줄 분리 가능)
+3. `SettingsTab` → `SettingsTab.tsx` (~440줄 분리 가능)
+4. `StaffTab` → `StaffManagementTab.tsx` (~360줄 분리 가능)
+
 # System Architecture
 
 The project is structured as a pnpm monorepo, organizing code into `artifacts` (deployable applications) and `lib` (shared libraries).
