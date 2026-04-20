@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, translationUnitsTable, translationUnitLogsTable, languageServiceDataTable, contentInsightsTable } from "@workspace/db";
-import { eq, and, or, ilike, sql, desc } from "drizzle-orm";
+import { eq, and, or, ilike, sql, desc, inArray } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import {
   anonymizeTranslationUnit,
@@ -806,6 +806,171 @@ function buildLongAnswer(g: GenGroup, stats: { sourceCount: number; avgPrice: nu
 function groupKey(serviceType: string, languagePair: string | null, domain: string | null, industry: string | null, useCase: string | null): string {
   return [serviceType, languagePair ?? "", domain ?? "", industry ?? "", useCase ?? ""].join("|");
 }
+
+// ─── 인사이트 필터링 유틸리티 ──────────────────────────────────────────────────
+
+const PRICE_KEYWORDS = ["비용", "가격", "단가", "견적", "얼마", "요금", "금액"];
+const COMMERCIAL_KEYWORDS = ["견적", "요청", "비용", "준비", "문의", "신청", "계약"];
+const NUMERIC_PATTERN = /\d[\d,./~]*[원시간%]/;
+const RANGE_PATTERN = /\d+\s*[~–-]\s*\d+/;
+const CONDITIONAL_PATTERN = /상황에\s*따라|경우에\s*따라|다를\s*수\s*있|달라질\s*수/;
+
+function calcSearchIntent(question: string): number {
+  let score = 0;
+  if (PRICE_KEYWORDS.some(k => question.includes(k))) score += 20;
+  if (question.trim().endsWith("?") || question.trim().endsWith("나요?") || question.trim().endsWith("까요?")) score += 5;
+  return Math.min(score, 25);
+}
+
+function calcCommercialIntent(question: string, shortAnswer: string | null): number {
+  const text = question + " " + (shortAnswer ?? "");
+  if (COMMERCIAL_KEYWORDS.some(k => text.includes(k))) return 22;
+  if (PRICE_KEYWORDS.some(k => text.includes(k))) return 15;
+  return 8;
+}
+
+function calcSpecificity(shortAnswer: string | null, longAnswer: string | null): number {
+  const text = (shortAnswer ?? "") + " " + (longAnswer ?? "");
+  if (NUMERIC_PATTERN.test(text) || RANGE_PATTERN.test(text)) return 18;
+  if (CONDITIONAL_PATTERN.test(text)) return 5;
+  if (text.length > 100) return 10;
+  return 5;
+}
+
+function calcSourceWeight(sourceType: string | null, languageServiceDataId: number | null): number {
+  if (languageServiceDataId !== null) return 10;
+  if (sourceType === "manual") return 7;
+  if (sourceType === "blog") return 5;
+  return 7;
+}
+
+function normalize(s: string): string {
+  return s.replace(/[^\uAC00-\uD7A3a-zA-Z0-9]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function tokenSimilarity(a: string, b: string): number {
+  const ta = new Set(normalize(a).split(" ").filter(Boolean));
+  const tb = new Set(normalize(b).split(" ").filter(Boolean));
+  const intersection = [...ta].filter(t => tb.has(t)).length;
+  const union = new Set([...ta, ...tb]).size;
+  return union === 0 ? 0 : intersection / union;
+}
+
+// POST /api/admin/content-insights/filter  (품질 필터 실행)
+router.post("/admin/content-insights/filter", ...adminOnly, async (req, res) => {
+  try {
+    const { ids } = req.body as { ids?: number[] };
+
+    let targets;
+    if (ids && ids.length > 0) {
+      targets = await db.select().from(contentInsightsTable)
+        .where(and(
+          eq(contentInsightsTable.status, "draft"),
+          inArray(contentInsightsTable.id, ids)
+        ));
+    } else {
+      targets = await db.select().from(contentInsightsTable)
+        .where(eq(contentInsightsTable.status, "draft"));
+    }
+
+    if (targets.length === 0) {
+      return res.json({ processed: 0, result: [] });
+    }
+
+    // 기존 비초안 인사이트 로드 (중복 비교용)
+    const existing = await db.select().from(contentInsightsTable)
+      .where(sql`status != 'draft'`);
+
+    const resultList: { id: number; decision: string; score: number; duplicateOfId?: number; reason: string }[] = [];
+    const processedThisRun: { id: number; question: string }[] = [];
+
+    for (const insight of targets) {
+      // 점수 계산
+      const si = calcSearchIntent(insight.question);
+      const ci = calcCommercialIntent(insight.question, insight.shortAnswer);
+      const sp = calcSpecificity(insight.shortAnswer, insight.longAnswer);
+      const sw = calcSourceWeight(insight.sourceType, insight.languageServiceDataId);
+
+      // 중복 검사: 기존 비초안 + 같은 배치에서 앞에 처리된 항목
+      let dup = 0;
+      let duplicateOfId: number | undefined = undefined;
+      let similarity = 0;
+
+      const compareCandidates = [
+        ...existing.map(e => ({ id: e.id, question: e.question })),
+        ...processedThisRun,
+      ].filter(c => c.id !== insight.id);
+
+      for (const cand of compareCandidates) {
+        const sim = tokenSimilarity(insight.question, cand.question);
+        if (sim > similarity) {
+          similarity = sim;
+          if (sim >= 0.85) duplicateOfId = cand.id;
+        }
+      }
+
+      if (similarity >= 0.85) dup = 0;
+      else if (similarity >= 0.7) dup = 5;
+      else dup = 15;
+
+      const total = si + ci + sp + dup + sw;
+
+      // 판정
+      let decision: string;
+      let reason: string;
+
+      if (similarity >= 0.85) {
+        decision = "merge";
+        reason = `기존 인사이트 #${duplicateOfId}와 유사도 ${(similarity * 100).toFixed(0)}%로 중복 판정`;
+      } else if (total >= 80) {
+        decision = "keep";
+        const parts = [];
+        if (si >= 20) parts.push("검색 의도 높음");
+        if (ci >= 20) parts.push("상업적 의도 높음");
+        if (sp >= 15) parts.push("구체성 우수");
+        if (dup >= 15) parts.push("중복 없음");
+        reason = parts.join(" / ") || "종합 점수 우수";
+      } else if (total >= 60) {
+        decision = "review";
+        const parts = [];
+        if (si < 10) parts.push("검색 의도 낮음");
+        if (sp < 10) parts.push("구체성 부족");
+        if (dup < 10) parts.push("유사 질문 존재");
+        reason = parts.length > 0 ? parts.join(" / ") : "보통 수준 — 검토 필요";
+      } else {
+        decision = "drop";
+        const parts = [];
+        if (si < 10) parts.push("검색 의도 낮음");
+        if (ci < 10) parts.push("상업적 가치 낮음");
+        if (sp < 10) parts.push("구체성 부족");
+        reason = parts.join(" / ") || "종합 점수 미달";
+      }
+
+      await db.update(contentInsightsTable)
+        .set({
+          filterScore: total,
+          filterDecision: decision,
+          filterReason: reason,
+          duplicateOfId: duplicateOfId ?? null,
+          searchIntentScore: si,
+          commercialIntentScore: ci,
+          specificityScore: sp,
+          duplicationScore: dup,
+          sourceWeight: sw,
+          updatedAt: new Date(),
+        })
+        .where(eq(contentInsightsTable.id, insight.id));
+
+      resultList.push({ id: insight.id, decision, score: total, duplicateOfId, reason });
+      processedThisRun.push({ id: insight.id, question: insight.question });
+    }
+
+    return res.json({ processed: targets.length, result: resultList });
+  } catch (err) {
+    console.error("[filter] error:", err);
+    return res.status(500).json({ error: "필터 실행 중 오류가 발생했습니다." });
+  }
+});
 
 // POST /api/admin/content-insights/from-blog  (블로그 글 → 인사이트 변환)
 router.post("/admin/content-insights/from-blog", ...adminOnly, async (req, res) => {

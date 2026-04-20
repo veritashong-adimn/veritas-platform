@@ -1,0 +1,230 @@
+[목표]
+블로그/데이터/수동으로 생성된 인사이트에 대해
+자동으로 품질 평가를 수행하고
+keep / review / merge / drop으로 분류하는
+“인사이트 자동 필터링 시스템”을 구현한다.
+
+---
+
+[1단계: DB 스키마 확장]
+
+파일:
+lib/db/src/schema/content_insights.ts
+
+아래 컬럼 추가 (nullable 허용):
+
+* filterScore (integer)
+* filterDecision (text)  // 'keep' | 'review' | 'merge' | 'drop'
+* duplicateOfId (integer nullable)
+* filterReason (text nullable)
+
+세부 점수:
+
+* searchIntentScore (integer)
+* commercialIntentScore (integer)
+* specificityScore (integer)
+* duplicationScore (integer)
+* sourceWeight (integer)
+
+모든 기존 데이터는 null 허용
+
+DB 반영:
+pnpm run push
+
+---
+
+[2단계: 필터 API 추가]
+
+파일:
+artifacts/api-server/src/routes/data-layer.ts
+
+신규 API:
+
+POST /api/admin/content-insights/filter
+
+요청:
+{
+"ids": [1,2,3]  // 선택 (없으면 draft 전체 대상)
+}
+
+동작:
+
+1. 대상 인사이트 조회 (status = 'draft')
+2. 각 인사이트에 대해 품질 평가 수행
+3. 점수 계산
+4. filterDecision 결정
+5. DB 업데이트
+
+응답:
+{
+"processed": 5,
+"result": [
+{ id: 1, decision: "keep", score: 82 },
+{ id: 2, decision: "merge", duplicateOfId: 1 },
+{ id: 3, decision: "drop", score: 45 }
+]
+}
+
+---
+
+[3단계: 점수 계산 로직 (초기 규칙 기반)]
+
+각 항목 점수 (0~100 기준):
+
+1. searchIntentScore (0~25)
+
+* "비용", "가격", "견적", "얼마" 포함 → +20~25
+* 질문형 문장 → +5
+* 일반 설명형 → 10 이하
+
+2. commercialIntentScore (0~25)
+
+* "견적", "요청", "준비", "비용" → +20 이상
+* 정보성만 → 10 이하
+
+3. specificityScore (0~20)
+
+* 숫자, 범위, 조건 포함 → +15~20
+* "상황에 따라"만 있음 → 5 이하
+
+4. duplicationScore (0~15)
+
+* 기존 질문과 유사하면 점수 낮게
+* 유사도 높으면 0
+
+5. sourceWeight (0~10)
+
+* data: 10
+* manual: 7
+* blog: 5
+
+최종 점수:
+filterScore =
+searchIntentScore +
+commercialIntentScore +
+specificityScore +
+duplicationScore +
+sourceWeight
+
+---
+
+[4단계: 중복 판정 로직]
+
+1. 간단 규칙 기반
+
+유사 키워드 그룹:
+
+* 비용 / 가격 / 단가
+* 견적 / 비용 문의
+* 준비 / 준비사항 / 준비 정보
+
+문장 normalize 후 비교
+
+2. 간단 유사도 체크
+
+* 문자열 포함 여부
+* 토큰 유사도 (공백 기준 split)
+
+유사도 기준:
+
+* 0.85 이상 → merge
+* 0.7~0.85 → review
+* 이하 → 정상
+
+merge 시:
+
+* duplicateOfId에 기존 ID 저장
+
+---
+
+[5단계: 최종 판단 기준]
+
+if 유사도 0.85 이상:
+→ filterDecision = "merge"
+
+else if filterScore >= 80:
+→ "keep"
+
+else if 60 <= score < 80:
+→ "review"
+
+else:
+→ "drop"
+
+---
+
+[6단계: 프론트 UI 추가]
+
+파일:
+InsightManagementTab.tsx
+
+1. 상단 버튼 추가
+
+"⚙️ 품질 필터 실행"
+
+클릭 시:
+→ POST /api/admin/content-insights/filter 호출
+
+2. 테이블 컬럼 추가
+
+* 필터 점수
+* 판정 (keep/review/merge/drop)
+
+3. 색상 표시
+
+* keep → 초록
+* review → 주황
+* merge → 파랑
+* drop → 빨강
+
+4. merge 항목 표시
+
+* "기존 #ID와 중복" 표시
+
+---
+
+[7단계: 상세 패널 표시]
+
+오른쪽 상세 영역에 추가:
+
+* 필터 점수
+* 판정 결과
+* 필터 이유 (간단 텍스트)
+
+예:
+"검색 의도 높음 / 중복 없음 / 구체성 우수"
+
+---
+
+[8단계: 자동 실행 (선택)]
+
+블로그 생성 / 수동 생성 / 자동 생성 후:
+
+옵션:
+자동으로 filter API 실행
+
+또는:
+관리자가 수동 실행
+
+초기에는 수동 실행 권장
+
+---
+
+[9단계: 안전 장치]
+
+* 기존 published 데이터는 필터 대상 제외
+* filter 실행 실패 시 rollback
+* filterScore null이면 미평가 상태 유지
+
+---
+
+[10단계: 최종 목표]
+
+인사이트 생성 이후:
+
+1. 자동 점수 평가
+2. keep / review / merge / drop 분류
+3. 운영자는 keep/review만 검토
+
+즉,
+“좋은 인사이트만 남기는 구조” 완성

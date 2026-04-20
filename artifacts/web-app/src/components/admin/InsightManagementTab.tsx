@@ -28,6 +28,15 @@ interface ContentInsight {
   sourceType: string | null;
   sourceTitle: string | null;
   sourceUrl: string | null;
+  filterScore: number | null;
+  filterDecision: string | null;
+  filterReason: string | null;
+  duplicateOfId: number | null;
+  searchIntentScore: number | null;
+  commercialIntentScore: number | null;
+  specificityScore: number | null;
+  duplicationScore: number | null;
+  sourceWeight: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -171,6 +180,8 @@ export function InsightManagementTab({ token, setToast }: Props) {
   const [showBlogModal, setShowBlogModal] = useState(false);
   const [blogDraft, setBlogDraft] = useState({ ...EMPTY_BLOG });
   const [convertingBlog, setConvertingBlog] = useState(false);
+
+  const [filtering, setFiltering] = useState(false);
 
   const [highlightedIds, setHighlightedIds] = useState<Set<number>>(new Set());
   const [pendingScrollId, setPendingScrollId] = useState<number | null>(null);
@@ -495,6 +506,58 @@ export function InsightManagementTab({ token, setToast }: Props) {
     }
   };
 
+  const handleFilter = async (selectedIds?: number[]) => {
+    setFiltering(true);
+    try {
+      const body = selectedIds && selectedIds.length > 0 ? { ids: selectedIds } : {};
+      const res = await fetch(`${API}/admin/content-insights/filter`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? "필터 실행 실패");
+      }
+      const result = await res.json();
+
+      // 목록 재조회
+      const f = appliedFilters;
+      const params = new URLSearchParams({ limit: "100" });
+      if (f.serviceType) params.set("serviceType", f.serviceType);
+      if (f.status) params.set("status", f.status);
+      if (f.visibilityLevel) params.set("visibilityLevel", f.visibilityLevel);
+      if (f.domain) params.set("domain", f.domain);
+      if (f.languagePair) params.set("languagePair", f.languagePair);
+
+      setLoading(true);
+      const listRes = await fetch(`${API}/admin/content-insights?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const listData = await listRes.json();
+      const newList: ContentInsight[] = listData.data ?? [];
+      setInsights(newList);
+      setTotal(listData.total ?? 0);
+      setLoading(false);
+
+      // 선택된 항목 갱신
+      if (selected) {
+        const refreshed = newList.find(r => r.id === selected.id);
+        if (refreshed) setSelected(refreshed);
+      }
+
+      const kept = result.result.filter((r: any) => r.decision === "keep").length;
+      const reviewed = result.result.filter((r: any) => r.decision === "review").length;
+      const merged = result.result.filter((r: any) => r.decision === "merge").length;
+      const dropped = result.result.filter((r: any) => r.decision === "drop").length;
+      setToast(`품질 필터 완료: ${result.processed}건 처리 — keep ${kept}, review ${reviewed}, merge ${merged}, drop ${dropped}`);
+    } catch (err: unknown) {
+      setToast(err instanceof Error ? err.message : "품질 필터 실행 실패");
+    } finally {
+      setFiltering(false);
+    }
+  };
+
   const statusActions = (insight: ContentInsight): { label: string; next: string; bg: string; color: string }[] => {
     const { status } = insight;
     if (status === "draft")     return [{ label: "승인", next: "approved",  bg: "#059669", color: "#fff" }];
@@ -571,6 +634,22 @@ export function InsightManagementTab({ token, setToast }: Props) {
         <span style={{ marginLeft: "auto", fontSize: 12, color: "#6b7280" }}>
           총 <strong>{total}</strong>건
         </span>
+
+        <button
+          onClick={() => handleFilter()}
+          disabled={filtering}
+          style={{
+            ...btnGhostStyle,
+            display: "flex", alignItems: "center", gap: 5,
+            opacity: filtering ? 0.6 : 1,
+            cursor: filtering ? "not-allowed" : "pointer",
+            border: "1px solid #d1d5db",
+          }}
+          title="draft 상태 인사이트 전체에 품질 필터를 실행합니다"
+        >
+          <span style={{ fontSize: 14 }}>⚙️</span>
+          {filtering ? "필터 실행 중…" : "품질 필터 실행"}
+        </button>
 
         <div style={{ position: "relative" }}>
           <button
@@ -1053,7 +1132,7 @@ export function InsightManagementTab({ token, setToast }: Props) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
-                    {["ID", "유형", "질문", "요약 답변", "건수", "평균 단가", "신뢰도", "상태", "공개", "생성일"].map(h => (
+                    {["ID", "유형", "질문", "요약 답변", "건수", "평균 단가", "신뢰도", "품질점수", "판정", "상태", "공개", "생성일"].map(h => (
                       <th key={h} style={thStyle}>{h}</th>
                     ))}
                   </tr>
@@ -1098,6 +1177,24 @@ export function InsightManagementTab({ token, setToast }: Props) {
                         <td style={{ ...tdStyle, textAlign: "center" }}>{r.sourceCount ?? "-"}</td>
                         <td style={{ ...tdStyle, textAlign: "right" }}>{fmt(r.avgPrice, "원")}</td>
                         <td style={{ ...tdStyle, textAlign: "center" }}>{fmtConf(r.confidenceScore)}</td>
+                        <td style={{ ...tdStyle, textAlign: "center", fontWeight: 600, color: r.filterScore !== null ? (r.filterScore >= 80 ? "#059669" : r.filterScore >= 60 ? "#d97706" : "#dc2626") : "#9ca3af" }}>
+                          {r.filterScore !== null ? r.filterScore : "—"}
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: "center" }}>
+                          {r.filterDecision ? (
+                            <span style={{
+                              padding: "2px 7px", borderRadius: 99, fontSize: 10, fontWeight: 700,
+                              ...(r.filterDecision === "keep"   ? { background: "#dcfce7", color: "#166534" } :
+                                  r.filterDecision === "review" ? { background: "#fef9c3", color: "#854d0e" } :
+                                  r.filterDecision === "merge"  ? { background: "#dbeafe", color: "#1e40af" } :
+                                  r.filterDecision === "drop"   ? { background: "#fee2e2", color: "#991b1b" } :
+                                  { background: "#f3f4f6", color: "#6b7280" }),
+                            }}>
+                              {r.filterDecision.toUpperCase()}
+                              {r.filterDecision === "merge" && r.duplicateOfId ? ` #${r.duplicateOfId}` : ""}
+                            </span>
+                          ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>—</span>}
+                        </td>
                         <td style={tdStyle}>
                           <Badge text={STATUS_KO[r.status] ?? r.status} style={stColor} />
                         </td>
@@ -1332,6 +1429,66 @@ export function InsightManagementTab({ token, setToast }: Props) {
                     ["평균 시간",   selected.avgDuration ? `${parseFloat(selected.avgDuration).toFixed(1)}시간` : "-"],
                     ["신뢰도",     fmtConf(selected.confidenceScore)],
                   ]} />
+                </DetailSection>
+
+                {/* 품질 필터 */}
+                <DetailSection label="품질 필터">
+                  {selected.filterDecision ? (
+                    <>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                        <span style={{
+                          padding: "4px 12px", borderRadius: 99, fontSize: 13, fontWeight: 700,
+                          ...(selected.filterDecision === "keep"   ? { background: "#dcfce7", color: "#166534" } :
+                              selected.filterDecision === "review" ? { background: "#fef9c3", color: "#854d0e" } :
+                              selected.filterDecision === "merge"  ? { background: "#dbeafe", color: "#1e40af" } :
+                              selected.filterDecision === "drop"   ? { background: "#fee2e2", color: "#991b1b" } :
+                              { background: "#f3f4f6", color: "#6b7280" }),
+                        }}>
+                          {selected.filterDecision.toUpperCase()}
+                        </span>
+                        <span style={{ fontSize: 16, fontWeight: 700, color: selected.filterScore !== null ? (selected.filterScore >= 80 ? "#059669" : selected.filterScore >= 60 ? "#d97706" : "#dc2626") : "#9ca3af" }}>
+                          {selected.filterScore !== null ? `${selected.filterScore}점` : "-"}
+                        </span>
+                      </div>
+                      {selected.filterReason && (
+                        <div style={{ fontSize: 12, color: "#4b5563", marginBottom: 10, lineHeight: 1.5 }}>
+                          {selected.filterReason}
+                        </div>
+                      )}
+                      {selected.filterDecision === "merge" && selected.duplicateOfId && (
+                        <div style={{ fontSize: 11, color: "#1e40af", background: "#eff6ff", padding: "6px 10px", borderRadius: 6, marginBottom: 10 }}>
+                          기존 인사이트 #{selected.duplicateOfId}와 중복 판정
+                        </div>
+                      )}
+                      <MetaGrid rows={[
+                        ["검색 의도",   selected.searchIntentScore !== null ? `${selected.searchIntentScore}/25` : "-"],
+                        ["상업적 의도", selected.commercialIntentScore !== null ? `${selected.commercialIntentScore}/25` : "-"],
+                        ["구체성",     selected.specificityScore !== null ? `${selected.specificityScore}/20` : "-"],
+                        ["중복 없음",  selected.duplicationScore !== null ? `${selected.duplicationScore}/15` : "-"],
+                        ["출처 가중치", selected.sourceWeight !== null ? `${selected.sourceWeight}/10` : "-"],
+                      ]} />
+                      <button
+                        onClick={() => handleFilter([selected.id])}
+                        disabled={filtering}
+                        style={{ ...btnGhostStyle, marginTop: 8, fontSize: 11, padding: "4px 10px", opacity: filtering ? 0.5 : 1 }}
+                      >↻ 재평가</button>
+                    </>
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <p style={{ margin: 0, fontSize: 12, color: "#9ca3af" }}>아직 품질 필터가 실행되지 않았습니다.</p>
+                      <button
+                        onClick={() => handleFilter([selected.id])}
+                        disabled={filtering}
+                        style={{
+                          ...btnGhostStyle, fontSize: 11, padding: "5px 12px", display: "inline-flex",
+                          alignItems: "center", gap: 4, alignSelf: "flex-start",
+                          opacity: filtering ? 0.5 : 1,
+                        }}
+                      >
+                        <span>⚙️</span> 이 항목 필터 실행
+                      </button>
+                    </div>
+                  )}
                 </DetailSection>
 
                 {/* 공개 설정 */}

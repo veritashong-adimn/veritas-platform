@@ -38,6 +38,17 @@ export const contentInsightsTable = pgTable("content_insights", {
   sourceTitle: text("source_title"),
   sourceUrl: text("source_url"),
 
+  filterScore: integer("filter_score"),
+  filterDecision: text("filter_decision"),
+  filterReason: text("filter_reason"),
+  duplicateOfId: integer("duplicate_of_id"),
+
+  searchIntentScore: integer("search_intent_score"),
+  commercialIntentScore: integer("commercial_intent_score"),
+  specificityScore: integer("specificity_score"),
+  duplicationScore: integer("duplication_score"),
+  sourceWeight: integer("source_weight"),
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
