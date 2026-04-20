@@ -203,6 +203,20 @@ export function InsightManagementTab({ token, setToast }: Props) {
   const [mergeTargetId, setMergeTargetId] = useState<string>("");
   const [merging, setMerging] = useState(false);
 
+  // ── 자동 보완 ──────────────────────────────────────────────────────────────
+  interface AutoSuggestion {
+    id: number;
+    insightId: number;
+    type: "faq" | "related" | "meta";
+    payload: Record<string, unknown>;
+    status: "pending" | "applied" | "rejected";
+    createdAt: string;
+  }
+  const [suggestions, setSuggestions] = useState<AutoSuggestion[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [enhancing, setEnhancing] = useState(false);
+  const [batchEnhancing, setBatchEnhancing] = useState(false);
+
   const [highlightedIds, setHighlightedIds] = useState<Set<number>>(new Set());
   const [pendingScrollId, setPendingScrollId] = useState<number | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -660,6 +674,92 @@ export function InsightManagementTab({ token, setToast }: Props) {
     finally { setMerging(false); }
   };
 
+  // ── 자동 보완 핸들러 ─────────────────────────────────────────────────────────
+  const authHeaders = { Authorization: `Bearer ${token}` };
+
+  const loadSuggestions = async (insightId: number) => {
+    setSuggestionsLoading(true);
+    try {
+      const res = await fetch(`${API}/admin/content-insights/${insightId}/suggestions`, { headers: authHeaders });
+      if (res.ok) setSuggestions(await res.json());
+    } finally {
+      setSuggestionsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selected) { setSuggestions([]); loadSuggestions(selected.id); }
+    else setSuggestions([]);
+  }, [selected?.id]);
+
+  const handleAutoEnhance = async (insightId: number) => {
+    setEnhancing(true);
+    try {
+      const res = await fetch(`${API}/admin/content-insights/${insightId}/auto-enhance`, {
+        method: "POST", headers: authHeaders,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "자동 보완 실패");
+      if (data.created === 0) {
+        setToast(data.message ?? "새로운 제안이 없습니다.");
+      } else {
+        setToast(`자동 보완 제안 ${data.created}개 생성 완료`);
+        setSuggestions(data.suggestions ?? []);
+      }
+    } catch (err: unknown) {
+      setToast(err instanceof Error ? err.message : "자동 보완 실패");
+    } finally {
+      setEnhancing(false);
+    }
+  };
+
+  const handleBatchAutoEnhance = async () => {
+    if (!confirm("현재 목록의 PARTIAL/NONE 인사이트(최대 20개)에 대해 자동 보완을 실행합니다.\n시간이 걸릴 수 있습니다. 계속하시겠습니까?")) return;
+    setBatchEnhancing(true);
+    try {
+      const res = await fetch(`${API}/admin/content-insights/batch-auto-enhance`, {
+        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "배치 자동 보완 실패");
+      setToast(`배치 완료: ${data.processed}건 처리, ${data.created}개 제안 생성`);
+      if (selected) await loadSuggestions(selected.id);
+    } catch (err: unknown) {
+      setToast(err instanceof Error ? err.message : "배치 자동 보완 실패");
+    } finally {
+      setBatchEnhancing(false);
+    }
+  };
+
+  const handleApplySuggestion = async (sugId: number) => {
+    try {
+      const res = await fetch(`${API}/admin/suggestions/${sugId}/apply`, { method: "POST", headers: authHeaders });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "제안 적용 실패");
+      setSuggestions(prev => prev.map(s => s.id === sugId ? { ...s, status: "applied" } : s));
+      if (selected && data.insight) {
+        const updated = data.insight as ContentInsight;
+        setSelected(updated);
+        setInsights(prev => prev.map(r => r.id === updated.id ? updated : r));
+      }
+      setToast("제안이 적용되었습니다.");
+    } catch (err: unknown) {
+      setToast(err instanceof Error ? err.message : "적용 실패");
+    }
+  };
+
+  const handleRejectSuggestion = async (sugId: number) => {
+    try {
+      const res = await fetch(`${API}/admin/suggestions/${sugId}/reject`, { method: "POST", headers: authHeaders });
+      if (!res.ok) throw new Error("무시 실패");
+      setSuggestions(prev => prev.map(s => s.id === sugId ? { ...s, status: "rejected" } : s));
+      setToast("제안을 무시했습니다.");
+    } catch (err: unknown) {
+      setToast(err instanceof Error ? err.message : "무시 실패");
+    }
+  };
+
   const statusActions = (insight: ContentInsight): { label: string; next: string; bg: string; color: string }[] => {
     const { status } = insight;
     if (status === "draft")     return [{ label: "승인", next: "approved",  bg: "#059669", color: "#fff" }];
@@ -781,6 +881,22 @@ export function InsightManagementTab({ token, setToast }: Props) {
         >
           <span style={{ fontSize: 14 }}>⚙️</span>
           {filtering ? "필터 실행 중…" : "품질 필터 실행"}
+        </button>
+
+        <button
+          onClick={handleBatchAutoEnhance}
+          disabled={batchEnhancing}
+          style={{
+            ...btnGhostStyle,
+            display: "flex", alignItems: "center", gap: 5,
+            opacity: batchEnhancing ? 0.6 : 1,
+            cursor: batchEnhancing ? "not-allowed" : "pointer",
+            border: "1px solid #7c3aed", color: "#7c3aed",
+          }}
+          title="PARTIAL/NONE 인사이트 최대 20개에 자동 보완 제안을 생성합니다"
+        >
+          <span style={{ fontSize: 14 }}>✨</span>
+          {batchEnhancing ? "보완 실행 중…" : "자동 보완 실행"}
         </button>
 
         <div style={{ position: "relative" }}>
@@ -1695,22 +1811,38 @@ export function InsightManagementTab({ token, setToast }: Props) {
 
                 {/* AEO/GEO 준비 상태 */}
                 <DetailSection label="AEO/GEO 노출 준비 상태">
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-                    <span style={{
-                      padding: "4px 12px", borderRadius: 99, fontSize: 13, fontWeight: 700,
-                      ...(selected.aeoStatus === "READY"   ? { background: "#dcfce7", color: "#166534" } :
-                          selected.aeoStatus === "PARTIAL" ? { background: "#fef9c3", color: "#92400e" } :
-                                                              { background: "#fee2e2", color: "#991b1b" }),
-                    }}>
-                      {selected.aeoStatus ?? "NONE"}
-                    </span>
-                    <span style={{
-                      fontSize: 18, fontWeight: 800,
-                      color: (selected.aeoScore ?? 0) >= 80 ? "#059669" : (selected.aeoScore ?? 0) >= 40 ? "#d97706" : "#dc2626",
-                    }}>
-                      {selected.aeoScore ?? 0}점
-                    </span>
-                    <span style={{ fontSize: 11, color: "#9ca3af" }}>/ 100</span>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{
+                        padding: "4px 12px", borderRadius: 99, fontSize: 13, fontWeight: 700,
+                        ...(selected.aeoStatus === "READY"   ? { background: "#dcfce7", color: "#166534" } :
+                            selected.aeoStatus === "PARTIAL" ? { background: "#fef9c3", color: "#92400e" } :
+                                                                { background: "#fee2e2", color: "#991b1b" }),
+                      }}>
+                        {selected.aeoStatus ?? "NONE"}
+                      </span>
+                      <span style={{
+                        fontSize: 18, fontWeight: 800,
+                        color: (selected.aeoScore ?? 0) >= 80 ? "#059669" : (selected.aeoScore ?? 0) >= 40 ? "#d97706" : "#dc2626",
+                      }}>
+                        {selected.aeoScore ?? 0}점
+                      </span>
+                      <span style={{ fontSize: 11, color: "#9ca3af" }}>/ 100</span>
+                    </div>
+                    <button
+                      onClick={() => handleAutoEnhance(selected.id)}
+                      disabled={enhancing}
+                      style={{
+                        padding: "5px 12px", borderRadius: 7, border: "1px solid #7c3aed",
+                        background: enhancing ? "#f5f3ff" : "#7c3aed", color: enhancing ? "#7c3aed" : "#fff",
+                        cursor: enhancing ? "not-allowed" : "pointer", fontSize: 12, fontWeight: 600,
+                        display: "flex", alignItems: "center", gap: 5,
+                      }}
+                      title="AI로 부족한 AEO 필드(FAQ/관련/메타)를 자동 보완합니다"
+                    >
+                      <span>✨</span>
+                      {enhancing ? "보완 중…" : "자동 보완"}
+                    </button>
                   </div>
                   <MetaGrid rows={[
                     ["핵심 답변(shortAnswer)", selected.hasShortAnswer ? "✅ 있음 (+30점)" : "❌ 없음 (0점)"],
@@ -1748,6 +1880,104 @@ export function InsightManagementTab({ token, setToast }: Props) {
                     <div style={{ marginTop: 8, fontSize: 12, color: "#9ca3af", fontStyle: "italic" }}>FAQ 미생성 — 블로그 변환 또는 수동 추가 필요</div>
                   )}
                 </DetailSection>
+
+                {/* 자동 보완 제안 */}
+                {(suggestionsLoading || suggestions.length > 0) && (
+                  <DetailSection label="자동 보완 제안">
+                    {suggestionsLoading ? (
+                      <div style={{ fontSize: 12, color: "#9ca3af" }}>제안 불러오는 중…</div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {suggestions.length === 0 && (
+                          <div style={{ fontSize: 12, color: "#9ca3af", fontStyle: "italic" }}>제안 없음 — "✨ 자동 보완" 버튼을 눌러 생성하세요</div>
+                        )}
+                        {suggestions.map(sug => {
+                          const isPending = sug.status === "pending";
+                          const isApplied = sug.status === "applied";
+                          const isRejected = sug.status === "rejected";
+                          const typeLabel = sug.type === "faq" ? "FAQ 제안" : sug.type === "related" ? "관련 연결 제안" : "메타 제안";
+                          const typeColor = sug.type === "faq" ? "#1e40af" : sug.type === "related" ? "#065f46" : "#6d28d9";
+                          const typeBg = sug.type === "faq" ? "#dbeafe" : sug.type === "related" ? "#d1fae5" : "#ede9fe";
+                          return (
+                            <div key={sug.id} style={{
+                              border: `1px solid ${isPending ? "#e5e7eb" : isApplied ? "#bbf7d0" : "#fecaca"}`,
+                              borderRadius: 8, padding: "10px 12px",
+                              background: isPending ? "#fff" : isApplied ? "#f0fdf4" : "#fef2f2",
+                              opacity: isRejected ? 0.7 : 1,
+                            }}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                  <span style={{
+                                    padding: "2px 8px", borderRadius: 99, fontSize: 11, fontWeight: 700,
+                                    background: typeBg, color: typeColor,
+                                  }}>{typeLabel}</span>
+                                  {isApplied && <span style={{ fontSize: 11, color: "#059669", fontWeight: 600 }}>✅ 적용됨</span>}
+                                  {isRejected && <span style={{ fontSize: 11, color: "#dc2626", fontWeight: 600 }}>✕ 무시됨</span>}
+                                </div>
+                                {isPending && (
+                                  <div style={{ display: "flex", gap: 6 }}>
+                                    <button
+                                      onClick={() => handleApplySuggestion(sug.id)}
+                                      style={{
+                                        padding: "3px 10px", borderRadius: 6, border: "1px solid #059669",
+                                        background: "#059669", color: "#fff", cursor: "pointer",
+                                        fontSize: 11, fontWeight: 600,
+                                      }}
+                                    >적용</button>
+                                    <button
+                                      onClick={() => handleRejectSuggestion(sug.id)}
+                                      style={{
+                                        padding: "3px 10px", borderRadius: 6, border: "1px solid #d1d5db",
+                                        background: "#fff", color: "#6b7280", cursor: "pointer",
+                                        fontSize: 11,
+                                      }}
+                                    >무시</button>
+                                  </div>
+                                )}
+                              </div>
+                              {/* 페이로드 미리보기 */}
+                              {sug.type === "faq" && Array.isArray((sug.payload as {items?: unknown}).items) && (
+                                <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                                  {((sug.payload as {items: {question: string; answer: string}[]}).items).slice(0, 5).map((faq, i) => (
+                                    <div key={i} style={{ background: "#f9fafb", borderRadius: 5, padding: "6px 8px", border: "1px solid #e5e7eb" }}>
+                                      <div style={{ fontSize: 11, fontWeight: 600, color: "#111827", marginBottom: 2 }}>Q. {faq.question}</div>
+                                      <div style={{ fontSize: 11, color: "#374151" }}>A. {faq.answer}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {sug.type === "related" && Array.isArray((sug.payload as {items?: unknown}).items) && (
+                                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  {((sug.payload as {items: {id: number; question: string}[]}).items).map((r, i) => (
+                                    <div key={i} style={{ fontSize: 11, color: "#1e40af", background: "#eff6ff", padding: "4px 8px", borderRadius: 5 }}>
+                                      #{r.id} {r.question}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {sug.type === "meta" && (
+                                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                  {(sug.payload as Record<string,string>).aeoTitle && (
+                                    <div style={{ fontSize: 11 }}>
+                                      <span style={{ color: "#6b7280", fontWeight: 600 }}>Title: </span>
+                                      <span style={{ color: "#111827" }}>{(sug.payload as Record<string,string>).aeoTitle}</span>
+                                    </div>
+                                  )}
+                                  {(sug.payload as Record<string,string>).aeoDescription && (
+                                    <div style={{ fontSize: 11 }}>
+                                      <span style={{ color: "#6b7280", fontWeight: 600 }}>Desc: </span>
+                                      <span style={{ color: "#374151" }}>{(sug.payload as Record<string,string>).aeoDescription}</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </DetailSection>
+                )}
 
                 {/* 품질 필터 */}
                 <DetailSection label="품질 필터">

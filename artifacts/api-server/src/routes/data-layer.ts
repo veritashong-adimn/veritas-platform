@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, translationUnitsTable, translationUnitLogsTable, languageServiceDataTable, contentInsightsTable } from "@workspace/db";
+import { db, translationUnitsTable, translationUnitLogsTable, languageServiceDataTable, contentInsightsTable, insightAutoSuggestionsTable } from "@workspace/db";
 import { eq, and, or, ilike, sql, desc, inArray } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import {
@@ -1384,6 +1384,330 @@ router.post("/admin/content-insights/generate", ...adminOnly, async (req, res) =
   } catch (err) {
     req.log.error({ err }, "CI: failed to generate insights");
     res.status(500).json({ error: "인사이트 자동 생성 실패" });
+  }
+});
+
+// ─── AEO 자동 보완 API ───────────────────────────────────────────────────────
+
+// 텍스트 유사도: 단어 overlap 기반 (벡터 DB 없이 간단 매칭)
+function wordSimilarity(a: string, b: string): number {
+  const tokA = new Set(a.toLowerCase().replace(/[^\w\uAC00-\uD7A3 ]/g, " ").split(/\s+/).filter(Boolean));
+  const tokB = new Set(b.toLowerCase().replace(/[^\w\uAC00-\uD7A3 ]/g, " ").split(/\s+/).filter(Boolean));
+  const intersection = [...tokA].filter(t => tokB.has(t)).length;
+  if (!intersection) return 0;
+  return intersection / Math.sqrt(tokA.size * tokB.size);
+}
+
+async function runAutoEnhance(insight: typeof contentInsightsTable.$inferSelect, allInsights: typeof contentInsightsTable.$inferSelect[]) {
+  const aeo = computeAeoFields(insight);
+  const needs = {
+    faq: aeo.faqCount < 3,
+    related: aeo.relatedCount === 0,
+    meta: !aeo.hasAeoTitle || !aeo.hasAeoDescription,
+  };
+  if (!needs.faq && !needs.related && !needs.meta) return { skipped: true };
+
+  const OpenAI = (await import("openai")).default;
+  const openaiClient = new OpenAI({
+    apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+    baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+  });
+
+  const requestedItems: string[] = [];
+  if (needs.faq) requestedItems.push(`"faqSuggestions": [{question, answer}]×3~5개 (기존과 다른 관점)`);
+  if (needs.related) requestedItems.push(`"relatedQuestions": [텍스트] ×3개 (관련 다른 질문)`);
+  if (needs.meta) {
+    if (!aeo.hasAeoTitle) requestedItems.push(`"aeoTitle": 검색최적화 제목 (60자 이내)`);
+    if (!aeo.hasAeoDescription) requestedItems.push(`"aeoDescription": AI답변구조 설명문 (160자 이내)`);
+  }
+
+  const existingFaqText = insight.faqJson
+    ? (insight.faqJson as { question: string }[]).map(f => f.question).join(", ")
+    : "없음";
+
+  const systemPrompt = `당신은 통번역 분야 SEO/AEO 전문가입니다. 주어진 인사이트에 대해 JSON 형식으로만 응답하세요.`;
+  const userPrompt = `인사이트 정보:
+- 질문: ${insight.question}
+- 요약 답변: ${insight.shortAnswer ?? "(없음)"}
+- 도메인: ${insight.domain ?? "(없음)"}
+- 언어쌍: ${insight.languagePair ?? "(없음)"}
+- 기존 FAQ 질문: ${existingFaqText}
+
+아래 항목들을 생성해주세요:
+${requestedItems.join("\n")}
+
+반드시 JSON만 반환 (예: {"faqSuggestions": [...], "relatedQuestions": [...], "aeoTitle": "...", "aeoDescription": "..."})`;
+
+  const completion = await openaiClient.chat.completions.create({
+    model: "gpt-5-mini",
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    response_format: { type: "json_object" },
+    max_completion_tokens: 2048,
+  });
+
+  const raw = completion.choices[0]?.message?.content ?? "{}";
+  let parsed: Record<string, unknown> = {};
+  try { parsed = JSON.parse(raw); } catch { return { error: "AI 응답 파싱 실패" }; }
+
+  const suggestions: { type: string; payload: Record<string, unknown> }[] = [];
+
+  // FAQ 제안
+  if (needs.faq && Array.isArray(parsed.faqSuggestions)) {
+    const faqs = (parsed.faqSuggestions as { question: string; answer: string }[])
+      .filter(f => f?.question && f?.answer)
+      .slice(0, 5);
+    if (faqs.length > 0) {
+      suggestions.push({ type: "faq", payload: { items: faqs, currentCount: aeo.faqCount } });
+    }
+  }
+
+  // Related 제안: 텍스트 기반 → 기존 인사이트와 유사도 매칭
+  if (needs.related && Array.isArray(parsed.relatedQuestions)) {
+    const relQs = parsed.relatedQuestions as string[];
+    const candidates = allInsights.filter(r => r.id !== insight.id && r.status !== "archived" && !r.isArchived);
+    const scored: { id: number; question: string; score: number }[] = [];
+    for (const rq of relQs) {
+      for (const c of candidates) {
+        const s = wordSimilarity(rq, c.question);
+        if (s > 0.05) scored.push({ id: c.id, question: c.question, score: s });
+      }
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const seen = new Set<number>();
+    const top: { id: number; question: string }[] = [];
+    for (const s of scored) {
+      if (!seen.has(s.id)) { seen.add(s.id); top.push({ id: s.id, question: s.question }); }
+      if (top.length >= 3) break;
+    }
+    if (top.length > 0) {
+      suggestions.push({ type: "related", payload: { items: top, suggestedTexts: relQs } });
+    }
+  }
+
+  // Meta 제안
+  if (needs.meta) {
+    const metaPayload: Record<string, string> = {};
+    if (!aeo.hasAeoTitle && typeof parsed.aeoTitle === "string") metaPayload.aeoTitle = (parsed.aeoTitle as string).slice(0, 60);
+    if (!aeo.hasAeoDescription && typeof parsed.aeoDescription === "string") metaPayload.aeoDescription = (parsed.aeoDescription as string).slice(0, 160);
+    if (Object.keys(metaPayload).length > 0) {
+      suggestions.push({ type: "meta", payload: metaPayload });
+    }
+  }
+
+  return { suggestions };
+}
+
+// GET /api/admin/content-insights/:id/suggestions
+router.get("/admin/content-insights/:id/suggestions", ...staffPlus, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "유효하지 않은 id" });
+    const rows = await db.select().from(insightAutoSuggestionsTable)
+      .where(eq(insightAutoSuggestionsTable.insightId, id))
+      .orderBy(desc(insightAutoSuggestionsTable.createdAt));
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: "제안 목록 조회 실패" });
+  }
+});
+
+// POST /api/admin/content-insights/:id/auto-enhance  (단건 자동 보완 실행)
+router.post("/admin/content-insights/:id/auto-enhance", ...adminOnly, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "유효하지 않은 id" });
+
+    const [insight] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, id));
+    if (!insight) return res.status(404).json({ error: "인사이트를 찾을 수 없습니다." });
+
+    // drop/archived 상태 제외
+    if (insight.filterDecision === "drop" || insight.isArchived) {
+      return res.status(400).json({ error: "DROP 또는 보관 상태의 인사이트는 자동 보완 대상이 아닙니다." });
+    }
+
+    // 기존 pending 제안 삭제 (재생성)
+    await db.delete(insightAutoSuggestionsTable)
+      .where(and(
+        eq(insightAutoSuggestionsTable.insightId, id),
+        eq(insightAutoSuggestionsTable.status, "pending"),
+      ));
+
+    // 유사도 매칭용 전체 인사이트 조회
+    const allInsights = await db.select({
+      id: contentInsightsTable.id,
+      question: contentInsightsTable.question,
+      status: contentInsightsTable.status,
+      isArchived: contentInsightsTable.isArchived,
+    }).from(contentInsightsTable);
+
+    const result = await runAutoEnhance(insight, allInsights as any);
+    if ("skipped" in result && result.skipped) {
+      return res.json({ message: "이미 AEO READY 상태입니다. 보완이 필요하지 않습니다.", created: 0 });
+    }
+    if ("error" in result) {
+      return res.status(500).json({ error: result.error });
+    }
+
+    const created: typeof insightAutoSuggestionsTable.$inferSelect[] = [];
+    for (const sug of result.suggestions ?? []) {
+      const [row] = await db.insert(insightAutoSuggestionsTable).values({
+        insightId: id,
+        type: sug.type,
+        payload: sug.payload,
+        status: "pending",
+      }).returning();
+      created.push(row);
+    }
+
+    req.log.info({ id, count: created.length }, "CI: auto-enhance suggestions created");
+    res.status(201).json({ created: created.length, suggestions: created });
+  } catch (err) {
+    req.log.error({ err }, "CI: auto-enhance failed");
+    res.status(500).json({ error: "자동 보완 실행 실패" });
+  }
+});
+
+// POST /api/admin/content-insights/batch-auto-enhance  (배치 자동 보완)
+router.post("/admin/content-insights/batch-auto-enhance", ...adminOnly, async (req, res) => {
+  try {
+    const { ids: reqIds } = req.body as { ids?: number[] };
+
+    // 대상: PARTIAL or NONE, filterDecision != drop, !isArchived
+    let targets = await db.select().from(contentInsightsTable)
+      .where(and(
+        eq(contentInsightsTable.isArchived, false),
+      ));
+
+    if (reqIds?.length) {
+      targets = targets.filter(r => reqIds.includes(r.id));
+    } else {
+      targets = targets.filter(r => {
+        if (r.filterDecision === "drop") return false;
+        const aeo = computeAeoFields(r);
+        return aeo.aeoStatus !== "READY";
+      }).slice(0, 20); // 최대 20개
+    }
+
+    if (targets.length === 0) {
+      return res.json({ processed: 0, created: 0, message: "보완 대상 인사이트가 없습니다." });
+    }
+
+    const allInsights = await db.select({
+      id: contentInsightsTable.id,
+      question: contentInsightsTable.question,
+      status: contentInsightsTable.status,
+      isArchived: contentInsightsTable.isArchived,
+    }).from(contentInsightsTable);
+
+    let totalCreated = 0;
+    const results: { id: number; created: number }[] = [];
+
+    for (const insight of targets) {
+      try {
+        await db.delete(insightAutoSuggestionsTable)
+          .where(and(
+            eq(insightAutoSuggestionsTable.insightId, insight.id),
+            eq(insightAutoSuggestionsTable.status, "pending"),
+          ));
+
+        const result = await runAutoEnhance(insight, allInsights as any);
+        if ("skipped" in result || "error" in result) { results.push({ id: insight.id, created: 0 }); continue; }
+
+        let cnt = 0;
+        for (const sug of result.suggestions ?? []) {
+          await db.insert(insightAutoSuggestionsTable).values({
+            insightId: insight.id, type: sug.type, payload: sug.payload, status: "pending",
+          });
+          cnt++;
+        }
+        totalCreated += cnt;
+        results.push({ id: insight.id, created: cnt });
+      } catch {
+        results.push({ id: insight.id, created: 0 });
+      }
+    }
+
+    req.log.info({ processed: targets.length, totalCreated }, "CI: batch auto-enhance complete");
+    res.json({ processed: targets.length, created: totalCreated, results });
+  } catch (err) {
+    req.log.error({ err }, "CI: batch auto-enhance failed");
+    res.status(500).json({ error: "배치 자동 보완 실패" });
+  }
+});
+
+// POST /api/admin/suggestions/:sugId/apply  (제안 적용)
+router.post("/admin/suggestions/:sugId/apply", ...adminOnly, async (req, res) => {
+  try {
+    const sugId = parseInt(req.params.sugId);
+    if (isNaN(sugId)) return res.status(400).json({ error: "유효하지 않은 sugId" });
+
+    const [sug] = await db.select().from(insightAutoSuggestionsTable)
+      .where(eq(insightAutoSuggestionsTable.id, sugId));
+    if (!sug) return res.status(404).json({ error: "제안을 찾을 수 없습니다." });
+    if (sug.status !== "pending") return res.status(400).json({ error: `이미 ${sug.status} 상태입니다.` });
+
+    const [insight] = await db.select().from(contentInsightsTable)
+      .where(eq(contentInsightsTable.id, sug.insightId));
+    if (!insight) return res.status(404).json({ error: "인사이트를 찾을 수 없습니다." });
+
+    const setPayload: Record<string, unknown> = { updatedAt: new Date() };
+    const payload = sug.payload as Record<string, unknown>;
+
+    if (sug.type === "faq") {
+      const newFaqs = payload.items as { question: string; answer: string }[];
+      const existing = Array.isArray(insight.faqJson) ? insight.faqJson as { question: string; answer: string }[] : [];
+      // 기존 + 새 항목 병합 (중복 질문 제외)
+      const existingQs = new Set(existing.map(f => f.question));
+      const merged = [...existing, ...newFaqs.filter(f => !existingQs.has(f.question))].slice(0, 5);
+      setPayload.faqJson = merged;
+    } else if (sug.type === "related") {
+      const items = payload.items as { id: number }[];
+      const newIds = items.map(i => i.id);
+      const existing = Array.isArray(insight.relatedIds) ? insight.relatedIds as number[] : [];
+      const merged = [...new Set([...existing, ...newIds])].slice(0, 10);
+      setPayload.relatedIds = merged;
+    } else if (sug.type === "meta") {
+      if (payload.aeoTitle && !insight.aeoTitle) setPayload.aeoTitle = payload.aeoTitle;
+      if (payload.aeoDescription && !insight.aeoDescription) setPayload.aeoDescription = payload.aeoDescription;
+    }
+
+    const [updated] = await db.update(contentInsightsTable)
+      .set(setPayload)
+      .where(eq(contentInsightsTable.id, insight.id))
+      .returning();
+
+    await db.update(insightAutoSuggestionsTable)
+      .set({ status: "applied", updatedAt: new Date() })
+      .where(eq(insightAutoSuggestionsTable.id, sugId));
+
+    const updatedWithAeo = { ...updated, ...computeAeoFields(updated) };
+    res.json({ suggestion: { ...sug, status: "applied" }, insight: updatedWithAeo });
+  } catch (err) {
+    req.log.error({ err }, "CI: apply suggestion failed");
+    res.status(500).json({ error: "제안 적용 실패" });
+  }
+});
+
+// POST /api/admin/suggestions/:sugId/reject  (제안 무시)
+router.post("/admin/suggestions/:sugId/reject", ...adminOnly, async (req, res) => {
+  try {
+    const sugId = parseInt(req.params.sugId);
+    if (isNaN(sugId)) return res.status(400).json({ error: "유효하지 않은 sugId" });
+
+    const [sug] = await db.select().from(insightAutoSuggestionsTable)
+      .where(eq(insightAutoSuggestionsTable.id, sugId));
+    if (!sug) return res.status(404).json({ error: "제안을 찾을 수 없습니다." });
+
+    await db.update(insightAutoSuggestionsTable)
+      .set({ status: "rejected", updatedAt: new Date() })
+      .where(eq(insightAutoSuggestionsTable.id, sugId));
+
+    res.json({ id: sugId, status: "rejected" });
+  } catch (err) {
+    res.status(500).json({ error: "제안 무시 실패" });
   }
 });
 

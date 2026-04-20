@@ -12,6 +12,7 @@ Key capabilities include:
 - Comprehensive management of translator settlement and payment information, including sensitive data with robust security.
 - Separation of translation and interpretation product structures with automatic code generation (`[SVC]-[LANG]-[CAT]-NNN`), dropdown-based form, duplicate warning, deactivation reason modal, and multi-filter search (serviceType/languagePair/category/active).
 - Support for divisions within large client companies: divisions table (company_id FK, name, type), project-level requesting/billing/payer separation, full CRUD API, and stats display in company detail modal.
+- **AEO/GEO 자동 보완 시스템**: `insight_auto_suggestions` 테이블 (insightId/type/payload/status). AI(GPT)가 부족한 AEO 필드(FAQ 3개 미만, 관련 연결 없음, aeoTitle/Description 누락) 자동 탐지 → 제안 생성(POST /auto-enhance 단건 / batch). 어드민이 "자동 보완 제안" 패널에서 Apply/Reject. 적용 시 insight 필드에 즉시 반영 및 AEO 점수 재계산. 유사도 기반 관련 인사이트 자동 매칭(단어 overlap). 배치 처리(최대 20건).
 - A new data layer for translation data assetization (`translation_units`), enabling advanced search, anonymization, and history tracking.
 - `language_service_data` + `content_insights` tables: 통합 언어 서비스 데이터 구조 (번역/통역/장비 서비스 레퍼런스 데이터 + AEO/GEO 콘텐츠 인사이트 생성 기반). 서비스 유형별 동적 필드, CRUD API, 인사이트 Q&A 등록/삭제 지원.
 - **공개 인사이트 페이지**: `published` + `public_insight` 상태의 인사이트를 `/insights` (목록) 및 `/insights/:slug` (상세)로 공개 노출. FAQ JSON-LD schema, SEO 메타 태그(title, description, og:) 자동 삽입. PATCH status → published 전환 시 slug 자동 생성. 공개 API: `GET /api/public/insights`, `GET /api/public/insights/:slug` (인증 불필요). 로그인 없이 접근 가능한 공개 페이지.
