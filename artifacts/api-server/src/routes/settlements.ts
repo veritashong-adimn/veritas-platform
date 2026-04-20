@@ -58,6 +58,7 @@ router.get("/admin/settlements", ...adminGuard, async (req, res) => {
         translatorId: settlementsTable.translatorId,
         paymentId: settlementsTable.paymentId,
         translatorName: settlementsTable.translatorName,
+        translatorNameFromUser: usersTable.name,
 
         totalAmount: settlementsTable.totalAmount,
         translatorAmount: settlementsTable.translatorAmount,
@@ -92,15 +93,23 @@ router.get("/admin/settlements", ...adminGuard, async (req, res) => {
       .leftJoin(usersTable, eq(settlementsTable.translatorId, usersTable.id))
       .orderBy(settlementsTable.payoutDueDate, settlementsTable.createdAt);
 
+    // translatorName 병합: settlements.translatorName → users.name 순으로 fallback
+    const merged = rows.map(r => ({
+      ...r,
+      translatorName: r.translatorName ?? r.translatorNameFromUser ?? null,
+      translatorNameFromUser: undefined, // 클라이언트 노출 불필요
+    }));
+
     // pending_review 우선, 그 다음 ready, 나머지
     const order = ["pending_review", "ready", "draft", "pending", "paid"];
-    const sorted = [...rows].sort((a, b) => {
+    const sorted = [...merged].sort((a, b) => {
       const ai = order.indexOf(a.status ?? "pending");
       const bi = order.indexOf(b.status ?? "pending");
       if (ai !== bi) return ai - bi;
-      // 같은 상태면 지급 예정일 빠른순
-      if (a.payoutDueDate && b.payoutDueDate) return a.payoutDueDate.localeCompare(b.payoutDueDate);
-      return 0;
+      // 같은 상태 내에서 이름 가나다순
+      const na = (a.translatorName ?? a.translatorEmail ?? "").toLowerCase();
+      const nb = (b.translatorName ?? b.translatorEmail ?? "").toLowerCase();
+      return na.localeCompare(nb, "ko");
     });
 
     res.json(sorted);

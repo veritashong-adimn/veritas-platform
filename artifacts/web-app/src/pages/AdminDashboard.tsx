@@ -980,21 +980,31 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   }, [settlements]);
 
   const filteredSettlements = useMemo(() => {
-    return settlements.filter(s => {
-      if (settlementFilter !== "all" && s.status !== settlementFilter) return false;
-      if (settlementMonthFilter !== "all" && s.createdAt.slice(0, 7) !== settlementMonthFilter) return false;
-      if (paidDateFrom || paidDateTo) {
-        if (!s.paidDate) return false;
-        const pd = new Date(s.paidDate);
-        if (paidDateFrom && pd < new Date(paidDateFrom)) return false;
-        if (paidDateTo) {
-          const toEnd = new Date(paidDateTo);
-          toEnd.setHours(23, 59, 59, 999);
-          if (pd > toEnd) return false;
+    const statusOrder = ["pending_review", "ready", "draft", "pending", "paid"];
+    return settlements
+      .filter(s => {
+        if (settlementFilter !== "all" && s.status !== settlementFilter) return false;
+        if (settlementMonthFilter !== "all" && s.createdAt.slice(0, 7) !== settlementMonthFilter) return false;
+        if (paidDateFrom || paidDateTo) {
+          if (!s.paidDate) return false;
+          const pd = new Date(s.paidDate);
+          if (paidDateFrom && pd < new Date(paidDateFrom)) return false;
+          if (paidDateTo) {
+            const toEnd = new Date(paidDateTo);
+            toEnd.setHours(23, 59, 59, 999);
+            if (pd > toEnd) return false;
+          }
         }
-      }
-      return true;
-    });
+        return true;
+      })
+      .sort((a, b) => {
+        const si = statusOrder.indexOf(a.status ?? "pending");
+        const sj = statusOrder.indexOf(b.status ?? "pending");
+        if (si !== sj) return si - sj;
+        const na = (a.translatorName ?? a.translatorEmail ?? "").toLowerCase();
+        const nb = (b.translatorName ?? b.translatorEmail ?? "").toLowerCase();
+        return na.localeCompare(nb, "ko");
+      });
   }, [settlements, settlementFilter, settlementMonthFilter, paidDateFrom, paidDateTo]);
 
   const settlementStats = useMemo(() => {
@@ -1897,8 +1907,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             </td>
                             {/* 통번역사 */}
                             <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>
-                              <div style={{ fontWeight: 600 }}>{s.translatorName || s.translatorEmail || `#${s.translatorId}`}</div>
-                              {s.translatorName && s.translatorEmail && <div style={{ color: "#9ca3af", fontSize: 11 }}>{s.translatorEmail}</div>}
+                              {(s.translatorName || s.translatorEmail)
+                                ? <>
+                                    <div style={{ fontWeight: 600 }}>{s.translatorName || s.translatorEmail}</div>
+                                    {s.translatorName && s.translatorEmail && (
+                                      <div style={{ color: "#9ca3af", fontSize: 11 }}>{s.translatorEmail}</div>
+                                    )}
+                                  </>
+                                : <span style={{ color: "#d1d5db", fontSize: 12 }}>정보 없음</span>
+                              }
                             </td>
                             {/* 원금액 */}
                             <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" }}>
