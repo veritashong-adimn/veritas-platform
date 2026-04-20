@@ -856,17 +856,40 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     if (ids.length === 0) return;
     setBatchPaying(true);
     try {
-      const res = await fetch(api("/api/admin/settlements/batch-pay"), {
-        method: "PATCH", headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ ids }),
+      const res = await fetch(api("/api/admin/settlements/bulk-pay"), {
+        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ settlementIds: ids }),
       });
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
-      setToast(`${data.updated}건 일괄 지급 완료 처리되었습니다.${data.skipped > 0 ? ` (${data.skipped}건 스킵)` : ""}`);
+      setToast(`${data.updated}건 지급 완료 처리되었습니다.${data.skipped > 0 ? ` (${data.skipped}건 스킵)` : ""}`);
       setSelectedSettlements(new Set());
       await fetchAll();
     } catch { setToast("오류: 일괄 정산 처리 실패"); }
     finally { setBatchPaying(false); }
+  };
+
+  const handlePaymentExport = () => {
+    const ids = Array.from(selectedSettlements);
+    if (ids.length === 0) return;
+    const token = localStorage.getItem("token");
+    const idsParam = ids.join(",");
+    const url = api(`/api/admin/settlements/export?ids=${idsParam}`);
+    const a = document.createElement("a");
+    a.href = url;
+    a.setAttribute("download", `payment_${new Date().toISOString().slice(0, 10)}.csv`);
+    const headers = new Headers({ Authorization: `Bearer ${token}` });
+    fetch(url, { headers })
+      .then(r => r.blob())
+      .then(blob => {
+        const blobUrl = URL.createObjectURL(blob);
+        a.href = blobUrl;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(blobUrl);
+      })
+      .catch(() => setToast("오류: 지급 파일 다운로드 실패"));
   };
 
   const handleRoleChange = async (userId: number, newRole: string) => {
@@ -1638,28 +1661,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             return next;
           });
         };
+        const selectedTotal = filteredSettlements
+          .filter(s => selectedSettlements.has(s.id))
+          .reduce((sum, s) => sum + (parseFloat(String(s.netAmount ?? "0")) || 0), 0);
+
         return (
           <Section
             title={`정산 현황 (${filteredSettlements.length})`}
             action={
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                {someSelected && (
-                  <>
-                    <button type="button" onClick={runBatchPay} disabled={batchPaying} style={{
-                      padding: "6px 14px", fontSize: 12, borderRadius: 8, fontWeight: 700, cursor: batchPaying ? "not-allowed" : "pointer",
-                      background: batchPaying ? "#86efac" : "#059669", border: "none", color: "#fff", whiteSpace: "nowrap",
-                    }}>
-                      {batchPaying ? "처리 중..." : `선택 ${selectedSettlements.size}건 일괄 지급 완료`}
-                    </button>
-                    <button type="button" onClick={() => setSelectedSettlements(new Set())} style={{
-                      padding: "6px 12px", fontSize: 12, borderRadius: 8, fontWeight: 600, cursor: "pointer",
-                      background: "#f3f4f6", border: "1px solid #e5e7eb", color: "#374151", whiteSpace: "nowrap",
-                    }}>
-                      선택 취소
-                    </button>
-                  </>
-                )}
-                <GhostBtn onClick={() => handleExportCSV("settlements")} style={{ fontSize: 12, padding: "6px 12px" }}>⬇ CSV</GhostBtn>
+                <GhostBtn onClick={() => handleExportCSV("settlements")} style={{ fontSize: 12, padding: "6px 12px" }}>⬇ 전체 CSV</GhostBtn>
                 <FilterPill label="전체" active={settlementFilter === "all"} onClick={() => setSettlementFilter("all")} />
                 {ALL_SETTLEMENT_STATUSES.map(s => {
                   const SETTLEMENT_LABEL: Record<string, string> = {
@@ -1674,6 +1685,47 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               </div>
             }
           >
+            {/* ── 선택 액션 바 ── */}
+            {someSelected && (
+              <div style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "10px 16px",
+                background: "linear-gradient(135deg, #eff6ff, #dbeafe)",
+                border: "1px solid #93c5fd", borderRadius: 10, marginBottom: 16,
+                flexWrap: "wrap",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 200 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#1d4ed8" }}>
+                    {selectedSettlements.size}건 선택됨
+                  </span>
+                  <span style={{ fontSize: 12, color: "#6b7280" }}>|</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>
+                    합계 ₩{selectedTotal.toLocaleString()}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button type="button" onClick={handlePaymentExport} style={{
+                    padding: "7px 14px", fontSize: 12, borderRadius: 8, fontWeight: 600, cursor: "pointer",
+                    background: "#fff", border: "1px solid #3b82f6", color: "#2563eb", whiteSpace: "nowrap",
+                  }}>
+                    ⬇ 지급 파일 다운로드
+                  </button>
+                  <button type="button" onClick={runBatchPay} disabled={batchPaying} style={{
+                    padding: "7px 14px", fontSize: 12, borderRadius: 8, fontWeight: 700,
+                    cursor: batchPaying ? "not-allowed" : "pointer",
+                    background: batchPaying ? "#86efac" : "#059669", border: "none", color: "#fff", whiteSpace: "nowrap",
+                  }}>
+                    {batchPaying ? "처리 중..." : "선택 지급 완료"}
+                  </button>
+                  <button type="button" onClick={() => setSelectedSettlements(new Set())} style={{
+                    padding: "7px 12px", fontSize: 12, borderRadius: 8, fontWeight: 600, cursor: "pointer",
+                    background: "#f3f4f6", border: "1px solid #e5e7eb", color: "#6b7280", whiteSpace: "nowrap",
+                  }}>
+                    ✕ 선택 취소
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* ── 통계 카드 4종 ── */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
               {/* 오늘 지급 예정 */}

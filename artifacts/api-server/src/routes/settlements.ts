@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import {
   db, settlementsTable, projectsTable, usersTable, paymentsTable, companiesTable,
+  translatorSensitiveTable,
 } from "@workspace/db";
 import { eq, inArray, and, lte, sql } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
@@ -257,6 +258,110 @@ router.patch("/admin/settlements/batch-pay",
     }
   }
 );
+
+// ── 일괄 지급 완료 (bulk-pay) ─────────────────────────────────────────────────
+router.post("/admin/settlements/bulk-pay", ...adminGuard, async (req, res) => {
+  const rawIds: number[] = req.body?.settlementIds ?? [];
+  if (!Array.isArray(rawIds) || rawIds.length === 0) {
+    res.status(400).json({ error: "settlementIds 필드가 필요합니다." });
+    return;
+  }
+  const validIds = rawIds.filter(id => Number.isInteger(id) && id > 0);
+  try {
+    const targets = await db
+      .select({ id: settlementsTable.id, projectId: settlementsTable.projectId, status: settlementsTable.status })
+      .from(settlementsTable)
+      .where(inArray(settlementsTable.id, validIds));
+
+    const readyIds = targets.filter(t => t.status === "ready").map(t => t.id);
+    if (readyIds.length === 0) {
+      res.status(400).json({ error: "지급 가능한 항목이 없습니다. ready 상태만 지급 처리할 수 있습니다." });
+      return;
+    }
+
+    const now = new Date();
+    const updated = await db
+      .update(settlementsTable)
+      .set({ status: "paid", paidAt: now, paidDate: now.toISOString().slice(0, 10) })
+      .where(inArray(settlementsTable.id, readyIds))
+      .returning({ id: settlementsTable.id });
+
+    for (const t of targets.filter(t => readyIds.includes(t.id))) {
+      await logEvent("project", t.projectId, "settlement_paid_bulk", req.log);
+    }
+
+    res.json({
+      updated: updated.length,
+      skipped: validIds.length - readyIds.length,
+      items: updated,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Failed to bulk-pay settlements");
+    res.status(500).json({ error: "일괄 지급 처리 실패." });
+  }
+});
+
+// ── 지급 파일 내보내기 CSV ─────────────────────────────────────────────────────
+router.get("/admin/settlements/export", ...adminGuard, async (req, res) => {
+  const rawIds = String(req.query.ids ?? "");
+  const ids = rawIds
+    .split(",")
+    .map(s => parseInt(s.trim(), 10))
+    .filter(n => !isNaN(n) && n > 0);
+
+  if (ids.length === 0) {
+    res.status(400).json({ error: "ids 쿼리 파라미터가 필요합니다. 예: ?ids=1,2,3" });
+    return;
+  }
+
+  try {
+    const rows = await db
+      .select({
+        id: settlementsTable.id,
+        translatorName: settlementsTable.translatorName,
+        netAmount: settlementsTable.netAmount,
+        payoutDueDate: settlementsTable.payoutDueDate,
+        bankName: translatorSensitiveTable.bankName,
+        bankAccount: translatorSensitiveTable.bankAccount,
+        accountHolder: translatorSensitiveTable.accountHolder,
+        paypalEmail: translatorSensitiveTable.paypalEmail,
+        paymentMethod: translatorSensitiveTable.paymentMethod,
+        status: settlementsTable.status,
+      })
+      .from(settlementsTable)
+      .leftJoin(
+        translatorSensitiveTable,
+        eq(settlementsTable.translatorId, translatorSensitiveTable.translatorId),
+      )
+      .where(inArray(settlementsTable.id, ids));
+
+    const header = ["정산ID", "번역사 이름", "은행명", "계좌번호", "예금주", "실지급액", "지급 예정일", "상태"];
+    const csvLines = [
+      header.join(","),
+      ...rows.map(r => [
+        r.id,
+        `"${(r.translatorName ?? "").replace(/"/g, '""')}"`,
+        `"${(r.bankName ?? (r.paypalEmail ? "PayPal" : "")).replace(/"/g, '""')}"`,
+        `"${(r.bankAccount ?? r.paypalEmail ?? "").replace(/"/g, '""')}"`,
+        `"${(r.accountHolder ?? "").replace(/"/g, '""')}"`,
+        r.netAmount ?? 0,
+        r.payoutDueDate ?? "",
+        r.status ?? "",
+      ].join(",")),
+    ];
+
+    const csvContent = "\uFEFF" + csvLines.join("\r\n"); // UTF-8 BOM for Excel
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="payment_${new Date().toISOString().slice(0, 10)}.csv"`,
+    );
+    res.send(csvContent);
+  } catch (err) {
+    req.log.error({ err }, "Failed to export settlements CSV");
+    res.status(500).json({ error: "지급 파일 생성 실패." });
+  }
+});
 
 // ── 번역사 본인 정산 내역 ──────────────────────────────────────────────────────
 router.get("/settlements/my", requireAuth, requireRole("translator"), async (req, res) => {
