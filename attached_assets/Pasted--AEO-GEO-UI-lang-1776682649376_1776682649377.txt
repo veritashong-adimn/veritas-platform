@@ -1,0 +1,174 @@
+[목표]
+기존 "언어 서비스 데이터"와는 별도로,
+AEO/GEO 인사이트를 조회·검수할 수 있는 "인사이트 관리" UI를 추가한다.
+
+이번 작업에서는
+
+* 기존 language_service_data 입력/목록 UI는 최대한 건드리지 않고
+* content_insights 조회/상태 관리 UI만 새로 붙인다.
+
+---
+
+[1단계: 좌측 메뉴에 신규 탭 추가]
+
+"데이터 자산" 그룹 아래에 신규 메뉴 추가:
+
+* 인사이트 관리
+
+기존:
+
+* 번역 데이터
+* 언어 서비스 데이터
+
+변경:
+
+* 번역 데이터
+* 언어 서비스 데이터
+* 인사이트 관리
+
+---
+
+[2단계: InsightManagementTab 신규 컴포넌트 생성]
+
+새 컴포넌트 생성:
+
+* InsightManagementTab.tsx
+
+역할:
+
+* content_insights 목록 조회
+* 필터 검색
+* 상세 보기
+* 상태 변경(초기 버전)
+
+---
+
+[3단계: 목록 조회 UI]
+
+GET /api/admin/content-insights 연결
+
+상단 필터 영역 추가:
+
+* 서비스 유형(serviceType)
+
+  * 전체 / 번역 / 통역 / 장비
+
+* 상태(status)
+
+  * 전체 / draft / approved / published
+
+* 공개 수준(visibilityLevel)
+
+  * 전체 / private / internal_summary / public_insight
+
+* 도메인(domain) 검색
+
+* 언어쌍(languagePair) 검색
+
+* [검색]
+
+* [초기화]
+
+---
+
+[4단계: 목록 테이블 컬럼]
+
+표시 컬럼:
+
+* ID
+* 서비스 유형
+* 질문(question)
+* shortAnswer
+* sourceCount
+* avgPrice
+* confidenceScore
+* status
+* visibilityLevel
+* 생성일(createdAt)
+
+질문(question)은 한 줄 말줄임 표시 가능
+shortAnswer도 길면 말줄임 처리 가능
+
+---
+
+[5단계: 상세 패널 또는 상세 영역]
+
+목록 row 클릭 시 우측 상세 패널 또는 하단 상세 영역 표시
+
+표시 항목:
+
+* question
+* shortAnswer
+* longAnswer
+* serviceType
+* questionType
+* domain
+* languagePair
+* industry
+* useCase
+* sourceCount
+* avgPrice / minPrice / maxPrice
+* avgDuration
+* confidenceScore
+* status
+* visibilityLevel
+
+longAnswer는 줄바꿈/마크다운 구조가 보이도록 렌더링
+
+---
+
+[6단계: 상태 변경 기능 추가 (초기 버전)]
+
+상세 패널에 버튼 추가:
+
+* [승인]
+* [게시]
+* [보관]
+
+동작:
+
+* draft → approved
+* approved → published
+* published → archived 가능하도록
+
+신규 API가 없으면
+PATCH /api/admin/content-insights/:id/status
+엔드포인트 추가해서 처리
+
+요청 body 예시:
+{ "status": "approved" }
+
+---
+
+[7단계: 레거시/불완전 데이터 대응]
+
+ID 1처럼 shortAnswer / longAnswer / sourceCount가 null인 레거시 데이터가 있어도
+화면이 깨지지 않도록 처리
+
+예:
+
+* 값 없으면 "-" 표시
+* longAnswer 없으면 "상세 답변 없음"
+
+---
+
+[8단계: UI 원칙]
+
+* 기존 "언어 서비스 데이터" 화면은 유지
+* 인사이트는 별도 관리 화면으로 분리
+* 현재 단계에서는 수정 기능보다 조회/검수/상태변경 중심으로 구현
+* 생성(generate) 버튼은 이번 단계에서는 넣지 않아도 됨
+  (필요하면 다음 단계에서 추가)
+
+---
+
+[최종 결과]
+
+관리자가 별도 "인사이트 관리" 화면에서
+
+* 생성된 인사이트 목록 확인
+* 질문/답변 검수
+* 통계값 확인
+* draft / approved / published 상태 변경
+
+을 할 수 있는 상태로 만든다.

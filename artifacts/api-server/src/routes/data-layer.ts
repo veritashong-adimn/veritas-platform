@@ -426,6 +426,32 @@ router.post("/admin/language-service-data/:id/insights", ...adminOnly, async (re
   }
 });
 
+// PATCH /api/admin/content-insights/:id/status
+router.patch("/admin/content-insights/:id/status", ...adminOnly, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "유효하지 않은 id" });
+
+    const { status } = req.body as { status?: string };
+    const VALID = ["draft", "approved", "published", "archived"];
+    if (!status || !VALID.includes(status)) {
+      return res.status(400).json({ error: `status는 ${VALID.join(" | ")} 중 하나여야 합니다.` });
+    }
+
+    const [updated] = await db.update(contentInsightsTable)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(contentInsightsTable.id, id))
+      .returning();
+
+    if (!updated) return res.status(404).json({ error: "인사이트를 찾을 수 없습니다." });
+    req.log.info({ id, status }, "CI: status updated");
+    res.json(updated);
+  } catch (err) {
+    req.log.error({ err }, "CI: failed to update status");
+    res.status(500).json({ error: "상태 변경 실패" });
+  }
+});
+
 // DELETE /api/admin/content-insights/:id
 router.delete("/admin/content-insights/:id", ...adminOnly, async (req, res) => {
   try {
