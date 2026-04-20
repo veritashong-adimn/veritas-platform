@@ -607,15 +607,53 @@ router.post("/admin/content-insights", ...adminOnly, async (req, res) => {
 });
 
 // GET /api/admin/content-insights
+// ─── AEO helpers ──────────────────────────────────────────────────────────────
+
+function computeAeoFields(row: typeof contentInsightsTable.$inferSelect) {
+  const faqArr = (() => {
+    if (!row.faqJson) return [];
+    if (Array.isArray(row.faqJson)) return row.faqJson as { question: string; answer: string }[];
+    try { const p = JSON.parse(row.faqJson as unknown as string); return Array.isArray(p) ? p : []; }
+    catch { return []; }
+  })();
+  const relArr = (() => {
+    if (!row.relatedIds) return [];
+    if (Array.isArray(row.relatedIds)) return row.relatedIds as number[];
+    return [];
+  })();
+
+  const faqCount = faqArr.length;
+  const relatedCount = relArr.length;
+  const hasAeoTitle = !!row.aeoTitle?.trim();
+  const hasAeoDescription = !!row.aeoDescription?.trim();
+  const hasShortAnswer = !!row.shortAnswer?.trim();
+
+  let aeoScore = 0;
+  if (hasShortAnswer) aeoScore += 30;
+  if (faqCount >= 3) aeoScore += 30;
+  else if (faqCount >= 1) aeoScore += 15;
+  if (relatedCount >= 1) aeoScore += 20;
+  if (hasAeoTitle) aeoScore += 10;
+  if (hasAeoDescription) aeoScore += 10;
+
+  const hasAny = hasShortAnswer || faqCount > 0 || relatedCount > 0;
+  const isReady = hasShortAnswer && faqCount >= 3 && relatedCount >= 1 && hasAeoTitle && hasAeoDescription;
+  const aeoStatus: "READY" | "PARTIAL" | "NONE" = isReady ? "READY" : hasAny ? "PARTIAL" : "NONE";
+
+  return { faqCount, relatedCount, hasAeoTitle, hasAeoDescription, hasShortAnswer, aeoScore, aeoStatus };
+}
+
 router.get("/admin/content-insights", ...staffPlus, async (req, res) => {
   try {
     const {
       serviceType, status, visibilityLevel, domain, languagePair,
       filterDecision, showArchived,
-      page = "1", limit = "50",
+      aeoStatus: aeoStatusFilter,
+      sortBy,
+      page = "1", limit = "100",
     } = req.query as Record<string, string | undefined>;
     const pageNum = Math.max(1, parseInt(page));
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const limitNum = Math.min(200, Math.max(1, parseInt(limit)));
     const offset = (pageNum - 1) * limitNum;
 
     const conditions = [];
@@ -625,17 +663,38 @@ router.get("/admin/content-insights", ...staffPlus, async (req, res) => {
     if (domain) conditions.push(eq(contentInsightsTable.domain, domain));
     if (languagePair) conditions.push(eq(contentInsightsTable.languagePair, languagePair));
     if (filterDecision) conditions.push(eq(contentInsightsTable.filterDecision, filterDecision));
-    // 기본: 보관 항목 숨김 (showArchived=true 이면 보관 항목도 포함)
     if (showArchived !== "true") conditions.push(eq(contentInsightsTable.isArchived, false));
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;
-    const [rows, countResult] = await Promise.all([
-      db.select().from(contentInsightsTable).where(where)
-        .orderBy(desc(contentInsightsTable.createdAt))
-        .limit(limitNum).offset(offset),
-      db.select({ count: sql<number>`count(*)::int` }).from(contentInsightsTable).where(where),
-    ]);
-    res.json({ data: rows, total: countResult[0].count, page: pageNum, limit: limitNum });
+
+    // aeoStatus 필터는 파생 컬럼이므로 전체 조회 후 in-memory 필터링
+    const fetchAll = !!aeoStatusFilter;
+    const rows = await db.select().from(contentInsightsTable).where(where)
+      .orderBy(desc(contentInsightsTable.createdAt))
+      .limit(fetchAll ? 5000 : limitNum)
+      .offset(fetchAll ? 0 : offset);
+
+    // 파생 필드 계산
+    let enriched = rows.map(r => ({ ...r, ...computeAeoFields(r) }));
+
+    // aeoStatus 필터
+    if (aeoStatusFilter && ["READY", "PARTIAL", "NONE"].includes(aeoStatusFilter)) {
+      enriched = enriched.filter(r => r.aeoStatus === aeoStatusFilter);
+    }
+
+    // 정렬
+    if (sortBy === "aeoScore") {
+      enriched.sort((a, b) => b.aeoScore - a.aeoScore);
+    } else if (sortBy === "faqCount") {
+      enriched.sort((a, b) => b.faqCount - a.faqCount);
+    } else if (sortBy === "relatedCount") {
+      enriched.sort((a, b) => b.relatedCount - a.relatedCount);
+    }
+
+    const total = enriched.length;
+    const data = fetchAll ? enriched.slice(offset, offset + limitNum) : enriched;
+
+    res.json({ data, total: fetchAll ? total : (await db.select({ count: sql<number>`count(*)::int` }).from(contentInsightsTable).where(where))[0].count, page: pageNum, limit: limitNum });
   } catch (err) {
     req.log.error({ err }, "CI: failed to list insights");
     res.status(500).json({ error: "인사이트 조회 실패" });

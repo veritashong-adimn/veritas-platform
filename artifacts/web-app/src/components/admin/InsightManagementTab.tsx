@@ -41,6 +41,14 @@ interface ContentInsight {
   aeoDescription: string | null;
   faqJson: { question: string; answer: string }[] | null;
   relatedIds: number[] | null;
+  // 파생 필드 (API 계산)
+  faqCount: number;
+  relatedCount: number;
+  hasAeoTitle: boolean;
+  hasAeoDescription: boolean;
+  hasShortAnswer: boolean;
+  aeoScore: number;
+  aeoStatus: "READY" | "PARTIAL" | "NONE";
   isArchived: boolean;
   mergedIntoId: number | null;
   deletedAt: string | null;
@@ -218,11 +226,15 @@ export function InsightManagementTab({ token, setToast }: Props) {
   const [appliedFilters, setAppliedFilters] = useState(filters);
   const [decisionTab, setDecisionTab] = useState<string>("all");
   const [showArchived, setShowArchived] = useState(false);
+  const [aeoStatusFilter, setAeoStatusFilter] = useState<"" | "READY" | "PARTIAL" | "NONE">("");
+  const [sortBy, setSortBy] = useState<"" | "aeoScore" | "faqCount" | "relatedCount">("");
 
   const fetchInsights = useCallback(async (
     f = appliedFilters,
     dtab = decisionTab,
-    archived = showArchived
+    archived = showArchived,
+    aeoSt = aeoStatusFilter,
+    sBy = sortBy,
   ) => {
     setLoading(true);
     try {
@@ -234,6 +246,8 @@ export function InsightManagementTab({ token, setToast }: Props) {
       if (f.languagePair) params.set("languagePair", f.languagePair);
       if (dtab !== "all") params.set("filterDecision", dtab);
       if (archived) params.set("showArchived", "true");
+      if (aeoSt) params.set("aeoStatus", aeoSt);
+      if (sBy) params.set("sortBy", sBy);
 
       const res = await fetch(`${API}/admin/content-insights?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -246,22 +260,24 @@ export function InsightManagementTab({ token, setToast }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [appliedFilters, decisionTab, showArchived, token, setToast]);
+  }, [appliedFilters, decisionTab, showArchived, aeoStatusFilter, sortBy, token, setToast]);
 
   useEffect(() => { fetchInsights(); }, [fetchInsights]);
 
   const handleSearch = () => {
     setAppliedFilters(filters);
     setSelected(null);
-    fetchInsights(filters, decisionTab, showArchived);
+    fetchInsights(filters, decisionTab, showArchived, aeoStatusFilter, sortBy);
   };
 
   const handleReset = () => {
     const empty = { serviceType: "", status: "", visibilityLevel: "", domain: "", languagePair: "" };
     setFilters(empty);
     setAppliedFilters(empty);
+    setAeoStatusFilter("");
+    setSortBy("");
     setSelected(null);
-    fetchInsights(empty, decisionTab, showArchived);
+    fetchInsights(empty, decisionTab, showArchived, "", "");
   };
 
   const handleGenerate = async () => {
@@ -713,6 +729,36 @@ export function InsightManagementTab({ token, setToast }: Props) {
           onKeyDown={e => e.key === "Enter" && handleSearch()}
           style={inputStyle}
         />
+
+        <select
+          value={aeoStatusFilter}
+          onChange={e => {
+            const v = e.target.value as "" | "READY" | "PARTIAL" | "NONE";
+            setAeoStatusFilter(v);
+            setSelected(null);
+          }}
+          style={{ ...selectStyle, borderColor: aeoStatusFilter ? "#2563eb" : undefined }}
+        >
+          <option value="">AEO 상태 전체</option>
+          <option value="READY">✅ READY</option>
+          <option value="PARTIAL">⚠️ PARTIAL</option>
+          <option value="NONE">❌ NONE</option>
+        </select>
+
+        <select
+          value={sortBy}
+          onChange={e => {
+            const v = e.target.value as "" | "aeoScore" | "faqCount" | "relatedCount";
+            setSortBy(v);
+            setSelected(null);
+          }}
+          style={{ ...selectStyle, borderColor: sortBy ? "#7c3aed" : undefined }}
+        >
+          <option value="">기본 정렬 (최신순)</option>
+          <option value="aeoScore">AEO 점수 높은순</option>
+          <option value="faqCount">FAQ 많은순</option>
+          <option value="relatedCount">관련 연결 많은순</option>
+        </select>
 
         <button onClick={handleSearch} style={btnPrimaryStyle}>검색</button>
         <button onClick={handleReset} style={btnGhostStyle}>초기화</button>
@@ -1302,7 +1348,7 @@ export function InsightManagementTab({ token, setToast }: Props) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
-                    {["ID", "유형", "질문", "요약 답변", "건수", "평균 단가", "신뢰도", "품질점수", "판정", "상태", "공개", "생성일", "액션"].map(h => (
+                    {["ID", "유형", "질문", "요약 답변", "건수", "평균 단가", "신뢰도", "품질점수", "판정", "AEO 상태", "FAQ", "관련", "AEO 점수", "상태", "공개", "생성일", "액션"].map(h => (
                       <th key={h} style={thStyle}>{h}</th>
                     ))}
                   </tr>
@@ -1364,6 +1410,29 @@ export function InsightManagementTab({ token, setToast }: Props) {
                               {r.filterDecision === "merge" && r.duplicateOfId ? ` #${r.duplicateOfId}` : ""}
                             </span>
                           ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>—</span>}
+                        </td>
+                        {/* ── AEO 컬럼 ── */}
+                        <td style={{ ...tdStyle, textAlign: "center" }}>
+                          <span style={{
+                            padding: "2px 7px", borderRadius: 99, fontSize: 10, fontWeight: 700,
+                            ...(r.aeoStatus === "READY"   ? { background: "#dcfce7", color: "#166534" } :
+                                r.aeoStatus === "PARTIAL" ? { background: "#fef9c3", color: "#92400e" } :
+                                                             { background: "#fee2e2", color: "#991b1b" }),
+                          }}>
+                            {r.aeoStatus ?? "NONE"}
+                          </span>
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: "center", color: r.faqCount >= 3 ? "#059669" : r.faqCount >= 1 ? "#d97706" : "#9ca3af" }}>
+                          {r.faqCount != null ? `FAQ ${r.faqCount}` : "—"}
+                        </td>
+                        <td style={{ ...tdStyle, textAlign: "center", color: r.relatedCount >= 1 ? "#2563eb" : "#9ca3af" }}>
+                          {r.relatedCount > 0 ? `연결 ${r.relatedCount}` : "없음"}
+                        </td>
+                        <td style={{
+                          ...tdStyle, textAlign: "center", fontWeight: 700,
+                          color: r.aeoScore >= 80 ? "#059669" : r.aeoScore >= 40 ? "#d97706" : "#dc2626",
+                        }}>
+                          {r.aeoScore ?? 0}
                         </td>
                         <td style={tdStyle}>
                           <Badge text={STATUS_KO[r.status] ?? r.status} style={stColor} />
@@ -1622,6 +1691,62 @@ export function InsightManagementTab({ token, setToast }: Props) {
                     ["평균 시간",   selected.avgDuration ? `${parseFloat(selected.avgDuration).toFixed(1)}시간` : "-"],
                     ["신뢰도",     fmtConf(selected.confidenceScore)],
                   ]} />
+                </DetailSection>
+
+                {/* AEO/GEO 준비 상태 */}
+                <DetailSection label="AEO/GEO 노출 준비 상태">
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                    <span style={{
+                      padding: "4px 12px", borderRadius: 99, fontSize: 13, fontWeight: 700,
+                      ...(selected.aeoStatus === "READY"   ? { background: "#dcfce7", color: "#166534" } :
+                          selected.aeoStatus === "PARTIAL" ? { background: "#fef9c3", color: "#92400e" } :
+                                                              { background: "#fee2e2", color: "#991b1b" }),
+                    }}>
+                      {selected.aeoStatus ?? "NONE"}
+                    </span>
+                    <span style={{
+                      fontSize: 18, fontWeight: 800,
+                      color: (selected.aeoScore ?? 0) >= 80 ? "#059669" : (selected.aeoScore ?? 0) >= 40 ? "#d97706" : "#dc2626",
+                    }}>
+                      {selected.aeoScore ?? 0}점
+                    </span>
+                    <span style={{ fontSize: 11, color: "#9ca3af" }}>/ 100</span>
+                  </div>
+                  <MetaGrid rows={[
+                    ["핵심 답변(shortAnswer)", selected.hasShortAnswer ? "✅ 있음 (+30점)" : "❌ 없음 (0점)"],
+                    ["FAQ 수", selected.faqCount >= 3 ? `✅ ${selected.faqCount}개 (+30점)` : selected.faqCount >= 1 ? `⚠️ ${selected.faqCount}개 (+15점)` : "❌ 없음 (0점)"],
+                    ["관련 연결 수", selected.relatedCount >= 1 ? `✅ ${selected.relatedCount}개 (+20점)` : "❌ 없음 (0점)"],
+                    ["AEO Title", selected.hasAeoTitle ? "✅ 있음 (+10점)" : "❌ 없음 (0점)"],
+                    ["AEO Description", selected.hasAeoDescription ? "✅ 있음 (+10점)" : "❌ 없음 (0점)"],
+                  ]} />
+                  {selected.aeoTitle && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 3, fontWeight: 600 }}>AEO TITLE</div>
+                      <div style={{ fontSize: 13, color: "#111827", background: "#f9fafb", padding: "7px 10px", borderRadius: 6 }}>{selected.aeoTitle}</div>
+                    </div>
+                  )}
+                  {selected.aeoDescription && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 3, fontWeight: 600 }}>AEO DESCRIPTION</div>
+                      <div style={{ fontSize: 13, color: "#374151", background: "#f9fafb", padding: "7px 10px", borderRadius: 6, lineHeight: 1.5 }}>{selected.aeoDescription}</div>
+                    </div>
+                  )}
+                  {selected.faqJson && selected.faqJson.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 6, fontWeight: 600 }}>FAQ 목록 ({selected.faqJson.length}개)</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                        {selected.faqJson.map((faq, i) => (
+                          <div key={i} style={{ background: "#f0fdf4", borderRadius: 6, padding: "7px 10px", border: "1px solid #dcfce7" }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: "#111827", marginBottom: 2 }}>Q. {faq.question}</div>
+                            <div style={{ fontSize: 12, color: "#374151" }}>A. {faq.answer}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {(!selected.faqJson || selected.faqJson.length === 0) && (
+                    <div style={{ marginTop: 8, fontSize: 12, color: "#9ca3af", fontStyle: "italic" }}>FAQ 미생성 — 블로그 변환 또는 수동 추가 필요</div>
+                  )}
                 </DetailSection>
 
                 {/* 품질 필터 */}
