@@ -34,6 +34,10 @@ export const contentInsightsTable = pgTable("content_insights", {
 
   slug: text("slug"),
 
+  sourceType: text("source_type"),
+  sourceTitle: text("source_title"),
+  sourceUrl: text("source_url"),
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

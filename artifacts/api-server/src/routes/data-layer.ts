@@ -807,6 +807,111 @@ function groupKey(serviceType: string, languagePair: string | null, domain: stri
   return [serviceType, languagePair ?? "", domain ?? "", industry ?? "", useCase ?? ""].join("|");
 }
 
+// POST /api/admin/content-insights/from-blog  (블로그 글 → 인사이트 변환)
+router.post("/admin/content-insights/from-blog", ...adminOnly, async (req, res) => {
+  try {
+    const { title, content, sourceUrl, count = 3 } = req.body as {
+      title?: string;
+      content?: string;
+      sourceUrl?: string;
+      count?: number;
+    };
+
+    if (!content || typeof content !== "string" || content.trim().length < 300) {
+      return res.status(400).json({ error: "본문이 너무 짧아 인사이트 생성이 어렵습니다. (최소 300자)" });
+    }
+
+    const safeCount = Math.min(Math.max(Number(count) || 3, 1), 5);
+
+    const OpenAI = (await import("openai")).default;
+    const openaiClient = new OpenAI({
+      apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+    });
+
+    const systemPrompt = `당신은 언어 서비스(번역/통역/장비) 분야의 AEO/GEO 인사이트 전문가입니다.
+블로그 글을 분석해서 사용자의 검색 의도에 답하는 FAQ형 인사이트를 생성합니다.
+
+규칙:
+- 블로그 본문에 명확한 숫자 근거가 없으면 avgPrice/minPrice/maxPrice를 절대 생성하지 말 것 (null 유지)
+- 추측·과장 금지. 블로그 내용에 근거한 답변만 생성
+- confidenceScore는 0.4~0.5 수준 (블로그 기반이므로 낮게 설정)
+- status: "draft", visibilityLevel: "internal_summary" 고정
+- serviceType: translation | interpretation | equipment 중 하나
+- questionType: price | definition | comparison | process | faq 중 하나
+- 응답은 반드시 JSON 배열만 반환 (마크다운 코드블록 없이)`;
+
+    const userPrompt = `블로그 제목: ${title ?? "(제목 없음)"}
+블로그 본문:
+${content.substring(0, 8000)}
+
+위 블로그 글을 분석하여 ${safeCount}개의 인사이트를 JSON 배열로 생성하세요.
+각 항목 형식:
+{
+  "question": "사용자가 검색할 법한 질문",
+  "shortAnswer": "1~2문장 핵심 답변",
+  "longAnswer": "마크다운 형식 상세 답변 (소제목/불릿 사용 가능)",
+  "serviceType": "translation|interpretation|equipment",
+  "questionType": "price|definition|comparison|process|faq",
+  "domain": "legal|finance|medical|general|etc",
+  "languagePair": "ko-en|en-ko|null",
+  "industry": "산업명 또는 null",
+  "useCase": "사용 목적 또는 null",
+  "confidenceScore": 0.4
+}
+
+반드시 JSON 배열만 반환 ([ ... ]). 다른 텍스트 없이.`;
+
+    const completion = await openaiClient.chat.completions.create({
+      model: "gpt-5-mini",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      max_completion_tokens: 8192,
+    });
+
+    const raw = completion.choices[0]?.message?.content ?? "[]";
+    let parsed: any[] = [];
+    try {
+      const cleaned = raw.replace(/```json|```/g, "").trim();
+      parsed = JSON.parse(cleaned);
+      if (!Array.isArray(parsed)) parsed = [];
+    } catch {
+      return res.status(500).json({ error: "AI 응답 파싱 실패. 다시 시도해 주세요." });
+    }
+
+    const inserted = [];
+    for (const item of parsed.slice(0, safeCount)) {
+      const [row] = await db.insert(contentInsightsTable).values({
+        question: item.question ?? "질문 없음",
+        answer: item.shortAnswer ?? "",
+        shortAnswer: item.shortAnswer ?? null,
+        longAnswer: item.longAnswer ?? null,
+        serviceType: (["translation", "interpretation", "equipment"].includes(item.serviceType)
+          ? item.serviceType : "translation") as any,
+        questionType: item.questionType ?? null,
+        domain: item.domain ?? null,
+        languagePair: (item.languagePair && item.languagePair !== "null") ? item.languagePair : null,
+        industry: (item.industry && item.industry !== "null") ? item.industry : null,
+        useCase: (item.useCase && item.useCase !== "null") ? item.useCase : null,
+        confidenceScore: String(item.confidenceScore ?? "0.45"),
+        status: "draft",
+        visibilityLevel: "internal_summary",
+        sourceType: "blog",
+        sourceTitle: title ?? null,
+        sourceUrl: sourceUrl ?? null,
+      }).returning();
+      inserted.push(row);
+    }
+
+    return res.status(201).json({ created: inserted.length, items: inserted });
+  } catch (err) {
+    console.error("[from-blog] error:", err);
+    return res.status(500).json({ error: "인사이트 생성 중 오류가 발생했습니다." });
+  }
+});
+
 // POST /api/admin/content-insights/generate
 router.post("/admin/content-insights/generate", ...adminOnly, async (req, res) => {
   try {

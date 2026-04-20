@@ -24,6 +24,10 @@ interface ContentInsight {
   status: string;
   visibilityLevel: string;
   isPublic: boolean;
+  slug: string | null;
+  sourceType: string | null;
+  sourceTitle: string | null;
+  sourceUrl: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -162,6 +166,11 @@ export function InsightManagementTab({ token, setToast }: Props) {
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualDraft, setManualDraft] = useState({ ...EMPTY_MANUAL });
   const [creating, setCreating] = useState(false);
+
+  const EMPTY_BLOG = { title: "", content: "", sourceUrl: "", count: "3" };
+  const [showBlogModal, setShowBlogModal] = useState(false);
+  const [blogDraft, setBlogDraft] = useState({ ...EMPTY_BLOG });
+  const [convertingBlog, setConvertingBlog] = useState(false);
 
   const [highlightedIds, setHighlightedIds] = useState<Set<number>>(new Set());
   const [pendingScrollId, setPendingScrollId] = useState<number | null>(null);
@@ -417,6 +426,75 @@ export function InsightManagementTab({ token, setToast }: Props) {
     }
   };
 
+  const handleBlogConvert = async () => {
+    const body = blogDraft.content.trim();
+    if (body.length < 300) {
+      setToast("본문이 너무 짧아 인사이트 생성이 어렵습니다. (최소 300자)");
+      return;
+    }
+    setConvertingBlog(true);
+    try {
+      const res = await fetch(`${API}/admin/content-insights/from-blog`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: blogDraft.title.trim() || undefined,
+          content: body,
+          sourceUrl: blogDraft.sourceUrl.trim() || undefined,
+          count: Number(blogDraft.count) || 3,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? "변환 실패");
+      }
+      const result = await res.json();
+      const createdItems: ContentInsight[] = result.items ?? [];
+
+      setShowBlogModal(false);
+      setBlogDraft({ ...EMPTY_BLOG });
+
+      // 목록 재조회
+      const f = appliedFilters;
+      const params = new URLSearchParams({ limit: "100" });
+      if (f.serviceType) params.set("serviceType", f.serviceType);
+      if (f.status) params.set("status", f.status);
+      if (f.visibilityLevel) params.set("visibilityLevel", f.visibilityLevel);
+      if (f.domain) params.set("domain", f.domain);
+      if (f.languagePair) params.set("languagePair", f.languagePair);
+
+      setLoading(true);
+      const listRes = await fetch(`${API}/admin/content-insights?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const listData = await listRes.json();
+      const newList: ContentInsight[] = listData.data ?? [];
+      setInsights(newList);
+      setTotal(listData.total ?? 0);
+      setLoading(false);
+
+      // 첫 번째 생성 항목 자동 선택 + 하이라이트
+      if (createdItems.length > 0) {
+        const firstId = createdItems[0].id;
+        const found = newList.find(r => r.id === firstId);
+        if (found) {
+          setSelected(found);
+          setPendingScrollId(found.id);
+        }
+        const newIds = new Set(createdItems.map(r => r.id));
+        setHighlightedIds(newIds);
+        if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = setTimeout(() => setHighlightedIds(new Set()), 2000);
+      }
+
+      setToast(`블로그 글 기반 인사이트 초안 ${result.created ?? createdItems.length}건이 생성되었습니다.`);
+    } catch (err: unknown) {
+      setToast(err instanceof Error ? err.message : "블로그 변환 실패");
+    } finally {
+      setConvertingBlog(false);
+    }
+  };
+
   const statusActions = (insight: ContentInsight): { label: string; next: string; bg: string; color: string }[] => {
     const { status } = insight;
     if (status === "draft")     return [{ label: "승인", next: "approved",  bg: "#059669", color: "#fff" }];
@@ -529,6 +607,24 @@ export function InsightManagementTab({ token, setToast }: Props) {
                   <div>
                     <div style={{ fontWeight: 600 }}>수동 입력 생성</div>
                     <div style={{ fontSize: 11, color: "#6b7280", marginTop: 1 }}>직접 내용을 입력하여 생성</div>
+                  </div>
+                </button>
+                <div style={{ height: 1, background: "#f3f4f6" }} />
+                <button
+                  onClick={() => { setShowBlogModal(true); setShowCreateDropdown(false); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10, width: "100%",
+                    padding: "11px 14px", border: "none", background: "none",
+                    cursor: "pointer", fontSize: 13, color: "#111827", textAlign: "left",
+                    transition: "background 0.1s",
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "#f9fafb"; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
+                >
+                  <span style={{ fontSize: 16 }}>📝</span>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>블로그 글 변환</div>
+                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 1 }}>기존 블로그 글을 인사이트로 변환</div>
                   </div>
                 </button>
                 <div style={{ height: 1, background: "#f3f4f6" }} />
@@ -780,6 +876,157 @@ export function InsightManagementTab({ token, setToast }: Props) {
                   cursor: (creating || !manualDraft.question.trim()) ? "not-allowed" : "pointer",
                 }}
               >{creating ? "생성 중…" : "생성"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 블로그 변환 모달 ────────────────────────────────────────────────────── */}
+      {showBlogModal && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+        }}
+          onClick={e => { if (e.target === e.currentTarget && !convertingBlog) { setShowBlogModal(false); setBlogDraft({ ...EMPTY_BLOG }); } }}
+        >
+          <div style={{
+            background: "#fff", borderRadius: 14, width: 580, maxWidth: "92vw",
+            maxHeight: "90vh", overflowY: "auto",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.22)",
+          }}>
+            {/* 헤더 */}
+            <div style={{
+              padding: "18px 22px", borderBottom: "1px solid #e5e7eb",
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              position: "sticky", top: 0, background: "#fff", zIndex: 1, borderRadius: "14px 14px 0 0",
+            }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>📝 블로그 글 → 인사이트 변환</h3>
+                <p style={{ margin: "3px 0 0", fontSize: 12, color: "#6b7280" }}>블로그 본문을 붙여넣어 AEO/GEO 인사이트 초안을 자동 생성합니다.</p>
+              </div>
+              <button
+                onClick={() => { if (!convertingBlog) { setShowBlogModal(false); setBlogDraft({ ...EMPTY_BLOG }); } }}
+                style={{ background: "none", border: "none", fontSize: 20, cursor: convertingBlog ? "not-allowed" : "pointer", color: "#6b7280", lineHeight: 1 }}
+              >✕</button>
+            </div>
+
+            {/* 바디 */}
+            <div style={{ padding: "18px 22px", display: "flex", flexDirection: "column", gap: 14 }}>
+              {/* 블로그 제목 */}
+              <div>
+                <label style={modalLabelStyle}>블로그 제목 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(선택)</span></label>
+                <input
+                  value={blogDraft.title}
+                  onChange={e => setBlogDraft(d => ({ ...d, title: e.target.value }))}
+                  placeholder="예) 동시통역 비용은 어떻게 결정될까?"
+                  style={editInputStyle}
+                  disabled={convertingBlog}
+                />
+              </div>
+
+              {/* 본문 */}
+              <div>
+                <label style={modalLabelStyle}>
+                  블로그 본문 <span style={{ color: "#ef4444" }}>*</span>
+                  <span style={{
+                    fontSize: 11, fontWeight: 400, color: blogDraft.content.trim().length < 300 && blogDraft.content.length > 0 ? "#ef4444" : "#9ca3af",
+                    marginLeft: 8,
+                  }}>
+                    ({blogDraft.content.trim().length}자{blogDraft.content.trim().length < 300 ? " / 최소 300자 필요" : ""})
+                  </span>
+                </label>
+                <textarea
+                  value={blogDraft.content}
+                  onChange={e => setBlogDraft(d => ({ ...d, content: e.target.value }))}
+                  rows={12}
+                  placeholder="블로그 글 본문 전체를 붙여넣으세요"
+                  style={{ ...textareaStyle, fontFamily: "inherit", lineHeight: 1.6 }}
+                  disabled={convertingBlog}
+                />
+                {blogDraft.content.trim().length > 0 && blogDraft.content.trim().length < 300 && (
+                  <div style={{
+                    marginTop: 6, padding: "8px 10px", background: "#fef2f2", borderRadius: 6,
+                    border: "1px solid #fecaca", fontSize: 12, color: "#dc2626",
+                  }}>
+                    본문이 너무 짧아 인사이트 생성이 어렵습니다. (최소 300자)
+                  </div>
+                )}
+              </div>
+
+              {/* 출처 URL */}
+              <div>
+                <label style={modalLabelStyle}>출처 URL <span style={{ color: "#9ca3af", fontWeight: 400 }}>(선택)</span></label>
+                <input
+                  value={blogDraft.sourceUrl}
+                  onChange={e => setBlogDraft(d => ({ ...d, sourceUrl: e.target.value }))}
+                  placeholder="https://..."
+                  style={editInputStyle}
+                  disabled={convertingBlog}
+                />
+              </div>
+
+              {/* 생성 개수 */}
+              <div>
+                <label style={modalLabelStyle}>생성 개수</label>
+                <select
+                  value={blogDraft.count}
+                  onChange={e => setBlogDraft(d => ({ ...d, count: e.target.value }))}
+                  style={{ ...editSelectStyle, maxWidth: 120 }}
+                  disabled={convertingBlog}
+                >
+                  <option value="1">1개</option>
+                  <option value="3">3개</option>
+                  <option value="5">5개</option>
+                </select>
+              </div>
+
+              {/* 안내 */}
+              <div style={{
+                padding: "12px 14px", background: "#f0f9ff", borderRadius: 8,
+                border: "1px solid #bae6fd", fontSize: 12, color: "#0369a1",
+                lineHeight: 1.6,
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>📌 안내</div>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  <li>생성된 인사이트는 모두 <strong>초안(draft)</strong> 상태로 저장됩니다.</li>
+                  <li>자동 게시되지 않으며, 검수 후 게시할 수 있습니다.</li>
+                  <li>실제 운영 데이터가 없는 경우 가격 정보는 임의 생성하지 않습니다.</li>
+                </ul>
+              </div>
+
+              {/* 생성 중 표시 */}
+              {convertingBlog && (
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "12px 14px", background: "#f0fdf4", borderRadius: 8,
+                  border: "1px solid #bbf7d0", fontSize: 13, color: "#15803d",
+                }}>
+                  <span style={{ fontSize: 18 }}>⏳</span>
+                  AI가 블로그 글을 분석 중입니다… 잠시 기다려 주세요.
+                </div>
+              )}
+            </div>
+
+            {/* 푸터 */}
+            <div style={{
+              padding: "14px 22px", borderTop: "1px solid #e5e7eb",
+              display: "flex", justifyContent: "flex-end", gap: 8,
+              position: "sticky", bottom: 0, background: "#fff", borderRadius: "0 0 14px 14px",
+            }}>
+              <button
+                onClick={() => { setShowBlogModal(false); setBlogDraft({ ...EMPTY_BLOG }); }}
+                disabled={convertingBlog}
+                style={{ ...btnGhostStyle, opacity: convertingBlog ? 0.5 : 1, cursor: convertingBlog ? "not-allowed" : "pointer" }}
+              >취소</button>
+              <button
+                onClick={handleBlogConvert}
+                disabled={convertingBlog || blogDraft.content.trim().length < 300}
+                style={{
+                  ...btnPrimaryStyle, minWidth: 120,
+                  opacity: (convertingBlog || blogDraft.content.trim().length < 300) ? 0.7 : 1,
+                  cursor: (convertingBlog || blogDraft.content.trim().length < 300) ? "not-allowed" : "pointer",
+                }}
+              >{convertingBlog ? "생성 중…" : "초안 생성"}</button>
             </div>
           </div>
         </div>
@@ -1056,6 +1303,24 @@ export function InsightManagementTab({ token, setToast }: Props) {
                     ["사용 목적",  selected.useCase ?? "-"],
                   ]} />
                 </DetailSection>
+
+                {/* 출처 정보 */}
+                {(selected.sourceType || selected.sourceTitle || selected.sourceUrl) && (
+                  <DetailSection label="출처 정보">
+                    <MetaGrid rows={[
+                      ["출처 유형",  selected.sourceType ?? "-"],
+                      ["출처 제목",  selected.sourceTitle ?? "-"],
+                      ["출처 URL",
+                        selected.sourceUrl
+                          ? <a href={selected.sourceUrl} target="_blank" rel="noopener noreferrer"
+                              style={{ color: "#2563eb", fontSize: 11, wordBreak: "break-all" }}>
+                              {selected.sourceUrl}
+                            </a>
+                          : "-"
+                      ],
+                    ]} />
+                  </DetailSection>
+                )}
 
                 {/* 통계 정보 */}
                 <DetailSection label="데이터 통계">
