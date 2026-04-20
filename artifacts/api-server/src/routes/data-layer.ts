@@ -1500,6 +1500,80 @@ ${requestedItems.join("\n")}
   return { suggestions };
 }
 
+// ── 자동 적용 + 상태 설정 헬퍼 ─────────────────────────────────────────────────
+// AUTO-APPLY 품질 조건 (보완 후 재계산 기준)
+const AUTO_PUBLISH_READY_CONDITIONS = {
+  minAeoScore: 80,
+  minFaqCount: 3,
+  minRelatedCount: 2,
+};
+
+async function autoApplyAndSetStatus(
+  insightId: number,
+  suggestions: typeof insightAutoSuggestionsTable.$inferSelect[],
+  logger?: { info: (obj: unknown, msg: string) => void },
+): Promise<{ status: "publish_ready" | "review_ready"; appliedCount: number; insight: typeof contentInsightsTable.$inferSelect }> {
+  // suggestions 자동 적용 (faq/related/meta 순서로)
+  const ordered = [...suggestions].sort(a => a.type === "faq" ? -1 : a.type === "related" ? 0 : 1);
+
+  let appliedCount = 0;
+  for (const sug of ordered) {
+    const [current] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, insightId));
+    if (!current) continue;
+
+    const setPayload: Record<string, unknown> = { updatedAt: new Date() };
+    const payload = sug.payload as Record<string, unknown>;
+
+    if (sug.type === "faq") {
+      const newFaqs = payload.items as { question: string; answer: string }[];
+      const existing = Array.isArray(current.faqJson) ? current.faqJson as { question: string; answer: string }[] : [];
+      const existingQs = new Set(existing.map(f => f.question));
+      const merged = [...existing, ...newFaqs.filter(f => !existingQs.has(f.question))].slice(0, 5);
+      setPayload.faqJson = merged;
+    } else if (sug.type === "related") {
+      const items = payload.items as { id: number }[];
+      const newIds = items.map(i => i.id);
+      const existing = Array.isArray(current.relatedIds) ? current.relatedIds as number[] : [];
+      const merged = [...new Set([...existing, ...newIds])].slice(0, 10);
+      setPayload.relatedIds = merged;
+    } else if (sug.type === "meta") {
+      if (payload.aeoTitle && !current.aeoTitle) setPayload.aeoTitle = payload.aeoTitle;
+      if (payload.aeoDescription && !current.aeoDescription) setPayload.aeoDescription = payload.aeoDescription;
+    }
+
+    await db.update(contentInsightsTable).set(setPayload).where(eq(contentInsightsTable.id, insightId));
+    await db.update(insightAutoSuggestionsTable)
+      .set({ status: "applied", updatedAt: new Date() })
+      .where(eq(insightAutoSuggestionsTable.id, sug.id));
+    appliedCount++;
+  }
+
+  // 업데이트된 인사이트 재조회 후 AEO 재계산
+  const [updatedInsight] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, insightId));
+  const aeo = computeAeoFields(updatedInsight);
+
+  // 품질 조건 체크
+  const cond = AUTO_PUBLISH_READY_CONDITIONS;
+  const qualityMet =
+    aeo.aeoScore >= cond.minAeoScore &&
+    aeo.faqCount >= cond.minFaqCount &&
+    aeo.relatedCount >= cond.minRelatedCount &&
+    updatedInsight.filterDecision !== "drop";
+
+  const newStatus: "publish_ready" | "review_ready" = qualityMet ? "publish_ready" : "review_ready";
+
+  // status 업데이트 (이미 published 상태면 skip)
+  if (updatedInsight.status !== "published") {
+    await db.update(contentInsightsTable)
+      .set({ status: newStatus, updatedAt: new Date() })
+      .where(eq(contentInsightsTable.id, insightId));
+  }
+
+  const [finalInsight] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, insightId));
+  logger?.info({ insightId, newStatus, aeoScore: aeo.aeoScore, appliedCount }, "CI: auto-apply + status set");
+  return { status: newStatus, appliedCount, insight: finalInsight };
+}
+
 // GET /api/admin/content-insights/:id/suggestions
 router.get("/admin/content-insights/:id/suggestions", ...staffPlus, async (req, res) => {
   try {
@@ -1562,8 +1636,17 @@ router.post("/admin/content-insights/:id/auto-enhance", ...adminOnly, async (req
       created.push(row);
     }
 
-    req.log.info({ id, count: created.length }, "CI: auto-enhance suggestions created");
-    res.status(201).json({ created: created.length, suggestions: created });
+    // 자동 적용 + 상태 설정
+    const { status: newStatus, appliedCount, insight: finalInsight } = await autoApplyAndSetStatus(id, created, req.log);
+
+    req.log.info({ id, created: created.length, appliedCount, newStatus }, "CI: auto-enhance complete");
+    res.status(201).json({
+      created: created.length,
+      appliedCount,
+      newStatus,
+      autoApplied: true,
+      insight: { ...finalInsight, ...computeAeoFields(finalInsight) },
+    });
   } catch (err) {
     req.log.error({ err }, "CI: auto-enhance failed");
     res.status(500).json({ error: "자동 보완 실행 실패" });
@@ -1603,7 +1686,8 @@ router.post("/admin/content-insights/batch-auto-enhance", ...adminOnly, async (r
     }).from(contentInsightsTable);
 
     let totalCreated = 0;
-    const results: { id: number; created: number }[] = [];
+    let totalApplied = 0;
+    const results: { id: number; created: number; newStatus?: string }[] = [];
 
     for (const insight of targets) {
       try {
@@ -1616,22 +1700,27 @@ router.post("/admin/content-insights/batch-auto-enhance", ...adminOnly, async (r
         const result = await runAutoEnhance(insight, allInsights as any);
         if ("skipped" in result || "error" in result) { results.push({ id: insight.id, created: 0 }); continue; }
 
-        let cnt = 0;
+        const created: typeof insightAutoSuggestionsTable.$inferSelect[] = [];
         for (const sug of result.suggestions ?? []) {
-          await db.insert(insightAutoSuggestionsTable).values({
+          const [row] = await db.insert(insightAutoSuggestionsTable).values({
             insightId: insight.id, type: sug.type, payload: sug.payload, status: "pending",
-          });
-          cnt++;
+          }).returning();
+          created.push(row);
         }
-        totalCreated += cnt;
-        results.push({ id: insight.id, created: cnt });
+
+        // 자동 적용 + 상태 설정
+        const { status: newStatus, appliedCount } = await autoApplyAndSetStatus(insight.id, created);
+        totalCreated += created.length;
+        totalApplied += appliedCount;
+        results.push({ id: insight.id, created: created.length, newStatus });
       } catch {
         results.push({ id: insight.id, created: 0 });
       }
     }
 
-    req.log.info({ processed: targets.length, totalCreated }, "CI: batch auto-enhance complete");
-    res.json({ processed: targets.length, created: totalCreated, results });
+    const publishReadyCount = results.filter(r => r.newStatus === "publish_ready").length;
+    req.log.info({ processed: targets.length, totalCreated, totalApplied, publishReadyCount }, "CI: batch auto-enhance complete");
+    res.json({ processed: targets.length, created: totalCreated, applied: totalApplied, publishReadyCount, results });
   } catch (err) {
     req.log.error({ err }, "CI: batch auto-enhance failed");
     res.status(500).json({ error: "배치 자동 보완 실패" });
@@ -1708,6 +1797,64 @@ router.post("/admin/suggestions/:sugId/reject", ...adminOnly, async (req, res) =
     res.json({ id: sugId, status: "rejected" });
   } catch (err) {
     res.status(500).json({ error: "제안 무시 실패" });
+  }
+});
+
+// POST /api/admin/content-insights/:id/publish  (게시 대기 → 게시)
+router.post("/admin/content-insights/:id/publish", ...adminOnly, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "유효하지 않은 id" });
+
+    const [insight] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, id));
+    if (!insight) return res.status(404).json({ error: "인사이트를 찾을 수 없습니다." });
+    if (insight.status === "published") return res.status(400).json({ error: "이미 게시된 인사이트입니다." });
+    if (insight.isArchived) return res.status(400).json({ error: "보관된 인사이트는 게시할 수 없습니다." });
+
+    // slug 없으면 생성
+    let slug = insight.slug;
+    if (!slug) {
+      slug = insight.question
+        .toLowerCase()
+        .replace(/[^가-힣a-z0-9\s]/g, " ")
+        .trim()
+        .replace(/\s+/g, "-")
+        .slice(0, 80);
+      // 중복 slug 방지
+      const existingSlugs = await db.select({ slug: contentInsightsTable.slug })
+        .from(contentInsightsTable)
+        .where(eq(contentInsightsTable.isArchived, false));
+      const slugSet = new Set(existingSlugs.map(r => r.slug));
+      if (slugSet.has(slug)) slug = `${slug}-${id}`;
+    }
+
+    const now = new Date();
+    const [updated] = await db.update(contentInsightsTable)
+      .set({ status: "published", publishedAt: now, slug, updatedAt: now })
+      .where(eq(contentInsightsTable.id, id))
+      .returning();
+
+    req.log.info({ id, slug }, "CI: published via publish queue");
+    res.json({ ...updated, ...computeAeoFields(updated) });
+  } catch (err) {
+    req.log.error({ err }, "CI: publish failed");
+    res.status(500).json({ error: "게시 실패" });
+  }
+});
+
+// GET /api/admin/content-insights/publish-queue  (게시 대기 목록)
+router.get("/admin/content-insights/publish-queue", ...staffPlus, async (req, res) => {
+  try {
+    const rows = await db.select().from(contentInsightsTable)
+      .where(and(
+        eq(contentInsightsTable.status, "publish_ready"),
+        eq(contentInsightsTable.isArchived, false),
+      ))
+      .orderBy(desc(contentInsightsTable.updatedAt));
+    const withAeo = rows.map(r => ({ ...r, ...computeAeoFields(r) }));
+    res.json({ data: withAeo, total: withAeo.length });
+  } catch (err) {
+    res.status(500).json({ error: "게시 대기 목록 조회 실패" });
   }
 });
 

@@ -52,6 +52,7 @@ interface ContentInsight {
   isArchived: boolean;
   mergedIntoId: number | null;
   deletedAt: string | null;
+  publishedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -74,6 +75,8 @@ const SERVICE_TYPE_KO: Record<string, string> = {
 const STATUS_KO: Record<string, string> = {
   draft: "초안",
   approved: "승인됨",
+  review_ready: "검토 준비",
+  publish_ready: "게시 대기",
   published: "게시됨",
   archived: "보관됨",
 };
@@ -85,10 +88,12 @@ const VISIBILITY_KO: Record<string, string> = {
 };
 
 const STATUS_COLOR: Record<string, { bg: string; color: string }> = {
-  draft:     { bg: "#f3f4f6", color: "#374151" },
-  approved:  { bg: "#d1fae5", color: "#065f46" },
-  published: { bg: "#dbeafe", color: "#1e40af" },
-  archived:  { bg: "#fef3c7", color: "#92400e" },
+  draft:         { bg: "#f3f4f6", color: "#374151" },
+  approved:      { bg: "#d1fae5", color: "#065f46" },
+  review_ready:  { bg: "#fef9c3", color: "#854d0e" },
+  publish_ready: { bg: "#ede9fe", color: "#6d28d9" },
+  published:     { bg: "#dbeafe", color: "#1e40af" },
+  archived:      { bg: "#fef3c7", color: "#92400e" },
 };
 
 const SERVICE_COLOR: Record<string, string> = {
@@ -258,6 +263,7 @@ export function InsightManagementTab({ token, setToast }: Props) {
   });
   const [appliedFilters, setAppliedFilters] = useState(filters);
   const [decisionTab, setDecisionTab] = useState<string>("all");
+  const [statusTab, setStatusTab] = useState<string>("all");
   const [showArchived, setShowArchived] = useState(false);
   const [aeoStatusFilter, setAeoStatusFilter] = useState<"" | "READY" | "PARTIAL" | "NONE">("");
   const [sortBy, setSortBy] = useState<"" | "aeoScore" | "faqCount" | "relatedCount">("");
@@ -268,12 +274,15 @@ export function InsightManagementTab({ token, setToast }: Props) {
     archived = showArchived,
     aeoSt = aeoStatusFilter,
     sBy = sortBy,
+    stab = statusTab,
   ) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ limit: "100" });
       if (f.serviceType) params.set("serviceType", f.serviceType);
-      if (f.status) params.set("status", f.status);
+      // statusTab overrides the search form status filter
+      const effectiveStatus = stab !== "all" ? stab : f.status;
+      if (effectiveStatus) params.set("status", effectiveStatus);
       if (f.visibilityLevel) params.set("visibilityLevel", f.visibilityLevel);
       if (f.domain) params.set("domain", f.domain);
       if (f.languagePair) params.set("languagePair", f.languagePair);
@@ -293,14 +302,14 @@ export function InsightManagementTab({ token, setToast }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [appliedFilters, decisionTab, showArchived, aeoStatusFilter, sortBy, token, setToast]);
+  }, [appliedFilters, decisionTab, showArchived, aeoStatusFilter, sortBy, statusTab, token, setToast]);
 
   useEffect(() => { fetchInsights(); }, [fetchInsights]);
 
   const handleSearch = () => {
     setAppliedFilters(filters);
     setSelected(null);
-    fetchInsights(filters, decisionTab, showArchived, aeoStatusFilter, sortBy);
+    fetchInsights(filters, decisionTab, showArchived, aeoStatusFilter, sortBy, statusTab);
   };
 
   const handleReset = () => {
@@ -733,14 +742,42 @@ export function InsightManagementTab({ token, setToast }: Props) {
       if (data.created === 0) {
         setToast(data.message ?? "새로운 제안이 없습니다.");
       } else {
-        setToast(`자동 보완 제안 ${data.created}개 생성 완료`);
-        setSuggestions(data.suggestions ?? []);
+        const statusMsg = data.newStatus === "publish_ready" ? " → 게시 대기 전환!" : data.newStatus === "review_ready" ? " → 검토 준비 전환" : "";
+        setToast(`자동 보완 ${data.appliedCount ?? data.created}개 적용 완료${statusMsg}`);
+        // 상태 변경 즉시 반영
+        if (data.insight) {
+          const updated = data.insight as ContentInsight;
+          setSelected(updated);
+          setInsights(prev => prev.map(r => r.id === updated.id ? updated : r));
+        }
       }
     } catch (err: unknown) {
       setToast(err instanceof Error ? err.message : "자동 보완 실패");
     } finally {
       setEnhancing(false);
     }
+  };
+
+  const handlePublish = async (insightId: number) => {
+    openConfirm(
+      "게시 확인",
+      `#${insightId} 인사이트를 게시하시겠습니까?\n게시 후에는 공개 API에서 접근 가능합니다.`,
+      async () => {
+        try {
+          const res = await fetch(`${API}/admin/content-insights/${insightId}/publish`, {
+            method: "POST", headers: authHeaders,
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error ?? "게시 실패");
+          const updated = data as ContentInsight;
+          setSelected(updated);
+          setInsights(prev => prev.map(r => r.id === updated.id ? updated : r));
+          setToast(`#${insightId} 인사이트가 게시되었습니다.`);
+        } catch (err: unknown) {
+          setToast(err instanceof Error ? err.message : "게시 실패");
+        }
+      },
+    );
   };
 
   const handleBatchAutoEnhance = () => {
@@ -756,7 +793,8 @@ export function InsightManagementTab({ token, setToast }: Props) {
           });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error ?? "배치 자동 보완 실패");
-          setToast(`배치 완료: ${data.processed}건 처리, ${data.created}개 제안 생성`);
+          const pqMsg = data.publishReadyCount > 0 ? ` / 게시 대기 ${data.publishReadyCount}건` : "";
+          setToast(`배치 완료: ${data.processed}건 처리, ${data.applied ?? data.created}개 적용${pqMsg}`);
           if (selected) await loadSuggestions(selected.id);
         } catch (err: unknown) {
           setToast(err instanceof Error ? err.message : "배치 자동 보완 실패");
@@ -797,13 +835,19 @@ export function InsightManagementTab({ token, setToast }: Props) {
 
   const statusActions = (insight: ContentInsight): { label: string; next: string; bg: string; color: string }[] => {
     const { status } = insight;
-    if (status === "draft")     return [{ label: "승인", next: "approved",  bg: "#059669", color: "#fff" }];
-    if (status === "approved")  return [
+    if (status === "draft")         return [{ label: "승인", next: "approved", bg: "#059669", color: "#fff" }];
+    if (status === "approved")      return [
       { label: "게시", next: "published", bg: "#2563eb", color: "#fff" },
       { label: "초안으로", next: "draft", bg: "#6b7280", color: "#fff" },
     ];
-    if (status === "published") return [{ label: "보관", next: "archived",  bg: "#d97706", color: "#fff" }];
-    if (status === "archived")  return [{ label: "게시 복원", next: "published", bg: "#2563eb", color: "#fff" }];
+    if (status === "review_ready")  return [
+      { label: "초안으로", next: "draft", bg: "#6b7280", color: "#fff" },
+    ];
+    if (status === "publish_ready") return [
+      { label: "초안으로", next: "draft", bg: "#6b7280", color: "#fff" },
+    ];
+    if (status === "published")     return [{ label: "보관", next: "archived", bg: "#d97706", color: "#fff" }];
+    if (status === "archived")      return [{ label: "게시 복원", next: "published", bg: "#2563eb", color: "#fff" }];
     return [];
   };
 
@@ -1489,6 +1533,30 @@ export function InsightManagementTab({ token, setToast }: Props) {
         </div>
       )}
 
+      {/* ── 상태 탭 (Publish Queue 포함) ──────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        {([
+          { key: "all",           label: "전체 상태",    color: "#374151" },
+          { key: "draft",         label: "초안",         color: "#6b7280" },
+          { key: "review_ready",  label: "🔍 검토 준비", color: "#854d0e" },
+          { key: "publish_ready", label: "📤 게시 대기", color: "#6d28d9" },
+          { key: "published",     label: "✅ 게시됨",    color: "#1e40af" },
+        ] as const).map(({ key, label, color }) => (
+          <button key={key}
+            onClick={() => { setStatusTab(key); setSelected(null); }}
+            style={{
+              padding: "5px 14px", borderRadius: 99, fontSize: 12, fontWeight: 600,
+              border: "1.5px solid",
+              borderColor: statusTab === key ? color : "#e5e7eb",
+              background: statusTab === key ? color : "#fff",
+              color: statusTab === key ? "#fff" : "#6b7280",
+              cursor: "pointer",
+              transition: "all 0.1s",
+            }}
+          >{label}</button>
+        ))}
+      </div>
+
       {/* ── 판정 탭 + 보관됨 토글 ────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
         {([
@@ -1644,7 +1712,10 @@ export function InsightManagementTab({ token, setToast }: Props) {
                         </td>
                         {/* 액션 버튼 */}
                         <td style={{ ...tdStyle, whiteSpace: "nowrap" }} onClick={e => e.stopPropagation()}>
-                          {r.isArchived ? (
+                          {r.status === "publish_ready" && !r.isArchived ? (
+                            <button onClick={() => handlePublish(r.id)}
+                              style={{ ...miniBtn, background: "#ede9fe", color: "#6d28d9", fontWeight: 700 }}>📤 게시</button>
+                          ) : r.isArchived ? (
                             <button onClick={() => handleRestore(r.id)}
                               style={{ ...miniBtn, background: "#eff6ff", color: "#1e40af" }}>복구</button>
                           ) : r.filterDecision === "keep" || !r.filterDecision ? (
@@ -1810,7 +1881,21 @@ export function InsightManagementTab({ token, setToast }: Props) {
               <div style={{ padding: 16, overflowY: "auto", maxHeight: "calc(100vh - 280px)", display: "flex", flexDirection: "column", gap: 14 }}>
 
                 {/* 상태 변경 버튼 */}
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  {selected.status === "publish_ready" && (
+                    <button
+                      onClick={() => handlePublish(selected.id)}
+                      style={{
+                        padding: "7px 18px", borderRadius: 6, border: "none",
+                        background: "linear-gradient(135deg, #7c3aed, #4f46e5)", color: "#fff",
+                        fontWeight: 700, fontSize: 13, cursor: "pointer",
+                        boxShadow: "0 2px 8px rgba(109,40,217,0.25)",
+                        display: "flex", alignItems: "center", gap: 6,
+                      }}
+                    >
+                      📤 게시하기
+                    </button>
+                  )}
                   {statusActions(selected).map(a => (
                     <button
                       key={a.next}
@@ -1830,6 +1915,11 @@ export function InsightManagementTab({ token, setToast }: Props) {
                     text={STATUS_KO[selected.status] ?? selected.status}
                     style={{ ...(STATUS_COLOR[selected.status] ?? {}), alignSelf: "center" }}
                   />
+                  {selected.publishedAt && (
+                    <span style={{ fontSize: 11, color: "#9ca3af", alignSelf: "center" }}>
+                      게시일: {new Date(selected.publishedAt).toLocaleDateString("ko-KR")}
+                    </span>
+                  )}
                 </div>
 
                 {/* 질문 */}

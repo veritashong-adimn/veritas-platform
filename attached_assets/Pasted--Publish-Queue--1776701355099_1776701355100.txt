@@ -1,0 +1,198 @@
+지시문
+
+목표:
+자동 보완된 인사이트 중 품질 기준을 충족하는 경우,
+운영자 개입 없이 자동으로 적용하고 Publish Queue로 이동시키는 구조를 구축한다.
+
+이번 작업은
+👉 “반자동 승인 시스템 → 자동 게시 준비 시스템”으로 전환하는 단계다.
+
+---
+
+1. 상태 구조 확장
+
+insights 테이블에 상태 필드 추가 또는 확장:
+
+status:
+
+* draft (기본)
+* review_ready (보완 완료, 검토 필요)
+* publish_ready (자동 기준 충족)
+* published (게시 완료)
+
+기존 판정(keep/review/merge/drop)은 유지하고,
+👉 별도의 “게시 상태 흐름”으로 관리
+
+---
+
+2. 자동 적용 조건 정의
+
+아래 조건을 만족하면 자동 적용:
+
+* aeoScore ≥ 80
+* faqCount ≥ 3
+* relatedCount ≥ 2
+* classification != drop
+* auto suggestions 존재
+
+추가 권장:
+
+* duplicationScore 낮음
+* sourceWeight 일정 이상
+
+---
+
+3. 자동 적용 로직 (핵심)
+
+auto-enhance 실행 후:
+
+Step 1:
+AI 결과 생성
+
+Step 2:
+auto_* 또는 suggestion 저장
+
+Step 3:
+조건 체크
+
+IF 조건 만족:
+→ suggestion 자동 적용
+→ insight 필드 업데이트
+→ status = publish_ready
+
+ELSE:
+→ status = review_ready
+→ 기존처럼 수동 승인 대기
+
+---
+
+4. Publish Queue 개념
+
+publish_ready 상태인 인사이트를
+
+👉 Publish Queue로 간주
+
+별도 테이블 없이도 가능:
+
+* WHERE status = 'publish_ready'
+
+---
+
+5. 관리자 UI 추가
+
+새 탭 또는 필터:
+
+“📤 게시 대기 (Publish Queue)”
+
+표시 항목:
+
+* question
+* AEO 상태
+* AEO 점수
+* FAQ 개수
+* 관련 연결
+* sourceType
+
+---
+
+6. 게시 액션
+
+각 행에 버튼 추가:
+
+* “게시하기”
+
+클릭 시:
+
+* status = published
+* publishedAt = now()
+
+추가 옵션:
+
+* 즉시 공개 (/insights/:slug 반영)
+
+---
+
+7. 자동 게시 (옵션)
+
+설정 추가:
+
+autoPublishEnabled (true/false)
+
+true일 경우:
+
+* publish_ready → 자동 published
+
+false일 경우:
+
+* 큐에서 수동 게시
+
+👉 초기에는 false 권장
+
+---
+
+8. UI 표시 개선
+
+publish_ready 상태:
+
+* 파란색 또는 보라색 배지
+* “게시 준비 완료” 표시
+
+review_ready 상태:
+
+* 노란색
+* “검토 필요”
+
+---
+
+9. 로그 기록
+
+자동 적용 시:
+
+logs:
+
+* auto_applied
+* moved_to_publish_queue
+* auto_publish (옵션)
+
+---
+
+10. 예외 처리
+
+* 기존 데이터 덮어쓰기 주의
+* 이미 published 상태면 skip
+* 동일 인사이트 중복 처리 방지
+
+---
+
+11. 기대 결과
+
+작업 완료 후:
+
+* 자동 보완 →
+* 조건 충족 →
+* 자동 적용 →
+* 자동으로 게시 대기 상태 이동
+
+운영자는:
+
+👉 “검토 + 게시 버튼만 누르면 끝”
+
+---
+
+12. 완료 보고 형식
+
+* 상태 필드 변경 내용
+* 자동 적용 로직 위치
+* Publish Queue 구현 방식
+* UI 추가 위치
+* 자동 적용 조건 코드
+* 테스트 결과
+* publish_ready 샘플 데이터
+
+---
+
+핵심 한 줄:
+
+👉
+“좋은 인사이트는 자동으로 완성되고,
+게시 직전까지 스스로 올라간다”

@@ -58,6 +58,8 @@ export const contentInsightsTable = pgTable("content_insights", {
   mergedIntoId: integer("merged_into_id"),
   deletedAt: timestamp("deleted_at"),
 
+  publishedAt: timestamp("published_at"),
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
