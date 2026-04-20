@@ -332,7 +332,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
 
   // modals
-  type DetailModalState = { id: number; initialSection?: "info"|"finance"|"work"|"settlement"|"history" };
+  type DetailModalState = { id: number; initialSection?: "info"|"finance"|"work"|"settlement"|"history"|"control-tower" };
   const [detailModal, setDetailModal] = useState<DetailModalState | null>(null);
   const openDetail = (id: number, initialSection?: DetailModalState["initialSection"]) => setDetailModal({ id, initialSection });
   const [paying, setPaying] = useState<number | null>(null);

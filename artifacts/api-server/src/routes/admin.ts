@@ -372,6 +372,169 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
   }
 });
 
+// ─── 프로젝트 컨트롤타워 ──────────────────────────────────────────────────────
+router.get("/admin/projects/:id/control-tower", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 project id." });
+    return;
+  }
+
+  try {
+    // ── 1. 프로젝트 기본 정보 ────────────────────────────────────────────────
+    const [project] = await db
+      .select({
+        id: projectsTable.id,
+        title: projectsTable.title,
+        status: projectsTable.status,
+        financialStatus: projectsTable.financialStatus,
+        createdAt: projectsTable.createdAt,
+        companyId: projectsTable.companyId,
+        contactId: projectsTable.contactId,
+        requestingCompanyId: projectsTable.requestingCompanyId,
+        requestingDivisionId: projectsTable.requestingDivisionId,
+        billingCompanyId: projectsTable.billingCompanyId,
+        payerCompanyId: projectsTable.payerCompanyId,
+        requestingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.requestingCompanyId})`,
+        billingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.billingCompanyId})`,
+        payerCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.payerCompanyId})`,
+        divisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
+        customerEmail: usersTable.email,
+      })
+      .from(projectsTable)
+      .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))
+      .where(eq(projectsTable.id, projectId));
+
+    if (!project) {
+      res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." });
+      return;
+    }
+
+    // ── 2. 병렬 조회 ─────────────────────────────────────────────────────────
+    const [rawQuotes, payments, translatorRows, rawSettlements, company, contact] =
+      await Promise.all([
+        // 견적 + 아이템
+        db.select().from(quotesTable).where(eq(quotesTable.projectId, projectId)).then(qs =>
+          Promise.all(qs.map(async q => {
+            const items = await db.select().from(quoteItemsTable)
+              .where(eq(quoteItemsTable.quoteId, q.id)).orderBy(quoteItemsTable.id);
+            return { ...q, items };
+          }))
+        ),
+        // 결제
+        db.select().from(paymentsTable).where(eq(paymentsTable.projectId, projectId)),
+        // 태스크 + 번역사 이름
+        db.select({
+          taskId: tasksTable.id,
+          userId: tasksTable.translatorId,
+          taskStatus: tasksTable.status,
+          taskCreatedAt: tasksTable.createdAt,
+          translatorEmail: usersTable.email,
+          translatorName: usersTable.name,
+        })
+          .from(tasksTable)
+          .leftJoin(usersTable, eq(tasksTable.translatorId, usersTable.id))
+          .where(eq(tasksTable.projectId, projectId)),
+        // 정산
+        db.select().from(settlementsTable).where(eq(settlementsTable.projectId, projectId)),
+        // 거래처
+        project.companyId
+          ? db.select().from(companiesTable).where(eq(companiesTable.id, project.companyId)).then(r => r[0] ?? null)
+          : Promise.resolve(null),
+        // 담당자
+        project.contactId
+          ? db.select().from(contactsTable).where(eq(contactsTable.id, project.contactId)).then(r => r[0] ?? null)
+          : Promise.resolve(null),
+      ]);
+
+    // ── 3. 집계 ──────────────────────────────────────────────────────────────
+    const allItems = rawQuotes.flatMap(q => q.items);
+    const saleSupplyAmount = allItems.reduce((s, i) => s + Number(i.supplyAmount ?? 0), 0);
+    const saleTaxAmount    = allItems.reduce((s, i) => s + Number(i.taxAmount    ?? 0), 0);
+    const saleTotalAmount  = allItems.reduce((s, i) => s + Number(i.totalAmount  ?? 0), 0);
+    // 아이템이 없으면 최신 견적 price 사용
+    const latestQuotePrice = rawQuotes.length > 0 ? Number(rawQuotes[rawQuotes.length - 1].price ?? 0) : 0;
+    const effectiveSaleAmount = saleTotalAmount > 0 ? saleTotalAmount : latestQuotePrice;
+
+    const totalPayoutAmount = rawSettlements.reduce((s, st) => s + Number(st.netAmount ?? st.translatorAmount ?? 0), 0);
+    const estimatedMargin = (saleTotalAmount > 0 ? saleSupplyAmount : latestQuotePrice) - totalPayoutAmount;
+
+    const paidAmount = payments
+      .filter(p => p.status === "paid")
+      .reduce((s, p) => s + Number(p.amount ?? 0), 0);
+    const paymentStatus: "fully_paid" | "partial" | "unpaid" =
+      effectiveSaleAmount > 0 && paidAmount >= effectiveSaleAmount ? "fully_paid"
+      : paidAmount > 0 ? "partial" : "unpaid";
+
+    const sStatuses = rawSettlements.map(s => s.status ?? "pending");
+    const settlementStatus: "all_paid" | "partial" | "pending_review" | "pending" =
+      rawSettlements.length === 0 ? "pending"
+      : sStatuses.every(s => s === "paid") ? "all_paid"
+      : sStatuses.some(s => s === "pending_review") ? "pending_review"
+      : sStatuses.some(s => s === "paid") ? "partial"
+      : "pending";
+
+    // ── 4. 번역사 + 정산 매핑 ─────────────────────────────────────────────────
+    const translators = translatorRows.map(t => {
+      const settlement = rawSettlements.find(s => s.translatorId === t.userId) ?? null;
+      // 납품일: settlement.createdAt fallback (task.completedAt 필드 없음)
+      const deliveryDate = settlement?.createdAt
+        ? (settlement.createdAt instanceof Date
+            ? settlement.createdAt.toISOString().slice(0, 10)
+            : String(settlement.createdAt).slice(0, 10))
+        : null;
+      return {
+        userId: t.userId,
+        name: t.translatorName,
+        email: t.translatorEmail,
+        taskId: t.taskId,
+        taskStatus: t.taskStatus,
+        taskCreatedAt: t.taskCreatedAt,
+        deliveryDate,
+        settlement: settlement ? {
+          id: settlement.id,
+          grossAmount: settlement.grossAmount,
+          netAmount: settlement.netAmount,
+          withholdingAmount: settlement.withholdingAmount,
+          vatAmount: settlement.vatAmount,
+          settlementType: settlement.settlementType,
+          payoutDueDate: settlement.payoutDueDate,
+          status: settlement.status,
+          paidAt: settlement.paidAt,
+          reviewReason: settlement.reviewReason,
+          isAutoGenerated: settlement.isAutoGenerated,
+          bankInfoSnapshot: settlement.bankInfoSnapshot,
+        } : null,
+      };
+    });
+
+    res.json({
+      project,
+      company,
+      contact,
+      summary: {
+        saleSupplyAmount: Math.round(saleSupplyAmount),
+        saleTaxAmount: Math.round(saleTaxAmount),
+        saleTotalAmount: Math.round(effectiveSaleAmount),
+        totalPayoutAmount: Math.round(totalPayoutAmount),
+        estimatedMargin: Math.round(estimatedMargin),
+        paidAmount: Math.round(paidAmount),
+        unpaidAmount: Math.round(Math.max(0, effectiveSaleAmount - paidAmount)),
+        paymentStatus,
+        settlementStatus,
+        translatorCount: translatorRows.length,
+        doneTaskCount: translatorRows.filter(t => t.taskStatus === "done").length,
+      },
+      quotes: rawQuotes,
+      payments,
+      translators,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Admin: control-tower fetch failed");
+    res.status(500).json({ error: "컨트롤타워 데이터 조회 실패." });
+  }
+});
+
 // ─── 번역사 매칭 후보 추천 (top-3) ─────────────────────────────────────────
 router.get("/admin/projects/:id/match-candidates", ...adminGuard, async (req, res) => {
   const projectId = Number(req.params.id);

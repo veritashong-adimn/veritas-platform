@@ -788,8 +788,14 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                             </td>
 
                             {/* 액션 */}
-                            <td style={{ ...tableTd, width: 130 }} onClick={e => e.stopPropagation()}>
-                              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                            <td style={{ ...tableTd, width: 155 }} onClick={e => e.stopPropagation()}>
+                              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                                <button
+                                  title="컨트롤타워 — 판매·수행·결제 종합"
+                                  onClick={() => openDetail(p.id, "control-tower")}
+                                  style={{ background: "#eef2ff", color: "#4f46e5", border: "1px solid #c7d2fe", borderRadius: 6, padding: "4px 8px", fontSize: 13, cursor: "pointer", lineHeight: 1 }}>
+                                  🗼
+                                </button>
                                 <button
                                   onClick={() => openDetail(p.id, action.section)}
                                   style={{ background: action.bg, color: action.color, border: "none", borderRadius: 6, padding: "4px 11px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>

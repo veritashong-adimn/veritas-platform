@@ -3,6 +3,7 @@ import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, CO
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
 import { ReviewMemoPanel } from './ReviewMemoPanel';
 import { DraggableModal } from './DraggableModal';
+import { ProjectControlTowerTab } from './ProjectControlTowerTab';
 
 /* ────── 상태 변경 검증 ────── */
 function getStatusTransitionBlock(
@@ -44,7 +45,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   projectId: number; token: string; onClose: () => void;
   onRefresh: () => void; onToast: (msg: string) => void;
   adminList?: AdminUser[];
-  initialSection?: "info"|"finance"|"work"|"settlement"|"history";
+  initialSection?: "info"|"finance"|"work"|"settlement"|"history"|"control-tower";
 }) {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -69,7 +70,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [translatorSearch, setTranslatorSearch] = useState("");
   const [translatorSearchResults, setTranslatorSearchResults] = useState<any[]>([]);
   const [searchingTranslator, setSearchingTranslator] = useState(false);
-  const [activeSection, setActiveSection] = useState<"info"|"finance"|"work"|"settlement"|"history">(initialSection ?? "info");
+  const [activeSection, setActiveSection] = useState<"info"|"finance"|"work"|"settlement"|"history"|"control-tower">(initialSection ?? "info");
 
   type ProjectFile = { id: number; fileType: string; fileName: string; objectPath: string; fileSize: number | null; mimeType: string | null; createdAt: string; uploaderName: string | null; uploaderEmail: string | null };
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
@@ -891,6 +892,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   });
 
   const sections: Array<{ key: typeof activeSection; label: string }> = [
+    { key: "control-tower", label: "🗼 컨트롤타워" },
     { key: "info", label: "기본정보" },
     { key: "finance", label: "견적/결제" },
     { key: "work", label: "작업" },
@@ -2833,6 +2835,15 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   );
                 })()}
               </>
+            )}
+
+            {/* ── 컨트롤타워 탭 ─────────────────────────────────── */}
+            {activeSection === "control-tower" && (
+              <ProjectControlTowerTab
+                projectId={projectId}
+                token={token}
+                onToast={onToast}
+              />
             )}
 
             {/* 기록 탭 (파일 / 커뮤니케이션 / 메모 / 이벤트 로그) */}
