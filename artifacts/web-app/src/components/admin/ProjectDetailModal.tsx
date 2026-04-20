@@ -2843,6 +2843,19 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 projectId={projectId}
                 token={token}
                 onToast={onToast}
+                onOpenQuoteForm={() => {
+                  setActiveSection("finance");
+                  setShowQuoteForm(true);
+                }}
+                onOpenPaymentForm={() => {
+                  setActiveSection("finance");
+                  setShowPaymentForm(true);
+                }}
+                onOpenAssignPanel={() => {
+                  setActiveSection("work");
+                  setShowCandidates(true);
+                }}
+                onGoToFinance={() => setActiveSection("finance")}
               />
             )}
 
