@@ -170,11 +170,20 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   const [adminTab, setAdminTab] = useState<"dashboard"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics">("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // 섹션 기본 열림/닫힘 정책: customer·project는 기본 열림, 나머지 기본 닫힘
+  const SIDEBAR_DEFAULT_OPEN: Record<string, boolean> = {
+    customer: true, project: true,
+    resource: false, finance: false, data: false, system: false,
+  };
   const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
     try {
+      // v2: 버전 키로 구버전 기본값(전체 열림) 무효화
+      const ver = localStorage.getItem("admin_sidebar_sections_ver");
       const saved = localStorage.getItem("admin_sidebar_sections");
-      return saved ? JSON.parse(saved) : {};
-    } catch { return {}; }
+      if (ver === "2" && saved) return JSON.parse(saved);
+    } catch {}
+    // 첫 방문 또는 구버전: 새 기본값 적용
+    return SIDEBAR_DEFAULT_OPEN;
   });
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [payments, setPayments] = useState<AdminPayment[]>([]);
@@ -698,16 +707,19 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   };
   useEffect(() => { if (adminTab === "settings") fetchSettings(); }, [adminTab]);
 
-  // 아코디언 상태 localStorage 저장
+  // 아코디언 상태 localStorage 저장 (v2 버전 키 포함)
   useEffect(() => {
-    try { localStorage.setItem("admin_sidebar_sections", JSON.stringify(openSections)); } catch {}
+    try {
+      localStorage.setItem("admin_sidebar_sections", JSON.stringify(openSections));
+      localStorage.setItem("admin_sidebar_sections_ver", "2");
+    } catch {}
   }, [openSections]);
 
-  // 현재 탭이 속한 섹션 자동 펼침
+  // 현재 탭이 속한 섹션 자동 펼침 (닫혀있어도 항상 강제 열기)
   useEffect(() => {
     const activeGroup = ADMIN_NAV_GROUPS.find(g => g.items.some(item => item.id === adminTab));
     if (activeGroup && !activeGroup.isDashboard) {
-      setOpenSections(prev => prev[activeGroup.key] === false ? prev : { ...prev, [activeGroup.key]: true });
+      setOpenSections(prev => ({ ...prev, [activeGroup.key]: true }));
     }
   }, [adminTab]);
   useEffect(() => {
@@ -1152,12 +1164,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         onClick={() => setAdminTab(item.id as typeof adminTab)}
                         style={{
                           display: "flex", alignItems: "center", gap: 10,
-                          width: "100%", padding: "8px 20px 8px 20px", border: "none", cursor: "pointer",
+                          width: "100%", padding: "9px 20px 9px 22px", border: "none", cursor: "pointer",
                           background: isActive ? group.accentColor : "transparent",
                           color: isActive ? "#fff" : "#c1c8d4",
                           fontSize: 13, fontWeight: isActive ? 600 : 400,
                           textAlign: "left", whiteSpace: "nowrap",
-                          borderRadius: 0, transition: "background 0.12s, color 0.12s",
+                          borderRadius: 0, transition: "background 0.15s, color 0.12s",
                         }}
                         onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLButtonElement).style.background = "#2d3547"; } }}
                         onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; } }}
