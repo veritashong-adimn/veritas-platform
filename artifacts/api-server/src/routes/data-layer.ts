@@ -472,51 +472,118 @@ router.get("/admin/content-insights", ...staffPlus, async (req, res) => {
   }
 });
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── Label mapping helpers ────────────────────────────────────────────────────
 
-const SERVICE_TYPE_KO: Record<string, string> = {
-  translation: "번역",
-  interpretation: "통역",
-  equipment: "장비",
+const LANG_PAIR_LABEL: Record<string, string> = {
+  "ko-en": "한영",
+  "en-ko": "영한",
+  "ko-ja": "한일",
+  "ja-ko": "일한",
+  "ko-zh": "한중",
+  "zh-ko": "중한",
+  "ko-de": "한독",
+  "ko-fr": "한불",
+  "ko-es": "한서",
+  "ko-ru": "한러",
 };
+
+const DOMAIN_LABEL: Record<string, string> = {
+  legal: "법률",
+  finance: "금융",
+  medical: "의료",
+  it: "IT",
+  technical: "기술",
+  patent: "특허",
+  academic: "학술",
+  marketing: "마케팅",
+  government: "정부·공공",
+  business: "비즈니스",
+};
+
+const INTERP_TYPE_LABEL: Record<string, string> = {
+  simultaneous: "동시통역",
+  consecutive: "순차통역",
+  meeting: "미팅통역",
+  exhibition: "전시통역",
+  whisper: "위스퍼통역",
+};
+
+const EQUIP_TYPE_LABEL: Record<string, string> = {
+  booth: "통역 부스",
+  receiver: "수신기",
+  transmitter: "송신기",
+  headset: "헤드셋",
+  console: "통역 콘솔",
+};
+
+const LOCATION_LABEL: Record<string, string> = {
+  onsite: "현장",
+  remote: "원격",
+  hybrid: "하이브리드",
+};
+
+function labelOf(map: Record<string, string>, code: string | null | undefined): string | null {
+  if (!code) return null;
+  return map[code] ?? code;
+}
+
+// ─── Text builders ────────────────────────────────────────────────────────────
 
 function fmt(n: number | null): string {
   if (n === null) return "미정";
   return Math.round(n).toLocaleString("ko-KR");
 }
 
-function buildQuestion(record: { serviceType: string; languagePair: string | null; domain: string | null; interpretationType?: string | null; equipmentType?: string | null }): string {
-  if (record.serviceType === "translation") {
-    const domPart = record.domain ? `${record.domain} 분야 ` : "";
-    const langPart = record.languagePair ? `${record.languagePair} ` : "";
+type GenGroup = {
+  serviceType: string;
+  languagePair: string | null;
+  domain: string | null;
+  industry: string | null;
+  useCase: string | null;
+  interpretationType: string | null;
+  equipmentType: string | null;
+  locationType: string | null;
+};
+
+function buildQuestion(g: GenGroup): string {
+  if (g.serviceType === "translation") {
+    const domPart = labelOf(DOMAIN_LABEL, g.domain) ? `${labelOf(DOMAIN_LABEL, g.domain)} ` : "";
+    const langPart = labelOf(LANG_PAIR_LABEL, g.languagePair) ? `${labelOf(LANG_PAIR_LABEL, g.languagePair)} ` : "";
     return `${domPart}${langPart}번역 비용은 얼마인가요?`;
   }
-  if (record.serviceType === "interpretation") {
-    const typePart = (record as any).interpretationType ? `${(record as any).interpretationType} ` : "";
-    return `${typePart}통역 비용은 얼마인가요?`;
+  if (g.serviceType === "interpretation") {
+    const typeLabel = labelOf(INTERP_TYPE_LABEL, g.interpretationType);
+    return typeLabel ? `${typeLabel} 비용은 얼마인가요?` : "통역 비용은 얼마인가요?";
   }
-  const eqType = (record as any).equipmentType ?? "장비";
-  return `${eqType} 대여 비용은 얼마인가요?`;
+  const eqLabel = labelOf(EQUIP_TYPE_LABEL, g.equipmentType);
+  return eqLabel ? `${eqLabel} 대여 비용은 얼마인가요?` : "통역 장비 대여 비용은 얼마인가요?";
 }
 
 function buildShortAnswer(serviceType: string, avgPrice: number | null, minPrice: number | null, maxPrice: number | null): string {
-  const typeKo = SERVICE_TYPE_KO[serviceType] ?? serviceType;
-  return `${typeKo} 평균 비용은 약 ${fmt(avgPrice)}원이며, 보통 ${fmt(minPrice)}~${fmt(maxPrice)}원 범위입니다.`;
+  const prefixMap: Record<string, string> = {
+    translation: "번역 비용은",
+    interpretation: "통역 비용은",
+    equipment: "장비 대여 비용은",
+  };
+  const prefix = prefixMap[serviceType] ?? "비용은";
+  return `${prefix} 평균 ${fmt(avgPrice)}원 수준이며, 보통 ${fmt(minPrice)}~${fmt(maxPrice)}원 범위입니다.`;
 }
 
-function buildLongAnswer(
-  serviceType: string,
-  group: { languagePair: string | null; domain: string | null; industry: string | null; useCase: string | null; interpretationType?: string | null; equipmentType?: string | null; locationType?: string | null },
-  stats: { sourceCount: number; avgPrice: number | null; minPrice: number | null; maxPrice: number | null; avgDuration: number | null },
-): string {
-  const typeKo = SERVICE_TYPE_KO[serviceType] ?? serviceType;
+function buildLongAnswer(g: GenGroup, stats: { sourceCount: number; avgPrice: number | null; minPrice: number | null; maxPrice: number | null; avgDuration: number | null }): string {
+  const { serviceType } = g;
   const { sourceCount, avgPrice, minPrice, maxPrice, avgDuration } = stats;
 
+  const typeKo = serviceType === "translation" ? "번역" : serviceType === "interpretation" ? "통역" : "장비";
   const lines: string[] = [];
 
   lines.push(`## ${typeKo} 서비스 비용 안내`);
   lines.push("");
-  lines.push(`총 ${sourceCount}건의 실제 데이터를 기반으로 산출한 정보입니다.`);
+
+  if (sourceCount >= 3) {
+    lines.push(`총 ${sourceCount}건의 실제 데이터를 기반으로 산출한 평균값입니다.`);
+  } else {
+    lines.push(`총 ${sourceCount}건의 데이터를 기반으로 산출한 정보입니다.`);
+  }
   lines.push("");
 
   lines.push("### 비용 범위");
@@ -525,20 +592,31 @@ function buildLongAnswer(
   lines.push(`- 최고 단가: ${fmt(maxPrice)}원`);
   lines.push("");
 
-  lines.push("### 세부 조건");
-  if (group.languagePair) lines.push(`- 언어쌍: ${group.languagePair}`);
-  if (group.domain) lines.push(`- 도메인: ${group.domain}`);
-  if (group.industry) lines.push(`- 산업: ${group.industry}`);
-  if (group.useCase) lines.push(`- 사용 목적: ${group.useCase}`);
+  const condLines: string[] = [];
+  const langLabel = labelOf(LANG_PAIR_LABEL, g.languagePair);
+  const domLabel = labelOf(DOMAIN_LABEL, g.domain);
+  const interpLabel = labelOf(INTERP_TYPE_LABEL, g.interpretationType);
+  const equipLabel = labelOf(EQUIP_TYPE_LABEL, g.equipmentType);
+  const locLabel = labelOf(LOCATION_LABEL, g.locationType);
+
+  if (langLabel) condLines.push(`- 언어쌍: ${langLabel}`);
+  if (domLabel) condLines.push(`- 도메인: ${domLabel}`);
+  if (g.industry) condLines.push(`- 산업: ${g.industry}`);
+  if (g.useCase) condLines.push(`- 사용 목적: ${g.useCase}`);
   if (serviceType === "interpretation") {
-    if ((group as any).interpretationType) lines.push(`- 통역 유형: ${(group as any).interpretationType}`);
-    if ((group as any).locationType) lines.push(`- 장소: ${(group as any).locationType}`);
-    if (avgDuration) lines.push(`- 평균 시간: ${avgDuration.toFixed(1)}시간`);
+    if (interpLabel) condLines.push(`- 통역 유형: ${interpLabel}`);
+    if (locLabel) condLines.push(`- 장소: ${locLabel}`);
+    if (avgDuration) condLines.push(`- 평균 시간: ${avgDuration.toFixed(1)}시간`);
   }
   if (serviceType === "equipment") {
-    if ((group as any).equipmentType) lines.push(`- 장비 유형: ${(group as any).equipmentType}`);
+    if (equipLabel) condLines.push(`- 장비 유형: ${equipLabel}`);
   }
-  lines.push("");
+
+  if (condLines.length > 0) {
+    lines.push("### 세부 조건");
+    lines.push(...condLines);
+    lines.push("");
+  }
 
   lines.push("### 비용에 영향을 주는 요소");
   if (serviceType === "translation") {
@@ -557,39 +635,70 @@ function buildLongAnswer(
     lines.push("- 설치·철거·운반 비용 포함 여부");
   }
   lines.push("");
+
+  if (sourceCount === 1) {
+    lines.push("※ 본 데이터는 표본 수가 적어 참고용으로 활용하시기 바랍니다.");
+    lines.push("");
+  }
+
   lines.push("*본 데이터는 실제 거래 기반으로 산출되었으며, 개별 프로젝트 조건에 따라 달라질 수 있습니다.*");
 
   return lines.join("\n");
 }
 
+// ─── 그룹 키 생성 ──────────────────────────────────────────────────────────────
+
+function groupKey(serviceType: string, languagePair: string | null, domain: string | null, industry: string | null, useCase: string | null): string {
+  return [serviceType, languagePair ?? "", domain ?? "", industry ?? "", useCase ?? ""].join("|");
+}
+
 // POST /api/admin/content-insights/generate
 router.post("/admin/content-insights/generate", ...adminOnly, async (req, res) => {
   try {
+    const clearPrevious = req.query.clearPrevious === "true";
+
+    if (clearPrevious) {
+      await db.delete(contentInsightsTable).where(eq(contentInsightsTable.status, "draft"));
+    }
+
     const publicRecords = await db.select().from(languageServiceDataTable)
       .where(eq(languageServiceDataTable.isPublic, true));
 
     if (publicRecords.length === 0) {
-      return res.json({ generated: 0, message: "공개 데이터가 없습니다." });
+      return res.json({ generated: 0, updated: 0, message: "공개 데이터가 없습니다." });
     }
 
     // 그룹핑: serviceType + languagePair + domain + industry + useCase
     type LsdRow = typeof publicRecords[number];
     const groupMap = new Map<string, LsdRow[]>();
     for (const r of publicRecords) {
-      const key = [
-        r.serviceType,
-        r.languagePair ?? "",
-        r.domain ?? "",
-        r.industry ?? "",
-        r.useCase ?? "",
-      ].join("|");
+      const key = groupKey(r.serviceType, r.languagePair, r.domain, r.industry, r.useCase);
       if (!groupMap.has(key)) groupMap.set(key, []);
       groupMap.get(key)!.push(r);
     }
 
-    const toInsert: (typeof contentInsightsTable.$inferInsert)[] = [];
+    // clearPrevious=false 일 때 기존 draft 조회 (upsert 판단용)
+    let existingDraftsByKey = new Map<string, number>();
+    if (!clearPrevious) {
+      const existingDrafts = await db.select({
+        id: contentInsightsTable.id,
+        serviceType: contentInsightsTable.serviceType,
+        languagePair: contentInsightsTable.languagePair,
+        domain: contentInsightsTable.domain,
+        industry: contentInsightsTable.industry,
+        useCase: contentInsightsTable.useCase,
+      }).from(contentInsightsTable).where(eq(contentInsightsTable.status, "draft"));
 
-    for (const records of groupMap.values()) {
+      for (const d of existingDrafts) {
+        const k = groupKey(d.serviceType, d.languagePair, d.domain, d.industry, d.useCase);
+        if (!existingDraftsByKey.has(k)) existingDraftsByKey.set(k, d.id);
+      }
+    }
+
+    let insertedCount = 0;
+    let updatedCount = 0;
+
+    for (const [key, records] of groupMap.entries()) {
       const first = records[0];
       const prices = records.map(r => r.unitPrice).filter((p): p is number => p !== null);
       const durations = records
@@ -603,29 +712,24 @@ router.post("/admin/content-insights/generate", ...adminOnly, async (req, res) =
       const maxPrice = prices.length > 0 ? Math.max(...prices) : null;
       const avgDuration = durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
 
-      const representativeInterp = records.find(r => r.interpretationType)?.interpretationType ?? null;
-      const representativeEquip = records.find(r => r.equipmentType)?.equipmentType ?? null;
-      const representativeLoc = records.find(r => r.locationType)?.locationType ?? null;
-
-      const groupForGen = {
-        ...first,
-        interpretationType: representativeInterp,
-        equipmentType: representativeEquip,
-        locationType: representativeLoc,
+      const g: GenGroup = {
+        serviceType: first.serviceType,
+        languagePair: first.languagePair,
+        domain: first.domain,
+        industry: first.industry,
+        useCase: first.useCase,
+        interpretationType: records.find(r => r.interpretationType)?.interpretationType ?? null,
+        equipmentType: records.find(r => r.equipmentType)?.equipmentType ?? null,
+        locationType: records.find(r => r.locationType)?.locationType ?? null,
       };
 
-      const question = buildQuestion(groupForGen);
+      const question = buildQuestion(g);
       const shortAnswer = buildShortAnswer(first.serviceType, avgPrice, minPrice, maxPrice);
-      const longAnswer = buildLongAnswer(
-        first.serviceType,
-        groupForGen,
-        { sourceCount, avgPrice, minPrice, maxPrice, avgDuration },
-      );
-
+      const longAnswer = buildLongAnswer(g, { sourceCount, avgPrice, minPrice, maxPrice, avgDuration });
       const confidenceRaw = sourceCount >= 5 ? 0.9 : sourceCount >= 3 ? 0.7 : 0.5;
 
-      toInsert.push({
-        serviceType: first.serviceType,
+      const payload = {
+        serviceType: first.serviceType as "translation" | "interpretation" | "equipment",
         languageServiceDataId: null,
         question,
         answer: shortAnswer,
@@ -645,17 +749,23 @@ router.post("/admin/content-insights/generate", ...adminOnly, async (req, res) =
         visibilityLevel: "internal_summary",
         confidenceScore: String(confidenceRaw),
         isPublic: false,
-      });
+        updatedAt: new Date(),
+      };
+
+      const existingId = existingDraftsByKey.get(key);
+      if (!clearPrevious && existingId !== undefined) {
+        await db.update(contentInsightsTable)
+          .set(payload)
+          .where(eq(contentInsightsTable.id, existingId));
+        updatedCount++;
+      } else {
+        await db.insert(contentInsightsTable).values(payload);
+        insertedCount++;
+      }
     }
 
-    if (toInsert.length === 0) {
-      return res.json({ generated: 0, message: "생성할 그룹이 없습니다." });
-    }
-
-    const inserted = await db.insert(contentInsightsTable).values(toInsert).returning({ id: contentInsightsTable.id });
-
-    req.log.info({ count: inserted.length }, "CI: generated insights");
-    res.status(201).json({ generated: inserted.length, ids: inserted.map(r => r.id) });
+    req.log.info({ insertedCount, updatedCount }, "CI: generate complete");
+    res.status(201).json({ generated: insertedCount, updated: updatedCount, total: insertedCount + updatedCount });
   } catch (err) {
     req.log.error({ err }, "CI: failed to generate insights");
     res.status(500).json({ error: "인사이트 자동 생성 실패" });

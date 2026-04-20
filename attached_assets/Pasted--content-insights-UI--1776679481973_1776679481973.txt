@@ -1,0 +1,171 @@
+[목표]
+content_insights 생성 로직을 개선하여
+중복 생성 문제를 해결하고,
+사용자 노출용 문구를 자연스럽게 변환한다.
+
+이번 작업에서는 UI는 수정하지 않는다.
+(API + 생성 로직만 개선)
+
+---
+
+[1단계: 중복 생성 방지 로직 추가]
+
+POST /api/admin/content-insights/generate 로직 수정
+
+기존 문제:
+
+* 같은 그룹 조건으로 generate를 여러 번 실행하면
+  동일한 draft 인사이트가 계속 추가 생성됨
+
+해결 방식:
+
+1. 그룹 기준 정의:
+
+* serviceType
+* languagePair
+* domain
+* industry
+* useCase
+
+2. generate 실행 시:
+
+각 그룹별로 content_insights 테이블에서
+아래 조건으로 기존 draft 데이터 조회:
+
+* 동일 group key
+* status = 'draft'
+
+3. 처리 방식:
+
+* 기존 draft 존재 시:
+  → 새로 insert 하지 말고 update 수행
+
+* 기존 draft 없을 시:
+  → insert 수행
+
+즉, upsert 방식으로 변경
+
+---
+
+[2단계: 기존 draft 일괄 정리 옵션 추가]
+
+generate API에 옵션 추가:
+
+POST /api/admin/content-insights/generate?clearPrevious=true
+
+동작:
+
+* clearPrevious=true일 경우:
+  → content_insights에서 status='draft' 데이터 전부 삭제 후 생성
+
+* 기본값(false):
+  → upsert 방식 사용
+
+---
+
+[3단계: 코드값 → 사용자용 문구 변환]
+
+현재 문제:
+
+* legal, ko-en, simultaneous 등 내부 코드값이 그대로 노출됨
+
+개선:
+
+생성 로직에서 질문/답변 생성 시 아래 변환 적용
+
+---
+
+[매핑 규칙]
+
+languagePair:
+
+* ko-en → 한영
+* en-ko → 영한
+  (기본 fallback: 원값 사용)
+
+domain:
+
+* legal → 법률
+* finance → 금융
+* medical → 의료
+  (기본 fallback: 원값 사용)
+
+interpretationType:
+
+* simultaneous → 동시통역
+* consecutive → 순차통역
+* meeting → 미팅통역
+* exhibition → 전시통역
+
+equipmentType:
+
+* booth → 통역 부스
+* receiver → 수신기
+* transmitter → 송신기
+
+---
+
+질문 생성 시:
+
+예:
+
+* "legal ko-en 번역 비용은 얼마인가요?"
+  → "법률 한영 번역 비용은 얼마인가요?"
+
+* "simultaneous 통역 비용은 얼마인가요?"
+  → "동시통역 비용은 얼마인가요?"
+
+---
+
+[4단계: 장비/통역 fallback 문구 처리]
+
+데이터가 부족하거나 필드가 없는 경우 대비:
+
+* interpretationType 없으면:
+  → "통역 비용은 얼마인가요?"
+
+* equipmentType 없으면:
+  → "통역 장비 대여 비용은 얼마인가요?"
+
+---
+
+[5단계: shortAnswer 문구 개선]
+
+현재:
+"{serviceType} 평균 비용은 약 {avgPrice}원..."
+
+개선:
+
+* 번역:
+  "번역 비용은 평균 {avgPrice}원 수준이며, 보통 {minPrice}~{maxPrice} 범위입니다."
+
+* 통역:
+  "통역 비용은 평균 {avgPrice}원 수준이며, 보통 {minPrice}~{maxPrice} 범위입니다."
+
+* 장비:
+  "장비 대여 비용은 평균 {avgPrice}원 수준이며, 보통 {minPrice}~{maxPrice} 범위입니다."
+
+---
+
+[6단계: 최소 데이터 기준 표시]
+
+sourceCount 기반 처리:
+
+* sourceCount = 1:
+  → longAnswer에 아래 문구 추가:
+
+  "※ 본 데이터는 표본 수가 적어 참고용으로 활용하시기 바랍니다."
+
+* sourceCount ≥ 3:
+  → "실제 데이터 기반 평균값" 강조 문구 유지
+
+---
+
+[결과]
+
+* 동일 조건 인사이트 중복 생성 방지
+* generate 반복 실행 가능
+* 사용자 노출용 질문/답변 자연스러움 확보
+* AEO/GEO 활용 가능한 문장 품질 개선
+
+→ 다음 단계(UI 연결) 진행 가능한 상태 확보
