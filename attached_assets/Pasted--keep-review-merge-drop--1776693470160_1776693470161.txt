@@ -1,0 +1,260 @@
+[목표]
+품질 필터 결과(keep / review / merge / drop)에 따라
+운영자가 인사이트를 실제로 정리·관리할 수 있는
+“판정 후 처리 시스템”을 구현한다.
+
+즉,
+판정 → 실행(정리)까지 이어지는 운영 기능 완성
+
+---
+
+[1단계: 전체 개념]
+
+현재:
+
+* 필터 → 점수 → 판정까지만 존재
+
+추가:
+
+* 판정별 실행 액션 UI + API
+
+최종 흐름:
+
+인사이트 생성
+→ 품질 필터
+→ 판정 (keep / review / merge / drop)
+→ 운영자가 처리 (승격 / 수정 / 병합 / 삭제)
+
+---
+
+[2단계: DB 확장]
+
+파일:
+lib/db/src/schema/content_insights.ts
+
+아래 컬럼 추가:
+
+* isArchived (boolean, default false)
+* mergedIntoId (integer nullable) // merge 완료 후 대상 ID
+* deletedAt (timestamp nullable)
+
+기존 duplicateOfId는 "추천 대상"
+mergedIntoId는 "실제 병합 완료 대상"
+
+---
+
+[3단계: API 설계]
+
+파일:
+artifacts/api-server/src/routes/data-layer.ts
+
+---
+
+## 3-1. REVIEW → KEEP 승격
+
+POST /api/admin/content-insights/:id/approve
+
+동작:
+
+* filterDecision = 'keep'
+* 상태 유지 (draft)
+* 필요 시 confidenceScore 조정 가능
+
+---
+
+## 3-2. REVIEW → DROP
+
+POST /api/admin/content-insights/:id/drop
+
+옵션:
+
+* soft delete
+
+동작:
+
+* filterDecision = 'drop'
+* isArchived = true
+* deletedAt = now()
+
+---
+
+## 3-3. MERGE 실행
+
+POST /api/admin/content-insights/merge
+
+요청:
+{
+"sourceId": 20,
+"targetId": 22
+}
+
+동작:
+
+1. source → target으로 병합 처리
+2. source:
+
+   * isArchived = true
+   * mergedIntoId = targetId
+3. target:
+
+   * 필요 시 longAnswer 보강 (선택)
+
+주의:
+
+* target은 반드시 keep 또는 review 상태
+
+---
+
+## 3-4. RESTORE (복구)
+
+POST /api/admin/content-insights/:id/restore
+
+동작:
+
+* isArchived = false
+* deletedAt = null
+* mergedIntoId = null
+
+---
+
+[4단계: 프론트 UI - 리스트 액션]
+
+파일:
+InsightManagementTab.tsx
+
+각 행(row)에 액션 버튼 추가:
+
+---
+
+## REVIEW 상태
+
+* [✔ 살리기] → approve API
+* [✏ 수정] → 기존 수정 모달
+* [🗑 삭제] → drop API
+
+---
+
+## MERGE 상태
+
+* [병합하기] 버튼
+
+클릭 시:
+→ 대상 선택 모달
+
+모달 내용:
+
+* 추천 대상 (duplicateOfId)
+* 또는 검색해서 선택
+
+→ merge API 호출
+
+---
+
+## DROP 상태
+
+* [삭제됨 표시]
+* [복구] 버튼 (restore API)
+
+---
+
+## KEEP 상태
+
+* [승인 진행] (기존 기능)
+* [수정]
+
+---
+
+[5단계: 필터 탭 / 분류 UI]
+
+상단 필터 또는 탭 추가:
+
+* 전체
+* KEEP
+* REVIEW
+* MERGE
+* DROP
+
+→ filterDecision 기준 필터링
+
+추가:
+
+* "보관됨(Archived)" 토글
+
+---
+
+[6단계: 상세 패널 확장]
+
+오른쪽 상세 영역에 추가:
+
+[판정 처리 섹션]
+
+* 현재 판정 표시
+* 추천 액션 버튼 표시
+
+예:
+
+REVIEW일 경우:
+
+* "이 인사이트는 검토가 필요합니다"
+* [살리기] [수정] [삭제]
+
+MERGE일 경우:
+
+* "기존 #22와 중복입니다"
+* [병합 실행]
+
+DROP일 경우:
+
+* "삭제 추천된 인사이트입니다"
+* [복구]
+
+---
+
+[7단계: 병합 UX]
+
+병합 시:
+
+1. 확인 모달:
+   "20번을 22번에 병합하시겠습니까?"
+
+2. 완료 후:
+
+* source 행 흐리게 표시
+* "병합됨 → #22" 표시
+
+3. 목록 자동 갱신
+
+---
+
+[8단계: 삭제 정책]
+
+soft delete 기본:
+
+* isArchived = true
+* 리스트 기본에서는 숨김
+* "보관됨 보기" 체크 시 노출
+
+하드 삭제는 추후
+
+---
+
+[9단계: 안전 장치]
+
+* published 상태는 merge/drop 제한
+* merge 시 자기 자신 선택 금지
+* 이미 archived 된 항목 재병합 금지
+
+---
+
+[10단계: 최종 목표]
+
+운영자는:
+
+* review → 살릴지 삭제할지 결정
+* merge → 중복 제거
+* drop → 정리
+* keep → 게시
+
+즉,
+
+“AI가 분류하고, 사람이 최종 정리하는 시스템” 완성

@@ -600,6 +600,7 @@ router.get("/admin/content-insights", ...staffPlus, async (req, res) => {
   try {
     const {
       serviceType, status, visibilityLevel, domain, languagePair,
+      filterDecision, showArchived,
       page = "1", limit = "50",
     } = req.query as Record<string, string | undefined>;
     const pageNum = Math.max(1, parseInt(page));
@@ -612,6 +613,9 @@ router.get("/admin/content-insights", ...staffPlus, async (req, res) => {
     if (visibilityLevel) conditions.push(eq(contentInsightsTable.visibilityLevel, visibilityLevel));
     if (domain) conditions.push(eq(contentInsightsTable.domain, domain));
     if (languagePair) conditions.push(eq(contentInsightsTable.languagePair, languagePair));
+    if (filterDecision) conditions.push(eq(contentInsightsTable.filterDecision, filterDecision));
+    // 기본: 보관 항목 숨김 (showArchived=true 이면 보관 항목도 포함)
+    if (showArchived !== "true") conditions.push(eq(contentInsightsTable.isArchived, false));
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;
     const [rows, countResult] = await Promise.all([
@@ -855,6 +859,103 @@ function tokenSimilarity(a: string, b: string): number {
   const union = new Set([...ta, ...tb]).size;
   return union === 0 ? 0 : intersection / union;
 }
+
+// POST /api/admin/content-insights/:id/approve  (REVIEW → KEEP 승격)
+router.post("/admin/content-insights/:id/approve", ...adminOnly, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const [row] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, id));
+    if (!row) return res.status(404).json({ error: "인사이트를 찾을 수 없습니다." });
+    if (row.status === "published") return res.status(400).json({ error: "게시된 인사이트는 조작할 수 없습니다." });
+
+    const [updated] = await db.update(contentInsightsTable)
+      .set({ filterDecision: "keep", updatedAt: new Date() })
+      .where(eq(contentInsightsTable.id, id))
+      .returning();
+    return res.json(updated);
+  } catch (err) {
+    console.error("[approve]", err);
+    return res.status(500).json({ error: "승격 처리 중 오류가 발생했습니다." });
+  }
+});
+
+// POST /api/admin/content-insights/:id/drop  (→ soft delete)
+router.post("/admin/content-insights/:id/drop", ...adminOnly, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const [row] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, id));
+    if (!row) return res.status(404).json({ error: "인사이트를 찾을 수 없습니다." });
+    if (row.status === "published") return res.status(400).json({ error: "게시된 인사이트는 삭제할 수 없습니다." });
+
+    const now = new Date();
+    const [updated] = await db.update(contentInsightsTable)
+      .set({ filterDecision: "drop", isArchived: true, deletedAt: now, updatedAt: now })
+      .where(eq(contentInsightsTable.id, id))
+      .returning();
+    return res.json(updated);
+  } catch (err) {
+    console.error("[drop]", err);
+    return res.status(500).json({ error: "삭제 처리 중 오류가 발생했습니다." });
+  }
+});
+
+// POST /api/admin/content-insights/:id/restore  (보관 해제)
+router.post("/admin/content-insights/:id/restore", ...adminOnly, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const [row] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, id));
+    if (!row) return res.status(404).json({ error: "인사이트를 찾을 수 없습니다." });
+
+    const [updated] = await db.update(contentInsightsTable)
+      .set({ isArchived: false, deletedAt: null, mergedIntoId: null, filterDecision: "review", updatedAt: new Date() })
+      .where(eq(contentInsightsTable.id, id))
+      .returning();
+    return res.json(updated);
+  } catch (err) {
+    console.error("[restore]", err);
+    return res.status(500).json({ error: "복구 처리 중 오류가 발생했습니다." });
+  }
+});
+
+// POST /api/admin/content-insights/merge  (병합 실행)
+router.post("/admin/content-insights/merge", ...adminOnly, async (req, res) => {
+  try {
+    const { sourceId, targetId } = req.body as { sourceId?: number; targetId?: number };
+    if (!sourceId || !targetId) return res.status(400).json({ error: "sourceId, targetId가 필요합니다." });
+    if (sourceId === targetId) return res.status(400).json({ error: "자기 자신과 병합할 수 없습니다." });
+
+    const [source] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, sourceId));
+    const [target] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, targetId));
+    if (!source) return res.status(404).json({ error: `인사이트 #${sourceId}를 찾을 수 없습니다.` });
+    if (!target) return res.status(404).json({ error: `인사이트 #${targetId}를 찾을 수 없습니다.` });
+    if (source.isArchived) return res.status(400).json({ error: "이미 보관된 인사이트는 병합할 수 없습니다." });
+    if (source.status === "published") return res.status(400).json({ error: "게시된 인사이트는 병합할 수 없습니다." });
+    if (target.status === "published" || target.status === "archived") {
+      return res.status(400).json({ error: "대상은 keep 또는 review 상태여야 합니다." });
+    }
+
+    const now = new Date();
+    // source 보관
+    await db.update(contentInsightsTable)
+      .set({ isArchived: true, mergedIntoId: targetId, filterDecision: "merge", deletedAt: now, updatedAt: now })
+      .where(eq(contentInsightsTable.id, sourceId));
+
+    // target longAnswer 보강 (source에 없으면 스킵)
+    const patchTarget: Partial<typeof contentInsightsTable.$inferInsert> = { updatedAt: now };
+    if (!target.longAnswer && source.longAnswer) {
+      patchTarget.longAnswer = source.longAnswer;
+    }
+    const [updatedTarget] = await db.update(contentInsightsTable)
+      .set(patchTarget)
+      .where(eq(contentInsightsTable.id, targetId))
+      .returning();
+
+    return res.json({ merged: true, sourceId, targetId, target: updatedTarget });
+  } catch (err) {
+    console.error("[merge]", err);
+    return res.status(500).json({ error: "병합 처리 중 오류가 발생했습니다." });
+  }
+});
 
 // POST /api/admin/content-insights/filter  (품질 필터 실행)
 router.post("/admin/content-insights/filter", ...adminOnly, async (req, res) => {

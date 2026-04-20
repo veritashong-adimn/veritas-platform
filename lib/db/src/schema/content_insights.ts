@@ -49,6 +49,10 @@ export const contentInsightsTable = pgTable("content_insights", {
   duplicationScore: integer("duplication_score"),
   sourceWeight: integer("source_weight"),
 
+  isArchived: boolean("is_archived").notNull().default(false),
+  mergedIntoId: integer("merged_into_id"),
+  deletedAt: timestamp("deleted_at"),
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

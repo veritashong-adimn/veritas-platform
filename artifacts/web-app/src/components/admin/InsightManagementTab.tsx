@@ -37,6 +37,9 @@ interface ContentInsight {
   specificityScore: number | null;
   duplicationScore: number | null;
   sourceWeight: number | null;
+  isArchived: boolean;
+  mergedIntoId: number | null;
+  deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -183,6 +186,11 @@ export function InsightManagementTab({ token, setToast }: Props) {
 
   const [filtering, setFiltering] = useState(false);
 
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [mergeSource, setMergeSource] = useState<ContentInsight | null>(null);
+  const [mergeTargetId, setMergeTargetId] = useState<string>("");
+  const [merging, setMerging] = useState(false);
+
   const [highlightedIds, setHighlightedIds] = useState<Set<number>>(new Set());
   const [pendingScrollId, setPendingScrollId] = useState<number | null>(null);
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -204,8 +212,14 @@ export function InsightManagementTab({ token, setToast }: Props) {
     languagePair: "",
   });
   const [appliedFilters, setAppliedFilters] = useState(filters);
+  const [decisionTab, setDecisionTab] = useState<string>("all");
+  const [showArchived, setShowArchived] = useState(false);
 
-  const fetchInsights = useCallback(async (f = appliedFilters) => {
+  const fetchInsights = useCallback(async (
+    f = appliedFilters,
+    dtab = decisionTab,
+    archived = showArchived
+  ) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({ limit: "100" });
@@ -214,6 +228,8 @@ export function InsightManagementTab({ token, setToast }: Props) {
       if (f.visibilityLevel) params.set("visibilityLevel", f.visibilityLevel);
       if (f.domain) params.set("domain", f.domain);
       if (f.languagePair) params.set("languagePair", f.languagePair);
+      if (dtab !== "all") params.set("filterDecision", dtab);
+      if (archived) params.set("showArchived", "true");
 
       const res = await fetch(`${API}/admin/content-insights?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -226,14 +242,14 @@ export function InsightManagementTab({ token, setToast }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [appliedFilters, token, setToast]);
+  }, [appliedFilters, decisionTab, showArchived, token, setToast]);
 
   useEffect(() => { fetchInsights(); }, [fetchInsights]);
 
   const handleSearch = () => {
     setAppliedFilters(filters);
     setSelected(null);
-    fetchInsights(filters);
+    fetchInsights(filters, decisionTab, showArchived);
   };
 
   const handleReset = () => {
@@ -241,7 +257,7 @@ export function InsightManagementTab({ token, setToast }: Props) {
     setFilters(empty);
     setAppliedFilters(empty);
     setSelected(null);
-    fetchInsights(empty);
+    fetchInsights(empty, decisionTab, showArchived);
   };
 
   const handleGenerate = async () => {
@@ -556,6 +572,72 @@ export function InsightManagementTab({ token, setToast }: Props) {
     } finally {
       setFiltering(false);
     }
+  };
+
+  const handleApprove = async (id: number) => {
+    try {
+      const res = await fetch(`${API}/admin/content-insights/${id}/approve`, {
+        method: "POST", headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? "승격 실패");
+      const updated: ContentInsight = await res.json();
+      setInsights(prev => prev.map(r => r.id === id ? updated : r));
+      if (selected?.id === id) setSelected(updated);
+      setToast("KEEP으로 승격되었습니다.");
+    } catch (err: unknown) { setToast(err instanceof Error ? err.message : "승격 실패"); }
+  };
+
+  const handleDrop = async (id: number) => {
+    if (!confirm(`#${id} 인사이트를 삭제(보관) 처리하시겠습니까?`)) return;
+    try {
+      const res = await fetch(`${API}/admin/content-insights/${id}/drop`, {
+        method: "POST", headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? "삭제 실패");
+      setInsights(prev => prev.filter(r => r.id !== id));
+      if (selected?.id === id) setSelected(null);
+      setToast(`#${id} 인사이트가 보관되었습니다.`);
+    } catch (err: unknown) { setToast(err instanceof Error ? err.message : "삭제 실패"); }
+  };
+
+  const handleRestore = async (id: number) => {
+    try {
+      const res = await fetch(`${API}/admin/content-insights/${id}/restore`, {
+        method: "POST", headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? "복구 실패");
+      const updated: ContentInsight = await res.json();
+      setInsights(prev => prev.map(r => r.id === id ? updated : r));
+      if (selected?.id === id) setSelected(updated);
+      setToast(`#${id} 인사이트가 복구되었습니다.`);
+    } catch (err: unknown) { setToast(err instanceof Error ? err.message : "복구 실패"); }
+  };
+
+  const openMergeModal = (insight: ContentInsight) => {
+    setMergeSource(insight);
+    setMergeTargetId(insight.duplicateOfId ? String(insight.duplicateOfId) : "");
+    setShowMergeModal(true);
+  };
+
+  const handleMergeConfirm = async () => {
+    if (!mergeSource || !mergeTargetId.trim()) return;
+    const targetId = Number(mergeTargetId.trim());
+    if (isNaN(targetId) || targetId <= 0) { setToast("유효한 대상 ID를 입력하세요."); return; }
+    if (!confirm(`#${mergeSource.id}를 #${targetId}에 병합하시겠습니까?\n병합된 항목은 보관 처리됩니다.`)) return;
+    setMerging(true);
+    try {
+      const res = await fetch(`${API}/admin/content-insights/merge`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceId: mergeSource.id, targetId }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error ?? "병합 실패");
+      setShowMergeModal(false);
+      setInsights(prev => prev.filter(r => r.id !== mergeSource.id));
+      if (selected?.id === mergeSource.id) setSelected(null);
+      setToast(`#${mergeSource.id} → #${targetId} 병합 완료`);
+    } catch (err: unknown) { setToast(err instanceof Error ? err.message : "병합 실패"); }
+    finally { setMerging(false); }
   };
 
   const statusActions = (insight: ContentInsight): { label: string; next: string; bg: string; color: string }[] => {
@@ -1111,6 +1193,90 @@ export function InsightManagementTab({ token, setToast }: Props) {
         </div>
       )}
 
+      {/* ── 병합 모달 ──────────────────────────────────────────────────────────── */}
+      {showMergeModal && mergeSource && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}
+          onClick={e => { if (e.target === e.currentTarget && !merging) { setShowMergeModal(false); } }}
+        >
+          <div style={{ background: "#fff", borderRadius: 14, width: 460, maxWidth: "92vw", boxShadow: "0 20px 60px rgba(0,0,0,0.22)", padding: 24 }}>
+            <h3 style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 700 }}>병합 실행</h3>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "#6b7280" }}>
+              아래 소스 인사이트를 대상 인사이트에 병합합니다. 소스는 보관 처리됩니다.
+            </p>
+            <div style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 12px", marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 3 }}>소스 (병합되어 사라질 항목)</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>#{mergeSource.id} — {mergeSource.question}</div>
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={modalLabelStyle}>
+                대상 인사이트 ID
+                {mergeSource.duplicateOfId && (
+                  <span style={{ fontWeight: 400, color: "#6b7280", marginLeft: 8, fontSize: 11 }}>
+                    (추천: #{mergeSource.duplicateOfId})
+                  </span>
+                )}
+              </label>
+              <input
+                type="number"
+                value={mergeTargetId}
+                onChange={e => setMergeTargetId(e.target.value)}
+                placeholder={mergeSource.duplicateOfId ? `추천 대상: #${mergeSource.duplicateOfId}` : "대상 ID 입력"}
+                style={{ ...editInputStyle, maxWidth: 180 }}
+                disabled={merging}
+              />
+              <button
+                onClick={() => setMergeTargetId(String(mergeSource.duplicateOfId ?? ""))}
+                style={{ ...btnGhostStyle, marginLeft: 8, fontSize: 11, padding: "4px 8px" }}
+                disabled={!mergeSource.duplicateOfId}
+              >추천 사용</button>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button onClick={() => setShowMergeModal(false)} disabled={merging} style={{ ...btnGhostStyle, opacity: merging ? 0.5 : 1 }}>취소</button>
+              <button
+                onClick={handleMergeConfirm}
+                disabled={merging || !mergeTargetId.trim()}
+                style={{ ...btnPrimaryStyle, background: "#2563eb", opacity: (merging || !mergeTargetId.trim()) ? 0.7 : 1 }}
+              >{merging ? "병합 중…" : "병합 실행"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 판정 탭 + 보관됨 토글 ────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        {([
+          { key: "all", label: "전체", color: "#374151" },
+          { key: "keep", label: "✅ KEEP", color: "#166534" },
+          { key: "review", label: "🔍 REVIEW", color: "#854d0e" },
+          { key: "merge", label: "🔀 MERGE", color: "#1e40af" },
+          { key: "drop", label: "🗑 DROP", color: "#991b1b" },
+        ] as const).map(({ key, label, color }) => (
+          <button key={key}
+            onClick={() => { setDecisionTab(key); setSelected(null); }}
+            style={{
+              padding: "5px 14px", borderRadius: 99, fontSize: 12, fontWeight: 600,
+              border: "1.5px solid",
+              borderColor: decisionTab === key ? color : "#e5e7eb",
+              background: decisionTab === key ? color : "#fff",
+              color: decisionTab === key ? "#fff" : "#6b7280",
+              cursor: "pointer",
+              transition: "all 0.1s",
+            }}
+          >{label}</button>
+        ))}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, color: "#6b7280", userSelect: "none" }}>
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={e => { setShowArchived(e.target.checked); setSelected(null); }}
+              style={{ cursor: "pointer" }}
+            />
+            보관됨 포함
+          </label>
+        </div>
+      </div>
+
       {/* ── 콘텐츠 영역: 목록 + 상세 ────────────────────────────────────────────── */}
       <div style={{ display: "flex", gap: 12, minHeight: 0, alignItems: "flex-start" }}>
 
@@ -1132,7 +1298,7 @@ export function InsightManagementTab({ token, setToast }: Props) {
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
-                    {["ID", "유형", "질문", "요약 답변", "건수", "평균 단가", "신뢰도", "품질점수", "판정", "상태", "공개", "생성일"].map(h => (
+                    {["ID", "유형", "질문", "요약 답변", "건수", "평균 단가", "신뢰도", "품질점수", "판정", "상태", "공개", "생성일", "액션"].map(h => (
                       <th key={h} style={thStyle}>{h}</th>
                     ))}
                   </tr>
@@ -1205,6 +1371,28 @@ export function InsightManagementTab({ token, setToast }: Props) {
                         </td>
                         <td style={{ ...tdStyle, whiteSpace: "nowrap", color: "#6b7280" }}>
                           {new Date(r.createdAt).toLocaleDateString("ko-KR")}
+                        </td>
+                        {/* 액션 버튼 */}
+                        <td style={{ ...tdStyle, whiteSpace: "nowrap" }} onClick={e => e.stopPropagation()}>
+                          {r.isArchived ? (
+                            <button onClick={() => handleRestore(r.id)}
+                              style={{ ...miniBtn, background: "#eff6ff", color: "#1e40af" }}>복구</button>
+                          ) : r.filterDecision === "keep" || !r.filterDecision ? (
+                            <span style={{ color: "#d1d5db", fontSize: 10 }}>—</span>
+                          ) : r.filterDecision === "review" ? (
+                            <div style={{ display: "flex", gap: 4 }}>
+                              <button onClick={() => handleApprove(r.id)}
+                                style={{ ...miniBtn, background: "#dcfce7", color: "#166534" }}>✔ 살리기</button>
+                              <button onClick={() => handleDrop(r.id)}
+                                style={{ ...miniBtn, background: "#fee2e2", color: "#991b1b" }}>🗑</button>
+                            </div>
+                          ) : r.filterDecision === "merge" ? (
+                            <button onClick={() => openMergeModal(r)}
+                              style={{ ...miniBtn, background: "#dbeafe", color: "#1e40af" }}>병합하기</button>
+                          ) : r.filterDecision === "drop" ? (
+                            <button onClick={() => handleRestore(r.id)}
+                              style={{ ...miniBtn, background: "#f3f4f6", color: "#6b7280" }}>복구</button>
+                          ) : null}
                         </td>
                       </tr>
                     );
@@ -1407,15 +1595,16 @@ export function InsightManagementTab({ token, setToast }: Props) {
                     <MetaGrid rows={[
                       ["출처 유형",  selected.sourceType ?? "-"],
                       ["출처 제목",  selected.sourceTitle ?? "-"],
-                      ["출처 URL",
-                        selected.sourceUrl
-                          ? <a href={selected.sourceUrl} target="_blank" rel="noopener noreferrer"
-                              style={{ color: "#2563eb", fontSize: 11, wordBreak: "break-all" }}>
-                              {selected.sourceUrl}
-                            </a>
-                          : "-"
-                      ],
                     ]} />
+                    {selected.sourceUrl && (
+                      <div style={{ display: "flex", gap: 8, marginTop: 6, fontSize: 12 }}>
+                        <span style={{ color: "#6b7280", minWidth: 80 }}>출처 URL</span>
+                        <a href={selected.sourceUrl} target="_blank" rel="noopener noreferrer"
+                          style={{ color: "#2563eb", wordBreak: "break-all" }}>
+                          {selected.sourceUrl}
+                        </a>
+                      </div>
+                    )}
                   </DetailSection>
                 )}
 
@@ -1472,6 +1661,42 @@ export function InsightManagementTab({ token, setToast }: Props) {
                         disabled={filtering}
                         style={{ ...btnGhostStyle, marginTop: 8, fontSize: 11, padding: "4px 10px", opacity: filtering ? 0.5 : 1 }}
                       >↻ 재평가</button>
+
+                      {/* 판정 처리 액션 */}
+                      <div style={{ marginTop: 12, paddingTop: 10, borderTop: "1px solid #f3f4f6", display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {selected.isArchived ? (
+                          <button onClick={() => handleRestore(selected.id)} style={{ ...miniBtn, background: "#eff6ff", color: "#1e40af", padding: "5px 12px", fontSize: 12 }}>
+                            복구
+                          </button>
+                        ) : selected.filterDecision === "review" ? (
+                          <>
+                            <button onClick={() => handleApprove(selected.id)} style={{ ...miniBtn, background: "#dcfce7", color: "#166534", padding: "5px 12px", fontSize: 12 }}>
+                              ✔ KEEP으로 살리기
+                            </button>
+                            <button onClick={() => openMergeModal(selected)} style={{ ...miniBtn, background: "#dbeafe", color: "#1e40af", padding: "5px 12px", fontSize: 12 }}>
+                              🔀 병합 처리
+                            </button>
+                            <button onClick={() => handleDrop(selected.id)} style={{ ...miniBtn, background: "#fee2e2", color: "#991b1b", padding: "5px 12px", fontSize: 12 }}>
+                              🗑 삭제
+                            </button>
+                          </>
+                        ) : selected.filterDecision === "merge" ? (
+                          <>
+                            <button onClick={() => openMergeModal(selected)} style={{ ...miniBtn, background: "#dbeafe", color: "#1e40af", padding: "5px 12px", fontSize: 12 }}>
+                              🔀 병합 실행
+                            </button>
+                            <button onClick={() => handleDrop(selected.id)} style={{ ...miniBtn, background: "#fee2e2", color: "#991b1b", padding: "5px 12px", fontSize: 12 }}>
+                              🗑 삭제
+                            </button>
+                          </>
+                        ) : selected.filterDecision === "drop" ? (
+                          <>
+                            <button onClick={() => handleRestore(selected.id)} style={{ ...miniBtn, background: "#f3f4f6", color: "#6b7280", padding: "5px 12px", fontSize: 12 }}>
+                              복구
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
                     </>
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1597,4 +1822,8 @@ const textareaStyle: React.CSSProperties = {
 
 const modalLabelStyle: React.CSSProperties = {
   display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 5,
+};
+
+const miniBtn: React.CSSProperties = {
+  padding: "3px 8px", borderRadius: 5, border: "none", fontSize: 11, fontWeight: 600, cursor: "pointer",
 };
