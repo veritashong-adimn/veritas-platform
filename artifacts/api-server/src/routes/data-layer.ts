@@ -723,6 +723,7 @@ router.post("/admin/content-insights/generate", ...adminOnly, async (req, res) =
 
     let insertedCount = 0;
     let updatedCount = 0;
+    const resultIds: number[] = [];
 
     for (const [key, records] of groupMap.entries()) {
       const first = records[0];
@@ -783,15 +784,17 @@ router.post("/admin/content-insights/generate", ...adminOnly, async (req, res) =
         await db.update(contentInsightsTable)
           .set(payload)
           .where(eq(contentInsightsTable.id, existingId));
+        resultIds.push(existingId);
         updatedCount++;
       } else {
-        await db.insert(contentInsightsTable).values(payload);
+        const [inserted] = await db.insert(contentInsightsTable).values(payload).returning({ id: contentInsightsTable.id });
+        resultIds.push(inserted.id);
         insertedCount++;
       }
     }
 
     req.log.info({ insertedCount, updatedCount }, "CI: generate complete");
-    res.status(201).json({ generated: insertedCount, updated: updatedCount, total: insertedCount + updatedCount });
+    res.status(201).json({ generated: insertedCount, updated: updatedCount, total: insertedCount + updatedCount, ids: resultIds });
   } catch (err) {
     req.log.error({ err }, "CI: failed to generate insights");
     res.status(500).json({ error: "인사이트 자동 생성 실패" });

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -149,6 +149,19 @@ export function InsightManagementTab({ token, setToast }: Props) {
   const [clearPrevious, setClearPrevious] = useState(false);
   const [generating, setGenerating] = useState(false);
 
+  const [highlightedIds, setHighlightedIds] = useState<Set<number>>(new Set());
+  const [pendingScrollId, setPendingScrollId] = useState<number | null>(null);
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (pendingScrollId === null) return;
+    const el = document.querySelector(`[data-insight-id="${pendingScrollId}"]`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setPendingScrollId(null);
+  }, [pendingScrollId, insights]);
+
+  useEffect(() => () => { if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current); }, []);
+
   const [filters, setFilters] = useState({
     serviceType: "",
     status: "",
@@ -208,15 +221,56 @@ export function InsightManagementTab({ token, setToast }: Props) {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       });
       if (!res.ok) throw new Error();
-      const data = await res.json();
+      const data: { generated: number; updated: number; total: number; ids?: number[] } = await res.json();
+
+      // 0.4초 딜레이: 완료 감각 제공
+      await new Promise(r => setTimeout(r, 400));
       setShowGenerateModal(false);
       setClearPrevious(false);
-      const empty = { serviceType: "", status: "", visibilityLevel: "", domain: "", languagePair: "" };
-      setFilters(empty);
-      setAppliedFilters(empty);
-      setSelected(null);
-      await fetchInsights(empty);
-      setToast(`인사이트 생성 완료 (생성: ${data.generated ?? 0}건 / 업데이트: ${data.updated ?? 0}건)`);
+
+      // 필터 유지한 채 목록 재조회
+      const f = appliedFilters;
+      const params = new URLSearchParams({ limit: "100" });
+      if (f.serviceType) params.set("serviceType", f.serviceType);
+      if (f.status) params.set("status", f.status);
+      if (f.visibilityLevel) params.set("visibilityLevel", f.visibilityLevel);
+      if (f.domain) params.set("domain", f.domain);
+      if (f.languagePair) params.set("languagePair", f.languagePair);
+
+      setLoading(true);
+      const listRes = await fetch(`${API}/admin/content-insights?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const listData = await listRes.json();
+      const newInsights: ContentInsight[] = listData.data ?? [];
+      setInsights(newInsights);
+      setTotal(listData.total ?? 0);
+      setLoading(false);
+
+      // 새로 생성된 첫 번째 ID 자동 선택 + 스크롤
+      const ids: number[] = data.ids ?? [];
+      const firstNew = ids.length > 0 ? newInsights.find(r => ids.includes(r.id)) : null;
+
+      if (firstNew) {
+        setSelected(firstNew);
+        setPendingScrollId(firstNew.id);
+      }
+
+      // 하이라이트 효과 (2초)
+      if (ids.length > 0) {
+        setHighlightedIds(new Set(ids));
+        if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = setTimeout(() => setHighlightedIds(new Set()), 2000);
+      }
+
+      // 현재 필터로 생성 결과가 안 보이는 경우 안내
+      const visibleNewCount = ids.filter(id => newInsights.some(r => r.id === id)).length;
+      const hasHidden = ids.length > 0 && visibleNewCount < ids.length;
+
+      const baseMsg = `${data.generated ?? 0}건의 인사이트가 생성되었습니다.`;
+      const updateMsg = (data.updated ?? 0) > 0 ? ` (업데이트: ${data.updated}건)` : "";
+      const filterMsg = hasHidden ? "\n현재 필터 조건으로 일부 생성 결과가 보이지 않을 수 있습니다." : "";
+      setToast(`${baseMsg}${updateMsg}${filterMsg}`);
     } catch (err) {
       console.error("인사이트 생성 오류:", err);
       setToast("인사이트 생성 중 오류가 발생했습니다.");
@@ -436,19 +490,24 @@ export function InsightManagementTab({ token, setToast }: Props) {
                 <tbody>
                   {insights.map(r => {
                     const isActive = selected?.id === r.id;
+                    const isHighlighted = highlightedIds.has(r.id);
                     const stColor = STATUS_COLOR[r.status] ?? { bg: "#f3f4f6", color: "#374151" };
+                    const rowBg = isActive ? "#eff6ff" : isHighlighted ? "#f0fdf4" : "transparent";
                     return (
                       <tr
                         key={r.id}
+                        data-insight-id={r.id}
                         onClick={() => setSelected(isActive ? null : r)}
                         style={{
                           cursor: "pointer",
                           borderBottom: "1px solid #f3f4f6",
-                          background: isActive ? "#eff6ff" : "transparent",
-                          transition: "background 0.1s",
+                          background: rowBg,
+                          transition: "background 0.6s",
+                          outline: isHighlighted && !isActive ? "2px solid #bbf7d0" : "none",
+                          outlineOffset: -1,
                         }}
                         onMouseEnter={e => { if (!isActive) (e.currentTarget as HTMLElement).style.background = "#f9fafb"; }}
-                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = isActive ? "#eff6ff" : "transparent"; }}
+                        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = rowBg; }}
                       >
                         <td style={tdStyle}>{r.id}</td>
                         <td style={tdStyle}>
