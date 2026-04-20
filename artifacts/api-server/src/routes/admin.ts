@@ -2802,6 +2802,10 @@ router.patch("/admin/settings", ...adminGuard, async (req, res) => {
       ...(b.settlementRatio     !== undefined && { settlementRatio:     num("settlementRatio")       }),
       ...(b.settlementCycle     !== undefined && { settlementCycle:     str("settlementCycle")       }),
       ...(b.applyWithholdingTax !== undefined && { applyWithholdingTax: bool("applyWithholdingTax")  }),
+      // 인사이트 자동 게시 설정
+      ...(b.autoPublishEnabled   !== undefined && { autoPublishEnabled:   bool("autoPublishEnabled")   }),
+      ...(b.autoPublishThreshold !== undefined && { autoPublishThreshold: int("autoPublishThreshold")  }),
+      ...(b.autoPublishDryRun    !== undefined && { autoPublishDryRun:    bool("autoPublishDryRun")    }),
       updatedAt: new Date(),
     };
 

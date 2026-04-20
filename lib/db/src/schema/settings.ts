@@ -42,6 +42,14 @@ export const settingsTable = pgTable("settings", {
   /** 3.3% 원천세 적용 여부 */
   applyWithholdingTax: boolean("apply_withholding_tax").default(true),
 
+  // ── 인사이트 자동 게시 설정 ────────────────────────────────────────────────
+  /** 조건 충족 시 자동으로 게시 (published) 전환 */
+  autoPublishEnabled:   boolean("auto_publish_enabled").notNull().default(false),
+  /** 자동 게시 기준 AEO 점수 (기본 80) */
+  autoPublishThreshold: integer("auto_publish_threshold").default(80),
+  /** 드라이런 모드: true면 실제 게시 안 하고 로그만 기록 */
+  autoPublishDryRun:    boolean("auto_publish_dry_run").notNull().default(false),
+
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 

@@ -742,8 +742,17 @@ export function InsightManagementTab({ token, setToast }: Props) {
       if (data.created === 0) {
         setToast(data.message ?? "새로운 제안이 없습니다.");
       } else {
-        const statusMsg = data.newStatus === "publish_ready" ? " → 게시 대기 전환!" : data.newStatus === "review_ready" ? " → 검토 준비 전환" : "";
-        setToast(`자동 보완 ${data.appliedCount ?? data.created}개 적용 완료${statusMsg}`);
+        // 자동 게시 여부 판단
+        if (data.autoPublished) {
+          const dryNote = data.dryRun ? " (드라이런 — 실제 게시 안 됨)" : "";
+          setToast(`✅ 자동 게시 완료! 인사이트가 공개 게시되었습니다.${dryNote}`);
+        } else {
+          const statusMsg = data.newStatus === "publish_ready" ? " → 게시 대기 전환!"
+            : data.newStatus === "review_ready" ? " → 검토 준비 전환"
+            : data.newStatus === "published" ? " → 게시됨"
+            : "";
+          setToast(`자동 보완 ${data.appliedCount ?? data.created}개 적용 완료${statusMsg}`);
+        }
         // 상태 변경 즉시 반영
         if (data.insight) {
           const updated = data.insight as ContentInsight;
@@ -794,7 +803,8 @@ export function InsightManagementTab({ token, setToast }: Props) {
           const data = await res.json();
           if (!res.ok) throw new Error(data.error ?? "배치 자동 보완 실패");
           const pqMsg = data.publishReadyCount > 0 ? ` / 게시 대기 ${data.publishReadyCount}건` : "";
-          setToast(`배치 완료: ${data.processed}건 처리, ${data.applied ?? data.created}개 적용${pqMsg}`);
+          const apMsg = (data.autoPublishedCount ?? 0) > 0 ? ` / ✅ 자동 게시 ${data.autoPublishedCount}건` : "";
+          setToast(`배치 완료: ${data.processed}건 처리, ${data.applied ?? data.created}개 적용${pqMsg}${apMsg}`);
           if (selected) await loadSuggestions(selected.id);
         } catch (err: unknown) {
           setToast(err instanceof Error ? err.message : "배치 자동 보완 실패");

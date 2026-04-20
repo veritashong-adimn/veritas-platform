@@ -651,7 +651,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   // ── 환경설정 상태 ─────────────────────────────────────────────────────────
   const [settingsSaving, setSettingsSaving] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"company"|"bank"|"document"|"payment"|"settlement">("company");
+  const [settingsTab, setSettingsTab] = useState<"company"|"bank"|"document"|"payment"|"settlement"|"insight">("company");
   const [settingsForm, setSettingsForm] = useState({
     // 공급자 정보
     companyName: "", businessNumber: "", ceoName: "", address: "", email: "", phone: "",
@@ -663,6 +663,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     defaultBillingType: "postpaid_per_project", paymentDueDays: "7", allowPartialPayment: false,
     // 정산 설정
     settlementRatio: "70", settlementCycle: "monthly", applyWithholdingTax: true,
+    // 인사이트 자동 게시
+    autoPublishEnabled: false, autoPublishThreshold: "80", autoPublishDryRun: false,
   });
   const fetchSettings = async () => {
     const res = await fetch(api("/api/admin/settings"), { headers: { Authorization: `Bearer ${token}` } });
@@ -688,6 +690,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         settlementRatio:     String(d.settlementRatio  ?? "70"),
         settlementCycle:     d.settlementCycle     ?? "monthly",
         applyWithholdingTax: Boolean(d.applyWithholdingTax ?? true),
+        autoPublishEnabled:   Boolean(d.autoPublishEnabled   ?? false),
+        autoPublishThreshold: String(d.autoPublishThreshold  ?? "80"),
+        autoPublishDryRun:    Boolean(d.autoPublishDryRun    ?? false),
       });
     }
   };
@@ -2712,6 +2717,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           { id: "document",   label: "📄 문서 설정" },
           { id: "payment",    label: "💳 결제 설정" },
           { id: "settlement", label: "🧾 정산 설정" },
+          { id: "insight",    label: "🤖 자동 게시" },
         ] as const;
         return (
           <Section title="환경설정">
@@ -2866,6 +2872,80 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         프리랜서(개인 사업자가 아닌 통번역사)에게 지급 시 원천징수 의무가 발생합니다.
                       </div>
                     </div>
+                  </div>
+                </div>
+                {saveBtn}
+              </Card>
+            )}
+
+            {/* 자동 게시 설정 */}
+            {settingsTab === "insight" && (
+              <Card style={{ padding: "22px 24px", maxWidth: 560 }}>
+                <div style={{ fontWeight: 700, fontSize: 15, color: "#111827", marginBottom: 4, paddingBottom: 10, borderBottom: "1px solid #f0f0f0" }}>
+                  🤖 인사이트 자동 게시 설정
+                </div>
+                <p style={{ margin: "0 0 20px", fontSize: 12, color: "#6b7280", lineHeight: 1.7 }}>
+                  조건을 충족한 인사이트를 운영자 개입 없이 자동으로 게시합니다.<br />
+                  처음에는 <strong>드라이런</strong> 모드로 테스트한 뒤, 실제 게시로 전환하세요.
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+
+                  {/* 자동 게시 활성화 */}
+                  <div style={{ padding: "14px 16px", background: sf.autoPublishEnabled ? "#f0fdf4" : "#f9fafb", borderRadius: 10, border: `1.5px solid ${sf.autoPublishEnabled ? "#bbf7d0" : "#e5e7eb"}` }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                      <input type="checkbox" checked={sf.autoPublishEnabled}
+                        onChange={e => set("autoPublishEnabled")(e.target.checked)}
+                        style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#059669" }} />
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: sf.autoPublishEnabled ? "#059669" : "#374151" }}>
+                          자동 게시 활성화
+                        </div>
+                        <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
+                          조건 충족 인사이트를 자동으로 published 상태로 전환
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* 임계값 */}
+                  <div>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 6, fontWeight: 600 }}>
+                      AEO 점수 기준 (autoPublishThreshold)
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <input type="number" min="0" max="100" value={sf.autoPublishThreshold}
+                        onChange={e => set("autoPublishThreshold")(e.target.value)}
+                        style={{ ...inputStyle, fontSize: 13, width: 90 }} />
+                      <span style={{ fontSize: 12, color: "#6b7280" }}>점 이상일 때 자동 게시 (기본값: 80)</span>
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 11, color: "#9ca3af", lineHeight: 1.6 }}>
+                      추가 필수 조건: FAQ ≥ 3개, 관련 인사이트 ≥ 2개, shortAnswer 존재, classification ≠ drop
+                    </div>
+                  </div>
+
+                  {/* 드라이런 */}
+                  <div style={{ padding: "14px 16px", background: sf.autoPublishDryRun ? "#fffbeb" : "#f9fafb", borderRadius: 10, border: `1.5px solid ${sf.autoPublishDryRun ? "#fde68a" : "#e5e7eb"}` }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+                      <input type="checkbox" checked={sf.autoPublishDryRun}
+                        onChange={e => set("autoPublishDryRun")(e.target.checked)}
+                        style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#d97706" }} />
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: sf.autoPublishDryRun ? "#d97706" : "#374151" }}>
+                          드라이런 모드 (Dry Run)
+                        </div>
+                        <div style={{ fontSize: 11, color: "#6b7280", marginTop: 2 }}>
+                          실제 게시하지 않고 로그만 기록 — 테스트 시 사용
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* 현재 상태 요약 */}
+                  <div style={{ padding: "12px 14px", background: "#f8fafc", borderRadius: 8, border: "1px solid #e2e8f0", fontSize: 12, color: "#374151", lineHeight: 1.8 }}>
+                    <strong>현재 설정 요약:</strong><br />
+                    자동 게시: <strong style={{ color: sf.autoPublishEnabled ? "#059669" : "#dc2626" }}>{sf.autoPublishEnabled ? "활성화" : "비활성화"}</strong>
+                    {" · "}기준 점수: <strong>{sf.autoPublishThreshold}점</strong>
+                    {" · "}드라이런: <strong style={{ color: sf.autoPublishDryRun ? "#d97706" : "#6b7280" }}>{sf.autoPublishDryRun ? "ON (로그만)" : "OFF (실제 게시)"}</strong>
                   </div>
                 </div>
                 {saveBtn}

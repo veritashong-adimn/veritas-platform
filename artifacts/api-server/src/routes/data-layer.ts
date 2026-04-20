@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, translationUnitsTable, translationUnitLogsTable, languageServiceDataTable, contentInsightsTable, insightAutoSuggestionsTable, insightEventsTable } from "@workspace/db";
+import { db, translationUnitsTable, translationUnitLogsTable, languageServiceDataTable, contentInsightsTable, insightAutoSuggestionsTable, insightEventsTable, settingsTable, logsTable } from "@workspace/db";
 import { eq, and, or, ilike, sql, desc, inArray } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import {
@@ -1508,11 +1508,30 @@ const AUTO_PUBLISH_READY_CONDITIONS = {
   minRelatedCount: 2,
 };
 
+/** 인사이트 질문 기반 한글 허용 slug 생성 (최대 60자 + id suffix) */
+function generateInsightSlug(question: string, id: number): string {
+  const base = question
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s가-힣]/g, "")   // 한글·영숫자·공백만 허용
+    .replace(/\s+/g, "-")            // 공백 → 하이픈
+    .replace(/-+/g, "-")             // 연속 하이픈 정리
+    .replace(/^-+|-+$/g, "")         // 앞뒤 하이픈 제거
+    .slice(0, 60);
+  return base ? `${base}-${id}` : `insight-${id}`;
+}
+
 async function autoApplyAndSetStatus(
   insightId: number,
   suggestions: typeof insightAutoSuggestionsTable.$inferSelect[],
-  logger?: { info: (obj: unknown, msg: string) => void },
-): Promise<{ status: "publish_ready" | "review_ready"; appliedCount: number; insight: typeof contentInsightsTable.$inferSelect }> {
+  logger?: { info: (obj: unknown, msg: string) => void; error?: (obj: unknown, msg: string) => void },
+): Promise<{
+  status: "publish_ready" | "review_ready" | "published";
+  appliedCount: number;
+  insight: typeof contentInsightsTable.$inferSelect;
+  autoPublished: boolean;
+  dryRun: boolean;
+}> {
   // suggestions 자동 적용 (faq/related/meta 순서로)
   const ordered = [...suggestions].sort(a => a.type === "faq" ? -1 : a.type === "related" ? 0 : 1);
 
@@ -1552,7 +1571,12 @@ async function autoApplyAndSetStatus(
   const [updatedInsight] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, insightId));
   const aeo = computeAeoFields(updatedInsight);
 
-  // 품질 조건 체크
+  // 이미 published면 건드리지 않음
+  if (updatedInsight.status === "published") {
+    return { status: "published", appliedCount, insight: updatedInsight, autoPublished: false, dryRun: false };
+  }
+
+  // 품질 조건 체크 → publish_ready / review_ready
   const cond = AUTO_PUBLISH_READY_CONDITIONS;
   const qualityMet =
     aeo.aeoScore >= cond.minAeoScore &&
@@ -1562,16 +1586,99 @@ async function autoApplyAndSetStatus(
 
   const newStatus: "publish_ready" | "review_ready" = qualityMet ? "publish_ready" : "review_ready";
 
-  // status 업데이트 (이미 published 상태면 skip)
-  if (updatedInsight.status !== "published") {
-    await db.update(contentInsightsTable)
-      .set({ status: newStatus, updatedAt: new Date() })
-      .where(eq(contentInsightsTable.id, insightId));
+  await db.update(contentInsightsTable)
+    .set({ status: newStatus, updatedAt: new Date() })
+    .where(eq(contentInsightsTable.id, insightId));
+
+  logger?.info({ insightId, newStatus, aeoScore: aeo.aeoScore, appliedCount }, "CI: auto-apply + status set");
+
+  // ── 자동 게시 시도 ──────────────────────────────────────────────────────────
+  let autoPublished = false;
+  let dryRun = false;
+
+  if (newStatus === "publish_ready") {
+    try {
+      const [settings] = await db.select({
+        autoPublishEnabled:   settingsTable.autoPublishEnabled,
+        autoPublishThreshold: settingsTable.autoPublishThreshold,
+        autoPublishDryRun:    settingsTable.autoPublishDryRun,
+      }).from(settingsTable).limit(1);
+
+      const enabled   = settings?.autoPublishEnabled   ?? false;
+      const threshold = settings?.autoPublishThreshold ?? 80;
+      const isDryRun  = settings?.autoPublishDryRun    ?? false;
+      dryRun = isDryRun;
+
+      if (enabled) {
+        // 자동 게시 세부 조건 체크
+        const shortAnswerOk    = !!updatedInsight.shortAnswer?.trim();
+        const classificationOk = updatedInsight.filterDecision !== "drop";
+        const scoreOk          = aeo.aeoScore >= threshold;
+        const faqOk            = aeo.faqCount >= cond.minFaqCount;
+        const relatedOk        = aeo.relatedCount >= cond.minRelatedCount;
+        const conditionsMet    = shortAnswerOk && classificationOk && scoreOk && faqOk && relatedOk;
+
+        if (conditionsMet) {
+          // slug 생성 (없을 경우)
+          let slug = updatedInsight.slug;
+          if (!slug) {
+            const candidateSlug = generateInsightSlug(updatedInsight.question, insightId);
+            // 충돌 방지: 동일 slug 존재 여부 확인
+            const [conflict] = await db.select({ id: contentInsightsTable.id })
+              .from(contentInsightsTable)
+              .where(eq(contentInsightsTable.slug, candidateSlug));
+            slug = conflict ? `${candidateSlug}-${Date.now()}` : candidateSlug;
+          }
+
+          if (!isDryRun) {
+            const now = new Date();
+            await db.update(contentInsightsTable)
+              .set({ status: "published", publishedAt: now, slug, isPublic: true, updatedAt: now })
+              .where(eq(contentInsightsTable.id, insightId));
+
+            await db.insert(logsTable).values({
+              entityType: "insight",
+              entityId: insightId,
+              action: "auto_published",
+              metadata: JSON.stringify({ aeoScore: aeo.aeoScore, faqCount: aeo.faqCount, relatedCount: aeo.relatedCount, slug }),
+            });
+            autoPublished = true;
+            logger?.info({ insightId, slug, aeoScore: aeo.aeoScore }, "CI: auto-published");
+          } else {
+            // 드라이런: 로그만 기록
+            await db.insert(logsTable).values({
+              entityType: "insight",
+              entityId: insightId,
+              action: "auto_published",
+              metadata: JSON.stringify({ dryRun: true, aeoScore: aeo.aeoScore, faqCount: aeo.faqCount, relatedCount: aeo.relatedCount, slug }),
+            });
+            logger?.info({ insightId, dryRun: true, aeoScore: aeo.aeoScore }, "CI: auto-publish dry-run");
+          }
+        } else {
+          // 조건 미달: 스킵 로그
+          const reason = !shortAnswerOk ? "shortAnswer 없음"
+            : !classificationOk ? "classification=drop"
+            : !scoreOk ? `aeoScore ${aeo.aeoScore} < ${threshold}`
+            : !faqOk ? `faqCount ${aeo.faqCount} < ${cond.minFaqCount}`
+            : `relatedCount ${aeo.relatedCount} < ${cond.minRelatedCount}`;
+
+          await db.insert(logsTable).values({
+            entityType: "insight",
+            entityId: insightId,
+            action: "auto_publish_skipped",
+            metadata: JSON.stringify({ reason, aeoScore: aeo.aeoScore }),
+          });
+          logger?.info({ insightId, reason }, "CI: auto-publish skipped");
+        }
+      }
+    } catch (err) {
+      logger?.error?.({ err }, "CI: auto-publish check failed (non-fatal)");
+    }
   }
 
   const [finalInsight] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, insightId));
-  logger?.info({ insightId, newStatus, aeoScore: aeo.aeoScore, appliedCount }, "CI: auto-apply + status set");
-  return { status: newStatus, appliedCount, insight: finalInsight };
+  const finalStatus = finalInsight.status === "published" ? "published" : newStatus;
+  return { status: finalStatus as "publish_ready" | "review_ready" | "published", appliedCount, insight: finalInsight, autoPublished, dryRun };
 }
 
 // GET /api/admin/content-insights/:id/suggestions
@@ -1636,15 +1743,17 @@ router.post("/admin/content-insights/:id/auto-enhance", ...adminOnly, async (req
       created.push(row);
     }
 
-    // 자동 적용 + 상태 설정
-    const { status: newStatus, appliedCount, insight: finalInsight } = await autoApplyAndSetStatus(id, created, req.log);
+    // 자동 적용 + 상태 설정 (+ 자동 게시 시도)
+    const { status: newStatus, appliedCount, insight: finalInsight, autoPublished, dryRun } = await autoApplyAndSetStatus(id, created, req.log);
 
-    req.log.info({ id, created: created.length, appliedCount, newStatus }, "CI: auto-enhance complete");
+    req.log.info({ id, created: created.length, appliedCount, newStatus, autoPublished }, "CI: auto-enhance complete");
     res.status(201).json({
       created: created.length,
       appliedCount,
       newStatus,
       autoApplied: true,
+      autoPublished,
+      dryRun,
       insight: { ...finalInsight, ...computeAeoFields(finalInsight) },
     });
   } catch (err) {
@@ -1708,19 +1817,20 @@ router.post("/admin/content-insights/batch-auto-enhance", ...adminOnly, async (r
           created.push(row);
         }
 
-        // 자동 적용 + 상태 설정
-        const { status: newStatus, appliedCount } = await autoApplyAndSetStatus(insight.id, created);
+        // 자동 적용 + 상태 설정 (+ 자동 게시 시도)
+        const { status: newStatus, appliedCount, autoPublished } = await autoApplyAndSetStatus(insight.id, created);
         totalCreated += created.length;
         totalApplied += appliedCount;
-        results.push({ id: insight.id, created: created.length, newStatus });
+        results.push({ id: insight.id, created: created.length, newStatus, autoPublished });
       } catch {
         results.push({ id: insight.id, created: 0 });
       }
     }
 
     const publishReadyCount = results.filter(r => r.newStatus === "publish_ready").length;
-    req.log.info({ processed: targets.length, totalCreated, totalApplied, publishReadyCount }, "CI: batch auto-enhance complete");
-    res.json({ processed: targets.length, created: totalCreated, applied: totalApplied, publishReadyCount, results });
+    const autoPublishedCount = results.filter(r => (r as any).autoPublished === true).length;
+    req.log.info({ processed: targets.length, totalCreated, totalApplied, publishReadyCount, autoPublishedCount }, "CI: batch auto-enhance complete");
+    res.json({ processed: targets.length, created: totalCreated, applied: totalApplied, publishReadyCount, autoPublishedCount, results });
   } catch (err) {
     req.log.error({ err }, "CI: batch auto-enhance failed");
     res.status(500).json({ error: "배치 자동 보완 실패" });
