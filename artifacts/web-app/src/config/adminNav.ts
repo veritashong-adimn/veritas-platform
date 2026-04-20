@@ -2,7 +2,6 @@ export type NavItem = {
   id: string;
   label: string;
   icon: string;
-  iconColor?: string;
   perm?: string;
 };
 
@@ -32,6 +31,9 @@ export const STAFF_DEFAULT_PERMS: string[] = [
 /**
  * 재무·정산 메뉴는 별도 권한 부여 시에만 노출 (선택적).
  * admin 전용: menu.user, menu.permission, menu.settings
+ *
+ * 업무 흐름 기준 정렬:
+ * 고객/거래처 → 프로젝트 → 리소스 → 재무·정산 → 데이터 자산 → 시스템
  */
 
 export const ADMIN_NAV_GROUPS: NavGroup[] = [
@@ -42,28 +44,6 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     isDashboard: true,
     items: [
       { id: "dashboard", label: "대시보드", icon: "◉" },
-    ],
-  },
-  {
-    key: "project",
-    label: "프로젝트 관리",
-    accentColor: "#3b82f6",
-    perm: "menu.project",
-    items: [
-      { id: "projects",    label: "프로젝트", icon: "📋", perm: "menu.project" },
-      { id: "tasks",       label: "작업",     icon: "⚙️", perm: "menu.project" },
-    ],
-  },
-  {
-    key: "finance",
-    label: "재무·정산",
-    accentColor: "#10b981",
-    perm: "menu.payment",
-    items: [
-      { id: "payments",    label: "결제",       icon: "💳", iconColor: "#10b981", perm: "menu.payment" },
-      { id: "settlements", label: "정산",       icon: "📊", iconColor: "#10b981", perm: "menu.settlement" },
-      { id: "billing",     label: "누적 청구",  icon: "📑", iconColor: "#10b981", perm: "menu.settlement" },
-      { id: "prepaid",     label: "선입금 관리", icon: "💰", iconColor: "#10b981", perm: "menu.settlement" },
     ],
   },
   {
@@ -78,13 +58,35 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
+    key: "project",
+    label: "프로젝트 관리",
+    accentColor: "#3b82f6",
+    perm: "menu.project",
+    items: [
+      { id: "projects", label: "프로젝트", icon: "📋", perm: "menu.project" },
+      { id: "tasks",    label: "작업",     icon: "⚙️", perm: "menu.project" },
+    ],
+  },
+  {
     key: "resource",
     label: "리소스",
     accentColor: "#f59e0b",
     perm: "menu.translator",
     items: [
-      { id: "translators", label: "통번역사", icon: "🌐", perm: "menu.translator" },
+      { id: "translators", label: "번역사",   icon: "🌐", perm: "menu.translator" },
       { id: "products",    label: "상품/단가", icon: "🏷️", perm: "menu.product" },
+    ],
+  },
+  {
+    key: "finance",
+    label: "재무·정산",
+    accentColor: "#10b981",
+    perm: "menu.payment",
+    items: [
+      { id: "payments",    label: "결제",       icon: "💳", perm: "menu.payment" },
+      { id: "settlements", label: "정산",       icon: "📊", perm: "menu.settlement" },
+      { id: "billing",     label: "누적 청구",  icon: "📑", perm: "menu.settlement" },
+      { id: "prepaid",     label: "선입금 관리", icon: "💰", perm: "menu.settlement" },
     ],
   },
   {
@@ -93,10 +95,10 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     accentColor: "#0ea5e9",
     perm: "menu.user",
     items: [
-      { id: "data-layer",         label: "번역 데이터",       icon: "🗃️", perm: "menu.user" },
-      { id: "language-service",   label: "언어 서비스 데이터", icon: "📊", perm: "menu.user" },
-      { id: "insight-management", label: "인사이트 관리",      icon: "💡", perm: "menu.user" },
-      { id: "insight-analytics",  label: "인사이트 성과분석",  icon: "📈", iconColor: "#7c3aed", perm: "menu.user" },
+      { id: "data-layer",         label: "번역 데이터",        icon: "🗃️", perm: "menu.user" },
+      { id: "language-service",   label: "언어 서비스 데이터",  icon: "📊", perm: "menu.user" },
+      { id: "insight-management", label: "인사이트 관리",       icon: "💡", perm: "menu.user" },
+      { id: "insight-analytics",  label: "인사이트 성과분석",   icon: "📈", perm: "menu.user" },
     ],
   },
   {
@@ -125,7 +127,7 @@ export const ADMIN_PAGE_TITLE: Record<string, string> = {
   companies:   "거래처",
   contacts:    "담당자",
   customers:   "고객관리",
-  translators: "통번역사",
+  translators: "번역사",
   products:    "상품/단가",
   users:       "사용자관리",
   roles:       "역할관리",
@@ -133,8 +135,8 @@ export const ADMIN_PAGE_TITLE: Record<string, string> = {
   board:       "게시판",
   settings:    "환경설정",
   test:        "운영 테스트",
-  "data-layer": "번역 데이터",
-  "language-service": "언어 서비스 데이터",
-  "insight-management": "인사이트 관리",
-  "insight-analytics":  "인사이트 성과분석",
+  "data-layer":           "번역 데이터",
+  "language-service":     "언어 서비스 데이터",
+  "insight-management":   "인사이트 관리",
+  "insight-analytics":    "인사이트 성과분석",
 };

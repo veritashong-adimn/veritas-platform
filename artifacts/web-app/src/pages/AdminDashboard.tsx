@@ -1144,7 +1144,6 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   {/* 메뉴 아이템 (섹션이 열려 있을 때만) */}
                   {isOpen && group.items.map(item => {
                     const isActive = adminTab === item.id;
-                    const hasIconColor = !!item.iconColor;
                     return (
                       <button
                         key={item.id}
@@ -1161,15 +1160,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         onMouseEnter={e => { if (!isActive) { (e.currentTarget as HTMLButtonElement).style.background = "#2d3547"; } }}
                         onMouseLeave={e => { if (!isActive) { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; } }}
                       >
-                        <span style={{
-                          fontSize: 15, lineHeight: 1, flexShrink: 0,
-                          filter: hasIconColor && !isActive ? `drop-shadow(0 0 3px ${item.iconColor}88)` : "none",
-                        }}>
+                        <span style={{ fontSize: 15, lineHeight: 1, flexShrink: 0 }}>
                           {item.icon}
                         </span>
-                        <span style={{ color: isActive ? "#fff" : hasIconColor && !isActive ? "#a7f3d0" : "#c1c8d4" }}>
-                          {item.label}
-                        </span>
+                        <span>{item.label}</span>
                       </button>
                     );
                   })}
