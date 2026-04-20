@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, translationUnitsTable, translationUnitLogsTable } from "@workspace/db";
-import { eq, and, or, ilike, sql } from "drizzle-orm";
+import { db, translationUnitsTable, translationUnitLogsTable, languageServiceDataTable, contentInsightsTable } from "@workspace/db";
+import { eq, and, or, ilike, sql, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import {
   anonymizeTranslationUnit,
@@ -285,6 +285,156 @@ router.patch("/admin/translation-units/:id", ...adminOnly, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "DataLayer: failed to update translation unit");
     res.status(500).json({ error: "수정 실패" });
+  }
+});
+
+// ─── Language Service Data ───────────────────────────────────────────────────
+
+// GET /api/admin/language-service-data
+router.get("/admin/language-service-data", ...staffPlus, async (req, res) => {
+  try {
+    const { serviceType, domain, languagePair, isPublic, page = "1", limit = "50" } = req.query as Record<string, string | undefined>;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const offset = (pageNum - 1) * limitNum;
+
+    const conditions = [];
+    if (serviceType) conditions.push(eq(languageServiceDataTable.serviceType, serviceType as "translation" | "interpretation" | "equipment"));
+    if (domain) conditions.push(eq(languageServiceDataTable.domain, domain));
+    if (languagePair) conditions.push(eq(languageServiceDataTable.languagePair, languagePair));
+    if (isPublic !== undefined) conditions.push(eq(languageServiceDataTable.isPublic, isPublic === "true"));
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const [rows, countResult] = await Promise.all([
+      db.select().from(languageServiceDataTable).where(where).orderBy(desc(languageServiceDataTable.createdAt)).limit(limitNum).offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(languageServiceDataTable).where(where),
+    ]);
+    res.json({ data: rows, total: countResult[0].count, page: pageNum, limit: limitNum });
+  } catch (err) {
+    req.log.error({ err }, "LSD: failed to list");
+    res.status(500).json({ error: "조회 실패" });
+  }
+});
+
+// POST /api/admin/language-service-data
+router.post("/admin/language-service-data", ...adminOnly, async (req, res) => {
+  try {
+    const { serviceType, languagePair, domain, industry, useCase, unitPrice, totalPrice,
+      turnaroundTime, isPublic, interpretationType, durationHours, numInterpreters,
+      locationType, equipmentType, quantity, rentalDuration, notes } = req.body;
+    if (!serviceType) return res.status(400).json({ error: "serviceType 필수" });
+    const [row] = await db.insert(languageServiceDataTable).values({
+      serviceType, languagePair, domain, industry, useCase,
+      unitPrice: unitPrice !== undefined ? Number(unitPrice) : undefined,
+      totalPrice: totalPrice !== undefined ? Number(totalPrice) : undefined,
+      turnaroundTime, isPublic: Boolean(isPublic ?? true),
+      interpretationType,
+      durationHours: durationHours !== undefined ? String(durationHours) : undefined,
+      numInterpreters: numInterpreters !== undefined ? Number(numInterpreters) : undefined,
+      locationType, equipmentType,
+      quantity: quantity !== undefined ? Number(quantity) : undefined,
+      rentalDuration, notes,
+    }).returning();
+    res.status(201).json(row);
+  } catch (err) {
+    req.log.error({ err }, "LSD: failed to create");
+    res.status(500).json({ error: "생성 실패" });
+  }
+});
+
+// PATCH /api/admin/language-service-data/:id
+router.patch("/admin/language-service-data/:id", ...adminOnly, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const { serviceType, languagePair, domain, industry, useCase, unitPrice, totalPrice,
+      turnaroundTime, isPublic, interpretationType, durationHours, numInterpreters,
+      locationType, equipmentType, quantity, rentalDuration, notes } = req.body;
+    const existing = await db.select().from(languageServiceDataTable).where(eq(languageServiceDataTable.id, id)).limit(1);
+    if (!existing.length) return res.status(404).json({ error: "항목 없음" });
+    const [updated] = await db.update(languageServiceDataTable).set({
+      ...(serviceType !== undefined && { serviceType }),
+      ...(languagePair !== undefined && { languagePair }),
+      ...(domain !== undefined && { domain }),
+      ...(industry !== undefined && { industry }),
+      ...(useCase !== undefined && { useCase }),
+      ...(unitPrice !== undefined && { unitPrice: Number(unitPrice) }),
+      ...(totalPrice !== undefined && { totalPrice: Number(totalPrice) }),
+      ...(turnaroundTime !== undefined && { turnaroundTime }),
+      ...(isPublic !== undefined && { isPublic: Boolean(isPublic) }),
+      ...(interpretationType !== undefined && { interpretationType }),
+      ...(durationHours !== undefined && { durationHours: String(durationHours) }),
+      ...(numInterpreters !== undefined && { numInterpreters: Number(numInterpreters) }),
+      ...(locationType !== undefined && { locationType }),
+      ...(equipmentType !== undefined && { equipmentType }),
+      ...(quantity !== undefined && { quantity: Number(quantity) }),
+      ...(rentalDuration !== undefined && { rentalDuration }),
+      ...(notes !== undefined && { notes }),
+      updatedAt: new Date(),
+    }).where(eq(languageServiceDataTable.id, id)).returning();
+    res.json(updated);
+  } catch (err) {
+    req.log.error({ err }, "LSD: failed to update");
+    res.status(500).json({ error: "수정 실패" });
+  }
+});
+
+// DELETE /api/admin/language-service-data/:id
+router.delete("/admin/language-service-data/:id", ...adminOnly, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    await db.delete(languageServiceDataTable).where(eq(languageServiceDataTable.id, id));
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "LSD: failed to delete");
+    res.status(500).json({ error: "삭제 실패" });
+  }
+});
+
+// GET /api/admin/language-service-data/:id/insights
+router.get("/admin/language-service-data/:id/insights", ...staffPlus, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    const rows = await db.select().from(contentInsightsTable)
+      .where(eq(contentInsightsTable.languageServiceDataId, id))
+      .orderBy(desc(contentInsightsTable.createdAt));
+    res.json(rows);
+  } catch (err) {
+    req.log.error({ err }, "LSD: failed to list insights");
+    res.status(500).json({ error: "인사이트 조회 실패" });
+  }
+});
+
+// POST /api/admin/language-service-data/:id/insights
+router.post("/admin/language-service-data/:id/insights", ...adminOnly, async (req, res) => {
+  try {
+    const languageServiceDataId = parseInt(req.params.id);
+    const { question, answer, domain, languagePair, isPublic } = req.body;
+    if (!question || !answer) return res.status(400).json({ error: "question, answer 필수" });
+    const parent = await db.select().from(languageServiceDataTable).where(eq(languageServiceDataTable.id, languageServiceDataId)).limit(1);
+    if (!parent.length) return res.status(404).json({ error: "부모 항목 없음" });
+    const [row] = await db.insert(contentInsightsTable).values({
+      serviceType: parent[0].serviceType,
+      languageServiceDataId, question, answer,
+      domain: domain ?? parent[0].domain,
+      languagePair: languagePair ?? parent[0].languagePair,
+      isPublic: Boolean(isPublic ?? true),
+    }).returning();
+    res.status(201).json(row);
+  } catch (err) {
+    req.log.error({ err }, "LSD: failed to create insight");
+    res.status(500).json({ error: "인사이트 생성 실패" });
+  }
+});
+
+// DELETE /api/admin/content-insights/:id
+router.delete("/admin/content-insights/:id", ...adminOnly, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    await db.delete(contentInsightsTable).where(eq(contentInsightsTable.id, id));
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "LSD: failed to delete insight");
+    res.status(500).json({ error: "인사이트 삭제 실패" });
   }
 });
 

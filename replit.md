@@ -13,6 +13,7 @@ Key capabilities include:
 - Separation of translation and interpretation product structures with automatic code generation (`[SVC]-[LANG]-[CAT]-NNN`), dropdown-based form, duplicate warning, deactivation reason modal, and multi-filter search (serviceType/languagePair/category/active).
 - Support for divisions within large client companies: divisions table (company_id FK, name, type), project-level requesting/billing/payer separation, full CRUD API, and stats display in company detail modal.
 - A new data layer for translation data assetization (`translation_units`), enabling advanced search, anonymization, and history tracking.
+- `language_service_data` + `content_insights` tables: 통합 언어 서비스 데이터 구조 (번역/통역/장비 서비스 레퍼런스 데이터 + AEO/GEO 콘텐츠 인사이트 생성 기반). 서비스 유형별 동적 필드, CRUD API, 인사이트 Q&A 등록/삭제 지원.
 - Detailed project, company, contact, translator, and product management modals.
 - File management (upload/download/delete) for project documents using GCS presigned URLs.
 - Translator self-service for profile and rate management.
@@ -30,7 +31,8 @@ I prefer detailed explanations and iterative development. Ask before making majo
 
 - **프론트엔드 컴포넌트/페이지**: 1,000줄 초과 → 분리 신호. 새 탭/기능 추가 전 먼저 보고
 - **API 라우트 파일**: 1,500줄 초과 → 도메인별 분리 검토
-- **AdminDashboard.tsx 현황**: 현재 ~3,990줄. 4,000줄 초과 또는 새 탭 추가 전 먼저 알림
+- **AdminDashboard.tsx 현황**: 현재 ~3,550줄. 4,000줄 초과 또는 새 탭 추가 전 먼저 알림
+- **분리 완료**: `DataLayerTab.tsx` (387줄) — 번역 데이터 탭 분리 완료
 
 **분리 대상 (우선순위 순)**:
 1. `SettlementTab` → `SettlementManagementTab.tsx` (~700줄 분리 가능)
