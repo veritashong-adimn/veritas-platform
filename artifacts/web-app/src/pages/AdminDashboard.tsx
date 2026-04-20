@@ -1223,58 +1223,250 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px", background: "#f9fafb" }}>
 
           {/* 대시보드 탭 */}
-          {adminTab === "dashboard" && (
-            <div>
-              <div style={{ marginBottom: 24 }}>
-                <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 800, color: "#111827" }}>전체 현황</h2>
-                <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>통번역 플랫폼 운영 현황을 한눈에 확인합니다.</p>
-              </div>
-              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 32 }}>
-                {[
-                  { label: "전체 프로젝트", value: projects.length, color: "#2563eb", bg: "#eff6ff", sub: "총 등록 건수", onClick: () => setAdminTab("projects") },
-                  { label: "결제 완료", value: payments.filter(p => p.status === "paid").length, color: "#059669", bg: "#f0fdf4", sub: "결제 확인 완료", onClick: () => setAdminTab("payments") },
-                  { label: "진행 중 작업", value: tasks.filter(t => t.status !== "done").length, color: "#d97706", bg: "#fffbeb", sub: "번역 진행 중", onClick: () => setAdminTab("tasks") },
-                  { label: "완료된 작업", value: tasks.filter(t => t.status === "done").length, color: "#9333ea", bg: "#faf5ff", sub: "번역 완료", onClick: () => setAdminTab("tasks") },
-                  { label: "정산 대기", value: settlements.filter(s => s.status === "ready").length, color: "#dc2626", bg: "#fef2f2", sub: "정산 처리 필요", onClick: () => setAdminTab("settlements") },
-                ].map(s => (
-                  <div key={s.label} onClick={s.onClick} style={{
-                    background: s.bg, border: `1px solid ${s.color}22`,
-                    borderRadius: 12, padding: "20px 24px", minWidth: 160, flex: "1 1 140px",
-                    cursor: "pointer", transition: "box-shadow 0.12s",
-                  }}
-                    onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.boxShadow = `0 4px 12px ${s.color}22`}
-                    onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.boxShadow = "none"}
-                  >
-                    <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 600, color: s.color }}>{s.label}</p>
-                    <p style={{ margin: "0 0 4px", fontSize: 30, fontWeight: 800, color: s.color, lineHeight: 1 }}>{s.value}</p>
-                    <p style={{ margin: 0, fontSize: 11, color: `${s.color}99` }}>{s.sub}</p>
+          {adminTab === "dashboard" && (() => {
+            const now = new Date();
+            const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const startOfWeek  = new Date(startOfToday); startOfWeek.setDate(startOfToday.getDate() - startOfToday.getDay());
+            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+            const paidPayments = payments.filter(p => p.status === "paid");
+            const unpaidPayments = payments.filter(p => ["pending","unpaid","overdue"].includes(p.status));
+            const pendingSettlements = settlements.filter(s => s.status === "ready");
+
+            const revenueToday = paidPayments.filter(p => new Date(p.createdAt) >= startOfToday).reduce((acc, p) => acc + Number(p.amount), 0);
+            const revenueWeek  = paidPayments.filter(p => new Date(p.createdAt) >= startOfWeek).reduce((acc, p) => acc + Number(p.amount), 0);
+            const revenueMonth = paidPayments.filter(p => new Date(p.createdAt) >= startOfMonth).reduce((acc, p) => acc + Number(p.amount), 0);
+            const unpaidTotal  = unpaidPayments.reduce((acc, p) => acc + Number(p.amount), 0);
+
+            const inProgressTasks = tasks.filter(t => t.status !== "done");
+            const delayedProjects = projects.filter(p => {
+              const terminal = ["completed","rejected","cancelled"];
+              if (terminal.includes(p.status)) return false;
+              const age = (now.getTime() - new Date(p.createdAt).getTime()) / (1000 * 60 * 60 * 24);
+              return age > 30 || p.financialStatus === "overdue";
+            });
+
+            const kpi = [
+              {
+                label: "진행 중 작업",
+                value: inProgressTasks.length,
+                sub: "현재 번역·통역 중",
+                color: "#2563eb", bg: "#eff6ff",
+                onClick: () => setAdminTab("tasks"),
+              },
+              {
+                label: "정산 대기",
+                value: pendingSettlements.length,
+                sub: pendingSettlements.length > 0 ? "⚠ 즉시 처리 필요" : "처리 대기 없음",
+                color: pendingSettlements.length > 0 ? "#dc2626" : "#6b7280",
+                bg: pendingSettlements.length > 0 ? "#fef2f2" : "#f9fafb",
+                alert: pendingSettlements.length > 0,
+                onClick: () => setAdminTab("settlements"),
+              },
+              {
+                label: "이번달 매출",
+                value: `${revenueMonth.toLocaleString()}원`,
+                sub: `오늘 ${revenueToday.toLocaleString()}원 / 이번주 ${revenueWeek.toLocaleString()}원`,
+                color: "#059669", bg: "#f0fdf4",
+                onClick: () => setAdminTab("payments"),
+              },
+              {
+                label: "미결제 금액",
+                value: `${unpaidTotal.toLocaleString()}원`,
+                sub: unpaidPayments.length > 0 ? `${unpaidPayments.length}건 미수금` : "미수금 없음",
+                color: unpaidPayments.length > 0 ? "#d97706" : "#6b7280",
+                bg: unpaidPayments.length > 0 ? "#fffbeb" : "#f9fafb",
+                alert: unpaidPayments.length > 0,
+                onClick: () => setAdminTab("payments"),
+              },
+            ];
+
+            const alerts = [
+              pendingSettlements.length > 0 && {
+                icon: "🔴", label: `정산 대기 ${pendingSettlements.length}건`,
+                desc: "미지급 정산이 쌓여 있습니다. 지금 처리하세요.",
+                actionLabel: "정산 처리하기", action: () => setAdminTab("settlements"),
+                border: "#fecaca", bg: "#fef2f2", color: "#dc2626",
+              },
+              unpaidPayments.length > 0 && {
+                icon: "🟡", label: `미결제 ${unpaidPayments.length}건 · ${unpaidTotal.toLocaleString()}원`,
+                desc: "입금 확인이 필요한 결제 건이 있습니다.",
+                actionLabel: "결제 관리", action: () => setAdminTab("payments"),
+                border: "#fde68a", bg: "#fffbeb", color: "#d97706",
+              },
+              delayedProjects.length > 0 && {
+                icon: "🟠", label: `지연 의심 프로젝트 ${delayedProjects.length}건`,
+                desc: "30일 이상 미완료 또는 연체 상태 프로젝트입니다.",
+                actionLabel: "프로젝트 보기", action: () => setAdminTab("projects"),
+                border: "#fed7aa", bg: "#fff7ed", color: "#ea580c",
+              },
+            ].filter(Boolean) as { icon: string; label: string; desc: string; actionLabel: string; action: () => void; border: string; bg: string; color: string }[];
+
+            const PROJECT_STATUS_BADGE: Record<string, { bg: string; color: string; label: string }> = {
+              pending:     { bg: "#f3f4f6", color: "#6b7280", label: "대기" },
+              in_progress: { bg: "#dbeafe", color: "#1d4ed8", label: "진행 중" },
+              review:      { bg: "#fef9c3", color: "#92400e", label: "검토" },
+              completed:   { bg: "#d1fae5", color: "#065f46", label: "완료" },
+              rejected:    { bg: "#fee2e2", color: "#991b1b", label: "반려" },
+              cancelled:   { bg: "#f3f4f6", color: "#9ca3af", label: "취소" },
+              delayed:     { bg: "#ffedd5", color: "#9a3412", label: "지연" },
+            };
+            const getProjectBadge = (p: AdminProject) => {
+              const base = PROJECT_STATUS_BADGE[p.status] ?? { bg: "#f3f4f6", color: "#6b7280", label: p.status };
+              const isDelayed = delayedProjects.some(d => d.id === p.id);
+              return isDelayed ? PROJECT_STATUS_BADGE.delayed : base;
+            };
+
+            return (
+              <div>
+                {/* 헤더 */}
+                <div style={{ marginBottom: 22 }}>
+                  <h2 style={{ margin: "0 0 3px", fontSize: 18, fontWeight: 800, color: "#111827" }}>컨트롤 타워</h2>
+                  <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>운영 현황을 한눈에 파악하고 즉시 행동하세요.</p>
+                </div>
+
+                {/* KPI 카드 4개 */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 20 }}>
+                  {kpi.map(k => (
+                    <div key={k.label} onClick={k.onClick} style={{
+                      background: k.bg, border: `1.5px solid ${"alert" in k && k.alert ? k.color + "44" : "#e5e7eb"}`,
+                      borderRadius: 14, padding: "18px 20px", cursor: "pointer",
+                      position: "relative", overflow: "hidden",
+                      transition: "box-shadow 0.15s, transform 0.1s",
+                      boxShadow: "alert" in k && k.alert ? `0 0 0 3px ${k.color}18` : "none",
+                    }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = `0 6px 18px ${k.color}22`; (e.currentTarget as HTMLDivElement).style.transform = "translateY(-1px)"; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "alert" in k && k.alert ? `0 0 0 3px ${k.color}18` : "none"; (e.currentTarget as HTMLDivElement).style.transform = "none"; }}
+                    >
+                      {"alert" in k && k.alert && (
+                        <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: k.color }} />
+                      )}
+                      <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: k.color, textTransform: "uppercase", letterSpacing: "0.06em" }}>{k.label}</p>
+                      <p style={{ margin: "0 0 5px", fontSize: 26, fontWeight: 800, color: k.color, lineHeight: 1, wordBreak: "break-all" }}>{k.value}</p>
+                      <p style={{ margin: 0, fontSize: 11, color: `${k.color}bb` }}>{k.sub}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* 운영 알림 */}
+                {alerts.length > 0 && (
+                  <div style={{ marginBottom: 20 }}>
+                    <h3 style={{ margin: "0 0 10px", fontSize: 13, fontWeight: 700, color: "#111827" }}>⚡ 운영 알림</h3>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      {alerts.map(a => (
+                        <div key={a.label} style={{
+                          display: "flex", alignItems: "center", justifyContent: "space-between",
+                          background: a.bg, border: `1px solid ${a.border}`, borderRadius: 10,
+                          padding: "12px 16px", gap: 12,
+                        }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+                            <span style={{ fontSize: 18, flexShrink: 0 }}>{a.icon}</span>
+                            <div style={{ minWidth: 0 }}>
+                              <p style={{ margin: "0 0 2px", fontSize: 13, fontWeight: 700, color: a.color }}>{a.label}</p>
+                              <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>{a.desc}</p>
+                            </div>
+                          </div>
+                          <button onClick={a.action} style={{
+                            padding: "7px 14px", background: a.color, color: "#fff",
+                            border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700,
+                            cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap",
+                          }}>
+                            {a.actionLabel}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                ))}
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-                <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", padding: "20px 22px" }}>
-                  <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#111827" }}>최근 프로젝트</h3>
-                  {projects.slice(0, 5).map(p => (
-                    <div key={p.id} onClick={() => openDetail(p.id)} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f3f4f6", cursor: "pointer" }}>
-                      <span style={{ fontSize: 13, color: "#374151", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</span>
-                      <StatusBadge status={p.status} />
+                )}
+
+                {/* 매출 요약 + 하단 패널 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+
+                  {/* 최근 프로젝트 */}
+                  <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", padding: "18px 20px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                      <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>최근 프로젝트</h3>
+                      <button onClick={() => setAdminTab("projects")} style={{ background: "none", border: "none", fontSize: 12, color: "#2563eb", cursor: "pointer", padding: 0, fontWeight: 600 }}>전체 보기 →</button>
                     </div>
-                  ))}
-                  {projects.length === 0 && <p style={{ fontSize: 13, color: "#9ca3af", margin: 0 }}>프로젝트가 없습니다.</p>}
-                </div>
-                <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", padding: "20px 22px" }}>
-                  <h3 style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#111827" }}>최근 정산</h3>
-                  {settlements.slice(0, 5).map(s => (
-                    <div key={s.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}>
-                      <span style={{ fontSize: 13, color: "#374151" }}>{(s as any).translatorName ?? s.translatorId}</span>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>{Number(s.translatorAmount).toLocaleString()}원</span>
+                    {projects.length === 0 ? (
+                      <p style={{ fontSize: 13, color: "#9ca3af", margin: 0 }}>프로젝트가 없습니다.</p>
+                    ) : projects.slice(0, 6).map(p => {
+                      const badge = getProjectBadge(p);
+                      return (
+                        <div key={p.id} onClick={() => openDetail(p.id)} style={{
+                          display: "flex", alignItems: "center", justifyContent: "space-between",
+                          padding: "7px 0", borderBottom: "1px solid #f3f4f6",
+                          cursor: "pointer", gap: 8,
+                        }}
+                          onMouseEnter={e => (e.currentTarget as HTMLDivElement).style.background = "#f9fafb"}
+                          onMouseLeave={e => (e.currentTarget as HTMLDivElement).style.background = "transparent"}
+                        >
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ margin: 0, fontSize: 13, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.title}</p>
+                            {p.companyName && <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>{p.companyName}</p>}
+                          </div>
+                          <span style={{
+                            padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                            background: badge.bg, color: badge.color, flexShrink: 0, whiteSpace: "nowrap",
+                          }}>{badge.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* 우측: 매출 요약 + 최근 정산 */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                    {/* 매출 요약 */}
+                    <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", padding: "18px 20px" }}>
+                      <h3 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#111827" }}>💰 매출 요약</h3>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+                        {[
+                          { label: "오늘", value: revenueToday, color: "#7c3aed" },
+                          { label: "이번주", value: revenueWeek,  color: "#0891b2" },
+                          { label: "이번달", value: revenueMonth, color: "#059669" },
+                        ].map(r => (
+                          <div key={r.label} style={{ textAlign: "center", padding: "10px 6px", background: "#f9fafb", borderRadius: 8 }}>
+                            <p style={{ margin: "0 0 3px", fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase" }}>{r.label}</p>
+                            <p style={{ margin: 0, fontSize: 15, fontWeight: 800, color: r.color }}>{r.value.toLocaleString()}원</p>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  ))}
-                  {settlements.length === 0 && <p style={{ fontSize: 13, color: "#9ca3af", margin: 0 }}>정산 내역이 없습니다.</p>}
+
+                    {/* 최근 정산 */}
+                    <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", padding: "18px 20px", flex: 1 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>최근 정산</h3>
+                        <button onClick={() => setAdminTab("settlements")} style={{ background: "none", border: "none", fontSize: 12, color: "#2563eb", cursor: "pointer", padding: 0, fontWeight: 600 }}>전체 보기 →</button>
+                      </div>
+                      {settlements.length === 0 ? (
+                        <p style={{ fontSize: 13, color: "#9ca3af", margin: 0 }}>정산 내역이 없습니다.</p>
+                      ) : settlements.slice(0, 5).map(s => {
+                        const isPending = s.status === "ready";
+                        return (
+                          <div key={s.id} style={{
+                            display: "flex", justifyContent: "space-between", alignItems: "center",
+                            padding: "7px 0", borderBottom: "1px solid #f3f4f6",
+                            background: isPending ? "#fef9f9" : "transparent",
+                          }}>
+                            <div>
+                              <span style={{ fontSize: 13, color: isPending ? "#dc2626" : "#374151", fontWeight: isPending ? 600 : 400 }}>
+                                {s.translatorEmail ?? `통번역사 #${s.translatorId}`}
+                              </span>
+                              {isPending && <span style={{ marginLeft: 6, fontSize: 10, background: "#fee2e2", color: "#dc2626", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>미지급</span>}
+                            </div>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: isPending ? "#dc2626" : "#111827" }}>
+                              {Number(s.translatorAmount).toLocaleString()}원
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
       {/* ── 프로젝트 탭 ── */}
       {adminTab === "projects" && (
