@@ -1106,7 +1106,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           <nav style={{ flex: 1, overflowY: "auto", padding: "8px 0" }}>
             {SIDEBAR_GROUPS.map((group, gi) => {
               const isOpen = group.isDashboard || openSections[group.key] !== false;
-              const hasActiveItem = group.items.some(item => item.id === adminTab);
+              // 필터 전 전체 아이템 기준으로 active 여부 판단 (perm 필터와 무관하게 일관성 보장)
+              const rawGroup = ADMIN_NAV_GROUPS.find(g => g.key === group.key);
+              const hasActiveItem = (rawGroup ?? group).items.some(item => item.id === adminTab);
               return (
                 <div key={group.key} style={{ marginBottom: group.isDashboard ? 4 : 1 }}>
                   {/* 섹션 헤더 (대시보드 제외) */}

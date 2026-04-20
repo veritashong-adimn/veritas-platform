@@ -73,7 +73,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     accentColor: "#f59e0b",
     perm: "menu.translator",
     items: [
-      { id: "translators", label: "번역사",   icon: "🌐", perm: "menu.translator" },
+      { id: "translators", label: "통번역사",  icon: "🌐", perm: "menu.translator" },
       { id: "products",    label: "상품/단가", icon: "🏷️", perm: "menu.product" },
     ],
   },
@@ -127,7 +127,7 @@ export const ADMIN_PAGE_TITLE: Record<string, string> = {
   companies:   "거래처",
   contacts:    "담당자",
   customers:   "고객관리",
-  translators: "번역사",
+  translators: "통번역사",
   products:    "상품/단가",
   users:       "사용자관리",
   roles:       "역할관리",
