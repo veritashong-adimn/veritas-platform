@@ -148,9 +148,20 @@ export function InsightManagementTab({ token, setToast }: Props) {
   const [editDraft, setEditDraft] = useState<Partial<ContentInsight>>({});
   const [saving, setSaving] = useState(false);
 
+  const [showCreateDropdown, setShowCreateDropdown] = useState(false);
+
   const [showGenerateModal, setShowGenerateModal] = useState(false);
   const [clearPrevious, setClearPrevious] = useState(false);
   const [generating, setGenerating] = useState(false);
+
+  const EMPTY_MANUAL = {
+    question: "", shortAnswer: "", longAnswer: "",
+    serviceType: "translation", domain: "", languagePair: "",
+    industry: "", useCase: "", avgPrice: "", minPrice: "", maxPrice: "", confidenceScore: "",
+  };
+  const [showManualModal, setShowManualModal] = useState(false);
+  const [manualDraft, setManualDraft] = useState({ ...EMPTY_MANUAL });
+  const [creating, setCreating] = useState(false);
 
   const [highlightedIds, setHighlightedIds] = useState<Set<number>>(new Set());
   const [pendingScrollId, setPendingScrollId] = useState<number | null>(null);
@@ -348,6 +359,64 @@ export function InsightManagementTab({ token, setToast }: Props) {
     }
   };
 
+  const handleCreateManual = async () => {
+    if (!manualDraft.question.trim()) {
+      setToast("질문은 필수 입력 항목입니다.");
+      return;
+    }
+    setCreating(true);
+    try {
+      const res = await fetch(`${API}/admin/content-insights`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(manualDraft),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? "생성 실패");
+      }
+      const created: ContentInsight = await res.json();
+
+      setShowManualModal(false);
+      setManualDraft({ ...EMPTY_MANUAL });
+
+      // 목록 재조회
+      const f = appliedFilters;
+      const params = new URLSearchParams({ limit: "100" });
+      if (f.serviceType) params.set("serviceType", f.serviceType);
+      if (f.status) params.set("status", f.status);
+      if (f.visibilityLevel) params.set("visibilityLevel", f.visibilityLevel);
+      if (f.domain) params.set("domain", f.domain);
+      if (f.languagePair) params.set("languagePair", f.languagePair);
+
+      setLoading(true);
+      const listRes = await fetch(`${API}/admin/content-insights?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const listData = await listRes.json();
+      const newList: ContentInsight[] = listData.data ?? [];
+      setInsights(newList);
+      setTotal(listData.total ?? 0);
+      setLoading(false);
+
+      // 생성된 항목 자동 선택 + 스크롤 + 하이라이트
+      const found = newList.find(r => r.id === created.id);
+      if (found) {
+        setSelected(found);
+        setPendingScrollId(found.id);
+        setHighlightedIds(new Set([found.id]));
+        if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+        highlightTimerRef.current = setTimeout(() => setHighlightedIds(new Set()), 2000);
+      }
+
+      setToast("인사이트가 생성되었습니다.");
+    } catch (err: unknown) {
+      setToast(err instanceof Error ? err.message : "인사이트 생성 실패");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const statusActions = (insight: ContentInsight): { label: string; next: string; bg: string; color: string }[] => {
     const { status } = insight;
     if (status === "draft")     return [{ label: "승인", next: "approved",  bg: "#059669", color: "#fff" }];
@@ -425,12 +494,65 @@ export function InsightManagementTab({ token, setToast }: Props) {
           총 <strong>{total}</strong>건
         </span>
 
-        <button
-          onClick={() => setShowGenerateModal(true)}
-          style={{ ...btnPrimaryStyle, background: "#2563eb", display: "flex", alignItems: "center", gap: 4 }}
-        >
-          <span>+</span> 인사이트 생성
-        </button>
+        <div style={{ position: "relative" }}>
+          <button
+            onClick={() => setShowCreateDropdown(d => !d)}
+            style={{ ...btnPrimaryStyle, background: "#2563eb", display: "flex", alignItems: "center", gap: 6 }}
+          >
+            <span style={{ fontSize: 14 }}>+</span> 인사이트 생성
+            <span style={{ fontSize: 10, opacity: 0.8 }}>▾</span>
+          </button>
+          {showCreateDropdown && (
+            <>
+              <div
+                style={{ position: "fixed", inset: 0, zIndex: 10 }}
+                onClick={() => setShowCreateDropdown(false)}
+              />
+              <div style={{
+                position: "absolute", top: "calc(100% + 6px)", right: 0,
+                background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.12)", minWidth: 200, zIndex: 20,
+                overflow: "hidden",
+              }}>
+                <button
+                  onClick={() => { setShowManualModal(true); setShowCreateDropdown(false); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10, width: "100%",
+                    padding: "11px 14px", border: "none", background: "none",
+                    cursor: "pointer", fontSize: 13, color: "#111827", textAlign: "left",
+                    transition: "background 0.1s",
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "#f9fafb"; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
+                >
+                  <span style={{ fontSize: 16 }}>✍️</span>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>수동 입력 생성</div>
+                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 1 }}>직접 내용을 입력하여 생성</div>
+                  </div>
+                </button>
+                <div style={{ height: 1, background: "#f3f4f6" }} />
+                <button
+                  onClick={() => { setShowGenerateModal(true); setShowCreateDropdown(false); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10, width: "100%",
+                    padding: "11px 14px", border: "none", background: "none",
+                    cursor: "pointer", fontSize: 13, color: "#111827", textAlign: "left",
+                    transition: "background 0.1s",
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "#f9fafb"; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "none"; }}
+                >
+                  <span style={{ fontSize: 16 }}>⚡</span>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>데이터 기반 자동 생성</div>
+                    <div style={{ fontSize: 11, color: "#6b7280", marginTop: 1 }}>언어 서비스 데이터 기반 자동 생성</div>
+                  </div>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* ── 생성 모달 ────────────────────────────────────────────────────────────── */}
@@ -505,6 +627,159 @@ export function InsightManagementTab({ token, setToast }: Props) {
               >
                 {generating ? "생성 중…" : "생성 실행"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 수동 생성 모달 ────────────────────────────────────────────────────────── */}
+      {showManualModal && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+        }}
+          onClick={e => { if (e.target === e.currentTarget) { setShowManualModal(false); setManualDraft({ ...EMPTY_MANUAL }); } }}
+        >
+          <div style={{
+            background: "#fff", borderRadius: 14, width: 560, maxWidth: "92vw",
+            maxHeight: "88vh", overflowY: "auto",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.22)",
+          }}>
+            {/* 모달 헤더 */}
+            <div style={{
+              padding: "18px 22px", borderBottom: "1px solid #e5e7eb",
+              display: "flex", justifyContent: "space-between", alignItems: "center",
+              position: "sticky", top: 0, background: "#fff", zIndex: 1, borderRadius: "14px 14px 0 0",
+            }}>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>✍️ 인사이트 수동 생성</h3>
+                <p style={{ margin: "3px 0 0", fontSize: 12, color: "#6b7280" }}>직접 내용을 입력하여 인사이트를 생성합니다.</p>
+              </div>
+              <button
+                onClick={() => { setShowManualModal(false); setManualDraft({ ...EMPTY_MANUAL }); }}
+                style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#6b7280", lineHeight: 1 }}
+              >✕</button>
+            </div>
+
+            {/* 모달 바디 */}
+            <div style={{ padding: "18px 22px", display: "flex", flexDirection: "column", gap: 14 }}>
+
+              {/* 질문 */}
+              <div>
+                <label style={modalLabelStyle}>질문 <span style={{ color: "#ef4444" }}>*</span></label>
+                <textarea
+                  value={manualDraft.question}
+                  onChange={e => setManualDraft(d => ({ ...d, question: e.target.value }))}
+                  rows={2}
+                  placeholder="예: 법률 한영 번역 비용은 얼마인가요?"
+                  style={textareaStyle}
+                />
+              </div>
+
+              {/* 요약 답변 */}
+              <div>
+                <label style={modalLabelStyle}>요약 답변 (shortAnswer)</label>
+                <textarea
+                  value={manualDraft.shortAnswer}
+                  onChange={e => setManualDraft(d => ({ ...d, shortAnswer: e.target.value }))}
+                  rows={2}
+                  placeholder="한 두 문장의 핵심 답변"
+                  style={textareaStyle}
+                />
+              </div>
+
+              {/* 상세 답변 */}
+              <div>
+                <label style={modalLabelStyle}>상세 답변 (longAnswer)</label>
+                <textarea
+                  value={manualDraft.longAnswer}
+                  onChange={e => setManualDraft(d => ({ ...d, longAnswer: e.target.value }))}
+                  rows={5}
+                  placeholder="마크다운 형식 가능. ## 제목, - 목록 등"
+                  style={textareaStyle}
+                />
+              </div>
+
+              {/* 서비스 유형 */}
+              <div>
+                <label style={modalLabelStyle}>서비스 유형</label>
+                <select
+                  value={manualDraft.serviceType}
+                  onChange={e => setManualDraft(d => ({ ...d, serviceType: e.target.value }))}
+                  style={{ ...editSelectStyle, maxWidth: 200 }}
+                >
+                  <option value="translation">번역</option>
+                  <option value="interpretation">통역</option>
+                  <option value="equipment">장비</option>
+                </select>
+              </div>
+
+              {/* 분류 정보 */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div>
+                  <label style={modalLabelStyle}>도메인</label>
+                  <input value={manualDraft.domain} onChange={e => setManualDraft(d => ({ ...d, domain: e.target.value }))} placeholder="예: legal, finance" style={editInputStyle} />
+                </div>
+                <div>
+                  <label style={modalLabelStyle}>언어쌍</label>
+                  <input value={manualDraft.languagePair} onChange={e => setManualDraft(d => ({ ...d, languagePair: e.target.value }))} placeholder="예: ko-en" style={editInputStyle} />
+                </div>
+                <div>
+                  <label style={modalLabelStyle}>산업</label>
+                  <input value={manualDraft.industry} onChange={e => setManualDraft(d => ({ ...d, industry: e.target.value }))} placeholder="예: 제약, IT" style={editInputStyle} />
+                </div>
+                <div>
+                  <label style={modalLabelStyle}>사용 목적</label>
+                  <input value={manualDraft.useCase} onChange={e => setManualDraft(d => ({ ...d, useCase: e.target.value }))} placeholder="예: 계약서, 특허" style={editInputStyle} />
+                </div>
+              </div>
+
+              {/* 가격 정보 */}
+              <div>
+                <label style={modalLabelStyle}>가격 정보 (원)</label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 3 }}>평균 단가</div>
+                    <input type="number" value={manualDraft.avgPrice} onChange={e => setManualDraft(d => ({ ...d, avgPrice: e.target.value }))} placeholder="100000" style={editInputStyle} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 3 }}>최소 단가</div>
+                    <input type="number" value={manualDraft.minPrice} onChange={e => setManualDraft(d => ({ ...d, minPrice: e.target.value }))} placeholder="80000" style={editInputStyle} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 3 }}>최대 단가</div>
+                    <input type="number" value={manualDraft.maxPrice} onChange={e => setManualDraft(d => ({ ...d, maxPrice: e.target.value }))} placeholder="120000" style={editInputStyle} />
+                  </div>
+                </div>
+              </div>
+
+              {/* 신뢰도 */}
+              <div>
+                <label style={modalLabelStyle}>신뢰도 (0.0 ~ 1.0)</label>
+                <input type="number" min="0" max="1" step="0.1" value={manualDraft.confidenceScore} onChange={e => setManualDraft(d => ({ ...d, confidenceScore: e.target.value }))} placeholder="0.7" style={{ ...editInputStyle, maxWidth: 100 }} />
+              </div>
+            </div>
+
+            {/* 모달 푸터 */}
+            <div style={{
+              padding: "14px 22px", borderTop: "1px solid #e5e7eb",
+              display: "flex", justifyContent: "flex-end", gap: 8,
+              position: "sticky", bottom: 0, background: "#fff", borderRadius: "0 0 14px 14px",
+            }}>
+              <button
+                onClick={() => { setShowManualModal(false); setManualDraft({ ...EMPTY_MANUAL }); }}
+                disabled={creating}
+                style={{ ...btnGhostStyle, opacity: creating ? 0.5 : 1 }}
+              >취소</button>
+              <button
+                onClick={handleCreateManual}
+                disabled={creating || !manualDraft.question.trim()}
+                style={{
+                  ...btnPrimaryStyle, minWidth: 100,
+                  opacity: (creating || !manualDraft.question.trim()) ? 0.7 : 1,
+                  cursor: (creating || !manualDraft.question.trim()) ? "not-allowed" : "pointer",
+                }}
+              >{creating ? "생성 중…" : "생성"}</button>
             </div>
           </div>
         </div>
@@ -896,4 +1171,8 @@ const textareaStyle: React.CSSProperties = {
   width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid #d1d5db",
   fontSize: 12, color: "#111827", resize: "vertical", lineHeight: 1.5,
   fontFamily: "inherit", boxSizing: "border-box",
+};
+
+const modalLabelStyle: React.CSSProperties = {
+  display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 5,
 };

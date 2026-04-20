@@ -551,6 +551,50 @@ router.delete("/admin/content-insights/:id", ...adminOnly, async (req, res) => {
 
 // ─── Content Insights: 조회 + 자동 생성 ──────────────────────────────────────
 
+// POST /api/admin/content-insights  (수동 생성)
+router.post("/admin/content-insights", ...adminOnly, async (req, res) => {
+  try {
+    const {
+      question, shortAnswer, longAnswer, serviceType,
+      domain, languagePair, industry, useCase,
+      avgPrice, minPrice, maxPrice, confidenceScore,
+      questionType, visibilityLevel,
+    } = req.body as Record<string, string | undefined>;
+
+    if (!question?.trim()) {
+      return res.status(400).json({ error: "질문(question)은 필수입니다." });
+    }
+
+    const payload = {
+      question: question.trim(),
+      answer: shortAnswer?.trim() || question.trim(),
+      shortAnswer: shortAnswer?.trim() || null,
+      longAnswer: longAnswer?.trim() || null,
+      serviceType: (serviceType ?? "translation") as "translation" | "interpretation" | "equipment",
+      questionType: questionType?.trim() || "price",
+      domain: domain?.trim() || null,
+      languagePair: languagePair?.trim() || null,
+      industry: industry?.trim() || null,
+      useCase: useCase?.trim() || null,
+      avgPrice: avgPrice ? String(avgPrice) : null,
+      minPrice: minPrice ? String(minPrice) : null,
+      maxPrice: maxPrice ? String(maxPrice) : null,
+      confidenceScore: confidenceScore ? String(confidenceScore) : null,
+      status: "draft",
+      visibilityLevel: visibilityLevel ?? "internal_summary",
+      isPublic: false,
+      updatedAt: new Date(),
+    };
+
+    const [inserted] = await db.insert(contentInsightsTable).values(payload).returning();
+    req.log.info({ id: inserted.id }, "CI: manual insight created");
+    res.status(201).json(inserted);
+  } catch (err) {
+    req.log.error({ err }, "CI: failed to create manual insight");
+    res.status(500).json({ error: "인사이트 생성 실패" });
+  }
+});
+
 // GET /api/admin/content-insights
 router.get("/admin/content-insights", ...staffPlus, async (req, res) => {
   try {
