@@ -100,13 +100,17 @@ router.get("/admin/settlements", ...adminGuard, async (req, res) => {
       translatorNameFromUser: undefined, // 클라이언트 노출 불필요
     }));
 
-    // pending_review 우선, 그 다음 ready, 나머지
+    // 정렬: 1순위 status, 2순위 payoutDueDate, 3순위 translatorName
     const order = ["pending_review", "ready", "draft", "pending", "paid"];
     const sorted = [...merged].sort((a, b) => {
       const ai = order.indexOf(a.status ?? "pending");
       const bi = order.indexOf(b.status ?? "pending");
       if (ai !== bi) return ai - bi;
-      // 같은 상태 내에서 이름 가나다순
+      // 지급 예정일 빠른순 (null 후순위)
+      const da = a.payoutDueDate ?? "9999-12-31";
+      const db = b.payoutDueDate ?? "9999-12-31";
+      if (da !== db) return da.localeCompare(db);
+      // 이름 가나다순
       const na = (a.translatorName ?? a.translatorEmail ?? "").toLowerCase();
       const nb = (b.translatorName ?? b.translatorEmail ?? "").toLowerCase();
       return na.localeCompare(nb, "ko");
