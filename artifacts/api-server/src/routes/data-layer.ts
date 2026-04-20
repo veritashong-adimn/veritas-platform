@@ -426,7 +426,18 @@ router.post("/admin/language-service-data/:id/insights", ...adminOnly, async (re
   }
 });
 
-function buildSlug(serviceType: string, languagePair: string | null, domain: string | null, id: number): string {
+function buildSlug(serviceType: string, languagePair: string | null, domain: string | null, id: number, question?: string | null): string {
+  if (question?.trim()) {
+    const slugFromQuestion = question
+      .replace(/[?？]/g, "")
+      .trim()
+      .replace(/[^\w\uAC00-\uD7A3\uAC00-\uD7A30-9 -]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .slice(0, 60)
+      .replace(/^-|-$/g, "");
+    if (slugFromQuestion) return slugFromQuestion + "-" + id;
+  }
   const typeMap: Record<string, string> = {
     translation: "translation", interpretation: "interpretation", equipment: "equipment",
   };
@@ -462,7 +473,7 @@ router.patch("/admin/content-insights/:id/status", ...adminOnly, async (req, res
 
     const setPayload: Record<string, unknown> = { status, updatedAt: new Date() };
     if (status === "published" && !existing.slug) {
-      setPayload.slug = buildSlug(existing.serviceType, existing.languagePair, existing.domain, id);
+      setPayload.slug = buildSlug(existing.serviceType, existing.languagePair, existing.domain, id, existing.question);
     }
 
     const [updated] = await db.update(contentInsightsTable)
@@ -1115,7 +1126,7 @@ ${content.substring(0, 8000)}
 각 항목 형식:
 {
   "question": "사용자가 검색할 법한 질문",
-  "shortAnswer": "1~2문장 핵심 답변",
+  "shortAnswer": "1~2문장 핵심 답변 (200자 이내)",
   "longAnswer": "마크다운 형식 상세 답변 (소제목/불릿 사용 가능)",
   "serviceType": "translation|interpretation|equipment",
   "questionType": "price|definition|comparison|process|faq",
@@ -1123,9 +1134,17 @@ ${content.substring(0, 8000)}
   "languagePair": "ko-en|en-ko|null",
   "industry": "산업명 또는 null",
   "useCase": "사용 목적 또는 null",
-  "confidenceScore": 0.4
+  "confidenceScore": 0.4,
+  "aeoTitle": "검색엔진/AI용 짧은 제목 (60자 이내)",
+  "aeoDescription": "AI 답변 구조에 최적화된 설명문 (160자 이내)",
+  "faqJson": [
+    { "question": "유사 질문 다른 표현 1", "answer": "간단한 답변" },
+    { "question": "유사 질문 다른 표현 2", "answer": "간단한 답변" },
+    { "question": "유사 질문 다른 표현 3", "answer": "간단한 답변" }
+  ]
 }
 
+faqJson은 main question과 다른 표현의 유사 질문 3~5개를 생성하세요.
 반드시 JSON 배열만 반환 ([ ... ]). 다른 텍스트 없이.`;
 
     const completion = await openaiClient.chat.completions.create({
@@ -1149,10 +1168,15 @@ ${content.substring(0, 8000)}
 
     const inserted = [];
     for (const item of parsed.slice(0, safeCount)) {
+      const rawShort = item.shortAnswer ?? null;
+      const trimmedShort = rawShort ? rawShort.slice(0, 200) : null;
+      const faqItems = Array.isArray(item.faqJson)
+        ? item.faqJson.filter((f: any) => f?.question && f?.answer).slice(0, 5) as { question: string; answer: string }[]
+        : null;
       const [row] = await db.insert(contentInsightsTable).values({
         question: item.question ?? "질문 없음",
-        answer: item.shortAnswer ?? "",
-        shortAnswer: item.shortAnswer ?? null,
+        answer: trimmedShort ?? "",
+        shortAnswer: trimmedShort,
         longAnswer: item.longAnswer ?? null,
         serviceType: (["translation", "interpretation", "equipment"].includes(item.serviceType)
           ? item.serviceType : "translation") as any,
@@ -1162,6 +1186,9 @@ ${content.substring(0, 8000)}
         industry: (item.industry && item.industry !== "null") ? item.industry : null,
         useCase: (item.useCase && item.useCase !== "null") ? item.useCase : null,
         confidenceScore: String(item.confidenceScore ?? "0.45"),
+        aeoTitle: item.aeoTitle?.slice(0, 60) ?? null,
+        aeoDescription: item.aeoDescription?.slice(0, 160) ?? null,
+        faqJson: faqItems?.length ? faqItems : null,
         status: "draft",
         visibilityLevel: "internal_summary",
         sourceType: "blog",

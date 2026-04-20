@@ -37,6 +37,10 @@ interface ContentInsight {
   specificityScore: number | null;
   duplicationScore: number | null;
   sourceWeight: number | null;
+  aeoTitle: string | null;
+  aeoDescription: string | null;
+  faqJson: { question: string; answer: string }[] | null;
+  relatedIds: number[] | null;
   isArchived: boolean;
   mergedIntoId: number | null;
   deletedAt: string | null;

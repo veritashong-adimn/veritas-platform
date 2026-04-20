@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/constants";
 
+interface FaqItem {
+  question: string;
+  answer: string;
+}
+
 interface RelatedInsight {
   id: number;
   question: string;
@@ -24,6 +29,11 @@ interface InsightDetail {
   maxPrice: string | null;
   sourceCount: number | null;
   confidenceScore: string | null;
+  aeoTitle: string | null;
+  aeoDescription: string | null;
+  faqJson: FaqItem[] | null;
+  sourceWeight: number | null;
+  filterScore: number | null;
   createdAt: string;
   updatedAt: string;
   slug: string;
@@ -140,7 +150,11 @@ export function InsightDetailPage({ slug }: { slug: string }) {
 
   useEffect(() => {
     if (!insight) return;
-    document.title = insight.question;
+
+    // SEO 메타 설정
+    const metaTitle = insight.aeoTitle ?? insight.question;
+    const metaDesc = insight.aeoDescription ?? insight.shortAnswer ?? insight.question;
+    document.title = metaTitle;
 
     const upsertMeta = (name: string, content: string, property?: string) => {
       const sel = property ? `meta[property="${property}"]` : `meta[name="${name}"]`;
@@ -152,14 +166,13 @@ export function InsightDetailPage({ slug }: { slug: string }) {
       }
       el.content = content;
     };
-    upsertMeta("description", insight.shortAnswer ?? insight.question);
-    upsertMeta("", insight.question, "og:title");
-    upsertMeta("", insight.shortAnswer ?? insight.question, "og:description");
+    upsertMeta("description", metaDesc);
+    upsertMeta("", metaTitle, "og:title");
+    upsertMeta("", metaDesc, "og:description");
 
-    const jsonLd = {
-      "@context": "https://schema.org",
-      "@type": "FAQPage",
-      "mainEntity": [{
+    // FAQPage Schema (질문 + faqJson 전체 포함)
+    const faqEntities: object[] = [
+      {
         "@type": "Question",
         "name": insight.question,
         "acceptedAnswer": {
@@ -169,16 +182,56 @@ export function InsightDetailPage({ slug }: { slug: string }) {
             insight.longAnswer ? stripMarkdown(insight.longAnswer) : null,
           ].filter(Boolean).join(" "),
         },
-      }],
-    };
-    let scriptEl = document.getElementById("faq-jsonld");
-    if (!scriptEl) {
-      scriptEl = document.createElement("script");
-      scriptEl.id = "faq-jsonld";
-      scriptEl.setAttribute("type", "application/ld+json");
-      document.head.appendChild(scriptEl);
+      },
+    ];
+    if (insight.faqJson?.length) {
+      for (const faq of insight.faqJson) {
+        faqEntities.push({
+          "@type": "Question",
+          "name": faq.question,
+          "acceptedAnswer": { "@type": "Answer", "text": faq.answer },
+        });
+      }
     }
-    scriptEl.textContent = JSON.stringify(jsonLd);
+    const faqSchema = {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": faqEntities,
+    };
+    let faqScript = document.getElementById("faq-jsonld");
+    if (!faqScript) {
+      faqScript = document.createElement("script");
+      faqScript.id = "faq-jsonld";
+      faqScript.setAttribute("type", "application/ld+json");
+      document.head.appendChild(faqScript);
+    }
+    faqScript.textContent = JSON.stringify(faqSchema);
+
+    // QAPage Schema
+    const qaSchema = {
+      "@context": "https://schema.org",
+      "@type": "QAPage",
+      "mainEntity": {
+        "@type": "Question",
+        "name": insight.question,
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": insight.shortAnswer ?? "",
+        },
+      },
+    };
+    let qaScript = document.getElementById("qa-jsonld");
+    if (!qaScript) {
+      qaScript = document.createElement("script");
+      qaScript.id = "qa-jsonld";
+      qaScript.setAttribute("type", "application/ld+json");
+      document.head.appendChild(qaScript);
+    }
+    qaScript.textContent = JSON.stringify(qaSchema);
+
+    return () => {
+      document.getElementById("qa-jsonld")?.remove();
+    };
   }, [insight]);
 
   const BADGE_COLOR: Record<string, { bg: string; text: string }> = {
@@ -186,6 +239,9 @@ export function InsightDetailPage({ slug }: { slug: string }) {
     interpretation: { bg: "#f0fdf4", text: "#16a34a" },
     equipment: { bg: "#fef9c3", text: "#b45309" },
   };
+
+  const hasKeyFacts = insight &&
+    (insight.avgPrice || insight.minPrice || insight.maxPrice || insight.sourceCount !== null);
 
   return (
     <div style={{
@@ -239,71 +295,123 @@ export function InsightDetailPage({ slug }: { slug: string }) {
 
         {!loading && insight && (() => {
           const badge = BADGE_COLOR[insight.serviceType] ?? { bg: "#f3f4f6", text: "#374151" };
+          const conf = fmtConf(insight.confidenceScore);
           return (
             <>
-              <div style={{ marginBottom: 8 }}>
-                <span style={{
-                  display: "inline-block", background: badge.bg, color: badge.text,
-                  fontSize: 12, fontWeight: 700, padding: "3px 10px", borderRadius: 100,
-                }}>
-                  {SERVICE_LABEL[insight.serviceType] ?? insight.serviceType}
-                </span>
+              {/* ── Answer Box (최상단, AEO/GEO 핵심 구조) ────────────────────────── */}
+              <div style={{
+                background: "#fff", border: "2px solid #e5e7eb", borderRadius: 14,
+                padding: "24px 28px", marginBottom: 24,
+                boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+              }}>
+                {/* 배지 + 신뢰도 */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                  <span style={{
+                    display: "inline-block", background: badge.bg, color: badge.text,
+                    fontSize: 12, fontWeight: 700, padding: "3px 10px", borderRadius: 100,
+                  }}>
+                    {SERVICE_LABEL[insight.serviceType] ?? insight.serviceType}
+                  </span>
+                  {conf && (
+                    <span style={{
+                      fontSize: 12, color: "#6b7280", background: "#f3f4f6",
+                      padding: "3px 10px", borderRadius: 100,
+                    }}>
+                      신뢰도 {conf}
+                    </span>
+                  )}
+                </div>
+
+                {/* 메인 질문 h1 */}
+                <h1 style={{ margin: "0 0 16px", fontSize: 22, fontWeight: 800, color: "#111827", lineHeight: 1.4 }}>
+                  {insight.question}
+                </h1>
+
+                {/* 핵심 답변 (shortAnswer) */}
+                {insight.shortAnswer && (
+                  <div style={{
+                    fontSize: 16, color: "#374151", lineHeight: 1.8,
+                    borderLeft: "4px solid #2563eb", paddingLeft: 16,
+                    marginBottom: hasKeyFacts ? 20 : 0,
+                  }}>
+                    {insight.shortAnswer}
+                  </div>
+                )}
+
+                {/* 핵심 수치 (key-facts) */}
+                {hasKeyFacts && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: insight.shortAnswer ? 0 : 4 }}>
+                    {fmtPrice(insight.avgPrice) && (
+                      <div style={{ background: "#f0fdf4", borderRadius: 8, padding: "10px 14px", minWidth: 100 }}>
+                        <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, marginBottom: 2 }}>평균 단가</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: "#059669" }}>{fmtPrice(insight.avgPrice)}</div>
+                      </div>
+                    )}
+                    {fmtPrice(insight.minPrice) && (
+                      <div style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 14px", minWidth: 100 }}>
+                        <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, marginBottom: 2 }}>최소 단가</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: "#111827" }}>{fmtPrice(insight.minPrice)}</div>
+                      </div>
+                    )}
+                    {fmtPrice(insight.maxPrice) && (
+                      <div style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 14px", minWidth: 100 }}>
+                        <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, marginBottom: 2 }}>최대 단가</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: "#111827" }}>{fmtPrice(insight.maxPrice)}</div>
+                      </div>
+                    )}
+                    {insight.sourceCount !== null && (
+                      <div style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 14px", minWidth: 100 }}>
+                        <div style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, marginBottom: 2 }}>데이터 건수</div>
+                        <div style={{ fontSize: 16, fontWeight: 800, color: "#111827" }}>{insight.sourceCount}건</div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
-              <h1 style={{ margin: "0 0 16px", fontSize: 24, fontWeight: 800, color: "#111827", lineHeight: 1.4 }}>
-                {insight.question}
-              </h1>
-
-              {insight.shortAnswer && (
-                <p style={{
-                  margin: "0 0 28px", fontSize: 16, color: "#374151", lineHeight: 1.8,
-                  background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10,
-                  padding: "16px 20px",
-                }}>
-                  {insight.shortAnswer}
-                </p>
-              )}
-
+              {/* ── 상세 설명 ───────────────────────────────────────────────────────── */}
               {insight.longAnswer && (
                 <div style={{
-                  background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10,
-                  padding: "20px 22px", marginBottom: 24,
+                  background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12,
+                  padding: "20px 24px", marginBottom: 24,
                 }}>
-                  <h2 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700, color: "#111827" }}>상세 설명</h2>
+                  <h2 style={{ margin: "0 0 14px", fontSize: 16, fontWeight: 700, color: "#111827" }}>상세 설명</h2>
                   <div>{renderLongAnswer(insight.longAnswer)}</div>
                 </div>
               )}
 
-              <div style={{
-                background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10,
-                padding: "20px 22px", marginBottom: 24,
-              }}>
-                <h2 style={{ margin: "0 0 16px", fontSize: 15, fontWeight: 700, color: "#111827" }}>데이터 근거</h2>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 16 }}>
-                  {[
-                    { label: "평균 단가", value: fmtPrice(insight.avgPrice) },
-                    { label: "최소 단가", value: fmtPrice(insight.minPrice) },
-                    { label: "최대 단가", value: fmtPrice(insight.maxPrice) },
-                    { label: "데이터 건수", value: insight.sourceCount !== null ? `${insight.sourceCount}건` : null },
-                    { label: "신뢰도", value: fmtConf(insight.confidenceScore) },
-                  ].filter(item => item.value !== null).map(item => (
-                    <div key={item.label} style={{
-                      background: "#f9fafb", borderRadius: 8, padding: "12px 14px",
-                    }}>
-                      <div style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, marginBottom: 4 }}>{item.label}</div>
-                      <div style={{ fontSize: 16, fontWeight: 800, color: "#111827" }}>{item.value}</div>
-                    </div>
-                  ))}
+              {/* ── FAQ 영역 (AEO/GEO 핵심) ─────────────────────────────────────── */}
+              {insight.faqJson && insight.faqJson.length > 0 && (
+                <div style={{
+                  background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12,
+                  padding: "20px 24px", marginBottom: 24,
+                }}>
+                  <h2 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700, color: "#111827" }}>자주 묻는 질문</h2>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                    {insight.faqJson.map((faq, idx) => (
+                      <div key={idx} style={{
+                        borderRadius: 8, background: "#f9fafb",
+                        border: "1px solid #f3f4f6", padding: "14px 16px",
+                      }}>
+                        <h3 style={{ margin: "0 0 8px", fontSize: 14, fontWeight: 700, color: "#111827" }}>
+                          {faq.question}
+                        </h3>
+                        <p style={{ margin: 0, fontSize: 14, color: "#374151", lineHeight: 1.7 }}>
+                          {faq.answer}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
+              {/* ── 관련 정보 (도메인/언어쌍/산업) ──────────────────────────────── */}
               {(insight.domain || insight.languagePair || insight.industry || insight.useCase) && (
                 <div style={{
-                  background: "#fff", border: "1px solid #e5e7eb", borderRadius: 10,
-                  padding: "20px 22px", marginBottom: 24,
+                  background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12,
+                  padding: "16px 20px", marginBottom: 24,
                 }}>
-                  <h2 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700, color: "#111827" }}>관련 정보</h2>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 16 }}>
                     {insight.domain && (
                       <div style={{ fontSize: 13, color: "#374151" }}>
                         <span style={{ color: "#9ca3af", marginRight: 4 }}>도메인</span>
@@ -332,9 +440,10 @@ export function InsightDetailPage({ slug }: { slug: string }) {
                 </div>
               )}
 
+              {/* ── 관련 인사이트 (내부 링크) ────────────────────────────────────── */}
               {insight.related.length > 0 && (
                 <div style={{ marginBottom: 24 }}>
-                  <h2 style={{ margin: "0 0 14px", fontSize: 15, fontWeight: 700, color: "#111827" }}>관련 인사이트</h2>
+                  <h2 style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 700, color: "#111827" }}>관련 정보</h2>
                   <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {insight.related.map(r => (
                       <a
@@ -342,7 +451,7 @@ export function InsightDetailPage({ slug }: { slug: string }) {
                         href={`/insights/${r.slug}`}
                         style={{
                           display: "block", background: "#fff",
-                          border: "1px solid #e5e7eb", borderRadius: 8,
+                          border: "1px solid #e5e7eb", borderRadius: 10,
                           padding: "14px 16px", textDecoration: "none",
                           transition: "border-color 0.15s",
                         }}

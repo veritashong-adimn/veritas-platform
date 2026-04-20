@@ -1,0 +1,165 @@
+🚀 📌 지시문 — AEO / GEO 노출 구조 적용
+🎯 목표
+인사이트 페이지를 AI 답변 구조(AEO/GEO)로 변환
+검색 / ChatGPT / AI 검색에 노출되는 구조 구현
+FAQ + Schema + 내부링크 + Answer Box 적용
+1️⃣ DB 스키마 확장
+
+📁 lib/db/src/schema/content_insights.ts
+
+👉 아래 컬럼 추가
+
+aeoTitle: text("aeo_title"),
+aeoDescription: text("aeo_description"),
+faqJson: jsonb("faq_json"),
+relatedIds: integer("related_ids").array(),
+
+👉 실행
+
+pnpm run push
+2️⃣ slug 생성 로직 개선
+
+📁 artifacts/api-server/src/routes/data-layer.ts
+
+👉 함수 추가
+
+function generateSlug(question: string, id: number) {
+  return question
+    .replace(/[?]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .slice(0, 60)
+    + "-" + id;
+}
+
+👉 적용
+
+status → published 변경 시
+slug 없으면 자동 생성
+3️⃣ FAQ 자동 생성 추가
+
+📁 /api/admin/content-insights/from-blog
+
+👉 GPT 프롬프트에 추가
+
+유사 질문 3~5개 생성 (다른 표현)
+각 질문에 대한 간단한 답변 포함
+
+👉 저장 구조
+
+faqJson: [
+  { question: "...", answer: "..." }
+]
+4️⃣ 공개 상세 페이지 구조 변경 (핵심)
+
+📁 artifacts/web-app/src/pages/InsightDetailPage.tsx
+
+✅ 4-1 Answer Box (최상단)
+<div className="answer-box">
+  <h1>{insight.question}</h1>
+
+  <div className="short-answer">
+    {insight.shortAnswer}
+  </div>
+
+  <div className="key-facts">
+    평균: {insight.avgPrice}
+    최소: {insight.minPrice}
+    최대: {insight.maxPrice}
+  </div>
+</div>
+✅ 4-2 상세 설명
+<h2>상세 설명</h2>
+<div dangerouslySetInnerHTML={{ __html: insight.longAnswer }} />
+✅ 4-3 FAQ 영역
+{insight.faqJson?.map((faq) => (
+  <div key={faq.question}>
+    <h3>{faq.question}</h3>
+    <p>{faq.answer}</p>
+  </div>
+))}
+✅ 4-4 내부 링크
+<h3>관련 정보</h3>
+
+{relatedInsights.map(item => (
+  <Link to={`/insights/${item.slug}`}>
+    {item.question}
+  </Link>
+))}
+5️⃣ 관련 인사이트 API 추가
+
+📁 /api/public/insights/:slug
+
+👉 추가
+
+SELECT *
+FROM content_insights
+WHERE service_type = current.service_type
+AND id != current.id
+LIMIT 5;
+6️⃣ Schema 자동 삽입 (필수)
+
+📁 InsightDetailPage.tsx
+
+✅ FAQ Schema
+<script type="application/ld+json">
+{JSON.stringify({
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": insight.faqJson.map(f => ({
+    "@type": "Question",
+    "name": f.question,
+    "acceptedAnswer": {
+      "@type": "Answer",
+      "text": f.answer
+    }
+  }))
+})}
+</script>
+✅ QAPage Schema
+<script type="application/ld+json">
+{JSON.stringify({
+  "@context": "https://schema.org",
+  "@type": "QAPage",
+  "mainEntity": {
+    "@type": "Question",
+    "name": insight.question,
+    "acceptedAnswer": {
+      "@type": "Answer",
+      "text": insight.shortAnswer
+    }
+  }
+})}
+</script>
+7️⃣ SEO 메타 설정
+document.title = insight.question;
+
+<meta name="description" content={insight.shortAnswer} />
+<meta property="og:title" content={insight.question} />
+<meta property="og:description" content={insight.shortAnswer} />
+8️⃣ 노출 우선순위 적용
+
+📁 API 쿼리
+
+ORDER BY sourceWeight DESC, filterScore DESC
+9️⃣ shortAnswer 제한
+
+📁 생성 로직
+
+shortAnswer = shortAnswer.slice(0, 200);
+🔟 신뢰도 표시
+<div className="confidence">
+  신뢰도: {insight.confidenceScore}
+</div>
+🎯 완료 기준 (반드시 확인)
+/insights/:slug 페이지 정상 출력
+FAQ schema 포함
+QAPage schema 포함
+내부 링크 표시
+shortAnswer 상단 노출
+slug 자연어 생성
+SEO meta 적용
+💥 핵심
+
+이 작업은 “페이지 개발”이 아니라
+👉 AI가 답변으로 가져가는 구조를 만드는 작업이다

@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, boolean, numeric, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, boolean, numeric, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { languageServiceDataTable, languageServiceTypeEnum } from "./language_service_data";
 
 export const contentInsightsTable = pgTable("content_insights", {
@@ -48,6 +48,11 @@ export const contentInsightsTable = pgTable("content_insights", {
   specificityScore: integer("specificity_score"),
   duplicationScore: integer("duplication_score"),
   sourceWeight: integer("source_weight"),
+
+  aeoTitle: text("aeo_title"),
+  aeoDescription: text("aeo_description"),
+  faqJson: jsonb("faq_json").$type<{ question: string; answer: string }[]>(),
+  relatedIds: integer("related_ids").array(),
 
   isArchived: boolean("is_archived").notNull().default(false),
   mergedIntoId: integer("merged_into_id"),
