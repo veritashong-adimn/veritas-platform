@@ -14,6 +14,7 @@ Key capabilities include:
 - Support for divisions within large client companies: divisions table (company_id FK, name, type), project-level requesting/billing/payer separation, full CRUD API, and stats display in company detail modal.
 - A new data layer for translation data assetization (`translation_units`), enabling advanced search, anonymization, and history tracking.
 - `language_service_data` + `content_insights` tables: 통합 언어 서비스 데이터 구조 (번역/통역/장비 서비스 레퍼런스 데이터 + AEO/GEO 콘텐츠 인사이트 생성 기반). 서비스 유형별 동적 필드, CRUD API, 인사이트 Q&A 등록/삭제 지원.
+- **공개 인사이트 페이지**: `published` + `public_insight` 상태의 인사이트를 `/insights` (목록) 및 `/insights/:slug` (상세)로 공개 노출. FAQ JSON-LD schema, SEO 메타 태그(title, description, og:) 자동 삽입. PATCH status → published 전환 시 slug 자동 생성. 공개 API: `GET /api/public/insights`, `GET /api/public/insights/:slug` (인증 불필요). 로그인 없이 접근 가능한 공개 페이지.
 - Detailed project, company, contact, translator, and product management modals.
 - File management (upload/download/delete) for project documents using GCS presigned URLs.
 - Translator self-service for profile and rate management.

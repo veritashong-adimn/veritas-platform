@@ -1,0 +1,256 @@
+[목표]
+현재 인사이트 관리에서 "게시됨(published)" 상태인 content_insights를
+실제 홈페이지에서 노출 가능한 공개 콘텐츠 페이지로 연결한다.
+
+이번 작업의 범위:
+
+* published + public_insight 인사이트만 외부 노출
+* 공개 API 추가
+* 인사이트 목록 페이지 1개
+* 인사이트 상세 페이지 1개
+* FAQ schema(JSON-LD) 삽입
+
+주의:
+이번 단계에서는 관리자 UI는 수정하지 않는다.
+홈페이지/공개 페이지 연결만 구현한다.
+
+---
+
+[1단계: 공개 API 추가]
+
+신규 API 추가:
+
+1. GET /api/public/insights
+
+* 조건:
+
+  * status = 'published'
+  * visibilityLevel = 'public_insight'
+* 반환 필드:
+
+  * id
+  * serviceType
+  * question
+  * shortAnswer
+  * slug
+  * avgPrice
+  * minPrice
+  * maxPrice
+  * sourceCount
+  * confidenceScore
+  * createdAt / updatedAt
+
+2. GET /api/public/insights/:slug
+
+* slug 기준 단건 조회
+* 조건:
+
+  * status = 'published'
+  * visibilityLevel = 'public_insight'
+* 반환 필드:
+
+  * id
+  * serviceType
+  * question
+  * shortAnswer
+  * longAnswer
+  * questionType
+  * domain
+  * languagePair
+  * industry
+  * useCase
+  * avgPrice
+  * minPrice
+  * maxPrice
+  * sourceCount
+  * confidenceScore
+  * createdAt / updatedAt
+  * slug
+
+404 처리:
+
+* 없는 slug
+* published/public_insight 조건 미충족
+
+---
+
+[2단계: slug 자동 생성]
+
+content_insights에 slug 필드가 없으면 추가
+
+slug 생성 규칙:
+
+* question 기반
+* 한글 허용 또는 slugify 규칙 적용
+* 중복 방지를 위해 id suffix 허용 가능
+
+예:
+
+* 법률 한영 번역 비용은 얼마인가요?
+  → /insights/legal-ko-en-translation-cost-9
+* 동시통역 비용은 얼마인가요?
+  → /insights/simultaneous-interpretation-cost-10
+
+규칙:
+
+* published 전환 시 slug가 없으면 자동 생성
+* 기존 published 데이터도 조회 시 slug 없으면 보정 가능하게 처리
+
+---
+
+[3단계: 공개 목록 페이지 생성]
+
+신규 공개 페이지:
+
+* /insights
+
+역할:
+
+* 게시된 인사이트 목록 노출
+
+표시 항목:
+
+* 질문(question)
+* shortAnswer
+* 서비스 유형(serviceType)
+* 평균 단가(avgPrice)
+* 데이터 건수(sourceCount)
+* 신뢰도(confidenceScore)
+
+UI 원칙:
+
+* 홈페이지 톤과 맞추되 단순/가독성 우선
+* 카드형 또는 리스트형 가능
+* 질문 클릭 시 상세 페이지 이동
+
+상단 제목 예시:
+
+* "통번역 인사이트"
+* "번역·통역·장비 비용 인사이트"
+
+---
+
+[4단계: 공개 상세 페이지 생성]
+
+신규 공개 페이지:
+
+* /insights/:slug
+
+페이지 구성:
+
+1. H1 제목
+
+* question
+
+2. 첫 문단
+
+* shortAnswer
+
+3. 본문
+
+* longAnswer 렌더링
+* 마크다운이 있으면 보기 좋게 표시
+
+4. 데이터 근거 박스
+
+* 평균 단가
+* 최소/최대 단가
+* 데이터 건수
+* 신뢰도
+
+5. 관련 정보(있으면)
+
+* 서비스 유형
+* 언어쌍
+* 도메인
+* 산업/업종
+* 사용 목적
+
+6. 하단 관련 인사이트 링크 (선택)
+
+* 같은 serviceType 또는 domain 기준 2~4개
+
+---
+
+[5단계: FAQ schema(JSON-LD) 삽입]
+
+상세 페이지(/insights/:slug)에 FAQ schema 삽입:
+
+script type="application/ld+json"
+
+구조:
+
+* @context: https://schema.org
+* @type: FAQPage
+* mainEntity:
+
+  * @type: Question
+  * name: question
+  * acceptedAnswer:
+
+    * @type: Answer
+    * text: shortAnswer + longAnswer 텍스트 버전
+
+주의:
+
+* HTML 태그 제거한 텍스트 기반으로 넣기
+* JSON escape 안전 처리
+
+---
+
+[6단계: SEO 기본 메타 추가]
+
+상세 페이지에 기본 메타 적용:
+
+* title: question
+* meta description: shortAnswer
+* og:title: question
+* og:description: shortAnswer
+
+목록 페이지:
+
+* title: 통번역 인사이트
+* meta description: 번역, 통역, 장비 비용과 실제 데이터 기반 인사이트 제공
+
+---
+
+[7단계: 노출 조건 명확화]
+
+공개 노출 기준:
+
+* status = published
+* visibilityLevel = public_insight
+
+즉:
+
+* draft, approved, archived 는 절대 공개 페이지에 노출하지 않음
+* internal_summary / private 도 절대 노출하지 않음
+
+---
+
+[8단계: 샘플 데이터 반영 확인]
+
+현재 게시된 샘플 중 최소 1건을
+visibilityLevel = public_insight 로 변경하여
+실제 /insights 및 /insights/:slug 에 노출 확인
+
+테스트 확인 항목:
+
+* 목록 페이지 접근
+* 상세 페이지 접근
+* FAQ schema 삽입 확인
+* 404 처리 확인
+
+---
+
+[최종 결과]
+
+이 작업이 끝나면:
+
+1. 관리자에서 인사이트를 생성/검수/게시
+2. 게시된 인사이트가 실제 공개 페이지로 연결
+3. 검색엔진과 AI가 읽을 수 있는 FAQ 구조 생성
+
+즉,
+"인사이트 관리"의 게시 상태가
+실제 홈페이지 콘텐츠 게시와 연결되는 구조 완성

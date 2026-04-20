@@ -426,6 +426,25 @@ router.post("/admin/language-service-data/:id/insights", ...adminOnly, async (re
   }
 });
 
+function buildSlug(serviceType: string, languagePair: string | null, domain: string | null, id: number): string {
+  const typeMap: Record<string, string> = {
+    translation: "translation", interpretation: "interpretation", equipment: "equipment",
+  };
+  const domainMap: Record<string, string> = {
+    legal: "legal", finance: "finance", medical: "medical", technical: "technical",
+    marketing: "marketing", general: "general", academic: "academic", literary: "literary",
+    science: "science", government: "government",
+  };
+  const parts: string[] = [];
+  parts.push(typeMap[serviceType] || serviceType);
+  if (domain && domainMap[domain]) parts.push(domainMap[domain]);
+  if (languagePair) {
+    parts.push(languagePair.replace(/[^a-zA-Z0-9]/g, "-").replace(/-+/g, "-").toLowerCase());
+  }
+  parts.push(String(id));
+  return parts.join("-").replace(/--+/g, "-").replace(/^-|-$/g, "");
+}
+
 // PATCH /api/admin/content-insights/:id/status
 router.patch("/admin/content-insights/:id/status", ...adminOnly, async (req, res) => {
   try {
@@ -438,8 +457,16 @@ router.patch("/admin/content-insights/:id/status", ...adminOnly, async (req, res
       return res.status(400).json({ error: `status는 ${VALID.join(" | ")} 중 하나여야 합니다.` });
     }
 
+    const [existing] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, id));
+    if (!existing) return res.status(404).json({ error: "인사이트를 찾을 수 없습니다." });
+
+    const setPayload: Record<string, unknown> = { status, updatedAt: new Date() };
+    if (status === "published" && !existing.slug) {
+      setPayload.slug = buildSlug(existing.serviceType, existing.languagePair, existing.domain, id);
+    }
+
     const [updated] = await db.update(contentInsightsTable)
-      .set({ status, updatedAt: new Date() })
+      .set(setPayload)
       .where(eq(contentInsightsTable.id, id))
       .returning();
 

@@ -32,6 +32,8 @@ export const contentInsightsTable = pgTable("content_insights", {
 
   isPublic: boolean("is_public").notNull().default(true),
 
+  slug: text("slug"),
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

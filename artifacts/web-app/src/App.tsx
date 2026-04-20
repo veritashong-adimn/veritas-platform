@@ -7,6 +7,8 @@ import { CustomerDashboard } from "./pages/CustomerDashboard";
 import { TranslatorDashboard } from "./pages/TranslatorDashboard";
 import { AdminDashboard } from "./pages/AdminDashboard";
 import { SetPasswordPage } from "./pages/SetPasswordPage";
+import { InsightsListPage } from "./pages/InsightsListPage";
+import { InsightDetailPage } from "./pages/InsightDetailPage";
 
 function AccessDenied({ onBack }: { onBack: () => void }) {
   return (
@@ -96,6 +98,15 @@ export default function App() {
   // set-password 초대 링크 처리: 로그인 없이 접근 가능
   if (window.location.pathname === "/set-password") {
     return <SetPasswordPage />;
+  }
+
+  // 공개 인사이트 페이지: 로그인 없이 접근 가능
+  if (window.location.pathname === "/insights" || window.location.pathname === "/insights/") {
+    return <InsightsListPage />;
+  }
+  const insightDetailMatch = window.location.pathname.match(/^\/insights\/(.+)$/);
+  if (insightDetailMatch) {
+    return <InsightDetailPage slug={insightDetailMatch[1]} />;
   }
 
   if (!token || !user) return <AuthPage onAuth={handleAuth} />;

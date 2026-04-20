@@ -21,6 +21,7 @@ import filesRouter from "./files";
 import rolesRouter from "./roles";
 import activityRouter from "./activity";
 import dataLayerRouter from "./data-layer";
+import publicInsightsRouter from "./public-insights";
 
 const router: IRouter = Router();
 
@@ -46,5 +47,6 @@ router.use(filesRouter);
 router.use(rolesRouter);
 router.use(activityRouter);
 router.use(dataLayerRouter);
+router.use(publicInsightsRouter);
 
 export default router;
