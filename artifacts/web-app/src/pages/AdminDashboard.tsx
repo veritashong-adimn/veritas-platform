@@ -1443,19 +1443,32 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         <p style={{ fontSize: 13, color: "#9ca3af", margin: 0 }}>정산 내역이 없습니다.</p>
                       ) : settlements.slice(0, 5).map(s => {
                         const isPending = s.status === "ready";
+                        const name = (s as any).translatorName as string | null | undefined;
+                        const email = s.translatorEmail;
                         return (
                           <div key={s.id} style={{
                             display: "flex", justifyContent: "space-between", alignItems: "center",
-                            padding: "7px 0", borderBottom: "1px solid #f3f4f6",
+                            padding: "8px 0", borderBottom: "1px solid #f3f4f6",
                             background: isPending ? "#fef9f9" : "transparent",
                           }}>
-                            <div>
-                              <span style={{ fontSize: 13, color: isPending ? "#dc2626" : "#374151", fontWeight: isPending ? 600 : 400 }}>
-                                {s.translatorEmail ?? `통번역사 #${s.translatorId}`}
-                              </span>
-                              {isPending && <span style={{ marginLeft: 6, fontSize: 10, background: "#fee2e2", color: "#dc2626", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>미지급</span>}
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                <span style={{ fontSize: 13, fontWeight: 600, color: isPending ? "#dc2626" : "#111827" }}>
+                                  {name || email || `통번역사 #${s.translatorId}`}
+                                </span>
+                                {isPending && (
+                                  <span style={{ fontSize: 10, background: "#fee2e2", color: "#dc2626", borderRadius: 4, padding: "1px 5px", fontWeight: 700, flexShrink: 0 }}>
+                                    미지급
+                                  </span>
+                                )}
+                              </div>
+                              {name && email && (
+                                <p style={{ margin: 0, fontSize: 11, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  {email}
+                                </p>
+                              )}
                             </div>
-                            <span style={{ fontSize: 13, fontWeight: 700, color: isPending ? "#dc2626" : "#111827" }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: isPending ? "#dc2626" : "#111827", flexShrink: 0, marginLeft: 8 }}>
                               {Number(s.translatorAmount).toLocaleString()}원
                             </span>
                           </div>
