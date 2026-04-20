@@ -479,6 +479,64 @@ router.patch("/admin/content-insights/:id/status", ...adminOnly, async (req, res
   }
 });
 
+// PATCH /api/admin/content-insights/:id  (필드 수정)
+router.patch("/admin/content-insights/:id", ...adminOnly, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "유효하지 않은 id" });
+
+    const ALLOWED = [
+      "question", "shortAnswer", "longAnswer", "serviceType", "questionType",
+      "domain", "languagePair", "industry", "useCase",
+      "avgPrice", "minPrice", "maxPrice", "confidenceScore",
+    ];
+    const body = req.body as Record<string, unknown>;
+
+    const updateData: Record<string, unknown> = {};
+    for (const key of ALLOWED) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) {
+        updateData[key] = body[key] !== "" ? body[key] : null;
+      }
+    }
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ error: "수정할 필드가 없습니다." });
+    }
+    updateData.updatedAt = new Date();
+
+    const [existing] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, id));
+    if (!existing) return res.status(404).json({ error: "인사이트를 찾을 수 없습니다." });
+
+    const [updated] = await db.update(contentInsightsTable)
+      .set(updateData)
+      .where(eq(contentInsightsTable.id, id))
+      .returning();
+
+    if (!updated) return res.status(404).json({ error: "인사이트를 찾을 수 없습니다." });
+
+    if (existing.status === "published") {
+      const before: Record<string, unknown> = {};
+      const after: Record<string, unknown> = {};
+      for (const key of Object.keys(updateData)) {
+        if (key !== "updatedAt") {
+          before[key] = (existing as Record<string, unknown>)[key];
+          after[key] = updateData[key];
+        }
+      }
+      await logEvent(
+        "insight", id, "insight_updated", req.log,
+        req.user ? { id: req.user.id, email: req.user.email } : undefined,
+        JSON.stringify({ before, after }),
+      );
+    }
+
+    req.log.info({ id, status: existing.status }, "CI: insight updated");
+    res.json(updated);
+  } catch (err) {
+    req.log.error({ err }, "CI: failed to update insight");
+    res.status(500).json({ error: "인사이트 수정 실패" });
+  }
+});
+
 // DELETE /api/admin/content-insights/:id
 router.delete("/admin/content-insights/:id", ...adminOnly, async (req, res) => {
   try {

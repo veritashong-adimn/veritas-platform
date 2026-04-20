@@ -144,6 +144,9 @@ export function InsightManagementTab({ token, setToast }: Props) {
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<ContentInsight | null>(null);
   const [statusUpdating, setStatusUpdating] = useState(false);
+  const [editMode, setEditMode] = useState(false);
+  const [editDraft, setEditDraft] = useState<Partial<ContentInsight>>({});
+  const [saving, setSaving] = useState(false);
 
   const [showGenerateModal, setShowGenerateModal] = useState(false);
   const [clearPrevious, setClearPrevious] = useState(false);
@@ -276,6 +279,52 @@ export function InsightManagementTab({ token, setToast }: Props) {
       setToast("인사이트 생성 중 오류가 발생했습니다.");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  useEffect(() => {
+    setEditMode(false);
+    if (selected) {
+      setEditDraft({
+        question: selected.question,
+        shortAnswer: selected.shortAnswer ?? "",
+        longAnswer: selected.longAnswer ?? "",
+        serviceType: selected.serviceType,
+        questionType: selected.questionType ?? "",
+        domain: selected.domain ?? "",
+        languagePair: selected.languagePair ?? "",
+        industry: selected.industry ?? "",
+        useCase: selected.useCase ?? "",
+        avgPrice: selected.avgPrice ?? "",
+        minPrice: selected.minPrice ?? "",
+        maxPrice: selected.maxPrice ?? "",
+        confidenceScore: selected.confidenceScore ?? "",
+      });
+    }
+  }, [selected?.id]);
+
+  const handleSave = async () => {
+    if (!selected) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`${API}/admin/content-insights/${selected.id}`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify(editDraft),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error ?? "수정 실패");
+      }
+      const updated: ContentInsight = await res.json();
+      setInsights(prev => prev.map(r => r.id === updated.id ? updated : r));
+      setSelected(updated);
+      setEditMode(false);
+      setToast("인사이트가 수정되었습니다.");
+    } catch (err: unknown) {
+      setToast(err instanceof Error ? err.message : "인사이트 수정 실패");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -560,88 +609,202 @@ export function InsightManagementTab({ token, setToast }: Props) {
               background: "#f9fafb",
             }}>
               <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>
-                인사이트 #{selected.id} 상세
+                인사이트 #{selected.id} {editMode ? "수정" : "상세"}
               </span>
-              <button
-                onClick={() => setSelected(null)}
-                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#6b7280" }}
-              >✕</button>
-            </div>
-
-            <div style={{ padding: 16, overflowY: "auto", maxHeight: "calc(100vh - 280px)", display: "flex", flexDirection: "column", gap: 14 }}>
-
-              {/* 상태 변경 버튼 */}
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {statusActions(selected).map(a => (
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                {!editMode && (
                   <button
-                    key={a.next}
-                    onClick={() => handleStatusChange(selected.id, a.next)}
-                    disabled={statusUpdating}
+                    onClick={() => setEditMode(true)}
                     style={{
-                      padding: "6px 14px", borderRadius: 6, border: "none",
-                      background: a.bg, color: a.color, fontWeight: 600, fontSize: 12,
-                      cursor: statusUpdating ? "not-allowed" : "pointer",
-                      opacity: statusUpdating ? 0.6 : 1,
+                      padding: "4px 10px", borderRadius: 6, border: "1px solid #d1d5db",
+                      background: "#fff", color: "#374151", fontSize: 11, fontWeight: 600, cursor: "pointer",
                     }}
-                  >
-                    {statusUpdating ? "처리 중…" : a.label}
-                  </button>
-                ))}
-                <Badge
-                  text={STATUS_KO[selected.status] ?? selected.status}
-                  style={{ ...(STATUS_COLOR[selected.status] ?? {}), alignSelf: "center" }}
-                />
+                  >✏️ 수정</button>
+                )}
+                <button
+                  onClick={() => { setSelected(null); setEditMode(false); }}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#6b7280" }}
+                >✕</button>
               </div>
-
-              {/* 질문 */}
-              <DetailSection label="질문">
-                <p style={{ margin: 0, fontWeight: 600, color: "#111827", fontSize: 14 }}>{selected.question}</p>
-              </DetailSection>
-
-              {/* 요약 답변 */}
-              <DetailSection label="요약 답변 (shortAnswer)">
-                <p style={{ margin: 0, color: "#374151" }}>{selected.shortAnswer ?? selected.answer ?? "-"}</p>
-              </DetailSection>
-
-              {/* 상세 답변 */}
-              <DetailSection label="상세 답변 (longAnswer)">
-                <LongAnswerRenderer text={selected.longAnswer} />
-              </DetailSection>
-
-              {/* 메타 정보 */}
-              <DetailSection label="분류 정보">
-                <MetaGrid rows={[
-                  ["서비스 유형", SERVICE_TYPE_KO[selected.serviceType] ?? selected.serviceType],
-                  ["질문 유형",   selected.questionType ?? "-"],
-                  ["언어쌍",     selected.languagePair ?? "-"],
-                  ["도메인",     selected.domain ?? "-"],
-                  ["산업",       selected.industry ?? "-"],
-                  ["사용 목적",  selected.useCase ?? "-"],
-                ]} />
-              </DetailSection>
-
-              {/* 통계 정보 */}
-              <DetailSection label="데이터 통계">
-                <MetaGrid rows={[
-                  ["기반 건수",   selected.sourceCount !== null ? `${selected.sourceCount}건` : "-"],
-                  ["평균 단가",   fmt(selected.avgPrice, "원")],
-                  ["최저 단가",   fmt(selected.minPrice, "원")],
-                  ["최고 단가",   fmt(selected.maxPrice, "원")],
-                  ["평균 시간",   selected.avgDuration ? `${parseFloat(selected.avgDuration).toFixed(1)}시간` : "-"],
-                  ["신뢰도",     fmtConf(selected.confidenceScore)],
-                ]} />
-              </DetailSection>
-
-              {/* 공개 설정 */}
-              <DetailSection label="공개 설정">
-                <MetaGrid rows={[
-                  ["공개 수준",   VISIBILITY_KO[selected.visibilityLevel] ?? selected.visibilityLevel],
-                  ["공개 여부",   selected.isPublic ? "공개" : "비공개"],
-                  ["생성일",     new Date(selected.createdAt).toLocaleString("ko-KR")],
-                  ["수정일",     new Date(selected.updatedAt).toLocaleString("ko-KR")],
-                ]} />
-              </DetailSection>
             </div>
+
+            {editMode ? (
+              /* ── 수정 폼 ────────────────────────────────────────────── */
+              <div style={{ padding: 16, overflowY: "auto", maxHeight: "calc(100vh - 280px)", display: "flex", flexDirection: "column", gap: 12 }}>
+
+                {selected.status === "published" && (
+                  <div style={{
+                    background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8,
+                    padding: "8px 12px", fontSize: 12, color: "#92400e",
+                  }}>
+                    ⚠️ 게시 상태에서 수정하면 공개 페이지에 즉시 반영됩니다.
+                  </div>
+                )}
+
+                <EditField label="질문">
+                  <textarea
+                    value={editDraft.question ?? ""}
+                    onChange={e => setEditDraft(d => ({ ...d, question: e.target.value }))}
+                    rows={3}
+                    style={textareaStyle}
+                  />
+                </EditField>
+
+                <EditField label="요약 답변 (shortAnswer)">
+                  <textarea
+                    value={editDraft.shortAnswer ?? ""}
+                    onChange={e => setEditDraft(d => ({ ...d, shortAnswer: e.target.value }))}
+                    rows={3}
+                    style={textareaStyle}
+                  />
+                </EditField>
+
+                <EditField label="상세 답변 (longAnswer)">
+                  <textarea
+                    value={editDraft.longAnswer ?? ""}
+                    onChange={e => setEditDraft(d => ({ ...d, longAnswer: e.target.value }))}
+                    rows={8}
+                    style={textareaStyle}
+                  />
+                </EditField>
+
+                <EditField label="서비스 유형">
+                  <select
+                    value={editDraft.serviceType ?? "translation"}
+                    onChange={e => setEditDraft(d => ({ ...d, serviceType: e.target.value }))}
+                    style={editSelectStyle}
+                  >
+                    <option value="translation">번역</option>
+                    <option value="interpretation">통역</option>
+                    <option value="equipment">장비</option>
+                  </select>
+                </EditField>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                  <EditField label="도메인">
+                    <input value={editDraft.domain ?? ""} onChange={e => setEditDraft(d => ({ ...d, domain: e.target.value }))} style={editInputStyle} placeholder="예: legal" />
+                  </EditField>
+                  <EditField label="언어쌍">
+                    <input value={editDraft.languagePair ?? ""} onChange={e => setEditDraft(d => ({ ...d, languagePair: e.target.value }))} style={editInputStyle} placeholder="예: ko-en" />
+                  </EditField>
+                  <EditField label="산업">
+                    <input value={editDraft.industry ?? ""} onChange={e => setEditDraft(d => ({ ...d, industry: e.target.value }))} style={editInputStyle} />
+                  </EditField>
+                  <EditField label="사용 목적">
+                    <input value={editDraft.useCase ?? ""} onChange={e => setEditDraft(d => ({ ...d, useCase: e.target.value }))} style={editInputStyle} />
+                  </EditField>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                  <EditField label="평균 단가">
+                    <input type="number" value={editDraft.avgPrice ?? ""} onChange={e => setEditDraft(d => ({ ...d, avgPrice: e.target.value }))} style={editInputStyle} placeholder="0" />
+                  </EditField>
+                  <EditField label="최저 단가">
+                    <input type="number" value={editDraft.minPrice ?? ""} onChange={e => setEditDraft(d => ({ ...d, minPrice: e.target.value }))} style={editInputStyle} placeholder="0" />
+                  </EditField>
+                  <EditField label="최고 단가">
+                    <input type="number" value={editDraft.maxPrice ?? ""} onChange={e => setEditDraft(d => ({ ...d, maxPrice: e.target.value }))} style={editInputStyle} placeholder="0" />
+                  </EditField>
+                </div>
+
+                <EditField label="신뢰도 (0.0 ~ 1.0)">
+                  <input type="number" min="0" max="1" step="0.1" value={editDraft.confidenceScore ?? ""} onChange={e => setEditDraft(d => ({ ...d, confidenceScore: e.target.value }))} style={{ ...editInputStyle, maxWidth: 100 }} placeholder="0.7" />
+                </EditField>
+
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 4, borderTop: "1px solid #f3f4f6" }}>
+                  <button
+                    onClick={() => setEditMode(false)}
+                    disabled={saving}
+                    style={{ ...btnGhostStyle, opacity: saving ? 0.5 : 1 }}
+                  >취소</button>
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    style={{
+                      ...btnPrimaryStyle, minWidth: 80,
+                      opacity: saving ? 0.7 : 1,
+                      cursor: saving ? "not-allowed" : "pointer",
+                    }}
+                  >{saving ? "저장 중…" : "저장"}</button>
+                </div>
+              </div>
+            ) : (
+              /* ── 상세 뷰 ────────────────────────────────────────────── */
+              <div style={{ padding: 16, overflowY: "auto", maxHeight: "calc(100vh - 280px)", display: "flex", flexDirection: "column", gap: 14 }}>
+
+                {/* 상태 변경 버튼 */}
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {statusActions(selected).map(a => (
+                    <button
+                      key={a.next}
+                      onClick={() => handleStatusChange(selected.id, a.next)}
+                      disabled={statusUpdating}
+                      style={{
+                        padding: "6px 14px", borderRadius: 6, border: "none",
+                        background: a.bg, color: a.color, fontWeight: 600, fontSize: 12,
+                        cursor: statusUpdating ? "not-allowed" : "pointer",
+                        opacity: statusUpdating ? 0.6 : 1,
+                      }}
+                    >
+                      {statusUpdating ? "처리 중…" : a.label}
+                    </button>
+                  ))}
+                  <Badge
+                    text={STATUS_KO[selected.status] ?? selected.status}
+                    style={{ ...(STATUS_COLOR[selected.status] ?? {}), alignSelf: "center" }}
+                  />
+                </div>
+
+                {/* 질문 */}
+                <DetailSection label="질문">
+                  <p style={{ margin: 0, fontWeight: 600, color: "#111827", fontSize: 14 }}>{selected.question}</p>
+                </DetailSection>
+
+                {/* 요약 답변 */}
+                <DetailSection label="요약 답변 (shortAnswer)">
+                  <p style={{ margin: 0, color: "#374151" }}>{selected.shortAnswer ?? selected.answer ?? "-"}</p>
+                </DetailSection>
+
+                {/* 상세 답변 */}
+                <DetailSection label="상세 답변 (longAnswer)">
+                  <LongAnswerRenderer text={selected.longAnswer} />
+                </DetailSection>
+
+                {/* 메타 정보 */}
+                <DetailSection label="분류 정보">
+                  <MetaGrid rows={[
+                    ["서비스 유형", SERVICE_TYPE_KO[selected.serviceType] ?? selected.serviceType],
+                    ["질문 유형",   selected.questionType ?? "-"],
+                    ["언어쌍",     selected.languagePair ?? "-"],
+                    ["도메인",     selected.domain ?? "-"],
+                    ["산업",       selected.industry ?? "-"],
+                    ["사용 목적",  selected.useCase ?? "-"],
+                  ]} />
+                </DetailSection>
+
+                {/* 통계 정보 */}
+                <DetailSection label="데이터 통계">
+                  <MetaGrid rows={[
+                    ["기반 건수",   selected.sourceCount !== null ? `${selected.sourceCount}건` : "-"],
+                    ["평균 단가",   fmt(selected.avgPrice, "원")],
+                    ["최저 단가",   fmt(selected.minPrice, "원")],
+                    ["최고 단가",   fmt(selected.maxPrice, "원")],
+                    ["평균 시간",   selected.avgDuration ? `${parseFloat(selected.avgDuration).toFixed(1)}시간` : "-"],
+                    ["신뢰도",     fmtConf(selected.confidenceScore)],
+                  ]} />
+                </DetailSection>
+
+                {/* 공개 설정 */}
+                <DetailSection label="공개 설정">
+                  <MetaGrid rows={[
+                    ["공개 수준",   VISIBILITY_KO[selected.visibilityLevel] ?? selected.visibilityLevel],
+                    ["공개 여부",   selected.isPublic ? "공개" : "비공개"],
+                    ["생성일",     new Date(selected.createdAt).toLocaleString("ko-KR")],
+                    ["수정일",     new Date(selected.updatedAt).toLocaleString("ko-KR")],
+                  ]} />
+                </DetailSection>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -677,6 +840,17 @@ function MetaGrid({ rows }: { rows: [string, string][] }) {
   );
 }
 
+function EditField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label style={{ display: "block", fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const selectStyle: React.CSSProperties = {
@@ -706,4 +880,20 @@ const thStyle: React.CSSProperties = {
 
 const tdStyle: React.CSSProperties = {
   padding: "8px 10px", fontSize: 12, color: "#111827", verticalAlign: "middle",
+};
+
+const editInputStyle: React.CSSProperties = {
+  width: "100%", padding: "6px 9px", borderRadius: 6, border: "1px solid #d1d5db",
+  fontSize: 12, color: "#111827", boxSizing: "border-box",
+};
+
+const editSelectStyle: React.CSSProperties = {
+  width: "100%", padding: "6px 9px", borderRadius: 6, border: "1px solid #d1d5db",
+  fontSize: 12, color: "#111827", background: "#fff", cursor: "pointer", boxSizing: "border-box",
+};
+
+const textareaStyle: React.CSSProperties = {
+  width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid #d1d5db",
+  fontSize: 12, color: "#111827", resize: "vertical", lineHeight: 1.5,
+  fontFamily: "inherit", boxSizing: "border-box",
 };
