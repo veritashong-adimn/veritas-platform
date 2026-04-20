@@ -203,6 +203,25 @@ export function InsightManagementTab({ token, setToast }: Props) {
   const [mergeTargetId, setMergeTargetId] = useState<string>("");
   const [merging, setMerging] = useState(false);
 
+  // ── 커스텀 확인 모달 (window.confirm 대체) ──────────────────────────────────
+  // window.confirm()은 Replit 프리뷰 iframe 환경에서 브라우저가 URL/origin 등
+  // 불필요한 문자열을 대화상자에 자동 삽입하므로 커스텀 모달로 대체한다.
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    description: string;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
+
+  const openConfirm = (
+    title: string,
+    description: string,
+    onConfirm: () => void | Promise<void>,
+  ) => {
+    setConfirmDialog({ title, description, onConfirm });
+  };
+
+  const closeConfirm = () => setConfirmDialog(null);
+
   // ── 자동 보완 ──────────────────────────────────────────────────────────────
   interface AutoSuggestion {
     id: number;
@@ -621,17 +640,22 @@ export function InsightManagementTab({ token, setToast }: Props) {
     } catch (err: unknown) { setToast(err instanceof Error ? err.message : "승격 실패"); }
   };
 
-  const handleDrop = async (id: number) => {
-    if (!confirm(`#${id} 인사이트를 삭제(보관) 처리하시겠습니까?`)) return;
-    try {
-      const res = await fetch(`${API}/admin/content-insights/${id}/drop`, {
-        method: "POST", headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error((await res.json()).error ?? "삭제 실패");
-      setInsights(prev => prev.filter(r => r.id !== id));
-      if (selected?.id === id) setSelected(null);
-      setToast(`#${id} 인사이트가 보관되었습니다.`);
-    } catch (err: unknown) { setToast(err instanceof Error ? err.message : "삭제 실패"); }
+  const handleDrop = (id: number) => {
+    openConfirm(
+      "인사이트 삭제",
+      `#${id} 인사이트를 삭제(보관) 처리하시겠습니까?`,
+      async () => {
+        try {
+          const res = await fetch(`${API}/admin/content-insights/${id}/drop`, {
+            method: "POST", headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!res.ok) throw new Error((await res.json()).error ?? "삭제 실패");
+          setInsights(prev => prev.filter(r => r.id !== id));
+          if (selected?.id === id) setSelected(null);
+          setToast(`#${id} 인사이트가 보관되었습니다.`);
+        } catch (err: unknown) { setToast(err instanceof Error ? err.message : "삭제 실패"); }
+      },
+    );
   };
 
   const handleRestore = async (id: number) => {
@@ -653,25 +677,31 @@ export function InsightManagementTab({ token, setToast }: Props) {
     setShowMergeModal(true);
   };
 
-  const handleMergeConfirm = async () => {
+  const handleMergeConfirm = () => {
     if (!mergeSource || !mergeTargetId.trim()) return;
     const targetId = Number(mergeTargetId.trim());
     if (isNaN(targetId) || targetId <= 0) { setToast("유효한 대상 ID를 입력하세요."); return; }
-    if (!confirm(`#${mergeSource.id}를 #${targetId}에 병합하시겠습니까?\n병합된 항목은 보관 처리됩니다.`)) return;
-    setMerging(true);
-    try {
-      const res = await fetch(`${API}/admin/content-insights/merge`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ sourceId: mergeSource.id, targetId }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error ?? "병합 실패");
-      setShowMergeModal(false);
-      setInsights(prev => prev.filter(r => r.id !== mergeSource.id));
-      if (selected?.id === mergeSource.id) setSelected(null);
-      setToast(`#${mergeSource.id} → #${targetId} 병합 완료`);
-    } catch (err: unknown) { setToast(err instanceof Error ? err.message : "병합 실패"); }
-    finally { setMerging(false); }
+    const srcId = mergeSource.id;
+    openConfirm(
+      "인사이트 병합",
+      `#${srcId}를 #${targetId}에 병합하시겠습니까?\n병합된 항목은 보관 처리됩니다.`,
+      async () => {
+        setMerging(true);
+        try {
+          const res = await fetch(`${API}/admin/content-insights/merge`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ sourceId: srcId, targetId }),
+          });
+          if (!res.ok) throw new Error((await res.json()).error ?? "병합 실패");
+          setShowMergeModal(false);
+          setInsights(prev => prev.filter(r => r.id !== srcId));
+          if (selected?.id === srcId) setSelected(null);
+          setToast(`#${srcId} → #${targetId} 병합 완료`);
+        } catch (err: unknown) { setToast(err instanceof Error ? err.message : "병합 실패"); }
+        finally { setMerging(false); }
+      },
+    );
   };
 
   // ── 자동 보완 핸들러 ─────────────────────────────────────────────────────────
@@ -713,23 +743,28 @@ export function InsightManagementTab({ token, setToast }: Props) {
     }
   };
 
-  const handleBatchAutoEnhance = async () => {
-    if (!confirm("현재 목록의 PARTIAL/NONE 인사이트(최대 20개)에 대해 자동 보완을 실행합니다.\n시간이 걸릴 수 있습니다. 계속하시겠습니까?")) return;
-    setBatchEnhancing(true);
-    try {
-      const res = await fetch(`${API}/admin/content-insights/batch-auto-enhance`, {
-        method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "배치 자동 보완 실패");
-      setToast(`배치 완료: ${data.processed}건 처리, ${data.created}개 제안 생성`);
-      if (selected) await loadSuggestions(selected.id);
-    } catch (err: unknown) {
-      setToast(err instanceof Error ? err.message : "배치 자동 보완 실패");
-    } finally {
-      setBatchEnhancing(false);
-    }
+  const handleBatchAutoEnhance = () => {
+    openConfirm(
+      "자동 보완 실행",
+      "현재 목록의 PARTIAL/NONE 인사이트(최대 20개)에 대해 자동 보완을 실행합니다.\n시간이 걸릴 수 있습니다. 계속하시겠습니까?",
+      async () => {
+        setBatchEnhancing(true);
+        try {
+          const res = await fetch(`${API}/admin/content-insights/batch-auto-enhance`, {
+            method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error ?? "배치 자동 보완 실패");
+          setToast(`배치 완료: ${data.processed}건 처리, ${data.created}개 제안 생성`);
+          if (selected) await loadSuggestions(selected.id);
+        } catch (err: unknown) {
+          setToast(err instanceof Error ? err.message : "배치 자동 보완 실패");
+        } finally {
+          setBatchEnhancing(false);
+        }
+      },
+    );
   };
 
   const handleApplySuggestion = async (sugId: number) => {
@@ -1403,6 +1438,52 @@ export function InsightManagementTab({ token, setToast }: Props) {
                 disabled={merging || !mergeTargetId.trim()}
                 style={{ ...btnPrimaryStyle, background: "#2563eb", opacity: (merging || !mergeTargetId.trim()) ? 0.7 : 1 }}
               >{merging ? "병합 중…" : "병합 실행"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 커스텀 확인 모달 ─────────────────────────────────────────────────── */}
+      {confirmDialog && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+            display: "flex", alignItems: "center", justifyContent: "center", zIndex: 2000,
+          }}
+          onClick={e => { if (e.target === e.currentTarget) closeConfirm(); }}
+        >
+          <div style={{
+            background: "#fff", borderRadius: 14, width: 420, maxWidth: "92vw",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.22)", padding: 28,
+          }}>
+            <h3 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 700, color: "#111827" }}>
+              {confirmDialog.title}
+            </h3>
+            <p style={{
+              margin: "0 0 24px", fontSize: 14, color: "#374151", lineHeight: 1.6,
+              whiteSpace: "pre-wrap",
+            }}>
+              {confirmDialog.description}
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button
+                onClick={closeConfirm}
+                style={{
+                  padding: "8px 20px", borderRadius: 8, border: "1px solid #d1d5db",
+                  background: "#fff", color: "#374151", cursor: "pointer", fontSize: 14, fontWeight: 500,
+                }}
+              >취소</button>
+              <button
+                onClick={async () => {
+                  const fn = confirmDialog.onConfirm;
+                  setConfirmDialog(null);
+                  await fn();
+                }}
+                style={{
+                  padding: "8px 20px", borderRadius: 8, border: "none",
+                  background: "#2563eb", color: "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600,
+                }}
+              >확인</button>
             </div>
           </div>
         </div>
