@@ -145,6 +145,10 @@ export function InsightManagementTab({ token, setToast }: Props) {
   const [selected, setSelected] = useState<ContentInsight | null>(null);
   const [statusUpdating, setStatusUpdating] = useState(false);
 
+  const [showGenerateModal, setShowGenerateModal] = useState(false);
+  const [clearPrevious, setClearPrevious] = useState(false);
+  const [generating, setGenerating] = useState(false);
+
   const [filters, setFilters] = useState({
     serviceType: "",
     status: "",
@@ -191,6 +195,34 @@ export function InsightManagementTab({ token, setToast }: Props) {
     setAppliedFilters(empty);
     setSelected(null);
     fetchInsights(empty);
+  };
+
+  const handleGenerate = async () => {
+    setGenerating(true);
+    try {
+      const url = clearPrevious
+        ? `${API}/admin/content-insights/generate?clearPrevious=true`
+        : `${API}/admin/content-insights/generate`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      });
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      setShowGenerateModal(false);
+      setClearPrevious(false);
+      const empty = { serviceType: "", status: "", visibilityLevel: "", domain: "", languagePair: "" };
+      setFilters(empty);
+      setAppliedFilters(empty);
+      setSelected(null);
+      await fetchInsights(empty);
+      setToast(`인사이트 생성 완료 (생성: ${data.generated ?? 0}건 / 업데이트: ${data.updated ?? 0}건)`);
+    } catch (err) {
+      console.error("인사이트 생성 오류:", err);
+      setToast("인사이트 생성 중 오류가 발생했습니다.");
+    } finally {
+      setGenerating(false);
+    }
   };
 
   const handleStatusChange = async (id: number, newStatus: string) => {
@@ -289,7 +321,91 @@ export function InsightManagementTab({ token, setToast }: Props) {
         <span style={{ marginLeft: "auto", fontSize: 12, color: "#6b7280" }}>
           총 <strong>{total}</strong>건
         </span>
+
+        <button
+          onClick={() => setShowGenerateModal(true)}
+          style={{ ...btnPrimaryStyle, background: "#2563eb", display: "flex", alignItems: "center", gap: 4 }}
+        >
+          <span>+</span> 인사이트 생성
+        </button>
       </div>
+
+      {/* ── 생성 모달 ────────────────────────────────────────────────────────────── */}
+      {showGenerateModal && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+        }}
+          onClick={e => { if (e.target === e.currentTarget) setShowGenerateModal(false); }}
+        >
+          <div style={{
+            background: "#fff", borderRadius: 12, padding: 28, width: 440, maxWidth: "90vw",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>인사이트 생성</h3>
+              <button
+                onClick={() => setShowGenerateModal(false)}
+                style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#6b7280" }}
+              >✕</button>
+            </div>
+
+            <div style={{
+              background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 8,
+              padding: "10px 14px", marginBottom: 20, fontSize: 13, color: "#0369a1", lineHeight: 1.5,
+            }}>
+              언어 서비스 데이터 중 공개된 데이터(is_public=true)를 기반으로<br />
+              인사이트가 자동 생성됩니다.
+            </div>
+
+            <label style={{
+              display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer",
+              padding: "12px 14px", borderRadius: 8, border: "1px solid #e5e7eb",
+              background: clearPrevious ? "#fef2f2" : "#f9fafb", marginBottom: 24,
+            }}>
+              <input
+                type="checkbox"
+                checked={clearPrevious}
+                onChange={e => setClearPrevious(e.target.checked)}
+                style={{ marginTop: 2, width: 15, height: 15, cursor: "pointer" }}
+              />
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>
+                  기존 draft 삭제 후 재생성 (clearPrevious)
+                </div>
+                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 3, lineHeight: 1.4 }}>
+                  {clearPrevious
+                    ? "⚠️ 기존 draft 상태 인사이트를 모두 삭제하고 새로 생성합니다."
+                    : "기존 데이터는 유지하고 upsert 방식으로 생성합니다."}
+                </div>
+              </div>
+            </label>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => { setShowGenerateModal(false); setClearPrevious(false); }}
+                disabled={generating}
+                style={{ ...btnGhostStyle, opacity: generating ? 0.5 : 1 }}
+              >
+                취소
+              </button>
+              <button
+                onClick={handleGenerate}
+                disabled={generating}
+                style={{
+                  ...btnPrimaryStyle,
+                  background: clearPrevious ? "#dc2626" : "#2563eb",
+                  minWidth: 100,
+                  opacity: generating ? 0.7 : 1,
+                  cursor: generating ? "not-allowed" : "pointer",
+                }}
+              >
+                {generating ? "생성 중…" : "생성 실행"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── 콘텐츠 영역: 목록 + 상세 ────────────────────────────────────────────── */}
       <div style={{ display: "flex", gap: 12, minHeight: 0, alignItems: "flex-start" }}>
