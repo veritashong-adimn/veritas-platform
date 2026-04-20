@@ -55,6 +55,44 @@ const LANG_LABEL: Record<string, string> = {
   "ko-zh": "한→중", "zh-ko": "중→한", "ko-de": "한→독", "ko-fr": "한→불",
 };
 
+// ── 이벤트 추적 헬퍼 ──────────────────────────────────────────────────────────
+
+function getOrCreateSessionId(): string {
+  const KEY = "insight_sid";
+  let sid = localStorage.getItem(KEY);
+  if (!sid) {
+    sid = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem(KEY, sid);
+  }
+  return sid;
+}
+
+function getDevice(): string {
+  if (typeof navigator === "undefined") return "desktop";
+  const ua = navigator.userAgent;
+  if (/Mobi|Android|iPhone|iPad/i.test(ua)) return "mobile";
+  if (/Tablet|iPad/i.test(ua)) return "tablet";
+  return "desktop";
+}
+
+async function trackInsightEvent(insightId: number, eventType: "view" | "click" | "conversion", apiBase: string) {
+  try {
+    await fetch(`${apiBase}/api/insight-events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        insightId,
+        eventType,
+        sessionId: getOrCreateSessionId(),
+        referrer: document.referrer?.slice(0, 512) || null,
+        device: getDevice(),
+      }),
+    });
+  } catch {
+    // 이벤트 수집 실패는 UX에 영향 주지 않음
+  }
+}
+
 function fmtPrice(val: string | null) {
   if (!val) return null;
   const n = parseFloat(val);
@@ -134,6 +172,9 @@ export function InsightDetailPage({ slug }: { slug: string }) {
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
+  // API base URL (환경에 따른 동적 처리)
+  const apiBase = api("").replace(/\/$/, "").replace(/\/api$/, "");
+
   useEffect(() => {
     fetch(api(`/api/public/insights/${encodeURIComponent(slug)}`))
       .then(r => {
@@ -147,6 +188,12 @@ export function InsightDetailPage({ slug }: { slug: string }) {
       })
       .catch(() => { setNotFound(true); setLoading(false); });
   }, [slug]);
+
+  // view 이벤트 수집 (insight 로드 완료 시 1회)
+  useEffect(() => {
+    if (!insight?.id) return;
+    trackInsightEvent(insight.id, "view", apiBase);
+  }, [insight?.id, apiBase]);
 
   useEffect(() => {
     if (!insight) return;
@@ -474,6 +521,54 @@ export function InsightDetailPage({ slug }: { slug: string }) {
                   </div>
                 </div>
               )}
+
+              {/* ── CTA 섹션 ───────────────────────────────────────────────────── */}
+              <div style={{
+                background: "linear-gradient(135deg, #eff6ff 0%, #f5f3ff 100%)",
+                border: "1px solid #c7d2fe", borderRadius: 14,
+                padding: "24px 28px", marginTop: 8, textAlign: "center",
+              }}>
+                <h3 style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 700, color: "#1e3a8a" }}>
+                  전문 통번역이 필요하신가요?
+                </h3>
+                <p style={{ margin: "0 0 20px", fontSize: 14, color: "#4b5563" }}>
+                  실제 거래 데이터 기반의 전문 서비스를 제공합니다.
+                </p>
+                <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+                  <a
+                    href="/#contact"
+                    onClick={() => trackInsightEvent(insight.id, "click", apiBase)}
+                    style={{
+                      display: "inline-block",
+                      background: "#2563eb", color: "#fff",
+                      padding: "12px 24px", borderRadius: 8,
+                      textDecoration: "none", fontWeight: 700, fontSize: 14,
+                      boxShadow: "0 2px 8px rgba(37,99,235,0.25)",
+                      transition: "opacity 0.15s",
+                    }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.opacity = "0.9"; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.opacity = "1"; }}
+                  >
+                    문의하기
+                  </a>
+                  <a
+                    href="/#quote"
+                    onClick={() => trackInsightEvent(insight.id, "click", apiBase)}
+                    style={{
+                      display: "inline-block",
+                      background: "#fff", color: "#2563eb",
+                      padding: "12px 24px", borderRadius: 8,
+                      textDecoration: "none", fontWeight: 700, fontSize: 14,
+                      border: "2px solid #2563eb",
+                      transition: "opacity 0.15s",
+                    }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLAnchorElement).style.opacity = "0.8"; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLAnchorElement).style.opacity = "1"; }}
+                  >
+                    견적 요청
+                  </a>
+                </div>
+              </div>
 
               <div style={{ fontSize: 12, color: "#d1d5db", textAlign: "right", marginTop: 32 }}>
                 최종 업데이트: {new Date(insight.updatedAt).toLocaleDateString("ko-KR")}

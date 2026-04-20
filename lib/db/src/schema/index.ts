@@ -34,3 +34,4 @@ export * from "./translation_unit_logs";
 export * from "./language_service_data";
 export * from "./content_insights";
 export * from "./insight_auto_suggestions";
+export * from "./insight_events";

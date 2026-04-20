@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, translationUnitsTable, translationUnitLogsTable, languageServiceDataTable, contentInsightsTable, insightAutoSuggestionsTable } from "@workspace/db";
+import { db, translationUnitsTable, translationUnitLogsTable, languageServiceDataTable, contentInsightsTable, insightAutoSuggestionsTable, insightEventsTable } from "@workspace/db";
 import { eq, and, or, ilike, sql, desc, inArray } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import {
@@ -1797,6 +1797,107 @@ router.post("/admin/suggestions/:sugId/reject", ...adminOnly, async (req, res) =
     res.json({ id: sugId, status: "rejected" });
   } catch (err) {
     res.status(500).json({ error: "제안 무시 실패" });
+  }
+});
+
+// ─── 인사이트 성과 분석 ────────────────────────────────────────────────────────
+
+// GET /api/admin/insight-analytics  (전체 성과 목록)
+router.get("/admin/insight-analytics", ...staffPlus, async (req, res) => {
+  try {
+    const { period = "all", sortBy = "views" } = req.query as { period?: string; sortBy?: string };
+
+    // 기간 필터
+    const periodFilter = (() => {
+      if (period === "7d") return sql`created_at >= NOW() - INTERVAL '7 days'`;
+      if (period === "30d") return sql`created_at >= NOW() - INTERVAL '30 days'`;
+      return sql`1=1`;
+    })();
+
+    const rows = await db.execute<{
+      insight_id: number;
+      question: string;
+      slug: string | null;
+      views: string;
+      clicks: string;
+      conversions: string;
+    }>(sql`
+      SELECT
+        ci.id AS insight_id,
+        ci.question,
+        ci.slug,
+        COALESCE(SUM(CASE WHEN ie.event_type = 'view'       AND ${periodFilter} THEN 1 ELSE 0 END), 0) AS views,
+        COALESCE(SUM(CASE WHEN ie.event_type = 'click'      AND ${periodFilter} THEN 1 ELSE 0 END), 0) AS clicks,
+        COALESCE(SUM(CASE WHEN ie.event_type = 'conversion' AND ${periodFilter} THEN 1 ELSE 0 END), 0) AS conversions
+      FROM content_insights ci
+      LEFT JOIN insight_events ie ON ie.insight_id = ci.id
+      WHERE ci.status = 'published' AND ci.is_archived = false
+      GROUP BY ci.id, ci.question, ci.slug
+    `);
+
+    const data = rows.rows.map(r => {
+      const views = Number(r.views);
+      const clicks = Number(r.clicks);
+      const conversions = Number(r.conversions);
+      return {
+        insightId: r.insight_id,
+        question: r.question,
+        slug: r.slug,
+        views,
+        clicks,
+        conversions,
+        ctr: views > 0 ? Math.round((clicks / views) * 1000) / 10 : 0,
+        conversionRate: clicks > 0 ? Math.round((conversions / clicks) * 1000) / 10 : 0,
+        viewConversionRate: views > 0 ? Math.round((conversions / views) * 1000) / 10 : 0,
+      };
+    });
+
+    // 정렬
+    if (sortBy === "clicks") data.sort((a, b) => b.clicks - a.clicks);
+    else if (sortBy === "conversions") data.sort((a, b) => b.conversions - a.conversions);
+    else if (sortBy === "ctr") data.sort((a, b) => b.ctr - a.ctr);
+    else data.sort((a, b) => b.views - a.views); // default: views
+
+    res.json({ data, period, sortBy });
+  } catch (err) {
+    req.log.error({ err }, "insight-analytics: query failed");
+    res.status(500).json({ error: "성과 분석 조회 실패" });
+  }
+});
+
+// GET /api/admin/insight-analytics/:id  (단일 인사이트 성과)
+router.get("/admin/insight-analytics/:id", ...staffPlus, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "유효하지 않은 id" });
+
+    const result = await db.execute<{ event_type: string; cnt: string }>(sql`
+      SELECT event_type, COUNT(*) AS cnt
+      FROM insight_events
+      WHERE insight_id = ${id}
+      GROUP BY event_type
+    `);
+
+    const stats: Record<string, number> = { view: 0, click: 0, conversion: 0 };
+    for (const r of result.rows) {
+      stats[r.event_type] = Number(r.cnt);
+    }
+
+    const views = stats.view;
+    const clicks = stats.click;
+    const conversions = stats.conversion;
+
+    res.json({
+      insightId: id,
+      views,
+      clicks,
+      conversions,
+      ctr: views > 0 ? Math.round((clicks / views) * 1000) / 10 : 0,
+      conversionRate: clicks > 0 ? Math.round((conversions / clicks) * 1000) / 10 : 0,
+      viewConversionRate: views > 0 ? Math.round((conversions / views) * 1000) / 10 : 0,
+    });
+  } catch (err) {
+    res.status(500).json({ error: "단일 인사이트 성과 조회 실패" });
   }
 });
 

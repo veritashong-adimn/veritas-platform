@@ -1,0 +1,244 @@
+지시문
+
+목표:
+게시된 인사이트의 성과(조회, 클릭, 전환)를 수집·저장·분석하여
+“어떤 인사이트가 실제로 유입과 매출에 기여하는지” 운영자가 확인할 수 있는 BI 시스템을 구축한다.
+
+이번 작업은
+👉 “콘텐츠 생산 시스템 → 성과 기반 최적화 시스템”으로 전환하는 핵심 단계다.
+
+---
+
+1. 추적 대상 정의
+
+분석 대상:
+
+* status = published 인 인사이트
+
+추적 이벤트 3가지:
+
+1. view (조회)
+
+* /insights/:slug 페이지 진입
+
+2. click (클릭)
+
+* CTA 버튼 클릭 (문의하기, 견적 요청 등)
+
+3. conversion (전환)
+
+* 실제 문의 제출 / 결제 / 프로젝트 생성
+
+---
+
+2. DB 테이블 추가
+
+table: insight_events
+
+컬럼:
+
+* id
+* insightId
+* eventType (view / click / conversion)
+* userId (nullable)
+* sessionId (string)
+* referrer (string, nullable)
+* createdAt (timestamp)
+
+추가 권장:
+
+* device (mobile / desktop)
+* country (optional)
+
+---
+
+3. 조회수(view) 수집
+
+위치:
+
+* /insights/:slug 페이지 로드 시
+
+동작:
+
+* 최초 렌더 시 API 호출 → view 이벤트 기록
+
+주의:
+
+* 같은 sessionId 기준으로 1회만 카운트 (중복 방지)
+* sessionId는 localStorage 또는 cookie 사용
+
+---
+
+4. 클릭(click) 수집
+
+대상:
+
+* “문의하기”
+* “견적 요청”
+* CTA 버튼 전체
+
+동작:
+
+* 버튼 클릭 시 API 호출 → click 이벤트 저장
+
+---
+
+5. 전환(conversion) 수집
+
+연동 대상:
+
+* 프로젝트 생성 API
+* 문의 제출 API
+
+동작:
+
+* 해당 요청 성공 시
+  → 연결된 insightId로 conversion 이벤트 기록
+
+---
+
+6. API 추가
+
+POST /api/insight-events
+
+* body: { insightId, eventType }
+
+GET /admin/insight-analytics
+
+* 기간별 통계 반환
+
+응답 예:
+
+* insightId
+* views
+* clicks
+* conversions
+* ctr
+* conversionRate
+
+---
+
+7. 지표 계산
+
+CTR (클릭률):
+
+* clicks / views
+
+Conversion Rate:
+
+* conversions / clicks
+
+추가:
+
+* views 대비 conversion도 계산 가능
+
+---
+
+8. 관리자 UI 추가
+
+위치:
+인사이트 관리 화면 또는 별도 “성과 분석” 탭
+
+표시 컬럼:
+
+* 조회수 (views)
+* 클릭수 (clicks)
+* 전환수 (conversions)
+* CTR (%)
+* 전환율 (%)
+
+정렬 옵션:
+
+* 조회수 높은순
+* 전환 높은순
+* CTR 높은순
+
+---
+
+9. 상세 패널 확장
+
+인사이트 상세에 추가:
+
+“성과 분석” 섹션
+
+표시:
+
+* 조회수
+* 클릭수
+* 전환수
+* CTR
+* 전환율
+
+---
+
+10. 필터 추가
+
+* 기간 선택 (최근 7일 / 30일 / 전체)
+* 성과 기준 필터:
+
+  * 조회수 높은
+  * 전환 있는 인사이트만
+
+---
+
+11. 운영 활용 구조
+
+운영자가 할 수 있어야 하는 것:
+
+* 조회수 높은데 전환 없는 인사이트 → CTA 개선
+* CTR 높은데 conversion 낮음 → 가격/신뢰 요소 보완
+* 전환 높은 인사이트 → 관련 콘텐츠 확장
+
+---
+
+12. 추가 확장 (다음 단계용)
+
+* 자동 랭킹 (Top performing insights)
+* 저성과 자동 DROP 후보
+* 고성과 자동 확장 (related 생성 강화)
+
+---
+
+13. 주의사항
+
+* 이벤트 중복 기록 방지
+* API 호출 과다 방지 (debounce 고려)
+* 익명 사용자 처리 (userId nullable)
+* 개인정보 저장 금지
+
+---
+
+14. 완료 기준
+
+작업 완료 후:
+
+* 게시된 인사이트에 대해
+
+  * 조회
+  * 클릭
+  * 전환
+    이 모두 수집됨
+
+관리자는:
+
+👉 어떤 인사이트가 돈 되는지 숫자로 확인 가능
+
+---
+
+15. 완료 보고 형식
+
+* 생성된 테이블 구조
+* 이벤트 수집 방식
+* API 목록
+* UI 추가 위치
+* 지표 계산 로직
+* 테스트 결과
+* 샘플 데이터
+
+---
+
+핵심 한 줄:
+
+👉
+“이제는 만드는 게 아니라
+돈 되는 것만 남긴다”

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { contentInsightsTable } from "@workspace/db/schema";
+import { contentInsightsTable, insightEventsTable } from "@workspace/db/schema";
 import { eq, and, desc, or, isNull } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
@@ -161,6 +161,62 @@ router.get("/public/insights/:slug", async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: "인사이트 상세 조회 실패" });
+  }
+});
+
+// POST /api/insight-events  (이벤트 수집 — 인증 불필요)
+router.post("/insight-events", async (req, res) => {
+  try {
+    const { insightId, eventType, sessionId, referrer, device } = req.body as {
+      insightId?: number;
+      eventType?: string;
+      sessionId?: string;
+      referrer?: string;
+      device?: string;
+    };
+
+    if (!insightId || !eventType || !sessionId) {
+      return res.status(400).json({ error: "insightId, eventType, sessionId 필수" });
+    }
+    if (!["view", "click", "conversion"].includes(eventType)) {
+      return res.status(400).json({ error: "eventType은 view|click|conversion 중 하나" });
+    }
+
+    // view 이벤트 중복 방지: 같은 sessionId + insightId 조합으로 이미 view 기록됐으면 skip
+    if (eventType === "view") {
+      const [existing] = await db.select({ id: insightEventsTable.id })
+        .from(insightEventsTable)
+        .where(and(
+          eq(insightEventsTable.insightId, insightId),
+          eq(insightEventsTable.sessionId, sessionId),
+          eq(insightEventsTable.eventType, "view"),
+        ))
+        .limit(1);
+      if (existing) {
+        return res.status(200).json({ skipped: true, reason: "duplicate_view" });
+      }
+    }
+
+    // insightId 유효성 확인 (published 여부도 확인)
+    const [insight] = await db.select({ id: contentInsightsTable.id })
+      .from(contentInsightsTable)
+      .where(and(eq(contentInsightsTable.id, insightId), eq(contentInsightsTable.status, "published")));
+    if (!insight) {
+      return res.status(404).json({ error: "인사이트를 찾을 수 없습니다." });
+    }
+
+    await db.insert(insightEventsTable).values({
+      insightId,
+      eventType,
+      sessionId: sessionId.slice(0, 128), // 최대 128자
+      referrer: referrer?.slice(0, 512) ?? null,
+      device: device ?? null,
+      userId: (req as any).user?.id ?? null,
+    });
+
+    res.status(201).json({ recorded: true });
+  } catch (err) {
+    res.status(500).json({ error: "이벤트 기록 실패" });
   }
 });
 

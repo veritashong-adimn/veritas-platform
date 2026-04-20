@@ -96,6 +96,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
       { id: "data-layer",         label: "번역 데이터",       icon: "🗃️", perm: "menu.user" },
       { id: "language-service",   label: "언어 서비스 데이터", icon: "📊", perm: "menu.user" },
       { id: "insight-management", label: "인사이트 관리",      icon: "💡", perm: "menu.user" },
+      { id: "insight-analytics",  label: "인사이트 성과분석",  icon: "📈", iconColor: "#7c3aed", perm: "menu.user" },
     ],
   },
   {
@@ -135,4 +136,5 @@ export const ADMIN_PAGE_TITLE: Record<string, string> = {
   "data-layer": "번역 데이터",
   "language-service": "언어 서비스 데이터",
   "insight-management": "인사이트 관리",
+  "insight-analytics":  "인사이트 성과분석",
 };

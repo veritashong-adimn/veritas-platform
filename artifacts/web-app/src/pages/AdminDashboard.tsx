@@ -28,6 +28,7 @@ import { CompanyManagementTab } from '../components/admin/CompanyManagementTab';
 import { DataLayerTab } from '../components/admin/DataLayerTab';
 import { LanguageServiceDataTab } from '../components/admin/LanguageServiceDataTab';
 import { InsightManagementTab } from '../components/admin/InsightManagementTab';
+import { InsightAnalyticsTab } from '../components/admin/InsightAnalyticsTab';
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
@@ -167,7 +168,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     return permissions.includes(key);
   };
 
-  const [adminTab, setAdminTab] = useState<"dashboard"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management">("dashboard");
+  const [adminTab, setAdminTab] = useState<"dashboard"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics">("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
     try {
@@ -3545,6 +3546,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {/* ── 인사이트 관리 탭 ────────────────────────────────────────────────────── */}
       {adminTab === "insight-management" && (
         <InsightManagementTab token={token} setToast={setToast} />
+      )}
+
+      {/* ── 인사이트 성과분석 탭 ─────────────────────────────────────────────────── */}
+      {adminTab === "insight-analytics" && (
+        <InsightAnalyticsTab token={token} setToast={setToast} />
       )}
 
           </div>{/* /스크롤 컨텐츠 */}
