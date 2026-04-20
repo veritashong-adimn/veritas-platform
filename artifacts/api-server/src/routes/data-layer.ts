@@ -438,4 +438,228 @@ router.delete("/admin/content-insights/:id", ...adminOnly, async (req, res) => {
   }
 });
 
+// ─── Content Insights: 조회 + 자동 생성 ──────────────────────────────────────
+
+// GET /api/admin/content-insights
+router.get("/admin/content-insights", ...staffPlus, async (req, res) => {
+  try {
+    const {
+      serviceType, status, visibilityLevel, domain, languagePair,
+      page = "1", limit = "50",
+    } = req.query as Record<string, string | undefined>;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+    const offset = (pageNum - 1) * limitNum;
+
+    const conditions = [];
+    if (serviceType) conditions.push(eq(contentInsightsTable.serviceType, serviceType as "translation" | "interpretation" | "equipment"));
+    if (status) conditions.push(eq(contentInsightsTable.status, status));
+    if (visibilityLevel) conditions.push(eq(contentInsightsTable.visibilityLevel, visibilityLevel));
+    if (domain) conditions.push(eq(contentInsightsTable.domain, domain));
+    if (languagePair) conditions.push(eq(contentInsightsTable.languagePair, languagePair));
+
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const [rows, countResult] = await Promise.all([
+      db.select().from(contentInsightsTable).where(where)
+        .orderBy(desc(contentInsightsTable.createdAt))
+        .limit(limitNum).offset(offset),
+      db.select({ count: sql<number>`count(*)::int` }).from(contentInsightsTable).where(where),
+    ]);
+    res.json({ data: rows, total: countResult[0].count, page: pageNum, limit: limitNum });
+  } catch (err) {
+    req.log.error({ err }, "CI: failed to list insights");
+    res.status(500).json({ error: "인사이트 조회 실패" });
+  }
+});
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+const SERVICE_TYPE_KO: Record<string, string> = {
+  translation: "번역",
+  interpretation: "통역",
+  equipment: "장비",
+};
+
+function fmt(n: number | null): string {
+  if (n === null) return "미정";
+  return Math.round(n).toLocaleString("ko-KR");
+}
+
+function buildQuestion(record: { serviceType: string; languagePair: string | null; domain: string | null; interpretationType?: string | null; equipmentType?: string | null }): string {
+  if (record.serviceType === "translation") {
+    const domPart = record.domain ? `${record.domain} 분야 ` : "";
+    const langPart = record.languagePair ? `${record.languagePair} ` : "";
+    return `${domPart}${langPart}번역 비용은 얼마인가요?`;
+  }
+  if (record.serviceType === "interpretation") {
+    const typePart = (record as any).interpretationType ? `${(record as any).interpretationType} ` : "";
+    return `${typePart}통역 비용은 얼마인가요?`;
+  }
+  const eqType = (record as any).equipmentType ?? "장비";
+  return `${eqType} 대여 비용은 얼마인가요?`;
+}
+
+function buildShortAnswer(serviceType: string, avgPrice: number | null, minPrice: number | null, maxPrice: number | null): string {
+  const typeKo = SERVICE_TYPE_KO[serviceType] ?? serviceType;
+  return `${typeKo} 평균 비용은 약 ${fmt(avgPrice)}원이며, 보통 ${fmt(minPrice)}~${fmt(maxPrice)}원 범위입니다.`;
+}
+
+function buildLongAnswer(
+  serviceType: string,
+  group: { languagePair: string | null; domain: string | null; industry: string | null; useCase: string | null; interpretationType?: string | null; equipmentType?: string | null; locationType?: string | null },
+  stats: { sourceCount: number; avgPrice: number | null; minPrice: number | null; maxPrice: number | null; avgDuration: number | null },
+): string {
+  const typeKo = SERVICE_TYPE_KO[serviceType] ?? serviceType;
+  const { sourceCount, avgPrice, minPrice, maxPrice, avgDuration } = stats;
+
+  const lines: string[] = [];
+
+  lines.push(`## ${typeKo} 서비스 비용 안내`);
+  lines.push("");
+  lines.push(`총 ${sourceCount}건의 실제 데이터를 기반으로 산출한 정보입니다.`);
+  lines.push("");
+
+  lines.push("### 비용 범위");
+  lines.push(`- 평균 단가: ${fmt(avgPrice)}원`);
+  lines.push(`- 최저 단가: ${fmt(minPrice)}원`);
+  lines.push(`- 최고 단가: ${fmt(maxPrice)}원`);
+  lines.push("");
+
+  lines.push("### 세부 조건");
+  if (group.languagePair) lines.push(`- 언어쌍: ${group.languagePair}`);
+  if (group.domain) lines.push(`- 도메인: ${group.domain}`);
+  if (group.industry) lines.push(`- 산업: ${group.industry}`);
+  if (group.useCase) lines.push(`- 사용 목적: ${group.useCase}`);
+  if (serviceType === "interpretation") {
+    if ((group as any).interpretationType) lines.push(`- 통역 유형: ${(group as any).interpretationType}`);
+    if ((group as any).locationType) lines.push(`- 장소: ${(group as any).locationType}`);
+    if (avgDuration) lines.push(`- 평균 시간: ${avgDuration.toFixed(1)}시간`);
+  }
+  if (serviceType === "equipment") {
+    if ((group as any).equipmentType) lines.push(`- 장비 유형: ${(group as any).equipmentType}`);
+  }
+  lines.push("");
+
+  lines.push("### 비용에 영향을 주는 요소");
+  if (serviceType === "translation") {
+    lines.push("- 언어쌍 희소성 (희귀 언어일수록 단가 상승)");
+    lines.push("- 전문 분야 난이도 (법률·의료·금융 분야 할증)");
+    lines.push("- 분량 및 납기 (긴급 처리 시 할증)");
+    lines.push("- 번역사 경력 및 전문성");
+  } else if (serviceType === "interpretation") {
+    lines.push("- 통역 유형 (동시통역이 순차통역보다 높음)");
+    lines.push("- 진행 시간 및 투입 통역사 수");
+    lines.push("- 현장 vs 원격 (현장 통역 시 이동비 별도)");
+    lines.push("- 주제 전문성 요구 수준");
+  } else {
+    lines.push("- 장비 규격 및 수량");
+    lines.push("- 렌탈 기간");
+    lines.push("- 설치·철거·운반 비용 포함 여부");
+  }
+  lines.push("");
+  lines.push("*본 데이터는 실제 거래 기반으로 산출되었으며, 개별 프로젝트 조건에 따라 달라질 수 있습니다.*");
+
+  return lines.join("\n");
+}
+
+// POST /api/admin/content-insights/generate
+router.post("/admin/content-insights/generate", ...adminOnly, async (req, res) => {
+  try {
+    const publicRecords = await db.select().from(languageServiceDataTable)
+      .where(eq(languageServiceDataTable.isPublic, true));
+
+    if (publicRecords.length === 0) {
+      return res.json({ generated: 0, message: "공개 데이터가 없습니다." });
+    }
+
+    // 그룹핑: serviceType + languagePair + domain + industry + useCase
+    type LsdRow = typeof publicRecords[number];
+    const groupMap = new Map<string, LsdRow[]>();
+    for (const r of publicRecords) {
+      const key = [
+        r.serviceType,
+        r.languagePair ?? "",
+        r.domain ?? "",
+        r.industry ?? "",
+        r.useCase ?? "",
+      ].join("|");
+      if (!groupMap.has(key)) groupMap.set(key, []);
+      groupMap.get(key)!.push(r);
+    }
+
+    const toInsert: (typeof contentInsightsTable.$inferInsert)[] = [];
+
+    for (const records of groupMap.values()) {
+      const first = records[0];
+      const prices = records.map(r => r.unitPrice).filter((p): p is number => p !== null);
+      const durations = records
+        .map(r => r.durationHours)
+        .filter((d): d is string => d !== null)
+        .map(d => parseFloat(d));
+
+      const sourceCount = records.length;
+      const avgPrice = prices.length > 0 ? prices.reduce((a, b) => a + b, 0) / prices.length : null;
+      const minPrice = prices.length > 0 ? Math.min(...prices) : null;
+      const maxPrice = prices.length > 0 ? Math.max(...prices) : null;
+      const avgDuration = durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : null;
+
+      const representativeInterp = records.find(r => r.interpretationType)?.interpretationType ?? null;
+      const representativeEquip = records.find(r => r.equipmentType)?.equipmentType ?? null;
+      const representativeLoc = records.find(r => r.locationType)?.locationType ?? null;
+
+      const groupForGen = {
+        ...first,
+        interpretationType: representativeInterp,
+        equipmentType: representativeEquip,
+        locationType: representativeLoc,
+      };
+
+      const question = buildQuestion(groupForGen);
+      const shortAnswer = buildShortAnswer(first.serviceType, avgPrice, minPrice, maxPrice);
+      const longAnswer = buildLongAnswer(
+        first.serviceType,
+        groupForGen,
+        { sourceCount, avgPrice, minPrice, maxPrice, avgDuration },
+      );
+
+      const confidenceRaw = sourceCount >= 5 ? 0.9 : sourceCount >= 3 ? 0.7 : 0.5;
+
+      toInsert.push({
+        serviceType: first.serviceType,
+        languageServiceDataId: null,
+        question,
+        answer: shortAnswer,
+        shortAnswer,
+        longAnswer,
+        questionType: "price",
+        domain: first.domain,
+        languagePair: first.languagePair,
+        industry: first.industry,
+        useCase: first.useCase,
+        sourceCount,
+        avgPrice: avgPrice !== null ? String(avgPrice) : null,
+        minPrice: minPrice !== null ? String(minPrice) : null,
+        maxPrice: maxPrice !== null ? String(maxPrice) : null,
+        avgDuration: avgDuration !== null ? String(avgDuration) : null,
+        status: "draft",
+        visibilityLevel: "internal_summary",
+        confidenceScore: String(confidenceRaw),
+        isPublic: false,
+      });
+    }
+
+    if (toInsert.length === 0) {
+      return res.json({ generated: 0, message: "생성할 그룹이 없습니다." });
+    }
+
+    const inserted = await db.insert(contentInsightsTable).values(toInsert).returning({ id: contentInsightsTable.id });
+
+    req.log.info({ count: inserted.length }, "CI: generated insights");
+    res.status(201).json({ generated: inserted.length, ids: inserted.map(r => r.id) });
+  } catch (err) {
+    req.log.error({ err }, "CI: failed to generate insights");
+    res.status(500).json({ error: "인사이트 자동 생성 실패" });
+  }
+});
+
 export default router;
