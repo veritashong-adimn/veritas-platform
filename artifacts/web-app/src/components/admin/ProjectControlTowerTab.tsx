@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { api, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE } from "../../lib/constants";
 import { StatusBadge } from "../ui";
 
+// ── 타입 ─────────────────────────────────────────────────────────────────────
 interface ControlTowerData {
   project: {
     id: number; title: string; status: string; financialStatus: string;
@@ -10,8 +11,8 @@ interface ControlTowerData {
     payerCompanyName?: string | null; divisionName?: string | null;
     customerEmail?: string | null;
   };
-  company: { id: number; name: string; email?: string | null; phone?: string | null } | null;
-  contact: { id: number; name: string; email?: string | null; phone?: string | null } | null;
+  company:  { id: number; name: string; email?: string | null; phone?: string | null } | null;
+  contact:  { id: number; name: string; email?: string | null; phone?: string | null } | null;
   summary: {
     saleSupplyAmount: number; saleTaxAmount: number; saleTotalAmount: number;
     totalPayoutAmount: number; estimatedMargin: number;
@@ -25,8 +26,8 @@ interface ControlTowerData {
     issueDate?: string | null; invoiceDueDate?: string | null; paymentDueDate?: string | null;
     items: Array<{
       id: number; productName: string; languagePair?: string | null; unit: string;
-      quantity: string; unitPrice: string; supplyAmount: string; taxAmount: string; totalAmount: string;
-      memo?: string | null;
+      quantity: string; unitPrice: string; supplyAmount: string; taxAmount: string;
+      totalAmount: string; memo?: string | null;
     }>;
   }>;
   payments: Array<{
@@ -56,49 +57,42 @@ interface Props {
   onGoToFinance: () => void;
 }
 
-// ── 스타일 헬퍼 ──────────────────────────────────────────────────────────────
-const fmtWon = (n: number) => `₩${Math.round(n).toLocaleString()}`;
+// ── 포맷 헬퍼 ────────────────────────────────────────────────────────────────
+const fmtWon  = (n: number) => `₩${Math.round(n).toLocaleString()}`;
 const fmtDate = (d?: string | null) => d ? d.slice(0, 10) : "—";
 const fmtMD   = (d?: string | null) => d ? d.slice(5, 10).replace("-", ".") : "—";
 
-const cardBase: React.CSSProperties = {
+// ── 공통 스타일 상수 ──────────────────────────────────────────────────────────
+const card: React.CSSProperties = {
   background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12,
   padding: "14px 18px", position: "relative", overflow: "hidden",
 };
-const sectionTitle: React.CSSProperties = {
-  fontSize: 13, fontWeight: 700, color: "#111827", marginBottom: 12,
+const sectionHd: React.CSSProperties = {
+  fontSize: 13, fontWeight: 700, color: "#111827", margin: 0,
   paddingBottom: 8, borderBottom: "1px solid #f3f4f6",
-  display: "flex", alignItems: "center", gap: 6,
+  display: "flex", alignItems: "center", justifyContent: "space-between",
 };
-const th: React.CSSProperties = {
+const TH: React.CSSProperties = {
   padding: "8px 10px", fontSize: 11, fontWeight: 700, color: "#6b7280",
-  background: "#f9fafb", borderBottom: "1px solid #e5e7eb", textAlign: "left" as const,
-  whiteSpace: "nowrap" as const,
+  background: "#f9fafb", borderBottom: "1px solid #e5e7eb",
+  textAlign: "left" as const, whiteSpace: "nowrap" as const,
 };
-const td: React.CSSProperties = {
+const TD: React.CSSProperties = {
   padding: "9px 10px", fontSize: 12, color: "#374151",
   borderBottom: "1px solid #f3f4f6", verticalAlign: "top" as const,
 };
-const actionBtn = (style: React.CSSProperties = {}): React.CSSProperties => ({
-  padding: "5px 12px", borderRadius: 7, fontSize: 11, fontWeight: 700,
-  cursor: "pointer", border: "none", whiteSpace: "nowrap" as const, ...style,
+const primaryBtn = (extra: React.CSSProperties = {}): React.CSSProperties => ({
+  padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 700,
+  cursor: "pointer", border: "none", whiteSpace: "nowrap" as const,
+  background: "#2563eb", color: "#fff", ...extra,
 });
 const ghostBtn: React.CSSProperties = {
-  padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
-  cursor: "pointer", background: "#f9fafb", border: "1px solid #e5e7eb", color: "#374151",
-  whiteSpace: "nowrap" as const,
+  padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+  cursor: "pointer", background: "#f9fafb", border: "1px solid #e5e7eb",
+  color: "#374151", whiteSpace: "nowrap" as const,
 };
 
-const SETTLEMENT_TYPE_KO: Record<string, string> = {
-  WITHHOLDING_3_3: "원천세 3.3%", VAT_INVOICE: "세금계산서",
-  OVERSEAS_REMITTANCE: "해외송금", OTHER_REVIEW: "기타",
-};
-const SETTLEMENT_TYPE_STYLE: Record<string, React.CSSProperties> = {
-  WITHHOLDING_3_3:     { background: "#ede9fe", color: "#7c3aed" },
-  VAT_INVOICE:         { background: "#dbeafe", color: "#2563eb" },
-  OVERSEAS_REMITTANCE: { background: "#fef3c7", color: "#b45309" },
-  OTHER_REVIEW:        { background: "#f3f4f6", color: "#6b7280" },
-};
+// ── 참조 데이터 ───────────────────────────────────────────────────────────────
 const SETTLE_STATUS_BADGE: Record<string, React.CSSProperties> = {
   paid:           { background: "#dcfce7", color: "#15803d" },
   ready:          { background: "#d1fae5", color: "#059669" },
@@ -110,41 +104,49 @@ const SETTLE_STATUS_KO: Record<string, string> = {
   paid: "지급 완료", ready: "지급 준비", pending_review: "검토 필요",
   pending: "대기", draft: "정보 부족",
 };
+const SETTLEMENT_TYPE_KO: Record<string, string> = {
+  WITHHOLDING_3_3: "원천세 3.3%", VAT_INVOICE: "세금계산서",
+  OVERSEAS_REMITTANCE: "해외송금", OTHER_REVIEW: "기타",
+};
+const SETTLEMENT_TYPE_STYLE: Record<string, React.CSSProperties> = {
+  WITHHOLDING_3_3:     { background: "#ede9fe", color: "#7c3aed" },
+  VAT_INVOICE:         { background: "#dbeafe", color: "#2563eb" },
+  OVERSEAS_REMITTANCE: { background: "#fef3c7", color: "#b45309" },
+  OTHER_REVIEW:        { background: "#f3f4f6", color: "#6b7280" },
+};
 const QUOTE_TYPE_KO: Record<string, string> = {
   b2b_standard: "일반 B2B", b2c_prepaid: "선입금",
   prepaid_deduction: "선입금 차감", accumulated_batch: "누적 청구",
 };
 
-// ── EmptyState 헬퍼 ───────────────────────────────────────────────────────────
+// ── 빈 상태 CTA ───────────────────────────────────────────────────────────────
 function EmptyCTA({ icon, text, btnLabel, onClick, disabled }: {
   icon: string; text: string; btnLabel: string; onClick: () => void; disabled?: boolean;
 }) {
   return (
-    <div style={{ textAlign: "center", padding: "20px 16px", background: "#f9fafb", borderRadius: 8, border: "1px dashed #d1d5db" }}>
-      <div style={{ fontSize: 28, marginBottom: 6 }}>{icon}</div>
-      <p style={{ margin: "0 0 10px", fontSize: 13, color: "#6b7280" }}>{text}</p>
-      <button
-        onClick={onClick}
-        disabled={disabled}
-        style={actionBtn({ background: "#2563eb", color: "#fff", opacity: disabled ? 0.5 : 1 })}>
+    <div style={{ textAlign: "center", padding: "24px 16px", background: "#f9fafb", borderRadius: 8, border: "1px dashed #d1d5db" }}>
+      <div style={{ fontSize: 30, marginBottom: 8 }}>{icon}</div>
+      <p style={{ margin: "0 0 12px", fontSize: 13, color: "#6b7280" }}>{text}</p>
+      <button onClick={onClick} disabled={disabled}
+        style={primaryBtn({ opacity: disabled ? 0.5 : 1 })}>
         {btnLabel}
       </button>
     </div>
   );
 }
 
+// ── 메인 컴포넌트 ─────────────────────────────────────────────────────────────
 export function ProjectControlTowerTab({
   projectId, token, onToast,
   onOpenQuoteForm, onOpenPaymentForm, onOpenAssignPanel, onGoToFinance,
 }: Props) {
-  const [data, setData] = useState<ControlTowerData | null>(null);
+  const [data, setData]   = useState<ControlTowerData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
-  const [payingSettlement, setPayingSettlement] = useState<number | null>(null);
+  const [err, setErr]     = useState("");
+  const [payingId, setPayingId] = useState<number | null>(null);
 
   const fetchData = useCallback(() => {
-    setLoading(true);
-    setErr("");
+    setLoading(true); setErr("");
     fetch(api(`/api/admin/projects/${projectId}/control-tower`), {
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -157,9 +159,9 @@ export function ProjectControlTowerTab({
   useEffect(() => { fetchData(); }, [fetchData]);
 
   // ── 지급 처리 ──────────────────────────────────────────────────────────────
-  const handlePaySettlement = async (settlementId: number) => {
+  const handlePay = async (settlementId: number) => {
     if (!confirm("이 정산건을 지급 완료 처리하시겠습니까?")) return;
-    setPayingSettlement(settlementId);
+    setPayingId(settlementId);
     try {
       const res = await fetch(api(`/api/admin/settlements/${settlementId}/pay`), {
         method: "PATCH",
@@ -168,13 +170,9 @@ export function ProjectControlTowerTab({
       });
       const d = await res.json();
       if (!res.ok) throw new Error(d.error || "지급 처리 실패");
-      onToast("지급 완료 처리되었습니다.");
-      fetchData();
-    } catch (e: any) {
-      onToast(`오류: ${e.message}`);
-    } finally {
-      setPayingSettlement(null);
-    }
+      onToast("지급 완료 처리되었습니다."); fetchData();
+    } catch (e: any) { onToast(`오류: ${e.message}`); }
+    finally { setPayingId(null); }
   };
 
   if (loading) return <div style={{ padding: 32, textAlign: "center", color: "#9ca3af" }}>불러오는 중...</div>;
@@ -183,37 +181,48 @@ export function ProjectControlTowerTab({
   const { project, company, contact, summary, quotes, payments, translators } = data;
   const today = new Date().toISOString().slice(0, 10);
 
-  const hasQuotes      = quotes.length > 0;
-  const hasPayments    = payments.length > 0;
-  const hasTranslators = translators.length > 0;
-  const hasReadySettlement = translators.some(t => t.settlement?.status === "ready");
-  const allSettlementsPaid = translators.every(t => !t.settlement || t.settlement.status === "paid");
-  const isFullyPaid = summary.paymentStatus === "fully_paid";
+  // ── 핵심 상태 파생 ────────────────────────────────────────────────────────
+  const hasQuotes       = quotes.length > 0;
+  const hasTranslators  = translators.length > 0;
+  const hasPayments     = payments.length > 0;
+  const isFullyPaid     = summary.paymentStatus === "fully_paid";
+  const hasSettlements  = translators.some(t => t.settlement !== null);
+  const hasPayableSettlement = translators.some(
+    t => t.settlement?.status === "ready" || t.settlement?.status === "pending"
+  );
+  const allSettlementsPaid   = hasSettlements && translators
+    .filter(t => t.settlement !== null)
+    .every(t => t.settlement!.status === "paid");
 
-  // ── 글로벌 액션 노출 조건 ─────────────────────────────────────────────────
-  const globalActions: Array<{ label: string; color: string; bg: string; border: string; onClick: () => void }> = [];
+  // ── 글로벌 배너 메시지 (우선순위 기반) ───────────────────────────────────
+  const needsItems: string[] = [];
+  if (!hasQuotes)      needsItems.push("견적");
+  if (!hasTranslators) needsItems.push("배정");
+  // 결제/지급은 섹션 전용 (상단 배너에 표시하지 않음)
+
+  const showBanner = needsItems.length > 0;
+  const bannerMsg  = needsItems.length === 1
+    ? `${needsItems[0]}이 필요합니다`
+    : `${needsItems.join(" / ")}이 필요합니다`;
+
+  // ── 글로벌 액션 버튼 (최대 2개, 흐름 시작 전용) ──────────────────────────
+  const topActions: Array<{ label: string; bg: string; onClick: () => void }> = [];
   if (!hasQuotes)
-    globalActions.push({ label: "📋 견적 생성", color: "#fff", bg: "#2563eb", border: "transparent", onClick: onOpenQuoteForm });
-  if (!hasTranslators)
-    globalActions.push({ label: "👤 통번역사 배정", color: "#fff", bg: "#7c3aed", border: "transparent", onClick: onOpenAssignPanel });
-  if (hasQuotes && !hasPayments)
-    globalActions.push({ label: "💳 결제 등록", color: "#fff", bg: "#059669", border: "transparent", onClick: onOpenPaymentForm });
-  if (hasReadySettlement)
-    globalActions.push({ label: "💸 지급 처리 필요", color: "#b45309", bg: "#fef3c7", border: "#fcd34d", onClick: () => {
-      const readyId = translators.find(t => t.settlement?.status === "ready")?.settlement?.id;
-      if (readyId) handlePaySettlement(readyId);
-    }});
+    topActions.push({ label: "📋 견적 생성", bg: "#2563eb", onClick: onOpenQuoteForm });
+  if (!hasTranslators && topActions.length < 2)
+    topActions.push({ label: "👤 통번역사 배정", bg: "#7c3aed", onClick: onOpenAssignPanel });
 
-  // ── 결제 상태 배지 ──────────────────────────────────────────────────────────
-  const paymentBadge = (() => {
-    if (summary.paymentStatus === "fully_paid") return { label: "결제 완료", bg: "#dcfce7", color: "#15803d" };
-    if (summary.paymentStatus === "partial")    return { label: "부분 입금", bg: "#fef3c7", color: "#b45309" };
+  // ── 요약 카드 값 계산 ─────────────────────────────────────────────────────
+  const payBadge = (() => {
+    if (isFullyPaid)                          return { label: "결제 완료", bg: "#dcfce7", color: "#15803d" };
+    if (summary.paymentStatus === "partial")  return { label: "부분 입금", bg: "#fef3c7", color: "#b45309" };
     return { label: "미결제", bg: "#fee2e2", color: "#dc2626" };
   })();
   const settleBadge = (() => {
-    if (summary.settlementStatus === "all_paid")       return { label: "전액 지급", bg: "#dcfce7", color: "#15803d" };
-    if (summary.settlementStatus === "partial")        return { label: "일부 지급", bg: "#d1fae5", color: "#059669" };
-    if (summary.settlementStatus === "pending_review") return { label: "검토 필요", bg: "#fef3c7", color: "#b45309" };
+    if (allSettlementsPaid)                              return { label: "지급 완료",  bg: "#dcfce7", color: "#15803d" };
+    if (summary.settlementStatus === "partial")          return { label: "일부 지급",  bg: "#d1fae5", color: "#059669" };
+    if (summary.settlementStatus === "pending_review")   return { label: "검토 필요",  bg: "#fef3c7", color: "#b45309" };
+    if (!hasSettlements)                                 return { label: "미생성",     bg: "#f3f4f6", color: "#9ca3af" };
     return { label: "미지급", bg: "#fee2e2", color: "#dc2626" };
   })();
 
@@ -221,7 +230,7 @@ export function ProjectControlTowerTab({
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
 
       {/* ── 프로젝트 헤더 ────────────────────────────────────────────────────── */}
-      <div style={{ ...cardBase, background: "linear-gradient(135deg, #f8faff, #eff6ff)", borderColor: "#bfdbfe" }}>
+      <div style={{ ...card, background: "linear-gradient(135deg, #f8faff, #eff6ff)", borderColor: "#bfdbfe" }}>
         <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #3b82f6, #8b5cf6)" }} />
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
           <div>
@@ -248,19 +257,22 @@ export function ProjectControlTowerTab({
         </div>
       </div>
 
-      {/* ── 글로벌 액션 바 ────────────────────────────────────────────────────── */}
-      {globalActions.length > 0 && (
+      {/* ── 글로벌 배너 (흐름 시작 액션) ─────────────────────────────────────── */}
+      {showBanner && (
         <div style={{
-          background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 10,
-          padding: "10px 16px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+          background: "#fffbeb", border: "1.5px solid #fcd34d", borderRadius: 10,
+          padding: "11px 16px", display: "flex", alignItems: "center",
+          gap: 12, flexWrap: "wrap",
         }}>
-          <span style={{ fontSize: 12, fontWeight: 700, color: "#92400e" }}>⚡ 처리 필요</span>
-          {globalActions.map((a, i) => (
+          <span style={{ fontSize: 22 }}>⚠️</span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#92400e", flex: 1 }}>
+            {bannerMsg}
+          </span>
+          {topActions.map((a, i) => (
             <button key={i} onClick={a.onClick}
               style={{
-                padding: "6px 14px", borderRadius: 7, fontSize: 12, fontWeight: 700,
-                cursor: "pointer", background: a.bg, color: a.color,
-                border: `1px solid ${a.border || a.bg}`,
+                padding: "7px 16px", borderRadius: 7, fontSize: 12, fontWeight: 700,
+                cursor: "pointer", background: a.bg, color: "#fff", border: "none",
               }}>
               {a.label}
             </button>
@@ -270,99 +282,108 @@ export function ProjectControlTowerTab({
 
       {/* ── 요약 카드 5개 ─────────────────────────────────────────────────────── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
-        <SummaryCard topColor="#3b82f6" label="판매금액"
-          main={fmtWon(summary.saleTotalAmount)}
-          sub={summary.saleTaxAmount > 0 ? `공급가 ${fmtWon(summary.saleSupplyAmount)} + 세금 ${fmtWon(summary.saleTaxAmount)}` : undefined}
+        {/* 판매금액 */}
+        <SCard topColor={hasQuotes ? "#3b82f6" : "#d1d5db"} label="판매금액"
+          main={hasQuotes ? fmtWon(summary.saleTotalAmount) : "미등록"}
+          mainColor={hasQuotes ? "#111827" : "#9ca3af"}
+          sub={hasQuotes && summary.saleTaxAmount > 0
+            ? `공급가 ${fmtWon(summary.saleSupplyAmount)} + 세금 ${fmtWon(summary.saleTaxAmount)}`
+            : hasQuotes ? "부가세 없음" : "견적 등록이 필요합니다"}
         />
-        <SummaryCard topColor="#8b5cf6" label="지급예정액"
-          main={fmtWon(summary.totalPayoutAmount)}
-          sub={`번역사 ${summary.translatorCount}명 (${summary.doneTaskCount}건 완료)`}
+        {/* 지급예정액 */}
+        <SCard topColor={hasSettlements ? "#8b5cf6" : "#d1d5db"} label="지급예정액"
+          main={hasSettlements ? fmtWon(summary.totalPayoutAmount) : "없음"}
+          mainColor={hasSettlements ? "#111827" : "#9ca3af"}
+          sub={hasSettlements
+            ? `번역사 ${summary.translatorCount}명 (${summary.doneTaskCount}건 완료)`
+            : "정산 생성 전"}
         />
-        <SummaryCard
-          topColor={summary.estimatedMargin >= 0 ? "#059669" : "#dc2626"}
+        {/* 예상 차액 */}
+        <SCard
+          topColor={!hasQuotes ? "#d1d5db" : summary.estimatedMargin >= 0 ? "#059669" : "#dc2626"}
           label="예상 차액"
-          main={(summary.estimatedMargin >= 0 ? "+" : "") + fmtWon(summary.estimatedMargin)}
-          mainColor={summary.estimatedMargin >= 0 ? "#059669" : "#dc2626"}
-          sub={summary.saleTotalAmount > 0 ? `마진율 ${Math.round((summary.estimatedMargin / summary.saleTotalAmount) * 100)}%` : undefined}
+          main={!hasQuotes ? "—" : (summary.estimatedMargin >= 0 ? "+" : "") + fmtWon(summary.estimatedMargin)}
+          mainColor={!hasQuotes ? "#9ca3af" : summary.estimatedMargin >= 0 ? "#059669" : "#dc2626"}
+          sub={hasQuotes && summary.saleTotalAmount > 0
+            ? `마진율 ${Math.round((summary.estimatedMargin / summary.saleTotalAmount) * 100)}%`
+            : undefined}
         />
-        <SummaryCard topColor={paymentBadge.color} label="고객 결제"
-          badge={{ label: paymentBadge.label, bg: paymentBadge.bg, color: paymentBadge.color }}
+        {/* 고객 결제 */}
+        <SCard topColor={payBadge.color} label="고객 결제"
+          badge={payBadge}
           sub={`입금 ${fmtWon(summary.paidAmount)} / 미수 ${fmtWon(summary.unpaidAmount)}`}
         />
-        <SummaryCard topColor={settleBadge.color} label="지급 현황"
-          badge={{ label: settleBadge.label, bg: settleBadge.bg, color: settleBadge.color }}
-          sub={`정산 ${translators.filter(t => t.settlement).length}/${translators.length}건`}
+        {/* 지급 현황 */}
+        <SCard topColor={settleBadge.color} label="지급 현황"
+          badge={settleBadge}
+          sub={hasSettlements
+            ? `정산 ${translators.filter(t => t.settlement).length}/${translators.length}건`
+            : "정산 없음"}
         />
       </div>
 
       {/* ── 판매정보 섹션 ─────────────────────────────────────────────────────── */}
-      <div style={cardBase}>
-        <div style={{ ...sectionTitle, justifyContent: "space-between" }}>
+      <div style={{ ...card, opacity: hasQuotes ? 1 : 0.65, transition: "opacity 0.2s" }}>
+        <div style={{ ...sectionHd, marginBottom: 12 }}>
           <span>📋 판매정보</span>
-          <div style={{ display: "flex", gap: 6 }}>
-            {!hasQuotes ? (
-              <button onClick={onOpenQuoteForm}
-                style={actionBtn({ background: "#2563eb", color: "#fff" })}>
-                ＋ 견적 생성
-              </button>
-            ) : (
-              <button onClick={onGoToFinance}
-                style={ghostBtn}>
-                ✏️ 견적 수정
-              </button>
-            )}
-          </div>
+          {hasQuotes ? (
+            <button onClick={onGoToFinance} style={ghostBtn}>✏️ 견적 수정</button>
+          ) : (
+            <button onClick={onOpenQuoteForm}
+              style={{ padding: "5px 12px", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", border: "none", background: "#2563eb", color: "#fff" }}>
+              ＋ 견적 생성
+            </button>
+          )}
         </div>
-
         {!hasQuotes ? (
           <EmptyCTA icon="📋" text="견적 정보가 없습니다." btnLabel="견적 생성하기" onClick={onOpenQuoteForm} />
         ) : (
           quotes.map(q => {
-            const quoteSupply = q.items.reduce((s, i) => s + Number(i.supplyAmount ?? 0), 0);
-            const quoteTax    = q.items.reduce((s, i) => s + Number(i.taxAmount    ?? 0), 0);
-            const quoteTotal  = q.items.reduce((s, i) => s + Number(i.totalAmount  ?? 0), 0);
+            const qSupply = q.items.reduce((s, i) => s + Number(i.supplyAmount ?? 0), 0);
+            const qTax    = q.items.reduce((s, i) => s + Number(i.taxAmount    ?? 0), 0);
+            const qTotal  = q.items.reduce((s, i) => s + Number(i.totalAmount  ?? 0), 0);
             return (
               <div key={q.id} style={{ marginBottom: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>견적 #{q.id}</span>
                   <StatusBadge status={q.status} />
                   <span style={{ padding: "2px 7px", borderRadius: 5, fontSize: 10, fontWeight: 600, background: "#f0f9ff", color: "#0369a1" }}>
                     {QUOTE_TYPE_KO[q.quoteType] ?? q.quoteType}
                   </span>
-                  {q.issueDate       && <span style={{ fontSize: 11, color: "#9ca3af" }}>발행일: {q.issueDate}</span>}
-                  {q.invoiceDueDate  && <span style={{ fontSize: 11, color: "#9ca3af" }}>청구일: {q.invoiceDueDate}</span>}
-                  {q.paymentDueDate  && <span style={{ fontSize: 11, color: "#9ca3af" }}>입금예정: {q.paymentDueDate}</span>}
+                  {q.issueDate      && <span style={{ fontSize: 11, color: "#9ca3af" }}>발행일: {q.issueDate}</span>}
+                  {q.invoiceDueDate && <span style={{ fontSize: 11, color: "#9ca3af" }}>청구일: {q.invoiceDueDate}</span>}
+                  {q.paymentDueDate && <span style={{ fontSize: 11, color: "#9ca3af" }}>입금예정: {q.paymentDueDate}</span>}
                 </div>
                 {q.items.length > 0 ? (
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                       <thead>
-                        <tr>{["상품/서비스","언어쌍","단위","수량","단가","공급가액","부가세","합계","비고"].map(h => (
-                          <th key={h} style={th}>{h}</th>
-                        ))}</tr>
+                        <tr>{["상품/서비스","언어쌍","단위","수량","단가","공급가액","부가세","합계","비고"].map(h =>
+                          <th key={h} style={TH}>{h}</th>
+                        )}</tr>
                       </thead>
                       <tbody>
                         {q.items.map(item => (
                           <tr key={item.id}>
-                            <td style={{ ...td, fontWeight: 600, maxWidth: 140 }}>{item.productName}</td>
-                            <td style={{ ...td, color: "#6b7280" }}>{item.languagePair ?? "—"}</td>
-                            <td style={{ ...td, color: "#6b7280" }}>{item.unit}</td>
-                            <td style={{ ...td, textAlign: "right" as const }}>{Number(item.quantity).toLocaleString()}</td>
-                            <td style={{ ...td, textAlign: "right" as const }}>{Number(item.unitPrice).toLocaleString()}</td>
-                            <td style={{ ...td, textAlign: "right" as const, fontWeight: 600 }}>{Number(item.supplyAmount).toLocaleString()}</td>
-                            <td style={{ ...td, textAlign: "right" as const, color: "#b45309" }}>{Number(item.taxAmount).toLocaleString()}</td>
-                            <td style={{ ...td, textAlign: "right" as const, fontWeight: 700, color: "#1d4ed8" }}>{Number(item.totalAmount).toLocaleString()}</td>
-                            <td style={{ ...td, color: "#9ca3af", maxWidth: 120 }}>{item.memo ?? "—"}</td>
+                            <td style={{ ...TD, fontWeight: 600, maxWidth: 140 }}>{item.productName}</td>
+                            <td style={{ ...TD, color: "#6b7280" }}>{item.languagePair ?? "—"}</td>
+                            <td style={{ ...TD, color: "#6b7280" }}>{item.unit}</td>
+                            <td style={{ ...TD, textAlign: "right" as const }}>{Number(item.quantity).toLocaleString()}</td>
+                            <td style={{ ...TD, textAlign: "right" as const }}>{Number(item.unitPrice).toLocaleString()}</td>
+                            <td style={{ ...TD, textAlign: "right" as const, fontWeight: 600 }}>{Number(item.supplyAmount).toLocaleString()}</td>
+                            <td style={{ ...TD, textAlign: "right" as const, color: "#b45309" }}>{Number(item.taxAmount).toLocaleString()}</td>
+                            <td style={{ ...TD, textAlign: "right" as const, fontWeight: 700, color: "#1d4ed8" }}>{Number(item.totalAmount).toLocaleString()}</td>
+                            <td style={{ ...TD, color: "#9ca3af", maxWidth: 120 }}>{item.memo ?? "—"}</td>
                           </tr>
                         ))}
                       </tbody>
                       <tfoot>
                         <tr style={{ background: "#f9fafb" }}>
-                          <td colSpan={5} style={{ ...td, fontWeight: 700 }}>합계</td>
-                          <td style={{ ...td, textAlign: "right" as const, fontWeight: 700 }}>{quoteSupply.toLocaleString()}</td>
-                          <td style={{ ...td, textAlign: "right" as const, fontWeight: 700, color: "#b45309" }}>{quoteTax.toLocaleString()}</td>
-                          <td style={{ ...td, textAlign: "right" as const, fontWeight: 800, color: "#1d4ed8" }}>{quoteTotal.toLocaleString()}</td>
-                          <td style={td} />
+                          <td colSpan={5} style={{ ...TD, fontWeight: 700 }}>합계</td>
+                          <td style={{ ...TD, textAlign: "right" as const, fontWeight: 700 }}>{qSupply.toLocaleString()}</td>
+                          <td style={{ ...TD, textAlign: "right" as const, fontWeight: 700, color: "#b45309" }}>{qTax.toLocaleString()}</td>
+                          <td style={{ ...TD, textAlign: "right" as const, fontWeight: 800, color: "#1d4ed8" }}>{qTotal.toLocaleString()}</td>
+                          <td style={TD} />
                         </tr>
                       </tfoot>
                     </table>
@@ -379,22 +400,17 @@ export function ProjectControlTowerTab({
       </div>
 
       {/* ── 통번역사 수행/정산 섹션 ──────────────────────────────────────────── */}
-      <div style={cardBase}>
-        <div style={{ ...sectionTitle, justifyContent: "space-between" }}>
+      <div style={card}>
+        <div style={{ ...sectionHd, marginBottom: 12 }}>
           <span>👥 통번역사 수행 · 정산</span>
-          <div style={{ display: "flex", gap: 6 }}>
-            {!hasTranslators ? (
-              <button onClick={onOpenAssignPanel}
-                style={actionBtn({ background: "#7c3aed", color: "#fff" })}>
-                ＋ 통번역사 배정
-              </button>
-            ) : (
-              <button onClick={onOpenAssignPanel}
-                style={ghostBtn}>
-                ➕ 추가 배정
-              </button>
-            )}
-          </div>
+          {!hasTranslators ? (
+            <button onClick={onOpenAssignPanel}
+              style={{ padding: "5px 12px", borderRadius: 7, fontSize: 11, fontWeight: 700, cursor: "pointer", border: "none", background: "#7c3aed", color: "#fff" }}>
+              ＋ 통번역사 배정
+            </button>
+          ) : (
+            <button onClick={onOpenAssignPanel} style={ghostBtn}>➕ 추가 배정</button>
+          )}
         </div>
 
         {!hasTranslators ? (
@@ -403,16 +419,16 @@ export function ProjectControlTowerTab({
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
-                <tr>{["통번역사","태스크 상태","납품일","지급예정일","원금액","원천세","실지급액","정산 유형","정산 상태","액션"].map(h => (
-                  <th key={h} style={th}>{h}</th>
-                ))}</tr>
+                <tr>{["통번역사","태스크 상태","납품일","지급예정일","원금액","원천세","실지급액","정산 유형","정산 상태","액션"].map(h =>
+                  <th key={h} style={TH}>{h}</th>
+                )}</tr>
               </thead>
               <tbody>
                 {translators.map(t => {
-                  const s = t.settlement;
-                  const gross       = Number(s?.grossAmount      ?? 0);
-                  const withholding = Number(s?.withholdingAmount ?? 0);
-                  const net         = Number(s?.netAmount        ?? 0);
+                  const s           = t.settlement;
+                  const gross       = Number(s?.grossAmount       ?? 0);
+                  const withholding = Number(s?.withholdingAmount  ?? 0);
+                  const net         = Number(s?.netAmount          ?? 0);
                   const isOverdue   = s?.payoutDueDate && s.payoutDueDate < today && s.status !== "paid";
                   const isDueToday  = s?.payoutDueDate === today && s?.status !== "paid";
                   const canPay      = s?.status === "ready" || s?.status === "pending";
@@ -420,15 +436,13 @@ export function ProjectControlTowerTab({
                     <tr key={t.taskId}
                       onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
                       onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                      {/* 통번역사 */}
-                      <td style={{ ...td, minWidth: 130 }}>
+                      <td style={{ ...TD, minWidth: 130 }}>
                         {(t.name || t.email)
                           ? <><div style={{ fontWeight: 600 }}>{t.name || t.email}</div>
                               {t.name && t.email && <div style={{ color: "#9ca3af", fontSize: 11 }}>{t.email}</div>}</>
                           : <span style={{ color: "#d1d5db" }}>정보 없음</span>}
                       </td>
-                      {/* 태스크 상태 */}
-                      <td style={td}>
+                      <td style={TD}>
                         <span style={{
                           padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 700,
                           background: t.taskStatus === "done" ? "#dcfce7" : t.taskStatus === "working" ? "#dbeafe" : "#f3f4f6",
@@ -437,8 +451,7 @@ export function ProjectControlTowerTab({
                           {{ waiting: "대기", assigned: "배정", working: "진행", done: "완료" }[t.taskStatus] ?? t.taskStatus}
                         </span>
                       </td>
-                      {/* 납품일 */}
-                      <td style={{ ...td, whiteSpace: "nowrap" as const }}>
+                      <td style={{ ...TD, whiteSpace: "nowrap" as const }}>
                         {t.deliveryDate
                           ? <div>
                               <div style={{ fontWeight: 500 }}>{fmtMD(t.deliveryDate)}</div>
@@ -446,8 +459,7 @@ export function ProjectControlTowerTab({
                             </div>
                           : <span style={{ color: "#d1d5db" }}>—</span>}
                       </td>
-                      {/* 지급예정일 */}
-                      <td style={{ ...td, whiteSpace: "nowrap" as const }}>
+                      <td style={{ ...TD, whiteSpace: "nowrap" as const }}>
                         {s?.payoutDueDate ? (
                           <div>
                             <span style={{ fontWeight: 600, color: isOverdue ? "#dc2626" : isDueToday ? "#d97706" : "#111827" }}>
@@ -458,64 +470,49 @@ export function ProjectControlTowerTab({
                           </div>
                         ) : <span style={{ color: "#d1d5db" }}>—</span>}
                       </td>
-                      {/* 원금액 */}
-                      <td style={{ ...td, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" as const }}>
+                      <td style={{ ...TD, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" as const }}>
                         {s ? `${Math.round(gross).toLocaleString()}원` : <span style={{ color: "#d1d5db" }}>—</span>}
                       </td>
-                      {/* 원천세 */}
-                      <td style={{ ...td, fontSize: 12, color: "#b45309", whiteSpace: "nowrap" as const }}>
-                        {withholding > 0 ? (
-                          <><div>{Math.round(withholding).toLocaleString()}원</div><div style={{ fontSize: 10, color: "#9ca3af" }}>3.3%</div></>
-                        ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                      <td style={{ ...TD, fontSize: 12, color: "#b45309", whiteSpace: "nowrap" as const }}>
+                        {withholding > 0
+                          ? <><div>{Math.round(withholding).toLocaleString()}원</div><div style={{ fontSize: 10, color: "#9ca3af" }}>3.3%</div></>
+                          : <span style={{ color: "#d1d5db" }}>—</span>}
                       </td>
-                      {/* 실지급액 */}
-                      <td style={{ ...td, fontWeight: 700, color: "#059669", whiteSpace: "nowrap" as const }}>
+                      <td style={{ ...TD, fontWeight: 700, color: "#059669", whiteSpace: "nowrap" as const }}>
                         {s ? `${Math.round(net).toLocaleString()}원` : <span style={{ color: "#d1d5db" }}>—</span>}
                       </td>
-                      {/* 정산 유형 */}
-                      <td style={td}>
-                        {s?.settlementType ? (
-                          <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, ...(SETTLEMENT_TYPE_STYLE[s.settlementType] ?? { background: "#f3f4f6", color: "#6b7280" }) }}>
-                            {SETTLEMENT_TYPE_KO[s.settlementType] ?? s.settlementType}
-                          </span>
-                        ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                      <td style={TD}>
+                        {s?.settlementType
+                          ? <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, ...(SETTLEMENT_TYPE_STYLE[s.settlementType] ?? { background: "#f3f4f6", color: "#6b7280" }) }}>
+                              {SETTLEMENT_TYPE_KO[s.settlementType] ?? s.settlementType}
+                            </span>
+                          : <span style={{ color: "#d1d5db" }}>—</span>}
                       </td>
-                      {/* 정산 상태 */}
-                      <td style={td}>
+                      <td style={TD}>
                         {s ? (
                           <div>
-                            <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 700, ...(SETTLE_STATUS_BADGE[s.status] ?? { background: "#f3f4f6", color: "#6b7280" }) }}>
+                            <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 700, ...(SETTLE_STATUS_BADGE[s.status] ?? {}) }}>
                               {SETTLE_STATUS_KO[s.status] ?? s.status}
                             </span>
                             {s.reviewReason && (
-                              <div style={{ fontSize: 10, color: "#b45309", marginTop: 3, maxWidth: 120, lineHeight: 1.3 }} title={s.reviewReason}>
-                                {s.reviewReason.length > 25 ? s.reviewReason.slice(0, 25) + "…" : s.reviewReason}
+                              <div style={{ fontSize: 10, color: "#b45309", marginTop: 3, maxWidth: 120 }} title={s.reviewReason}>
+                                {s.reviewReason.slice(0, 25)}{s.reviewReason.length > 25 ? "…" : ""}
                               </div>
                             )}
                             {s.paidAt && <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 2 }}>지급일: {fmtDate(s.paidAt)}</div>}
                           </div>
                         ) : <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600, background: "#f1f5f9", color: "#94a3b8" }}>정산 없음</span>}
                       </td>
-                      {/* 액션 */}
-                      <td style={{ ...td, width: 90 }}>
+                      {/* 액션 열 */}
+                      <td style={{ ...TD, width: 90 }}>
                         {s && canPay && (
-                          <button
-                            onClick={() => handlePaySettlement(s.id)}
-                            disabled={payingSettlement === s.id}
-                            style={actionBtn({
-                              background: payingSettlement === s.id ? "#e5e7eb" : "#059669",
-                              color: payingSettlement === s.id ? "#6b7280" : "#fff",
-                              fontSize: 11,
-                            })}>
-                            {payingSettlement === s.id ? "처리 중…" : "💸 지급"}
+                          <button onClick={() => handlePay(s.id)} disabled={payingId === s.id}
+                            style={{ padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", border: "none", background: payingId === s.id ? "#e5e7eb" : "#059669", color: payingId === s.id ? "#6b7280" : "#fff" }}>
+                            {payingId === s.id ? "처리 중…" : "💸 지급"}
                           </button>
                         )}
-                        {s?.status === "paid" && (
-                          <span style={{ fontSize: 11, color: "#15803d", fontWeight: 600 }}>✓ 완료</span>
-                        )}
-                        {!s && (
-                          <span style={{ fontSize: 11, color: "#d1d5db" }}>—</span>
-                        )}
+                        {s?.status === "paid" && <span style={{ fontSize: 11, color: "#15803d", fontWeight: 600 }}>✓ 완료</span>}
+                        {!s && <span style={{ fontSize: 11, color: "#d1d5db" }}>—</span>}
                       </td>
                     </tr>
                   );
@@ -524,17 +521,17 @@ export function ProjectControlTowerTab({
               {translators.some(t => t.settlement) && (
                 <tfoot>
                   <tr style={{ background: "#f9fafb", borderTop: "2px solid #e5e7eb" }}>
-                    <td colSpan={4} style={{ ...td, fontWeight: 700 }}>합계</td>
-                    <td style={{ ...td, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" as const }}>
+                    <td colSpan={4} style={{ ...TD, fontWeight: 700 }}>합계</td>
+                    <td style={{ ...TD, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" as const }}>
                       {translators.reduce((s, t) => s + Number(t.settlement?.grossAmount ?? 0), 0).toLocaleString()}원
                     </td>
-                    <td style={{ ...td, fontWeight: 700, color: "#b45309", whiteSpace: "nowrap" as const }}>
+                    <td style={{ ...TD, fontWeight: 700, color: "#b45309", whiteSpace: "nowrap" as const }}>
                       {translators.reduce((s, t) => s + Number(t.settlement?.withholdingAmount ?? 0), 0).toLocaleString()}원
                     </td>
-                    <td style={{ ...td, fontWeight: 800, color: "#059669", whiteSpace: "nowrap" as const }}>
+                    <td style={{ ...TD, fontWeight: 800, color: "#059669", whiteSpace: "nowrap" as const }}>
                       {translators.reduce((s, t) => s + Number(t.settlement?.netAmount ?? 0), 0).toLocaleString()}원
                     </td>
-                    <td colSpan={3} style={td} />
+                    <td colSpan={3} style={TD} />
                   </tr>
                 </tfoot>
               )}
@@ -543,158 +540,211 @@ export function ProjectControlTowerTab({
         )}
       </div>
 
-      {/* ── 결제 / 지급 흐름 섹션 ──────────────────────────────────────────────── */}
+      {/* ── 결제/지급 하단 2분할 ──────────────────────────────────────────────── */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+
         {/* 고객 결제 현황 */}
-        <div style={cardBase}>
-          <div style={{ ...sectionTitle, justifyContent: "space-between" }}>
-            <span>💳 고객 결제 현황</span>
+        <div style={card}>
+          <div style={{ ...sectionHd, marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span>💳 고객 결제 현황</span>
+              <span style={{
+                padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 700,
+                background: payBadge.bg, color: payBadge.color,
+              }}>{payBadge.label}</span>
+            </div>
+            {/* 버튼: 미완료일 때만 표시 */}
             {!isFullyPaid && (
               <button onClick={onOpenPaymentForm}
-                style={!hasPayments
-                  ? actionBtn({ background: "#059669", color: "#fff" })
-                  : ghostBtn}>
+                style={{ padding: "5px 12px", borderRadius: 7, fontSize: 11, fontWeight: 700,
+                  cursor: "pointer", border: "none",
+                  background: !hasPayments ? "#059669" : "#f9fafb",
+                  color: !hasPayments ? "#fff" : "#374151",
+                  ...(hasPayments ? { border: "1px solid #e5e7eb" } : {}),
+                } as React.CSSProperties}>
                 {hasPayments ? "✏️ 수정 등록" : "＋ 결제 등록"}
               </button>
             )}
           </div>
+
           {!hasPayments ? (
             <EmptyCTA icon="💳" text="결제 내역이 없습니다." btnLabel="결제 등록하기" onClick={onOpenPaymentForm} />
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>{["결제일","금액","방법","상태"].map(h => <th key={h} style={th}>{h}</th>)}</tr>
-              </thead>
-              <tbody>
-                {payments.map(p => (
-                  <tr key={p.id}>
-                    <td style={{ ...td, whiteSpace: "nowrap" as const }}>{fmtDate(p.createdAt)}</td>
-                    <td style={{ ...td, fontWeight: 700, color: p.status === "paid" ? "#059669" : "#374151" }}>
-                      {Number(p.amount).toLocaleString()}원
-                    </td>
-                    <td style={{ ...td, color: "#6b7280" }}>{p.paymentMethod ?? "—"}</td>
-                    <td style={td}><StatusBadge status={p.status} /></td>
+            <>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>{["결제일","금액","방법","상태"].map(h => <th key={h} style={TH}>{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {payments.map(p => (
+                    <tr key={p.id}>
+                      <td style={{ ...TD, whiteSpace: "nowrap" as const }}>{fmtDate(p.createdAt)}</td>
+                      <td style={{ ...TD, fontWeight: 700, color: p.status === "paid" ? "#059669" : "#374151" }}>
+                        {Number(p.amount).toLocaleString()}원
+                      </td>
+                      <td style={{ ...TD, color: "#6b7280" }}>{p.paymentMethod ?? "—"}</td>
+                      <td style={TD}><StatusBadge status={p.status} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background: "#f9fafb", borderTop: "1px solid #e5e7eb" }}>
+                    <td style={{ ...TD, fontWeight: 700 }}>입금 합계</td>
+                    <td style={{ ...TD, fontWeight: 800, color: "#059669" }}>{summary.paidAmount.toLocaleString()}원</td>
+                    <td colSpan={2} style={TD} />
                   </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr style={{ background: "#f9fafb", borderTop: "1px solid #e5e7eb" }}>
-                  <td style={{ ...td, fontWeight: 700 }}>입금 합계</td>
-                  <td style={{ ...td, fontWeight: 800, color: "#059669" }}>{summary.paidAmount.toLocaleString()}원</td>
-                  <td colSpan={2} style={td} />
-                </tr>
-                {summary.unpaidAmount > 0 && (
-                  <tr style={{ background: "#fff7f7" }}>
-                    <td style={{ ...td, fontWeight: 700, color: "#dc2626" }}>미수금</td>
-                    <td style={{ ...td, fontWeight: 800, color: "#dc2626" }}>{summary.unpaidAmount.toLocaleString()}원</td>
-                    <td colSpan={2} style={td} />
-                  </tr>
-                )}
-              </tfoot>
-            </table>
+                  {summary.unpaidAmount > 0 && (
+                    <tr style={{ background: "#fff7f7" }}>
+                      <td style={{ ...TD, fontWeight: 700, color: "#dc2626" }}>미수금</td>
+                      <td style={{ ...TD, fontWeight: 800, color: "#dc2626" }}>{summary.unpaidAmount.toLocaleString()}원</td>
+                      <td colSpan={2} style={TD} />
+                    </tr>
+                  )}
+                </tfoot>
+              </table>
+              {/* 결제 완료 상태 */}
+              {isFullyPaid && (
+                <div style={{ marginTop: 10, padding: "8px 12px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0", fontSize: 12, fontWeight: 600, color: "#15803d" }}>
+                  ✅ 결제가 완료되었습니다.
+                </div>
+              )}
+            </>
           )}
         </div>
 
         {/* 통번역사 지급 현황 */}
-        <div style={cardBase}>
-          <div style={{ ...sectionTitle, justifyContent: "space-between" }}>
-            <span>💸 통번역사 지급 현황</span>
-            {hasReadySettlement && !allSettlementsPaid && (
-              <span style={{ padding: "3px 8px", borderRadius: 6, fontSize: 11, fontWeight: 700, background: "#fef3c7", color: "#b45309" }}>
-                ⚡ 지급 대기
-              </span>
-            )}
+        <div style={card}>
+          <div style={{ ...sectionHd, marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span>💸 통번역사 지급 현황</span>
+              <span style={{
+                padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 700,
+                background: settleBadge.bg, color: settleBadge.color,
+              }}>{settleBadge.label}</span>
+            </div>
           </div>
-          {translators.filter(t => t.settlement).length === 0 ? (
-            <div style={{ textAlign: "center", padding: "20px 16px", color: "#9ca3af", fontSize: 13 }}>
-              <p style={{ margin: "0 0 6px" }}>정산 내역이 없습니다.</p>
+
+          {!hasSettlements ? (
+            <div style={{ textAlign: "center", padding: "20px 16px", background: "#f9fafb", borderRadius: 8, border: "1px dashed #d1d5db" }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>📄</div>
+              <p style={{ margin: "0 0 4px", fontSize: 13, color: "#6b7280" }}>정산이 아직 생성되지 않았습니다.</p>
               <p style={{ margin: 0, fontSize: 11, color: "#c0c8d4" }}>프로젝트 완료 시 자동 생성되거나 정산 탭에서 수동 생성 가능합니다.</p>
             </div>
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>{["번역사","지급예정일","실지급액","상태","액션"].map(h => <th key={h} style={th}>{h}</th>)}</tr>
-              </thead>
-              <tbody>
-                {translators.filter(t => t.settlement).map(t => {
-                  const s = t.settlement!;
-                  const isOverdue = s.payoutDueDate && s.payoutDueDate < today && s.status !== "paid";
-                  const canPay    = s.status === "ready" || s.status === "pending";
-                  return (
-                    <tr key={t.taskId}>
-                      <td style={{ ...td, fontWeight: 600 }}>{t.name || t.email || "—"}</td>
-                      <td style={{ ...td, whiteSpace: "nowrap" as const }}>
-                        <span style={{ fontWeight: 600, color: isOverdue ? "#dc2626" : "#111827" }}>
-                          {s.payoutDueDate ?? "—"}
-                        </span>
-                        {isOverdue && <span style={{ marginLeft: 4, padding: "1px 4px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "#fee2e2", color: "#dc2626" }}>지연</span>}
-                      </td>
-                      <td style={{ ...td, fontWeight: 700, color: "#059669" }}>
-                        {Number(s.netAmount ?? 0).toLocaleString()}원
-                      </td>
-                      <td style={td}>
-                        <span style={{ padding: "2px 7px", borderRadius: 6, fontSize: 11, fontWeight: 700, ...(SETTLE_STATUS_BADGE[s.status] ?? {}) }}>
-                          {SETTLE_STATUS_KO[s.status] ?? s.status}
-                        </span>
-                        {s.paidAt && <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1 }}>지급일: {fmtDate(s.paidAt)}</div>}
-                      </td>
-                      <td style={td}>
-                        {canPay && (
-                          <button
-                            onClick={() => handlePaySettlement(s.id)}
-                            disabled={payingSettlement === s.id}
-                            style={actionBtn({
-                              background: payingSettlement === s.id ? "#e5e7eb" : "#059669",
-                              color: payingSettlement === s.id ? "#6b7280" : "#fff",
-                            })}>
-                            {payingSettlement === s.id ? "처리 중…" : "지급"}
-                          </button>
-                        )}
-                        {s.status === "paid" && <span style={{ fontSize: 11, color: "#15803d", fontWeight: 600 }}>✓ 완료</span>}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr style={{ background: "#f9fafb", borderTop: "1px solid #e5e7eb" }}>
-                  <td style={{ ...td, fontWeight: 700 }}>지급 합계</td>
-                  <td style={td} />
-                  <td style={{ ...td, fontWeight: 800, color: "#059669" }}>
-                    {summary.totalPayoutAmount.toLocaleString()}원
-                  </td>
-                  <td colSpan={2} style={td} />
-                </tr>
-              </tfoot>
-            </table>
+            <>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>{["번역사","지급예정일","실지급액","상태","액션"].map(h => <th key={h} style={TH}>{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {translators.filter(t => t.settlement).map(t => {
+                    const s = t.settlement!;
+                    const isOverdue = s.payoutDueDate && s.payoutDueDate < today && s.status !== "paid";
+                    const canPay    = s.status === "ready" || s.status === "pending";
+                    return (
+                      <tr key={t.taskId}>
+                        <td style={{ ...TD, fontWeight: 600 }}>{t.name || t.email || "—"}</td>
+                        <td style={{ ...TD, whiteSpace: "nowrap" as const }}>
+                          <span style={{ fontWeight: 600, color: isOverdue ? "#dc2626" : "#111827" }}>
+                            {s.payoutDueDate ?? "—"}
+                          </span>
+                          {isOverdue && <span style={{ marginLeft: 4, padding: "1px 4px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "#fee2e2", color: "#dc2626" }}>지연</span>}
+                        </td>
+                        <td style={{ ...TD, fontWeight: 700, color: "#059669" }}>
+                          {Number(s.netAmount ?? 0).toLocaleString()}원
+                        </td>
+                        <td style={TD}>
+                          <span style={{ padding: "2px 7px", borderRadius: 6, fontSize: 11, fontWeight: 700, ...(SETTLE_STATUS_BADGE[s.status] ?? {}) }}>
+                            {SETTLE_STATUS_KO[s.status] ?? s.status}
+                          </span>
+                          {s.paidAt && <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1 }}>지급일: {fmtDate(s.paidAt)}</div>}
+                        </td>
+                        <td style={TD}>
+                          {canPay && (
+                            <button onClick={() => handlePay(s.id)} disabled={payingId === s.id}
+                              style={{ padding: "5px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", border: "none", background: payingId === s.id ? "#e5e7eb" : "#059669", color: payingId === s.id ? "#6b7280" : "#fff" }}>
+                              {payingId === s.id ? "처리 중…" : "지급"}
+                            </button>
+                          )}
+                          {s.status === "paid" && <span style={{ fontSize: 11, color: "#15803d", fontWeight: 600 }}>✓ 완료</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr style={{ background: "#f9fafb", borderTop: "1px solid #e5e7eb" }}>
+                    <td style={{ ...TD, fontWeight: 700 }}>지급 합계</td>
+                    <td style={TD} />
+                    <td style={{ ...TD, fontWeight: 800, color: "#059669" }}>
+                      {summary.totalPayoutAmount.toLocaleString()}원
+                    </td>
+                    <td colSpan={2} style={TD} />
+                  </tr>
+                </tfoot>
+              </table>
+
+              {/* 지급 가능한 경우 강조 CTA */}
+              {hasPayableSettlement && !allSettlementsPaid && (
+                <div style={{ marginTop: 10, padding: "12px 14px", background: "#f0fdf4", borderRadius: 8, border: "1.5px solid #86efac", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#15803d" }}>
+                    💸 지급 처리가 가능한 정산이 있습니다.
+                  </span>
+                  <button
+                    onClick={() => {
+                      const first = translators.find(t => t.settlement?.status === "ready" || t.settlement?.status === "pending");
+                      if (first?.settlement) handlePay(first.settlement.id);
+                    }}
+                    disabled={payingId !== null}
+                    style={primaryBtn({ background: "#059669", fontSize: 12, opacity: payingId !== null ? 0.6 : 1 })}>
+                    지급 처리하기
+                  </button>
+                </div>
+              )}
+
+              {/* 지급 완료 상태 */}
+              {allSettlementsPaid && (
+                <div style={{ marginTop: 10, padding: "8px 12px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0", fontSize: 12, fontWeight: 600, color: "#15803d" }}>
+                  ✅ 모든 정산이 지급 완료되었습니다.
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
 
-      {/* ── 돈 흐름 요약 바 ────────────────────────────────────────────────────── */}
-      <div style={{ ...cardBase, background: "#f8faff", borderColor: "#bfdbfe" }}>
-        <div style={sectionTitle}>💡 프로젝트 돈 흐름</div>
+      {/* ── 돈 흐름 요약 ────────────────────────────────────────────────────────── */}
+      <div style={{ ...card, background: "#f8faff", borderColor: "#bfdbfe" }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#111827", marginBottom: 12 }}>💡 프로젝트 돈 흐름</div>
         <div style={{ display: "flex", alignItems: "center", gap: 0, flexWrap: "wrap" }}>
-          <FlowPill color="#3b82f6" label="판매금액" value={fmtWon(summary.saleTotalAmount)} />
+          <FlowPill
+            color="#3b82f6" label="판매금액"
+            value={hasQuotes ? fmtWon(summary.saleTotalAmount) : "미등록"}
+            dimmed={!hasQuotes}
+          />
           <FlowArrow />
           <FlowPill
             color={summary.paymentStatus === "fully_paid" ? "#059669" : summary.paymentStatus === "partial" ? "#d97706" : "#dc2626"}
-            label={`고객 입금${summary.paymentStatus === "fully_paid" ? " ✓" : ""}`}
+            label={`고객 입금${isFullyPaid ? " ✓" : ""}`}
             value={fmtWon(summary.paidAmount)}
             sub={summary.unpaidAmount > 0 ? `미수 ${fmtWon(summary.unpaidAmount)}` : undefined}
           />
           <FlowArrow />
           <FlowPill
-            color={summary.settlementStatus === "all_paid" ? "#059669" : summary.settlementStatus === "pending_review" ? "#d97706" : "#8b5cf6"}
-            label={`번역사 지급${summary.settlementStatus === "all_paid" ? " ✓" : ""}`}
-            value={fmtWon(summary.totalPayoutAmount)}
+            color={allSettlementsPaid ? "#059669" : summary.settlementStatus === "pending_review" ? "#d97706" : "#8b5cf6"}
+            label={`번역사 지급${allSettlementsPaid ? " ✓" : ""}`}
+            value={hasSettlements ? fmtWon(summary.totalPayoutAmount) : "없음"}
+            dimmed={!hasSettlements}
           />
           <FlowArrow />
           <FlowPill
-            color={summary.estimatedMargin >= 0 ? "#059669" : "#dc2626"}
+            color={!hasQuotes ? "#d1d5db" : summary.estimatedMargin >= 0 ? "#059669" : "#dc2626"}
             label="예상 차액"
-            value={`${summary.estimatedMargin >= 0 ? "+" : ""}${fmtWon(summary.estimatedMargin)}`}
-            sub={summary.saleTotalAmount > 0 ? `마진율 ${Math.round((summary.estimatedMargin / summary.saleTotalAmount) * 100)}%` : undefined}
+            value={!hasQuotes ? "—" : (summary.estimatedMargin >= 0 ? "+" : "") + fmtWon(summary.estimatedMargin)}
+            sub={hasQuotes && summary.saleTotalAmount > 0
+              ? `마진율 ${Math.round((summary.estimatedMargin / summary.saleTotalAmount) * 100)}%`
+              : undefined}
+            dimmed={!hasQuotes}
           />
         </div>
       </div>
@@ -703,9 +753,9 @@ export function ProjectControlTowerTab({
   );
 }
 
-// ── 서브 컴포넌트 ──────────────────────────────────────────────────────────────
+// ── 서브 컴포넌트 ─────────────────────────────────────────────────────────────
 
-function SummaryCard({ topColor, label, main, mainColor, sub, badge }: {
+function SCard({ topColor, label, main, mainColor, sub, badge }: {
   topColor: string; label: string;
   main?: string; mainColor?: string; sub?: string;
   badge?: { label: string; bg: string; color: string };
@@ -726,11 +776,17 @@ function SummaryCard({ topColor, label, main, mainColor, sub, badge }: {
   );
 }
 
-function FlowPill({ color, label, value, sub }: { color: string; label: string; value: string; sub?: string }) {
+function FlowPill({ color, label, value, sub, dimmed }: {
+  color: string; label: string; value: string; sub?: string; dimmed?: boolean;
+}) {
   return (
-    <div style={{ background: "#fff", border: `1.5px solid ${color}`, borderRadius: 10, padding: "8px 14px", minWidth: 110, textAlign: "center" as const }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color, marginBottom: 2, textTransform: "uppercase" as const }}>{label}</div>
-      <div style={{ fontSize: 14, fontWeight: 800, color: "#111827" }}>{value}</div>
+    <div style={{
+      background: "#fff", border: `1.5px solid ${dimmed ? "#e5e7eb" : color}`,
+      borderRadius: 10, padding: "8px 14px", minWidth: 110,
+      textAlign: "center" as const, opacity: dimmed ? 0.55 : 1,
+    }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: dimmed ? "#9ca3af" : color, marginBottom: 2, textTransform: "uppercase" as const }}>{label}</div>
+      <div style={{ fontSize: 14, fontWeight: 800, color: dimmed ? "#9ca3af" : "#111827" }}>{value}</div>
       {sub && <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1 }}>{sub}</div>}
     </div>
   );
