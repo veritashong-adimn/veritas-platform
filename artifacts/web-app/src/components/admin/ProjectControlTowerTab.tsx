@@ -1,3 +1,4 @@
+// 컨트롤타워 탭 — 상태 기반 UX 자동 제어 (2025-04)
 import React, { useCallback, useEffect, useState } from "react";
 import { api, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE } from "../../lib/constants";
 import { StatusBadge } from "../ui";
