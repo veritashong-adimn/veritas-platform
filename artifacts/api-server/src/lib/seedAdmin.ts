@@ -3,8 +3,12 @@ import { db, usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "./logger";
 
+const DEFAULT_ADMIN_EMAIL = "admin@platform.com";
+const DEFAULT_ADMIN_PASSWORD = "DevTest1234!";
+
 export async function seedAdmin(): Promise<void> {
-  const adminEmail = process.env["ADMIN_EMAIL"] ?? "admin@platform.com";
+  const adminEmail = process.env["ADMIN_EMAIL"] ?? DEFAULT_ADMIN_EMAIL;
+  const rawPassword = process.env["ADMIN_PASSWORD"] ?? DEFAULT_ADMIN_PASSWORD;
 
   const existing = await db
     .select({ id: usersTable.id })
@@ -17,22 +21,20 @@ export async function seedAdmin(): Promise<void> {
     return;
   }
 
-  const rawPassword = process.env["ADMIN_PASSWORD"];
-  if (!rawPassword) {
-    logger.warn(
-      { email: adminEmail },
-      "ADMIN_PASSWORD env var is not set and no admin account exists. " +
-        "Set the ADMIN_PASSWORD secret to create the admin account on next restart.",
-    );
-    return;
-  }
-
   const hashed = await bcrypt.hash(rawPassword, 10);
   await db.insert(usersTable).values({
     email: adminEmail,
     password: hashed,
     role: "admin",
+    name: "관리자",
+    isActive: true,
   });
 
-  logger.info({ email: adminEmail }, "Admin account created from ADMIN_PASSWORD env var");
+  const usingDefault = !process.env["ADMIN_PASSWORD"];
+  logger.info(
+    { email: adminEmail, usingDefaultPassword: usingDefault },
+    usingDefault
+      ? "Admin account created with DEFAULT password — set ADMIN_PASSWORD env var to override"
+      : "Admin account created from ADMIN_PASSWORD env var",
+  );
 }
