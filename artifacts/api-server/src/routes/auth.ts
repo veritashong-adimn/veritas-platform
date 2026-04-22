@@ -81,10 +81,17 @@ router.post("/auth/login", async (req, res) => {
 
   const email = rawEmail.trim().toLowerCase();
 
-  const [user] = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.email, email));
+  let user: (typeof usersTable.$inferSelect) | undefined;
+  try {
+    [user] = await db
+      .select()
+      .from(usersTable)
+      .where(eq(usersTable.email, email));
+  } catch (err) {
+    req.log.error({ err }, "Login DB query failed");
+    res.status(503).json({ error: "데이터베이스 연결에 실패했습니다. 잠시 후 다시 시도해 주세요." });
+    return;
+  }
 
   if (!user) {
     req.log.warn({ email }, "Login failed: user not found");
