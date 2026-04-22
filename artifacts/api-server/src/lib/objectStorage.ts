@@ -1,34 +1,24 @@
-import { Storage, File } from "@google-cloud/storage";
-import { Readable } from "stream";
-import { randomUUID } from "crypto";
+/**
+ * objectStorage.ts — Cloudflare R2 기반 오브젝트 스토리지 서비스
+ * Google Cloud Storage 의존성 완전 제거, R2 단일 구현
+ */
+import { randomUUID } from "node:crypto";
 import {
-  ObjectAclPolicy,
-  ObjectPermission,
-  canAccessObject,
-  getObjectAclPolicy,
-  setObjectAclPolicy,
-} from "./objectAcl";
+  isR2Configured,
+  getR2Client,
+  bucketName,
+  getPresignedUploadUrl,
+  getPresignedDownloadUrl,
+  getR2ObjectStream,
+  r2ObjectExists,
+  getR2PublicUrl,
+  extractKeyFromR2Url,
+} from "./r2";
 
-const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
+// ── 내부 타입 (GCS File 대체) ─────────────────────────────────────────────────
+export type R2Object = { key: string };
 
-export const objectStorageClient = new Storage({
-  credentials: {
-    audience: "replit",
-    subject_token_type: "access_token",
-    token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
-    type: "external_account",
-    credential_source: {
-      url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
-      format: {
-        type: "json",
-        subject_token_field_name: "access_token",
-      },
-    },
-    universe_domain: "googleapis.com",
-  },
-  projectId: "",
-});
-
+// ── 에러 ──────────────────────────────────────────────────────────────────────
 export class ObjectNotFoundError extends Error {
   constructor() {
     super("Object not found");
@@ -37,231 +27,105 @@ export class ObjectNotFoundError extends Error {
   }
 }
 
+// ── 서비스 ────────────────────────────────────────────────────────────────────
 export class ObjectStorageService {
-  constructor() {}
 
-  getPublicObjectSearchPaths(): Array<string> {
-    const pathsStr = process.env.PUBLIC_OBJECT_SEARCH_PATHS || "";
-    const paths = Array.from(
-      new Set(
-        pathsStr
-          .split(",")
-          .map((path) => path.trim())
-          .filter((path) => path.length > 0)
-      )
-    );
-    if (paths.length === 0) {
-      throw new Error(
-        "PUBLIC_OBJECT_SEARCH_PATHS not set. Create a bucket in 'Object Storage' " +
-          "tool and set PUBLIC_OBJECT_SEARCH_PATHS env var (comma-separated paths)."
-      );
-    }
-    return paths;
+  /** R2 설정 여부 확인 */
+  isConfigured(): boolean {
+    return isR2Configured();
   }
 
-  getPrivateObjectDir(): string {
-    const dir = process.env.PRIVATE_OBJECT_DIR || "";
-    if (!dir) {
-      throw new Error(
-        "PRIVATE_OBJECT_DIR not set. Create a bucket in 'Object Storage' " +
-          "tool and set PRIVATE_OBJECT_DIR env var."
-      );
-    }
-    return dir;
-  }
+  // ── 업로드 URL 생성 ─────────────────────────────────────────────────────────
 
-  async searchPublicObject(filePath: string): Promise<File | null> {
-    for (const searchPath of this.getPublicObjectSearchPaths()) {
-      const fullPath = `${searchPath}/${filePath}`;
-
-      const { bucketName, objectName } = parseObjectPath(fullPath);
-      const bucket = objectStorageClient.bucket(bucketName);
-      const file = bucket.file(objectName);
-
-      const [exists] = await file.exists();
-      if (exists) {
-        return file;
-      }
-    }
-
-    return null;
-  }
-
-  async downloadObject(file: File, cacheTtlSec: number = 3600): Promise<Response> {
-    const [metadata] = await file.getMetadata();
-    const aclPolicy = await getObjectAclPolicy(file);
-    const isPublic = aclPolicy?.visibility === "public";
-
-    const nodeStream = file.createReadStream();
-    const webStream = Readable.toWeb(nodeStream) as ReadableStream;
-
-    const headers: Record<string, string> = {
-      "Content-Type": (metadata.contentType as string) || "application/octet-stream",
-      "Cache-Control": `${isPublic ? "public" : "private"}, max-age=${cacheTtlSec}`,
-    };
-    if (metadata.size) {
-      headers["Content-Length"] = String(metadata.size);
-    }
-
-    return new Response(webStream, { headers });
-  }
-
+  /** 클라이언트 직접 업로드용 Presigned PUT URL 반환 */
   async getObjectEntityUploadURL(): Promise<string> {
-    const privateObjectDir = this.getPrivateObjectDir();
-    if (!privateObjectDir) {
-      throw new Error(
-        "PRIVATE_OBJECT_DIR not set. Create a bucket in 'Object Storage' " +
-          "tool and set PRIVATE_OBJECT_DIR env var."
-      );
+    if (!isR2Configured()) {
+      throw new Error("R2 환경변수가 설정되지 않았습니다. R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME을 설정해주세요.");
     }
-
-    const objectId = randomUUID();
-    const fullPath = `${privateObjectDir}/uploads/${objectId}`;
-
-    const { bucketName, objectName } = parseObjectPath(fullPath);
-
-    return signObjectURL({
-      bucketName,
-      objectName,
-      method: "PUT",
-      ttlSec: 900,
-    });
+    const key = `uploads/${randomUUID()}`;
+    return getPresignedUploadUrl(key, undefined, 900);
   }
 
-  async getObjectEntityFile(objectPath: string): Promise<File> {
-    if (!objectPath.startsWith("/objects/")) {
-      throw new ObjectNotFoundError();
-    }
+  // ── 경로 정규화 ─────────────────────────────────────────────────────────────
 
-    const parts = objectPath.slice(1).split("/");
-    if (parts.length < 2) {
-      throw new ObjectNotFoundError();
-    }
-
-    const entityId = parts.slice(1).join("/");
-    let entityDir = this.getPrivateObjectDir();
-    if (!entityDir.endsWith("/")) {
-      entityDir = `${entityDir}/`;
-    }
-    const objectEntityPath = `${entityDir}${entityId}`;
-    const { bucketName, objectName } = parseObjectPath(objectEntityPath);
-    const bucket = objectStorageClient.bucket(bucketName);
-    const objectFile = bucket.file(objectName);
-    const [exists] = await objectFile.exists();
-    if (!exists) {
-      throw new ObjectNotFoundError();
-    }
-    return objectFile;
-  }
-
+  /**
+   * Presigned URL 또는 R2 public URL을 내부 경로 (/objects/{key})로 변환.
+   * 이미 내부 경로이면 그대로 반환.
+   */
   normalizeObjectEntityPath(rawPath: string): string {
-    if (!rawPath.startsWith("https://storage.googleapis.com/")) {
+    if (rawPath.startsWith("/objects/") || rawPath.startsWith("/")) {
       return rawPath;
     }
+    // R2 URL에서 키 추출
+    const key = extractKeyFromR2Url(rawPath);
+    if (key) return `/objects/${key}`;
+    return rawPath;
+  }
 
-    const url = new URL(rawPath);
-    const rawObjectPath = url.pathname;
+  // ── 공개 오브젝트 검색 ──────────────────────────────────────────────────────
 
-    let objectEntityDir = this.getPrivateObjectDir();
-    if (!objectEntityDir.endsWith("/")) {
-      objectEntityDir = `${objectEntityDir}/`;
+  /**
+   * public/{filePath} 키로 R2 오브젝트가 존재하는지 확인.
+   * 존재하면 R2Object 반환, 없으면 null.
+   */
+  async searchPublicObject(filePath: string): Promise<R2Object | null> {
+    const key = `public/${filePath}`;
+    const exists = await r2ObjectExists(key);
+    return exists ? { key } : null;
+  }
+
+  // ── 다운로드 ────────────────────────────────────────────────────────────────
+
+  /**
+   * R2Object를 스트림으로 다운로드.
+   * ttlSec: 이 메서드에서는 사용되지 않음(스트림 직접 반환), 호환성 유지용 파라미터.
+   */
+  async downloadObject(obj: R2Object, _ttlSec = 3600): Promise<Response> {
+    const { body, contentType, contentLength } = await getR2ObjectStream(obj.key);
+    const headers: Record<string, string> = {
+      "Content-Type": contentType,
+      "Cache-Control": "private, max-age=3600",
+    };
+    if (contentLength != null) {
+      headers["Content-Length"] = String(contentLength);
+    }
+    return new Response(body, { headers });
+  }
+
+  // ── 프라이빗 오브젝트 조회 ──────────────────────────────────────────────────
+
+  /**
+   * /objects/{key} 형태의 내부 경로로 R2Object 반환.
+   * 존재하지 않으면 ObjectNotFoundError.
+   */
+  async getObjectEntityFile(objectPath: string): Promise<R2Object> {
+    // 경로 형식: /objects/{key} 또는 uploads/{uuid}
+    let key: string;
+    if (objectPath.startsWith("/objects/")) {
+      key = objectPath.slice("/objects/".length);
+    } else if (objectPath.startsWith("/")) {
+      key = objectPath.slice(1);
+    } else {
+      key = objectPath;
     }
 
-    if (!rawObjectPath.startsWith(objectEntityDir)) {
-      return rawObjectPath;
-    }
+    if (!key) throw new ObjectNotFoundError();
 
-    const entityId = rawObjectPath.slice(objectEntityDir.length);
-    return `/objects/${entityId}`;
+    const exists = await r2ObjectExists(key);
+    if (!exists) throw new ObjectNotFoundError();
+
+    return { key };
   }
 
-  async trySetObjectEntityAclPolicy(
-    rawPath: string,
-    aclPolicy: ObjectAclPolicy
-  ): Promise<string> {
-    const normalizedPath = this.normalizeObjectEntityPath(rawPath);
-    if (!normalizedPath.startsWith("/")) {
-      return normalizedPath;
-    }
+  // ── ACL / 다운로드 URL (호환성) ─────────────────────────────────────────────
 
-    const objectFile = await this.getObjectEntityFile(normalizedPath);
-    await setObjectAclPolicy(objectFile, aclPolicy);
-    return normalizedPath;
+  /** Presigned GET URL 반환 (직접 다운로드 링크가 필요할 때) */
+  async getSignedDownloadUrl(key: string, ttlSec = 3600): Promise<string> {
+    return getPresignedDownloadUrl(key, ttlSec);
   }
 
-  async canAccessObjectEntity({
-    userId,
-    objectFile,
-    requestedPermission,
-  }: {
-    userId?: string;
-    objectFile: File;
-    requestedPermission?: ObjectPermission;
-  }): Promise<boolean> {
-    return canAccessObject({
-      userId,
-      objectFile,
-      requestedPermission: requestedPermission ?? ObjectPermission.READ,
-    });
+  /** 공개 URL 반환 */
+  getPublicUrl(key: string): string {
+    return getR2PublicUrl(key);
   }
-}
-
-function parseObjectPath(path: string): {
-  bucketName: string;
-  objectName: string;
-} {
-  if (!path.startsWith("/")) {
-    path = `/${path}`;
-  }
-  const pathParts = path.split("/");
-  if (pathParts.length < 3) {
-    throw new Error("Invalid path: must contain at least a bucket name");
-  }
-
-  const bucketName = pathParts[1];
-  const objectName = pathParts.slice(2).join("/");
-
-  return {
-    bucketName,
-    objectName,
-  };
-}
-
-async function signObjectURL({
-  bucketName,
-  objectName,
-  method,
-  ttlSec,
-}: {
-  bucketName: string;
-  objectName: string;
-  method: "GET" | "PUT" | "DELETE" | "HEAD";
-  ttlSec: number;
-}): Promise<string> {
-  const request = {
-    bucket_name: bucketName,
-    object_name: objectName,
-    method,
-    expires_at: new Date(Date.now() + ttlSec * 1000).toISOString(),
-  };
-  const response = await fetch(
-    `${REPLIT_SIDECAR_ENDPOINT}/object-storage/signed-object-url`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(request),
-      signal: AbortSignal.timeout(30_000),
-    }
-  );
-  if (!response.ok) {
-    throw new Error(
-      `Failed to sign object URL, errorcode: ${response.status}, ` +
-        `make sure you're running on Replit`
-    );
-  }
-
-  const json = await response.json() as { signed_url: string };
-  return json.signed_url;
 }
