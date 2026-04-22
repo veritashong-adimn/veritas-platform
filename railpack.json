@@ -17,6 +17,6 @@
     }
   },
   "deploy": {
-    "startCommand": "pnpm --filter @workspace/api-server run start"
+    "startCommand": "pnpm --filter @workspace/db run push-force && pnpm --filter @workspace/api-server run start"
   }
 }
