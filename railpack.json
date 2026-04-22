@@ -7,6 +7,15 @@
         "corepack prepare pnpm@10.26.1 --activate",
         "pnpm install --no-frozen-lockfile"
       ]
+    },
+    "build": {
+      "dependsOn": ["install"],
+      "commands": [
+        "pnpm --filter @workspace/api-server run build"
+      ]
     }
+  },
+  "deploy": {
+    "startCommand": "pnpm --filter @workspace/api-server run start"
   }
 }
