@@ -11,7 +11,8 @@
     "build": {
       "dependsOn": ["install"],
       "commands": [
-        "pnpm -r --if-present run build"
+        "pnpm --filter @workspace/api-server run build",
+        "BASE_PATH=/ pnpm --filter @workspace/web-app run build"
       ]
     }
   },
