@@ -1,3 +1,4 @@
+// 서버 진입점
 import app from "./app";
 import { logger } from "./lib/logger";
 import { seedAdmin } from "./lib/seedAdmin";
