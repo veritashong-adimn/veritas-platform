@@ -19,5 +19,8 @@
   "deploy": {
     "startCommand": "pnpm --filter @workspace/db run push-force && pnpm --filter @workspace/api-server run start",
     "_comment": "DB 스키마 자동 적용 후 서버 시작"
-  }
+  },
+  "watchPatterns": [
+    "**"
+  ]
 }
