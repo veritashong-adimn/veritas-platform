@@ -440,28 +440,25 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                 )}
               </div>
 
-              {/* ── 플랫폼 사용자 ── */}
-              <div style={{ borderRadius: 10, border: "1px solid #e5e7eb", padding: "12px 14px", background: "#fafafa" }}>
-                <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>플랫폼 사용자</p>
-                <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
-                    고객 로그인 계정 (선택)
-                    <span
-                      title={"로그인하여 프로젝트를 조회/결제할 수 있는 고객 계정입니다.\n선택하지 않으면 내부 관리용 프로젝트로 등록됩니다."}
-                      style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", background: "#e5e7eb", color: "#6b7280", fontSize: 10, fontWeight: 700, cursor: "help", flexShrink: 0 }}
-                    >?</span>
-                    {user.role === "customer"
-                      ? <span style={{ fontWeight: 400, color: "#059669", marginLeft: 2 }}>(자동 선택됨)</span>
-                      : <span style={{ fontWeight: 400, color: "#9ca3af", marginLeft: 2 }}>(로그인 없이 내부 관리)</span>}
-                  </label>
-                  <SearchableSelect
-                    items={customers.map(c => ({ id: c.id, label: c.contactName, sub: c.email }))}
-                    value={newProjectCustomerId}
-                    placeholder="선택 안함 (로그인 없이 내부 관리)"
-                    accentBorder="#374151"
-                    onChange={setNewProjectCustomerId}
-                  />
-                </div>
+              {/* ── 고객 로그인 계정 ── */}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+                  고객 로그인 계정 (선택)
+                  <span
+                    title={"로그인하여 프로젝트 조회, 견적 확인, 결제를 할 수 있는 고객 계정입니다.\n선택하지 않으면 내부에서만 관리되는 프로젝트로 등록됩니다."}
+                    style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", background: "#e5e7eb", color: "#6b7280", fontSize: 10, fontWeight: 700, cursor: "help", flexShrink: 0 }}
+                  >?</span>
+                  {user.role === "customer" && (
+                    <span style={{ fontWeight: 400, color: "#059669", marginLeft: 2 }}>(자동 선택됨)</span>
+                  )}
+                </label>
+                <SearchableSelect
+                  items={customers.map(c => ({ id: c.id, label: c.contactName, sub: c.email }))}
+                  value={newProjectCustomerId}
+                  placeholder="선택 안함 (고객 미연결 / 내부 관리)"
+                  accentBorder="#374151"
+                  onChange={setNewProjectCustomerId}
+                />
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
