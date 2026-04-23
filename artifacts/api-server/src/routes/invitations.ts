@@ -49,9 +49,9 @@ router.post("/invitations", ...adminGuard, async (req, res) => {
   const performer = (req as any).user as { id: number; email: string } | undefined;
 
   try {
-    // 프로젝트 존재 확인
+    // 프로젝트 존재 확인 (requestingCompanyId 포함 - 신규 유저 companyId 설정에 사용)
     const [project] = await db
-      .select({ id: projectsTable.id, title: projectsTable.title })
+      .select({ id: projectsTable.id, title: projectsTable.title, requestingCompanyId: projectsTable.requestingCompanyId })
       .from(projectsTable)
       .where(eq(projectsTable.id, projectId));
 
@@ -108,6 +108,7 @@ router.post("/invitations", ...adminGuard, async (req, res) => {
     }
 
     // 사용자 생성 (isActive: false = invited)
+    // companyId: 프로젝트의 requestingCompanyId를 소속 회사로 설정
     const inviteToken = crypto.randomBytes(32).toString("hex");
     const [newUser] = await db
       .insert(usersTable)
@@ -117,8 +118,12 @@ router.post("/invitations", ...adminGuard, async (req, res) => {
         role: "client",
         isActive: false,
         inviteToken,
+        companyId: project.requestingCompanyId ?? null,
       })
       .returning({ id: usersTable.id });
+
+    await logEvent("project", projectId, "customer_invitation_company_assigned", req.log, performer,
+      JSON.stringify({ email: normalizedEmail, companyId: project.requestingCompanyId }));
 
     // 프로젝트 연결
     await db

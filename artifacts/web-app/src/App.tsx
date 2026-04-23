@@ -160,7 +160,7 @@ export default function App() {
           </div>
         )}
 
-        {user.role === "customer" && <CustomerDashboard user={user} token={token} />}
+        {(user.role === "customer" || user.role === "client") && <CustomerDashboard user={user} token={token} />}
         {user.role === "translator" && <TranslatorDashboard user={user} token={token} />}
       </main>
     </div>

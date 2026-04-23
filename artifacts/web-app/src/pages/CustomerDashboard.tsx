@@ -27,13 +27,15 @@ export function CustomerDashboard({ user, token }: { user: User; token: string }
   const fetchProjects = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(api(`/api/projects?userId=${user.id}`));
+      // 보안 엔드포인트 사용 (인증 토큰 포함, 회사 단위 조회 지원)
+      const res = await fetch(api("/api/customer/projects"), {
+        headers: { "Authorization": `Bearer ${token}` },
+      });
       const data = await res.json();
-      setProjects(Array.isArray(data) ? data.sort((a: Project, b: Project) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) : []);
+      setProjects(Array.isArray(data) ? data : []);
     } catch { setToast("오류: 프로젝트 목록을 불러올 수 없습니다."); }
     finally { setLoading(false); }
-  }, [user.id]);
+  }, [token]);
 
   useEffect(() => { fetchProjects(); }, [fetchProjects]);
 
