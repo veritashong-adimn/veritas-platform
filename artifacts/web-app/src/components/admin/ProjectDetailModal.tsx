@@ -172,7 +172,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [quotePrepaidUsage, setQuotePrepaidUsage] = useState("");
   // 선입금 차감 - 거래처 계정 원장
   type CompPrepaidAcct = { id: number; initialAmount: number; currentBalance: number; note: string | null; depositDate: string | null; status: string };
-  type LedgerEntry = { id: number; type: string; amount: number; balanceAfter: number; description: string | null; projectId: number | null; projectTitle: string | null; transactionDate: string | null; createdAt: string | null; supplyAmount: number | null; taxAmount: number | null };
+  type LedgerEntry = { id: number; accountId?: number; type: string; amount: number; balanceBefore: number | null; balanceAfter: number; description: string | null; projectId: number | null; projectTitle: string | null; transactionDate: string | null; createdAt: string | null; supplyAmount: number | null; taxAmount: number | null };
   const [compPrepaidAccounts, setCompPrepaidAccounts] = useState<CompPrepaidAcct[]>([]);
   const [loadingCompPrepaid, setLoadingCompPrepaid] = useState(false);
   const [selectedPrepaidAcctId, setSelectedPrepaidAcctId] = useState<number | null>(null);
@@ -181,6 +181,19 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [quickPrepaidAmount, setQuickPrepaidAmount] = useState("");
   const [quickPrepaidNote, setQuickPrepaidNote] = useState("");
   const [registeringPrepaid, setRegisteringPrepaid] = useState(false);
+
+  // ── 입금 등록 모달 ──────────────────────────────────────────────────────────
+  const [showDepositModal, setShowDepositModal] = useState(false);
+  const [depositAmount, setDepositAmount] = useState("");
+  const [depositDate, setDepositDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [depositMemo, setDepositMemo] = useState("");
+  const [depositTargetAcctId, setDepositTargetAcctId] = useState<number | null>(null);
+  const [depositSubmitting, setDepositSubmitting] = useState(false);
+
+  // ── 이력 보기 모달 ──────────────────────────────────────────────────────────
+  const [showLedgerModal, setShowLedgerModal] = useState(false);
+  const [ledgerModalData, setLedgerModalData] = useState<LedgerEntry[]>([]);
+  const [ledgerModalLoading, setLedgerModalLoading] = useState(false);
   const [quoteBatchStart, setQuoteBatchStart] = useState("");
   const [quoteBatchEnd, setQuoteBatchEnd] = useState("");
   // 누적 견적 후보 조회 상태
@@ -849,6 +862,62 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       }
     } catch { onToast("오류: 선입금 계정 등록 실패"); }
     finally { setRegisteringPrepaid(false); }
+  };
+
+  // ── 입금 등록 제출 핸들러 ──────────────────────────────────────────────────
+  const handleDepositSubmit = async () => {
+    const compId = detail?.companyId;
+    if (!compId) { onToast("거래처가 없습니다."); return; }
+    const rawAmt = Number(depositAmount.replace(/,/g, ""));
+    if (!rawAmt || rawAmt <= 0) { onToast("입금 금액을 입력하세요."); return; }
+    if (!depositDate) { onToast("입금일을 입력하세요."); return; }
+    setDepositSubmitting(true);
+    try {
+      const res = await fetch(api("/api/prepaid/deposit"), {
+        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyId: compId,
+          accountId: depositTargetAcctId ?? undefined,
+          amount: rawAmt,
+          note: depositMemo || null,
+          depositDate,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast(`입금 완료: ${rawAmt.toLocaleString()}원`);
+      setShowDepositModal(false);
+      setDepositAmount(""); setDepositMemo("");
+      setDepositDate(new Date().toISOString().slice(0, 10));
+      // 계정 목록 갱신
+      const listRes = await fetch(api(`/api/admin/prepaid-accounts?companyId=${compId}&_t=${Date.now()}`), { headers: authH });
+      if (listRes.ok) {
+        const list = await listRes.json();
+        const active = list.filter((a: CompPrepaidAcct) => a.status === "active");
+        setCompPrepaidAccounts(active);
+        if (active.length > 0 && !selectedPrepaidAcctId) setSelectedPrepaidAcctId(active[0].id);
+      }
+      // 원장도 갱신
+      if (selectedPrepaidAcctId || data.account?.id) {
+        const acctId = selectedPrepaidAcctId ?? data.account.id;
+        const txRes = await fetch(api(`/api/prepaid/transactions?companyId=${compId}&_t=${Date.now()}`), { headers: authH });
+        if (txRes.ok) setAcctLedger(await txRes.json());
+      }
+    } catch { onToast("입금 처리 중 오류가 발생했습니다."); }
+    finally { setDepositSubmitting(false); }
+  };
+
+  // ── 이력 보기 모달 오픈 핸들러 ────────────────────────────────────────────
+  const handleOpenLedgerModal = async () => {
+    const compId = detail?.companyId;
+    if (!compId) return;
+    setShowLedgerModal(true);
+    setLedgerModalLoading(true);
+    try {
+      const res = await fetch(api(`/api/prepaid/transactions?companyId=${compId}&limit=200&_t=${Date.now()}`), { headers: authH });
+      if (res.ok) setLedgerModalData(await res.json());
+    } catch { /* ignore */ }
+    finally { setLedgerModalLoading(false); }
   };
 
   const handleCreatePayment = async () => {
@@ -1952,8 +2021,30 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       return (
                         <div style={{ marginBottom: 10 }}>
                           <div style={{ background: "#fdf4ff", border: `1px solid ${isInsufficient ? "#f87171" : "#d8b4fe"}`, borderRadius: 8, padding: "12px 14px" }}>
-                            <div style={{ fontSize: 10, fontWeight: 800, color: "#7c3aed", marginBottom: 10 }}>
-                              {quoteType === "b2c_prepaid" ? "선입금 견적서 — 잔액 차감" : "B2B 선입금 차감"}
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                              <div style={{ fontSize: 10, fontWeight: 800, color: "#7c3aed" }}>
+                                {quoteType === "b2c_prepaid" ? "선입금 견적서 — 잔액 차감" : "B2B 선입금 차감"}
+                              </div>
+                              <div style={{ display: "flex", gap: 6 }}>
+                                <button
+                                  type="button"
+                                  onClick={e => {
+                                    e.stopPropagation();
+                                    setDepositTargetAcctId(selectedAcct?.id ?? null);
+                                    setDepositDate(new Date().toISOString().slice(0, 10));
+                                    setDepositAmount(""); setDepositMemo("");
+                                    setShowDepositModal(true);
+                                  }}
+                                  style={{ fontSize: 11, fontWeight: 700, color: "#166534", background: "#dcfce7", border: "1px solid #86efac", borderRadius: 5, padding: "3px 10px", cursor: "pointer" }}>
+                                  + 입금 등록
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={e => { e.stopPropagation(); handleOpenLedgerModal(); }}
+                                  style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", border: "1px solid #d8b4fe", borderRadius: 5, padding: "3px 10px", cursor: "pointer" }}>
+                                  이력 보기
+                                </button>
+                              </div>
                             </div>
                             {/* 선입금 견적서(b2c_prepaid)에 날짜 입력 */}
                             {quoteType === "b2c_prepaid" && (
@@ -3216,6 +3307,189 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             )}
           </>
         )}
+      {/* ── 선입금 입금 등록 모달 ─────────────────────────────────────────────── */}
+      {showDepositModal && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 10100, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={e => { if (e.target === e.currentTarget) setShowDepositModal(false); }}
+        >
+          <div style={{ background: "#fff", borderRadius: 14, padding: "26px 28px", width: 380, maxWidth: "90vw", boxShadow: "0 12px 40px rgba(0,0,0,0.22)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: "#15803d" }}>선입금 입금 등록</div>
+                <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
+                  {compPrepaidAccounts.find(a => a.id === depositTargetAcctId)?.note ?? "계정에 입금을 추가합니다"}
+                </div>
+              </div>
+              <button onClick={() => setShowDepositModal(false)}
+                style={{ background: "none", border: "none", fontSize: 20, color: "#9ca3af", cursor: "pointer", lineHeight: 1, padding: 4 }}>×</button>
+            </div>
+
+            {/* 여러 계정일 때 계정 선택 */}
+            {compPrepaidAccounts.length > 1 && (
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>입금 대상 계정</label>
+                <select value={depositTargetAcctId ?? ""} onChange={e => setDepositTargetAcctId(Number(e.target.value))}
+                  style={{ width: "100%", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: 7, fontSize: 12 }}>
+                  {compPrepaidAccounts.map(a => (
+                    <option key={a.id} value={a.id}>
+                      {a.depositDate ?? "-"}{a.note ? ` · ${a.note}` : ""} — 잔액 {a.currentBalance.toLocaleString()}원
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* 입금 금액 */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>입금 금액 (원) *</label>
+              <input
+                value={depositAmount}
+                onChange={e => { const raw = e.target.value.replace(/[^0-9]/g, ""); setDepositAmount(raw ? Number(raw).toLocaleString() : ""); }}
+                placeholder="예: 5,000,000"
+                style={{ width: "100%", padding: "9px 12px", border: "1px solid #86efac", borderRadius: 8, fontSize: 14, fontWeight: 700, color: "#15803d", boxSizing: "border-box" }}
+              />
+              {depositAmount && Number(depositAmount.replace(/,/g, "")) > 0 && (
+                <div style={{ fontSize: 11, color: "#15803d", marginTop: 3, fontWeight: 600 }}>
+                  입금 후 잔액: {((compPrepaidAccounts.find(a => a.id === depositTargetAcctId)?.currentBalance ?? 0) + Number(depositAmount.replace(/,/g, ""))).toLocaleString()}원
+                </div>
+              )}
+            </div>
+
+            {/* 입금일 */}
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>입금일 *</label>
+              <input type="date" value={depositDate} onChange={e => setDepositDate(e.target.value)}
+                style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 7, fontSize: 13, boxSizing: "border-box" }} />
+            </div>
+
+            {/* 메모 */}
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ fontSize: 11, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>메모 (선택)</label>
+              <input value={depositMemo} onChange={e => setDepositMemo(e.target.value)}
+                placeholder="예: 1차 계약금, 추가 입금 등"
+                style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 7, fontSize: 13, boxSizing: "border-box" }} />
+            </div>
+
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => setShowDepositModal(false)}
+                style={{ padding: "9px 20px", borderRadius: 7, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, cursor: "pointer", color: "#374151" }}>
+                취소
+              </button>
+              <button onClick={handleDepositSubmit} disabled={depositSubmitting || !depositAmount || !depositDate}
+                style={{ padding: "9px 20px", borderRadius: 7, border: "none", background: depositSubmitting || !depositAmount ? "#9ca3af" : "#16a34a", fontSize: 13, fontWeight: 700, cursor: depositSubmitting || !depositAmount ? "not-allowed" : "pointer", color: "#fff" }}>
+                {depositSubmitting ? "등록 중..." : "등록"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 선입금 이력 보기 모달 ─────────────────────────────────────────────── */}
+      {showLedgerModal && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 10100, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={e => { if (e.target === e.currentTarget) setShowLedgerModal(false); }}
+        >
+          <div style={{ background: "#fff", borderRadius: 14, width: 740, maxWidth: "95vw", maxHeight: "80vh", display: "flex", flexDirection: "column", boxShadow: "0 12px 40px rgba(0,0,0,0.22)" }}>
+            {/* 헤더 */}
+            <div style={{ padding: "20px 24px 14px", borderBottom: "1px solid #f3f4f6", flexShrink: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: "#7c3aed" }}>선입금 거래 이력</div>
+                  <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
+                    {compPrepaidAccounts.find(a => a.id === selectedPrepaidAcctId)
+                      ? `잔액: ${compPrepaidAccounts.find(a => a.id === selectedPrepaidAcctId)!.currentBalance.toLocaleString()}원`
+                      : "모든 계정의 거래 내역"}
+                  </div>
+                </div>
+                <button onClick={() => setShowLedgerModal(false)}
+                  style={{ background: "none", border: "none", fontSize: 22, color: "#9ca3af", cursor: "pointer", lineHeight: 1, padding: 4 }}>×</button>
+              </div>
+            </div>
+
+            {/* 테이블 */}
+            <div style={{ overflowY: "auto", flex: 1, padding: "12px 16px" }}>
+              {ledgerModalLoading ? (
+                <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af", fontSize: 13 }}>이력 불러오는 중...</div>
+              ) : ledgerModalData.length === 0 ? (
+                <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af", fontSize: 13 }}>거래 내역이 없습니다.</div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <thead style={{ position: "sticky", top: 0, background: "#f5f3ff", zIndex: 1 }}>
+                    <tr>
+                      {[
+                        { h: "날짜", w: 88 },
+                        { h: "유형", w: 56 },
+                        { h: "금액", w: 100, right: true },
+                        { h: "전 잔액", w: 100, right: true },
+                        { h: "후 잔액", w: 100, right: true },
+                        { h: "프로젝트", w: undefined },
+                        { h: "메모", w: undefined },
+                      ].map(({ h, w, right }) => (
+                        <th key={h} style={{ padding: "7px 10px", fontWeight: 700, color: "#4b5563", borderBottom: "2px solid #d8b4fe", whiteSpace: "nowrap", textAlign: right ? "right" : "left", fontSize: 11, width: w }}>
+                          {h}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ledgerModalData.map((tx, idx) => {
+                      const isDeposit = tx.type === "deposit";
+                      const isDeduct = tx.type === "deduction";
+                      const typeLabel = isDeposit ? "입금" : isDeduct ? "차감" : "조정";
+                      const typeColor = isDeposit ? "#15803d" : isDeduct ? "#dc2626" : "#374151";
+                      const typeBg = isDeposit ? "#dcfce7" : isDeduct ? "#fee2e2" : "#f3f4f6";
+                      const rowBg = idx % 2 === 0 ? "#fff" : "#fafafa";
+                      const dateStr = tx.transactionDate ? tx.transactionDate.slice(0, 10) : (tx.createdAt ? tx.createdAt.slice(0, 10) : "-");
+                      const amtPrefix = isDeposit ? "+" : isDeduct ? "−" : "";
+                      const balBefore = tx.balanceBefore != null ? Number(tx.balanceBefore) : null;
+                      const tdSt: React.CSSProperties = { padding: "7px 10px", borderBottom: "1px solid #f3f4f6" };
+                      return (
+                        <tr key={tx.id} style={{ background: rowBg }}>
+                          <td style={{ ...tdSt, color: "#6b7280", fontFamily: "monospace", fontSize: 11 }}>{dateStr}</td>
+                          <td style={{ ...tdSt, textAlign: "center" }}>
+                            <span style={{ background: typeBg, color: typeColor, fontWeight: 700, fontSize: 10, borderRadius: 4, padding: "2px 7px" }}>{typeLabel}</span>
+                          </td>
+                          <td style={{ ...tdSt, textAlign: "right", fontWeight: 800, color: typeColor, fontFamily: "monospace" }}>
+                            {amtPrefix}{tx.amount.toLocaleString()}원
+                          </td>
+                          <td style={{ ...tdSt, textAlign: "right", color: "#6b7280", fontFamily: "monospace", fontSize: 11 }}>
+                            {balBefore != null ? balBefore.toLocaleString() + "원" : "-"}
+                          </td>
+                          <td style={{ ...tdSt, textAlign: "right", fontWeight: 600, color: "#374151", fontFamily: "monospace", fontSize: 11 }}>
+                            {tx.balanceAfter.toLocaleString()}원
+                          </td>
+                          <td style={{ ...tdSt, color: "#374151", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {tx.projectTitle ?? <span style={{ color: "#d1d5db" }}>-</span>}
+                          </td>
+                          <td style={{ ...tdSt, color: "#6b7280", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {tx.description ?? <span style={{ color: "#d1d5db" }}>-</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* 푸터 요약 */}
+            {!ledgerModalLoading && ledgerModalData.length > 0 && (() => {
+              const totalDep = ledgerModalData.filter(t => t.type === "deposit").reduce((s, t) => s + t.amount, 0);
+              const totalDed = ledgerModalData.filter(t => t.type === "deduction").reduce((s, t) => s + t.amount, 0);
+              return (
+                <div style={{ padding: "12px 24px", borderTop: "1px solid #f3f4f6", display: "flex", gap: 20, background: "#fafafa", borderRadius: "0 0 14px 14px", flexShrink: 0 }}>
+                  <span style={{ fontSize: 12, color: "#15803d" }}>총 입금: <b>{totalDep.toLocaleString()}원</b></span>
+                  <span style={{ fontSize: 12, color: "#dc2626" }}>총 차감: <b>{totalDed.toLocaleString()}원</b></span>
+                  <span style={{ fontSize: 12, color: "#374151", marginLeft: "auto" }}>{ledgerModalData.length}건</span>
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
       {/* 완료 상태 수정 확인 모달 */}
       {completedConfirmShow && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
