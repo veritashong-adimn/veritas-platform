@@ -822,23 +822,7 @@ router.delete("/admin/projects/:id", requireAuth, requireRole("admin"), async (r
       .from(projectsTable).where(eq(projectsTable.id, projectId));
     if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
 
-    // 2) 삭제 가능 조건 검증
-    if (project.status === "completed") {
-      res.status(409).json({ error: "완료된 프로젝트는 삭제할 수 없습니다. 취소 처리를 사용하세요." });
-      return;
-    }
-    const [payment] = await db.select({ id: paymentsTable.id }).from(paymentsTable).where(eq(paymentsTable.projectId, projectId));
-    if (payment) {
-      res.status(409).json({ error: "이 프로젝트는 결제 이력이 있어 삭제할 수 없습니다. 취소 처리 또는 별도 정정 절차를 사용하세요." });
-      return;
-    }
-    const [settlement] = await db.select({ id: settlementsTable.id }).from(settlementsTable).where(eq(settlementsTable.projectId, projectId));
-    if (settlement) {
-      res.status(409).json({ error: "이 프로젝트는 정산 이력이 있어 삭제할 수 없습니다. 취소 처리 또는 별도 정정 절차를 사용하세요." });
-      return;
-    }
-
-    // 3) 스냅샷 audit 로그 (삭제 전 기록)
+    // 2) audit 로그 (삭제 전 기록)
     req.log.info({
       event: "project_deleted_by_admin",
       projectId,
@@ -849,19 +833,48 @@ router.delete("/admin/projects/:id", requireAuth, requireRole("admin"), async (r
       deletedAt: new Date().toISOString(),
     }, "Admin hard-deleted project");
 
-    // 4) 트랜잭션 내 cascade 삭제
+    // 3) FK 순서에 맞춘 트랜잭션 cascade 삭제
+    //
+    // 의존 관계:
+    //   settlements → tasks, payments, projects
+    //   billing_batch_items → projects, quotes
+    //   communications → projects
+    //   quote_item_files → quote_items → quotes → projects
+    //   payments → projects
+    //   tasks → projects
+    //   logs, notes, project_files → projects
+    //
+    // 삭제 순서: 자식 먼저, 부모 나중
     await db.transaction(async (tx) => {
-      // logs
-      await tx.delete(logsTable).where(eq(logsTable.projectId, projectId));
-      // notes
+      // ① settlements: taskId + paymentId FK 때문에 tasks/payments 보다 먼저
+      await tx.delete(settlementsTable).where(eq(settlementsTable.projectId, projectId));
+
+      // ② billing_batch_items: projectId FK (cascade 없음)
+      await tx.delete(billingBatchItemsTable).where(eq(billingBatchItemsTable.projectId, projectId));
+
+      // ③ communications: projectId FK (cascade 없음)
+      await tx.delete(communicationsTable).where(eq(communicationsTable.projectId, projectId));
+
+      // ④ notes
       await tx.delete(notesTable).where(and(eq(notesTable.entityType, "project"), eq(notesTable.entityId, projectId)));
-      // project files
+
+      // ⑤ logs (entityType + entityId 방식 — projectId 컬럼 없음)
+      await tx.delete(logsTable).where(and(eq(logsTable.entityType, "project"), eq(logsTable.entityId, projectId)));
+
+      // ⑥ project files (schema에 cascade 있지만 명시적으로 처리)
       await tx.delete(projectFilesTable).where(eq(projectFilesTable.projectId, projectId));
-      // quote item files → quote items → quotes
-      const projectQuotes = await tx.select({ id: quotesTable.id }).from(quotesTable).where(eq(quotesTable.projectId, projectId));
+
+      // ⑦ quote item files → quote items → quotes
+      const projectQuotes = await tx
+        .select({ id: quotesTable.id })
+        .from(quotesTable)
+        .where(eq(quotesTable.projectId, projectId));
       if (projectQuotes.length > 0) {
         const quoteIds = projectQuotes.map(q => q.id);
-        const projectQuoteItems = await tx.select({ id: quoteItemsTable.id }).from(quoteItemsTable).where(inArray(quoteItemsTable.quoteId, quoteIds));
+        const projectQuoteItems = await tx
+          .select({ id: quoteItemsTable.id })
+          .from(quoteItemsTable)
+          .where(inArray(quoteItemsTable.quoteId, quoteIds));
         if (projectQuoteItems.length > 0) {
           const itemIds = projectQuoteItems.map(qi => qi.id);
           await tx.delete(quoteItemFilesTable).where(inArray(quoteItemFilesTable.quoteItemId, itemIds));
@@ -869,16 +882,26 @@ router.delete("/admin/projects/:id", requireAuth, requireRole("admin"), async (r
         }
         await tx.delete(quotesTable).where(inArray(quotesTable.id, quoteIds));
       }
-      // tasks
+
+      // ⑧ payments: projectId FK (cascade 없음)
+      await tx.delete(paymentsTable).where(eq(paymentsTable.projectId, projectId));
+
+      // ⑨ tasks: projectId FK (cascade 없음)
       await tx.delete(tasksTable).where(eq(tasksTable.projectId, projectId));
-      // project
+
+      // ⑩ 최종: 프로젝트 본체 삭제
       await tx.delete(projectsTable).where(eq(projectsTable.id, projectId));
     });
 
     res.json({ success: true, deletedProjectId: projectId });
-  } catch (err) {
+  } catch (err: any) {
+    console.error("[Admin] 프로젝트 삭제 실패 projectId=%d:", projectId, err);
     req.log.error({ err }, "Admin: failed to hard-delete project");
-    res.status(500).json({ error: "프로젝트 삭제에 실패했습니다." });
+    res.status(500).json({
+      success: false,
+      message: "삭제 실패",
+      error: err?.message ?? String(err),
+    });
   }
 });
 
