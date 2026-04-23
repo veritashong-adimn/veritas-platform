@@ -1060,6 +1060,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onClose={() => setContactModal(null)}
           onToast={setToast}
           onOpenProject={(id) => { setContactModal(null); openDetail(id); }}
+          onRefreshList={fetchContacts}
         />
       )}
       {translatorDetailModal !== null && (

@@ -190,7 +190,8 @@ export type TranslatorListItem = {
 export type ContactDetail = {
   id: number; companyId: number; companyName: string | null;
   name: string; department: string | null; position: string | null;
-  email: string | null; phone: string | null; notes: string | null; createdAt: string;
+  email: string | null; phone: string | null; mobile: string | null;
+  officePhone: string | null; notes: string | null; memo: string | null; createdAt: string;
   projects: Array<{ id: number; title: string; status: string; createdAt: string }>;
   communications: Array<{ id: number; type: string; content: string; projectId: number | null; createdAt: string }>;
 };
