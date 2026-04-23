@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { ADMIN_NAV_GROUPS, ADMIN_PAGE_TITLE, STAFF_DEFAULT_PERMS } from '../config/adminNav';
 import {
   api, User, AdminProject, AdminPayment, AdminTask, AdminSettlement, AdminUser,
-  AdminCustomer, AdminContact, Company, Contact, Product, ProductOption, BoardPost, TranslatorProfile,
+  AdminCustomer, AdminContact, Company, Contact, Division, Product, ProductOption, BoardPost, TranslatorProfile,
   TranslatorListItem, TranslatorRate, NoteEntry, Communication,
   STATUS_LABEL, FEEDBACK_TAGS, COMM_TYPE_LABEL, COMM_TYPE_COLOR,
   PROJECT_STATUS_TRANSITIONS, getActionLabel, BOARD_CATEGORY_LABEL, AVAILABILITY_LABEL,
@@ -284,11 +284,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [contactSearch, setContactSearch] = useState("");
   const [contactModal, setContactModal] = useState<number | null>(null);
   const [showCreateContactModal, setShowCreateContactModal] = useState(false);
-  const emptyNewContactForm = { companyId: null as number | null, name: "", mobile: "", email: "", department: "", position: "", officePhone: "", memo: "", isPrimary: false, isQuoteContact: false, isBillingContact: false, isActive: true };
+  const emptyNewContactForm = { companyId: null as number | null, divisionId: null as number | null, name: "", mobile: "", email: "", department: "", position: "", officePhone: "", memo: "", isPrimary: false, isQuoteContact: false, isBillingContact: false, isActive: true };
   const [newContactForm, setNewContactForm] = useState(emptyNewContactForm);
   const [newContactErrors, setNewContactErrors] = useState<Record<string, string>>({});
   const [savingNewContact, setSavingNewContact] = useState(false);
   const [companySearchQuery, setCompanySearchQuery] = useState("");
+  const [newContactDivisions, setNewContactDivisions] = useState<Division[]>([]);
 
   // translators tab state
   const [translatorList, setTranslatorList] = useState<TranslatorListItem[]>([]);
@@ -2685,7 +2686,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             const matchedDiv = (c.divisionNames ?? []).find(d => d.toLowerCase().includes(q));
                             return (
                               <div key={c.id}
-                                onClick={() => { setNewContactForm(p => ({ ...p, companyId: c.id })); setCompanySearchQuery(c.name); }}
+                                onClick={async () => {
+                                  setNewContactForm(p => ({ ...p, companyId: c.id, divisionId: null }));
+                                  setCompanySearchQuery(c.name);
+                                  setNewContactDivisions([]);
+                                  try {
+                                    const dRes = await fetch(api(`/api/admin/companies/${c.id}/divisions`), { headers: authHeaders });
+                                    if (dRes.ok) { const dData = await dRes.json(); setNewContactDivisions(Array.isArray(dData) ? dData : []); }
+                                  } catch { /* ignore */ }
+                                }}
                                 style={{ padding: "9px 14px", cursor: "pointer", fontSize: 13, color: "#111827", borderBottom: "1px solid #f9fafb" }}
                                 onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
                                 onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
@@ -2701,11 +2710,35 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     {newContactForm.companyId !== null && (
                       <div style={{ padding: "8px 12px", background: "#eff6ff", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13 }}>
                         <span style={{ color: "#1d4ed8", fontWeight: 600 }}>✓ {companySearchQuery}</span>
-                        <button onClick={() => { setNewContactForm(p => ({ ...p, companyId: null })); setCompanySearchQuery(""); }}
+                        <button onClick={() => { setNewContactForm(p => ({ ...p, companyId: null, divisionId: null })); setCompanySearchQuery(""); setNewContactDivisions([]); }}
                           style={{ background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: 12 }}>변경</button>
                       </div>
                     )}
                   </div>
+
+                  {/* 브랜드/부서 선택 */}
+                  {(newContactForm.companyId !== null) && (
+                    <div>
+                      <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>
+                        브랜드/부서 <span style={{ color: "#9ca3af", fontWeight: 400, fontSize: 11 }}>(선택)</span>
+                      </label>
+                      {newContactDivisions.length === 0 ? (
+                        <div style={{ padding: "8px 12px", background: "#f9fafb", borderRadius: 7, fontSize: 12, color: "#9ca3af", border: "1px solid #f3f4f6" }}>
+                          이 거래처에 등록된 브랜드/부서가 없습니다.
+                        </div>
+                      ) : (
+                        <select
+                          value={newContactForm.divisionId ?? ""}
+                          onChange={e => setNewContactForm(p => ({ ...p, divisionId: e.target.value ? Number(e.target.value) : null }))}
+                          style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 7, fontSize: 13, color: "#111827", background: "#fff" }}>
+                          <option value="">선택 안 함 (거래처 전체 소속)</option>
+                          {newContactDivisions.map(d => (
+                            <option key={d.id} value={d.id}>{d.name}</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  )}
 
                   {/* 기본정보 */}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
@@ -2824,7 +2857,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                         <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{c.companyName ?? "-"}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
+                          <div>{c.companyName ?? "-"}</div>
+                          {c.divisionName && <div style={{ color: "#7c3aed", fontWeight: 600, fontSize: 11, marginTop: 1 }}>↳ {c.divisionName}</div>}
+                        </td>
                         <td style={{ ...tableTd, fontWeight: 700, color: "#111827" }}>{c.name}</td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
                           {[c.department, c.position].filter(Boolean).join(" / ") || "-"}

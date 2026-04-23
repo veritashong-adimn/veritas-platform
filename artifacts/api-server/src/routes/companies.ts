@@ -557,9 +557,11 @@ async function listContacts(req: any, res: any) {
         isBillingContact: contactsTable.isBillingContact, isActive: contactsTable.isActive,
         createdAt: contactsTable.createdAt, updatedAt: contactsTable.updatedAt,
         companyName: companiesTable.name,
+        divisionName: divisionsTable.name,
       })
       .from(contactsTable)
       .leftJoin(companiesTable, eq(contactsTable.companyId, companiesTable.id))
+      .leftJoin(divisionsTable, eq(contactsTable.divisionId, divisionsTable.id))
       .where(conds.length > 0 ? and(...conds) : undefined)
       .orderBy(desc(contactsTable.isPrimary), contactsTable.name);
 
@@ -609,6 +611,13 @@ async function createContact(req: any, res: any, targetCompanyId: number) {
 
   const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, targetCompanyId));
   if (!company) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+
+  // divisionId가 있을 경우 해당 거래처 소속인지 검증
+  if (divisionId) {
+    const [div] = await db.select({ id: divisionsTable.id }).from(divisionsTable)
+      .where(and(eq(divisionsTable.id, Number(divisionId)), eq(divisionsTable.companyId, targetCompanyId)));
+    if (!div) { res.status(400).json({ error: "선택한 브랜드/부서가 해당 거래처에 속하지 않습니다." }); return; }
+  }
 
   // isPrimary = true 이면 기존 기본 담당자 해제
   if (isPrimary) {
@@ -670,9 +679,11 @@ router.get("/admin/contacts/:id", ...adminGuard, async (req, res) => {
         isBillingContact: contactsTable.isBillingContact, isActive: contactsTable.isActive,
         createdAt: contactsTable.createdAt, updatedAt: contactsTable.updatedAt,
         companyName: companiesTable.name,
+        divisionName: divisionsTable.name,
       })
       .from(contactsTable)
       .leftJoin(companiesTable, eq(contactsTable.companyId, companiesTable.id))
+      .leftJoin(divisionsTable, eq(contactsTable.divisionId, divisionsTable.id))
       .where(eq(contactsTable.id, contactId));
 
     if (!contact) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
@@ -732,6 +743,13 @@ async function patchContact(req: any, res: any, contactId: number) {
 
   if (email?.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
     res.status(400).json({ error: "이메일 형식이 올바르지 않습니다." }); return;
+  }
+
+  // divisionId가 있을 경우 해당 거래처 소속인지 검증
+  if (divisionId) {
+    const [div] = await db.select({ id: divisionsTable.id }).from(divisionsTable)
+      .where(and(eq(divisionsTable.id, Number(divisionId)), eq(divisionsTable.companyId, existing.companyId)));
+    if (!div) { res.status(400).json({ error: "선택한 브랜드/부서가 해당 거래처에 속하지 않습니다." }); return; }
   }
 
   const prevPrimary = existing.isPrimary;

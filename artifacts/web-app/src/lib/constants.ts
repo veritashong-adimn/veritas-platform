@@ -166,7 +166,7 @@ export type Contact = {
   createdAt: string; updatedAt: string;
 };
 export type AdminContact = {
-  id: number; companyId: number; companyName: string | null; divisionId: number | null;
+  id: number; companyId: number; companyName: string | null; divisionId: number | null; divisionName: string | null;
   name: string; department: string | null; position: string | null;
   email: string | null; phone: string | null; mobile: string | null; officePhone: string | null;
   notes: string | null; memo: string | null;
@@ -188,7 +188,7 @@ export type TranslatorListItem = {
   education: string | null; major: string | null;
 };
 export type ContactDetail = {
-  id: number; companyId: number; companyName: string | null;
+  id: number; companyId: number; companyName: string | null; divisionId: number | null; divisionName: string | null;
   name: string; department: string | null; position: string | null;
   email: string | null; phone: string | null; mobile: string | null;
   officePhone: string | null; notes: string | null; memo: string | null; createdAt: string;

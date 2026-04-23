@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { api, ContactDetail, NoteEntry } from "../../lib/constants";
+import { api, ContactDetail, Division, NoteEntry } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn } from "../ui";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { DraggableModal } from "./DraggableModal";
@@ -20,7 +20,7 @@ const readValue: React.CSSProperties = { color: "#374151", fontSize: 13 };
 type EditForm = {
   name: string; department: string; position: string;
   email: string; phone: string; mobile: string; officePhone: string;
-  memo: string;
+  memo: string; divisionId: number | null;
 };
 
 export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenProject, onRefreshList }: {
@@ -36,7 +36,8 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
 
   // ── 편집 모드 ──────────────────────────────────────────────────────────────
   const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState<EditForm>({ name: "", department: "", position: "", email: "", phone: "", mobile: "", officePhone: "", memo: "" });
+  const [editForm, setEditForm] = useState<EditForm>({ name: "", department: "", position: "", email: "", phone: "", mobile: "", officePhone: "", memo: "", divisionId: null });
+  const [editDivisions, setEditDivisions] = useState<Division[]>([]);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -57,7 +58,7 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
   };
   useEffect(() => { load(); }, [contactId]);
 
-  const enterEdit = () => {
+  const enterEdit = async () => {
     if (!detail) return;
     setEditForm({
       name: detail.name ?? "",
@@ -68,9 +69,16 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
       mobile: detail.mobile ?? "",
       officePhone: detail.officePhone ?? "",
       memo: detail.memo ?? "",
+      divisionId: detail.divisionId ?? null,
     });
     setFormError(null);
+    setEditDivisions([]);
     setEditMode(true);
+    // 해당 거래처의 divisions 로드
+    try {
+      const res = await fetch(api(`/api/admin/companies/${detail.companyId}/divisions`), { headers: authH });
+      if (res.ok) { const data = await res.json(); setEditDivisions(Array.isArray(data) ? data : []); }
+    } catch { /* ignore */ }
   };
 
   const cancelEdit = () => {
@@ -98,6 +106,7 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
           mobile: editForm.mobile.trim() || null,
           officePhone: editForm.officePhone.trim() || null,
           memo: editForm.memo.trim() || null,
+          divisionId: editForm.divisionId ?? null,
         }),
       });
       const data = await res.json();
@@ -164,6 +173,26 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
                 </span>
               </div>
 
+              {/* 브랜드/부서 선택 */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                <label style={{ ...readLabel, minWidth: 76 }}>브랜드/부서</label>
+                {editDivisions.length === 0 ? (
+                  <span style={{ fontSize: 12, color: "#9ca3af", padding: "6px 0" }}>
+                    {detail.divisionName ? `현재: ${detail.divisionName}` : "등록된 브랜드/부서 없음"}
+                  </span>
+                ) : (
+                  <select
+                    value={editForm.divisionId ?? ""}
+                    onChange={e => setEditForm(prev => ({ ...prev, divisionId: e.target.value ? Number(e.target.value) : null }))}
+                    style={{ ...inputStyle, flex: 1 }}>
+                    <option value="">선택 안 함</option>
+                    {editDivisions.map(d => (
+                      <option key={d.id} value={d.id}>{d.name}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
               {/* 편집 가능 필드 */}
               {([
                 { k: "name" as const, label: "이름 *", placeholder: "홍길동" },
@@ -226,6 +255,7 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
               {([
                 ["이름", detail.name],
                 ["거래처", detail.companyName ?? "-"],
+                ["브랜드/부서", detail.divisionName ?? "-"],
                 ["부서", detail.department ?? "-"],
                 ["직책", detail.position ?? "-"],
                 ["이메일", detail.email ?? "-"],
