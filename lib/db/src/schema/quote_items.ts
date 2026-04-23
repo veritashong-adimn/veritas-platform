@@ -1,5 +1,5 @@
 import {
-  pgTable, serial, integer, numeric, text, timestamp,
+  pgTable, serial, integer, numeric, text, timestamp, boolean, date,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -33,6 +33,20 @@ export const quoteItemsTable = pgTable("quote_items", {
   totalAmount: numeric("total_amount", { precision: 14, scale: 2 }).notNull(),
 
   memo: text("memo"),
+
+  // ── 항목 유형 (번역/통역) ────────────────────────────────────────────────
+  itemType: text("item_type").default("translation"),          // "translation" | "interpretation"
+
+  // ── 세금 유형 ────────────────────────────────────────────────────────────
+  taxType: text("tax_type").default("taxable"),                // "taxable" | "exempt" | "zero_rate"
+
+  // ── 통역 전용 필드 ─────────────────────────────────────────────────────
+  interpretDate: date("interpret_date"),                        // 통역 날짜
+  interpretPlace: text("interpret_place"),                      // 장소
+  interpretType: text("interpret_type"),                        // "consecutive" | "simultaneous" | "meeting"
+  interpretDuration: text("interpret_duration"),                // "4h" | "8h" 등 (기존 memo에서 분리)
+  hasTravelExpense: boolean("has_travel_expense").default(false),
+  hasEquipment: boolean("has_equipment").default(false),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });

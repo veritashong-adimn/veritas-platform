@@ -4,7 +4,7 @@ import {
   logsTable, quotesTable, settlementsTable, notesTable,
   customersTable, communicationsTable, translatorProfilesTable,
   contactsTable, companiesTable, translatorRatesTable, divisionsTable,
-  quoteItemsTable, calcQuoteItemAmounts,
+  quoteItemsTable, quoteItemFilesTable, calcQuoteItemAmounts,
   billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
   prepaidAccountsTable, prepaidLedgerTable, settingsTable,
 } from "@workspace/db";
@@ -1016,7 +1016,14 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
-  type ItemInput = { productName: string; languagePair?: string; unit?: string; quantity?: number; unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string };
+  type ItemInput = {
+    productName: string; languagePair?: string; unit?: string; quantity?: number;
+    unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string;
+    itemType?: string; taxType?: string;
+    interpretDate?: string; interpretPlace?: string; interpretType?: string;
+    interpretDuration?: string; hasTravelExpense?: boolean; hasEquipment?: boolean;
+    files?: Array<{ name: string; url: string; size?: number }>;
+  };
   const {
     amount, items, note,
     taxDocumentType, taxCategory,
@@ -1216,7 +1223,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
       }).returning();
 
       if (calcItems.length > 0) {
-        await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
+        const insertedItems = await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
           quoteId: quote.id,
           productId: (it as any).productId ?? null,
           productName: it.productName,
@@ -1228,7 +1235,33 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
           taxAmount: String(it.taxAmount),
           totalAmount: String(it.totalAmount),
           memo: (it as any).memo ?? null,
-        })));
+          itemType: (it as any).itemType ?? "translation",
+          taxType: (it as any).taxType ?? "taxable",
+          interpretDate: (it as any).interpretDate ?? null,
+          interpretPlace: (it as any).interpretPlace ?? null,
+          interpretType: (it as any).interpretType ?? null,
+          interpretDuration: (it as any).interpretDuration ?? null,
+          hasTravelExpense: (it as any).hasTravelExpense ?? false,
+          hasEquipment: (it as any).hasEquipment ?? false,
+        }))).returning({ id: quoteItemsTable.id });
+
+        // 첨부 파일 기록 (번역 항목)
+        const fileRecords: Array<{ quoteItemId: number; fileName: string; fileUrl: string; fileSize?: number }> = [];
+        calcItems.forEach((it, i) => {
+          const files = (it as any).files as Array<{ name: string; url: string; size?: number }> | undefined;
+          if (files && files.length > 0 && insertedItems[i]) {
+            files.forEach(f => {
+              if (f.url && f.name) {
+                fileRecords.push({ quoteItemId: insertedItems[i].id, fileName: f.name, fileUrl: f.url, fileSize: f.size });
+              }
+            });
+          }
+        });
+        if (fileRecords.length > 0) {
+          await tx.insert(quoteItemFilesTable).values(fileRecords.map(f => ({
+            quoteItemId: f.quoteItemId, fileName: f.fileName, fileUrl: f.fileUrl, fileSize: f.fileSize ?? null,
+          })));
+        }
       }
 
       // 누적 견적 배치 레코드 생성 (월말 청구/세금계산서 연계용)

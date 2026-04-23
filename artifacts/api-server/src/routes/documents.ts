@@ -1,10 +1,10 @@
 import { Router, type IRouter } from "express";
 import {
   db, projectsTable, quotesTable, paymentsTable, settlementsTable,
-  usersTable, companiesTable, contactsTable, notesTable, quoteItemsTable,
+  usersTable, companiesTable, contactsTable, notesTable, quoteItemsTable, quoteItemFilesTable,
   prepaidAccountsTable, prepaidLedgerTable, settingsTable, divisionsTable,
 } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import {
   buildQuoteHtml, buildStatementHtml,
@@ -73,10 +73,18 @@ async function loadProjectData(projectId: number) {
 
   const quote = quotes[0] ?? null;
 
-  // quote_items 로드
+  // quote_items + 첨부 파일 로드
   let quoteItems: QuoteItemDoc[] = [];
   if (quote) {
     const rawItems = await db.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quote.id)).orderBy(quoteItemsTable.id);
+    const itemIds = rawItems.map(it => it.id);
+    const rawFiles = itemIds.length > 0 ? await db.select().from(quoteItemFilesTable).where(inArray(quoteItemFilesTable.quoteItemId, itemIds)) : [];
+    const filesByItem = new Map<number, Array<{ fileName: string; fileUrl: string }>>();
+    rawFiles.forEach(f => {
+      const list = filesByItem.get(f.quoteItemId) ?? [];
+      list.push({ fileName: f.fileName, fileUrl: f.fileUrl });
+      filesByItem.set(f.quoteItemId, list);
+    });
     quoteItems = rawItems.map(it => ({
       id: it.id,
       productName: it.productName,
@@ -87,6 +95,15 @@ async function loadProjectData(projectId: number) {
       taxAmount: it.taxAmount,
       totalAmount: it.totalAmount,
       memo: it.memo,
+      itemType: it.itemType,
+      taxType: it.taxType,
+      interpretDate: it.interpretDate ? String(it.interpretDate) : null,
+      interpretPlace: it.interpretPlace,
+      interpretType: it.interpretType,
+      interpretDuration: it.interpretDuration,
+      hasTravelExpense: it.hasTravelExpense,
+      hasEquipment: it.hasEquipment,
+      files: filesByItem.get(it.id) ?? [],
     }));
   }
 

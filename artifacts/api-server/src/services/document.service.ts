@@ -60,6 +60,15 @@ export type QuoteItemDoc = {
   taxAmount: number | string;
   totalAmount: number | string;
   memo?: string | null;
+  itemType?: string | null;
+  taxType?: string | null;
+  interpretDate?: string | null;
+  interpretPlace?: string | null;
+  interpretType?: string | null;
+  interpretDuration?: string | null;
+  hasTravelExpense?: boolean | null;
+  hasEquipment?: boolean | null;
+  files?: Array<{ fileName: string; fileUrl: string }>;
 };
 
 export type QuoteDoc = {
@@ -379,18 +388,38 @@ const BILLING_TYPE_LABEL: Record<string, string> = {
 /** quote_items 테이블 or 단일 요약 행 렌더 → { itemRows, supply, tax, total } */
 function calcItemData(doc: QuoteDoc) {
   const hasItems = !!(doc.items && doc.items.length > 0);
+  const INTERPRET_TYPE_KO: Record<string, string> = { consecutive: "순차통역", simultaneous: "동시통역", meeting: "수행통역" };
+  const TAX_TYPE_KO: Record<string, string> = { taxable: "과세", exempt: "면세", zero_rate: "영세율" };
   const itemRows = hasItems
-    ? doc.items!.map((item, i) => `
-      <tr>
-        <td class="ctr">${i + 1}</td>
-        <td>${esc(item.productName)}${item.memo ? `<br/><span style="font-size:10px;color:#6b7280">${esc(item.memo)}</span>` : ""}</td>
-        <td class="ctr">${esc(String(item.unit ?? "건"))}</td>
-        <td class="num">${Number(item.quantity).toLocaleString("ko-KR")}</td>
-        <td class="num">${Number(item.unitPrice).toLocaleString("ko-KR")}원</td>
-        <td class="num">${Number(item.supplyAmount).toLocaleString("ko-KR")}원</td>
-        <td class="num">${Number(item.taxAmount).toLocaleString("ko-KR")}원</td>
-        <td class="num">${Number(item.totalAmount).toLocaleString("ko-KR")}원</td>
-      </tr>`).join("")
+    ? doc.items!.map((item, i) => {
+        const isInterpret = item.itemType === "interpretation";
+        let subLines = "";
+        if (isInterpret) {
+          const parts = [];
+          if (item.interpretDate) parts.push(`날짜: ${item.interpretDate}`);
+          if (item.interpretPlace) parts.push(`장소: ${esc(item.interpretPlace)}`);
+          if (item.interpretType) parts.push(INTERPRET_TYPE_KO[item.interpretType] ?? item.interpretType);
+          if (item.interpretDuration) parts.push(`진행: ${esc(item.interpretDuration)}`);
+          if (item.hasTravelExpense) parts.push("출장");
+          if (item.hasEquipment) parts.push("장비");
+          if (parts.length) subLines += `<br/><span style="font-size:9px;color:#7c3aed">${parts.join(" · ")}</span>`;
+        } else if (item.files && item.files.length > 0) {
+          subLines += `<br/><span style="font-size:9px;color:#6b7280">📎 ${item.files.map(f => esc(f.fileName)).join(", ")}</span>`;
+        }
+        if (item.memo) subLines += `<br/><span style="font-size:10px;color:#6b7280">${esc(item.memo)}</span>`;
+        const taxLabel = item.taxType && item.taxType !== "taxable" ? `<br/><span style="font-size:9px;color:#059669">${TAX_TYPE_KO[item.taxType] ?? ""}</span>` : "";
+        return `
+        <tr>
+          <td class="ctr">${i + 1}</td>
+          <td>${esc(item.productName)}${subLines}</td>
+          <td class="ctr">${esc(String(item.unit ?? "건"))}</td>
+          <td class="num">${Number(item.quantity).toLocaleString("ko-KR")}</td>
+          <td class="num">${Number(item.unitPrice).toLocaleString("ko-KR")}원${taxLabel}</td>
+          <td class="num">${Number(item.supplyAmount).toLocaleString("ko-KR")}원</td>
+          <td class="num">${item.taxType === "exempt" ? "면세" : item.taxType === "zero_rate" ? "영세율" : `${Number(item.taxAmount).toLocaleString("ko-KR")}원`}</td>
+          <td class="num">${Number(item.totalAmount).toLocaleString("ko-KR")}원</td>
+        </tr>`;
+      }).join("")
     : `<tr>
         <td class="ctr">1</td>
         <td>${esc(doc.projectTitle)} 번역 서비스</td>
