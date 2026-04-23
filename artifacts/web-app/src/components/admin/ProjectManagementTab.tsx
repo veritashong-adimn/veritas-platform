@@ -175,6 +175,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newProjectTitle, setNewProjectTitle] = useState("");
   const [newProjectCustomerId, setNewProjectCustomerId] = useState<number | null>(null);
+  const [newProjectCustomerUserId, setNewProjectCustomerUserId] = useState<number | null>(null);
   const [newProjectCompanyId, setNewProjectCompanyId] = useState<number | null>(null);
   const [newProjectContactId, setNewProjectContactId] = useState<number | null>(null);
   const [newProjectDivisionId, setNewProjectDivisionId] = useState<number | null>(null);
@@ -185,10 +186,20 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const [companyDivisions, setCompanyDivisions] = useState<{id:number;name:string;type:string|null}[]>([]);
   const [creatingProject, setCreatingProject] = useState(false);
 
+  // ── 초대 모달 state ───────────────────────────────────────────────────────
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteName, setInviteName] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviting, setInviting] = useState(false);
+  const [inviteError, setInviteError] = useState("");
+  // 초대 후 생성된 프로젝트 ID를 임시 보관 (프로젝트 생성 → 초대 링크)
+  const [pendingInviteProjectId, setPendingInviteProjectId] = useState<number | null>(null);
+
   // ── 모달용 데이터 ────────────────────────────────────────────────────────
   const [companies, setCompanies] = useState<Company[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [customers, setCustomers] = useState<AdminCustomer[]>([]);
+  const [platformUsers, setPlatformUsers] = useState<{id:number;name:string|null;email:string}[]>([]);
 
   // ── 프로젝트 조회 ────────────────────────────────────────────────────────
   const fetchProjects = useCallback(async () => {
@@ -217,14 +228,16 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   // ── 거래처/담당자/고객 데이터 로드 (모달용) ──────────────────────────────
   const fetchModalData = useCallback(async () => {
     try {
-      const [cRes, coRes, cuRes] = await Promise.all([
+      const [cRes, coRes, cuRes, puRes] = await Promise.all([
         fetch(api("/api/admin/companies"), { headers: authHeaders }),
         fetch(api("/api/admin/contacts"), { headers: authHeaders }),
         fetch(api("/api/admin/customers"), { headers: authHeaders }),
+        fetch(api("/api/admin/platform-users"), { headers: authHeaders }),
       ]);
       if (cRes.ok) setCompanies(await cRes.json());
       if (coRes.ok) setContacts(await coRes.json());
       if (cuRes.ok) setCustomers(await cuRes.json());
+      if (puRes.ok) setPlatformUsers(await puRes.json());
     } catch { /* ignore */ }
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -260,6 +273,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
         body: JSON.stringify({
           title: newProjectTitle.trim(),
           customerId: newProjectCustomerId ?? undefined,
+          customerUserId: newProjectCustomerUserId ?? undefined,
           companyId: newProjectCompanyId ?? undefined,
           contactId: newProjectContactId ?? undefined,
           requestingDivisionId: newProjectDivisionId ?? undefined,
@@ -269,7 +283,36 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       });
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
-      setToast(`프로젝트 #${data.id} 생성 완료`);
+
+      // 기존 플랫폼 계정 연결 시 알림 발송
+      if (newProjectCustomerUserId && data.id) {
+        try {
+          await fetch(api("/api/notifications/project-created"), {
+            method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+            body: JSON.stringify({ userId: newProjectCustomerUserId, projectId: data.id }),
+          });
+        } catch { /* 알림 실패는 무시 */ }
+      }
+
+      // 초대 이메일이 입력된 경우 → 초대 발송
+      if (inviteEmail.trim() && data.id) {
+        try {
+          const invRes = await fetch(api("/api/invitations"), {
+            method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
+            body: JSON.stringify({ name: inviteName.trim() || undefined, email: inviteEmail.trim(), projectId: data.id }),
+          });
+          const invData = await invRes.json();
+          if (invRes.ok) {
+            setToast(invData.mode === "linked" ? `프로젝트 #${data.id} 생성 + 기존 계정 연결됨` : `프로젝트 #${data.id} 생성 + 초대 이메일 발송됨`);
+          } else {
+            setToast(`프로젝트 #${data.id} 생성됨 (초대 실패: ${invData.error})`);
+          }
+        } catch {
+          setToast(`프로젝트 #${data.id} 생성됨 (초대 발송 오류)`);
+        }
+      } else {
+        setToast(`프로젝트 #${data.id} 생성 완료`);
+      }
       resetCreateModal();
       await fetchProjects();
       openDetail(data.id);
@@ -278,12 +321,24 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     finally { setCreatingProject(false); }
   };
 
+  // ── 초대 폼 확인 (실제 API 호출은 프로젝트 등록 시) ─────────────────────
+  const handleInviteFormConfirm = () => {
+    if (!inviteEmail.trim()) { setInviteError("이메일을 입력하세요."); return; }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(inviteEmail.trim())) { setInviteError("올바른 이메일 주소를 입력하세요."); return; }
+    setShowInviteModal(false);
+    setInviteError("");
+  };
+
   const resetCreateModal = () => {
     setShowCreateProject(false); setNewProjectTitle("");
     setShowBillingOverride(false); setShowPayerOverride(false);
+    setNewProjectCustomerId(null); setNewProjectCustomerUserId(null);
     setNewProjectCompanyId(null); setNewProjectContactId(null);
     setNewProjectDivisionId(null); setNewProjectBillingCompanyId(null);
     setNewProjectPayerCompanyId(null); setCompanyDivisions([]);
+    setInviteName(""); setInviteEmail(""); setInviteError("");
+    setPendingInviteProjectId(null); setShowInviteModal(false);
   };
 
   // ── JSX ─────────────────────────────────────────────────────────────────
@@ -376,17 +431,40 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                     title={"로그인하여 프로젝트 조회, 견적 확인, 결제를 할 수 있는 고객 계정입니다.\n선택하면 고객이 직접 프로젝트를 확인하고 진행할 수 있습니다.\n선택하지 않으면 내부에서만 관리되는 프로젝트로 등록됩니다."}
                     style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", background: "#e5e7eb", color: "#6b7280", fontSize: 10, fontWeight: 700, cursor: "help", flexShrink: 0 }}
                   >?</span>
-                  {user.role === "customer" && (
-                    <span style={{ fontWeight: 400, color: "#059669", marginLeft: 2 }}>(자동 선택됨)</span>
-                  )}
                 </label>
                 <SearchableSelect
-                  items={customers.map(c => ({ id: c.id, label: c.contactName, sub: c.email }))}
-                  value={newProjectCustomerId}
+                  items={platformUsers.map(u => ({ id: u.id, label: u.name ?? u.email, sub: u.name ? u.email : undefined }))}
+                  value={newProjectCustomerUserId}
                   placeholder="선택 안함 (고객 미연결 / 내부 관리)"
                   accentBorder="#374151"
-                  onChange={setNewProjectCustomerId}
+                  onChange={setNewProjectCustomerUserId}
                 />
+                {/* 초대 설정됨 표시 */}
+                {inviteEmail && (
+                  <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", background: "#eff6ff", borderRadius: 6, border: "1px solid #bfdbfe" }}>
+                    <span style={{ fontSize: 12 }}>✉</span>
+                    <span style={{ fontSize: 12, color: "#1d4ed8", flex: 1 }}>
+                      초대 예정: <strong>{inviteName || inviteEmail}</strong> ({inviteEmail})
+                    </span>
+                    <button type="button" onClick={() => { setInviteEmail(""); setInviteName(""); }}
+                      style={{ fontSize: 11, color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: "1px 4px" }}>✕</button>
+                  </div>
+                )}
+                {/* 고객 계정 초대 버튼 */}
+                {!inviteEmail && (
+                  <button
+                    type="button"
+                    onClick={() => { setInviteError(""); setShowInviteModal(true); }}
+                    style={{
+                      marginTop: 6, display: "inline-flex", alignItems: "center", gap: 5,
+                      fontSize: 12, color: "#2563eb", background: "none", border: "none",
+                      cursor: "pointer", padding: "2px 0", fontWeight: 600,
+                    }}
+                  >
+                    <span style={{ fontSize: 14 }}>✉</span>
+                    계정이 없는 경우 초대하기
+                  </button>
+                )}
               </div>
 
               {/* ── 청구 대상 ── */}
@@ -469,6 +547,65 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
               </PrimaryBtn>
             </div>
         </DraggableModal>
+      )}
+
+      {/* ── 고객 초대 미니 모달 ── */}
+      {showInviteModal && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 500,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          background: "rgba(0,0,0,0.35)",
+        }} onClick={e => { if (e.target === e.currentTarget) setShowInviteModal(false); }}>
+          <div style={{
+            background: "#fff", borderRadius: 14, padding: "28px 28px 24px",
+            width: 420, boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
+          }}>
+            <p style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800, color: "#111827" }}>고객 계정 초대</p>
+            <p style={{ margin: "0 0 20px", fontSize: 12, color: "#6b7280" }}>
+              계정이 없는 고객에게 초대 이메일을 발송합니다.<br />
+              프로젝트 등록 완료 시 자동으로 초대 링크가 발송됩니다.
+            </p>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>
+                  이름 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(선택)</span>
+                </label>
+                <input
+                  value={inviteName}
+                  onChange={e => setInviteName(e.target.value)}
+                  placeholder="고객 이름"
+                  style={{ ...inputStyle }}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>
+                  이메일 <span style={{ color: "#dc2626" }}>*</span>
+                </label>
+                <input
+                  type="email"
+                  value={inviteEmail}
+                  onChange={e => setInviteEmail(e.target.value)}
+                  placeholder="customer@example.com"
+                  style={{ ...inputStyle }}
+                  onKeyDown={e => e.key === "Enter" && handleInviteFormConfirm()}
+                />
+              </div>
+              {inviteError && (
+                <p style={{ margin: 0, fontSize: 12, color: "#dc2626", background: "#fef2f2", padding: "7px 10px", borderRadius: 6 }}>
+                  {inviteError}
+                </p>
+              )}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
+              <GhostBtn onClick={() => { setShowInviteModal(false); setInviteError(""); }}>취소</GhostBtn>
+              <PrimaryBtn onClick={handleInviteFormConfirm} style={{ padding: "9px 20px" }}>
+                초대 정보 확인
+              </PrimaryBtn>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── 프로젝트 탭 ── */}

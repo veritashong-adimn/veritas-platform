@@ -853,10 +853,11 @@ router.post("/admin/projects/:id/rematch", ...adminGuard, async (req, res) => {
 
 // ─── 관리자 직접 프로젝트 생성 ────────────────────────────────────────────
 router.post("/admin/projects", ...adminGuard, requirePermission("project.create"), async (req, res) => {
-  const { title, customerId, companyId, contactId,
+  const { title, customerId, customerUserId, companyId, contactId,
     requestingCompanyId, requestingDivisionId, billingCompanyId, payerCompanyId,
   } = req.body as {
-    title?: string; customerId?: number; companyId?: number; contactId?: number;
+    title?: string; customerId?: number; customerUserId?: number;
+    companyId?: number; contactId?: number;
     requestingCompanyId?: number; requestingDivisionId?: number;
     billingCompanyId?: number; payerCompanyId?: number;
   };
@@ -881,6 +882,7 @@ router.post("/admin/projects", ...adminGuard, requirePermission("project.create"
     const [project] = await db.insert(projectsTable).values({
       userId: adminUser.id,
       customerId: customerId ? Number(customerId) : null,
+      customerUserId: customerUserId ? Number(customerUserId) : null,
       companyId: companyId ? Number(companyId) : null,
       contactId: contactId ? Number(contactId) : null,
       requestingCompanyId: effectiveRequestingId ? Number(effectiveRequestingId) : null,

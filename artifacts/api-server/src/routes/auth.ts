@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
 import { randomUUID, randomBytes } from "crypto";
-import { db, usersTable, userSessionsTable } from "@workspace/db";
+import { db, usersTable, userSessionsTable, invitationsTable, projectsTable } from "@workspace/db";
 import { eq, and, gte, sql } from "drizzle-orm";
 import { signToken, requireAuth } from "../middlewares/auth";
 import { getPermissionsForRole, ALL_PERMISSIONS } from "../lib/rbac";
@@ -274,6 +274,18 @@ router.post("/auth/set-password", async (req, res) => {
     await db.update(usersTable)
       .set({ password: hashed, isActive: true, inviteToken: null })
       .where(eq(usersTable.id, user.id));
+
+    // 초대 레코드 확인 → 프로젝트 자동 연결
+    const [invitation] = await db
+      .select({ projectId: invitationsTable.projectId })
+      .from(invitationsTable)
+      .where(eq(invitationsTable.token, token.trim()));
+
+    if (invitation?.projectId) {
+      await db.update(projectsTable)
+        .set({ customerUserId: user.id })
+        .where(eq(projectsTable.id, invitation.projectId));
+    }
 
     res.json({ ok: true, email: user.email });
   } catch (err) {
