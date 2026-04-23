@@ -115,8 +115,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [quotePaymentMethod, setQuotePaymentMethod] = useState<string>("card");
   const changeQuoteType = (val: typeof quoteType) => {
     setQuoteType(val);
+    // 견적서 유형에 따라 청구 방식 자동 설정
     if (val === "accumulated_batch") setQuoteBillingType("monthly_billing");
-    else if (val === "prepaid_deduction") setQuoteBillingType("prepaid_wallet");
+    else if (val === "b2c_prepaid") setQuoteBillingType("prepaid_wallet");   // 선입금 견적서 → 선입금 차감 고정
+    else if (val === "b2b_standard") setQuoteBillingType("postpaid_per_project"); // 일반 견적서 → 건별 후불 기본
+    // prepaid_deduction은 레거시 타입 — 신규 생성 불가, 기존 데이터 표시용
   };
   const [showQuoteForm, setShowQuoteForm] = useState(false);
   const [creatingQuote, setCreatingQuote] = useState(false);
@@ -2304,10 +2307,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             style={{ width: "100%" }}
                             triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #93c5fd", background: "#eff6ff" }}
                             options={[
-                              { value: "b2b_standard", label: "B2B 견적서", sub: "후불 정산 기준 기업용 견적" },
-                              { value: "b2c_prepaid", label: "B2C 견적서", sub: "선입금 기반 개인/단건 견적" },
-                              { value: "prepaid_deduction", label: "차감 견적서", sub: "선입금 잔액에서 차감되는 견적" },
-                              { value: "accumulated_batch", label: "누적 견적서" },
+                              { value: "b2b_standard", label: "일반 견적서", sub: "일반 프로젝트에 사용하는 기본 견적" },
+                              { value: "b2c_prepaid", label: "선입금 견적서", sub: "선입금 잔액 기반으로 사용하는 견적" },
+                              { value: "accumulated_batch", label: "누적 견적서", sub: "월별 또는 기간별 누적 청구용 견적" },
                             ]}
                           />
                         </div>
@@ -2319,6 +2321,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             <div style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, background: "#ecfdf5", borderColor: "#6ee7b7", color: "#065f46", fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
                               🗂️ 누적 청구 <span style={{ fontSize: 9, color: "#6b7280", fontWeight: 400 }}>(누적 견적 고정)</span>
                             </div>
+                          ) : quoteType === "b2c_prepaid" ? (
+                            <div style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, background: "#fdf4ff", borderColor: "#d8b4fe", color: "#7c3aed", fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+                              💳 선입금 차감 <span style={{ fontSize: 9, color: "#9ca3af", fontWeight: 400 }}>(선입금 견적 고정)</span>
+                            </div>
                           ) : (
                             <ClickSelect
                               value={quoteBillingType || companyBillingType}
@@ -2326,10 +2332,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               style={{ width: "100%" }}
                               triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7 }}
                               options={[
-                                { value: "postpaid_per_project", label: "건별 후불" },
-                                { value: "monthly_billing", label: "누적 청구" },
-                                { value: "prepaid_wallet", label: "선입금 차감" },
-                                { value: "prepay_upfront", label: "선결제(카드/현금)" },
+                                { value: "postpaid_per_project", label: "건별 후불", sub: "작업 후 건별 청구" },
+                                { value: "prepay_upfront", label: "선결제(카드/현금)", sub: "결제 완료 후 진행" },
                               ]}
                             />
                           )}
@@ -2591,9 +2595,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", zero_tax_invoice: "세금계산서(영세율)", bill: "계산서" };
                         const taxCatLabel: Record<string, string> = { normal: "일반", zero_rated: "영세율", consignment: "위수탁", consignment_zero_rated: "위수탁영세율" };
                         const qtLabel: Record<string, [string, string, string]> = {
-                          b2b_standard:      ["B2B 견적", "#eff6ff", "#1d4ed8"],
-                          b2c_prepaid:       ["B2C 견적", "#fef3c7", "#92400e"],
-                          prepaid_deduction: ["차감 견적", "#fdf4ff", "#7c3aed"],
+                          b2b_standard:      ["일반 견적", "#eff6ff", "#1d4ed8"],
+                          b2c_prepaid:       ["선입금 견적", "#fef3c7", "#92400e"],
+                          prepaid_deduction: ["선입금 견적", "#fdf4ff", "#7c3aed"],  // 레거시 — 선입금 견적으로 표시
                           accumulated_batch: ["누적 견적", "#ecfdf5", "#065f46"],
                         };
                         const pmLabel: Record<string, string> = { card: "카드", cash: "현금", bank: "계좌이체" };

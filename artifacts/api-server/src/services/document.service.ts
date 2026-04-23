@@ -568,8 +568,8 @@ export function buildB2CPrepaidQuoteHtml(doc: QuoteDoc): string {
   const { itemRows, supply, tax, total } = calcItemData(doc);
 
   const body = `
-  ${renderDocHeader(doc, "견 적 서", "B2C QUOTATION",
-    `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:#fef3c7;color:#92400e;border:1px solid #fde68a">B2C 견적</span>`
+  ${renderDocHeader(doc, "견 적 서", "PREPAID QUOTATION",
+    `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:#fef3c7;color:#92400e;border:1px solid #fde68a">선입금 견적</span>`
   )}
 
   <div class="party-grid no-break">
@@ -626,8 +626,8 @@ export function buildB2BStandardQuoteHtml(doc: QuoteDoc): string {
   const showDivision = taxDocType !== "tax_invoice" && taxDocType !== "zero_tax_invoice";
 
   const body = `
-  ${renderDocHeader(doc, "견 적 서", "B2B QUOTATION",
-    `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe">B2B 견적</span>`
+  ${renderDocHeader(doc, "견 적 서", "STANDARD QUOTATION",
+    `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe">일반 견적</span>`
   )}
 
   <div class="party-grid no-break">
@@ -715,8 +715,8 @@ export function buildPrepaidDeductionQuoteHtml(doc: QuoteDoc): string {
   </div>` : "";
 
   const body = `
-  ${renderDocHeader(doc, "차감 견적서", "DEDUCTION QUOTATION",
-    `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:#fdf4ff;color:#7c3aed;border:1px solid #d8b4fe">차감 견적</span>`
+  ${renderDocHeader(doc, "견 적 서", "PREPAID QUOTATION",
+    `<span style="display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:700;background:#fdf4ff;color:#7c3aed;border:1px solid #d8b4fe">선입금 견적</span>`
   )}
 
   <div class="party-grid no-break">
