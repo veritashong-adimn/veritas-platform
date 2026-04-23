@@ -432,7 +432,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     }
   }, [quoteType, detail?.companyId]);
   useEffect(() => {
-    if (quoteType === "prepaid_deduction" && detail?.companyId) {
+    if ((quoteType === "b2c_prepaid" || quoteType === "prepaid_deduction") && detail?.companyId) {
       setCompPrepaidAccounts([]);
       setSelectedPrepaidAcctId(null);
       setAcctLedger([]);
@@ -736,16 +736,22 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      // 선입금 차감 시 원장에 자동 연동
-      if (quoteType === "prepaid_deduction" && selectedPrepaidAcctId) {
-        const usageAmt = quoteItemForms.filter(it => it.productName.trim() && Number(it.unitPrice) > 0)
-          .reduce((s, it) => s + calcItemTotal(it).total, 0);
+      // 선입금 차감 시 원장에 자동 연동 (b2c_prepaid + prepaid_wallet 및 레거시 prepaid_deduction 공통)
+      if ((quoteType === "b2c_prepaid" || quoteType === "prepaid_deduction") && selectedPrepaidAcctId) {
+        const validItems = quoteItemForms.filter(it => it.productName.trim() && Number(it.unitPrice) > 0);
+        const usageAmt = validItems.reduce((s, it) => s + calcItemTotal(it).total, 0);
+        const supplyAmt = validItems.reduce((s, it) => s + calcItemTotal(it).supply, 0);
+        const taxAmt = validItems.reduce((s, it) => s + calcItemTotal(it).tax, 0);
+        const quoteIdFromResp = data?.id ?? null;
         await fetch(api(`/api/admin/prepaid-accounts/${selectedPrepaidAcctId}/transactions`), {
           method: "POST", headers: { ...authH, "Content-Type": "application/json" },
           body: JSON.stringify({
             type: "deduction", amount: usageAmt,
             description: `프로젝트: ${detail?.title ?? `#${projectId}`}`,
-            projectId, transactionDate: new Date().toISOString().slice(0, 10),
+            projectId, quoteId: quoteIdFromResp,
+            supplyAmount: supplyAmt > 0 ? supplyAmt : null,
+            taxAmount: taxAmt > 0 ? taxAmt : null,
+            transactionDate: new Date().toISOString().slice(0, 10),
           }),
         });
         // 원장 내역 즉시 갱신
@@ -1806,18 +1812,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
 
                   // 견적 유형별 추가 입력 필드 (JSX 변수 — 컴포넌트 아님)
                   const quoteTypeExtraJsx = (() => {
-                    if (quoteType === "b2c_prepaid") return (
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
-                        <div>
-                          {qfLbl("견적유효기간 (선택)")}
-                          <input type="date" value={quoteValidUntil} onChange={e => setQuoteValidUntil(e.target.value)} style={qfIs} />
-                        </div>
-                        <div>
-                          {qfLbl("입금 기한 (선택)")}
-                          <input type="date" value={quotePaymentDueDate} onChange={e => setQuotePaymentDueDate(e.target.value)} style={qfIs} />
-                        </div>
-                      </div>
-                    );
                     if (quoteType === "b2b_standard") return (
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 10 }}>
                         <div>
@@ -1834,8 +1828,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         </div>
                       </div>
                     );
-                    if (quoteType === "prepaid_deduction") {
-                      // ── 선입금 계정 원장 방식 (B2B 전용) ────────────────────────────────────
+                    if (quoteType === "b2c_prepaid" || quoteType === "prepaid_deduction") {
+                      // ── 선입금 계정 원장 방식 ─────────────────────────────────────────────
                       const selectedAcct = compPrepaidAccounts.find(a => a.id === selectedPrepaidAcctId) ?? null;
                       const curBalance = selectedAcct?.currentBalance ?? 0;
                       const usageNum = quoteItemsGrandTotal;
@@ -1848,7 +1842,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         return (
                           <div style={{ marginBottom: 10 }}>
                             <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "12px 14px" }}>
-                              <div style={{ fontSize: 10, fontWeight: 800, color: "#dc2626", marginBottom: 8 }}>선입금 차감 — 거래처 없음</div>
+                              <div style={{ fontSize: 10, fontWeight: 800, color: "#dc2626", marginBottom: 8 }}>선입금 견적서 — 거래처 없음</div>
                               <div style={{ fontSize: 12, color: "#dc2626" }}>
                                 ⚠️ 이 프로젝트에 거래처가 연결되어 있지 않습니다.<br/>
                                 <span style={{ fontWeight: 400, color: "#374151" }}>프로젝트 기본 정보에서 거래처를 먼저 설정하세요.</span>
@@ -1863,7 +1857,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         return (
                           <div style={{ marginBottom: 10 }}>
                             <div style={{ background: "#fef9eb", border: "1px solid #fde68a", borderRadius: 8, padding: "12px 14px" }}>
-                              <div style={{ fontSize: 10, fontWeight: 800, color: "#92400e", marginBottom: 8 }}>선입금 차감 — 계정 없음</div>
+                              <div style={{ fontSize: 10, fontWeight: 800, color: "#92400e", marginBottom: 8 }}>선입금 견적서 — 계정 없음</div>
                               <div style={{ padding: "8px 12px", background: "#fffbeb", borderRadius: 6, border: "1px solid #fde68a", fontSize: 12, color: "#92400e", marginBottom: 12 }}>
                                 ⚠️ 이 거래처에 등록된 선입금 계정이 없습니다. 아래에서 바로 등록할 수 있습니다.
                               </div>
@@ -1909,8 +1903,21 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         <div style={{ marginBottom: 10 }}>
                           <div style={{ background: "#fdf4ff", border: `1px solid ${isInsufficient ? "#f87171" : "#d8b4fe"}`, borderRadius: 8, padding: "12px 14px" }}>
                             <div style={{ fontSize: 10, fontWeight: 800, color: "#7c3aed", marginBottom: 10 }}>
-                              B2B 선입금 차감
+                              {quoteType === "b2c_prepaid" ? "선입금 견적서 — 잔액 차감" : "B2B 선입금 차감"}
                             </div>
+                            {/* 선입금 견적서(b2c_prepaid)에 날짜 입력 */}
+                            {quoteType === "b2c_prepaid" && (
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
+                                <div>
+                                  {qfLbl("견적유효기간 (선택)")}
+                                  <input type="date" value={quoteValidUntil} onChange={e => setQuoteValidUntil(e.target.value)} style={{ ...qfIs, borderColor: "#d8b4fe" }} />
+                                </div>
+                                <div>
+                                  {qfLbl("입금 기한 (선택)")}
+                                  <input type="date" value={quotePaymentDueDate} onChange={e => setQuotePaymentDueDate(e.target.value)} style={{ ...qfIs, borderColor: "#d8b4fe" }} />
+                                </div>
+                              </div>
+                            )}
 
                             {/* 계정 선택 (여러 계정 있을 때) */}
                             {compPrepaidAccounts.length > 1 && (

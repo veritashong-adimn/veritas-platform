@@ -24,6 +24,7 @@ import dataLayerRouter from "./data-layer";
 import publicInsightsRouter from "./public-insights";
 import invitationsRouter from "./invitations";
 import customerRouter from "./customer";
+import prepaidRouter from "./prepaid";
 
 const router: IRouter = Router();
 
@@ -52,5 +53,6 @@ router.use(dataLayerRouter);
 router.use(publicInsightsRouter);
 router.use(invitationsRouter);
 router.use(customerRouter);
+router.use(prepaidRouter);
 
 export default router;

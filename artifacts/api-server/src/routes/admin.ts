@@ -1040,7 +1040,9 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
     : [];
 
   const hasItems = Array.isArray(items) && items.length > 0;
-  const isPrepaidDeduction = quoteType === "prepaid_deduction";
+  // 선입금 차감 방식: prepaid_deduction (레거시) 또는 b2c_prepaid + prepaid_wallet
+  const isPrepaidDeduction = quoteType === "prepaid_deduction"
+    || (quoteType === "b2c_prepaid" && billingType === "prepaid_wallet");
   const isAccumulatedBatch = quoteType === "accumulated_batch";
   const hasSelectedProjects = selectedProjectIds.length > 0;
 
@@ -1439,14 +1441,16 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
       currentBalance: Number(account.currentBalance),
       companyName: company?.name ?? `거래처 #${account.companyId}`,
       ledger: ledger.map(e => {
-        const tax = e.type === "deduction" && e.projectId ? (taxByProjectId.get(e.projectId) ?? null) : null;
+        const taxFallback = e.type === "deduction" && e.projectId ? (taxByProjectId.get(e.projectId) ?? null) : null;
         return {
           ...e,
           amount: Number(e.amount),
+          balanceBefore: e.balanceBefore != null ? Number(e.balanceBefore) : null,
           balanceAfter: Number(e.balanceAfter),
           projectTitle: e.projectId ? (projectMap.get(e.projectId) ?? `프로젝트 #${e.projectId}`) : null,
-          supplyAmount: tax?.supplyAmount ?? null,
-          taxAmount: tax?.taxAmount ?? null,
+          // 원장에 직접 저장된 값 우선, 없으면 quote_items에서 계산한 값 fallback
+          supplyAmount: e.supplyAmount != null ? Number(e.supplyAmount) : (taxFallback?.supplyAmount ?? null),
+          taxAmount: e.taxAmount != null ? Number(e.taxAmount) : (taxFallback?.taxAmount ?? null),
         };
       }),
     });
@@ -1459,11 +1463,14 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
 // ─── 선입금 계정에 거래 추가 (차감 / 추가입금 / 조정) ──────────────────────
 router.post("/admin/prepaid-accounts/:id/transactions", ...adminGuard, async (req, res) => {
   const accountId = Number(req.params.id);
-  const { type, amount, description, projectId, transactionDate } = req.body as {
+  const { type, amount, description, projectId, quoteId, supplyAmount, taxAmount, transactionDate } = req.body as {
     type: "deduction" | "deposit" | "adjustment";
     amount: number;
     description?: string;
     projectId?: number;
+    quoteId?: number;
+    supplyAmount?: number;
+    taxAmount?: number;
     transactionDate?: string;
   };
   if (!type || !amount || amount <= 0) {
@@ -1487,15 +1494,27 @@ router.post("/admin/prepaid-accounts/:id/transactions", ...adminGuard, async (re
       const [entry] = await tx.insert(prepaidLedgerTable).values({
         accountId,
         projectId: projectId ?? null,
+        quoteId: quoteId ?? null,
         type,
         amount: String(amount),
+        balanceBefore: String(currentBal),
         balanceAfter: String(newBalance),
+        supplyAmount: supplyAmount != null ? String(supplyAmount) : null,
+        taxAmount: taxAmount != null ? String(taxAmount) : null,
         description: description ?? (type === "deduction" ? "서비스 차감" : type === "deposit" ? "추가 입금" : "잔액 조정"),
         transactionDate: transactionDate ?? new Date().toISOString().slice(0, 10),
       }).returning();
       return entry;
     });
-    res.status(201).json({ ...result, amount: Number(result.amount), balanceAfter: Number(result.balanceAfter), currentBalance: newBalance });
+    res.status(201).json({
+      ...result,
+      amount: Number(result.amount),
+      balanceBefore: Number(result.balanceBefore ?? currentBal),
+      balanceAfter: Number(result.balanceAfter),
+      supplyAmount: result.supplyAmount != null ? Number(result.supplyAmount) : null,
+      taxAmount: result.taxAmount != null ? Number(result.taxAmount) : null,
+      currentBalance: newBalance,
+    });
   } catch (err) {
     req.log.error({ err }, "Failed to add prepaid transaction");
     res.status(500).json({ error: "거래 추가 실패" });
