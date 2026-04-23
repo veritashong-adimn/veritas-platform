@@ -116,8 +116,8 @@ const SETTLEMENT_TYPE_STYLE: Record<string, React.CSSProperties> = {
   OTHER_REVIEW:        { background: "#f3f4f6", color: "#6b7280" },
 };
 const QUOTE_TYPE_KO: Record<string, string> = {
-  b2b_standard: "일반 B2B", b2c_prepaid: "선입금",
-  prepaid_deduction: "선입금 차감", accumulated_batch: "누적 청구",
+  b2b_standard: "B2B 견적서", b2c_prepaid: "B2C 견적서",
+  prepaid_deduction: "차감 견적서", accumulated_batch: "누적 견적서",
 };
 
 // ── 빈 상태 CTA ───────────────────────────────────────────────────────────────

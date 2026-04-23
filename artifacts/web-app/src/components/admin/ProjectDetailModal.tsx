@@ -2304,9 +2304,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             style={{ width: "100%" }}
                             triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #93c5fd", background: "#eff6ff" }}
                             options={[
-                              { value: "b2b_standard", label: "B2B 일반 견적서" },
-                              { value: "b2c_prepaid", label: "B2C 선입금 견적서" },
-                              { value: "prepaid_deduction", label: "선입금 차감 견적서" },
+                              { value: "b2b_standard", label: "B2B 견적서", sub: "후불 정산 기준 기업용 견적" },
+                              { value: "b2c_prepaid", label: "B2C 견적서", sub: "선입금 기반 개인/단건 견적" },
+                              { value: "prepaid_deduction", label: "차감 견적서", sub: "선입금 잔액에서 차감되는 견적" },
                               { value: "accumulated_batch", label: "누적 견적서" },
                             ]}
                           />
@@ -2591,9 +2591,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", zero_tax_invoice: "세금계산서(영세율)", bill: "계산서" };
                         const taxCatLabel: Record<string, string> = { normal: "일반", zero_rated: "영세율", consignment: "위수탁", consignment_zero_rated: "위수탁영세율" };
                         const qtLabel: Record<string, [string, string, string]> = {
-                          b2b_standard:      ["B2B 일반", "#eff6ff", "#1d4ed8"],
-                          b2c_prepaid:       ["B2C 선입금", "#fef3c7", "#92400e"],
-                          prepaid_deduction: ["선입금 차감", "#fdf4ff", "#7c3aed"],
+                          b2b_standard:      ["B2B 견적", "#eff6ff", "#1d4ed8"],
+                          b2c_prepaid:       ["B2C 견적", "#fef3c7", "#92400e"],
+                          prepaid_deduction: ["차감 견적", "#fdf4ff", "#7c3aed"],
                           accumulated_batch: ["누적 견적", "#ecfdf5", "#065f46"],
                         };
                         const pmLabel: Record<string, string> = { card: "카드", cash: "현금", bank: "계좌이체" };
