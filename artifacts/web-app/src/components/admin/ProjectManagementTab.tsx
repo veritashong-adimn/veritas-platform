@@ -424,47 +424,92 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
               </div>
 
               {/* ── 고객 로그인 계정 ── */}
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
-                  고객 로그인 계정 (선택)
+              <div style={{ padding: "12px 14px", borderRadius: 10, border: "1px solid #e5e7eb", background: "#fafafa" }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
+                  고객 로그인 계정
+                  <span style={{ fontWeight: 400, color: "#9ca3af" }}>(선택)</span>
                   <span
                     title={"로그인하여 프로젝트 조회, 견적 확인, 결제를 할 수 있는 고객 계정입니다.\n선택하면 고객이 직접 프로젝트를 확인하고 진행할 수 있습니다.\n선택하지 않으면 내부에서만 관리되는 프로젝트로 등록됩니다."}
                     style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", background: "#e5e7eb", color: "#6b7280", fontSize: 10, fontWeight: 700, cursor: "help", flexShrink: 0 }}
                   >?</span>
                 </label>
+
+                {/* 기존 계정 선택 셀렉트 */}
                 <SearchableSelect
                   items={platformUsers.map(u => ({ id: u.id, label: u.name ?? u.email, sub: u.name ? u.email : undefined }))}
-                  value={newProjectCustomerUserId}
-                  placeholder="선택 안함 (고객 미연결 / 내부 관리)"
+                  value={inviteEmail ? null : newProjectCustomerUserId}
+                  placeholder="기존 계정 검색..."
                   accentBorder="#374151"
-                  onChange={setNewProjectCustomerUserId}
+                  onChange={id => {
+                    // 초대 예정이 있으면 제거하고 기존 계정 선택
+                    if (inviteEmail) { setInviteEmail(""); setInviteName(""); }
+                    setNewProjectCustomerUserId(id);
+                  }}
                 />
-                {/* 초대 설정됨 표시 */}
+
+                {/* 선택된 기존 계정 표시 */}
+                {newProjectCustomerUserId && !inviteEmail && (() => {
+                  const u = platformUsers.find(p => p.id === newProjectCustomerUserId);
+                  return u ? (
+                    <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", background: "#f0fdf4", borderRadius: 6, border: "1px solid #bbf7d0" }}>
+                      <span style={{ fontSize: 12 }}>✓</span>
+                      <span style={{ fontSize: 12, color: "#065f46", flex: 1 }}>
+                        <strong>{u.name ?? u.email}</strong>{u.name ? ` (${u.email})` : ""} — 등록 시 알림 발송
+                      </span>
+                    </div>
+                  ) : null;
+                })()}
+
+                {/* 초대 예정 배지 */}
                 {inviteEmail && (
-                  <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", background: "#eff6ff", borderRadius: 6, border: "1px solid #bfdbfe" }}>
-                    <span style={{ fontSize: 12 }}>✉</span>
+                  <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", background: "#eff6ff", borderRadius: 6, border: "1px solid #bfdbfe" }}>
+                    <span style={{ fontSize: 13, color: "#2563eb" }}>✉</span>
                     <span style={{ fontSize: 12, color: "#1d4ed8", flex: 1 }}>
-                      초대 예정: <strong>{inviteName || inviteEmail}</strong> ({inviteEmail})
+                      <span style={{ fontSize: 10, fontWeight: 700, background: "#dbeafe", color: "#1e40af", borderRadius: 4, padding: "1px 5px", marginRight: 5 }}>초대 예정</span>
+                      <strong>{inviteName || inviteEmail}</strong>
+                      {inviteName ? <span style={{ color: "#6b7280" }}> ({inviteEmail})</span> : ""}
                     </span>
-                    <button type="button" onClick={() => { setInviteEmail(""); setInviteName(""); }}
-                      style={{ fontSize: 11, color: "#6b7280", background: "none", border: "none", cursor: "pointer", padding: "1px 4px" }}>✕</button>
+                    <button
+                      type="button"
+                      onClick={() => { setInviteEmail(""); setInviteName(""); setInviteError(""); }}
+                      style={{ fontSize: 12, color: "#9ca3af", background: "none", border: "none", cursor: "pointer", padding: "2px 6px", borderRadius: 4, lineHeight: 1 }}
+                      title="초대 예정 취소"
+                    >✕</button>
+                    <button
+                      type="button"
+                      onClick={() => { setInviteError(""); setShowInviteModal(true); }}
+                      style={{ fontSize: 11, color: "#2563eb", background: "none", border: "none", cursor: "pointer", padding: "2px 6px", fontWeight: 600, borderRadius: 4, textDecoration: "underline" }}
+                    >수정</button>
                   </div>
                 )}
-                {/* 고객 계정 초대 버튼 */}
-                {!inviteEmail && (
+
+                {/* + 고객 계정 초대 버튼 — 항상 표시 */}
+                <div style={{ marginTop: 8, borderTop: "1px dashed #e5e7eb", paddingTop: 8 }}>
                   <button
                     type="button"
-                    onClick={() => { setInviteError(""); setShowInviteModal(true); }}
-                    style={{
-                      marginTop: 6, display: "inline-flex", alignItems: "center", gap: 5,
-                      fontSize: 12, color: "#2563eb", background: "none", border: "none",
-                      cursor: "pointer", padding: "2px 0", fontWeight: 600,
+                    onClick={() => {
+                      // 기존 계정 선택 해제 후 초대 모달 열기
+                      setNewProjectCustomerUserId(null);
+                      setInviteError("");
+                      setShowInviteModal(true);
                     }}
+                    style={{
+                      display: "inline-flex", alignItems: "center", gap: 6,
+                      fontSize: 13, fontWeight: 700, color: "#2563eb",
+                      background: "#eff6ff", border: "1.5px solid #bfdbfe",
+                      borderRadius: 8, cursor: "pointer", padding: "7px 14px",
+                      transition: "background 0.15s",
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.background = "#dbeafe")}
+                    onMouseLeave={e => (e.currentTarget.style.background = "#eff6ff")}
                   >
-                    <span style={{ fontSize: 14 }}>✉</span>
-                    계정이 없는 경우 초대하기
+                    <span style={{ fontSize: 15, lineHeight: 1 }}>+</span>
+                    고객 계정 초대
                   </button>
-                )}
+                  <p style={{ margin: "5px 0 0", fontSize: 11, color: "#9ca3af" }}>
+                    기존 계정이 없는 경우 이메일로 초대 링크를 발송합니다
+                  </p>
+                </div>
               </div>
 
               {/* ── 청구 대상 ── */}
@@ -562,8 +607,9 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
           }}>
             <p style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800, color: "#111827" }}>고객 계정 초대</p>
             <p style={{ margin: "0 0 20px", fontSize: 12, color: "#6b7280" }}>
-              계정이 없는 고객에게 초대 이메일을 발송합니다.<br />
-              프로젝트 등록 완료 시 자동으로 초대 링크가 발송됩니다.
+              이 이메일로 로그인 계정을 초대합니다.<br />
+              기존 계정이 있으면 해당 계정에 연결되고,<br />
+              없으면 프로젝트 등록 완료 시 초대 이메일이 발송됩니다.
             </p>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -601,7 +647,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
               <GhostBtn onClick={() => { setShowInviteModal(false); setInviteError(""); }}>취소</GhostBtn>
               <PrimaryBtn onClick={handleInviteFormConfirm} style={{ padding: "9px 20px" }}>
-                초대 정보 확인
+                초대 추가
               </PrimaryBtn>
             </div>
           </div>
