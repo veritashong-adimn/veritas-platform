@@ -41,11 +41,12 @@ const sectionHd: React.CSSProperties = {
   margin: '16px 0 8px', paddingBottom: 4, borderBottom: '1px solid #f3f4f6',
 };
 
-export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adminList, initialSection }: {
+export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToast, adminList, initialSection, isAdmin }: {
   projectId: number; token: string; onClose: () => void;
   onRefresh: () => void; onToast: (msg: string) => void;
   adminList?: AdminUser[];
   initialSection?: "info"|"finance"|"work"|"settlement"|"history"|"control-tower";
+  isAdmin?: boolean;
 }) {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -56,6 +57,27 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const serverStatusRef = useRef<string>("");   // 서버에서 확인된 마지막 상태
   const [changingStatus, setChangingStatus] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+
+  // ── 완전 삭제 (admin 전용) ────────────────────────────────────────────────
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDeleteProject = async () => {
+    setDeleting(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${projectId}`), {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      onToast("프로젝트가 완전히 삭제되었습니다.");
+      onRefresh();
+      onClose();
+    } catch { onToast("오류: 삭제 요청에 실패했습니다."); }
+    finally { setDeleting(false); }
+  };
   const [financialStatusTarget, setFinancialStatusTarget] = useState("");
   const [changingFinancialStatus, setChangingFinancialStatus] = useState(false);
   const [commType, setCommType] = useState<"email"|"phone"|"message">("message");
@@ -1035,8 +1057,58 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       width={820}
       zIndex={300}
       bodyPadding="20px 28px"
-      headerExtra={detail ? <StatusBadge status={detail.status} /> : undefined}
+      headerExtra={
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {detail && <StatusBadge status={detail.status} />}
+          {isAdmin && detail && (
+            <button
+              onClick={() => { setShowDeleteConfirm(true); setDeleteConfirmInput(""); }}
+              style={{ fontSize: 11, padding: "3px 10px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>
+              완전 삭제
+            </button>
+          )}
+        </div>
+      }
     >
+      {/* ── 완전 삭제 확인 모달 오버레이 ── */}
+      {showDeleteConfirm && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 440, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+            <h2 style={{ margin: "0 0 8px", fontSize: 18, fontWeight: 800, color: "#dc2626" }}>⚠ 프로젝트 완전 삭제</h2>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "#374151", lineHeight: 1.6 }}>
+              이 작업은 <strong>되돌릴 수 없습니다.</strong><br />
+              프로젝트, 관련 견적, 견적 항목, 로그 등 모든 연결 데이터가 영구 삭제됩니다.
+            </p>
+            <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 14px", marginBottom: 18 }}>
+              <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 700, color: "#991b1b" }}>삭제 대상 프로젝트</p>
+              <p style={{ margin: 0, fontSize: 13, color: "#7f1d1d" }}>#{projectId} — {detail?.title || "(제목 없음)"}</p>
+            </div>
+            <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
+              아래 입력란에 <code style={{ background: "#fee2e2", color: "#dc2626", padding: "1px 6px", borderRadius: 4 }}>삭제</code>를 입력하면 활성화됩니다.
+            </label>
+            <input
+              value={deleteConfirmInput}
+              onChange={e => setDeleteConfirmInput(e.target.value)}
+              placeholder="삭제"
+              style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #fca5a5", fontSize: 14, boxSizing: "border-box", outline: "none", marginBottom: 18 }}
+            />
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmInput(""); }}
+                disabled={deleting}
+                style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
+                취소
+              </button>
+              <button
+                onClick={handleDeleteProject}
+                disabled={deleteConfirmInput !== "삭제" || deleting}
+                style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: deleteConfirmInput === "삭제" ? "#dc2626" : "#fca5a5", color: "#fff", fontSize: 13, fontWeight: 700, cursor: deleteConfirmInput === "삭제" ? "pointer" : "not-allowed" }}>
+                {deleting ? "삭제 중..." : "최종 삭제"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
         {loading ? (
           <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p>
         ) : err ? (

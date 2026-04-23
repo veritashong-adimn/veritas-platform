@@ -1153,6 +1153,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onToast={setToast}
           adminList={adminUsers}
           initialSection={detailModal.initialSection}
+          isAdmin={user.role === "admin"}
         />
       )}
       {customerModal !== null && (

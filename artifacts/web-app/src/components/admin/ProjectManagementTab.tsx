@@ -155,6 +155,11 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [loading, setLoading] = useState(false);
 
+  // ── 프로젝트 완전 삭제 (admin 전용) ─────────────────────────────────────
+  const [deleteConfirmProject, setDeleteConfirmProject] = useState<{ id: number; title: string } | null>(null);
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
+  const [deleting, setDeleting] = useState(false);
+
   // ── 필터 state ───────────────────────────────────────────────────────────
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [projectSearch, setProjectSearch] = useState("");
@@ -245,6 +250,25 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     fetchProjects();
     fetchModalData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 프로젝트 완전 삭제 실행 ─────────────────────────────────────────────
+  const handleDeleteProject = async () => {
+    if (!deleteConfirmProject) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${deleteConfirmProject.id}`), {
+        method: "DELETE",
+        headers: authHeaders,
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setToast("프로젝트가 완전히 삭제되었습니다.");
+      setDeleteConfirmProject(null);
+      setDeleteConfirmInput("");
+      fetchProjects();
+    } catch { setToast("오류: 삭제 요청에 실패했습니다."); }
+    finally { setDeleting(false); }
+  };
 
   // ── 프로젝트 CSV 내보내기 ────────────────────────────────────────────────
   const handleExportProjects = async () => {
@@ -344,6 +368,48 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   // ── JSX ─────────────────────────────────────────────────────────────────
   return (
     <>
+      {/* ── 프로젝트 완전 삭제 확인 모달 (admin 전용) ── */}
+      {deleteConfirmProject && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 9000, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 440, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+            <h2 style={{ margin: "0 0 8px", fontSize: 18, fontWeight: 800, color: "#dc2626" }}>⚠ 프로젝트 완전 삭제</h2>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "#374151", lineHeight: 1.6 }}>
+              이 작업은 <strong>되돌릴 수 없습니다.</strong><br />
+              프로젝트, 관련 견적, 견적 항목, 로그 등 모든 연결 데이터가 영구 삭제됩니다.
+            </p>
+            <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 14px", marginBottom: 18 }}>
+              <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 700, color: "#991b1b" }}>삭제 대상 프로젝트</p>
+              <p style={{ margin: 0, fontSize: 13, color: "#7f1d1d" }}>
+                #{deleteConfirmProject.id} — {deleteConfirmProject.title || "(제목 없음)"}
+              </p>
+            </div>
+            <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
+              아래 입력란에 <code style={{ background: "#fee2e2", color: "#dc2626", padding: "1px 6px", borderRadius: 4 }}>삭제</code>를 정확히 입력하면 최종 삭제가 활성화됩니다.
+            </label>
+            <input
+              value={deleteConfirmInput}
+              onChange={e => setDeleteConfirmInput(e.target.value)}
+              placeholder="삭제"
+              style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #fca5a5", fontSize: 14, boxSizing: "border-box", outline: "none", marginBottom: 18 }}
+            />
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => { setDeleteConfirmProject(null); setDeleteConfirmInput(""); }}
+                disabled={deleting}
+                style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
+                취소
+              </button>
+              <button
+                onClick={handleDeleteProject}
+                disabled={deleteConfirmInput !== "삭제" || deleting}
+                style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: deleteConfirmInput === "삭제" ? "#dc2626" : "#fca5a5", color: "#fff", fontSize: 13, fontWeight: 700, cursor: deleteConfirmInput === "삭제" ? "pointer" : "not-allowed", transition: "background 0.15s" }}>
+                {deleting ? "삭제 중..." : "최종 삭제"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── 프로젝트 생성 모달 ── */}
       {showCreateProject && (
         <DraggableModal
@@ -999,6 +1065,13 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                                     }}
                                     style={{ background: "transparent", color: "#ef4444", border: "1px solid #fca5a5", borderRadius: 6, padding: "4px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
                                     취소
+                                  </button>
+                                )}
+                                {user.role === "admin" && (
+                                  <button
+                                    onClick={() => { setDeleteConfirmProject({ id: p.id, title: p.title }); setDeleteConfirmInput(""); }}
+                                    style={{ background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, padding: "4px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>
+                                    완전 삭제
                                   </button>
                                 )}
                               </div>

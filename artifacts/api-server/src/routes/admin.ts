@@ -7,6 +7,7 @@ import {
   quoteItemsTable, quoteItemFilesTable, calcQuoteItemAmounts,
   billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
   prepaidAccountsTable, prepaidLedgerTable, settingsTable,
+  projectFilesTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
@@ -803,6 +804,81 @@ router.patch("/admin/projects/:id/cancel", ...adminGuard, requirePermission("pro
   } catch (err) {
     req.log.error({ err }, "Admin: failed to cancel project");
     res.status(500).json({ error: "프로젝트 취소 실패." });
+  }
+});
+
+// ─── 프로젝트 완전 삭제 (admin 전용) ──────────────────────────────────────
+router.delete("/admin/projects/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 project id." });
+    return;
+  }
+
+  try {
+    // 1) 프로젝트 존재 확인
+    const [project] = await db
+      .select({ id: projectsTable.id, title: projectsTable.title, status: projectsTable.status })
+      .from(projectsTable).where(eq(projectsTable.id, projectId));
+    if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
+
+    // 2) 삭제 가능 조건 검증
+    if (project.status === "completed") {
+      res.status(409).json({ error: "완료된 프로젝트는 삭제할 수 없습니다. 취소 처리를 사용하세요." });
+      return;
+    }
+    const [payment] = await db.select({ id: paymentsTable.id }).from(paymentsTable).where(eq(paymentsTable.projectId, projectId));
+    if (payment) {
+      res.status(409).json({ error: "이 프로젝트는 결제 이력이 있어 삭제할 수 없습니다. 취소 처리 또는 별도 정정 절차를 사용하세요." });
+      return;
+    }
+    const [settlement] = await db.select({ id: settlementsTable.id }).from(settlementsTable).where(eq(settlementsTable.projectId, projectId));
+    if (settlement) {
+      res.status(409).json({ error: "이 프로젝트는 정산 이력이 있어 삭제할 수 없습니다. 취소 처리 또는 별도 정정 절차를 사용하세요." });
+      return;
+    }
+
+    // 3) 스냅샷 audit 로그 (삭제 전 기록)
+    req.log.info({
+      event: "project_deleted_by_admin",
+      projectId,
+      projectTitle: project.title,
+      projectStatus: project.status,
+      deletedBy: req.user?.id,
+      deletedByEmail: (req.user as any)?.email,
+      deletedAt: new Date().toISOString(),
+    }, "Admin hard-deleted project");
+
+    // 4) 트랜잭션 내 cascade 삭제
+    await db.transaction(async (tx) => {
+      // logs
+      await tx.delete(logsTable).where(eq(logsTable.projectId, projectId));
+      // notes
+      await tx.delete(notesTable).where(and(eq(notesTable.entityType, "project"), eq(notesTable.entityId, projectId)));
+      // project files
+      await tx.delete(projectFilesTable).where(eq(projectFilesTable.projectId, projectId));
+      // quote item files → quote items → quotes
+      const projectQuotes = await tx.select({ id: quotesTable.id }).from(quotesTable).where(eq(quotesTable.projectId, projectId));
+      if (projectQuotes.length > 0) {
+        const quoteIds = projectQuotes.map(q => q.id);
+        const projectQuoteItems = await tx.select({ id: quoteItemsTable.id }).from(quoteItemsTable).where(inArray(quoteItemsTable.quoteId, quoteIds));
+        if (projectQuoteItems.length > 0) {
+          const itemIds = projectQuoteItems.map(qi => qi.id);
+          await tx.delete(quoteItemFilesTable).where(inArray(quoteItemFilesTable.quoteItemId, itemIds));
+          await tx.delete(quoteItemsTable).where(inArray(quoteItemsTable.id, itemIds));
+        }
+        await tx.delete(quotesTable).where(inArray(quotesTable.id, quoteIds));
+      }
+      // tasks
+      await tx.delete(tasksTable).where(eq(tasksTable.projectId, projectId));
+      // project
+      await tx.delete(projectsTable).where(eq(projectsTable.id, projectId));
+    });
+
+    res.json({ success: true, deletedProjectId: projectId });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to hard-delete project");
+    res.status(500).json({ error: "프로젝트 삭제에 실패했습니다." });
   }
 });
 
