@@ -39,7 +39,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [savingContact, setSavingContact] = useState(false);
   const [showInactiveContacts, setShowInactiveContacts] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", representativeName: "", email: "", phone: "", mobile: "", industry: "", businessCategory: "", address: "", website: "", notes: "", registeredAt: "", companyType: "client", vendorType: "" });
+  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", representativeName: "", industry: "", businessCategory: "", address: "", notes: "", registeredAt: "", companyType: "client", vendorType: "" });
   const [originalName, setOriginalName] = useState("");
   const [nameChangeReason, setNameChangeReason] = useState("");
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
@@ -72,13 +72,9 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
           name: data.name,
           businessNumber: data.businessNumber ?? "",
           representativeName: data.representativeName ?? "",
-          email: data.email ?? "",
-          phone: data.phone ?? "",
-          mobile: (data as any).mobile ?? "",
           industry: data.industry ?? "",
           businessCategory: (data as any).businessCategory ?? "",
           address: data.address ?? "",
-          website: data.website ?? "",
           notes: data.notes ?? "",
           registeredAt: (data as any).registeredAt ?? "",
           companyType: (data as any).companyType ?? "client",
@@ -118,8 +114,6 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       const bn = editForm.businessNumber.replace(/-/g, "");
       if (!/^\d{10}$/.test(bn)) errs.businessNumber = "사업자등록번호 형식: 000-00-00000";
     }
-    if (editForm.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(editForm.email.trim())) errs.email = "이메일 형식이 올바르지 않습니다.";
-    if (editForm.website.trim() && !/^https?:\/\/.+/.test(editForm.website.trim())) errs.website = "웹사이트는 http:// 또는 https://로 시작해야 합니다.";
     setFormErrors(errs);
     if (Object.keys(errs).length > 0) return;
 
@@ -343,20 +337,12 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     ["사업자번호", detail.businessNumber ?? "-", false],
                     ["대표자명", detail.representativeName ?? "-", false],
                     ["등록일", (detail as any).registeredAt ?? "-", false],
-                    ["대표전화", detail.phone ?? "-", false],
-                    ["휴대폰", (detail as any).mobile ?? "-", false],
-                    ["이메일", detail.email ?? "-", false],
-                    ["웹사이트", detail.website ?? "-", false],
                     ["업태", detail.industry ?? "-", false],
                     ["종목", (detail as any).businessCategory ?? "-", false],
                   ] as [string, string, boolean][]).map(([l, v, bold]) => (
                     <div key={l} style={{ display: "flex", flexDirection: "column", gap: 1, paddingRight: 12 }}>
                       <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase" }}>{l}</span>
-                      <span style={{ fontSize: 13, color: "#374151", fontWeight: bold ? 700 : 400 }}>
-                        {l === "웹사이트" && v !== "-"
-                          ? <a href={v} target="_blank" rel="noreferrer" style={{ color: "#2563eb" }}>{v}</a>
-                          : v}
-                      </span>
+                      <span style={{ fontSize: 13, color: "#374151", fontWeight: bold ? 700 : 400 }}>{v}</span>
                     </div>
                   ))}
                 </div>
@@ -483,37 +469,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                       style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
                   </div>
                 </div>
-                {/* 3행: 대표전화 / 휴대폰 / 이메일 */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대표전화</label>
-                    <input value={editForm.phone} onChange={e => setEditForm(p => ({ ...p, phone: formatPhone(e.target.value) }))}
-                      placeholder="02-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>휴대폰</label>
-                    <input value={editForm.mobile} onChange={e => setEditForm(p => ({ ...p, mobile: formatPhone(e.target.value) }))}
-                      placeholder="010-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>이메일</label>
-                    <input value={editForm.email} onChange={e => setEditForm(p => ({ ...p, email: e.target.value }))}
-                      placeholder="contact@company.com"
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.email ? "#fca5a5" : undefined }} />
-                    {formErrors.email && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.email}</p>}
-                  </div>
-                </div>
-                {/* 3.5행: 웹사이트 */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "0 12px" }}>
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>웹사이트</label>
-                    <input value={editForm.website} onChange={e => setEditForm(p => ({ ...p, website: e.target.value }))}
-                      placeholder="https://example.com"
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.website ? "#fca5a5" : undefined }} />
-                    {formErrors.website && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.website}</p>}
-                  </div>
-                </div>
-                {/* 4행: 업태 / 종목 */}
+                {/* 3행: 업태 / 종목 */}
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
                   <div>
                     <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>업태</label>

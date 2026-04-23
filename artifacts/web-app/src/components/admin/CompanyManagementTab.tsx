@@ -52,9 +52,9 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
   const [companyModal, setCompanyModal] = useState<number | null>(null);
   const [showCompanyForm, setShowCompanyForm] = useState(false);
   const [companyForm, setCompanyForm] = useState({
-    name: "", businessNumber: "", representativeName: "", email: "",
-    phone: "", mobile: "", industry: "", businessCategory: "", address: "",
-    website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10),
+    name: "", businessNumber: "", representativeName: "",
+    industry: "", businessCategory: "", address: "",
+    notes: "", registeredAt: new Date().toISOString().slice(0, 10),
     companyType: "client", vendorType: "",
   });
   const [savingCompany, setSavingCompany] = useState(false);
@@ -153,9 +153,9 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
     setNewCompanyDivForm({ name: "", type: "" });
     setNewCompanyContactForm(emptyNewCompanyContactForm);
     setCompanyForm({
-      name: "", businessNumber: "", representativeName: "", email: "",
-      phone: "", mobile: "", industry: "", businessCategory: "", address: "",
-      website: "", notes: "", registeredAt: new Date().toISOString().slice(0, 10),
+      name: "", businessNumber: "", representativeName: "",
+      industry: "", businessCategory: "", address: "",
+      notes: "", registeredAt: new Date().toISOString().slice(0, 10),
       companyType: "client", vendorType: "",
     });
     setShowCompanyForm(false);
@@ -376,33 +376,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                         style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
                     </div>
                   </div>
-                  {/* 3행: 대표전화 / 휴대폰 / 이메일 */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대표전화</label>
-                      <input value={companyForm.phone} onChange={e => setCompanyForm(p => ({ ...p, phone: formatPhone(e.target.value) }))}
-                        placeholder="02-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>휴대폰</label>
-                      <input value={companyForm.mobile} onChange={e => setCompanyForm(p => ({ ...p, mobile: formatPhone(e.target.value) }))}
-                        placeholder="010-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>이메일</label>
-                      <input type="email" value={companyForm.email} onChange={e => setCompanyForm(p => ({ ...p, email: e.target.value }))}
-                        placeholder="contact@company.com" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
-                  </div>
-                  {/* 3.5행: 웹사이트 */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "0 12px" }}>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>웹사이트</label>
-                      <input value={companyForm.website} onChange={e => setCompanyForm(p => ({ ...p, website: e.target.value }))}
-                        placeholder="https://example.com" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
-                  </div>
-                  {/* 4행: 업태 / 종목 */}
+                  {/* 3행: 업태 / 종목 */}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
                     <div>
                       <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>업태</label>
