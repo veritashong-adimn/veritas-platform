@@ -368,6 +368,27 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                 </div>
               </div>
 
+              {/* ── 고객 로그인 계정 ── */}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+                  고객 로그인 계정 (선택)
+                  <span
+                    title={"로그인하여 프로젝트 조회, 견적 확인, 결제를 할 수 있는 고객 계정입니다.\n선택하면 고객이 직접 프로젝트를 확인하고 진행할 수 있습니다.\n선택하지 않으면 내부에서만 관리되는 프로젝트로 등록됩니다."}
+                    style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", background: "#e5e7eb", color: "#6b7280", fontSize: 10, fontWeight: 700, cursor: "help", flexShrink: 0 }}
+                  >?</span>
+                  {user.role === "customer" && (
+                    <span style={{ fontWeight: 400, color: "#059669", marginLeft: 2 }}>(자동 선택됨)</span>
+                  )}
+                </label>
+                <SearchableSelect
+                  items={customers.map(c => ({ id: c.id, label: c.contactName, sub: c.email }))}
+                  value={newProjectCustomerId}
+                  placeholder="선택 안함 (고객 미연결 / 내부 관리)"
+                  accentBorder="#374151"
+                  onChange={setNewProjectCustomerId}
+                />
+              </div>
+
               {/* ── 청구 대상 ── */}
               <div style={{ borderRadius: 10, border: "1px solid #e5e7eb", padding: "12px 14px", background: "#fafafa" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: showBillingOverride ? 10 : 0 }}>
@@ -440,26 +461,6 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                 )}
               </div>
 
-              {/* ── 고객 로그인 계정 ── */}
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
-                  고객 로그인 계정 (선택)
-                  <span
-                    title={"로그인하여 프로젝트 조회, 견적 확인, 결제를 할 수 있는 고객 계정입니다.\n선택하지 않으면 내부에서만 관리되는 프로젝트로 등록됩니다."}
-                    style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", background: "#e5e7eb", color: "#6b7280", fontSize: 10, fontWeight: 700, cursor: "help", flexShrink: 0 }}
-                  >?</span>
-                  {user.role === "customer" && (
-                    <span style={{ fontWeight: 400, color: "#059669", marginLeft: 2 }}>(자동 선택됨)</span>
-                  )}
-                </label>
-                <SearchableSelect
-                  items={customers.map(c => ({ id: c.id, label: c.contactName, sub: c.email }))}
-                  value={newProjectCustomerId}
-                  placeholder="선택 안함 (고객 미연결 / 내부 관리)"
-                  accentBorder="#374151"
-                  onChange={setNewProjectCustomerId}
-                />
-              </div>
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
               <GhostBtn onClick={resetCreateModal}>취소</GhostBtn>
