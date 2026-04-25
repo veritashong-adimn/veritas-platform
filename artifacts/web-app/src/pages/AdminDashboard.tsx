@@ -12,10 +12,10 @@ import {
   VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS,
 } from '../lib/constants';
 import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../components/ui';
-import { formatPhone } from '../lib/utils';
 import { LogModal } from '../components/admin/LogModal';
 import { DraggableModal } from '../components/admin/DraggableModal';
 import { ContactDetailModal } from '../components/admin/ContactDetailModal';
+import { ContactFormModal } from '../components/admin/ContactFormModal';
 import { CustomerDetailModal } from '../components/admin/CustomerDetailModal';
 import { TranslatorProfileModal } from '../components/admin/TranslatorProfileModal';
 import { TranslatorDetailModal } from '../components/admin/TranslatorDetailModal';
@@ -285,13 +285,6 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [showInactiveContacts, setShowInactiveContacts] = useState(false);
   const [contactModal, setContactModal] = useState<number | null>(null);
   const [showCreateContactModal, setShowCreateContactModal] = useState(false);
-  const emptyNewContactForm = { companyId: null as number | null, divisionId: null as number | null, name: "", mobile: "", email: "", department: "", position: "", officePhone: "", memo: "", isPrimary: false, isQuoteContact: false, isBillingContact: false, isActive: true };
-  const [newContactForm, setNewContactForm] = useState(emptyNewContactForm);
-  const [newContactErrors, setNewContactErrors] = useState<Record<string, string>>({});
-  const [savingNewContact, setSavingNewContact] = useState(false);
-  const [companySearchQuery, setCompanySearchQuery] = useState("");
-  const [newContactDivisions, setNewContactDivisions] = useState<Division[]>([]);
-  const [contactWarning, setContactWarning] = useState<{ message: string } | null>(null);
   const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
   const [deleteConfirmContact, setDeleteConfirmContact] = useState<{ id: number; name: string } | null>(null);
   const [deletingContact, setDeletingContact] = useState<number | null>(null);
@@ -497,49 +490,6 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   // 비활성 필터 토글 시 선택 초기화
   useEffect(() => { setSelectedContactIds(new Set()); }, [showInactiveContacts]);
-
-  const handleCreateContact = async (force = false) => {
-    const errs: Record<string, string> = {};
-    if (!newContactForm.companyId) errs.companyId = "거래처를 선택해주세요.";
-    if (!newContactForm.name.trim()) errs.name = "담당자명은 필수입니다.";
-    if (!newContactForm.mobile.trim() && !newContactForm.email.trim()) errs.mobile = "휴대폰 또는 이메일 중 하나 이상 입력해주세요.";
-    if (newContactForm.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newContactForm.email.trim())) errs.email = "이메일 형식이 올바르지 않습니다.";
-    setNewContactErrors(errs);
-    if (Object.keys(errs).length > 0) return;
-    setSavingNewContact(true);
-    try {
-      const res = await fetch(api("/api/admin/contacts"), {
-        method: "POST",
-        headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ ...newContactForm, force }),
-      });
-      const data = await res.json();
-
-      // ① 휴대폰 중복 — 강제 차단
-      if (res.status === 409) {
-        setToast(`오류: ${data.error}`);
-        return;
-      }
-
-      // ② 이메일·이름 중복 경고 — 확인 후 진행 가능
-      if (res.status === 200 && data.warning) {
-        setContactWarning({ message: data.message });
-        return;
-      }
-
-      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
-
-      // 성공
-      setContactWarning(null);
-      setShowCreateContactModal(false);
-      setNewContactForm(emptyNewContactForm);
-      setNewContactErrors({});
-      setCompanySearchQuery("");
-      await fetchContacts();
-      setToast("담당자가 등록되었습니다.");
-    } catch { setToast("오류: 담당자 등록 실패"); }
-    finally { setSavingNewContact(false); }
-  };
 
   const handleDeleteContact = async (contactId: number) => {
     setDeletingContact(contactId);
@@ -2713,228 +2663,20 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {/* ── 담당자 탭 ── */}
       {adminTab === "contacts" && (
         <Section title={`담당자 관리 (${contacts.length})`} action={
-          <PrimaryBtn onClick={() => { setShowCreateContactModal(true); setNewContactForm(emptyNewContactForm); setNewContactErrors({}); setCompanySearchQuery(""); }} style={{ fontSize: 13, padding: "7px 14px" }}>
+          <PrimaryBtn onClick={() => setShowCreateContactModal(true)} style={{ fontSize: 13, padding: "7px 14px" }}>
             + 담당자 등록
           </PrimaryBtn>
         }>
           {/* ── 담당자 등록 모달 ── */}
           {showCreateContactModal && (
-            <DraggableModal
-              title="담당자 등록"
-              subtitle="하나의 거래처에 여러 명의 담당자를 등록할 수 있습니다."
+            <ContactFormModal
+              mode="create"
+              token={token}
+              companies={companies}
               onClose={() => setShowCreateContactModal(false)}
-              width={560}
-              zIndex={1000}
-              bodyPadding="20px 24px"
-            >
-                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  {/* 거래처 선택 */}
-                  <div>
-                    <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 6 }}>
-                      거래처 선택 <span style={{ color: "#dc2626" }}>*</span>
-                    </label>
-                    <input value={companySearchQuery}
-                      onChange={e => { setCompanySearchQuery(e.target.value); setNewContactForm(p => ({ ...p, companyId: null })); }}
-                      placeholder="회사명, 브랜드명 검색..."
-                      style={{ ...inputStyle, fontSize: 13, padding: "8px 12px", marginBottom: 6, borderColor: newContactErrors.companyId ? "#fca5a5" : undefined }} />
-                    {newContactErrors.companyId && <p style={{ margin: "0 0 6px", fontSize: 11, color: "#dc2626" }}>{newContactErrors.companyId}</p>}
-                    {companySearchQuery.trim() && newContactForm.companyId === null && (
-                      <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, maxHeight: 180, overflowY: "auto", background: "#fff", boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }}>
-                        {(() => {
-                          const q = companySearchQuery.toLowerCase();
-                          const filtered = companies.filter(c =>
-                            c.name.toLowerCase().includes(q) ||
-                            (c.divisionNames ?? []).some(d => d.toLowerCase().includes(q)) ||
-                            (c.businessNumber ?? "").replace(/-/g,"").includes(q.replace(/-/g,""))
-                          ).slice(0, 10);
-                          if (filtered.length === 0) return <p style={{ padding: "12px 14px", color: "#9ca3af", fontSize: 13, margin: 0 }}>검색 결과가 없습니다.</p>;
-                          return filtered.map(c => {
-                            const matchedDiv = (c.divisionNames ?? []).find(d => d.toLowerCase().includes(q));
-                            return (
-                              <div key={c.id}
-                                onClick={async () => {
-                                  setNewContactForm(p => ({ ...p, companyId: c.id, divisionId: null }));
-                                  setCompanySearchQuery(c.name);
-                                  setNewContactDivisions([]);
-                                  try {
-                                    const dRes = await fetch(api(`/api/admin/companies/${c.id}/divisions`), { headers: authHeaders });
-                                    if (dRes.ok) { const dData = await dRes.json(); setNewContactDivisions(Array.isArray(dData) ? dData : []); }
-                                  } catch { /* ignore */ }
-                                }}
-                                style={{ padding: "9px 14px", cursor: "pointer", fontSize: 13, color: "#111827", borderBottom: "1px solid #f9fafb" }}
-                                onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
-                                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                                <span style={{ fontWeight: 600 }}>{c.name}</span>
-                                {matchedDiv && <span style={{ color: "#7c3aed", fontWeight: 700, marginLeft: 4 }}>({matchedDiv})</span>}
-                                {c.businessNumber && <span style={{ color: "#9ca3af", marginLeft: 8, fontSize: 12 }}>{c.businessNumber}</span>}
-                              </div>
-                            );
-                          });
-                        })()}
-                      </div>
-                    )}
-                    {newContactForm.companyId !== null && (
-                      <div style={{ padding: "8px 12px", background: "#eff6ff", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13 }}>
-                        <span style={{ color: "#1d4ed8", fontWeight: 600 }}>✓ {companySearchQuery}</span>
-                        <button onClick={() => { setNewContactForm(p => ({ ...p, companyId: null, divisionId: null })); setCompanySearchQuery(""); setNewContactDivisions([]); }}
-                          style={{ background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: 12 }}>변경</button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 브랜드/부서 선택 */}
-                  {(newContactForm.companyId !== null) && (
-                    <div>
-                      <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>
-                        브랜드/부서 <span style={{ color: "#9ca3af", fontWeight: 400, fontSize: 11 }}>(선택)</span>
-                      </label>
-                      {newContactDivisions.length === 0 ? (
-                        <div style={{ padding: "8px 12px", background: "#f9fafb", borderRadius: 7, fontSize: 12, color: "#9ca3af", border: "1px solid #f3f4f6" }}>
-                          이 거래처에 등록된 브랜드/부서가 없습니다.
-                        </div>
-                      ) : (
-                        <select
-                          value={newContactForm.divisionId ?? ""}
-                          onChange={e => setNewContactForm(p => ({ ...p, divisionId: e.target.value ? Number(e.target.value) : null }))}
-                          style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 7, fontSize: 13, color: "#111827", background: "#fff" }}>
-                          <option value="">선택 안 함 (거래처 전체 소속)</option>
-                          {newContactDivisions.map(d => (
-                            <option key={d.id} value={d.id}>{d.name}</option>
-                          ))}
-                        </select>
-                      )}
-                    </div>
-                  )}
-
-                  {/* 기본정보 */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
-                    <div style={{ gridColumn: "1/-1" }}>
-                      <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>
-                        담당자명 <span style={{ color: "#dc2626" }}>*</span>
-                      </label>
-                      <input value={newContactForm.name} onChange={e => setNewContactForm(p => ({ ...p, name: e.target.value }))}
-                        placeholder="예: 홍길동"
-                        style={{ ...inputStyle, fontSize: 13, padding: "8px 12px", borderColor: newContactErrors.name ? "#fca5a5" : undefined }} />
-                      {newContactErrors.name && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{newContactErrors.name}</p>}
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>
-                        부서
-                      </label>
-                      <input value={newContactForm.department} onChange={e => setNewContactForm(p => ({ ...p, department: e.target.value }))}
-                        placeholder="예: 마케팅팀"
-                        style={{ ...inputStyle, fontSize: 13, padding: "8px 12px" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>
-                        직책
-                      </label>
-                      <input value={newContactForm.position} onChange={e => setNewContactForm(p => ({ ...p, position: e.target.value }))}
-                        placeholder="예: 과장"
-                        style={{ ...inputStyle, fontSize: 13, padding: "8px 12px" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>
-                        휴대폰 <span style={{ color: "#9ca3af", fontWeight: 400, fontSize: 11 }}>(권장)</span>
-                      </label>
-                      <input
-                        value={newContactForm.mobile}
-                        onChange={e => setNewContactForm(p => ({ ...p, mobile: formatPhone(e.target.value) }))}
-                        placeholder="예: 010-1234-5678"
-                        inputMode="numeric"
-                        style={{ ...inputStyle, fontSize: 13, padding: "8px 12px", borderColor: newContactErrors.mobile ? "#fca5a5" : undefined }} />
-                      {newContactErrors.mobile && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{newContactErrors.mobile}</p>}
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>
-                        이메일 <span style={{ color: "#9ca3af", fontWeight: 400, fontSize: 11 }}>(권장)</span>
-                      </label>
-                      <input
-                        value={newContactForm.email}
-                        onChange={e => {
-                          const val = e.target.value;
-                          setNewContactForm(p => ({ ...p, email: val }));
-                          const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-                          if (val && !emailRe.test(val)) {
-                            setNewContactErrors(prev => ({ ...prev, email: "올바른 이메일 형식이 아닙니다. (@ 포함)" }));
-                          } else {
-                            setNewContactErrors(prev => ({ ...prev, email: "" }));
-                          }
-                        }}
-                        placeholder="예: hong@example.com"
-                        style={{ ...inputStyle, fontSize: 13, padding: "8px 12px", borderColor: newContactErrors.email ? "#fca5a5" : undefined }} />
-                      {newContactErrors.email && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{newContactErrors.email}</p>}
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>직장전화</label>
-                      <input
-                        value={newContactForm.officePhone}
-                        onChange={e => setNewContactForm(p => ({ ...p, officePhone: formatPhone(e.target.value) }))}
-                        placeholder="예: 02-1234-5678"
-                        inputMode="numeric"
-                        style={{ ...inputStyle, fontSize: 13, padding: "8px 12px" }} />
-                    </div>
-                    <div style={{ gridColumn: "1/-1" }}>
-                      <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>메모</label>
-                      <textarea value={newContactForm.memo} onChange={e => setNewContactForm(p => ({ ...p, memo: e.target.value }))}
-                        rows={2} placeholder="특이사항 등"
-                        style={{ ...inputStyle, fontSize: 13, padding: "8px 12px", resize: "vertical" }} />
-                    </div>
-                  </div>
-
-                  {/* 역할 체크박스 */}
-                  <div style={{ background: "#f9fafb", borderRadius: 10, padding: "12px 16px" }}>
-                    <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#6b7280" }}>역할 설정</p>
-                    <p style={{ margin: "0 0 10px", fontSize: 11, color: "#9ca3af" }}>기본 담당자는 거래처별 1명만 지정됩니다. 견적/청구 담당자는 중복 지정 가능합니다.</p>
-                    <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
-                      {([["isPrimary","기본 담당자","기본 연락처로 지정"],["isQuoteContact","견적 담당자","견적 발송 담당"],["isBillingContact","청구 담당자","청구 처리 담당"],["isActive","활성 상태","비활성 시 목록에서 숨김"]] as const).map(([key, label, desc]) => (
-                        <label key={key} style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
-                          <input type="checkbox" checked={newContactForm[key]} onChange={e => setNewContactForm(p => ({ ...p, [key]: e.target.checked }))}
-                            style={{ marginTop: 2 }} />
-                          <div>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: "#374151" }}>{label}</span>
-                            <p style={{ margin: "1px 0 0", fontSize: 11, color: "#9ca3af" }}>{desc}</p>
-                          </div>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* 저장/취소 */}
-                  <div style={{ display: "flex", gap: 10, paddingTop: 4 }}>
-                    <PrimaryBtn onClick={() => handleCreateContact(false)} disabled={savingNewContact} style={{ flex: 1, fontSize: 14, padding: "10px" }}>
-                      {savingNewContact ? "등록 중..." : "담당자 등록"}
-                    </PrimaryBtn>
-                    <GhostBtn onClick={() => { setShowCreateContactModal(false); setContactWarning(null); }} style={{ fontSize: 14, padding: "10px 20px" }}>취소</GhostBtn>
-                  </div>
-                </div>
-
-                {/* ── 중복 경고 확인 오버레이 ── */}
-                {contactWarning && (
-                  <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <div style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 420, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
-                      <h3 style={{ margin: "0 0 10px", fontSize: 17, fontWeight: 800, color: "#d97706" }}>⚠ 중복 담당자 경고</h3>
-                      <p style={{ margin: "0 0 20px", fontSize: 13, color: "#374151", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
-                        {contactWarning.message}
-                      </p>
-                      <p style={{ margin: "0 0 20px", fontSize: 13, color: "#6b7280" }}>동명이인이거나 별도 담당자인 경우 계속 등록할 수 있습니다.</p>
-                      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                        <button
-                          onClick={() => setContactWarning(null)}
-                          style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
-                          취소 (다시 확인)
-                        </button>
-                        <button
-                          onClick={() => { setContactWarning(null); handleCreateContact(true); }}
-                          disabled={savingNewContact}
-                          style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: "#d97706", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                          {savingNewContact ? "등록 중..." : "계속 등록"}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-            </DraggableModal>
+              onSuccess={async () => { await fetchContacts(); }}
+              onToast={setToast}
+            />
           )}
 
           <p style={{ fontSize: 12, color: "#9ca3af", margin: "0 0 12px" }}>

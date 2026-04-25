@@ -192,6 +192,7 @@ export type ContactDetail = {
   name: string; department: string | null; position: string | null;
   email: string | null; phone: string | null; mobile: string | null;
   officePhone: string | null; notes: string | null; memo: string | null; createdAt: string;
+  isPrimary: boolean; isQuoteContact: boolean; isBillingContact: boolean; isActive: boolean;
   projects: Array<{ id: number; title: string; status: string; createdAt: string }>;
   communications: Array<{ id: number; type: string; content: string; projectId: number | null; createdAt: string }>;
 };
