@@ -60,8 +60,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     phone: "",
     languagePairs: "", languageLevel: "", specializations: "", education: "", major: "",
     graduationYear: "", region: "", grade: "", rating: "", availabilityStatus: "available",
-    bio: "", ratePerWord: "", ratePerPage: "", unitType: "eojeol", unitPrice: "",
-    resumeUrl: "", portfolioUrl: "",
+    bio: "", resumeUrl: "", portfolioUrl: "",
   });
 
   const authH = { Authorization: `Bearer ${token}` };
@@ -107,10 +106,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           region: p?.region ?? "", grade: p?.grade ?? "",
           rating: p?.rating ? String(p.rating) : "",
           availabilityStatus: p?.availabilityStatus ?? "available",
-          bio: p?.bio ?? "", ratePerWord: p?.ratePerWord ? String(p.ratePerWord) : "",
-          ratePerPage: p?.ratePerPage ? String(p.ratePerPage) : "",
-          unitType: p?.unitType ?? "eojeol",
-          unitPrice: p?.unitPrice ? String(p.unitPrice) : "",
+          bio: p?.bio ?? "",
           resumeUrl: p?.resumeUrl ?? "", portfolioUrl: p?.portfolioUrl ?? "",
         });
       }
@@ -152,10 +148,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           phone: form.phone.trim() || null,
           graduationYear: form.graduationYear ? Number(form.graduationYear) : null,
           rating: form.rating ? Number(form.rating) : null,
-          ratePerWord: form.ratePerWord ? Number(form.ratePerWord) : null,
-          ratePerPage: form.ratePerPage ? Number(form.ratePerPage) : null,
-          unitType: form.unitType || "eojeol",
-          unitPrice: form.unitPrice ? Number(form.unitPrice) : null,
           grade: form.grade || null,
           languageLevel: form.languageLevel || null,
           resumeUrl: form.resumeUrl || null,
@@ -180,10 +172,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         rating: data.rating ? String(data.rating) : "",
         availabilityStatus: data.availabilityStatus ?? "available",
         bio: data.bio ?? "",
-        ratePerWord: data.ratePerWord ? String(data.ratePerWord) : "",
-        ratePerPage: data.ratePerPage ? String(data.ratePerPage) : "",
-        unitType: data.unitType ?? "eojeol",
-        unitPrice: data.unitPrice ? String(data.unitPrice) : "",
         resumeUrl: data.resumeUrl ?? "",
         portfolioUrl: data.portfolioUrl ?? "",
       }));
@@ -492,20 +480,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 options={[
                   { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
                 ]} />
-            </div>
-            <div>
-              <label style={labelSt}>기본 단가</label>
-              <div style={{ display: "flex", gap: 6 }}>
-                <ClickSelect value={form.unitType} onChange={v => setForm(p => ({ ...p, unitType: v }))}
-                  triggerStyle={{ fontSize: 13, padding: "7px 8px", borderRadius: 8, flex: "0 0 90px" }}
-                  options={[
-                    { value: "eojeol", label: "어절" }, { value: "char", label: "글자" },
-                    { value: "page", label: "페이지" }, { value: "hour", label: "시간" },
-                  ]} />
-                <input type="number" value={form.unitPrice}
-                  onChange={e => setForm(p => ({ ...p, unitPrice: e.target.value }))}
-                  placeholder="단가(원)" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", flex: 1 }} />
-              </div>
             </div>
             <div>
               <label style={labelSt}>이력서 URL</label>

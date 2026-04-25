@@ -3115,11 +3115,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           </td>
                           {/* 대표 단가 */}
                           <td style={{ ...tableTd, fontSize: 12, textAlign: "center", whiteSpace: "nowrap" }}>
-                            {t.ratePerWord != null
-                              ? <span style={{ fontWeight: 700, color: "#059669" }}>{Number(t.ratePerWord).toLocaleString()}원<span style={{ fontWeight: 400, color: "#9ca3af" }}>/어절</span></span>
-                              : t.ratePerPage != null
-                                ? <span style={{ fontWeight: 700, color: "#059669" }}>{Number(t.ratePerPage).toLocaleString()}원<span style={{ fontWeight: 400, color: "#9ca3af" }}>/pg</span></span>
-                                : <span style={{ color: "#d1d5db" }}>미설정</span>}
+                            {t.repRate != null
+                              ? <span style={{ fontWeight: 700, color: "#059669" }}>{Number(t.repRate).toLocaleString()}원<span style={{ fontWeight: 400, color: "#9ca3af" }}>/{t.repUnit ?? "-"}</span></span>
+                              : <span style={{ color: "#d1d5db" }}>미설정</span>}
                           </td>
                           {/* 평점 */}
                           <td style={{ ...tableTd, textAlign: "center" }}>

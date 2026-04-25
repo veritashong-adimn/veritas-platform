@@ -47,10 +47,6 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         rating: translatorProfilesTable.rating,
         availabilityStatus: translatorProfilesTable.availabilityStatus,
         bio: translatorProfilesTable.bio,
-        ratePerWord: translatorProfilesTable.ratePerWord,
-        ratePerPage: translatorProfilesTable.ratePerPage,
-        unitType: translatorProfilesTable.unitType,
-        unitPrice: translatorProfilesTable.unitPrice,
         education: translatorProfilesTable.education,
         major: translatorProfilesTable.major,
         graduationYear: translatorProfilesTable.graduationYear,
@@ -62,7 +58,35 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       .where(eq(usersTable.role, "translator"))
       .orderBy(desc(usersTable.createdAt));
 
-    let result = rows;
+    // 단가 관리(translator_rates)에서 대표단가 계산
+    const translatorIds = rows.map(r => r.id);
+    const ratesMap: Record<number, { repRate: number; repUnit: string } | null> = {};
+    if (translatorIds.length > 0) {
+      const allRates = await db
+        .select({
+          translatorId: translatorRatesTable.translatorId,
+          rate: translatorRatesTable.rate,
+          unit: translatorRatesTable.unit,
+          serviceType: translatorRatesTable.serviceType,
+          id: translatorRatesTable.id,
+        })
+        .from(translatorRatesTable)
+        .where(inArray(translatorRatesTable.translatorId, translatorIds))
+        .orderBy(translatorRatesTable.id);
+
+      const grouped: Record<number, typeof allRates> = {};
+      for (const r of allRates) {
+        if (!grouped[r.translatorId]) grouped[r.translatorId] = [];
+        grouped[r.translatorId].push(r);
+      }
+      for (const [tid, rates] of Object.entries(grouped)) {
+        const find = (svc: string, unit: string) => rates.find(r => r.serviceType === svc && r.unit === unit);
+        const rep = find("번역", "어절") || find("번역", "단어") || find("번역", "글자") || find("통역", "시간") || rates[0];
+        ratesMap[Number(tid)] = rep ? { repRate: rep.rate, repUnit: rep.unit } : null;
+      }
+    }
+
+    let result = rows.map(r => ({ ...r, ...(ratesMap[r.id] ?? { repRate: null, repUnit: null }) }));
 
     if (search?.trim()) {
       const s = search.trim().toLowerCase();
@@ -239,7 +263,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
   const {
     languagePairs, languageLevel, specializations, education, major,
     graduationYear, phone, region, grade, rating, availabilityStatus, bio,
-    ratePerWord, ratePerPage, unitType, unitPrice, resumeUrl, portfolioUrl,
+    resumeUrl, portfolioUrl,
     emails,
   } = req.body;
 
@@ -262,10 +286,6 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
       rating: (rating != null && rating !== "") ? Number(rating) : null,
       availabilityStatus: availabilityStatus ?? "available",
       bio: bio?.trim() || null,
-      ratePerWord: (ratePerWord != null && ratePerWord !== "") ? Number(ratePerWord) : null,
-      ratePerPage: (ratePerPage != null && ratePerPage !== "") ? Number(ratePerPage) : null,
-      unitType: unitType || null,
-      unitPrice: (unitPrice != null && unitPrice !== "") ? Number(unitPrice) : null,
       resumeUrl: resumeUrl?.trim() || null,
       portfolioUrl: portfolioUrl?.trim() || null,
       updatedAt: new Date(),
