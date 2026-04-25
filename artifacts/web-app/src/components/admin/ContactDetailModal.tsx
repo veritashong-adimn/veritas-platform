@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api, ContactDetail, Division, NoteEntry } from "../../lib/constants";
+import { formatPhoneNumber } from "../../utils/formatPhone";
 import { StatusBadge, PrimaryBtn } from "../ui";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { DraggableModal } from "./DraggableModal";
@@ -136,8 +137,21 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
     finally { setAddingNote(false); }
   };
 
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const [emailError, setEmailError] = useState<string>("");
+
   const ef = (k: keyof EditForm) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setEditForm(prev => ({ ...prev, [k]: e.target.value }));
+
+  const handleEmailChange = (value: string) => {
+    setEditForm(prev => ({ ...prev, email: value }));
+    if (!value) { setEmailError(""); return; }
+    setEmailError(emailRegex.test(value) ? "" : "올바른 이메일 형식이 아닙니다. (@ 포함)");
+  };
+
+  const handlePhoneChange = (k: "phone" | "mobile" | "officePhone") => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setEditForm(prev => ({ ...prev, [k]: formatPhoneNumber(e.target.value) }));
+  };
 
   // ── 모달 제목 영역 오른쪽 버튼 ──────────────────────────────────────────────
   const headerExtra = !loading && detail && !editMode ? (
@@ -198,7 +212,32 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
                 { k: "name" as const, label: "이름 *", placeholder: "홍길동" },
                 { k: "department" as const, label: "부서", placeholder: "마케팅팀" },
                 { k: "position" as const, label: "직책", placeholder: "과장" },
-                { k: "email" as const, label: "이메일", placeholder: "contact@company.com" },
+              ]).map(({ k, label, placeholder }) => (
+                <div key={k} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}>
+                  <label style={{ ...readLabel, minWidth: 76 }}>{label}</label>
+                  <input value={editForm[k]} onChange={ef(k)} placeholder={placeholder} style={{ ...inputStyle, flex: 1 }} />
+                </div>
+              ))}
+
+              {/* 이메일 — 실시간 형식 검증 */}
+              <div style={{ display: "flex", gap: 8, marginBottom: emailError ? 2 : 8, alignItems: "center" }}>
+                <label style={{ ...readLabel, minWidth: 76 }}>이메일</label>
+                <input
+                  value={editForm.email}
+                  onChange={e => handleEmailChange(e.target.value)}
+                  placeholder="contact@company.com"
+                  style={{ ...inputStyle, flex: 1, borderColor: emailError ? "#fca5a5" : undefined }}
+                />
+              </div>
+              {emailError && (
+                <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                  <span style={{ minWidth: 76 }} />
+                  <p style={{ margin: 0, fontSize: 11, color: "#dc2626" }}>{emailError}</p>
+                </div>
+              )}
+
+              {/* 전화 / 휴대폰 / 사무실 — 자동 하이픈 포맷팅 */}
+              {([
                 { k: "phone" as const, label: "전화", placeholder: "02-1234-5678" },
                 { k: "mobile" as const, label: "휴대폰", placeholder: "010-1234-5678" },
                 { k: "officePhone" as const, label: "사무실", placeholder: "02-9999-0000" },
@@ -207,9 +246,10 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
                   <label style={{ ...readLabel, minWidth: 76 }}>{label}</label>
                   <input
                     value={editForm[k]}
-                    onChange={ef(k)}
+                    onChange={handlePhoneChange(k)}
                     placeholder={placeholder}
                     style={{ ...inputStyle, flex: 1 }}
+                    inputMode="numeric"
                   />
                 </div>
               ))}

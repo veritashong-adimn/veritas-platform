@@ -2772,8 +2772,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>
                         휴대폰 <span style={{ color: "#9ca3af", fontWeight: 400, fontSize: 11 }}>(권장)</span>
                       </label>
-                      <input value={newContactForm.mobile} onChange={e => setNewContactForm(p => ({ ...p, mobile: e.target.value }))}
+                      <input
+                        value={newContactForm.mobile}
+                        onChange={e => setNewContactForm(p => ({ ...p, mobile: formatPhone(e.target.value) }))}
                         placeholder="예: 010-1234-5678"
+                        inputMode="numeric"
                         style={{ ...inputStyle, fontSize: 13, padding: "8px 12px", borderColor: newContactErrors.mobile ? "#fca5a5" : undefined }} />
                       {newContactErrors.mobile && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{newContactErrors.mobile}</p>}
                     </div>
@@ -2781,15 +2784,29 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>
                         이메일 <span style={{ color: "#9ca3af", fontWeight: 400, fontSize: 11 }}>(권장)</span>
                       </label>
-                      <input value={newContactForm.email} onChange={e => setNewContactForm(p => ({ ...p, email: e.target.value }))}
+                      <input
+                        value={newContactForm.email}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setNewContactForm(p => ({ ...p, email: val }));
+                          const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                          if (val && !emailRe.test(val)) {
+                            setNewContactErrors(prev => ({ ...prev, email: "올바른 이메일 형식이 아닙니다. (@ 포함)" }));
+                          } else {
+                            setNewContactErrors(prev => ({ ...prev, email: "" }));
+                          }
+                        }}
                         placeholder="예: hong@example.com"
                         style={{ ...inputStyle, fontSize: 13, padding: "8px 12px", borderColor: newContactErrors.email ? "#fca5a5" : undefined }} />
                       {newContactErrors.email && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{newContactErrors.email}</p>}
                     </div>
                     <div>
                       <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>직장전화</label>
-                      <input value={newContactForm.officePhone} onChange={e => setNewContactForm(p => ({ ...p, officePhone: e.target.value }))}
+                      <input
+                        value={newContactForm.officePhone}
+                        onChange={e => setNewContactForm(p => ({ ...p, officePhone: formatPhone(e.target.value) }))}
                         placeholder="예: 02-1234-5678"
+                        inputMode="numeric"
                         style={{ ...inputStyle, fontSize: 13, padding: "8px 12px" }} />
                     </div>
                     <div style={{ gridColumn: "1/-1" }}>
