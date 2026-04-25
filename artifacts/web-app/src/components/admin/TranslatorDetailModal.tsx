@@ -92,6 +92,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         }
         // 대표 없으면 첫 번째를 대표로
         if (!entries.some(e => e.isPrimary)) entries[0].isPrimary = true;
+        // 대표 이메일을 최상단으로 정렬
+        entries.sort((a, b) => (b.isPrimary ? 1 : 0) - (a.isPrimary ? 1 : 0));
         setEmailEntries(entries);
 
         // 언어레벨 "비즈니스" → "일반" 정규화
@@ -400,7 +402,11 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                           </span>
                         ) : (
                           <button
-                            onClick={() => setEmailEntries(p => p.map((x, idx) => ({ ...x, isPrimary: idx === i })))}
+                            onClick={() => setEmailEntries(p => {
+                              const selected = { ...p[i], isPrimary: true };
+                              const rest = p.filter((_, idx) => idx !== i).map(x => ({ ...x, isPrimary: false }));
+                              return [selected, ...rest];
+                            })}
                             style={{ fontSize: 11, fontWeight: 600, padding: "5px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb", color: "#374151", cursor: "pointer", whiteSpace: "nowrap" }}>
                             대표로 지정
                           </button>

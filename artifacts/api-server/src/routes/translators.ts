@@ -28,7 +28,12 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
     const rows = await db
       .select({
         id: usersTable.id,
-        email: usersTable.email,
+        email: sql<string>`COALESCE(
+          (SELECT te.email FROM translator_emails te
+           WHERE te.translator_id = ${usersTable.id} AND te.is_primary = true
+           LIMIT 1),
+          ${usersTable.email}
+        )`,
         name: usersTable.name,
         isActive: usersTable.isActive,
         createdAt: usersTable.createdAt,
