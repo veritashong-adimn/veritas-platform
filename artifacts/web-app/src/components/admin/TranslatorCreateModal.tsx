@@ -69,6 +69,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [rates, setRates] = useState<RateEntry[]>([]);
   const [rateErrors, setRateErrors] = useState<string[]>([]);
+  const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [form, setForm] = useState({
     email: "", name: "", phone: "", region: "",
     languagePairs: "", languageLevel: "",
@@ -169,6 +170,17 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           method: "POST", headers: { ...authH, "Content-Type": "application/json" },
           body: JSON.stringify(sbody),
         });
+      }
+
+      // 이력서 파일 업로드 (선택한 경우)
+      if (resumeFile) {
+        const fd = new FormData();
+        fd.append("file", resumeFile);
+        await fetch(api(`/api/admin/translators/${userId}/resume-upload`), {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: fd,
+        }).catch(() => {});
       }
 
       onToast(`통번역사 "${data.name ?? data.email}"이(가) 등록되었습니다.`);
@@ -308,6 +320,23 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         <label style={labelSt}>상세정보 (경력·특이사항)</label>
         <textarea value={form.bio} onChange={e => setF("bio", e.target.value)} rows={3}
           placeholder="출신학교, 경력 요약, 전문분야, 통역/번역 특징, 주의사항 등" style={{ ...inputStyle, resize: "vertical" }} />
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <label style={labelSt}>이력서 파일 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(선택·등록 후 업로드됨)</span></label>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            type="file"
+            accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            onChange={e => setResumeFile(e.target.files?.[0] ?? null)}
+            style={{ fontSize: 12, flex: 1, minWidth: 0 }}
+          />
+          {resumeFile && (
+            <span style={{ fontSize: 12, color: "#6366f1", whiteSpace: "nowrap" }}>
+              📄 {resumeFile.name}
+            </span>
+          )}
+        </div>
+        <p style={{ fontSize: 11, color: "#9ca3af", margin: "3px 0 0" }}>PDF, DOC, DOCX · 최대 10MB</p>
       </div>
 
       {/* ── 단가 등록 ── */}
