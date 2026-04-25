@@ -281,10 +281,10 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       {/* ── 기본 정보 ── */}
       <p style={sH}>기본 정보</p>
       <div style={grid2}>
-        <F label="이름" field="name" placeholder="홍길동" required />
-        <F label="휴대폰" field="phone" placeholder="010-0000-0000" />
-        <F label="이메일" field="email" type="email" placeholder="example@email.com" required />
-        <F label="지역" field="region" placeholder="서울, 경기..." />
+        {F({ label: "이름", field: "name", placeholder: "홍길동", required: true })}
+        {F({ label: "휴대폰", field: "phone", placeholder: "010-0000-0000" })}
+        {F({ label: "이메일", field: "email", type: "email", placeholder: "example@email.com", required: true })}
+        {F({ label: "지역", field: "region", placeholder: "서울, 경기..." })}
       </div>
 
       {/* ── 언어 ── */}
@@ -435,7 +435,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       {/* ── 파일/기타 ── */}
       <p style={sH}>파일 & 기타</p>
       <div style={grid2}>
-        <F label="이력서 URL" field="resumeUrl" placeholder="https://drive.google.com/..." />
+        {F({ label: "이력서 URL", field: "resumeUrl", placeholder: "https://drive.google.com/..." })}
         <div>
           <label style={labelSt}>가용 상태</label>
           <ClickSelect value={form.availabilityStatus} onChange={v => setF("availabilityStatus", v)}
@@ -497,9 +497,9 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                 </div>
                 <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>계좌정보</p>
                 <div style={{ ...grid3, marginBottom: 4 }}>
-                  <SA label="은행명" field="bankName" placeholder="국민은행" />
-                  <SA label="예금주" field="accountHolder" placeholder="홍길동" />
-                  <SA label="계좌번호" field="bankAccount" placeholder="123-456-789012" mono />
+                  {SA({ label: "은행명", field: "bankName", placeholder: "국민은행" })}
+                  {SA({ label: "예금주", field: "accountHolder", placeholder: "홍길동" })}
+                  {SA({ label: "계좌번호", field: "bankAccount", placeholder: "123-456-789012", mono: true })}
                 </div>
               </>
             )}
@@ -509,16 +509,16 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
               <>
                 <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>사업자 정보</p>
                 <div style={{ ...grid2, marginBottom: 12 }}>
-                  <SA label="사업자등록번호" field="businessNumber" placeholder="000-00-00000" mono />
-                  <SA label="상호" field="businessName" placeholder="(주)회사명" />
-                  <SA label="대표자명" field="businessOwner" placeholder="홍길동" />
-                  <SA label="세금계산서 이메일" field="taxInvoiceEmail" placeholder="tax@company.com" type="email" />
+                  {SA({ label: "사업자등록번호", field: "businessNumber", placeholder: "000-00-00000", mono: true })}
+                  {SA({ label: "상호", field: "businessName", placeholder: "(주)회사명" })}
+                  {SA({ label: "대표자명", field: "businessOwner", placeholder: "홍길동" })}
+                  {SA({ label: "세금계산서 이메일", field: "taxInvoiceEmail", placeholder: "tax@company.com", type: "email" })}
                 </div>
                 <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>계좌정보</p>
                 <div style={{ ...grid3, marginBottom: 4 }}>
-                  <SA label="은행명" field="bankName" placeholder="국민은행" />
-                  <SA label="예금주" field="accountHolder" placeholder="홍길동" />
-                  <SA label="계좌번호" field="bankAccount" placeholder="123-456-789012" mono />
+                  {SA({ label: "은행명", field: "bankName", placeholder: "국민은행" })}
+                  {SA({ label: "예금주", field: "accountHolder", placeholder: "홍길동" })}
+                  {SA({ label: "계좌번호", field: "bankAccount", placeholder: "123-456-789012", mono: true })}
                 </div>
               </>
             )}
@@ -528,9 +528,9 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
               <>
                 <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>PayPal 정보</p>
                 <div style={{ ...grid2, marginBottom: 12 }}>
-                  <SA label="PayPal 계정 이메일" field="paypalEmail" placeholder="paypal@email.com" type="email" />
-                  <SA label="영문이름 (Full Name)" field="englishName" placeholder="Hong Gil Dong" />
-                  <SA label="국가" field="country" placeholder="South Korea" />
+                  {SA({ label: "PayPal 계정 이메일", field: "paypalEmail", placeholder: "paypal@email.com", type: "email" })}
+                  {SA({ label: "영문이름 (Full Name)", field: "englishName", placeholder: "Hong Gil Dong" })}
+                  {SA({ label: "국가", field: "country", placeholder: "South Korea" })}
                   <div>
                     <label style={labelAmber}>통화</label>
                     <ClickSelect value={sf.currency} onChange={v => setSf("currency", v)}
@@ -538,7 +538,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                       options={[{ value: "", label: "선택 안 함" }, ...CURRENCIES.map(c => ({ value: c, label: c }))]} />
                   </div>
                 </div>
-                <SA label="송금 메모 (선택)" field="remittanceMemo" placeholder="프로젝트명 또는 메모" />
+                {SA({ label: "송금 메모 (선택)", field: "remittanceMemo", placeholder: "프로젝트명 또는 메모" })}
               </>
             )}
 
@@ -547,30 +547,30 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
               <>
                 <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>수취인 정보</p>
                 <div style={{ ...grid2, marginBottom: 12 }}>
-                  <SA label="영문이름 (Full Name)" field="englishName" placeholder="Hong Gil Dong" />
-                  <SA label="국가" field="country" placeholder="United States" />
+                  {SA({ label: "영문이름 (Full Name)", field: "englishName", placeholder: "Hong Gil Dong" })}
+                  {SA({ label: "국가", field: "country", placeholder: "United States" })}
                   <div>
                     <label style={labelAmber}>통화</label>
                     <ClickSelect value={sf.currency} onChange={v => setSf("currency", v)}
                       style={{ width: "100%" }} triggerStyle={{ ...inpAmber, width: "100%", boxSizing: "border-box" as const }}
                       options={[{ value: "", label: "선택 안 함" }, ...CURRENCIES.map(c => ({ value: c, label: c }))]} />
                   </div>
-                  <SA label="거주지 영문주소" field="addressEn" placeholder="123 Main St, City, State" />
+                  {SA({ label: "거주지 영문주소", field: "addressEn", placeholder: "123 Main St, City, State" })}
                 </div>
                 <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>해외 은행 정보</p>
                 <div style={{ ...grid2, marginBottom: 12 }}>
-                  <SA label="은행명(영문)" field="bankNameEn" placeholder="Bank of America" />
-                  <SA label="계좌번호" field="bankAccount" placeholder="Account Number" mono />
-                  <SA label="SWIFT Code" field="swiftCode" placeholder="AAAABBCC" mono />
-                  <SA label="Routing Number" field="routingNumber" placeholder="021000021" mono />
+                  {SA({ label: "은행명(영문)", field: "bankNameEn", placeholder: "Bank of America" })}
+                  {SA({ label: "계좌번호", field: "bankAccount", placeholder: "Account Number", mono: true })}
+                  {SA({ label: "SWIFT Code", field: "swiftCode", placeholder: "AAAABBCC", mono: true })}
+                  {SA({ label: "Routing Number", field: "routingNumber", placeholder: "021000021", mono: true })}
                 </div>
-                <SA label="IBAN (선택)" field="iban" placeholder="GB33BUKB20201555555555" mono />
+                {SA({ label: "IBAN (선택)", field: "iban", placeholder: "GB33BUKB20201555555555", mono: true })}
               </>
             )}
 
             {/* ── 기타 ── */}
             {isOther && (
-              <SA label="정산 방식 설명" field="settlementMemo" placeholder="지급 방식 및 기타 정보를 입력하세요" />
+              SA({ label: "정산 방식 설명", field: "settlementMemo", placeholder: "지급 방식 및 기타 정보를 입력하세요" })
             )}
 
             {/* ── 공통 추가 정보 ── */}
