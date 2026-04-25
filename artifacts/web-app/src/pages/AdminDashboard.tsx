@@ -3042,7 +3042,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["ID","이름 / 이메일","등급","언어쌍","전문분야","지역","대표 단가","평점","상태","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                    <tr>{["이름","언어쌍","학력","전문분야","등급","대표 단가","평점","지역","상태","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {translatorList.map(t => {
@@ -3059,18 +3059,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         <tr key={t.id} onClick={() => setTranslatorDetailModal({ userId: t.id, email: t.email })} style={{ cursor: "pointer" }}
                           onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                          <td style={{ ...tableTd, color: "#9ca3af", whiteSpace: "nowrap" }}>#{t.id}</td>
+                          {/* 이름 / 이메일 / 휴대폰 */}
                           <td style={{ ...tableTd, minWidth: 130 }}>
                             {t.name
                               ? <><span style={{ fontWeight: 700, fontSize: 13, color: "#111827" }}>{t.name}</span><br /><span style={{ color: "#6b7280", fontSize: 11 }}>{t.email}</span></>
                               : <span style={{ fontSize: 13, color: "#374151" }}>{t.email}</span>}
                             {t.phone && <div style={{ fontSize: 11, color: "#9ca3af" }}>{t.phone}</div>}
                           </td>
-                          <td style={{ ...tableTd, textAlign: "center" }}>
-                            {gc
-                              ? <span style={{ padding: "2px 9px", borderRadius: 10, background: gc.bg, color: gc.color, fontSize: 11, fontWeight: 800 }}>{t.grade}</span>
-                              : <span style={{ color: "#d1d5db" }}>-</span>}
-                          </td>
+                          {/* 언어쌍 */}
                           <td style={{ ...tableTd, fontSize: 12, color: "#374151", maxWidth: 160, whiteSpace: "normal" }}>
                             {t.languagePairs ? (
                               <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
@@ -3079,18 +3075,24 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                                 ))}
                               </div>
                             ) : <span style={{ color: "#d1d5db" }}>-</span>}
-                            {t.education && (
-                              <div style={{ marginTop: 3, fontSize: 11, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                🎓 {t.education}
-                              </div>
-                            )}
                           </td>
+                          {/* 학력 */}
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
+                            {t.education ? t.education : <span style={{ color: "#d1d5db" }}>-</span>}
+                          </td>
+                          {/* 전문분야 */}
                           <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", maxWidth: 140, whiteSpace: "normal" }}>
                             {t.specializations
                               ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden" }}>{t.specializations}</span>
                               : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>{t.region ?? "-"}</td>
+                          {/* 등급 */}
+                          <td style={{ ...tableTd, textAlign: "center" }}>
+                            {gc
+                              ? <span style={{ padding: "2px 9px", borderRadius: 10, background: gc.bg, color: gc.color, fontSize: 11, fontWeight: 800 }}>{t.grade}</span>
+                              : <span style={{ color: "#d1d5db" }}>-</span>}
+                          </td>
+                          {/* 대표 단가 */}
                           <td style={{ ...tableTd, fontSize: 12, textAlign: "right", whiteSpace: "nowrap" }}>
                             {t.ratePerWord != null
                               ? <span style={{ fontWeight: 700, color: "#059669" }}>{Number(t.ratePerWord).toLocaleString()}원<span style={{ fontWeight: 400, color: "#9ca3af" }}>/어절</span></span>
@@ -3098,14 +3100,19 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                                 ? <span style={{ fontWeight: 700, color: "#059669" }}>{Number(t.ratePerPage).toLocaleString()}원<span style={{ fontWeight: 400, color: "#9ca3af" }}>/pg</span></span>
                                 : <span style={{ color: "#d1d5db" }}>미설정</span>}
                           </td>
+                          {/* 평점 */}
                           <td style={{ ...tableTd, textAlign: "center" }}>
                             {t.rating != null ? <span style={{ fontWeight: 700, color: "#d97706" }}>★ {Number(t.rating).toFixed(1)}</span> : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
+                          {/* 지역 */}
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>{t.region ?? "-"}</td>
+                          {/* 상태 */}
                           <td style={{ ...tableTd, textAlign: "center", whiteSpace: "nowrap" }}>
                             <span style={{ padding: "2px 8px", borderRadius: 10, background: statusBg, color: statusColor, fontSize: 11, fontWeight: 700 }}>
                               {AVAILABILITY_LABEL[t.availabilityStatus ?? "available"] ?? t.availabilityStatus}
                             </span>
                           </td>
+                          {/* 등록일 */}
                           <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</td>
                         </tr>
                       );
