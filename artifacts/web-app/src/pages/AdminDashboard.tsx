@@ -291,6 +291,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [companySearchQuery, setCompanySearchQuery] = useState("");
   const [newContactDivisions, setNewContactDivisions] = useState<Division[]>([]);
   const [contactWarning, setContactWarning] = useState<{ message: string } | null>(null);
+  const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
+  const [deleteConfirmContact, setDeleteConfirmContact] = useState<{ id: number; name: string } | null>(null);
+  const [deletingContact, setDeletingContact] = useState<number | null>(null);
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [primaryMergeId, setPrimaryMergeId] = useState<number | null>(null);
+  const [merging, setMerging] = useState(false);
 
   // translators tab state
   const [translatorList, setTranslatorList] = useState<TranslatorListItem[]>([]);
@@ -528,6 +534,43 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       setToast("담당자가 등록되었습니다.");
     } catch { setToast("오류: 담당자 등록 실패"); }
     finally { setSavingNewContact(false); }
+  };
+
+  const handleDeleteContact = async (contactId: number) => {
+    setDeletingContact(contactId);
+    try {
+      const res = await fetch(api(`/api/admin/contacts/${contactId}`), {
+        method: "DELETE", headers: authHeaders,
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setDeleteConfirmContact(null);
+      setSelectedContactIds(prev => { const n = new Set(prev); n.delete(contactId); return n; });
+      await fetchContacts();
+      setToast("담당자가 삭제(비활성) 처리되었습니다.");
+    } catch { setToast("오류: 담당자 삭제 실패"); }
+    finally { setDeletingContact(null); }
+  };
+
+  const handleMergeContacts = async () => {
+    if (!primaryMergeId) { setToast("대표 담당자를 선택해주세요."); return; }
+    const mergeIds = Array.from(selectedContactIds).filter(id => id !== primaryMergeId);
+    setMerging(true);
+    try {
+      const res = await fetch(api("/api/admin/contacts/merge"), {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ primaryContactId: primaryMergeId, mergeContactIds: mergeIds }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setShowMergeModal(false);
+      setSelectedContactIds(new Set());
+      setPrimaryMergeId(null);
+      await fetchContacts();
+      setToast(`담당자 통합 완료: ${data.mergedNames?.join(", ")} → 대표 담당자로 통합됨`);
+    } catch { setToast("오류: 담당자 통합 실패"); }
+    finally { setMerging(false); }
   };
 
   const fetchTranslators = useCallback(async () => {
@@ -2901,6 +2944,23 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               {contactsLoading ? "검색 중..." : "검색"}
             </PrimaryBtn>
           </div>
+          {/* 선택 시 통합 툴바 */}
+          {selectedContactIds.size >= 2 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 12, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: "10px 16px", marginBottom: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "#1d4ed8" }}>{selectedContactIds.size}명 선택됨</span>
+              <button
+                onClick={() => { setShowMergeModal(true); setPrimaryMergeId(null); }}
+                style={{ fontSize: 13, fontWeight: 700, padding: "7px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>
+                선택 담당자 통합
+              </button>
+              <button
+                onClick={() => setSelectedContactIds(new Set())}
+                style={{ fontSize: 12, padding: "6px 12px", background: "transparent", color: "#6b7280", border: "1px solid #d1d5db", borderRadius: 7, cursor: "pointer" }}>
+                선택 해제
+              </button>
+            </div>
+          )}
+
           {contactsLoading ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
           ) : contacts.length === 0 ? (
@@ -2910,44 +2970,152 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
-                    <tr>{["ID","거래처","담당자명","부서/직책","휴대폰","이메일","역할","상태","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                    <tr>
+                      <th style={{ ...tableTh, width: 36 }}>
+                        <input type="checkbox"
+                          checked={selectedContactIds.size === contacts.length && contacts.length > 0}
+                          onChange={e => setSelectedContactIds(e.target.checked ? new Set(contacts.map(c => c.id)) : new Set())}
+                          title="전체 선택"
+                        />
+                      </th>
+                      {["ID","거래처","담당자명","부서/직책","휴대폰","이메일","역할","상태","등록일","작업"].map(h => <th key={h} style={tableTh}>{h}</th>)}
+                    </tr>
                   </thead>
                   <tbody>
-                    {contacts.map(c => (
-                      <tr key={c.id} onClick={() => setContactModal(c.id)} style={{ cursor: "pointer", opacity: (c as any).isActive !== false ? 1 : 0.6 }}
-                        onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
-                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                        <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
-                          <div>{c.companyName ?? "-"}</div>
-                          {c.divisionName && <div style={{ color: "#7c3aed", fontWeight: 600, fontSize: 11, marginTop: 1 }}>↳ {c.divisionName}</div>}
-                        </td>
-                        <td style={{ ...tableTd, fontWeight: 700, color: "#111827" }}>{c.name}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
-                          {[c.department, c.position].filter(Boolean).join(" / ") || "-"}
-                        </td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{(c as any).mobile ?? c.phone ?? "-"}</td>
-                        <td style={{ ...tableTd, color: "#2563eb", fontSize: 12 }}>{c.email ?? "-"}</td>
-                        <td style={{ ...tableTd }}>
-                          <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
-                            {(c as any).isPrimary && <span style={{ fontSize: 10, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>기본</span>}
-                            {(c as any).isQuoteContact && <span style={{ fontSize: 10, background: "#d1fae5", color: "#065f46", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>견적</span>}
-                            {(c as any).isBillingContact && <span style={{ fontSize: 10, background: "#ede9fe", color: "#5b21b6", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>청구</span>}
-                          </div>
-                        </td>
-                        <td style={{ ...tableTd, fontSize: 12 }}>
-                          <span style={{ background: (c as any).isActive !== false ? "#d1fae5" : "#f3f4f6", color: (c as any).isActive !== false ? "#065f46" : "#9ca3af", borderRadius: 4, padding: "2px 7px", fontSize: 11, fontWeight: 600 }}>
-                            {(c as any).isActive !== false ? "활성" : "비활성"}
-                          </span>
-                        </td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</td>
-                      </tr>
-                    ))}
+                    {contacts.map(c => {
+                      const isSelected = selectedContactIds.has(c.id);
+                      return (
+                        <tr key={c.id}
+                          style={{ cursor: "pointer", opacity: (c as any).isActive !== false ? 1 : 0.6, background: isSelected ? "#eff6ff" : undefined }}
+                          onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = "#f9fafb"; }}
+                          onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}>
+                          <td style={{ ...tableTd, textAlign: "center" }} onClick={e => e.stopPropagation()}>
+                            <input type="checkbox"
+                              checked={isSelected}
+                              onChange={e => {
+                                e.stopPropagation();
+                                setSelectedContactIds(prev => {
+                                  const n = new Set(prev);
+                                  e.target.checked ? n.add(c.id) : n.delete(c.id);
+                                  return n;
+                                });
+                              }}
+                            />
+                          </td>
+                          <td style={{ ...tableTd, color: "#9ca3af" }} onClick={() => setContactModal(c.id)}>#{c.id}</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }} onClick={() => setContactModal(c.id)}>
+                            <div>{c.companyName ?? "-"}</div>
+                            {c.divisionName && <div style={{ color: "#7c3aed", fontWeight: 600, fontSize: 11, marginTop: 1 }}>↳ {c.divisionName}</div>}
+                          </td>
+                          <td style={{ ...tableTd, fontWeight: 700, color: "#111827" }} onClick={() => setContactModal(c.id)}>{c.name}</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }} onClick={() => setContactModal(c.id)}>
+                            {[c.department, c.position].filter(Boolean).join(" / ") || "-"}
+                          </td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#374151" }} onClick={() => setContactModal(c.id)}>{(c as any).mobile ?? c.phone ?? "-"}</td>
+                          <td style={{ ...tableTd, color: "#2563eb", fontSize: 12 }} onClick={() => setContactModal(c.id)}>{c.email ?? "-"}</td>
+                          <td style={{ ...tableTd }} onClick={() => setContactModal(c.id)}>
+                            <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
+                              {(c as any).isPrimary && <span style={{ fontSize: 10, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>기본</span>}
+                              {(c as any).isQuoteContact && <span style={{ fontSize: 10, background: "#d1fae5", color: "#065f46", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>견적</span>}
+                              {(c as any).isBillingContact && <span style={{ fontSize: 10, background: "#ede9fe", color: "#5b21b6", borderRadius: 4, padding: "1px 5px", fontWeight: 700 }}>청구</span>}
+                            </div>
+                          </td>
+                          <td style={{ ...tableTd, fontSize: 12 }} onClick={() => setContactModal(c.id)}>
+                            <span style={{ background: (c as any).isActive !== false ? "#d1fae5" : "#f3f4f6", color: (c as any).isActive !== false ? "#065f46" : "#9ca3af", borderRadius: 4, padding: "2px 7px", fontSize: 11, fontWeight: 600 }}>
+                              {(c as any).isActive !== false ? "활성" : "비활성"}
+                            </span>
+                          </td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }} onClick={() => setContactModal(c.id)}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</td>
+                          <td style={{ ...tableTd }} onClick={e => e.stopPropagation()}>
+                            {(c as any).isActive !== false && (
+                              <button
+                                onClick={() => setDeleteConfirmContact({ id: c.id, name: c.name })}
+                                disabled={deletingContact === c.id}
+                                style={{ fontSize: 11, padding: "3px 9px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 5, cursor: "pointer", fontWeight: 600 }}>
+                                삭제
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
             </Card>
           )}
+
+          {/* ── 삭제 확인 모달 ── */}
+          {deleteConfirmContact && (
+            <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <div style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 400, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+                <h3 style={{ margin: "0 0 10px", fontSize: 16, fontWeight: 800, color: "#111827" }}>담당자 삭제</h3>
+                <p style={{ margin: "0 0 6px", fontSize: 14, color: "#374151" }}>
+                  <strong>{deleteConfirmContact.name}</strong> 담당자를 삭제하시겠습니까?
+                </p>
+                <p style={{ margin: "0 0 20px", fontSize: 12, color: "#9ca3af" }}>삭제된 담당자는 목록에서 숨김 처리됩니다.</p>
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                  <button onClick={() => setDeleteConfirmContact(null)} disabled={!!deletingContact}
+                    style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
+                    취소
+                  </button>
+                  <button onClick={() => handleDeleteContact(deleteConfirmContact.id)} disabled={!!deletingContact}
+                    style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: "#dc2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                    {deletingContact ? "삭제 중..." : "삭제"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── 담당자 통합 모달 ── */}
+          {showMergeModal && (() => {
+            const selectedContacts = contacts.filter(c => selectedContactIds.has(c.id));
+            return (
+              <DraggableModal title="중복 담당자 통합" onClose={() => setShowMergeModal(false)} width={680} zIndex={400} bodyPadding="20px 28px">
+                <p style={{ margin: "0 0 6px", fontSize: 13, color: "#374151" }}>대표 담당자를 선택하세요.</p>
+                <p style={{ margin: "0 0 16px", fontSize: 12, color: "#9ca3af" }}>통합 후 나머지 담당자는 비활성 처리됩니다. 기존 프로젝트 이력은 대표 담당자로 연결됩니다.</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+                  {selectedContacts.map(c => (
+                    <label key={c.id} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 10, border: `2px solid ${primaryMergeId === c.id ? "#2563eb" : "#e5e7eb"}`, background: primaryMergeId === c.id ? "#eff6ff" : "#fff", cursor: "pointer" }}>
+                      <input type="radio" name="primaryContact" value={c.id}
+                        checked={primaryMergeId === c.id}
+                        onChange={() => setPrimaryMergeId(c.id)}
+                        style={{ marginTop: 2, accentColor: "#2563eb" }} />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+                          <span style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>{c.name}</span>
+                          {primaryMergeId === c.id && <span style={{ fontSize: 10, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>대표</span>}
+                          {(c as any).isPrimary && <span style={{ fontSize: 10, background: "#d1fae5", color: "#065f46", borderRadius: 4, padding: "1px 5px", fontWeight: 600 }}>기본담당자</span>}
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 16px", fontSize: 12, color: "#6b7280" }}>
+                          <span>거래처: {c.companyName ?? "-"}</span>
+                          <span>부서/직책: {[c.department, c.position].filter(Boolean).join(" / ") || "-"}</span>
+                          <span>휴대폰: {(c as any).mobile ?? c.phone ?? "-"}</span>
+                          <span>이메일: {c.email ?? "-"}</span>
+                          <span>등록일: {new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
+                          <span>ID: #{c.id}</span>
+                        </div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+                {!primaryMergeId && (
+                  <p style={{ margin: "0 0 12px", fontSize: 12, color: "#dc2626", fontWeight: 600 }}>대표 담당자를 선택해주세요.</p>
+                )}
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                  <button onClick={() => setShowMergeModal(false)}
+                    style={{ padding: "10px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
+                    취소
+                  </button>
+                  <button onClick={handleMergeContacts} disabled={!primaryMergeId || merging}
+                    style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: primaryMergeId ? "#2563eb" : "#93c5fd", color: "#fff", fontSize: 13, fontWeight: 700, cursor: primaryMergeId ? "pointer" : "not-allowed" }}>
+                    {merging ? "통합 중..." : `${selectedContactIds.size}명 통합`}
+                  </button>
+                </div>
+              </DraggableModal>
+            );
+          })()}
         </Section>
       )}
 

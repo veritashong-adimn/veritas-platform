@@ -873,28 +873,90 @@ router.patch("/admin/company-contacts/:id", ...adminGuard, async (req, res) => {
   catch (err) { req.log.error({ err }, "Contacts: failed to update"); res.status(500).json({ error: "담당자 수정 실패." }); }
 });
 
-// ─── 담당자 삭제 (soft delete) ───────────────────────────────────────────────
+// ─── 담당자 삭제 (항상 soft delete) ─────────────────────────────────────────
 async function deleteContact(req: any, res: any, contactId: number) {
   const [existing] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId));
   if (!existing) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
 
-  const hasProjects = await db.select({ id: projectsTable.id }).from(projectsTable)
-    .where(eq(projectsTable.contactId, contactId)).limit(1);
+  await db.update(contactsTable)
+    .set({ isActive: false, updatedAt: new Date() })
+    .where(eq(contactsTable.id, contactId));
 
-  if (hasProjects.length > 0) {
-    // 프로젝트 연결 이력 있으면 비활성 처리
-    await db.update(contactsTable).set({ isActive: false, updatedAt: new Date() })
-      .where(eq(contactsTable.id, contactId));
-    await logEvent("company", existing.companyId, "company_contact_deleted", undefined, (req as any).user?.id,
-      JSON.stringify({ contactId, name: existing.name, reason: "soft_delete_has_projects" }));
-    res.json({ ok: true, softDeleted: true });
-  } else {
-    await db.delete(contactsTable).where(eq(contactsTable.id, contactId));
-    await logEvent("company", existing.companyId, "company_contact_deleted", undefined, (req as any).user?.id,
-      JSON.stringify({ contactId, name: existing.name, reason: "hard_delete" }));
-    res.json({ ok: true, softDeleted: false });
-  }
+  await logEvent("company", existing.companyId, "company_contact_deleted", undefined, (req as any).user?.id,
+    JSON.stringify({ contactId, name: existing.name, companyId: existing.companyId }));
+
+  res.json({ ok: true, softDeleted: true });
 }
+
+// ─── 담당자 통합 ──────────────────────────────────────────────────────────────
+router.post("/admin/contacts/merge", ...adminGuard, requirePermission("contact.update"), async (req, res) => {
+  const { primaryContactId, mergeContactIds } = req.body as {
+    primaryContactId?: number;
+    mergeContactIds?: number[];
+  };
+
+  if (!primaryContactId || !Array.isArray(mergeContactIds) || mergeContactIds.length === 0) {
+    res.status(400).json({ error: "primaryContactId와 mergeContactIds(배열)가 필요합니다." });
+    return;
+  }
+  if (mergeContactIds.includes(primaryContactId)) {
+    res.status(400).json({ error: "대표 담당자가 통합 대상에 포함될 수 없습니다." });
+    return;
+  }
+
+  try {
+    const allIds = [primaryContactId, ...mergeContactIds];
+    const rows = await db
+      .select({ id: contactsTable.id, companyId: contactsTable.companyId, name: contactsTable.name })
+      .from(contactsTable)
+      .where(inArray(contactsTable.id, allIds));
+
+    if (rows.length !== allIds.length) {
+      res.status(404).json({ error: "존재하지 않는 담당자가 포함되어 있습니다." });
+      return;
+    }
+
+    const companyIds = [...new Set(rows.map(r => r.companyId))];
+    if (companyIds.length > 1) {
+      res.status(400).json({ error: "통합할 담당자들이 같은 거래처에 속해야 합니다." });
+      return;
+    }
+
+    const primaryRow = rows.find(r => r.id === primaryContactId)!;
+    const companyId = primaryRow.companyId;
+
+    await db.transaction(async (tx) => {
+      // 연결 테이블(projects.contactId) → primaryContactId로 변경
+      if (mergeContactIds.length > 0) {
+        await tx.update(projectsTable)
+          .set({ contactId: primaryContactId })
+          .where(inArray(projectsTable.contactId, mergeContactIds));
+      }
+
+      // 통합 대상 담당자 비활성화
+      await tx.update(contactsTable)
+        .set({ isActive: false, updatedAt: new Date() })
+        .where(inArray(contactsTable.id, mergeContactIds));
+    });
+
+    const mergedNames = rows.filter(r => mergeContactIds.includes(r.id)).map(r => r.name);
+
+    await logEvent("company", companyId, "company_contact_merged", undefined, (req as any).user?.id,
+      JSON.stringify({
+        primaryContactId,
+        mergedContactIds: mergeContactIds,
+        mergedNames,
+        primaryName: primaryRow.name,
+        companyId,
+        reason: "duplicate_contact_merge",
+      }));
+
+    res.json({ ok: true, primaryContactId, mergedContactIds: mergeContactIds, mergedNames });
+  } catch (err: any) {
+    console.error("[Admin] 담당자 통합 실패:", err);
+    res.status(500).json({ error: "담당자 통합에 실패했습니다.", detail: err?.message });
+  }
+});
 
 router.delete("/admin/contacts/:id", ...adminGuard, async (req, res) => {
   const contactId = Number(req.params.id);
