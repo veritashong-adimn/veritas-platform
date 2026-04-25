@@ -38,7 +38,6 @@ const UNIT_OPTIONS = [
   { value: "page",   label: "페이지" },
   { value: "hour",   label: "시간" },
 ];
-const COMMON_SPECIALIZATIONS = ["IT", "법률", "의료/제약", "금융", "특허", "문학/출판", "기술/공학", "마케팅", "방송/미디어", "게임"];
 const CURRENCIES = ["KRW", "USD", "EUR", "JPY", "GBP", "CAD", "AUD", "CNY", "HKD", "SGD"];
 const FEE_PAYER_OPTIONS = [
   { value: "sender",    label: "송금인 부담 (당사)" },
@@ -70,14 +69,13 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [availableProducts, setAvailableProducts] = useState<Product[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<Array<{ productId: number; unitPrice: string }>>([]);
-  const [selectedSpecs, setSelectedSpecs] = useState<string[]>([]);
-  const [customSpec, setCustomSpec] = useState("");
   const [rates, setRates] = useState<RateEntry[]>([]);
   const [rateErrors, setRateErrors] = useState<string[]>([]);
   const [form, setForm] = useState({
     email: "", name: "", phone: "", region: "",
-    languagePairs: "", languageLevel: "", grade: "", bio: "",
-    resumeUrl: "", availabilityStatus: "available",
+    languagePairs: "", languageLevel: "",
+    education: "", major: "", graduationYear: "", specializations: "", grade: "", rating: "",
+    bio: "", resumeUrl: "", portfolioUrl: "", availabilityStatus: "available",
   });
   const [createdInvite, setCreatedInvite] = useState<{ email: string; inviteToken: string } | null>(null);
   const [sf, setSF] = useState(emptySensitive());
@@ -98,8 +96,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   const setSf = (key: keyof ReturnType<typeof emptySensitive>, val: string | boolean) =>
     setSF(p => ({ ...p, [key]: val }));
 
-  const toggleSpec = (s: string) =>
-    setSelectedSpecs(p => p.includes(s) ? p.filter(x => x !== s) : [...p, s]);
   const addProduct = (productId: number) => {
     if (selectedProducts.find(p => p.productId === productId)) return;
     setSelectedProducts(p => [...p, { productId, unitPrice: "" }]);
@@ -121,11 +117,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
     if (!validate()) return;
     setSaving(true);
     try {
-      const specializations = [
-        ...selectedSpecs,
-        ...(customSpec.trim() ? customSpec.split(",").map(s => s.trim()).filter(Boolean) : []),
-      ].join(", ") || undefined;
-
       // 단가 중복 검사 (클라이언트)
       const seen = new Set<string>();
       const rErr: string[] = rates.map(_ => "");
@@ -145,9 +136,15 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           region: form.region.trim() || undefined,
           languagePairs: form.languagePairs.trim() || undefined,
           languageLevel: form.languageLevel || undefined,
-          specializations, grade: form.grade || undefined,
+          specializations: form.specializations.trim() || undefined,
+          education: form.education.trim() || undefined,
+          major: form.major.trim() || undefined,
+          graduationYear: form.graduationYear ? Number(form.graduationYear) : undefined,
+          rating: form.rating ? Number(form.rating) : undefined,
+          grade: form.grade || undefined,
           bio: form.bio.trim() || undefined,
           resumeUrl: form.resumeUrl.trim() || undefined,
+          portfolioUrl: form.portfolioUrl.trim() || undefined,
           availabilityStatus: form.availabilityStatus,
         }),
       });
@@ -299,11 +296,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         </div>
         {F({ label: "이메일", field: "email", type: "email", placeholder: "example@email.com", required: true })}
         {F({ label: "지역", field: "region", placeholder: "서울, 경기..." })}
-      </div>
-
-      {/* ── 언어 ── */}
-      <p style={sH}>언어</p>
-      <div style={grid2}>
         <div>
           <label style={labelSt}>언어쌍</label>
           <input value={form.languagePairs} onChange={e => setF("languagePairs", e.target.value)}
@@ -318,27 +310,39 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         </div>
       </div>
 
-      {/* ── 전문분야 ── */}
-      <p style={sH}>전문분야</p>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-        {COMMON_SPECIALIZATIONS.map(s => (
-          <button key={s} onClick={() => toggleSpec(s)} style={{
-            padding: "5px 12px", borderRadius: 20, fontSize: 12, cursor: "pointer",
-            border: selectedSpecs.includes(s) ? "1.5px solid #2563eb" : "1.5px solid #e5e7eb",
-            background: selectedSpecs.includes(s) ? "#eff6ff" : "#f9fafb",
-            color: selectedSpecs.includes(s) ? "#1d4ed8" : "#374151",
-            fontWeight: selectedSpecs.includes(s) ? 700 : 400,
-          }}>{s}</button>
-        ))}
+      {/* ── 프로필 편집 ── */}
+      <p style={sH}>프로필 편집</p>
+      <div style={grid2}>
+        {F({ label: "학력", field: "education", placeholder: "예: 서울대학교" })}
+        {F({ label: "전공", field: "major", placeholder: "예: 영어영문학" })}
+        {F({ label: "졸업연도", field: "graduationYear", type: "number", placeholder: "예: 2018" })}
+        {F({ label: "전문분야", field: "specializations", placeholder: "예: 법률, IT, 의학" })}
+        <div>
+          <label style={labelSt}>등급</label>
+          <ClickSelect value={form.grade} onChange={v => setF("grade", v)}
+            style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8 }}
+            options={[{ value: "", label: "등급 없음" }, ...GRADES.map(g => ({ value: g, label: `${g}등급` }))]} />
+        </div>
+        {F({ label: "평점 (1-5)", field: "rating", type: "number", placeholder: "예: 4.5" })}
+        <div>
+          <label style={labelSt}>가용 상태</label>
+          <ClickSelect value={form.availabilityStatus} onChange={v => setF("availabilityStatus", v)}
+            style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8 }}
+            options={[
+              { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
+            ]} />
+        </div>
+        {F({ label: "이력서 URL", field: "resumeUrl", placeholder: "https://drive.google.com/..." })}
+        {F({ label: "포트폴리오 URL", field: "portfolioUrl", placeholder: "https://..." })}
       </div>
-      <div>
-        <label style={labelSt}>직접 입력 (쉼표 구분)</label>
-        <input value={customSpec} onChange={e => setCustomSpec(e.target.value)}
-          placeholder="예: 특허, 환경, 스포츠" style={inputStyle} />
+      <div style={{ marginTop: 8 }}>
+        <label style={labelSt}>상세정보 (경력·특이사항)</label>
+        <textarea value={form.bio} onChange={e => setF("bio", e.target.value)} rows={3}
+          placeholder="출신학교, 경력 요약, 전문분야, 통역/번역 특징, 주의사항 등" style={{ ...inputStyle, resize: "vertical" }} />
       </div>
 
-      {/* ── 가능 상품 & 단가 ── */}
-      <p style={sH}>가능 상품 & 단가</p>
+      {/* ── 수행 가능 상품 ── */}
+      <p style={sH}>수행 가능 상품</p>
       <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
         <ClickSelect value="" onChange={v => { if (v) addProduct(Number(v)); }}
           style={{ flex: 1 }} triggerStyle={{ fontSize: 13, padding: "9px 12px", borderRadius: 8, width: "100%" }}
@@ -369,15 +373,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           })}
         </div>
       )}
-
-      {/* ── 등급 ── */}
-      <p style={sH}>등급</p>
-      <div style={{ maxWidth: 200 }}>
-        <label style={labelSt}>등급</label>
-        <ClickSelect value={form.grade} onChange={v => setF("grade", v)}
-          style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8 }}
-          options={[{ value: "", label: "등급 없음" }, ...GRADES.map(g => ({ value: g, label: `${g}등급` }))]} />
-      </div>
+      {selectedProducts.length === 0 && <p style={{ color: "#9ca3af", fontSize: 13, padding: "2px 0 6px" }}>수행 가능한 상품이 없습니다.</p>}
 
       {/* ── 단가 등록 ── */}
       <p style={sH}>단가 등록</p>
@@ -445,25 +441,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         style={{ fontSize: 13, fontWeight: 600, padding: "8px 16px", borderRadius: 8, border: "1.5px dashed #9ca3af", background: "#f9fafb", color: "#374151", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
         + 단가 추가
       </button>
-
-      {/* ── 파일/기타 ── */}
-      <p style={sH}>파일 & 기타</p>
-      <div style={grid2}>
-        {F({ label: "이력서 URL", field: "resumeUrl", placeholder: "https://drive.google.com/..." })}
-        <div>
-          <label style={labelSt}>가용 상태</label>
-          <ClickSelect value={form.availabilityStatus} onChange={v => setF("availabilityStatus", v)}
-            style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8 }}
-            options={[
-              { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
-            ]} />
-        </div>
-      </div>
-      <div style={{ marginTop: 10 }}>
-        <label style={labelSt}>상세정보</label>
-        <textarea value={form.bio} onChange={e => setF("bio", e.target.value)} rows={3}
-          placeholder="출신학교, 경력 요약, 전문분야, 통역/번역 특징, 주의사항 등을 입력" style={{ ...inputStyle, resize: "vertical" }} />
-      </div>
 
       {/* ── 정산/지급 정보 (권한자만) ── */}
       {hasPerm("translator.sensitive") && (

@@ -484,6 +484,9 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           {/* ── 프로필 편집 ── */}
           <p style={sH}>프로필 편집</p>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", marginBottom: 12 }}>
+            <F label="학력" field="education" placeholder="예: 서울대학교" />
+            <F label="전공" field="major" placeholder="예: 영어영문학" />
+            <F label="졸업연도" field="graduationYear" type="number" placeholder="예: 2018" />
             <F label="전문분야" field="specializations" placeholder="예: 법률, IT, 의학" />
             <div>
               <label style={labelSt}>등급</label>
@@ -491,9 +494,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
                 options={[{ value: "", label: "등급 없음" }, ...GRADE_OPTIONS.map(g => ({ value: g, label: `${g}등급` }))]} />
             </div>
-            <F label="학력" field="education" placeholder="예: 서울대학교" />
-            <F label="전공" field="major" placeholder="예: 영어영문학" />
-            <F label="졸업연도" field="graduationYear" type="number" placeholder="예: 2018" />
             <F label="평점 (1-5)" field="rating" type="number" placeholder="예: 4.5" />
             <div>
               <label style={labelSt}>가용 상태</label>

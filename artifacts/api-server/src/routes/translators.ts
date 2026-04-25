@@ -105,6 +105,7 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
   const {
     email, name, phone, region,
     languagePairs, languageLevel, specializations,
+    education, major, graduationYear, rating,
     grade, bio, ratePerWord, ratePerPage, unitType, unitPrice,
     resumeUrl, portfolioUrl, availabilityStatus,
   } = req.body;
@@ -127,6 +128,9 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
       phone: phone?.trim() || null, region: region?.trim() || null,
       languagePairs: languagePairs?.trim() || null, languageLevel: languageLevel || null,
       specializations: specializations?.trim() || null,
+      education: education?.trim() || null, major: major?.trim() || null,
+      graduationYear: graduationYear ? Number(graduationYear) : null,
+      rating: rating ? Number(rating) : null,
       grade: grade || null, bio: bio?.trim() || null,
       ratePerWord: ratePerWord ? Number(ratePerWord) : null,
       ratePerPage: ratePerPage ? Number(ratePerPage) : null,
