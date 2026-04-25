@@ -55,12 +55,15 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [rateForm, setRateForm] = useState({ workType: "번역", unit: "eojeol", rate: "", memo: "" });
   const [addingRate, setAddingRate] = useState(false);
   const [showSensitive, setShowSensitive] = useState(false);
+  const [resumeFile, setResumeFile] = useState<File | null>(null);
+  const [resumeUploading, setResumeUploading] = useState(false);
+  const [resumeDeleting, setResumeDeleting] = useState(false);
 
   const [form, setForm] = useState({
     phone: "",
     languagePairs: "", languageLevel: "", specializations: "", education: "", major: "",
     graduationYear: "", region: "", grade: "", rating: "", availabilityStatus: "available",
-    bio: "", resumeUrl: "", portfolioUrl: "",
+    bio: "",
   });
 
   const authH = { Authorization: `Bearer ${token}` };
@@ -107,7 +110,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           rating: p?.rating ? String(p.rating) : "",
           availabilityStatus: p?.availabilityStatus ?? "available",
           bio: p?.bio ?? "",
-          resumeUrl: p?.resumeUrl ?? "", portfolioUrl: p?.portfolioUrl ?? "",
         });
       }
       if (nRes.ok) setNotes(Array.isArray(nData) ? nData : []);
@@ -150,8 +152,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           rating: form.rating ? Number(form.rating) : null,
           grade: form.grade || null,
           languageLevel: form.languageLevel || null,
-          resumeUrl: form.resumeUrl || null,
-          portfolioUrl: form.portfolioUrl || null,
           emails: validated.map(e => ({ email: e.email.trim().toLowerCase(), isPrimary: e.isPrimary })),
         }),
       });
@@ -172,8 +172,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         rating: data.rating ? String(data.rating) : "",
         availabilityStatus: data.availabilityStatus ?? "available",
         bio: data.bio ?? "",
-        resumeUrl: data.resumeUrl ?? "",
-        portfolioUrl: data.portfolioUrl ?? "",
       }));
       // 대표 이메일 변경 시 userInfo 갱신
       const newPrimary = validated.find(e => e.isPrimary)?.email.trim().toLowerCase() ?? "";
@@ -481,15 +479,83 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
                 ]} />
             </div>
-            <div>
-              <label style={labelSt}>이력서 URL</label>
-              <input type="text" value={form.resumeUrl} onChange={e => setForm(p => ({ ...p, resumeUrl: e.target.value }))}
-                placeholder="https://..." style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-            </div>
-            <div>
-              <label style={labelSt}>포트폴리오 URL</label>
-              <input type="text" value={form.portfolioUrl} onChange={e => setForm(p => ({ ...p, portfolioUrl: e.target.value }))}
-                placeholder="https://..." style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={labelSt}>이력서 파일</label>
+              {profile?.resumeUrl ? (
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 12, color: "#374151", background: "#f3f4f6", borderRadius: 6, padding: "4px 8px" }}>
+                    📄 이력서 등록됨
+                  </span>
+                  <button
+                    type="button"
+                    disabled={resumeUploading || resumeDeleting}
+                    onClick={async () => {
+                      try {
+                        const r = await fetch(api(`/api/admin/translators/${userId}/resume-url`), { headers: authH });
+                        const d = await r.json();
+                        if (r.ok) window.open(d.downloadUrl, "_blank");
+                        else onToast(`오류: ${d.error}`);
+                      } catch { onToast("오류: 다운로드 URL 생성 실패"); }
+                    }}
+                    style={{ fontSize: 12, padding: "4px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151" }}>
+                    다운로드
+                  </button>
+                  <button
+                    type="button"
+                    disabled={resumeDeleting || resumeUploading}
+                    onClick={async () => {
+                      if (!window.confirm("이력서를 삭제하시겠습니까?")) return;
+                      setResumeDeleting(true);
+                      try {
+                        const r = await fetch(api(`/api/admin/translators/${userId}/resume`), { method: "DELETE", headers: authH });
+                        if (r.ok) { setProfile(p => p ? { ...p, resumeUrl: null } : p); onToast("이력서가 삭제되었습니다."); }
+                        else { const d = await r.json(); onToast(`오류: ${d.error}`); }
+                      } catch { onToast("오류: 이력서 삭제 실패"); }
+                      finally { setResumeDeleting(false); }
+                    }}
+                    style={{ fontSize: 12, padding: "4px 10px", borderRadius: 6, border: "1px solid #fca5a5", background: "#fff5f5", cursor: "pointer", color: "#b91c1c" }}>
+                    {resumeDeleting ? "삭제 중..." : "삭제"}
+                  </button>
+                </div>
+              ) : (
+                <span style={{ fontSize: 12, color: "#9ca3af" }}>이력서 없음</span>
+              )}
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+                <input
+                  type="file"
+                  accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  onChange={e => setResumeFile(e.target.files?.[0] ?? null)}
+                  style={{ fontSize: 12, flex: 1, minWidth: 0 }}
+                />
+                <button
+                  type="button"
+                  disabled={!resumeFile || resumeUploading}
+                  onClick={async () => {
+                    if (!resumeFile) return;
+                    setResumeUploading(true);
+                    try {
+                      const fd = new FormData();
+                      fd.append("file", resumeFile);
+                      const r = await fetch(api(`/api/admin/translators/${userId}/resume-upload`), {
+                        method: "POST",
+                        headers: { Authorization: `Bearer ${token}` },
+                        body: fd,
+                      });
+                      const d = await r.json();
+                      if (r.ok) {
+                        setProfile(p => p ? { ...p, resumeUrl: d.resumeUrl } : p);
+                        setResumeFile(null);
+                        onToast("이력서가 업로드되었습니다.");
+                      } else {
+                        onToast(`오류: ${d.error}`);
+                      }
+                    } catch { onToast("오류: 이력서 업로드 실패"); }
+                    finally { setResumeUploading(false); }
+                  }}
+                  style={{ fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid #6366f1", background: resumeFile ? "#6366f1" : "#e0e0e0", color: resumeFile ? "#fff" : "#999", cursor: resumeFile ? "pointer" : "not-allowed", whiteSpace: "nowrap" }}>
+                  {resumeUploading ? "업로드 중..." : "업로드"}
+                </button>
+              </div>
             </div>
           </div>
           <div style={{ marginBottom: 12 }}>

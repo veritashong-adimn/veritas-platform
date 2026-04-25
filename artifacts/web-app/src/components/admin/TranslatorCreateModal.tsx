@@ -73,7 +73,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
     email: "", name: "", phone: "", region: "",
     languagePairs: "", languageLevel: "",
     education: "", major: "", graduationYear: "", specializations: "", grade: "", rating: "",
-    bio: "", resumeUrl: "", portfolioUrl: "", availabilityStatus: "available",
+    bio: "", availabilityStatus: "available",
   });
   const [createdInvite, setCreatedInvite] = useState<{ email: string; inviteToken: string } | null>(null);
   const [sf, setSF] = useState(emptySensitive());
@@ -126,8 +126,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           rating: form.rating ? Number(form.rating) : undefined,
           grade: form.grade || undefined,
           bio: form.bio.trim() || undefined,
-          resumeUrl: form.resumeUrl.trim() || undefined,
-          portfolioUrl: form.portfolioUrl.trim() || undefined,
           availabilityStatus: form.availabilityStatus,
         }),
       });
@@ -305,8 +303,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
               { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
             ]} />
         </div>
-        {F({ label: "이력서 URL", field: "resumeUrl", placeholder: "https://drive.google.com/..." })}
-        {F({ label: "포트폴리오 URL", field: "portfolioUrl", placeholder: "https://..." })}
       </div>
       <div style={{ marginTop: 8 }}>
         <label style={labelSt}>상세정보 (경력·특이사항)</label>

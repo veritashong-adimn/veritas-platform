@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
+import multer from "multer";
 import {
   db, usersTable, translatorProfilesTable, translatorRatesTable,
   translatorProductsTable, productsTable, translatorSensitiveTable,
@@ -9,6 +10,18 @@ import {
 import { eq, and, ilike, or, sql, desc, gte, lte, inArray } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { encrypt, decrypt, maskResidentNumber } from "../lib/encrypt";
+import {
+  uploadResumeToGCS, deleteResumeFromGCS, getResumeDownloadUrl, isAllowedMime,
+} from "../lib/gcsResume";
+
+const resumeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (isAllowedMime(file.mimetype)) cb(null, true);
+    else cb(new Error("PDF, DOC, DOCX 파일만 업로드 가능합니다."));
+  },
+});
 
 function generateInviteToken(): string {
   return randomBytes(32).toString("hex");
@@ -263,7 +276,6 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
   const {
     languagePairs, languageLevel, specializations, education, major,
     graduationYear, phone, region, grade, rating, availabilityStatus, bio,
-    resumeUrl, portfolioUrl,
     emails,
   } = req.body;
 
@@ -286,8 +298,6 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
       rating: (rating != null && rating !== "") ? Number(rating) : null,
       availabilityStatus: availabilityStatus ?? "available",
       bio: bio?.trim() || null,
-      resumeUrl: resumeUrl?.trim() || null,
-      portfolioUrl: portfolioUrl?.trim() || null,
       updatedAt: new Date(),
     };
 
@@ -344,6 +354,108 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Translators: failed to update profile");
     res.status(500).json({ error: "번역사 프로필 저장 실패." });
+  }
+});
+
+// ─── 이력서 파일 업로드 ───────────────────────────────────────────────────────
+router.post(
+  "/admin/translators/:id/resume-upload",
+  ...adminGuard,
+  resumeUpload.single("file"),
+  async (req, res) => {
+    const userId = Number(req.params.id);
+    if (isNaN(userId) || userId <= 0) {
+      res.status(400).json({ error: "유효하지 않은 user id." }); return;
+    }
+    if (!req.file) {
+      res.status(400).json({ error: "파일을 첨부해주세요. (필드명: file)" }); return;
+    }
+
+    try {
+      const [existing] = await db
+        .select({ resumeUrl: translatorProfilesTable.resumeUrl })
+        .from(translatorProfilesTable)
+        .where(eq(translatorProfilesTable.userId, userId));
+
+      if (existing?.resumeUrl) {
+        await deleteResumeFromGCS(existing.resumeUrl).catch(() => {});
+      }
+
+      const storedPath = await uploadResumeToGCS(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+      );
+
+      const existingProfile = await db
+        .select({ id: translatorProfilesTable.id })
+        .from(translatorProfilesTable)
+        .where(eq(translatorProfilesTable.userId, userId));
+
+      let profile;
+      if (existingProfile.length === 0) {
+        [profile] = await db.insert(translatorProfilesTable)
+          .values({ userId, resumeUrl: storedPath })
+          .returning();
+      } else {
+        [profile] = await db.update(translatorProfilesTable)
+          .set({ resumeUrl: storedPath, updatedAt: new Date() })
+          .where(eq(translatorProfilesTable.userId, userId))
+          .returning();
+      }
+
+      req.log.info({ userId, storedPath }, "Resume uploaded");
+      res.json({ resumeUrl: storedPath, fileName: req.file.originalname });
+    } catch (err) {
+      req.log.error({ err }, "Resume upload failed");
+      res.status(500).json({ error: "이력서 업로드에 실패했습니다." });
+    }
+  },
+);
+
+// ─── 이력서 다운로드 URL 발급 ─────────────────────────────────────────────────
+router.get("/admin/translators/:id/resume-url", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+  try {
+    const [profile] = await db
+      .select({ resumeUrl: translatorProfilesTable.resumeUrl })
+      .from(translatorProfilesTable)
+      .where(eq(translatorProfilesTable.userId, userId));
+    if (!profile?.resumeUrl) {
+      res.status(404).json({ error: "이력서가 없습니다." }); return;
+    }
+    const downloadUrl = await getResumeDownloadUrl(profile.resumeUrl);
+    res.json({ downloadUrl });
+  } catch (err) {
+    req.log.error({ err }, "Resume URL generation failed");
+    res.status(500).json({ error: "이력서 다운로드 URL 생성 실패." });
+  }
+});
+
+// ─── 이력서 삭제 ──────────────────────────────────────────────────────────────
+router.delete("/admin/translators/:id/resume", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+  try {
+    const [profile] = await db
+      .select({ resumeUrl: translatorProfilesTable.resumeUrl })
+      .from(translatorProfilesTable)
+      .where(eq(translatorProfilesTable.userId, userId));
+    if (profile?.resumeUrl) {
+      await deleteResumeFromGCS(profile.resumeUrl).catch(() => {});
+      await db.update(translatorProfilesTable)
+        .set({ resumeUrl: null, updatedAt: new Date() })
+        .where(eq(translatorProfilesTable.userId, userId));
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "Resume delete failed");
+    res.status(500).json({ error: "이력서 삭제 실패." });
   }
 });
 
