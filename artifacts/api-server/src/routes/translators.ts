@@ -249,16 +249,24 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
     if (!user) { res.status(404).json({ error: "번역사를 찾을 수 없습니다." }); return; }
 
     const profileData = {
-      languagePairs, languageLevel, specializations, education, major,
-      graduationYear: graduationYear ? Number(graduationYear) : undefined,
-      phone: phone ?? null, region, grade: grade ?? null,
-      rating: rating ? Number(rating) : undefined,
+      languagePairs: languagePairs?.trim() || null,
+      languageLevel: languageLevel?.trim() || null,
+      specializations: specializations?.trim() || null,
+      education: education?.trim() || null,
+      major: major?.trim() || null,
+      graduationYear: (graduationYear != null && graduationYear !== "") ? Number(graduationYear) : null,
+      phone: phone?.trim() || null,
+      region: region?.trim() || null,
+      grade: grade || null,
+      rating: (rating != null && rating !== "") ? Number(rating) : null,
       availabilityStatus: availabilityStatus ?? "available",
-      bio, ratePerWord: ratePerWord ? Number(ratePerWord) : undefined,
-      ratePerPage: ratePerPage ? Number(ratePerPage) : undefined,
-      unitType: unitType ?? undefined,
-      unitPrice: unitPrice != null ? Number(unitPrice) : undefined,
-      resumeUrl: resumeUrl ?? null, portfolioUrl: portfolioUrl ?? null,
+      bio: bio?.trim() || null,
+      ratePerWord: (ratePerWord != null && ratePerWord !== "") ? Number(ratePerWord) : null,
+      ratePerPage: (ratePerPage != null && ratePerPage !== "") ? Number(ratePerPage) : null,
+      unitType: unitType || null,
+      unitPrice: (unitPrice != null && unitPrice !== "") ? Number(unitPrice) : null,
+      resumeUrl: resumeUrl?.trim() || null,
+      portfolioUrl: portfolioUrl?.trim() || null,
       updatedAt: new Date(),
     };
 
