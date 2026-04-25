@@ -538,14 +538,14 @@ router.get("/admin/companies/:id/contacts", ...adminGuard, async (req, res) => {
 // ─── 공통: 전체 담당자 목록 (GET /admin/contacts  &  GET /admin/company-contacts) ─
 async function listContacts(req: any, res: any) {
   try {
-    const { keyword, companyId: companyIdQ, isActive } = req.query as {
-      keyword?: string; companyId?: string; isActive?: string;
+    const { keyword, companyId: companyIdQ, includeInactive } = req.query as {
+      keyword?: string; companyId?: string; includeInactive?: string;
     };
 
     const conds: ReturnType<typeof eq>[] = [];
     if (companyIdQ) conds.push(eq(contactsTable.companyId, Number(companyIdQ)));
-    if (isActive === "true") conds.push(eq(contactsTable.isActive, true));
-    if (isActive === "false") conds.push(eq(contactsTable.isActive, false));
+    // 기본: 활성 담당자만 표시. includeInactive=true 시 전체 표시.
+    if (includeInactive !== "true") conds.push(eq(contactsTable.isActive, true));
 
     const rows = await db
       .select({

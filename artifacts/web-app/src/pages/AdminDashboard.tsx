@@ -282,6 +282,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [contacts, setContacts] = useState<AdminContact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
   const [contactSearch, setContactSearch] = useState("");
+  const [showInactiveContacts, setShowInactiveContacts] = useState(false);
   const [contactModal, setContactModal] = useState<number | null>(null);
   const [showCreateContactModal, setShowCreateContactModal] = useState(false);
   const emptyNewContactForm = { companyId: null as number | null, divisionId: null as number | null, name: "", mobile: "", email: "", department: "", position: "", officePhone: "", memo: "", isPrimary: false, isQuoteContact: false, isBillingContact: false, isActive: true };
@@ -486,12 +487,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     try {
       const params = new URLSearchParams();
       if (contactSearch.trim()) params.set("keyword", contactSearch.trim());
+      if (showInactiveContacts) params.set("includeInactive", "true");
       const res = await fetch(api(`/api/admin/contacts${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) setContacts(Array.isArray(data) ? data : []);
     } catch { setToast("오류: 담당자 조회 실패"); }
     finally { setContactsLoading(false); }
-  }, [token, contactSearch]);
+  }, [token, contactSearch, showInactiveContacts]);
+
+  // 비활성 필터 토글 시 선택 초기화
+  useEffect(() => { setSelectedContactIds(new Set()); }, [showInactiveContacts]);
 
   const handleCreateContact = async (force = false) => {
     const errs: Record<string, string> = {};
@@ -2935,7 +2940,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           <p style={{ fontSize: 12, color: "#9ca3af", margin: "0 0 12px" }}>
             하나의 거래처에 여러 명의 담당자를 등록할 수 있습니다. 기본 담당자는 거래처별 1명만 지정됩니다.
           </p>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
             <input value={contactSearch} onChange={e => setContactSearch(e.target.value)}
               placeholder="이름, 이메일, 휴대폰, 거래처 검색..."
               style={{ ...inputStyle, maxWidth: 340, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
@@ -2943,6 +2948,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <PrimaryBtn onClick={fetchContacts} disabled={contactsLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
               {contactsLoading ? "검색 중..." : "검색"}
             </PrimaryBtn>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6b7280", cursor: "pointer", userSelect: "none", padding: "6px 0" }}>
+              <input
+                type="checkbox"
+                checked={showInactiveContacts}
+                onChange={e => setShowInactiveContacts(e.target.checked)}
+                style={{ width: 15, height: 15, accentColor: "#6b7280", cursor: "pointer" }}
+              />
+              비활성 포함
+            </label>
           </div>
           {/* 선택 시 통합 툴바 */}
           {selectedContactIds.size >= 2 && (
