@@ -12,7 +12,9 @@ const inputStyle: React.CSSProperties = {
 };
 
 const GRADE_OPTIONS = ["S", "A", "B", "C"];
-const LANG_LEVEL_OPTIONS = ["일반", "비즈니스", "전문"];
+const LANG_LEVEL_OPTIONS = ["일반", "전문"];
+
+type EmailEntry = { email: string; isPrimary: boolean; error: string };
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function formatPhoneNumber(value: string): string {
@@ -38,8 +40,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [rates, setRates] = useState<TranslatorRate[]>([]);
   const [notes, setNotes] = useState<NoteEntry[]>([]);
   const [translatorProducts, setTranslatorProducts] = useState<TranslatorProduct[]>([]);
-  const [extraEmails, setExtraEmails] = useState<string[]>([]);
-  const [emailErrors, setEmailErrors] = useState<string[]>([]);
+  const [emailEntries, setEmailEntries] = useState<EmailEntry[]>([]);
   const [availableProducts, setAvailableProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -79,16 +80,26 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         setProfile(p);
         setRates(Array.isArray(dData.rates) ? dData.rates : []);
         setTranslatorProducts(Array.isArray(dData.translatorProducts) ? dData.translatorProducts : []);
-        // 추가 이메일 (대표 이메일 제외)
+        // 이메일 목록 구성
         const allEmails: Array<{ email: string; isPrimary: boolean }> = Array.isArray(dData.emails) ? dData.emails : [];
-        const primaryEmail = u?.email ?? userEmail;
-        // 대표 이메일이 없으면 기존 users.email을 대표로 취급
-        const extras = allEmails.filter(e => !e.isPrimary && e.email !== primaryEmail).map(e => e.email);
-        setExtraEmails(extras);
-        setEmailErrors(extras.map(() => ""));
+        const fallbackPrimary = u?.email ?? userEmail;
+        let entries: EmailEntry[];
+        if (allEmails.length > 0) {
+          entries = allEmails.map(e => ({ email: e.email, isPrimary: e.isPrimary, error: "" }));
+        } else {
+          // translator_emails 없으면 users.email을 대표로
+          entries = [{ email: fallbackPrimary, isPrimary: true, error: "" }];
+        }
+        // 대표 없으면 첫 번째를 대표로
+        if (!entries.some(e => e.isPrimary)) entries[0].isPrimary = true;
+        setEmailEntries(entries);
+
+        // 언어레벨 "비즈니스" → "일반" 정규화
+        const rawLevel = p?.languageLevel ?? "";
+        const normalizedLevel = rawLevel === "비즈니스" ? "일반" : rawLevel;
         setForm({
           phone: p?.phone ?? "",
-          languagePairs: p?.languagePairs ?? "", languageLevel: p?.languageLevel ?? "",
+          languagePairs: p?.languagePairs ?? "", languageLevel: normalizedLevel,
           specializations: p?.specializations ?? "", education: p?.education ?? "", major: p?.major ?? "",
           graduationYear: p?.graduationYear ? String(p.graduationYear) : "",
           region: p?.region ?? "", grade: p?.grade ?? "",
@@ -110,19 +121,27 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   useEffect(() => { load(); }, [userId]);
 
   const handleSave = async () => {
-    // 추가 이메일 검증
-    const errs = extraEmails.map(e => {
-      const t = e.trim();
-      if (!t) return "";
-      if (!emailRegex.test(t)) return "올바른 이메일 형식이 아닙니다.";
-      return "";
+    // 이메일 검증
+    const validated = emailEntries.map(e => {
+      const t = e.email.trim().toLowerCase();
+      if (!t) return { ...e, error: "이메일을 입력하세요." };
+      if (!emailRegex.test(t)) return { ...e, error: "올바른 이메일 형식이 아닙니다." };
+      return { ...e, error: "" };
     });
-    if (errs.some(Boolean)) { setEmailErrors(errs); return; }
-    const normalizedExtras = Array.from(new Set(extraEmails.map(e => e.trim().toLowerCase()).filter(Boolean)));
-    // 중복 검사 (추가 이메일 간)
-    if (normalizedExtras.length !== new Set(normalizedExtras).size) {
+    if (validated.some(e => e.error)) { setEmailEntries(validated); return; }
+
+    // 중복 검사
+    const allNorm = validated.map(e => e.email.trim().toLowerCase());
+    if (new Set(allNorm).size !== allNorm.length) {
       onToast("동일한 이메일이 중복 입력되어 있습니다."); return;
     }
+
+    // 대표 이메일 1개 확인
+    const primaryCount = validated.filter(e => e.isPrimary).length;
+    if (primaryCount !== 1) {
+      onToast("대표 이메일은 반드시 1개여야 합니다."); return;
+    }
+
     setSaving(true);
     try {
       const res = await fetch(api(`/api/admin/translators/${userId}`), {
@@ -140,12 +159,15 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           languageLevel: form.languageLevel || null,
           resumeUrl: form.resumeUrl || null,
           portfolioUrl: form.portfolioUrl || null,
-          emails: normalizedExtras,
+          emails: validated.map(e => ({ email: e.email.trim().toLowerCase(), isPrimary: e.isPrimary })),
         }),
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       setProfile(data);
+      // 대표 이메일 변경 시 userInfo 갱신
+      const newPrimary = validated.find(e => e.isPrimary)?.email.trim().toLowerCase() ?? "";
+      if (newPrimary) setUserInfo(prev => prev ? { ...prev, email: newPrimary } : prev);
       onToast("통번역사 프로필이 저장되었습니다.");
     } catch { onToast("오류: 저장 실패"); }
     finally { setSaving(false); }
@@ -356,43 +378,56 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   {userInfo?.name || <span style={{ color: "#9ca3af" }}>—</span>}
                 </div>
               </div>
-              {/* 대표 이메일 — 읽기 전용 */}
-              <div>
-                <label style={{ ...labelSt, fontSize: 11 }}>대표 이메일 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(변경 불가)</span></label>
-                <div style={{ fontSize: 13, color: "#374151", padding: "6px 0", wordBreak: "break-all" }}>
-                  {userInfo?.email || userEmail}
-                </div>
-              </div>
-              {/* 추가 이메일 — 편집 가능 */}
+              {/* 이메일 목록 — 모두 편집 가능, 대표 지정 가능 */}
               <div style={{ gridColumn: "1 / -1" }}>
-                <label style={{ ...labelSt, fontSize: 11 }}>추가 이메일 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(수정 가능 · 저장 버튼으로 반영)</span></label>
-                {extraEmails.length > 0 && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 6 }}>
-                    {extraEmails.map((email, i) => (
-                      <div key={i}>
-                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                          <input
-                            type="email" value={email}
-                            onChange={e => {
-                              setExtraEmails(p => p.map((x, idx) => idx === i ? e.target.value : x));
-                              setEmailErrors(p => { const n = [...p]; n[i] = ""; return n; });
-                            }}
-                            placeholder="이메일 주소"
-                            style={{ ...inputStyle, fontSize: 13, padding: "6px 10px", flex: 1 }}
-                          />
+                <label style={{ ...labelSt, fontSize: 11 }}>
+                  이메일 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(저장 버튼으로 반영 · 대표 이메일은 로그인에 사용됨)</span>
+                </label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 6 }}>
+                  {emailEntries.map((entry, i) => (
+                    <div key={i}>
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <input
+                          type="email"
+                          value={entry.email}
+                          onChange={e => setEmailEntries(p => p.map((x, idx) => idx === i ? { ...x, email: e.target.value, error: "" } : x))}
+                          placeholder="이메일 주소"
+                          style={{ ...inputStyle, fontSize: 13, padding: "6px 10px", flex: 1, borderColor: entry.error ? "#dc2626" : "#d1d5db" }}
+                        />
+                        {entry.isPrimary ? (
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: "5px 10px", borderRadius: 6, background: "#dbeafe", color: "#1d4ed8", whiteSpace: "nowrap", border: "1px solid #bfdbfe" }}>
+                            ★ 대표
+                          </span>
+                        ) : (
                           <button
-                            onClick={() => { setExtraEmails(p => p.filter((_, idx) => idx !== i)); setEmailErrors(p => p.filter((_, idx) => idx !== i)); }}
-                            style={{ background: "none", border: "1px solid #fca5a5", borderRadius: 6, color: "#dc2626", fontSize: 13, padding: "5px 10px", cursor: "pointer", whiteSpace: "nowrap" }}>
-                            삭제
+                            onClick={() => setEmailEntries(p => p.map((x, idx) => ({ ...x, isPrimary: idx === i })))}
+                            style={{ fontSize: 11, fontWeight: 600, padding: "5px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb", color: "#374151", cursor: "pointer", whiteSpace: "nowrap" }}>
+                            대표로 지정
                           </button>
-                        </div>
-                        {emailErrors[i] && <p style={{ color: "#dc2626", fontSize: 11, margin: "3px 0 0" }}>{emailErrors[i]}</p>}
+                        )}
+                        <button
+                          disabled={entry.isPrimary && emailEntries.length === 1}
+                          onClick={() => {
+                            const next = emailEntries.filter((_, idx) => idx !== i);
+                            // 삭제된 항목이 대표였다면 남은 첫 번째를 대표로
+                            if (entry.isPrimary && next.length > 0) next[0].isPrimary = true;
+                            setEmailEntries(next);
+                          }}
+                          style={{
+                            background: "none", border: "1px solid #fca5a5", borderRadius: 6,
+                            color: (entry.isPrimary && emailEntries.length === 1) ? "#d1d5db" : "#dc2626",
+                            fontSize: 13, padding: "5px 10px", cursor: (entry.isPrimary && emailEntries.length === 1) ? "not-allowed" : "pointer",
+                            whiteSpace: "nowrap",
+                          }}>
+                          삭제
+                        </button>
                       </div>
-                    ))}
-                  </div>
-                )}
+                      {entry.error && <p style={{ color: "#dc2626", fontSize: 11, margin: "3px 0 0" }}>{entry.error}</p>}
+                    </div>
+                  ))}
+                </div>
                 <button
-                  onClick={() => { setExtraEmails(p => [...p, ""]); setEmailErrors(p => [...p, ""]); }}
+                  onClick={() => setEmailEntries(p => [...p, { email: "", isPrimary: false, error: "" }])}
                   style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: 7, border: "1.5px dashed #9ca3af", background: "#f9fafb", color: "#374151", cursor: "pointer" }}>
                   + 이메일 추가
                 </button>

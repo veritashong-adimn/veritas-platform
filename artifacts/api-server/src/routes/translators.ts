@@ -262,21 +262,43 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
     }
 
     // 이메일 목록 동기화
-    if (Array.isArray(emails)) {
-      const normalized = Array.from(new Set(
-        emails.map((e: string) => e.trim().toLowerCase()).filter(Boolean)
-      ));
-      await db.delete(translatorEmailsTable).where(
-        and(eq(translatorEmailsTable.translatorId, userId), eq(translatorEmailsTable.isPrimary, false))
+    if (Array.isArray(emails) && emails.length > 0) {
+      // 정규화
+      const entries: Array<{ email: string; isPrimary: boolean }> = emails
+        .map((e: { email: string; isPrimary: boolean }) => ({
+          email: (e.email ?? "").trim().toLowerCase(),
+          isPrimary: !!e.isPrimary,
+        }))
+        .filter(e => e.email);
+
+      // 중복 검사
+      const uniqueEmails = new Set(entries.map(e => e.email));
+      if (uniqueEmails.size !== entries.length) {
+        res.status(400).json({ error: "중복된 이메일이 있습니다." }); return;
+      }
+
+      // 대표 이메일 수 검증
+      const primaryEntries = entries.filter(e => e.isPrimary);
+      if (primaryEntries.length !== 1) {
+        res.status(400).json({ error: "대표 이메일은 반드시 1개여야 합니다." }); return;
+      }
+
+      const newPrimaryEmail = primaryEntries[0].email;
+
+      // 전체 교체
+      await db.delete(translatorEmailsTable).where(eq(translatorEmailsTable.translatorId, userId));
+      await db.insert(translatorEmailsTable).values(
+        entries.map(e => ({ translatorId: userId, email: e.email, isPrimary: e.isPrimary }))
       );
-      const primaryRow = await db.select().from(translatorEmailsTable)
-        .where(and(eq(translatorEmailsTable.translatorId, userId), eq(translatorEmailsTable.isPrimary, true)));
-      const primaryEmail = primaryRow[0]?.email ?? user.email;
-      const extras = normalized.filter(e => e !== primaryEmail);
-      if (extras.length > 0) {
-        await db.insert(translatorEmailsTable).values(
-          extras.map(e => ({ translatorId: userId, email: e, isPrimary: false }))
-        );
+
+      // users.email을 대표 이메일로 동기화 (변경된 경우만)
+      if (newPrimaryEmail !== user.email) {
+        const conflict = await db.select({ id: usersTable.id }).from(usersTable)
+          .where(and(eq(usersTable.email, newPrimaryEmail), sql`${usersTable.id} != ${userId}`)).limit(1);
+        if (conflict.length > 0) {
+          res.status(409).json({ error: "이미 사용 중인 이메일입니다." }); return;
+        }
+        await db.update(usersTable).set({ email: newPrimaryEmail }).where(eq(usersTable.id, userId));
       }
     }
 
