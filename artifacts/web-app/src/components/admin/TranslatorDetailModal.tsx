@@ -13,14 +13,31 @@ const inputStyle: React.CSSProperties = {
 
 const GRADE_OPTIONS = ["S", "A", "B", "C"];
 const LANG_LEVEL_OPTIONS = ["일반", "전문"];
-const WORK_TYPES = ["번역", "통역", "편집", "감수", "기타"];
-const UNIT_OPTIONS = [
-  { value: "word",   label: "단어" },
-  { value: "eojeol", label: "어절" },
-  { value: "char",   label: "글자" },
-  { value: "page",   label: "페이지" },
-  { value: "hour",   label: "시간" },
+const WORK_TYPES = ["번역", "통역", "편집", "감수", "직접입력"];
+const SUB_TYPES_MAP: Record<string, string[]> = {
+  "번역": ["일반번역", "전문번역", "긴급번역", "공증번역"],
+  "통역": ["동시통역", "순차통역", "수행통역", "미팅통역", "전시회통역", "전화통역", "화상통역"],
+  "편집": ["원어민감수", "윤문", "교정", "편집", "DTP"],
+  "감수": ["번역감수", "전문감수", "원어민감수"],
+  "직접입력": [],
+};
+const TRANS_UNITS = [
+  { value: "word", label: "단어" }, { value: "eojeol", label: "어절" },
+  { value: "char", label: "글자" }, { value: "page", label: "페이지" }, { value: "item", label: "건" },
 ];
+const INTERP_UNITS = [
+  { value: "1h", label: "1시간" }, { value: "2h", label: "2시간" },
+  { value: "4h", label: "4시간" }, { value: "6h", label: "6시간" },
+  { value: "8h", label: "8시간" }, { value: "extra", label: "추가시간" },
+  { value: "day", label: "일" }, { value: "item", label: "건" },
+];
+const UNIT_BY_TYPE: Record<string, { value: string; label: string }[]> = {
+  "번역": TRANS_UNITS, "통역": INTERP_UNITS, "편집": TRANS_UNITS,
+  "감수": TRANS_UNITS, "직접입력": [...TRANS_UNITS, ...INTERP_UNITS.filter(u => u.value !== "item")],
+};
+const ALL_UNITS = [...TRANS_UNITS, ...INTERP_UNITS.filter(u => !TRANS_UNITS.some(t => t.value === u.value))];
+const getUnitLabel = (unit: string) => ALL_UNITS.find(u => u.value === unit)?.label ?? unit;
+const LANG_DIRECTIONS = ["한→영", "영→한", "한→중", "중→한", "한→일", "일→한", "영→중", "중→영", "기타"];
 
 type EmailEntry = { email: string; isPrimary: boolean; error: string };
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -52,7 +69,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [saving, setSaving] = useState(false);
   const [noteText, setNoteText] = useState("");
   const [addingNote, setAddingNote] = useState(false);
-  const [rateForm, setRateForm] = useState({ workType: "번역", unit: "eojeol", rate: "", memo: "" });
+  const [rateForm, setRateForm] = useState({ workType: "번역", subType: "일반번역", langDir: "한→영", unit: "eojeol", rate: "", memo: "" });
   const [addingRate, setAddingRate] = useState(false);
   const [showSensitive, setShowSensitive] = useState(false);
   const [resumeFile, setResumeFile] = useState<File | null>(null);
@@ -183,18 +200,32 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 
   const handleAddRate = async () => {
     if (!rateForm.workType || !rateForm.rate) { onToast("업무유형과 기본단가를 입력하세요."); return; }
-    const isDuplicate = rates.some(r => r.serviceType === rateForm.workType && r.unit === rateForm.unit);
-    if (isDuplicate) { onToast("동일한 업무유형 + 단가단위 조합이 이미 존재합니다."); return; }
+    const subTypeVal = rateForm.subType.trim() || null;
+    const langDirVal = rateForm.langDir.trim() || null;
+    const isDuplicate = rates.some(r =>
+      r.serviceType === rateForm.workType &&
+      (r.subType ?? null) === subTypeVal &&
+      (r.languagePair ?? null) === langDirVal &&
+      r.unit === rateForm.unit,
+    );
+    if (isDuplicate) { onToast("동일한 조합(업무유형+세부유형+언어방향+단가단위)의 단가가 이미 존재합니다."); return; }
     setAddingRate(true);
     try {
       const res = await fetch(api(`/api/admin/translators/${userId}/rates`), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
-        body: JSON.stringify({ workType: rateForm.workType, unit: rateForm.unit, rate: Number(rateForm.rate), memo: rateForm.memo || null }),
+        body: JSON.stringify({
+          workType: rateForm.workType,
+          subType: subTypeVal,
+          languagePair: langDirVal,
+          unit: rateForm.unit,
+          rate: Number(rateForm.rate),
+          memo: rateForm.memo || null,
+        }),
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       setRates(prev => [data, ...prev]);
-      setRateForm({ workType: "번역", unit: "eojeol", rate: "", memo: "" });
+      setRateForm({ workType: "번역", subType: "일반번역", langDir: "한→영", unit: "eojeol", rate: "", memo: "" });
       onToast("단가가 추가되었습니다.");
     } catch { onToast("오류: 단가 추가 실패"); }
     finally { setAddingRate(false); }
@@ -581,37 +612,93 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 
           {/* ── 단가 관리 ── */}
           <p style={sH}>단가 관리 ({rates.length})</p>
-          <div style={{ display: "grid", gridTemplateColumns: "120px 90px 110px 1fr auto", gap: "6px 8px", alignItems: "end", marginBottom: 10 }}>
-            <ClickSelect value={rateForm.workType} onChange={v => setRateForm(p => ({ ...p, workType: v }))}
-              triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 8 }}
-              options={WORK_TYPES.map(w => ({ value: w, label: w }))} />
-            <ClickSelect value={rateForm.unit} onChange={v => setRateForm(p => ({ ...p, unit: v }))}
-              triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 8 }}
-              options={UNIT_OPTIONS} />
-            <input type="number" value={rateForm.rate} onChange={e => setRateForm(p => ({ ...p, rate: e.target.value }))}
-              placeholder="기본단가(원)" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
-            <input value={rateForm.memo} onChange={e => setRateForm(p => ({ ...p, memo: e.target.value }))}
-              placeholder="메모 (선택)" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
-            <PrimaryBtn onClick={handleAddRate} disabled={addingRate} style={{ fontSize: 12, padding: "6px 12px", whiteSpace: "nowrap" }}>
-              {addingRate ? "추가 중..." : "+ 추가"}
-            </PrimaryBtn>
+          {/* 단가 추가 폼 - 2행 */}
+          <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px 8px", marginBottom: 6 }}>
+              {/* 업무유형 */}
+              <div>
+                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>업무유형</div>
+                <ClickSelect value={rateForm.workType}
+                  onChange={v => {
+                    const units = UNIT_BY_TYPE[v] ?? TRANS_UNITS;
+                    const defaultUnit = units[0]?.value ?? "eojeol";
+                    const subs = SUB_TYPES_MAP[v] ?? [];
+                    const defaultSub = subs[0] ?? "";
+                    setRateForm(p => ({ ...p, workType: v, subType: defaultSub, unit: defaultUnit }));
+                  }}
+                  triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+                  options={WORK_TYPES.map(w => ({ value: w, label: w }))} />
+              </div>
+              {/* 세부유형 */}
+              <div>
+                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>세부유형</div>
+                {rateForm.workType === "직접입력" ? (
+                  <input value={rateForm.subType} onChange={e => setRateForm(p => ({ ...p, subType: e.target.value }))}
+                    placeholder="세부유형 입력" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+                ) : (
+                  <ClickSelect value={rateForm.subType}
+                    onChange={v => setRateForm(p => ({ ...p, subType: v }))}
+                    triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+                    options={[
+                      { value: "", label: "세부유형 선택" },
+                      ...(SUB_TYPES_MAP[rateForm.workType] ?? []).map(s => ({ value: s, label: s })),
+                    ]} />
+                )}
+              </div>
+              {/* 언어방향 */}
+              <div>
+                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>언어방향</div>
+                <input list="rf-langdir-list" value={rateForm.langDir}
+                  onChange={e => setRateForm(p => ({ ...p, langDir: e.target.value }))}
+                  placeholder="예: 한→영 (선택 또는 입력)"
+                  style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+                <datalist id="rf-langdir-list">
+                  {LANG_DIRECTIONS.map(d => <option key={d} value={d} />)}
+                </datalist>
+              </div>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 1fr auto", gap: "6px 8px", alignItems: "end" }}>
+              {/* 단가단위 */}
+              <div>
+                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>단가단위</div>
+                <ClickSelect value={rateForm.unit}
+                  onChange={v => setRateForm(p => ({ ...p, unit: v }))}
+                  triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+                  options={UNIT_BY_TYPE[rateForm.workType] ?? TRANS_UNITS} />
+              </div>
+              {/* 단가 */}
+              <div>
+                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>단가 (원)</div>
+                <input type="number" value={rateForm.rate}
+                  onChange={e => setRateForm(p => ({ ...p, rate: e.target.value }))}
+                  placeholder="예: 40" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+              </div>
+              {/* 메모 */}
+              <div>
+                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>메모</div>
+                <input value={rateForm.memo} onChange={e => setRateForm(p => ({ ...p, memo: e.target.value }))}
+                  placeholder="메모 (선택)" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+              </div>
+              <PrimaryBtn onClick={handleAddRate} disabled={addingRate}
+                style={{ fontSize: 12, padding: "6px 14px", whiteSpace: "nowrap", alignSelf: "flex-end" }}>
+                {addingRate ? "추가 중..." : "+ 추가"}
+              </PrimaryBtn>
+            </div>
           </div>
           {rates.length > 0 ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 4 }}>
-              {rates.map(r => {
-                const unitLabel = UNIT_OPTIONS.find(u => u.value === r.unit)?.label ?? r.unit;
-                const memoDisplay = r.memo || (r.languagePair ? `언어조합: ${r.languagePair}` : "");
-                return (
-                  <div key={r.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6", fontSize: 13 }}>
-                    <span style={{ fontWeight: 600, color: "#374151", minWidth: 60 }}>{r.serviceType}</span>
-                    <span style={{ color: "#6b7280", minWidth: 50 }}>{unitLabel}</span>
-                    <span style={{ fontWeight: 700, color: "#059669", minWidth: 90 }}>{r.rate.toLocaleString()}원</span>
-                    {memoDisplay && <span style={{ color: "#9ca3af", fontSize: 12, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{memoDisplay}</span>}
-                    {!memoDisplay && <span style={{ flex: 1 }} />}
-                    <button onClick={() => handleDeleteRate(r.id)} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, cursor: "pointer" }}>삭제</button>
-                  </div>
-                );
-              })}
+              {rates.map(r => (
+                <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 12px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6", fontSize: 13, flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 700, color: "#374151", minWidth: 40 }}>{r.serviceType}</span>
+                  {r.subType && <span style={{ color: "#6366f1", fontWeight: 600, minWidth: 52 }}>{r.subType}</span>}
+                  {r.languagePair && <span style={{ color: "#9ca3af", minWidth: 44 }}>{r.languagePair}</span>}
+                  <span style={{ color: "#6b7280", minWidth: 40 }}>{getUnitLabel(r.unit)}</span>
+                  <span style={{ fontWeight: 700, color: "#059669", minWidth: 80 }}>{r.rate.toLocaleString()}원</span>
+                  {r.memo && <span style={{ color: "#9ca3af", fontSize: 12, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.memo}</span>}
+                  {!r.memo && <span style={{ flex: 1 }} />}
+                  <button onClick={() => handleDeleteRate(r.id)} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, cursor: "pointer", padding: "2px 4px" }}>삭제</button>
+                </div>
+              ))}
             </div>
           ) : <p style={{ color: "#9ca3af", fontSize: 13, padding: "6px 0" }}>등록된 단가가 없습니다.</p>}
 

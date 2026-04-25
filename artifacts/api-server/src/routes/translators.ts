@@ -81,6 +81,8 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
           rate: translatorRatesTable.rate,
           unit: translatorRatesTable.unit,
           serviceType: translatorRatesTable.serviceType,
+          subType: translatorRatesTable.subType,
+          languagePair: translatorRatesTable.languagePair,
           id: translatorRatesTable.id,
         })
         .from(translatorRatesTable)
@@ -93,8 +95,19 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         grouped[r.translatorId].push(r);
       }
       for (const [tid, rates] of Object.entries(grouped)) {
-        const find = (svc: string, unit: string) => rates.find(r => r.serviceType === svc && r.unit === unit);
-        const rep = find("번역", "어절") || find("번역", "단어") || find("번역", "글자") || find("통역", "시간") || rates[0];
+        const find = (svc: string, sub: string | null, lp: string | null, unit: string) =>
+          rates.find(r =>
+            r.serviceType === svc &&
+            (sub === null || r.subType === sub) &&
+            (lp === null || r.languagePair === lp) &&
+            r.unit === unit,
+          );
+        const rep =
+          find("번역", "일반번역", "한→영", "eojeol") ||
+          find("번역", "일반번역", "영→한", "eojeol") ||
+          find("통역", "순차통역", null, "4h") ||
+          find("통역", "동시통역", null, "4h") ||
+          rates[rates.length - 1]; // 가장 최근 등록된 단가
         ratesMap[Number(tid)] = rep ? { repRate: rep.rate, repUnit: rep.unit } : null;
       }
     }
@@ -621,8 +634,8 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
   if (isNaN(userId) || userId <= 0) {
     res.status(400).json({ error: "유효하지 않은 user id." }); return;
   }
-  const { serviceType, workType, languagePair, unit, rate, memo } = req.body as {
-    serviceType?: string; workType?: string; languagePair?: string;
+  const { serviceType, workType, subType, languagePair, unit, rate, memo } = req.body as {
+    serviceType?: string; workType?: string; subType?: string; languagePair?: string;
     unit?: string; rate?: number; memo?: string;
   };
   const resolvedServiceType = (workType ?? serviceType)?.trim();
@@ -630,17 +643,23 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
     res.status(400).json({ error: "업무유형과 단가는 필수입니다." }); return;
   }
   const resolvedUnit = unit?.trim() || "word";
+  const resolvedSubType = subType?.trim() || null;
+  const resolvedLangPair = languagePair?.trim() || null;
   try {
-    // 중복 차단: 동일 통번역사 + 동일 업무유형 + 동일 단가단위
+    // 중복 차단: 업무유형 + 세부유형 + 언어방향 + 단가단위
+    const dupConditions = [
+      eq(translatorRatesTable.translatorId, userId),
+      eq(translatorRatesTable.serviceType, resolvedServiceType),
+      eq(translatorRatesTable.unit, resolvedUnit),
+      resolvedSubType ? eq(translatorRatesTable.subType, resolvedSubType) : sql`${translatorRatesTable.subType} IS NULL`,
+      resolvedLangPair ? eq(translatorRatesTable.languagePair, resolvedLangPair) : sql`${translatorRatesTable.languagePair} IS NULL`,
+    ];
     const [dup] = await db.select({ id: translatorRatesTable.id })
       .from(translatorRatesTable)
-      .where(and(
-        eq(translatorRatesTable.translatorId, userId),
-        eq(translatorRatesTable.serviceType, resolvedServiceType),
-        eq(translatorRatesTable.unit, resolvedUnit),
-      ));
+      .where(and(...dupConditions));
     if (dup) {
-      res.status(409).json({ error: `이미 동일한 단가 항목이 존재합니다. (${resolvedServiceType} / ${resolvedUnit})` });
+      const label = [resolvedServiceType, resolvedSubType, resolvedLangPair, resolvedUnit].filter(Boolean).join(" / ");
+      res.status(409).json({ error: `이미 동일한 단가 항목이 존재합니다. (${label})` });
       return;
     }
     const [newRate] = await db
@@ -648,7 +667,8 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
       .values({
         translatorId: userId,
         serviceType: resolvedServiceType,
-        languagePair: languagePair?.trim() || null,
+        subType: resolvedSubType,
+        languagePair: resolvedLangPair,
         unit: resolvedUnit,
         rate: Number(rate),
         memo: memo?.trim() || null,

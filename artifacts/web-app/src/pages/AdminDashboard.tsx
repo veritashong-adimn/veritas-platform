@@ -38,6 +38,12 @@ const inputStyle: React.CSSProperties = {
 const labelStyle: React.CSSProperties = {
   display: 'block', fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 6,
 };
+const RATE_UNIT_LABELS: Record<string, string> = {
+  word: "단어", eojeol: "어절", char: "글자", page: "페이지", item: "건",
+  "1h": "1시간", "2h": "2시간", "4h": "4시간", "6h": "6시간", "8h": "8시간",
+  extra: "추가시간", day: "일", hour: "시간",
+};
+const getRateUnitLabel = (unit: string) => RATE_UNIT_LABELS[unit] ?? unit;
 
 function Section({ title, sub, children, action }: { title: string; sub?: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
@@ -3116,7 +3122,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           {/* 대표 단가 */}
                           <td style={{ ...tableTd, fontSize: 12, textAlign: "center", whiteSpace: "nowrap" }}>
                             {t.repRate != null
-                              ? <span style={{ fontWeight: 700, color: "#059669" }}>{Number(t.repRate).toLocaleString()}원<span style={{ fontWeight: 400, color: "#9ca3af" }}>/{t.repUnit ?? "-"}</span></span>
+                              ? <span style={{ fontWeight: 700, color: "#059669" }}>{Number(t.repRate).toLocaleString()}원<span style={{ fontWeight: 400, color: "#9ca3af" }}>/{t.repUnit ? getRateUnitLabel(t.repUnit) : "-"}</span></span>
                               : <span style={{ color: "#d1d5db" }}>미설정</span>}
                           </td>
                           {/* 평점 */}

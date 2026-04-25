@@ -30,14 +30,29 @@ function formatPhoneNumber(value: string): string {
   if (n.length <= 7) return `${n.slice(0, 3)}-${n.slice(3)}`;
   return `${n.slice(0, 3)}-${n.slice(3, 7)}-${n.slice(7, 11)}`;
 }
-const WORK_TYPES = ["번역", "통역", "편집", "감수", "기타"];
-const UNIT_OPTIONS = [
-  { value: "word",   label: "단어" },
-  { value: "eojeol", label: "어절" },
-  { value: "char",   label: "글자" },
-  { value: "page",   label: "페이지" },
-  { value: "hour",   label: "시간" },
+const WORK_TYPES = ["번역", "통역", "편집", "감수", "직접입력"];
+const SUB_TYPES_MAP: Record<string, string[]> = {
+  "번역": ["일반번역", "전문번역", "긴급번역", "공증번역"],
+  "통역": ["동시통역", "순차통역", "수행통역", "미팅통역", "전시회통역", "전화통역", "화상통역"],
+  "편집": ["원어민감수", "윤문", "교정", "편집", "DTP"],
+  "감수": ["번역감수", "전문감수", "원어민감수"],
+  "직접입력": [],
+};
+const TRANS_UNITS = [
+  { value: "word", label: "단어" }, { value: "eojeol", label: "어절" },
+  { value: "char", label: "글자" }, { value: "page", label: "페이지" }, { value: "item", label: "건" },
 ];
+const INTERP_UNITS = [
+  { value: "1h", label: "1시간" }, { value: "2h", label: "2시간" },
+  { value: "4h", label: "4시간" }, { value: "6h", label: "6시간" },
+  { value: "8h", label: "8시간" }, { value: "extra", label: "추가시간" },
+  { value: "day", label: "일" }, { value: "item", label: "건" },
+];
+const UNIT_BY_TYPE: Record<string, { value: string; label: string }[]> = {
+  "번역": TRANS_UNITS, "통역": INTERP_UNITS, "편집": TRANS_UNITS,
+  "감수": TRANS_UNITS, "직접입력": [...TRANS_UNITS, ...INTERP_UNITS.filter(u => u.value !== "item")],
+};
+const LANG_DIRECTIONS = ["한→영", "영→한", "한→중", "중→한", "한→일", "일→한", "영→중", "중→영", "기타"];
 const CURRENCIES = ["KRW", "USD", "EUR", "JPY", "GBP", "CAD", "AUD", "CNY", "HKD", "SGD"];
 const FEE_PAYER_OPTIONS = [
   { value: "sender",    label: "송금인 부담 (당사)" },
@@ -63,7 +78,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 }) {
   const hasPerm = (key: string) => permissions.includes(key) || permissions.includes("*");
 
-  type RateEntry = { workType: string; unit: string; rate: string; memo: string };
+  type RateEntry = { workType: string; subType: string; langDir: string; unit: string; rate: string; memo: string };
 
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -106,8 +121,8 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       const rErr: string[] = rates.map(_ => "");
       let hasDup = false;
       rates.forEach((r, i) => {
-        const key = `${r.workType}|${r.unit}`;
-        if (seen.has(key)) { rErr[i] = "동일한 업무유형+단가단위 조합이 중복됩니다."; hasDup = true; }
+        const key = `${r.workType}|${r.subType}|${r.langDir}|${r.unit}`;
+        if (seen.has(key)) { rErr[i] = "동일한 업무유형+세부유형+언어방향+단가단위 조합이 중복됩니다."; hasDup = true; }
         else seen.add(key);
       });
       if (hasDup) { setRateErrors(rErr); return; }
@@ -144,7 +159,14 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         if (!r.workType || !r.unit || !r.rate) continue;
         await fetch(api(`/api/admin/translators/${userId}/rates`), {
           method: "POST", headers: { ...authH, "Content-Type": "application/json" },
-          body: JSON.stringify({ workType: r.workType, unit: r.unit, rate: Number(r.rate), memo: r.memo || null }),
+          body: JSON.stringify({
+            workType: r.workType,
+            subType: r.subType.trim() || null,
+            languagePair: r.langDir.trim() || null,
+            unit: r.unit,
+            rate: Number(r.rate),
+            memo: r.memo || null,
+          }),
         });
       }
 
@@ -343,65 +365,85 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       <p style={sH}>단가 등록</p>
       {rates.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
-          {rates.map((r, i) => (
-            <div key={i} style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 14px" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 2fr auto", gap: "8px 10px", alignItems: "end" }}>
-                {/* 업무유형 */}
-                <div>
-                  <label style={{ ...labelSt, marginBottom: 3 }}>업무유형</label>
-                  <ClickSelect
-                    value={r.workType}
-                    onChange={v => { setRates(p => p.map((x, idx) => idx === i ? { ...x, workType: v } : x)); setRateErrors(p => { const n = [...p]; n[i] = ""; return n; }); }}
-                    style={{ width: "100%" }}
-                    triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 7 }}
-                    options={WORK_TYPES.map(w => ({ value: w, label: w }))}
-                  />
+          {rates.map((r, i) => {
+            const clearRateErr = () => setRateErrors(p => { const n = [...p]; n[i] = ""; return n; });
+            const updateRate = (patch: Partial<typeof r>) => setRates(p => p.map((x, idx) => idx === i ? { ...x, ...patch } : x));
+            const unitOpts = UNIT_BY_TYPE[r.workType] ?? TRANS_UNITS;
+            return (
+              <div key={i} style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 14px" }}>
+                {/* 행 1: 업무유형 / 세부유형 / 언어방향 / 삭제 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: "6px 8px", marginBottom: 6, alignItems: "end" }}>
+                  <div>
+                    <label style={{ ...labelSt, marginBottom: 2 }}>업무유형</label>
+                    <ClickSelect value={r.workType}
+                      onChange={v => {
+                        const units = UNIT_BY_TYPE[v] ?? TRANS_UNITS;
+                        const subs = SUB_TYPES_MAP[v] ?? [];
+                        updateRate({ workType: v, subType: subs[0] ?? "", unit: units[0]?.value ?? "eojeol" });
+                        clearRateErr();
+                      }}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 7 }}
+                      options={WORK_TYPES.map(w => ({ value: w, label: w }))} />
+                  </div>
+                  <div>
+                    <label style={{ ...labelSt, marginBottom: 2 }}>세부유형</label>
+                    {r.workType === "직접입력" ? (
+                      <input value={r.subType} onChange={e => { updateRate({ subType: e.target.value }); clearRateErr(); }}
+                        placeholder="세부유형 입력" style={{ ...inputStyle, padding: "7px 10px", fontSize: 13 }} />
+                    ) : (
+                      <ClickSelect value={r.subType}
+                        onChange={v => { updateRate({ subType: v }); clearRateErr(); }}
+                        style={{ width: "100%" }}
+                        triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 7 }}
+                        options={[
+                          { value: "", label: "세부유형 선택" },
+                          ...(SUB_TYPES_MAP[r.workType] ?? []).map(s => ({ value: s, label: s })),
+                        ]} />
+                    )}
+                  </div>
+                  <div>
+                    <label style={{ ...labelSt, marginBottom: 2 }}>언어방향</label>
+                    <input list={`langdir-${i}`} value={r.langDir}
+                      onChange={e => { updateRate({ langDir: e.target.value }); clearRateErr(); }}
+                      placeholder="예: 한→영"
+                      style={{ ...inputStyle, padding: "7px 10px", fontSize: 13 }} />
+                    <datalist id={`langdir-${i}`}>
+                      {LANG_DIRECTIONS.map(d => <option key={d} value={d} />)}
+                    </datalist>
+                  </div>
+                  <button onClick={() => { setRates(p => p.filter((_, idx) => idx !== i)); setRateErrors(p => p.filter((_, idx) => idx !== i)); }}
+                    style={{ background: "none", border: "none", color: "#dc2626", fontSize: 18, cursor: "pointer", padding: "0 4px", marginTop: 16 }}>×</button>
                 </div>
-                {/* 단가단위 */}
-                <div>
-                  <label style={{ ...labelSt, marginBottom: 3 }}>단가단위</label>
-                  <ClickSelect
-                    value={r.unit}
-                    onChange={v => { setRates(p => p.map((x, idx) => idx === i ? { ...x, unit: v } : x)); setRateErrors(p => { const n = [...p]; n[i] = ""; return n; }); }}
-                    style={{ width: "100%" }}
-                    triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 7 }}
-                    options={UNIT_OPTIONS}
-                  />
+                {/* 행 2: 단가단위 / 단가 / 메모 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 1fr", gap: "6px 8px" }}>
+                  <div>
+                    <label style={{ ...labelSt, marginBottom: 2 }}>단가단위</label>
+                    <ClickSelect value={r.unit}
+                      onChange={v => { updateRate({ unit: v }); clearRateErr(); }}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 7 }}
+                      options={unitOpts} />
+                  </div>
+                  <div>
+                    <label style={{ ...labelSt, marginBottom: 2 }}>단가 (원)</label>
+                    <input type="number" value={r.rate} onChange={e => { updateRate({ rate: e.target.value }); clearRateErr(); }}
+                      placeholder="예: 40" style={{ ...inputStyle, padding: "7px 10px", fontSize: 13 }} />
+                  </div>
+                  <div>
+                    <label style={{ ...labelSt, marginBottom: 2 }}>메모</label>
+                    <input type="text" value={r.memo} onChange={e => updateRate({ memo: e.target.value })}
+                      placeholder="특이사항 등" style={{ ...inputStyle, padding: "7px 10px", fontSize: 13 }} />
+                  </div>
                 </div>
-                {/* 기본단가 */}
-                <div>
-                  <label style={{ ...labelSt, marginBottom: 3 }}>기본단가 (원)</label>
-                  <input
-                    type="number" value={r.rate}
-                    onChange={e => setRates(p => p.map((x, idx) => idx === i ? { ...x, rate: e.target.value } : x))}
-                    placeholder="예: 40"
-                    style={{ ...inputStyle, padding: "7px 10px" }}
-                  />
-                </div>
-                {/* 메모 */}
-                <div>
-                  <label style={{ ...labelSt, marginBottom: 3 }}>메모</label>
-                  <input
-                    type="text" value={r.memo}
-                    onChange={e => setRates(p => p.map((x, idx) => idx === i ? { ...x, memo: e.target.value } : x))}
-                    placeholder="특이사항 등"
-                    style={{ ...inputStyle, padding: "7px 10px" }}
-                  />
-                </div>
-                {/* 삭제 */}
-                <button
-                  onClick={() => { setRates(p => p.filter((_, idx) => idx !== i)); setRateErrors(p => p.filter((_, idx) => idx !== i)); }}
-                  style={{ background: "none", border: "none", color: "#dc2626", fontSize: 18, cursor: "pointer", padding: "0 4px", marginBottom: 2 }}>
-                  ×
-                </button>
+                {rateErrors[i] && <p style={{ ...errStyle, marginTop: 4 }}>{rateErrors[i]}</p>}
               </div>
-              {rateErrors[i] && <p style={{ ...errStyle, marginTop: 4 }}>{rateErrors[i]}</p>}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
       <button
-        onClick={() => setRates(p => [...p, { workType: "번역", unit: "eojeol", rate: "", memo: "" }])}
+        onClick={() => setRates(p => [...p, { workType: "번역", subType: "일반번역", langDir: "한→영", unit: "eojeol", rate: "", memo: "" }])}
         style={{ fontSize: 13, fontWeight: 600, padding: "8px 16px", borderRadius: 8, border: "1.5px dashed #9ca3af", background: "#f9fafb", color: "#374151", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
         + 단가 추가
       </button>
