@@ -13,6 +13,14 @@ const inputStyle: React.CSSProperties = {
 
 const GRADE_OPTIONS = ["S", "A", "B", "C"];
 const LANG_LEVEL_OPTIONS = ["일반", "비즈니스", "전문"];
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function formatPhoneNumber(value: string): string {
+  const n = value.replace(/\D/g, "");
+  if (n.length <= 3) return n;
+  if (n.length <= 7) return `${n.slice(0, 3)}-${n.slice(3)}`;
+  return `${n.slice(0, 3)}-${n.slice(3, 7)}-${n.slice(7, 11)}`;
+}
 
 export function TranslatorDetailModal({ userId, userEmail, token, permissions = [], onClose, onToast, onDeleted }: {
   userId: number; userEmail: string; token: string;
@@ -30,6 +38,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [rates, setRates] = useState<TranslatorRate[]>([]);
   const [notes, setNotes] = useState<NoteEntry[]>([]);
   const [translatorProducts, setTranslatorProducts] = useState<TranslatorProduct[]>([]);
+  const [extraEmails, setExtraEmails] = useState<string[]>([]);
+  const [emailErrors, setEmailErrors] = useState<string[]>([]);
   const [availableProducts, setAvailableProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -69,6 +79,13 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         setProfile(p);
         setRates(Array.isArray(dData.rates) ? dData.rates : []);
         setTranslatorProducts(Array.isArray(dData.translatorProducts) ? dData.translatorProducts : []);
+        // 추가 이메일 (대표 이메일 제외)
+        const allEmails: Array<{ email: string; isPrimary: boolean }> = Array.isArray(dData.emails) ? dData.emails : [];
+        const primaryEmail = u?.email ?? userEmail;
+        // 대표 이메일이 없으면 기존 users.email을 대표로 취급
+        const extras = allEmails.filter(e => !e.isPrimary && e.email !== primaryEmail).map(e => e.email);
+        setExtraEmails(extras);
+        setEmailErrors(extras.map(() => ""));
         setForm({
           phone: p?.phone ?? "",
           languagePairs: p?.languagePairs ?? "", languageLevel: p?.languageLevel ?? "",
@@ -93,6 +110,19 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   useEffect(() => { load(); }, [userId]);
 
   const handleSave = async () => {
+    // 추가 이메일 검증
+    const errs = extraEmails.map(e => {
+      const t = e.trim();
+      if (!t) return "";
+      if (!emailRegex.test(t)) return "올바른 이메일 형식이 아닙니다.";
+      return "";
+    });
+    if (errs.some(Boolean)) { setEmailErrors(errs); return; }
+    const normalizedExtras = Array.from(new Set(extraEmails.map(e => e.trim().toLowerCase()).filter(Boolean)));
+    // 중복 검사 (추가 이메일 간)
+    if (normalizedExtras.length !== new Set(normalizedExtras).size) {
+      onToast("동일한 이메일이 중복 입력되어 있습니다."); return;
+    }
     setSaving(true);
     try {
       const res = await fetch(api(`/api/admin/translators/${userId}`), {
@@ -110,6 +140,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           languageLevel: form.languageLevel || null,
           resumeUrl: form.resumeUrl || null,
           portfolioUrl: form.portfolioUrl || null,
+          emails: normalizedExtras,
         }),
       });
       const data = await res.json();
@@ -325,20 +356,54 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   {userInfo?.name || <span style={{ color: "#9ca3af" }}>—</span>}
                 </div>
               </div>
-              {/* 이메일 — 읽기 전용 */}
+              {/* 대표 이메일 — 읽기 전용 */}
               <div>
-                <label style={{ ...labelSt, fontSize: 11 }}>이메일</label>
+                <label style={{ ...labelSt, fontSize: 11 }}>대표 이메일 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(변경 불가)</span></label>
                 <div style={{ fontSize: 13, color: "#374151", padding: "6px 0", wordBreak: "break-all" }}>
                   {userInfo?.email || userEmail}
                 </div>
               </div>
-              {/* 휴대폰 — 편집 가능 */}
+              {/* 추가 이메일 — 편집 가능 */}
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ ...labelSt, fontSize: 11 }}>추가 이메일 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(수정 가능 · 저장 버튼으로 반영)</span></label>
+                {extraEmails.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 6 }}>
+                    {extraEmails.map((email, i) => (
+                      <div key={i}>
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <input
+                            type="email" value={email}
+                            onChange={e => {
+                              setExtraEmails(p => p.map((x, idx) => idx === i ? e.target.value : x));
+                              setEmailErrors(p => { const n = [...p]; n[i] = ""; return n; });
+                            }}
+                            placeholder="이메일 주소"
+                            style={{ ...inputStyle, fontSize: 13, padding: "6px 10px", flex: 1 }}
+                          />
+                          <button
+                            onClick={() => { setExtraEmails(p => p.filter((_, idx) => idx !== i)); setEmailErrors(p => p.filter((_, idx) => idx !== i)); }}
+                            style={{ background: "none", border: "1px solid #fca5a5", borderRadius: 6, color: "#dc2626", fontSize: 13, padding: "5px 10px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                            삭제
+                          </button>
+                        </div>
+                        {emailErrors[i] && <p style={{ color: "#dc2626", fontSize: 11, margin: "3px 0 0" }}>{emailErrors[i]}</p>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  onClick={() => { setExtraEmails(p => [...p, ""]); setEmailErrors(p => [...p, ""]); }}
+                  style={{ fontSize: 12, fontWeight: 600, padding: "5px 12px", borderRadius: 7, border: "1.5px dashed #9ca3af", background: "#f9fafb", color: "#374151", cursor: "pointer" }}>
+                  + 이메일 추가
+                </button>
+              </div>
+              {/* 휴대폰 — 편집 가능 + 자동 포맷 */}
               <div>
                 <label style={{ ...labelSt, fontSize: 11 }}>휴대폰번호 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(수정 가능)</span></label>
                 <input
                   type="tel"
                   value={form.phone}
-                  onChange={e => setForm(p => ({ ...p, phone: e.target.value }))}
+                  onChange={e => setForm(p => ({ ...p, phone: formatPhoneNumber(e.target.value) }))}
                   placeholder="010-0000-0000"
                   style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
                 />

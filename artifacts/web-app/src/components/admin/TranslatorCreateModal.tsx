@@ -23,6 +23,13 @@ const grid3: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 
 
 const GRADES = ["S", "A", "B", "C"];
 const LANG_LEVELS = ["일반", "전문"];
+
+function formatPhoneNumber(value: string): string {
+  const n = value.replace(/\D/g, "");
+  if (n.length <= 3) return n;
+  if (n.length <= 7) return `${n.slice(0, 3)}-${n.slice(3)}`;
+  return `${n.slice(0, 3)}-${n.slice(3, 7)}-${n.slice(7, 11)}`;
+}
 const WORK_TYPES = ["번역", "통역", "편집", "감수", "기타"];
 const UNIT_OPTIONS = [
   { value: "word",   label: "단어" },
@@ -282,7 +289,14 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       <p style={sH}>기본 정보</p>
       <div style={grid2}>
         {F({ label: "이름", field: "name", placeholder: "홍길동", required: true })}
-        {F({ label: "휴대폰", field: "phone", placeholder: "010-0000-0000" })}
+        <div>
+          <label style={labelSt}>휴대폰</label>
+          <input type="tel" value={form.phone}
+            onChange={e => setF("phone", formatPhoneNumber(e.target.value))}
+            placeholder="010-0000-0000"
+            style={{ ...inputStyle, borderColor: errors.phone ? "#dc2626" : "#d1d5db" }} />
+          {errors.phone && <span style={errStyle}>{errors.phone}</span>}
+        </div>
         {F({ label: "이메일", field: "email", type: "email", placeholder: "example@email.com", required: true })}
         {F({ label: "지역", field: "region", placeholder: "서울, 경기..." })}
       </div>

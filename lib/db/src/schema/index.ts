@@ -23,6 +23,7 @@ export * from "./translator_profiles";
 export * from "./translator_rates";
 export * from "./translator_products";
 export * from "./translator_sensitive";
+export * from "./translator_emails";
 export * from "./board_posts";
 export * from "./project_files";
 export * from "./billing_batches";

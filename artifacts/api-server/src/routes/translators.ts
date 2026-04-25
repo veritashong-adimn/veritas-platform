@@ -4,7 +4,7 @@ import { randomBytes } from "crypto";
 import {
   db, usersTable, translatorProfilesTable, translatorRatesTable,
   translatorProductsTable, productsTable, translatorSensitiveTable,
-  tasksTable, settlementsTable, logsTable,
+  tasksTable, settlementsTable, logsTable, translatorEmailsTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, sql, desc, gte, lte, inArray } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
@@ -131,6 +131,11 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
       availabilityStatus: availabilityStatus ?? "available",
     }).returning();
 
+    // 대표 이메일을 translator_emails에 시딩
+    await db.insert(translatorEmailsTable).values({
+      translatorId: newUser.id, email: newUser.email, isPrimary: true,
+    });
+
     res.status(201).json({
       id: newUser.id, email: newUser.email, name: newUser.name,
       isActive: newUser.isActive, inviteToken: newUser.inviteToken,
@@ -190,6 +195,12 @@ router.get("/admin/translators/:id", ...adminGuard, async (req, res) => {
       .where(eq(translatorProductsTable.translatorId, userId))
       .orderBy(translatorProductsTable.createdAt);
 
+    const emailRows = await db
+      .select({ id: translatorEmailsTable.id, email: translatorEmailsTable.email, isPrimary: translatorEmailsTable.isPrimary })
+      .from(translatorEmailsTable)
+      .where(eq(translatorEmailsTable.translatorId, userId))
+      .orderBy(translatorEmailsTable.createdAt);
+
     const inviteStatus = !user.password ? "pending" : "active";
     res.json({
       user: {
@@ -200,6 +211,7 @@ router.get("/admin/translators/:id", ...adminGuard, async (req, res) => {
       profile: profile ?? null,
       rates,
       translatorProducts,
+      emails: emailRows,
     });
   } catch (err) {
     req.log.error({ err }, "Translators: failed to get detail");
@@ -218,6 +230,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
     languagePairs, languageLevel, specializations, education, major,
     graduationYear, phone, region, grade, rating, availabilityStatus, bio,
     ratePerWord, ratePerPage, unitType, unitPrice, resumeUrl, portfolioUrl,
+    emails,
   } = req.body;
 
   try {
@@ -246,6 +259,25 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
       [profile] = await db.insert(translatorProfilesTable).values({ userId, ...profileData }).returning();
     } else {
       [profile] = await db.update(translatorProfilesTable).set(profileData).where(eq(translatorProfilesTable.userId, userId)).returning();
+    }
+
+    // 이메일 목록 동기화
+    if (Array.isArray(emails)) {
+      const normalized = Array.from(new Set(
+        emails.map((e: string) => e.trim().toLowerCase()).filter(Boolean)
+      ));
+      await db.delete(translatorEmailsTable).where(
+        and(eq(translatorEmailsTable.translatorId, userId), eq(translatorEmailsTable.isPrimary, false))
+      );
+      const primaryRow = await db.select().from(translatorEmailsTable)
+        .where(and(eq(translatorEmailsTable.translatorId, userId), eq(translatorEmailsTable.isPrimary, true)));
+      const primaryEmail = primaryRow[0]?.email ?? user.email;
+      const extras = normalized.filter(e => e !== primaryEmail);
+      if (extras.length > 0) {
+        await db.insert(translatorEmailsTable).values(
+          extras.map(e => ({ translatorId: userId, email: e, isPrimary: false }))
+        );
+      }
     }
 
     res.json(profile);
