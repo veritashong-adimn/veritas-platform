@@ -166,6 +166,27 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       setProfile(data);
+      // 저장 응답값으로 form state 갱신 (학력/전공/졸업연도/전문분야 포함)
+      setForm(prev => ({
+        ...prev,
+        education: data.education ?? "",
+        major: data.major ?? "",
+        graduationYear: data.graduationYear ? String(data.graduationYear) : "",
+        specializations: data.specializations ?? "",
+        languagePairs: data.languagePairs ?? "",
+        languageLevel: data.languageLevel ?? "",
+        region: data.region ?? "",
+        grade: data.grade ?? "",
+        rating: data.rating ? String(data.rating) : "",
+        availabilityStatus: data.availabilityStatus ?? "available",
+        bio: data.bio ?? "",
+        ratePerWord: data.ratePerWord ? String(data.ratePerWord) : "",
+        ratePerPage: data.ratePerPage ? String(data.ratePerPage) : "",
+        unitType: data.unitType ?? "eojeol",
+        unitPrice: data.unitPrice ? String(data.unitPrice) : "",
+        resumeUrl: data.resumeUrl ?? "",
+        portfolioUrl: data.portfolioUrl ?? "",
+      }));
       // 대표 이메일 변경 시 userInfo 갱신
       const newPrimary = validated.find(e => e.isPrimary)?.email.trim().toLowerCase() ?? "";
       if (newPrimary) setUserInfo(prev => prev ? { ...prev, email: newPrimary } : prev);
