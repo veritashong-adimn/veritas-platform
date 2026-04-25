@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
-import { api, Product } from "../../lib/constants";
+import React, { useState, useRef } from "react";
+import { api } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 import { PAYMENT_METHODS } from "./SensitiveInfoModal";
@@ -67,8 +67,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [availableProducts, setAvailableProducts] = useState<Product[]>([]);
-  const [selectedProducts, setSelectedProducts] = useState<Array<{ productId: number; unitPrice: string }>>([]);
   const [rates, setRates] = useState<RateEntry[]>([]);
   const [rateErrors, setRateErrors] = useState<string[]>([]);
   const [form, setForm] = useState({
@@ -82,27 +80,12 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   const backRef = useRef<HTMLInputElement>(null);
   const authH = { Authorization: `Bearer ${token}` };
 
-  useEffect(() => {
-    fetch(api("/api/admin/products"), { headers: authH })
-      .then(r => r.json())
-      .then(d => setAvailableProducts(Array.isArray(d) ? d.filter((p: Product) => p.active) : []))
-      .catch(() => {});
-  }, []);
-
   const setF = (key: keyof typeof form, val: string) => {
     setForm(p => ({ ...p, [key]: val }));
     setErrors(p => { const n = { ...p }; delete n[key]; return n; });
   };
   const setSf = (key: keyof ReturnType<typeof emptySensitive>, val: string | boolean) =>
     setSF(p => ({ ...p, [key]: val }));
-
-  const addProduct = (productId: number) => {
-    if (selectedProducts.find(p => p.productId === productId)) return;
-    setSelectedProducts(p => [...p, { productId, unitPrice: "" }]);
-  };
-  const removeProduct = (id: number) => setSelectedProducts(p => p.filter(x => x.productId !== id));
-  const setProductPrice = (id: number, price: string) =>
-    setSelectedProducts(p => p.map(x => x.productId === id ? { ...x, unitPrice: price } : x));
 
   const validate = () => {
     const e: Record<string, string> = {};
@@ -158,14 +141,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 
       const userId = data.id;
 
-      for (const sp of selectedProducts) {
-        if (!sp.productId) continue;
-        await fetch(api(`/api/admin/translators/${userId}/products`), {
-          method: "POST", headers: { ...authH, "Content-Type": "application/json" },
-          body: JSON.stringify({ productId: sp.productId, unitPrice: sp.unitPrice ? Number(sp.unitPrice) : null }),
-        });
-      }
-
       for (const r of rates) {
         if (!r.workType || !r.unit || !r.rate) continue;
         await fetch(api(`/api/admin/translators/${userId}/rates`), {
@@ -204,8 +179,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
     } catch { onToast("오류: 등록 실패"); }
     finally { setSaving(false); }
   };
-
-  const assignedProductIds = new Set(selectedProducts.map(p => p.productId));
 
   const F = ({ label, field, type = "text", placeholder = "", required = false }: {
     label: string; field: keyof typeof form; type?: string; placeholder?: string; required?: boolean;
@@ -340,40 +313,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         <textarea value={form.bio} onChange={e => setF("bio", e.target.value)} rows={3}
           placeholder="출신학교, 경력 요약, 전문분야, 통역/번역 특징, 주의사항 등" style={{ ...inputStyle, resize: "vertical" }} />
       </div>
-
-      {/* ── 수행 가능 상품 ── */}
-      <p style={sH}>수행 가능 상품</p>
-      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-        <ClickSelect value="" onChange={v => { if (v) addProduct(Number(v)); }}
-          style={{ flex: 1 }} triggerStyle={{ fontSize: 13, padding: "9px 12px", borderRadius: 8, width: "100%" }}
-          options={[
-            { value: "", label: "상품 선택하여 추가..." },
-            ...availableProducts.filter(p => !assignedProductIds.has(p.id))
-              .map(p => ({ value: String(p.id), label: (p.mainCategory ? `[${p.mainCategory}] ` : "") + p.name })),
-          ]}
-        />
-      </div>
-      {selectedProducts.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 4 }}>
-          {selectedProducts.map(sp => {
-            const prod = availableProducts.find(p => p.id === sp.productId);
-            return (
-              <div key={sp.productId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 12px", background: "#f0fdf4", borderRadius: 8, border: "1px solid #bbf7d0" }}>
-                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: "#065f46" }}>
-                  {prod?.mainCategory ? <span style={{ fontSize: 11, color: "#6b7280", marginRight: 4 }}>[{prod.mainCategory}]</span> : null}
-                  {prod?.name ?? `#${sp.productId}`}
-                </span>
-                <input type="number" value={sp.unitPrice} onChange={e => setProductPrice(sp.productId, e.target.value)}
-                  placeholder="단가(원)" style={{ width: 110, padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 12 }} />
-                <span style={{ fontSize: 11, color: "#6b7280" }}>{prod?.unit ?? ""}</span>
-                <button onClick={() => removeProduct(sp.productId)}
-                  style={{ background: "none", border: "none", color: "#dc2626", fontSize: 14, cursor: "pointer", padding: "0 4px" }}>×</button>
-              </div>
-            );
-          })}
-        </div>
-      )}
-      {selectedProducts.length === 0 && <p style={{ color: "#9ca3af", fontSize: 13, padding: "2px 0 6px" }}>수행 가능한 상품이 없습니다.</p>}
 
       {/* ── 단가 등록 ── */}
       <p style={sH}>단가 등록</p>
