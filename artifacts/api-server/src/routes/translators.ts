@@ -71,6 +71,7 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         (t.name ?? "").toLowerCase().includes(s) ||
         (t.phone ?? "").toLowerCase().includes(s) ||
         (t.languagePairs ?? "").toLowerCase().includes(s) ||
+        (t.education ?? "").toLowerCase().includes(s) ||
         (t.region ?? "").toLowerCase().includes(s)
       );
     }

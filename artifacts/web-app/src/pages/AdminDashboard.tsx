@@ -3000,7 +3000,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         }>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
             <input value={translatorSearch} onChange={e => setTranslatorSearch(e.target.value)}
-              placeholder="이름, 이메일, 언어쌍, 지역 검색..."
+              placeholder="이름, 이메일, 언어쌍, 학력, 지역 검색..."
               style={{ ...inputStyle, maxWidth: 240, flex: "1 1 180px", padding: "8px 12px", fontSize: 13 }}
               onKeyDown={e => e.key === "Enter" && fetchTranslators()} />
             <input value={translatorLangFilter} onChange={e => setTranslatorLangFilter(e.target.value)}
