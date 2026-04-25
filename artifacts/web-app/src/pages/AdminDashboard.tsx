@@ -3040,9 +3040,28 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                  <colgroup>
+                    <col style={{ width: "17%" }} />
+                    <col style={{ width: "11%" }} />
+                    <col style={{ width: "18%" }} />
+                    <col style={{ width: "15%" }} />
+                    <col style={{ width: "7%" }} />
+                    <col style={{ width: "10%" }} />
+                    <col style={{ width: "7%" }} />
+                    <col style={{ width: "7%" }} />
+                    <col style={{ width: "5%" }} />
+                    <col style={{ width: "8%" }} />
+                  </colgroup>
                   <thead>
-                    <tr>{["이름","언어쌍","학력","전문분야","등급","대표 단가","평점","지역","상태","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                    <tr>
+                      {([ ["이름","left"],["언어쌍","left"],["학력","left"],["전문분야","left"],
+                          ["등급","center"],["대표 단가","center"],["평점","center"],
+                          ["지역","center"],["상태","center"],["등록일","center"],
+                      ] as [string, React.CSSProperties["textAlign"]][]).map(([h, align]) => (
+                        <th key={h} style={{ ...tableTh, textAlign: align }}>{h}</th>
+                      ))}
+                    </tr>
                   </thead>
                   <tbody>
                     {translatorList.map(t => {
@@ -3060,30 +3079,32 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                           {/* 이름 / 이메일 / 휴대폰 */}
-                          <td style={{ ...tableTd, minWidth: 130 }}>
+                          <td style={{ ...tableTd }}>
                             {t.name
                               ? <><span style={{ fontWeight: 700, fontSize: 13, color: "#111827" }}>{t.name}</span><br /><span style={{ color: "#6b7280", fontSize: 11 }}>{t.email}</span></>
                               : <span style={{ fontSize: 13, color: "#374151" }}>{t.email}</span>}
                             {t.phone && <div style={{ fontSize: 11, color: "#9ca3af" }}>{t.phone}</div>}
                           </td>
                           {/* 언어쌍 */}
-                          <td style={{ ...tableTd, fontSize: 12, color: "#374151", maxWidth: 160, whiteSpace: "normal" }}>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>
                             {t.languagePairs ? (
                               <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
                                 {t.languagePairs.split(",").map((lp, i) => (
-                                  <span key={i} style={{ background: "#eff6ff", color: "#1d4ed8", borderRadius: 4, padding: "1px 6px", fontSize: 11, whiteSpace: "nowrap" }}>{lp.trim()}</span>
+                                  <span key={i} style={{ background: "#eff6ff", color: "#1d4ed8", borderRadius: 4, padding: "1px 5px", fontSize: 11, whiteSpace: "nowrap" }}>{lp.trim()}</span>
                                 ))}
                               </div>
                             ) : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
-                          {/* 학력 */}
-                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>
-                            {t.education ? t.education : <span style={{ color: "#d1d5db" }}>-</span>}
+                          {/* 학력 — 최대 2줄 말줄임 */}
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
+                            {t.education
+                              ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden", whiteSpace: "normal" }}>{t.education}</span>
+                              : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
                           {/* 전문분야 */}
-                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", maxWidth: 140, whiteSpace: "normal" }}>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
                             {t.specializations
-                              ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden" }}>{t.specializations}</span>
+                              ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden", whiteSpace: "normal" }}>{t.specializations}</span>
                               : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
                           {/* 등급 */}
@@ -3093,7 +3114,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
                           {/* 대표 단가 */}
-                          <td style={{ ...tableTd, fontSize: 12, textAlign: "right", whiteSpace: "nowrap" }}>
+                          <td style={{ ...tableTd, fontSize: 12, textAlign: "center", whiteSpace: "nowrap" }}>
                             {t.ratePerWord != null
                               ? <span style={{ fontWeight: 700, color: "#059669" }}>{Number(t.ratePerWord).toLocaleString()}원<span style={{ fontWeight: 400, color: "#9ca3af" }}>/어절</span></span>
                               : t.ratePerPage != null
@@ -3105,15 +3126,17 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             {t.rating != null ? <span style={{ fontWeight: 700, color: "#d97706" }}>★ {Number(t.rating).toFixed(1)}</span> : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
                           {/* 지역 */}
-                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>{t.region ?? "-"}</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", textAlign: "center", whiteSpace: "nowrap" }}>{t.region ?? "-"}</td>
                           {/* 상태 */}
-                          <td style={{ ...tableTd, textAlign: "center", whiteSpace: "nowrap" }}>
-                            <span style={{ padding: "2px 8px", borderRadius: 10, background: statusBg, color: statusColor, fontSize: 11, fontWeight: 700 }}>
-                              {AVAILABILITY_LABEL[t.availabilityStatus ?? "available"] ?? t.availabilityStatus}
-                            </span>
+                          <td style={{ ...tableTd, padding: "9px 4px" }}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+                              <span style={{ padding: "2px 7px", borderRadius: 10, background: statusBg, color: statusColor, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
+                                {AVAILABILITY_LABEL[t.availabilityStatus ?? "available"] ?? t.availabilityStatus}
+                              </span>
+                            </div>
                           </td>
                           {/* 등록일 */}
-                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap", textAlign: "center" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</td>
                         </tr>
                       );
                     })}
