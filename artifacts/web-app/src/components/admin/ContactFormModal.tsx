@@ -88,9 +88,14 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
     return { ...emptyForm };
   });
 
+  type CrossCompanyDup = { id: number; name: string; companyName: string; mobile: string | null; email: string | null };
+  type WarningState =
+    | { kind: "same_company"; message: string }
+    | { kind: "cross_company"; message: string; duplicates: CrossCompanyDup[] };
+
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
-  const [warning, setWarning] = useState<string | null>(null);
+  const [warning, setWarning] = useState<WarningState | null>(null);
 
   // ── 거래처 검색 (create 전용) ───────────────────────────────────────────────
   const [companyQuery, setCompanyQuery] = useState("");
@@ -163,7 +168,11 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
         return;
       }
       if (mode === "create" && res.status === 200 && data.warning) {
-        setWarning(data.warning);
+        if (data.type === "cross_company_duplicate") {
+          setWarning({ kind: "cross_company", message: data.message, duplicates: data.duplicates ?? [] });
+        } else {
+          setWarning({ kind: "same_company", message: data.message });
+        }
         return;
       }
       if (!res.ok) {
@@ -428,12 +437,12 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
         </div>
       </div>
 
-      {/* ── 중복 경고 확인 오버레이 (create 전용) ── */}
-      {warning && (
+      {/* ── 동일 거래처 중복 경고 오버레이 ── */}
+      {warning?.kind === "same_company" && (
         <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 420, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
             <h3 style={{ margin: "0 0 10px", fontSize: 17, fontWeight: 800, color: "#d97706" }}>⚠ 중복 담당자 경고</h3>
-            <p style={{ margin: "0 0 20px", fontSize: 13, color: "#374151", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{warning}</p>
+            <p style={{ margin: "0 0 20px", fontSize: 13, color: "#374151", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{warning.message}</p>
             <p style={{ margin: "0 0 20px", fontSize: 13, color: "#6b7280" }}>동명이인이거나 별도 담당자인 경우 계속 등록할 수 있습니다.</p>
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
               <button
@@ -446,6 +455,44 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
                 disabled={saving}
                 style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: "#d97706", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
                 그래도 등록
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 다른 거래처 중복 경고 오버레이 ── */}
+      {warning?.kind === "cross_company" && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 460, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+            <h3 style={{ margin: "0 0 6px", fontSize: 17, fontWeight: 800, color: "#d97706" }}>⚠ 다른 거래처 동일 담당자 확인</h3>
+            <p style={{ margin: "0 0 14px", fontSize: 13, color: "#374151" }}>
+              다른 거래처에 동일한 휴대폰 또는 이메일을 가진 담당자가 존재합니다.
+            </p>
+            <div style={{ background: "#fefce8", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 14px", marginBottom: 14, maxHeight: 180, overflowY: "auto" }}>
+              {warning.duplicates.map(d => (
+                <div key={d.id} style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", fontSize: 13, padding: "6px 0", borderBottom: "1px solid #fde68a" }}>
+                  <span style={{ fontWeight: 700, color: "#92400e" }}>{d.companyName}</span>
+                  <span style={{ color: "#374151" }}>/ {d.name}</span>
+                  {d.mobile && <span style={{ color: "#6b7280" }}>{d.mobile}</span>}
+                  {d.email && <span style={{ color: "#6b7280" }}>{d.email}</span>}
+                </div>
+              ))}
+            </div>
+            <p style={{ margin: "0 0 20px", fontSize: 12, color: "#6b7280" }}>
+              이직 또는 겸직 담당자일 수 있습니다. 계속 등록하시겠습니까?
+            </p>
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setWarning(null)}
+                style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
+                취소
+              </button>
+              <button
+                onClick={() => { setWarning(null); save(true); }}
+                disabled={saving}
+                style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: "#d97706", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                {saving ? "등록 중..." : "계속 등록"}
               </button>
             </div>
           </div>

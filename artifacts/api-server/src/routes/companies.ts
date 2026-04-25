@@ -680,6 +680,44 @@ async function createContact(req: any, res: any, targetCompanyId: number) {
       res.status(200).json({ warning: true, message: warnings.join(" / "), warnings, duplicateContact });
       return;
     }
+
+    // ④ 다른 거래처 동일 휴대폰/이메일 검사 (cross-company)
+    if (normalizedMobile || normalizedEmail) {
+      const orParts: ReturnType<typeof sql>[] = [];
+      if (normalizedMobile) {
+        orParts.push(sql`regexp_replace(${contactsTable.mobile}, '[^0-9]', '', 'g') = ${normalizedMobile}`);
+      }
+      if (normalizedEmail) {
+        orParts.push(sql`lower(${contactsTable.email}) = ${normalizedEmail}`);
+      }
+      const crossDups = await db
+        .select({
+          id: contactsTable.id,
+          name: contactsTable.name,
+          mobile: contactsTable.mobile,
+          email: contactsTable.email,
+          companyName: companiesTable.name,
+        })
+        .from(contactsTable)
+        .innerJoin(companiesTable, eq(contactsTable.companyId, companiesTable.id))
+        .where(and(
+          ne(contactsTable.companyId, targetCompanyId),
+          eq(contactsTable.isActive, true),
+          orParts.length === 1 ? orParts[0] : or(...orParts),
+        ));
+      if (crossDups.length > 0) {
+        res.status(200).json({
+          warning: true,
+          type: "cross_company_duplicate",
+          message: "다른 거래처에 동일한 휴대폰 또는 이메일을 가진 담당자가 존재합니다.",
+          duplicates: crossDups.map(c => ({
+            id: c.id, name: c.name, companyName: c.companyName,
+            mobile: c.mobile, email: c.email,
+          })),
+        });
+        return;
+      }
+    }
   }
 
   // isPrimary = true 이면 기존 기본 담당자 해제
