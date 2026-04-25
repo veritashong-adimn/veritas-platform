@@ -245,14 +245,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
   };
   const labelSt: React.CSSProperties = { fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 };
-  const F = ({ label, field, type = "text", placeholder = "" }: { label: string; field: keyof typeof form; type?: string; placeholder?: string }) => (
-    <div>
-      <label style={labelSt}>{label}</label>
-      <input type={type} value={form[field]} onChange={e => setForm(p => ({ ...p, [field]: e.target.value }))}
-        placeholder={placeholder} style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-    </div>
-  );
-
   const handleReinvite = async () => {
     setReinviting(true);
     try {
@@ -462,17 +454,37 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           {/* ── 프로필 편집 ── */}
           <p style={sH}>프로필 편집</p>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px", marginBottom: 12 }}>
-            <F label="학력" field="education" placeholder="예: 서울대학교" />
-            <F label="전공" field="major" placeholder="예: 영어영문학" />
-            <F label="졸업연도" field="graduationYear" type="number" placeholder="예: 2018" />
-            <F label="전문분야" field="specializations" placeholder="예: 법률, IT, 의학" />
+            <div>
+              <label style={labelSt}>학력</label>
+              <input type="text" value={form.education} onChange={e => setForm(p => ({ ...p, education: e.target.value }))}
+                placeholder="예: 서울대학교" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+            </div>
+            <div>
+              <label style={labelSt}>전공</label>
+              <input type="text" value={form.major} onChange={e => setForm(p => ({ ...p, major: e.target.value }))}
+                placeholder="예: 영어영문학" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+            </div>
+            <div>
+              <label style={labelSt}>졸업연도</label>
+              <input type="number" value={form.graduationYear} onChange={e => setForm(p => ({ ...p, graduationYear: e.target.value }))}
+                placeholder="예: 2018" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+            </div>
+            <div>
+              <label style={labelSt}>전문분야</label>
+              <input type="text" value={form.specializations} onChange={e => setForm(p => ({ ...p, specializations: e.target.value }))}
+                placeholder="예: 법률, IT, 의학" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+            </div>
             <div>
               <label style={labelSt}>등급</label>
               <ClickSelect value={form.grade} onChange={v => setForm(p => ({ ...p, grade: v }))}
                 style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
                 options={[{ value: "", label: "등급 없음" }, ...GRADE_OPTIONS.map(g => ({ value: g, label: `${g}등급` }))]} />
             </div>
-            <F label="평점 (1-5)" field="rating" type="number" placeholder="예: 4.5" />
+            <div>
+              <label style={labelSt}>평점 (1-5)</label>
+              <input type="number" value={form.rating} onChange={e => setForm(p => ({ ...p, rating: e.target.value }))}
+                placeholder="예: 4.5" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+            </div>
             <div>
               <label style={labelSt}>가용 상태</label>
               <ClickSelect value={form.availabilityStatus} onChange={v => setForm(p => ({ ...p, availabilityStatus: v }))}
@@ -495,8 +507,16 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   placeholder="단가(원)" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", flex: 1 }} />
               </div>
             </div>
-            <F label="이력서 URL" field="resumeUrl" placeholder="https://..." />
-            <F label="포트폴리오 URL" field="portfolioUrl" placeholder="https://..." />
+            <div>
+              <label style={labelSt}>이력서 URL</label>
+              <input type="text" value={form.resumeUrl} onChange={e => setForm(p => ({ ...p, resumeUrl: e.target.value }))}
+                placeholder="https://..." style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+            </div>
+            <div>
+              <label style={labelSt}>포트폴리오 URL</label>
+              <input type="text" value={form.portfolioUrl} onChange={e => setForm(p => ({ ...p, portfolioUrl: e.target.value }))}
+                placeholder="https://..." style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+            </div>
           </div>
           <div style={{ marginBottom: 12 }}>
             <label style={labelSt}>상세정보 (경력·특이사항)</label>
