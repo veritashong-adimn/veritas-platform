@@ -290,6 +290,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [savingNewContact, setSavingNewContact] = useState(false);
   const [companySearchQuery, setCompanySearchQuery] = useState("");
   const [newContactDivisions, setNewContactDivisions] = useState<Division[]>([]);
+  const [contactWarning, setContactWarning] = useState<{ message: string } | null>(null);
 
   // translators tab state
   const [translatorList, setTranslatorList] = useState<TranslatorListItem[]>([]);
@@ -486,7 +487,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     finally { setContactsLoading(false); }
   }, [token, contactSearch]);
 
-  const handleCreateContact = async () => {
+  const handleCreateContact = async (force = false) => {
     const errs: Record<string, string> = {};
     if (!newContactForm.companyId) errs.companyId = "거래처를 선택해주세요.";
     if (!newContactForm.name.trim()) errs.name = "담당자명은 필수입니다.";
@@ -499,10 +500,26 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       const res = await fetch(api("/api/admin/contacts"), {
         method: "POST",
         headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify(newContactForm),
+        body: JSON.stringify({ ...newContactForm, force }),
       });
       const data = await res.json();
+
+      // ① 휴대폰 중복 — 강제 차단
+      if (res.status === 409) {
+        setToast(`오류: ${data.error}`);
+        return;
+      }
+
+      // ② 이메일·이름 중복 경고 — 확인 후 진행 가능
+      if (res.status === 200 && data.warning) {
+        setContactWarning({ message: data.message });
+        return;
+      }
+
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+
+      // 성공
+      setContactWarning(null);
       setShowCreateContactModal(false);
       setNewContactForm(emptyNewContactForm);
       setNewContactErrors({});
@@ -2837,12 +2854,38 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
                   {/* 저장/취소 */}
                   <div style={{ display: "flex", gap: 10, paddingTop: 4 }}>
-                    <PrimaryBtn onClick={handleCreateContact} disabled={savingNewContact} style={{ flex: 1, fontSize: 14, padding: "10px" }}>
+                    <PrimaryBtn onClick={() => handleCreateContact(false)} disabled={savingNewContact} style={{ flex: 1, fontSize: 14, padding: "10px" }}>
                       {savingNewContact ? "등록 중..." : "담당자 등록"}
                     </PrimaryBtn>
-                    <GhostBtn onClick={() => setShowCreateContactModal(false)} style={{ fontSize: 14, padding: "10px 20px" }}>취소</GhostBtn>
+                    <GhostBtn onClick={() => { setShowCreateContactModal(false); setContactWarning(null); }} style={{ fontSize: 14, padding: "10px 20px" }}>취소</GhostBtn>
                   </div>
                 </div>
+
+                {/* ── 중복 경고 확인 오버레이 ── */}
+                {contactWarning && (
+                  <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <div style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 420, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+                      <h3 style={{ margin: "0 0 10px", fontSize: 17, fontWeight: 800, color: "#d97706" }}>⚠ 중복 담당자 경고</h3>
+                      <p style={{ margin: "0 0 20px", fontSize: 13, color: "#374151", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+                        {contactWarning.message}
+                      </p>
+                      <p style={{ margin: "0 0 20px", fontSize: 13, color: "#6b7280" }}>동명이인이거나 별도 담당자인 경우 계속 등록할 수 있습니다.</p>
+                      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                        <button
+                          onClick={() => setContactWarning(null)}
+                          style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
+                          취소 (다시 확인)
+                        </button>
+                        <button
+                          onClick={() => { setContactWarning(null); handleCreateContact(true); }}
+                          disabled={savingNewContact}
+                          style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: "#d97706", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                          {savingNewContact ? "등록 중..." : "계속 등록"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
             </DraggableModal>
           )}
 

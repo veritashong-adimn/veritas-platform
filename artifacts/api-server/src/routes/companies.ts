@@ -594,11 +594,12 @@ async function createContact(req: any, res: any, targetCompanyId: number) {
   const {
     name, department, position, email, phone, mobile, officePhone, notes, memo,
     isPrimary, isQuoteContact, isBillingContact, isActive, divisionId,
+    force,
   } = req.body as {
     name?: string; department?: string; position?: string; email?: string; phone?: string;
     mobile?: string; officePhone?: string; notes?: string; memo?: string;
     isPrimary?: boolean; isQuoteContact?: boolean; isBillingContact?: boolean; isActive?: boolean;
-    divisionId?: number | null;
+    divisionId?: number | null; force?: boolean;
   };
 
   if (!name?.trim()) { res.status(400).json({ error: "담당자명은 필수입니다." }); return; }
@@ -619,6 +620,68 @@ async function createContact(req: any, res: any, targetCompanyId: number) {
     if (!div) { res.status(400).json({ error: "선택한 브랜드/부서가 해당 거래처에 속하지 않습니다." }); return; }
   }
 
+  // ── 정규화 ────────────────────────────────────────────────────────────────
+  const normalizedMobile = mobile?.trim() ? mobile.replace(/\D/g, "") : null;
+  const normalizedEmail  = email?.trim()  ? email.trim().toLowerCase()  : null;
+
+  // ① 휴대폰 중복 검사 (강제 차단 — force 플래그 무시)
+  if (normalizedMobile) {
+    const activeMobiles = await db
+      .select({ id: contactsTable.id, name: contactsTable.name, mobile: contactsTable.mobile })
+      .from(contactsTable)
+      .where(and(eq(contactsTable.companyId, targetCompanyId), eq(contactsTable.isActive, true)));
+
+    const mobileConflict = activeMobiles.find(
+      c => c.mobile && c.mobile.replace(/\D/g, "") === normalizedMobile,
+    );
+    if (mobileConflict) {
+      res.status(409).json({
+        error: `이미 동일한 휴대폰 번호의 담당자가 존재합니다. (${mobileConflict.name})`,
+        duplicateContact: { id: mobileConflict.id, name: mobileConflict.name },
+      });
+      return;
+    }
+  }
+
+  // ② 이메일 / ③ 이름 중복 경고 (force=true 이면 건너뜀)
+  if (!force) {
+    const warnings: string[] = [];
+    let duplicateContact: { id: number; name: string } | null = null;
+
+    if (normalizedEmail) {
+      const [emailDup] = await db
+        .select({ id: contactsTable.id, name: contactsTable.name })
+        .from(contactsTable)
+        .where(and(
+          eq(contactsTable.companyId, targetCompanyId),
+          sql`lower(${contactsTable.email}) = ${normalizedEmail}`,
+          eq(contactsTable.isActive, true),
+        ));
+      if (emailDup) {
+        warnings.push(`동일한 이메일을 사용하는 담당자가 이미 존재합니다. (${emailDup.name})`);
+        duplicateContact = emailDup;
+      }
+    }
+
+    const [nameDup] = await db
+      .select({ id: contactsTable.id, name: contactsTable.name })
+      .from(contactsTable)
+      .where(and(
+        eq(contactsTable.companyId, targetCompanyId),
+        eq(contactsTable.name, name.trim()),
+        eq(contactsTable.isActive, true),
+      ));
+    if (nameDup) {
+      warnings.push(`동일한 이름의 담당자가 이미 존재합니다. (${nameDup.name}) 동명이인 여부를 확인하세요.`);
+      if (!duplicateContact) duplicateContact = nameDup;
+    }
+
+    if (warnings.length > 0) {
+      res.status(200).json({ warning: true, message: warnings.join(" / "), warnings, duplicateContact });
+      return;
+    }
+  }
+
   // isPrimary = true 이면 기존 기본 담당자 해제
   if (isPrimary) {
     await db.update(contactsTable)
@@ -631,8 +694,10 @@ async function createContact(req: any, res: any, targetCompanyId: number) {
     .values({
       companyId: targetCompanyId, name: name.trim(),
       department: department ?? null, position: position ?? null,
-      email: email?.trim() ?? null, phone: phone?.trim() ?? null,
-      mobile: mobile?.trim() ?? null, officePhone: officePhone?.trim() ?? null,
+      email: normalizedEmail,
+      phone: phone?.trim() || null,
+      mobile: normalizedMobile,
+      officePhone: officePhone?.trim() || null,
       notes: notes ?? null, memo: memo ?? null,
       isPrimary: isPrimary ?? false,
       isQuoteContact: isQuoteContact ?? false,
