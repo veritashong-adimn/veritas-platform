@@ -22,7 +22,15 @@ const grid2: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 
 const grid3: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px 14px" };
 
 const GRADES = ["S", "A", "B", "C"];
-const LANG_LEVELS = ["일반", "비즈니스", "전문"];
+const LANG_LEVELS = ["일반", "전문"];
+const WORK_TYPES = ["번역", "통역", "편집", "감수", "기타"];
+const UNIT_OPTIONS = [
+  { value: "word",   label: "단어" },
+  { value: "eojeol", label: "어절" },
+  { value: "char",   label: "글자" },
+  { value: "page",   label: "페이지" },
+  { value: "hour",   label: "시간" },
+];
 const COMMON_SPECIALIZATIONS = ["IT", "법률", "의료/제약", "금융", "특허", "문학/출판", "기술/공학", "마케팅", "방송/미디어", "게임"];
 const CURRENCIES = ["KRW", "USD", "EUR", "JPY", "GBP", "CAD", "AUD", "CNY", "HKD", "SGD"];
 const FEE_PAYER_OPTIONS = [
@@ -49,16 +57,19 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 }) {
   const hasPerm = (key: string) => permissions.includes(key) || permissions.includes("*");
 
+  type RateEntry = { workType: string; unit: string; rate: string; memo: string };
+
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [availableProducts, setAvailableProducts] = useState<Product[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<Array<{ productId: number; unitPrice: string }>>([]);
   const [selectedSpecs, setSelectedSpecs] = useState<string[]>([]);
   const [customSpec, setCustomSpec] = useState("");
+  const [rates, setRates] = useState<RateEntry[]>([]);
+  const [rateErrors, setRateErrors] = useState<string[]>([]);
   const [form, setForm] = useState({
     email: "", name: "", phone: "", region: "",
     languagePairs: "", languageLevel: "", grade: "", bio: "",
-    unitType: "eojeol", unitPrice: "",
     resumeUrl: "", availabilityStatus: "available",
   });
   const [createdInvite, setCreatedInvite] = useState<{ email: string; inviteToken: string } | null>(null);
@@ -108,6 +119,17 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         ...(customSpec.trim() ? customSpec.split(",").map(s => s.trim()).filter(Boolean) : []),
       ].join(", ") || undefined;
 
+      // 단가 중복 검사 (클라이언트)
+      const seen = new Set<string>();
+      const rErr: string[] = rates.map(_ => "");
+      let hasDup = false;
+      rates.forEach((r, i) => {
+        const key = `${r.workType}|${r.unit}`;
+        if (seen.has(key)) { rErr[i] = "동일한 업무유형+단가단위 조합이 중복됩니다."; hasDup = true; }
+        else seen.add(key);
+      });
+      if (hasDup) { setRateErrors(rErr); return; }
+
       const res = await fetch(api("/api/admin/translators"), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -118,8 +140,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           languageLevel: form.languageLevel || undefined,
           specializations, grade: form.grade || undefined,
           bio: form.bio.trim() || undefined,
-          unitType: form.unitType || "eojeol",
-          unitPrice: form.unitPrice ? Number(form.unitPrice) : undefined,
           resumeUrl: form.resumeUrl.trim() || undefined,
           availabilityStatus: form.availabilityStatus,
         }),
@@ -139,6 +159,14 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         await fetch(api(`/api/admin/translators/${userId}/products`), {
           method: "POST", headers: { ...authH, "Content-Type": "application/json" },
           body: JSON.stringify({ productId: sp.productId, unitPrice: sp.unitPrice ? Number(sp.unitPrice) : null }),
+        });
+      }
+
+      for (const r of rates) {
+        if (!r.workType || !r.unit || !r.rate) continue;
+        await fetch(api(`/api/admin/translators/${userId}/rates`), {
+          method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+          body: JSON.stringify({ workType: r.workType, unit: r.unit, rate: Number(r.rate), memo: r.memo || null }),
         });
       }
 
@@ -253,9 +281,9 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       {/* ── 기본 정보 ── */}
       <p style={sH}>기본 정보</p>
       <div style={grid2}>
-        <F label="이메일" field="email" type="email" placeholder="example@email.com" required />
         <F label="이름" field="name" placeholder="홍길동" required />
         <F label="휴대폰" field="phone" placeholder="010-0000-0000" />
+        <F label="이메일" field="email" type="email" placeholder="example@email.com" required />
         <F label="지역" field="region" placeholder="서울, 경기..." />
       </div>
 
@@ -328,26 +356,81 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         </div>
       )}
 
-      {/* ── 등급 & 단가 ── */}
-      <p style={sH}>등급 & 기본 단가</p>
-      <div style={grid3}>
-        <div>
-          <label style={labelSt}>등급</label>
-          <ClickSelect value={form.grade} onChange={v => setF("grade", v)}
-            style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8 }}
-            options={[{ value: "", label: "등급 없음" }, ...GRADES.map(g => ({ value: g, label: `${g}등급` }))]} />
-        </div>
-        <div>
-          <label style={labelSt}>단가 단위</label>
-          <ClickSelect value={form.unitType} onChange={v => setF("unitType", v)}
-            style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8 }}
-            options={[
-              { value: "eojeol", label: "어절" }, { value: "char", label: "글자" },
-              { value: "page", label: "페이지" }, { value: "hour", label: "시간" },
-            ]} />
-        </div>
-        <F label="기본 단가 (원)" field="unitPrice" type="number" placeholder="예: 40" />
+      {/* ── 등급 ── */}
+      <p style={sH}>등급</p>
+      <div style={{ maxWidth: 200 }}>
+        <label style={labelSt}>등급</label>
+        <ClickSelect value={form.grade} onChange={v => setF("grade", v)}
+          style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8 }}
+          options={[{ value: "", label: "등급 없음" }, ...GRADES.map(g => ({ value: g, label: `${g}등급` }))]} />
       </div>
+
+      {/* ── 단가 등록 ── */}
+      <p style={sH}>단가 등록</p>
+      {rates.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+          {rates.map((r, i) => (
+            <div key={i} style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 14px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 2fr auto", gap: "8px 10px", alignItems: "end" }}>
+                {/* 업무유형 */}
+                <div>
+                  <label style={{ ...labelSt, marginBottom: 3 }}>업무유형</label>
+                  <ClickSelect
+                    value={r.workType}
+                    onChange={v => { setRates(p => p.map((x, idx) => idx === i ? { ...x, workType: v } : x)); setRateErrors(p => { const n = [...p]; n[i] = ""; return n; }); }}
+                    style={{ width: "100%" }}
+                    triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 7 }}
+                    options={WORK_TYPES.map(w => ({ value: w, label: w }))}
+                  />
+                </div>
+                {/* 단가단위 */}
+                <div>
+                  <label style={{ ...labelSt, marginBottom: 3 }}>단가단위</label>
+                  <ClickSelect
+                    value={r.unit}
+                    onChange={v => { setRates(p => p.map((x, idx) => idx === i ? { ...x, unit: v } : x)); setRateErrors(p => { const n = [...p]; n[i] = ""; return n; }); }}
+                    style={{ width: "100%" }}
+                    triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 7 }}
+                    options={UNIT_OPTIONS}
+                  />
+                </div>
+                {/* 기본단가 */}
+                <div>
+                  <label style={{ ...labelSt, marginBottom: 3 }}>기본단가 (원)</label>
+                  <input
+                    type="number" value={r.rate}
+                    onChange={e => setRates(p => p.map((x, idx) => idx === i ? { ...x, rate: e.target.value } : x))}
+                    placeholder="예: 40"
+                    style={{ ...inputStyle, padding: "7px 10px" }}
+                  />
+                </div>
+                {/* 메모 */}
+                <div>
+                  <label style={{ ...labelSt, marginBottom: 3 }}>메모</label>
+                  <input
+                    type="text" value={r.memo}
+                    onChange={e => setRates(p => p.map((x, idx) => idx === i ? { ...x, memo: e.target.value } : x))}
+                    placeholder="특이사항 등"
+                    style={{ ...inputStyle, padding: "7px 10px" }}
+                  />
+                </div>
+                {/* 삭제 */}
+                <button
+                  onClick={() => { setRates(p => p.filter((_, idx) => idx !== i)); setRateErrors(p => p.filter((_, idx) => idx !== i)); }}
+                  style={{ background: "none", border: "none", color: "#dc2626", fontSize: 18, cursor: "pointer", padding: "0 4px", marginBottom: 2 }}>
+                  ×
+                </button>
+              </div>
+              {rateErrors[i] && <p style={{ ...errStyle, marginTop: 4 }}>{rateErrors[i]}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+      <button
+        onClick={() => setRates(p => [...p, { workType: "번역", unit: "eojeol", rate: "", memo: "" }])}
+        style={{ fontSize: 13, fontWeight: 600, padding: "8px 16px", borderRadius: 8, border: "1.5px dashed #9ca3af", background: "#f9fafb", color: "#374151", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+        + 단가 추가
+      </button>
 
       {/* ── 파일/기타 ── */}
       <p style={sH}>파일 & 기타</p>

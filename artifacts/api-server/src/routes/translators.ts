@@ -417,16 +417,38 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
   if (isNaN(userId) || userId <= 0) {
     res.status(400).json({ error: "유효하지 않은 user id." }); return;
   }
-  const { serviceType, languagePair, unit, rate } = req.body as {
-    serviceType?: string; languagePair?: string; unit?: string; rate?: number;
+  const { serviceType, workType, languagePair, unit, rate, memo } = req.body as {
+    serviceType?: string; workType?: string; languagePair?: string;
+    unit?: string; rate?: number; memo?: string;
   };
-  if (!serviceType?.trim() || !languagePair?.trim() || !rate) {
-    res.status(400).json({ error: "서비스 유형, 언어조합, 단가는 필수입니다." }); return;
+  const resolvedServiceType = (workType ?? serviceType)?.trim();
+  if (!resolvedServiceType || rate == null) {
+    res.status(400).json({ error: "업무유형과 단가는 필수입니다." }); return;
   }
+  const resolvedUnit = unit?.trim() || "word";
   try {
+    // 중복 차단: 동일 통번역사 + 동일 업무유형 + 동일 단가단위
+    const [dup] = await db.select({ id: translatorRatesTable.id })
+      .from(translatorRatesTable)
+      .where(and(
+        eq(translatorRatesTable.translatorId, userId),
+        eq(translatorRatesTable.serviceType, resolvedServiceType),
+        eq(translatorRatesTable.unit, resolvedUnit),
+      ));
+    if (dup) {
+      res.status(409).json({ error: `이미 동일한 단가 항목이 존재합니다. (${resolvedServiceType} / ${resolvedUnit})` });
+      return;
+    }
     const [newRate] = await db
       .insert(translatorRatesTable)
-      .values({ translatorId: userId, serviceType: serviceType.trim(), languagePair: languagePair.trim(), unit: unit ?? "word", rate: Number(rate) })
+      .values({
+        translatorId: userId,
+        serviceType: resolvedServiceType,
+        languagePair: languagePair?.trim() || null,
+        unit: resolvedUnit,
+        rate: Number(rate),
+        memo: memo?.trim() || null,
+      })
       .returning();
     res.status(201).json(newRate);
   } catch (err) {
