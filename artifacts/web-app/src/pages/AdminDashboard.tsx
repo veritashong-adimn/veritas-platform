@@ -1319,6 +1319,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <span style={{ fontSize: 15, fontWeight: 700, color: "#111827", flex: 1 }}>
               {PAGE_TITLE[adminTab] ?? "관리자"}
             </span>
+            <span style={{ fontSize: 10, color: "#fff", background: "#dc2626", borderRadius: 4, padding: "2px 7px", fontWeight: 700, letterSpacing: 0.5 }}>
+              REAL BUILD 8dfae0a
+            </span>
             <GhostBtn onClick={fetchAll} disabled={loading} style={{ fontSize: 12, padding: "5px 12px" }}>
               {loading ? "로딩..." : "새로고침"}
             </GhostBtn>
