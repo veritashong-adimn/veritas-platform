@@ -175,7 +175,7 @@ export type AdminContact = {
 };
 export type TranslatorRate = {
   id: number; translatorId: number; serviceType: string; subType: string | null;
-  languagePair: string | null; unit: string; rate: number; memo: string | null; createdAt: string;
+  language: string | null; languagePair: string | null; unit: string; rate: number; memo: string | null; createdAt: string;
 };
 export type TranslatorListItem = {
   id: number; email: string; name: string | null; isActive: boolean; createdAt: string;

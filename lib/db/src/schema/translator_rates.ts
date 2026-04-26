@@ -8,6 +8,7 @@ export const translatorRatesTable = pgTable("translator_rates", {
     .references(() => usersTable.id),
   serviceType: text("service_type").notNull(),
   subType: text("sub_type"),
+  language: text("language"),
   languagePair: text("language_pair"),
   unit: text("unit").notNull().default("word"),
   rate: real("rate").notNull(),

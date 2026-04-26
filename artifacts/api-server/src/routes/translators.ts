@@ -634,8 +634,8 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
   if (isNaN(userId) || userId <= 0) {
     res.status(400).json({ error: "유효하지 않은 user id." }); return;
   }
-  const { serviceType, workType, subType, languagePair, unit, rate, memo } = req.body as {
-    serviceType?: string; workType?: string; subType?: string; languagePair?: string;
+  const { serviceType, workType, subType, language, languagePair, unit, rate, memo } = req.body as {
+    serviceType?: string; workType?: string; subType?: string; language?: string; languagePair?: string;
     unit?: string; rate?: number; memo?: string;
   };
   const resolvedServiceType = (workType ?? serviceType)?.trim();
@@ -644,21 +644,23 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
   }
   const resolvedUnit = unit?.trim() || "word";
   const resolvedSubType = subType?.trim() || null;
+  const resolvedLanguage = language?.trim() || null;
   const resolvedLangPair = languagePair?.trim() || null;
   try {
-    // 중복 차단: 업무유형 + 세부유형 + 언어방향 + 단가단위
+    // 중복 차단: 업무유형 + 세부유형 + 언어 + 언어방향 + 단가단위
     const dupConditions = [
       eq(translatorRatesTable.translatorId, userId),
       eq(translatorRatesTable.serviceType, resolvedServiceType),
       eq(translatorRatesTable.unit, resolvedUnit),
       resolvedSubType ? eq(translatorRatesTable.subType, resolvedSubType) : sql`${translatorRatesTable.subType} IS NULL`,
+      resolvedLanguage ? eq(translatorRatesTable.language, resolvedLanguage) : sql`${translatorRatesTable.language} IS NULL`,
       resolvedLangPair ? eq(translatorRatesTable.languagePair, resolvedLangPair) : sql`${translatorRatesTable.languagePair} IS NULL`,
     ];
     const [dup] = await db.select({ id: translatorRatesTable.id })
       .from(translatorRatesTable)
       .where(and(...dupConditions));
     if (dup) {
-      const label = [resolvedServiceType, resolvedSubType, resolvedLangPair, resolvedUnit].filter(Boolean).join(" / ");
+      const label = [resolvedServiceType, resolvedSubType, resolvedLanguage, resolvedLangPair, resolvedUnit].filter(Boolean).join(" / ");
       res.status(409).json({ error: `이미 동일한 단가 항목이 존재합니다. (${label})` });
       return;
     }
@@ -668,6 +670,7 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
         translatorId: userId,
         serviceType: resolvedServiceType,
         subType: resolvedSubType,
+        language: resolvedLanguage,
         languagePair: resolvedLangPair,
         unit: resolvedUnit,
         rate: Number(rate),

@@ -52,7 +52,28 @@ const UNIT_BY_TYPE: Record<string, { value: string; label: string }[]> = {
   "번역": TRANS_UNITS, "통역": INTERP_UNITS, "편집": TRANS_UNITS,
   "감수": TRANS_UNITS, "직접입력": [...TRANS_UNITS, ...INTERP_UNITS.filter(u => u.value !== "item")],
 };
-const LANG_DIRECTIONS = ["한→영", "영→한", "한→중", "중→한", "한→일", "일→한", "영→중", "중→영", "기타"];
+const languageDirectionMap: Record<string, string[]> = {
+  영어: ["한→영", "영→한"], 일본어: ["한→일", "일→한"], 중국어: ["한→중", "중→한"],
+  러시아어: ["한→러", "러→한"], 스페인어: ["한→스", "스→한"], 독일어: ["한→독", "독→한"],
+  프랑스어: ["한→프", "프→한"], 아랍어: ["한→아", "아→한"], 이탈리아어: ["한→이", "이→한"],
+  터키어: ["한→터", "터→한"], 포르투갈어: ["한→포", "포→한"], 폴란드어: ["한→폴", "폴→한"],
+  스웨덴어: ["한→스웨", "스웨→한"], 네덜란드어: ["한→네", "네→한"], 그리스어: ["한→그", "그→한"],
+  체코어: ["한→체", "체→한"], 페르시아어: ["한→페", "페→한"], 히브리어: ["한→히", "히→한"],
+  베트남어: ["한→베", "베→한"], 몽골어: ["한→몽", "몽→한"], 태국어: ["한→태", "태→한"],
+  인도네시아어: ["한→인니", "인니→한"], 캄보디아어: ["한→캄", "캄→한"], 인도어: ["한→인", "인→한"],
+  파키스탄어: ["한→파", "파→한"], 스리랑카어: ["한→스리", "스리→한"], 방글라데시어: ["한→방", "방→한"],
+  미얀마어: ["한→미", "미→한"], 라오스어: ["한→라", "라→한"], 광동어: ["한→광", "광→한"],
+  우즈베키스탄어: ["한→우즈", "우즈→한"], 우크라이나어: ["한→우크", "우크→한"], 기타어: [],
+};
+const LANGUAGES = Object.keys(languageDirectionMap);
+const getLangDirs = (language: string, langCustom: string): string[] => {
+  if (language === "기타어") {
+    const name = langCustom.trim();
+    if (!name) return [];
+    return [`한→${name}`, `${name}→한`];
+  }
+  return languageDirectionMap[language] ?? [];
+};
 const CURRENCIES = ["KRW", "USD", "EUR", "JPY", "GBP", "CAD", "AUD", "CNY", "HKD", "SGD"];
 const FEE_PAYER_OPTIONS = [
   { value: "sender",    label: "송금인 부담 (당사)" },
@@ -78,7 +99,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 }) {
   const hasPerm = (key: string) => permissions.includes(key) || permissions.includes("*");
 
-  type RateEntry = { workType: string; subType: string; langDir: string; unit: string; rate: string; memo: string };
+  type RateEntry = { workType: string; subType: string; language: string; langCustom: string; langDir: string; unit: string; rate: string; memo: string };
 
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -121,8 +142,9 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       const rErr: string[] = rates.map(_ => "");
       let hasDup = false;
       rates.forEach((r, i) => {
-        const key = `${r.workType}|${r.subType}|${r.langDir}|${r.unit}`;
-        if (seen.has(key)) { rErr[i] = "동일한 업무유형+세부유형+언어방향+단가단위 조합이 중복됩니다."; hasDup = true; }
+        const langVal = r.language === "기타어" ? r.langCustom.trim() || "기타어" : r.language.trim();
+        const key = `${r.workType}|${r.subType}|${langVal}|${r.langDir}|${r.unit}`;
+        if (seen.has(key)) { rErr[i] = "동일한 업무유형+세부유형+언어+언어방향+단가단위 조합이 중복됩니다."; hasDup = true; }
         else seen.add(key);
       });
       if (hasDup) { setRateErrors(rErr); return; }
@@ -157,11 +179,13 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 
       for (const r of rates) {
         if (!r.workType || !r.unit || !r.rate) continue;
+        const langVal = r.language === "기타어" ? r.langCustom.trim() || "기타어" : r.language.trim() || null;
         await fetch(api(`/api/admin/translators/${userId}/rates`), {
           method: "POST", headers: { ...authH, "Content-Type": "application/json" },
           body: JSON.stringify({
             workType: r.workType,
             subType: r.subType.trim() || null,
+            language: langVal,
             languagePair: r.langDir.trim() || null,
             unit: r.unit,
             rate: Number(r.rate),
@@ -371,8 +395,8 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
             const unitOpts = UNIT_BY_TYPE[r.workType] ?? TRANS_UNITS;
             return (
               <div key={i} style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 14px" }}>
-                {/* 행 1: 업무유형 / 세부유형 / 언어방향 / 삭제 */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: "6px 8px", marginBottom: 6, alignItems: "end" }}>
+                {/* 행 1: 업무유형 / 세부유형 / 언어 / 언어방향 / 삭제 */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: "6px 8px", marginBottom: 6, alignItems: "end" }}>
                   <div>
                     <label style={{ ...labelSt, marginBottom: 2 }}>업무유형</label>
                     <ClickSelect value={r.workType}
@@ -403,14 +427,46 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                     )}
                   </div>
                   <div>
+                    <label style={{ ...labelSt, marginBottom: 2 }}>언어</label>
+                    <ClickSelect value={r.language}
+                      onChange={v => {
+                        const dirs = getLangDirs(v, r.langCustom);
+                        updateRate({ language: v, langDir: dirs[0] ?? "" });
+                        clearRateErr();
+                      }}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 7 }}
+                      options={LANGUAGES.map(l => ({ value: l, label: l }))} />
+                    {r.language === "기타어" && (
+                      <input value={r.langCustom}
+                        onChange={e => {
+                          const val = e.target.value;
+                          const dirs = getLangDirs("기타어", val);
+                          updateRate({ langCustom: val, langDir: dirs[0] ?? "" });
+                          clearRateErr();
+                        }}
+                        placeholder="기타 언어명 (예: 말레이어)"
+                        style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, marginTop: 4 }} />
+                    )}
+                  </div>
+                  <div>
                     <label style={{ ...labelSt, marginBottom: 2 }}>언어방향</label>
-                    <input list={`langdir-${i}`} value={r.langDir}
-                      onChange={e => { updateRate({ langDir: e.target.value }); clearRateErr(); }}
-                      placeholder="예: 한→영"
-                      style={{ ...inputStyle, padding: "7px 10px", fontSize: 13 }} />
-                    <datalist id={`langdir-${i}`}>
-                      {LANG_DIRECTIONS.map(d => <option key={d} value={d} />)}
-                    </datalist>
+                    {(() => {
+                      const dirs = getLangDirs(r.language, r.langCustom);
+                      return dirs.length > 0 ? (
+                        <ClickSelect value={r.langDir}
+                          onChange={v => { updateRate({ langDir: v }); clearRateErr(); }}
+                          style={{ width: "100%" }}
+                          triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 7 }}
+                          options={dirs.map(d => ({ value: d, label: d }))} />
+                      ) : (
+                        <input value={r.langDir}
+                          onChange={e => { updateRate({ langDir: e.target.value }); clearRateErr(); }}
+                          placeholder={r.language === "기타어" ? "언어명 입력 후 자동 생성" : "언어방향"}
+                          style={{ ...inputStyle, padding: "7px 10px", fontSize: 13, color: "#9ca3af" }}
+                          readOnly={dirs.length === 0 && r.language !== "기타어"} />
+                      );
+                    })()}
                   </div>
                   <button onClick={() => { setRates(p => p.filter((_, idx) => idx !== i)); setRateErrors(p => p.filter((_, idx) => idx !== i)); }}
                     style={{ background: "none", border: "none", color: "#dc2626", fontSize: 18, cursor: "pointer", padding: "0 4px", marginTop: 16 }}>×</button>
@@ -443,7 +499,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         </div>
       )}
       <button
-        onClick={() => setRates(p => [...p, { workType: "번역", subType: "일반번역", langDir: "한→영", unit: "eojeol", rate: "", memo: "" }])}
+        onClick={() => setRates(p => [...p, { workType: "번역", subType: "일반번역", language: "영어", langCustom: "", langDir: "한→영", unit: "eojeol", rate: "", memo: "" }])}
         style={{ fontSize: 13, fontWeight: 600, padding: "8px 16px", borderRadius: 8, border: "1.5px dashed #9ca3af", background: "#f9fafb", color: "#374151", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
         + 단가 추가
       </button>
