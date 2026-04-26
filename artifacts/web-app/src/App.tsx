@@ -25,16 +25,6 @@ function AccessDenied({ onBack }: { onBack: () => void }) {
   );
 }
 
-const BUILD_BADGE = (
-  <div style={{
-    position: "fixed", bottom: 8, right: 8, zIndex: 99999,
-    background: "#7c3aed", color: "#fff", fontSize: 10, fontWeight: 700,
-    padding: "3px 8px", borderRadius: 4, letterSpacing: 0.5, pointerEvents: "none",
-    opacity: 0.85,
-  }}>
-    PROD BUILD 4e33eeb
-  </div>
-);
 
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
@@ -120,7 +110,7 @@ export default function App() {
     return <InsightDetailPage slug={insightDetailMatch[1]} />;
   }
 
-  if (!token || !user) return <>{BUILD_BADGE}<AuthPage onAuth={handleAuth} /></>;
+  if (!token || !user) return <AuthPage onAuth={handleAuth} />;
 
   const isAdmin = isInternalUser(user.role);
   const showAdminPage = page === "admin";

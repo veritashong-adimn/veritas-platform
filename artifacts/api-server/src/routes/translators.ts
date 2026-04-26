@@ -82,6 +82,7 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
           unit: translatorRatesTable.unit,
           serviceType: translatorRatesTable.serviceType,
           subType: translatorRatesTable.subType,
+          language: translatorRatesTable.language,
           languagePair: translatorRatesTable.languagePair,
           id: translatorRatesTable.id,
         })
@@ -95,18 +96,20 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         grouped[r.translatorId].push(r);
       }
       for (const [tid, rates] of Object.entries(grouped)) {
-        const find = (svc: string, sub: string | null, lp: string | null, unit: string) =>
+        // language=출발언어, languagePair=도착언어로 저장됨
+        const find = (svc: string, sub: string | null, srcLang: string | null, tgtLang: string | null, unit: string) =>
           rates.find(r =>
             r.serviceType === svc &&
             (sub === null || r.subType === sub) &&
-            (lp === null || r.languagePair === lp) &&
+            (srcLang === null || r.language === srcLang) &&
+            (tgtLang === null || r.languagePair === tgtLang) &&
             r.unit === unit,
           );
         const rep =
-          find("번역", "일반번역", "한→영", "eojeol") ||
-          find("번역", "일반번역", "영→한", "eojeol") ||
-          find("통역", "순차통역", null, "4h") ||
-          find("통역", "동시통역", null, "4h") ||
+          find("번역", "일반번역", "한국어", "영어", "eojeol") ||
+          find("번역", "일반번역", "영어", "한국어", "eojeol") ||
+          find("통역", "순차통역", null, null, "4h") ||
+          find("통역", "동시통역", null, null, "4h") ||
           rates[rates.length - 1]; // 가장 최근 등록된 단가
         ratesMap[Number(tid)] = rep ? { repRate: rep.rate, repUnit: rep.unit } : null;
       }

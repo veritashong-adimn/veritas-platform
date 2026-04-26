@@ -9,6 +9,8 @@ const inputStyle: React.CSSProperties = {
   outline: "none", boxSizing: "border-box", background: "#fff",
 };
 
+const GRADE_OPTIONS = ["S", "A", "B", "C"];
+
 export function TranslatorProfileModal({ userId, userEmail, token, onClose, onToast }: {
   userId: number; userEmail: string; token: string;
   onClose: () => void; onToast: (msg: string) => void;
@@ -17,8 +19,8 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     languagePairs: "", specializations: "", education: "", major: "",
-    graduationYear: "", region: "", rating: "", availabilityStatus: "available",
-    bio: "", ratePerWord: "", ratePerPage: "",
+    graduationYear: "", region: "", grade: "", rating: "",
+    availabilityStatus: "available", bio: "",
   });
 
   const authH = { Authorization: `Bearer ${token}` };
@@ -31,13 +33,16 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
         if (res.ok && data.profile) {
           const p = data.profile as TranslatorProfile;
           setForm({
-            languagePairs: p.languagePairs ?? "", specializations: p.specializations ?? "",
-            education: p.education ?? "", major: p.major ?? "",
+            languagePairs: p.languagePairs ?? "",
+            specializations: p.specializations ?? "",
+            education: p.education ?? "",
+            major: p.major ?? "",
             graduationYear: p.graduationYear ? String(p.graduationYear) : "",
-            region: p.region ?? "", rating: p.rating ? String(p.rating) : "",
+            region: p.region ?? "",
+            grade: p.grade ?? "",
+            rating: p.rating ? String(p.rating) : "",
             availabilityStatus: p.availabilityStatus ?? "available",
-            bio: p.bio ?? "", ratePerWord: p.ratePerWord ? String(p.ratePerWord) : "",
-            ratePerPage: p.ratePerPage ? String(p.ratePerPage) : "",
+            bio: p.bio ?? "",
           });
         }
       } catch { onToast("오류: 프로필 불러오기 실패"); }
@@ -54,8 +59,7 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
           ...form,
           graduationYear: form.graduationYear ? Number(form.graduationYear) : null,
           rating: form.rating ? Number(form.rating) : null,
-          ratePerWord: form.ratePerWord ? Number(form.ratePerWord) : null,
-          ratePerPage: form.ratePerPage ? Number(form.ratePerPage) : null,
+          grade: form.grade || null,
         }),
       });
       const data = await res.json();
@@ -81,16 +85,32 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
               <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#6b7280", textTransform: "uppercase" }}>기본 정보</p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
                 <F label="언어 조합 (예: 한→영, 영→한)" field="languagePairs" placeholder="한→영, 영→한" />
-                <F label="전문 분야" field="specializations" placeholder="법률, 의학, 기술" />
-                <F label="학력" field="education" placeholder="서울대학교" />
-                <F label="전공" field="major" />
-                <F label="졸업연도" field="graduationYear" type="number" placeholder="2010" />
                 <F label="지역" field="region" placeholder="서울" />
+              </div>
+            </div>
+            <div>
+              <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#6b7280", textTransform: "uppercase" }}>학력 / 전문분야</p>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
+                <F label="학력" field="education" placeholder="서울대학교" />
+                <F label="전공" field="major" placeholder="영어영문학" />
+                <F label="졸업연도" field="graduationYear" type="number" placeholder="2010" />
+                <F label="전문분야" field="specializations" placeholder="법률, 의학, 기술" />
               </div>
             </div>
             <div>
               <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#6b7280", textTransform: "uppercase" }}>운영 정보</p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>등급</label>
+                  <ClickSelect
+                    value={form.grade}
+                    onChange={v => setForm(p => ({ ...p, grade: v }))}
+                    style={{ width: "100%" }}
+                    triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                    options={[{ value: "", label: "등급 없음" }, ...GRADE_OPTIONS.map(g => ({ value: g, label: `${g}등급` }))]}
+                  />
+                </div>
+                <F label="평점 (1-5)" field="rating" type="number" placeholder="4.5" />
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>가용 상태</label>
                   <ClickSelect value={form.availabilityStatus} onChange={v => setForm(p => ({ ...p, availabilityStatus: v }))}
@@ -99,9 +119,6 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
                       { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
                     ]} />
                 </div>
-                <F label="평점 (0-5)" field="rating" type="number" placeholder="4.5" />
-                <F label="단어당 단가 (원)" field="ratePerWord" type="number" placeholder="50" />
-                <F label="페이지당 단가 (원)" field="ratePerPage" type="number" placeholder="10000" />
               </div>
             </div>
             <div>
