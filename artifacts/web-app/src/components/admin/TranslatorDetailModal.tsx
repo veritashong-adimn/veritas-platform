@@ -66,6 +66,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteCanForce] = useState(false);
+  const [activating, setActivating] = useState(false);
   const [userInfo, setUserInfo] = useState<{ name: string; email: string; isActive: boolean; invitePending?: boolean } | null>(null);
   const [reinviting, setReinviting] = useState(false);
   const [rates, setRates] = useState<TranslatorRate[]>([]);
@@ -292,6 +293,29 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     finally { setReinviting(false); }
   };
 
+  const handleActivate = async () => {
+    if (!confirm("이 통번역사를 다시 활성화하시겠습니까?")) return;
+    setActivating(true);
+    try {
+      const res = await fetch(api(`/api/admin/translators/${userId}/activate`), {
+        method: "PATCH", headers: authH,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        onToast(data.error ?? "활성화 중 오류가 발생했습니다.");
+        return;
+      }
+      onToast("통번역사가 활성화되었습니다.");
+      setUserInfo(prev => prev ? { ...prev, isActive: true } : prev);
+      onDeleted?.(); // 목록 새로고침
+    } catch (err) {
+      console.error("[PATCH /activate] 예외:", err);
+      onToast("오류가 발생했습니다. 관리자에게 문의하세요.");
+    } finally {
+      setActivating(false);
+    }
+  };
+
   const handleDeleteTranslator = async () => {
     if (!confirm("이 통번역사를 비활성 처리하시겠습니까?\n기존 단가, 정산, 작업 데이터는 보존됩니다.")) return;
     setDeleting(true);
@@ -323,14 +347,28 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     <DraggableModal title="통번역사 상세" subtitle={userEmail} onClose={onClose} width={860} zIndex={300} bodyPadding="20px 28px"
       headerExtra={
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-          <button onClick={() => handleDeleteTranslator()} disabled={deleting}
-            style={{ fontSize: 11, padding: "3px 10px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>
-            {deleting ? "처리 중…" : "비활성 처리"}
-          </button>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {userInfo?.isActive === false ? (
+              <button onClick={handleActivate} disabled={activating}
+                style={{ fontSize: 11, padding: "3px 10px", background: "#d1fae5", color: "#065f46", border: "1px solid #6ee7b7", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>
+                {activating ? "처리 중…" : "활성화"}
+              </button>
+            ) : (
+              <button onClick={() => handleDeleteTranslator()} disabled={deleting}
+                style={{ fontSize: 11, padding: "3px 10px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>
+                {deleting ? "처리 중…" : "비활성 처리"}
+              </button>
+            )}
+          </div>
           {deleteError && (
             <div style={{ fontSize: 11, color: "#dc2626", maxWidth: 260, textAlign: "right" }}>
               {deleteError}
             </div>
+          )}
+          {userInfo?.isActive === false && (
+            <span style={{ fontSize: 10, color: "#9ca3af", background: "#f3f4f6", borderRadius: 4, padding: "1px 6px" }}>
+              비활성 상태
+            </span>
           )}
         </div>
       }

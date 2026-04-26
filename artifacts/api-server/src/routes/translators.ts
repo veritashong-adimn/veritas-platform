@@ -1036,6 +1036,43 @@ router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission
   }
 });
 
+// ─── 통번역사 활성화 (복구) ───────────────────────────────────────────────────
+router.patch("/admin/translators/:id/activate", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 사용자 id." }); return;
+  }
+
+  try {
+    const [existing] = await db.select().from(usersTable).where(
+      and(eq(usersTable.id, userId), eq(usersTable.role, "translator"))
+    );
+    if (!existing) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
+
+    if (existing.isActive) {
+      res.status(400).json({ error: "이미 활성 상태인 통번역사입니다." }); return;
+    }
+
+    await db.update(usersTable)
+      .set({ isActive: true, updatedAt: new Date() })
+      .where(eq(usersTable.id, userId));
+
+    await db.insert(logsTable).values({
+      entityType: "translator",
+      entityId: userId,
+      action: "activated",
+      performedBy: req.user?.id ?? null,
+      performedByEmail: req.user?.email ?? null,
+      metadata: JSON.stringify({ name: existing.name, email: existing.email }),
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    req.log.error({ err }, "Translators: failed to activate");
+    res.status(500).json({ error: "활성화 중 오류가 발생했습니다. 관리자에게 문의하세요." });
+  }
+});
+
 // ─── 통번역사 비활성 처리 (Soft Delete) ──────────────────────────────────────
 router.delete("/admin/translators/:id", ...adminGuard, async (req, res) => {
   const userId = Number(req.params.id);
