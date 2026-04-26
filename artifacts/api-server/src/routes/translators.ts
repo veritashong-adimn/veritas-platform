@@ -33,9 +33,9 @@ const adminGuard = [requireAuth, requireRole("admin", "staff")];
 // ─── 번역사 목록 (검색/필터) ──────────────────────────────────────────────────
 router.get("/admin/translators", ...adminGuard, async (req, res) => {
   try {
-    const { search, languagePair, specialization, status, minRating, grade } = req.query as {
+    const { search, languagePair, specialization, status, minRating, grade, includeInactive } = req.query as {
       search?: string; languagePair?: string; specialization?: string;
-      status?: string; minRating?: string; grade?: string;
+      status?: string; minRating?: string; grade?: string; includeInactive?: string;
     };
 
     const rows = await db
@@ -68,7 +68,11 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       })
       .from(usersTable)
       .leftJoin(translatorProfilesTable, eq(translatorProfilesTable.userId, usersTable.id))
-      .where(eq(usersTable.role, "translator"))
+      .where(
+        includeInactive === "true"
+          ? eq(usersTable.role, "translator")
+          : and(eq(usersTable.role, "translator"), eq(usersTable.isActive, true))
+      )
       .orderBy(desc(usersTable.createdAt));
 
     // 단가 관리(translator_rates)에서 대표단가 계산
@@ -290,6 +294,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
   }
 
   const {
+    name,
     languagePairs, languageLevel, specializations, education, major,
     graduationYear, phone, region, grade, rating, availabilityStatus, bio,
     emails,
@@ -300,6 +305,12 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
       and(eq(usersTable.id, userId), eq(usersTable.role, "translator"))
     );
     if (!user) { res.status(404).json({ error: "번역사를 찾을 수 없습니다." }); return; }
+
+    // 이름 업데이트 (변경된 경우)
+    const trimmedName = typeof name === "string" ? name.trim() : null;
+    if (trimmedName && trimmedName !== user.name) {
+      await db.update(usersTable).set({ name: trimmedName, updatedAt: new Date() }).where(eq(usersTable.id, userId));
+    }
 
     const profileData = {
       languagePairs: languagePairs?.trim() || null,
@@ -1025,59 +1036,41 @@ router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission
   }
 });
 
-// ─── 통번역사 삭제 ────────────────────────────────────────────────────────────
+// ─── 통번역사 비활성 처리 (Soft Delete) ──────────────────────────────────────
 router.delete("/admin/translators/:id", ...adminGuard, async (req, res) => {
   const userId = Number(req.params.id);
   if (isNaN(userId) || userId <= 0) {
     res.status(400).json({ error: "유효하지 않은 사용자 id." }); return;
   }
-  const force = req.query.force === "true";
 
   try {
-    const [existing] = await db.select().from(usersTable).where(and(eq(usersTable.id, userId), eq(usersTable.role, "translator")));
+    const [existing] = await db.select().from(usersTable).where(
+      and(eq(usersTable.id, userId), eq(usersTable.role, "translator"))
+    );
     if (!existing) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
 
-    if (force) {
-      if (process.env.ENABLE_FORCE_DELETE !== "true") {
-        res.status(403).json({ error: "강제 삭제는 현재 비활성화되어 있습니다. (ENABLE_FORCE_DELETE=true 설정 필요)" }); return;
-      }
-      if (req.user?.role !== "admin") {
-        res.status(403).json({ error: "강제 삭제는 관리자만 가능합니다." }); return;
-      }
+    if (!existing.isActive) {
+      res.status(400).json({ error: "이미 비활성 처리된 통번역사입니다." }); return;
     }
 
-    const [taskCount] = await db.select({ count: sql<number>`count(*)::int` }).from(tasksTable).where(eq(tasksTable.translatorId, userId));
-    const [settlementCount] = await db.select({ count: sql<number>`count(*)::int` }).from(settlementsTable).where(eq(settlementsTable.translatorId, userId));
-
-    const hasLinks = (taskCount?.count ?? 0) > 0 || (settlementCount?.count ?? 0) > 0;
-
-    if (hasLinks && !force) {
-      const reasons: string[] = [];
-      if ((taskCount?.count ?? 0) > 0) reasons.push(`작업 ${taskCount?.count}건`);
-      if ((settlementCount?.count ?? 0) > 0) reasons.push(`정산 ${settlementCount?.count}건`);
-      res.status(409).json({
-        error: `이 통번역사는 연결된 데이터가 있어 삭제할 수 없습니다. (${reasons.join(", ")})`,
-        reasons,
-        canForceDelete: true,
-      });
-      return;
-    }
-
-    await db.delete(usersTable).where(eq(usersTable.id, userId));
+    // Soft delete: 물리 삭제 없이 비활성 처리 (기존 단가/정산/작업 데이터 보존)
+    await db.update(usersTable)
+      .set({ isActive: false, updatedAt: new Date() })
+      .where(eq(usersTable.id, userId));
 
     await db.insert(logsTable).values({
       entityType: "translator",
       entityId: userId,
-      action: force ? "force_deleted" : "deleted",
+      action: "deactivated",
       performedBy: req.user?.id ?? null,
       performedByEmail: req.user?.email ?? null,
-      metadata: JSON.stringify({ name: existing.name, email: existing.email, force, taskCount: taskCount?.count, settlementCount: settlementCount?.count }),
+      metadata: JSON.stringify({ name: existing.name, email: existing.email }),
     });
 
-    res.json({ ok: true, force });
+    res.json({ ok: true });
   } catch (err) {
-    req.log.error({ err }, "Translators: failed to delete");
-    res.status(500).json({ error: "통번역사 삭제 실패." });
+    req.log.error({ err }, "Translators: failed to deactivate");
+    res.status(500).json({ error: "비활성 처리 중 오류가 발생했습니다. 관리자에게 문의하세요." });
   }
 });
 

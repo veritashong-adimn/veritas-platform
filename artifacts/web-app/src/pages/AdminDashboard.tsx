@@ -306,6 +306,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [translatorStatusFilter, setTranslatorStatusFilter] = useState("all");
   const [translatorGradeFilter, setTranslatorGradeFilter] = useState("all");
   const [translatorRatingFilter, setTranslatorRatingFilter] = useState("");
+  const [showInactiveTranslators, setShowInactiveTranslators] = useState(false);
   const [translatorDetailModal, setTranslatorDetailModal] = useState<{ userId: number; email: string } | null>(null);
   const [showTranslatorCreateModal, setShowTranslatorCreateModal] = useState(false);
 
@@ -543,12 +544,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       if (translatorStatusFilter !== "all") params.set("status", translatorStatusFilter);
       if (translatorGradeFilter !== "all") params.set("grade", translatorGradeFilter);
       if (translatorRatingFilter.trim()) params.set("minRating", translatorRatingFilter.trim());
+      if (showInactiveTranslators) params.set("includeInactive", "true");
       const res = await fetch(api(`/api/admin/translators${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) setTranslatorList(Array.isArray(data) ? data : []);
     } catch { setToast("오류: 통번역사 조회 실패"); }
     finally { setTranslatorsLoading(false); }
-  }, [token, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter]);
+  }, [token, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter, showInactiveTranslators]);
 
   const handleSaveBoardPost = async () => {
     if (!boardForm.title.trim() || !boardForm.content.trim()) { setToast("제목과 내용을 입력하세요."); return; }
@@ -3034,6 +3036,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <PrimaryBtn onClick={fetchTranslators} disabled={translatorsLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
               {translatorsLoading ? "검색 중..." : "검색"}
             </PrimaryBtn>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6b7280", cursor: "pointer", userSelect: "none", padding: "6px 0" }}>
+              <input
+                type="checkbox"
+                checked={showInactiveTranslators}
+                onChange={e => setShowInactiveTranslators(e.target.checked)}
+                style={{ width: 15, height: 15, accentColor: "#6b7280", cursor: "pointer" }}
+              />
+              비활성 포함
+            </label>
           </div>
           {translatorsLoading ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>

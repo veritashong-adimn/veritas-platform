@@ -65,7 +65,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [profile, setProfile] = useState<TranslatorProfile | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [deleteCanForce, setDeleteCanForce] = useState(false);
+  const [deleteCanForce] = useState(false);
   const [userInfo, setUserInfo] = useState<{ name: string; email: string; isActive: boolean; invitePending?: boolean } | null>(null);
   const [reinviting, setReinviting] = useState(false);
   const [rates, setRates] = useState<TranslatorRate[]>([]);
@@ -83,6 +83,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [resumeDeleting, setResumeDeleting] = useState(false);
 
   const [form, setForm] = useState({
+    name: "",
     phone: "",
     languagePairs: "", languageLevel: "", specializations: "", education: "", major: "",
     graduationYear: "", region: "", grade: "", rating: "", availabilityStatus: "available",
@@ -125,6 +126,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         const rawLevel = p?.languageLevel ?? "";
         const normalizedLevel = rawLevel === "비즈니스" ? "일반" : rawLevel;
         setForm({
+          name: u?.name ?? "",
           phone: p?.phone ?? "",
           languagePairs: p?.languagePairs ?? "", languageLevel: normalizedLevel,
           specializations: p?.specializations ?? "", education: p?.education ?? "", major: p?.major ?? "",
@@ -170,6 +172,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
         body: JSON.stringify({
           ...form,
+          name: form.name.trim() || null,
           phone: form.phone.trim() || null,
           graduationYear: form.graduationYear ? Number(form.graduationYear) : null,
           rating: form.rating ? Number(form.rating) : null,
@@ -180,6 +183,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      // name이 변경된 경우 userInfo 동기화
+      if (form.name.trim()) setUserInfo(prev => prev ? { ...prev, name: form.name.trim() } : prev);
       setProfile(data);
       // 저장 응답값으로 form state 갱신 (학력/전공/졸업연도/전문분야 포함)
       setForm(prev => ({
@@ -287,33 +292,27 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     finally { setReinviting(false); }
   };
 
-  const handleDeleteTranslator = async (force = false) => {
-    if (!force) {
-      if (!confirm("이 통번역사를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.")) return;
-    } else {
-      if (!confirm("연결된 작업/정산 데이터가 함께 영향을 받을 수 있습니다.\n정말 강제 삭제하시겠습니까?")) return;
-    }
+  const handleDeleteTranslator = async () => {
+    if (!confirm("이 통번역사를 비활성 처리하시겠습니까?\n기존 단가, 정산, 작업 데이터는 보존됩니다.")) return;
     setDeleting(true);
     setDeleteError(null);
     try {
-      const res = await fetch(api(`/api/admin/translators/${userId}${force ? "?force=true" : ""}`), {
+      const res = await fetch(api(`/api/admin/translators/${userId}`), {
         method: "DELETE", headers: authH,
       });
       const data = await res.json();
       if (!res.ok) {
-        if (res.status === 409 && data.canForceDelete) {
-          setDeleteError(data.error);
-          setDeleteCanForce(true);
-        } else {
-          setDeleteError(data.error ?? "삭제 실패");
-        }
+        const msg = data.error ?? "비활성 처리 중 오류가 발생했습니다. 관리자에게 문의하세요.";
+        console.error("[DELETE /admin/translators]", res.status, data);
+        setDeleteError(msg);
         return;
       }
-      onToast("통번역사가 삭제되었습니다.");
+      onToast("통번역사가 비활성 처리되었습니다.");
       onDeleted?.();
       onClose();
-    } catch {
-      setDeleteError("오류가 발생했습니다.");
+    } catch (err) {
+      console.error("[DELETE /admin/translators] 예외:", err);
+      setDeleteError("오류가 발생했습니다. 관리자에게 문의하세요.");
     } finally {
       setDeleting(false);
     }
@@ -324,19 +323,13 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     <DraggableModal title="통번역사 상세" subtitle={userEmail} onClose={onClose} width={860} zIndex={300} bodyPadding="20px 28px"
       headerExtra={
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-          <button onClick={() => handleDeleteTranslator(false)} disabled={deleting}
+          <button onClick={() => handleDeleteTranslator()} disabled={deleting}
             style={{ fontSize: 11, padding: "3px 10px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>
-            {deleting ? "삭제 중…" : "통번역사 삭제"}
+            {deleting ? "처리 중…" : "비활성 처리"}
           </button>
           {deleteError && (
-            <div style={{ fontSize: 11, color: "#dc2626", maxWidth: 240, textAlign: "right" }}>
+            <div style={{ fontSize: 11, color: "#dc2626", maxWidth: 260, textAlign: "right" }}>
               {deleteError}
-              {deleteCanForce && (
-                <button onClick={() => handleDeleteTranslator(true)} disabled={deleting}
-                  style={{ marginLeft: 6, fontSize: 11, padding: "2px 8px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 700 }}>
-                  강제 삭제
-                </button>
-              )}
             </div>
           )}
         </div>
@@ -371,12 +364,16 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           </div>
           <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 16 }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 20px" }}>
-              {/* 이름 — 읽기 전용 */}
+              {/* 이름 — 수정 가능 */}
               <div>
-                <label style={{ ...labelSt, fontSize: 11 }}>이름</label>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "#111827", padding: "6px 0" }}>
-                  {userInfo?.name || <span style={{ color: "#9ca3af" }}>—</span>}
-                </div>
+                <label style={{ ...labelSt, fontSize: 11 }}>이름 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(저장 버튼으로 반영)</span></label>
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
+                  placeholder="이름 입력"
+                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
+                />
               </div>
               {/* 이메일 목록 — 모두 편집 가능, 대표 지정 가능 */}
               <div style={{ gridColumn: "1 / -1" }}>
