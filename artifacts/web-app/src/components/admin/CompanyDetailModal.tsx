@@ -208,14 +208,30 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   };
 
   const handleDeleteContact = async (c: Contact) => {
-    if (!window.confirm(`"${c.name}" 담당자를 삭제(비활성)하시겠습니까?`)) return;
+    if (!window.confirm(`"${c.name}" 담당자를 비활성 처리하시겠습니까?`)) return;
     try {
       const res = await fetch(api(`/api/admin/contacts/${c.id}`), { method: "DELETE", headers: authH });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       await load();
-      onToast(data.softDeleted ? `"${c.name}" 담당자가 비활성 처리되었습니다.` : `"${c.name}" 담당자가 삭제되었습니다.`);
+      onToast(`"${c.name}" 담당자가 비활성 처리되었습니다.`);
     } catch { onToast("오류: 담당자 삭제 실패"); }
+  };
+
+  const handlePermanentDeleteContact = async (c: Contact) => {
+    const ok = window.confirm(
+      `⚠️ 이 작업은 되돌릴 수 없습니다.\n\n` +
+      `"${c.name}" 담당자를 완전삭제하시겠습니까?\n` +
+      `테스트 데이터인 경우에만 완전삭제하세요.`
+    );
+    if (!ok) return;
+    try {
+      const res = await fetch(api(`/api/admin/contacts/${c.id}/permanent`), { method: "DELETE", headers: authH });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      await load();
+      onToast(`"${c.name}" 담당자가 완전삭제되었습니다.`);
+    } catch { onToast("오류: 담당자 완전삭제 실패"); }
   };
 
   const handleAddDiv = async () => {
@@ -505,7 +521,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
             <p style={sH}>재무 요약</p>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               {[
-                { label: "담당자 수", value: `${detail.contacts.length}명`, color: "#6b7280", bg: "#f3f4f6" },
+                { label: "담당자 수", value: `활성 ${detail.contacts.filter((c: Contact) => c.isActive).length}명 / 비활성 ${detail.contacts.filter((c: Contact) => !c.isActive).length}명`, color: "#6b7280", bg: "#f3f4f6" },
                 { label: "프로젝트 수", value: `${detail.projects.length}건`, color: "#2563eb", bg: "#eff6ff" },
                 { label: "총 견적 금액", value: `${Number(detail.totalQuote).toLocaleString()}원`, color: "#0891b2", bg: "#f0f9ff" },
                 { label: "총 결제 금액", value: `${Number(detail.totalPayment).toLocaleString()}원`, color: "#059669", bg: "#f0fdf4" },
@@ -822,7 +838,11 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                           <GhostBtn onClick={() => { setEditContactId(null); setEditContactErrors({}); }} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
                           <button onClick={() => handleDeleteContact(c)}
                             style={{ marginLeft: "auto", background: "none", border: "1px solid #fca5a5", borderRadius: 7, padding: "7px 14px", fontSize: 13, cursor: "pointer", color: "#ef4444" }}>
-                            삭제
+                            비활성 처리
+                          </button>
+                          <button onClick={() => handlePermanentDeleteContact(c)}
+                            style={{ background: "#7f1d1d", border: "none", borderRadius: 7, padding: "7px 14px", fontSize: 13, cursor: "pointer", color: "#fff", fontWeight: 700 }}>
+                            완전삭제
                           </button>
                         </div>
                       </div>
@@ -855,10 +875,18 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                               {c.isBillingContact && <span style={{ fontSize: 11, background: "#ede9fe", color: "#5b21b6", borderRadius: 4, padding: "1px 7px", fontWeight: 700 }}>청구</span>}
                             </div>
                           </div>
-                          <button onClick={() => handleEditContact(c)}
-                            style={{ background: "none", border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer", color: "#374151", whiteSpace: "nowrap" }}>
-                            수정
-                          </button>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+                            <button onClick={() => handleEditContact(c)}
+                              style={{ background: "none", border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer", color: "#374151", whiteSpace: "nowrap" }}>
+                              수정
+                            </button>
+                            {!c.isActive && (
+                              <button onClick={() => handlePermanentDeleteContact(c)}
+                                style={{ background: "#7f1d1d", border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 11, cursor: "pointer", color: "#fff", fontWeight: 700, whiteSpace: "nowrap" }}>
+                                완전삭제
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     )

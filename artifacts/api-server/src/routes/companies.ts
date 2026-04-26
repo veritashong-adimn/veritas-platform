@@ -397,7 +397,10 @@ router.delete("/admin/companies/:id", ...adminGuard, async (req, res) => {
       }
     }
 
-    const [contactCount] = await db.select({ count: sql<number>`count(*)::int` }).from(contactsTable).where(eq(contactsTable.companyId, companyId));
+    // 활성 담당자만 차단 대상으로 카운트 (비활성 담당자는 삭제 허용)
+    const [activeContactCount] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(contactsTable)
+      .where(and(eq(contactsTable.companyId, companyId), eq(contactsTable.isActive, true)));
     const [projectCount] = await db.select({ count: sql<number>`count(*)::int` }).from(projectsTable)
       .where(or(
         eq(projectsTable.companyId, companyId),
@@ -406,11 +409,11 @@ router.delete("/admin/companies/:id", ...adminGuard, async (req, res) => {
         eq(projectsTable.payerCompanyId, companyId),
       ));
 
-    const hasLinks = (contactCount?.count ?? 0) > 0 || (projectCount?.count ?? 0) > 0;
+    const hasLinks = (activeContactCount?.count ?? 0) > 0 || (projectCount?.count ?? 0) > 0;
 
     if (hasLinks && !force) {
       const reasons: string[] = [];
-      if ((contactCount?.count ?? 0) > 0) reasons.push(`담당자 ${contactCount?.count}건`);
+      if ((activeContactCount?.count ?? 0) > 0) reasons.push(`활성 담당자 ${activeContactCount?.count}건`);
       if ((projectCount?.count ?? 0) > 0) reasons.push(`프로젝트 ${projectCount?.count}건`);
       res.status(409).json({
         error: `이 거래처는 연결된 데이터가 있어 삭제할 수 없습니다. (${reasons.join(", ")})`,
@@ -419,6 +422,11 @@ router.delete("/admin/companies/:id", ...adminGuard, async (req, res) => {
       });
       return;
     }
+
+    // 비활성 담당자가 있으면 먼저 완전삭제 (companyId NOT NULL 제약으로 null 불가)
+    await db.delete(contactsTable).where(
+      and(eq(contactsTable.companyId, companyId), eq(contactsTable.isActive, false))
+    );
 
     await db.delete(companiesTable).where(eq(companiesTable.id, companyId));
 
@@ -925,6 +933,43 @@ async function deleteContact(req: any, res: any, contactId: number) {
 
   res.json({ ok: true, softDeleted: true });
 }
+
+// ─── 담당자 완전삭제 (Permanent Delete) ──────────────────────────────────────
+router.delete("/admin/contacts/:id/permanent", ...adminGuard, async (req, res) => {
+  const contactId = Number(req.params.id);
+  if (isNaN(contactId) || contactId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 contact id." }); return;
+  }
+  try {
+    const [existing] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId));
+    if (!existing) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
+
+    // 연결된 프로젝트 확인
+    const [projectCount] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(projectsTable)
+      .where(eq(projectsTable.contactId, contactId));
+    if ((projectCount?.count ?? 0) > 0) {
+      res.status(409).json({
+        error: "이 담당자는 프로젝트/견적/청구 이력이 있어 완전삭제할 수 없습니다. 비활성 처리만 가능합니다.",
+        reason: "projects",
+        count: projectCount.count,
+      }); return;
+    }
+
+    // 완전삭제 실행
+    await db.delete(contactsTable).where(eq(contactsTable.id, contactId));
+
+    await logEvent("company", existing.companyId, "company_contact_permanent_deleted",
+      undefined, (req as any).user?.id,
+      JSON.stringify({ contactId, name: existing.name, companyId: existing.companyId }));
+
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "Contacts: failed to permanent delete");
+    res.status(500).json({ error: "담당자 완전삭제 중 오류가 발생했습니다." });
+  }
+});
 
 // ─── 담당자 통합 ──────────────────────────────────────────────────────────────
 router.post("/admin/contacts/merge", ...adminGuard, requirePermission("contact.update"), async (req, res) => {
