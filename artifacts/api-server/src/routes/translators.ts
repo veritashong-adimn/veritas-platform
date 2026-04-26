@@ -660,7 +660,7 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
       .from(translatorRatesTable)
       .where(and(...dupConditions));
     if (dup) {
-      const label = [resolvedServiceType, resolvedSubType, resolvedLanguage, resolvedLangPair, resolvedUnit].filter(Boolean).join(" / ");
+      const label = [resolvedServiceType, resolvedSubType, resolvedLanguage ? `${resolvedLanguage}→${resolvedLangPair}` : resolvedLangPair, resolvedUnit].filter(Boolean).join(" / ");
       res.status(409).json({ error: `이미 동일한 단가 항목이 존재합니다. (${label})` });
       return;
     }
