@@ -2999,7 +2999,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
       {/* ── 통번역사 탭 ── */}
       {adminTab === "translators" && (
-        <Section title={`통번역사 관리 (${translatorList.length})`} action={
+        <Section title={`통번역사 관리 (${translatorList.length}) ▸ BUILD TEST dc9e24d`} action={
           <PrimaryBtn onClick={() => setShowTranslatorCreateModal(true)} style={{ padding: "8px 16px", fontSize: 13 }}>
             + 통번역사 등록
           </PrimaryBtn>
