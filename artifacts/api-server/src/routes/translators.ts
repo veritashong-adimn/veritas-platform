@@ -6,6 +6,7 @@ import {
   db, usersTable, translatorProfilesTable, translatorRatesTable,
   translatorProductsTable, productsTable, translatorSensitiveTable,
   tasksTable, settlementsTable, logsTable, translatorEmailsTable,
+  notesTable, invitationsTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, sql, desc, gte, lte, inArray } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
@@ -1070,6 +1071,83 @@ router.patch("/admin/translators/:id/activate", ...adminGuard, async (req, res) 
   } catch (err) {
     req.log.error({ err }, "Translators: failed to activate");
     res.status(500).json({ error: "활성화 중 오류가 발생했습니다. 관리자에게 문의하세요." });
+  }
+});
+
+// ─── 통번역사 완전삭제 (Permanent Delete) ────────────────────────────────────
+router.delete("/admin/translators/:id/permanent", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 사용자 id." }); return;
+  }
+
+  try {
+    // 1. 통번역사 존재 여부 확인
+    const [existing] = await db.select().from(usersTable).where(
+      and(eq(usersTable.id, userId), eq(usersTable.role, "translator"))
+    );
+    if (!existing) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
+
+    // 2. 연결된 작업 존재 여부 확인
+    const [taskCount] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(tasksTable)
+      .where(eq(tasksTable.translatorId, userId));
+    if ((taskCount?.count ?? 0) > 0) {
+      res.status(409).json({
+        error: "이 통번역사는 프로젝트/작업 이력이 있어 완전삭제할 수 없습니다. 비활성 처리만 가능합니다.",
+        reason: "tasks",
+        count: taskCount.count,
+      }); return;
+    }
+
+    // 3. 연결된 정산 존재 여부 확인
+    const [settlementCount] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(settlementsTable)
+      .where(eq(settlementsTable.translatorId, userId));
+    if ((settlementCount?.count ?? 0) > 0) {
+      res.status(409).json({
+        error: "이 통번역사는 정산 이력이 있어 완전삭제할 수 없습니다. 비활성 처리만 가능합니다.",
+        reason: "settlements",
+        count: settlementCount.count,
+      }); return;
+    }
+
+    // 4. 이력서 파일 삭제 (GCS)
+    const [profile] = await db.select().from(translatorProfilesTable).where(eq(translatorProfilesTable.userId, userId));
+    if (profile?.resumeFileName) {
+      try { await deleteResumeFromGCS(profile.resumeFileName); } catch { /* 파일 없어도 계속 */ }
+    }
+
+    // 5. 종속 데이터 삭제 (순서 중요: FK 참조 먼저)
+    await db.delete(translatorRatesTable).where(eq(translatorRatesTable.translatorId, userId));
+    await db.delete(translatorEmailsTable).where(eq(translatorEmailsTable.translatorId, userId));
+    await db.delete(translatorSensitiveTable).where(eq(translatorSensitiveTable.translatorId, userId));
+    await db.delete(translatorProductsTable).where(eq(translatorProductsTable.translatorId, userId));
+    await db.delete(translatorProfilesTable).where(eq(translatorProfilesTable.userId, userId));
+    await db.delete(notesTable).where(
+      and(eq(notesTable.entityType, "translator"), eq(notesTable.entityId, userId))
+    );
+    await db.delete(invitationsTable).where(eq(invitationsTable.userId, userId));
+
+    // 6. 본 레코드 삭제
+    await db.delete(usersTable).where(eq(usersTable.id, userId));
+
+    // 7. 감사 로그 (users 삭제 후이므로 참조 없이 기록)
+    await db.insert(logsTable).values({
+      entityType: "translator",
+      entityId: userId,
+      action: "permanent_deleted",
+      performedBy: req.user?.id ?? null,
+      performedByEmail: req.user?.email ?? null,
+      metadata: JSON.stringify({ name: existing.name, email: existing.email }),
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    req.log.error({ err }, "Translators: failed to permanent delete");
+    res.status(500).json({ error: "완전삭제 중 오류가 발생했습니다. 관리자에게 문의하세요." });
   }
 });
 

@@ -67,6 +67,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteCanForce] = useState(false);
   const [activating, setActivating] = useState(false);
+  const [permanentDeleting, setPermanentDeleting] = useState(false);
+  const [permanentDeleteError, setPermanentDeleteError] = useState<string | null>(null);
   const [userInfo, setUserInfo] = useState<{ name: string; email: string; isActive: boolean; invitePending?: boolean } | null>(null);
   const [reinviting, setReinviting] = useState(false);
   const [rates, setRates] = useState<TranslatorRate[]>([]);
@@ -316,6 +318,35 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     }
   };
 
+  const handlePermanentDelete = async () => {
+    const ok = confirm(
+      "⚠️ 이 작업은 되돌릴 수 없습니다.\n\n" +
+      "테스트 데이터인 경우에만 완전삭제하세요.\n\n" +
+      "정말 완전삭제하시겠습니까?"
+    );
+    if (!ok) return;
+    setPermanentDeleting(true);
+    setPermanentDeleteError(null);
+    try {
+      const res = await fetch(api(`/api/admin/translators/${userId}/permanent`), {
+        method: "DELETE", headers: authH,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPermanentDeleteError(data.error ?? "완전삭제 중 오류가 발생했습니다.");
+        return;
+      }
+      onToast("통번역사가 완전삭제되었습니다.");
+      onClose();
+      onDeleted?.();
+    } catch (err) {
+      console.error("[DELETE /permanent] 예외:", err);
+      setPermanentDeleteError("오류가 발생했습니다. 관리자에게 문의하세요.");
+    } finally {
+      setPermanentDeleting(false);
+    }
+  };
+
   const handleDeleteTranslator = async () => {
     if (!confirm("이 통번역사를 비활성 처리하시겠습니까?\n기존 단가, 정산, 작업 데이터는 보존됩니다.")) return;
     setDeleting(true);
@@ -349,20 +380,24 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
             {userInfo?.isActive === false ? (
-              <button onClick={handleActivate} disabled={activating}
+              <button onClick={handleActivate} disabled={activating || permanentDeleting}
                 style={{ fontSize: 11, padding: "3px 10px", background: "#d1fae5", color: "#065f46", border: "1px solid #6ee7b7", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>
                 {activating ? "처리 중…" : "활성화"}
               </button>
             ) : (
-              <button onClick={() => handleDeleteTranslator()} disabled={deleting}
+              <button onClick={() => handleDeleteTranslator()} disabled={deleting || permanentDeleting}
                 style={{ fontSize: 11, padding: "3px 10px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>
                 {deleting ? "처리 중…" : "비활성 처리"}
               </button>
             )}
+            <button onClick={handlePermanentDelete} disabled={permanentDeleting || deleting || activating}
+              style={{ fontSize: 11, padding: "3px 10px", background: "#7f1d1d", color: "#fff", border: "1px solid #991b1b", borderRadius: 6, cursor: "pointer", fontWeight: 700, opacity: (permanentDeleting || deleting || activating) ? 0.6 : 1 }}>
+              {permanentDeleting ? "삭제 중…" : "완전삭제"}
+            </button>
           </div>
-          {deleteError && (
-            <div style={{ fontSize: 11, color: "#dc2626", maxWidth: 260, textAlign: "right" }}>
-              {deleteError}
+          {(deleteError || permanentDeleteError) && (
+            <div style={{ fontSize: 11, color: "#dc2626", maxWidth: 300, textAlign: "right", lineHeight: 1.4 }}>
+              {permanentDeleteError ?? deleteError}
             </div>
           )}
           {userInfo?.isActive === false && (
