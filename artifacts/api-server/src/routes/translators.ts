@@ -503,9 +503,9 @@ router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) =>
 
       // ── 프로필 구성 ──────────────────────────────────────────────────────
       const bioText = [row.career?.trim(), row.bio?.trim()].filter(Boolean).join(" | ") || null;
-      // 언어쌍: 출발언어→도착언어 조합
+      // 언어쌍: 출발언어-도착언어 형식으로 저장
       const langPairs = (row.sourceLang?.trim() && row.targetLang?.trim())
-        ? `${row.sourceLang.trim()}→${row.targetLang.trim()}` : null;
+        ? `${row.sourceLang.trim()}-${row.targetLang.trim()}` : null;
       await db.insert(translatorProfilesTable).values({
         userId: newUser.id,
         phone: row.phone?.trim() || null,
@@ -544,18 +544,36 @@ router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) =>
       const workTypeVal = row.workType?.trim();
       const rateVal = row.rate?.trim();
       if (workTypeVal && rateVal && !isNaN(Number(rateVal))) {
+        const rSub  = row.subType?.trim()    || null;
+        const rLang = row.sourceLang?.trim() || null;
+        const rLp   = row.targetLang?.trim() || null;
+        const rUnit = row.unit?.trim()        || "eojeol";
+        const willBeDefault = yesNo(row.isDefault, false);  // 기본값 false
+        // 기본단가 설정 시 동일 서비스조건(serviceType+subType+언어쌍, unit 무관)의 기존 기본단가 자동 해제
+        if (willBeDefault) {
+          await db.update(translatorRatesTable)
+            .set({ isDefault: false, updatedAt: new Date() })
+            .where(and(
+              eq(translatorRatesTable.translatorId, newUser.id),
+              eq(translatorRatesTable.serviceType, workTypeVal),
+              eq(translatorRatesTable.isDefault, true),
+              rSub  ? eq(translatorRatesTable.subType,      rSub)  : sql`${translatorRatesTable.subType} IS NULL`,
+              rLang ? eq(translatorRatesTable.language,     rLang) : sql`${translatorRatesTable.language} IS NULL`,
+              rLp   ? eq(translatorRatesTable.languagePair, rLp)   : sql`${translatorRatesTable.languagePair} IS NULL`,
+            ));
+        }
         await db.insert(translatorRatesTable).values({
           translatorId: newUser.id,
           serviceType: workTypeVal,
-          subType: row.subType?.trim() || null,
-          language: row.sourceLang?.trim() || null,
-          languagePair: row.targetLang?.trim() || null,
-          unit: row.unit?.trim() || "eojeol",
+          subType: rSub,
+          language: rLang,
+          languagePair: rLp,
+          unit: rUnit,
           rate: Number(rateVal),
-          currency: (row.currency?.trim() || "KRW") as string,
-          vatIncluded: yesNo(row.vatIncluded, false),
-          isDefault: yesNo(row.isDefault, true),
-          isActive: yesNo(row.rateActive, true),
+          currency: (row.currency?.trim() || "KRW") as string,    // 기본값 KRW
+          vatIncluded: yesNo(row.vatIncluded, false),              // 기본값 false
+          isDefault: willBeDefault,                                 // 기본값 false
+          isActive: yesNo(row.rateActive, true),                   // 기본값 true
           minPrice: row.minPrice?.trim() && !isNaN(Number(row.minPrice)) ? Number(row.minPrice) : null,
           baseHours: row.baseHours?.trim() && !isNaN(Number(row.baseHours)) ? Number(row.baseHours) : null,
           overtimeRate: row.overtimeRate?.trim() && !isNaN(Number(row.overtimeRate)) ? Number(row.overtimeRate) : null,
@@ -1033,9 +1051,24 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
       .from(translatorRatesTable)
       .where(and(...dupConditions));
     if (dup) {
-      const label = [resolvedServiceType, resolvedSubType, resolvedLanguage ? `${resolvedLanguage}→${resolvedLangPair}` : resolvedLangPair, resolvedUnit].filter(Boolean).join(" / ");
+      const label = [resolvedServiceType, resolvedSubType, resolvedLanguage ? `${resolvedLanguage}-${resolvedLangPair}` : resolvedLangPair, resolvedUnit].filter(Boolean).join(" / ");
       res.status(409).json({ error: `이미 동일한 단가 항목이 존재합니다. (${label})` });
       return;
+    }
+    const willBeDefault = isDefault === true;
+    // 기본단가 설정 시 동일 서비스조건(serviceType+subType+언어쌍, unit 무관)의 기존 기본단가 자동 해제
+    if (willBeDefault) {
+      const clearConditions = [
+        eq(translatorRatesTable.translatorId, userId),
+        eq(translatorRatesTable.serviceType, resolvedServiceType),
+        eq(translatorRatesTable.isDefault, true),
+        resolvedSubType ? eq(translatorRatesTable.subType, resolvedSubType) : sql`${translatorRatesTable.subType} IS NULL`,
+        resolvedLanguage ? eq(translatorRatesTable.language, resolvedLanguage) : sql`${translatorRatesTable.language} IS NULL`,
+        resolvedLangPair ? eq(translatorRatesTable.languagePair, resolvedLangPair) : sql`${translatorRatesTable.languagePair} IS NULL`,
+      ];
+      await db.update(translatorRatesTable)
+        .set({ isDefault: false, updatedAt: new Date() })
+        .where(and(...clearConditions));
     }
     const [newRate] = await db
       .insert(translatorRatesTable)
@@ -1048,9 +1081,9 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
         unit: resolvedUnit,
         rate: Number(rate),
         currency: (currency?.trim() || "KRW") as string,
-        vatIncluded: vatIncluded === true,
-        isDefault: isDefault === true,
-        isActive: isActive !== false,
+        vatIncluded: vatIncluded === true,          // 기본값 false
+        isDefault: willBeDefault,                   // 기본값 false
+        isActive: isActive !== false,               // 기본값 true
         minPrice: minPrice != null ? Number(minPrice) : null,
         baseHours: baseHours != null ? Number(baseHours) : null,
         overtimeRate: overtimeRate != null ? Number(overtimeRate) : null,
