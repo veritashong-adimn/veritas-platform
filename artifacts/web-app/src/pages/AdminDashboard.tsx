@@ -318,6 +318,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [translatorStatusFilter, setTranslatorStatusFilter] = useState("all");
   const [translatorGradeFilter, setTranslatorGradeFilter] = useState("all");
   const [translatorRatingFilter, setTranslatorRatingFilter] = useState("");
+  const [translatorSvcFilter, setTranslatorSvcFilter] = useState("all");
   const [showInactiveTranslators, setShowInactiveTranslators] = useState(false);
   const [translatorDetailModal, setTranslatorDetailModal] = useState<{ userId: number; email: string } | null>(null);
   const [showTranslatorCreateModal, setShowTranslatorCreateModal] = useState(false);
@@ -562,13 +563,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       if (translatorStatusFilter !== "all") params.set("status", translatorStatusFilter);
       if (translatorGradeFilter !== "all") params.set("grade", translatorGradeFilter);
       if (translatorRatingFilter.trim()) params.set("minRating", translatorRatingFilter.trim());
+      if (translatorSvcFilter !== "all") params.set("svc", translatorSvcFilter);
       if (showInactiveTranslators) params.set("includeInactive", "true");
       const res = await fetch(api(`/api/admin/translators${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) setTranslatorList(Array.isArray(data) ? data : []);
     } catch { setToast("오류: 통번역사 조회 실패"); }
     finally { setTranslatorsLoading(false); }
-  }, [token, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter, showInactiveTranslators]);
+  }, [token, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter, translatorSvcFilter, showInactiveTranslators]);
 
   const handleExcelUpload = async (file: File) => {
     setExcelParsing(true);
@@ -3228,6 +3230,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <input value={translatorLangFilter} onChange={e => setTranslatorLangFilter(e.target.value)}
               placeholder="언어쌍 (예: 한→영)"
               style={{ ...inputStyle, maxWidth: 150, padding: "8px 12px", fontSize: 13 }} />
+            <ClickSelect
+              value={translatorSvcFilter}
+              onChange={setTranslatorSvcFilter}
+              triggerStyle={{ fontSize: 13, padding: "8px 12px", minWidth: 100, borderRadius: 8 }}
+              options={[
+                { value: "all", label: "전체 업무" },
+                ...["번역","통역","감수","편집","미디어","DTP"].map(s => ({ value: s, label: s })),
+              ]}
+            />
             <ClickSelect
               value={translatorGradeFilter}
               onChange={setTranslatorGradeFilter}

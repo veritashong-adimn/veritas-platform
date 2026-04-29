@@ -35,9 +35,9 @@ const adminGuard = [requireAuth, requireRole("admin", "staff")];
 // ─── 번역사 목록 (검색/필터) ──────────────────────────────────────────────────
 router.get("/admin/translators", ...adminGuard, async (req, res) => {
   try {
-    const { search, languagePair, specialization, status, minRating, grade, includeInactive } = req.query as {
+    const { search, languagePair, specialization, status, minRating, grade, includeInactive, svc } = req.query as {
       search?: string; languagePair?: string; specialization?: string;
-      status?: string; minRating?: string; grade?: string; includeInactive?: string;
+      status?: string; minRating?: string; grade?: string; includeInactive?: string; svc?: string;
     };
 
     const rows = await db
@@ -151,6 +151,20 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
     }
     if (grade?.trim()) {
       result = result.filter(t => t.grade === grade.trim());
+    }
+    // 업무유형 필터: 해당 업무유형의 단가가 1개 이상 있는 통번역사만 반환
+    if (svc?.trim()) {
+      const svcTrim = svc.trim();
+      const allRatesForSvc = translatorIds.length > 0
+        ? await db.select({ translatorId: translatorRatesTable.translatorId })
+            .from(translatorRatesTable)
+            .where(and(
+              inArray(translatorRatesTable.translatorId, translatorIds),
+              eq(translatorRatesTable.serviceType, svcTrim),
+            ))
+        : [];
+      const svcSet = new Set(allRatesForSvc.map(r => r.translatorId));
+      result = result.filter(t => svcSet.has(t.id));
     }
 
     res.json(result);
@@ -274,10 +288,20 @@ router.get("/admin/translators/sample-excel", ...adminGuard, (_req, res) => {
     "hour", "300000", "KRW", "N",
     "", "4", "100000", "Y", "Y", "",
   ];
-  // 예시 3: 단가 없는 통번역사 (단가 컬럼 전부 공백)
+  // 예시 3: 미디어(자막) 단가
   const row3 = [
     "박철수", "park@example.com", "010-5555-1234",
-    "대구", "C", "IT,기술", "번역 3년", "Y",
+    "대구", "C", "영상번역", "자막 경력 5년", "Y",
+    "", "", "", "available", "",
+    "", "", "", "",
+    "미디어", "자막작업", "한국어", "영어",
+    "min", "50000", "KRW", "N",
+    "", "", "", "Y", "Y", "영상 자막 전문",
+  ];
+  // 예시 4: 단가 없는 통번역사 (단가 컬럼 전부 공백)
+  const row4 = [
+    "이영수", "lee@example.com", "010-7777-8888",
+    "광주", "B", "IT,기술", "번역 3년", "Y",
     "", "", "", "available", "",
     "", "", "", "",
     "", "", "", "",
@@ -286,7 +310,7 @@ router.get("/admin/translators/sample-excel", ...adminGuard, (_req, res) => {
   ];
 
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([headers, row1, row2, row3]);
+  const ws = XLSX.utils.aoa_to_sheet([headers, row1, row2, row3, row4]);
   // 열 너비 — 기본 15, 이메일 22
   ws["!cols"] = headers.map((h) => ({ wch: h === "이메일" ? 24 : 16 }));
   // 헤더 행 굵게 (스타일은 xlsx 기본 지원 안 하나, 참고용으로 남김)
@@ -407,6 +431,12 @@ router.post("/admin/translators/upload-excel", ...adminGuard, excelUpload.single
         checkYN(vatVal,       "VAT포함여부",  errors);
         checkYN(isDefaultVal, "기본단가여부", errors);
         checkYN(rateActiveV,  "단가활성여부", errors);
+        // 미디어 업무유형 세부유형 검증
+        if (workTypeVal === "미디어") {
+          const MEDIA_SUBS = ["자막작업", "더빙"];
+          if (!subTypeVal) errors.push("미디어 업무유형은 세부유형(자막작업/더빙) 필수");
+          else if (!MEDIA_SUBS.includes(subTypeVal)) errors.push(`미디어 세부유형은 '자막작업' 또는 '더빙'만 허용됩니다 (입력값: "${subTypeVal}")`);
+        }
       }
 
       parsed.push({
