@@ -1,0 +1,210 @@
+import React, { useState } from "react";
+import { ClickSelect } from "../ui";
+import {
+  SERVICE_TYPES as WORK_TYPES,
+  SUB_SERVICE_TYPES as SUB_TYPES_MAP,
+  UNIT_BY_SERVICE_TYPE as UNIT_BY_TYPE,
+  LANG_OPTIONS,
+} from "./translatorRateConstants";
+
+export type RateEntryData = {
+  workType: string;
+  subType: string;
+  sourceLang: string;
+  sourceCustom: string;
+  targetLang: string;
+  targetCustom: string;
+  unit: string;
+  rate: string;
+  currency: string;
+  vatIncluded: boolean;
+  isDefault: boolean;
+  isActive: boolean;
+  memo: string;
+  minPrice: string;
+  baseHours: string;
+  overtimeRate: string;
+};
+
+export const emptyRateEntry = (): RateEntryData => ({
+  workType: "번역",
+  subType: "일반번역",
+  sourceLang: "한국어",
+  sourceCustom: "",
+  targetLang: "영어",
+  targetCustom: "",
+  unit: "eojeol",
+  rate: "",
+  currency: "KRW",
+  vatIncluded: false,
+  isDefault: false,
+  isActive: true,
+  memo: "",
+  minPrice: "",
+  baseHours: "",
+  overtimeRate: "",
+});
+
+const inputStyle: React.CSSProperties = {
+  width: "100%", padding: "6px 10px", borderRadius: 7,
+  border: "1px solid #d1d5db", fontSize: 13, color: "#111827",
+  outline: "none", boxSizing: "border-box", background: "#fff",
+};
+const label11: React.CSSProperties = { fontSize: 11, color: "#6b7280", marginBottom: 2 };
+
+interface Props {
+  value: RateEntryData;
+  onChange: (patch: Partial<RateEntryData>) => void;
+  onRemove?: () => void;
+  error?: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  actionLoading?: boolean;
+}
+
+export function TranslatorRateEntryCard({
+  value: r,
+  onChange,
+  onRemove,
+  error,
+  actionLabel,
+  onAction,
+  actionLoading,
+}: Props) {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const up = (patch: Partial<RateEntryData>) => onChange(patch);
+  const unitOpts = UNIT_BY_TYPE[r.workType] ?? UNIT_BY_TYPE["번역"];
+
+  return (
+    <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px" }}>
+      {/* 행1: 업무유형 / 세부유형 / 출발언어 / 도착언어 (+ 삭제) */}
+      <div style={{ display: "grid", gridTemplateColumns: onRemove ? "1fr 1fr 1fr 1fr auto" : "1fr 1fr 1fr 1fr", gap: "6px 8px", marginBottom: 6, alignItems: "end" }}>
+        <div>
+          <div style={label11}>업무유형</div>
+          <ClickSelect value={r.workType}
+            onChange={v => {
+              const units = UNIT_BY_TYPE[v] ?? UNIT_BY_TYPE["번역"];
+              const subs = SUB_TYPES_MAP[v] ?? [];
+              up({ workType: v, subType: subs[0] ?? "", unit: units[0]?.value ?? "eojeol" });
+            }}
+            triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+            options={WORK_TYPES.map(w => ({ value: w, label: w }))} />
+        </div>
+        <div>
+          <div style={label11}>세부유형</div>
+          <ClickSelect value={r.subType}
+            onChange={v => up({ subType: v })}
+            triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+            options={[{ value: "", label: "세부유형 선택" }, ...(SUB_TYPES_MAP[r.workType] ?? []).map(s => ({ value: s, label: s }))]} />
+        </div>
+        <div>
+          <div style={label11}>출발 언어</div>
+          <ClickSelect value={r.sourceLang}
+            onChange={v => up({ sourceLang: v, sourceCustom: "" })}
+            triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+            options={LANG_OPTIONS.map(l => ({ value: l, label: l }))} />
+          {r.sourceLang === "기타" && (
+            <input value={r.sourceCustom} onChange={e => up({ sourceCustom: e.target.value })}
+              placeholder="언어명 직접 입력" style={{ ...inputStyle, fontSize: 12, marginTop: 4 }} />
+          )}
+        </div>
+        <div>
+          <div style={label11}>도착 언어</div>
+          <ClickSelect value={r.targetLang}
+            onChange={v => up({ targetLang: v, targetCustom: "" })}
+            triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+            options={LANG_OPTIONS.map(l => ({ value: l, label: l }))} />
+          {r.targetLang === "기타" && (
+            <input value={r.targetCustom} onChange={e => up({ targetCustom: e.target.value })}
+              placeholder="언어명 직접 입력" style={{ ...inputStyle, fontSize: 12, marginTop: 4 }} />
+          )}
+        </div>
+        {onRemove && (
+          <button onClick={onRemove}
+            style={{ background: "none", border: "none", color: "#dc2626", fontSize: 18, cursor: "pointer", padding: "0 4px", marginTop: 16 }}>
+            ×
+          </button>
+        )}
+      </div>
+
+      {/* 행2: 단가단위 / 단가 / 통화 / VAT / 기본단가 / 활성 */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 80px auto auto auto", gap: "6px 8px", marginBottom: 6, alignItems: "end" }}>
+        <div>
+          <div style={label11}>단가단위</div>
+          <ClickSelect value={r.unit}
+            onChange={v => up({ unit: v })}
+            triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+            options={unitOpts} />
+        </div>
+        <div>
+          <div style={label11}>단가</div>
+          <input type="number" value={r.rate} onChange={e => up({ rate: e.target.value })}
+            placeholder="예: 40" style={inputStyle} />
+        </div>
+        <div>
+          <div style={label11}>통화</div>
+          <ClickSelect value={r.currency}
+            onChange={v => up({ currency: v })}
+            triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+            options={["KRW","USD","EUR","JPY","CNY"].map(c => ({ value: c, label: c }))} />
+        </div>
+        <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 11, color: "#6b7280", cursor: "pointer", paddingBottom: 6 }}>
+          <input type="checkbox" checked={r.vatIncluded} onChange={e => up({ vatIncluded: e.target.checked })} />
+          VAT포함
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 11, color: "#6b7280", cursor: "pointer", paddingBottom: 6 }}>
+          <input type="checkbox" checked={r.isDefault} onChange={e => up({ isDefault: e.target.checked })} />
+          기본단가
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 11, color: "#6b7280", cursor: "pointer", paddingBottom: 6 }}>
+          <input type="checkbox" checked={r.isActive} onChange={e => up({ isActive: e.target.checked })} />
+          활성
+        </label>
+      </div>
+
+      {/* 행3: 메모 (+ 액션버튼) */}
+      <div style={{ display: "grid", gridTemplateColumns: actionLabel ? "1fr auto" : "1fr", gap: "6px 8px", alignItems: "end", marginBottom: 4 }}>
+        <div>
+          <div style={label11}>메모</div>
+          <input value={r.memo} onChange={e => up({ memo: e.target.value })}
+            placeholder="메모 (선택)" style={inputStyle} />
+        </div>
+        {actionLabel && onAction && (
+          <button onClick={onAction} disabled={actionLoading}
+            style={{ fontSize: 12, fontWeight: 600, padding: "6px 16px", borderRadius: 7, border: "none", background: actionLoading ? "#9ca3af" : "#2563eb", color: "#fff", cursor: actionLoading ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>
+            {actionLoading ? "추가 중..." : actionLabel}
+          </button>
+        )}
+      </div>
+
+      {/* 고급설정 토글 */}
+      <div>
+        <button onClick={() => setShowAdvanced(p => !p)}
+          style={{ background: "none", border: "none", fontSize: 11, color: "#6b7280", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
+          {showAdvanced ? "▲ 고급설정 접기" : "▼ 고급설정 (최소금액·기본시간·추가시간단가)"}
+        </button>
+        {showAdvanced && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px 8px", marginTop: 6 }}>
+            <div>
+              <div style={label11}>최소금액 (선택)</div>
+              <input type="number" value={r.minPrice} onChange={e => up({ minPrice: e.target.value })}
+                placeholder="예: 50000" style={inputStyle} />
+            </div>
+            <div>
+              <div style={label11}>기본시간 (선택)</div>
+              <input type="number" value={r.baseHours} onChange={e => up({ baseHours: e.target.value })}
+                placeholder="예: 4" style={inputStyle} />
+            </div>
+            <div>
+              <div style={label11}>추가시간 단가 (선택)</div>
+              <input type="number" value={r.overtimeRate} onChange={e => up({ overtimeRate: e.target.value })}
+                placeholder="예: 30000" style={inputStyle} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {error && <p style={{ color: "#dc2626", fontSize: 12, marginTop: 4 }}>{error}</p>}
+    </div>
+  );
+}
