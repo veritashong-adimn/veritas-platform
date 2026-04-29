@@ -4,6 +4,15 @@ import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { DraggableModal } from "./DraggableModal";
 import { SensitiveInfoModal } from "./SensitiveInfoModal";
+import {
+  SERVICE_TYPES as WORK_TYPES,
+  SUB_SERVICE_TYPES as SUB_TYPES_MAP,
+  UNIT_BY_SERVICE_TYPE as UNIT_BY_TYPE,
+  ALL_RATE_UNITS as ALL_UNITS,
+  getRateUnitLabel as getUnitLabel,
+  LANG_OPTIONS,
+  CURRENCIES,
+} from "./translatorRateConstants";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -13,48 +22,6 @@ const inputStyle: React.CSSProperties = {
 
 const GRADE_OPTIONS = ["S", "A", "B", "C"];
 const LANG_LEVEL_OPTIONS = ["일반", "전문"];
-const WORK_TYPES = ["번역", "통역", "감수", "편집", "미디어", "DTP"];
-const SUB_TYPES_MAP: Record<string, string[]> = {
-  "번역": ["일반번역", "전문번역", "긴급번역", "공증번역"],
-  "통역": ["동시통역", "위스퍼링통역", "순차통역", "수행통역", "미팅통역", "전시회통역", "화상통역", "전화통역"],
-  "감수": ["교정", "윤문", "원어민감수", "원문대조감수"],
-  "편집": ["문서편집", "리라이팅"],
-  "미디어": ["자막작업", "더빙"],
-  "DTP": ["디자인작업"],
-};
-const TRANS_UNITS = [
-  { value: "word", label: "단어" }, { value: "eojeol", label: "어절" },
-  { value: "char", label: "글자" }, { value: "page", label: "페이지" }, { value: "item", label: "건" },
-];
-const INTERP_UNITS = [
-  { value: "1h", label: "1시간" }, { value: "2h", label: "2시간" },
-  { value: "4h", label: "4시간" }, { value: "6h", label: "6시간" },
-  { value: "8h", label: "8시간" }, { value: "extra", label: "추가시간" },
-  { value: "day", label: "일" }, { value: "item", label: "건" },
-];
-const MEDIA_UNITS = [
-  { value: "min", label: "분" }, { value: "item", label: "건" },
-  { value: "project", label: "프로젝트" },
-];
-const UNIT_BY_TYPE: Record<string, { value: string; label: string }[]> = {
-  "번역": TRANS_UNITS, "통역": INTERP_UNITS,
-  "감수": TRANS_UNITS, "편집": TRANS_UNITS,
-  "미디어": MEDIA_UNITS,
-  "DTP": TRANS_UNITS,
-};
-const ALL_UNITS = [
-  ...TRANS_UNITS,
-  ...INTERP_UNITS.filter(u => !TRANS_UNITS.some(t => t.value === u.value)),
-  ...MEDIA_UNITS.filter(u => !TRANS_UNITS.some(t => t.value === u.value) && !INTERP_UNITS.some(i => i.value === u.value)),
-];
-const getUnitLabel = (unit: string) => ALL_UNITS.find(u => u.value === unit)?.label ?? unit;
-const LANG_OPTIONS = [
-  "한국어", "영어", "일본어", "중국어", "러시아어", "스페인어", "독일어", "프랑스어",
-  "아랍어", "이탈리아어", "터키어", "포르투갈어", "폴란드어", "스웨덴어", "네덜란드어",
-  "그리스어", "체코어", "페르시아어", "히브리어", "베트남어", "몽골어", "태국어",
-  "인도네시아어", "말레이어", "캄보디아어", "인도어", "파키스탄어", "스리랑카어", "방글라데시어",
-  "미얀마어", "라오스어", "광동어", "우즈베키스탄어", "우크라이나어", "기타",
-];
 
 type EmailEntry = { email: string; isPrimary: boolean; error: string };
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -720,7 +687,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>업무유형</div>
                 <ClickSelect value={rateForm.workType}
                   onChange={v => {
-                    const units = UNIT_BY_TYPE[v] ?? TRANS_UNITS;
+                    const units = UNIT_BY_TYPE[v] ?? UNIT_BY_TYPE["번역"];
                     const defaultUnit = units[0]?.value ?? "eojeol";
                     const subs = SUB_TYPES_MAP[v] ?? [];
                     const defaultSub = subs[0] ?? "";
@@ -766,7 +733,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 <ClickSelect value={rateForm.unit}
                   onChange={v => setRateForm(p => ({ ...p, unit: v }))}
                   triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
-                  options={UNIT_BY_TYPE[rateForm.workType] ?? TRANS_UNITS} />
+                  options={UNIT_BY_TYPE[rateForm.workType] ?? UNIT_BY_TYPE["번역"]} />
               </div>
               <div>
                 <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>단가</div>
