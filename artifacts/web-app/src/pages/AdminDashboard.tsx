@@ -59,7 +59,18 @@ function Section({ title, sub, children, action }: { title: string; sub?: string
 }
 
 type SSItem = { id: number; label: string; sub?: string };
-type ExcelRow = { row: number; email: string; name: string; phone: string; sourceLang: string; targetLang: string; workType: string; subType: string; unit: string; rate: string; currency: string; vatIncluded: string; specializations: string; grade: string; region: string; error: string };
+type ExcelRow = {
+  row: number; email: string; name: string; phone: string;
+  language: string; languagePairs: string; region: string; grade: string;
+  specializations: string; career: string; status: string;
+  education: string; major: string; rating: string; availabilityStatus: string; bio: string;
+  residentNumber: string; bankName: string; bankAccount: string; accountHolder: string;
+  workType: string; subType: string; sourceLang: string; targetLang: string;
+  unit: string; rate: string; currency: string; vatIncluded: string;
+  minPrice: string; baseHours: string; overtimeRate: string;
+  isDefault: string; rateActive: string; rateMemo: string;
+  error: string;
+};
 /**
  * SearchableSelect — 검색형 드롭다운
  * 동작: 클릭/포커스로 열림, 외부 mousedown·ESC·선택 완료 시만 닫힘
@@ -1190,10 +1201,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 {excelPreview.valid.length > 0 && (
                   <div style={{ marginBottom: 12 }}>
                     <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, color: "#374151" }}>등록 예정 목록</div>
-                    <div style={{ overflowX: "auto", maxHeight: 240, border: "1px solid #e5e7eb", borderRadius: 8 }}>
+                    <div style={{ overflowX: "auto", maxHeight: 260, border: "1px solid #e5e7eb", borderRadius: 8 }}>
                       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                        <thead style={{ background: "#f9fafb" }}>
-                          <tr>{["행","이메일","이름","전화번호","출발언어→도착언어","업무유형","단가","통화"].map(h => (
+                        <thead style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
+                          <tr>{["행","이름","이메일","휴대폰","언어쌍","지역","등급","전문분야","업무유형","단가단위","단가","통화","기본단가여부"].map(h => (
                             <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#374151", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" }}>{h}</th>
                           ))}</tr>
                         </thead>
@@ -1201,13 +1212,22 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           {excelPreview.valid.map(r => (
                             <tr key={r.row} style={{ borderBottom: "1px solid #f3f4f6" }}>
                               <td style={{ padding: "5px 10px", color: "#9ca3af" }}>{r.row}</td>
-                              <td style={{ padding: "5px 10px" }}>{r.email}</td>
-                              <td style={{ padding: "5px 10px" }}>{r.name || "-"}</td>
+                              <td style={{ padding: "5px 10px", fontWeight: 600 }}>{r.name || "-"}</td>
+                              <td style={{ padding: "5px 10px", color: "#3b82f6" }}>{r.email}</td>
                               <td style={{ padding: "5px 10px" }}>{r.phone || "-"}</td>
-                              <td style={{ padding: "5px 10px" }}>{r.sourceLang && r.targetLang ? `${r.sourceLang}→${r.targetLang}` : r.sourceLang || r.targetLang || "-"}</td>
-                              <td style={{ padding: "5px 10px" }}>{r.workType || "-"}</td>
-                              <td style={{ padding: "5px 10px" }}>{r.rate || "-"}</td>
-                              <td style={{ padding: "5px 10px" }}>{r.currency || "KRW"}</td>
+                              <td style={{ padding: "5px 10px" }}>
+                                {r.languagePairs || (r.sourceLang && r.targetLang ? `${r.sourceLang}→${r.targetLang}` : r.sourceLang || r.targetLang || "-")}
+                              </td>
+                              <td style={{ padding: "5px 10px" }}>{r.region || "-"}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.grade || "-"}</td>
+                              <td style={{ padding: "5px 10px", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.specializations || "-"}</td>
+                              <td style={{ padding: "5px 10px", color: r.workType ? "#7c3aed" : "#9ca3af" }}>{r.workType || "-"}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.unit || "-"}</td>
+                              <td style={{ padding: "5px 10px", fontWeight: r.rate ? 600 : 400, color: r.rate ? "#059669" : "#9ca3af" }}>{r.rate || "-"}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.currency || (r.rate ? "KRW" : "-")}</td>
+                              <td style={{ padding: "5px 10px", textAlign: "center" }}>
+                                {r.isDefault ? <span style={{ background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 6px", fontSize: 11 }}>{r.isDefault}</span> : "-"}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
