@@ -30,13 +30,13 @@ function formatPhoneNumber(value: string): string {
   if (n.length <= 7) return `${n.slice(0, 3)}-${n.slice(3)}`;
   return `${n.slice(0, 3)}-${n.slice(3, 7)}-${n.slice(7, 11)}`;
 }
-const WORK_TYPES = ["번역", "통역", "감수", "편집", "직접입력"];
+const WORK_TYPES = ["번역", "통역", "감수", "편집", "DTP"];
 const SUB_TYPES_MAP: Record<string, string[]> = {
   "번역": ["일반번역", "전문번역", "긴급번역", "공증번역"],
   "통역": ["동시통역", "위스퍼링통역", "순차통역", "수행통역", "미팅통역", "전시회통역", "화상통역", "전화통역"],
-  "감수": ["번역감수", "전문감수", "원어민감수", "원문대조감수"],
-  "편집": ["원어민감수", "윤문", "교정", "편집", "DTP"],
-  "직접입력": [],
+  "감수": ["교정", "윤문", "원어민감수", "원문대조감수"],
+  "편집": ["문서편집", "리라이팅"],
+  "DTP": ["디자인작업"],
 };
 const TRANS_UNITS = [
   { value: "word", label: "단어" }, { value: "eojeol", label: "어절" },
@@ -49,8 +49,8 @@ const INTERP_UNITS = [
   { value: "day", label: "일" }, { value: "item", label: "건" },
 ];
 const UNIT_BY_TYPE: Record<string, { value: string; label: string }[]> = {
-  "번역": TRANS_UNITS, "통역": INTERP_UNITS, "편집": TRANS_UNITS,
-  "감수": TRANS_UNITS, "직접입력": [...TRANS_UNITS, ...INTERP_UNITS.filter(u => u.value !== "item")],
+  "번역": TRANS_UNITS, "통역": INTERP_UNITS,
+  "감수": TRANS_UNITS, "편집": TRANS_UNITS, "DTP": TRANS_UNITS,
 };
 const LANG_OPTIONS = [
   "한국어", "영어", "일본어", "중국어", "러시아어", "스페인어", "독일어", "프랑스어",
