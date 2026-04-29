@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
 import multer from "multer";
+import * as XLSX from "xlsx";
 import {
   db, usersTable, translatorProfilesTable, translatorRatesTable,
   translatorProductsTable, productsTable, translatorSensitiveTable,
@@ -225,6 +226,179 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
     req.log.error({ err }, "Translators: failed to create");
     res.status(500).json({ error: "통번역사 등록 실패." });
   }
+});
+
+// ─── 엑셀 업로드용 multer ─────────────────────────────────────────────────────
+const excelUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = file.originalname.match(/\.(xlsx|xls)$/i) || file.mimetype.includes("spreadsheet") || file.mimetype.includes("excel");
+    if (ok) cb(null, true); else cb(new Error("Excel(.xlsx/.xls) 파일만 가능합니다."));
+  },
+});
+
+// ─── 샘플 엑셀 다운로드 ─────────────────────────────────────────────────────
+router.get("/admin/translators/sample-excel", ...adminGuard, (_req, res) => {
+  const headers = [
+    "이메일(필수)", "이름", "전화번호",
+    "출발언어", "도착언어",
+    "업무유형", "세부유형", "단가단위", "기본단가", "통화", "VAT포함(Y/N)",
+    "전문분야", "등급(1~5)", "지역",
+  ];
+  const sample = [
+    "translator@example.com", "홍길동", "010-1234-5678",
+    "한국어", "영어",
+    "번역", "일반번역", "eojeol", "45", "KRW", "N",
+    "법률,금융", "2", "서울",
+  ];
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([headers, sample]);
+  // 열 너비 설정
+  ws["!cols"] = headers.map(() => ({ wch: 18 }));
+  XLSX.utils.book_append_sheet(wb, ws, "통번역사");
+  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+  res.setHeader("Content-Disposition", 'attachment; filename="translators_sample.xlsx"');
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.send(buf);
+});
+
+// ─── 엑셀 파싱(미리보기) ──────────────────────────────────────────────────────
+router.post("/admin/translators/upload-excel", ...adminGuard, excelUpload.single("file"), async (req, res) => {
+  if (!req.file) { res.status(400).json({ error: "파일이 없습니다." }); return; }
+  try {
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows: string[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" }) as string[][];
+    if (rows.length < 2) { res.status(400).json({ error: "데이터 행이 없습니다. (1행 헤더, 2행~ 데이터)" }); return; }
+
+    const colMap: Record<string, number> = {};
+    const COLUMN_NAMES: Record<string, string> = {
+      "이메일(필수)": "email", "이메일": "email",
+      "이름": "name", "전화번호": "phone",
+      "출발언어": "sourceLang", "도착언어": "targetLang",
+      "업무유형": "workType", "세부유형": "subType",
+      "단가단위": "unit", "기본단가": "rate", "통화": "currency", "VAT포함(Y/N)": "vatIncluded",
+      "전문분야": "specializations", "등급(1~5)": "grade", "등급": "grade", "지역": "region",
+    };
+    const headerRow = rows[0].map(h => String(h ?? "").trim());
+    headerRow.forEach((h, i) => { if (COLUMN_NAMES[h]) colMap[COLUMN_NAMES[h]] = i; });
+
+    if (colMap["email"] == null) {
+      res.status(400).json({ error: "엑셀에 '이메일(필수)' 열이 없습니다." }); return;
+    }
+
+    const parsed: { row: number; email: string; name: string; phone: string; sourceLang: string; targetLang: string; workType: string; subType: string; unit: string; rate: string; currency: string; vatIncluded: string; specializations: string; grade: string; region: string; error: string }[] = [];
+
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      const cell = (key: string) => String(r[colMap[key] ?? -1] ?? "").trim();
+      const email = cell("email");
+      if (!email) continue; // 빈 행 스킵
+      const errors: string[] = [];
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("이메일 형식 오류");
+      const rateVal = cell("rate");
+      if (rateVal && isNaN(Number(rateVal))) errors.push("기본단가는 숫자여야 합니다");
+      parsed.push({
+        row: i + 1,
+        email,
+        name: cell("name"),
+        phone: cell("phone"),
+        sourceLang: cell("sourceLang"),
+        targetLang: cell("targetLang"),
+        workType: cell("workType"),
+        subType: cell("subType"),
+        unit: cell("unit") || "eojeol",
+        rate: rateVal,
+        currency: cell("currency") || "KRW",
+        vatIncluded: cell("vatIncluded"),
+        specializations: cell("specializations"),
+        grade: cell("grade"),
+        region: cell("region"),
+        error: errors.join("; "),
+      });
+    }
+
+    const valid = parsed.filter(p => !p.error);
+    const invalid = parsed.filter(p => p.error);
+
+    // 이메일 중복 검사 (DB)
+    const emails = valid.map(p => p.email.toLowerCase());
+    const existingUsers = emails.length > 0
+      ? await db.select({ email: usersTable.email }).from(usersTable).where(inArray(usersTable.email, emails))
+      : [];
+    const existingSet = new Set(existingUsers.map(u => u.email));
+    const duplicateRows = valid.filter(p => existingSet.has(p.email.toLowerCase()));
+    duplicateRows.forEach(p => { p.error = "이미 등록된 이메일"; invalid.push(p); });
+    const finalValid = valid.filter(p => !existingSet.has(p.email.toLowerCase()));
+
+    res.json({ valid: finalValid, invalid, totalRows: parsed.length });
+  } catch (err) {
+    req.log.error({ err }, "Excel upload parse error");
+    res.status(500).json({ error: "엑셀 파싱 중 오류가 발생했습니다." });
+  }
+});
+
+// ─── 엑셀 대량 등록 ──────────────────────────────────────────────────────────
+router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) => {
+  const { rows } = req.body as { rows: { email: string; name?: string; phone?: string; sourceLang?: string; targetLang?: string; workType?: string; subType?: string; unit?: string; rate?: string; currency?: string; vatIncluded?: string; specializations?: string; grade?: string; region?: string }[] };
+  if (!Array.isArray(rows) || rows.length === 0) {
+    res.status(400).json({ error: "등록할 데이터가 없습니다." }); return;
+  }
+  const results: { email: string; status: "created" | "error"; error?: string }[] = [];
+  for (const row of rows) {
+    const email = row.email?.trim().toLowerCase();
+    if (!email) { results.push({ email: "?", status: "error", error: "이메일 없음" }); continue; }
+    try {
+      const tempPw = randomBytes(8).toString("hex");
+      const hashed = await bcrypt.hash(tempPw, 10);
+      const [newUser] = await db.insert(usersTable).values({
+        email, password: hashed, role: "translator", isActive: true,
+      }).returning({ id: usersTable.id });
+      const profileData: Record<string, unknown> = { userId: newUser.id };
+      if (row.name) profileData.name = row.name.trim();
+      if (row.phone) profileData.phone = row.phone.trim();
+      if (row.specializations) profileData.specializations = row.specializations.trim();
+      if (row.grade) profileData.grade = row.grade.trim();
+      if (row.region) profileData.region = row.region.trim();
+      if (row.sourceLang || row.targetLang) {
+        const src = row.sourceLang?.trim(); const tgt = row.targetLang?.trim();
+        if (src && tgt) profileData.languagePairs = `${src}→${tgt}`;
+        else if (src) profileData.languagePairs = src;
+      }
+      await db.insert(translatorProfilesTable).values(profileData as never);
+      await db.insert(translatorEmailsTable).values({ userId: newUser.id, email, isPrimary: true });
+      // 단가 등록
+      if (row.workType?.trim() && row.rate?.trim() && !isNaN(Number(row.rate))) {
+        const src = row.sourceLang?.trim() || null;
+        const tgt = row.targetLang?.trim() || null;
+        await db.insert(translatorRatesTable).values({
+          translatorId: newUser.id,
+          serviceType: row.workType.trim(),
+          subType: row.subType?.trim() || null,
+          language: src, languagePair: tgt,
+          unit: row.unit?.trim() || "eojeol",
+          rate: Number(row.rate),
+          currency: row.currency?.trim() || "KRW",
+          vatIncluded: row.vatIncluded?.toUpperCase() === "Y",
+          isDefault: true, isActive: true,
+        });
+      }
+      await db.insert(logsTable).values({
+        entityType: "translator", entityId: newUser.id,
+        action: "bulk_created", performedBy: req.user?.id ?? null,
+        performedByEmail: req.user?.email ?? null,
+        metadata: JSON.stringify({ email }),
+      });
+      results.push({ email, status: "created" });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      results.push({ email, status: "error", error: msg });
+    }
+  }
+  const created = results.filter(r => r.status === "created").length;
+  const failed = results.filter(r => r.status === "error").length;
+  res.status(201).json({ created, failed, results });
 });
 
 // ─── 번역사 상세 ──────────────────────────────────────────────────────────────
@@ -649,9 +823,14 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
   if (isNaN(userId) || userId <= 0) {
     res.status(400).json({ error: "유효하지 않은 user id." }); return;
   }
-  const { serviceType, workType, subType, language, languagePair, unit, rate, memo } = req.body as {
+  const {
+    serviceType, workType, subType, language, languagePair, unit, rate,
+    currency, vatIncluded, isDefault, isActive, minPrice, baseHours, overtimeRate, memo
+  } = req.body as {
     serviceType?: string; workType?: string; subType?: string; language?: string; languagePair?: string;
-    unit?: string; rate?: number; memo?: string;
+    unit?: string; rate?: number; currency?: string; vatIncluded?: boolean;
+    isDefault?: boolean; isActive?: boolean;
+    minPrice?: number; baseHours?: number; overtimeRate?: number; memo?: string;
   };
   const resolvedServiceType = (workType ?? serviceType)?.trim();
   if (!resolvedServiceType || rate == null) {
@@ -689,6 +868,13 @@ router.post("/admin/translators/:id/rates", ...adminGuard, async (req, res) => {
         languagePair: resolvedLangPair,
         unit: resolvedUnit,
         rate: Number(rate),
+        currency: (currency?.trim() || "KRW") as string,
+        vatIncluded: vatIncluded === true,
+        isDefault: isDefault === true,
+        isActive: isActive !== false,
+        minPrice: minPrice != null ? Number(minPrice) : null,
+        baseHours: baseHours != null ? Number(baseHours) : null,
+        overtimeRate: overtimeRate != null ? Number(overtimeRate) : null,
         memo: memo?.trim() || null,
       })
       .returning();

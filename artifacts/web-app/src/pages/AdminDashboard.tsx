@@ -59,6 +59,7 @@ function Section({ title, sub, children, action }: { title: string; sub?: string
 }
 
 type SSItem = { id: number; label: string; sub?: string };
+type ExcelRow = { row: number; email: string; name: string; phone: string; sourceLang: string; targetLang: string; workType: string; subType: string; unit: string; rate: string; currency: string; vatIncluded: string; specializations: string; grade: string; region: string; error: string };
 /**
  * SearchableSelect — 검색형 드롭다운
  * 동작: 클릭/포커스로 열림, 외부 mousedown·ESC·선택 완료 시만 닫힘
@@ -309,6 +310,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [showInactiveTranslators, setShowInactiveTranslators] = useState(false);
   const [translatorDetailModal, setTranslatorDetailModal] = useState<{ userId: number; email: string } | null>(null);
   const [showTranslatorCreateModal, setShowTranslatorCreateModal] = useState(false);
+  // 엑셀 대량 업로드 상태
+  const [showExcelModal, setShowExcelModal] = useState(false);
+  const [excelParsing, setExcelParsing] = useState(false);
+  const [excelPreview, setExcelPreview] = useState<{ valid: ExcelRow[]; invalid: ExcelRow[]; totalRows: number } | null>(null);
+  const [excelBulkLoading, setExcelBulkLoading] = useState(false);
+  const [excelBulkResult, setExcelBulkResult] = useState<{ created: number; failed: number; results: { email: string; status: string; error?: string }[] } | null>(null);
 
   // 운영 테스트 시나리오
   type ScenarioStep = { step: number; name: string; status: "ok"|"error"|"skipped"; detail: string; data?: Record<string, unknown> };
@@ -551,6 +558,39 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     } catch { setToast("오류: 통번역사 조회 실패"); }
     finally { setTranslatorsLoading(false); }
   }, [token, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter, showInactiveTranslators]);
+
+  const handleExcelUpload = async (file: File) => {
+    setExcelParsing(true);
+    setExcelPreview(null);
+    setExcelBulkResult(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(api("/api/admin/translators/upload-excel"), { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setExcelPreview(data);
+    } catch { setToast("오류: 엑셀 파싱 실패"); }
+    finally { setExcelParsing(false); }
+  };
+
+  const handleBulkCreate = async () => {
+    if (!excelPreview?.valid?.length) { setToast("등록할 유효한 데이터가 없습니다."); return; }
+    setExcelBulkLoading(true);
+    try {
+      const res = await fetch(api("/api/admin/translators/bulk-create"), {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: excelPreview.valid }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data.error}`); return; }
+      setExcelBulkResult(data);
+      await fetchTranslators();
+      setToast(`통번역사 ${data.created}명 등록 완료 (실패 ${data.failed}명)`);
+    } catch { setToast("오류: 대량 등록 실패"); }
+    finally { setExcelBulkLoading(false); }
+  };
 
   const handleSaveBoardPost = async () => {
     if (!boardForm.title.trim() || !boardForm.content.trim()) { setToast("제목과 내용을 입력하세요."); return; }
@@ -1108,6 +1148,144 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           }}
           onToast={setToast}
         />
+      )}
+      {/* ── 엑셀 대량 등록 모달 ── */}
+      {showExcelModal && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 9000, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 16, padding: "24px 28px", width: "min(820px,96vw)", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+              <h2 style={{ margin: 0, fontSize: 17, fontWeight: 700 }}>📥 통번역사 엑셀 대량 등록</h2>
+              <button onClick={() => { setShowExcelModal(false); setExcelPreview(null); setExcelBulkResult(null); }}
+                style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#6b7280" }}>×</button>
+            </div>
+            <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 14px" }}>
+              샘플 엑셀 형식에 맞게 파일을 준비 후 업로드하세요. 이메일(필수) 외 나머지 항목은 선택 입력입니다.
+            </p>
+            {/* 파일 업로드 드롭존 */}
+            {!excelPreview && !excelBulkResult && (
+              <label style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "2px dashed #d1d5db", borderRadius: 12, padding: "36px 24px", cursor: "pointer", background: "#f9fafb", marginBottom: 14 }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📂</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#374151", marginBottom: 4 }}>엑셀 파일을 선택하거나 여기에 드롭하세요</div>
+                <div style={{ fontSize: 12, color: "#9ca3af" }}>.xlsx / .xls 파일 · 최대 5MB</div>
+                <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} disabled={excelParsing}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) handleExcelUpload(f); e.target.value = ""; }} />
+                {excelParsing && <div style={{ marginTop: 12, color: "#6b7280", fontSize: 13 }}>파싱 중...</div>}
+              </label>
+            )}
+            {/* 파싱 결과 */}
+            {excelPreview && !excelBulkResult && (
+              <>
+                <div style={{ display: "flex", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
+                  <div style={{ background: "#ecfdf5", borderRadius: 8, padding: "8px 16px", fontSize: 13, color: "#065f46", fontWeight: 600 }}>
+                    ✅ 정상 {excelPreview.valid.length}행
+                  </div>
+                  <div style={{ background: excelPreview.invalid.length > 0 ? "#fef2f2" : "#f3f4f6", borderRadius: 8, padding: "8px 16px", fontSize: 13, color: excelPreview.invalid.length > 0 ? "#991b1b" : "#6b7280", fontWeight: 600 }}>
+                    ⚠️ 오류 {excelPreview.invalid.length}행
+                  </div>
+                  <div style={{ background: "#eff6ff", borderRadius: 8, padding: "8px 16px", fontSize: 13, color: "#1d4ed8", fontWeight: 600 }}>
+                    전체 {excelPreview.totalRows}행
+                  </div>
+                </div>
+                {/* 정상 행 미리보기 */}
+                {excelPreview.valid.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, color: "#374151" }}>등록 예정 목록</div>
+                    <div style={{ overflowX: "auto", maxHeight: 240, border: "1px solid #e5e7eb", borderRadius: 8 }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead style={{ background: "#f9fafb" }}>
+                          <tr>{["행","이메일","이름","전화번호","출발언어→도착언어","업무유형","단가","통화"].map(h => (
+                            <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#374151", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" }}>{h}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody>
+                          {excelPreview.valid.map(r => (
+                            <tr key={r.row} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                              <td style={{ padding: "5px 10px", color: "#9ca3af" }}>{r.row}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.email}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.name || "-"}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.phone || "-"}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.sourceLang && r.targetLang ? `${r.sourceLang}→${r.targetLang}` : r.sourceLang || r.targetLang || "-"}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.workType || "-"}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.rate || "-"}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.currency || "KRW"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                {/* 오류 행 */}
+                {excelPreview.invalid.length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, color: "#991b1b" }}>오류 행 (등록 제외)</div>
+                    <div style={{ overflowX: "auto", maxHeight: 160, border: "1px solid #fecaca", borderRadius: 8, background: "#fef2f2" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead>
+                          <tr>{["행","이메일","오류 사유"].map(h => (
+                            <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#991b1b", borderBottom: "1px solid #fecaca", whiteSpace: "nowrap" }}>{h}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody>
+                          {excelPreview.invalid.map(r => (
+                            <tr key={r.row} style={{ borderBottom: "1px solid #fecaca" }}>
+                              <td style={{ padding: "5px 10px", color: "#9ca3af" }}>{r.row}</td>
+                              <td style={{ padding: "5px 10px" }}>{r.email}</td>
+                              <td style={{ padding: "5px 10px", color: "#dc2626" }}>{r.error}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                  <button onClick={() => { setExcelPreview(null); }}
+                    style={{ padding: "8px 18px", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", fontSize: 13, cursor: "pointer" }}>
+                    다시 선택
+                  </button>
+                  <PrimaryBtn onClick={handleBulkCreate} disabled={excelBulkLoading || excelPreview.valid.length === 0}
+                    style={{ padding: "8px 20px", fontSize: 13 }}>
+                    {excelBulkLoading ? "등록 중..." : `${excelPreview.valid.length}명 일괄 등록`}
+                  </PrimaryBtn>
+                </div>
+              </>
+            )}
+            {/* 등록 결과 */}
+            {excelBulkResult && (
+              <div>
+                <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+                  <div style={{ background: "#ecfdf5", borderRadius: 8, padding: "10px 18px", fontSize: 14, color: "#065f46", fontWeight: 700 }}>✅ 등록 성공 {excelBulkResult.created}명</div>
+                  {excelBulkResult.failed > 0 && (
+                    <div style={{ background: "#fef2f2", borderRadius: 8, padding: "10px 18px", fontSize: 14, color: "#991b1b", fontWeight: 700 }}>❌ 실패 {excelBulkResult.failed}명</div>
+                  )}
+                </div>
+                {excelBulkResult.failed > 0 && (
+                  <div style={{ overflowX: "auto", maxHeight: 200, border: "1px solid #fecaca", borderRadius: 8, background: "#fef2f2", marginBottom: 14 }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                      <thead>
+                        <tr>{["이메일","오류"].map(h => (<th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#991b1b", borderBottom: "1px solid #fecaca" }}>{h}</th>))}</tr>
+                      </thead>
+                      <tbody>
+                        {excelBulkResult.results.filter(r => r.status === "error").map((r, i) => (
+                          <tr key={i} style={{ borderBottom: "1px solid #fecaca" }}>
+                            <td style={{ padding: "5px 10px" }}>{r.email}</td>
+                            <td style={{ padding: "5px 10px", color: "#dc2626" }}>{r.error}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <PrimaryBtn onClick={() => { setShowExcelModal(false); setExcelPreview(null); setExcelBulkResult(null); }} style={{ padding: "8px 20px", fontSize: 13 }}>
+                    닫기
+                  </PrimaryBtn>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       )}
       {translatorProfileModal !== null && (
         <TranslatorProfileModal
@@ -3003,9 +3181,24 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {/* ── 통번역사 탭 ── */}
       {adminTab === "translators" && (
         <Section title={`통번역사 관리 (${translatorList.length})`} action={
-          <PrimaryBtn onClick={() => setShowTranslatorCreateModal(true)} style={{ padding: "8px 16px", fontSize: 13 }}>
-            + 통번역사 등록
-          </PrimaryBtn>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={async () => {
+              const res = await fetch(api("/api/admin/translators/sample-excel"), { headers: authHeaders });
+              if (!res.ok) { setToast("샘플 다운로드 실패"); return; }
+              const blob = await res.blob();
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a"); a.href = url; a.download = "translators_sample.xlsx"; a.click(); URL.revokeObjectURL(url);
+            }} style={{ padding: "8px 14px", fontSize: 12, borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", color: "#374151", cursor: "pointer", fontWeight: 600 }}>
+              샘플 다운로드
+            </button>
+            <button onClick={() => { setShowExcelModal(true); setExcelPreview(null); setExcelBulkResult(null); }}
+              style={{ padding: "8px 14px", fontSize: 12, borderRadius: 8, border: "1px solid #10b981", background: "#ecfdf5", color: "#065f46", cursor: "pointer", fontWeight: 600 }}>
+              📥 엑셀 대량 등록
+            </button>
+            <PrimaryBtn onClick={() => setShowTranslatorCreateModal(true)} style={{ padding: "8px 16px", fontSize: 13 }}>
+              + 통번역사 등록
+            </PrimaryBtn>
+          </div>
         }>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
             <input value={translatorSearch} onChange={e => setTranslatorSearch(e.target.value)}

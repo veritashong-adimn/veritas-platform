@@ -78,7 +78,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [saving, setSaving] = useState(false);
   const [noteText, setNoteText] = useState("");
   const [addingNote, setAddingNote] = useState(false);
-  const [rateForm, setRateForm] = useState({ workType: "번역", subType: "일반번역", sourceLang: "한국어", sourceCustom: "", targetLang: "영어", targetCustom: "", unit: "eojeol", rate: "", memo: "" });
+  const [rateForm, setRateForm] = useState({ workType: "번역", subType: "일반번역", sourceLang: "한국어", sourceCustom: "", targetLang: "영어", targetCustom: "", unit: "eojeol", rate: "", currency: "KRW", vatIncluded: false, isDefault: false, isActive: true, minPrice: "", baseHours: "", overtimeRate: "", memo: "" });
+  const [showRateAdvanced, setShowRateAdvanced] = useState(false);
   const [addingRate, setAddingRate] = useState(false);
   const [showSensitive, setShowSensitive] = useState(false);
   const [resumeFile, setResumeFile] = useState<File | null>(null);
@@ -238,13 +239,20 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           languagePair: tgtLang,
           unit: rateForm.unit,
           rate: Number(rateForm.rate),
+          currency: rateForm.currency,
+          vatIncluded: rateForm.vatIncluded,
+          isDefault: rateForm.isDefault,
+          isActive: rateForm.isActive,
+          minPrice: rateForm.minPrice ? Number(rateForm.minPrice) : null,
+          baseHours: rateForm.baseHours ? Number(rateForm.baseHours) : null,
+          overtimeRate: rateForm.overtimeRate ? Number(rateForm.overtimeRate) : null,
           memo: rateForm.memo || null,
         }),
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       setRates(prev => [data, ...prev]);
-      setRateForm({ workType: "번역", subType: "일반번역", sourceLang: "한국어", sourceCustom: "", targetLang: "영어", targetCustom: "", unit: "eojeol", rate: "", memo: "" });
+      setRateForm({ workType: "번역", subType: "일반번역", sourceLang: "한국어", sourceCustom: "", targetLang: "영어", targetCustom: "", unit: "eojeol", rate: "", currency: "KRW", vatIncluded: false, isDefault: false, isActive: true, minPrice: "", baseHours: "", overtimeRate: "", memo: "" });
       onToast("단가가 추가되었습니다.");
     } catch { onToast("오류: 단가 추가 실패"); }
     finally { setAddingRate(false); }
@@ -693,7 +701,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 
           {/* ── 단가 관리 ── */}
           <p style={sH}>단가 관리 ({rates.length})</p>
-          {/* 단가 추가 폼 - 2행 4열 */}
+          {/* 단가 추가 폼 */}
           <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
             {/* 행1: 업무유형 / 세부유형 / 출발언어 / 도착언어 */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "6px 8px", marginBottom: 6 }}>
@@ -712,15 +720,10 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               </div>
               <div>
                 <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>세부유형</div>
-                {rateForm.workType === "직접입력" ? (
-                  <input value={rateForm.subType} onChange={e => setRateForm(p => ({ ...p, subType: e.target.value }))}
-                    placeholder="세부유형 입력" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
-                ) : (
-                  <ClickSelect value={rateForm.subType}
-                    onChange={v => setRateForm(p => ({ ...p, subType: v }))}
-                    triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
-                    options={[{ value: "", label: "세부유형 선택" }, ...(SUB_TYPES_MAP[rateForm.workType] ?? []).map(s => ({ value: s, label: s }))]} />
-                )}
+                <ClickSelect value={rateForm.subType}
+                  onChange={v => setRateForm(p => ({ ...p, subType: v }))}
+                  triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+                  options={[{ value: "", label: "세부유형 선택" }, ...(SUB_TYPES_MAP[rateForm.workType] ?? []).map(s => ({ value: s, label: s }))]} />
               </div>
               <div>
                 <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>출발 언어</div>
@@ -729,10 +732,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
                   options={LANG_OPTIONS.map(l => ({ value: l, label: l }))} />
                 {rateForm.sourceLang === "기타" && (
-                  <input value={rateForm.sourceCustom}
-                    onChange={e => setRateForm(p => ({ ...p, sourceCustom: e.target.value }))}
-                    placeholder="언어명 입력 (예: 말레이어)"
-                    style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", marginTop: 4 }} />
+                  <input value={rateForm.sourceCustom} onChange={e => setRateForm(p => ({ ...p, sourceCustom: e.target.value }))}
+                    placeholder="언어명 직접 입력" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", marginTop: 4 }} />
                 )}
               </div>
               <div>
@@ -742,15 +743,13 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
                   options={LANG_OPTIONS.map(l => ({ value: l, label: l }))} />
                 {rateForm.targetLang === "기타" && (
-                  <input value={rateForm.targetCustom}
-                    onChange={e => setRateForm(p => ({ ...p, targetCustom: e.target.value }))}
-                    placeholder="언어명 입력 (예: 말레이어)"
-                    style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", marginTop: 4 }} />
+                  <input value={rateForm.targetCustom} onChange={e => setRateForm(p => ({ ...p, targetCustom: e.target.value }))}
+                    placeholder="언어명 직접 입력" style={{ ...inputStyle, fontSize: 12, padding: "5px 8px", marginTop: 4 }} />
                 )}
               </div>
             </div>
-            {/* 행2: 단가단위 / 단가(원) / 메모 / [+추가] */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 110px 1fr auto", gap: "6px 8px", alignItems: "end" }}>
+            {/* 행2: 단가단위 / 단가 / 통화 / VAT / 기본단가 / 활성여부 */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 80px auto auto auto", gap: "6px 8px", marginBottom: 6, alignItems: "end" }}>
               <div>
                 <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>단가단위</div>
                 <ClickSelect value={rateForm.unit}
@@ -759,26 +758,77 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   options={UNIT_BY_TYPE[rateForm.workType] ?? TRANS_UNITS} />
               </div>
               <div>
-                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>단가 (원)</div>
+                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>단가</div>
                 <input type="number" value={rateForm.rate}
                   onChange={e => setRateForm(p => ({ ...p, rate: e.target.value }))}
                   placeholder="예: 40" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
               </div>
+              <div>
+                <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>통화</div>
+                <ClickSelect value={rateForm.currency}
+                  onChange={v => setRateForm(p => ({ ...p, currency: v }))}
+                  triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+                  options={["KRW","USD","EUR","JPY","CNY"].map(c => ({ value: c, label: c }))} />
+              </div>
+              <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 11, color: "#6b7280", cursor: "pointer", paddingBottom: 6 }}>
+                <input type="checkbox" checked={rateForm.vatIncluded} onChange={e => setRateForm(p => ({ ...p, vatIncluded: e.target.checked }))} />
+                VAT포함
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 11, color: "#6b7280", cursor: "pointer", paddingBottom: 6 }}>
+                <input type="checkbox" checked={rateForm.isDefault} onChange={e => setRateForm(p => ({ ...p, isDefault: e.target.checked }))} />
+                기본단가
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, fontSize: 11, color: "#6b7280", cursor: "pointer", paddingBottom: 6 }}>
+                <input type="checkbox" checked={rateForm.isActive} onChange={e => setRateForm(p => ({ ...p, isActive: e.target.checked }))} />
+                활성
+              </label>
+            </div>
+            {/* 행3: 메모 + 추가 버튼 */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "6px 8px", alignItems: "end", marginBottom: 4 }}>
               <div>
                 <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>메모</div>
                 <input value={rateForm.memo} onChange={e => setRateForm(p => ({ ...p, memo: e.target.value }))}
                   placeholder="메모 (선택)" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
               </div>
               <PrimaryBtn onClick={handleAddRate} disabled={addingRate}
-                style={{ fontSize: 12, padding: "6px 14px", whiteSpace: "nowrap", alignSelf: "flex-end" }}>
+                style={{ fontSize: 12, padding: "6px 16px", whiteSpace: "nowrap" }}>
                 {addingRate ? "추가 중..." : "+ 추가"}
               </PrimaryBtn>
+            </div>
+            {/* 고급설정 토글 */}
+            <div>
+              <button onClick={() => setShowRateAdvanced(p => !p)}
+                style={{ background: "none", border: "none", fontSize: 11, color: "#6b7280", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
+                {showRateAdvanced ? "▲ 고급설정 접기" : "▼ 고급설정 (최소금액·기본시간·추가시간단가)"}
+              </button>
+              {showRateAdvanced && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px 8px", marginTop: 6 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>최소금액 (선택)</div>
+                    <input type="number" value={rateForm.minPrice}
+                      onChange={e => setRateForm(p => ({ ...p, minPrice: e.target.value }))}
+                      placeholder="예: 50000" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>기본시간 (선택)</div>
+                    <input type="number" value={rateForm.baseHours}
+                      onChange={e => setRateForm(p => ({ ...p, baseHours: e.target.value }))}
+                      placeholder="예: 4" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>추가시간 단가 (선택)</div>
+                    <input type="number" value={rateForm.overtimeRate}
+                      onChange={e => setRateForm(p => ({ ...p, overtimeRate: e.target.value }))}
+                      placeholder="예: 30000" style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           {rates.length > 0 ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 4 }}>
               {rates.map(r => (
-                <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 12px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6", fontSize: 13, flexWrap: "wrap" }}>
+                <div key={r.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "8px 12px", background: r.isActive === false ? "#f3f4f6" : "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6", fontSize: 13, flexWrap: "wrap", opacity: r.isActive === false ? 0.65 : 1 }}>
                   <span style={{ fontWeight: 700, color: "#374151", minWidth: 40 }}>{r.serviceType}</span>
                   {r.subType && <span style={{ color: "#6366f1", fontWeight: 600, minWidth: 52 }}>{r.subType}</span>}
                   {(r.language || r.languagePair) && (
@@ -787,7 +837,12 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                     </span>
                   )}
                   <span style={{ color: "#6b7280", minWidth: 40 }}>{getUnitLabel(r.unit)}</span>
-                  <span style={{ fontWeight: 700, color: "#059669", minWidth: 80 }}>{r.rate.toLocaleString()}원</span>
+                  <span style={{ fontWeight: 700, color: "#059669", minWidth: 80 }}>
+                    {r.rate.toLocaleString()}{r.currency !== "KRW" ? ` ${r.currency}` : "원"}
+                  </span>
+                  {r.vatIncluded && <span style={{ fontSize: 11, background: "#fef3c7", color: "#92400e", borderRadius: 4, padding: "1px 5px" }}>VAT포함</span>}
+                  {r.isDefault && <span style={{ fontSize: 11, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 5px" }}>기본</span>}
+                  {r.isActive === false && <span style={{ fontSize: 11, background: "#f3f4f6", color: "#9ca3af", borderRadius: 4, padding: "1px 5px" }}>비활성</span>}
                   {r.memo && <span style={{ color: "#9ca3af", fontSize: 12, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.memo}</span>}
                   {!r.memo && <span style={{ flex: 1 }} />}
                   <button onClick={() => handleDeleteRate(r.id)} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, cursor: "pointer", padding: "2px 4px" }}>삭제</button>
