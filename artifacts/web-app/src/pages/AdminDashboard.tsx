@@ -61,7 +61,7 @@ function Section({ title, sub, children, action }: { title: string; sub?: string
 type SSItem = { id: number; label: string; sub?: string };
 type ExcelRow = {
   row: number; email: string; name: string; phone: string;
-  language: string; languagePairs: string; region: string; grade: string;
+  region: string; grade: string;
   specializations: string; career: string; status: string;
   education: string; major: string; rating: string; availabilityStatus: string; bio: string;
   residentNumber: string; bankName: string; bankAccount: string; accountHolder: string;
@@ -1216,7 +1216,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               <td style={{ padding: "5px 10px", color: "#3b82f6" }}>{r.email}</td>
                               <td style={{ padding: "5px 10px" }}>{r.phone || "-"}</td>
                               <td style={{ padding: "5px 10px" }}>
-                                {r.languagePairs || (r.sourceLang && r.targetLang ? `${r.sourceLang}→${r.targetLang}` : r.sourceLang || r.targetLang || "-")}
+                                {r.sourceLang && r.targetLang ? `${r.sourceLang}→${r.targetLang}` : r.sourceLang || r.targetLang || "-"}
                               </td>
                               <td style={{ padding: "5px 10px" }}>{r.region || "-"}</td>
                               <td style={{ padding: "5px 10px" }}>{r.grade || "-"}</td>

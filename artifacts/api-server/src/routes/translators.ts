@@ -240,11 +240,11 @@ const excelUpload = multer({
 
 // ─── 샘플 엑셀 다운로드 ─────────────────────────────────────────────────────
 router.get("/admin/translators/sample-excel", ...adminGuard, (_req, res) => {
-  // ■ 최종 표준 컬럼 구조 (통번역사 기본정보 19 + 단가정보 14 = 33열)
+  // ■ 최종 표준 컬럼 구조 (통번역사 기본정보 17 + 단가정보 14 = 31열)
   const headers = [
-    // 통번역사 기본정보
+    // 통번역사 기본정보 (언어/언어쌍 제거 → 출발언어·도착언어로만 사용)
     "이름", "이메일", "휴대폰",
-    "언어", "언어쌍", "지역", "등급", "전문분야", "경력", "상태",
+    "지역", "등급", "전문분야", "경력", "상태",
     "학력", "전공", "평점", "가용상태", "상세정보",
     "주민번호", "은행명", "계좌번호", "예금주",
     // 단가정보
@@ -257,7 +257,7 @@ router.get("/admin/translators/sample-excel", ...adminGuard, (_req, res) => {
   // 예시 1: 번역 단가 포함
   const row1 = [
     "홍길동", "hong@example.com", "010-1234-5678",
-    "한국어", "한국어→영어", "서울", "A", "법률,금융", "번역 경력 10년", "Y",
+    "서울", "A", "법률,금융", "번역 경력 10년", "Y",
     "서울대학교", "영어영문학", "4.5", "available", "",
     "", "국민은행", "", "홍길동",
     "번역", "일반번역", "한국어", "영어",
@@ -267,17 +267,17 @@ router.get("/admin/translators/sample-excel", ...adminGuard, (_req, res) => {
   // 예시 2: 통역 단가 포함
   const row2 = [
     "김영희", "kim@example.com", "010-9876-5432",
-    "영어", "영어→한국어", "부산", "B", "의료,제약", "동시통역사 5년", "Y",
+    "부산", "B", "의료,제약", "동시통역사 5년", "Y",
     "연세대학교", "영어통번역학", "4.0", "available", "",
     "", "", "", "",
     "통역", "동시통역", "영어", "한국어",
     "hour", "300000", "KRW", "N",
     "", "4", "100000", "Y", "Y", "",
   ];
-  // 예시 3: 단가 없는 통번역사
+  // 예시 3: 단가 없는 통번역사 (단가 컬럼 전부 공백)
   const row3 = [
     "박철수", "park@example.com", "010-5555-1234",
-    "일본어", "일본어→한국어", "대구", "C", "IT,기술", "번역 3년", "Y",
+    "대구", "C", "IT,기술", "번역 3년", "Y",
     "", "", "", "available", "",
     "", "", "", "",
     "", "", "", "",
@@ -303,7 +303,6 @@ const EXCEL_COL_MAP: Record<string, string> = {
   // 기본정보
   "이름": "name", "이메일": "email", "이메일(필수)": "email",
   "휴대폰": "phone", "전화번호": "phone",
-  "언어": "language", "언어쌍": "languagePairs",
   "지역": "region", "등급": "grade", "전문분야": "specializations",
   "경력": "career", "상태": "status",
   "학력": "education", "전공": "major",
@@ -344,7 +343,7 @@ router.post("/admin/translators/upload-excel", ...adminGuard, excelUpload.single
 
     type ParsedRow = {
       row: number; email: string; name: string; phone: string;
-      language: string; languagePairs: string; region: string; grade: string;
+      region: string; grade: string;
       specializations: string; career: string; status: string;
       education: string; major: string; rating: string; availabilityStatus: string; bio: string;
       residentNumber: string; bankName: string; bankAccount: string; accountHolder: string;
@@ -356,29 +355,63 @@ router.post("/admin/translators/upload-excel", ...adminGuard, excelUpload.single
     };
     const parsed: ParsedRow[] = [];
 
+    // Y/N만 허용하는 필드 검증 헬퍼 (빈 값은 통과)
+    const checkYN = (val: string, label: string, errors: string[]) => {
+      if (val && val.toUpperCase() !== "Y" && val.toUpperCase() !== "N") {
+        errors.push(`${label}은 Y 또는 N만 허용됩니다 (입력값: "${val}")`);
+      }
+    };
+
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
       const cell = (key: string) => String(r[colMap[key] ?? -1] ?? "").trim();
       const email = cell("email");
       if (!email) continue;
       const errors: string[] = [];
+
+      // ─ 기본 검증
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("이메일 형식 오류");
-      const rateVal = cell("rate");
-      if (rateVal && isNaN(Number(rateVal))) errors.push("단가는 숫자여야 합니다");
       const ratingVal = cell("rating");
       if (ratingVal && isNaN(Number(ratingVal))) errors.push("평점은 숫자여야 합니다");
-      const minPriceVal = cell("minPrice");
-      if (minPriceVal && isNaN(Number(minPriceVal))) errors.push("최소금액은 숫자여야 합니다");
-      // 단가정보 일부 입력 시 업무유형·단가단위·단가 필수
-      const hasRatePartial = rateVal || cell("workType") || cell("subType") || cell("sourceLang") || cell("targetLang");
-      if (hasRatePartial && rateVal) {
-        if (!cell("workType")) errors.push("단가 입력 시 업무유형 필수");
-        if (!cell("unit")) errors.push("단가 입력 시 단가단위 필수");
+
+      // ─ 단가 관련 컬럼 수집
+      const rateVal      = cell("rate");
+      const workTypeVal  = cell("workType");
+      const subTypeVal   = cell("subType");
+      const sourceLangV  = cell("sourceLang");
+      const targetLangV  = cell("targetLang");
+      const unitVal      = cell("unit");
+      const currencyVal  = cell("currency");
+      const vatVal       = cell("vatIncluded");
+      const minPriceVal  = cell("minPrice");
+      const baseHoursVal = cell("baseHours");
+      const overtimeVal  = cell("overtimeRate");
+      const isDefaultVal = cell("isDefault");
+      const rateActiveV  = cell("rateActive");
+      const rateMemoVal  = cell("rateMemo");
+
+      const rateAllEmpty = !rateVal && !workTypeVal && !subTypeVal && !sourceLangV && !targetLangV
+        && !unitVal && !currencyVal && !vatVal && !minPriceVal && !baseHoursVal && !overtimeVal
+        && !isDefaultVal && !rateActiveV && !rateMemoVal;
+
+      if (!rateAllEmpty) {
+        // 단가 컬럼 일부 입력 → 필수 필드 + 형식 검증
+        if (!workTypeVal) errors.push("단가 입력 시 업무유형 필수");
+        if (!rateVal)     errors.push("단가 입력 시 단가 필수");
+        else if (isNaN(Number(rateVal))) errors.push("단가는 숫자여야 합니다");
+        if (!unitVal)     errors.push("단가 입력 시 단가단위 필수");
+        if (minPriceVal && isNaN(Number(minPriceVal)))   errors.push("최소금액은 숫자여야 합니다");
+        if (baseHoursVal && isNaN(Number(baseHoursVal))) errors.push("기본시간은 숫자여야 합니다");
+        if (overtimeVal && isNaN(Number(overtimeVal)))   errors.push("추가시간단가는 숫자여야 합니다");
+        // Y/N 필드 검증
+        checkYN(vatVal,       "VAT포함여부",  errors);
+        checkYN(isDefaultVal, "기본단가여부", errors);
+        checkYN(rateActiveV,  "단가활성여부", errors);
       }
+
       parsed.push({
         row: i + 1, email,
         name: cell("name"), phone: cell("phone"),
-        language: cell("language"), languagePairs: cell("languagePairs"),
         region: cell("region"), grade: cell("grade"),
         specializations: cell("specializations"), career: cell("career"),
         status: cell("status"),
@@ -386,15 +419,15 @@ router.post("/admin/translators/upload-excel", ...adminGuard, excelUpload.single
         rating: ratingVal, availabilityStatus: cell("availabilityStatus"), bio: cell("bio"),
         residentNumber: cell("residentNumber"), bankName: cell("bankName"),
         bankAccount: cell("bankAccount"), accountHolder: cell("accountHolder"),
-        workType: cell("workType"), subType: cell("subType"),
-        sourceLang: cell("sourceLang"), targetLang: cell("targetLang"),
-        unit: cell("unit") || (rateVal ? "eojeol" : ""),
-        rate: rateVal, currency: cell("currency") || (rateVal ? "KRW" : ""),
-        vatIncluded: cell("vatIncluded"),
-        minPrice: minPriceVal, baseHours: cell("baseHours"),
-        overtimeRate: cell("overtimeRate"),
-        isDefault: cell("isDefault"), rateActive: cell("rateActive"),
-        rateMemo: cell("rateMemo"),
+        workType: workTypeVal, subType: subTypeVal,
+        sourceLang: sourceLangV, targetLang: targetLangV,
+        unit: unitVal || (rateVal ? "eojeol" : ""),
+        rate: rateVal, currency: currencyVal || (rateVal ? "KRW" : ""),
+        vatIncluded: vatVal,
+        minPrice: minPriceVal, baseHours: baseHoursVal,
+        overtimeRate: overtimeVal,
+        isDefault: isDefaultVal, rateActive: rateActiveV,
+        rateMemo: rateMemoVal,
         error: errors.join("; "),
       });
     }
@@ -423,7 +456,7 @@ router.post("/admin/translators/upload-excel", ...adminGuard, excelUpload.single
 router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) => {
   type BulkRow = {
     email: string; name?: string; phone?: string;
-    language?: string; languagePairs?: string; region?: string; grade?: string;
+    region?: string; grade?: string;
     specializations?: string; career?: string; status?: string;
     education?: string; major?: string; rating?: string;
     availabilityStatus?: string; bio?: string;
@@ -470,15 +503,12 @@ router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) =>
 
       // ── 프로필 구성 ──────────────────────────────────────────────────────
       const bioText = [row.career?.trim(), row.bio?.trim()].filter(Boolean).join(" | ") || null;
-      // 언어쌍: 엑셀의 "언어쌍" 우선, 없으면 출발언어→도착언어로 조합
-      let langPairs = row.languagePairs?.trim() || null;
-      if (!langPairs && row.sourceLang?.trim() && row.targetLang?.trim()) {
-        langPairs = `${row.sourceLang.trim()}→${row.targetLang.trim()}`;
-      }
+      // 언어쌍: 출발언어→도착언어 조합
+      const langPairs = (row.sourceLang?.trim() && row.targetLang?.trim())
+        ? `${row.sourceLang.trim()}→${row.targetLang.trim()}` : null;
       await db.insert(translatorProfilesTable).values({
         userId: newUser.id,
         phone: row.phone?.trim() || null,
-        languageLevel: row.language?.trim() || null,
         languagePairs: langPairs,
         region: row.region?.trim() || null,
         grade: row.grade?.trim() || null,
