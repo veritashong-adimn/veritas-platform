@@ -547,7 +547,7 @@ export const LANGUAGE_CODES: { code: string; label: string }[] = [
   { code: "km",      label: "캄보디아어" },
   { code: "lo",      label: "라오어" },
   { code: "ms",      label: "말레이어" },
-  { code: "other",   label: "기타 직접입력" },
+  { code: "custom",  label: "기타 직접입력" },
 ];
 
 export const UNITS_BY_PRODUCT_TYPE: Record<string, string[]> = {

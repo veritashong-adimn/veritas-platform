@@ -73,7 +73,9 @@ function previewCode(
 type ProductFormType = {
   productType: string;
   sourceLanguage: string;
+  sourceLanguageCustom: string;
   targetLanguage: string;
+  targetLanguageCustom: string;
   mainCategory: string;
   subCategory: string;
   name: string;
@@ -95,7 +97,7 @@ type ProductRequest = {
 };
 
 const emptyProductForm: ProductFormType = {
-  productType: "translation", sourceLanguage: "ko", targetLanguage: "en",
+  productType: "translation", sourceLanguage: "ko", sourceLanguageCustom: "", targetLanguage: "en", targetLanguageCustom: "",
   mainCategory: "일반번역", subCategory: "",
   name: "", unit: "어절", basePrice: "", description: "",
   interpretationDuration: "", overtimePrice: "", options: [],
@@ -150,8 +152,12 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   function autoName(f: ProductFormType): string {
     const typeLabel = PRODUCT_TYPES_META[f.productType]?.label ?? f.productType;
     const hasLang = PRODUCT_TYPES_META[f.productType]?.hasLanguage ?? false;
-    const srcLabel = hasLang && f.sourceLanguage ? (LANG_LABEL[f.sourceLanguage] ?? f.sourceLanguage) : "";
-    const tgtLabel = hasLang && f.targetLanguage ? (LANG_LABEL[f.targetLanguage] ?? f.targetLanguage) : "";
+    const srcLabel = hasLang && f.sourceLanguage
+      ? (f.sourceLanguage === "custom" ? (f.sourceLanguageCustom || "기타") : (LANG_LABEL[f.sourceLanguage] ?? f.sourceLanguage))
+      : "";
+    const tgtLabel = hasLang && f.targetLanguage
+      ? (f.targetLanguage === "custom" ? (f.targetLanguageCustom || "기타") : (LANG_LABEL[f.targetLanguage] ?? f.targetLanguage))
+      : "";
     const mainLabel = f.mainCategory;
     const subLabel = f.subCategory;
     if (hasLang && srcLabel && tgtLabel) {
@@ -233,6 +239,16 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     if (!editingProduct && hasLang && (!productForm.sourceLanguage || !productForm.targetLanguage)) {
       setToast("출발언어와 도착언어는 필수입니다."); return;
     }
+    if (!editingProduct && hasLang && productForm.sourceLanguage === "custom" && !productForm.sourceLanguageCustom.trim()) {
+      setToast("출발언어 직접 입력을 입력해 주세요."); return;
+    }
+    if (!editingProduct && hasLang && productForm.targetLanguage === "custom" && !productForm.targetLanguageCustom.trim()) {
+      setToast("도착언어 직접 입력을 입력해 주세요."); return;
+    }
+
+    // "custom" 선택 시 실제 입력값으로 대체해서 저장
+    const resolveLanguage = (code: string, custom: string) =>
+      code === "custom" ? (custom.trim() || "custom") : code;
 
     setSavingProduct(true);
     try {
@@ -250,8 +266,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         }
         : {
           productType: productForm.productType,
-          sourceLanguage: hasLang ? productForm.sourceLanguage : null,
-          targetLanguage: hasLang ? productForm.targetLanguage : null,
+          sourceLanguage: hasLang ? resolveLanguage(productForm.sourceLanguage, productForm.sourceLanguageCustom) : null,
+          targetLanguage: hasLang ? resolveLanguage(productForm.targetLanguage, productForm.targetLanguageCustom) : null,
           mainCategory: productForm.mainCategory,
           subCategory: productForm.subCategory || null,
           name: effectiveName,
@@ -474,7 +490,15 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   value={form.sourceLanguage}
                   onChange={v => {
                     setForm(p => {
-                      const updated = { ...p, sourceLanguage: v };
+                      const updated = { ...p, sourceLanguage: v, sourceLanguageCustom: "" };
+                      if (!productNameCustom) updated.name = autoName(updated);
+                      return updated;
+                    });
+                  }}
+                  customValue={form.sourceLanguageCustom}
+                  onCustomChange={v => {
+                    setForm(p => {
+                      const updated = { ...p, sourceLanguageCustom: v };
                       if (!productNameCustom) updated.name = autoName(updated);
                       return updated;
                     });
@@ -490,7 +514,15 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   value={form.targetLanguage}
                   onChange={v => {
                     setForm(p => {
-                      const updated = { ...p, targetLanguage: v };
+                      const updated = { ...p, targetLanguage: v, targetLanguageCustom: "" };
+                      if (!productNameCustom) updated.name = autoName(updated);
+                      return updated;
+                    });
+                  }}
+                  customValue={form.targetLanguageCustom}
+                  onCustomChange={v => {
+                    setForm(p => {
+                      const updated = { ...p, targetLanguageCustom: v };
                       if (!productNameCustom) updated.name = autoName(updated);
                       return updated;
                     });
