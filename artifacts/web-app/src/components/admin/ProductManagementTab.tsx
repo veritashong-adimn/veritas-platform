@@ -140,7 +140,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   // 필터
   const [filterProductType, setFilterProductType] = useState("");
   const [filterSourceLang, setFilterSourceLang] = useState("");
+  const [filterSourceLangCustom, setFilterSourceLangCustom] = useState("");
   const [filterTargetLang, setFilterTargetLang] = useState("");
+  const [filterTargetLangCustom, setFilterTargetLangCustom] = useState("");
   const [filterMainCategory, setFilterMainCategory] = useState("");
   const [filterActiveOnly, setFilterActiveOnly] = useState<"" | "true" | "false">("");
 
@@ -199,8 +201,15 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
       const params = new URLSearchParams();
       if (productSearch.trim()) params.set("search", productSearch.trim());
       if (filterProductType) params.set("productType", filterProductType);
-      if (filterSourceLang) params.set("sourceLanguage", filterSourceLang);
-      if (filterTargetLang) params.set("targetLanguage", filterTargetLang);
+      // custom 언어: 실제 입력값을 그대로 API에 전달 (저장 시 실제 텍스트로 변환되어 있음)
+      const effectiveSrcLang = filterSourceLang === "custom"
+        ? filterSourceLangCustom.trim()
+        : filterSourceLang;
+      const effectiveTgtLang = filterTargetLang === "custom"
+        ? filterTargetLangCustom.trim()
+        : filterTargetLang;
+      if (effectiveSrcLang) params.set("sourceLanguage", effectiveSrcLang);
+      if (effectiveTgtLang) params.set("targetLanguage", effectiveTgtLang);
       if (filterMainCategory) params.set("mainCategory", filterMainCategory);
       if (filterActiveOnly) params.set("activeOnly", filterActiveOnly);
       const res = await fetch(api(`/api/admin/products${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
@@ -208,7 +217,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
       if (res.ok) setProducts(Array.isArray(data) ? data : []);
     } catch { setToast("오류: 상품 조회 실패"); }
     finally { setProductsLoading(false); }
-  }, [token, productSearch, filterProductType, filterSourceLang, filterTargetLang, filterMainCategory, filterActiveOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, productSearch, filterProductType, filterSourceLang, filterSourceLangCustom, filterTargetLang, filterTargetLangCustom, filterMainCategory, filterActiveOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchProductRequests = useCallback(async () => {
     setProductRequestsLoading(true);
@@ -901,7 +910,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         )}
 
         {/* 필터 */}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "flex-start" }}>
           <input value={productSearch} onChange={e => setProductSearch(e.target.value)}
             placeholder="상품명, 코드 검색..."
             style={{ ...inputStyle, maxWidth: 200, flex: "1 1 140px", padding: "8px 12px", fontSize: 13 }}
@@ -913,22 +922,62 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               <option key={k} value={k}>{TYPE_COLORS[k]?.icon} {v.label}</option>
             ))}
           </select>
-          <LanguageSearchSelect
-            value={filterSourceLang}
-            onChange={v => setFilterSourceLang(v === "custom" ? "" : v)}
-            mode="code"
-            placeholder="출발언어 전체"
-            style={{ minWidth: 130, flex: "0 0 auto" }}
-            triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
-          />
-          <LanguageSearchSelect
-            value={filterTargetLang}
-            onChange={v => setFilterTargetLang(v === "custom" ? "" : v)}
-            mode="code"
-            placeholder="도착언어 전체"
-            style={{ minWidth: 130, flex: "0 0 auto" }}
-            triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
-          />
+          {/* 출발언어 필터 */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <LanguageSearchSelect
+              value={filterSourceLang}
+              onChange={v => { setFilterSourceLang(v); setFilterSourceLangCustom(""); }}
+              mode="code"
+              placeholder="출발언어 전체"
+              style={{ minWidth: 130 }}
+              triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
+            />
+            {filterSourceLang === "custom" && (
+              <div>
+                <label style={{ fontSize: 10, color: "#6b7280", display: "block", marginBottom: 2 }}>직접 입력 출발언어</label>
+                <input
+                  autoFocus
+                  value={filterSourceLangCustom}
+                  onChange={e => setFilterSourceLangCustom(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && fetchProducts()}
+                  placeholder="예: 카자흐어, 세르비아어..."
+                  style={{
+                    width: "100%", padding: "5px 8px", fontSize: 12,
+                    border: "1px solid #a5b4fc", borderRadius: 6, outline: "none",
+                    color: "#111827", background: "#faf5ff", boxSizing: "border-box",
+                  }}
+                />
+              </div>
+            )}
+          </div>
+          {/* 도착언어 필터 */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <LanguageSearchSelect
+              value={filterTargetLang}
+              onChange={v => { setFilterTargetLang(v); setFilterTargetLangCustom(""); }}
+              mode="code"
+              placeholder="도착언어 전체"
+              style={{ minWidth: 130 }}
+              triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
+            />
+            {filterTargetLang === "custom" && (
+              <div>
+                <label style={{ fontSize: 10, color: "#6b7280", display: "block", marginBottom: 2 }}>직접 입력 도착언어</label>
+                <input
+                  autoFocus
+                  value={filterTargetLangCustom}
+                  onChange={e => setFilterTargetLangCustom(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && fetchProducts()}
+                  placeholder="예: 카자흐어, 세르비아어..."
+                  style={{
+                    width: "100%", padding: "5px 8px", fontSize: 12,
+                    border: "1px solid #a5b4fc", borderRadius: 6, outline: "none",
+                    color: "#111827", background: "#faf5ff", boxSizing: "border-box",
+                  }}
+                />
+              </div>
+            )}
+          </div>
           <select value={filterActiveOnly} onChange={e => setFilterActiveOnly(e.target.value as "" | "true" | "false")}
             style={{ ...inputStyle, padding: "8px 10px", fontSize: 13, minWidth: 100 }}>
             <option value="">전체 상태</option>
@@ -938,10 +987,12 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           <PrimaryBtn onClick={fetchProducts} disabled={productsLoading} style={{ padding: "8px 14px", fontSize: 13 }}>
             {productsLoading ? "검색 중..." : "검색"}
           </PrimaryBtn>
-          {(productSearch || filterProductType || filterSourceLang || filterTargetLang || filterMainCategory || filterActiveOnly) && (
+          {(productSearch || filterProductType || filterSourceLang || filterSourceLangCustom || filterTargetLang || filterTargetLangCustom || filterMainCategory || filterActiveOnly) && (
             <button onClick={() => {
-              setProductSearch(""); setFilterProductType(""); setFilterSourceLang("");
-              setFilterTargetLang(""); setFilterMainCategory(""); setFilterActiveOnly("");
+              setProductSearch(""); setFilterProductType("");
+              setFilterSourceLang(""); setFilterSourceLangCustom("");
+              setFilterTargetLang(""); setFilterTargetLangCustom("");
+              setFilterMainCategory(""); setFilterActiveOnly("");
             }}
               style={{ padding: "8px 12px", fontSize: 12, borderRadius: 7, border: "1px solid #e5e7eb", background: "#f3f4f6", color: "#6b7280", cursor: "pointer" }}>
               필터 초기화
