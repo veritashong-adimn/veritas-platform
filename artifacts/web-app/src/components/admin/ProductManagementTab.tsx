@@ -2,10 +2,10 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   api, Product, ProductOption,
   PRODUCT_TYPES_META, MAIN_CATEGORIES_BY_TYPE, SUB_CATEGORIES_BY_MAIN,
-  LANGUAGE_CODES, UNITS_BY_PRODUCT_TYPE, PRODUCT_OPTION_TYPES,
+  LANGUAGE_CODES, UNITS_BY_PRODUCT_TYPE, PRODUCT_OPTION_TYPES, EQUIPMENT_ITEMS,
 } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
-import { LanguageSearchSelect, LangCustomInput, isLangCustom } from './LanguageSearchSelect';
+import { LanguageSearchSelect, LangCustomInput, isLangCustom, ItemSearchSelect, isItemCustom } from './LanguageSearchSelect';
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
@@ -78,6 +78,8 @@ type ProductFormType = {
   sourceLanguageCustom: string;
   targetLanguage: string;
   targetLanguageCustom: string;
+  equipmentItem: string;
+  equipmentItemCustom: string;
   mainCategory: string;
   subCategory: string;
   name: string;
@@ -100,6 +102,7 @@ type ProductRequest = {
 
 const emptyProductForm: ProductFormType = {
   productType: "translation", sourceLanguage: "ko", sourceLanguageCustom: "", targetLanguage: "en", targetLanguageCustom: "",
+  equipmentItem: "", equipmentItemCustom: "",
   mainCategory: "일반번역", subCategory: "",
   name: "", unit: "어절", basePrice: "", description: "",
   interpretationDuration: "", overtimePrice: "", options: [],
@@ -143,6 +146,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [filterSourceLangCustom, setFilterSourceLangCustom] = useState("");
   const [filterTargetLang, setFilterTargetLang] = useState("");
   const [filterTargetLangCustom, setFilterTargetLangCustom] = useState("");
+  const [filterEquipmentSearch, setFilterEquipmentSearch] = useState("");
+  const [filterEquipmentCustom, setFilterEquipmentCustom] = useState("");
   const [filterMainCategory, setFilterMainCategory] = useState("");
   const [filterActiveOnly, setFilterActiveOnly] = useState<"" | "true" | "false">("");
 
@@ -156,6 +161,15 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   function autoName(f: ProductFormType): string {
     const typeLabel = PRODUCT_TYPES_META[f.productType]?.label ?? f.productType;
     const hasLang = PRODUCT_TYPES_META[f.productType]?.hasLanguage ?? false;
+
+    // 통역장비: 장비상품명 기반
+    if (f.productType === "equipment") {
+      const equip = f.equipmentItem === "기타 직접입력"
+        ? (f.equipmentItemCustom.trim() || "기타장비")
+        : (f.equipmentItem.trim() || "");
+      return equip || f.mainCategory || "통역장비";
+    }
+
     const srcLabel = hasLang && f.sourceLanguage
       ? (f.sourceLanguage === "custom" ? (f.sourceLanguageCustom || "기타") : (LANG_LABEL[f.sourceLanguage] ?? f.sourceLanguage))
       : "";
@@ -175,6 +189,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   // ─── productType 변경 시 연관 필드 초기화 ───────────────────────────────
   function handleProductTypeChange(newType: string, setter: React.Dispatch<React.SetStateAction<ProductFormType>>) {
     const hasLang = PRODUCT_TYPES_META[newType]?.hasLanguage ?? false;
+    const isEquip = newType === "equipment";
     const mainCats = MAIN_CATEGORIES_BY_TYPE[newType] ?? [];
     const defMain = mainCats[0]?.label ?? "";
     const defUnit = (UNITS_BY_PRODUCT_TYPE[newType] ?? ["건"])[0];
@@ -187,6 +202,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         unit: defUnit,
         sourceLanguage: hasLang ? (prev.sourceLanguage || "ko") : "",
         targetLanguage: hasLang ? (prev.targetLanguage || "en") : "",
+        equipmentItem: isEquip ? prev.equipmentItem : "",
+        equipmentItemCustom: isEquip ? prev.equipmentItemCustom : "",
       };
       if (!productNameCustom) updated.name = autoName(updated);
       return updated;
@@ -199,25 +216,36 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     setProductsLoading(true);
     try {
       const params = new URLSearchParams();
-      if (productSearch.trim()) params.set("search", productSearch.trim());
       if (filterProductType) params.set("productType", filterProductType);
-      // custom 언어: 실제 입력값을 그대로 API에 전달 (저장 시 실제 텍스트로 변환되어 있음)
-      const effectiveSrcLang = filterSourceLang === "custom"
-        ? filterSourceLangCustom.trim()
-        : filterSourceLang;
-      const effectiveTgtLang = filterTargetLang === "custom"
-        ? filterTargetLangCustom.trim()
-        : filterTargetLang;
-      if (effectiveSrcLang) params.set("sourceLanguage", effectiveSrcLang);
-      if (effectiveTgtLang) params.set("targetLanguage", effectiveTgtLang);
       if (filterMainCategory) params.set("mainCategory", filterMainCategory);
       if (filterActiveOnly) params.set("activeOnly", filterActiveOnly);
+
+      if (filterProductType === "equipment") {
+        // 통역장비: 장비상품명 검색 (search 파라미터 사용)
+        const equipSearch = filterEquipmentSearch === "기타 직접입력"
+          ? filterEquipmentCustom.trim()
+          : filterEquipmentSearch === "" ? "" : filterEquipmentSearch;
+        const combined = [productSearch.trim(), equipSearch].filter(Boolean).join(" ");
+        if (combined) params.set("search", combined);
+      } else {
+        // 번역/통역 등: 언어 필터 적용
+        if (productSearch.trim()) params.set("search", productSearch.trim());
+        const effectiveSrcLang = filterSourceLang === "custom"
+          ? filterSourceLangCustom.trim()
+          : filterSourceLang;
+        const effectiveTgtLang = filterTargetLang === "custom"
+          ? filterTargetLangCustom.trim()
+          : filterTargetLang;
+        if (effectiveSrcLang) params.set("sourceLanguage", effectiveSrcLang);
+        if (effectiveTgtLang) params.set("targetLanguage", effectiveTgtLang);
+      }
+
       const res = await fetch(api(`/api/admin/products${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) setProducts(Array.isArray(data) ? data : []);
     } catch { setToast("오류: 상품 조회 실패"); }
     finally { setProductsLoading(false); }
-  }, [token, productSearch, filterProductType, filterSourceLang, filterSourceLangCustom, filterTargetLang, filterTargetLangCustom, filterMainCategory, filterActiveOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, productSearch, filterProductType, filterSourceLang, filterSourceLangCustom, filterTargetLang, filterTargetLangCustom, filterEquipmentSearch, filterEquipmentCustom, filterMainCategory, filterActiveOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchProductRequests = useCallback(async () => {
     setProductRequestsLoading(true);
@@ -255,6 +283,12 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     }
     if (!editingProduct && hasLang && productForm.targetLanguage === "custom" && !productForm.targetLanguageCustom.trim()) {
       setToast("도착언어 직접 입력을 입력해 주세요."); return;
+    }
+    if (!editingProduct && productForm.productType === "equipment" && !productForm.equipmentItem) {
+      setToast("장비상품을 선택해 주세요."); return;
+    }
+    if (!editingProduct && productForm.productType === "equipment" && productForm.equipmentItem === "기타 직접입력" && !productForm.equipmentItemCustom.trim()) {
+      setToast("직접 입력 장비상품명을 입력해 주세요."); return;
     }
 
     // "custom" 선택 시 실제 입력값으로 대체해서 저장
@@ -487,6 +521,52 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {/* 장비상품 선택 (통역장비 유형만) */}
+        {form.productType === "equipment" && (
+          <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 10, padding: "12px 16px", marginBottom: 12 }}>
+            <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: "#c2410c" }}>
+              🎧 장비상품 <span style={{ color: "#dc2626" }}>*</span>
+            </p>
+            <ItemSearchSelect
+              items={EQUIPMENT_ITEMS}
+              value={form.equipmentItem}
+              onChange={v => {
+                setForm(p => {
+                  const updated = { ...p, equipmentItem: v, equipmentItemCustom: "" };
+                  if (!productNameCustom) updated.name = autoName(updated);
+                  return updated;
+                });
+              }}
+              placeholder="장비상품 선택..."
+              style={{ width: "100%" }}
+              triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+            />
+            {isItemCustom(form.equipmentItem) && (
+              <div style={{ marginTop: 6 }}>
+                <label style={{ fontSize: 11, color: "#6b7280", display: "block", marginBottom: 2 }}>직접 입력 장비상품</label>
+                <input
+                  autoFocus
+                  value={form.equipmentItemCustom}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setForm(p => {
+                      const updated = { ...p, equipmentItemCustom: v };
+                      if (!productNameCustom) updated.name = autoName(updated);
+                      return updated;
+                    });
+                  }}
+                  placeholder="예: 특수음향장비..."
+                  style={{
+                    width: "100%", padding: "6px 10px", fontSize: 13,
+                    border: "1px solid #fed7aa", borderRadius: 7, outline: "none",
+                    boxSizing: "border-box", color: "#111827", background: "#fffbeb",
+                  }}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -794,7 +874,15 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 setProductForm({
                   productType: p.productType,
                   sourceLanguage: p.sourceLanguage ?? "",
+                  sourceLanguageCustom: "",
                   targetLanguage: p.targetLanguage ?? "",
+                  targetLanguageCustom: "",
+                  equipmentItem: p.productType === "equipment"
+                    ? (EQUIPMENT_ITEMS.includes(p.name) ? p.name : "기타 직접입력")
+                    : "",
+                  equipmentItemCustom: p.productType === "equipment"
+                    ? (EQUIPMENT_ITEMS.includes(p.name) ? "" : p.name)
+                    : "",
                   mainCategory: p.mainCategory ?? "",
                   subCategory: p.subCategory ?? "",
                   name: p.name,
@@ -922,62 +1010,95 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               <option key={k} value={k}>{TYPE_COLORS[k]?.icon} {v.label}</option>
             ))}
           </select>
-          {/* 출발언어 필터 */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <LanguageSearchSelect
-              value={filterSourceLang}
-              onChange={v => { setFilterSourceLang(v); setFilterSourceLangCustom(""); }}
-              mode="code"
-              placeholder="출발언어 전체"
-              style={{ minWidth: 130 }}
-              triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
-            />
-            {filterSourceLang === "custom" && (
-              <div>
-                <label style={{ fontSize: 10, color: "#6b7280", display: "block", marginBottom: 2 }}>직접 입력 출발언어</label>
-                <input
-                  autoFocus
-                  value={filterSourceLangCustom}
-                  onChange={e => setFilterSourceLangCustom(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && fetchProducts()}
-                  placeholder="예: 카자흐어, 세르비아어..."
-                  style={{
-                    width: "100%", padding: "5px 8px", fontSize: 12,
-                    border: "1px solid #a5b4fc", borderRadius: 6, outline: "none",
-                    color: "#111827", background: "#faf5ff", boxSizing: "border-box",
-                  }}
+          {/* 출발언어/도착언어 필터 (통역장비 제외) */}
+          {filterProductType !== "equipment" && (
+            <>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <LanguageSearchSelect
+                  value={filterSourceLang}
+                  onChange={v => { setFilterSourceLang(v); setFilterSourceLangCustom(""); }}
+                  mode="code"
+                  placeholder="출발언어 전체"
+                  style={{ minWidth: 130 }}
+                  triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
                 />
+                {filterSourceLang === "custom" && (
+                  <div>
+                    <label style={{ fontSize: 10, color: "#6b7280", display: "block", marginBottom: 2 }}>직접 입력 출발언어</label>
+                    <input
+                      autoFocus
+                      value={filterSourceLangCustom}
+                      onChange={e => setFilterSourceLangCustom(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && fetchProducts()}
+                      placeholder="예: 카자흐어, 세르비아어..."
+                      style={{
+                        width: "100%", padding: "5px 8px", fontSize: 12,
+                        border: "1px solid #a5b4fc", borderRadius: 6, outline: "none",
+                        color: "#111827", background: "#faf5ff", boxSizing: "border-box",
+                      }}
+                    />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          {/* 도착언어 필터 */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <LanguageSearchSelect
-              value={filterTargetLang}
-              onChange={v => { setFilterTargetLang(v); setFilterTargetLangCustom(""); }}
-              mode="code"
-              placeholder="도착언어 전체"
-              style={{ minWidth: 130 }}
-              triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
-            />
-            {filterTargetLang === "custom" && (
-              <div>
-                <label style={{ fontSize: 10, color: "#6b7280", display: "block", marginBottom: 2 }}>직접 입력 도착언어</label>
-                <input
-                  autoFocus
-                  value={filterTargetLangCustom}
-                  onChange={e => setFilterTargetLangCustom(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && fetchProducts()}
-                  placeholder="예: 카자흐어, 세르비아어..."
-                  style={{
-                    width: "100%", padding: "5px 8px", fontSize: 12,
-                    border: "1px solid #a5b4fc", borderRadius: 6, outline: "none",
-                    color: "#111827", background: "#faf5ff", boxSizing: "border-box",
-                  }}
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <LanguageSearchSelect
+                  value={filterTargetLang}
+                  onChange={v => { setFilterTargetLang(v); setFilterTargetLangCustom(""); }}
+                  mode="code"
+                  placeholder="도착언어 전체"
+                  style={{ minWidth: 130 }}
+                  triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
                 />
+                {filterTargetLang === "custom" && (
+                  <div>
+                    <label style={{ fontSize: 10, color: "#6b7280", display: "block", marginBottom: 2 }}>직접 입력 도착언어</label>
+                    <input
+                      autoFocus
+                      value={filterTargetLangCustom}
+                      onChange={e => setFilterTargetLangCustom(e.target.value)}
+                      onKeyDown={e => e.key === "Enter" && fetchProducts()}
+                      placeholder="예: 카자흐어, 세르비아어..."
+                      style={{
+                        width: "100%", padding: "5px 8px", fontSize: 12,
+                        border: "1px solid #a5b4fc", borderRadius: 6, outline: "none",
+                        color: "#111827", background: "#faf5ff", boxSizing: "border-box",
+                      }}
+                    />
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </>
+          )}
+          {/* 장비상품 필터 (통역장비 전용) */}
+          {filterProductType === "equipment" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              <ItemSearchSelect
+                items={["", ...EQUIPMENT_ITEMS]}
+                value={filterEquipmentSearch}
+                onChange={v => { setFilterEquipmentSearch(v); setFilterEquipmentCustom(""); }}
+                placeholder="장비상품 전체"
+                style={{ minWidth: 170 }}
+                triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
+              />
+              {filterEquipmentSearch === "기타 직접입력" && (
+                <div>
+                  <label style={{ fontSize: 10, color: "#6b7280", display: "block", marginBottom: 2 }}>직접 입력 장비상품</label>
+                  <input
+                    autoFocus
+                    value={filterEquipmentCustom}
+                    onChange={e => setFilterEquipmentCustom(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && fetchProducts()}
+                    placeholder="예: 동시통역장비..."
+                    style={{
+                      width: "100%", padding: "5px 8px", fontSize: 12,
+                      border: "1px solid #fed7aa", borderRadius: 6, outline: "none",
+                      color: "#111827", background: "#fff7ed", boxSizing: "border-box",
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
           <select value={filterActiveOnly} onChange={e => setFilterActiveOnly(e.target.value as "" | "true" | "false")}
             style={{ ...inputStyle, padding: "8px 10px", fontSize: 13, minWidth: 100 }}>
             <option value="">전체 상태</option>
@@ -987,11 +1108,12 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           <PrimaryBtn onClick={fetchProducts} disabled={productsLoading} style={{ padding: "8px 14px", fontSize: 13 }}>
             {productsLoading ? "검색 중..." : "검색"}
           </PrimaryBtn>
-          {(productSearch || filterProductType || filterSourceLang || filterSourceLangCustom || filterTargetLang || filterTargetLangCustom || filterMainCategory || filterActiveOnly) && (
+          {(productSearch || filterProductType || filterSourceLang || filterSourceLangCustom || filterTargetLang || filterTargetLangCustom || filterEquipmentSearch || filterEquipmentCustom || filterMainCategory || filterActiveOnly) && (
             <button onClick={() => {
               setProductSearch(""); setFilterProductType("");
               setFilterSourceLang(""); setFilterSourceLangCustom("");
               setFilterTargetLang(""); setFilterTargetLangCustom("");
+              setFilterEquipmentSearch(""); setFilterEquipmentCustom("");
               setFilterMainCategory(""); setFilterActiveOnly("");
             }}
               style={{ padding: "8px 12px", fontSize: 12, borderRadius: 7, border: "1px solid #e5e7eb", background: "#f3f4f6", color: "#6b7280", cursor: "pointer" }}>

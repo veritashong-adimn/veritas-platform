@@ -227,21 +227,34 @@ async function findDuplicate(
   mainCategory: string,
   subCategory?: string,
   excludeId?: number,
+  name?: string,
 ) {
-  let rows = await db
+  const hasLang = isLangType(productType);
+  // 비언어형 상품(통역장비 등): 이름 기반 중복 체크
+  // 언어형 상품: 출발언어+도착언어+대분류+중분류 기반 중복 체크
+  const conditions = hasLang
+    ? and(
+        sql`LOWER(${productsTable.productType}) = LOWER(${productType})`,
+        sql`LOWER(COALESCE(${productsTable.mainCategory}, '')) = LOWER(${mainCategory || ""})`,
+        sql`LOWER(COALESCE(${productsTable.subCategory}, '')) = LOWER(${subCategory || ""})`,
+        sourceLanguage
+          ? sql`LOWER(COALESCE(${productsTable.sourceLanguage}, '')) = LOWER(${sourceLanguage})`
+          : sql`(${productsTable.sourceLanguage} IS NULL OR ${productsTable.sourceLanguage} = '')`,
+        targetLanguage
+          ? sql`LOWER(COALESCE(${productsTable.targetLanguage}, '')) = LOWER(${targetLanguage})`
+          : sql`(${productsTable.targetLanguage} IS NULL OR ${productsTable.targetLanguage} = '')`,
+      )
+    : and(
+        sql`LOWER(${productsTable.productType}) = LOWER(${productType})`,
+        name?.trim()
+          ? sql`LOWER(COALESCE(${productsTable.name}, '')) = LOWER(${name.trim()})`
+          : sql`1=0`,
+      );
+
+  const rows = await db
     .select({ id: productsTable.id, code: productsTable.code, name: productsTable.name, active: productsTable.active })
     .from(productsTable)
-    .where(and(
-      sql`LOWER(${productsTable.productType}) = LOWER(${productType})`,
-      sql`LOWER(COALESCE(${productsTable.mainCategory}, '')) = LOWER(${mainCategory || ""})`,
-      sql`LOWER(COALESCE(${productsTable.subCategory}, '')) = LOWER(${subCategory || ""})`,
-      sourceLanguage
-        ? sql`LOWER(COALESCE(${productsTable.sourceLanguage}, '')) = LOWER(${sourceLanguage})`
-        : sql`(${productsTable.sourceLanguage} IS NULL OR ${productsTable.sourceLanguage} = '')`,
-      targetLanguage
-        ? sql`LOWER(COALESCE(${productsTable.targetLanguage}, '')) = LOWER(${targetLanguage})`
-        : sql`(${productsTable.targetLanguage} IS NULL OR ${productsTable.targetLanguage} = '')`,
-    ));
+    .where(conditions);
   return rows.filter(r => r.id !== excludeId);
 }
 
@@ -366,7 +379,7 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
   }
 
   try {
-    const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCat, subCat);
+    const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCat, subCat, undefined, name?.trim());
     if (dupes.length > 0) {
       res.status(409).json({ error: "동일한 상품이 이미 존재합니다.", existing: dupes, isDuplicate: true });
       return;
@@ -508,7 +521,7 @@ router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), 
       const basePrice = Math.round(basePriceRaw);
       const overtimePrice = overtimePriceRaw !== null && !isNaN(overtimePriceRaw) ? Math.round(overtimePriceRaw) : null;
 
-      const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCat, subCat);
+      const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCat, subCat, undefined, nameRaw);
       if (dupes.length > 0) {
         result.errors.push({ row: rowNum, message: `중복 상품 존재: ${dupes[0].code} (${dupes[0].name})` });
         result.skipped++;
@@ -577,7 +590,7 @@ router.post("/admin/product-requests", ...adminGuard, async (req, res) => {
   const tgtLang = hasLang ? (targetLanguage?.trim().toLowerCase() || null) : null;
 
   try {
-    const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCategory.trim(), subCategory?.trim() || "");
+    const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCategory.trim(), subCategory?.trim() || "", undefined, name?.trim());
     const dupeInfo = dupes.length > 0 ? { hasDuplicate: true, existing: dupes } : { hasDuplicate: false };
 
     const performer = req.user as { id: number; email: string } | undefined;
@@ -628,7 +641,7 @@ router.post("/admin/product-requests/:id/approve", ...adminOnly, async (req, res
     const mainCat = request.mainCategory || "";
     const subCat = request.subCategory || "";
 
-    const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCat, subCat);
+    const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCat, subCat, undefined, request.name);
     if (dupes.length > 0) {
       res.status(409).json({ error: `동일한 상품이 이미 존재합니다. (${dupes[0].code})`, existing: dupes, isDuplicate: true });
       return;
@@ -713,7 +726,7 @@ router.post("/admin/product-requests/:id/reject", ...adminOnly, async (req, res)
 
 // ─── 중복 체크 ────────────────────────────────────────────────────────────────
 router.get("/admin/products/check-duplicate", ...adminGuard, async (req, res) => {
-  const { productType, sourceLanguage, targetLanguage, mainCategory, subCategory, excludeId } = req.query as Record<string, string | undefined>;
+  const { productType, sourceLanguage, targetLanguage, mainCategory, subCategory, excludeId, name } = req.query as Record<string, string | undefined>;
 
   if (!productType || !mainCategory) {
     res.status(400).json({ error: "productType, mainCategory 는 필수입니다." }); return;
@@ -726,7 +739,8 @@ router.get("/admin/products/check-duplicate", ...adminGuard, async (req, res) =>
       targetLanguage || null,
       mainCategory,
       subCategory || "",
-      excludeId ? Number(excludeId) : undefined
+      excludeId ? Number(excludeId) : undefined,
+      name || undefined,
     );
     res.json({ hasDuplicate: dupes.length > 0, existing: dupes });
   } catch (err) {

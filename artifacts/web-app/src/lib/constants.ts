@@ -562,6 +562,29 @@ export const UNITS_BY_PRODUCT_TYPE: Record<string, string[]> = {
   other_cost:     ["건"],
 };
 
+export const EQUIPMENT_ITEMS: string[] = [
+  "동시통역장비(FM)",
+  "동시통역장비(적외선)",
+  "리시버",
+  "리시버 분실 보상비",
+  "리시버관리",
+  "통역부스",
+  "사전설치",
+  "가이드장비(수신기)",
+  "가이드장비(송신기)",
+  "위스퍼링장비(수신기)",
+  "위스퍼링장비(송신기)",
+  "회의용마이크",
+  "무선마이크",
+  "유선마이크",
+  "핀마이크",
+  "오디오인터페이스",
+  "음향콘솔",
+  "믹서",
+  "분배기",
+  "기타 직접입력",
+];
+
 export const PRODUCT_MAIN_CATEGORIES = ["번역", "통역", "통번역", "통역장비", "프로젝트", "교통비", "식대", "숙박", "기타비용"] as const;
 export type ProductMainCategory = typeof PRODUCT_MAIN_CATEGORIES[number];
 
