@@ -2,7 +2,11 @@ import { Router, type IRouter } from "express";
 import {
   db, companiesTable, contactsTable, projectsTable,
   paymentsTable, settlementsTable, quotesTable, communicationsTable, usersTable,
-  billingBatchesTable, divisionsTable, companyNameHistoryTable, logsTable,
+  billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
+  divisionsTable, companyNameHistoryTable, logsTable,
+  prepaidAccountsTable, prepaidLedgerTable,
+  quoteItemsTable, quoteItemFilesTable,
+  projectFilesTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, inArray, sql, desc, ne } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
@@ -376,73 +380,273 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
   }
 });
 
-// ─── 거래처 삭제 ─────────────────────────────────────────────────────────────
-router.delete("/admin/companies/:id", ...adminGuard, async (req, res) => {
+// ─── 거래처 삭제 사전 검사 ───────────────────────────────────────────────────
+router.get("/admin/companies/:id/delete-check", ...adminGuard, async (req, res) => {
   const companyId = Number(req.params.id);
   if (isNaN(companyId) || companyId <= 0) {
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
-  const force = req.query.force === "true";
-
   try {
-    const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
+    const [existing] = await db.select({ id: companiesTable.id }).from(companiesTable).where(eq(companiesTable.id, companyId));
     if (!existing) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
 
-    if (force) {
-      if (process.env.ENABLE_FORCE_DELETE !== "true") {
-        res.status(403).json({ error: "강제 삭제는 현재 비활성화되어 있습니다. (ENABLE_FORCE_DELETE=true 설정 필요)" }); return;
-      }
-      if (req.user?.role !== "admin") {
-        res.status(403).json({ error: "강제 삭제는 관리자만 가능합니다." }); return;
-      }
-    }
-
-    // 활성 담당자만 차단 대상으로 카운트 (비활성 담당자는 삭제 허용)
-    const [activeContactCount] = await db.select({ count: sql<number>`count(*)::int` })
-      .from(contactsTable)
-      .where(and(eq(contactsTable.companyId, companyId), eq(contactsTable.isActive, true)));
-    const [projectCount] = await db.select({ count: sql<number>`count(*)::int` }).from(projectsTable)
+    // 프로젝트 ID 목록 먼저 수집
+    const projectRows = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
       .where(or(
         eq(projectsTable.companyId, companyId),
         eq(projectsTable.requestingCompanyId, companyId),
         eq(projectsTable.billingCompanyId, companyId),
         eq(projectsTable.payerCompanyId, companyId),
       ));
+    const projectIds = projectRows.map(p => p.id);
 
-    const hasLinks = (activeContactCount?.count ?? 0) > 0 || (projectCount?.count ?? 0) > 0;
+    // 병렬 카운트 조회
+    const [
+      [contacts],
+      [divisions],
+      [prepaidAccounts],
+      [billingCycles],
+    ] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(contactsTable).where(eq(contactsTable.companyId, companyId)),
+      db.select({ count: sql<number>`count(*)::int` }).from(divisionsTable).where(eq(divisionsTable.companyId, companyId)),
+      db.select({ count: sql<number>`count(*)::int` }).from(prepaidAccountsTable).where(eq(prepaidAccountsTable.companyId, companyId)),
+      db.select({ count: sql<number>`count(*)::int` }).from(billingBatchesTable).where(eq(billingBatchesTable.companyId, companyId)),
+    ]);
 
-    if (hasLinks && !force) {
-      const reasons: string[] = [];
-      if ((activeContactCount?.count ?? 0) > 0) reasons.push(`활성 담당자 ${activeContactCount?.count}건`);
-      if ((projectCount?.count ?? 0) > 0) reasons.push(`프로젝트 ${projectCount?.count}건`);
+    let quotesCount = 0, paymentsCount = 0, settlementsCount = 0;
+    if (projectIds.length > 0) {
+      const [[qRow], [pmRow], [sRow]] = await Promise.all([
+        db.select({ count: sql<number>`count(*)::int` }).from(quotesTable).where(inArray(quotesTable.projectId, projectIds)),
+        db.select({ count: sql<number>`count(*)::int` }).from(paymentsTable).where(inArray(paymentsTable.projectId, projectIds)),
+        db.select({ count: sql<number>`count(*)::int` }).from(settlementsTable).where(inArray(settlementsTable.projectId, projectIds)),
+      ]);
+      quotesCount = qRow?.count ?? 0;
+      paymentsCount = pmRow?.count ?? 0;
+      settlementsCount = sRow?.count ?? 0;
+    }
+
+    type Reason = { type: string; label: string; count: number };
+    const reasons: Reason[] = [];
+
+    if ((contacts?.count ?? 0) > 0) reasons.push({ type: "contacts", label: "담당자", count: contacts.count });
+    if ((divisions?.count ?? 0) > 0) reasons.push({ type: "divisions", label: "브랜드/부서", count: divisions.count });
+    if (projectIds.length > 0) reasons.push({ type: "projects", label: "프로젝트", count: projectIds.length });
+    if (quotesCount > 0) reasons.push({ type: "quotes", label: "견적서", count: quotesCount });
+    if (paymentsCount > 0) reasons.push({ type: "payments", label: "결제", count: paymentsCount });
+    if (settlementsCount > 0) reasons.push({ type: "settlements", label: "정산", count: settlementsCount });
+    if ((prepaidAccounts?.count ?? 0) > 0) reasons.push({ type: "prepaid_accounts", label: "선입금 계정", count: prepaidAccounts.count });
+    if ((billingCycles?.count ?? 0) > 0) reasons.push({ type: "billing_cycles", label: "누적 청구", count: billingCycles.count });
+
+    res.json({ canDelete: reasons.length === 0, reasons });
+  } catch (err) {
+    req.log.error({ err }, "Companies: failed to delete-check");
+    res.status(500).json({ error: "삭제 가능 여부 확인 실패." });
+  }
+});
+
+// ─── 거래처 삭제 ─────────────────────────────────────────────────────────────
+router.delete("/admin/companies/:id", ...adminGuard, async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 company id." }); return;
+  }
+
+  try {
+    const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
+    if (!existing) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+
+    // 연결 데이터 검사
+    const projectRows = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(or(
+        eq(projectsTable.companyId, companyId),
+        eq(projectsTable.requestingCompanyId, companyId),
+        eq(projectsTable.billingCompanyId, companyId),
+        eq(projectsTable.payerCompanyId, companyId),
+      ));
+    const projectIds = projectRows.map(p => p.id);
+
+    const [[contacts], [prepaidAccounts], [billingCycles]] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(contactsTable)
+        .where(and(eq(contactsTable.companyId, companyId), eq(contactsTable.isActive, true))),
+      db.select({ count: sql<number>`count(*)::int` }).from(prepaidAccountsTable).where(eq(prepaidAccountsTable.companyId, companyId)),
+      db.select({ count: sql<number>`count(*)::int` }).from(billingBatchesTable).where(eq(billingBatchesTable.companyId, companyId)),
+    ]);
+
+    const blockingReasons: string[] = [];
+    if ((contacts?.count ?? 0) > 0) blockingReasons.push(`담당자 ${contacts.count}건 존재`);
+    if (projectIds.length > 0) blockingReasons.push(`프로젝트 ${projectIds.length}건 존재`);
+    if ((prepaidAccounts?.count ?? 0) > 0) blockingReasons.push(`선입금 계정 ${prepaidAccounts.count}건 존재`);
+    if ((billingCycles?.count ?? 0) > 0) blockingReasons.push(`누적 청구 ${billingCycles.count}건 존재`);
+
+    if (blockingReasons.length > 0) {
       res.status(409).json({
-        error: `이 거래처는 연결된 데이터가 있어 삭제할 수 없습니다. (${reasons.join(", ")})`,
-        reasons,
-        canForceDelete: true,
+        error: "삭제할 수 없습니다.",
+        reasons: blockingReasons,
+        canHardDelete: true,
       });
       return;
     }
 
-    // 비활성 담당자가 있으면 먼저 완전삭제 (companyId NOT NULL 제약으로 null 불가)
-    await db.delete(contactsTable).where(
-      and(eq(contactsTable.companyId, companyId), eq(contactsTable.isActive, false))
-    );
-
+    // 비활성 담당자, 부서, 상호이력 정리 후 삭제
+    await db.delete(contactsTable).where(eq(contactsTable.companyId, companyId));
+    await db.delete(divisionsTable).where(eq(divisionsTable.companyId, companyId));
+    await db.delete(companyNameHistoryTable).where(eq(companyNameHistoryTable.companyId, companyId));
     await db.delete(companiesTable).where(eq(companiesTable.id, companyId));
 
     await db.insert(logsTable).values({
       entityType: "company",
       entityId: companyId,
-      action: force ? "force_deleted" : "deleted",
+      action: "deleted",
       performedBy: req.user?.id ?? null,
       performedByEmail: req.user?.email ?? null,
-      metadata: JSON.stringify({ name: existing.name, force, contactCount: contactCount?.count, projectCount: projectCount?.count }),
+      metadata: JSON.stringify({ name: existing.name }),
     });
 
-    res.json({ ok: true, force });
+    res.json({ ok: true });
   } catch (err) {
     req.log.error({ err }, "Companies: failed to delete");
     res.status(500).json({ error: "거래처 삭제 실패." });
+  }
+});
+
+// ─── 거래처 완전삭제 (Hard Delete, 개발환경 전용) ─────────────────────────────
+router.delete("/admin/companies/:id/hard", ...adminGuard, async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 company id." }); return;
+  }
+
+  // 운영 안전장치: ALLOW_HARD_DELETE=true 환경변수 없으면 차단
+  if (process.env.ALLOW_HARD_DELETE !== "true") {
+    req.log.warn({ companyId, user: req.user?.email }, "[HARD_DELETE_BLOCKED] ALLOW_HARD_DELETE not enabled");
+    res.status(403).json({ error: "완전삭제는 개발 환경에서만 사용 가능합니다. (ALLOW_HARD_DELETE=true 설정 필요)" });
+    return;
+  }
+
+  if (req.user?.role !== "admin") {
+    res.status(403).json({ error: "완전삭제는 관리자만 가능합니다." }); return;
+  }
+
+  try {
+    const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
+    if (!existing) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+
+    req.log.warn({ companyId, companyName: existing.name, deletedBy: req.user?.email },
+      "[HARD_DELETE_COMPANY] 완전삭제 시작");
+
+    // 프로젝트 ID 수집
+    const projectRows = await db
+      .select({ id: projectsTable.id })
+      .from(projectsTable)
+      .where(or(
+        eq(projectsTable.companyId, companyId),
+        eq(projectsTable.requestingCompanyId, companyId),
+        eq(projectsTable.billingCompanyId, companyId),
+        eq(projectsTable.payerCompanyId, companyId),
+      ));
+    const projectIds = projectRows.map(p => p.id);
+
+    // 견적서 ID 수집 (quote_items 삭제용)
+    let quoteIds: number[] = [];
+    if (projectIds.length > 0) {
+      const quoteRows = await db.select({ id: quotesTable.id }).from(quotesTable)
+        .where(inArray(quotesTable.projectId, projectIds));
+      quoteIds = quoteRows.map(q => q.id);
+    }
+
+    // 선입금 계정 ID 수집 (prepaid_ledger 삭제용)
+    const prepaidRows = await db.select({ id: prepaidAccountsTable.id }).from(prepaidAccountsTable)
+      .where(eq(prepaidAccountsTable.companyId, companyId));
+    const prepaidIds = prepaidRows.map(p => p.id);
+
+    // 누적 청구 ID 수집 (billing_batch_items 삭제용)
+    const batchRows = await db.select({ id: billingBatchesTable.id }).from(billingBatchesTable)
+      .where(eq(billingBatchesTable.companyId, companyId));
+    const batchIds = batchRows.map(b => b.id);
+
+    // 트랜잭션으로 FK 순서에 맞게 전체 삭제
+    await db.transaction(async (tx) => {
+      // 1. billing_batch_work_items, billing_batch_items (둘 다 billing_batches cascade)
+      if (batchIds.length > 0) {
+        await tx.delete(billingBatchWorkItemsTable).where(inArray(billingBatchWorkItemsTable.batchId, batchIds));
+        await tx.delete(billingBatchItemsTable).where(inArray(billingBatchItemsTable.batchId, batchIds));
+      }
+      // 2. billing_batches
+      await tx.delete(billingBatchesTable).where(eq(billingBatchesTable.companyId, companyId));
+
+      // 4. prepaid_ledger (FK → prepaid_accounts, cascade이지만 명시적 삭제)
+      if (prepaidIds.length > 0) {
+        await tx.delete(prepaidLedgerTable).where(inArray(prepaidLedgerTable.accountId, prepaidIds));
+      }
+      // 5. prepaid_accounts
+      await tx.delete(prepaidAccountsTable).where(eq(prepaidAccountsTable.companyId, companyId));
+
+      if (projectIds.length > 0) {
+        // 6. quote_item_files (FK → quote_items)
+        if (quoteIds.length > 0) {
+          const quoteItemRows = await tx.select({ id: quoteItemsTable.id }).from(quoteItemsTable)
+            .where(inArray(quoteItemsTable.quoteId, quoteIds));
+          const quoteItemIds = quoteItemRows.map(q => q.id);
+          if (quoteItemIds.length > 0) {
+            await tx.delete(quoteItemFilesTable).where(inArray(quoteItemFilesTable.quoteItemId, quoteItemIds));
+          }
+          // 7. quote_items
+          await tx.delete(quoteItemsTable).where(inArray(quoteItemsTable.quoteId, quoteIds));
+        }
+        // 8. project_files
+        await tx.delete(projectFilesTable).where(inArray(projectFilesTable.projectId, projectIds));
+        // 9. settlements
+        await tx.delete(settlementsTable).where(inArray(settlementsTable.projectId, projectIds));
+        // 10. payments
+        await tx.delete(paymentsTable).where(inArray(paymentsTable.projectId, projectIds));
+        // 11. quotes
+        await tx.delete(quotesTable).where(inArray(quotesTable.projectId, projectIds));
+      }
+      // 12. projects
+      await tx.delete(projectsTable).where(or(
+        eq(projectsTable.companyId, companyId),
+        eq(projectsTable.requestingCompanyId, companyId),
+        eq(projectsTable.billingCompanyId, companyId),
+        eq(projectsTable.payerCompanyId, companyId),
+      ));
+
+      // 13. contacts
+      await tx.delete(contactsTable).where(eq(contactsTable.companyId, companyId));
+      // 14. divisions
+      await tx.delete(divisionsTable).where(eq(divisionsTable.companyId, companyId));
+      // 15. company_name_history
+      await tx.delete(companyNameHistoryTable).where(eq(companyNameHistoryTable.companyId, companyId));
+      // 16. company
+      await tx.delete(companiesTable).where(eq(companiesTable.id, companyId));
+
+      // 감사 로그
+      await tx.insert(logsTable).values({
+        entityType: "company",
+        entityId: companyId,
+        action: "hard_deleted",
+        performedBy: req.user?.id ?? null,
+        performedByEmail: req.user?.email ?? null,
+        metadata: JSON.stringify({
+          name: existing.name,
+          projectCount: projectIds.length,
+          quoteCount: quoteIds.length,
+          prepaidCount: prepaidIds.length,
+          batchCount: batchIds.length,
+        }),
+      });
+    });
+
+    req.log.warn({ companyId, companyName: existing.name, deletedBy: req.user?.email },
+      "[HARD_DELETE_COMPANY] 완전삭제 완료");
+
+    res.json({ ok: true, hardDelete: true, companyName: existing.name });
+  } catch (err) {
+    req.log.error({ err }, "Companies: hard delete failed");
+    res.status(500).json({ error: "완전삭제 실패. 트랜잭션이 롤백되었습니다." });
   }
 });
 

@@ -26,8 +26,10 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [detail, setDetail] = useState<CompanyDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [deleteCanForce, setDeleteCanForce] = useState(false);
+  type DeleteReason = { type: string; label: string; count: number };
+  const [deleteCheckModal, setDeleteCheckModal] = useState<{ show: boolean; reasons: DeleteReason[]; checking: boolean }>({ show: false, reasons: [], checking: false });
+  const [hardDeleteModal, setHardDeleteModal] = useState<{ show: boolean; confirmText: string; loading: boolean }>({ show: false, confirmText: "", loading: false });
+  const allowHardDelete = import.meta.env.VITE_ALLOW_HARD_DELETE === "true";
   const [showContactForm, setShowContactForm] = useState(false);
   const emptyContactForm = { name: "", department: "", position: "", email: "", phone: "", mobile: "", officePhone: "", memo: "", isPrimary: false, isQuoteContact: false, isBillingContact: false, isActive: true, divisionId: null as number | null };
   const [contactForm, setContactForm] = useState(emptyContactForm);
@@ -272,37 +274,54 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
     } catch { onToast("오류: 수정 실패"); }
   };
 
-  const handleDeleteCompany = async (force = false) => {
-    if (!force) {
-      if (!confirm("이 거래처를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.")) return;
-    } else {
-      if (!confirm("연결된 담당자, 프로젝트 등 모든 데이터가 함께 삭제됩니다.\n정말 강제 삭제하시겠습니까?")) return;
-    }
-    setDeleting(true);
-    setDeleteError(null);
+  const handleDeleteClick = async () => {
+    setDeleteCheckModal(p => ({ ...p, checking: true, show: false }));
     try {
-      const res = await fetch(api(`/api/admin/companies/${companyId}${force ? "?force=true" : ""}`), {
-        method: "DELETE", headers: authH,
-      });
+      const res = await fetch(api(`/api/admin/companies/${companyId}/delete-check`), { headers: authH });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      if (data.canDelete) {
+        if (!confirm(`"${detail?.name}" 거래처를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
+        await doDelete();
+      } else {
+        setDeleteCheckModal({ show: true, reasons: data.reasons ?? [], checking: false });
+      }
+    } catch { onToast("오류: 삭제 가능 여부 확인 실패"); }
+    finally { setDeleteCheckModal(p => ({ ...p, checking: false })); }
+  };
+
+  const doDelete = async () => {
+    setDeleting(true);
+    try {
+      const res = await fetch(api(`/api/admin/companies/${companyId}`), { method: "DELETE", headers: authH });
       const data = await res.json();
       if (!res.ok) {
-        if (res.status === 409 && data.canForceDelete) {
-          setDeleteError(data.error);
-          setDeleteCanForce(true);
+        if (res.status === 409) {
+          setDeleteCheckModal({ show: true, reasons: (data.reasons ?? []).map((r: string) => ({ type: "block", label: r, count: 0 })), checking: false });
         } else {
-          setDeleteError(data.error ?? "삭제 실패");
+          onToast(`오류: ${data.error ?? "삭제 실패"}`);
         }
         return;
       }
       onToast("거래처가 삭제되었습니다.");
-      onRefresh?.();
-      onDeleted?.();
-      onClose();
-    } catch {
-      setDeleteError("오류가 발생했습니다.");
-    } finally {
-      setDeleting(false);
-    }
+      onRefresh?.(); onDeleted?.(); onClose();
+    } catch { onToast("오류: 삭제 실패"); }
+    finally { setDeleting(false); }
+  };
+
+  const doHardDelete = async () => {
+    if (hardDeleteModal.confirmText !== "삭제") { onToast("확인 텍스트가 일치하지 않습니다."); return; }
+    setHardDeleteModal(p => ({ ...p, loading: true }));
+    try {
+      const res = await fetch(api(`/api/admin/companies/${companyId}/hard`), { method: "DELETE", headers: authH });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error ?? "완전삭제 실패"}`); return; }
+      onToast(`"${data.companyName}" 거래처가 완전삭제되었습니다.`);
+      setHardDeleteModal({ show: false, confirmText: "", loading: false });
+      setDeleteCheckModal({ show: false, reasons: [], checking: false });
+      onRefresh?.(); onDeleted?.(); onClose();
+    } catch { onToast("오류: 완전삭제 실패"); }
+    finally { setHardDeleteModal(p => ({ ...p, loading: false })); }
   };
 
   const handleDeleteDiv = async (divId: number, name: string) => {
@@ -319,22 +338,18 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
     <>
     <DraggableModal title={`거래처 #${companyId} 상세`} onClose={onClose} width={800} zIndex={300} bodyPadding="20px 28px"
       headerExtra={
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-          <button onClick={() => handleDeleteCompany(false)} disabled={deleting}
-            style={{ fontSize: 11, padding: "3px 10px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>
-            {deleting ? "삭제 중…" : "거래처 삭제"}
-          </button>
-          {deleteError && (
-            <div style={{ fontSize: 11, color: "#dc2626", maxWidth: 240, textAlign: "right" }}>
-              {deleteError}
-              {deleteCanForce && (
-                <button onClick={() => handleDeleteCompany(true)} disabled={deleting}
-                  style={{ marginLeft: 6, fontSize: 11, padding: "2px 8px", background: "#dc2626", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontWeight: 700 }}>
-                  강제 삭제
-                </button>
-              )}
-            </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {allowHardDelete && (
+            <button onClick={() => setHardDeleteModal({ show: true, confirmText: "", loading: false })}
+              disabled={deleting || deleteCheckModal.checking}
+              style={{ fontSize: 11, padding: "3px 10px", background: "#1f2937", color: "#f87171", border: "1px solid #4b5563", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>
+              완전삭제
+            </button>
           )}
+          <button onClick={handleDeleteClick} disabled={deleting || deleteCheckModal.checking}
+            style={{ fontSize: 11, padding: "3px 10px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>
+            {deleteCheckModal.checking ? "확인 중…" : deleting ? "삭제 중…" : "삭제"}
+          </button>
         </div>
       }
     >
@@ -947,6 +962,92 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
         onClose={() => setSelectedLedgerAccountId(null)}
         onUpdate={load}
       />
+    )}
+
+    {/* ── 삭제 불가 사유 모달 ── */}
+    {deleteCheckModal.show && (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ background: "#fff", borderRadius: 14, padding: "28px 28px 22px", width: 400, maxWidth: "90vw", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+            <span style={{ fontSize: 22 }}>🚫</span>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>삭제할 수 없습니다</h3>
+          </div>
+          <p style={{ margin: "0 0 14px", fontSize: 13, color: "#6b7280" }}>이 거래처에 연결된 데이터가 존재합니다.</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 20 }}>
+            {deleteCheckModal.reasons.map((r, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 12px", background: "#fef2f2", borderRadius: 8, border: "1px solid #fecaca" }}>
+                <span style={{ fontSize: 13, color: "#374151", fontWeight: 600 }}>{r.label}</span>
+                {r.count > 0 && <span style={{ fontSize: 13, color: "#dc2626", fontWeight: 700 }}>{r.count.toLocaleString()}건</span>}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            {allowHardDelete && (
+              <button
+                onClick={() => { setDeleteCheckModal(p => ({ ...p, show: false })); setHardDeleteModal({ show: true, confirmText: "", loading: false }); }}
+                style={{ padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700, background: "#1f2937", color: "#f87171", border: "1px solid #4b5563", cursor: "pointer" }}>
+                완전삭제
+              </button>
+            )}
+            <button onClick={() => setDeleteCheckModal(p => ({ ...p, show: false }))}
+              style={{ padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, background: "#f3f4f6", color: "#374151", border: "1px solid #e5e7eb", cursor: "pointer" }}>
+              닫기
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* ── 완전삭제 확인 모달 ── */}
+    {hardDeleteModal.show && (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ background: "#fff", borderRadius: 14, padding: "28px 28px 22px", width: 440, maxWidth: "90vw", boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+            <span style={{ fontSize: 22 }}>⚠️</span>
+            <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#dc2626" }}>완전삭제 — 되돌릴 수 없습니다</h3>
+          </div>
+          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 10, padding: "12px 14px", marginBottom: 18 }}>
+            <p style={{ margin: "0 0 6px", fontSize: 13, fontWeight: 700, color: "#991b1b" }}>
+              &ldquo;{detail?.name}&rdquo; 거래처와 연결된 모든 데이터를 삭제합니다.
+            </p>
+            <ul style={{ margin: "0", paddingLeft: 18, fontSize: 12, color: "#b91c1c", lineHeight: 1.8 }}>
+              <li>담당자, 부서/브랜드</li>
+              <li>프로젝트, 견적서, 결제, 정산</li>
+              <li>선입금 계정 및 장부</li>
+              <li>누적 청구 데이터</li>
+            </ul>
+          </div>
+          <p style={{ margin: "0 0 8px", fontSize: 13, color: "#374151" }}>
+            계속하려면 <strong>삭제</strong>를 직접 입력하세요.
+          </p>
+          <input
+            value={hardDeleteModal.confirmText}
+            onChange={e => setHardDeleteModal(p => ({ ...p, confirmText: e.target.value }))}
+            placeholder="삭제"
+            style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1.5px solid #fca5a5", fontSize: 14, color: "#111827", outline: "none", boxSizing: "border-box", marginBottom: 18 }}
+            onKeyDown={e => { if (e.key === "Enter" && hardDeleteModal.confirmText === "삭제") doHardDelete(); }}
+          />
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button
+              onClick={() => setHardDeleteModal({ show: false, confirmText: "", loading: false })}
+              disabled={hardDeleteModal.loading}
+              style={{ padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 600, background: "#f3f4f6", color: "#374151", border: "1px solid #e5e7eb", cursor: "pointer" }}>
+              취소
+            </button>
+            <button
+              onClick={doHardDelete}
+              disabled={hardDeleteModal.confirmText !== "삭제" || hardDeleteModal.loading}
+              style={{
+                padding: "8px 18px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: hardDeleteModal.confirmText === "삭제" ? "pointer" : "not-allowed",
+                background: hardDeleteModal.confirmText === "삭제" ? "#dc2626" : "#f3f4f6",
+                color: hardDeleteModal.confirmText === "삭제" ? "#fff" : "#9ca3af",
+                border: "none",
+              }}>
+              {hardDeleteModal.loading ? "삭제 중…" : "완전삭제 실행"}
+            </button>
+          </div>
+        </div>
+      </div>
     )}
     </>
   );
