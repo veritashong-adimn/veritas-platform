@@ -4,8 +4,8 @@ import {
   SERVICE_TYPES as WORK_TYPES,
   SUB_SERVICE_TYPES as SUB_TYPES_MAP,
   UNIT_BY_SERVICE_TYPE as UNIT_BY_TYPE,
-  LANG_OPTIONS,
 } from "./translatorRateConstants";
+import { LanguageSearchSelect } from "./LanguageSearchSelect";
 
 export type RateEntryData = {
   workType: string;
@@ -77,8 +77,8 @@ export function TranslatorRateEntryCard({
 
   return (
     <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 10, padding: "10px 12px" }}>
-      {/* 행1: 업무유형 / 세부유형 / 출발언어 / 도착언어 (+ 삭제) */}
-      <div style={{ display: "grid", gridTemplateColumns: onRemove ? "1fr 1fr 1fr 1fr auto" : "1fr 1fr 1fr 1fr", gap: "6px 8px", marginBottom: 6, alignItems: "end" }}>
+      {/* 행1: 업무유형 / 세부유형 */}
+      <div style={{ display: "grid", gridTemplateColumns: onRemove ? "1fr 1fr auto" : "1fr 1fr", gap: "6px 8px", marginBottom: 6, alignItems: "end" }}>
         <div>
           <div style={label11}>업무유형</div>
           <ClickSelect value={r.workType}
@@ -97,28 +97,6 @@ export function TranslatorRateEntryCard({
             triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
             options={[{ value: "", label: "세부유형 선택" }, ...(SUB_TYPES_MAP[r.workType] ?? []).map(s => ({ value: s, label: s }))]} />
         </div>
-        <div>
-          <div style={label11}>출발 언어</div>
-          <ClickSelect value={r.sourceLang}
-            onChange={v => up({ sourceLang: v, sourceCustom: "" })}
-            triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
-            options={LANG_OPTIONS.map(l => ({ value: l, label: l }))} />
-          {r.sourceLang === "기타" && (
-            <input value={r.sourceCustom} onChange={e => up({ sourceCustom: e.target.value })}
-              placeholder="언어명 직접 입력" style={{ ...inputStyle, fontSize: 12, marginTop: 4 }} />
-          )}
-        </div>
-        <div>
-          <div style={label11}>도착 언어</div>
-          <ClickSelect value={r.targetLang}
-            onChange={v => up({ targetLang: v, targetCustom: "" })}
-            triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
-            options={LANG_OPTIONS.map(l => ({ value: l, label: l }))} />
-          {r.targetLang === "기타" && (
-            <input value={r.targetCustom} onChange={e => up({ targetCustom: e.target.value })}
-              placeholder="언어명 직접 입력" style={{ ...inputStyle, fontSize: 12, marginTop: 4 }} />
-          )}
-        </div>
         {onRemove && (
           <button onClick={onRemove}
             style={{ background: "none", border: "none", color: "#dc2626", fontSize: 18, cursor: "pointer", padding: "0 4px", marginTop: 16 }}>
@@ -127,7 +105,35 @@ export function TranslatorRateEntryCard({
         )}
       </div>
 
-      {/* 행2: 단가단위 / 단가 / 통화 / VAT / 기본단가 / 활성 */}
+      {/* 행2: 출발언어 / 도착언어 (searchable) */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 8px", marginBottom: 6 }}>
+        <div>
+          <div style={label11}>출발 언어</div>
+          <LanguageSearchSelect
+            value={r.sourceLang}
+            onChange={v => up({ sourceLang: v, sourceCustom: "" })}
+            customValue={r.sourceCustom}
+            onCustomChange={v => up({ sourceCustom: v })}
+            mode="label"
+            placeholder="출발언어 선택..."
+            triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+          />
+        </div>
+        <div>
+          <div style={label11}>도착 언어</div>
+          <LanguageSearchSelect
+            value={r.targetLang}
+            onChange={v => up({ targetLang: v, targetCustom: "" })}
+            customValue={r.targetCustom}
+            onCustomChange={v => up({ targetCustom: v })}
+            mode="label"
+            placeholder="도착언어 선택..."
+            triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
+          />
+        </div>
+      </div>
+
+      {/* 행3: 단가단위 / 단가 / 통화 / VAT / 기본단가 / 활성 */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 80px auto auto auto", gap: "6px 8px", marginBottom: 6, alignItems: "end" }}>
         <div>
           <div style={label11}>단가단위</div>
@@ -162,7 +168,7 @@ export function TranslatorRateEntryCard({
         </label>
       </div>
 
-      {/* 행3: 메모 (+ 액션버튼) */}
+      {/* 행4: 메모 (+ 액션버튼) */}
       <div style={{ display: "grid", gridTemplateColumns: actionLabel ? "1fr auto" : "1fr", gap: "6px 8px", alignItems: "end", marginBottom: 4 }}>
         <div>
           <div style={label11}>메모</div>

@@ -5,6 +5,7 @@ import {
   LANGUAGE_CODES, UNITS_BY_PRODUCT_TYPE, PRODUCT_OPTION_TYPES,
 } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
+import { LanguageSearchSelect } from './LanguageSearchSelect';
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
@@ -29,7 +30,6 @@ function Section({ title, sub, children, action }: {
 
 // ─── 언어 코드 레이블 ────────────────────────────────────────────────────────
 const LANG_LABEL: Record<string, string> = Object.fromEntries(LANGUAGE_CODES.map(l => [l.code, l.label]));
-const LANG_OPTIONS_SELECT = [{ value: "", label: "선택" }, ...LANGUAGE_CODES.map(l => ({ value: l.code, label: `${l.label} (${l.code})` }))];
 
 // ─── 상품유형별 색상 ─────────────────────────────────────────────────────────
 const TYPE_COLORS: Record<string, { bg: string; color: string; icon: string }> = {
@@ -470,7 +470,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
                 <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>출발언어 <span style={{ color: "#dc2626" }}>*</span></label>
-                <ClickSelect
+                <LanguageSearchSelect
                   value={form.sourceLanguage}
                   onChange={v => {
                     setForm(p => {
@@ -479,14 +479,14 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                       return updated;
                     });
                   }}
-                  options={LANG_OPTIONS_SELECT}
-                  style={{ width: "100%" }}
+                  mode="code"
+                  placeholder="출발언어 선택..."
                   triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
                 />
               </div>
               <div>
                 <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>도착언어 <span style={{ color: "#dc2626" }}>*</span></label>
-                <ClickSelect
+                <LanguageSearchSelect
                   value={form.targetLanguage}
                   onChange={v => {
                     setForm(p => {
@@ -495,8 +495,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                       return updated;
                     });
                   }}
-                  options={LANG_OPTIONS_SELECT}
-                  style={{ width: "100%" }}
+                  mode="code"
+                  placeholder="도착언어 선택..."
                   triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
                 />
               </div>
@@ -881,16 +881,22 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               <option key={k} value={k}>{TYPE_COLORS[k]?.icon} {v.label}</option>
             ))}
           </select>
-          <select value={filterSourceLang} onChange={e => setFilterSourceLang(e.target.value)}
-            style={{ ...inputStyle, padding: "8px 10px", fontSize: 13, minWidth: 110 }}>
-            <option value="">출발언어 전체</option>
-            {LANGUAGE_CODES.slice(0, 10).map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
-          </select>
-          <select value={filterTargetLang} onChange={e => setFilterTargetLang(e.target.value)}
-            style={{ ...inputStyle, padding: "8px 10px", fontSize: 13, minWidth: 110 }}>
-            <option value="">도착언어 전체</option>
-            {LANGUAGE_CODES.slice(0, 10).map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
-          </select>
+          <LanguageSearchSelect
+            value={filterSourceLang}
+            onChange={v => setFilterSourceLang(v === "other" ? "" : v)}
+            mode="code"
+            placeholder="출발언어 전체"
+            style={{ minWidth: 130, flex: "0 0 auto" }}
+            triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
+          />
+          <LanguageSearchSelect
+            value={filterTargetLang}
+            onChange={v => setFilterTargetLang(v === "other" ? "" : v)}
+            mode="code"
+            placeholder="도착언어 전체"
+            style={{ minWidth: 130, flex: "0 0 auto" }}
+            triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
+          />
           <select value={filterActiveOnly} onChange={e => setFilterActiveOnly(e.target.value as "" | "true" | "false")}
             style={{ ...inputStyle, padding: "8px 10px", fontSize: 13, minWidth: 100 }}>
             <option value="">전체 상태</option>

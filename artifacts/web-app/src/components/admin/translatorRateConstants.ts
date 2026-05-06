@@ -1,3 +1,5 @@
+import { LANGUAGE_CODES } from "../../lib/constants";
+
 export const SERVICE_TYPES = ["번역", "통역", "감수", "편집", "미디어", "DTP"] as const;
 
 export const SUB_SERVICE_TYPES: Record<string, string[]> = {
@@ -52,12 +54,6 @@ export const ALL_RATE_UNITS = [
 export const getRateUnitLabel = (unit: string) =>
   ALL_RATE_UNITS.find(u => u.value === unit)?.label ?? unit;
 
-export const LANG_OPTIONS = [
-  "한국어", "영어", "일본어", "중국어", "러시아어", "스페인어", "독일어", "프랑스어",
-  "아랍어", "이탈리아어", "터키어", "포르투갈어", "폴란드어", "스웨덴어", "네덜란드어",
-  "그리스어", "체코어", "페르시아어", "히브리어", "베트남어", "몽골어", "태국어",
-  "인도네시아어", "말레이어", "캄보디아어", "인도어", "파키스탄어", "스리랑카어", "방글라데시어",
-  "미얀마어", "라오스어", "광동어", "우즈베키스탄어", "우크라이나어", "기타",
-];
-
 export const CURRENCIES = ["KRW", "USD", "EUR", "JPY", "GBP", "CAD", "AUD", "CNY", "HKD", "SGD"];
+
+export const LANG_LABEL_OPTIONS = LANGUAGE_CODES.map(l => l.label);
