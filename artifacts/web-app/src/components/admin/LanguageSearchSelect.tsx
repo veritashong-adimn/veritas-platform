@@ -6,8 +6,6 @@ export type LangSelectMode = "code" | "label";
 interface Props {
   value: string;
   onChange: (val: string) => void;
-  customValue?: string;
-  onCustomChange?: (val: string) => void;
   mode?: LangSelectMode;
   placeholder?: string;
   style?: React.CSSProperties;
@@ -29,19 +27,15 @@ function getLangOptions(mode: LangSelectMode): LangOption[] {
 }
 
 function findOption(value: string, mode: LangSelectMode): LangOption | undefined {
-  return LANGUAGE_CODES.map(l => ({
-    value: mode === "code" ? l.code : l.label,
-    label: l.label,
-    code: l.code,
-  })).find(o => o.value === value);
+  return getLangOptions(mode).find(o => o.value === value);
 }
 
-function isCustom(value: string, mode: LangSelectMode): boolean {
+export function isLangCustom(value: string, mode: LangSelectMode): boolean {
   return mode === "code" ? value === CUSTOM_CODE : value === CUSTOM_LABEL;
 }
 
 export function LanguageSearchSelect({
-  value, onChange, customValue = "", onCustomChange,
+  value, onChange,
   mode = "code", placeholder = "언어 선택...",
   style, triggerStyle, disabled = false,
 }: Props) {
@@ -50,7 +44,6 @@ export function LanguageSearchSelect({
   const [highlightIdx, setHighlightIdx] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const customInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const allOptions = getLangOptions(mode);
@@ -64,13 +57,7 @@ export function LanguageSearchSelect({
     : allOptions;
 
   const selected = findOption(value, mode);
-  const showTriggerLabel = selected
-    ? selected.label
-    : value
-    ? value
-    : "";
-
-  const showCustomInput = isCustom(value, mode) && !!onCustomChange;
+  const showTriggerLabel = selected ? selected.label : value ? value : "";
 
   useEffect(() => {
     if (!open) return;
@@ -85,16 +72,8 @@ export function LanguageSearchSelect({
   }, [open]);
 
   useEffect(() => {
-    if (open && searchInputRef.current) {
-      searchInputRef.current.focus();
-    }
+    if (open && searchInputRef.current) searchInputRef.current.focus();
   }, [open]);
-
-  useEffect(() => {
-    if (showCustomInput && customInputRef.current) {
-      customInputRef.current.focus();
-    }
-  }, [showCustomInput]);
 
   useEffect(() => {
     if (!open || highlightIdx < 0 || !listRef.current) return;
@@ -121,23 +100,9 @@ export function LanguageSearchSelect({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setOpen(false);
-        setQuery("");
-        return;
-      }
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setOpen(true);
-        setHighlightIdx(i => Math.min(i + 1, filtered.length - 1));
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setHighlightIdx(i => Math.max(i - 1, 0));
-        return;
-      }
+      if (e.key === "Escape") { e.preventDefault(); setOpen(false); setQuery(""); return; }
+      if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHighlightIdx(i => Math.min(i + 1, filtered.length - 1)); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)); return; }
       if (e.key === "Enter" && highlightIdx >= 0 && highlightIdx < filtered.length) {
         e.preventDefault();
         handleSelect(filtered[highlightIdx].value);
@@ -146,25 +111,24 @@ export function LanguageSearchSelect({
     [filtered, highlightIdx, handleSelect],
   );
 
-  const triggerBase: React.CSSProperties = {
-    display: "flex", alignItems: "center", justifyContent: "space-between",
-    width: "100%", padding: "6px 10px", fontSize: 13,
-    border: "1px solid #d1d5db", borderRadius: 8,
-    background: disabled ? "#f9fafb" : "#fff",
-    color: disabled ? "#9ca3af" : showTriggerLabel ? "#111827" : "#9ca3af",
-    cursor: disabled ? "not-allowed" : "pointer",
-    outline: "none", textAlign: "left" as const, gap: 4,
-  };
-
   return (
     <div ref={containerRef} style={{ position: "relative", ...style }}>
-      {/* ── 트리거 ── */}
+      {/* ── 트리거 버튼 ── */}
       {!open ? (
         <button
           type="button"
           disabled={disabled}
           onClick={handleOpen}
-          style={{ ...triggerBase, ...triggerStyle }}
+          style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            width: "100%", padding: "6px 10px", fontSize: 13,
+            border: "1px solid #d1d5db", borderRadius: 8,
+            background: disabled ? "#f9fafb" : "#fff",
+            color: disabled ? "#9ca3af" : showTriggerLabel ? "#111827" : "#9ca3af",
+            cursor: disabled ? "not-allowed" : "pointer",
+            outline: "none", textAlign: "left", gap: 4,
+            ...triggerStyle,
+          }}
         >
           <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {showTriggerLabel || placeholder}
@@ -183,9 +147,7 @@ export function LanguageSearchSelect({
             display: "flex", alignItems: "center",
             border: "1px solid #6366f1", borderRadius: 8, background: "#fff",
             padding: "0 8px", gap: 4,
-            ...(triggerStyle
-              ? { ...triggerStyle, border: "1px solid #6366f1", padding: "0 8px" }
-              : {}),
+            ...(triggerStyle ? { ...triggerStyle, border: "1px solid #6366f1", padding: "0 8px" } : {}),
           }}
           onMouseDown={e => e.stopPropagation()}
         >
@@ -193,10 +155,7 @@ export function LanguageSearchSelect({
           <input
             ref={searchInputRef}
             value={query}
-            onChange={e => {
-              setQuery(e.target.value);
-              setHighlightIdx(0);
-            }}
+            onChange={e => { setQuery(e.target.value); setHighlightIdx(0); }}
             onKeyDown={handleKeyDown}
             placeholder="언어명 또는 코드 검색..."
             style={{
@@ -207,10 +166,7 @@ export function LanguageSearchSelect({
           <button
             type="button"
             onClick={() => { setOpen(false); setQuery(""); }}
-            style={{
-              background: "none", border: "none", cursor: "pointer",
-              fontSize: 14, color: "#9ca3af", padding: "0 2px", flexShrink: 0,
-            }}
+            style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "#9ca3af", padding: "0 2px", flexShrink: 0 }}
           >
             ✕
           </button>
@@ -253,23 +209,15 @@ export function LanguageSearchSelect({
                     padding: "5px 12px", fontSize: 13, border: "none",
                     background: isHi ? "#eff6ff" : isSel ? "#f0f9ff" : "transparent",
                     color: isCustomOpt ? "#6b7280" : isSel ? "#1d4ed8" : "#111827",
-                    cursor: "pointer",
-                    fontWeight: isSel ? 700 : 400,
+                    cursor: "pointer", fontWeight: isSel ? 700 : 400,
                     borderTop: isCustomOpt ? "1px solid #f3f4f6" : "none",
                     fontStyle: isCustomOpt ? "italic" : "normal",
                   }}
                 >
-                  <span style={{ fontSize: 9, color: "#2563eb", opacity: isSel ? 1 : 0, flexShrink: 0 }}>
-                    ✓
-                  </span>
+                  <span style={{ fontSize: 9, color: "#2563eb", opacity: isSel ? 1 : 0, flexShrink: 0 }}>✓</span>
                   <span style={{ flex: 1 }}>{opt.label}</span>
                   {!isCustomOpt && (
-                    <span
-                      style={{
-                        fontSize: 10, color: isHi ? "#64748b" : "#c0c7d3",
-                        fontFamily: "monospace", flexShrink: 0,
-                      }}
-                    >
+                    <span style={{ fontSize: 10, color: isHi ? "#64748b" : "#c0c7d3", fontFamily: "monospace", flexShrink: 0 }}>
                       {opt.code}
                     </span>
                   )}
@@ -279,27 +227,35 @@ export function LanguageSearchSelect({
           )}
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* ── 기타 직접입력 필드 ── */}
-      {showCustomInput && (
-        <div style={{ marginTop: 5 }}>
-          <label style={{ fontSize: 11, color: "#6b7280", display: "block", marginBottom: 2 }}>
-            직접 입력 언어
-          </label>
-          <input
-            ref={customInputRef}
-            value={customValue}
-            onChange={e => onCustomChange!(e.target.value)}
-            placeholder="예: 카자흐어, 세르비아어..."
-            style={{
-              width: "100%", padding: "6px 10px", fontSize: 13,
-              border: "1px solid #a5b4fc", borderRadius: 7, outline: "none",
-              boxSizing: "border-box", color: "#111827",
-              background: "#faf5ff",
-            }}
-          />
-        </div>
-      )}
+// ─── 기타 직접입력 필드 (부모에서 직접 렌더링용) ──────────────────────────────
+export function LangCustomInput({
+  value, onChange, placeholder = "예: 카자흐어, 세르비아어...", label = "직접 입력 언어",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  label?: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { ref.current?.focus(); }, []);
+  return (
+    <div style={{ marginTop: 5 }}>
+      <label style={{ fontSize: 11, color: "#6b7280", display: "block", marginBottom: 2 }}>{label}</label>
+      <input
+        ref={ref}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={{
+          width: "100%", padding: "6px 10px", fontSize: 13,
+          border: "1px solid #a5b4fc", borderRadius: 7, outline: "none",
+          boxSizing: "border-box", color: "#111827", background: "#faf5ff",
+        }}
+      />
     </div>
   );
 }

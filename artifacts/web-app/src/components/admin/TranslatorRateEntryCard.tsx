@@ -5,7 +5,7 @@ import {
   SUB_SERVICE_TYPES as SUB_TYPES_MAP,
   UNIT_BY_SERVICE_TYPE as UNIT_BY_TYPE,
 } from "./translatorRateConstants";
-import { LanguageSearchSelect } from "./LanguageSearchSelect";
+import { LanguageSearchSelect, LangCustomInput, isLangCustom } from "./LanguageSearchSelect";
 
 export type RateEntryData = {
   workType: string;
@@ -112,24 +112,34 @@ export function TranslatorRateEntryCard({
           <LanguageSearchSelect
             value={r.sourceLang}
             onChange={v => up({ sourceLang: v, sourceCustom: "" })}
-            customValue={r.sourceCustom}
-            onCustomChange={v => up({ sourceCustom: v })}
             mode="label"
             placeholder="출발언어 선택..."
             triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
           />
+          {isLangCustom(r.sourceLang, "label") && (
+            <LangCustomInput
+              value={r.sourceCustom}
+              onChange={v => up({ sourceCustom: v })}
+              label="직접 입력 출발언어"
+            />
+          )}
         </div>
         <div>
           <div style={label11}>도착 언어</div>
           <LanguageSearchSelect
             value={r.targetLang}
             onChange={v => up({ targetLang: v, targetCustom: "" })}
-            customValue={r.targetCustom}
-            onCustomChange={v => up({ targetCustom: v })}
             mode="label"
             placeholder="도착언어 선택..."
             triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
           />
+          {isLangCustom(r.targetLang, "label") && (
+            <LangCustomInput
+              value={r.targetCustom}
+              onChange={v => up({ targetCustom: v })}
+              label="직접 입력 도착언어"
+            />
+          )}
         </div>
       </div>
 

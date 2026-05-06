@@ -5,7 +5,7 @@ import {
   LANGUAGE_CODES, UNITS_BY_PRODUCT_TYPE, PRODUCT_OPTION_TYPES,
 } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
-import { LanguageSearchSelect } from './LanguageSearchSelect';
+import { LanguageSearchSelect, LangCustomInput, isLangCustom } from './LanguageSearchSelect';
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
@@ -64,7 +64,9 @@ function previewCode(
   const catCode = subCode || mainCode;
 
   if (hasLang && sourceLanguage && targetLanguage) {
-    return `${typeCode}-${sourceLanguage.toUpperCase()}-${targetLanguage.toUpperCase()}-${catCode}-###`;
+    const srcCode = sourceLanguage === "custom" ? "ETC" : sourceLanguage.toUpperCase();
+    const tgtCode = targetLanguage === "custom" ? "ETC" : targetLanguage.toUpperCase();
+    return `${typeCode}-${srcCode}-${tgtCode}-${catCode}-###`;
   }
   return `${typeCode}-${catCode}-###`;
 }
@@ -495,18 +497,17 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                       return updated;
                     });
                   }}
-                  customValue={form.sourceLanguageCustom}
-                  onCustomChange={v => {
-                    setForm(p => {
-                      const updated = { ...p, sourceLanguageCustom: v };
-                      if (!productNameCustom) updated.name = autoName(updated);
-                      return updated;
-                    });
-                  }}
                   mode="code"
                   placeholder="출발언어 선택..."
                   triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
                 />
+                {isLangCustom(form.sourceLanguage, "code") && (
+                  <LangCustomInput
+                    value={form.sourceLanguageCustom}
+                    onChange={v => setForm(p => ({ ...p, sourceLanguageCustom: v }))}
+                    label="직접 입력 출발언어"
+                  />
+                )}
               </div>
               <div>
                 <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>도착언어 <span style={{ color: "#dc2626" }}>*</span></label>
@@ -519,18 +520,17 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                       return updated;
                     });
                   }}
-                  customValue={form.targetLanguageCustom}
-                  onCustomChange={v => {
-                    setForm(p => {
-                      const updated = { ...p, targetLanguageCustom: v };
-                      if (!productNameCustom) updated.name = autoName(updated);
-                      return updated;
-                    });
-                  }}
                   mode="code"
                   placeholder="도착언어 선택..."
                   triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
                 />
+                {isLangCustom(form.targetLanguage, "code") && (
+                  <LangCustomInput
+                    value={form.targetLanguageCustom}
+                    onChange={v => setForm(p => ({ ...p, targetLanguageCustom: v }))}
+                    label="직접 입력 도착언어"
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -915,7 +915,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           </select>
           <LanguageSearchSelect
             value={filterSourceLang}
-            onChange={v => setFilterSourceLang(v === "other" ? "" : v)}
+            onChange={v => setFilterSourceLang(v === "custom" ? "" : v)}
             mode="code"
             placeholder="출발언어 전체"
             style={{ minWidth: 130, flex: "0 0 auto" }}
@@ -923,7 +923,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           />
           <LanguageSearchSelect
             value={filterTargetLang}
-            onChange={v => setFilterTargetLang(v === "other" ? "" : v)}
+            onChange={v => setFilterTargetLang(v === "custom" ? "" : v)}
             mode="code"
             placeholder="도착언어 전체"
             style={{ minWidth: 130, flex: "0 0 auto" }}
