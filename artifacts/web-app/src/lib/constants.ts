@@ -223,12 +223,15 @@ export type ProductOption = {
 };
 export type Product = {
   id: number; code: string; name: string;
+  productType: string;
+  sourceLanguage: string | null; targetLanguage: string | null;
+  languagePair: string | null;
   mainCategory: string | null; subCategory: string | null;
+  category: string | null; field: string | null;
   unit: string; basePrice: number; description: string | null;
   active: boolean; createdAt: string;
   options: ProductOption[];
-  category: string | null; languagePair: string | null; field: string | null;
-  productType: string; interpretationDuration: string | null; overtimePrice: number | null;
+  interpretationDuration: string | null; overtimePrice: number | null;
   deactivationReason: string | null;
 };
 export type BoardPost = {
@@ -422,21 +425,150 @@ export const FEEDBACK_TAGS = [
 ] as const;
 export type FeedbackTag = "general" | "bug" | "ux" | "idea" | "urgent";
 
-export const PRODUCT_MAIN_CATEGORIES = ["통역", "번역", "통번역", "통역장비", "프로젝트", "교통비", "식대", "숙박"] as const;
+export const PRODUCT_TYPES_META: Record<string, { label: string; code: string; hasLanguage: boolean }> = {
+  translation:    { label: "번역",     code: "TR", hasLanguage: true },
+  interpretation: { label: "통역",     code: "IN", hasLanguage: true },
+  combined:       { label: "통번역",   code: "CO", hasLanguage: true },
+  equipment:      { label: "통역장비", code: "EQ", hasLanguage: false },
+  project:        { label: "프로젝트", code: "PJ", hasLanguage: false },
+  transport:      { label: "교통비",   code: "TX", hasLanguage: false },
+  meal:           { label: "식대",     code: "ML", hasLanguage: false },
+  accommodation:  { label: "숙박",     code: "AC", hasLanguage: false },
+  other_cost:     { label: "기타비용", code: "OT", hasLanguage: false },
+};
+
+export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: string }[]> = {
+  translation: [
+    { label: "일반번역", code: "GEN" },
+    { label: "전문번역", code: "SPEC" },
+    { label: "출판번역", code: "PUB" },
+    { label: "영상번역", code: "VID" },
+    { label: "자막번역", code: "SUB" },
+    { label: "SW번역",   code: "SW" },
+    { label: "기타번역", code: "ETC" },
+  ],
+  interpretation: [
+    { label: "동시통역",     code: "SIM" },
+    { label: "위스퍼링통역", code: "WHP" },
+    { label: "순차통역",     code: "CON" },
+    { label: "수행통역",     code: "ESC" },
+    { label: "미팅통역",     code: "MTG" },
+    { label: "전시회통역",   code: "EXH" },
+    { label: "화상통역",     code: "VDEO" },
+    { label: "전화통역",     code: "TEL" },
+    { label: "기타통역",     code: "ETC" },
+  ],
+  combined: [
+    { label: "일반번역", code: "GEN" },
+    { label: "전문번역", code: "SPEC" },
+    { label: "동시통역", code: "SIM" },
+    { label: "순차통역", code: "CON" },
+    { label: "기타",     code: "ETC" },
+  ],
+  equipment: [
+    { label: "동시통역장비", code: "SIM" },
+    { label: "순차통역장비", code: "CON" },
+    { label: "수신기",       code: "RCV" },
+    { label: "기타장비",     code: "ETC" },
+  ],
+  project: [
+    { label: "번역프로젝트",   code: "TR" },
+    { label: "통역프로젝트",   code: "IN" },
+    { label: "종합언어서비스", code: "COMP" },
+    { label: "기타프로젝트",   code: "ETC" },
+  ],
+  transport: [
+    { label: "항공",     code: "AIR" },
+    { label: "기차",     code: "RAIL" },
+    { label: "버스",     code: "BUS" },
+    { label: "택시",     code: "TAXI" },
+    { label: "기타교통", code: "ETC" },
+  ],
+  meal: [
+    { label: "식비",     code: "MEAL" },
+    { label: "간식비",   code: "SNK" },
+    { label: "접대비",   code: "ENT" },
+    { label: "기타식대", code: "ETC" },
+  ],
+  accommodation: [
+    { label: "호텔",       code: "HTL" },
+    { label: "게스트하우스", code: "GST" },
+    { label: "기타숙박",   code: "ETC" },
+  ],
+  other_cost: [
+    { label: "기타", code: "ETC" },
+  ],
+};
+
+export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: string }[]> = {
+  "전문번역": [
+    { label: "법률",   code: "LAW" },
+    { label: "의료",   code: "MED" },
+    { label: "기술",   code: "TECH" },
+    { label: "금융",   code: "FIN" },
+    { label: "계약서", code: "CONT" },
+    { label: "논문",   code: "ACAD" },
+  ],
+};
+
+export const LANGUAGE_CODES: { code: string; label: string }[] = [
+  { code: "ko",  label: "한국어" },
+  { code: "en",  label: "영어" },
+  { code: "ja",  label: "일본어" },
+  { code: "zh",  label: "중국어" },
+  { code: "ru",  label: "러시아어" },
+  { code: "es",  label: "스페인어" },
+  { code: "de",  label: "독일어" },
+  { code: "fr",  label: "프랑스어" },
+  { code: "ar",  label: "아랍어" },
+  { code: "it",  label: "이탈리아어" },
+  { code: "tr",  label: "터키어" },
+  { code: "pt",  label: "포르투갈어" },
+  { code: "pl",  label: "폴란드어" },
+  { code: "sv",  label: "스웨덴어" },
+  { code: "nl",  label: "네덜란드어" },
+  { code: "el",  label: "그리스어" },
+  { code: "cs",  label: "체코어" },
+  { code: "fa",  label: "페르시아어" },
+  { code: "he",  label: "히브리어" },
+  { code: "vi",  label: "베트남어" },
+  { code: "mn",  label: "몽골어" },
+  { code: "th",  label: "태국어" },
+  { code: "id",  label: "인도네시아어" },
+  { code: "ms",  label: "말레이어" },
+  { code: "km",  label: "캄보디아어" },
+  { code: "hi",  label: "인도어" },
+  { code: "ur",  label: "파키스탄어" },
+  { code: "si",  label: "스리랑카어" },
+  { code: "bn",  label: "방글라데시어" },
+  { code: "my",  label: "미얀마어" },
+  { code: "lo",  label: "라오스어" },
+  { code: "yue", label: "광동어" },
+  { code: "uz",  label: "우즈베키스탄어" },
+  { code: "uk",  label: "우크라이나어" },
+  { code: "other", label: "기타" },
+];
+
+export const UNITS_BY_PRODUCT_TYPE: Record<string, string[]> = {
+  translation:    ["어절", "단어", "글자", "페이지", "건"],
+  interpretation: ["1시간", "반일", "종일", "추가시간"],
+  combined:       ["어절", "단어", "글자", "페이지", "건", "1시간", "반일", "종일"],
+  equipment:      ["대", "일", "건"],
+  project:        ["건", "식"],
+  transport:      ["건"],
+  meal:           ["건", "인"],
+  accommodation:  ["박", "건"],
+  other_cost:     ["건"],
+};
+
+export const PRODUCT_MAIN_CATEGORIES = ["번역", "통역", "통번역", "통역장비", "프로젝트", "교통비", "식대", "숙박", "기타비용"] as const;
 export type ProductMainCategory = typeof PRODUCT_MAIN_CATEGORIES[number];
 
 export const PRODUCT_SUB_CATEGORIES: Record<string, string[]> = {
-  "통역": ["동시통역", "위스퍼링통역", "순차통역", "수행통역", "전시회통역", "화상통역", "기타통역"],
-  "번역": ["전문번역", "일반번역", "출판번역", "영상번역", "자막번역", "SW번역", "기타번역"],
-  "통번역": ["통번역패키지", "기타"],
-  "통역장비": ["부스", "수신기", "송신기", "마이크", "믹서", "기타장비"],
-  "프로젝트": ["기획", "관리", "컨설팅", "기타"],
-  "교통비": ["국내교통", "해외교통"],
-  "식대": ["일반식대", "특식"],
-  "숙박": ["국내숙박", "해외숙박"],
+  "전문번역": ["법률", "의료", "기술", "금융", "계약서", "논문"],
 };
 
-export const PRODUCT_UNITS = ["시간", "일", "월", "페이지", "단어", "글자", "회"] as const;
+export const PRODUCT_UNITS = ["어절", "단어", "글자", "페이지", "건", "1시간", "반일", "종일", "추가시간", "대", "일", "박", "인"] as const;
 export type ProductUnit = typeof PRODUCT_UNITS[number];
 
 export const PRODUCT_OPTION_TYPES = ["언어", "방식", "시간", "기타"] as const;

@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, productsTable, productOptionsTable, productRequestsTable } from "@workspace/db";
-import { eq, desc, sql, and, ilike, or } from "drizzle-orm";
+import { eq, desc, sql, and, or } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import multer from "multer";
@@ -10,69 +10,201 @@ const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 const adminOnly = [requireAuth, requireRole("admin")];
 
-// ─── 상수 ─────────────────────────────────────────────────────────────────────
-const VALID_SERVICE_TYPES = ["TR", "IN"] as const;
-const VALID_LANG_PAIRS = ["KOEN", "ENKO", "KOCN", "KOJA"] as const;
-const VALID_CATEGORIES_TR = ["GEN", "TECH", "MED", "LAW"] as const;
-const VALID_CATEGORIES_IN = ["SIM", "CON", "MIT", "EXH"] as const;
-const VALID_UNITS_TR = ["어절", "글자", "페이지", "건"] as const;
-const VALID_UNITS_IN = ["시간"] as const;
-
-const LANG_PAIR_LABEL: Record<string, string> = {
-  KOEN: "한영", ENKO: "영한", KOCN: "한중", KOJA: "한일",
-};
-const CATEGORY_LABEL_TR: Record<string, string> = {
-  GEN: "일반번역", TECH: "기술번역", MED: "의료번역", LAW: "법률번역",
-};
-const CATEGORY_LABEL_IN: Record<string, string> = {
-  SIM: "동시통역", CON: "순차통역", MIT: "미팅통역", EXH: "전시통역",
+// ─── 상품유형 정의 ─────────────────────────────────────────────────────────────
+export const PRODUCT_TYPES: Record<string, { label: string; code: string; hasLanguage: boolean }> = {
+  translation:     { label: "번역",     code: "TR", hasLanguage: true },
+  interpretation:  { label: "통역",     code: "IN", hasLanguage: true },
+  combined:        { label: "통번역",   code: "CO", hasLanguage: true },
+  equipment:       { label: "통역장비", code: "EQ", hasLanguage: false },
+  project:         { label: "프로젝트", code: "PJ", hasLanguage: false },
+  transport:       { label: "교통비",   code: "TX", hasLanguage: false },
+  meal:            { label: "식대",     code: "ML", hasLanguage: false },
+  accommodation:   { label: "숙박",     code: "AC", hasLanguage: false },
+  other_cost:      { label: "기타비용", code: "OT", hasLanguage: false },
 };
 
-function autoProductName(svcType: string, langPair: string, category: string): string {
-  const langLabel = LANG_PAIR_LABEL[langPair] ?? langPair;
-  if (svcType === "IN") {
-    const catLabel = CATEGORY_LABEL_IN[category] ?? `${category}통역`;
-    return `${langLabel} ${catLabel}`;
-  }
-  const catLabel = CATEGORY_LABEL_TR[category] ?? `${category}번역`;
-  return `${langLabel} ${catLabel}`;
-}
+// ─── 대분류 정의 (productType → mainCategory 목록) ────────────────────────────
+export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: string }[]> = {
+  translation: [
+    { label: "일반번역", code: "GEN" },
+    { label: "전문번역", code: "SPEC" },
+    { label: "출판번역", code: "PUB" },
+    { label: "영상번역", code: "VID" },
+    { label: "자막번역", code: "SUB" },
+    { label: "SW번역",   code: "SW" },
+    { label: "기타번역", code: "ETC" },
+  ],
+  interpretation: [
+    { label: "동시통역",     code: "SIM" },
+    { label: "위스퍼링통역", code: "WHP" },
+    { label: "순차통역",     code: "CON" },
+    { label: "수행통역",     code: "ESC" },
+    { label: "미팅통역",     code: "MTG" },
+    { label: "전시회통역",   code: "EXH" },
+    { label: "화상통역",     code: "VDEO" },
+    { label: "전화통역",     code: "TEL" },
+    { label: "기타통역",     code: "ETC" },
+  ],
+  combined: [
+    { label: "일반번역", code: "GEN" },
+    { label: "전문번역", code: "SPEC" },
+    { label: "동시통역", code: "SIM" },
+    { label: "순차통역", code: "CON" },
+    { label: "기타",     code: "ETC" },
+  ],
+  equipment: [
+    { label: "동시통역장비", code: "SIM" },
+    { label: "순차통역장비", code: "CON" },
+    { label: "수신기",       code: "RCV" },
+    { label: "기타장비",     code: "ETC" },
+  ],
+  project: [
+    { label: "번역프로젝트",   code: "TR" },
+    { label: "통역프로젝트",   code: "IN" },
+    { label: "종합언어서비스", code: "COMP" },
+    { label: "기타프로젝트",   code: "ETC" },
+  ],
+  transport: [
+    { label: "항공",     code: "AIR" },
+    { label: "기차",     code: "RAIL" },
+    { label: "버스",     code: "BUS" },
+    { label: "택시",     code: "TAXI" },
+    { label: "기타교통", code: "ETC" },
+  ],
+  meal: [
+    { label: "식비",     code: "MEAL" },
+    { label: "간식비",   code: "SNK" },
+    { label: "접대비",   code: "ENT" },
+    { label: "기타식대", code: "ETC" },
+  ],
+  accommodation: [
+    { label: "호텔",       code: "HTL" },
+    { label: "게스트하우스", code: "GST" },
+    { label: "기타숙박",   code: "ETC" },
+  ],
+  other_cost: [
+    { label: "기타", code: "ETC" },
+  ],
+};
 
-// ─── 엑셀 공통 설정 ──────────────────────────────────────────────────────────
-const EXCEL_HEADERS = [
-  "서비스유형*(TR/IN)", "언어쌍*(KOEN/ENKO/KOCN/KOJA)", "카테고리*(GEN/TECH/MED/LAW/SIM/CON/MIT/EXH)",
-  "상품명*", "단위*(어절/글자/페이지/건/시간)", "기본단가*", "기본진행시간(통역용)", "초과단가(통역용)", "비고",
+// ─── 중분류 정의 (mainCategory label → subCategory 목록) ─────────────────────
+export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: string }[]> = {
+  "전문번역": [
+    { label: "법률",  code: "LAW" },
+    { label: "의료",  code: "MED" },
+    { label: "기술",  code: "TECH" },
+    { label: "금융",  code: "FIN" },
+    { label: "계약서", code: "CONT" },
+    { label: "논문",  code: "ACAD" },
+  ],
+};
+
+// ─── 언어 코드 정의 ───────────────────────────────────────────────────────────
+export const LANGUAGE_CODES: { code: string; label: string }[] = [
+  { code: "ko",  label: "한국어" },
+  { code: "en",  label: "영어" },
+  { code: "ja",  label: "일본어" },
+  { code: "zh",  label: "중국어" },
+  { code: "ru",  label: "러시아어" },
+  { code: "es",  label: "스페인어" },
+  { code: "de",  label: "독일어" },
+  { code: "fr",  label: "프랑스어" },
+  { code: "ar",  label: "아랍어" },
+  { code: "it",  label: "이탈리아어" },
+  { code: "tr",  label: "터키어" },
+  { code: "pt",  label: "포르투갈어" },
+  { code: "pl",  label: "폴란드어" },
+  { code: "sv",  label: "스웨덴어" },
+  { code: "nl",  label: "네덜란드어" },
+  { code: "el",  label: "그리스어" },
+  { code: "cs",  label: "체코어" },
+  { code: "fa",  label: "페르시아어" },
+  { code: "he",  label: "히브리어" },
+  { code: "vi",  label: "베트남어" },
+  { code: "mn",  label: "몽골어" },
+  { code: "th",  label: "태국어" },
+  { code: "id",  label: "인도네시아어" },
+  { code: "ms",  label: "말레이어" },
+  { code: "km",  label: "캄보디아어" },
+  { code: "hi",  label: "인도어" },
+  { code: "ur",  label: "파키스탄어" },
+  { code: "si",  label: "스리랑카어" },
+  { code: "bn",  label: "방글라데시어" },
+  { code: "my",  label: "미얀마어" },
+  { code: "lo",  label: "라오스어" },
+  { code: "yue", label: "광동어" },
+  { code: "uz",  label: "우즈베키스탄어" },
+  { code: "uk",  label: "우크라이나어" },
+  { code: "other", label: "기타" },
 ];
-const COL_WIDTHS = [18, 24, 36, 20, 22, 10, 16, 14, 24];
-const UNIT_MAP: Record<string, string> = {
-  eojeol: "어절", char: "글자", page: "페이지", hour: "시간", 건: "건",
-};
-const UNIT_MAP_REV: Record<string, string> = {
-  어절: "eojeol", 글자: "char", 페이지: "page", 시간: "hour", 건: "건",
-};
-const excelUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
-function productToRow(p: typeof productsTable.$inferSelect): (string | number)[] {
-  return [
-    p.productType === "interpretation" ? "IN" : "TR",
-    p.languagePair ?? "",
-    p.category ?? "",
-    p.name,
-    UNIT_MAP[p.unit ?? "건"] ?? p.unit ?? "건",
-    p.basePrice ?? 0,
-    p.interpretationDuration ?? "",
-    p.overtimePrice ?? "",
-    p.description ?? "",
-  ];
+// ─── 단위 정의 ────────────────────────────────────────────────────────────────
+const UNITS_BY_TYPE: Record<string, string[]> = {
+  translation:    ["어절", "단어", "글자", "페이지", "건"],
+  interpretation: ["1시간", "반일", "종일", "추가시간"],
+  combined:       ["어절", "단어", "글자", "페이지", "건", "1시간", "반일", "종일"],
+  equipment:      ["대", "일", "건"],
+  project:        ["건", "식"],
+  transport:      ["건"],
+  meal:           ["건", "인"],
+  accommodation:  ["박", "건"],
+  other_cost:     ["건"],
+};
+
+// ─── 헬퍼 함수 ────────────────────────────────────────────────────────────────
+function getMainCatCode(productType: string, mainCategoryLabel: string): string {
+  const cats = MAIN_CATEGORIES_BY_TYPE[productType] ?? [];
+  return cats.find(c => c.label === mainCategoryLabel)?.code ?? "GEN";
 }
+
+function getSubCatCode(mainCategoryLabel: string, subCategoryLabel: string): string {
+  const subs = SUB_CATEGORIES_BY_MAIN[mainCategoryLabel] ?? [];
+  return subs.find(s => s.label === subCategoryLabel)?.code ?? "";
+}
+
+// 언어 기반 타입 여부
+function isLangType(productType: string): boolean {
+  return PRODUCT_TYPES[productType]?.hasLanguage ?? false;
+}
+
+// 레거시 languagePair 파싱 (예: KOEN → {src: ko, tgt: en})
+const LANG_PAIR_MIGRATION: Record<string, { src: string; tgt: string }> = {
+  KOEN: { src: "ko", tgt: "en" },
+  ENKO: { src: "en", tgt: "ko" },
+  KOCN: { src: "ko", tgt: "zh" },
+  KOJA: { src: "ko", tgt: "ja" },
+  KORU: { src: "ko", tgt: "ru" },
+  KOFR: { src: "ko", tgt: "fr" },
+  KODE: { src: "ko", tgt: "de" },
+  KOES: { src: "ko", tgt: "es" },
+};
 
 // ─── 상품 코드 자동 생성 ──────────────────────────────────────────────────────
-// 규칙: [서비스]-[언어]-[카테고리]-[번호]  예) TR-KOEN-GEN-001
-async function generateProductCode(serviceType: string, languagePair: string, category: string): Promise<string> {
-  const svc = serviceType.toUpperCase().slice(0, 4);
-  const lang = languagePair.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 6);
-  const cat = category.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 4);
-  const prefix = `${svc}-${lang}-${cat}`;
+// 언어 상품: [TYPE]-[SRC]-[TGT]-[CAT]-[SEQ]  예) TR-KO-EN-LAW-001
+// 비언어 상품: [TYPE]-[CAT]-[SEQ]              예) EQ-SIM-001
+async function generateProductCode(
+  productType: string,
+  sourceLanguage: string | null,
+  targetLanguage: string | null,
+  mainCategoryLabel: string,
+  subCategoryLabel?: string,
+): Promise<string> {
+  const typeCode = PRODUCT_TYPES[productType]?.code ?? "TR";
+  const hasLang = isLangType(productType);
+
+  // 카테고리 코드: 중분류가 있으면 중분류, 없으면 대분류
+  const catCode = subCategoryLabel
+    ? (getSubCatCode(mainCategoryLabel, subCategoryLabel) || getMainCatCode(productType, mainCategoryLabel))
+    : getMainCatCode(productType, mainCategoryLabel);
+
+  let prefix: string;
+  if (hasLang && sourceLanguage && targetLanguage) {
+    const src = sourceLanguage.toUpperCase();
+    const tgt = targetLanguage.toUpperCase();
+    prefix = `${typeCode}-${src}-${tgt}-${catCode}`;
+  } else {
+    prefix = `${typeCode}-${catCode}`;
+  }
 
   const existing = await db
     .select({ code: productsTable.code })
@@ -88,27 +220,67 @@ async function generateProductCode(serviceType: string, languagePair: string, ca
 }
 
 // ─── 중복 체크 ────────────────────────────────────────────────────────────────
-async function findDuplicate(serviceType: string, languagePair: string, category: string, excludeId?: number) {
-  const rows = await db
+async function findDuplicate(
+  productType: string,
+  sourceLanguage: string | null,
+  targetLanguage: string | null,
+  mainCategory: string,
+  subCategory?: string,
+  excludeId?: number,
+) {
+  let rows = await db
     .select({ id: productsTable.id, code: productsTable.code, name: productsTable.name, active: productsTable.active })
     .from(productsTable)
     .where(and(
-      sql`LOWER(${productsTable.productType}) = ${serviceType === "IN" ? "interpretation" : "translation"}`,
-      sql`LOWER(${productsTable.languagePair}) = LOWER(${languagePair})`,
-      sql`LOWER(${productsTable.category}) = LOWER(${category})`,
+      sql`LOWER(${productsTable.productType}) = LOWER(${productType})`,
+      sql`LOWER(COALESCE(${productsTable.mainCategory}, '')) = LOWER(${mainCategory || ""})`,
+      sql`LOWER(COALESCE(${productsTable.subCategory}, '')) = LOWER(${subCategory || ""})`,
+      sourceLanguage
+        ? sql`LOWER(COALESCE(${productsTable.sourceLanguage}, '')) = LOWER(${sourceLanguage})`
+        : sql`(${productsTable.sourceLanguage} IS NULL OR ${productsTable.sourceLanguage} = '')`,
+      targetLanguage
+        ? sql`LOWER(COALESCE(${productsTable.targetLanguage}, '')) = LOWER(${targetLanguage})`
+        : sql`(${productsTable.targetLanguage} IS NULL OR ${productsTable.targetLanguage} = '')`,
     ));
   return rows.filter(r => r.id !== excludeId);
+}
+
+// ─── 엑셀 공통 설정 ──────────────────────────────────────────────────────────
+const EXCEL_HEADERS = [
+  "상품코드(자동생성)", "상품유형*(번역/통역/통번역/통역장비/프로젝트/교통비/식대/숙박/기타비용)",
+  "출발언어(ko/en/ja...)", "도착언어(ko/en/ja...)",
+  "대분류*", "중분류", "상품명*", "단위*", "기본단가*",
+  "기본진행시간(통역용)", "초과단가(통역용)", "비고",
+];
+const COL_WIDTHS = [18, 36, 16, 16, 20, 20, 24, 14, 12, 18, 14, 24];
+const excelUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+const LANG_LABEL: Record<string, string> = Object.fromEntries(LANGUAGE_CODES.map(l => [l.code, l.label]));
+const TYPE_LABEL: Record<string, string> = Object.fromEntries(Object.entries(PRODUCT_TYPES).map(([k, v]) => [k, v.label]));
+
+function productToRow(p: typeof productsTable.$inferSelect): (string | number)[] {
+  return [
+    p.code,
+    TYPE_LABEL[p.productType] ?? p.productType,
+    p.sourceLanguage ?? "",
+    p.targetLanguage ?? "",
+    p.mainCategory ?? "",
+    p.subCategory ?? "",
+    p.name,
+    p.unit ?? "건",
+    p.basePrice ?? 0,
+    p.interpretationDuration ?? "",
+    p.overtimePrice ?? "",
+    p.description ?? "",
+  ];
 }
 
 // ─── 상품 목록 ────────────────────────────────────────────────────────────────
 router.get("/admin/products", ...adminGuard, async (req, res) => {
   try {
-    const { search, mainCategory, activeOnly, serviceType, languagePair, category } = req.query as {
-      search?: string; mainCategory?: string; activeOnly?: string;
-      serviceType?: string; languagePair?: string; category?: string;
-    };
+    const { search, productType, sourceLanguage, targetLanguage, mainCategory, activeOnly } = req.query as Record<string, string | undefined>;
 
-    let rows = await db.select().from(productsTable).orderBy(productsTable.active, desc(productsTable.createdAt));
+    let rows = await db.select().from(productsTable).orderBy(desc(productsTable.createdAt));
 
     if (search?.trim()) {
       const s = search.trim().toLowerCase();
@@ -117,30 +289,25 @@ router.get("/admin/products", ...adminGuard, async (req, res) => {
         p.code.toLowerCase().includes(s) ||
         (p.mainCategory ?? "").toLowerCase().includes(s) ||
         (p.subCategory ?? "").toLowerCase().includes(s) ||
-        (p.languagePair ?? "").toLowerCase().includes(s) ||
-        (p.category ?? "").toLowerCase().includes(s)
+        (p.sourceLanguage ?? "").toLowerCase().includes(s) ||
+        (p.targetLanguage ?? "").toLowerCase().includes(s)
       );
+    }
+
+    if (productType?.trim()) {
+      rows = rows.filter(p => p.productType === productType.trim());
+    }
+
+    if (sourceLanguage?.trim()) {
+      rows = rows.filter(p => (p.sourceLanguage ?? "").toLowerCase() === sourceLanguage.trim().toLowerCase());
+    }
+
+    if (targetLanguage?.trim()) {
+      rows = rows.filter(p => (p.targetLanguage ?? "").toLowerCase() === targetLanguage.trim().toLowerCase());
     }
 
     if (mainCategory?.trim()) {
       rows = rows.filter(p => p.mainCategory === mainCategory.trim());
-    }
-
-    if (serviceType?.trim()) {
-      const svc = serviceType.trim().toUpperCase();
-      rows = rows.filter(p =>
-        svc === "TR" ? p.productType === "translation" : svc === "IN" ? p.productType === "interpretation" : true
-      );
-    }
-
-    if (languagePair?.trim()) {
-      const lp = languagePair.trim().toUpperCase();
-      rows = rows.filter(p => (p.languagePair ?? "").toUpperCase() === lp);
-    }
-
-    if (category?.trim()) {
-      const cat = category.trim().toUpperCase();
-      rows = rows.filter(p => (p.category ?? "").toUpperCase() === cat);
     }
 
     if (activeOnly === "true") {
@@ -149,7 +316,7 @@ router.get("/admin/products", ...adminGuard, async (req, res) => {
       rows = rows.filter(p => !p.active);
     }
 
-    // 활성 상품 먼저 표시
+    // 활성 상품 먼저
     rows.sort((a, b) => (b.active ? 1 : 0) - (a.active ? 1 : 0));
 
     const allOptions = await db.select().from(productOptionsTable).orderBy(productOptionsTable.sortOrder);
@@ -165,67 +332,61 @@ router.get("/admin/products", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 상품 생성 (관리자 전용, 코드 자동 생성) ─────────────────────────────────
+// ─── 상품 생성 ────────────────────────────────────────────────────────────────
 router.post("/admin/products", ...adminOnly, async (req, res) => {
   const {
-    serviceType, languagePair, category,
-    name, mainCategory, subCategory, unit, basePrice, description,
-    productType, interpretationDuration, overtimePrice, options,
+    productType, sourceLanguage, targetLanguage,
+    mainCategory, subCategory,
+    name, unit, basePrice, description,
+    interpretationDuration, overtimePrice, options,
   } = req.body as {
-    serviceType?: string; languagePair?: string; category?: string;
-    name?: string; mainCategory?: string; subCategory?: string;
-    unit?: string; basePrice?: number; description?: string;
-    productType?: string; interpretationDuration?: string; overtimePrice?: number;
+    productType?: string; sourceLanguage?: string; targetLanguage?: string;
+    mainCategory?: string; subCategory?: string;
+    name?: string; unit?: string; basePrice?: number; description?: string;
+    interpretationDuration?: string; overtimePrice?: number;
     options?: { optionType: string; optionValue: string; sortOrder?: number }[];
   };
 
+  const pType = productType?.trim() || "translation";
+  if (!PRODUCT_TYPES[pType]) {
+    res.status(400).json({ error: `productType은 ${Object.keys(PRODUCT_TYPES).join("/")} 중 하나여야 합니다.` }); return;
+  }
+
+  const hasLang = isLangType(pType);
+  const srcLang = hasLang ? (sourceLanguage?.trim().toLowerCase() || null) : null;
+  const tgtLang = hasLang ? (targetLanguage?.trim().toLowerCase() || null) : null;
+  const mainCat = mainCategory?.trim() || "";
+  const subCat = subCategory?.trim() || "";
+
+  if (!mainCat) {
+    res.status(400).json({ error: "대분류는 필수입니다." }); return;
+  }
   if (!name?.trim()) {
     res.status(400).json({ error: "상품명은 필수입니다." }); return;
   }
 
-  const svcType = serviceType?.trim().toUpperCase() || (productType === "interpretation" ? "IN" : "TR");
-  const langPair = languagePair?.trim().toUpperCase() || "KOEN";
-  const cat = category?.trim().toUpperCase() || "GEN";
-  const resolvedProductType = svcType === "IN" ? "interpretation" : "translation";
-
-  if (!VALID_SERVICE_TYPES.includes(svcType as typeof VALID_SERVICE_TYPES[number])) {
-    res.status(400).json({ error: `serviceType은 ${VALID_SERVICE_TYPES.join(" 또는 ")} 이어야 합니다.` }); return;
-  }
-  if (!VALID_LANG_PAIRS.includes(langPair as typeof VALID_LANG_PAIRS[number])) {
-    res.status(400).json({ error: `languagePair은 ${VALID_LANG_PAIRS.join("/")} 중 하나여야 합니다.` }); return;
-  }
-  const validCats = svcType === "IN" ? VALID_CATEGORIES_IN : VALID_CATEGORIES_TR;
-  if (!(validCats as readonly string[]).includes(cat)) {
-    res.status(400).json({ error: `${svcType} 서비스의 category는 ${[...validCats].join("/")} 중 하나여야 합니다.` }); return;
-  }
-
   try {
-    // 중복 체크
-    const dupes = await findDuplicate(svcType, langPair, cat);
+    const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCat, subCat);
     if (dupes.length > 0) {
-      res.status(409).json({
-        error: `동일한 서비스/언어/카테고리 상품이 이미 존재합니다.`,
-        existing: dupes,
-        isDuplicate: true,
-      });
+      res.status(409).json({ error: "동일한 상품이 이미 존재합니다.", existing: dupes, isDuplicate: true });
       return;
     }
 
-    const code = await generateProductCode(svcType, langPair, cat);
+    const code = await generateProductCode(pType, srcLang, tgtLang, mainCat, subCat);
 
     const [product] = await db
       .insert(productsTable)
       .values({
         code,
         name: name.trim(),
-        mainCategory: mainCategory?.trim() || null,
-        subCategory: subCategory?.trim() || null,
-        unit: unit ?? "건",
+        productType: pType,
+        sourceLanguage: srcLang,
+        targetLanguage: tgtLang,
+        mainCategory: mainCat || null,
+        subCategory: subCat || null,
+        unit: unit ?? (UNITS_BY_TYPE[pType]?.[0] ?? "건"),
         basePrice: basePrice ?? 0,
         description: description?.trim() || null,
-        productType: resolvedProductType,
-        languagePair: langPair,
-        category: cat,
         interpretationDuration: interpretationDuration?.trim() || null,
         overtimePrice: overtimePrice ?? null,
       })
@@ -247,7 +408,7 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
     }
 
     await logEvent("product", product.id, "product_created", req.log, req.user as any,
-      JSON.stringify({ code, name: product.name, serviceType: svcType, languagePair: langPair, category: cat }));
+      JSON.stringify({ code, name: product.name, productType: pType, sourceLanguage: srcLang, targetLanguage: tgtLang, mainCategory: mainCat }));
 
     res.status(201).json({ ...product, options: optionRows });
   } catch (err) {
@@ -260,8 +421,9 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
 router.get("/admin/products/template", ...adminGuard, (_req, res) => {
   const wb = XLSX.utils.book_new();
   const sampleRows = [
-    ["(자동생성)", "한영 일반번역", "번역", "번역", "일반번역", "어절", 50, "", "", "일반 문서 번역"],
-    ["(자동생성)", "한영 동시통역", "통역", "통역", "동시통역", "시간", 200000, "4h", 50000, "컨퍼런스 동시통역"],
+    ["(자동생성)", "번역", "ko", "en", "전문번역", "법률", "한영 법률번역", "어절", 50, "", "", "법률 문서 번역"],
+    ["(자동생성)", "통역", "ko", "en", "동시통역", "", "한영 동시통역", "1시간", 200000, "4h", 50000, "컨퍼런스 동시통역"],
+    ["(자동생성)", "통역장비", "", "", "동시통역장비", "", "동시통역장비 임대", "일", 150000, "", "", ""],
   ];
   const ws = XLSX.utils.aoa_to_sheet([EXCEL_HEADERS, ...sampleRows]);
   ws["!cols"] = COL_WIDTHS.map(wch => ({ wch }));
@@ -272,10 +434,10 @@ router.get("/admin/products/template", ...adminGuard, (_req, res) => {
   res.send(buf);
 });
 
-// ─── 기존 상품 엑셀 내보내기 ──────────────────────────────────────────────────
+// ─── 엑셀 내보내기 ────────────────────────────────────────────────────────────
 router.get("/admin/products/export", ...adminGuard, async (req, res) => {
   try {
-    const rows = await db.select().from(productsTable).orderBy(productsTable.mainCategory, productsTable.name);
+    const rows = await db.select().from(productsTable).orderBy(productsTable.productType, productsTable.mainCategory, productsTable.name);
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet([EXCEL_HEADERS, ...rows.map(productToRow)]);
     ws["!cols"] = COL_WIDTHS.map(wch => ({ wch }));
@@ -291,12 +453,15 @@ router.get("/admin/products/export", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 엑셀 업로드 (일괄 등록 — 신규 표준 컬럼) ────────────────────────────────
+// ─── 엑셀 업로드 ─────────────────────────────────────────────────────────────
 router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), async (req, res) => {
   if (!req.file) { res.status(400).json({ error: "파일이 없습니다." }); return; }
 
   type ImportResult = { created: number; skipped: number; errors: { row: number; message: string }[] };
   const result: ImportResult = { created: 0, skipped: 0, errors: [] };
+
+  const TYPE_LABEL_REV: Record<string, string> = {};
+  for (const [k, v] of Object.entries(PRODUCT_TYPES)) TYPE_LABEL_REV[v.label] = k;
 
   try {
     const wb = XLSX.read(req.file.buffer, { type: "buffer" });
@@ -304,52 +469,46 @@ router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), 
     const rows: (string | number | undefined)[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
 
     if (rows.length < 2) {
-      res.status(400).json({ error: "데이터 행이 없습니다. (헤더 제외 최소 1행 필요)" }); return;
+      res.status(400).json({ error: "데이터 행이 없습니다." }); return;
     }
 
-    const dataRows = rows.slice(1);
+    for (let i = 1; i < rows.length; i++) {
+      const rowNum = i + 1;
+      const r = rows[i];
+      const typeRaw = String(r[1] ?? "").trim();
+      const srcLang = String(r[2] ?? "").trim().toLowerCase() || null;
+      const tgtLang = String(r[3] ?? "").trim().toLowerCase() || null;
+      const mainCat = String(r[4] ?? "").trim();
+      const subCat = String(r[5] ?? "").trim() || "";
+      const nameRaw = String(r[6] ?? "").trim();
+      const unitRaw = String(r[7] ?? "").trim();
+      const basePriceRaw = Number(r[8] ?? 0);
+      const interpretationDuration = String(r[9] ?? "").trim() || null;
+      const overtimePriceRaw = r[10] !== "" ? Number(r[10]) : null;
+      const description = String(r[11] ?? "").trim() || null;
 
-    for (let i = 0; i < dataRows.length; i++) {
-      const rowNum = i + 2;
-      const r = dataRows[i];
-      // 새 컬럼 순서: 서비스유형 | 언어쌍 | 카테고리 | 상품명 | 단위 | 기본단가 | 진행시간 | 초과단가 | 비고
-      const svcRaw = String(r[0] ?? "").trim().toUpperCase();
-      const langRaw = String(r[1] ?? "").trim().toUpperCase();
-      const catRaw = String(r[2] ?? "").trim().toUpperCase();
-      const nameRaw = String(r[3] ?? "").trim();
-      const unitRaw = String(r[4] ?? "").trim();
-      const basePriceRaw = Number(r[5] ?? 0);
-      const interpretationDuration = String(r[6] ?? "").trim() || null;
-      const overtimePriceRaw = r[7] !== "" ? Number(r[7]) : null;
-      const description = String(r[8] ?? "").trim() || null;
+      if (!typeRaw && !mainCat && !nameRaw) continue;
 
-      // 빈 행 스킵
-      if (!svcRaw && !langRaw && !catRaw && !nameRaw) continue;
-
-      // 필수 필드 검증
-      if (!VALID_SERVICE_TYPES.includes(svcRaw as typeof VALID_SERVICE_TYPES[number])) {
-        result.errors.push({ row: rowNum, message: `서비스유형 오류: '${svcRaw}' (TR 또는 IN)` }); continue;
+      const pType = TYPE_LABEL_REV[typeRaw] ?? typeRaw;
+      if (!PRODUCT_TYPES[pType]) {
+        result.errors.push({ row: rowNum, message: `상품유형 오류: '${typeRaw}'` }); continue;
       }
-      if (!VALID_LANG_PAIRS.includes(langRaw as typeof VALID_LANG_PAIRS[number])) {
-        result.errors.push({ row: rowNum, message: `언어쌍 오류: '${langRaw}' (KOEN/ENKO/KOCN/KOJA)` }); continue;
+      if (!mainCat) {
+        result.errors.push({ row: rowNum, message: `대분류가 없습니다` }); continue;
       }
-      const validCats = svcRaw === "IN" ? VALID_CATEGORIES_IN : VALID_CATEGORIES_TR;
-      if (!validCats.includes(catRaw as never)) {
-        result.errors.push({ row: rowNum, message: `카테고리 오류: '${catRaw}' (서비스유형에 맞는 값 사용)` }); continue;
+      if (!nameRaw) {
+        result.errors.push({ row: rowNum, message: `상품명이 없습니다` }); continue;
       }
-      const name = nameRaw || autoProductName(svcRaw, langRaw, catRaw);
       if (isNaN(basePriceRaw) || basePriceRaw < 0) {
-        result.errors.push({ row: rowNum, message: `기본단가 숫자 오류: '${r[5]}'` }); continue;
+        result.errors.push({ row: rowNum, message: `기본단가 숫자 오류: '${r[8]}'` }); continue;
       }
 
-      const validUnits = svcRaw === "IN" ? VALID_UNITS_IN : VALID_UNITS_TR;
-      const unit = validUnits.includes(unitRaw as never) ? unitRaw : (svcRaw === "IN" ? "시간" : "어절");
+      const validUnits = UNITS_BY_TYPE[pType] ?? ["건"];
+      const unit = validUnits.includes(unitRaw) ? unitRaw : validUnits[0];
       const basePrice = Math.round(basePriceRaw);
       const overtimePrice = overtimePriceRaw !== null && !isNaN(overtimePriceRaw) ? Math.round(overtimePriceRaw) : null;
-      const productType = svcRaw === "IN" ? "interpretation" : "translation";
 
-      // 중복 체크
-      const dupes = await findDuplicate(svcRaw, langRaw, catRaw);
+      const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCat, subCat);
       if (dupes.length > 0) {
         result.errors.push({ row: rowNum, message: `중복 상품 존재: ${dupes[0].code} (${dupes[0].name})` });
         result.skipped++;
@@ -357,10 +516,12 @@ router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), 
       }
 
       try {
-        const code = await generateProductCode(svcRaw, langRaw, catRaw);
+        const code = await generateProductCode(pType, srcLang, tgtLang, mainCat, subCat);
         await db.insert(productsTable).values({
-          code, name, unit, basePrice, description, productType,
-          languagePair: langRaw, category: catRaw, interpretationDuration, overtimePrice,
+          code, name: nameRaw, productType: pType,
+          sourceLanguage: srcLang, targetLanguage: tgtLang,
+          mainCategory: mainCat || null, subCategory: subCat || null,
+          unit, basePrice, description, interpretationDuration, overtimePrice,
         });
         result.created++;
       } catch (rowErr) {
@@ -371,11 +532,11 @@ router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), 
     res.json(result);
   } catch (err) {
     req.log.error({ err }, "Products import failed");
-    res.status(500).json({ error: "파일 파싱 실패. 올바른 엑셀 형식인지 확인하세요." });
+    res.status(500).json({ error: "파일 파싱 실패." });
   }
 });
 
-// ─── 상품 요청 목록 (관리자/스태프) ──────────────────────────────────────────
+// ─── 상품 요청 목록 ────────────────────────────────────────────────────────────
 router.get("/admin/product-requests", ...adminGuard, async (req, res) => {
   try {
     const { status } = req.query as { status?: string };
@@ -395,33 +556,40 @@ router.get("/admin/product-requests", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 상품 요청 생성 (관리자/스태프 모두) ─────────────────────────────────────
+// ─── 상품 요청 생성 ────────────────────────────────────────────────────────────
 router.post("/admin/product-requests", ...adminGuard, async (req, res) => {
-  const { serviceType, languagePair, category, name, unit, description } = req.body as {
-    serviceType?: string; languagePair?: string; category?: string;
+  const { productType, sourceLanguage, targetLanguage, mainCategory, subCategory, name, unit, description } = req.body as {
+    productType?: string; sourceLanguage?: string; targetLanguage?: string;
+    mainCategory?: string; subCategory?: string;
     name?: string; unit?: string; description?: string;
   };
 
-  if (!serviceType?.trim() || !languagePair?.trim() || !category?.trim() || !name?.trim()) {
-    res.status(400).json({ error: "서비스유형, 언어쌍, 카테고리, 상품명은 필수입니다." }); return;
+  const pType = productType?.trim() || "translation";
+  if (!PRODUCT_TYPES[pType]) {
+    res.status(400).json({ error: "유효하지 않은 상품유형입니다." }); return;
+  }
+  if (!mainCategory?.trim() || !name?.trim()) {
+    res.status(400).json({ error: "대분류와 상품명은 필수입니다." }); return;
   }
 
-  const svcType = serviceType.trim().toUpperCase();
-  const langPair = languagePair.trim().toUpperCase();
-  const cat = category.trim().toUpperCase();
+  const hasLang = isLangType(pType);
+  const srcLang = hasLang ? (sourceLanguage?.trim().toLowerCase() || null) : null;
+  const tgtLang = hasLang ? (targetLanguage?.trim().toLowerCase() || null) : null;
 
   try {
-    // 중복 상품 체크
-    const dupes = await findDuplicate(svcType, langPair, cat);
-    const dupeInfo = dupes.length > 0
-      ? { hasDuplicate: true, existing: dupes }
-      : { hasDuplicate: false };
+    const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCategory.trim(), subCategory?.trim() || "");
+    const dupeInfo = dupes.length > 0 ? { hasDuplicate: true, existing: dupes } : { hasDuplicate: false };
 
     const performer = req.user as { id: number; email: string } | undefined;
     const [request] = await db.insert(productRequestsTable).values({
-      serviceType: svcType,
-      languagePair: langPair,
-      category: cat,
+      productType: pType,
+      sourceLanguage: srcLang,
+      targetLanguage: tgtLang,
+      mainCategory: mainCategory.trim(),
+      subCategory: subCategory?.trim() || null,
+      serviceType: "",
+      languagePair: "",
+      category: "",
       name: name.trim(),
       unit: unit ?? "건",
       description: description?.trim() || null,
@@ -431,7 +599,7 @@ router.post("/admin/product-requests", ...adminGuard, async (req, res) => {
     }).returning();
 
     await logEvent("product_request", request.id, "product_requested", req.log, performer as any,
-      JSON.stringify({ serviceType: svcType, languagePair: langPair, category: cat, name: name.trim(), ...dupeInfo }));
+      JSON.stringify({ productType: pType, sourceLanguage: srcLang, targetLanguage: tgtLang, mainCategory: mainCategory.trim(), name: name.trim(), ...dupeInfo }));
 
     res.status(201).json({ ...request, ...dupeInfo });
   } catch (err) {
@@ -440,7 +608,7 @@ router.post("/admin/product-requests", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 상품 요청 승인 (관리자만) ───────────────────────────────────────────────
+// ─── 상품 요청 승인 ────────────────────────────────────────────────────────────
 router.post("/admin/product-requests/:id/approve", ...adminOnly, async (req, res) => {
   const requestId = Number(req.params.id);
   if (isNaN(requestId) || requestId <= 0) {
@@ -454,35 +622,34 @@ router.post("/admin/product-requests/:id/approve", ...adminOnly, async (req, res
       res.status(409).json({ error: `이미 ${request.status === "approved" ? "승인" : "거절"}된 요청입니다.` }); return;
     }
 
-    // 중복 체크 (승인 시에도)
-    const dupes = await findDuplicate(request.serviceType, request.languagePair, request.category);
+    const pType = request.productType || "translation";
+    const srcLang = request.sourceLanguage;
+    const tgtLang = request.targetLanguage;
+    const mainCat = request.mainCategory || "";
+    const subCat = request.subCategory || "";
+
+    const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCat, subCat);
     if (dupes.length > 0) {
-      res.status(409).json({
-        error: `동일한 서비스/언어/카테고리 상품이 이미 존재합니다. (${dupes[0].code})`,
-        existing: dupes,
-        isDuplicate: true,
-      });
+      res.status(409).json({ error: `동일한 상품이 이미 존재합니다. (${dupes[0].code})`, existing: dupes, isDuplicate: true });
       return;
     }
 
-    // 상품 코드 자동 생성
-    const code = await generateProductCode(request.serviceType, request.languagePair, request.category);
-    const resolvedProductType = request.serviceType === "IN" ? "interpretation" : "translation";
-
+    const code = await generateProductCode(pType, srcLang, tgtLang, mainCat, subCat);
     const performer = req.user as { id: number; email: string } | undefined;
 
     const [product] = await db.insert(productsTable).values({
       code,
       name: request.name,
+      productType: pType,
+      sourceLanguage: srcLang,
+      targetLanguage: tgtLang,
+      mainCategory: mainCat || null,
+      subCategory: subCat || null,
       unit: request.unit ?? "건",
       description: request.description ?? null,
-      productType: resolvedProductType,
-      languagePair: request.languagePair,
-      category: request.category,
       basePrice: 0,
     }).returning();
 
-    // 요청 상태 approved로 변경
     const [updated] = await db.update(productRequestsTable)
       .set({
         status: "approved",
@@ -506,7 +673,7 @@ router.post("/admin/product-requests/:id/approve", ...adminOnly, async (req, res
   }
 });
 
-// ─── 상품 요청 거절 (관리자만) ───────────────────────────────────────────────
+// ─── 상품 요청 거절 ────────────────────────────────────────────────────────────
 router.post("/admin/product-requests/:id/reject", ...adminOnly, async (req, res) => {
   const requestId = Number(req.params.id);
   if (isNaN(requestId) || requestId <= 0) {
@@ -523,7 +690,6 @@ router.post("/admin/product-requests/:id/reject", ...adminOnly, async (req, res)
     }
 
     const performer = req.user as { id: number; email: string } | undefined;
-
     const [updated] = await db.update(productRequestsTable)
       .set({
         status: "rejected",
@@ -545,21 +711,21 @@ router.post("/admin/product-requests/:id/reject", ...adminOnly, async (req, res)
   }
 });
 
-// ─── 중복 상품 체크 ────────────────────────────────────────────────────────────
+// ─── 중복 체크 ────────────────────────────────────────────────────────────────
 router.get("/admin/products/check-duplicate", ...adminGuard, async (req, res) => {
-  const { serviceType, languagePair, category, excludeId } = req.query as {
-    serviceType?: string; languagePair?: string; category?: string; excludeId?: string;
-  };
+  const { productType, sourceLanguage, targetLanguage, mainCategory, subCategory, excludeId } = req.query as Record<string, string | undefined>;
 
-  if (!serviceType || !languagePair || !category) {
-    res.status(400).json({ error: "serviceType, languagePair, category 모두 필요합니다." }); return;
+  if (!productType || !mainCategory) {
+    res.status(400).json({ error: "productType, mainCategory 는 필수입니다." }); return;
   }
 
   try {
     const dupes = await findDuplicate(
-      serviceType.toUpperCase(),
-      languagePair.toUpperCase(),
-      category.toUpperCase(),
+      productType,
+      sourceLanguage || null,
+      targetLanguage || null,
+      mainCategory,
+      subCategory || "",
       excludeId ? Number(excludeId) : undefined
     );
     res.json({ hasDuplicate: dupes.length > 0, existing: dupes });
@@ -568,7 +734,7 @@ router.get("/admin/products/check-duplicate", ...adminGuard, async (req, res) =>
   }
 });
 
-// ─── 상품 단건 조회 (옵션 포함) ──────────────────────────────────────────────
+// ─── 상품 단건 조회 ────────────────────────────────────────────────────────────
 router.get("/admin/products/:id", ...adminGuard, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {
@@ -588,7 +754,7 @@ router.get("/admin/products/:id", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 상품 수정 (코드/serviceType/languagePair 변경 불가) ──────────────────────
+// ─── 상품 수정 (code/productType/sourceLanguage/targetLanguage 변경 불가) ────
 router.patch("/admin/products/:id", ...adminOnly, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {
@@ -615,7 +781,6 @@ router.patch("/admin/products/:id", ...adminOnly, async (req, res) => {
     const [updated] = await db
       .update(productsTable)
       .set({
-        // code, productType, languagePair, category 는 수정 불가
         name: name?.trim() ?? existing.name,
         mainCategory: mainCategory !== undefined ? (mainCategory?.trim() || null) : existing.mainCategory,
         subCategory: subCategory !== undefined ? (subCategory?.trim() || null) : existing.subCategory,
@@ -673,7 +838,6 @@ router.patch("/admin/products/:id/toggle", ...adminOnly, async (req, res) => {
     const [existing] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
     if (!existing) { res.status(404).json({ error: "상품을 찾을 수 없습니다." }); return; }
 
-    // 비활성화 시 사유 필수
     if (existing.active && !reason?.trim()) {
       res.status(400).json({ error: "비활성화 사유를 입력해주세요." }); return;
     }
@@ -701,15 +865,12 @@ router.patch("/admin/products/:id/toggle", ...adminOnly, async (req, res) => {
   }
 });
 
-// ─── 상품 삭제 → 비활성 처리 (소프트 삭제) ───────────────────────────────────
+// ─── 상품 삭제 (소프트) ───────────────────────────────────────────────────────
 router.delete("/admin/products/:id", ...adminOnly, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {
     res.status(400).json({ error: "유효하지 않은 product id." }); return;
   }
-
-  const { reason } = req.body as { reason?: string };
-  const deactivationReason = reason?.trim() || "삭제 요청 → 비활성 처리";
 
   try {
     const [existing] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
@@ -717,18 +878,27 @@ router.delete("/admin/products/:id", ...adminOnly, async (req, res) => {
 
     const [updated] = await db
       .update(productsTable)
-      .set({ active: false, deactivationReason })
+      .set({ active: false, deactivationReason: "관리자 삭제" })
       .where(eq(productsTable.id, productId))
       .returning();
 
-    await logEvent("product", productId, "product_deactivated", req.log, req.user as any,
-      JSON.stringify({ reason: deactivationReason }));
-
-    res.json({ ok: true, deactivated: true, product: updated });
+    await logEvent("product", productId, "product_deleted", req.log, req.user as any);
+    res.json(updated);
   } catch (err) {
-    req.log.error({ err }, "Products: failed to deactivate");
-    res.status(500).json({ error: "상품 비활성 처리 실패." });
+    req.log.error({ err }, "Products: failed to delete");
+    res.status(500).json({ error: "상품 삭제 실패." });
   }
+});
+
+// ─── 메타 정보 (프론트 참조용) ───────────────────────────────────────────────
+router.get("/admin/products-meta", ...adminGuard, (_req, res) => {
+  res.json({
+    productTypes: PRODUCT_TYPES,
+    mainCategoriesByType: MAIN_CATEGORIES_BY_TYPE,
+    subCategoriesByMain: SUB_CATEGORIES_BY_MAIN,
+    languageCodes: LANGUAGE_CODES,
+    unitsByType: UNITS_BY_TYPE,
+  });
 });
 
 export default router;

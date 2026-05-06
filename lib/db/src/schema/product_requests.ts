@@ -3,9 +3,14 @@ import { usersTable } from "./users";
 
 export const productRequestsTable = pgTable("product_requests", {
   id: serial("id").primaryKey(),
-  serviceType: text("service_type").notNull(),
-  languagePair: text("language_pair").notNull(),
-  category: text("category").notNull(),
+  serviceType: text("service_type").notNull().default(""),
+  languagePair: text("language_pair").notNull().default(""),
+  category: text("category").notNull().default(""),
+  productType: text("product_type").notNull().default("translation"),
+  sourceLanguage: text("source_language"),
+  targetLanguage: text("target_language"),
+  mainCategory: text("main_category"),
+  subCategory: text("sub_category"),
   name: text("name").notNull(),
   unit: text("unit").notNull().default("건"),
   description: text("description"),
