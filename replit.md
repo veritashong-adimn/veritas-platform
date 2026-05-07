@@ -27,6 +27,16 @@ The business vision is to streamline the process of translation and interpretati
 
 I prefer detailed explanations and iterative development. Ask before making major changes. Do not make changes to files outside the `artifacts/api-server/src` directory.
 
+## 비용/시간 절감 원칙 (작업 기본 원칙)
+
+1. 관련 파일만 최소 탐색 후 수정한다.
+2. 버튼/액션에는 처음부터 `data-testid`와 `aria-label`을 명확히 부여한다.
+3. 빌드/HMR 오류만 먼저 확인한다.
+4. E2E는 핵심 시나리오 1회만 짧게 실행한다.
+5. 테스트 실패 시 1회까지만 수정 후 재시도한다.
+6. 두 번째 실패 또는 시간초과 발생 시 즉시 중단하고 원인/수정계획/예상 작업량을 보고한 뒤 사용자 승인을 기다린다.
+7. 전체 로그인→전체 플로우 반복 테스트는 사용자가 명시적으로 요청한 경우에만 실행한다.
+
 ## 코드 무게 관리 규칙 (Code Weight Management)
 
 파일이 무거워지기 전에 먼저 알리고 분리 여부를 확인한다.
