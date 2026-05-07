@@ -13,7 +13,7 @@ export const productsTable = pgTable("products", {
   category: text("category"),
   field: text("field"),
   unit: text("unit").notNull().default("건"),
-  basePrice: integer("base_price").notNull().default(0),
+  basePrice: integer("base_price"),
   description: text("description"),
   interpretationDuration: text("interpretation_duration"),
   overtimePrice: integer("overtime_price"),

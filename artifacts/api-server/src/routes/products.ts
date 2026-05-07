@@ -282,7 +282,7 @@ function productToRow(p: typeof productsTable.$inferSelect): (string | number)[]
     p.subCategory ?? "",
     p.name,
     p.unit ?? "건",
-    p.basePrice ?? 0,
+    p.basePrice ?? "",
     p.interpretationDuration ?? "",
     p.overtimePrice ?? "",
     p.description ?? "",
@@ -401,7 +401,7 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
         mainCategory: mainCat || null,
         subCategory: subCat || null,
         unit: unit ?? (UNITS_BY_TYPE[pType]?.[0] ?? "건"),
-        basePrice: basePrice ?? 0,
+        basePrice: basePrice != null ? basePrice : null,
         description: description?.trim() || null,
         interpretationDuration: interpretationDuration?.trim() || null,
         overtimePrice: overtimePrice ?? null,
@@ -500,7 +500,7 @@ router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), 
       const subCat = String(r[5] ?? "").trim() || "";
       const nameRaw = String(r[6] ?? "").trim();
       const unitRaw = String(r[7] ?? "").trim();
-      const basePriceRaw = Number(r[8] ?? 0);
+      const basePriceRaw = r[8] !== "" && r[8] != null ? Number(r[8]) : null;
       const interpretationDuration = String(r[9] ?? "").trim() || null;
       const overtimePriceRaw = r[10] !== "" ? Number(r[10]) : null;
       const description = String(r[11] ?? "").trim() || null;
@@ -517,13 +517,13 @@ router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), 
       if (!nameRaw) {
         result.errors.push({ row: rowNum, message: `상품명이 없습니다` }); continue;
       }
-      if (isNaN(basePriceRaw) || basePriceRaw < 0) {
+      if (basePriceRaw !== null && (isNaN(basePriceRaw) || basePriceRaw < 0)) {
         result.errors.push({ row: rowNum, message: `기본단가 숫자 오류: '${r[8]}'` }); continue;
       }
 
       const validUnits = UNITS_BY_TYPE[pType] ?? ["건"];
       const unit = validUnits.includes(unitRaw) ? unitRaw : validUnits[0];
-      const basePrice = Math.round(basePriceRaw);
+      const basePrice = basePriceRaw !== null ? Math.round(basePriceRaw) : null;
       const overtimePrice = overtimePriceRaw !== null && !isNaN(overtimePriceRaw) ? Math.round(overtimePriceRaw) : null;
 
       const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCat, subCat, undefined, nameRaw);
@@ -804,7 +804,7 @@ router.patch("/admin/products/:id", ...adminOnly, async (req, res) => {
         mainCategory: mainCategory !== undefined ? (mainCategory?.trim() || null) : existing.mainCategory,
         subCategory: subCategory !== undefined ? (subCategory?.trim() || null) : existing.subCategory,
         unit: unit ?? existing.unit,
-        basePrice: basePrice ?? existing.basePrice,
+        basePrice: basePrice !== undefined ? (basePrice != null ? basePrice : null) : existing.basePrice,
         description: description !== undefined ? (description?.trim() || null) : existing.description,
         active: active !== undefined ? Boolean(active) : existing.active,
         interpretationDuration: interpretationDuration !== undefined

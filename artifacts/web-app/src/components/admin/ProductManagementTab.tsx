@@ -270,8 +270,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   // ─── 상품 저장 ──────────────────────────────────────────────────────────
   const handleSaveProduct = async () => {
     const effectiveName = productNameCustom ? productForm.name.trim() : autoName(productForm);
-    if (!effectiveName || !productForm.basePrice) {
-      setToast("상품명과 기본단가는 필수입니다."); return;
+    if (!effectiveName) {
+      setToast("상품명은 필수입니다."); return;
     }
     if (!editingProduct && !productForm.mainCategory) {
       setToast("대분류는 필수입니다."); return;
@@ -305,7 +305,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           mainCategory: productForm.mainCategory || null,
           subCategory: productForm.subCategory || null,
           unit: productForm.unit,
-          basePrice: Number(productForm.basePrice),
+          basePrice: productForm.basePrice !== "" ? Number(productForm.basePrice) : null,
           description: productForm.description || null,
           interpretationDuration: productForm.interpretationDuration.trim() || null,
           overtimePrice: productForm.overtimePrice ? Number(productForm.overtimePrice) : null,
@@ -319,7 +319,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           subCategory: productForm.subCategory || null,
           name: effectiveName,
           unit: productForm.unit,
-          basePrice: Number(productForm.basePrice),
+          basePrice: productForm.basePrice !== "" ? Number(productForm.basePrice) : null,
           description: productForm.description || null,
           interpretationDuration: productForm.interpretationDuration.trim() || null,
           overtimePrice: productForm.overtimePrice ? Number(productForm.overtimePrice) : null,
@@ -744,9 +744,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             />
           </div>
           <div>
-            <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>기본단가 <span style={{ color: "#dc2626" }}>*</span></label>
+            <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>기본단가 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(선택)</span></label>
             <NumericInput value={form.basePrice} onChange={raw => setForm(p => ({ ...p, basePrice: raw }))}
-              placeholder="0" suffix="원"
+              placeholder="미입력 시 견적에서 결정" suffix="원"
               style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
           </div>
         </div>
@@ -866,8 +866,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   {p.subCategory}
                 </span>
               )}
-              <span style={{ fontSize: 11, background: "#f0fdf4", color: "#059669", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>
-                {Number(p.basePrice).toLocaleString()}원 / {p.unit}
+              <span style={{ fontSize: 11, background: p.basePrice != null ? "#f0fdf4" : "#f9fafb", color: p.basePrice != null ? "#059669" : "#9ca3af", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>
+                {p.basePrice != null ? `${Number(p.basePrice).toLocaleString()}원 / ${p.unit}` : `미설정 / ${p.unit}`}
               </span>
               {p.interpretationDuration && (
                 <span style={{ fontSize: 11, background: "#faf5ff", color: "#7c3aed", borderRadius: 5, padding: "2px 8px" }}>기본 {p.interpretationDuration}</span>
@@ -910,7 +910,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   subCategory: p.subCategory ?? "",
                   name: p.name,
                   unit: p.unit,
-                  basePrice: String(p.basePrice),
+                  basePrice: p.basePrice != null ? String(p.basePrice) : "",
                   description: p.description ?? "",
                   interpretationDuration: p.interpretationDuration ?? "",
                   overtimePrice: p.overtimePrice != null ? String(p.overtimePrice) : "",

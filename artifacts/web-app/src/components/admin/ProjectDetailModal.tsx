@@ -2635,7 +2635,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                             setQuoteItemForms(prev => prev.map((p, i) => i === idx ? {
                                               ...p,
                                               productId: prod.id, productName: prod.name, unit: prod.unit,
-                                              unitPrice: String(prod.basePrice), productType: (prod as any).productType ?? "translation",
+                                              unitPrice: prod.basePrice != null ? String(prod.basePrice) : "", productType: (prod as any).productType ?? "translation",
                                               interpretationDuration: (prod as any).interpretationDuration ?? "",
                                               quantity: (prod as any).productType === "interpretation" ? "1" : p.quantity,
                                             } : p));
@@ -2650,7 +2650,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         { value: "", label: "상품 선택..." },
                                         ...quoteProducts.map(p => ({
                                           value: String(p.id),
-                                          label: `${(p as any).productType === "interpretation" ? "🎤 " : "📄 "}${p.mainCategory ? `[${p.mainCategory}] ` : ""}${p.name} — ${Number(p.basePrice).toLocaleString()}원/${p.unit}`,
+                                          label: `${(p as any).productType === "interpretation" ? "🎤 " : "📄 "}${p.mainCategory ? `[${p.mainCategory}] ` : ""}${p.name} — ${p.basePrice != null ? `${Number(p.basePrice).toLocaleString()}원` : "미설정"}/${p.unit}`,
                                         })),
                                       ]}
                                     />
