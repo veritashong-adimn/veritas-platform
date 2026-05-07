@@ -253,7 +253,9 @@ export function ClickSelect({
     : { top: "calc(100% + 2px)" };
 
   return (
-    <div ref={containerRef} style={{ position: "relative", display: "inline-block", ...style }}>
+    <div ref={containerRef} style={{ position: "relative", display: "inline-block", ...style }}
+      onMouseDown={e => e.stopPropagation()}
+    >
       <button
         type="button"
         disabled={disabled}
@@ -277,7 +279,6 @@ export function ClickSelect({
       {open && (
         <div ref={listRef} role="listbox"
           style={{ ...CS.menu, ...menuPos, ...menuStyle }}
-          onMouseDown={e => e.stopPropagation()}
         >
           {options.map((opt, idx) => {
             const isSel = opt.value === value;
@@ -371,7 +372,9 @@ export function SearchableSelectShared({
   };
 
   return (
-    <div ref={containerRef} style={{ position: "relative" }}>
+    <div ref={containerRef} style={{ position: "relative" }}
+      onMouseDown={e => e.stopPropagation()}
+    >
       <div style={{
         display: "flex", alignItems: "center",
         border: `1px solid ${open ? accentBorder : "#d1d5db"}`,
@@ -397,7 +400,6 @@ export function SearchableSelectShared({
       {open && (
         <div ref={listRef}
           style={{ ...CS.menu, position: "absolute", top: "calc(100% + 3px)", left: 0, right: 0, minWidth: "unset" }}
-          onMouseDown={e => e.stopPropagation()}
         >
           {filtered.length === 0
             ? <p style={{ margin: 0, padding: "8px 10px", fontSize: 12, color: "#94a3b8" }}>검색 결과 없음</p>

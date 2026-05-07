@@ -55,9 +55,7 @@ function SearchableSelect({ items, value, onChange, placeholder, accentBorder = 
   useEffect(() => { const t = setTimeout(() => setDebounced(query), 250); return () => clearTimeout(t); }, [query]);
 
   useEffect(() => {
-    const h = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
-    };
+    const h = () => setOpen(false);
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, []);
@@ -90,7 +88,9 @@ function SearchableSelect({ items, value, onChange, placeholder, accentBorder = 
   };
 
   return (
-    <div ref={containerRef} style={{ position: "relative" }}>
+    <div ref={containerRef} style={{ position: "relative" }}
+      onMouseDown={e => e.stopPropagation()}
+    >
       <div style={{ display: "flex", alignItems: "center", border: `1px solid ${open ? accentBorder : "#d1d5db"}`, borderRadius: 7, background: "#fff", transition: "border-color 0.12s" }}>
         <input
           value={displayValue}
@@ -112,7 +112,6 @@ function SearchableSelect({ items, value, onChange, placeholder, accentBorder = 
       {open && (
         <div ref={listRef}
           style={{ position: "absolute", top: "calc(100% + 2px)", left: 0, right: 0, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 7, boxShadow: "0 4px 18px rgba(0,0,0,0.1)", zIndex: 600, maxHeight: 208, overflowY: "auto", scrollbarWidth: "thin" }}
-          onMouseDown={e => e.stopPropagation()}
         >
           {filtered.length === 0
             ? <p style={{ margin: 0, padding: "7px 10px", fontSize: 12, color: "#94a3b8" }}>검색 결과 없음</p>

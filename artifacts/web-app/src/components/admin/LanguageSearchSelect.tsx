@@ -61,12 +61,7 @@ export function LanguageSearchSelect({
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setQuery("");
-      }
-    };
+    const handler = () => { setOpen(false); setQuery(""); };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
@@ -112,7 +107,9 @@ export function LanguageSearchSelect({
   );
 
   return (
-    <div ref={containerRef} style={{ position: "relative", ...style }}>
+    <div ref={containerRef} style={{ position: "relative", ...style }}
+      onMouseDown={e => e.stopPropagation()}
+    >
       {/* ── 트리거 버튼 ── */}
       {!open ? (
         <button
@@ -263,12 +260,7 @@ export function ItemSearchSelect({
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setQuery("");
-      }
-    };
+    const handler = () => { setOpen(false); setQuery(""); };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
@@ -301,7 +293,9 @@ export function ItemSearchSelect({
   }, [filtered, highlightIdx, handleSelect]);
 
   return (
-    <div ref={containerRef} style={{ position: "relative", ...style }}>
+    <div ref={containerRef} style={{ position: "relative", ...style }}
+      onMouseDown={e => e.stopPropagation()}
+    >
       {!open ? (
         <button
           type="button"
