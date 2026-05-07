@@ -33,3 +33,6 @@ channel = "stable-25_05"
 [userenv.development]
 ALLOW_HARD_DELETE = "true"
 VITE_ALLOW_HARD_DELETE = "true"
+
+[userenv.shared]
+JWT_SECRET = "550a5f239005d7fcb6319c8356a5024e5ac07cac2e5084280e8c6764dc76627d"

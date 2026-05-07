@@ -711,12 +711,18 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   // ── Heartbeat: 3분마다 마지막 활동 시간 갱신 ────────────────────────────
   useEffect(() => {
-    const sendHeartbeat = () => {
+    const sendHeartbeat = async () => {
       if (!token) return;
-      fetch(api("/api/auth/heartbeat"), {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => {});
+      try {
+        const res = await fetch(api("/api/auth/heartbeat"), {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.status === 401) {
+          setToast("세션이 만료되었습니다. 다시 로그인해 주세요.");
+          setTimeout(() => onLogout(), 1500);
+        }
+      } catch {}
     };
     sendHeartbeat();
     const interval = setInterval(sendHeartbeat, 3 * 60 * 1000);

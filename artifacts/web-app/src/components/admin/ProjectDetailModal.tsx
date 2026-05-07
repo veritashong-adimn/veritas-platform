@@ -429,6 +429,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
           setStatusTarget(data.status);
         }
         setFinancialStatusTarget(data.financialStatus ?? "unbilled");
+      } else if (res.status === 401) {
+        onToast("세션이 만료되었습니다. 다시 로그인해 주세요.");
+        onClose();
       } else {
         setErr(data.error ?? "조회 실패");
       }
