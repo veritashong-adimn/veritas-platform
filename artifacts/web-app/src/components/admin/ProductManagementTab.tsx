@@ -146,10 +146,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
 
   // 필터
   const [filterProductType, setFilterProductType] = useState("");
-  const [filterSourceLang, setFilterSourceLang] = useState("");
-  const [filterSourceLangCustom, setFilterSourceLangCustom] = useState("");
-  const [filterTargetLang, setFilterTargetLang] = useState("");
-  const [filterTargetLangCustom, setFilterTargetLangCustom] = useState("");
   const [filterMainCategory, setFilterMainCategory] = useState("");
   const [filterActiveOnly, setFilterActiveOnly] = useState<"" | "true" | "false">("");
 
@@ -224,23 +220,13 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
       if (filterActiveOnly) params.set("activeOnly", filterActiveOnly);
 
       if (productSearch.trim()) params.set("search", productSearch.trim());
-      if (filterProductType !== "equipment") {
-        const effectiveSrcLang = filterSourceLang === "custom"
-          ? filterSourceLangCustom.trim()
-          : filterSourceLang;
-        const effectiveTgtLang = filterTargetLang === "custom"
-          ? filterTargetLangCustom.trim()
-          : filterTargetLang;
-        if (effectiveSrcLang) params.set("sourceLanguage", effectiveSrcLang);
-        if (effectiveTgtLang) params.set("targetLanguage", effectiveTgtLang);
-      }
 
       const res = await fetch(api(`/api/admin/products${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) setProducts(Array.isArray(data) ? data : []);
     } catch { setToast("오류: 상품 조회 실패"); }
     finally { setProductsLoading(false); }
-  }, [token, productSearch, filterProductType, filterSourceLang, filterSourceLangCustom, filterTargetLang, filterTargetLangCustom, filterMainCategory, filterActiveOnly]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, productSearch, filterProductType, filterMainCategory, filterActiveOnly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchProductRequests = useCallback(async () => {
     setProductRequestsLoading(true);
@@ -983,65 +969,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             style={{ minWidth: 110 }}
             triggerStyle={{ padding: "8px 10px", fontSize: 13, width: "100%" }}
           />
-          {/* 출발언어/도착언어 필터 (통역장비 제외) */}
-          {filterProductType !== "equipment" && (
-            <>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <LanguageSearchSelect
-                  value={filterSourceLang}
-                  onChange={v => { setFilterSourceLang(v); setFilterSourceLangCustom(""); }}
-                  mode="code"
-                  placeholder="출발언어 전체"
-                  style={{ minWidth: 130 }}
-                  triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
-                />
-                {filterSourceLang === "custom" && (
-                  <div>
-                    <label style={{ fontSize: 10, color: "#6b7280", display: "block", marginBottom: 2 }}>직접 입력 출발언어</label>
-                    <input
-                      autoFocus
-                      value={filterSourceLangCustom}
-                      onChange={e => setFilterSourceLangCustom(e.target.value)}
-                      onKeyDown={e => e.key === "Enter" && fetchProducts()}
-                      placeholder="예: 카자흐어, 세르비아어..."
-                      style={{
-                        width: "100%", padding: "5px 8px", fontSize: 12,
-                        border: "1px solid #a5b4fc", borderRadius: 6, outline: "none",
-                        color: "#111827", background: "#faf5ff", boxSizing: "border-box",
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                <LanguageSearchSelect
-                  value={filterTargetLang}
-                  onChange={v => { setFilterTargetLang(v); setFilterTargetLangCustom(""); }}
-                  mode="code"
-                  placeholder="도착언어 전체"
-                  style={{ minWidth: 130 }}
-                  triggerStyle={{ padding: "8px 10px", fontSize: 13, borderRadius: 7 }}
-                />
-                {filterTargetLang === "custom" && (
-                  <div>
-                    <label style={{ fontSize: 10, color: "#6b7280", display: "block", marginBottom: 2 }}>직접 입력 도착언어</label>
-                    <input
-                      autoFocus
-                      value={filterTargetLangCustom}
-                      onChange={e => setFilterTargetLangCustom(e.target.value)}
-                      onKeyDown={e => e.key === "Enter" && fetchProducts()}
-                      placeholder="예: 카자흐어, 세르비아어..."
-                      style={{
-                        width: "100%", padding: "5px 8px", fontSize: 12,
-                        border: "1px solid #a5b4fc", borderRadius: 6, outline: "none",
-                        color: "#111827", background: "#faf5ff", boxSizing: "border-box",
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
-            </>
-          )}
           <select value={filterActiveOnly} onChange={e => setFilterActiveOnly(e.target.value as "" | "true" | "false")}
             style={{ ...inputStyle, padding: "8px 10px", fontSize: 13, minWidth: 100 }}>
             <option value="">전체 상태</option>
@@ -1051,11 +978,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           <PrimaryBtn onClick={fetchProducts} disabled={productsLoading} style={{ padding: "8px 14px", fontSize: 13 }}>
             {productsLoading ? "검색 중..." : "검색"}
           </PrimaryBtn>
-          {(productSearch || filterProductType || filterSourceLang || filterSourceLangCustom || filterTargetLang || filterTargetLangCustom || filterMainCategory || filterActiveOnly) && (
+          {(productSearch || filterProductType || filterMainCategory || filterActiveOnly) && (
             <button onClick={() => {
               setProductSearch(""); setFilterProductType("");
-              setFilterSourceLang(""); setFilterSourceLangCustom("");
-              setFilterTargetLang(""); setFilterTargetLangCustom("");
               setFilterMainCategory(""); setFilterActiveOnly("");
             }}
               onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "#d1d5db"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#6b7280"; }}
