@@ -437,7 +437,7 @@ function calcItemData(doc: QuoteDoc) {
           <tr>
             <td class="ctr">${i + 1}</td>
             <td>${esc(item.productName)}<span style="font-size:9px;color:#6b7280;margin-left:4px">[실비]</span>${subLines}</td>
-            <td class="ctr">—</td>
+            <td class="ctr" style="white-space:nowrap">—</td>
             <td class="num">—</td>
             <td class="num">—${taxLabel}</td>
             <td class="num">${Number(item.supplyAmount).toLocaleString("ko-KR")}원</td>
@@ -448,7 +448,7 @@ function calcItemData(doc: QuoteDoc) {
         <tr>
           <td class="ctr">${i + 1}</td>
           <td>${esc(item.productName)}${subLines}</td>
-          <td class="ctr">${esc(String(item.unit ?? "건"))}</td>
+          <td class="ctr" style="white-space:nowrap;word-break:keep-all">${esc(String(item.unit ?? "건"))}</td>
           <td class="num">${Number(item.quantity).toLocaleString("ko-KR")}</td>
           <td class="num">${Number(item.unitPrice).toLocaleString("ko-KR")}원${taxLabel}</td>
           <td class="num">${Number(item.supplyAmount).toLocaleString("ko-KR")}원</td>
@@ -486,7 +486,7 @@ function renderItemTable(itemRows: string, supply: number, tax: number, total: n
         <tr>
           <th style="width:28px">No.</th>
           <th>품목명</th>
-          <th style="width:36px">단위</th>
+          <th style="width:54px;white-space:nowrap">단위</th>
           <th style="width:44px">수량</th>
           <th style="width:82px">단가</th>
           <th style="width:100px">공급가액</th>
@@ -563,7 +563,6 @@ function renderProjectBar(doc: QuoteDoc): string {
     <strong>프로젝트:</strong> ${esc(doc.projectTitle)}
     ${doc.customerEmail ? ` &nbsp;|&nbsp; <strong>담당자:</strong> ${esc(doc.customerEmail)}` : ""}
     ${doc.quoteCreatedAt ? ` &nbsp;|&nbsp; <strong>견적일:</strong> ${fmtDate(doc.quoteCreatedAt)}` : ""}
-    ${doc.quoteStatus ? ` &nbsp;|&nbsp; <strong>견적상태:</strong> ${esc(STATUS_KO[doc.quoteStatus] ?? doc.quoteStatus)}` : ""}
   </div>`;
 }
 

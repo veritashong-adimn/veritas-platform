@@ -132,6 +132,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [quoteNote, setQuoteNote] = useState("");
   const [quoteTaxDocType, setQuoteTaxDocType] = useState<"tax_invoice" | "zero_tax_invoice" | "bill">("tax_invoice");
   const [quoteTaxCategory, setQuoteTaxCategory] = useState<"normal" | "zero_rated" | "consignment" | "consignment_zero_rated">("normal");
+  const [quoteVatType, setQuoteVatType] = useState<"taxable" | "exempt" | "zero_rate">("taxable");
   const [quoteType, setQuoteType] = useState<"b2b_standard" | "b2c_prepaid" | "prepaid_deduction" | "accumulated_batch">("b2b_standard");
   const [quoteBillingType, setQuoteBillingType] = useState<string>("postpaid_per_project");
   const [quotePaymentMethod, setQuotePaymentMethod] = useState<string>("card");
@@ -187,18 +188,15 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [quoteMode, setQuoteMode] = useState<"simple" | "items">("items");
   const [quoteItemForms, setQuoteItemForms] = useState<QuoteItemForm[]>([defaultItem()]);
   const calcItemTotal = (it: QuoteItemForm) => {
-    const supply = Math.round(Number(it.quantity || 1) * Number(it.unitPrice || 0));
-    const taxRate = it.taxType === "taxable" ? 0.1 : 0;
-    const tax = Math.round(supply * taxRate);
-    return { supply, tax, total: supply + tax };
+    const supply = Math.round(Number(it.quantity || 1) * Number(it.unitPrice.replace?.(/,/g, "") || it.unitPrice || 0));
+    return { supply, tax: 0, total: supply };
   };
   const calcGrandTotals = () => {
-    return quoteItemForms.reduce((acc, it) => {
-      const { supply, tax, total } = calcItemTotal(it);
-      return { supply: acc.supply + supply, tax: acc.tax + tax, total: acc.total + total };
-    }, { supply: 0, tax: 0, total: 0 });
+    const supply = quoteItemForms.reduce((s, it) => s + calcItemTotal(it).supply, 0);
+    const tax = quoteVatType === "taxable" ? Math.round(supply * 0.1) : 0;
+    return { supply, tax, total: supply + tax };
   };
-  const quoteItemsGrandTotal = quoteItemForms.reduce((s, it) => s + calcItemTotal(it).total, 0);
+  const quoteItemsGrandTotal = calcGrandTotals().total;
   // quote_type별 추가 필드
   const _dateDefault = (days: number) => { const d = new Date(); d.setDate(d.getDate() + days); return d.toISOString().split("T")[0]; };
   const [quoteValidUntil, setQuoteValidUntil] = useState(() => _dateDefault(30));
@@ -787,8 +785,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             unit: it.unit || "건",
             quantity: Number(it.quantity) || 1,
             unitPrice: Number(it.unitPrice.replace(/,/g, "")),
-            taxRate: (it.taxType === "taxable" ? 0.1 : 0) as 0 | 0.1,
-            taxType: it.taxType,
+            taxRate: (quoteVatType === "taxable" ? 0.1 : 0) as 0 | 0.1,
+            taxType: quoteVatType,
             itemType: it.productType,
             memo: it.memo || undefined,
             files: it.files.filter(f => !f.uploading).map(f => ({ name: f.name, url: f.url, size: f.size })),
@@ -830,8 +828,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             unit: it.unit || "건",
             quantity: Number(it.quantity) || 1,
             unitPrice: Number(it.unitPrice.replace(/,/g, "")),
-            taxRate: (it.taxType === "taxable" ? 0.1 : 0) as 0 | 0.1,
-            taxType: it.taxType,
+            taxRate: (quoteVatType === "taxable" ? 0.1 : 0) as 0 | 0.1,
+            taxType: quoteVatType,
             itemType: it.productType,
             memo: it.memo || undefined,
             files: it.files.filter(f => !f.uploading).map(f => ({ name: f.name, url: f.url, size: f.size })),
@@ -2580,11 +2578,26 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           onClick={() => setShowTaxOptions(v => !v)}
                           style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 10px", background: "#f9fafb", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#6b7280" }}
                         >
-                          <span>⚙️ 회계/세무 옵션 (청구방식 · 문서구분 · 발행유형)</span>
+                          <span>⚙️ 회계/세무 옵션 (과세유형 · 청구방식 · 문서구분 · 발행유형)</span>
                           <span style={{ fontSize: 10, color: "#9ca3af" }}>{showTaxOptions ? "▲ 접기" : "▼ 펼치기"}</span>
                         </button>
                         {showTaxOptions && (
                           <div style={{ padding: "10px 10px 4px", background: "#fff" }}>
+                            {/* 과세 유형 */}
+                            <div style={{ marginBottom: 10 }}>
+                              <label style={{ fontSize: 10, fontWeight: 700, color: "#059669", display: "block", marginBottom: 3 }}>과세 유형 (견적 전체 적용)</label>
+                              <ClickSelect
+                                value={quoteVatType}
+                                onChange={v => setQuoteVatType(v as "taxable" | "exempt" | "zero_rate")}
+                                style={{ width: "100%" }}
+                                triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #6ee7b7" }}
+                                options={[
+                                  { value: "taxable", label: "부가세 10%", sub: "과세 (기본)" },
+                                  { value: "exempt", label: "면세", sub: "부가세 없음" },
+                                  { value: "zero_rate", label: "영세율", sub: "세액 0원 (영세율 적용)" },
+                                ]}
+                              />
+                            </div>
                             {/* 청구방식 */}
                             <div style={{ marginBottom: 10 }}>
                               <label style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", display: "block", marginBottom: 3 }}>
@@ -2729,7 +2742,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* ── 번역 행 ── */}
                                 {it.productType === "translation" && (
                                   <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "54px 10px 54px 60px 52px 80px 64px 80px", gap: 4, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "54px 10px 54px 60px 52px 80px 80px", gap: 4, alignItems: "center" }}>
                                       <input value={it.sourceLanguage} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, sourceLanguage: e.target.value } : p))}
                                         placeholder="출발어" style={{ ...inputStyle, fontSize: 11, padding: "6px 4px", textAlign: "center" }} />
                                       <span style={{ textAlign: "center", color: "#9ca3af", fontSize: 12 }}>→</span>
@@ -2742,9 +2755,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right" }} />
-                                      <ClickSelect value={it.taxType} onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxType: v as "taxable"|"exempt"|"zero_rate" } : p))}
-                                        triggerStyle={{ fontSize: 10, padding: "6px 2px", borderRadius: 6, width: 64 }}
-                                        options={[{ value: "taxable", label: "부가세10%" }, { value: "exempt", label: "면세" }, { value: "zero_rate", label: "영세율" }]} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
                                         placeholder="공급가액" style={{ ...roSt, color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                     </div>
@@ -2785,7 +2795,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* ── 통역 행 (보라색 카드) ── */}
                                 {it.productType === "interpretation" && (
                                   <div style={{ background: "#faf5ff", borderRadius: 8, padding: "8px 10px", border: "1px solid #e9d5ff", display: "flex", flexDirection: "column", gap: 6 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "50px 50px 76px 80px 52px 48px 80px 64px 80px", gap: 4, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "50px 50px 76px 80px 52px 48px 80px 80px", gap: 4, alignItems: "center" }}>
                                       <input value={it.langA} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, langA: e.target.value } : p))}
                                         placeholder="언어A" style={{ ...inputStyle, fontSize: 11, padding: "6px 4px", textAlign: "center" }} />
                                       <input value={it.langB} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, langB: e.target.value } : p))}
@@ -2807,10 +2817,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       <NumericInput value={it.unitPrice}
                                         onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right", borderColor: "#d8b4fe" }} />
-                                      <ClickSelect value={it.taxType}
-                                        onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxType: v as "taxable"|"exempt"|"zero_rate" } : p))}
-                                        triggerStyle={{ fontSize: 10, padding: "6px 2px", borderRadius: 6, width: 64 }}
-                                        options={[{ value: "taxable", label: "부가세10%" }, { value: "exempt", label: "면세" }, { value: "zero_rate", label: "영세율" }]} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
                                         placeholder="공급가액" style={{ ...roSt, color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                     </div>
@@ -2838,7 +2844,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* ── 장비 행 (파란색 카드) ── */}
                                 {it.productType === "equipment" && (
                                   <div style={{ background: "#eff6ff", borderRadius: 8, padding: "8px 10px", border: "1px solid #bfdbfe", display: "flex", flexDirection: "column", gap: 6 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "76px 88px 52px 80px 64px 80px", gap: 4, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "76px 88px 52px 80px 80px", gap: 4, alignItems: "center" }}>
                                       <ClickSelect value={it.quantityUnit}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantityUnit: v } : p))}
                                         triggerStyle={{ fontSize: 11, padding: "6px 2px", borderRadius: 6, width: 76, borderColor: "#93c5fd" }}
@@ -2851,9 +2857,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right" }} />
-                                      <ClickSelect value={it.taxType} onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxType: v as "taxable"|"exempt"|"zero_rate" } : p))}
-                                        triggerStyle={{ fontSize: 10, padding: "6px 2px", borderRadius: 6, width: 64 }}
-                                        options={[{ value: "taxable", label: "부가세10%" }, { value: "exempt", label: "면세" }, { value: "zero_rate", label: "영세율" }]} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
                                         placeholder="공급가액" style={{ ...roSt, color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                     </div>
@@ -2865,12 +2868,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* ── 실비 행 (노란색 카드) ── */}
                                 {it.productType === "expense" && (
                                   <div style={{ background: "#fefce8", borderRadius: 8, padding: "8px 10px", border: "1px solid #fde68a", display: "flex", flexDirection: "column", gap: 6 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 64px 80px", gap: 4, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 80px", gap: 4, alignItems: "center" }}>
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw, quantity: "1" } : p))}
                                         placeholder="금액 (원)" style={{ ...inputStyle, fontSize: 13, padding: "6px 8px", textAlign: "right", borderColor: "#fde68a" }} />
-                                      <ClickSelect value={it.taxType} onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxType: v as "taxable"|"exempt"|"zero_rate" } : p))}
-                                        triggerStyle={{ fontSize: 10, padding: "6px 2px", borderRadius: 6, width: 64 }}
-                                        options={[{ value: "taxable", label: "부가세10%" }, { value: "exempt", label: "면세" }, { value: "zero_rate", label: "영세율" }]} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
                                         placeholder="공급가액" style={{ ...roSt, color: supply > 0 ? "#92400e" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                     </div>
@@ -2951,6 +2951,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               if (eq0?.billingType) setQuoteBillingType(eq0.billingType);
                               if (eq0?.taxDocumentType) setQuoteTaxDocType(eq0.taxDocumentType as typeof quoteTaxDocType);
                               if (eq0?.taxCategory) setQuoteTaxCategory(eq0.taxCategory as typeof quoteTaxCategory);
+                              if (Array.isArray(eq0?.items) && eq0.items.length > 0 && eq0.items[0]?.taxType) {
+                                setQuoteVatType(eq0.items[0].taxType as "taxable"|"exempt"|"zero_rate");
+                              }
                               if (eq0?.paymentMethod) setQuotePaymentMethod(eq0.paymentMethod);
                               if (eq0?.validUntil) setQuoteValidUntil(eq0.validUntil);
                               if (eq0?.issueDate) setQuoteIssueDate(eq0.issueDate);
