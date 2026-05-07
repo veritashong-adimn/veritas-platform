@@ -2776,7 +2776,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                           e.target.value = "";
                                         }} />
                                       </label>
-                                      {it.files.map((f, fi) => (
+                                      {(it.files || []).map((f, fi) => (
                                         <span key={fi} style={{ fontSize: 10, background: f.uploading ? "#fef9c3" : "#f0fdf4", borderRadius: 4, padding: "2px 6px", border: `1px solid ${f.uploading ? "#fde047" : "#86efac"}`, display: "flex", alignItems: "center", gap: 3, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                           {f.uploading ? "⏳" : "📄"} {f.name}
                                           {!f.uploading && <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, files: p.files.filter((_, fi2) => fi2 !== fi) } : p))} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 12, lineHeight: 1, padding: 0, marginLeft: 2 }}>×</button>}
