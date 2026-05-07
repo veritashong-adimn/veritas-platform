@@ -431,7 +431,7 @@ function calcItemData(doc: QuoteDoc) {
 
         const taxLabel = item.taxType && item.taxType !== "taxable" ? `<br/><span style="font-size:9px;color:#059669">${TAX_TYPE_KO[item.taxType] ?? ""}</span>` : "";
 
-        // 실비: 수량/단가 생략, 금액만 표시
+        // 실비: 수량/단가 생략, 공급가액만 표시
         if (isExpense) {
           return `
           <tr>
@@ -441,8 +441,6 @@ function calcItemData(doc: QuoteDoc) {
             <td class="num">—</td>
             <td class="num">—${taxLabel}</td>
             <td class="num">${Number(item.supplyAmount).toLocaleString("ko-KR")}원</td>
-            <td class="num">${item.taxType === "exempt" ? "면세" : item.taxType === "zero_rate" ? "영세율" : `${Number(item.taxAmount).toLocaleString("ko-KR")}원`}</td>
-            <td class="num">${Number(item.totalAmount).toLocaleString("ko-KR")}원</td>
           </tr>`;
         }
 
@@ -454,8 +452,6 @@ function calcItemData(doc: QuoteDoc) {
           <td class="num">${Number(item.quantity).toLocaleString("ko-KR")}</td>
           <td class="num">${Number(item.unitPrice).toLocaleString("ko-KR")}원${taxLabel}</td>
           <td class="num">${Number(item.supplyAmount).toLocaleString("ko-KR")}원</td>
-          <td class="num">${item.taxType === "exempt" ? "면세" : item.taxType === "zero_rate" ? "영세율" : `${Number(item.taxAmount).toLocaleString("ko-KR")}원`}</td>
-          <td class="num">${Number(item.totalAmount).toLocaleString("ko-KR")}원</td>
         </tr>`;
       }).join("")
     : `<tr>
@@ -465,8 +461,6 @@ function calcItemData(doc: QuoteDoc) {
         <td class="num">1</td>
         <td class="num">—</td>
         <td class="num">${fmt(doc.supplyAmount ?? doc.totalAmount)}</td>
-        <td class="num">${fmt(doc.taxAmount ?? 0)}</td>
-        <td class="num">${fmt(doc.totalAmount)}</td>
       </tr>`;
 
   const supply = hasItems
@@ -495,18 +489,14 @@ function renderItemTable(itemRows: string, supply: number, tax: number, total: n
           <th style="width:36px">단위</th>
           <th style="width:44px">수량</th>
           <th style="width:82px">단가</th>
-          <th style="width:86px">공급가액</th>
-          <th style="width:72px">세액</th>
-          <th style="width:86px">합계</th>
+          <th style="width:100px">공급가액</th>
         </tr>
       </thead>
       <tbody>${itemRows}</tbody>
       <tfoot>
         <tr>
-          <td colspan="5" style="text-align:right;color:#6b7280;font-size:11px">소 계</td>
+          <td colspan="5" style="text-align:right;color:#6b7280;font-size:11px">공급가액 소계</td>
           <td class="num">${fmt(supply)}</td>
-          <td class="num">${fmt(tax)}</td>
-          <td class="num">${fmt(total)}</td>
         </tr>
       </tfoot>
     </table>

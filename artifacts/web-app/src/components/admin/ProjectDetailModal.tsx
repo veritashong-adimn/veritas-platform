@@ -2729,7 +2729,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* ── 번역 행 ── */}
                                 {it.productType === "translation" && (
                                   <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "54px 10px 54px 60px 52px 80px 64px 68px 76px", gap: 4, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "54px 10px 54px 60px 52px 80px 64px 80px", gap: 4, alignItems: "center" }}>
                                       <input value={it.sourceLanguage} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, sourceLanguage: e.target.value } : p))}
                                         placeholder="출발어" style={{ ...inputStyle, fontSize: 11, padding: "6px 4px", textAlign: "center" }} />
                                       <span style={{ textAlign: "center", color: "#9ca3af", fontSize: 12 }}>→</span>
@@ -2745,10 +2745,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       <ClickSelect value={it.taxType} onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxType: v as "taxable"|"exempt"|"zero_rate" } : p))}
                                         triggerStyle={{ fontSize: 10, padding: "6px 2px", borderRadius: 6, width: 64 }}
                                         options={[{ value: "taxable", label: "부가세10%" }, { value: "exempt", label: "면세" }, { value: "zero_rate", label: "영세율" }]} />
-                                      <input readOnly value={supply > 0 ? (it.taxType === "taxable" ? tax.toLocaleString() : it.taxType === "exempt" ? "면세" : "영세율") : ""}
-                                        placeholder="세액" style={{ ...roSt, color: tax > 0 ? "#7c3aed" : "#9ca3af" }} />
-                                      <input readOnly value={supply > 0 ? total.toLocaleString() : ""} placeholder="합계"
-                                        style={{ ...roSt, color: supply > 0 ? "#065f46" : "#9ca3af", fontWeight: supply > 0 ? 800 : 400, borderColor: supply > 0 ? "#6ee7b7" : undefined }} />
+                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
+                                        placeholder="공급가액" style={{ ...roSt, color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                     </div>
                                     <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                                       <label style={{ fontSize: 11, color: "#7c3aed", cursor: "pointer", border: "1px dashed #d8b4fe", borderRadius: 5, padding: "3px 8px", whiteSpace: "nowrap", background: "#faf5ff" }}>
@@ -2787,7 +2785,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* ── 통역 행 (보라색 카드) ── */}
                                 {it.productType === "interpretation" && (
                                   <div style={{ background: "#faf5ff", borderRadius: 8, padding: "8px 10px", border: "1px solid #e9d5ff", display: "flex", flexDirection: "column", gap: 6 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "50px 50px 76px 80px 52px 48px 80px 64px 76px", gap: 4, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "50px 50px 76px 80px 52px 48px 80px 64px 80px", gap: 4, alignItems: "center" }}>
                                       <input value={it.langA} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, langA: e.target.value } : p))}
                                         placeholder="언어A" style={{ ...inputStyle, fontSize: 11, padding: "6px 4px", textAlign: "center" }} />
                                       <input value={it.langB} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, langB: e.target.value } : p))}
@@ -2813,8 +2811,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxType: v as "taxable"|"exempt"|"zero_rate" } : p))}
                                         triggerStyle={{ fontSize: 10, padding: "6px 2px", borderRadius: 6, width: 64 }}
                                         options={[{ value: "taxable", label: "부가세10%" }, { value: "exempt", label: "면세" }, { value: "zero_rate", label: "영세율" }]} />
-                                      <input readOnly value={supply > 0 ? total.toLocaleString() : ""}
-                                        placeholder="합계" style={{ ...roSt, color: supply > 0 ? "#065f46" : "#9ca3af", fontWeight: supply > 0 ? 800 : 400, borderColor: supply > 0 ? "#6ee7b7" : undefined }} />
+                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
+                                        placeholder="공급가액" style={{ ...roSt, color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                     </div>
                                     <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 80px 56px 56px 1fr", gap: 4, alignItems: "center" }}>
                                       <input type="date" value={it.interpretDate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretDate: e.target.value } : p))}
@@ -2834,20 +2832,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
                                         placeholder="메모 (선택)" style={{ ...inputStyle, fontSize: 11, padding: "5px 8px" }} />
                                     </div>
-                                    {supply > 0 && (
-                                      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", fontSize: 11, color: "#6b7280" }}>
-                                        <span>공급가: <b style={{ color: "#1e40af" }}>{supply.toLocaleString()}원</b></span>
-                                        <span>세액: <b style={{ color: "#7c3aed" }}>{it.taxType === "taxable" ? tax.toLocaleString() : it.taxType === "exempt" ? "면세" : "영세율"}원</b></span>
-                                        <span>합계: <b style={{ color: "#065f46" }}>{total.toLocaleString()}원</b></span>
-                                      </div>
-                                    )}
                                   </div>
                                 )}
 
                                 {/* ── 장비 행 (파란색 카드) ── */}
                                 {it.productType === "equipment" && (
                                   <div style={{ background: "#eff6ff", borderRadius: 8, padding: "8px 10px", border: "1px solid #bfdbfe", display: "flex", flexDirection: "column", gap: 6 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "76px 88px 52px 80px 64px 68px 76px", gap: 4, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "76px 88px 52px 80px 64px 80px", gap: 4, alignItems: "center" }}>
                                       <ClickSelect value={it.quantityUnit}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantityUnit: v } : p))}
                                         triggerStyle={{ fontSize: 11, padding: "6px 2px", borderRadius: 6, width: 76, borderColor: "#93c5fd" }}
@@ -2863,10 +2854,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       <ClickSelect value={it.taxType} onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxType: v as "taxable"|"exempt"|"zero_rate" } : p))}
                                         triggerStyle={{ fontSize: 10, padding: "6px 2px", borderRadius: 6, width: 64 }}
                                         options={[{ value: "taxable", label: "부가세10%" }, { value: "exempt", label: "면세" }, { value: "zero_rate", label: "영세율" }]} />
-                                      <input readOnly value={supply > 0 ? (it.taxType === "taxable" ? tax.toLocaleString() : it.taxType === "exempt" ? "면세" : "영세율") : ""}
-                                        placeholder="세액" style={{ ...roSt, color: tax > 0 ? "#7c3aed" : "#9ca3af" }} />
-                                      <input readOnly value={supply > 0 ? total.toLocaleString() : ""} placeholder="합계"
-                                        style={{ ...roSt, color: supply > 0 ? "#065f46" : "#9ca3af", fontWeight: supply > 0 ? 800 : 400, borderColor: supply > 0 ? "#6ee7b7" : undefined }} />
+                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
+                                        placeholder="공급가액" style={{ ...roSt, color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                     </div>
                                     <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
                                       placeholder="메모 (선택)" style={{ ...inputStyle, fontSize: 11, padding: "4px 8px" }} />
@@ -2876,14 +2865,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* ── 실비 행 (노란색 카드) ── */}
                                 {it.productType === "expense" && (
                                   <div style={{ background: "#fefce8", borderRadius: 8, padding: "8px 10px", border: "1px solid #fde68a", display: "flex", flexDirection: "column", gap: 6 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 64px 76px", gap: 4, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 64px 80px", gap: 4, alignItems: "center" }}>
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw, quantity: "1" } : p))}
                                         placeholder="금액 (원)" style={{ ...inputStyle, fontSize: 13, padding: "6px 8px", textAlign: "right", borderColor: "#fde68a" }} />
                                       <ClickSelect value={it.taxType} onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, taxType: v as "taxable"|"exempt"|"zero_rate" } : p))}
                                         triggerStyle={{ fontSize: 10, padding: "6px 2px", borderRadius: 6, width: 64 }}
                                         options={[{ value: "taxable", label: "부가세10%" }, { value: "exempt", label: "면세" }, { value: "zero_rate", label: "영세율" }]} />
-                                      <input readOnly value={supply > 0 ? total.toLocaleString() : ""} placeholder="합계"
-                                        style={{ ...roSt, color: supply > 0 ? "#92400e" : "#9ca3af", fontWeight: supply > 0 ? 800 : 400, borderColor: supply > 0 ? "#fde68a" : undefined }} />
+                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
+                                        placeholder="공급가액" style={{ ...roSt, color: supply > 0 ? "#92400e" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                     </div>
                                     <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
                                       placeholder="메모 (선택)" style={{ ...inputStyle, fontSize: 11, padding: "4px 8px" }} />
@@ -2897,13 +2886,26 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               style={{ fontSize: 12, color: "#7c3aed", background: "none", border: "1px dashed #d8b4fe", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
                               + 항목 추가
                             </button>
-                            {(() => { const gt = calcGrandTotals(); return gt.total > 0 ? (
-                              <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#f0fdf4", borderRadius: 7, padding: "6px 12px", border: "1px solid #86efac", fontSize: 12 }}>
-                                <span style={{ color: "#6b7280" }}>공급가: <b style={{ color: "#1e40af" }}>{gt.supply.toLocaleString()}원</b></span>
-                                <span style={{ color: "#9ca3af" }}>|</span>
-                                <span style={{ color: "#6b7280" }}>세액: <b style={{ color: "#7c3aed" }}>{gt.tax.toLocaleString()}원</b></span>
-                                <span style={{ color: "#9ca3af" }}>|</span>
-                                <span style={{ color: "#6b7280" }}>합계: <b style={{ color: "#065f46", fontSize: 13 }}>{gt.total.toLocaleString()}원</b></span>
+                            {(() => { const gt = calcGrandTotals(); return gt.supply > 0 ? (
+                              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, background: "#f0fdf4", borderRadius: 7, padding: "6px 12px", border: "1px solid #86efac", fontSize: 12, minWidth: 180 }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", width: "100%", gap: 12 }}>
+                                  <span style={{ color: "#6b7280" }}>공급가액</span>
+                                  <b style={{ color: "#1e40af" }}>{gt.supply.toLocaleString()}원</b>
+                                </div>
+                                <div style={{ display: "flex", justifyContent: "space-between", width: "100%", gap: 12 }}>
+                                  <span style={{ color: "#6b7280" }}>
+                                    {gt.tax === 0 ? "부가세" : "부가세 (VAT 10%)"}
+                                  </span>
+                                  <b style={{ color: "#7c3aed" }}>
+                                    {gt.tax === 0
+                                      ? <span style={{ color: "#9ca3af", fontWeight: 400 }}>영세율/면세</span>
+                                      : `${gt.tax.toLocaleString()}원`}
+                                  </b>
+                                </div>
+                                <div style={{ display: "flex", justifyContent: "space-between", width: "100%", gap: 12, borderTop: "1px solid #86efac", paddingTop: 3, marginTop: 1 }}>
+                                  <span style={{ color: "#065f46", fontWeight: 700 }}>총금액</span>
+                                  <b style={{ color: "#065f46", fontSize: 13 }}>{gt.total.toLocaleString()}원</b>
+                                </div>
                               </div>
                             ) : null; })()}
                           </div>
