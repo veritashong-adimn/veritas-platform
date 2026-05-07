@@ -34,19 +34,27 @@ export const quoteItemsTable = pgTable("quote_items", {
 
   memo: text("memo"),
 
-  // ── 항목 유형 (번역/통역) ────────────────────────────────────────────────
-  itemType: text("item_type").default("translation"),          // "translation" | "interpretation"
+  // ── 항목 유형 ────────────────────────────────────────────────────────────
+  itemType: text("item_type").default("translation"),
+  // "translation" | "interpretation" | "equipment" | "expense"
 
   // ── 세금 유형 ────────────────────────────────────────────────────────────
   taxType: text("tax_type").default("taxable"),                // "taxable" | "exempt" | "zero_rate"
 
   // ── 통역 전용 필드 ─────────────────────────────────────────────────────
-  interpretDate: date("interpret_date"),                        // 통역 날짜
-  interpretPlace: text("interpret_place"),                      // 장소
-  interpretType: text("interpret_type"),                        // "consecutive" | "simultaneous" | "meeting"
-  interpretDuration: text("interpret_duration"),                // "4h" | "8h" 등 (기존 memo에서 분리)
+  interpretDate: date("interpret_date"),
+  interpretPlace: text("interpret_place"),
+  interpretType: text("interpret_type"),                       // "consecutive" | "simultaneous" | "meeting"
+  interpretDuration: text("interpret_duration"),
   hasTravelExpense: boolean("has_travel_expense").default(false),
   hasEquipment: boolean("has_equipment").default(false),
+
+  // ── 통역 방향 (통역 항목) ────────────────────────────────────────────────
+  interpretationDirection: text("interpretation_direction"),   // "양방향" | "A→B" | "B→A"
+
+  // ── 장비 전용 필드 ─────────────────────────────────────────────────────
+  quantityUnit: text("quantity_unit"),                         // "개" | "세트" | "부스"
+  usagePeriod: text("usage_period"),                           // "반일" | "1일" | "2일" | "3일"
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });

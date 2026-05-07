@@ -69,6 +69,12 @@ export type QuoteItemDoc = {
   hasTravelExpense?: boolean | null;
   hasEquipment?: boolean | null;
   files?: Array<{ fileName: string; fileUrl: string }>;
+  /** 통역 방향 */
+  interpretationDirection?: string | null;
+  /** 장비 수량단위 */
+  quantityUnit?: string | null;
+  /** 장비 사용기간 */
+  usagePeriod?: string | null;
 };
 
 export type QuoteDoc = {
@@ -390,24 +396,56 @@ function calcItemData(doc: QuoteDoc) {
   const hasItems = !!(doc.items && doc.items.length > 0);
   const INTERPRET_TYPE_KO: Record<string, string> = { consecutive: "순차통역", simultaneous: "동시통역", meeting: "수행통역" };
   const TAX_TYPE_KO: Record<string, string> = { taxable: "과세", exempt: "면세", zero_rate: "영세율" };
+  const DIRECTION_SYMBOL: Record<string, string> = { "양방향": "↔", "A→B": "→", "B→A": "←" };
+
   const itemRows = hasItems
     ? doc.items!.map((item, i) => {
         const isInterpret = item.itemType === "interpretation";
+        const isEquipment = item.itemType === "equipment";
+        const isExpense = item.itemType === "expense";
         let subLines = "";
+
         if (isInterpret) {
-          const parts = [];
+          const parts: string[] = [];
+          if (item.languagePair) parts.push(item.languagePair);
+          if (item.interpretationDirection) parts.push(DIRECTION_SYMBOL[item.interpretationDirection] ?? item.interpretationDirection);
+          if (item.interpretType) parts.push(INTERPRET_TYPE_KO[item.interpretType] ?? item.interpretType);
           if (item.interpretDate) parts.push(`날짜: ${item.interpretDate}`);
           if (item.interpretPlace) parts.push(`장소: ${esc(item.interpretPlace)}`);
-          if (item.interpretType) parts.push(INTERPRET_TYPE_KO[item.interpretType] ?? item.interpretType);
           if (item.interpretDuration) parts.push(`진행: ${esc(item.interpretDuration)}`);
           if (item.hasTravelExpense) parts.push("출장");
           if (item.hasEquipment) parts.push("장비");
           if (parts.length) subLines += `<br/><span style="font-size:9px;color:#7c3aed">${parts.join(" · ")}</span>`;
-        } else if (item.files && item.files.length > 0) {
-          subLines += `<br/><span style="font-size:9px;color:#6b7280">📎 ${item.files.map(f => esc(f.fileName)).join(", ")}</span>`;
+        } else if (isEquipment) {
+          const parts: string[] = [];
+          if (item.usagePeriod) parts.push(`사용기간: ${esc(item.usagePeriod)}`);
+          if (item.quantityUnit) parts.push(`단위: ${esc(item.quantityUnit)}`);
+          if (parts.length) subLines += `<br/><span style="font-size:9px;color:#1d4ed8">${parts.join(" · ")}</span>`;
+        } else {
+          if (item.languagePair) subLines += `<br/><span style="font-size:9px;color:#6b7280">${esc(item.languagePair)}</span>`;
+          if (item.files && item.files.length > 0) {
+            subLines += `<br/><span style="font-size:9px;color:#6b7280">📎 ${item.files.map(f => esc(f.fileName)).join(", ")}</span>`;
+          }
         }
         if (item.memo) subLines += `<br/><span style="font-size:10px;color:#6b7280">${esc(item.memo)}</span>`;
+
         const taxLabel = item.taxType && item.taxType !== "taxable" ? `<br/><span style="font-size:9px;color:#059669">${TAX_TYPE_KO[item.taxType] ?? ""}</span>` : "";
+
+        // 실비: 수량/단가 생략, 금액만 표시
+        if (isExpense) {
+          return `
+          <tr>
+            <td class="ctr">${i + 1}</td>
+            <td>${esc(item.productName)}<span style="font-size:9px;color:#6b7280;margin-left:4px">[실비]</span>${subLines}</td>
+            <td class="ctr">—</td>
+            <td class="num">—</td>
+            <td class="num">—${taxLabel}</td>
+            <td class="num">${Number(item.supplyAmount).toLocaleString("ko-KR")}원</td>
+            <td class="num">${item.taxType === "exempt" ? "면세" : item.taxType === "zero_rate" ? "영세율" : `${Number(item.taxAmount).toLocaleString("ko-KR")}원`}</td>
+            <td class="num">${Number(item.totalAmount).toLocaleString("ko-KR")}원</td>
+          </tr>`;
+        }
+
         return `
         <tr>
           <td class="ctr">${i + 1}</td>

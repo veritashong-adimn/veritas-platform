@@ -1122,6 +1122,9 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
     interpretDate?: string; interpretPlace?: string; interpretType?: string;
     interpretDuration?: string; hasTravelExpense?: boolean; hasEquipment?: boolean;
     files?: Array<{ name: string; url: string; size?: number }>;
+    interpretationDirection?: string;
+    quantityUnit?: string;
+    usagePeriod?: string;
   };
   const {
     amount, items, note,
@@ -1342,6 +1345,9 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
           interpretDuration: (it as any).interpretDuration ?? null,
           hasTravelExpense: (it as any).hasTravelExpense ?? false,
           hasEquipment: (it as any).hasEquipment ?? false,
+          interpretationDirection: (it as any).interpretationDirection ?? null,
+          quantityUnit: (it as any).quantityUnit ?? null,
+          usagePeriod: (it as any).usagePeriod ?? null,
         }))).returning({ id: quoteItemsTable.id });
 
         // 첨부 파일 기록 (번역 항목)
@@ -2062,8 +2068,8 @@ router.post("/admin/projects/:id/payment", ...adminGuard, requirePermission("pay
   const projectId = Number(req.params.id);
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
-  const { amount, paymentDate, paymentMethod, paymentNote } = req.body as {
-    amount?: number; paymentDate?: string; paymentMethod?: string; paymentNote?: string;
+  const { amount, paymentDate, paymentDueDate, paymentMethod, paymentNote } = req.body as {
+    amount?: number; paymentDate?: string; paymentDueDate?: string; paymentMethod?: string; paymentNote?: string;
   };
   if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
     res.status(400).json({ error: "유효한 결제 금액(원)이 필요합니다." }); return;
@@ -2085,7 +2091,10 @@ router.post("/admin/projects/:id/payment", ...adminGuard, requirePermission("pay
         paymentNote: paymentNote || null,
       }).returning();
       await tx.update(projectsTable).set({ status: "paid" }).where(eq(projectsTable.id, projectId));
-      await tx.update(quotesTable).set({ status: "approved" }).where(eq(quotesTable.projectId, projectId));
+      await tx.update(quotesTable).set({
+        status: "approved",
+        ...(paymentDueDate ? { paymentDueDate } : {}),
+      }).where(eq(quotesTable.projectId, projectId));
       return payment;
     });
     await logEvent("project", projectId, "payment_received", req.log, req.user ?? undefined);

@@ -103,6 +103,9 @@ async function loadProjectData(projectId: number) {
       interpretDuration: it.interpretDuration,
       hasTravelExpense: it.hasTravelExpense,
       hasEquipment: it.hasEquipment,
+      interpretationDirection: (it as any).interpretationDirection ?? null,
+      quantityUnit: (it as any).quantityUnit ?? null,
+      usagePeriod: (it as any).usagePeriod ?? null,
       files: filesByItem.get(it.id) ?? [],
     }));
   }
