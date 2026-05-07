@@ -155,6 +155,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [deactivatingProductId, setDeactivatingProductId] = useState<number | null>(null);
   const [deactivationReason, setDeactivationReason] = useState("");
   const [productDupeWarning, setProductDupeWarning] = useState<{ existing: { id: number; code: string; name: string }[] } | null>(null);
+  const [deletingProduct, setDeletingProduct] = useState<{ id: number; code: string; name: string } | null>(null);
+  const [purging, setPurging] = useState(false);
   const [productNameCustom, setProductNameCustom] = useState(false);
 
   // ─── 자동 상품명 생성 ────────────────────────────────────────────────────
@@ -478,6 +480,27 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
       await fetchProducts();
       setToast("상품이 비활성화되었습니다.");
     } catch { setToast("오류: 비활성화 실패"); }
+  };
+
+  // ─── 상품 완전삭제 ───────────────────────────────────────────────────────
+  const handlePurgeProduct = async () => {
+    if (!deletingProduct) return;
+    setPurging(true);
+    try {
+      const res = await fetch(api(`/api/admin/products/${deletingProduct.id}/purge`), {
+        method: "DELETE", headers: authHeaders,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setToast(`오류: ${data.error}`);
+        setDeletingProduct(null);
+        return;
+      }
+      setToast(`상품 "${deletingProduct.name}" (${deletingProduct.code})이 완전삭제되었습니다.`);
+      setDeletingProduct(null);
+      await fetchProducts();
+    } catch { setToast("오류: 완전삭제 실패"); }
+    finally { setPurging(false); }
   };
 
   // ─── 상품 폼 렌더링 ─────────────────────────────────────────────────────
@@ -867,7 +890,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               </div>
             )}
           </div>
-          <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+          <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "flex-start" }}>
             {hasPerm("product.manage") && (
               <button onClick={() => {
                 setEditingProduct(p.id);
@@ -905,6 +928,13 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               <button onClick={() => handleToggleProduct(p.id)}
                 style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: p.active ? "#fef2f2" : "#f0fdf4", color: p.active ? "#dc2626" : "#059669", border: "none", fontWeight: 600 }}>
                 {p.active ? "비활성" : "활성"}
+              </button>
+            )}
+            {user?.role === "admin" && (
+              <button onClick={() => setDeletingProduct({ id: p.id, code: p.code, name: p.name })}
+                title="완전삭제 (복구 불가)"
+                style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#1f2937", color: "#f9fafb", border: "none", fontWeight: 600 }}>
+                삭제
               </button>
             )}
           </div>
@@ -1280,6 +1310,40 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             <div style={{ display: "flex", gap: 8 }}>
               <PrimaryBtn onClick={handleConfirmDeactivate} style={{ fontSize: 13 }}>비활성화</PrimaryBtn>
               <GhostBtn onClick={() => setDeactivatingProductId(null)} style={{ fontSize: 13 }}>취소</GhostBtn>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* 완전삭제 확인 모달 */}
+      {deletingProduct && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1001 }}>
+          <Card style={{ width: 420, padding: "28px 32px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+              <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#fee2e2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>🗑</div>
+              <div>
+                <p style={{ margin: 0, fontWeight: 700, fontSize: 16, color: "#111827" }}>상품 완전삭제</p>
+                <p style={{ margin: "2px 0 0", fontSize: 12, color: "#9ca3af" }}>삭제 후 복구 불가</p>
+              </div>
+            </div>
+            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "12px 16px", marginBottom: 16 }}>
+              <p style={{ margin: 0, fontSize: 13, color: "#374151" }}>
+                <span style={{ fontFamily: "monospace", background: "#e5e7eb", padding: "1px 6px", borderRadius: 4, marginRight: 6 }}>{deletingProduct.code}</span>
+                <strong>{deletingProduct.name}</strong>
+              </p>
+            </div>
+            <p style={{ margin: "0 0 6px", fontSize: 13, color: "#dc2626", fontWeight: 600 }}>⚠ 주의사항</p>
+            <ul style={{ margin: "0 0 20px", paddingLeft: 18, fontSize: 12, color: "#6b7280", lineHeight: 1.7 }}>
+              <li>견적/프로젝트에 사용된 상품은 삭제할 수 없습니다.</li>
+              <li>상품 코드는 삭제 후에도 재사용되지 않습니다.</li>
+              <li>통번역사 단가 설정이 함께 삭제됩니다.</li>
+            </ul>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={handlePurgeProduct} disabled={purging}
+                style={{ flex: 1, padding: "10px 0", fontSize: 14, borderRadius: 8, cursor: purging ? "not-allowed" : "pointer", background: purging ? "#9ca3af" : "#dc2626", color: "#fff", border: "none", fontWeight: 700 }}>
+                {purging ? "삭제 중..." : "완전삭제"}
+              </button>
+              <GhostBtn onClick={() => setDeletingProduct(null)} style={{ fontSize: 13, padding: "10px 20px" }}>취소</GhostBtn>
             </div>
           </Card>
         </div>

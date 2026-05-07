@@ -20,6 +20,7 @@ export const productsTable = pgTable("products", {
   active: boolean("active").notNull().default(true),
   deactivationReason: text("deactivation_reason"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  deletedAt: timestamp("deleted_at"),
 });
 
 export type Product = typeof productsTable.$inferSelect;
