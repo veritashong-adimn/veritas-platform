@@ -1003,13 +1003,20 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             placeholder="상품명, 코드 검색..."
             style={{ ...inputStyle, maxWidth: 200, flex: "1 1 140px", padding: "8px 12px", fontSize: 13 }}
             onKeyDown={e => e.key === "Enter" && fetchProducts()} />
-          <select value={filterProductType} onChange={e => setFilterProductType(e.target.value)}
-            style={{ ...inputStyle, padding: "8px 10px", fontSize: 13, minWidth: 110 }}>
-            <option value="">전체 유형</option>
-            {Object.entries(PRODUCT_TYPES_META).map(([k, v]) => (
-              <option key={k} value={k}>{TYPE_COLORS[k]?.icon} {v.label}</option>
-            ))}
-          </select>
+          <ClickSelect
+            value={filterProductType}
+            onChange={v => setFilterProductType(v)}
+            placeholder="전체 유형"
+            options={[
+              { value: "", label: "전체 유형" },
+              ...Object.entries(PRODUCT_TYPES_META).map(([k, v]) => ({
+                value: k,
+                label: `${TYPE_COLORS[k]?.icon ?? ""} ${v.label}`,
+              })),
+            ]}
+            style={{ minWidth: 110 }}
+            triggerStyle={{ padding: "8px 10px", fontSize: 13, width: "100%" }}
+          />
           {/* 출발언어/도착언어 필터 (통역장비 제외) */}
           {filterProductType !== "equipment" && (
             <>
