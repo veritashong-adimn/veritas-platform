@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { api } from '../../lib/constants';
-import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
+import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 
 type ServiceType = "translation" | "interpretation" | "equipment";
 
@@ -312,10 +312,10 @@ export function LanguageServiceDataTab({ token, setToast }: { token: string; set
               <input value={f.useCase} onChange={e => setForm(p => ({ ...p, useCase: e.target.value }))} style={inputStyle} placeholder="계약서, 컨퍼런스..." />
             </FieldRow>
             <FieldRow label="단가 (원)">
-              <input type="number" value={f.unitPrice} onChange={e => setForm(p => ({ ...p, unitPrice: e.target.value }))} style={inputStyle} placeholder="0" />
+              <NumericInput value={f.unitPrice} onChange={raw => setForm(p => ({ ...p, unitPrice: raw }))} style={inputStyle} placeholder="0" suffix="원" />
             </FieldRow>
             <FieldRow label="총 금액 (원)">
-              <input type="number" value={f.totalPrice} onChange={e => setForm(p => ({ ...p, totalPrice: e.target.value }))} style={inputStyle} placeholder="0" />
+              <NumericInput value={f.totalPrice} onChange={raw => setForm(p => ({ ...p, totalPrice: raw }))} style={inputStyle} placeholder="0" suffix="원" />
             </FieldRow>
             <FieldRow label="납기">
               <input value={f.turnaroundTime} onChange={e => setForm(p => ({ ...p, turnaroundTime: e.target.value }))} style={inputStyle} placeholder="2 business days" />

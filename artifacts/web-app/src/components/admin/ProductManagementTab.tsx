@@ -4,7 +4,7 @@ import {
   PRODUCT_TYPES_META, MAIN_CATEGORIES_BY_TYPE, SUB_CATEGORIES_BY_MAIN,
   LANGUAGE_CODES, UNITS_BY_PRODUCT_TYPE, PRODUCT_OPTION_TYPES, EQUIPMENT_ITEMS,
 } from '../../lib/constants';
-import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
+import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 import { LanguageSearchSelect, LangCustomInput, isLangCustom, ItemSearchSelect, isItemCustom } from './LanguageSearchSelect';
 
 const inputStyle: React.CSSProperties = {
@@ -722,8 +722,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           </div>
           <div>
             <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>기본단가 <span style={{ color: "#dc2626" }}>*</span></label>
-            <input value={form.basePrice} onChange={e => setForm(p => ({ ...p, basePrice: e.target.value }))}
-              type="number" min="0" placeholder="0"
+            <NumericInput value={form.basePrice} onChange={raw => setForm(p => ({ ...p, basePrice: raw }))}
+              placeholder="0" suffix="원"
               style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
           </div>
         </div>
@@ -740,8 +740,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               </div>
               <div>
                 <label style={{ fontSize: 12, color: "#7c3aed", display: "block", marginBottom: 3 }}>초과 단가 (1시간당)</label>
-                <input value={form.overtimePrice} onChange={e => setForm(p => ({ ...p, overtimePrice: e.target.value }))}
-                  type="number" min="0" placeholder="초과 시 적용 단가 (선택)"
+                <NumericInput value={form.overtimePrice} onChange={raw => setForm(p => ({ ...p, overtimePrice: raw }))}
+                  placeholder="초과 시 적용 단가 (선택)" suffix="원"
                   style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
               </div>
             </div>

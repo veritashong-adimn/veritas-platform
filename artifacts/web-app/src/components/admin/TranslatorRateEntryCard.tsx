@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { ClickSelect } from "../ui";
+import { ClickSelect, NumericInput } from "../ui";
 import {
   SERVICE_TYPES as WORK_TYPES,
   SUB_SERVICE_TYPES as SUB_TYPES_MAP,
@@ -154,8 +154,8 @@ export function TranslatorRateEntryCard({
         </div>
         <div>
           <div style={label11}>단가</div>
-          <input type="number" value={r.rate} onChange={e => up({ rate: e.target.value })}
-            placeholder="예: 40" style={inputStyle} />
+          <NumericInput value={r.rate} onChange={raw => up({ rate: raw })}
+            allowDecimal placeholder="예: 40" style={inputStyle} />
         </div>
         <div>
           <div style={label11}>통화</div>
@@ -203,8 +203,8 @@ export function TranslatorRateEntryCard({
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px 8px", marginTop: 6 }}>
             <div>
               <div style={label11}>최소금액 (선택)</div>
-              <input type="number" value={r.minPrice} onChange={e => up({ minPrice: e.target.value })}
-                placeholder="예: 50000" style={inputStyle} />
+              <NumericInput value={r.minPrice} onChange={raw => up({ minPrice: raw })}
+                placeholder="예: 50000" suffix="원" style={inputStyle} />
             </div>
             <div>
               <div style={label11}>기본시간 (선택)</div>
@@ -213,8 +213,8 @@ export function TranslatorRateEntryCard({
             </div>
             <div>
               <div style={label11}>추가시간 단가 (선택)</div>
-              <input type="number" value={r.overtimeRate} onChange={e => up({ overtimeRate: e.target.value })}
-                placeholder="예: 30000" style={inputStyle} />
+              <NumericInput value={r.overtimeRate} onChange={raw => up({ overtimeRate: raw })}
+                placeholder="예: 30000" suffix="원" style={inputStyle} />
             </div>
           </div>
         )}

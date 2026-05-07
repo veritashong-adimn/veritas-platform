@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react";
 import { STATUS_LABEL, STATUS_STYLE, ROLE_LABEL, ROLE_STYLE, Role } from "../../lib/constants";
 
 export const inputStyle: React.CSSProperties = {
@@ -423,6 +423,116 @@ export function SearchableSelectShared({
             })
           }
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── NumericInput ──────────────────────────────────────────────────────────────
+// 플랫폼 전역 천단위 콤마 숫자 입력 컴포넌트
+// value/onChange: 콤마 없는 raw string ("1000000")
+// display: "1,000,000"
+// 커서 위치 보정: 콤마 추가/삭제 시 커서 튀지 않음
+
+function _fmtNumDisplay(raw: string, allowDecimal: boolean): string {
+  if (!raw || raw === "-") return raw;
+  const neg = raw.startsWith("-");
+  const abs = neg ? raw.slice(1) : raw;
+  if (allowDecimal && abs.includes(".")) {
+    const dotIdx = abs.indexOf(".");
+    const intPart = abs.slice(0, dotIdx).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    const decPart = abs.slice(dotIdx + 1);
+    return (neg ? "-" : "") + intPart + "." + decPart;
+  }
+  return (neg ? "-" : "") + abs.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+export function NumericInput({
+  value,
+  onChange,
+  allowDecimal = false,
+  allowNegative = false,
+  suffix,
+  placeholder = "0",
+  style,
+  disabled = false,
+}: {
+  value: string | number;
+  onChange: (raw: string) => void;
+  allowDecimal?: boolean;
+  allowNegative?: boolean;
+  suffix?: string;
+  placeholder?: string;
+  style?: React.CSSProperties;
+  disabled?: boolean;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const pendingCaret = useRef<number | null>(null);
+
+  const raw = String(value ?? "").replace(/,/g, "");
+  const displayed = _fmtNumDisplay(raw, allowDecimal);
+
+  useLayoutEffect(() => {
+    if (pendingCaret.current !== null && inputRef.current) {
+      inputRef.current.setSelectionRange(pendingCaret.current, pendingCaret.current);
+      pendingCaret.current = null;
+    }
+  });
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const el = e.target;
+    const cursor = el.selectionStart ?? 0;
+    const inputVal = el.value;
+
+    let digitsBeforeCursor = 0;
+    for (let i = 0; i < cursor; i++) {
+      if (inputVal[i] >= "0" && inputVal[i] <= "9") digitsBeforeCursor++;
+    }
+
+    let newRaw = inputVal.replace(/,/g, "");
+    const keepPattern = allowNegative
+      ? (allowDecimal ? /[^\d.-]/g : /[^\d-]/g)
+      : (allowDecimal ? /[^\d.]/g : /[^\d]/g);
+    newRaw = newRaw.replace(keepPattern, "");
+
+    if (allowDecimal) {
+      const firstDot = newRaw.indexOf(".");
+      if (firstDot !== -1) {
+        newRaw = newRaw.slice(0, firstDot + 1) + newRaw.slice(firstDot + 1).replace(/\./g, "");
+      }
+    }
+
+    const newFormatted = _fmtNumDisplay(newRaw, allowDecimal);
+
+    let dCount = 0;
+    let newCursor = newFormatted.length;
+    for (let i = 0; i < newFormatted.length; i++) {
+      if (dCount === digitsBeforeCursor) { newCursor = i; break; }
+      if (newFormatted[i] >= "0" && newFormatted[i] <= "9") dCount++;
+    }
+
+    pendingCaret.current = newCursor;
+    onChange(newRaw);
+  };
+
+  const hasSuffix = !!suffix;
+  return (
+    <div style={{ position: "relative", display: "flex", alignItems: "center", width: "100%" }}>
+      <input
+        ref={inputRef}
+        value={displayed}
+        onChange={handleChange}
+        placeholder={placeholder}
+        disabled={disabled}
+        inputMode="numeric"
+        style={{ width: "100%", boxSizing: "border-box", paddingRight: hasSuffix ? 32 : undefined, ...style }}
+      />
+      {hasSuffix && (
+        <span style={{
+          position: "absolute", right: 10, color: "#9ca3af",
+          fontSize: 12, pointerEvents: "none", userSelect: "none",
+          lineHeight: 1, whiteSpace: "nowrap",
+        }}>{suffix}</span>
       )}
     </div>
   );

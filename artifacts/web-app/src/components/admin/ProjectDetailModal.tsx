@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, ALL_FINANCIAL_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, AdminUser, BOARD_CATEGORY_LABEL, Product } from '../../lib/constants';
-import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
+import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 import { ReviewMemoPanel } from './ReviewMemoPanel';
 import { DraggableModal } from './DraggableModal';
 import { ProjectControlTowerTab } from './ProjectControlTowerTab';
@@ -2056,9 +2056,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
                                 <div>
                                   {qfLbl("최초 입금액 (원) *")}
-                                  <input
-                                    type="number" min="0" value={quickPrepaidAmount} placeholder="0"
-                                    onChange={e => setQuickPrepaidAmount(e.target.value)}
+                                  <NumericInput
+                                    value={quickPrepaidAmount} onChange={raw => setQuickPrepaidAmount(raw)} placeholder="0" suffix="원"
                                     style={{ ...qfIs, borderColor: "#fde68a" }}
                                   />
                                 </div>
@@ -2372,17 +2371,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                               <td style={tdSt}><input value={editWI.projectName} onChange={e => setEditWI(p => ({ ...p, projectName: e.target.value }))} style={inpSt} placeholder="프로젝트명" /></td>
                                               <td style={tdSt}><input value={editWI.language} onChange={e => setEditWI(p => ({ ...p, language: e.target.value }))} style={inpSt} placeholder="KO→EN" /></td>
                                               <td style={tdSt}><input value={editWI.description} onChange={e => setEditWI(p => ({ ...p, description: e.target.value }))} style={inpSt} placeholder="내용" /></td>
-                                              <td style={{ ...tdSt, textAlign: "right" }}><input type="number" value={editWI.quantity} onChange={e => {
-                                                const qty = parseFloat(e.target.value) || 0;
+                                              <td style={{ ...tdSt, textAlign: "right" }}><NumericInput allowDecimal value={editWI.quantity} onChange={raw => {
+                                                const qty = parseFloat(raw) || 0;
                                                 const price = parseFloat(editWI.unitPrice) || 0;
-                                                setEditWI(p => ({ ...p, quantity: e.target.value, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
+                                                setEditWI(p => ({ ...p, quantity: raw, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
                                               }} style={{ ...inpSt, textAlign: "right" }} /></td>
-                                              <td style={{ ...tdSt, textAlign: "right" }}><input type="number" value={editWI.unitPrice} onChange={e => {
-                                                const price = parseFloat(e.target.value) || 0;
+                                              <td style={{ ...tdSt, textAlign: "right" }}><NumericInput value={editWI.unitPrice} onChange={raw => {
+                                                const price = parseFloat(raw) || 0;
                                                 const qty = parseFloat(editWI.quantity) || 0;
-                                                setEditWI(p => ({ ...p, unitPrice: e.target.value, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
+                                                setEditWI(p => ({ ...p, unitPrice: raw, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
                                               }} style={{ ...inpSt, textAlign: "right" }} /></td>
-                                              <td style={{ ...tdSt, textAlign: "right" }}><input type="number" value={editWI.amount} onChange={e => setEditWI(p => ({ ...p, amount: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} placeholder="자동" /></td>
+                                              <td style={{ ...tdSt, textAlign: "right" }}><NumericInput value={editWI.amount} onChange={raw => setEditWI(p => ({ ...p, amount: raw }))} style={{ ...inpSt, textAlign: "right" }} placeholder="자동" /></td>
                                               <td style={{ ...tdSt, textAlign: "center" }}>
                                                 <button type="button" onClick={() => saveWorkItem(batchData.id, w.id, editWI)} disabled={activeBatchOp}
                                                   style={{ fontSize: 10, padding: "2px 6px", background: "#065f46", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer", marginBottom: 2, display: "block", width: "100%" }}>저장</button>
@@ -2419,17 +2418,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                           <td style={tdSt}><input value={newWI.projectName} onChange={e => setNewWI(p => ({ ...p, projectName: e.target.value }))} style={inpSt} placeholder="프로젝트명" /></td>
                                           <td style={tdSt}><input value={newWI.language} onChange={e => setNewWI(p => ({ ...p, language: e.target.value }))} style={inpSt} placeholder="KO→EN" /></td>
                                           <td style={tdSt}><input value={newWI.description} onChange={e => setNewWI(p => ({ ...p, description: e.target.value }))} style={inpSt} placeholder="내용" /></td>
-                                          <td style={{ ...tdSt }}><input type="number" value={newWI.quantity} onChange={e => {
-                                            const qty = parseFloat(e.target.value) || 0;
+                                          <td style={{ ...tdSt }}><NumericInput allowDecimal value={newWI.quantity} onChange={raw => {
+                                            const qty = parseFloat(raw) || 0;
                                             const price = parseFloat(newWI.unitPrice) || 0;
-                                            setNewWI(p => ({ ...p, quantity: e.target.value, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
+                                            setNewWI(p => ({ ...p, quantity: raw, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
                                           }} style={{ ...inpSt, textAlign: "right" }} /></td>
-                                          <td style={{ ...tdSt }}><input type="number" value={newWI.unitPrice} onChange={e => {
-                                            const price = parseFloat(e.target.value) || 0;
+                                          <td style={{ ...tdSt }}><NumericInput value={newWI.unitPrice} onChange={raw => {
+                                            const price = parseFloat(raw) || 0;
                                             const qty = parseFloat(newWI.quantity) || 0;
-                                            setNewWI(p => ({ ...p, unitPrice: e.target.value, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
+                                            setNewWI(p => ({ ...p, unitPrice: raw, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
                                           }} style={{ ...inpSt, textAlign: "right" }} placeholder="단가" /></td>
-                                          <td style={{ ...tdSt }}><input type="number" value={newWI.amount} onChange={e => setNewWI(p => ({ ...p, amount: e.target.value }))} style={{ ...inpSt, textAlign: "right" }} placeholder="(수량×단가)" /></td>
+                                          <td style={{ ...tdSt }}><NumericInput value={newWI.amount} onChange={raw => setNewWI(p => ({ ...p, amount: raw }))} style={{ ...inpSt, textAlign: "right" }} placeholder="(수량×단가)" /></td>
                                           <td style={{ ...tdSt, textAlign: "center" }}>
                                             <button type="button" onClick={() => addWorkItem(batchData.id, newWI)} disabled={activeBatchOp}
                                               style={{ fontSize: 10, padding: "2px 6px", background: "#065f46", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer", marginBottom: 2, display: "block", width: "100%" }}>추가</button>
@@ -2681,10 +2680,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                           { value: "meeting", label: "수행통역" },
                                         ]}
                                       />
-                                      <input value={it.unitPrice}
-                                        onChange={e => { const raw = e.target.value.replace(/,/g, ""); setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw, quantity: "1" } : p)); }}
-                                        onBlur={e => { const n = Number(e.target.value.replace(/,/g, "")); if (!isNaN(n) && n > 0) setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: n.toLocaleString() } : p)); }}
-                                        onFocus={e => { setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: it.unitPrice.replace(/,/g, "") } : p)); }}
+                                      <NumericInput value={it.unitPrice}
+                                        onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw, quantity: "1" } : p))}
                                         placeholder="총금액" style={{ ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right", borderColor: "#d8b4fe" }} />
                                       <ClickSelect
                                         value={it.taxType}
@@ -2739,12 +2736,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                           { value: "시간", label: "시간" },
                                         ]}
                                       />
-                                      <input type="number" value={it.quantity} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: e.target.value } : p))}
-                                        min="0" style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "right" }} />
-                                      <input value={it.unitPrice}
-                                        onChange={e => { const raw = e.target.value.replace(/,/g, ""); setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p)); }}
-                                        onBlur={e => { const n = Number(e.target.value.replace(/,/g, "")); if (!isNaN(n) && n > 0) setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: n.toLocaleString() } : p)); }}
-                                        onFocus={e => { setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: it.unitPrice.replace(/,/g, "") } : p)); }}
+                                      <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
+                                        style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "right" }} />
+                                      <NumericInput value={it.unitPrice}
+                                        onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right" }} />
                                       <ClickSelect
                                         value={it.taxType}
@@ -2972,9 +2967,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
                             <div>
                               <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 3 }}>금액 (원) *</label>
-                              <input type="number" min="0" value={paymentAmount}
-                                onChange={e => setPaymentAmount(e.target.value)}
-                                placeholder="예: 500000"
+                              <NumericInput value={paymentAmount} onChange={raw => setPaymentAmount(raw)}
+                                placeholder="예: 500000" suffix="원"
                                 style={{ ...inputStyle, width: "100%", fontSize: 13, padding: "7px 10px", boxSizing: "border-box" }} />
                             </div>
                             <div>

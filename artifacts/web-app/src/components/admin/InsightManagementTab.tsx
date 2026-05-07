@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { NumericInput } from "../ui";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1252,15 +1253,15 @@ export function InsightManagementTab({ token, setToast }: Props) {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                   <div>
                     <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 3 }}>평균 단가</div>
-                    <input type="number" value={manualDraft.avgPrice} onChange={e => setManualDraft(d => ({ ...d, avgPrice: e.target.value }))} placeholder="100000" style={editInputStyle} />
+                    <NumericInput value={manualDraft.avgPrice ?? ""} onChange={raw => setManualDraft(d => ({ ...d, avgPrice: raw }))} placeholder="100000" suffix="원" style={editInputStyle} />
                   </div>
                   <div>
                     <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 3 }}>최소 단가</div>
-                    <input type="number" value={manualDraft.minPrice} onChange={e => setManualDraft(d => ({ ...d, minPrice: e.target.value }))} placeholder="80000" style={editInputStyle} />
+                    <NumericInput value={manualDraft.minPrice ?? ""} onChange={raw => setManualDraft(d => ({ ...d, minPrice: raw }))} placeholder="80000" suffix="원" style={editInputStyle} />
                   </div>
                   <div>
                     <div style={{ fontSize: 10, color: "#9ca3af", marginBottom: 3 }}>최대 단가</div>
-                    <input type="number" value={manualDraft.maxPrice} onChange={e => setManualDraft(d => ({ ...d, maxPrice: e.target.value }))} placeholder="120000" style={editInputStyle} />
+                    <NumericInput value={manualDraft.maxPrice ?? ""} onChange={raw => setManualDraft(d => ({ ...d, maxPrice: raw }))} placeholder="120000" suffix="원" style={editInputStyle} />
                   </div>
                 </div>
               </div>
@@ -1855,13 +1856,13 @@ export function InsightManagementTab({ token, setToast }: Props) {
 
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                   <EditField label="평균 단가">
-                    <input type="number" value={editDraft.avgPrice ?? ""} onChange={e => setEditDraft(d => ({ ...d, avgPrice: e.target.value }))} style={editInputStyle} placeholder="0" />
+                    <NumericInput value={editDraft.avgPrice ?? ""} onChange={raw => setEditDraft(d => ({ ...d, avgPrice: raw }))} style={editInputStyle} placeholder="0" suffix="원" />
                   </EditField>
                   <EditField label="최저 단가">
-                    <input type="number" value={editDraft.minPrice ?? ""} onChange={e => setEditDraft(d => ({ ...d, minPrice: e.target.value }))} style={editInputStyle} placeholder="0" />
+                    <NumericInput value={editDraft.minPrice ?? ""} onChange={raw => setEditDraft(d => ({ ...d, minPrice: raw }))} style={editInputStyle} placeholder="0" suffix="원" />
                   </EditField>
                   <EditField label="최고 단가">
-                    <input type="number" value={editDraft.maxPrice ?? ""} onChange={e => setEditDraft(d => ({ ...d, maxPrice: e.target.value }))} style={editInputStyle} placeholder="0" />
+                    <NumericInput value={editDraft.maxPrice ?? ""} onChange={raw => setEditDraft(d => ({ ...d, maxPrice: raw }))} style={editInputStyle} placeholder="0" suffix="원" />
                   </EditField>
                 </div>
 

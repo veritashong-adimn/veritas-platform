@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { api } from "../../lib/constants";
-import { PrimaryBtn, GhostBtn } from "../ui";
+import { PrimaryBtn, GhostBtn, NumericInput } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 
 interface LedgerEntry {
@@ -167,7 +167,7 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>금액 (원) *</label>
-                  <input value={txAmount} onChange={e => setTxAmount(e.target.value)} placeholder="예: 500000"
+                  <NumericInput value={txAmount} onChange={raw => setTxAmount(raw)} placeholder="예: 500000" suffix="원"
                     style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 14, outline: "none" }} />
                 </div>
                 <div>
