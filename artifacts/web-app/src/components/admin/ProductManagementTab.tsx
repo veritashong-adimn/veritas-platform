@@ -149,6 +149,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [filterMainCategory, setFilterMainCategory] = useState("");
   const [filterActiveOnly, setFilterActiveOnly] = useState<"" | "true" | "false">("");
 
+  const [deletingRequestId, setDeletingRequestId] = useState<number | null>(null);
+  const [deletingRequestInProgress, setDeletingRequestInProgress] = useState(false);
+
   // 기타 상태
   const [deactivatingProductId, setDeactivatingProductId] = useState<number | null>(null);
   const [deactivationReason, setDeactivationReason] = useState("");
@@ -386,6 +389,22 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
       setRejectReason("");
       fetchProductRequests();
     } catch { setToast("오류: 거절 처리 실패"); }
+  };
+
+  const handleDeleteRequest = async () => {
+    if (deletingRequestId === null) return;
+    const targetId = deletingRequestId;
+    setDeletingRequestInProgress(true);
+    try {
+      const res = await fetch(api(`/api/admin/product-requests/${targetId}`), {
+        method: "DELETE", headers: authHeaders,
+      });
+      if (!res.ok) { const d = await res.json(); setToast(`삭제 실패: ${d.error}`); return; }
+      setDeletingRequestId(null);
+      setToast("요청이 삭제되었습니다.");
+      await fetchProductRequests();
+    } catch { setToast("오류: 삭제 실패"); }
+    finally { setDeletingRequestInProgress(false); }
   };
 
   // ─── 엑셀 다운로드 ──────────────────────────────────────────────────────
@@ -854,6 +873,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             )}
             {user?.role === "admin" && (
               <button onClick={() => setDeletingProduct({ id: p.id, code: p.code, name: p.name })}
+                aria-label="상품 완전삭제"
                 title="완전삭제 (복구 불가)"
                 style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#1f2937", color: "#f9fafb", border: "none", fontWeight: 600 }}>
                 삭제
@@ -1085,34 +1105,43 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                         <p style={{ margin: "4px 0 0", fontSize: 12, color: "#991b1b" }}>거절 사유: {req.rejectionReason}</p>
                       )}
                     </div>
-                    {req.status === "pending" && user?.role === "admin" && (
+                    {user?.role === "admin" && (
                       <div style={{ display: "flex", gap: 6, flexShrink: 0, flexDirection: "column" }}>
-                        <button onClick={() => handleApproveRequest(req.id)}
-                          style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#dcfce7", color: "#166534", border: "none", fontWeight: 700 }}>
-                          ✅ 승인
-                        </button>
-                        {rejectingRequestId === req.id ? (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                            <input value={rejectReason} onChange={e => setRejectReason(e.target.value)}
-                              placeholder="거절 사유 (선택)"
-                              style={{ ...inputStyle, fontSize: 12, padding: "4px 8px", width: 160 }} />
-                            <div style={{ display: "flex", gap: 4 }}>
-                              <button onClick={() => handleRejectRequest(req.id)}
-                                style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#fee2e2", color: "#991b1b", border: "none", fontWeight: 700 }}>
-                                확인
+                        {req.status === "pending" && (
+                          <>
+                            <button onClick={() => handleApproveRequest(req.id)}
+                              style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#dcfce7", color: "#166534", border: "none", fontWeight: 700 }}>
+                              ✅ 승인
+                            </button>
+                            {rejectingRequestId === req.id ? (
+                              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                                <input value={rejectReason} onChange={e => setRejectReason(e.target.value)}
+                                  placeholder="거절 사유 (선택)"
+                                  style={{ ...inputStyle, fontSize: 12, padding: "4px 8px", width: 160 }} />
+                                <div style={{ display: "flex", gap: 4 }}>
+                                  <button onClick={() => handleRejectRequest(req.id)}
+                                    style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#fee2e2", color: "#991b1b", border: "none", fontWeight: 700 }}>
+                                    확인
+                                  </button>
+                                  <button onClick={() => setRejectingRequestId(null)}
+                                    style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#f3f4f6", color: "#6b7280", border: "none" }}>
+                                    취소
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button onClick={() => { setRejectingRequestId(req.id); setRejectReason(""); }}
+                                style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#fee2e2", color: "#991b1b", border: "none", fontWeight: 700 }}>
+                                ❌ 거절
                               </button>
-                              <button onClick={() => setRejectingRequestId(null)}
-                                style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#f3f4f6", color: "#6b7280", border: "none" }}>
-                                취소
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <button onClick={() => { setRejectingRequestId(req.id); setRejectReason(""); }}
-                            style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#fee2e2", color: "#991b1b", border: "none", fontWeight: 700 }}>
-                            ❌ 거절
-                          </button>
+                            )}
+                          </>
                         )}
+                        <button onClick={() => setDeletingRequestId(req.id)}
+                          aria-label="등록요청 삭제"
+                          style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#f3f4f6", color: "#6b7280", border: "1px solid #e5e7eb", fontWeight: 600 }}>
+                          🗑 요청삭제
+                        </button>
                       </div>
                     )}
                   </div>
@@ -1122,6 +1151,34 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           </div>
         )}
       </Section>
+
+      {/* 상품 등록 요청 삭제 확인 모달 */}
+      {deletingRequestId !== null && (
+        <div role="dialog" aria-modal="true" aria-label="상품 등록 요청 삭제 확인"
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1001 }}>
+          <Card style={{ width: 420, padding: "28px 32px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+              <div style={{ width: 40, height: 40, borderRadius: "50%", background: "#fee2e2", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>🗑</div>
+              <div>
+                <p style={{ margin: 0, fontWeight: 700, fontSize: 16, color: "#111827" }}>상품 등록 요청 삭제</p>
+                <p style={{ margin: "2px 0 0", fontSize: 12, color: "#9ca3af" }}>삭제 후 복구 불가</p>
+              </div>
+            </div>
+            <p style={{ margin: "0 0 6px", fontSize: 13, color: "#374151" }}>이 상품 등록 요청을 삭제하시겠습니까?</p>
+            <p style={{ margin: "0 0 20px", fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+              삭제 후 복구할 수 없습니다.<br />
+              이미 승인된 요청의 경우 실제 생성된 상품은 삭제되지 않습니다.
+            </p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button aria-label="요청 삭제 확인" onClick={handleDeleteRequest} disabled={deletingRequestInProgress}
+                style={{ flex: 1, padding: "10px 0", fontSize: 14, borderRadius: 8, cursor: deletingRequestInProgress ? "not-allowed" : "pointer", background: deletingRequestInProgress ? "#9ca3af" : "#dc2626", color: "#fff", border: "none", fontWeight: 700 }}>
+                {deletingRequestInProgress ? "삭제 중..." : "삭제 확인"}
+              </button>
+              <GhostBtn onClick={() => setDeletingRequestId(null)} style={{ fontSize: 13, padding: "10px 20px" }}>취소</GhostBtn>
+            </div>
+          </Card>
+        </div>
+      )}
 
       {/* 비활성화 사유 모달 */}
       {deactivatingProductId && (

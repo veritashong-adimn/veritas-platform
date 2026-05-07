@@ -812,6 +812,26 @@ router.post("/admin/product-requests/:id/reject", ...adminOnly, async (req, res)
   }
 });
 
+// ─── 상품 등록 요청 삭제 ──────────────────────────────────────────────────────
+router.delete("/admin/product-requests/:id", ...adminOnly, async (req, res) => {
+  const requestId = Number(req.params.id);
+  if (isNaN(requestId) || requestId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 요청 id." }); return;
+  }
+  try {
+    const [request] = await db.select().from(productRequestsTable).where(eq(productRequestsTable.id, requestId));
+    if (!request) { res.status(404).json({ error: "요청을 찾을 수 없습니다." }); return; }
+    const performer = req.user as { id: number; email: string } | undefined;
+    await db.delete(productRequestsTable).where(eq(productRequestsTable.id, requestId));
+    await logEvent("product_request", requestId, "product_request_deleted", req.log, performer as any,
+      JSON.stringify({ name: request.name, status: request.status }));
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "ProductRequests: failed to delete");
+    res.status(500).json({ error: "상품 요청 삭제 실패." });
+  }
+});
+
 // ─── 중복 체크 ────────────────────────────────────────────────────────────────
 router.get("/admin/products/check-duplicate", ...adminGuard, async (req, res) => {
   const { productType, sourceLanguage, targetLanguage, mainCategory, subCategory, excludeId, name } = req.query as Record<string, string | undefined>;
