@@ -1153,8 +1153,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               setFilterEquipmentSearch(""); setFilterEquipmentCustom("");
               setFilterMainCategory(""); setFilterActiveOnly("");
             }}
-              style={{ padding: "8px 12px", fontSize: 12, borderRadius: 7, border: "1px solid #e5e7eb", background: "#f3f4f6", color: "#6b7280", cursor: "pointer" }}>
-              필터 초기화
+              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "#d1d5db"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#6b7280"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "#e5e7eb"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#9ca3af"; }}
+              style={{ padding: "8px 14px", fontSize: 13, fontWeight: 500, borderRadius: 7, border: "1px solid #9ca3af", background: "#e5e7eb", color: "#374151", cursor: "pointer", transition: "background 0.15s, border-color 0.15s" }}>
+              ✕ 필터 초기화
             </button>
           )}
         </div>
