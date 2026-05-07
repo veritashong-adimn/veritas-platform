@@ -438,12 +438,14 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
     mainCategory, subCategory,
     name, unit, basePrice, description,
     interpretationDuration, overtimePrice, options,
+    quantityUnit, usagePeriod,
   } = req.body as {
     productType?: string; sourceLanguage?: string; targetLanguage?: string;
     mainCategory?: string; subCategory?: string;
     name?: string; unit?: string; basePrice?: number; description?: string;
     interpretationDuration?: string; overtimePrice?: number;
     options?: { optionType: string; optionValue: string; sortOrder?: number }[];
+    quantityUnit?: string; usagePeriod?: string;
   };
 
   const pType = productType?.trim() || "translation";
@@ -488,6 +490,8 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
         description: description?.trim() || null,
         interpretationDuration: interpretationDuration?.trim() || null,
         overtimePrice: overtimePrice ?? null,
+        quantityUnit: quantityUnit?.trim() || null,
+        usagePeriod: usagePeriod?.trim() || null,
       })
       .returning();
 
@@ -886,11 +890,13 @@ router.patch("/admin/products/:id", ...adminOnly, async (req, res) => {
   const {
     name, mainCategory, subCategory, unit, basePrice, description, active,
     interpretationDuration, overtimePrice, options,
+    quantityUnit, usagePeriod,
   } = req.body as {
     name?: string; mainCategory?: string; subCategory?: string;
     unit?: string; basePrice?: number; description?: string; active?: boolean;
     interpretationDuration?: string; overtimePrice?: number | null;
     options?: { optionType: string; optionValue: string; sortOrder?: number }[];
+    quantityUnit?: string; usagePeriod?: string | null;
   };
 
   try {
@@ -913,6 +919,8 @@ router.patch("/admin/products/:id", ...adminOnly, async (req, res) => {
         interpretationDuration: interpretationDuration !== undefined
           ? (interpretationDuration?.trim() || null) : existing.interpretationDuration,
         overtimePrice: overtimePrice !== undefined ? (overtimePrice ?? null) : existing.overtimePrice,
+        quantityUnit: quantityUnit !== undefined ? (quantityUnit?.trim() || null) : existing.quantityUnit,
+        usagePeriod: usagePeriod !== undefined ? (usagePeriod !== null ? (usagePeriod.trim() || null) : null) : existing.usagePeriod,
       })
       .where(eq(productsTable.id, productId))
       .returning();

@@ -3,6 +3,7 @@ import {
   api, Product, ProductOption,
   PRODUCT_TYPES_META, MAIN_CATEGORIES_BY_TYPE, SUB_CATEGORIES_BY_MAIN,
   LANGUAGE_CODES, UNITS_BY_PRODUCT_TYPE, PRODUCT_OPTION_TYPES,
+  EQUIPMENT_QUANTITY_UNITS, EQUIPMENT_USAGE_PERIODS,
 } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 import { LanguageSearchSelect, LangCustomInput, isLangCustom } from './LanguageSearchSelect';
@@ -88,6 +89,9 @@ type ProductFormType = {
   subCategory: string;
   name: string;
   unit: string;
+  quantityUnit: string;
+  usagePeriod: string;
+  usagePeriodCustom: string;
   basePrice: string;
   description: string;
   interpretationDuration: string;
@@ -108,7 +112,8 @@ const emptyProductForm: ProductFormType = {
   productType: "translation", sourceLanguage: "ko", sourceLanguageCustom: "", targetLanguage: "en", targetLanguageCustom: "",
   equipmentItem: "", equipmentItemCustom: "",
   mainCategory: "일반번역", subCategory: "",
-  name: "", unit: "어절", basePrice: "", description: "",
+  name: "", unit: "어절", quantityUnit: "개", usagePeriod: "1일", usagePeriodCustom: "",
+  basePrice: "", description: "",
   interpretationDuration: "", overtimePrice: "", options: [],
 };
 
@@ -206,6 +211,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         targetLanguage: hasLang ? (prev.targetLanguage || "en") : "",
         equipmentItem: isEquip ? prev.equipmentItem : "",
         equipmentItemCustom: isEquip ? prev.equipmentItemCustom : "",
+        quantityUnit: isEquip ? "개" : "",
+        usagePeriod: isEquip ? "1일" : "",
+        usagePeriodCustom: "",
       };
       if (!productNameCustom) updated.name = autoName(updated);
       return updated;
@@ -272,6 +280,11 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const resolveLanguage = (code: string, custom: string) =>
       code === "custom" ? (custom.trim() || "custom") : code;
 
+    const isEquipForm = productForm.productType === "equipment";
+    const effectiveUnit = isEquipForm ? (productForm.quantityUnit || "개") : productForm.unit;
+    const effectiveUsagePeriod = isEquipForm
+      ? (productForm.usagePeriod === "직접입력" ? (productForm.usagePeriodCustom.trim() || null) : productForm.usagePeriod || null)
+      : null;
     setSavingProduct(true);
     try {
       const payload = editingProduct
@@ -279,12 +292,14 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           name: effectiveName,
           mainCategory: productForm.mainCategory || null,
           subCategory: productForm.subCategory || null,
-          unit: productForm.unit,
+          unit: effectiveUnit,
           basePrice: productForm.basePrice !== "" ? Number(productForm.basePrice) : null,
           description: productForm.description || null,
           interpretationDuration: productForm.interpretationDuration.trim() || null,
           overtimePrice: productForm.overtimePrice ? Number(productForm.overtimePrice) : null,
           options: productForm.options.filter(o => o.optionType.trim() && o.optionValue.trim()),
+          quantityUnit: isEquipForm ? (productForm.quantityUnit || null) : null,
+          usagePeriod: effectiveUsagePeriod,
         }
         : {
           productType: productForm.productType,
@@ -293,12 +308,14 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           mainCategory: productForm.mainCategory,
           subCategory: productForm.subCategory || null,
           name: effectiveName,
-          unit: productForm.unit,
+          unit: effectiveUnit,
           basePrice: productForm.basePrice !== "" ? Number(productForm.basePrice) : null,
           description: productForm.description || null,
           interpretationDuration: productForm.interpretationDuration.trim() || null,
           overtimePrice: productForm.overtimePrice ? Number(productForm.overtimePrice) : null,
           options: productForm.options.filter(o => o.optionType.trim() && o.optionValue.trim()),
+          quantityUnit: isEquipForm ? (productForm.quantityUnit || null) : null,
+          usagePeriod: effectiveUsagePeriod,
         };
 
       const url = editingProduct ? `/api/admin/products/${editingProduct}` : "/api/admin/products";
@@ -508,6 +525,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const units = UNITS_BY_PRODUCT_TYPE[form.productType] ?? ["건"];
     const typeColor = TYPE_COLORS[form.productType] ?? { bg: "#f9fafb", color: "#374151", icon: "📦" };
     const isInterp = form.productType === "interpretation" || form.productType === "combined";
+    const isEquip = form.productType === "equipment";
     const codePrev = previewCode(form.productType, form.sourceLanguage, form.targetLanguage, form.mainCategory, form.subCategory);
 
     return (
@@ -675,19 +693,21 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         </div>
 
         {/* 단위 / 기본단가 */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-          <div>
-            <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>
-              단위 <span style={{ fontSize: 11, color: "#9ca3af" }}>(상품유형에 따라 자동 변경)</span>
-            </label>
-            <ClickSelect
-              value={form.unit}
-              onChange={v => setForm(p => ({ ...p, unit: v }))}
-              options={units.map(u => ({ value: u, label: u }))}
-              style={{ width: "100%" }}
-              triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
-            />
-          </div>
+        <div style={{ display: "grid", gridTemplateColumns: isEquip ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 12 }}>
+          {!isEquip && (
+            <div>
+              <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>
+                단위 <span style={{ fontSize: 11, color: "#9ca3af" }}>(상품유형에 따라 자동 변경)</span>
+              </label>
+              <ClickSelect
+                value={form.unit}
+                onChange={v => setForm(p => ({ ...p, unit: v }))}
+                options={units.map(u => ({ value: u, label: u }))}
+                style={{ width: "100%" }}
+                triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+              />
+            </div>
+          )}
           <div>
             <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>기본단가 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(선택)</span></label>
             <NumericInput value={form.basePrice} onChange={raw => setForm(p => ({ ...p, basePrice: raw }))}
@@ -695,6 +715,53 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
           </div>
         </div>
+
+        {/* 통역장비 전용: 수량단위 / 사용기간 */}
+        {isEquip && (
+          <div style={{ background: "#fff7ed", borderRadius: 8, padding: "10px 14px", border: "1px solid #fed7aa", marginBottom: 12 }}>
+            <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: "#c2410c" }}>장비 구성</p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 12, color: "#c2410c", display: "block", marginBottom: 4 }}>수량단위</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {EQUIPMENT_QUANTITY_UNITS.map(u => (
+                    <button key={u} type="button" data-testid={`qty-unit-${u}`}
+                      onClick={() => setForm(prev => ({ ...prev, quantityUnit: u }))}
+                      style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer",
+                        border: `1px solid ${form.quantityUnit === u ? "#c2410c" : "#e5e7eb"}`,
+                        background: form.quantityUnit === u ? "#fff7ed" : "#f9fafb",
+                        color: form.quantityUnit === u ? "#c2410c" : "#6b7280",
+                        fontWeight: form.quantityUnit === u ? 700 : 400 }}>
+                      {u}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: 12, color: "#c2410c", display: "block", marginBottom: 4 }}>사용기간</label>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: form.usagePeriod === "직접입력" ? 4 : 0 }}>
+                  {([...EQUIPMENT_USAGE_PERIODS, "직접입력"] as string[]).map(period => (
+                    <button key={period} type="button" data-testid={`usage-period-${period}`}
+                      onClick={() => setForm(prev => ({ ...prev, usagePeriod: period, usagePeriodCustom: period !== "직접입력" ? "" : prev.usagePeriodCustom }))}
+                      style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer",
+                        border: `1px solid ${form.usagePeriod === period ? "#c2410c" : "#e5e7eb"}`,
+                        background: form.usagePeriod === period ? "#fff7ed" : "#f9fafb",
+                        color: form.usagePeriod === period ? "#c2410c" : "#6b7280",
+                        fontWeight: form.usagePeriod === period ? 700 : 400 }}>
+                      {period}
+                    </button>
+                  ))}
+                </div>
+                {form.usagePeriod === "직접입력" && (
+                  <input value={form.usagePeriodCustom}
+                    onChange={e => setForm(prev => ({ ...prev, usagePeriodCustom: e.target.value }))}
+                    placeholder="예: 4일, 1주일"
+                    style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} />
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* 통역 전용: 기본진행시간 / 초과단가 */}
         {isInterp && (
@@ -812,7 +879,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 </span>
               )}
               <span style={{ fontSize: 11, background: p.basePrice != null ? "#f0fdf4" : "#f9fafb", color: p.basePrice != null ? "#059669" : "#9ca3af", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>
-                {p.basePrice != null ? `${Number(p.basePrice).toLocaleString()}원 / ${p.unit}` : `미설정 / ${p.unit}`}
+                {p.productType === "equipment"
+                  ? `${p.basePrice != null ? Number(p.basePrice).toLocaleString() + "원" : "미설정"} / ${p.quantityUnit || p.unit}${p.usagePeriod ? ` / ${p.usagePeriod}` : ""}`
+                  : p.basePrice != null ? `${Number(p.basePrice).toLocaleString()}원 / ${p.unit}` : `미설정 / ${p.unit}`
+                }
               </span>
               {p.interpretationDuration && (
                 <span style={{ fontSize: 11, background: "#faf5ff", color: "#7c3aed", borderRadius: 5, padding: "2px 8px" }}>기본 {p.interpretationDuration}</span>
@@ -851,6 +921,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   subCategory: p.subCategory ?? "",
                   name: p.name,
                   unit: p.unit,
+                  quantityUnit: p.quantityUnit || (p.productType === "equipment" ? "개" : ""),
+                  usagePeriod: p.usagePeriod || (p.productType === "equipment" ? "1일" : ""),
+                  usagePeriodCustom: "",
                   basePrice: p.basePrice != null ? String(p.basePrice) : "",
                   description: p.description ?? "",
                   interpretationDuration: p.interpretationDuration ?? "",

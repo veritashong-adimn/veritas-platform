@@ -233,6 +233,8 @@ export type Product = {
   options: ProductOption[];
   interpretationDuration: string | null; overtimePrice: number | null;
   deactivationReason: string | null;
+  quantityUnit: string | null;
+  usagePeriod: string | null;
 };
 export type BoardPost = {
   id: number; category: string; title: string; content?: string;
@@ -629,13 +631,16 @@ export const LANGUAGE_CODES: { code: string; label: string }[] = [
   { code: "custom",  label: "기타 직접입력" },
 ];
 
+export const EQUIPMENT_QUANTITY_UNITS = ["개", "세트", "부스"] as const;
+export const EQUIPMENT_USAGE_PERIODS = ["반일", "1일", "2일", "3일"] as const;
+
 export const UNITS_BY_PRODUCT_TYPE: Record<string, string[]> = {
   translation:    ["어절", "단어", "글자", "페이지", "건"],
   interpretation: ["1시간", "반일", "종일", "추가시간"],
   combined:       ["어절", "단어", "글자", "페이지", "건", "1시간", "반일", "종일"],
   proofreading:   ["어절", "단어", "글자", "페이지", "건"],
   media:          ["분", "초", "건"],
-  equipment:      ["대", "일", "건"],
+  equipment:      ["개", "세트", "부스"],
   editing:        ["페이지", "건", "시간"],
   operations:     ["건", "인"],
   project:        ["건", "식"],
