@@ -438,14 +438,14 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
     mainCategory, subCategory,
     name, unit, basePrice, description,
     interpretationDuration, overtimePrice, options,
-    quantityUnit, usagePeriod,
+    quantityUnit, usagePeriod, interpretationDirection,
   } = req.body as {
     productType?: string; sourceLanguage?: string; targetLanguage?: string;
     mainCategory?: string; subCategory?: string;
     name?: string; unit?: string; basePrice?: number; description?: string;
     interpretationDuration?: string; overtimePrice?: number;
     options?: { optionType: string; optionValue: string; sortOrder?: number }[];
-    quantityUnit?: string; usagePeriod?: string;
+    quantityUnit?: string; usagePeriod?: string; interpretationDirection?: string;
   };
 
   const pType = productType?.trim() || "translation";
@@ -492,6 +492,7 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
         overtimePrice: overtimePrice ?? null,
         quantityUnit: quantityUnit?.trim() || null,
         usagePeriod: usagePeriod?.trim() || null,
+        interpretationDirection: interpretationDirection?.trim() || null,
       })
       .returning();
 
@@ -890,13 +891,13 @@ router.patch("/admin/products/:id", ...adminOnly, async (req, res) => {
   const {
     name, mainCategory, subCategory, unit, basePrice, description, active,
     interpretationDuration, overtimePrice, options,
-    quantityUnit, usagePeriod,
+    quantityUnit, usagePeriod, interpretationDirection,
   } = req.body as {
     name?: string; mainCategory?: string; subCategory?: string;
     unit?: string; basePrice?: number; description?: string; active?: boolean;
     interpretationDuration?: string; overtimePrice?: number | null;
     options?: { optionType: string; optionValue: string; sortOrder?: number }[];
-    quantityUnit?: string; usagePeriod?: string | null;
+    quantityUnit?: string; usagePeriod?: string | null; interpretationDirection?: string;
   };
 
   try {
@@ -921,6 +922,7 @@ router.patch("/admin/products/:id", ...adminOnly, async (req, res) => {
         overtimePrice: overtimePrice !== undefined ? (overtimePrice ?? null) : existing.overtimePrice,
         quantityUnit: quantityUnit !== undefined ? (quantityUnit?.trim() || null) : existing.quantityUnit,
         usagePeriod: usagePeriod !== undefined ? (usagePeriod !== null ? (usagePeriod.trim() || null) : null) : existing.usagePeriod,
+        interpretationDirection: interpretationDirection !== undefined ? (interpretationDirection?.trim() || null) : existing.interpretationDirection,
       })
       .where(eq(productsTable.id, productId))
       .returning();

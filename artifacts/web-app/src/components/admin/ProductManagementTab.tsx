@@ -3,7 +3,7 @@ import {
   api, Product, ProductOption,
   PRODUCT_TYPES_META, MAIN_CATEGORIES_BY_TYPE, SUB_CATEGORIES_BY_MAIN,
   LANGUAGE_CODES, UNITS_BY_PRODUCT_TYPE, PRODUCT_OPTION_TYPES,
-  EQUIPMENT_QUANTITY_UNITS, EQUIPMENT_USAGE_PERIODS,
+  EQUIPMENT_QUANTITY_UNITS, EQUIPMENT_USAGE_PERIODS, INTERPRETATION_DIRECTIONS,
 } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 import { LanguageSearchSelect, LangCustomInput, isLangCustom } from './LanguageSearchSelect';
@@ -92,6 +92,7 @@ type ProductFormType = {
   quantityUnit: string;
   usagePeriod: string;
   usagePeriodCustom: string;
+  interpretationDirection: string;
   basePrice: string;
   description: string;
   interpretationDuration: string;
@@ -112,7 +113,7 @@ const emptyProductForm: ProductFormType = {
   productType: "translation", sourceLanguage: "ko", sourceLanguageCustom: "", targetLanguage: "en", targetLanguageCustom: "",
   equipmentItem: "", equipmentItemCustom: "",
   mainCategory: "일반번역", subCategory: "",
-  name: "", unit: "어절", quantityUnit: "개", usagePeriod: "1일", usagePeriodCustom: "",
+  name: "", unit: "어절", quantityUnit: "개", usagePeriod: "1일", usagePeriodCustom: "", interpretationDirection: "양방향",
   basePrice: "", description: "",
   interpretationDuration: "", overtimePrice: "", options: [],
 };
@@ -185,10 +186,19 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
       : "";
     const mainLabel = f.mainCategory;
     const subLabel = f.subCategory;
+    const isInterpType = f.productType === "interpretation" || f.productType === "combined";
     if (hasLang && srcLabel && tgtLabel) {
+      let sep = "→";
+      let aLabel = srcLabel;
+      let bLabel = tgtLabel;
+      if (isInterpType) {
+        const dir = f.interpretationDirection || "양방향";
+        if (dir === "양방향") { sep = "↔"; }
+        else if (dir === "B→A") { aLabel = tgtLabel; bLabel = srcLabel; sep = "→"; }
+      }
       return subLabel
-        ? `${srcLabel}→${tgtLabel} ${subLabel} ${typeLabel}`
-        : (mainLabel ? `${srcLabel}→${tgtLabel} ${mainLabel}` : `${srcLabel}→${tgtLabel} ${typeLabel}`);
+        ? `${aLabel}${sep}${bLabel} ${subLabel} ${typeLabel}`
+        : (mainLabel ? `${aLabel}${sep}${bLabel} ${mainLabel}` : `${aLabel}${sep}${bLabel} ${typeLabel}`);
     }
     return mainLabel ? `${mainLabel}` : typeLabel;
   }
@@ -214,6 +224,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         quantityUnit: isEquip ? "개" : "",
         usagePeriod: isEquip ? "1일" : "",
         usagePeriodCustom: "",
+        interpretationDirection: (newType === "interpretation" || newType === "combined") ? "양방향" : "",
       };
       if (!productNameCustom) updated.name = autoName(updated);
       return updated;
@@ -300,6 +311,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           options: productForm.options.filter(o => o.optionType.trim() && o.optionValue.trim()),
           quantityUnit: isEquipForm ? (productForm.quantityUnit || null) : null,
           usagePeriod: effectiveUsagePeriod,
+          interpretationDirection: productForm.interpretationDirection || null,
         }
         : {
           productType: productForm.productType,
@@ -316,6 +328,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           options: productForm.options.filter(o => o.optionType.trim() && o.optionValue.trim()),
           quantityUnit: isEquipForm ? (productForm.quantityUnit || null) : null,
           usagePeriod: effectiveUsagePeriod,
+          interpretationDirection: productForm.interpretationDirection || null,
         };
 
       const url = editingProduct ? `/api/admin/products/${editingProduct}` : "/api/admin/products";
@@ -562,7 +575,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: "#1d4ed8" }}>언어 설정</p>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
-                <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>출발언어 <span style={{ color: "#dc2626" }}>*</span></label>
+                <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>
+                  {isInterp ? "언어 A" : "출발언어"} <span style={{ color: "#dc2626" }}>*</span>
+                </label>
                 <LanguageSearchSelect
                   value={form.sourceLanguage}
                   onChange={v => {
@@ -573,19 +588,21 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                     });
                   }}
                   mode="code"
-                  placeholder="출발언어 선택..."
+                  placeholder={isInterp ? "언어 A 선택..." : "출발언어 선택..."}
                   triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
                 />
                 {isLangCustom(form.sourceLanguage, "code") && (
                   <LangCustomInput
                     value={form.sourceLanguageCustom}
                     onChange={v => setForm(p => ({ ...p, sourceLanguageCustom: v }))}
-                    label="직접 입력 출발언어"
+                    label={isInterp ? "직접 입력 언어 A" : "직접 입력 출발언어"}
                   />
                 )}
               </div>
               <div>
-                <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>도착언어 <span style={{ color: "#dc2626" }}>*</span></label>
+                <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>
+                  {isInterp ? "언어 B" : "도착언어"} <span style={{ color: "#dc2626" }}>*</span>
+                </label>
                 <LanguageSearchSelect
                   value={form.targetLanguage}
                   onChange={v => {
@@ -596,18 +613,40 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                     });
                   }}
                   mode="code"
-                  placeholder="도착언어 선택..."
+                  placeholder={isInterp ? "언어 B 선택..." : "도착언어 선택..."}
                   triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
                 />
                 {isLangCustom(form.targetLanguage, "code") && (
                   <LangCustomInput
                     value={form.targetLanguageCustom}
                     onChange={v => setForm(p => ({ ...p, targetLanguageCustom: v }))}
-                    label="직접 입력 도착언어"
+                    label={isInterp ? "직접 입력 언어 B" : "직접 입력 도착언어"}
                   />
                 )}
               </div>
             </div>
+            {isInterp && (
+              <div style={{ marginTop: 10 }}>
+                <label style={{ fontSize: 12, color: "#1d4ed8", display: "block", marginBottom: 4, fontWeight: 600 }}>통역방향</label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {INTERPRETATION_DIRECTIONS.map(dir => (
+                    <button key={dir} type="button" data-testid={`interp-dir-${dir}`}
+                      onClick={() => setForm(prev => {
+                        const updated = { ...prev, interpretationDirection: dir };
+                        if (!productNameCustom) updated.name = autoName(updated);
+                        return updated;
+                      })}
+                      style={{ padding: "4px 14px", fontSize: 12, borderRadius: 6, cursor: "pointer",
+                        border: `1px solid ${form.interpretationDirection === dir ? "#1d4ed8" : "#bfdbfe"}`,
+                        background: form.interpretationDirection === dir ? "#dbeafe" : "#f0f7ff",
+                        color: form.interpretationDirection === dir ? "#1d4ed8" : "#6b7280",
+                        fontWeight: form.interpretationDirection === dir ? 700 : 400 }}>
+                      {dir === "양방향" ? "↔ 양방향" : dir === "A→B" ? "→ A→B" : "← B→A"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -865,7 +904,14 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 6 }}>
               {hasLang && srcLabel && tgtLabel && (
                 <span style={{ fontSize: 11, background: "#dbeafe", color: "#1d4ed8", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>
-                  {srcLabel} → {tgtLabel}
+                  {(p.productType === "interpretation" || p.productType === "combined")
+                    ? (p.interpretationDirection === "B→A"
+                        ? `${tgtLabel} → ${srcLabel}`
+                        : p.interpretationDirection === "A→B"
+                          ? `${srcLabel} → ${tgtLabel}`
+                          : `${srcLabel} ↔ ${tgtLabel}`)
+                    : `${srcLabel} → ${tgtLabel}`
+                  }
                 </span>
               )}
               {p.mainCategory && (
@@ -924,6 +970,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   quantityUnit: p.quantityUnit || (p.productType === "equipment" ? "개" : ""),
                   usagePeriod: p.usagePeriod || (p.productType === "equipment" ? "1일" : ""),
                   usagePeriodCustom: "",
+                  interpretationDirection: p.interpretationDirection || ((p.productType === "interpretation" || p.productType === "combined") ? "양방향" : ""),
                   basePrice: p.basePrice != null ? String(p.basePrice) : "",
                   description: p.description ?? "",
                   interpretationDuration: p.interpretationDuration ?? "",

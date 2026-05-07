@@ -235,6 +235,7 @@ export type Product = {
   deactivationReason: string | null;
   quantityUnit: string | null;
   usagePeriod: string | null;
+  interpretationDirection: string | null;
 };
 export type BoardPost = {
   id: number; category: string; title: string; content?: string;
@@ -633,6 +634,7 @@ export const LANGUAGE_CODES: { code: string; label: string }[] = [
 
 export const EQUIPMENT_QUANTITY_UNITS = ["개", "세트", "부스"] as const;
 export const EQUIPMENT_USAGE_PERIODS = ["반일", "1일", "2일", "3일"] as const;
+export const INTERPRETATION_DIRECTIONS = ["양방향", "A→B", "B→A"] as const;
 
 export const UNITS_BY_PRODUCT_TYPE: Record<string, string[]> = {
   translation:    ["어절", "단어", "글자", "페이지", "건"],

@@ -19,6 +19,7 @@ export const productsTable = pgTable("products", {
   overtimePrice: integer("overtime_price"),
   quantityUnit: text("quantity_unit"),
   usagePeriod: text("usage_period"),
+  interpretationDirection: text("interpretation_direction"),
   active: boolean("active").notNull().default(true),
   deactivationReason: text("deactivation_reason"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
