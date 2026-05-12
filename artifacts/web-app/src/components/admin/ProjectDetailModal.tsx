@@ -2696,18 +2696,26 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         if (pid) {
                                           const prod = quoteProducts.find(p => p.id === pid);
                                           if (prod) {
-                                            setQuoteItemForms(prev => prev.map((p, i) => i === idx ? {
-                                              ...p,
-                                              productId: prod.id, productName: prod.name,
-                                              unit: (prod as any).productType === "equipment" ? ((prod as any).quantityUnit || "개") : prod.unit,
-                                              unitPrice: prod.basePrice != null ? String(prod.basePrice) : "",
-                                              productType: (prod as any).productType ?? "translation",
-                                              interpretationDuration: (prod as any).interpretationDuration ?? p.interpretationDuration,
-                                              interpretationDirection: (prod as any).interpretationDirection ?? p.interpretationDirection,
-                                              quantityUnit: (prod as any).quantityUnit ?? p.quantityUnit,
-                                              usagePeriod: (prod as any).usagePeriod ?? p.usagePeriod,
-                                              quantity: (prod as any).productType === "interpretation" ? "1" : p.quantity,
-                                            } : p));
+                                            setQuoteItemForms(prev => prev.map((p, i) => {
+                                              if (i !== idx) return p;
+                                              const pType = (prod as any).productType ?? "translation";
+                                              return {
+                                                ...p,
+                                                productId: prod.id, productName: prod.name,
+                                                unit: pType === "equipment" ? ((prod as any).quantityUnit || "개") : prod.unit,
+                                                unitPrice: prod.basePrice != null ? String(prod.basePrice) : "",
+                                                productType: pType,
+                                                sourceLanguage: pType === "translation" ? ((prod as any).sourceLanguage ?? p.sourceLanguage) : p.sourceLanguage,
+                                                targetLanguage: pType === "translation" ? ((prod as any).targetLanguage ?? p.targetLanguage) : p.targetLanguage,
+                                                langA: pType === "interpretation" ? ((prod as any).sourceLanguage ?? p.langA) : p.langA,
+                                                langB: pType === "interpretation" ? ((prod as any).targetLanguage ?? p.langB) : p.langB,
+                                                interpretationDuration: (prod as any).interpretationDuration ?? p.interpretationDuration,
+                                                interpretationDirection: (prod as any).interpretationDirection ?? p.interpretationDirection,
+                                                quantityUnit: (prod as any).quantityUnit ?? p.quantityUnit,
+                                                usagePeriod: (prod as any).usagePeriod ?? p.usagePeriod,
+                                                quantity: pType === "interpretation" ? "1" : p.quantity,
+                                              };
+                                            }));
                                             return;
                                           }
                                         }
@@ -2960,31 +2968,40 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               if (eq0?.batchPeriodStart) setQuoteBatchStart(eq0.batchPeriodStart);
                               if (eq0?.batchPeriodEnd) setQuoteBatchEnd(eq0.batchPeriodEnd);
                               if (Array.isArray(eq0?.items) && eq0.items.length > 0) {
-                                setQuoteItemForms(eq0.items.map((it: any) => ({
-                                  productId: it.productId ?? null,
-                                  productName: it.productName ?? "",
-                                  languagePair: it.languagePair ?? "",
-                                  sourceLanguage: it.sourceLanguage ?? "",
-                                  targetLanguage: it.targetLanguage ?? "",
-                                  langA: it.langA ?? "",
-                                  langB: it.langB ?? "",
-                                  interpretationDirection: it.interpretationDirection ?? "양방향",
-                                  quantityUnit: it.quantityUnit ?? "개",
-                                  usagePeriod: it.usagePeriod ?? "1일",
-                                  unit: it.unit ?? "건",
-                                  quantity: String(it.quantity ?? "1"),
-                                  unitPrice: String(it.unitPrice ?? ""),
-                                  taxType: (it.taxType ?? "taxable") as "taxable"|"exempt"|"zero_rate",
-                                  productType: it.itemType ?? "translation",
-                                  interpretDate: it.interpretDate ?? "",
-                                  interpretPlace: it.interpretPlace ?? "",
-                                  interpretType: it.interpretType ?? "consecutive",
-                                  interpretationDuration: it.interpretDuration ?? "",
-                                  hasTravelExpense: it.hasTravelExpense ?? false,
-                                  hasEquipment: it.hasEquipment ?? false,
-                                  files: [],
-                                  memo: it.memo ?? "",
-                                })));
+                                setQuoteItemForms(eq0.items.map((it: any) => {
+                                  const lp = it.languagePair ?? "";
+                                  const arrowIdx = lp.indexOf("→");
+                                  const biIdx = lp.indexOf("↔");
+                                  const sepIdx = arrowIdx >= 0 ? arrowIdx : biIdx;
+                                  const parsedA = sepIdx >= 0 ? lp.slice(0, sepIdx).trim() : "";
+                                  const parsedB = sepIdx >= 0 ? lp.slice(sepIdx + 1).trim() : "";
+                                  const itemType = it.itemType ?? "translation";
+                                  return {
+                                    productId: it.productId ?? null,
+                                    productName: it.productName ?? "",
+                                    languagePair: lp,
+                                    sourceLanguage: itemType === "translation" ? parsedA : "",
+                                    targetLanguage: itemType === "translation" ? parsedB : "",
+                                    langA: itemType === "interpretation" ? parsedA : "",
+                                    langB: itemType === "interpretation" ? parsedB : "",
+                                    interpretationDirection: it.interpretationDirection ?? "양방향",
+                                    quantityUnit: it.quantityUnit ?? "개",
+                                    usagePeriod: it.usagePeriod ?? "1일",
+                                    unit: it.unit ?? "건",
+                                    quantity: String(it.quantity ?? "1"),
+                                    unitPrice: String(it.unitPrice ?? ""),
+                                    taxType: (it.taxType ?? "taxable") as "taxable"|"exempt"|"zero_rate",
+                                    productType: itemType,
+                                    interpretDate: it.interpretDate ?? "",
+                                    interpretPlace: it.interpretPlace ?? "",
+                                    interpretType: it.interpretType ?? "consecutive",
+                                    interpretationDuration: it.interpretDuration ?? "",
+                                    hasTravelExpense: it.hasTravelExpense ?? false,
+                                    hasEquipment: it.hasEquipment ?? false,
+                                    files: [],
+                                    memo: it.memo ?? "",
+                                  };
+                                }));
                               }
                               setShowQuoteForm(true);
                             };
