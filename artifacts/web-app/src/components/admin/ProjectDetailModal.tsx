@@ -3075,7 +3075,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                               return {
                                                 ...p,
                                                 productId: prod.id, productName: prod.name,
-                                                unit: pType === "equipment" ? ((prod as any).quantityUnit || "개") : prod.unit,
+                                                unit: pType === "equipment" ? ((prod as any).quantityUnit || "개") : pType === "translation" ? (prod.unit && prod.unit !== "어절" ? prod.unit : "페이지") : prod.unit,
                                                 unitPrice: prod.basePrice != null ? String(prod.basePrice) : "",
                                                 productType: pType,
                                                 sourceLanguage: pType === "translation" ? ((prod as any).sourceLanguage ?? p.sourceLanguage) : p.sourceLanguage,
