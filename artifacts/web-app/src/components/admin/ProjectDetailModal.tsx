@@ -2994,52 +2994,64 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           </div>
                           {quoteItemForms.map((it, idx) => {
                             const { supply } = calcItemTotal(it);
-                            const roSt: React.CSSProperties = { ...inputStyle, fontSize: 11, padding: "5px 3px", textAlign: "right", background: "#f8fafc", cursor: "default", color: supply > 0 ? "#374151" : "#9ca3af" };
+                            const roSt: React.CSSProperties = {
+                              ...inputStyle, fontSize: 11, padding: "5px 3px", textAlign: "right",
+                              background: "#f9fafb", borderColor: "#e4e7eb", cursor: "default",
+                              color: supply > 0 ? "#374151" : "#9ca3af", fontWeight: supply > 0 ? 500 : 400,
+                            };
                             const detailBtn: React.CSSProperties = {
-                              fontSize: 10, width: 56, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                              gap: 2, padding: "0 4px", height: 26, borderRadius: 8, border: "none",
-                              background: it.showDetail ? "#4f46e5" : "#f0f0f0", color: it.showDetail ? "#fff" : "#9ca3af",
-                              cursor: "pointer", fontWeight: 600, flexShrink: 0,
+                              fontSize: 10, minWidth: 64, width: "auto", display: "inline-flex", alignItems: "center",
+                              justifyContent: "center", gap: 2, padding: "0 10px", height: 26, borderRadius: 999,
+                              border: "none", background: it.showDetail ? "#4f46e5" : "#f0f0f0",
+                              color: it.showDetail ? "#fff" : "#9ca3af", cursor: "pointer", fontWeight: 600, flexShrink: 0,
                             };
                             const detailArea: React.CSSProperties = {
-                              marginTop: 4, padding: "6px 8px", background: "#fafafa",
+                              marginTop: 4, padding: "5px 6px", background: "#fafafa",
                               borderRadius: 5, borderTop: "1px dashed #e5e7eb",
                             };
                             const TYPE_META = {
-                              translation:    { lbl: "번역",   icon: "📄", c: "#1e40af", bg: "rgba(59,130,246,0.03)",   border: "#dbeafe" },
-                              interpretation: { lbl: "통역",   icon: "🎤", c: "#7c3aed", bg: "rgba(139,92,246,0.03)",  border: "#ede9fe" },
-                              equipment:      { lbl: "장비",   icon: "🔧", c: "#047857", bg: "rgba(16,185,129,0.03)",  border: "#d1fae5" },
-                              expense:        { lbl: "실비",   icon: "💰", c: "#b45309", bg: "rgba(245,158,11,0.03)",  border: "#fef3c7" },
+                              translation:    { lbl: "번역", icon: "📄", c: "#1e40af", bg: "rgba(59,130,246,0.03)",  hdr: "rgba(59,130,246,0.04)",  border: "#dbeafe" },
+                              interpretation: { lbl: "통역", icon: "🎤", c: "#7c3aed", bg: "rgba(139,92,246,0.03)", hdr: "rgba(139,92,246,0.05)",  border: "#ede9fe" },
+                              equipment:      { lbl: "장비", icon: "🔧", c: "#047857", bg: "rgba(16,185,129,0.03)", hdr: "rgba(16,185,129,0.05)",  border: "#d1fae5" },
+                              expense:        { lbl: "실비", icon: "💰", c: "#b45309", bg: "rgba(245,158,11,0.03)", hdr: "rgba(245,158,11,0.05)",  border: "#fef3c7" },
                             } as const;
                             const tm = TYPE_META[it.productType as keyof typeof TYPE_META] ?? TYPE_META.translation;
                             return (
-                              <div key={idx} style={{ marginBottom: 8, border: `1px solid ${tm.border}`, borderRadius: 8, padding: "7px 8px", background: tm.bg }}>
+                              <div key={idx} style={{ marginBottom: 12, border: "1px solid #dcdfe6", borderRadius: 8, background: tm.bg, boxShadow: "0 1px 2px rgba(0,0,0,0.03)", overflow: "hidden" }}>
                                 {/* ── HEADER ── */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 5 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 5, background: tm.hdr, borderBottom: "1px solid #ececec", padding: "4px 8px", borderRadius: "6px 6px 0 0" }}>
+                                  {/* 번호 + 선택 유형 badge */}
                                   <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 700, flexShrink: 0 }}>#{idx + 1}</span>
-                                  {/* 유형 배지 (클릭 가능) */}
-                                  {(["translation","interpretation","equipment","expense"] as const).map(v => {
-                                    const m = TYPE_META[v];
-                                    return (
-                                      <button key={v} onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productType: v } : p))}
-                                        style={{ fontSize: 10, padding: "1px 6px", borderRadius: 10, border: "none", background: it.productType === v ? m.bg : "transparent", color: it.productType === v ? m.c : "#d1d5db", cursor: "pointer", fontWeight: it.productType === v ? 700 : 400, outline: it.productType === v ? `1px solid ${m.border}` : "none" }}>
-                                        {m.icon} {m.lbl}
-                                      </button>
-                                    );
-                                  })}
-                                  {/* 상품명 표시 */}
+                                  <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 10, background: tm.bg, color: tm.c, fontWeight: 700, border: `1px solid ${tm.border}`, flexShrink: 0 }}>
+                                    {tm.icon} {tm.lbl}
+                                  </span>
+                                  {/* 상품명 */}
                                   <span style={{ flex: 1, fontSize: 11, color: it.productName ? "#374151" : "#c4c9d1", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                     {it.productName || "상품 미선택"}
                                   </span>
-                                  {/* 액션 */}
-                                  <button
-                                    onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDirectInput: !p.showDirectInput, productId: p.showDirectInput ? p.productId : null } : p))}
-                                    style={{ fontSize: 10, padding: "2px 6px", borderRadius: 5, border: "1px solid #e5e7eb", background: it.showDirectInput ? "#f3f4f6" : "#fff", color: it.showDirectInput ? "#374151" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
-                                    {it.showDirectInput ? "✕ 직접" : "+ 직접"}
-                                  </button>
-                                  <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))}
-                                    style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 1px", flexShrink: 0 }}>×</button>
+                                  {/* 유형 변경 아이콘 */}
+                                  <div style={{ display: "flex", gap: 1, flexShrink: 0 }}>
+                                    {(["translation","interpretation","equipment","expense"] as const).map(v => (
+                                      <button key={v} onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productType: v } : p))}
+                                        title={TYPE_META[v].lbl}
+                                        style={{ fontSize: 11, padding: "1px 3px", borderRadius: 4, border: "none", background: "transparent", opacity: it.productType === v ? 1 : 0.3, cursor: "pointer" }}>
+                                        {TYPE_META[v].icon}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  {/* 액션 그룹 */}
+                                  <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+                                    <button
+                                      onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDirectInput: !p.showDirectInput, productId: p.showDirectInput ? p.productId : null } : p))}
+                                      style={{ fontSize: 10, padding: "2px 6px", borderRadius: 5, border: "1px solid #e5e7eb", background: it.showDirectInput ? "#f3f4f6" : "#fff", color: it.showDirectInput ? "#374151" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap" }}>
+                                      {it.showDirectInput ? "✕ 직접" : "+ 직접"}
+                                    </button>
+                                    <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))}
+                                      style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>×</button>
+                                  </div>
                                 </div>
+                                {/* ── BODY ── */}
+                                <div style={{ padding: "6px 8px" }}>
                                 {/* ── 상품 선택 / 직접 입력 ── */}
                                 <div style={{ marginBottom: 5 }}>
                                   {!it.showDirectInput ? (
@@ -3106,9 +3118,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
-                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={{ ...roSt, fontWeight: supply > 0 ? 600 : 400 }} />
+                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={roSt} />
                                       <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))} style={detailBtn}>
-                                        상세 {it.showDetail ? "▲" : "▼"}
+                                        {it.showDetail ? "▲" : "▼"} 상세
                                       </button>
                                     </div>
                                     {it.showDetail && (
@@ -3170,9 +3182,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
-                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={{ ...roSt, fontWeight: supply > 0 ? 600 : 400 }} />
+                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={roSt} />
                                       <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))} style={detailBtn}>
-                                        상세 {it.showDetail ? "▲" : "▼"}
+                                        {it.showDetail ? "▲" : "▼"} 상세
                                       </button>
                                     </div>
                                     {it.showDetail && (
@@ -3211,9 +3223,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
-                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={{ ...roSt, fontWeight: supply > 0 ? 600 : 400 }} />
+                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={roSt} />
                                       <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))} style={detailBtn}>
-                                        상세 {it.showDetail ? "▲" : "▼"}
+                                        {it.showDetail ? "▲" : "▼"} 상세
                                       </button>
                                     </div>
                                     {it.showDetail && (
@@ -3233,12 +3245,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* ── 실비 행 ── */}
                                 {it.productType === "expense" && (
                                   <div>
-                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 72px 56px", gap: 3, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 72px 64px", gap: 3, alignItems: "center" }}>
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw, quantity: "1" } : p))}
                                         placeholder="금액 (원)" style={{ ...inputStyle, fontSize: 13, padding: "5px 7px", textAlign: "right" }} />
-                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={{ ...roSt, fontWeight: supply > 0 ? 600 : 400 }} />
+                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={roSt} />
                                       <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))} style={detailBtn}>
-                                        상세 {it.showDetail ? "▲" : "▼"}
+                                        {it.showDetail ? "▲" : "▼"} 상세
                                       </button>
                                     </div>
                                     {it.showDetail && (
@@ -3249,10 +3261,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     )}
                                   </div>
                                 )}
+                                </div>{/* ── /BODY ── */}
                               </div>
                             );
                           })}
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6, gap: 8 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, paddingTop: 8, borderTop: "1px dashed #e5e7eb", gap: 8 }}>
                             <button onClick={() => setQuoteItemForms(prev => [...prev, defaultItem()])}
                               style={{ fontSize: 12, color: "#7c3aed", background: "none", border: "1px dashed #d8b4fe", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
                               + 항목 추가

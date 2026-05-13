@@ -1,0 +1,280 @@
+지시문
+
+작업 목적:
+
+현재 견적 입력 UI는
+compact 구조와 기능은 상당히 안정화되었으나,
+
+아직 아래 문제가 남아 있다.
+
+견적 항목(row) 간 구분감 부족
+Header / 입력영역 hierarchy 약함
+상세 버튼이 input처럼 보임
+카드 간 시각 분리 부족
+정보와 컨트롤 혼합
+
+이번 작업은 기능 변경이 아니라
+“최종 UX 마감 작업”이다.
+
+핵심 목표:
+
+“세로 길이는 유지하면서
+항목 구분감과 완성도를 높이는 것”
+
+중요:
+
+DB 수정 금지
+API payload 수정 금지
+PDF 로직 수정 금지
+저장 구조 변경 금지
+compact 구조 유지
+padding 과도 확대 금지
+ERP 느낌으로 되돌아가지 말 것
+
+───────────────────────
+
+1. 견적 항목 카드 간 구분감 강화
+
+현재:
+row card들이 서로 붙어 보임.
+
+수정:
+
+각 item card(container)에:
+
+margin-bottom: 12px;
+border: 1px solid #dcdfe6;
+border-radius: 8px;
+box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+
+적용.
+
+중요:
+shadow는 매우 약하게.
+
+“떠 있는 카드 느낌” 금지.
+
+───────────────────────
+
+2. Header 영역 분리 강화
+
+현재:
+header와 입력 영역이 붙어 보임.
+
+수정:
+
+row header 영역에:
+
+background: rgba(0,0,0,0.015);
+border-bottom: 1px solid #ececec;
+padding: 4px 6px;
+margin-bottom: 6px;
+border-radius: 6px 6px 0 0;
+
+적용.
+
+목표:
+
+header/body hierarchy 강화
+한눈에 row 구분 가능하게
+
+───────────────────────
+
+3. Header 단순화
+
+현재:
+번역/통역/장비/실비 버튼이 모두 보여 복잡함.
+
+수정:
+
+header에는
+현재 선택된 유형만 표시.
+
+예:
+
+#1 [통역] 한국어↔영어 동시통역
+#2 [장비] 위스퍼링송신기
+
+형태 유지.
+
+유형 변경용 버튼들은:
+
+compact icon/button 형태로 축소
+또는
+row 내부 action 영역으로 이동
+
+중요:
+header는 “정보 표시 중심”.
+
+───────────────────────
+
+4. 상세 버튼 compact화
+
+현재:
+상세 버튼이 긴 input처럼 보임.
+
+수정:
+
+현재:
+[ 상세 ▲ ]
+
+↓
+
+compact pill button 형태:
+
+[▼ 상세]
+[▲ 상세]
+
+스타일:
+
+width: auto;
+min-width: 64px;
+height: 26px;
+padding: 0 10px;
+border-radius: 999px;
+display: inline-flex;
+align-items: center;
+justify-content: center;
+
+배치:
+row 우측 끝.
+
+절대:
+긴 input width 사용 금지.
+
+───────────────────────
+
+5. 카드 내부 padding 미세 축소
+
+현재:
+padding 누적으로 카드 높이가 약간 커짐.
+
+수정:
+
+card padding 소폭 감소
+detail area padding 소폭 감소
+내부 row gap 소폭 감소
+
+목표:
+“compact하지만 답답하지 않게”
+
+───────────────────────
+
+6. 공급가액 read-only 느낌 강화
+
+현재:
+editable input처럼 보임.
+
+수정:
+
+공급가액 input:
+
+background: #f9fafb;
+border-color: #ececec;
+color: #374151;
+cursor: default;
+font-weight: 500;
+
+적용.
+
+목표:
+“자동 계산값” 느낌 강화.
+
+───────────────────────
+
+7. 직접입력 + 삭제 버튼 그룹화
+
+현재:
+우측 액션들이 흩어져 보임.
+
+수정:
+
+상품 선택 dropdown 우측에
+action group compact 정렬.
+
+구조:
+
+[상품선택________________]
+[+직접][✕]
+
+스타일:
+
+gap: 4px
+높이 정렬 통일
+compact button 형태
+
+───────────────────────
+
+8. 총금액 영역 footer화
+
+현재:
+summary box가 row 영역에 섞여 보임.
+
+수정:
+
+총금액 영역을
+견적 footer 느낌으로 정리.
+
+예:
+
+margin-top: 10px;
+padding-top: 8px;
+border-top: 1px dashed #e5e7eb;
+
+적용.
+
+중요:
+현재 우측 정렬 구조 유지 가능.
+
+───────────────────────
+
+9. row 유형별 tint 유지
+
+현재 방향 유지.
+
+통역:
+연보라
+
+번역:
+연파랑
+
+장비:
+연초록
+
+실비:
+연노랑
+
+단:
+채도 더 높이지 말 것.
+
+“구분만 되는 수준” 유지.
+
+───────────────────────
+
+10. E2E 최소 검증
+
+전체 테스트 금지.
+
+아래만 확인:
+
+통역 row 추가
+번역 row 추가
+장비 row 추가
+카드 구분 확인
+상세 펼침/접힘
+직접입력 토글
+공급가액 readonly 스타일
+견적 저장
+수정/재생성 복원
+
+완료 후 결과 보고.
+
+───────────────────────
+
+11. 수정 파일 제한
+
+가능하면 아래 파일 중심 작업:
+
+artifacts/web-app/src/components/admin/ProjectDetailModal.tsx
+
+불필요한 백엔드 수정 금지.
