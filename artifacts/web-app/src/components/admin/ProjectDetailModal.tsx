@@ -3032,7 +3032,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
                                       placeholder="항목명 직접 입력" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px", flex: 1 }} />
                                   </div>
-                                  <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))} disabled={quoteItemForms.length <= 1}
+                                  <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))}
                                     style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 4px", flexShrink: 0 }}>×</button>
                                 </div>
                                 {/* 유형 탭 */}
