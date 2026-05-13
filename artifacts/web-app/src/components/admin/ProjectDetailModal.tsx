@@ -238,7 +238,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     taxType: "taxable" | "exempt" | "zero_rate";
     productType: string;    // "translation" | "interpretation" | "equipment" | "expense"
     interpreterCount: string;   // 통역사 수 (명)
-    workDays: string;           // 진행일수 (일)
+    workQuantity: string;       // 진행 수량
+    workUnit: string;           // 수량단위: "시간"|"일"|"회"|"건"
     interpretDate: string;
     interpretPlace: string;
     interpretType: string;
@@ -259,7 +260,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     langA: "", langB: "", interpretationDirection: "양방향",
     quantityUnit: "개", usagePeriod: "1일",
     unit: "건", quantity: "1", unitPrice: "", taxType: "taxable", productType: "translation",
-    interpreterCount: "1", workDays: "1",
+    interpreterCount: "1", workQuantity: "1", workUnit: "일",
     interpretDate: "", interpretPlace: "", interpretType: "동시통역",
     interpretationDuration: "", hasTravelExpense: false, hasEquipment: false,
     files: [], memo: "",
@@ -270,7 +271,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const calcItemTotal = (it: QuoteItemForm) => {
     const price = Number(it.unitPrice.replace?.(/,/g, "") || it.unitPrice || 0);
     const supply = it.productType === "interpretation"
-      ? Math.round(Number(it.interpreterCount || 1) * Number(it.workDays || 1) * price)
+      ? Math.round(Number(it.interpreterCount || 1) * Number(it.workQuantity || 1) * price)
       : Math.round(Number(it.quantity || 1) * price);
     return { supply, tax: 0, total: supply };
   };
@@ -881,7 +882,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             hasEquipment: it.productType === "interpretation" ? it.hasEquipment : undefined,
             interpretationDirection: it.productType === "interpretation" ? it.interpretationDirection || undefined : undefined,
             quantityUnit: it.productType === "equipment" ? it.quantityUnit || undefined : undefined,
-            usagePeriod: it.productType === "interpretation" ? it.workDays || undefined : it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
+            usagePeriod: it.productType === "interpretation" ? it.workUnit || undefined : it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
             eventStartDate: it.productType === "equipment" && it.showDetail ? it.eventStartDate || undefined : undefined,
             eventEndDate: it.productType === "equipment" && it.showDetail ? it.eventEndDate || undefined : undefined,
             itemLocation: it.productType === "equipment" && it.showDetail ? it.itemLocation || undefined : undefined,
@@ -927,7 +928,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             hasEquipment: it.productType === "interpretation" ? it.hasEquipment : undefined,
             interpretationDirection: it.productType === "interpretation" ? it.interpretationDirection || undefined : undefined,
             quantityUnit: it.productType === "equipment" ? it.quantityUnit || undefined : undefined,
-            usagePeriod: it.productType === "interpretation" ? it.workDays || undefined : it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
+            usagePeriod: it.productType === "interpretation" ? it.workUnit || undefined : it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
             eventStartDate: it.productType === "equipment" && it.showDetail ? it.eventStartDate || undefined : undefined,
             eventEndDate: it.productType === "equipment" && it.showDetail ? it.eventEndDate || undefined : undefined,
             itemLocation: it.productType === "equipment" && it.showDetail ? it.itemLocation || undefined : undefined,
@@ -3167,7 +3168,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* ── 통역 행 ── */}
                                 {it.productType === "interpretation" && (
                                   <div>
-                                    <div style={{ display: "grid", gridTemplateColumns: "38px 38px 62px 84px 70px 32px 32px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "38px 38px 62px 84px 70px 52px 46px 38px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
                                       <input value={it.langA} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, langA: e.target.value } : p))}
                                         placeholder="A" style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "center", textTransform: "uppercase" }} />
                                       <input value={it.langB} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, langB: e.target.value } : p))}
@@ -3201,9 +3202,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                           { value: "추가시간", label: "추가시간" },
                                         ]} />
                                       <NumericInput allowDecimal value={it.interpreterCount} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpreterCount: raw } : p))}
-                                        placeholder="명" style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "right" }} />
-                                      <NumericInput allowDecimal value={it.workDays} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, workDays: raw } : p))}
-                                        placeholder="일" style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "right" }} />
+                                        placeholder="명" style={{ ...inputStyle, fontSize: 11, padding: "5px 3px", textAlign: "right" }} />
+                                      <NumericInput allowDecimal value={it.workQuantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, workQuantity: raw } : p))}
+                                        placeholder="수량" style={{ ...inputStyle, fontSize: 11, padding: "5px 3px", textAlign: "right" }} />
+                                      <ClickSelect value={it.workUnit}
+                                        onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, workUnit: v } : p))}
+                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 38, borderColor: "#d8b4fe" }}
+                                        options={[
+                                          { value: "시간", label: "시간" },
+                                          { value: "일", label: "일" },
+                                          { value: "회", label: "회" },
+                                          { value: "건", label: "건" },
+                                        ]} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={roSt} />
@@ -3393,7 +3403,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     taxType: (it.taxType ?? "taxable") as "taxable"|"exempt"|"zero_rate",
                                     productType: itemType,
                                     interpreterCount: itemType === "interpretation" ? String(it.quantity ?? "1") : "1",
-                                    workDays: itemType === "interpretation" ? String(it.usagePeriod ?? "1") : "1",
+                                    workQuantity: itemType === "interpretation" ? "1" : "1",
+                                    workUnit: itemType === "interpretation" ? (it.usagePeriod ?? "일") : "일",
                                     interpretDate: it.interpretDate ?? "",
                                     interpretPlace: it.interpretPlace ?? "",
                                     interpretType: it.interpretType ?? "동시통역",
