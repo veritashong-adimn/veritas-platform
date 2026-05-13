@@ -246,6 +246,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     files: Array<{ name: string; url: string; size?: number; uploading?: boolean }>;
     memo: string;
     showDetail: boolean;
+    showDirectInput: boolean;
     eventStartDate: string;
     eventEndDate: string;
     itemLocation: string;
@@ -259,7 +260,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     interpretDate: "", interpretPlace: "", interpretType: "consecutive",
     interpretationDuration: "", hasTravelExpense: false, hasEquipment: false,
     files: [], memo: "",
-    showDetail: false, eventStartDate: "", eventEndDate: "", itemLocation: "",
+    showDetail: false, showDirectInput: false, eventStartDate: "", eventEndDate: "", itemLocation: "",
   });
   const [quoteMode, setQuoteMode] = useState<"simple" | "items">("items");
   const [quoteItemForms, setQuoteItemForms] = useState<QuoteItemForm[]>([defaultItem()]);
@@ -2996,9 +2997,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             const roSt: React.CSSProperties = { ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right", background: "#f8fafc", cursor: "default" };
                             return (
                               <div key={idx} style={{ marginBottom: 6 }}>
-                                {/* 상품 선택 + 항목명 */}
-                                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 4, marginBottom: 3, alignItems: "center" }}>
-                                  <div style={{ display: "flex", gap: 4 }}>
+                                {/* 상품 선택 + 항목명 토글 */}
+                                <div style={{ display: "flex", gap: 3, marginBottom: 3, alignItems: "center" }}>
+                                  {/* 상품 드롭다운 — 직접입력 모드일 때 숨김 */}
+                                  {!it.showDirectInput && (
                                     <ClickSelect
                                       value={String(it.productId ?? "")}
                                       onChange={v => {
@@ -3031,8 +3033,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         }
                                         setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productId: null } : p));
                                       }}
-                                      style={{ flex: "0 0 160px" }}
-                                      triggerStyle={{ fontSize: 11, padding: "5px 4px", borderRadius: 7, color: it.productId ? "#1e40af" : "#9ca3af", width: "160px" }}
+                                      style={{ flex: "1 1 0", minWidth: 0 }}
+                                      triggerStyle={{ fontSize: 11, padding: "5px 4px", borderRadius: 6, color: it.productId ? "#1e40af" : "#9ca3af", width: "100%" }}
                                       options={[
                                         { value: "", label: "상품 선택..." },
                                         ...quoteProducts.map(p => ({
@@ -3041,17 +3043,26 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         })),
                                       ]}
                                     />
+                                  )}
+                                  {/* 직접입력 input — showDirectInput일 때만 표시 */}
+                                  {it.showDirectInput && (
                                     <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
-                                      placeholder="항목명 직접 입력" style={{ ...inputStyle, fontSize: 12, padding: "6px 8px", flex: 1 }} />
-                                  </div>
+                                      placeholder="항목명 직접 입력" style={{ ...inputStyle, fontSize: 12, padding: "5px 7px", flex: "1 1 0", minWidth: 0 }} autoFocus />
+                                  )}
+                                  {/* 직접입력 토글 버튼 */}
+                                  <button
+                                    onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDirectInput: !p.showDirectInput, productId: p.showDirectInput ? p.productId : null } : p))}
+                                    style={{ fontSize: 10, padding: "4px 7px", borderRadius: 5, border: "1px solid #e5e7eb", background: it.showDirectInput ? "#f3f4f6" : "#fff", color: it.showDirectInput ? "#374151" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>
+                                    {it.showDirectInput ? "✕ 직접입력" : "+ 직접입력"}
+                                  </button>
                                   <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))}
-                                    style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 4px", flexShrink: 0 }}>×</button>
+                                    style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "0 2px", flexShrink: 0 }}>×</button>
                                 </div>
-                                {/* 유형 탭 */}
+                                {/* 유형 탭 — 선택된 것만 강조 */}
                                 <div style={{ display: "flex", gap: 3, marginBottom: 4 }}>
                                   {([{ v: "translation", lbl: "📄 번역", c: "#1e40af", bg: "#eff6ff" }, { v: "interpretation", lbl: "🎤 통역", c: "#7c3aed", bg: "#fdf4ff" }, { v: "equipment", lbl: "🔧 장비", c: "#1d4ed8", bg: "#dbeafe" }, { v: "expense", lbl: "💰 실비", c: "#92400e", bg: "#fefce8" }] as const).map(o => (
                                     <button key={o.v} onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productType: o.v } : p))}
-                                      style={{ fontSize: 10, padding: "2px 7px", borderRadius: 5, border: `1px solid ${it.productType === o.v ? o.c : "#e5e7eb"}`, background: it.productType === o.v ? o.bg : "#f9fafb", color: it.productType === o.v ? o.c : "#9ca3af", cursor: "pointer", fontWeight: it.productType === o.v ? 700 : 400 }}>
+                                      style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, border: it.productType === o.v ? `1px solid ${o.c}` : "1px solid transparent", background: it.productType === o.v ? o.bg : "transparent", color: it.productType === o.v ? o.c : "#c4c9d1", cursor: "pointer", fontWeight: it.productType === o.v ? 700 : 400 }}>
                                       {o.lbl}
                                     </button>
                                   ))}
@@ -3076,8 +3087,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
                                         placeholder="공급가액" style={{ ...roSt, fontSize: 11, padding: "5px 3px", color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                       <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))}
-                                        style={{ fontSize: 10, padding: "3px 6px", borderRadius: 5, border: `1px solid ${it.showDetail ? "#7c3aed" : "#d8b4fe"}`, background: it.showDetail ? "#7c3aed" : "#faf5ff", color: it.showDetail ? "#fff" : "#7c3aed", cursor: "pointer", whiteSpace: "nowrap" }}>
-                                        {it.showDetail ? "▲" : "▼"}
+                                        style={{ fontSize: 10, padding: "3px 8px", borderRadius: 10, border: "none", background: it.showDetail ? "#7c3aed" : "#f3f4f6", color: it.showDetail ? "#fff" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap", fontWeight: 600 }}>
+                                        상세 {it.showDetail ? "▲" : "▼"}
                                       </button>
                                     </div>
                                     {it.showDetail && (
@@ -3143,8 +3154,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
                                         placeholder="공급가액" style={{ ...roSt, fontSize: 11, padding: "5px 3px", color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                       <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))}
-                                        style={{ fontSize: 10, padding: "3px 6px", borderRadius: 5, border: `1px solid ${it.showDetail ? "#7c3aed" : "#d8b4fe"}`, background: it.showDetail ? "#7c3aed" : "#faf5ff", color: it.showDetail ? "#fff" : "#7c3aed", cursor: "pointer", whiteSpace: "nowrap" }}>
-                                        {it.showDetail ? "▲" : "▼"}
+                                        style={{ fontSize: 10, padding: "3px 8px", borderRadius: 10, border: "none", background: it.showDetail ? "#7c3aed" : "#f3f4f6", color: it.showDetail ? "#fff" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap", fontWeight: 600 }}>
+                                        상세 {it.showDetail ? "▲" : "▼"}
                                       </button>
                                     </div>
                                     {it.showDetail && (
@@ -3189,8 +3200,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
                                         placeholder="공급가액" style={{ ...roSt, fontSize: 11, padding: "5px 3px", color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                       <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))}
-                                        style={{ fontSize: 10, padding: "3px 6px", borderRadius: 5, border: `1px solid ${it.showDetail ? "#1d4ed8" : "#93c5fd"}`, background: it.showDetail ? "#1d4ed8" : "#eff6ff", color: it.showDetail ? "#fff" : "#1d4ed8", cursor: "pointer", whiteSpace: "nowrap" }}>
-                                        {it.showDetail ? "▲" : "▼"}
+                                        style={{ fontSize: 10, padding: "3px 8px", borderRadius: 10, border: "none", background: it.showDetail ? "#1d4ed8" : "#f3f4f6", color: it.showDetail ? "#fff" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap", fontWeight: 600 }}>
+                                        상세 {it.showDetail ? "▲" : "▼"}
                                       </button>
                                     </div>
                                     {it.showDetail && (
@@ -3217,8 +3228,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
                                         placeholder="공급가액" style={{ ...roSt, fontSize: 11, padding: "5px 3px", color: supply > 0 ? "#92400e" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                       <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))}
-                                        style={{ fontSize: 10, padding: "3px 6px", borderRadius: 5, border: `1px solid ${it.showDetail ? "#92400e" : "#fde68a"}`, background: it.showDetail ? "#92400e" : "#fefce8", color: it.showDetail ? "#fff" : "#92400e", cursor: "pointer", whiteSpace: "nowrap" }}>
-                                        {it.showDetail ? "▲" : "▼"}
+                                        style={{ fontSize: 10, padding: "3px 8px", borderRadius: 10, border: "none", background: it.showDetail ? "#92400e" : "#f3f4f6", color: it.showDetail ? "#fff" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap", fontWeight: 600 }}>
+                                        상세 {it.showDetail ? "▲" : "▼"}
                                       </button>
                                     </div>
                                     {it.showDetail && (
@@ -3342,6 +3353,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     files: [],
                                     memo: it.memo ?? "",
                                     showDetail: !!(it.eventStartDate || it.eventEndDate || it.itemLocation),
+                                    showDirectInput: !it.productId,
                                     eventStartDate: it.eventStartDate ?? "",
                                     eventEndDate: it.eventEndDate ?? "",
                                     itemLocation: it.itemLocation ?? "",
