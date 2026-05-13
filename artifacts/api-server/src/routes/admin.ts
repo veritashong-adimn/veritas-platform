@@ -55,11 +55,15 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
         requestingCompanyId: projectsTable.requestingCompanyId,
         requestingDivisionId: projectsTable.requestingDivisionId,
         billingCompanyId: projectsTable.billingCompanyId,
+        billingDivisionId: projectsTable.billingDivisionId,
         payerCompanyId: projectsTable.payerCompanyId,
+        payerDivisionId: projectsTable.payerDivisionId,
         contactName: contactAlias.name, companyName: companyAlias.name,
         divisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
         billingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.billingCompanyId})`,
+        billingDivisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.billingDivisionId})`,
         payerCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.payerCompanyId})`,
+        payerDivisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.payerDivisionId})`,
         requestingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.requestingCompanyId})`,
       })
       .from(projectsTable)
@@ -233,10 +237,14 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
         requestingCompanyId: projectsTable.requestingCompanyId,
         requestingDivisionId: projectsTable.requestingDivisionId,
         billingCompanyId: projectsTable.billingCompanyId,
+        billingDivisionId: projectsTable.billingDivisionId,
         payerCompanyId: projectsTable.payerCompanyId,
+        payerDivisionId: projectsTable.payerDivisionId,
         divisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
         billingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.billingCompanyId})`,
+        billingDivisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.billingDivisionId})`,
         payerCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.payerCompanyId})`,
+        payerDivisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.payerDivisionId})`,
         requestingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.requestingCompanyId})`,
       })
       .from(projectsTable)
@@ -395,10 +403,14 @@ router.get("/admin/projects/:id/control-tower", ...adminGuard, async (req, res) 
         requestingCompanyId: projectsTable.requestingCompanyId,
         requestingDivisionId: projectsTable.requestingDivisionId,
         billingCompanyId: projectsTable.billingCompanyId,
+        billingDivisionId: projectsTable.billingDivisionId,
         payerCompanyId: projectsTable.payerCompanyId,
+        payerDivisionId: projectsTable.payerDivisionId,
         requestingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.requestingCompanyId})`,
         billingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.billingCompanyId})`,
+        billingDivisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.billingDivisionId})`,
         payerCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.payerCompanyId})`,
+        payerDivisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.payerDivisionId})`,
         divisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
         customerEmail: usersTable.email,
       })
@@ -1007,12 +1019,13 @@ router.patch("/admin/projects/:id/info", ...adminGuard, requirePermission("proje
   if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
 
   const { title, companyId, contactId,
-    requestingCompanyId, requestingDivisionId, billingCompanyId, payerCompanyId,
+    requestingCompanyId, requestingDivisionId, billingCompanyId, billingDivisionId, payerCompanyId, payerDivisionId,
     forceEdit,
   } = req.body as {
     title?: string; companyId?: number | null; contactId?: number | null;
     requestingCompanyId?: number | null; requestingDivisionId?: number | null;
-    billingCompanyId?: number | null; payerCompanyId?: number | null;
+    billingCompanyId?: number | null; billingDivisionId?: number | null;
+    payerCompanyId?: number | null; payerDivisionId?: number | null;
     forceEdit?: boolean;
   };
   const updates: Record<string, any> = {};
@@ -1022,7 +1035,9 @@ router.patch("/admin/projects/:id/info", ...adminGuard, requirePermission("proje
   if (requestingCompanyId !== undefined) updates.requestingCompanyId = requestingCompanyId;
   if (requestingDivisionId !== undefined) updates.requestingDivisionId = requestingDivisionId;
   if (billingCompanyId !== undefined) updates.billingCompanyId = billingCompanyId;
+  if (billingDivisionId !== undefined) updates.billingDivisionId = billingDivisionId;
   if (payerCompanyId !== undefined) updates.payerCompanyId = payerCompanyId;
+  if (payerDivisionId !== undefined) updates.payerDivisionId = payerDivisionId;
   if (Object.keys(updates).length === 0) { res.status(400).json({ error: "변경할 항목이 없습니다." }); return; }
 
   try {

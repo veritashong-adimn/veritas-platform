@@ -147,6 +147,15 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [showQuoteForm, setShowQuoteForm] = useState(false);
   const [showTaxOptions, setShowTaxOptions] = useState(false);
   const [showBillingCardEdit, setShowBillingCardEdit] = useState(false);
+  const [billingCardMode, setBillingCardMode] = useState<"same_as_request"|"other_company"|"other_division">("same_as_request");
+  const [billingCardCompanyId, setBillingCardCompanyId] = useState<number|null>(null);
+  const [billingCardDivisionId, setBillingCardDivisionId] = useState<number|null>(null);
+  const [billingCardDivisions, setBillingCardDivisions] = useState<{id:number;name:string;type:string|null}[]>([]);
+  const [payerCardMode, setPayerCardMode] = useState<"same_as_billing"|"same_as_request"|"other_company"|"other_division">("same_as_billing");
+  const [payerCardCompanyId, setPayerCardCompanyId] = useState<number|null>(null);
+  const [payerCardDivisionId, setPayerCardDivisionId] = useState<number|null>(null);
+  const [payerCardDivisions, setPayerCardDivisions] = useState<{id:number;name:string;type:string|null}[]>([]);
+  const [savingBillingCard, setSavingBillingCard] = useState(false);
   const [creatingQuote, setCreatingQuote] = useState(false);
   type QuoteItemForm = {
     productId: number | null;
@@ -2045,75 +2054,220 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 {(() => {
                   const q0 = (detail.quotes ?? [])[0] as any;
                   const compName = (detail.company as any)?.name ?? (detail as any).companyName ?? "-";
-                  const billingName = (detail as any).billingCompanyName ?? compName;
-                  const payerName = (detail as any).payerCompanyName ?? billingName;
+                  const bCompName = (detail as any).billingCompanyName;
+                  const bDivName = (detail as any).billingDivisionName;
+                  const pCompName = (detail as any).payerCompanyName;
+                  const pDivName = (detail as any).payerDivisionName;
+                  const billingDisplay = bCompName
+                    ? (bDivName ? `${bCompName} / ${bDivName}` : bCompName)
+                    : compName;
+                  const billingEffective = bCompName ?? compName;
+                  const payerDisplay = pCompName
+                    ? (pDivName ? `${pCompName} / ${pDivName}` : pCompName)
+                    : billingEffective;
                   const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", zero_tax_invoice: "세금계산서(영세율)", bill: "계산서" };
                   const btLabelMap: Record<string, string> = { postpaid_per_project: "건별 후불", monthly_billing: "누적 청구", prepaid_wallet: "선입금 차감", prepay_upfront: "선결제" };
                   const tdt = q0?.taxDocumentType;
                   const bt = q0?.billingType ?? (detail.company as any)?.billingType;
                   const fmtDate = (v: string | null | undefined) => v ? new Date(v).toLocaleDateString("ko-KR") : "-";
-                  const infoRows: { label: string; value: string; color?: string }[] = [
-                    { label: "청구 대상", value: billingName, color: "#0369a1" },
-                    { label: "💰 납부 주체", value: payerName, color: "#059669" },
-                    { label: "문서 구분", value: tdt ? (taxDocLabel[tdt] ?? tdt) : "-" },
-                    { label: "청구 방식", value: bt ? (btLabelMap[bt] ?? bt) : "-" },
-                    { label: "입금 예정일", value: fmtDate(q0?.paymentDueDate) },
-                    { label: "견적일", value: fmtDate(q0?.issueDate) },
-                    { label: "견적 유효기간", value: fmtDate(q0?.validUntil) },
-                  ];
+
+                  const loadBillingDivisions = async (cid: number) => {
+                    try {
+                      const r = await fetch(api(`/api/admin/companies/${cid}/divisions`), { headers: authH });
+                      setBillingCardDivisions(r.ok ? await r.json() : []);
+                    } catch { setBillingCardDivisions([]); }
+                  };
+                  const loadPayerDivisions = async (cid: number) => {
+                    try {
+                      const r = await fetch(api(`/api/admin/companies/${cid}/divisions`), { headers: authH });
+                      setPayerCardDivisions(r.ok ? await r.json() : []);
+                    } catch { setPayerCardDivisions([]); }
+                  };
+
+                  const handleOpenEdit = () => {
+                    if (showBillingCardEdit) { setShowBillingCardEdit(false); return; }
+                    const bCid = (detail as any).billingCompanyId ?? null;
+                    const bDid = (detail as any).billingDivisionId ?? null;
+                    const pCid = (detail as any).payerCompanyId ?? null;
+                    const pDid = (detail as any).payerDivisionId ?? null;
+                    const reqCid = detail.company?.id ?? (detail as any).companyId ?? null;
+                    const bMode: typeof billingCardMode = bCid === null ? "same_as_request" : bDid !== null ? "other_division" : "other_company";
+                    const pMode: typeof payerCardMode = pCid === null ? "same_as_billing" : (pCid === reqCid && pDid === null) ? "same_as_request" : pDid !== null ? "other_division" : "other_company";
+                    setBillingCardMode(bMode);
+                    setBillingCardCompanyId(bCid);
+                    setBillingCardDivisionId(bDid);
+                    setBillingCardDivisions([]);
+                    setPayerCardMode(pMode);
+                    setPayerCardCompanyId(pCid);
+                    setPayerCardDivisionId(pDid);
+                    setPayerCardDivisions([]);
+                    if (bCid && bDid !== null) loadBillingDivisions(bCid);
+                    if (pCid && pDid !== null) loadPayerDivisions(pCid);
+                    setShowBillingCardEdit(true);
+                  };
+
+                  const handleSaveBillingCard = async () => {
+                    setSavingBillingCard(true);
+                    try {
+                      const reqCid = detail.company?.id ?? (detail as any).companyId ?? null;
+                      let billingCompanyId: number | null;
+                      let billingDivisionId: number | null;
+                      if (billingCardMode === "same_as_request") { billingCompanyId = null; billingDivisionId = null; }
+                      else if (billingCardMode === "other_company") { billingCompanyId = billingCardCompanyId; billingDivisionId = null; }
+                      else { billingCompanyId = billingCardCompanyId; billingDivisionId = billingCardDivisionId; }
+                      let payerCompanyId: number | null;
+                      let payerDivisionId: number | null;
+                      if (payerCardMode === "same_as_billing") { payerCompanyId = null; payerDivisionId = null; }
+                      else if (payerCardMode === "same_as_request") { payerCompanyId = reqCid; payerDivisionId = null; }
+                      else if (payerCardMode === "other_company") { payerCompanyId = payerCardCompanyId; payerDivisionId = null; }
+                      else { payerCompanyId = payerCardCompanyId; payerDivisionId = payerCardDivisionId; }
+                      const res = await fetch(api(`/api/admin/projects/${projectId}/info`), {
+                        method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
+                        body: JSON.stringify({ billingCompanyId, billingDivisionId, payerCompanyId, payerDivisionId }),
+                      });
+                      if (res.ok) { setShowBillingCardEdit(false); await loadDetail(); onRefresh(); }
+                      else { const d = await res.json(); alert(d.error ?? "저장 실패"); }
+                    } finally { setSavingBillingCard(false); }
+                  };
+
+                  const rdoStyle = (active: boolean): React.CSSProperties => ({
+                    display: "flex", alignItems: "center", gap: 5, cursor: "pointer",
+                    fontSize: 11, fontWeight: active ? 700 : 400, color: active ? "#1e40af" : "#374151",
+                    background: active ? "#eff6ff" : "transparent",
+                    border: active ? "1.5px solid #93c5fd" : "1.5px solid #e5e7eb",
+                    borderRadius: 6, padding: "4px 10px", userSelect: "none",
+                  });
+
                   return (
                     <div style={{ background: "#f8fafc", borderRadius: 10, padding: "12px 14px", marginBottom: 16, border: "1px solid #e2e8f0" }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
                         <span style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>📋 청구 / 결제 정보</span>
-                        <button
-                          onClick={() => {
-                            if (!showBillingCardEdit) {
-                              setEditBillingCompanyId((detail as any).billingCompanyId ?? null);
-                              setEditPayerCompanyId((detail as any).payerCompanyId ?? null);
-                            }
-                            setShowBillingCardEdit(v => !v);
-                          }}
+                        <button onClick={handleOpenEdit}
                           style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: showBillingCardEdit ? "#f3f4f6" : "#fdf4ff", border: "1px solid #d8b4fe", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
                           {showBillingCardEdit ? "✕ 닫기" : "✏️ 수정"}
                         </button>
                       </div>
+
                       {!showBillingCardEdit ? (
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                          {infoRows.map(item => (
+                          {[
+                            { label: "청구 대상", value: billingDisplay, color: "#0369a1" },
+                            { label: "정산 주체", value: payerDisplay, color: "#059669" },
+                            { label: "문서 구분", value: tdt ? (taxDocLabel[tdt] ?? tdt) : "-" },
+                            { label: "청구 방식", value: bt ? (btLabelMap[bt] ?? bt) : "-" },
+                            { label: "입금 예정일", value: fmtDate(q0?.paymentDueDate) },
+                            { label: "견적일", value: fmtDate(q0?.issueDate) },
+                            { label: "견적 유효기간", value: fmtDate(q0?.validUntil) },
+                          ].map(item => (
                             <div key={item.label} style={{ background: "#fff", borderRadius: 7, padding: "7px 10px", border: "1px solid #e2e8f0" }}>
                               <p style={{ margin: 0, fontSize: 10, color: "#9ca3af", fontWeight: 600 }}>{item.label}</p>
-                              <p style={{ margin: "2px 0 0", fontSize: 12, fontWeight: 600, color: item.color ?? "#374151" }}>{item.value}</p>
+                              <p style={{ margin: "2px 0 0", fontSize: 12, fontWeight: 600, color: (item as any).color ?? "#374151" }}>{item.value}</p>
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                          <p style={{ margin: 0, fontSize: 11, color: "#6b7280" }}>청구 대상과 납부 주체를 수정합니다. 문서 구분·청구 방식 등은 견적 생성/수정 시 변경됩니다.</p>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                            <div>
-                              <label style={{ fontSize: 11, color: "#0369a1", fontWeight: 700, display: "block", marginBottom: 3 }}>청구 대상</label>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                          <p style={{ margin: 0, fontSize: 11, color: "#6b7280" }}>문서 구분·청구 방식 등은 견적 생성/수정 시 변경됩니다.</p>
+
+                          {/* ── 청구 대상 ── */}
+                          <div style={{ background: "#fff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "10px 12px" }}>
+                            <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: "#0369a1" }}>청구 대상</p>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                              {(["same_as_request", "other_company", "other_division"] as const).map(mode => (
+                                <button key={mode} type="button"
+                                  onClick={() => { setBillingCardMode(mode); setBillingCardCompanyId(null); setBillingCardDivisionId(null); setBillingCardDivisions([]); }}
+                                  style={rdoStyle(billingCardMode === mode)}>
+                                  {mode === "same_as_request" ? "요청 거래처와 동일" : mode === "other_company" ? "다른 거래처 선택" : "다른 브랜드/부서 선택"}
+                                </button>
+                              ))}
+                            </div>
+                            {billingCardMode === "other_company" && (
                               <ClickSelect
-                                value={String(editBillingCompanyId ?? "")}
-                                onChange={v => setEditBillingCompanyId(v ? Number(v) : null)}
+                                value={String(billingCardCompanyId ?? "")}
+                                onChange={v => setBillingCardCompanyId(v ? Number(v) : null)}
                                 style={{ width: "100%" }}
                                 triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #bae6fd" }}
-                                options={[{ value: "", label: "— 요청 거래처와 동일 —" }, ...companiesList.map(c => ({ value: String(c.id), label: c.name }))]}
+                                options={[{ value: "", label: "— 거래처 선택 —" }, ...companiesList.map(c => ({ value: String(c.id), label: c.name }))]}
                               />
+                            )}
+                            {billingCardMode === "other_division" && (
+                              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                <ClickSelect
+                                  value={String(billingCardCompanyId ?? "")}
+                                  onChange={v => {
+                                    const cid = v ? Number(v) : null;
+                                    setBillingCardCompanyId(cid); setBillingCardDivisionId(null);
+                                    if (cid) loadBillingDivisions(cid); else setBillingCardDivisions([]);
+                                  }}
+                                  style={{ width: "100%" }}
+                                  triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #bae6fd" }}
+                                  options={[{ value: "", label: "— 거래처 선택 —" }, ...companiesList.map(c => ({ value: String(c.id), label: c.name }))]}
+                                />
+                                {billingCardCompanyId && (
+                                  <ClickSelect
+                                    value={String(billingCardDivisionId ?? "")}
+                                    onChange={v => setBillingCardDivisionId(v ? Number(v) : null)}
+                                    style={{ width: "100%" }}
+                                    triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a5f3fc" }}
+                                    options={[{ value: "", label: "— 브랜드/부서 선택 —" }, ...billingCardDivisions.map(d => ({ value: String(d.id), label: d.name + (d.type ? ` (${d.type})` : "") }))]}
+                                  />
+                                )}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* ── 정산 주체 ── */}
+                          <div style={{ background: "#fff", border: "1px solid #a7f3d0", borderRadius: 8, padding: "10px 12px" }}>
+                            <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: "#059669" }}>정산 주체</p>
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                              {(["same_as_billing", "same_as_request", "other_company", "other_division"] as const).map(mode => (
+                                <button key={mode} type="button"
+                                  onClick={() => { setPayerCardMode(mode); setPayerCardCompanyId(null); setPayerCardDivisionId(null); setPayerCardDivisions([]); }}
+                                  style={rdoStyle(payerCardMode === mode)}>
+                                  {mode === "same_as_billing" ? "청구 대상과 동일" : mode === "same_as_request" ? "요청 거래처와 동일" : mode === "other_company" ? "다른 거래처 선택" : "다른 브랜드/부서 선택"}
+                                </button>
+                              ))}
                             </div>
-                            <div>
-                              <label style={{ fontSize: 11, color: "#059669", fontWeight: 700, display: "block", marginBottom: 3 }}>💰 납부 주체</label>
+                            {payerCardMode === "other_company" && (
                               <ClickSelect
-                                value={String(editPayerCompanyId ?? "")}
-                                onChange={v => setEditPayerCompanyId(v ? Number(v) : null)}
+                                value={String(payerCardCompanyId ?? "")}
+                                onChange={v => setPayerCardCompanyId(v ? Number(v) : null)}
                                 style={{ width: "100%" }}
                                 triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a7f3d0" }}
-                                options={[{ value: "", label: "— 청구 대상과 동일 —" }, ...companiesList.map(c => ({ value: String(c.id), label: c.name }))]}
+                                options={[{ value: "", label: "— 거래처 선택 —" }, ...companiesList.map(c => ({ value: String(c.id), label: c.name }))]}
                               />
-                            </div>
+                            )}
+                            {payerCardMode === "other_division" && (
+                              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                                <ClickSelect
+                                  value={String(payerCardCompanyId ?? "")}
+                                  onChange={v => {
+                                    const cid = v ? Number(v) : null;
+                                    setPayerCardCompanyId(cid); setPayerCardDivisionId(null);
+                                    if (cid) loadPayerDivisions(cid); else setPayerCardDivisions([]);
+                                  }}
+                                  style={{ width: "100%" }}
+                                  triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a7f3d0" }}
+                                  options={[{ value: "", label: "— 거래처 선택 —" }, ...companiesList.map(c => ({ value: String(c.id), label: c.name }))]}
+                                />
+                                {payerCardCompanyId && (
+                                  <ClickSelect
+                                    value={String(payerCardDivisionId ?? "")}
+                                    onChange={v => setPayerCardDivisionId(v ? Number(v) : null)}
+                                    style={{ width: "100%" }}
+                                    triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a5f3fc" }}
+                                    options={[{ value: "", label: "— 브랜드/부서 선택 —" }, ...payerCardDivisions.map(d => ({ value: String(d.id), label: d.name + (d.type ? ` (${d.type})` : "") }))]}
+                                  />
+                                )}
+                              </div>
+                            )}
                           </div>
+
                           <div style={{ display: "flex", gap: 8 }}>
-                            <PrimaryBtn onClick={async () => { await handleSaveEdit(); setShowBillingCardEdit(false); }}
-                              style={{ fontSize: 12, padding: "6px 16px", background: "#7c3aed", border: "none" }}>저장</PrimaryBtn>
+                            <PrimaryBtn onClick={handleSaveBillingCard} disabled={savingBillingCard}
+                              style={{ fontSize: 12, padding: "6px 16px", background: "#7c3aed", border: "none" }}>
+                              {savingBillingCard ? "저장 중..." : "저장"}
+                            </PrimaryBtn>
                             <button onClick={() => setShowBillingCardEdit(false)}
                               style={{ fontSize: 12, padding: "6px 14px", borderRadius: 7, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>취소</button>
                           </div>
