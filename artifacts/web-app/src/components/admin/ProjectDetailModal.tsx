@@ -5,6 +5,67 @@ import { ReviewMemoPanel } from './ReviewMemoPanel';
 import { DraggableModal } from './DraggableModal';
 import { ProjectControlTowerTab } from './ProjectControlTowerTab';
 
+/* ────── SearchableSelect (거래처 검색용 공통 컴포넌트) ────── */
+type SSItem = { id: number; label: string; sub?: string };
+function BillingSearchableSelect({ items, value, onChange, placeholder, accentBorder = "#6366f1" }: {
+  items: SSItem[]; value: number | null; onChange: (id: number | null) => void;
+  placeholder?: string; accentBorder?: string;
+}) {
+  const [query, setQuery] = React.useState("");
+  const [open, setOpen] = React.useState(false);
+  const [debounced, setDebounced] = React.useState("");
+  const [highlightIdx, setHighlightIdx] = React.useState(-1);
+  const listRef = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => { const t = setTimeout(() => setDebounced(query), 200); return () => clearTimeout(t); }, [query]);
+  React.useEffect(() => { const h = () => setOpen(false); document.addEventListener("mousedown", h); return () => document.removeEventListener("mousedown", h); }, []);
+  const selected = value != null ? items.find(i => i.id === value) : null;
+  const q = debounced.toLowerCase();
+  const filtered = (q ? items.filter(i => i.label.toLowerCase().includes(q) || (i.sub ?? "").toLowerCase().includes(q)) : items).slice(0, 30);
+  const displayValue = open ? query : (selected?.label ?? "");
+  React.useEffect(() => { if (!open || highlightIdx < 0 || !listRef.current) return; (listRef.current.children[highlightIdx] as HTMLElement | undefined)?.scrollIntoView?.({ block: "nearest" }); }, [highlightIdx, open]);
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") { e.preventDefault(); setOpen(false); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHighlightIdx(i => Math.min(i + 1, filtered.length - 1)); return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)); return; }
+    if (e.key === "Enter") { e.preventDefault(); if (highlightIdx >= 0 && highlightIdx < filtered.length) { onChange(filtered[highlightIdx].id); setQuery(""); setOpen(false); setHighlightIdx(-1); } }
+  };
+  return (
+    <div style={{ position: "relative" }} onMouseDown={e => e.stopPropagation()}>
+      <div style={{ display: "flex", alignItems: "center", border: `1px solid ${open ? accentBorder : "#d1d5db"}`, borderRadius: 7, background: "#fff", transition: "border-color 0.12s" }}>
+        <input value={displayValue} onChange={e => { setQuery(e.target.value); setOpen(true); setHighlightIdx(-1); }}
+          onFocus={() => { setOpen(true); if (selected) setQuery(""); }} onKeyDown={handleKeyDown}
+          placeholder={placeholder ?? "이름으로 검색..."}
+          style={{ flex: 1, padding: "6px 10px", fontSize: 12, border: "none", outline: "none", background: "transparent", borderRadius: 7, minWidth: 0 }} />
+        {value != null && (
+          <button type="button" onClick={() => { onChange(null); setQuery(""); setOpen(false); }}
+            style={{ padding: "0 8px", fontSize: 15, lineHeight: 1, color: "#94a3b8", background: "none", border: "none", cursor: "pointer", flexShrink: 0 }}>×</button>
+        )}
+        <span onClick={() => setOpen(o => !o)} style={{ padding: "0 8px", color: "#94a3b8", fontSize: 9, flexShrink: 0, userSelect: "none", cursor: "pointer" }}>{open ? "▲" : "▼"}</span>
+      </div>
+      {open && (
+        <div ref={listRef} style={{ position: "absolute", top: "calc(100% + 2px)", left: 0, right: 0, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 7, boxShadow: "0 4px 18px rgba(0,0,0,0.1)", zIndex: 700, maxHeight: 200, overflowY: "auto", scrollbarWidth: "thin" }}>
+          {items.length === 0
+            ? <p style={{ margin: 0, padding: "7px 10px", fontSize: 12, color: "#94a3b8" }}>등록된 거래처가 없습니다</p>
+            : filtered.length === 0
+              ? <p style={{ margin: 0, padding: "7px 10px", fontSize: 12, color: "#94a3b8" }}>검색 결과 없음</p>
+              : filtered.map((item, idx) => {
+                  const isHighlit = idx === highlightIdx;
+                  return (
+                    <button key={item.id} type="button" onMouseEnter={() => setHighlightIdx(idx)} onMouseLeave={() => setHighlightIdx(-1)}
+                      onClick={() => { onChange(item.id); setQuery(""); setOpen(false); setHighlightIdx(-1); }}
+                      style={{ display: "block", width: "100%", textAlign: "left", padding: "5px 10px", fontSize: 12, color: "#111827", background: isHighlit ? "#eff6ff" : item.id === value ? "#f0f9ff" : "transparent", border: "none", borderBottom: "1px solid #f8fafc", cursor: "pointer" }}>
+                      <span style={{ fontWeight: 600 }}>{item.label}</span>
+                      {item.sub && <span style={{ marginLeft: 6, fontSize: 10, color: "#94a3b8" }}>{item.sub}</span>}
+                    </button>
+                  );
+                })
+          }
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ────── 상태 변경 검증 ────── */
 function getStatusTransitionBlock(
   targetStatus: string,
@@ -2084,8 +2145,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     } catch { setPayerCardDivisions([]); }
                   };
 
-                  const handleOpenEdit = () => {
+                  const handleOpenEdit = async () => {
                     if (showBillingCardEdit) { setShowBillingCardEdit(false); return; }
+                    await loadMeta();
                     const bCid = (detail as any).billingCompanyId ?? null;
                     const bDid = (detail as any).billingDivisionId ?? null;
                     const pCid = (detail as any).payerCompanyId ?? null;
@@ -2182,34 +2244,33 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               ))}
                             </div>
                             {billingCardMode === "other_company" && (
-                              <ClickSelect
-                                value={String(billingCardCompanyId ?? "")}
-                                onChange={v => setBillingCardCompanyId(v ? Number(v) : null)}
-                                style={{ width: "100%" }}
-                                triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #bae6fd" }}
-                                options={[{ value: "", label: "— 거래처 선택 —" }, ...companiesList.map(c => ({ value: String(c.id), label: c.name }))]}
+                              <BillingSearchableSelect
+                                items={companiesList.map(c => ({ id: c.id, label: c.name }))}
+                                value={billingCardCompanyId}
+                                onChange={setBillingCardCompanyId}
+                                placeholder="회사명으로 검색..."
+                                accentBorder="#93c5fd"
                               />
                             )}
                             {billingCardMode === "other_division" && (
                               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                                <ClickSelect
-                                  value={String(billingCardCompanyId ?? "")}
-                                  onChange={v => {
-                                    const cid = v ? Number(v) : null;
+                                <BillingSearchableSelect
+                                  items={companiesList.map(c => ({ id: c.id, label: c.name }))}
+                                  value={billingCardCompanyId}
+                                  onChange={cid => {
                                     setBillingCardCompanyId(cid); setBillingCardDivisionId(null);
                                     if (cid) loadBillingDivisions(cid); else setBillingCardDivisions([]);
                                   }}
-                                  style={{ width: "100%" }}
-                                  triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #bae6fd" }}
-                                  options={[{ value: "", label: "— 거래처 선택 —" }, ...companiesList.map(c => ({ value: String(c.id), label: c.name }))]}
+                                  placeholder="거래처 검색..."
+                                  accentBorder="#93c5fd"
                                 />
                                 {billingCardCompanyId && (
-                                  <ClickSelect
-                                    value={String(billingCardDivisionId ?? "")}
-                                    onChange={v => setBillingCardDivisionId(v ? Number(v) : null)}
-                                    style={{ width: "100%" }}
-                                    triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a5f3fc" }}
-                                    options={[{ value: "", label: "— 브랜드/부서 선택 —" }, ...billingCardDivisions.map(d => ({ value: String(d.id), label: d.name + (d.type ? ` (${d.type})` : "") }))]}
+                                  <BillingSearchableSelect
+                                    items={billingCardDivisions.map(d => ({ id: d.id, label: d.name + (d.type ? ` (${d.type})` : "") }))}
+                                    value={billingCardDivisionId}
+                                    onChange={setBillingCardDivisionId}
+                                    placeholder={billingCardDivisions.length === 0 ? "브랜드/부서 없음" : "브랜드/부서 검색..."}
+                                    accentBorder="#67e8f9"
                                   />
                                 )}
                               </div>
@@ -2229,34 +2290,33 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               ))}
                             </div>
                             {payerCardMode === "other_company" && (
-                              <ClickSelect
-                                value={String(payerCardCompanyId ?? "")}
-                                onChange={v => setPayerCardCompanyId(v ? Number(v) : null)}
-                                style={{ width: "100%" }}
-                                triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a7f3d0" }}
-                                options={[{ value: "", label: "— 거래처 선택 —" }, ...companiesList.map(c => ({ value: String(c.id), label: c.name }))]}
+                              <BillingSearchableSelect
+                                items={companiesList.map(c => ({ id: c.id, label: c.name }))}
+                                value={payerCardCompanyId}
+                                onChange={setPayerCardCompanyId}
+                                placeholder="회사명으로 검색..."
+                                accentBorder="#6ee7b7"
                               />
                             )}
                             {payerCardMode === "other_division" && (
                               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                                <ClickSelect
-                                  value={String(payerCardCompanyId ?? "")}
-                                  onChange={v => {
-                                    const cid = v ? Number(v) : null;
+                                <BillingSearchableSelect
+                                  items={companiesList.map(c => ({ id: c.id, label: c.name }))}
+                                  value={payerCardCompanyId}
+                                  onChange={cid => {
                                     setPayerCardCompanyId(cid); setPayerCardDivisionId(null);
                                     if (cid) loadPayerDivisions(cid); else setPayerCardDivisions([]);
                                   }}
-                                  style={{ width: "100%" }}
-                                  triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a7f3d0" }}
-                                  options={[{ value: "", label: "— 거래처 선택 —" }, ...companiesList.map(c => ({ value: String(c.id), label: c.name }))]}
+                                  placeholder="거래처 검색..."
+                                  accentBorder="#6ee7b7"
                                 />
                                 {payerCardCompanyId && (
-                                  <ClickSelect
-                                    value={String(payerCardDivisionId ?? "")}
-                                    onChange={v => setPayerCardDivisionId(v ? Number(v) : null)}
-                                    style={{ width: "100%" }}
-                                    triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a5f3fc" }}
-                                    options={[{ value: "", label: "— 브랜드/부서 선택 —" }, ...payerCardDivisions.map(d => ({ value: String(d.id), label: d.name + (d.type ? ` (${d.type})` : "") }))]}
+                                  <BillingSearchableSelect
+                                    items={payerCardDivisions.map(d => ({ id: d.id, label: d.name + (d.type ? ` (${d.type})` : "") }))}
+                                    value={payerCardDivisionId}
+                                    onChange={setPayerCardDivisionId}
+                                    placeholder={payerCardDivisions.length === 0 ? "브랜드/부서 없음" : "브랜드/부서 검색..."}
+                                    accentBorder="#67e8f9"
                                   />
                                 )}
                               </div>
