@@ -3120,7 +3120,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         placeholder="도착어" style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "center", textTransform: "uppercase" }} />
                                       <ClickSelect value={it.unit} onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: v } : p))}
                                         triggerStyle={{ fontSize: 10, padding: "5px 1px", borderRadius: 5, width: 52 }}
-                                        options={[{ value: "건", label: "건" }, { value: "어절", label: "어절" }, { value: "단어", label: "단어" }, { value: "글자", label: "글자" }, { value: "페이지", label: "페이지" }, { value: "시간", label: "시간" }]} />
+                                        options={[{ value: "페이지", label: "페이지" }, { value: "글자", label: "글자" }, { value: "단어", label: "단어" }, { value: "어절", label: "어절" }, { value: "건", label: "건" }]} />
                                       <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
                                         style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
