@@ -3059,40 +3059,54 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "0 2px", flexShrink: 0 }}>×</button>
                                 </div>
                                 {/* 유형 탭 — 선택된 것만 강조 */}
-                                <div style={{ display: "flex", gap: 3, marginBottom: 4 }}>
+                                <div style={{ display: "flex", gap: 2, marginBottom: 4 }}>
                                   {([{ v: "translation", lbl: "📄 번역", c: "#1e40af", bg: "#eff6ff" }, { v: "interpretation", lbl: "🎤 통역", c: "#7c3aed", bg: "#fdf4ff" }, { v: "equipment", lbl: "🔧 장비", c: "#1d4ed8", bg: "#dbeafe" }, { v: "expense", lbl: "💰 실비", c: "#92400e", bg: "#fefce8" }] as const).map(o => (
                                     <button key={o.v} onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productType: o.v } : p))}
-                                      style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, border: it.productType === o.v ? `1px solid ${o.c}` : "1px solid transparent", background: it.productType === o.v ? o.bg : "transparent", color: it.productType === o.v ? o.c : "#c4c9d1", cursor: "pointer", fontWeight: it.productType === o.v ? 700 : 400 }}>
+                                      style={{ fontSize: 10, padding: "2px 5px", borderRadius: 4, border: "none", background: it.productType === o.v ? o.bg : "transparent", color: it.productType === o.v ? o.c : "#d1d5db", cursor: "pointer", fontWeight: it.productType === o.v ? 700 : 400 }}>
                                       {o.lbl}
                                     </button>
                                   ))}
                                 </div>
 
+                                {/* 공통 상세 버튼 스타일 */}
+                                {(() => {
+                                  const detailBtn = (active: boolean, activeColor: string): React.CSSProperties => ({
+                                    fontSize: 10, width: 56, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                                    gap: 2, padding: "0 4px", height: 26, borderRadius: 8, border: "none",
+                                    background: active ? activeColor : "#f0f0f0", color: active ? "#fff" : "#9ca3af",
+                                    cursor: "pointer", fontWeight: 600, flexShrink: 0,
+                                  });
+                                  const detailArea: React.CSSProperties = {
+                                    marginTop: 3, padding: "5px 7px", background: "#fafafa",
+                                    borderRadius: 5, borderTop: "1px dashed #e5e7eb",
+                                  };
+                                  return (
+                                    <>
                                 {/* ── 번역 행 ── */}
                                 {it.productType === "translation" && (
-                                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "52px 10px 52px 58px 48px 78px 78px auto", gap: 3, alignItems: "center" }}>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "44px 8px 44px 52px 40px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
                                       <input value={it.sourceLanguage} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, sourceLanguage: e.target.value } : p))}
-                                        placeholder="출발어" style={{ ...inputStyle, fontSize: 11, padding: "5px 3px", textAlign: "center" }} />
-                                      <span style={{ textAlign: "center", color: "#9ca3af", fontSize: 12 }}>→</span>
+                                        placeholder="출발어" style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "center" }} />
+                                      <span style={{ textAlign: "center", color: "#9ca3af", fontSize: 11 }}>→</span>
                                       <input value={it.targetLanguage} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, targetLanguage: e.target.value } : p))}
-                                        placeholder="도착어" style={{ ...inputStyle, fontSize: 11, padding: "5px 3px", textAlign: "center" }} />
+                                        placeholder="도착어" style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "center" }} />
                                       <ClickSelect value={it.unit} onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: v } : p))}
-                                        triggerStyle={{ fontSize: 11, padding: "5px 2px", borderRadius: 6, width: 58 }}
+                                        triggerStyle={{ fontSize: 10, padding: "5px 1px", borderRadius: 5, width: 52 }}
                                         options={[{ value: "건", label: "건" }, { value: "어절", label: "어절" }, { value: "단어", label: "단어" }, { value: "글자", label: "글자" }, { value: "페이지", label: "페이지" }, { value: "시간", label: "시간" }]} />
                                       <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
-                                        style={{ ...inputStyle, fontSize: 12, padding: "5px 3px", textAlign: "right" }} />
+                                        style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
                                         placeholder="공급가액" style={{ ...roSt, fontSize: 11, padding: "5px 3px", color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                       <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))}
-                                        style={{ fontSize: 10, padding: "3px 8px", borderRadius: 10, border: "none", background: it.showDetail ? "#7c3aed" : "#f3f4f6", color: it.showDetail ? "#fff" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap", fontWeight: 600 }}>
+                                        style={detailBtn(it.showDetail, "#7c3aed")}>
                                         상세 {it.showDetail ? "▲" : "▼"}
                                       </button>
                                     </div>
                                     {it.showDetail && (
-                                      <div style={{ display: "flex", gap: 4, alignItems: "center", paddingTop: 3, borderTop: "1px solid #f3e8ff" }}>
+                                      <div style={{ ...detailArea, display: "flex", gap: 4, alignItems: "center" }}>
                                         <label style={{ fontSize: 11, color: "#7c3aed", cursor: "pointer", border: "1px dashed #d8b4fe", borderRadius: 5, padding: "3px 7px", whiteSpace: "nowrap", background: "#faf5ff" }}>
                                           📎 파일
                                           <input type="file" multiple style={{ display: "none" }} onChange={async e => {
@@ -3129,37 +3143,37 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
 
                                 {/* ── 통역 행 ── */}
                                 {it.productType === "interpretation" && (
-                                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "46px 46px 72px 76px 50px 44px 78px 78px auto", gap: 3, alignItems: "center" }}>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "40px 40px 64px 68px 44px 36px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
                                       <input value={it.langA} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, langA: e.target.value } : p))}
-                                        placeholder="언어A" style={{ ...inputStyle, fontSize: 11, padding: "5px 3px", textAlign: "center" }} />
+                                        placeholder="언어A" style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "center" }} />
                                       <input value={it.langB} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, langB: e.target.value } : p))}
-                                        placeholder="언어B" style={{ ...inputStyle, fontSize: 11, padding: "5px 3px", textAlign: "center" }} />
+                                        placeholder="언어B" style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "center" }} />
                                       <ClickSelect value={it.interpretationDirection}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretationDirection: v } : p))}
-                                        triggerStyle={{ fontSize: 10, padding: "5px 2px", borderRadius: 6, width: 72, borderColor: "#d8b4fe" }}
-                                        options={[{ value: "양방향", label: "↔ 양방향" }, { value: "A→B", label: "→ A→B" }, { value: "B→A", label: "← B→A" }]} />
+                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 64, borderColor: "#d8b4fe" }}
+                                        options={[{ value: "양방향", label: "↔양방향" }, { value: "A→B", label: "→A→B" }, { value: "B→A", label: "←B→A" }]} />
                                       <ClickSelect value={it.interpretType}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretType: v } : p))}
-                                        triggerStyle={{ fontSize: 10, padding: "5px 2px", borderRadius: 6, width: 76, borderColor: "#d8b4fe" }}
+                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 68, borderColor: "#d8b4fe" }}
                                         options={[{ value: "consecutive", label: "순차통역" }, { value: "simultaneous", label: "동시통역" }, { value: "meeting", label: "수행통역" }]} />
                                       <ClickSelect value={it.unit}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: v } : p))}
-                                        triggerStyle={{ fontSize: 10, padding: "5px 2px", borderRadius: 6, width: 50, borderColor: "#d8b4fe" }}
+                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 44, borderColor: "#d8b4fe" }}
                                         options={[{ value: "시간", label: "시간" }, { value: "반일", label: "반일" }, { value: "1일", label: "1일" }, { value: "건", label: "건" }]} />
                                       <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
-                                        style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "right" }} />
+                                        style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right", borderColor: "#d8b4fe" }} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
                                         placeholder="공급가액" style={{ ...roSt, fontSize: 11, padding: "5px 3px", color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                       <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))}
-                                        style={{ fontSize: 10, padding: "3px 8px", borderRadius: 10, border: "none", background: it.showDetail ? "#7c3aed" : "#f3f4f6", color: it.showDetail ? "#fff" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap", fontWeight: 600 }}>
+                                        style={detailBtn(it.showDetail, "#7c3aed")}>
                                         상세 {it.showDetail ? "▲" : "▼"}
                                       </button>
                                     </div>
                                     {it.showDetail && (
-                                      <div style={{ display: "grid", gridTemplateColumns: "110px 1fr 76px 50px 50px 1fr", gap: 3, alignItems: "center", paddingTop: 3, borderTop: "1px solid #f3e8ff" }}>
+                                      <div style={{ ...detailArea, display: "grid", gridTemplateColumns: "110px 1fr 72px 46px 46px 1fr", gap: 3, alignItems: "center" }}>
                                         <input type="date" value={it.interpretDate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretDate: e.target.value } : p))}
                                           style={{ ...inputStyle, fontSize: 11, padding: "4px 4px" }} />
                                         <input value={it.interpretPlace} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretPlace: e.target.value } : p))}
@@ -3183,29 +3197,29 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
 
                                 {/* ── 장비 행 ── */}
                                 {it.productType === "equipment" && (
-                                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "60px 72px 48px 78px 78px auto", gap: 3, alignItems: "center" }}>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "56px 64px 40px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
                                       <ClickSelect value={it.quantityUnit}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantityUnit: v } : p))}
-                                        triggerStyle={{ fontSize: 11, padding: "5px 2px", borderRadius: 6, width: 60, borderColor: "#93c5fd" }}
+                                        triggerStyle={{ fontSize: 10, padding: "5px 1px", borderRadius: 5, width: 56, borderColor: "#93c5fd" }}
                                         options={[{ value: "개", label: "개" }, { value: "세트", label: "세트" }, { value: "부스", label: "부스" }, { value: "대", label: "대" }]} />
                                       <ClickSelect value={it.usagePeriod}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, usagePeriod: v } : p))}
-                                        triggerStyle={{ fontSize: 11, padding: "5px 2px", borderRadius: 6, width: 72, borderColor: "#93c5fd" }}
+                                        triggerStyle={{ fontSize: 10, padding: "5px 1px", borderRadius: 5, width: 64, borderColor: "#93c5fd" }}
                                         options={[{ value: "반일", label: "반일" }, { value: "1일", label: "1일" }, { value: "2일", label: "2일" }, { value: "3일", label: "3일" }, { value: "4일", label: "4일" }, { value: "5일", label: "5일" }]} />
                                       <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
-                                        style={{ ...inputStyle, fontSize: 12, padding: "5px 3px", textAlign: "right" }} />
+                                        style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
                                         placeholder="공급가액" style={{ ...roSt, fontSize: 11, padding: "5px 3px", color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                       <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))}
-                                        style={{ fontSize: 10, padding: "3px 8px", borderRadius: 10, border: "none", background: it.showDetail ? "#1d4ed8" : "#f3f4f6", color: it.showDetail ? "#fff" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap", fontWeight: 600 }}>
+                                        style={detailBtn(it.showDetail, "#1d4ed8")}>
                                         상세 {it.showDetail ? "▲" : "▼"}
                                       </button>
                                     </div>
                                     {it.showDetail && (
-                                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 3, paddingTop: 3, borderTop: "1px solid #bfdbfe" }}>
+                                      <div style={{ ...detailArea, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 3 }}>
                                         <input type="date" value={it.eventStartDate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, eventStartDate: e.target.value } : p))}
                                           style={{ ...inputStyle, fontSize: 11, padding: "4px 5px" }} />
                                         <input type="date" value={it.eventEndDate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, eventEndDate: e.target.value } : p))}
@@ -3221,23 +3235,28 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
 
                                 {/* ── 실비 행 ── */}
                                 {it.productType === "expense" && (
-                                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 78px auto", gap: 3, alignItems: "center" }}>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 72px 56px", gap: 3, alignItems: "center" }}>
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw, quantity: "1" } : p))}
                                         placeholder="금액 (원)" style={{ ...inputStyle, fontSize: 13, padding: "5px 7px", textAlign: "right", borderColor: "#fde68a" }} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
                                         placeholder="공급가액" style={{ ...roSt, fontSize: 11, padding: "5px 3px", color: supply > 0 ? "#92400e" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
                                       <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))}
-                                        style={{ fontSize: 10, padding: "3px 8px", borderRadius: 10, border: "none", background: it.showDetail ? "#92400e" : "#f3f4f6", color: it.showDetail ? "#fff" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap", fontWeight: 600 }}>
+                                        style={detailBtn(it.showDetail, "#92400e")}>
                                         상세 {it.showDetail ? "▲" : "▼"}
                                       </button>
                                     </div>
                                     {it.showDetail && (
-                                      <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
-                                        placeholder="메모" style={{ ...inputStyle, fontSize: 11, padding: "4px 8px", borderTop: "1px solid #fef08a" }} />
+                                      <div style={detailArea}>
+                                        <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
+                                          placeholder="메모" style={{ ...inputStyle, fontSize: 11, padding: "4px 8px", width: "100%" }} />
+                                      </div>
                                     )}
                                   </div>
                                 )}
+                                    </>
+                                  );
+                                })()}
                               </div>
                             );
                           })}
