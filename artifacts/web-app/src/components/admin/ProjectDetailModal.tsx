@@ -146,6 +146,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   };
   const [showQuoteForm, setShowQuoteForm] = useState(false);
   const [showTaxOptions, setShowTaxOptions] = useState(false);
+  const [showBillingCardEdit, setShowBillingCardEdit] = useState(false);
   const [creatingQuote, setCreatingQuote] = useState(false);
   type QuoteItemForm = {
     productId: number | null;
@@ -2039,6 +2040,88 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   </button>
                   <span style={{ fontSize: 11, color: "#94a3b8", marginLeft: 4 }}>새 창에서 열린 후 Ctrl+P 또는 인쇄 버튼으로 PDF 저장</span>
                 </div>
+
+                {/* 청구 / 결제 정보 카드 */}
+                {(() => {
+                  const q0 = (detail.quotes ?? [])[0] as any;
+                  const compName = (detail.company as any)?.name ?? (detail as any).companyName ?? "-";
+                  const billingName = (detail as any).billingCompanyName ?? compName;
+                  const payerName = (detail as any).payerCompanyName ?? billingName;
+                  const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", zero_tax_invoice: "세금계산서(영세율)", bill: "계산서" };
+                  const btLabelMap: Record<string, string> = { postpaid_per_project: "건별 후불", monthly_billing: "누적 청구", prepaid_wallet: "선입금 차감", prepay_upfront: "선결제" };
+                  const tdt = q0?.taxDocumentType;
+                  const bt = q0?.billingType ?? (detail.company as any)?.billingType;
+                  const fmtDate = (v: string | null | undefined) => v ? new Date(v).toLocaleDateString("ko-KR") : "-";
+                  const infoRows: { label: string; value: string; color?: string }[] = [
+                    { label: "청구 대상", value: billingName, color: "#0369a1" },
+                    { label: "💰 납부 주체", value: payerName, color: "#059669" },
+                    { label: "문서 구분", value: tdt ? (taxDocLabel[tdt] ?? tdt) : "-" },
+                    { label: "청구 방식", value: bt ? (btLabelMap[bt] ?? bt) : "-" },
+                    { label: "입금 예정일", value: fmtDate(q0?.paymentDueDate) },
+                    { label: "견적일", value: fmtDate(q0?.issueDate) },
+                    { label: "견적 유효기간", value: fmtDate(q0?.validUntil) },
+                  ];
+                  return (
+                    <div style={{ background: "#f8fafc", borderRadius: 10, padding: "12px 14px", marginBottom: 16, border: "1px solid #e2e8f0" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>📋 청구 / 결제 정보</span>
+                        <button
+                          onClick={() => {
+                            if (!showBillingCardEdit) {
+                              setEditBillingCompanyId((detail as any).billingCompanyId ?? null);
+                              setEditPayerCompanyId((detail as any).payerCompanyId ?? null);
+                            }
+                            setShowBillingCardEdit(v => !v);
+                          }}
+                          style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: showBillingCardEdit ? "#f3f4f6" : "#fdf4ff", border: "1px solid #d8b4fe", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
+                          {showBillingCardEdit ? "✕ 닫기" : "✏️ 수정"}
+                        </button>
+                      </div>
+                      {!showBillingCardEdit ? (
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                          {infoRows.map(item => (
+                            <div key={item.label} style={{ background: "#fff", borderRadius: 7, padding: "7px 10px", border: "1px solid #e2e8f0" }}>
+                              <p style={{ margin: 0, fontSize: 10, color: "#9ca3af", fontWeight: 600 }}>{item.label}</p>
+                              <p style={{ margin: "2px 0 0", fontSize: 12, fontWeight: 600, color: item.color ?? "#374151" }}>{item.value}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <p style={{ margin: 0, fontSize: 11, color: "#6b7280" }}>청구 대상과 납부 주체를 수정합니다. 문서 구분·청구 방식 등은 견적 생성/수정 시 변경됩니다.</p>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            <div>
+                              <label style={{ fontSize: 11, color: "#0369a1", fontWeight: 700, display: "block", marginBottom: 3 }}>청구 대상</label>
+                              <ClickSelect
+                                value={String(editBillingCompanyId ?? "")}
+                                onChange={v => setEditBillingCompanyId(v ? Number(v) : null)}
+                                style={{ width: "100%" }}
+                                triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #bae6fd" }}
+                                options={[{ value: "", label: "— 요청 거래처와 동일 —" }, ...companiesList.map(c => ({ value: String(c.id), label: c.name }))]}
+                              />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: 11, color: "#059669", fontWeight: 700, display: "block", marginBottom: 3 }}>💰 납부 주체</label>
+                              <ClickSelect
+                                value={String(editPayerCompanyId ?? "")}
+                                onChange={v => setEditPayerCompanyId(v ? Number(v) : null)}
+                                style={{ width: "100%" }}
+                                triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a7f3d0" }}
+                                options={[{ value: "", label: "— 청구 대상과 동일 —" }, ...companiesList.map(c => ({ value: String(c.id), label: c.name }))]}
+                              />
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <PrimaryBtn onClick={async () => { await handleSaveEdit(); setShowBillingCardEdit(false); }}
+                              style={{ fontSize: 12, padding: "6px 16px", background: "#7c3aed", border: "none" }}>저장</PrimaryBtn>
+                            <button onClick={() => setShowBillingCardEdit(false)}
+                              style={{ fontSize: 12, padding: "6px 14px", borderRadius: 7, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>취소</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* 견적 섹션 */}
                 {(() => {
