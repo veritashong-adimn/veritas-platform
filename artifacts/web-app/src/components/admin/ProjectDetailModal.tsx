@@ -237,6 +237,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     unitPrice: string;
     taxType: "taxable" | "exempt" | "zero_rate";
     productType: string;    // "translation" | "interpretation" | "equipment" | "expense"
+    interpreterCount: string;   // 통역사 수 (명)
+    workDays: string;           // 진행일수 (일)
     interpretDate: string;
     interpretPlace: string;
     interpretType: string;
@@ -257,7 +259,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     langA: "", langB: "", interpretationDirection: "양방향",
     quantityUnit: "개", usagePeriod: "1일",
     unit: "건", quantity: "1", unitPrice: "", taxType: "taxable", productType: "translation",
-    interpretDate: "", interpretPlace: "", interpretType: "consecutive",
+    interpreterCount: "1", workDays: "1",
+    interpretDate: "", interpretPlace: "", interpretType: "동시통역",
     interpretationDuration: "", hasTravelExpense: false, hasEquipment: false,
     files: [], memo: "",
     showDetail: false, showDirectInput: false, eventStartDate: "", eventEndDate: "", itemLocation: "",
@@ -265,7 +268,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [quoteMode, setQuoteMode] = useState<"simple" | "items">("items");
   const [quoteItemForms, setQuoteItemForms] = useState<QuoteItemForm[]>([defaultItem()]);
   const calcItemTotal = (it: QuoteItemForm) => {
-    const supply = Math.round(Number(it.quantity || 1) * Number(it.unitPrice.replace?.(/,/g, "") || it.unitPrice || 0));
+    const price = Number(it.unitPrice.replace?.(/,/g, "") || it.unitPrice || 0);
+    const supply = it.productType === "interpretation"
+      ? Math.round(Number(it.interpreterCount || 1) * Number(it.workDays || 1) * price)
+      : Math.round(Number(it.quantity || 1) * price);
     return { supply, tax: 0, total: supply };
   };
   const calcGrandTotals = () => {
@@ -860,7 +866,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             productName: it.productName.trim(),
             languagePair: composeLangPair(it) || undefined,
             unit: it.unit || "건",
-            quantity: Number(it.quantity) || 1,
+            quantity: it.productType === "interpretation" ? Number(it.interpreterCount) || 1 : Number(it.quantity) || 1,
             unitPrice: Number(it.unitPrice.replace(/,/g, "")),
             taxRate: (quoteVatType === "taxable" ? 0.1 : 0) as 0 | 0.1,
             taxType: quoteVatType,
@@ -875,7 +881,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             hasEquipment: it.productType === "interpretation" ? it.hasEquipment : undefined,
             interpretationDirection: it.productType === "interpretation" ? it.interpretationDirection || undefined : undefined,
             quantityUnit: it.productType === "equipment" ? it.quantityUnit || undefined : undefined,
-            usagePeriod: it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
+            usagePeriod: it.productType === "interpretation" ? it.workDays || undefined : it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
             eventStartDate: it.productType === "equipment" && it.showDetail ? it.eventStartDate || undefined : undefined,
             eventEndDate: it.productType === "equipment" && it.showDetail ? it.eventEndDate || undefined : undefined,
             itemLocation: it.productType === "equipment" && it.showDetail ? it.itemLocation || undefined : undefined,
@@ -906,7 +912,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             productName: it.productName.trim(),
             languagePair: composeLangPair2(it) || undefined,
             unit: it.unit || "건",
-            quantity: Number(it.quantity) || 1,
+            quantity: it.productType === "interpretation" ? Number(it.interpreterCount) || 1 : Number(it.quantity) || 1,
             unitPrice: Number(it.unitPrice.replace(/,/g, "")),
             taxRate: (quoteVatType === "taxable" ? 0.1 : 0) as 0 | 0.1,
             taxType: quoteVatType,
@@ -921,7 +927,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             hasEquipment: it.productType === "interpretation" ? it.hasEquipment : undefined,
             interpretationDirection: it.productType === "interpretation" ? it.interpretationDirection || undefined : undefined,
             quantityUnit: it.productType === "equipment" ? it.quantityUnit || undefined : undefined,
-            usagePeriod: it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
+            usagePeriod: it.productType === "interpretation" ? it.workDays || undefined : it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
             eventStartDate: it.productType === "equipment" && it.showDetail ? it.eventStartDate || undefined : undefined,
             eventEndDate: it.productType === "equipment" && it.showDetail ? it.eventEndDate || undefined : undefined,
             itemLocation: it.productType === "equipment" && it.showDetail ? it.itemLocation || undefined : undefined,
@@ -3161,25 +3167,43 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* ── 통역 행 ── */}
                                 {it.productType === "interpretation" && (
                                   <div>
-                                    <div style={{ display: "grid", gridTemplateColumns: "40px 40px 64px 68px 44px 36px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "38px 38px 62px 84px 70px 32px 32px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
                                       <input value={it.langA} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, langA: e.target.value } : p))}
                                         placeholder="A" style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "center", textTransform: "uppercase" }} />
                                       <input value={it.langB} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, langB: e.target.value } : p))}
                                         placeholder="B" style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "center", textTransform: "uppercase" }} />
                                       <ClickSelect value={it.interpretationDirection}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretationDirection: v } : p))}
-                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 64, borderColor: "#d8b4fe" }}
+                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 62, borderColor: "#d8b4fe" }}
                                         options={[{ value: "양방향", label: "↔양방향" }, { value: "A→B", label: "→A→B" }, { value: "B→A", label: "←B→A" }]} />
                                       <ClickSelect value={it.interpretType}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretType: v } : p))}
-                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 68, borderColor: "#d8b4fe" }}
-                                        options={[{ value: "consecutive", label: "순차통역" }, { value: "simultaneous", label: "동시통역" }, { value: "meeting", label: "수행통역" }]} />
+                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 84, borderColor: "#d8b4fe" }}
+                                        options={[
+                                          { value: "동시통역", label: "동시통역" },
+                                          { value: "순차통역", label: "순차통역" },
+                                          { value: "위스퍼링통역", label: "위스퍼링통역" },
+                                          { value: "수행통역", label: "수행통역" },
+                                          { value: "전시회통역", label: "전시회통역" },
+                                          { value: "화상통역", label: "화상통역" },
+                                          { value: "가이드통역", label: "가이드통역" },
+                                        ]} />
                                       <ClickSelect value={it.unit}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: v } : p))}
-                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 44, borderColor: "#d8b4fe" }}
-                                        options={[{ value: "시간", label: "시간" }, { value: "반일", label: "반일" }, { value: "1일", label: "1일" }, { value: "건", label: "건" }]} />
-                                      <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
-                                        style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "right" }} />
+                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 70, borderColor: "#d8b4fe" }}
+                                        options={[
+                                          { value: "1시간", label: "1시간" },
+                                          { value: "2시간", label: "2시간" },
+                                          { value: "4시간", label: "4시간" },
+                                          { value: "6시간", label: "6시간" },
+                                          { value: "8시간", label: "8시간" },
+                                          { value: "1일", label: "1일" },
+                                          { value: "추가시간", label: "추가시간" },
+                                        ]} />
+                                      <NumericInput allowDecimal value={it.interpreterCount} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpreterCount: raw } : p))}
+                                        placeholder="명" style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "right" }} />
+                                      <NumericInput allowDecimal value={it.workDays} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, workDays: raw } : p))}
+                                        placeholder="일" style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={roSt} />
@@ -3362,15 +3386,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     langB: itemType === "interpretation" ? parsedB : "",
                                     interpretationDirection: it.interpretationDirection ?? "양방향",
                                     quantityUnit: it.quantityUnit ?? "개",
-                                    usagePeriod: it.usagePeriod ?? "1일",
-                                    unit: it.unit ?? "건",
+                                    usagePeriod: itemType === "interpretation" ? "1일" : (it.usagePeriod ?? "1일"),
+                                    unit: it.unit ?? (itemType === "interpretation" ? "1일" : "건"),
                                     quantity: String(it.quantity ?? "1"),
                                     unitPrice: String(it.unitPrice ?? ""),
                                     taxType: (it.taxType ?? "taxable") as "taxable"|"exempt"|"zero_rate",
                                     productType: itemType,
+                                    interpreterCount: itemType === "interpretation" ? String(it.quantity ?? "1") : "1",
+                                    workDays: itemType === "interpretation" ? String(it.usagePeriod ?? "1") : "1",
                                     interpretDate: it.interpretDate ?? "",
                                     interpretPlace: it.interpretPlace ?? "",
-                                    interpretType: it.interpretType ?? "consecutive",
+                                    interpretType: it.interpretType ?? "동시통역",
                                     interpretationDuration: it.interpretDuration ?? "",
                                     hasTravelExpense: it.hasTravelExpense ?? false,
                                     hasEquipment: it.hasEquipment ?? false,
