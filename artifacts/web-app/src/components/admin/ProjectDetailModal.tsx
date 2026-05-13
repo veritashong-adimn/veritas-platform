@@ -1180,6 +1180,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       width={820}
       zIndex={300}
       bodyPadding="20px 28px"
+      resizable
       headerExtra={
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {detail && <StatusBadge status={detail.status} />}

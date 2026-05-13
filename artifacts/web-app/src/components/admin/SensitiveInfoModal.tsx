@@ -172,7 +172,7 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
     <DraggableModal
       title="정산/지급 정보 관리"
       subtitle={`${userName} — 민감 개인정보`}
-      onClose={onClose} width={620} zIndex={400} bodyPadding="18px 24px"
+      onClose={onClose} width={620} zIndex={400} bodyPadding="18px 24px" resizable
     >
       {/* 보안 배너 */}
       <div style={{ display:"flex", gap:10, alignItems:"flex-start", background:"#fff7ed", border:"1px solid #fed7aa", borderRadius:10, padding:"10px 14px", marginBottom:14 }}>

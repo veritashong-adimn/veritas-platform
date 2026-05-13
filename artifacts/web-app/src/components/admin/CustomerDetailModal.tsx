@@ -81,7 +81,7 @@ export function CustomerDetailModal({ customerId, token, onClose, onToast, onOpe
   };
 
   return (
-    <DraggableModal title={`고객 #${customerId} 상세`} onClose={onClose} width={760} zIndex={300} bodyPadding="20px 28px">
+    <DraggableModal title={`고객 #${customerId} 상세`} onClose={onClose} width={760} zIndex={300} bodyPadding="20px 28px" resizable>
 
         {loading ? (
           <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p>

@@ -336,7 +336,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
 
   return (
     <>
-    <DraggableModal title={`거래처 #${companyId} 상세`} onClose={onClose} width={800} zIndex={300} bodyPadding="20px 28px"
+    <DraggableModal title={`거래처 #${companyId} 상세`} onClose={onClose} width={800} zIndex={300} bodyPadding="20px 28px" resizable
       headerExtra={
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {allowHardDelete && (

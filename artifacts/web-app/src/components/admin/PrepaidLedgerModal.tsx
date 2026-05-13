@@ -121,7 +121,7 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
   } as const;
 
   return (
-    <DraggableModal title="선입금 계정 원장" subtitle={account.companyName} onClose={onClose} width={780} zIndex={1200} bodyPadding="0">
+    <DraggableModal title="선입금 계정 원장" subtitle={account.companyName} onClose={onClose} width={780} zIndex={1200} bodyPadding="0" resizable>
         {/* Header */}
         <div style={{ background: "linear-gradient(135deg, #1e40af 0%, #3b82f6 100%)", padding: "20px 28px", color: "#fff" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>

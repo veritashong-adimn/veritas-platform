@@ -275,7 +275,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   }
 
   return (
-    <DraggableModal title="통번역사 등록" subtitle="초대 기반 계정 생성 — 비밀번호는 통번역사가 직접 설정합니다" onClose={onClose} width={800} zIndex={310} bodyPadding="20px 28px">
+    <DraggableModal title="통번역사 등록" subtitle="초대 기반 계정 생성 — 비밀번호는 통번역사가 직접 설정합니다" onClose={onClose} width={800} zIndex={310} bodyPadding="20px 28px" resizable>
 
       {/* ── 기본 정보 ── */}
       <p style={sH}>기본 정보</p>

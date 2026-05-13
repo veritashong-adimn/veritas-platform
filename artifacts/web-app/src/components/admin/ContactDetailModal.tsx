@@ -74,7 +74,7 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
 
   return (
     <>
-      <DraggableModal title="담당자 상세" headerExtra={headerExtra} onClose={onClose} width={720} zIndex={300} bodyPadding="20px 28px">
+      <DraggableModal title="담당자 상세" headerExtra={headerExtra} onClose={onClose} width={720} zIndex={300} bodyPadding="20px 28px" resizable>
         {loading ? (
           <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p>
         ) : !detail ? (
