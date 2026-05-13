@@ -259,7 +259,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     sourceLanguage: "", targetLanguage: "",
     langA: "", langB: "", interpretationDirection: "양방향",
     quantityUnit: "개", usagePeriod: "1일",
-    unit: "건", quantity: "1", unitPrice: "", taxType: "taxable", productType: "translation",
+    unit: "페이지", quantity: "1", unitPrice: "", taxType: "taxable", productType: "translation",
     interpreterCount: "1", workQuantity: "1", workUnit: "일",
     interpretDate: "", interpretPlace: "", interpretType: "동시통역",
     interpretationDuration: "", hasTravelExpense: false, hasEquipment: false,
