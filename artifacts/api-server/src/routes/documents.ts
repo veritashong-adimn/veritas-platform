@@ -267,7 +267,6 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
       batchPeriodStart: quote?.batchPeriodStart ?? null,
       batchPeriodEnd: quote?.batchPeriodEnd ?? null,
       batchItemCount: quote?.batchItemCount ?? null,
-      equipmentCommon: (quote as any)?.equipmentCommon ?? null,
       notes: combinedNotes,
     });
 

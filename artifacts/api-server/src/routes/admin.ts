@@ -1152,7 +1152,6 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
     prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
     prepaidAccountId,
     batchPeriodStart, batchPeriodEnd,
-    equipmentCommon,
   } = req.body as {
     amount?: number; items?: ItemInput[]; note?: string;
     taxDocumentType?: string; taxCategory?: string;
@@ -1162,7 +1161,6 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
     prepaidBalanceBefore?: number; prepaidUsageAmount?: number; prepaidBalanceAfter?: number;
     prepaidAccountId?: number;
     batchPeriodStart?: string; batchPeriodEnd?: string;
-    equipmentCommon?: string;
   };
   const selectedProjectIds: number[] = Array.isArray(req.body.selectedProjectIds)
     ? (req.body.selectedProjectIds as unknown[]).map(Number).filter(n => !isNaN(n) && n > 0)
@@ -1342,7 +1340,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
         batchPeriodStart: batchPeriodStart || null,
         batchPeriodEnd: batchPeriodEnd || null,
         batchItemCount: computedBatchItemCount ?? null,
-        equipmentCommon: equipmentCommon || null,
+        equipmentCommon: null,
       }).returning();
 
       if (calcItems.length > 0) {
