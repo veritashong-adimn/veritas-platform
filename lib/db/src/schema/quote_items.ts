@@ -56,6 +56,11 @@ export const quoteItemsTable = pgTable("quote_items", {
   quantityUnit: text("quantity_unit"),                         // "개" | "세트" | "부스"
   usagePeriod: text("usage_period"),                           // "반일" | "1일" | "2일" | "3일"
 
+  // ── 장비 개별 설정 (공통값 override) ───────────────────────────────────
+  eventStartDate: date("event_start_date"),
+  eventEndDate: date("event_end_date"),
+  itemLocation: text("item_location"),
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

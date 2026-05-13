@@ -1140,6 +1140,9 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
     interpretationDirection?: string;
     quantityUnit?: string;
     usagePeriod?: string;
+    eventStartDate?: string;
+    eventEndDate?: string;
+    itemLocation?: string;
   };
   const {
     amount, items, note,
@@ -1149,6 +1152,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
     prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
     prepaidAccountId,
     batchPeriodStart, batchPeriodEnd,
+    equipmentCommon,
   } = req.body as {
     amount?: number; items?: ItemInput[]; note?: string;
     taxDocumentType?: string; taxCategory?: string;
@@ -1158,6 +1162,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
     prepaidBalanceBefore?: number; prepaidUsageAmount?: number; prepaidBalanceAfter?: number;
     prepaidAccountId?: number;
     batchPeriodStart?: string; batchPeriodEnd?: string;
+    equipmentCommon?: string;
   };
   const selectedProjectIds: number[] = Array.isArray(req.body.selectedProjectIds)
     ? (req.body.selectedProjectIds as unknown[]).map(Number).filter(n => !isNaN(n) && n > 0)
@@ -1337,6 +1342,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
         batchPeriodStart: batchPeriodStart || null,
         batchPeriodEnd: batchPeriodEnd || null,
         batchItemCount: computedBatchItemCount ?? null,
+        equipmentCommon: equipmentCommon || null,
       }).returning();
 
       if (calcItems.length > 0) {
@@ -1363,6 +1369,9 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
           interpretationDirection: (it as any).interpretationDirection ?? null,
           quantityUnit: (it as any).quantityUnit ?? null,
           usagePeriod: (it as any).usagePeriod ?? null,
+          eventStartDate: (it as any).eventStartDate ?? null,
+          eventEndDate: (it as any).eventEndDate ?? null,
+          itemLocation: (it as any).itemLocation ?? null,
         }))).returning({ id: quoteItemsTable.id });
 
         // 첨부 파일 기록 (번역 항목)

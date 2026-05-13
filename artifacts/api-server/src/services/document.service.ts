@@ -75,6 +75,11 @@ export type QuoteItemDoc = {
   quantityUnit?: string | null;
   /** 장비 사용기간 */
   usagePeriod?: string | null;
+  /** 장비 개별 행사일 (override) */
+  eventStartDate?: string | null;
+  eventEndDate?: string | null;
+  /** 장비 개별 장소 (override) */
+  itemLocation?: string | null;
 };
 
 export type QuoteDoc = {
@@ -143,6 +148,9 @@ export type QuoteDoc = {
   batchPeriodStart?: string | null;
   batchPeriodEnd?: string | null;
   batchItemCount?: number | null;
+
+  // 장비 공통 설정 (JSON string)
+  equipmentCommon?: string | null;
 };
 
 export type StatementDoc = {
@@ -398,6 +406,11 @@ function calcItemData(doc: QuoteDoc) {
   const TAX_TYPE_KO: Record<string, string> = { taxable: "과세", exempt: "면세", zero_rate: "영세율" };
   const DIRECTION_SYMBOL: Record<string, string> = { "양방향": "↔", "A→B": "→", "B→A": "←" };
 
+  // 장비 공통 설정 파싱
+  let equipCommon: { eventStartDate?: string; eventEndDate?: string; usagePeriod?: string; location?: string; memo?: string } | null = null;
+  if (doc.equipmentCommon) { try { equipCommon = JSON.parse(doc.equipmentCommon); } catch {} }
+  let equipCommonRowInserted = false;
+
   const itemRows = hasItems
     ? doc.items!.map((item, i) => {
         const isInterpret = item.itemType === "interpretation";
@@ -418,7 +431,15 @@ function calcItemData(doc: QuoteDoc) {
           if (parts.length) subLines += `<br/><span style="font-size:9px;color:#7c3aed">${parts.join(" · ")}</span>`;
         } else if (isEquipment) {
           const parts: string[] = [];
-          if (item.usagePeriod) parts.push(`사용기간: ${esc(item.usagePeriod)}`);
+          // 개별값 우선, 없으면 공통값 fallback
+          const startDate = item.eventStartDate || equipCommon?.eventStartDate;
+          const endDate = item.eventEndDate || equipCommon?.eventEndDate;
+          const location = item.itemLocation || equipCommon?.location;
+          const period = item.usagePeriod || equipCommon?.usagePeriod;
+          if (startDate && endDate) parts.push(`행사일: ${startDate} ~ ${endDate}`);
+          else if (startDate) parts.push(`행사 시작: ${startDate}`);
+          if (period) parts.push(`사용기간: ${esc(period)}`);
+          if (location) parts.push(`장소: ${esc(location)}`);
           if (item.quantityUnit) parts.push(`단위: ${esc(item.quantityUnit)}`);
           if (parts.length) subLines += `<br/><span style="font-size:9px;color:#1d4ed8">${parts.join(" · ")}</span>`;
         } else {
@@ -431,9 +452,24 @@ function calcItemData(doc: QuoteDoc) {
 
         const taxLabel = item.taxType && item.taxType !== "taxable" ? `<br/><span style="font-size:9px;color:#059669">${TAX_TYPE_KO[item.taxType] ?? ""}</span>` : "";
 
+        // 첫 번째 장비 항목 앞에 공통 설정 행 삽입
+        let commonRow = "";
+        if (isEquipment && !equipCommonRowInserted && equipCommon) {
+          equipCommonRowInserted = true;
+          const cp: string[] = [];
+          if (equipCommon.eventStartDate && equipCommon.eventEndDate) cp.push(`행사기간: ${equipCommon.eventStartDate} ~ ${equipCommon.eventEndDate}`);
+          else if (equipCommon.eventStartDate) cp.push(`행사 시작: ${equipCommon.eventStartDate}`);
+          if (equipCommon.usagePeriod) cp.push(`사용기간: ${esc(equipCommon.usagePeriod)}`);
+          if (equipCommon.location) cp.push(`장소: ${esc(equipCommon.location)}`);
+          if (equipCommon.memo) cp.push(esc(equipCommon.memo));
+          if (cp.length > 0) {
+            commonRow = `<tr><td colspan="6" style="background:#eff6ff;color:#1d4ed8;font-size:10px;padding:4px 8px;font-weight:600;border-bottom:1px solid #bfdbfe;">🔧 장비 공통 · ${cp.join(" · ")}</td></tr>`;
+          }
+        }
+
         // 실비: 수량/단가 생략, 공급가액만 표시
         if (isExpense) {
-          return `
+          return commonRow + `
           <tr>
             <td class="ctr">${i + 1}</td>
             <td>${esc(item.productName)}<span style="font-size:9px;color:#6b7280;margin-left:4px">[실비]</span>${subLines}</td>
@@ -444,7 +480,7 @@ function calcItemData(doc: QuoteDoc) {
           </tr>`;
         }
 
-        return `
+        return commonRow + `
         <tr>
           <td class="ctr">${i + 1}</td>
           <td>${esc(item.productName)}${subLines}</td>

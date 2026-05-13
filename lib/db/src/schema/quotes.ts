@@ -42,6 +42,9 @@ export const quotesTable = pgTable("quotes", {
   batchPeriodEnd: date("batch_period_end"),
   batchItemCount: integer("batch_item_count"),
 
+  // ── 장비 공통 설정 (JSON string) ────────────────────────
+  equipmentCommon: text("equipment_common"),
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

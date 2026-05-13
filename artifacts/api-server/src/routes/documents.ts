@@ -106,6 +106,9 @@ async function loadProjectData(projectId: number) {
       interpretationDirection: (it as any).interpretationDirection ?? null,
       quantityUnit: (it as any).quantityUnit ?? null,
       usagePeriod: (it as any).usagePeriod ?? null,
+      eventStartDate: (it as any).eventStartDate ? String((it as any).eventStartDate) : null,
+      eventEndDate: (it as any).eventEndDate ? String((it as any).eventEndDate) : null,
+      itemLocation: (it as any).itemLocation ?? null,
       files: filesByItem.get(it.id) ?? [],
     }));
   }
@@ -264,6 +267,7 @@ router.get("/admin/projects/:id/pdf/quote", ...adminGuard, async (req, res) => {
       batchPeriodStart: quote?.batchPeriodStart ?? null,
       batchPeriodEnd: quote?.batchPeriodEnd ?? null,
       batchItemCount: quote?.batchItemCount ?? null,
+      equipmentCommon: (quote as any)?.equipmentCommon ?? null,
       notes: combinedNotes,
     });
 

@@ -245,6 +245,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     hasEquipment: boolean;
     files: Array<{ name: string; url: string; size?: number; uploading?: boolean }>;
     memo: string;
+    showIndividualSettings: boolean;
+    eventStartDate: string;
+    eventEndDate: string;
+    itemLocation: string;
   };
   const defaultItem = (): QuoteItemForm => ({
     productId: null, productName: "", languagePair: "",
@@ -255,9 +259,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     interpretDate: "", interpretPlace: "", interpretType: "consecutive",
     interpretationDuration: "", hasTravelExpense: false, hasEquipment: false,
     files: [], memo: "",
+    showIndividualSettings: false, eventStartDate: "", eventEndDate: "", itemLocation: "",
   });
   const [quoteMode, setQuoteMode] = useState<"simple" | "items">("items");
   const [quoteItemForms, setQuoteItemForms] = useState<QuoteItemForm[]>([defaultItem()]);
+  type EquipmentCommon = { eventStartDate: string; eventEndDate: string; usagePeriod: string; location: string; memo: string; };
+  const [equipmentCommon, setEquipmentCommon] = useState<EquipmentCommon>({ eventStartDate: "", eventEndDate: "", usagePeriod: "1일", location: "", memo: "" });
   const calcItemTotal = (it: QuoteItemForm) => {
     const supply = Math.round(Number(it.quantity || 1) * Number(it.unitPrice.replace?.(/,/g, "") || it.unitPrice || 0));
     return { supply, tax: 0, total: supply };
@@ -870,7 +877,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             interpretationDirection: it.productType === "interpretation" ? it.interpretationDirection || undefined : undefined,
             quantityUnit: it.productType === "equipment" ? it.quantityUnit || undefined : undefined,
             usagePeriod: it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
+            eventStartDate: it.productType === "equipment" && it.showIndividualSettings ? it.eventStartDate || undefined : undefined,
+            eventEndDate: it.productType === "equipment" && it.showIndividualSettings ? it.eventEndDate || undefined : undefined,
+            itemLocation: it.productType === "equipment" && it.showIndividualSettings ? it.itemLocation || undefined : undefined,
           })),
+          equipmentCommon: quoteItemForms.some(it => it.productType === "equipment") ? JSON.stringify(equipmentCommon) : undefined,
           prepaidAccountId: selectedPrepaidAcctId,
         };
       } else {
@@ -913,7 +924,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             interpretationDirection: it.productType === "interpretation" ? it.interpretationDirection || undefined : undefined,
             quantityUnit: it.productType === "equipment" ? it.quantityUnit || undefined : undefined,
             usagePeriod: it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
+            eventStartDate: it.productType === "equipment" && it.showIndividualSettings ? it.eventStartDate || undefined : undefined,
+            eventEndDate: it.productType === "equipment" && it.showIndividualSettings ? it.eventEndDate || undefined : undefined,
+            itemLocation: it.productType === "equipment" && it.showIndividualSettings ? it.itemLocation || undefined : undefined,
           })),
+          equipmentCommon: quoteItemForms.some(it => it.productType === "equipment") ? JSON.stringify(equipmentCommon) : undefined,
         };
       }
 
@@ -968,6 +983,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       }
       onToast(`견적 생성 완료`);
       setQuoteAmount(""); setQuoteNote(""); setQuoteItemForms([defaultItem()]); setShowQuoteForm(false);
+      setEquipmentCommon({ eventStartDate: "", eventEndDate: "", usagePeriod: "1일", location: "", memo: "" });
       setQuoteValidUntil(_dateDefault(30)); setQuoteIssueDate(_dateDefault(0));
       setQuotePrepaidUsage(""); setSelectedPrepaidAcctId(null); setCompPrepaidAccounts([]); setAcctLedger([]);
       setQuoteBatchStart(""); setQuoteBatchEnd(""); setBatchCandidates([]); setBatchSelected(new Set()); setBatchQueried(false);
@@ -2979,6 +2995,27 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                             <span style={{ fontSize: 10, fontWeight: 700, color: "#6b7280" }}>견적 항목 — 상품 선택 시 번역(📄)·통역(🎤) 자동 구분</span>
                           </div>
+                          {/* 장비 공통 설정 카드 */}
+                          {quoteItemForms.some(it => it.productType === "equipment") && (
+                            <div style={{ background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 8, padding: "10px 12px", marginBottom: 8 }}>
+                              <div style={{ fontSize: 11, fontWeight: 700, color: "#1d4ed8", marginBottom: 6 }}>🔧 장비 공통 설정</div>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 80px", gap: 4, marginBottom: 4 }}>
+                                <input type="date" value={equipmentCommon.eventStartDate} onChange={e => setEquipmentCommon(p => ({ ...p, eventStartDate: e.target.value }))}
+                                  style={{ ...inputStyle, fontSize: 11, padding: "5px 6px" }} placeholder="행사 시작일" />
+                                <input type="date" value={equipmentCommon.eventEndDate} onChange={e => setEquipmentCommon(p => ({ ...p, eventEndDate: e.target.value }))}
+                                  style={{ ...inputStyle, fontSize: 11, padding: "5px 6px" }} placeholder="행사 종료일" />
+                                <ClickSelect value={equipmentCommon.usagePeriod} onChange={v => setEquipmentCommon(p => ({ ...p, usagePeriod: v }))}
+                                  triggerStyle={{ fontSize: 11, padding: "5px 4px", borderRadius: 6, borderColor: "#93c5fd" }}
+                                  options={[{ value: "반일", label: "반일" }, { value: "1일", label: "1일" }, { value: "2일", label: "2일" }, { value: "3일", label: "3일" }, { value: "4일", label: "4일" }, { value: "5일", label: "5일" }]} />
+                              </div>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                                <input value={equipmentCommon.location} onChange={e => setEquipmentCommon(p => ({ ...p, location: e.target.value }))}
+                                  placeholder="행사 장소" style={{ ...inputStyle, fontSize: 11, padding: "5px 6px" }} />
+                                <input value={equipmentCommon.memo} onChange={e => setEquipmentCommon(p => ({ ...p, memo: e.target.value }))}
+                                  placeholder="공통 메모" style={{ ...inputStyle, fontSize: 11, padding: "5px 6px" }} />
+                              </div>
+                            </div>
+                          )}
                           {quoteItemForms.map((it, idx) => {
                             const { supply, tax, total } = calcItemTotal(it);
                             const roSt: React.CSSProperties = { ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right", background: "#f8fafc", cursor: "default" };
@@ -3149,25 +3186,43 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
 
                                 {/* ── 장비 행 (파란색 카드) ── */}
                                 {it.productType === "equipment" && (
-                                  <div style={{ background: "#eff6ff", borderRadius: 8, padding: "8px 10px", border: "1px solid #bfdbfe", display: "flex", flexDirection: "column", gap: 6 }}>
-                                    <div style={{ display: "grid", gridTemplateColumns: "76px 88px 52px 80px 80px", gap: 4, alignItems: "center" }}>
+                                  <div style={{ background: "#eff6ff", borderRadius: 8, padding: "7px 10px", border: "1px solid #bfdbfe", display: "flex", flexDirection: "column", gap: 5 }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "64px 52px 80px 80px auto", gap: 4, alignItems: "center" }}>
                                       <ClickSelect value={it.quantityUnit}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantityUnit: v } : p))}
-                                        triggerStyle={{ fontSize: 11, padding: "6px 2px", borderRadius: 6, width: 76, borderColor: "#93c5fd" }}
+                                        triggerStyle={{ fontSize: 11, padding: "5px 2px", borderRadius: 6, width: 64, borderColor: "#93c5fd" }}
                                         options={[{ value: "개", label: "개" }, { value: "세트", label: "세트" }, { value: "부스", label: "부스" }, { value: "대", label: "대" }]} />
-                                      <ClickSelect value={it.usagePeriod}
-                                        onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, usagePeriod: v } : p))}
-                                        triggerStyle={{ fontSize: 11, padding: "6px 2px", borderRadius: 6, width: 88, borderColor: "#93c5fd" }}
-                                        options={[{ value: "반일", label: "반일" }, { value: "1일", label: "1일" }, { value: "2일", label: "2일" }, { value: "3일", label: "3일" }, { value: "4일", label: "4일" }, { value: "5일", label: "5일" }]} />
                                       <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
-                                        style={{ ...inputStyle, fontSize: 12, padding: "6px 4px", textAlign: "right" }} />
+                                        style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
-                                        placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "6px 5px", textAlign: "right" }} />
+                                        placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 5px", textAlign: "right" }} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""}
-                                        placeholder="공급가액" style={{ ...roSt, color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
+                                        placeholder="공급가액" style={{ ...roSt, fontSize: 11, padding: "5px 4px", color: supply > 0 ? "#1e40af" : "#9ca3af", fontWeight: supply > 0 ? 700 : 400 }} />
+                                      <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showIndividualSettings: !p.showIndividualSettings } : p))}
+                                        style={{ fontSize: 10, padding: "3px 7px", borderRadius: 5, border: `1px solid ${it.showIndividualSettings ? "#1d4ed8" : "#93c5fd"}`, background: it.showIndividualSettings ? "#1d4ed8" : "#fff", color: it.showIndividualSettings ? "#fff" : "#1d4ed8", cursor: "pointer", whiteSpace: "nowrap" }}>
+                                        개별설정
+                                      </button>
                                     </div>
-                                    <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
-                                      placeholder="메모 (선택)" style={{ ...inputStyle, fontSize: 11, padding: "4px 8px" }} />
+                                    {it.showIndividualSettings && (
+                                      <div style={{ display: "flex", flexDirection: "column", gap: 4, paddingTop: 4, borderTop: "1px solid #bfdbfe" }}>
+                                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 80px", gap: 4 }}>
+                                          <input type="date" value={it.eventStartDate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, eventStartDate: e.target.value } : p))}
+                                            style={{ ...inputStyle, fontSize: 11, padding: "4px 6px" }} />
+                                          <input type="date" value={it.eventEndDate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, eventEndDate: e.target.value } : p))}
+                                            style={{ ...inputStyle, fontSize: 11, padding: "4px 6px" }} />
+                                          <ClickSelect value={it.usagePeriod}
+                                            onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, usagePeriod: v } : p))}
+                                            triggerStyle={{ fontSize: 11, padding: "4px 2px", borderRadius: 6, borderColor: "#93c5fd" }}
+                                            options={[{ value: "반일", label: "반일" }, { value: "1일", label: "1일" }, { value: "2일", label: "2일" }, { value: "3일", label: "3일" }, { value: "4일", label: "4일" }, { value: "5일", label: "5일" }]} />
+                                        </div>
+                                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
+                                          <input value={it.itemLocation} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, itemLocation: e.target.value } : p))}
+                                            placeholder="개별 장소" style={{ ...inputStyle, fontSize: 11, padding: "4px 6px" }} />
+                                          <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
+                                            placeholder="개별 메모" style={{ ...inputStyle, fontSize: 11, padding: "4px 6px" }} />
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
                                 )}
 
@@ -3298,8 +3353,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     hasEquipment: it.hasEquipment ?? false,
                                     files: [],
                                     memo: it.memo ?? "",
+                                    showIndividualSettings: !!(it.eventStartDate || it.eventEndDate || it.itemLocation),
+                                    eventStartDate: it.eventStartDate ?? "",
+                                    eventEndDate: it.eventEndDate ?? "",
+                                    itemLocation: it.itemLocation ?? "",
                                   };
                                 }));
+                              }
+                              if (eq0?.equipmentCommon) {
+                                try {
+                                  const ec = JSON.parse(eq0.equipmentCommon);
+                                  setEquipmentCommon({ eventStartDate: ec.eventStartDate ?? "", eventEndDate: ec.eventEndDate ?? "", usagePeriod: ec.usagePeriod ?? "1일", location: ec.location ?? "", memo: ec.memo ?? "" });
+                                } catch {}
                               }
                               setShowQuoteForm(true);
                             };
