@@ -3017,9 +3017,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             } as const;
                             const tm = TYPE_META[it.productType as keyof typeof TYPE_META] ?? TYPE_META.translation;
                             return (
-                              <div key={idx} style={{ marginBottom: 12, border: "1px solid #dcdfe6", borderRadius: 8, background: tm.bg, boxShadow: "0 1px 2px rgba(0,0,0,0.03)", overflow: "hidden" }}>
+                              <div key={idx} style={{ marginBottom: 12, border: "1px solid #cfd5dd", borderRadius: 8, background: tm.bg, boxShadow: "0 1px 2px rgba(0,0,0,0.03)", overflow: "hidden" }}>
                                 {/* ── HEADER ── */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 5, background: tm.hdr, borderBottom: "1px solid #ececec", padding: "4px 8px", borderRadius: "6px 6px 0 0" }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 5, background: `color-mix(in srgb, ${tm.hdr}, rgba(0,0,0,0.02))`, borderBottom: "1px solid #e3e7ee", padding: "4px 8px", borderRadius: "6px 6px 0 0" }}>
                                   {/* 번호 + 선택 유형 badge */}
                                   <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 700, flexShrink: 0 }}>#{idx + 1}</span>
                                   <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 10, background: tm.bg, color: tm.c, fontWeight: 700, border: `1px solid ${tm.border}`, flexShrink: 0 }}>
