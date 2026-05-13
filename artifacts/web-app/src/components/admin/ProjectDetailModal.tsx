@@ -3176,7 +3176,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       <ClickSelect value={it.interpretationDirection}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretationDirection: v } : p))}
                                         triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 62, borderColor: "#d8b4fe" }}
-                                        options={[{ value: "양방향", label: "↔양방향" }, { value: "A→B", label: "→A→B" }, { value: "B→A", label: "←B→A" }]} />
+                                        options={[{ value: "양방향", label: "양방향" }, { value: "A→B", label: "A→B" }, { value: "B→A", label: "B→A" }]} />
                                       <ClickSelect value={it.interpretType}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretType: v } : p))}
                                         triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 84, borderColor: "#d8b4fe" }}
