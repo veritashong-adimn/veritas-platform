@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import { LANGUAGE_CODES } from "../../lib/constants";
 
 export type LangSelectMode = "code" | "label";
@@ -42,9 +43,11 @@ export function LanguageSearchSelect({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlightIdx, setHighlightIdx] = useState(0);
+  const [dropPos, setDropPos] = useState<{ left: number; top: number; width: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const portalRef = useRef<HTMLDivElement>(null);
 
   const allOptions = getLangOptions(mode);
   const q = query.toLowerCase().trim();
@@ -59,9 +62,35 @@ export function LanguageSearchSelect({
   const selected = findOption(value, mode);
   const showTriggerLabel = selected ? selected.label : value ? value : "";
 
+  const calcPos = useCallback(() => {
+    if (!containerRef.current) return;
+    const r = containerRef.current.getBoundingClientRect();
+    setDropPos({ left: r.left, top: r.bottom + 3, width: r.width });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) { setDropPos(null); return; }
+    calcPos();
+  }, [open, calcPos]);
+
   useEffect(() => {
     if (!open) return;
-    const handler = () => { setOpen(false); setQuery(""); };
+    window.addEventListener("scroll", calcPos, true);
+    window.addEventListener("resize", calcPos);
+    return () => {
+      window.removeEventListener("scroll", calcPos, true);
+      window.removeEventListener("resize", calcPos);
+    };
+  }, [open, calcPos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (
+        containerRef.current && !containerRef.current.contains(e.target as Node) &&
+        (portalRef.current === null || !portalRef.current.contains(e.target as Node))
+      ) { setOpen(false); setQuery(""); }
+    };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
@@ -71,8 +100,8 @@ export function LanguageSearchSelect({
   }, [open]);
 
   useEffect(() => {
-    if (!open || highlightIdx < 0 || !listRef.current) return;
-    const el = listRef.current.children[highlightIdx] as HTMLElement | undefined;
+    if (!open || highlightIdx < 0 || !portalRef.current) return;
+    const el = portalRef.current.children[highlightIdx] as HTMLElement | undefined;
     el?.scrollIntoView?.({ block: "nearest" });
   }, [highlightIdx, open]);
 
@@ -170,14 +199,13 @@ export function LanguageSearchSelect({
         </div>
       )}
 
-      {/* ── 드롭다운 목록 ── */}
-      {open && (
+      {open && dropPos && createPortal(
         <div
-          ref={listRef}
+          ref={portalRef}
           onMouseDown={e => e.stopPropagation()}
           style={{
-            position: "absolute", zIndex: 10000,
-            top: "calc(100% + 3px)", left: 0, width: "100%", minWidth: 200,
+            position: "fixed", zIndex: 9500,
+            left: dropPos.left, top: dropPos.top, width: Math.max(dropPos.width, 200), minWidth: 200,
             maxHeight: 240, overflowY: "auto",
             background: "#fff", border: "1px solid #e2e8f0",
             borderRadius: 8, boxShadow: "0 4px 20px rgba(0,0,0,0.13)",
@@ -199,7 +227,7 @@ export function LanguageSearchSelect({
                   type="button"
                   onMouseEnter={() => setHighlightIdx(idx)}
                   onMouseLeave={() => setHighlightIdx(-1)}
-                  onClick={() => handleSelect(opt.value)}
+                  onMouseDown={e => { e.preventDefault(); e.stopPropagation(); handleSelect(opt.value); }}
                   style={{
                     display: "flex", alignItems: "center", gap: 6,
                     width: "100%", textAlign: "left",
@@ -222,7 +250,8 @@ export function LanguageSearchSelect({
               );
             })
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
@@ -251,16 +280,43 @@ export function ItemSearchSelect({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlightIdx, setHighlightIdx] = useState(0);
+  const [dropPos, setDropPos] = useState<{ left: number; top: number; width: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const portalRef = useRef<HTMLDivElement>(null);
 
   const q = query.toLowerCase().trim();
   const filtered = q ? items.filter(i => i.toLowerCase().includes(q)) : items;
 
+  const calcPos = useCallback(() => {
+    if (!containerRef.current) return;
+    const r = containerRef.current.getBoundingClientRect();
+    setDropPos({ left: r.left, top: r.bottom + 3, width: r.width });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) { setDropPos(null); return; }
+    calcPos();
+  }, [open, calcPos]);
+
   useEffect(() => {
     if (!open) return;
-    const handler = () => { setOpen(false); setQuery(""); };
+    window.addEventListener("scroll", calcPos, true);
+    window.addEventListener("resize", calcPos);
+    return () => {
+      window.removeEventListener("scroll", calcPos, true);
+      window.removeEventListener("resize", calcPos);
+    };
+  }, [open, calcPos]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (
+        containerRef.current && !containerRef.current.contains(e.target as Node) &&
+        (portalRef.current === null || !portalRef.current.contains(e.target as Node))
+      ) { setOpen(false); setQuery(""); }
+    };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
@@ -270,8 +326,8 @@ export function ItemSearchSelect({
   }, [open]);
 
   useEffect(() => {
-    if (!open || highlightIdx < 0 || !listRef.current) return;
-    const el = listRef.current.children[highlightIdx] as HTMLElement | undefined;
+    if (!open || highlightIdx < 0 || !portalRef.current) return;
+    const el = portalRef.current.children[highlightIdx] as HTMLElement | undefined;
     el?.scrollIntoView?.({ block: "nearest" });
   }, [highlightIdx, open]);
 
@@ -345,13 +401,13 @@ export function ItemSearchSelect({
           </button>
         </div>
       )}
-      {open && (
+      {open && dropPos && createPortal(
         <div
-          ref={listRef}
+          ref={portalRef}
           onMouseDown={e => e.stopPropagation()}
           style={{
-            position: "absolute", zIndex: 10000,
-            top: "calc(100% + 3px)", left: 0, width: "100%", minWidth: 200,
+            position: "fixed", zIndex: 9500,
+            left: dropPos.left, top: dropPos.top, width: Math.max(dropPos.width, 200), minWidth: 200,
             maxHeight: 280, overflowY: "auto",
             background: "#fff", border: "1px solid #e2e8f0",
             borderRadius: 8, boxShadow: "0 4px 20px rgba(0,0,0,0.13)",
@@ -371,7 +427,7 @@ export function ItemSearchSelect({
                   type="button"
                   onMouseEnter={() => setHighlightIdx(idx)}
                   onMouseLeave={() => setHighlightIdx(-1)}
-                  onClick={() => handleSelect(item)}
+                  onMouseDown={e => { e.preventDefault(); e.stopPropagation(); handleSelect(item); }}
                   style={{
                     display: "flex", alignItems: "center", gap: 6,
                     width: "100%", textAlign: "left",
@@ -389,7 +445,8 @@ export function ItemSearchSelect({
               );
             })
           )}
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

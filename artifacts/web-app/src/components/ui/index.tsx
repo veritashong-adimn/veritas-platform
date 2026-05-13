@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
 import { STATUS_LABEL, STATUS_STYLE, ROLE_LABEL, ROLE_STYLE, Role } from "../../lib/constants";
 
 export const inputStyle: React.CSSProperties = {
@@ -214,12 +215,42 @@ export function ClickSelect({
 }) {
   const [open, setOpen] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(-1);
+  const [dropPos, setDropPos] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const portalRef = useRef<HTMLDivElement>(null);
+
+  const calcPos = useCallback(() => {
+    if (!triggerRef.current) return;
+    const r = triggerRef.current.getBoundingClientRect();
+    setDropPos(
+      openUp
+        ? { left: r.left, bottom: window.innerHeight - r.top + 2, width: r.width }
+        : { left: r.left, top: r.bottom + 2, width: r.width }
+    );
+  }, [openUp]);
+
+  useLayoutEffect(() => {
+    if (!open) { setDropPos(null); return; }
+    calcPos();
+  }, [open, calcPos]);
+
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener("scroll", calcPos, true);
+    window.addEventListener("resize", calcPos);
+    return () => {
+      window.removeEventListener("scroll", calcPos, true);
+      window.removeEventListener("resize", calcPos);
+    };
+  }, [open, calcPos]);
 
   useEffect(() => {
     const onMD = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+      if (
+        containerRef.current && !containerRef.current.contains(e.target as Node) &&
+        (portalRef.current === null || !portalRef.current.contains(e.target as Node))
+      ) setOpen(false);
     };
     document.addEventListener("mousedown", onMD);
     return () => document.removeEventListener("mousedown", onMD);
@@ -242,21 +273,65 @@ export function ClickSelect({
   }, [open, highlightIdx, options, onChange]);
 
   useEffect(() => {
-    if (!open || highlightIdx < 0 || !listRef.current) return;
-    (listRef.current.children[highlightIdx] as HTMLElement | undefined)?.scrollIntoView?.({ block: "nearest" });
+    if (!open || highlightIdx < 0 || !portalRef.current) return;
+    (portalRef.current.children[highlightIdx] as HTMLElement | undefined)?.scrollIntoView?.({ block: "nearest" });
   }, [highlightIdx, open]);
 
   const selected = options.find(o => o.value === value);
 
-  const menuPos = openUp
-    ? { bottom: "calc(100% + 2px)", top: "auto" }
-    : { top: "calc(100% + 2px)" };
+  const menuEl = open && dropPos ? createPortal(
+    <div
+      ref={portalRef}
+      role="listbox"
+      style={{
+        ...CS.menu,
+        position: "fixed",
+        left: dropPos.left,
+        top: dropPos.top,
+        bottom: dropPos.bottom,
+        minWidth: dropPos.width,
+        zIndex: 9500,
+        ...(menuStyle ?? {}),
+      }}
+    >
+      {options.map((opt, idx) => {
+        const isSel = opt.value === value;
+        const isHi = idx === highlightIdx;
+        return (
+          <div key={opt.value} role="option" aria-selected={isSel}
+            onMouseEnter={() => setHighlightIdx(idx)}
+            onMouseLeave={() => setHighlightIdx(-1)}
+            onMouseDown={e => { e.preventDefault(); e.stopPropagation(); if (!opt.disabled) { onChange(opt.value); setOpen(false); } }}
+            style={{
+              ...CS.item,
+              display: "flex", alignItems: "center", gap: 4,
+              color: opt.disabled ? "#d1d5db" : isSel ? "#1d4ed8" : "#111827",
+              background: isHi ? "#eff6ff" : isSel ? "#f0f9ff" : "transparent",
+              cursor: opt.disabled ? "not-allowed" : "pointer",
+            }}
+          >
+            <span style={{ fontSize: 8, color: "#2563eb", flexShrink: 0, opacity: isSel ? 1 : 0, lineHeight: 1 }}>✓</span>
+            <span style={{ fontWeight: isSel ? 600 : 500, flex: "0 0 auto", whiteSpace: "nowrap" }}>
+              {opt.label}
+            </span>
+            {opt.sub && (
+              <span style={{ fontSize: 10.5, color: isHi ? "#64748b" : "#9ca3af", marginLeft: "auto", flexShrink: 0, whiteSpace: "nowrap", fontWeight: 400 }}>
+                {opt.sub}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>,
+    document.body
+  ) : null;
 
   return (
     <div ref={containerRef} style={{ position: "relative", display: "inline-block", ...style }}
       onMouseDown={e => e.stopPropagation()}
     >
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={() => { if (!disabled) { setOpen(o => !o); setHighlightIdx(-1); } }}
@@ -275,41 +350,7 @@ export function ClickSelect({
         </span>
         <span style={{ ...CS.chevron, transform: open ? "rotate(180deg)" : "none", transition: "transform 0.12s" }}>▼</span>
       </button>
-
-      {open && (
-        <div ref={listRef} role="listbox"
-          style={{ ...CS.menu, ...menuPos, ...menuStyle }}
-        >
-          {options.map((opt, idx) => {
-            const isSel = opt.value === value;
-            const isHi = idx === highlightIdx;
-            return (
-              <div key={opt.value} role="option" aria-selected={isSel}
-                onMouseEnter={() => setHighlightIdx(idx)}
-                onMouseLeave={() => setHighlightIdx(-1)}
-                onClick={() => { if (!opt.disabled) { onChange(opt.value); setOpen(false); } }}
-                style={{
-                  ...CS.item,
-                  display: "flex", alignItems: "center", gap: 4,
-                  color: opt.disabled ? "#d1d5db" : isSel ? "#1d4ed8" : "#111827",
-                  background: isHi ? "#eff6ff" : isSel ? "#f0f9ff" : "transparent",
-                  cursor: opt.disabled ? "not-allowed" : "pointer",
-                }}
-              >
-                <span style={{ fontSize: 8, color: "#2563eb", flexShrink: 0, opacity: isSel ? 1 : 0, lineHeight: 1 }}>✓</span>
-                <span style={{ fontWeight: isSel ? 600 : 500, flex: "0 0 auto", whiteSpace: "nowrap" }}>
-                  {opt.label}
-                </span>
-                {opt.sub && (
-                  <span style={{ fontSize: 10.5, color: isHi ? "#64748b" : "#9ca3af", marginLeft: "auto", flexShrink: 0, whiteSpace: "nowrap", fontWeight: 400 }}>
-                    {opt.sub}
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+      {menuEl}
     </div>
   );
 }
@@ -336,14 +377,39 @@ export function SearchableSelectShared({
   const [open, setOpen] = useState(false);
   const [debounced, setDebounced] = useState("");
   const [highlightIdx, setHighlightIdx] = useState(-1);
+  const [dropPos, setDropPos] = useState<{ left: number; top: number; width: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const portalRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { const t = setTimeout(() => setDebounced(query), 250); return () => clearTimeout(t); }, [query]);
 
+  const calcPos = useCallback(() => {
+    if (!containerRef.current) return;
+    const r = containerRef.current.getBoundingClientRect();
+    setDropPos({ left: r.left, top: r.bottom + 3, width: r.width });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) { setDropPos(null); return; }
+    calcPos();
+  }, [open, calcPos]);
+
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener("scroll", calcPos, true);
+    window.addEventListener("resize", calcPos);
+    return () => {
+      window.removeEventListener("scroll", calcPos, true);
+      window.removeEventListener("resize", calcPos);
+    };
+  }, [open, calcPos]);
+
   useEffect(() => {
     const h = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+      if (
+        containerRef.current && !containerRef.current.contains(e.target as Node) &&
+        (portalRef.current === null || !portalRef.current.contains(e.target as Node))
+      ) setOpen(false);
     };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
@@ -357,8 +423,8 @@ export function SearchableSelectShared({
   ).slice(0, maxResults);
 
   useEffect(() => {
-    if (!open || highlightIdx < 0 || !listRef.current) return;
-    (listRef.current.children[highlightIdx] as HTMLElement | undefined)?.scrollIntoView?.({ block: "nearest" });
+    if (!open || highlightIdx < 0 || !portalRef.current) return;
+    (portalRef.current.children[highlightIdx] as HTMLElement | undefined)?.scrollIntoView?.({ block: "nearest" });
   }, [highlightIdx, open]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -370,6 +436,36 @@ export function SearchableSelectShared({
       if (highlightIdx >= 0 && highlightIdx < filtered.length) { onChange(filtered[highlightIdx].id); setQuery(""); setOpen(false); setHighlightIdx(-1); }
     }
   };
+
+  const menuEl = open && dropPos ? createPortal(
+    <div
+      ref={portalRef}
+      style={{ ...CS.menu, position: "fixed", left: dropPos.left, top: dropPos.top, width: dropPos.width, minWidth: dropPos.width, zIndex: 9500 }}
+    >
+      {filtered.length === 0
+        ? <p style={{ margin: 0, padding: "8px 10px", fontSize: 12, color: "#94a3b8" }}>검색 결과 없음</p>
+        : filtered.map((item, idx) => {
+          const isHi = idx === highlightIdx;
+          return (
+            <button key={item.id} type="button"
+              onMouseEnter={() => setHighlightIdx(idx)}
+              onMouseLeave={() => setHighlightIdx(-1)}
+              onMouseDown={e => { e.preventDefault(); e.stopPropagation(); onChange(item.id); setQuery(""); setOpen(false); setHighlightIdx(-1); }}
+              style={{
+                display: "block", width: "100%", textAlign: "left",
+                padding: "5px 10px", fontSize: 12,
+                color: "#111827", background: isHi ? "#eff6ff" : item.id === value ? "#f0f9ff" : "transparent",
+                border: "none", borderBottom: "1px solid #f8fafc", cursor: "pointer",
+              }}>
+              <span style={{ fontWeight: 600 }}>{item.label}</span>
+              {item.sub && <span style={{ marginLeft: 6, fontSize: 10, color: "#94a3b8" }}>{item.sub}</span>}
+            </button>
+          );
+        })
+      }
+    </div>,
+    document.body
+  ) : null;
 
   return (
     <div ref={containerRef} style={{ position: "relative" }}
@@ -397,33 +493,7 @@ export function SearchableSelectShared({
           {open ? "▲" : "▼"}
         </span>
       </div>
-      {open && (
-        <div ref={listRef}
-          style={{ ...CS.menu, position: "absolute", top: "calc(100% + 3px)", left: 0, right: 0, minWidth: "unset" }}
-        >
-          {filtered.length === 0
-            ? <p style={{ margin: 0, padding: "8px 10px", fontSize: 12, color: "#94a3b8" }}>검색 결과 없음</p>
-            : filtered.map((item, idx) => {
-              const isHi = idx === highlightIdx;
-              return (
-                <button key={item.id} type="button"
-                  onMouseEnter={() => setHighlightIdx(idx)}
-                  onMouseLeave={() => setHighlightIdx(-1)}
-                  onClick={() => { onChange(item.id); setQuery(""); setOpen(false); setHighlightIdx(-1); }}
-                  style={{
-                    display: "block", width: "100%", textAlign: "left",
-                    padding: "5px 10px", fontSize: 12,
-                    color: "#111827", background: isHi ? "#eff6ff" : item.id === value ? "#f0f9ff" : "transparent",
-                    border: "none", borderBottom: "1px solid #f8fafc", cursor: "pointer",
-                  }}>
-                  <span style={{ fontWeight: 600 }}>{item.label}</span>
-                  {item.sub && <span style={{ marginLeft: 6, fontSize: 10, color: "#94a3b8" }}>{item.sub}</span>}
-                </button>
-              );
-            })
-          }
-        </div>
-      )}
+      {menuEl}
     </div>
   );
 }
