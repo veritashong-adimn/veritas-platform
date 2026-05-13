@@ -892,12 +892,14 @@ router.patch("/admin/products/:id", ...adminOnly, async (req, res) => {
     name, mainCategory, subCategory, unit, basePrice, description, active,
     interpretationDuration, overtimePrice, options,
     quantityUnit, usagePeriod, interpretationDirection,
+    sourceLanguage, targetLanguage,
   } = req.body as {
     name?: string; mainCategory?: string; subCategory?: string;
     unit?: string; basePrice?: number; description?: string; active?: boolean;
     interpretationDuration?: string; overtimePrice?: number | null;
     options?: { optionType: string; optionValue: string; sortOrder?: number }[];
     quantityUnit?: string; usagePeriod?: string | null; interpretationDirection?: string;
+    sourceLanguage?: string | null; targetLanguage?: string | null;
   };
 
   try {
@@ -923,6 +925,8 @@ router.patch("/admin/products/:id", ...adminOnly, async (req, res) => {
         quantityUnit: quantityUnit !== undefined ? (quantityUnit?.trim() || null) : existing.quantityUnit,
         usagePeriod: usagePeriod !== undefined ? (usagePeriod !== null ? (usagePeriod.trim() || null) : null) : existing.usagePeriod,
         interpretationDirection: interpretationDirection !== undefined ? (interpretationDirection?.trim() || null) : existing.interpretationDirection,
+        sourceLanguage: sourceLanguage !== undefined ? (sourceLanguage?.trim() || null) : existing.sourceLanguage,
+        targetLanguage: targetLanguage !== undefined ? (targetLanguage?.trim() || null) : existing.targetLanguage,
       })
       .where(eq(productsTable.id, productId))
       .returning();
