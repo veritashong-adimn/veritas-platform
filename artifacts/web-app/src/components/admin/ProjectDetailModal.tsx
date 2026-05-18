@@ -3014,7 +3014,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* ── 장비 행 ── */}
                                 {it.productType === "equipment" && (
                                   <div>
-                                    <div style={{ display: "grid", gridTemplateColumns: "56px 64px 40px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "40px 56px 64px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
+                                      <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
+                                        style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "right" }} />
                                       <ClickSelect value={it.quantityUnit}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantityUnit: v } : p))}
                                         triggerStyle={{ fontSize: 10, padding: "5px 1px", borderRadius: 5, width: 56, borderColor: "#6ee7b7" }}
@@ -3023,8 +3025,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, usagePeriod: v } : p))}
                                         triggerStyle={{ fontSize: 10, padding: "5px 1px", borderRadius: 5, width: 64, borderColor: "#6ee7b7" }}
                                         options={[{ value: "반일", label: "반일" }, { value: "1일", label: "1일" }, { value: "2일", label: "2일" }, { value: "3일", label: "3일" }, { value: "4일", label: "4일" }, { value: "5일", label: "5일" }]} />
-                                      <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
-                                        style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={roSt} />
