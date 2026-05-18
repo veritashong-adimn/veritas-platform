@@ -207,6 +207,16 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   };
   const [showQuoteForm, setShowQuoteForm] = useState(true);
   const [showTaxOptions, setShowTaxOptions] = useState(false);
+  const [showPaySchedule, setShowPaySchedule] = useState(false);
+  type PayScheduleRow = { label: string; amountType: "percent"|"fixed"; amount: string; dueDate: string; invoiceTiming: "after_payment"|"after_final"|"on_date"|"none" };
+  const makeDefaultPayRows = (type: string): PayScheduleRow[] => {
+    if (type === "split2") return [{ label: "선금", amountType: "percent", amount: "50", dueDate: "", invoiceTiming: "after_payment" }, { label: "잔금", amountType: "percent", amount: "50", dueDate: "", invoiceTiming: "after_payment" }];
+    if (type === "split3") return [{ label: "선금", amountType: "percent", amount: "30", dueDate: "", invoiceTiming: "after_payment" }, { label: "중도금", amountType: "percent", amount: "40", dueDate: "", invoiceTiming: "after_payment" }, { label: "잔금", amountType: "percent", amount: "30", dueDate: "", invoiceTiming: "after_payment" }];
+    if (type === "custom") return [{ label: "1차", amountType: "percent", amount: "", dueDate: "", invoiceTiming: "after_payment" }];
+    return [];
+  };
+  const [payScheduleType, setPayScheduleType] = useState<"split2"|"split3"|"custom">("split2");
+  const [payScheduleRows, setPayScheduleRows] = useState<PayScheduleRow[]>(makeDefaultPayRows("split2"));
   const [showBillingCardEdit, setShowBillingCardEdit] = useState(false);
   const [billingCardMode, setBillingCardMode] = useState<"same_as_request"|"other_company"|"other_division">("same_as_request");
   const [billingCardCompanyId, setBillingCardCompanyId] = useState<number|null>(null);
@@ -2751,6 +2761,84 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                   ]}
                                 />
                               </div>
+                            </div>
+
+                            {/* 결제/발행 스케줄 */}
+                            <div style={{ borderTop: "1px dashed #e5e7eb", paddingTop: 8, marginBottom: 4 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: showPaySchedule ? 8 : 0 }}>
+                                <input type="checkbox" id="payScheduleToggle" checked={showPaySchedule}
+                                  onChange={e => setShowPaySchedule(e.target.checked)}
+                                  style={{ cursor: "pointer", accentColor: "#0369a1" }} />
+                                <label htmlFor="payScheduleToggle" style={{ fontSize: 10, fontWeight: 700, color: "#0369a1", cursor: "pointer" }}>
+                                  💳 분할 결제/발행 스케줄 사용
+                                </label>
+                              </div>
+                              {showPaySchedule && (
+                                <div>
+                                  <ClickSelect
+                                    value={payScheduleType}
+                                    onChange={v => { const t = v as typeof payScheduleType; setPayScheduleType(t); setPayScheduleRows(makeDefaultPayRows(t)); }}
+                                    style={{ width: "100%", marginBottom: 6 }}
+                                    triggerStyle={{ width: "100%", fontSize: 11, padding: "5px 8px", borderRadius: 6, border: "1px solid #bae6fd", background: "#f0f9ff" }}
+                                    options={[
+                                      { value: "split2", label: "선금 / 잔금", sub: "2회 분할" },
+                                      { value: "split3", label: "선금 / 중도금 / 잔금", sub: "3회 분할" },
+                                      { value: "custom", label: "사용자 정의", sub: "단계 직접 구성" },
+                                    ]}
+                                  />
+                                  {/* 컬럼 헤더 */}
+                                  <div style={{ display: "grid", gridTemplateColumns: "40px 56px 108px 1fr", gap: 3, marginBottom: 2, paddingLeft: 1 }}>
+                                    {["단계", "비율/금액", "입금예정일", "발행 방식"].map(h => (
+                                      <span key={h} style={{ fontSize: 9, color: "#9ca3af", fontWeight: 600 }}>{h}</span>
+                                    ))}
+                                  </div>
+                                  {/* 스케줄 rows */}
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                    {payScheduleRows.map((row, ri) => (
+                                      <div key={ri} style={{ display: "grid", gridTemplateColumns: "40px 56px 108px 1fr" + (payScheduleType === "custom" ? " 18px" : ""), gap: 3, alignItems: "center" }}>
+                                        <input value={row.label}
+                                          onChange={e => setPayScheduleRows(prev => prev.map((r, i) => i === ri ? { ...r, label: e.target.value } : r))}
+                                          style={{ ...inputStyle, fontSize: 10, padding: "4px 3px", textAlign: "center" }} />
+                                        <div style={{ display: "flex", gap: 1 }}>
+                                          <input value={row.amount}
+                                            onChange={e => setPayScheduleRows(prev => prev.map((r, i) => i === ri ? { ...r, amount: e.target.value } : r))}
+                                            placeholder={row.amountType === "percent" ? "%" : "원"}
+                                            style={{ ...inputStyle, fontSize: 11, padding: "4px 2px", textAlign: "right", flex: 1, minWidth: 0 }} />
+                                          <button
+                                            onClick={() => setPayScheduleRows(prev => prev.map((r, i) => i === ri ? { ...r, amountType: r.amountType === "percent" ? "fixed" : "percent" } : r))}
+                                            style={{ fontSize: 9, padding: "0 4px", borderRadius: 4, border: "1px solid #bae6fd", background: row.amountType === "percent" ? "#e0f2fe" : "#f0fdf4", color: "#0369a1", cursor: "pointer", fontWeight: 700, flexShrink: 0 }}>
+                                            {row.amountType === "percent" ? "%" : "원"}
+                                          </button>
+                                        </div>
+                                        <input type="date" value={row.dueDate}
+                                          onChange={e => setPayScheduleRows(prev => prev.map((r, i) => i === ri ? { ...r, dueDate: e.target.value } : r))}
+                                          style={{ ...inputStyle, fontSize: 10, padding: "4px 3px" }} />
+                                        <ClickSelect value={row.invoiceTiming}
+                                          onChange={v => setPayScheduleRows(prev => prev.map((r, i) => i === ri ? { ...r, invoiceTiming: v as PayScheduleRow["invoiceTiming"] } : r))}
+                                          triggerStyle={{ width: "100%", fontSize: 10, padding: "4px 5px", borderRadius: 5, border: "1px solid #bae6fd" }}
+                                          options={[
+                                            { value: "after_payment", label: "입금 후 발행" },
+                                            { value: "after_final", label: "잔금 후 일괄" },
+                                            { value: "on_date", label: "특정일 발행" },
+                                            { value: "none", label: "미발행" },
+                                          ]}
+                                        />
+                                        {payScheduleType === "custom" && (
+                                          <button onClick={() => setPayScheduleRows(prev => prev.filter((_, i) => i !== ri))}
+                                            style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {payScheduleType === "custom" && (
+                                    <button
+                                      onClick={() => setPayScheduleRows(prev => [...prev, { label: `${prev.length + 1}차`, amountType: "percent", amount: "", dueDate: "", invoiceTiming: "after_payment" }])}
+                                      style={{ marginTop: 5, fontSize: 10, padding: "3px 9px", background: "#f0f9ff", color: "#0369a1", border: "1px solid #bae6fd", borderRadius: 5, cursor: "pointer", fontWeight: 600 }}>
+                                      ＋ 단계 추가
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         )}
