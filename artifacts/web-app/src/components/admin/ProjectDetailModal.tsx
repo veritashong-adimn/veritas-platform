@@ -1179,9 +1179,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const Req = () => <span style={{ color: "#dc2626", fontSize: 10, fontWeight: 700, marginLeft: 3 }}>필수</span>;
   const Opt = () => <span style={{ color: "#9ca3af", fontSize: 10, marginLeft: 3 }}>(선택)</span>;
   const tabBtnStyle = (active: boolean): React.CSSProperties => ({
-    padding: "5px 12px", fontSize: 12, fontWeight: active ? 700 : 500, borderRadius: 20, cursor: "pointer",
-    border: "1px solid", borderColor: active ? "#2563eb" : "#e5e7eb",
-    background: active ? "#eff6ff" : "#fff", color: active ? "#2563eb" : "#6b7280",
+    padding: "5px 13px", fontSize: 12, fontWeight: active ? 700 : 500, borderRadius: 7, cursor: "pointer",
+    border: active ? "1px solid #d4e4ff" : "1px solid transparent",
+    background: active ? "#ffffff" : "transparent",
+    color: active ? "#1d4ed8" : "#6b7280",
+    boxShadow: active ? "0 1px 3px rgba(37,99,235,0.10), 0 0 0 1px rgba(37,99,235,0.04)" : "none",
+    transition: "background 0.1s, color 0.1s, box-shadow 0.1s",
+    whiteSpace: "nowrap",
   });
 
   const sections: Array<{ key: typeof activeSection; label: string }> = [
@@ -1664,7 +1668,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             )}
 
             {/* 탭 내비 */}
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+            <div style={{ display: "flex", gap: 2, flexWrap: "wrap", marginBottom: 10, background: "#f0f2f6", borderRadius: 10, padding: "3px 4px", border: "1px solid #e5e8ef", alignItems: "center" }}>
               {sections.map(s => (
                 <button key={s.key} onClick={() => setActiveSection(s.key)} style={tabBtnStyle(activeSection === s.key)}>
                   {s.label}
