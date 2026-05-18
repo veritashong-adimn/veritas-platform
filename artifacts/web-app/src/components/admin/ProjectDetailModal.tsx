@@ -1358,7 +1358,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 });
 
                 return (
-                  <div style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px dashed #e5e7eb" }}>
+                  <div style={{ marginBottom: 0, paddingBottom: 4 }}>
                     {isCancelled && (
                       <div style={{ marginBottom: 6, display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", background: "#fee2e2", borderRadius: 6, fontSize: 11, fontWeight: 700, color: "#dc2626" }}>
                         🚫 취소된 프로젝트
@@ -1370,6 +1370,29 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   </div>
                 );
               })()}
+              {/* ── 재무 상태 — StepBar 직하단 (global status bar) ── */}
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 12, paddingTop: 8, paddingBottom: 10, borderBottom: "1px dashed #e5e7eb" }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", letterSpacing: "0.04em", flexShrink: 0 }}>재무</span>
+                {ALL_FINANCIAL_STATUSES.map(fs => {
+                  const isActive = (detail.financialStatus ?? "unbilled") === fs;
+                  const target = financialStatusTarget === fs;
+                  const fStyle = FINANCIAL_STATUS_STYLE[fs] ?? { background: "#f3f4f6", color: "#6b7280" };
+                  return (
+                    <button key={fs} onClick={() => setFinancialStatusTarget(fs)}
+                      style={{ padding: "3px 10px", borderRadius: 8, border: `2px solid ${target ? (fStyle.color as string) : "#e5e7eb"}`,
+                        fontWeight: target || isActive ? 700 : 400, fontSize: 12, cursor: "pointer",
+                        background: target ? (fStyle.background as string) : isActive ? "#f9fafb" : "#fff",
+                        color: target || isActive ? (fStyle.color as string) : "#6b7280" }}>
+                      {FINANCIAL_STATUS_LABEL[fs]}{isActive && " ✓"}
+                    </button>
+                  );
+                })}
+                <GhostBtn onClick={handleFinancialStatusChange}
+                  disabled={changingFinancialStatus || financialStatusTarget === (detail.financialStatus ?? "unbilled")}
+                  color="#059669" style={{ fontSize: 12, padding: "3px 10px" }}>
+                  {changingFinancialStatus ? "변경 중..." : "적용"}
+                </GhostBtn>
+              </div>
               {/* 현재 상태 안내 */}
               {(() => {
                 const noTranslatorBlock = ["approved", "matched", "in_progress"].includes(detail.status) && (detail.tasks ?? []).length === 0;
@@ -1456,32 +1479,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     </>
                   );
                 })()}
-                {/* 재무 상태 변경 */}
-                <div style={{ width: "100%", marginTop: 10, paddingTop: 10, borderTop: "1px dashed #e5e7eb" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>재무 상태</div>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    {ALL_FINANCIAL_STATUSES.map(fs => {
-                      const isActive = (detail.financialStatus ?? "unbilled") === fs;
-                      const target = financialStatusTarget === fs;
-                      const fStyle = FINANCIAL_STATUS_STYLE[fs] ?? { background: "#f3f4f6", color: "#6b7280" };
-                      return (
-                        <button key={fs} onClick={() => setFinancialStatusTarget(fs)}
-                          style={{ padding: "4px 12px", borderRadius: 8, border: `2px solid ${target ? (fStyle.color as string) : "#e5e7eb"}`,
-                            fontWeight: target || isActive ? 700 : 400, fontSize: 12, cursor: "pointer",
-                            background: target ? (fStyle.background as string) : isActive ? "#f9fafb" : "#fff",
-                            color: target || isActive ? (fStyle.color as string) : "#6b7280" }}>
-                          {FINANCIAL_STATUS_LABEL[fs]}
-                          {isActive && " ✓"}
-                        </button>
-                      );
-                    })}
-                    <GhostBtn onClick={handleFinancialStatusChange}
-                      disabled={changingFinancialStatus || financialStatusTarget === (detail.financialStatus ?? "unbilled")}
-                      color="#059669" style={{ fontSize: 12, padding: "4px 12px" }}>
-                      {changingFinancialStatus ? "변경 중..." : "재무 상태 적용"}
-                    </GhostBtn>
-                  </div>
-                </div>
 
                 {/* 통번역사 추천 — 이미 배정된 경우 재배정용으로만 표시 (미배정 시 위 통합 경고에 표시됨) */}
                 {["approved", "matched", "in_progress"].includes(detail.status) && (detail.tasks ?? []).length > 0 && (
