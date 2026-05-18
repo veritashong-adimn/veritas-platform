@@ -2875,17 +2875,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {/* ── 번역 행 ── */}
                                 {it.productType === "translation" && (
                                   <div>
-                                    <div style={{ display: "grid", gridTemplateColumns: "44px 8px 44px 52px 40px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "44px 8px 44px 40px 52px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
                                       <input value={it.sourceLanguage} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, sourceLanguage: e.target.value } : p))}
                                         placeholder="출발어" style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "center", textTransform: "uppercase" }} />
                                       <span style={{ textAlign: "center", color: "#9ca3af", fontSize: 11 }}>→</span>
                                       <input value={it.targetLanguage} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, targetLanguage: e.target.value } : p))}
                                         placeholder="도착어" style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "center", textTransform: "uppercase" }} />
+                                      <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
+                                        style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "right" }} />
                                       <ClickSelect value={it.unit} onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: v } : p))}
                                         triggerStyle={{ fontSize: 10, padding: "5px 1px", borderRadius: 5, width: 52 }}
                                         options={[{ value: "페이지", label: "페이지" }, { value: "글자", label: "글자" }, { value: "단어", label: "단어" }, { value: "어절", label: "어절" }, { value: "건", label: "건" }]} />
-                                      <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
-                                        style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "right" }} />
                                       <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
                                         placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
                                       <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={roSt} />
