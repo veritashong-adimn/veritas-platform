@@ -2693,10 +2693,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                   onChange={v => {
                                     const rt = v as typeof revenueType;
                                     setRevenueType(rt);
-                                    if (rt === "card") { setQuotePaymentMethod("card"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); }
-                                    else if (rt === "cash") { setQuotePaymentMethod("cash"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); }
+                                    if (rt === "card") { setQuotePaymentMethod("card"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); setQuoteVatType("taxable"); }
+                                    else if (rt === "cash") { setQuotePaymentMethod("cash"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); setQuoteVatType("taxable"); }
                                     else if (rt === "foreign") { setQuotePaymentMethod(""); setPaymentTiming("postpay"); setQuoteVatType("exempt"); }
-                                    else { setQuotePaymentMethod(""); }
+                                    else { setQuotePaymentMethod(""); setQuoteVatType("taxable"); }
                                   }}
                                   style={{ width: "100%" }}
                                   triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #93c5fd" }}
