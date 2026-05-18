@@ -2695,39 +2695,38 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               />
                             </div>
 
-                            {/* 2. 매출 구분 */}
-                            <div style={{ marginBottom: 10 }}>
-                              <label style={{ fontSize: 10, fontWeight: 700, color: "#1d4ed8", display: "block", marginBottom: 3 }}>매출 구분</label>
-                              <ClickSelect
-                                value={revenueType}
-                                onChange={v => {
-                                  const rt = v as typeof revenueType;
-                                  setRevenueType(rt);
-                                  if (rt === "card") { setQuotePaymentMethod("card"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); }
-                                  else if (rt === "cash") { setQuotePaymentMethod("cash"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); }
-                                  else if (rt === "foreign") { setQuotePaymentMethod(""); setPaymentTiming("postpay"); }
-                                  else { setQuotePaymentMethod(""); }
-                                }}
-                                style={{ width: "100%" }}
-                                triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #93c5fd" }}
-                                options={[
-                                  { value: "tax_invoice", label: "세금계산서", sub: "일반 B2B 청구" },
-                                  { value: "card", label: "카드 결제", sub: "카드 단말기 / PG" },
-                                  { value: "cash", label: "현금 결제", sub: "현금 직접 수령" },
-                                  { value: "foreign", label: "해외 입금", sub: "외화 수취" },
-                                ]}
-                              />
-                            </div>
-
-                            {/* 3. 해외입금 → 통화 선택 (conditional) */}
-                            {revenueType === "foreign" && (
-                              <div style={{ marginBottom: 10 }}>
-                                <label style={{ fontSize: 10, fontWeight: 700, color: "#0369a1", display: "block", marginBottom: 3 }}>통화</label>
-                                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                            {/* 2. 매출구분 + 통화 — inline row (통화는 해외입금 시만 노출) */}
+                            <div style={{ marginBottom: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-end" }}>
+                              <div style={{ flex: revenueType === "foreign" ? "0 0 62%" : "1 1 100%", minWidth: 0 }}>
+                                <label style={{ fontSize: 10, fontWeight: 700, color: "#1d4ed8", display: "block", marginBottom: 3 }}>매출 구분</label>
+                                <ClickSelect
+                                  value={revenueType}
+                                  onChange={v => {
+                                    const rt = v as typeof revenueType;
+                                    setRevenueType(rt);
+                                    if (rt === "card") { setQuotePaymentMethod("card"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); }
+                                    else if (rt === "cash") { setQuotePaymentMethod("cash"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); }
+                                    else if (rt === "foreign") { setQuotePaymentMethod(""); setPaymentTiming("postpay"); }
+                                    else { setQuotePaymentMethod(""); }
+                                  }}
+                                  style={{ width: "100%" }}
+                                  triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #93c5fd" }}
+                                  options={[
+                                    { value: "tax_invoice", label: "세금계산서", sub: "일반 B2B 청구" },
+                                    { value: "card", label: "카드 결제", sub: "카드 단말기 / PG" },
+                                    { value: "cash", label: "현금 결제", sub: "현금 직접 수령" },
+                                    { value: "foreign", label: "해외 입금", sub: "외화 수취" },
+                                  ]}
+                                />
+                              </div>
+                              {revenueType === "foreign" && (
+                                <div style={{ flex: "1 1 0", minWidth: 90 }}>
+                                  <label style={{ fontSize: 10, fontWeight: 700, color: "#0369a1", display: "block", marginBottom: 3 }}>통화</label>
                                   <ClickSelect
                                     value={foreignCurrency}
                                     onChange={v => { setForeignCurrency(v as typeof foreignCurrency); if (v !== "custom") setForeignCurrencyInput(""); }}
-                                    triggerStyle={{ fontSize: 12, padding: "6px 10px", borderRadius: 7, border: "1px solid #bae6fd" }}
+                                    style={{ width: "100%" }}
+                                    triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 6px", borderRadius: 7, border: "1px solid #bae6fd" }}
                                     options={[
                                       { value: "KRW", label: "KRW" }, { value: "USD", label: "USD" },
                                       { value: "EUR", label: "EUR" }, { value: "JPY", label: "JPY" },
@@ -2737,12 +2736,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                   />
                                   {foreignCurrency === "custom" && (
                                     <input value={foreignCurrencyInput} onChange={e => setForeignCurrencyInput(e.target.value)}
-                                      placeholder="통화 코드 (예: CNY)"
-                                      style={{ ...inputStyle, fontSize: 11, padding: "6px 8px", flex: 1 }} />
+                                      placeholder="통화 코드" style={{ ...inputStyle, fontSize: 11, padding: "5px 6px", width: "100%", marginTop: 3, boxSizing: "border-box" as const }} />
                                   )}
                                 </div>
-                              </div>
-                            )}
+                              )}
+                            </div>
 
                             {/* 4. 결제 방식 (payment timing) */}
                             <div style={{ marginBottom: 10 }}>
