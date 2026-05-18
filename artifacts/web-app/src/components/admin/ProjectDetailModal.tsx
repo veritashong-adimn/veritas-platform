@@ -1179,11 +1179,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const Req = () => <span style={{ color: "#dc2626", fontSize: 10, fontWeight: 700, marginLeft: 3 }}>필수</span>;
   const Opt = () => <span style={{ color: "#9ca3af", fontSize: 10, marginLeft: 3 }}>(선택)</span>;
   const tabBtnStyle = (active: boolean): React.CSSProperties => ({
-    padding: "5px 13px", fontSize: 12, fontWeight: active ? 700 : 500, borderRadius: 7, cursor: "pointer",
-    border: active ? "1px solid #d4e4ff" : "1px solid transparent",
+    padding: "5px 13px", fontSize: 12, fontWeight: active ? 700 : 400, borderRadius: 7, cursor: "pointer",
+    border: active ? "1px solid #c7d9f8" : "1px solid transparent",
     background: active ? "#ffffff" : "transparent",
-    color: active ? "#1d4ed8" : "#6b7280",
-    boxShadow: active ? "0 1px 3px rgba(37,99,235,0.10), 0 0 0 1px rgba(37,99,235,0.04)" : "none",
+    color: active ? "#1e3a8a" : "#9ca3af",
+    boxShadow: active ? "0 1px 4px rgba(37,99,235,0.14), 0 0 0 1px rgba(37,99,235,0.06)" : "none",
     transition: "background 0.1s, color 0.1s, box-shadow 0.1s",
     whiteSpace: "nowrap",
   });
@@ -1665,7 +1665,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             )}
 
             {/* 탭 내비 */}
-            <div style={{ display: "flex", gap: 2, flexWrap: "wrap", marginBottom: 10, background: "#f0f2f6", borderRadius: 10, padding: "3px 4px", border: "1px solid #e5e8ef", alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 2, flexWrap: "wrap", marginTop: 8, marginBottom: 12, background: "#f0f2f6", borderRadius: 10, padding: "3px 4px", border: "1px solid #e2e6ef", alignItems: "center" }}>
               {sections.map(s => (
                 <button key={s.key} onClick={() => setActiveSection(s.key)} style={tabBtnStyle(activeSection === s.key)}>
                   {s.label}
@@ -3129,8 +3129,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
 
                   return (
                     <>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: formVisible ? 6 : 8 }}>
-                        <p style={sectionHd}>견적 ({detail.quotes.length})</p>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: formVisible ? 8 : 10, paddingBottom: formVisible ? 7 : 0, borderBottom: formVisible ? "1px solid #ede9fe" : "none" }}>
+                        <p style={{ ...sectionHd, margin: 0, paddingBottom: 0, borderBottom: "none", color: "#5b21b6", letterSpacing: "0.04em", borderLeft: "3px solid #8b5cf6", paddingLeft: 8 }}>견적 ({detail.quotes.length})</p>
                         {canQuote && hasQuotes && !showQuoteForm && (
                           <button onClick={() => {
                             const doOpen = () => {
@@ -3488,12 +3488,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   return (
                     <>
                       {/* compact summary strip */}
-                      <div style={{ background: "#f8fafc", borderRadius: 8, padding: "8px 12px", marginTop: 12, border: "1px solid #eef2f7" }}>
+                      <div style={{ background: "#f3f7fc", borderRadius: 8, padding: "8px 12px", marginTop: 12, border: "1px solid #dce8f5" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                           <div style={{ flex: 1, display: "flex", alignItems: "center", flexWrap: "wrap", gap: "3px 0", minWidth: 0 }}>
                             {!showBillingCardEdit ? summaryItems.map((item, idx, arr) => (
                               <span key={item.label} style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 12 }}>
-                                <span style={{ color: "#b0b8c6", fontSize: 11 }}>{item.label}</span>
+                                <span style={{ color: "#94a3b8", fontSize: 11 }}>{item.label}</span>
                                 <span style={{ color: (item as any).color ?? "#374151", fontWeight: 600 }}>{item.value}</span>
                                 {idx < arr.length - 1 && <span style={{ color: "#d1d5db", margin: "0 5px" }}>·</span>}
                               </span>
@@ -3615,7 +3615,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       </div>
 
                       {/* 문서 출력 — 보조 액션 toolbar */}
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 6, padding: "6px 10px", background: "#f8fafc", borderRadius: 7, border: "1px solid #eef2f7" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8, padding: "5px 10px", background: "transparent", borderRadius: 7, borderTop: "1px solid #eef2f7" }}>
                         <span style={{ fontSize: 11, fontWeight: 600, color: "#94a3b8", marginRight: 2 }}>문서 출력</span>
                         <button
                           onClick={() => {
@@ -3644,7 +3644,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   const hasPaid = detail.payments.some((pm: any) => pm.status === "paid");
                   const hasSettlement = detail.settlements.length > 0;
                   return (
-                    <div style={{ background: hasSettlement ? "#f0fdf4" : "#f9fafb", border: `1px solid ${hasSettlement ? "#bbf7d0" : "#e5e7eb"}`, borderRadius: 10, padding: "12px 16px", marginTop: 16 }}>
+                    <div style={{ background: hasSettlement ? "#f0fdf4" : "#f9fafb", border: `1px solid ${hasSettlement ? "#bbf7d0" : "#e9edf3"}`, borderRadius: 8, padding: "10px 14px", marginTop: 14 }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: hasSettlement ? 8 : 0 }}>
                         <span style={{ fontSize: 12, fontWeight: 700, color: hasSettlement ? "#065f46" : "#6b7280" }}>
                           📊 정산 {hasSettlement ? `(${detail.settlements.length}건)` : "— 미생성"}

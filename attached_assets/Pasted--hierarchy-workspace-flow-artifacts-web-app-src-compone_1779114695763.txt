@@ -1,0 +1,276 @@
+[견적/결제 탭 — hierarchy / workspace flow 미세조정]
+
+작업 대상:
+artifacts/web-app/src/components/admin/ProjectDetailModal.tsx
+
+목표:
+현재 구조는 전체적으로 매우 안정화되었다.
+
+이제부터는:
+큰 구조 변경이 아니라,
+
+* hierarchy
+* grouping
+* density
+* action flow
+
+를 미세 조정하는 단계다.
+
+중요:
+현재 방향은 맞다.
+
+따라서:
+전체 구조를 흔들지 말고,
+“운영형 SaaS workspace”
+느낌을 더 강화하는 방향으로만 수정한다.
+
+---
+
+1. 상단 global 상태영역 유지
+
+---
+
+현재 방향 유지.
+
+즉:
+
+* 프로젝트 진행 StepBar
+* 재무 상태 chips
+
+를:
+
+“프로젝트 전체 상태바”
+
+처럼 읽히는 현재 방향 유지.
+
+현재 구조를 다시 분리하거나
+재무 상태를 탭 내부로 이동하지 말 것.
+
+---
+
+2. 상단 상태영역 ↔ 탭영역 연결감 강화
+
+---
+
+현재:
+상단 global 상태영역과
+탭 영역 사이의 hierarchy 연결이 약간 약함.
+
+추천 수정:
+
+* spacing
+* divider
+* subtle depth
+
+를 이용해:
+“global 영역 → workspace 영역”
+
+전환감 강화.
+
+중요:
+과도한 카드화 금지.
+
+---
+
+3. 탭 바 hierarchy 미세 강화
+
+---
+
+현재 탭 바가:
+약간 중간에 끼어 있는 느낌 존재.
+
+목표:
+탭 바를:
+
+“현재 작업 workspace navigator”
+
+처럼 읽히게.
+
+추천 방향:
+
+* active 상태 hierarchy 소폭 강화
+* inactive와의 contrast 미세 조정
+* spacing 정리
+
+정도만 수정.
+
+중요:
+과한 강조 금지.
+
+---
+
+4. 견적 section 시작 hierarchy 강화 (중요)
+
+---
+
+현재:
+“견적 (1)”
+section 시작점이 약함.
+
+하지만:
+실제 메인 작업 영역임.
+
+추천 수정:
+
+* section title hierarchy 강화
+* spacing 정리
+* subtle divider
+* section 시작점 강조
+
+정도 추가.
+
+목표:
+“여기부터 실제 작업 영역”
+
+처럼 읽히게.
+
+---
+
+5. 견적 수정/action 영역 hierarchy 유지
+
+---
+
+현재 방향 매우 좋음.
+
+즉:
+summary/info보다
+실제 입력/action 영역이 메인처럼 읽히는 현재 방향 유지.
+
+과도한 카드화 금지.
+
+---
+
+6. 청구/결제 summary strip hierarchy 소폭 강화
+
+---
+
+현재:
+summary strip가 약간 묻힘.
+
+추천:
+
+* 정보 밀도 유지
+* compact 유지
+* hierarchy만 소폭 강화
+
+예:
+
+* subtle contrast
+* spacing 정리
+* separator 정리
+
+정도.
+
+중요:
+다시 큰 카드 grid 형태로 되돌리지 말 것.
+
+---
+
+7. 문서 출력 / 정산 영역 정리
+
+---
+
+현재:
+문서 출력과 정산 영역이
+약간 footer처럼 눌려 보임.
+
+추천:
+workspace의 마지막 action 영역처럼 정리.
+
+즉:
+“마무리 액션”
+
+느낌 강화.
+
+---
+
+8. Vertical rhythm 정리
+
+---
+
+현재:
+각 section 간 rhythm이 약간 평평함.
+
+추천:
+
+* section spacing
+* title hierarchy
+* divider hierarchy
+
+를 미세 조정해서:
+
+읽기 흐름을 더 자연스럽게 정리.
+
+---
+
+9. 유지해야 하는 것
+
+---
+
+반드시 유지:
+
+✅ 현재 전체 구조
+✅ compact SaaS 스타일
+✅ 현재 workflow 구조
+✅ 현재 density 방향
+✅ 현재 action workspace 방향
+✅ 현재 견적 compact 구조
+✅ 현재 global 상태 구조
+
+---
+
+10. 절대 금지
+
+---
+
+❌ 전체 구조 변경
+❌ ERP 스타일 강화
+❌ 과도한 카드화
+❌ 진한 border/shadow
+❌ vertical length 증가
+❌ 화려한 UI
+❌ 정보량 증가
+
+---
+
+11. 핵심 목표
+
+---
+
+이번 단계의 핵심은:
+
+현재 잘 잡힌 구조를 유지하면서,
+
+“global 상태영역”
+→
+“workspace navigator”
+→
+“실제 action workspace”
+
+흐름을 더 자연스럽고 선명하게 만드는 것이다.
+
+---
+
+12. 작업 후 확인
+
+---
+
+반드시 확인:
+
+1. global 영역 → workspace 영역 전환 자연스러운지
+2. 탭 바 navigator 느낌 강화됐는지
+3. 견적 section 시작 hierarchy 개선됐는지
+4. summary strip 읽기 좋아졌는지
+5. 문서 출력/정산 action tail 느낌 생겼는지
+6. compact 유지 여부
+7. ERP 느낌 없는지
+8. 모바일 반응형 정상 여부
+
+작업 후:
+
+* 변경 전/후 스크린샷
+* hierarchy 변경 설명
+* workflow 흐름 설명
+* density/spacing 조정 내용
+
+함께 보고할 것.
