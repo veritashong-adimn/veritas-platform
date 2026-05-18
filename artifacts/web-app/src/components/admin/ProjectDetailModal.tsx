@@ -2729,9 +2729,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     onChange={v => { setForeignCurrency(v as typeof foreignCurrency); if (v !== "custom") setForeignCurrencyInput(""); }}
                                     triggerStyle={{ fontSize: 12, padding: "6px 10px", borderRadius: 7, border: "1px solid #bae6fd" }}
                                     options={[
-                                      { value: "USD", label: "USD" }, { value: "EUR", label: "EUR" },
-                                      { value: "JPY", label: "JPY" }, { value: "SGD", label: "SGD" },
-                                      { value: "custom", label: "기타" },
+                                      { value: "KRW", label: "KRW" }, { value: "USD", label: "USD" },
+                                      { value: "EUR", label: "EUR" }, { value: "JPY", label: "JPY" },
+                                      { value: "GBP", label: "GBP" }, { value: "CNY", label: "CNY" },
+                                      { value: "SGD", label: "SGD" }, { value: "custom", label: "기타" },
                                     ]}
                                   />
                                   {foreignCurrency === "custom" && (
