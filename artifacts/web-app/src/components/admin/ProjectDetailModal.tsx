@@ -205,7 +205,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     else if (val === "b2b_standard") setQuoteBillingType("postpaid_per_project"); // 일반 견적서 → 건별 후불 기본
     // prepaid_deduction은 레거시 타입 — 신규 생성 불가, 기존 데이터 표시용
   };
-  const [showQuoteForm, setShowQuoteForm] = useState(false);
+  const [showQuoteForm, setShowQuoteForm] = useState(true);
   const [showTaxOptions, setShowTaxOptions] = useState(false);
   const [showBillingCardEdit, setShowBillingCardEdit] = useState(false);
   const [billingCardMode, setBillingCardMode] = useState<"same_as_request"|"other_company"|"other_division">("same_as_request");
@@ -3511,102 +3511,101 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         </div>
 
                         {showBillingCardEdit && (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 10, paddingTop: 10, borderTop: "1px solid #e5e7eb" }}>
-                            <p style={{ margin: 0, fontSize: 11, color: "#6b7280" }}>문서 구분·청구 방식 등은 견적 생성/수정 시 변경됩니다.</p>
-
-                            {/* ── 청구 대상 ── */}
-                            <div style={{ background: "#fff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "10px 12px" }}>
-                              <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: "#0369a1" }}>청구 대상</p>
-                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-                                {(["same_as_request", "other_company", "other_division"] as const).map(mode => (
-                                  <button key={mode} type="button"
-                                    onClick={() => { setBillingCardMode(mode); setBillingCardCompanyId(null); setBillingCardDivisionId(null); setBillingCardDivisions([]); }}
-                                    style={rdoStyle(billingCardMode === mode)}>
-                                    {mode === "same_as_request" ? "요청 거래처와 동일" : mode === "other_company" ? "다른 거래처 선택" : "다른 브랜드/부서 선택"}
-                                  </button>
-                                ))}
-                              </div>
-                              {billingCardMode === "other_company" && (
-                                <BillingSearchableSelect
-                                  items={companiesList.map(c => ({ id: c.id, label: c.name }))}
-                                  value={billingCardCompanyId}
-                                  onChange={setBillingCardCompanyId}
-                                  placeholder="회사명으로 검색..."
-                                  accentBorder="#93c5fd"
-                                />
-                              )}
-                              {billingCardMode === "other_division" && (
-                                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                          <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #e5e7eb" }}>
+                            <p style={{ margin: "0 0 8px", fontSize: 11, color: "#6b7280" }}>문서 구분·청구 방식 등은 견적 생성/수정 시 변경됩니다.</p>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                              {/* ── 청구 대상 ── */}
+                              <div>
+                                <p style={{ margin: "0 0 5px", fontSize: 11, fontWeight: 700, color: "#0369a1" }}>청구 대상</p>
+                                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
+                                  {(["same_as_request", "other_company", "other_division"] as const).map(mode => (
+                                    <button key={mode} type="button"
+                                      onClick={() => { setBillingCardMode(mode); setBillingCardCompanyId(null); setBillingCardDivisionId(null); setBillingCardDivisions([]); }}
+                                      style={rdoStyle(billingCardMode === mode)}>
+                                      {mode === "same_as_request" ? "의뢰처와 동일" : mode === "other_company" ? "다른 거래처" : "다른 브랜드/부서"}
+                                    </button>
+                                  ))}
+                                </div>
+                                {billingCardMode === "other_company" && (
                                   <BillingSearchableSelect
                                     items={companiesList.map(c => ({ id: c.id, label: c.name }))}
                                     value={billingCardCompanyId}
-                                    onChange={cid => {
-                                      setBillingCardCompanyId(cid); setBillingCardDivisionId(null);
-                                      if (cid) loadBillingDivisions(cid); else setBillingCardDivisions([]);
-                                    }}
-                                    placeholder="거래처 검색..."
+                                    onChange={setBillingCardCompanyId}
+                                    placeholder="회사명으로 검색..."
                                     accentBorder="#93c5fd"
                                   />
-                                  {billingCardCompanyId && (
+                                )}
+                                {billingCardMode === "other_division" && (
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                                     <BillingSearchableSelect
-                                      items={billingCardDivisions.map(d => ({ id: d.id, label: d.name + (d.type ? ` (${d.type})` : "") }))}
-                                      value={billingCardDivisionId}
-                                      onChange={setBillingCardDivisionId}
-                                      placeholder={billingCardDivisions.length === 0 ? "브랜드/부서 없음" : "브랜드/부서 검색..."}
-                                      accentBorder="#67e8f9"
+                                      items={companiesList.map(c => ({ id: c.id, label: c.name }))}
+                                      value={billingCardCompanyId}
+                                      onChange={cid => {
+                                        setBillingCardCompanyId(cid); setBillingCardDivisionId(null);
+                                        if (cid) loadBillingDivisions(cid); else setBillingCardDivisions([]);
+                                      }}
+                                      placeholder="거래처 검색..."
+                                      accentBorder="#93c5fd"
                                     />
-                                  )}
-                                </div>
-                              )}
-                            </div>
-
-                            {/* ── 정산 주체 ── */}
-                            <div style={{ background: "#fff", border: "1px solid #a7f3d0", borderRadius: 8, padding: "10px 12px" }}>
-                              <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: "#059669" }}>정산 주체</p>
-                              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
-                                {(["same_as_billing", "same_as_request", "other_company", "other_division"] as const).map(mode => (
-                                  <button key={mode} type="button"
-                                    onClick={() => { setPayerCardMode(mode); setPayerCardCompanyId(null); setPayerCardDivisionId(null); setPayerCardDivisions([]); }}
-                                    style={rdoStyle(payerCardMode === mode)}>
-                                    {mode === "same_as_billing" ? "청구 대상과 동일" : mode === "same_as_request" ? "요청 거래처와 동일" : mode === "other_company" ? "다른 거래처 선택" : "다른 브랜드/부서 선택"}
-                                  </button>
-                                ))}
+                                    {billingCardCompanyId && (
+                                      <BillingSearchableSelect
+                                        items={billingCardDivisions.map(d => ({ id: d.id, label: d.name + (d.type ? ` (${d.type})` : "") }))}
+                                        value={billingCardDivisionId}
+                                        onChange={setBillingCardDivisionId}
+                                        placeholder={billingCardDivisions.length === 0 ? "브랜드/부서 없음" : "브랜드/부서 검색..."}
+                                        accentBorder="#67e8f9"
+                                      />
+                                    )}
+                                  </div>
+                                )}
                               </div>
-                              {payerCardMode === "other_company" && (
-                                <BillingSearchableSelect
-                                  items={companiesList.map(c => ({ id: c.id, label: c.name }))}
-                                  value={payerCardCompanyId}
-                                  onChange={setPayerCardCompanyId}
-                                  placeholder="회사명으로 검색..."
-                                  accentBorder="#6ee7b7"
-                                />
-                              )}
-                              {payerCardMode === "other_division" && (
-                                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                              {/* ── 정산 주체 ── */}
+                              <div>
+                                <p style={{ margin: "0 0 5px", fontSize: 11, fontWeight: 700, color: "#059669" }}>정산 주체</p>
+                                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 }}>
+                                  {(["same_as_billing", "same_as_request", "other_company", "other_division"] as const).map(mode => (
+                                    <button key={mode} type="button"
+                                      onClick={() => { setPayerCardMode(mode); setPayerCardCompanyId(null); setPayerCardDivisionId(null); setPayerCardDivisions([]); }}
+                                      style={rdoStyle(payerCardMode === mode)}>
+                                      {mode === "same_as_billing" ? "청구처와 동일" : mode === "same_as_request" ? "의뢰처와 동일" : mode === "other_company" ? "다른 거래처" : "다른 브랜드/부서"}
+                                    </button>
+                                  ))}
+                                </div>
+                                {payerCardMode === "other_company" && (
                                   <BillingSearchableSelect
                                     items={companiesList.map(c => ({ id: c.id, label: c.name }))}
                                     value={payerCardCompanyId}
-                                    onChange={cid => {
-                                      setPayerCardCompanyId(cid); setPayerCardDivisionId(null);
-                                      if (cid) loadPayerDivisions(cid); else setPayerCardDivisions([]);
-                                    }}
-                                    placeholder="거래처 검색..."
+                                    onChange={setPayerCardCompanyId}
+                                    placeholder="회사명으로 검색..."
                                     accentBorder="#6ee7b7"
                                   />
-                                  {payerCardCompanyId && (
+                                )}
+                                {payerCardMode === "other_division" && (
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                                     <BillingSearchableSelect
-                                      items={payerCardDivisions.map(d => ({ id: d.id, label: d.name + (d.type ? ` (${d.type})` : "") }))}
-                                      value={payerCardDivisionId}
-                                      onChange={setPayerCardDivisionId}
-                                      placeholder={payerCardDivisions.length === 0 ? "브랜드/부서 없음" : "브랜드/부서 검색..."}
-                                      accentBorder="#67e8f9"
+                                      items={companiesList.map(c => ({ id: c.id, label: c.name }))}
+                                      value={payerCardCompanyId}
+                                      onChange={cid => {
+                                        setPayerCardCompanyId(cid); setPayerCardDivisionId(null);
+                                        if (cid) loadPayerDivisions(cid); else setPayerCardDivisions([]);
+                                      }}
+                                      placeholder="거래처 검색..."
+                                      accentBorder="#6ee7b7"
                                     />
-                                  )}
-                                </div>
-                              )}
+                                    {payerCardCompanyId && (
+                                      <BillingSearchableSelect
+                                        items={payerCardDivisions.map(d => ({ id: d.id, label: d.name + (d.type ? ` (${d.type})` : "") }))}
+                                        value={payerCardDivisionId}
+                                        onChange={setPayerCardDivisionId}
+                                        placeholder={payerCardDivisions.length === 0 ? "브랜드/부서 없음" : "브랜드/부서 검색..."}
+                                        accentBorder="#67e8f9"
+                                      />
+                                    )}
+                                  </div>
+                                )}
+                              </div>
                             </div>
-
-                            <div style={{ display: "flex", gap: 8 }}>
+                            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                               <PrimaryBtn onClick={handleSaveBillingCard} disabled={savingBillingCard}
                                 style={{ fontSize: 12, padding: "6px 16px", background: "#7c3aed", border: "none" }}>
                                 {savingBillingCard ? "저장 중..." : "저장"}
