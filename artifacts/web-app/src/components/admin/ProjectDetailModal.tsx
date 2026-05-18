@@ -2150,12 +2150,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
 
                   // 견적 유형별 추가 입력 필드 (JSX 변수 — 컴포넌트 아님)
                   const quoteTypeExtraJsx = (() => {
-                    if (quoteType === "b2b_standard") return (
-                      <div style={{ marginBottom: 10 }}>
-                        {qfLbl("견적일 *")}
-                        <input type="date" value={quoteIssueDate} onChange={e => setQuoteIssueDate(e.target.value)} style={qfIs} />
-                      </div>
-                    );
+                    if (quoteType === "b2b_standard") return null;
                     if (quoteType === "b2c_prepaid" || quoteType === "prepaid_deduction") {
                       // ── 선입금 계정 원장 방식 ─────────────────────────────────────────────
                       const selectedAcct = compPrepaidAccounts.find(a => a.id === selectedPrepaidAcctId) ?? null;
@@ -2647,20 +2642,29 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         </div>
                       )}
 
-                      {/* 견적서 유형 선택 */}
-                      <div style={{ marginBottom: 10 }}>
-                        <label style={{ fontSize: 10, fontWeight: 700, color: "#1e3a8a", display: "block", marginBottom: 3 }}>견적서 유형 *</label>
-                        <ClickSelect
-                          value={quoteType}
-                          onChange={v => changeQuoteType(v as typeof quoteType)}
-                          style={{ width: "100%" }}
-                          triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #93c5fd", background: "#eff6ff" }}
-                          options={[
-                            { value: "b2b_standard", label: "일반 견적서", sub: "일반 프로젝트에 사용하는 기본 견적" },
-                            { value: "b2c_prepaid", label: "선입금 견적서", sub: "선입금 잔액 기반으로 사용하는 견적" },
-                            { value: "accumulated_batch", label: "누적 견적서", sub: "월별 또는 기간별 누적 청구용 견적" },
-                          ]}
-                        />
+                      {/* 견적서 유형 + 견적일 inline */}
+                      <div style={{ marginBottom: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-end" }}>
+                        <div style={{ flex: quoteType === "b2b_standard" ? "0 0 64%" : "1 1 100%", minWidth: 0 }}>
+                          <label style={{ fontSize: 10, fontWeight: 700, color: "#1e3a8a", display: "block", marginBottom: 3 }}>견적서 유형 *</label>
+                          <ClickSelect
+                            value={quoteType}
+                            onChange={v => changeQuoteType(v as typeof quoteType)}
+                            style={{ width: "100%" }}
+                            triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #93c5fd", background: "#eff6ff" }}
+                            options={[
+                              { value: "b2b_standard", label: "일반 견적서", sub: "일반 프로젝트에 사용하는 기본 견적" },
+                              { value: "b2c_prepaid", label: "선입금 견적서", sub: "선입금 잔액 기반으로 사용하는 견적" },
+                              { value: "accumulated_batch", label: "누적 견적서", sub: "월별 또는 기간별 누적 청구용 견적" },
+                            ]}
+                          />
+                        </div>
+                        {quoteType === "b2b_standard" && (
+                          <div style={{ flex: "1 1 0", minWidth: 90 }}>
+                            {qfLbl("견적일 *")}
+                            <input type="date" value={quoteIssueDate} onChange={e => setQuoteIssueDate(e.target.value)}
+                              style={{ ...qfIs, borderColor: "#93c5fd" }} />
+                          </div>
+                        )}
                       </div>
 
                       {/* 유형별 추가 입력 필드 (견적일 등) */}
@@ -2679,25 +2683,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         {showTaxOptions && (
                           <div style={{ padding: "10px 10px 6px", background: "#fff" }}>
 
-                            {/* 1. 과세 유형 */}
-                            <div style={{ marginBottom: 10 }}>
-                              <label style={{ fontSize: 10, fontWeight: 700, color: "#059669", display: "block", marginBottom: 3 }}>과세 유형 (견적 전체 적용)</label>
-                              <ClickSelect
-                                value={quoteVatType}
-                                onChange={v => setQuoteVatType(v as "taxable" | "exempt" | "zero_rate")}
-                                style={{ width: "100%" }}
-                                triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #6ee7b7" }}
-                                options={[
-                                  { value: "taxable", label: "부가세 10%", sub: "과세 (기본)" },
-                                  { value: "exempt", label: "면세", sub: "부가세 없음" },
-                                  { value: "zero_rate", label: "영세율", sub: "세액 0원 (영세율 적용)" },
-                                ]}
-                              />
-                            </div>
-
-                            {/* 2. 매출구분 + 통화 — inline row (통화는 해외입금 시만 노출) */}
-                            <div style={{ marginBottom: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-end" }}>
-                              <div style={{ flex: revenueType === "foreign" ? "0 0 62%" : "1 1 100%", minWidth: 0 }}>
+                            {/* 1. 매출구분 + 통화(해외입금 시) + 과세유형 — 한 row */}
+                            <div style={{ marginBottom: 10, display: "flex", gap: 5, flexWrap: "wrap", alignItems: "flex-end" }}>
+                              {/* 매출 구분 */}
+                              <div style={{ flex: revenueType === "foreign" ? "0 0 44%" : "0 0 58%", minWidth: 0 }}>
                                 <label style={{ fontSize: 10, fontWeight: 700, color: "#1d4ed8", display: "block", marginBottom: 3 }}>매출 구분</label>
                                 <ClickSelect
                                   value={revenueType}
@@ -2706,7 +2695,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     setRevenueType(rt);
                                     if (rt === "card") { setQuotePaymentMethod("card"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); }
                                     else if (rt === "cash") { setQuotePaymentMethod("cash"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); }
-                                    else if (rt === "foreign") { setQuotePaymentMethod(""); setPaymentTiming("postpay"); }
+                                    else if (rt === "foreign") { setQuotePaymentMethod(""); setPaymentTiming("postpay"); setQuoteVatType("exempt"); }
                                     else { setQuotePaymentMethod(""); }
                                   }}
                                   style={{ width: "100%" }}
@@ -2719,14 +2708,15 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                   ]}
                                 />
                               </div>
+                              {/* 통화 — 해외입금 시만 */}
                               {revenueType === "foreign" && (
-                                <div style={{ flex: "1 1 0", minWidth: 90 }}>
+                                <div style={{ flex: "0 0 18%", minWidth: 64 }}>
                                   <label style={{ fontSize: 10, fontWeight: 700, color: "#0369a1", display: "block", marginBottom: 3 }}>통화</label>
                                   <ClickSelect
                                     value={foreignCurrency}
                                     onChange={v => { setForeignCurrency(v as typeof foreignCurrency); if (v !== "custom") setForeignCurrencyInput(""); }}
                                     style={{ width: "100%" }}
-                                    triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 6px", borderRadius: 7, border: "1px solid #bae6fd" }}
+                                    triggerStyle={{ width: "100%", fontSize: 11, padding: "6px 3px", borderRadius: 7, border: "1px solid #bae6fd" }}
                                     options={[
                                       { value: "KRW", label: "KRW" }, { value: "USD", label: "USD" },
                                       { value: "EUR", label: "EUR" }, { value: "JPY", label: "JPY" },
@@ -2736,10 +2726,28 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                   />
                                   {foreignCurrency === "custom" && (
                                     <input value={foreignCurrencyInput} onChange={e => setForeignCurrencyInput(e.target.value)}
-                                      placeholder="통화 코드" style={{ ...inputStyle, fontSize: 11, padding: "5px 6px", width: "100%", marginTop: 3, boxSizing: "border-box" as const }} />
+                                      placeholder="코드" style={{ ...inputStyle, fontSize: 10, padding: "4px 5px", width: "100%", marginTop: 3, boxSizing: "border-box" as const }} />
                                   )}
                                 </div>
                               )}
+                              {/* 과세 유형 */}
+                              <div style={{ flex: "1 1 0", minWidth: 76 }}>
+                                <label style={{ fontSize: 10, fontWeight: 700, color: "#059669", display: "block", marginBottom: 3 }}>과세 유형</label>
+                                <ClickSelect
+                                  value={quoteVatType}
+                                  onChange={v => setQuoteVatType(v as "taxable" | "exempt" | "zero_rate")}
+                                  style={{ width: "100%" }}
+                                  triggerStyle={{ width: "100%", fontSize: 11, padding: "6px 4px", borderRadius: 7, border: "1px solid #6ee7b7" }}
+                                  options={[
+                                    { value: "taxable", label: "부가세 10%" },
+                                    { value: "exempt", label: "면세" },
+                                    { value: "zero_rate", label: "영세율" },
+                                  ]}
+                                />
+                                {revenueType === "foreign" && (
+                                  <span style={{ fontSize: 9, color: "#0369a1", display: "block", marginTop: 2 }}>해외입금 기본: 면세</span>
+                                )}
+                              </div>
                             </div>
 
                             {/* 4. 결제 방식 (payment timing) */}
