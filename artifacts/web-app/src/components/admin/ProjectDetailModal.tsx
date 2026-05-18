@@ -2744,9 +2744,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     { value: "zero_rate", label: "영세율" },
                                   ]}
                                 />
-                                {revenueType === "foreign" && (
-                                  <span style={{ fontSize: 9, color: "#0369a1", display: "block", marginTop: 2 }}>해외입금 기본: 면세</span>
-                                )}
                               </div>
                             </div>
 
