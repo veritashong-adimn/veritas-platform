@@ -217,6 +217,10 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   };
   const [payScheduleType, setPayScheduleType] = useState<"split2"|"split3"|"custom">("split2");
   const [payScheduleRows, setPayScheduleRows] = useState<PayScheduleRow[]>(makeDefaultPayRows("split2"));
+  const [revenueType, setRevenueType] = useState<"tax_invoice"|"card"|"cash"|"foreign">("tax_invoice");
+  const [foreignCurrency, setForeignCurrency] = useState<"USD"|"EUR"|"JPY"|"SGD"|"custom">("USD");
+  const [foreignCurrencyInput, setForeignCurrencyInput] = useState("");
+  const [paymentTiming, setPaymentTiming] = useState<"prepay"|"postpay">("postpay");
   const [showBillingCardEdit, setShowBillingCardEdit] = useState(false);
   const [billingCardMode, setBillingCardMode] = useState<"same_as_request"|"other_company"|"other_division">("same_as_request");
   const [billingCardCompanyId, setBillingCardCompanyId] = useState<number|null>(null);
@@ -2669,12 +2673,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           onClick={() => setShowTaxOptions(v => !v)}
                           style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 10px", background: "#f9fafb", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#6b7280" }}
                         >
-                          <span>⚙️ 회계/세무 옵션 (과세유형 · 청구방식 · 문서구분 · 발행유형)</span>
+                          <span>⚙️ 회계/세무 옵션 (과세유형 · 매출구분 · 결제방식 · 문서구분)</span>
                           <span style={{ fontSize: 10, color: "#9ca3af" }}>{showTaxOptions ? "▲ 접기" : "▼ 펼치기"}</span>
                         </button>
                         {showTaxOptions && (
-                          <div style={{ padding: "10px 10px 4px", background: "#fff" }}>
-                            {/* 과세 유형 */}
+                          <div style={{ padding: "10px 10px 6px", background: "#fff" }}>
+
+                            {/* 1. 과세 유형 */}
                             <div style={{ marginBottom: 10 }}>
                               <label style={{ fontSize: 10, fontWeight: 700, color: "#059669", display: "block", marginBottom: 3 }}>과세 유형 (견적 전체 적용)</label>
                               <ClickSelect
@@ -2689,10 +2694,62 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 ]}
                               />
                             </div>
-                            {/* 청구방식 */}
+
+                            {/* 2. 매출 구분 */}
+                            <div style={{ marginBottom: 10 }}>
+                              <label style={{ fontSize: 10, fontWeight: 700, color: "#1d4ed8", display: "block", marginBottom: 3 }}>매출 구분</label>
+                              <ClickSelect
+                                value={revenueType}
+                                onChange={v => {
+                                  const rt = v as typeof revenueType;
+                                  setRevenueType(rt);
+                                  if (rt === "card") { setQuotePaymentMethod("card"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); }
+                                  else if (rt === "cash") { setQuotePaymentMethod("cash"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); }
+                                  else if (rt === "foreign") { setQuotePaymentMethod(""); setPaymentTiming("postpay"); }
+                                  else { setQuotePaymentMethod(""); }
+                                }}
+                                style={{ width: "100%" }}
+                                triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #93c5fd" }}
+                                options={[
+                                  { value: "tax_invoice", label: "세금계산서", sub: "일반 B2B 청구" },
+                                  { value: "card", label: "카드 결제", sub: "카드 단말기 / PG" },
+                                  { value: "cash", label: "현금 결제", sub: "현금 직접 수령" },
+                                  { value: "foreign", label: "해외 입금", sub: "외화 수취" },
+                                ]}
+                              />
+                            </div>
+
+                            {/* 3. 해외입금 → 통화 선택 (conditional) */}
+                            {revenueType === "foreign" && (
+                              <div style={{ marginBottom: 10 }}>
+                                <label style={{ fontSize: 10, fontWeight: 700, color: "#0369a1", display: "block", marginBottom: 3 }}>통화</label>
+                                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                                  <ClickSelect
+                                    value={foreignCurrency}
+                                    onChange={v => { setForeignCurrency(v as typeof foreignCurrency); if (v !== "custom") setForeignCurrencyInput(""); }}
+                                    triggerStyle={{ fontSize: 12, padding: "6px 10px", borderRadius: 7, border: "1px solid #bae6fd" }}
+                                    options={[
+                                      { value: "USD", label: "USD" }, { value: "EUR", label: "EUR" },
+                                      { value: "JPY", label: "JPY" }, { value: "SGD", label: "SGD" },
+                                      { value: "custom", label: "기타" },
+                                    ]}
+                                  />
+                                  {foreignCurrency === "custom" && (
+                                    <input value={foreignCurrencyInput} onChange={e => setForeignCurrencyInput(e.target.value)}
+                                      placeholder="통화 코드 (예: CNY)"
+                                      style={{ ...inputStyle, fontSize: 11, padding: "6px 8px", flex: 1 }} />
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 4. 결제 방식 (payment timing) */}
                             <div style={{ marginBottom: 10 }}>
                               <label style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", display: "block", marginBottom: 3 }}>
-                                청구 방식 (거래처 기본: <span style={{ color: "#1d4ed8" }}>{companyBillingType === "prepaid_wallet" ? "선입금 차감" : companyBillingType === "monthly_billing" ? "누적 청구" : companyBillingType === "prepay_upfront" ? "선결제(카드/현금)" : "건별 후불"}</span>)
+                                결제 방식
+                                <span style={{ fontWeight: 400, color: "#9ca3af", marginLeft: 4 }}>
+                                  (거래처 기본: {companyBillingType === "prepaid_wallet" ? "선입금 차감" : companyBillingType === "monthly_billing" ? "누적 청구" : companyBillingType === "prepay_upfront" ? "선결제" : "후불"})
+                                </span>
                               </label>
                               {quoteType === "accumulated_batch" ? (
                                 <div style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, background: "#ecfdf5", borderColor: "#6ee7b7", color: "#065f46", fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
@@ -2704,73 +2761,30 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 </div>
                               ) : (
                                 <ClickSelect
-                                  value={quoteBillingType || companyBillingType}
-                                  onChange={setQuoteBillingType}
+                                  value={paymentTiming}
+                                  onChange={v => {
+                                    const t = v as typeof paymentTiming;
+                                    setPaymentTiming(t);
+                                    setQuoteBillingType(t === "prepay" ? "prepay_upfront" : "postpaid_per_project");
+                                  }}
                                   style={{ width: "100%" }}
                                   triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7 }}
                                   options={[
-                                    { value: "postpaid_per_project", label: "건별 후불", sub: "작업 후 건별 청구" },
-                                    { value: "prepay_upfront", label: "선결제(카드/현금)", sub: "결제 완료 후 진행" },
+                                    { value: "postpay", label: "후불 결제", sub: "작업 완료 후 청구" },
+                                    { value: "prepay", label: "선결제", sub: "결제 완료 후 진행" },
                                   ]}
                                 />
                               )}
                             </div>
-                            {/* 결제수단 — 선결제 선택 시만 노출 */}
-                            {(quoteBillingType || companyBillingType) === "prepay_upfront" && (
-                              <div style={{ marginBottom: 10 }}>
-                                <label style={{ fontSize: 10, fontWeight: 700, color: "#059669", display: "block", marginBottom: 3 }}>결제수단 *</label>
-                                <ClickSelect
-                                  value={quotePaymentMethod}
-                                  onChange={setQuotePaymentMethod}
-                                  style={{ width: "100%" }}
-                                  triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #6ee7b7" }}
-                                  options={[
-                                    { value: "card", label: "카드" },
-                                    { value: "cash", label: "현금" },
-                                    { value: "bank", label: "계좌이체" },
-                                  ]}
-                                />
-                              </div>
-                            )}
-                            {/* 문서구분 + 발행유형 */}
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 10 }}>
-                              <div>
-                                <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>문서 구분</label>
-                                <ClickSelect
-                                  value={quoteTaxDocType}
-                                  onChange={v => setQuoteTaxDocType(v as "tax_invoice" | "zero_tax_invoice" | "bill")}
-                                  style={{ width: "100%" }}
-                                  triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #d8b4fe" }}
-                                  options={[
-                                    { value: "tax_invoice", label: "세금계산서" },
-                                    { value: "zero_tax_invoice", label: "세금계산서(영세율)" },
-                                    { value: "bill", label: "계산서" },
-                                  ]}
-                                />
-                              </div>
-                              <div>
-                                <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>발행 유형</label>
-                                <ClickSelect
-                                  value={quoteTaxCategory}
-                                  onChange={v => setQuoteTaxCategory(v as "normal" | "zero_rated" | "consignment" | "consignment_zero_rated")}
-                                  style={{ width: "100%" }}
-                                  triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #d8b4fe" }}
-                                  options={[
-                                    { value: "normal", label: "일반" }, { value: "zero_rated", label: "영세율" },
-                                    { value: "consignment", label: "위수탁" }, { value: "consignment_zero_rated", label: "위수탁영세율" },
-                                  ]}
-                                />
-                              </div>
-                            </div>
 
-                            {/* 결제/발행 스케줄 */}
-                            <div style={{ borderTop: "1px dashed #e5e7eb", paddingTop: 8, marginBottom: 4 }}>
+                            {/* 5. ☐ 분할 결제 사용 */}
+                            <div style={{ marginBottom: showPaySchedule ? 6 : 4 }}>
                               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: showPaySchedule ? 8 : 0 }}>
                                 <input type="checkbox" id="payScheduleToggle" checked={showPaySchedule}
                                   onChange={e => setShowPaySchedule(e.target.checked)}
                                   style={{ cursor: "pointer", accentColor: "#0369a1" }} />
                                 <label htmlFor="payScheduleToggle" style={{ fontSize: 10, fontWeight: 700, color: "#0369a1", cursor: "pointer" }}>
-                                  💳 분할 결제/발행 스케줄 사용
+                                  ☐ 분할 결제 사용
                                 </label>
                               </div>
                               {showPaySchedule && (
@@ -2786,13 +2800,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       { value: "custom", label: "사용자 정의", sub: "단계 직접 구성" },
                                     ]}
                                   />
-                                  {/* 컬럼 헤더 */}
                                   <div style={{ display: "grid", gridTemplateColumns: "40px 56px 108px 1fr", gap: 3, marginBottom: 2, paddingLeft: 1 }}>
                                     {["단계", "비율/금액", "입금예정일", "발행 방식"].map(h => (
                                       <span key={h} style={{ fontSize: 9, color: "#9ca3af", fontWeight: 600 }}>{h}</span>
                                     ))}
                                   </div>
-                                  {/* 스케줄 rows */}
                                   <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                                     {payScheduleRows.map((row, ri) => (
                                       <div key={ri} style={{ display: "grid", gridTemplateColumns: "40px 56px 108px 1fr" + (payScheduleType === "custom" ? " 18px" : ""), gap: 3, alignItems: "center" }}>
@@ -2840,6 +2852,40 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 </div>
                               )}
                             </div>
+
+                            {/* 6. 문서구분 + 발행유형 (세무 보조) */}
+                            <div style={{ borderTop: "1px dashed #e5e7eb", paddingTop: 8, marginBottom: 4 }}>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                <div>
+                                  <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>문서 구분</label>
+                                  <ClickSelect
+                                    value={quoteTaxDocType}
+                                    onChange={v => setQuoteTaxDocType(v as "tax_invoice" | "zero_tax_invoice" | "bill")}
+                                    style={{ width: "100%" }}
+                                    triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #d8b4fe" }}
+                                    options={[
+                                      { value: "tax_invoice", label: "세금계산서" },
+                                      { value: "zero_tax_invoice", label: "세금계산서(영세율)" },
+                                      { value: "bill", label: "계산서" },
+                                    ]}
+                                  />
+                                </div>
+                                <div>
+                                  <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>발행 유형</label>
+                                  <ClickSelect
+                                    value={quoteTaxCategory}
+                                    onChange={v => setQuoteTaxCategory(v as "normal" | "zero_rated" | "consignment" | "consignment_zero_rated")}
+                                    style={{ width: "100%" }}
+                                    triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #d8b4fe" }}
+                                    options={[
+                                      { value: "normal", label: "일반" }, { value: "zero_rated", label: "영세율" },
+                                      { value: "consignment", label: "위수탁" }, { value: "consignment_zero_rated", label: "위수탁영세율" },
+                                    ]}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
                           </div>
                         )}
                       </div>
