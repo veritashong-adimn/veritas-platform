@@ -1678,9 +1678,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 {!editingInfo ? (
                   <>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px" }}>
-                      <div style={dl}>
-                        <span style={dt}>제목<Req /></span>
-                        <strong style={{ color: "#111827", fontSize: 14 }}>{detail.title}</strong>
+                      <div style={{ gridColumn: "span 2", marginBottom: 4, paddingBottom: 10, borderBottom: "1px solid #eef0f3" }}>
+                        <span style={{ fontSize: 11, color: "#9ca3af", display: "block", marginBottom: 3 }}>프로젝트명 <Req /></span>
+                        <strong style={{ color: "#111827", fontSize: 17, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1.3, display: "block" }}>{detail.title}</strong>
                       </div>
                       <div style={dl}>
                         <span style={dt}>고객</span>
@@ -2013,48 +2013,54 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               </>
             )}
 
-            {/* 거래처 / 담당자 — 기본정보 탭 하단에 함께 표시 */}
+            {/* 관계 정보 — 거래처 + 담당자 2컬럼 */}
             {activeSection === "info" && (
-              <>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <p style={sectionHd}>거래처 정보 <Opt /></p>
+              <div style={{ marginTop: 10, paddingTop: 12, borderTop: "1px solid #eef0f3" }}>
+                <p style={{ ...sectionHd, margin: "0 0 10px", color: "#4b5563" }}>관계 정보</p>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 14px" }}>
+                  {/* 거래처 컬럼 */}
+                  <div>
+                    <p style={{ ...sectionHd, margin: "0 0 6px", fontSize: 11 }}>거래처 <Opt /></p>
+                    {detail.company ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px", background: "#f9fafb", borderRadius: 8 }}>
+                        <div style={dl}><span style={dt}>회사명</span>
+                          <span style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+                            <strong>{detail.company.name}</strong>
+                            {(detail as any).divisionName && <span style={{ fontSize: 11, background: "#ede9fe", color: "#7c3aed", borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>{(detail as any).divisionName}</span>}
+                          </span>
+                        </div>
+                        <div style={dl}><span style={dt}>업종</span>{detail.company.industry ? <span>{detail.company.industry}</span> : <Empty />}</div>
+                        <div style={dl}><span style={dt}>대표자</span>{detail.company.representativeName ? <span>{detail.company.representativeName}</span> : <Empty />}</div>
+                        <div style={dl}><span style={dt}>이메일</span>{detail.company.email ? <span>{detail.company.email}</span> : <Empty />}</div>
+                        <div style={dl}><span style={dt}>전화</span>{detail.company.phone ? <span>{detail.company.phone}</span> : <Empty />}</div>
+                      </div>
+                    ) : (
+                      <div style={{ background: "#fffbeb", borderRadius: 8, padding: "10px 12px", border: "1px solid #fde68a", display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 13 }}>⚠</span>
+                        <span style={{ fontSize: 11, color: "#92400e" }}>거래처 미연결. '기본정보 수정'에서 연결하세요.</span>
+                      </div>
+                    )}
+                  </div>
+                  {/* 담당자 컬럼 */}
+                  <div>
+                    <p style={{ ...sectionHd, margin: "0 0 6px", fontSize: 11 }}>담당자 <Opt /></p>
+                    {detail.contact ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px", background: "#f9fafb", borderRadius: 8 }}>
+                        <div style={dl}><span style={dt}>이름</span><strong>{detail.contact.name}</strong></div>
+                        <div style={dl}><span style={dt}>부서</span>{detail.contact.department ? <span>{detail.contact.department}</span> : <Empty />}</div>
+                        <div style={dl}><span style={dt}>직책</span>{detail.contact.position ? <span>{detail.contact.position}</span> : <Empty />}</div>
+                        <div style={dl}><span style={dt}>이메일</span>{detail.contact.email ? <span>{detail.contact.email}</span> : <Empty />}</div>
+                        <div style={dl}><span style={dt}>전화</span>{detail.contact.phone ? <span>{detail.contact.phone}</span> : <Empty />}</div>
+                      </div>
+                    ) : (
+                      <div style={{ background: "#fffbeb", borderRadius: 8, padding: "10px 12px", border: "1px solid #fde68a", display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontSize: 13 }}>⚠</span>
+                        <span style={{ fontSize: 11, color: "#92400e" }}>담당자 미연결. '기본정보 수정'에서 연결하세요.</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                {detail.company ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 20px", padding: "12px", background: "#f9fafb", borderRadius: 8, marginBottom: 12 }}>
-                    <div style={dl}><span style={dt}>회사명</span>
-                      <strong>{detail.company.name}</strong>
-                      {(detail as any).divisionName && <span style={{ marginLeft: 6, fontSize: 11, background: "#ede9fe", color: "#7c3aed", borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>{(detail as any).divisionName}</span>}
-                    </div>
-                    <div style={dl}><span style={dt}>업종</span>{detail.company.industry ? <span>{detail.company.industry}</span> : <Empty />}</div>
-                    <div style={dl}><span style={dt}>대표자</span>{detail.company.representativeName ? <span>{detail.company.representativeName}</span> : <Empty />}</div>
-                    <div style={dl}><span style={dt}>이메일</span>{detail.company.email ? <span>{detail.company.email}</span> : <Empty />}</div>
-                    <div style={dl}><span style={dt}>전화</span>{detail.company.phone ? <span>{detail.company.phone}</span> : <Empty />}</div>
-                  </div>
-                ) : (
-                  <div style={{ background: "#fffbeb", borderRadius: 8, padding: "10px 14px", marginBottom: 12, border: "1px solid #fde68a", display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 15 }}>⚠</span>
-                    <span style={{ fontSize: 12, color: "#92400e" }}>연결된 거래처가 없습니다. '기본정보 수정'에서 거래처를 연결하세요.</span>
-                  </div>
-                )}
-
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <p style={sectionHd}>담당자 정보 <Opt /></p>
-                </div>
-                {detail.contact ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 20px", padding: "12px", background: "#f9fafb", borderRadius: 8 }}>
-                    <div style={dl}><span style={dt}>이름</span><strong>{detail.contact.name}</strong></div>
-                    <div style={dl}><span style={dt}>부서</span>{detail.contact.department ? <span>{detail.contact.department}</span> : <Empty />}</div>
-                    <div style={dl}><span style={dt}>직책</span>{detail.contact.position ? <span>{detail.contact.position}</span> : <Empty />}</div>
-                    <div style={dl}><span style={dt}>이메일</span>{detail.contact.email ? <span>{detail.contact.email}</span> : <Empty />}</div>
-                    <div style={dl}><span style={dt}>전화</span>{detail.contact.phone ? <span>{detail.contact.phone}</span> : <Empty />}</div>
-                  </div>
-                ) : (
-                  <div style={{ background: "#fffbeb", borderRadius: 8, padding: "10px 14px", border: "1px solid #fde68a", display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 15 }}>⚠</span>
-                    <span style={{ fontSize: 12, color: "#92400e" }}>연결된 담당자가 없습니다. '기본정보 수정'에서 담당자를 연결하세요.</span>
-                  </div>
-                )}
-              </>
+              </div>
             )}
 
             {/* 작업 (통번역사 배정 / 작업 관리) */}
