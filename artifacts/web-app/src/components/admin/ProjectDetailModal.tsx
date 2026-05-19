@@ -1216,8 +1216,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       title={`프로젝트 #${projectId} 상세`}
       onClose={onClose}
       width={820}
+      height="88vh"
       zIndex={300}
-      bodyPadding="20px 28px"
+      bodyPadding="0"
       resizable
       headerExtra={
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1272,11 +1273,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         </div>
       )}
         {loading ? (
-          <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p>
+          <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 28px" }}>불러오는 중...</p>
         ) : err ? (
-          <p style={{ color: "#dc2626", padding: "16px 0" }}>{err}</p>
+          <p style={{ color: "#dc2626", padding: "16px 28px" }}>{err}</p>
         ) : detail && (
           <>
+            {/* ── 고정 상단 영역: ReviewMemo + 액션바 + 탭 내비 ── */}
+            <div style={{ position: "sticky", top: 0, zIndex: 5, background: "#fff", padding: "20px 28px 0", borderBottom: "1px solid #f0f2f5" }}>
             <ReviewMemoPanel storageKey={`project_${projectId}`} label="이 프로젝트 검수 메모" />
             {/* 액션 바 */}
             <div style={{ background: "#f9fafb", borderRadius: 10, padding: "10px 12px", marginBottom: 14, border: "1px solid #e5e7eb" }}>
@@ -1679,13 +1682,17 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             )}
 
             {/* 탭 내비 */}
-            <div style={{ display: "flex", gap: 2, flexWrap: "wrap", marginTop: 8, marginBottom: 12, background: "#f0f2f6", borderRadius: 10, padding: "3px 4px", border: "1px solid #e2e6ef", alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 2, flexWrap: "wrap", marginTop: 8, marginBottom: 0, background: "#f0f2f6", borderRadius: 10, padding: "3px 4px", border: "1px solid #e2e6ef", alignItems: "center" }}>
               {sections.map(s => (
                 <button key={s.key} onClick={() => setActiveSection(s.key)} style={tabBtnStyle(activeSection === s.key)}>
                   {s.label}
                 </button>
               ))}
             </div>
+            </div>{/* ── /고정 상단 영역 ── */}
+
+            {/* ── 탭 콘텐츠 영역 (내부 스크롤 없이 고정 높이 모달 내에서 흐름) ── */}
+            <div style={{ padding: "16px 28px 24px", minHeight: 320 }}>
 
             {/* 기본 정보 */}
             {activeSection === "info" && (
@@ -4097,6 +4104,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                 )}
               </>
             )}
+            </div>{/* ── /탭 콘텐츠 영역 ── */}
           </>
         )}
       {/* ── 선입금 입금 등록 모달 ─────────────────────────────────────────────── */}

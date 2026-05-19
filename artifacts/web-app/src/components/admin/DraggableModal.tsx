@@ -6,6 +6,7 @@ interface DraggableModalProps {
   onClose: () => void;
   children: React.ReactNode;
   width?: number;
+  height?: string;
   zIndex?: number;
   headerExtra?: React.ReactNode;
   bodyPadding?: string;
@@ -18,6 +19,7 @@ export function DraggableModal({
   onClose,
   children,
   width = 720,
+  height,
   zIndex = 300,
   headerExtra,
   bodyPadding = "20px 24px",
@@ -145,8 +147,8 @@ export function DraggableModal({
   const dialogStyle: React.CSSProperties = maximized
     ? { position: "fixed", inset: 0, borderRadius: 0, maxWidth: "none", maxHeight: "none", width: "100%", height: "100%" }
     : pos
-    ? { position: "fixed", left: pos.x, top: pos.y, width: "100%", maxWidth: width, maxHeight: "90vh", ...sizeStyle }
-    : { position: "fixed", left: "50%", top: "50%", transform: "translate(-50%, -50%)", width: "100%", maxWidth: width, maxHeight: "90vh", ...sizeStyle };
+    ? { position: "fixed", left: pos.x, top: pos.y, width: "100%", maxWidth: width, height: height, maxHeight: height ?? "90vh", ...sizeStyle }
+    : { position: "fixed", left: "50%", top: "50%", transform: "translate(-50%, -50%)", width: "100%", maxWidth: width, height: height, maxHeight: height ?? "90vh", ...sizeStyle };
 
   return (
     <>
