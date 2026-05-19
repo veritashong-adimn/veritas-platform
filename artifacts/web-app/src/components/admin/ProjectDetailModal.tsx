@@ -3006,6 +3006,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         }
                                         setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productId: null, productName: "" } : p));
                                       }}
+                                      searchable
                                       style={{ width: "100%" }}
                                       triggerStyle={{ fontSize: 11, padding: "5px 6px", borderRadius: 6, color: it.productId ? "#1e40af" : "#9ca3af", width: "100%" }}
                                       options={[

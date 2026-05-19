@@ -201,7 +201,7 @@ export type ClickSelectOption = {
 
 export function ClickSelect({
   options, value, onChange, placeholder, disabled,
-  style, triggerStyle, menuStyle, openUp = false,
+  style, triggerStyle, menuStyle, openUp = false, searchable = false,
 }: {
   options: ClickSelectOption[];
   value: string;
@@ -212,13 +212,19 @@ export function ClickSelect({
   triggerStyle?: React.CSSProperties;
   menuStyle?: React.CSSProperties;
   openUp?: boolean;
+  searchable?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(-1);
   const [dropPos, setDropPos] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const [search, setSearch] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const portalRef = useRef<HTMLDivElement>(null);
+  const optionsListRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const closeMenu = useCallback(() => { setOpen(false); setSearch(""); }, []);
 
   const calcPos = useCallback(() => {
     if (!triggerRef.current) return;
@@ -246,35 +252,59 @@ export function ClickSelect({
   }, [open, calcPos]);
 
   useEffect(() => {
+    if (open && searchable) {
+      setTimeout(() => searchInputRef.current?.focus(), 0);
+    }
+  }, [open, searchable]);
+
+  useEffect(() => {
     const onMD = (e: MouseEvent) => {
       if (
         containerRef.current && !containerRef.current.contains(e.target as Node) &&
         (portalRef.current === null || !portalRef.current.contains(e.target as Node))
-      ) setOpen(false);
+      ) closeMenu();
     };
     document.addEventListener("mousedown", onMD);
     return () => document.removeEventListener("mousedown", onMD);
-  }, []);
+  }, [closeMenu]);
+
+  const filteredOpts = searchable && search.trim()
+    ? options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
+    : options;
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (!open) {
       if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") { e.preventDefault(); setOpen(true); setHighlightIdx(0); }
       return;
     }
-    if (e.key === "Escape") { e.preventDefault(); setOpen(false); return; }
-    if (e.key === "ArrowDown") { e.preventDefault(); setHighlightIdx(i => Math.min(i + 1, options.length - 1)); return; }
+    if (e.key === "Escape") { e.preventDefault(); closeMenu(); return; }
+    if (!searchable) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setHighlightIdx(i => Math.min(i + 1, filteredOpts.length - 1)); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)); return; }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (highlightIdx >= 0 && !filteredOpts[highlightIdx]?.disabled) {
+          onChange(filteredOpts[highlightIdx].value); closeMenu();
+        }
+      }
+    }
+  }, [open, highlightIdx, filteredOpts, onChange, closeMenu, searchable]);
+
+  const onSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") { e.preventDefault(); closeMenu(); return; }
+    if (e.key === "ArrowDown") { e.preventDefault(); setHighlightIdx(i => Math.min(i + 1, filteredOpts.length - 1)); return; }
     if (e.key === "ArrowUp") { e.preventDefault(); setHighlightIdx(i => Math.max(i - 1, 0)); return; }
     if (e.key === "Enter") {
       e.preventDefault();
-      if (highlightIdx >= 0 && !options[highlightIdx]?.disabled) {
-        onChange(options[highlightIdx].value); setOpen(false);
+      if (highlightIdx >= 0 && filteredOpts[highlightIdx] && !filteredOpts[highlightIdx].disabled) {
+        onChange(filteredOpts[highlightIdx].value); closeMenu();
       }
     }
-  }, [open, highlightIdx, options, onChange]);
+  }, [highlightIdx, filteredOpts, onChange, closeMenu]);
 
   useEffect(() => {
-    if (!open || highlightIdx < 0 || !portalRef.current) return;
-    (portalRef.current.children[highlightIdx] as HTMLElement | undefined)?.scrollIntoView?.({ block: "nearest" });
+    if (!open || highlightIdx < 0 || !optionsListRef.current) return;
+    (optionsListRef.current.children[highlightIdx] as HTMLElement | undefined)?.scrollIntoView?.({ block: "nearest" });
   }, [highlightIdx, open]);
 
   const selected = options.find(o => o.value === value);
@@ -291,37 +321,56 @@ export function ClickSelect({
         bottom: dropPos.bottom,
         minWidth: dropPos.width,
         zIndex: 9500,
+        padding: 0,
+        overflow: "hidden",
         ...(menuStyle ?? {}),
       }}
     >
-      {options.map((opt, idx) => {
-        const isSel = opt.value === value;
-        const isHi = idx === highlightIdx;
-        return (
-          <div key={opt.value} role="option" aria-selected={isSel}
-            onMouseEnter={() => setHighlightIdx(idx)}
-            onMouseLeave={() => setHighlightIdx(-1)}
-            onMouseDown={e => { e.preventDefault(); e.stopPropagation(); if (!opt.disabled) { onChange(opt.value); setOpen(false); } }}
-            style={{
-              ...CS.item,
-              display: "flex", alignItems: "center", gap: 4,
-              color: opt.disabled ? "#d1d5db" : isSel ? "#1d4ed8" : "#111827",
-              background: isHi ? "#eff6ff" : isSel ? "#f0f9ff" : "transparent",
-              cursor: opt.disabled ? "not-allowed" : "pointer",
-            }}
-          >
-            <span style={{ fontSize: 8, color: "#2563eb", flexShrink: 0, opacity: isSel ? 1 : 0, lineHeight: 1 }}>✓</span>
-            <span style={{ fontWeight: isSel ? 600 : 500, flex: "0 0 auto", whiteSpace: "nowrap" }}>
-              {opt.label}
-            </span>
-            {opt.sub && (
-              <span style={{ fontSize: 10.5, color: isHi ? "#64748b" : "#9ca3af", marginLeft: "auto", flexShrink: 0, whiteSpace: "nowrap", fontWeight: 400 }}>
-                {opt.sub}
+      {searchable && (
+        <div style={{ padding: "6px 8px", borderBottom: "1px solid #f0f0f0", background: "#fff" }}>
+          <input
+            ref={searchInputRef}
+            value={search}
+            onChange={e => { setSearch(e.target.value); setHighlightIdx(0); }}
+            onKeyDown={onSearchKeyDown}
+            onMouseDown={e => e.stopPropagation()}
+            placeholder="상품 검색..."
+            style={{ width: "100%", border: "1px solid #e5e7eb", borderRadius: 4, padding: "4px 7px", fontSize: 11, outline: "none", boxSizing: "border-box", color: "#111827" }}
+          />
+        </div>
+      )}
+      <div ref={optionsListRef} style={{ overflowY: "auto", maxHeight: 220 }}>
+        {filteredOpts.length === 0 ? (
+          <div style={{ padding: "8px 12px", fontSize: 11, color: "#9ca3af" }}>검색 결과가 없습니다.</div>
+        ) : filteredOpts.map((opt, idx) => {
+          const isSel = opt.value === value;
+          const isHi = idx === highlightIdx;
+          return (
+            <div key={opt.value} role="option" aria-selected={isSel}
+              onMouseEnter={() => setHighlightIdx(idx)}
+              onMouseLeave={() => setHighlightIdx(-1)}
+              onMouseDown={e => { e.preventDefault(); e.stopPropagation(); if (!opt.disabled) { onChange(opt.value); closeMenu(); } }}
+              style={{
+                ...CS.item,
+                display: "flex", alignItems: "center", gap: 4,
+                color: opt.disabled ? "#d1d5db" : isSel ? "#1d4ed8" : "#111827",
+                background: isHi ? "#eff6ff" : isSel ? "#f0f9ff" : "transparent",
+                cursor: opt.disabled ? "not-allowed" : "pointer",
+              }}
+            >
+              <span style={{ fontSize: 8, color: "#2563eb", flexShrink: 0, opacity: isSel ? 1 : 0, lineHeight: 1 }}>✓</span>
+              <span style={{ fontWeight: isSel ? 600 : 500, flex: "0 0 auto", whiteSpace: "nowrap" }}>
+                {opt.label}
               </span>
-            )}
-          </div>
-        );
-      })}
+              {opt.sub && (
+                <span style={{ fontSize: 10.5, color: isHi ? "#64748b" : "#9ca3af", marginLeft: "auto", flexShrink: 0, whiteSpace: "nowrap", fontWeight: 400 }}>
+                  {opt.sub}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>,
     document.body
   ) : null;
