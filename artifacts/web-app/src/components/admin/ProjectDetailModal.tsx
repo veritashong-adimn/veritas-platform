@@ -369,8 +369,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   // ── 커스텀 상품 등록 요청 상태 ───────────────────────────────────────────
   const [registerRequestIdx, setRegisterRequestIdx] = useState<number | null>(null);
   const [registerRequestForm, setRegisterRequestForm] = useState<{
-    name: string; serviceType: string; languagePair: string; unit: string; unitPrice: string; description: string;
-  }>({ name: "", serviceType: "translation", languagePair: "", unit: "건", unitPrice: "", description: "" });
+    name: string; serviceType: string; languagePair: string; unit: string; unitPrice: string; description: string; usagePeriod: string;
+  }>({ name: "", serviceType: "translation", languagePair: "", unit: "페이지", unitPrice: "", description: "", usagePeriod: "1일" });
   const [registerSubmitting, setRegisterSubmitting] = useState(false);
   const [registerDoneIdxs, setRegisterDoneIdxs] = useState<number[]>([]);
   const handleSubmitRegisterRequest = async () => {
@@ -3058,39 +3058,121 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                           <span style={{ fontSize: 10, color: "#16a34a" }}>✓ 등록 요청 전송됨</span>
                                         ) : registerRequestIdx === idx ? (
                                           <div style={{ padding: "7px 8px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 5, marginTop: 3 }}>
-                                            <div style={{ fontSize: 10.5, fontWeight: 700, color: "#166534", marginBottom: 5 }}>정식 상품 등록 요청</div>
-                                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 8px", marginBottom: 5 }}>
-                                              <div>
-                                                <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>서비스 유형</div>
-                                                <select value={registerRequestForm.serviceType} onChange={e => setRegisterRequestForm(p => ({ ...p, serviceType: e.target.value }))}
-                                                  style={{ ...inputStyle, fontSize: 11, width: "100%" }}>
-                                                  <option value="translation">번역</option>
-                                                  <option value="interpretation">통역</option>
-                                                  <option value="equipment">장비</option>
-                                                  <option value="expense">실비</option>
-                                                </select>
-                                              </div>
-                                              <div>
-                                                <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>언어쌍</div>
-                                                <input value={registerRequestForm.languagePair} onChange={e => setRegisterRequestForm(p => ({ ...p, languagePair: e.target.value }))}
-                                                  style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="예: ko-en" />
-                                              </div>
-                                              <div>
-                                                <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>제안 단가</div>
-                                                <input value={registerRequestForm.unitPrice} onChange={e => setRegisterRequestForm(p => ({ ...p, unitPrice: e.target.value }))}
-                                                  style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="숫자만" />
-                                              </div>
-                                              <div>
-                                                <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>단위</div>
-                                                <input value={registerRequestForm.unit} onChange={e => setRegisterRequestForm(p => ({ ...p, unit: e.target.value }))}
-                                                  style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="예: 페이지" />
-                                              </div>
-                                              <div style={{ gridColumn: "1 / -1" }}>
-                                                <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>메모 (선택)</div>
-                                                <input value={registerRequestForm.description} onChange={e => setRegisterRequestForm(p => ({ ...p, description: e.target.value }))}
-                                                  style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="추가 설명" />
-                                              </div>
+                                            {/* 헤더: 타이틀 + 유형 선택 한 줄 */}
+                                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
+                                              <span style={{ fontSize: 10.5, fontWeight: 700, color: "#166534", flexShrink: 0 }}>정식 상품 등록 요청</span>
+                                              <select value={registerRequestForm.serviceType} onChange={e => {
+                                                const st = e.target.value;
+                                                setRegisterRequestForm(p => ({
+                                                  ...p, serviceType: st, languagePair: "",
+                                                  unit: st === "translation" ? "페이지" : st === "interpretation" ? "시간" : st === "equipment" ? "개" : "건",
+                                                  usagePeriod: "1일",
+                                                }));
+                                              }} style={{ ...inputStyle, fontSize: 10, padding: "2px 4px", border: "1px solid #86efac", borderRadius: 4 }}>
+                                                <option value="translation">번역</option>
+                                                <option value="interpretation">통역</option>
+                                                <option value="equipment">장비</option>
+                                                <option value="expense">실비</option>
+                                              </select>
                                             </div>
+                                            {/* ── 번역 폼 ── */}
+                                            {registerRequestForm.serviceType === "translation" && (
+                                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 8px", marginBottom: 5 }}>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>언어쌍</div>
+                                                  <input value={registerRequestForm.languagePair} onChange={e => setRegisterRequestForm(p => ({ ...p, languagePair: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="예: ko→en" />
+                                                </div>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>단위</div>
+                                                  <select value={registerRequestForm.unit} onChange={e => setRegisterRequestForm(p => ({ ...p, unit: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }}>
+                                                    <option>페이지</option><option>단어</option><option>글자</option><option>어절</option><option>건</option>
+                                                  </select>
+                                                </div>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>제안 단가</div>
+                                                  <input value={registerRequestForm.unitPrice} onChange={e => setRegisterRequestForm(p => ({ ...p, unitPrice: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="숫자만" />
+                                                </div>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>메모</div>
+                                                  <input value={registerRequestForm.description} onChange={e => setRegisterRequestForm(p => ({ ...p, description: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="추가 설명" />
+                                                </div>
+                                              </div>
+                                            )}
+                                            {/* ── 통역 폼 ── */}
+                                            {registerRequestForm.serviceType === "interpretation" && (
+                                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 8px", marginBottom: 5 }}>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>언어쌍</div>
+                                                  <input value={registerRequestForm.languagePair} onChange={e => setRegisterRequestForm(p => ({ ...p, languagePair: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="예: ko↔en" />
+                                                </div>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>단위</div>
+                                                  <select value={registerRequestForm.unit} onChange={e => setRegisterRequestForm(p => ({ ...p, unit: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }}>
+                                                    <option>시간</option><option>일</option><option>회</option><option>건</option>
+                                                  </select>
+                                                </div>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>제안 단가</div>
+                                                  <input value={registerRequestForm.unitPrice} onChange={e => setRegisterRequestForm(p => ({ ...p, unitPrice: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="숫자만" />
+                                                </div>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>메모</div>
+                                                  <input value={registerRequestForm.description} onChange={e => setRegisterRequestForm(p => ({ ...p, description: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="추가 설명" />
+                                                </div>
+                                              </div>
+                                            )}
+                                            {/* ── 장비 폼 ── */}
+                                            {registerRequestForm.serviceType === "equipment" && (
+                                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 8px", marginBottom: 5 }}>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>단위</div>
+                                                  <select value={registerRequestForm.unit} onChange={e => setRegisterRequestForm(p => ({ ...p, unit: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }}>
+                                                    <option>개</option><option>세트</option><option>부스</option><option>대</option>
+                                                  </select>
+                                                </div>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>사용기간</div>
+                                                  <select value={registerRequestForm.usagePeriod} onChange={e => setRegisterRequestForm(p => ({ ...p, usagePeriod: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }}>
+                                                    <option>반일</option><option>1일</option><option>2일</option><option>3일</option><option>4일</option><option>5일</option>
+                                                  </select>
+                                                </div>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>제안 단가</div>
+                                                  <input value={registerRequestForm.unitPrice} onChange={e => setRegisterRequestForm(p => ({ ...p, unitPrice: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="숫자만" />
+                                                </div>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>메모</div>
+                                                  <input value={registerRequestForm.description} onChange={e => setRegisterRequestForm(p => ({ ...p, description: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="추가 설명" />
+                                                </div>
+                                              </div>
+                                            )}
+                                            {/* ── 실비 폼 ── */}
+                                            {registerRequestForm.serviceType === "expense" && (
+                                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 8px", marginBottom: 5 }}>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>금액</div>
+                                                  <input value={registerRequestForm.unitPrice} onChange={e => setRegisterRequestForm(p => ({ ...p, unitPrice: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="숫자만" />
+                                                </div>
+                                                <div>
+                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>메모</div>
+                                                  <input value={registerRequestForm.description} onChange={e => setRegisterRequestForm(p => ({ ...p, description: e.target.value }))}
+                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="추가 설명" />
+                                                </div>
+                                              </div>
+                                            )}
                                             <div style={{ display: "flex", gap: 5 }}>
                                               <button onClick={handleSubmitRegisterRequest} disabled={registerSubmitting}
                                                 style={{ fontSize: 10, padding: "3px 10px", borderRadius: 4, border: "none", background: "#16a34a", color: "#fff", cursor: "pointer" }}>
@@ -3103,11 +3185,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         ) : (
                                           <button onClick={() => {
                                             setRegisterRequestIdx(idx);
+                                            const st = it.productType;
                                             setRegisterRequestForm({
                                               name: it.productName.trim(),
-                                              serviceType: it.productType,
-                                              languagePair: it.productType === "translation" ? `${it.sourceLanguage}→${it.targetLanguage}` : it.productType === "interpretation" ? `${it.langA}↔${it.langB}` : it.languagePair,
-                                              unit: it.unit,
+                                              serviceType: st,
+                                              languagePair: st === "translation" ? `${it.sourceLanguage}→${it.targetLanguage}` : st === "interpretation" ? `${it.langA}↔${it.langB}` : "",
+                                              unit: st === "translation" ? (it.unit || "페이지") : st === "interpretation" ? (it.unit || "시간") : st === "equipment" ? (it.quantityUnit || "개") : "건",
+                                              usagePeriod: st === "equipment" ? (it.usagePeriod || "1일") : "1일",
                                               unitPrice: it.unitPrice,
                                               description: it.memo,
                                             });
