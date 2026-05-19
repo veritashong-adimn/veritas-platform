@@ -3354,7 +3354,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           </button>
                         )}
                       </div>
-                      {formVisible && quoteFormJsx}
+                      <div style={{ overflow: "hidden", maxHeight: formVisible ? "1600px" : "0", transition: "max-height 360ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
+                        {formVisible && quoteFormJsx}
+                      </div>
                       {hasQuotes ? detail.quotes.map(q => {
                         const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", zero_tax_invoice: "세금계산서(영세율)", bill: "계산서" };
                         const taxCatLabel: Record<string, string> = { normal: "일반", zero_rated: "영세율", consignment: "위수탁", consignment_zero_rated: "위수탁영세율" };
