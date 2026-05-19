@@ -2795,7 +2795,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                   ☐ 분할 결제 사용
                                 </label>
                               </div>
-                              {showPaySchedule && (
+                              <div style={{ maxHeight: showPaySchedule ? "320px" : "0px", overflow: "hidden", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
                                 <div>
                                   <ClickSelect
                                     value={payScheduleType}
@@ -2858,7 +2858,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     </button>
                                   )}
                                 </div>
-                              )}
+                              </div>
                             </div>
 
                             {/* 6. 문서구분 + 발행유형 (세무 보조) */}
@@ -3035,7 +3035,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         {it.showDetail ? "▲" : "▼"} 상세
                                       </button>
                                     </div>
-                                    {it.showDetail && (
+                                    <div style={{ maxHeight: it.showDetail ? "120px" : "0px", overflow: "hidden", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
                                       <div style={{ ...detailArea, display: "flex", gap: 4, alignItems: "center" }}>
                                         <label style={{ fontSize: 11, color: "#7c3aed", cursor: "pointer", border: "1px dashed #d8b4fe", borderRadius: 5, padding: "3px 7px", whiteSpace: "nowrap", background: "#faf5ff" }}>
                                           📎 파일
@@ -3067,7 +3067,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
                                           placeholder="메모" style={{ ...inputStyle, fontSize: 11, padding: "4px 7px", flex: 1 }} />
                                       </div>
-                                    )}
+                                    </div>
                                   </div>
                                 )}
                                 {/* ── 통역 행 ── */}
@@ -3133,7 +3133,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         {it.showDetail ? "▲" : "▼"} 상세
                                       </button>
                                     </div>
-                                    {it.showDetail && (
+                                    <div style={{ maxHeight: it.showDetail ? "60px" : "0px", overflow: "hidden", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
                                       <div style={{ ...detailArea, display: "grid", gridTemplateColumns: "110px 1fr 72px 46px 46px 1fr", gap: 3, alignItems: "center" }}>
                                         <input type="date" value={it.interpretDate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretDate: e.target.value } : p))}
                                           style={{ ...inputStyle, fontSize: 11, padding: "4px 4px" }} />
@@ -3150,7 +3150,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
                                           placeholder="메모" style={{ ...inputStyle, fontSize: 11, padding: "4px 7px" }} />
                                       </div>
-                                    )}
+                                    </div>
                                   </div>
                                 )}
                                 {/* ── 장비 행 ── */}
@@ -3174,7 +3174,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         {it.showDetail ? "▲" : "▼"} 상세
                                       </button>
                                     </div>
-                                    {it.showDetail && (
+                                    <div style={{ maxHeight: it.showDetail ? "60px" : "0px", overflow: "hidden", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
                                       <div style={{ ...detailArea, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 3 }}>
                                         <input type="date" value={it.eventStartDate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, eventStartDate: e.target.value } : p))}
                                           style={{ ...inputStyle, fontSize: 11, padding: "4px 5px" }} />
@@ -3185,7 +3185,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
                                           placeholder="메모" style={{ ...inputStyle, fontSize: 11, padding: "4px 6px" }} />
                                       </div>
-                                    )}
+                                    </div>
                                   </div>
                                 )}
                                 {/* ── 실비 행 ── */}
@@ -3199,12 +3199,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         {it.showDetail ? "▲" : "▼"} 상세
                                       </button>
                                     </div>
-                                    {it.showDetail && (
+                                    <div style={{ maxHeight: it.showDetail ? "44px" : "0px", overflow: "hidden", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
                                       <div style={detailArea}>
                                         <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
                                           placeholder="메모" style={{ ...inputStyle, fontSize: 11, padding: "4px 8px", width: "100%" }} />
                                       </div>
-                                    )}
+                                    </div>
                                   </div>
                                 )}
                                 </div>{/* ── /BODY ── */}
