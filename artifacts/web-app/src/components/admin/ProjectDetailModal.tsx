@@ -896,7 +896,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             hasEquipment: it.productType === "interpretation" ? it.hasEquipment : undefined,
             interpretationDirection: it.productType === "interpretation" ? it.interpretationDirection || undefined : undefined,
             quantityUnit: it.productType === "equipment" ? it.quantityUnit || undefined : undefined,
-            usagePeriod: it.productType === "interpretation" ? it.workUnit || undefined : it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
+            usagePeriod: it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
             eventStartDate: it.productType === "equipment" && it.showDetail ? it.eventStartDate || undefined : undefined,
             eventEndDate: it.productType === "equipment" && it.showDetail ? it.eventEndDate || undefined : undefined,
             itemLocation: it.productType === "equipment" && it.showDetail ? it.itemLocation || undefined : undefined,
@@ -942,7 +942,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             hasEquipment: it.productType === "interpretation" ? it.hasEquipment : undefined,
             interpretationDirection: it.productType === "interpretation" ? it.interpretationDirection || undefined : undefined,
             quantityUnit: it.productType === "equipment" ? it.quantityUnit || undefined : undefined,
-            usagePeriod: it.productType === "interpretation" ? it.workUnit || undefined : it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
+            usagePeriod: it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
             eventStartDate: it.productType === "equipment" && it.showDetail ? it.eventStartDate || undefined : undefined,
             eventEndDate: it.productType === "equipment" && it.showDetail ? it.eventEndDate || undefined : undefined,
             itemLocation: it.productType === "equipment" && it.showDetail ? it.itemLocation || undefined : undefined,
@@ -2680,7 +2680,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           <span>⚙️ 회계/세무 옵션 (과세유형 · 매출구분 · 결제방식 · 문서구분)</span>
                           <span style={{ fontSize: 10, color: "#9ca3af" }}>{showTaxOptions ? "▲ 접기" : "▼ 펼치기"}</span>
                         </button>
-                        {showTaxOptions && (
+                        <div style={{
+                          maxHeight: showTaxOptions ? "420px" : "0px",
+                          opacity: showTaxOptions ? 1 : 0,
+                          transform: showTaxOptions ? "translateY(0)" : "translateY(-4px)",
+                          overflow: "hidden",
+                          transition: "max-height 240ms ease, opacity 180ms ease, transform 240ms ease",
+                        }}>
                           <div style={{ padding: "10px 10px 6px", background: "#fff" }}>
 
                             {/* 1. 매출구분 + 통화(해외입금 시) + 과세유형 — 한 row */}
@@ -2891,7 +2897,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             </div>
 
                           </div>
-                        )}
+                        </div>
                       </div>
 
                       {/* 항목 입력 그리드 — 누적 배치 제외 모든 유형 공통 */}
@@ -3304,7 +3310,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     langB: itemType === "interpretation" ? parsedB : "",
                                     interpretationDirection: it.interpretationDirection ?? "양방향",
                                     quantityUnit: it.quantityUnit ?? "개",
-                                    usagePeriod: itemType === "interpretation" ? "1일" : (it.usagePeriod ?? "1일"),
+                                    usagePeriod: it.usagePeriod ?? "1일",
                                     unit: it.unit ?? (itemType === "interpretation" ? "1일" : "건"),
                                     quantity: String(it.quantity ?? "1"),
                                     unitPrice: String(it.unitPrice ?? ""),
