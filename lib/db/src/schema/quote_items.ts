@@ -61,6 +61,9 @@ export const quoteItemsTable = pgTable("quote_items", {
   eventEndDate: date("event_end_date"),
   itemLocation: text("item_location"),
 
+  // ── 커스텀 상품 여부 ────────────────────────────────────────────────────
+  isCustomProduct: boolean("is_custom_product").default(false),
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

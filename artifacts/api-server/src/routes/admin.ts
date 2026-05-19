@@ -7,7 +7,7 @@ import {
   quoteItemsTable, quoteItemFilesTable, calcQuoteItemAmounts,
   billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
   prepaidAccountsTable, prepaidLedgerTable, settingsTable,
-  projectFilesTable,
+  projectFilesTable, productRequestsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
@@ -1143,6 +1143,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
     eventStartDate?: string;
     eventEndDate?: string;
     itemLocation?: string;
+    isCustomProduct?: boolean;
   };
   const {
     amount, items, note,
@@ -1370,6 +1371,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
           eventStartDate: (it as any).eventStartDate ?? null,
           eventEndDate: (it as any).eventEndDate ?? null,
           itemLocation: (it as any).itemLocation ?? null,
+          isCustomProduct: (it as any).isCustomProduct ?? false,
         }))).returning({ id: quoteItemsTable.id });
 
         // 첨부 파일 기록 (번역 항목)
@@ -3166,6 +3168,41 @@ router.patch("/admin/settings", ...adminGuard, async (req, res) => {
     invalidateSettingsCache(); // 캐시 무효화 → 이후 모든 요청에 최신 설정 적용
     res.json(row);
   } catch (e) { res.status(500).json({ error: "설정 저장 실패" }); }
+});
+
+// ─── 커스텀 상품 정식 등록 요청 ────────────────────────────────────────────
+router.post("/admin/product-registration-requests", ...adminGuard, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const {
+      name, serviceType, languagePair, unit, unitPrice,
+      quantityUnit, usagePeriod, description,
+      sourceProjectId, sourceQuoteItemId,
+    } = req.body as {
+      name?: string; serviceType?: string; languagePair?: string; unit?: string;
+      unitPrice?: string | number; quantityUnit?: string; usagePeriod?: string;
+      description?: string; sourceProjectId?: number; sourceQuoteItemId?: number;
+    };
+    if (!name || !name.trim()) { res.status(400).json({ error: "상품명이 필요합니다." }); return; }
+    const [row] = await db.insert(productRequestsTable).values({
+      name: name.trim(),
+      serviceType: serviceType ?? "",
+      languagePair: languagePair ?? "",
+      category: "",
+      productType: serviceType ?? "translation",
+      unit: unit ?? "건",
+      unitPrice: unitPrice != null ? String(unitPrice) : null,
+      quantityUnit: quantityUnit ?? null,
+      usagePeriod: usagePeriod ?? null,
+      description: description ?? null,
+      sourceProjectId: sourceProjectId ?? null,
+      sourceQuoteItemId: sourceQuoteItemId ?? null,
+      requestedBy: user?.id ?? null,
+      requestedByEmail: user?.email ?? null,
+      status: "pending",
+    }).returning({ id: productRequestsTable.id });
+    res.json({ ok: true, id: row.id });
+  } catch (e) { res.status(500).json({ error: "등록 요청 실패" }); }
 });
 
 export default router;

@@ -264,6 +264,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     memo: string;
     showDetail: boolean;
     showDirectInput: boolean;
+    isCustomProduct: boolean;
     eventStartDate: string;
     eventEndDate: string;
     itemLocation: string;
@@ -278,7 +279,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     interpretDate: "", interpretPlace: "", interpretType: "동시통역",
     interpretationDuration: "", hasTravelExpense: false, hasEquipment: false,
     files: [], memo: "",
-    showDetail: false, showDirectInput: false, eventStartDate: "", eventEndDate: "", itemLocation: "",
+    showDetail: false, showDirectInput: false, isCustomProduct: false, eventStartDate: "", eventEndDate: "", itemLocation: "",
   });
   const [quoteMode, setQuoteMode] = useState<"simple" | "items">("items");
   const [quoteItemForms, setQuoteItemForms] = useState<QuoteItemForm[]>([defaultItem()]);
@@ -364,6 +365,27 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [creatingSettlement, setCreatingSettlement] = useState(false);
 
   const authH = { Authorization: `Bearer ${token}` };
+
+  // ── 커스텀 상품 등록 요청 상태 ───────────────────────────────────────────
+  const [registerRequestIdx, setRegisterRequestIdx] = useState<number | null>(null);
+  const [registerRequestForm, setRegisterRequestForm] = useState<{
+    name: string; serviceType: string; languagePair: string; unit: string; unitPrice: string; description: string;
+  }>({ name: "", serviceType: "translation", languagePair: "", unit: "건", unitPrice: "", description: "" });
+  const [registerSubmitting, setRegisterSubmitting] = useState(false);
+  const [registerDoneIdxs, setRegisterDoneIdxs] = useState<number[]>([]);
+  const handleSubmitRegisterRequest = async () => {
+    if (!registerRequestForm.name.trim()) return;
+    setRegisterSubmitting(true);
+    try {
+      await fetch(api("/api/admin/product-registration-requests"), {
+        method: "POST",
+        headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...registerRequestForm, sourceProjectId: detail?.project?.id ?? null }),
+      });
+      setRegisterDoneIdxs(prev => [...prev, registerRequestIdx!]);
+      setRegisterRequestIdx(null);
+    } catch(e) {} finally { setRegisterSubmitting(false); }
+  };
 
   const [quoteProducts, setQuoteProducts] = useState<Product[]>([]);
   useEffect(() => {
@@ -900,6 +922,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             eventStartDate: it.productType === "equipment" && it.showDetail ? it.eventStartDate || undefined : undefined,
             eventEndDate: it.productType === "equipment" && it.showDetail ? it.eventEndDate || undefined : undefined,
             itemLocation: it.productType === "equipment" && it.showDetail ? it.itemLocation || undefined : undefined,
+            isCustomProduct: it.isCustomProduct || undefined,
           })),
           prepaidAccountId: selectedPrepaidAcctId,
         };
@@ -946,6 +969,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             eventStartDate: it.productType === "equipment" && it.showDetail ? it.eventStartDate || undefined : undefined,
             eventEndDate: it.productType === "equipment" && it.showDetail ? it.eventEndDate || undefined : undefined,
             itemLocation: it.productType === "equipment" && it.showDetail ? it.itemLocation || undefined : undefined,
+            isCustomProduct: it.isCustomProduct || undefined,
           })),
         };
       }
@@ -2961,9 +2985,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                   {/* 액션 그룹 */}
                                   <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
                                     <button
-                                      onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDirectInput: !p.showDirectInput, productId: p.showDirectInput ? p.productId : null } : p))}
+                                      onClick={() => { setRegisterRequestIdx(null); setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDirectInput: !p.showDirectInput, isCustomProduct: !p.showDirectInput, productId: p.showDirectInput ? p.productId : null } : p)); }}
                                       style={{ fontSize: 10, padding: "2px 6px", borderRadius: 5, border: "1px solid #e5e7eb", background: it.showDirectInput ? "#f3f4f6" : "#fff", color: it.showDirectInput ? "#374151" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap" }}>
-                                      {it.showDirectInput ? "✕ 직접" : "+ 직접"}
+                                      {it.showDirectInput ? "✕ 커스텀" : "+ 커스텀"}
                                     </button>
                                     <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))}
                                       style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>×</button>
@@ -3026,8 +3050,74 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       ]}
                                     />
                                   ) : (
-                                    <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
-                                      placeholder="항목명 직접 입력" style={{ ...inputStyle, fontSize: 12, padding: "5px 7px", width: "100%" }} autoFocus />
+                                    <>
+                                      <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
+                                        placeholder="커스텀 상품명 입력" style={{ ...inputStyle, fontSize: 12, padding: "5px 7px", width: "100%" }} autoFocus />
+                                      <div style={{ marginTop: 3 }}>
+                                        {registerDoneIdxs.includes(idx) ? (
+                                          <span style={{ fontSize: 10, color: "#16a34a" }}>✓ 등록 요청 전송됨</span>
+                                        ) : registerRequestIdx === idx ? (
+                                          <div style={{ padding: "7px 8px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 5, marginTop: 3 }}>
+                                            <div style={{ fontSize: 10.5, fontWeight: 700, color: "#166534", marginBottom: 5 }}>정식 상품 등록 요청</div>
+                                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 8px", marginBottom: 5 }}>
+                                              <div>
+                                                <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>서비스 유형</div>
+                                                <select value={registerRequestForm.serviceType} onChange={e => setRegisterRequestForm(p => ({ ...p, serviceType: e.target.value }))}
+                                                  style={{ ...inputStyle, fontSize: 11, width: "100%" }}>
+                                                  <option value="translation">번역</option>
+                                                  <option value="interpretation">통역</option>
+                                                  <option value="equipment">장비</option>
+                                                  <option value="expense">실비</option>
+                                                </select>
+                                              </div>
+                                              <div>
+                                                <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>언어쌍</div>
+                                                <input value={registerRequestForm.languagePair} onChange={e => setRegisterRequestForm(p => ({ ...p, languagePair: e.target.value }))}
+                                                  style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="예: ko-en" />
+                                              </div>
+                                              <div>
+                                                <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>제안 단가</div>
+                                                <input value={registerRequestForm.unitPrice} onChange={e => setRegisterRequestForm(p => ({ ...p, unitPrice: e.target.value }))}
+                                                  style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="숫자만" />
+                                              </div>
+                                              <div>
+                                                <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>단위</div>
+                                                <input value={registerRequestForm.unit} onChange={e => setRegisterRequestForm(p => ({ ...p, unit: e.target.value }))}
+                                                  style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="예: 페이지" />
+                                              </div>
+                                              <div style={{ gridColumn: "1 / -1" }}>
+                                                <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>메모 (선택)</div>
+                                                <input value={registerRequestForm.description} onChange={e => setRegisterRequestForm(p => ({ ...p, description: e.target.value }))}
+                                                  style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="추가 설명" />
+                                              </div>
+                                            </div>
+                                            <div style={{ display: "flex", gap: 5 }}>
+                                              <button onClick={handleSubmitRegisterRequest} disabled={registerSubmitting}
+                                                style={{ fontSize: 10, padding: "3px 10px", borderRadius: 4, border: "none", background: "#16a34a", color: "#fff", cursor: "pointer" }}>
+                                                {registerSubmitting ? "전송 중..." : "요청 전송"}
+                                              </button>
+                                              <button onClick={() => setRegisterRequestIdx(null)}
+                                                style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>취소</button>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <button onClick={() => {
+                                            setRegisterRequestIdx(idx);
+                                            setRegisterRequestForm({
+                                              name: it.productName.trim(),
+                                              serviceType: it.productType,
+                                              languagePair: it.productType === "translation" ? `${it.sourceLanguage}→${it.targetLanguage}` : it.productType === "interpretation" ? `${it.langA}↔${it.langB}` : it.languagePair,
+                                              unit: it.unit,
+                                              unitPrice: it.unitPrice,
+                                              description: it.memo,
+                                            });
+                                          }}
+                                            style={{ fontSize: 10, color: "#16a34a", background: "none", border: "none", cursor: "pointer", padding: "1px 0", textDecoration: "underline" }}>
+                                            + 정식 상품 등록 요청
+                                          </button>
+                                        )}
+                                      </div>
+                                    </>
                                   )}
                                 </div>
                                 {/* ── 번역 행 ── */}
@@ -3342,7 +3432,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     files: [],
                                     memo: it.memo ?? "",
                                     showDetail: !!(it.eventStartDate || it.eventEndDate || it.itemLocation),
-                                    showDirectInput: !it.productId,
+                                    showDirectInput: it.isCustomProduct ?? !it.productId,
+                                    isCustomProduct: it.isCustomProduct ?? !it.productId,
                                     eventStartDate: it.eventStartDate ?? "",
                                     eventEndDate: it.eventEndDate ?? "",
                                     itemLocation: it.itemLocation ?? "",

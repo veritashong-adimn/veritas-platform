@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, timestamp, numeric } from "drizzle-orm/pg-core";
 import { usersTable } from "./users";
 
 export const productRequestsTable = pgTable("product_requests", {
@@ -14,6 +14,11 @@ export const productRequestsTable = pgTable("product_requests", {
   name: text("name").notNull(),
   unit: text("unit").notNull().default("건"),
   description: text("description"),
+  unitPrice: numeric("unit_price", { precision: 12, scale: 2 }),
+  quantityUnit: text("quantity_unit"),
+  usagePeriod: text("usage_period"),
+  sourceQuoteItemId: integer("source_quote_item_id"),
+  sourceProjectId: integer("source_project_id"),
   status: text("status").notNull().default("pending"),
   requestedBy: integer("requested_by").references(() => usersTable.id),
   requestedByEmail: text("requested_by_email"),
