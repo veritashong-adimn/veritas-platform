@@ -2683,9 +2683,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         <div style={{
                           maxHeight: showTaxOptions ? "420px" : "0px",
                           opacity: showTaxOptions ? 1 : 0,
-                          transform: showTaxOptions ? "translateY(0)" : "translateY(-4px)",
+                          transform: showTaxOptions ? "translateY(0)" : "translateY(-2px)",
                           overflow: "hidden",
-                          transition: "max-height 240ms ease, opacity 180ms ease, transform 240ms ease",
+                          transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease, transform 280ms cubic-bezier(0.22, 1, 0.36, 1)",
                         }}>
                           <div style={{ padding: "10px 10px 6px", background: "#fff" }}>
 
