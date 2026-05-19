@@ -3354,7 +3354,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           </button>
                         )}
                       </div>
-                      <div style={{ overflow: "hidden", maxHeight: formVisible ? "1600px" : "0", transition: "max-height 560ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
+                      <div style={{ overflow: "hidden", maxHeight: formVisible ? "1600px" : "0", transition: formVisible ? "max-height 560ms cubic-bezier(0.22, 1, 0.36, 1)" : "max-height 680ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
                         {formVisible && quoteFormJsx}
                       </div>
                       {hasQuotes ? detail.quotes.map(q => {
