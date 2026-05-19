@@ -197,11 +197,12 @@ export type ClickSelectOption = {
   label: string;
   sub?: string;
   disabled?: boolean;
+  group?: string;
 };
 
 export function ClickSelect({
   options, value, onChange, placeholder, disabled,
-  style, triggerStyle, menuStyle, openUp = false, searchable = false,
+  style, triggerStyle, menuStyle, openUp = false, searchable = false, chips,
 }: {
   options: ClickSelectOption[];
   value: string;
@@ -213,18 +214,20 @@ export function ClickSelect({
   menuStyle?: React.CSSProperties;
   openUp?: boolean;
   searchable?: boolean;
+  chips?: { value: string; label: string }[];
 }) {
   const [open, setOpen] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(-1);
   const [dropPos, setDropPos] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
   const [search, setSearch] = useState("");
+  const [activeChip, setActiveChip] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const portalRef = useRef<HTMLDivElement>(null);
   const optionsListRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const closeMenu = useCallback(() => { setOpen(false); setSearch(""); }, []);
+  const closeMenu = useCallback(() => { setOpen(false); setSearch(""); setActiveChip(""); }, []);
 
   const calcPos = useCallback(() => {
     if (!triggerRef.current) return;
@@ -268,9 +271,12 @@ export function ClickSelect({
     return () => document.removeEventListener("mousedown", onMD);
   }, [closeMenu]);
 
-  const filteredOpts = searchable && search.trim()
-    ? options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()))
+  const chipFiltered = (chips && chips.length && activeChip)
+    ? options.filter(o => !o.value || o.group === activeChip)
     : options;
+  const filteredOpts = (searchable && search.trim())
+    ? chipFiltered.filter(o => o.value && o.label.toLowerCase().includes(search.toLowerCase()))
+    : chipFiltered;
 
   const onKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (!open) {
@@ -326,8 +332,22 @@ export function ClickSelect({
         ...(menuStyle ?? {}),
       }}
     >
+      {chips && chips.length > 0 && (
+        <div style={{ padding: "5px 8px", borderBottom: "1px solid #f0f0f0", background: "#fff", display: "flex", gap: 4, flexWrap: "wrap" }}
+          onMouseDown={e => e.stopPropagation()}>
+          {chips.map(chip => {
+            const isActive = activeChip === chip.value;
+            return (
+              <button key={chip.value} type="button"
+                onMouseDown={e => { e.preventDefault(); e.stopPropagation(); setActiveChip(isActive ? "" : chip.value); setHighlightIdx(0); }}
+                style={{ border: "none", borderRadius: 10, padding: "2px 8px", fontSize: 10.5, fontWeight: isActive ? 700 : 500, cursor: "pointer", background: isActive ? "#2563eb" : "#f1f5f9", color: isActive ? "#fff" : "#475569", lineHeight: "18px" }}
+              >{chip.label}</button>
+            );
+          })}
+        </div>
+      )}
       {searchable && (
-        <div style={{ padding: "6px 8px", borderBottom: "1px solid #f0f0f0", background: "#fff" }}>
+        <div style={{ padding: "5px 8px", borderBottom: "1px solid #f0f0f0", background: "#fff" }}>
           <input
             ref={searchInputRef}
             value={search}

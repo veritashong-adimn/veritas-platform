@@ -3007,6 +3007,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productId: null, productName: "" } : p));
                                       }}
                                       searchable
+                                      chips={[
+                                        { value: "", label: "전체" },
+                                        { value: "translation", label: "📄 번역" },
+                                        { value: "interpretation", label: "🎤 통역" },
+                                        { value: "equipment", label: "🔧 장비" },
+                                        { value: "expense", label: "💰 실비" },
+                                      ]}
                                       style={{ width: "100%" }}
                                       triggerStyle={{ fontSize: 11, padding: "5px 6px", borderRadius: 6, color: it.productId ? "#1e40af" : "#9ca3af", width: "100%" }}
                                       options={[
@@ -3014,6 +3021,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                         ...quoteProducts.map(p => ({
                                           value: String(p.id),
                                           label: `${(p as any).productType === "interpretation" ? "🎤 " : (p as any).productType === "equipment" ? "🔧 " : (p as any).productType === "expense" ? "💰 " : "📄 "}${p.mainCategory ? `[${p.mainCategory}] ` : ""}${p.name} — ${p.basePrice != null ? `${Number(p.basePrice).toLocaleString()}원` : "미설정"}/${p.unit}`,
+                                          group: (p as any).productType ?? "translation",
                                         })),
                                       ]}
                                     />
