@@ -280,6 +280,7 @@ export function LanguageServiceDataTab({ token, setToast }: { token: string; set
       </div>
 
       {/* 입력 폼 */}
+      <div style={{ overflow: "hidden", maxHeight: showForm ? "900px" : "0", transition: showForm ? "max-height 560ms cubic-bezier(0.22, 1, 0.36, 1)" : "max-height 840ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
       {showForm && (
         <Card style={{ padding: 20, marginBottom: 16, background: "#f8faff", border: "1px solid #bfdbfe" }}>
           <p style={{ margin: "0 0 16px", fontWeight: 700, color: "#1e40af", fontSize: 15 }}>
@@ -389,6 +390,7 @@ export function LanguageServiceDataTab({ token, setToast }: { token: string; set
           </div>
         </Card>
       )}
+      </div>
 
       {/* 목록 + 상세 패널 */}
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>

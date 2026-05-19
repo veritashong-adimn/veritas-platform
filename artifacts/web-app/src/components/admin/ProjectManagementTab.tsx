@@ -696,6 +696,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
           </div>
 
           {/* ── 상세 필터 패널 ── */}
+          <div style={{ overflow: "hidden", maxHeight: showAdvancedFilter ? "400px" : "0", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
           {showAdvancedFilter && (
             <div style={{ marginTop: 4, borderTop: "1px solid #f0f0f0", paddingTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
               {/* 3열 그리드: 담당 / 거래처 / 재무 상태 / 견적 유형 / 청구 방식 */}
@@ -810,6 +811,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
               </div>
             </div>
           )}
+          </div>
         </div>
         {/* 필터 영역 끝 */}
 

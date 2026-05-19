@@ -199,25 +199,27 @@ export function TranslatorRateEntryCard({
           style={{ background: "none", border: "none", fontSize: 11, color: "#6b7280", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
           {showAdvanced ? "▲ 고급설정 접기" : "▼ 고급설정 (최소금액·기본시간·추가시간단가)"}
         </button>
-        {showAdvanced && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px 8px", marginTop: 6 }}>
-            <div>
-              <div style={label11}>최소금액 (선택)</div>
-              <NumericInput value={r.minPrice} onChange={raw => up({ minPrice: raw })}
-                placeholder="예: 50000" suffix="원" style={inputStyle} />
+        <div style={{ overflow: "hidden", maxHeight: showAdvanced ? "120px" : "0", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
+          {showAdvanced && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "6px 8px", marginTop: 6 }}>
+              <div>
+                <div style={label11}>최소금액 (선택)</div>
+                <NumericInput value={r.minPrice} onChange={raw => up({ minPrice: raw })}
+                  placeholder="예: 50000" suffix="원" style={inputStyle} />
+              </div>
+              <div>
+                <div style={label11}>기본시간 (선택)</div>
+                <input type="number" value={r.baseHours} onChange={e => up({ baseHours: e.target.value })}
+                  placeholder="예: 4" style={inputStyle} />
+              </div>
+              <div>
+                <div style={label11}>추가시간 단가 (선택)</div>
+                <NumericInput value={r.overtimeRate} onChange={raw => up({ overtimeRate: raw })}
+                  placeholder="예: 30000" suffix="원" style={inputStyle} />
+              </div>
             </div>
-            <div>
-              <div style={label11}>기본시간 (선택)</div>
-              <input type="number" value={r.baseHours} onChange={e => up({ baseHours: e.target.value })}
-                placeholder="예: 4" style={inputStyle} />
-            </div>
-            <div>
-              <div style={label11}>추가시간 단가 (선택)</div>
-              <NumericInput value={r.overtimeRate} onChange={raw => up({ overtimeRate: raw })}
-                placeholder="예: 30000" suffix="원" style={inputStyle} />
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {error && <p style={{ color: "#dc2626", fontSize: 12, marginTop: 4 }}>{error}</p>}
