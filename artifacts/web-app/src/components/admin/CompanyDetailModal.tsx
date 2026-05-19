@@ -336,7 +336,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
 
   return (
     <>
-    <DraggableModal title={`거래처 #${companyId} 상세`} onClose={onClose} width={800} zIndex={300} bodyPadding="20px 28px" resizable
+    <DraggableModal title={`거래처 #${companyId} 상세`} onClose={onClose} width={800} height="88vh" zIndex={300} bodyPadding="20px 28px" resizable
       headerExtra={
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {allowHardDelete && (
@@ -601,6 +601,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
               <p style={{ ...sH, margin: 0 }}>브랜드 / 부서 ({detail.divisions.length})</p>
               <GhostBtn onClick={() => setShowDivForm(v => !v)} style={{ fontSize: 12, padding: "4px 10px" }}>+ 추가</GhostBtn>
             </div>
+            <div style={{ overflow: "hidden", maxHeight: showDivForm ? "240px" : "0", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
             {showDivForm && (
               <div style={{ background: "#f9fafb", borderRadius: 10, padding: "14px 16px", marginBottom: 12, border: "1px solid #e5e7eb" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px" }}>
@@ -623,6 +624,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 </div>
               </div>
             )}
+            </div>{/* /showDivForm */}
             {detail.divisions.length === 0
               ? <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>등록된 브랜드/부서가 없습니다.</p>
               : (
@@ -693,6 +695,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
             </p>
 
             {/* 담당자 추가 폼 */}
+            <div style={{ overflow: "hidden", maxHeight: showContactForm ? "720px" : "0", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
             {showContactForm && (() => {
               const cf = contactForm; const setCf = setContactForm; const errs = contactFormErrors;
               return (
@@ -771,6 +774,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 </div>
               );
             })()}
+            </div>{/* /showContactForm */}
 
             {/* 담당자 카드 목록 */}
             {detail.contacts.filter((c: Contact) => c.isActive || showInactiveContacts).length === 0

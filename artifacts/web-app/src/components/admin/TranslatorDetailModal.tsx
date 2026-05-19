@@ -356,7 +356,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 
   return (
     <>
-    <DraggableModal title="통번역사 상세" subtitle={userEmail} onClose={onClose} width={860} zIndex={300} bodyPadding="20px 28px" resizable
+    <DraggableModal title="통번역사 상세" subtitle={userEmail} onClose={onClose} width={860} height="88vh" zIndex={300} bodyPadding="20px 28px" resizable
       headerExtra={
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>

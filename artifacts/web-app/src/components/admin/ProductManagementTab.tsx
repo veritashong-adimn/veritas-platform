@@ -1063,6 +1063,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         )}
 
         {/* 등록/수정 폼 */}
+        <div style={{ overflow: "hidden", maxHeight: showProductForm ? "900px" : "0", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
         {showProductForm && (
           <Card style={{ marginBottom: 16, padding: "20px 24px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
@@ -1088,6 +1089,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             </div>
           </Card>
         )}
+        </div>{/* /showProductForm */}
 
         {/* 필터 */}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "flex-start" }}>
@@ -1166,6 +1168,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         }>
 
         {/* 요청 폼 */}
+        <div style={{ overflow: "hidden", maxHeight: showRequestForm ? "900px" : "0", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
         {showRequestForm && (
           <Card style={{ marginBottom: 14, padding: "18px 22px", border: "1px solid #e9d5ff", background: "#faf5ff" }}>
             <p style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 700, color: "#6d28d9" }}>
@@ -1181,6 +1184,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             </div>
           </Card>
         )}
+        </div>{/* /showRequestForm */}
 
         {/* 요청 목록 */}
         {productRequestsLoading ? (
