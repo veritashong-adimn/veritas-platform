@@ -1139,11 +1139,11 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   <div style={{ textAlign: "center", padding: "24px 0", fontSize: 13, color: "#9ca3af" }}>해당 항목 없음</div>
                 ) : (
                   <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 860 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 980 }}>
                     <thead>
                       <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
                         {["행", "원본 상품명", "Product 후보", "언어쌍", "방향", "난이도", "산업", "유형", "단위", "단가", "상태", "이슈"].map(h => (
-                          <th key={h} style={{ padding: "7px 10px", textAlign: "left", color: "#6b7280", fontWeight: 600, borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" }}>{h}</th>
+                          <th key={h} style={{ padding: "6px 10px", textAlign: "left", color: "#9ca3af", fontWeight: 600, borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap", fontSize: 11 }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -1151,61 +1151,62 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                       {filtered.map((item, idx) => {
                         const sm = STATUS_META[item.status] ?? STATUS_META.review;
                         const an = item.analysis ?? { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", isOptionCandidate: false };
+                        const isBidir = an.direction === "bidirectional";
                         return (
                           <tr key={idx} style={{ borderBottom: "1px solid #f3f4f6", background: idx % 2 === 0 ? "#fff" : "#fafafa" }}>
-                            <td style={{ padding: "6px 10px", color: "#9ca3af", fontFamily: "monospace" }}>{item.rowNum}</td>
-                            <td style={{ padding: "6px 10px", color: "#111827", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
+                            <td style={{ padding: "5px 10px", color: "#c4c4c4", fontFamily: "monospace", fontSize: 11 }}>{item.rowNum}</td>
+                            <td style={{ padding: "5px 10px", color: "#374151", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
                             {/* Product 후보 */}
-                            <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
-                              {an.productCandidate ? (
-                                <span style={{ color: "#2563eb", fontWeight: 600 }}>{an.productCandidate}</span>
-                              ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                            <td style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>
+                              {an.productCandidate
+                                ? <span style={{ color: "#2563eb", fontWeight: 700 }}>{an.productCandidate}</span>
+                                : <span style={{ color: "#e5e7eb" }}>—</span>}
                               {an.isOptionCandidate && (
-                                <span title="동일 서비스가 여러 언어쌍으로 반복됨 — 옵션화 가능" style={{ marginLeft: 4, fontSize: 10, color: "#7c3aed", background: "#f5f3ff", borderRadius: 4, padding: "1px 5px", fontWeight: 700, cursor: "default" }}>옵션</span>
+                                <span title="옵션화 가능" style={{ marginLeft: 4, fontSize: 10, color: "#6d28d9", background: "#ede9fe", borderRadius: 3, padding: "1px 4px", fontWeight: 600, cursor: "default" }}>옵션</span>
                               )}
                             </td>
-                            {/* 언어쌍 */}
-                            <td style={{ padding: "6px 10px", color: "#374151", whiteSpace: "nowrap" }}>
-                              {an.langPair || <span style={{ color: "#d1d5db" }}>—</span>}
+                            {/* 언어쌍 — 항상 ↔ 관계형 */}
+                            <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "nowrap", fontSize: 12 }}>
+                              {an.langPair || ""}
                             </td>
                             {/* 방향 */}
-                            <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
+                            <td style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>
                               {an.direction ? (
-                                <span style={{ fontFamily: "monospace", fontSize: 11, color: an.direction === "bidirectional" ? "#059669" : "#374151", background: an.direction === "bidirectional" ? "#f0fdf4" : "#f3f4f6", borderRadius: 4, padding: "2px 6px" }}>
-                                  {an.direction === "bidirectional" ? "↔ 양방향" : an.direction}
+                                <span style={{ fontFamily: "monospace", fontSize: 11, color: isBidir ? "#059669" : "#6b7280", background: isBidir ? "#f0fdf4" : "#f9fafb", border: `1px solid ${isBidir ? "#bbf7d0" : "#e5e7eb"}`, borderRadius: 3, padding: "1px 5px" }}>
+                                  {isBidir ? "↔" : an.direction}
                                 </span>
-                              ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                              ) : ""}
                             </td>
                             {/* 난이도 */}
-                            <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
+                            <td style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>
                               {an.difficulty ? (
-                                <span style={{ fontSize: 11, fontWeight: 600, color: an.difficulty === "긴급" || an.difficulty === "특급" ? "#dc2626" : an.difficulty === "VIP" || an.difficulty === "프리미엄" ? "#7c3aed" : "#374151", background: an.difficulty === "긴급" || an.difficulty === "특급" ? "#fef2f2" : an.difficulty === "VIP" || an.difficulty === "프리미엄" ? "#f5f3ff" : "#f3f4f6", borderRadius: 4, padding: "2px 6px" }}>
+                                <span style={{ fontSize: 11, color: "#6b7280", background: "#f3f4f6", borderRadius: 3, padding: "1px 5px" }}>
                                   {an.difficulty}
                                 </span>
-                              ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                              ) : ""}
                             </td>
                             {/* 산업 */}
-                            <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
+                            <td style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>
                               {an.industry ? (
-                                <span style={{ fontSize: 11, fontWeight: 600, color: "#0369a1", background: "#f0f9ff", borderRadius: 4, padding: "2px 6px" }}>
+                                <span style={{ fontSize: 11, color: "#0369a1", background: "#f0f9ff", borderRadius: 3, padding: "1px 5px" }}>
                                   {an.industry}
                                 </span>
-                              ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                              ) : ""}
                             </td>
                             {/* 유형 */}
-                            <td style={{ padding: "6px 10px", color: "#374151", whiteSpace: "nowrap" }}>
+                            <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "nowrap", fontSize: 11 }}>
                               {item.productType}
                               {item.suggestedType && item.suggestedType !== item.productType && (
-                                <span style={{ marginLeft: 4, fontSize: 10, color: "#7c3aed" }}>→{item.suggestedType}</span>
+                                <span style={{ marginLeft: 3, fontSize: 10, color: "#a78bfa" }}>→{item.suggestedType}</span>
                               )}
                             </td>
-                            <td style={{ padding: "6px 10px", color: "#374151" }}>{item.unit}</td>
-                            <td style={{ padding: "6px 10px", color: "#374151", textAlign: "right" }}>{item.basePrice != null ? item.basePrice.toLocaleString() : "—"}</td>
-                            <td style={{ padding: "6px 10px" }}>
-                              <span style={{ fontSize: 11, fontWeight: 700, color: sm.color, background: sm.bg, borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap" }}>{sm.label}</span>
+                            <td style={{ padding: "5px 10px", color: "#6b7280", fontSize: 11 }}>{item.unit}</td>
+                            <td style={{ padding: "5px 10px", color: "#374151", textAlign: "right", fontSize: 11 }}>{item.basePrice != null ? item.basePrice.toLocaleString() : ""}</td>
+                            <td style={{ padding: "5px 10px" }}>
+                              <span style={{ fontSize: 11, fontWeight: 600, color: sm.color, background: sm.bg, borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>{sm.label}</span>
                             </td>
-                            <td style={{ padding: "6px 10px", color: "#6b7280", maxWidth: 200, fontSize: 11 }}>
-                              {item.issues.length > 0 ? item.issues.join(" · ") : ""}
+                            <td style={{ padding: "5px 10px", color: "#9ca3af", maxWidth: 190, fontSize: 11 }}>
+                              {item.issues.join(" · ")}
                             </td>
                           </tr>
                         );

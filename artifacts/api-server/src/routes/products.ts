@@ -362,36 +362,59 @@ type ProductAnalysis = {
 };
 
 const ISO_LABEL: Record<string, string> = {
-  ko: "한국어", en: "영어", ja: "일본어", zh: "중국어",
+  ko: "한국어", en: "영어",  ja: "일본어",     zh: "중국어",
   fr: "프랑스어", de: "독일어", es: "스페인어", ru: "러시아어",
-  ar: "아랍어", pt: "포르투갈어", vi: "베트남어", th: "태국어",
+  ar: "아랍어",  pt: "포르투갈어", vi: "베트남어", th: "태국어",
   id: "인도네시아어", ms: "말레이어", hi: "힌디어", ph: "필리핀어",
-  tr: "터키어", it: "이탈리아어", mn: "몽골어",
+  tr: "터키어",  it: "이탈리아어", mn: "몽골어",
+  bn: "벵골어",  ur: "우르두어",   fa: "페르시아어", km: "캄보디아어",
+  lo: "라오스어", sw: "스와힐리어", ne: "네팔어",  ta: "타밀어",
+  yue: "광동어", sr: "세르비아어", uk: "우크라이나어", pl: "폴란드어",
+  nl: "네덜란드어", cs: "체코어", ro: "루마니아어", hu: "헝가리어",
 };
 
 type LangEntry = { m: string; code: string; label: string };
 const LANG_ENTRIES: LangEntry[] = [
-  { m: "한국어",     code: "ko", label: "한국어" },
-  { m: "영국어",     code: "en", label: "영어" },
-  { m: "영어",       code: "en", label: "영어" },
-  { m: "일본어",     code: "ja", label: "일본어" },
-  { m: "중국어",     code: "zh", label: "중국어" },
-  { m: "프랑스어",   code: "fr", label: "프랑스어" },
-  { m: "불어",       code: "fr", label: "프랑스어" },
-  { m: "독일어",     code: "de", label: "독일어" },
-  { m: "스페인어",   code: "es", label: "스페인어" },
-  { m: "러시아어",   code: "ru", label: "러시아어" },
-  { m: "아랍어",     code: "ar", label: "아랍어" },
-  { m: "포르투갈어", code: "pt", label: "포르투갈어" },
-  { m: "베트남어",   code: "vi", label: "베트남어" },
-  { m: "태국어",     code: "th", label: "태국어" },
-  { m: "인도네시아어", code: "id", label: "인도네시아어" },
-  { m: "말레이어",   code: "ms", label: "말레이어" },
-  { m: "힌디어",     code: "hi", label: "힌디어" },
-  { m: "필리핀어",   code: "ph", label: "필리핀어" },
-  { m: "터키어",     code: "tr", label: "터키어" },
-  { m: "이탈리아어", code: "it", label: "이탈리아어" },
-  { m: "몽골어",     code: "mn", label: "몽골어" },
+  // 장음절 우선 (prefix 충돌 방지)
+  { m: "인도네시아어", code: "id",  label: "인도네시아어" },
+  { m: "포르투갈어",   code: "pt",  label: "포르투갈어" },
+  { m: "이탈리아어",   code: "it",  label: "이탈리아어" },
+  { m: "스와힐리어",   code: "sw",  label: "스와힐리어" },
+  { m: "캄보디아어",   code: "km",  label: "캄보디아어" },
+  { m: "크메르어",     code: "km",  label: "캄보디아어" },
+  { m: "스페인어",     code: "es",  label: "스페인어" },
+  { m: "러시아어",     code: "ru",  label: "러시아어" },
+  { m: "페르시아어",   code: "fa",  label: "페르시아어" },
+  { m: "우크라이나어", code: "uk",  label: "우크라이나어" },
+  { m: "네덜란드어",   code: "nl",  label: "네덜란드어" },
+  { m: "프랑스어",     code: "fr",  label: "프랑스어" },
+  { m: "베트남어",     code: "vi",  label: "베트남어" },
+  { m: "세르비아어",   code: "sr",  label: "세르비아어" },
+  { m: "우르두어",     code: "ur",  label: "우르두어" },
+  { m: "헝가리어",     code: "hu",  label: "헝가리어" },
+  { m: "라오스어",     code: "lo",  label: "라오스어" },
+  { m: "루마니아어",   code: "ro",  label: "루마니아어" },
+  { m: "한국어",       code: "ko",  label: "한국어" },
+  { m: "영국어",       code: "en",  label: "영어" },
+  { m: "필리핀어",     code: "ph",  label: "필리핀어" },
+  { m: "말레이어",     code: "ms",  label: "말레이어" },
+  { m: "체코어",       code: "cs",  label: "체코어" },
+  { m: "광동어",       code: "yue", label: "광동어" },
+  { m: "타밀어",       code: "ta",  label: "타밀어" },
+  { m: "네팔어",       code: "ne",  label: "네팔어" },
+  { m: "벵골어",       code: "bn",  label: "벵골어" },
+  { m: "폴란드어",     code: "pl",  label: "폴란드어" },
+  { m: "영어",         code: "en",  label: "영어" },
+  { m: "일본어",       code: "ja",  label: "일본어" },
+  { m: "중국어",       code: "zh",  label: "중국어" },
+  { m: "불어",         code: "fr",  label: "프랑스어" },
+  { m: "독일어",       code: "de",  label: "독일어" },
+  { m: "아랍어",       code: "ar",  label: "아랍어" },
+  { m: "힌디어",       code: "hi",  label: "힌디어" },
+  { m: "터키어",       code: "tr",  label: "터키어" },
+  { m: "태국어",       code: "th",  label: "태국어" },
+  { m: "몽골어",       code: "mn",  label: "몽골어" },
+  // 단음절
   { m: "한", code: "ko", label: "한국어" },
   { m: "영", code: "en", label: "영어" },
   { m: "일", code: "ja", label: "일본어" },
@@ -416,18 +439,21 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   let workName = name.trim();
   let srcCode = ""; let tgtCode = ""; let srcLabel = ""; let tgtLabel = "";
 
-  // ── Step 1: ISO pair (ko→en / ko-en / ko_en / en→ko 등)
-  const isoKeys = Object.keys(ISO_LABEL).join("|");
-  const isoPairRx = new RegExp(`(${isoKeys})[→\\-_](${isoKeys})`, "i");
-  const isoM = workName.match(isoPairRx);
+  // ── Step 1: 범용 ISO pair 감지 (미지원 코드 포함 — xx→yy / xx-yy / xx_yy)
+  // 알려진 코드만이 아니라 2-3자 소문자 패턴 전부 캡처 → Product에 남지 않도록 제거
+  const anyPairRx = /\b([a-z]{2,3})[→\-_]([a-z]{2,3})\b/i;
+  const isoM = workName.match(anyPairRx);
   if (isoM) {
-    srcCode = isoM[1].toLowerCase(); tgtCode = isoM[2].toLowerCase();
-    srcLabel = ISO_LABEL[srcCode] ?? srcCode; tgtLabel = ISO_LABEL[tgtCode] ?? tgtCode;
+    srcCode  = isoM[1].toLowerCase();
+    tgtCode  = isoM[2].toLowerCase();
+    srcLabel = ISO_LABEL[srcCode] ?? `미지원(${srcCode})`;
+    tgtLabel = ISO_LABEL[tgtCode] ?? `미지원(${tgtCode})`;
     workName = workName.replace(isoM[0], " ").replace(/\s+/g, " ").trim();
   } else {
-    // ── Step 2: Korean word-based language detection (prefix order)
+    // ── Step 2: 한국어 단어 기반 언어 감지 (prefix 순차 스캔)
     let rest = workName;
-    let lang1: LangEntry | null = null; let lang2: LangEntry | null = null;
+    let lang1: LangEntry | null = null;
+    let lang2: LangEntry | null = null;
     for (const l of LANG_ENTRIES) {
       if (rest.startsWith(l.m)) { lang1 = l; rest = rest.slice(l.m.length).replace(/^\s+/, ""); break; }
     }
@@ -443,7 +469,7 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
     }
   }
 
-  // ── Step 3: Difficulty extraction (longer keywords first)
+  // ── Step 3: 난이도 추출 (긴 키워드 우선)
   let difficulty = "";
   for (const d of DIFFICULTY_LIST) {
     const rx = new RegExp(d, "i");
@@ -454,7 +480,7 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
     }
   }
 
-  // ── Step 4: Industry extraction (longer keywords first)
+  // ── Step 4: 산업 추출
   let industry = "";
   for (const ind of INDUSTRY_LIST) {
     const rx = new RegExp(ind, "i");
@@ -465,16 +491,20 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
     }
   }
 
-  // ── Step 5: Product candidate = remaining text
-  const productCandidate = workName.replace(/\s+/g, "").trim();
+  // ── Step 5: Product 후보 — 잔여 ISO 토큰 제거 후 핵심 서비스 명만 남김
+  const productCandidate = workName
+    .replace(/\b[a-z]{2,3}[→\-_][a-z]{2,3}\b/gi, " ")  // 잔여 ISO pair 제거
+    .replace(/\s+/g, "")
+    .trim();
+
   if (!srcCode && !productCandidate) return none;
 
-  // ── Step 6: Language pair display + direction
+  // ── Step 6: Language Pair (항상 관계형 ↔) + Direction (방향형)
   const isInterp = productType === "interpretation" || /통역/.test(productCandidate);
   let langPair = ""; let direction = "";
 
   if (srcCode && tgtCode) {
-    langPair  = isInterp ? `${srcLabel} ↔ ${tgtLabel}` : `${srcLabel} → ${tgtLabel}`;
+    langPair  = `${srcLabel} ↔ ${tgtLabel}`;
     direction = isInterp ? "bidirectional" : `${srcCode}→${tgtCode}`;
   } else if (srcCode && srcCode !== "ko") {
     langPair  = `한국어 ↔ ${srcLabel}`;
