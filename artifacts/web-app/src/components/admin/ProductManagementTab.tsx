@@ -144,6 +144,17 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [importPreviewSort, setImportPreviewSort] = useState<"conf_asc" | "conf_desc">("conf_asc");
   const [importQualFilter, setImportQualFilter] = useState<"all" | "review_only" | "safe_only" | "low_conf">("all");
   const [importConfirmModal, setImportConfirmModal] = useState<{ mode: "selected" | "safe" | "all"; rows: ImportPreviewItem[] } | null>(null);
+  // ─── Review Workflow 상태 ──────────────────────────────────────────────────
+  type RowOverride = {
+    reviewStatus: "pending" | "approved" | "rejected";
+    rejectReason: string;
+    overriddenCandidate: string | undefined;
+    originalCandidate: string;
+  };
+  const [rowOverrides, setRowOverrides] = useState<Record<number, RowOverride>>({});
+  const [editingRowNum, setEditingRowNum] = useState<number | null>(null);
+  const [editingValue, setEditingValue] = useState<string>("");
+  const [importReviewFilter, setImportReviewFilter] = useState<"all" | "approved" | "rejected" | "pending" | "modified">("all");
   const [productRequests, setProductRequests] = useState<ProductRequest[]>([]);
   const [productRequestsLoading, setProductRequestsLoading] = useState(false);
   const [productRequestStatusFilter, setProductRequestStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
@@ -462,6 +473,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     setImportPreviewSort("conf_asc");
     setImportQualFilter("all");
     setImportConfirmModal(null);
+    setRowOverrides({});
+    setEditingRowNum(null);
+    setEditingValue("");
+    setImportReviewFilter("all");
     try {
       const form = new FormData();
       form.append("file", file);
@@ -1113,8 +1128,45 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             !item.analysis?.industry2 &&
             (item.analysis?.productCandidate ?? "") !== "";
 
+          // 검토 워크플로우 헬퍼
+          const REJECT_REASONS = ["프로젝트명", "내부업무", "Product 아님", "설명형 텍스트", "중복 의미", "운영성 항목"];
+          const REVIEW_STATUS_META = {
+            pending:  { label: "보류", color: "#6b7280", bg: "#f3f4f6", border: "#d1d5db" },
+            approved: { label: "승인", color: "#059669", bg: "#f0fdf4", border: "#bbf7d0" },
+            rejected: { label: "제외", color: "#dc2626", bg: "#fef2f2", border: "#fca5a5" },
+          };
+          const getReviewStatus = (item: ImportPreviewItem): "pending" | "approved" | "rejected" =>
+            rowOverrides[item.rowNum]?.reviewStatus ?? "pending";
+          const getEffectiveCandidate = (item: ImportPreviewItem): string => {
+            const ov = rowOverrides[item.rowNum];
+            return ov?.overriddenCandidate !== undefined ? ov.overriddenCandidate : (item.analysis?.productCandidate ?? "");
+          };
+          const setRowReviewStatus = (rowNum: number, status: "pending" | "approved" | "rejected") =>
+            setRowOverrides(prev => {
+              const base = prev[rowNum] ?? { reviewStatus: "pending" as const, rejectReason: "", overriddenCandidate: undefined, originalCandidate: "" };
+              return { ...prev, [rowNum]: { ...base, reviewStatus: status } };
+            });
+          const setRowRejectReason = (rowNum: number, reason: string) =>
+            setRowOverrides(prev => {
+              const base = prev[rowNum] ?? { reviewStatus: "rejected" as const, rejectReason: "", overriddenCandidate: undefined, originalCandidate: "" };
+              return { ...prev, [rowNum]: { ...base, rejectReason: reason } };
+            });
+          const setRowOverrideCandidate = (rowNum: number, value: string, aiOriginal: string) =>
+            setRowOverrides(prev => {
+              const ex = prev[rowNum] ?? { reviewStatus: "pending" as const, rejectReason: "", overriddenCandidate: undefined, originalCandidate: aiOriginal };
+              return { ...prev, [rowNum]: { ...ex, overriddenCandidate: value, originalCandidate: ex.originalCandidate || aiOriginal } };
+            });
+
           const safeRows = importPreview.items.filter(isSafe);
+          const safeAndNotRejected = importPreview.items.filter(x => isSafe(x) && getReviewStatus(x) !== "rejected");
           const allNewRows = importPreview.items.filter(x => x.status === "new");
+          const allNewNotRejected = importPreview.items.filter(x => x.status === "new" && getReviewStatus(x) !== "rejected");
+          const approvedCount = importPreview.items.filter(x => getReviewStatus(x) === "approved").length;
+          const rejectedCount = importPreview.items.filter(x => getReviewStatus(x) === "rejected").length;
+          const modifiedCount = importPreview.items.filter(x => {
+            const ov = rowOverrides[x.rowNum];
+            return ov?.overriddenCandidate !== undefined && ov.overriddenCandidate !== (x.analysis?.productCandidate ?? "");
+          }).length;
 
           // 상태 탭 필터
           let filtered = importPreviewFilter === "all"
@@ -1125,6 +1177,15 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           if (importQualFilter === "review_only") filtered = filtered.filter(x => !isSafe(x));
           else if (importQualFilter === "safe_only") filtered = filtered.filter(isSafe);
           else if (importQualFilter === "low_conf") filtered = filtered.filter(x => (x.analysis?.confidenceScore ?? 0) < 80);
+
+          // 검토 상태 필터
+          if (importReviewFilter === "approved") filtered = filtered.filter(x => getReviewStatus(x) === "approved");
+          else if (importReviewFilter === "rejected") filtered = filtered.filter(x => getReviewStatus(x) === "rejected");
+          else if (importReviewFilter === "pending") filtered = filtered.filter(x => getReviewStatus(x) === "pending");
+          else if (importReviewFilter === "modified") filtered = filtered.filter(x => {
+            const ov = rowOverrides[x.rowNum];
+            return ov?.overriddenCandidate !== undefined && ov.overriddenCandidate !== (x.analysis?.productCandidate ?? "");
+          });
 
           // 정렬 (기본: 낮은 confidence 먼저)
           filtered = [...filtered].sort((a, b) => {
@@ -1151,6 +1212,13 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             fontSize: 11, padding: "3px 9px", borderRadius: 5, border: `1px solid ${importPreviewSort === k ? "#7c3aed" : "#e5e7eb"}`,
             background: importPreviewSort === k ? "#f5f3ff" : "#fff", color: importPreviewSort === k ? "#7c3aed" : "#6b7280", cursor: "pointer", fontWeight: importPreviewSort === k ? 700 : 400,
           });
+          const rvFilterBtnStyle = (k: string): React.CSSProperties => ({
+            fontSize: 11, padding: "3px 9px", borderRadius: 5,
+            border: `1px solid ${importReviewFilter === k ? "#0369a1" : "#e5e7eb"}`,
+            background: importReviewFilter === k ? "#f0f9ff" : "#fff",
+            color: importReviewFilter === k ? "#0369a1" : "#6b7280",
+            cursor: "pointer", fontWeight: importReviewFilter === k ? 700 : 400,
+          });
 
           return (
             <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
@@ -1171,19 +1239,19 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                     style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, border: "none", background: selectedRows.size > 0 ? "#2563eb" : "#e5e7eb", color: selectedRows.size > 0 ? "#fff" : "#9ca3af", cursor: selectedRows.size > 0 ? "pointer" : "not-allowed", fontWeight: 700 }}>
                     선택 {selectedRows.size}건 등록
                   </button>
-                  {/* 검토필요 제외하고 등록 */}
+                  {/* 검토필요 제외하고 등록 (제외 처리된 항목 자동 제외) */}
                   <button
-                    disabled={safeRows.length === 0 || importExecuting}
-                    onClick={() => { if (safeRows.length > 0) setImportConfirmModal({ mode: "safe", rows: safeRows }); }}
-                    style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, border: "1px solid #059669", background: safeRows.length > 0 ? "#f0fdf4" : "#f9fafb", color: safeRows.length > 0 ? "#059669" : "#9ca3af", cursor: safeRows.length > 0 ? "pointer" : "not-allowed", fontWeight: 700 }}>
-                    검토필요 제외 {safeRows.length}건 등록
+                    disabled={safeAndNotRejected.length === 0 || importExecuting}
+                    onClick={() => { if (safeAndNotRejected.length > 0) setImportConfirmModal({ mode: "safe", rows: safeAndNotRejected }); }}
+                    style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, border: "1px solid #059669", background: safeAndNotRejected.length > 0 ? "#f0fdf4" : "#f9fafb", color: safeAndNotRejected.length > 0 ? "#059669" : "#9ca3af", cursor: safeAndNotRejected.length > 0 ? "pointer" : "not-allowed", fontWeight: 700 }}>
+                    검토필요 제외 {safeAndNotRejected.length}건 등록
                   </button>
-                  {/* 전체 등록 — 보조 버튼 스타일 */}
+                  {/* 전체 등록 — 보조 버튼 스타일 (제외 처리된 항목 자동 제외) */}
                   <button
-                    disabled={allNewRows.length === 0 || importExecuting}
-                    onClick={() => { if (allNewRows.length > 0) setImportConfirmModal({ mode: "all", rows: allNewRows }); }}
-                    style={{ fontSize: 11, padding: "5px 10px", borderRadius: 7, border: "1px solid #d1d5db", background: "#f9fafb", color: allNewRows.length > 0 ? "#6b7280" : "#9ca3af", cursor: allNewRows.length > 0 ? "pointer" : "not-allowed", fontWeight: 500 }}>
-                    전체 {allNewRows.length}건
+                    disabled={allNewNotRejected.length === 0 || importExecuting}
+                    onClick={() => { if (allNewNotRejected.length > 0) setImportConfirmModal({ mode: "all", rows: allNewNotRejected }); }}
+                    style={{ fontSize: 11, padding: "5px 10px", borderRadius: 7, border: "1px solid #d1d5db", background: "#f9fafb", color: allNewNotRejected.length > 0 ? "#6b7280" : "#9ca3af", cursor: allNewNotRejected.length > 0 ? "pointer" : "not-allowed", fontWeight: 500 }}>
+                    전체 {allNewNotRejected.length}건
                   </button>
                   <button onClick={() => { setImportPreview(null); setSelectedRows(new Set()); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 20, lineHeight: 1, padding: "0 4px" }}>×</button>
                 </div>
@@ -1195,7 +1263,11 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 <span style={{ color: "#374151" }}>중복 <strong style={{ color: "#d97706" }}>{s.duplicate}</strong></span>
                 <span style={{ color: "#374151" }}>충돌 <strong style={{ color: "#dc2626" }}>{s.conflict}</strong></span>
                 <span style={{ color: "#374151" }}>검토필요 <strong style={{ color: "#7c3aed" }}>{s.review}</strong></span>
-                <span style={{ color: "#374151" }}>등록가능 <strong style={{ color: "#059669" }}>{safeRows.length}</strong></span>
+                <span style={{ color: "#374151" }}>등록가능 <strong style={{ color: "#059669" }}>{safeAndNotRejected.length}</strong></span>
+                <span style={{ color: "#6b7280", fontSize: 11 }}>|</span>
+                {approvedCount > 0 && <span style={{ color: "#374151" }}>승인 <strong style={{ color: "#059669" }}>{approvedCount}</strong></span>}
+                {rejectedCount > 0 && <span style={{ color: "#374151" }}>제외 <strong style={{ color: "#dc2626" }}>{rejectedCount}</strong></span>}
+                {modifiedCount > 0 && <span style={{ color: "#374151" }}>수정됨 <strong style={{ color: "#7c3aed" }}>{modifiedCount}</strong></span>}
                 {selectedRows.size > 0 && (
                   <span style={{ color: "#374151" }}>선택됨 <strong style={{ color: "#2563eb" }}>{selectedRows.size}</strong>
                     <button onClick={() => setSelectedRows(new Set())} style={{ marginLeft: 4, fontSize: 10, color: "#9ca3af", background: "none", border: "none", cursor: "pointer", padding: 0 }}>✕ 해제</button>
@@ -1228,13 +1300,26 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   </button>
                 ))}
               </div>
+              {/* 검토 상태 필터 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 14px", background: "#f5f7fa", borderBottom: "1px solid #eaecf0", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, marginRight: 2 }}>검토:</span>
+                {([
+                  ["all",      "전체"],
+                  ["pending",  `보류${importReviewFilter === "pending" ? "" : rejectedCount + approvedCount > 0 ? ` (${importPreview.items.length - approvedCount - rejectedCount})` : ""}`],
+                  ["approved", `승인${approvedCount > 0 ? ` ${approvedCount}` : ""}`],
+                  ["rejected", `제외${rejectedCount > 0 ? ` ${rejectedCount}` : ""}`],
+                  ["modified", `수정됨${modifiedCount > 0 ? ` ${modifiedCount}` : ""}`],
+                ] as const).map(([k, label]) => (
+                  <button key={k} onClick={() => setImportReviewFilter(k)} style={rvFilterBtnStyle(k)}>{label}</button>
+                ))}
+              </div>
 
               {/* 미리보기 테이블 — 단일 scroll 컨테이너 (sticky 정상 동작) */}
               <div style={{ maxHeight: 320, overflowY: "auto", overflowX: "auto" }}>
                 {filtered.length === 0 ? (
                   <div style={{ textAlign: "center", padding: "24px 0", fontSize: 13, color: "#9ca3af" }}>해당 항목 없음</div>
                 ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1040 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1200 }}>
                     <thead>
                       <tr>
                         {/* 체크박스 헤더 */}
@@ -1248,7 +1333,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               }
                             }} />
                         </th>
-                        {["행", "원본 상품명", "Product 후보", "언어쌍", "방향", "난이도", "산업", "유형", "단위", "단가", "상태", "이슈"].map(h => (
+                        {["행", "원본 상품명", "Product 후보", "언어쌍", "방향", "난이도", "산업", "유형", "단위", "단가", "상태", "이슈", "검토"].map(h => (
                           <th key={h} style={thStyle}>{h}</th>
                         ))}
                       </tr>
@@ -1268,11 +1353,41 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                             </td>
                             <td style={{ padding: "4px 8px", color: "#c4c4c4", fontFamily: "monospace", fontSize: 11 }}>{item.rowNum}</td>
                             <td style={{ padding: "4px 8px", color: "#374151", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
-                            {/* Product 후보 (AI 추천값 — 확정 아님) */}
+                            {/* Product 후보 — 클릭하여 inline 수정 가능 */}
                             <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
-                              {an.productCandidate
-                                ? <span title="AI 분석 추천값" style={{ fontSize: 11, color: "#374151", fontWeight: 500, background: "#f3f4f6", borderRadius: 3, padding: "1px 6px", border: "1px solid #e5e7eb" }}>{an.productCandidate}</span>
-                                : ""}
+                              {editingRowNum === item.rowNum ? (
+                                <input
+                                  autoFocus
+                                  value={editingValue}
+                                  onChange={e => setEditingValue(e.target.value)}
+                                  onBlur={() => { setRowOverrideCandidate(item.rowNum, editingValue, an.productCandidate); setEditingRowNum(null); }}
+                                  onKeyDown={e => {
+                                    if (e.key === "Enter") { setRowOverrideCandidate(item.rowNum, editingValue, an.productCandidate); setEditingRowNum(null); }
+                                    if (e.key === "Escape") setEditingRowNum(null);
+                                  }}
+                                  style={{ fontSize: 11, padding: "1px 5px", border: "1px solid #2563eb", borderRadius: 3, outline: "none", width: 90, color: "#111827" }}
+                                />
+                              ) : (() => {
+                                const eff = getEffectiveCandidate(item);
+                                const isOverridden = rowOverrides[item.rowNum]?.overriddenCandidate !== undefined;
+                                return (
+                                  <span
+                                    title={isOverridden
+                                      ? `AI 추천: ${an.productCandidate} → 수정: ${eff} (클릭하여 재수정)`
+                                      : `AI 분석 추천값 — 클릭하여 수정`}
+                                    onClick={() => { setEditingRowNum(item.rowNum); setEditingValue(eff); }}
+                                    style={{
+                                      fontSize: 11, cursor: "text",
+                                      color: isOverridden ? "#7c3aed" : "#374151",
+                                      fontWeight: isOverridden ? 700 : 500,
+                                      background: isOverridden ? "#f5f3ff" : "#f3f4f6",
+                                      borderRadius: 3, padding: "1px 6px",
+                                      border: `1px solid ${isOverridden ? "#c4b5fd" : "#e5e7eb"}`,
+                                    }}>
+                                    {eff || <span style={{ color: "#c4c4c4" }}>—</span>}
+                                  </span>
+                                );
+                              })()}
                               {an.isOptionCandidate && (
                                 <span title="동일 서비스가 여러 언어쌍/산업으로 반복 — 옵션화 가능" style={{ marginLeft: 4, fontSize: 10, color: "#6d28d9", background: "#ede9fe", borderRadius: 3, padding: "1px 4px", fontWeight: 600, cursor: "default" }}>옵션화 가능</span>
                               )}
@@ -1328,6 +1443,45 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               {item.issues.filter(s => s.startsWith("유사 중복") || s.startsWith("taxonomy") || s.startsWith("단가") || s.startsWith("단위")).map((s, i) => (
                                 <span key={`iss-${i}`} style={{ display: "inline-block", marginRight: 3, color: "#9ca3af" }}>{s}</span>
                               ))}
+                            </td>
+                            {/* 검토 상태 — 승인/보류/제외 + Reject Reason */}
+                            <td style={{ padding: "4px 6px", whiteSpace: "nowrap", verticalAlign: "top" }}>
+                              {(() => {
+                                const rv = getReviewStatus(item);
+                                const ov = rowOverrides[item.rowNum];
+                                return (
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                    <div style={{ display: "flex", gap: 2 }}>
+                                      {(["approved", "pending", "rejected"] as const).map(st => {
+                                        const meta = REVIEW_STATUS_META[st];
+                                        const active = rv === st;
+                                        return (
+                                          <button key={st}
+                                            onClick={() => setRowReviewStatus(item.rowNum, st)}
+                                            style={{
+                                              fontSize: 10, padding: "2px 6px", borderRadius: 4,
+                                              border: `1px solid ${active ? meta.border : "#e5e7eb"}`,
+                                              background: active ? meta.bg : "#fff",
+                                              color: active ? meta.color : "#9ca3af",
+                                              cursor: "pointer", fontWeight: active ? 700 : 400, lineHeight: "15px",
+                                            }}>
+                                            {meta.label}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                    {rv === "rejected" && (
+                                      <select
+                                        value={ov?.rejectReason ?? ""}
+                                        onChange={e => setRowRejectReason(item.rowNum, e.target.value)}
+                                        style={{ fontSize: 10, padding: "1px 3px", border: "1px solid #fca5a5", borderRadius: 3, color: "#dc2626", background: "#fef2f2", maxWidth: 105 }}>
+                                        <option value="">사유 선택</option>
+                                        {REJECT_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                                      </select>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </td>
                           </tr>
                         );

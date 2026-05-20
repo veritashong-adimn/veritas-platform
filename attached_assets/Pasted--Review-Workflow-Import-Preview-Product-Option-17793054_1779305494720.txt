@@ -1,0 +1,214 @@
+지시문 — Review Workflow 초기 구조 구축
+
+현재 상품 마스터 Import Preview는 다음 단계까지 완료된 상태입니다.
+
+- Product / Option 구조 정리
+- Import Preview 운영 검토 구조
+- Sticky Header
+- 등록 안전장치
+- Confidence Score
+- Review Reason
+- Canonical Stabilization
+- 설명형/프로젝트명 감지
+- 운영성 항목(EX 가능성) 감지
+- Canonical Mapping 강화
+
+현재 상태는:
+“AI가 Product 후보를 추천”
+하는 단계입니다.
+
+이번 작업 목표는:
+
+“운영자가 수정/승인/제외한 판단을 구조적으로 관리할 수 있게 만드는 것”
+
+입니다.
+
+중요:
+- DB schema 대규모 변경 금지
+- 자동학습 엔진 구현 금지
+- AI 자동등록 엔진 구현 금지
+- 기존 Import Preview 구조 유지
+- 기존 Sticky Header 유지
+- 기존 등록 안전장치 유지
+
+이번 작업은:
+Review Workflow(검토 워크플로우) 초기 구조만 구현합니다.
+
+핵심 목표
+
+현재:
+AI 추천 → 바로 등록 여부 판단
+
+다음 단계:
+AI 추천
+→ 운영자 수정/승인/제외
+→ 판단 이력 축적 가능 상태
+
+즉:
+“운영자 판단 데이터가 남기 시작하는 구조”
+를 만드는 것이 목표입니다.
+
+수정 요청
+
+1. Manual Product Override 기능 추가
+
+현재 Product 후보는 AI 추천값만 표시됩니다.
+
+추가:
+운영자가 Product 후보를 직접 수정할 수 있게 해 주세요.
+
+예:
+- 영문화 → 번역
+- 회의록작성 → 타이핑
+- 시스템입력 → 제외 예정
+
+방향:
+- inline edit 가능
+또는
+- dropdown/select 가능
+- compact UX 유지
+
+중요:
+현재 단계에서는 DB 영구 저장까지 하지 않아도 됨.
+우선 Preview 상태 내부에서 수정 가능 구조만 구현.
+
+2. Row 상태 추가
+
+각 Preview row에 다음 상태를 둘 수 있게 해 주세요.
+
+- 승인
+- 제외
+- 보류(기본)
+
+예:
+status:
+- pending
+- approved
+- rejected
+
+기본 상태:
+pending
+
+UI:
+- compact chip/button 형태
+- 현재 행 상태 시각적으로 구분
+
+3. Reject Reason 추가
+
+운영자가 제외 처리할 경우 이유를 선택할 수 있게 해 주세요.
+
+예:
+- 프로젝트명
+- 내부업무
+- Product 아님
+- 설명형 텍스트
+- 중복 의미
+- 운영성 항목
+
+중요:
+free text보다 predefined reason 중심.
+
+4. Canonical 수정 추적 구조 (Preview 내부)
+
+운영자가 AI 추천값을 수정한 경우:
+원래 추천값과 수정값을 Preview state 안에서 유지해 주세요.
+
+예:
+AI 추천:
+- 영문화
+
+운영자 수정:
+- 번역
+
+즉:
+- originalCandidate
+- overriddenCandidate
+
+구조 유지 가능 상태.
+
+중요:
+이번 단계에서는 DB 저장까지 안 해도 됨.
+우선 Preview 내부 상태만 유지.
+
+5. Review Filter 강화
+
+추가 필터:
+
+- 승인만 보기
+- 제외만 보기
+- 보류만 보기
+- 수정된 항목만 보기
+
+예:
+“AI 추천값을 운영자가 수정한 항목만”
+필터 가능하게.
+
+6. “등록 제외”와 “미검토” 구분
+
+현재:
+등록 안 하면 끝.
+
+이번 작업부터는:
+
+- pending = 아직 판단 안 함
+- rejected = 명시적으로 제외
+- approved = 승인
+
+구분되도록 해 주세요.
+
+즉:
+“제외”
+와
+“아직 안 봄”
+은 다른 상태.
+
+7. 등록 버튼 연동
+
+현재 등록 버튼 구조는 유지하되:
+
+실제 등록 대상은:
+approved 상태 중심으로 계산되도록 준비 구조를 만들어 주세요.
+
+단:
+이번 단계에서는 기존 등록 동작 깨지지 않게 유지.
+
+중요:
+아직 실제 승인 기반 DB 저장 로직까지 강제 변경하지 말 것.
+우선 workflow 상태만 구축.
+
+8. 기존 구조 유지
+
+다음은 절대 깨지면 안 됩니다.
+
+- Sticky Header
+- 등록 안전장치
+- Product/Option 철학
+- Canonical 구조
+- Import Preview flow
+- Confidence/ReviewReason 표시
+- 기존 필터/정렬 구조
+
+9. 검증
+
+수정 후 다음 확인해 주세요.
+
+- Babel/TypeScript 통과
+- 기존 Preview 정상 렌더링
+- Sticky Header 유지
+- 기존 등록 안전장치 유지
+- Product override 정상 동작
+- 승인/제외/보류 상태 변경 정상
+- Reject Reason 선택 정상
+- 수정된 항목 필터 정상
+- 선택/필터/정렬 동시 사용 시 오류 없음
+- HMR 오류 없음
+
+최종 보고 시 다음 형식으로 알려 주세요.
+
+1. 수정 파일
+2. 추가된 Review Workflow 구조
+3. Preview state 변경 구조
+4. Override 처리 방식
+5. Reject Reason 구조
+6. 필터 추가 내용
+7. 검증 결과
