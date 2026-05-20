@@ -130,7 +130,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     status: "new" | "duplicate" | "conflict" | "review";
     issues: string[]; suggestedType: string;
     duplicateOf: { code: string; name: string }[];
-    analysis: { productCandidate: string; langPair: string; direction: string; isOptionCandidate: boolean };
+    analysis: { productCandidate: string; langPair: string; direction: string; difficulty: string; industry: string; isOptionCandidate: boolean };
   };
   const [importPreview, setImportPreview] = useState<{
     summary: { total: number; new: number; duplicate: number; conflict: number; review: number };
@@ -1142,7 +1142,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 860 }}>
                     <thead>
                       <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
-                        {["행", "원본 상품명", "Product 후보", "언어쌍", "방향", "유형", "단위", "단가", "상태", "이슈"].map(h => (
+                        {["행", "원본 상품명", "Product 후보", "언어쌍", "방향", "난이도", "산업", "유형", "단위", "단가", "상태", "이슈"].map(h => (
                           <th key={h} style={{ padding: "7px 10px", textAlign: "left", color: "#6b7280", fontWeight: 600, borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" }}>{h}</th>
                         ))}
                       </tr>
@@ -1150,7 +1150,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                     <tbody>
                       {filtered.map((item, idx) => {
                         const sm = STATUS_META[item.status] ?? STATUS_META.review;
-                        const an = item.analysis ?? { productCandidate: "", langPair: "", direction: "", isOptionCandidate: false };
+                        const an = item.analysis ?? { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", isOptionCandidate: false };
                         return (
                           <tr key={idx} style={{ borderBottom: "1px solid #f3f4f6", background: idx % 2 === 0 ? "#fff" : "#fafafa" }}>
                             <td style={{ padding: "6px 10px", color: "#9ca3af", fontFamily: "monospace" }}>{item.rowNum}</td>
@@ -1173,6 +1173,22 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               {an.direction ? (
                                 <span style={{ fontFamily: "monospace", fontSize: 11, color: an.direction === "bidirectional" ? "#059669" : "#374151", background: an.direction === "bidirectional" ? "#f0fdf4" : "#f3f4f6", borderRadius: 4, padding: "2px 6px" }}>
                                   {an.direction === "bidirectional" ? "↔ 양방향" : an.direction}
+                                </span>
+                              ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                            </td>
+                            {/* 난이도 */}
+                            <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
+                              {an.difficulty ? (
+                                <span style={{ fontSize: 11, fontWeight: 600, color: an.difficulty === "긴급" || an.difficulty === "특급" ? "#dc2626" : an.difficulty === "VIP" || an.difficulty === "프리미엄" ? "#7c3aed" : "#374151", background: an.difficulty === "긴급" || an.difficulty === "특급" ? "#fef2f2" : an.difficulty === "VIP" || an.difficulty === "프리미엄" ? "#f5f3ff" : "#f3f4f6", borderRadius: 4, padding: "2px 6px" }}>
+                                  {an.difficulty}
+                                </span>
+                              ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                            </td>
+                            {/* 산업 */}
+                            <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
+                              {an.industry ? (
+                                <span style={{ fontSize: 11, fontWeight: 600, color: "#0369a1", background: "#f0f9ff", borderRadius: 4, padding: "2px 6px" }}>
+                                  {an.industry}
                                 </span>
                               ) : <span style={{ color: "#d1d5db" }}>—</span>}
                             </td>

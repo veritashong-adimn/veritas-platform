@@ -356,65 +356,133 @@ type ProductAnalysis = {
   productCandidate: string;
   langPair: string;
   direction: string;
+  difficulty: string;
+  industry: string;
   isOptionCandidate: boolean;
 };
 
+const ISO_LABEL: Record<string, string> = {
+  ko: "한국어", en: "영어", ja: "일본어", zh: "중국어",
+  fr: "프랑스어", de: "독일어", es: "스페인어", ru: "러시아어",
+  ar: "아랍어", pt: "포르투갈어", vi: "베트남어", th: "태국어",
+  id: "인도네시아어", ms: "말레이어", hi: "힌디어", ph: "필리핀어",
+  tr: "터키어", it: "이탈리아어", mn: "몽골어",
+};
+
+type LangEntry = { m: string; code: string; label: string };
+const LANG_ENTRIES: LangEntry[] = [
+  { m: "한국어",     code: "ko", label: "한국어" },
+  { m: "영국어",     code: "en", label: "영어" },
+  { m: "영어",       code: "en", label: "영어" },
+  { m: "일본어",     code: "ja", label: "일본어" },
+  { m: "중국어",     code: "zh", label: "중국어" },
+  { m: "프랑스어",   code: "fr", label: "프랑스어" },
+  { m: "불어",       code: "fr", label: "프랑스어" },
+  { m: "독일어",     code: "de", label: "독일어" },
+  { m: "스페인어",   code: "es", label: "스페인어" },
+  { m: "러시아어",   code: "ru", label: "러시아어" },
+  { m: "아랍어",     code: "ar", label: "아랍어" },
+  { m: "포르투갈어", code: "pt", label: "포르투갈어" },
+  { m: "베트남어",   code: "vi", label: "베트남어" },
+  { m: "태국어",     code: "th", label: "태국어" },
+  { m: "인도네시아어", code: "id", label: "인도네시아어" },
+  { m: "말레이어",   code: "ms", label: "말레이어" },
+  { m: "힌디어",     code: "hi", label: "힌디어" },
+  { m: "필리핀어",   code: "ph", label: "필리핀어" },
+  { m: "터키어",     code: "tr", label: "터키어" },
+  { m: "이탈리아어", code: "it", label: "이탈리아어" },
+  { m: "몽골어",     code: "mn", label: "몽골어" },
+  { m: "한", code: "ko", label: "한국어" },
+  { m: "영", code: "en", label: "영어" },
+  { m: "일", code: "ja", label: "일본어" },
+  { m: "중", code: "zh", label: "중국어" },
+  { m: "불", code: "fr", label: "프랑스어" },
+  { m: "독", code: "de", label: "독일어" },
+  { m: "스", code: "es", label: "스페인어" },
+  { m: "러", code: "ru", label: "러시아어" },
+  { m: "아", code: "ar", label: "아랍어" },
+  { m: "포", code: "pt", label: "포르투갈어" },
+  { m: "베", code: "vi", label: "베트남어" },
+  { m: "태", code: "th", label: "태국어" },
+];
+
+const DIFFICULTY_LIST = ["프리미엄", "특급", "긴급", "VIP", "고급", "전문", "일반"];
+const INDUSTRY_LIST   = ["반도체", "화장품", "바이오", "자동차", "국방", "특허", "금융", "계약", "의료", "법률", "게임", "IT"];
+
 function analyzeProductStructure(name: string, productType?: string): ProductAnalysis {
-  const none: ProductAnalysis = { productCandidate: "", langPair: "", direction: "", isOptionCandidate: false };
+  const none: ProductAnalysis = { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", isOptionCandidate: false };
   if (!name?.trim()) return none;
 
-  type L = { m: string; code: string; label: string };
-  const LANGS: L[] = [
-    { m: "한국어", code: "ko", label: "한국어" }, { m: "영국어", code: "en", label: "영어" },
-    { m: "영어",   code: "en", label: "영어" },   { m: "일본어", code: "ja", label: "일본어" },
-    { m: "중국어", code: "zh", label: "중국어" },  { m: "프랑스어", code: "fr", label: "프랑스어" },
-    { m: "불어",   code: "fr", label: "프랑스어" },{ m: "독일어", code: "de", label: "독일어" },
-    { m: "스페인어", code: "es", label: "스페인어" }, { m: "러시아어", code: "ru", label: "러시아어" },
-    { m: "아랍어", code: "ar", label: "아랍어" },  { m: "포르투갈어", code: "pt", label: "포르투갈어" },
-    { m: "베트남어", code: "vi", label: "베트남어" }, { m: "태국어", code: "th", label: "태국어" },
-    { m: "인도네시아어", code: "id", label: "인도네시아어" }, { m: "말레이어", code: "ms", label: "말레이어" },
-    { m: "힌디어", code: "hi", label: "힌디어" },
-    { m: "한", code: "ko", label: "한국어" }, { m: "영", code: "en", label: "영어" },
-    { m: "일", code: "ja", label: "일본어" }, { m: "중", code: "zh", label: "중국어" },
-    { m: "불", code: "fr", label: "프랑스어" }, { m: "독", code: "de", label: "독일어" },
-    { m: "스", code: "es", label: "스페인어" }, { m: "러", code: "ru", label: "러시아어" },
-    { m: "아", code: "ar", label: "아랍어" },   { m: "포", code: "pt", label: "포르투갈어" },
-    { m: "베", code: "vi", label: "베트남어" },  { m: "태", code: "th", label: "태국어" },
-  ];
+  let workName = name.trim();
+  let srcCode = ""; let tgtCode = ""; let srcLabel = ""; let tgtLabel = "";
 
-  let rest = name;
-  let lang1: L | null = null;
-  let lang2: L | null = null;
-
-  for (const l of LANGS) {
-    if (rest.startsWith(l.m)) { lang1 = l; rest = rest.slice(l.m.length); break; }
-  }
-  if (lang1) {
-    for (const l of LANGS) {
-      if (l.code !== lang1.code && rest.startsWith(l.m)) {
-        lang2 = l; rest = rest.slice(l.m.length); break;
+  // ── Step 1: ISO pair (ko→en / ko-en / ko_en / en→ko 등)
+  const isoKeys = Object.keys(ISO_LABEL).join("|");
+  const isoPairRx = new RegExp(`(${isoKeys})[→\\-_](${isoKeys})`, "i");
+  const isoM = workName.match(isoPairRx);
+  if (isoM) {
+    srcCode = isoM[1].toLowerCase(); tgtCode = isoM[2].toLowerCase();
+    srcLabel = ISO_LABEL[srcCode] ?? srcCode; tgtLabel = ISO_LABEL[tgtCode] ?? tgtCode;
+    workName = workName.replace(isoM[0], " ").replace(/\s+/g, " ").trim();
+  } else {
+    // ── Step 2: Korean word-based language detection (prefix order)
+    let rest = workName;
+    let lang1: LangEntry | null = null; let lang2: LangEntry | null = null;
+    for (const l of LANG_ENTRIES) {
+      if (rest.startsWith(l.m)) { lang1 = l; rest = rest.slice(l.m.length).replace(/^\s+/, ""); break; }
+    }
+    if (lang1) {
+      for (const l of LANG_ENTRIES) {
+        if (l.code !== lang1.code && rest.startsWith(l.m)) {
+          lang2 = l; rest = rest.slice(l.m.length).replace(/^\s+/, ""); break;
+        }
       }
+      srcCode = lang1.code; srcLabel = lang1.label;
+      if (lang2) { tgtCode = lang2.code; tgtLabel = lang2.label; }
+      workName = rest;
     }
   }
 
-  if (!lang1) return none;
-
-  const productCandidate = rest.trim() || name;
-  const isInterp = productType === "interpretation" || /통역/.test(productCandidate);
-
-  let langPair: string;
-  let direction: string;
-
-  if (lang2) {
-    langPair  = isInterp ? `${lang1.label} ↔ ${lang2.label}` : `${lang1.label} → ${lang2.label}`;
-    direction = isInterp ? "bidirectional" : `${lang1.code}→${lang2.code}`;
-  } else {
-    if (lang1.code === "ko") return { productCandidate, langPair: "", direction: "", isOptionCandidate: false };
-    langPair  = `한국어 ↔ ${lang1.label}`;
-    direction = isInterp ? "bidirectional" : `ko↔${lang1.code}`;
+  // ── Step 3: Difficulty extraction (longer keywords first)
+  let difficulty = "";
+  for (const d of DIFFICULTY_LIST) {
+    const rx = new RegExp(d, "i");
+    if (rx.test(workName)) {
+      difficulty = d.toUpperCase() === "VIP" ? "VIP" : d;
+      workName = workName.replace(rx, " ").replace(/\s+/g, " ").trim();
+      break;
+    }
   }
 
-  return { productCandidate, langPair, direction, isOptionCandidate: true };
+  // ── Step 4: Industry extraction (longer keywords first)
+  let industry = "";
+  for (const ind of INDUSTRY_LIST) {
+    const rx = new RegExp(ind, "i");
+    if (rx.test(workName)) {
+      industry = ind.toUpperCase() === "IT" ? "IT" : ind;
+      workName = workName.replace(rx, " ").replace(/\s+/g, " ").trim();
+      break;
+    }
+  }
+
+  // ── Step 5: Product candidate = remaining text
+  const productCandidate = workName.replace(/\s+/g, "").trim();
+  if (!srcCode && !productCandidate) return none;
+
+  // ── Step 6: Language pair display + direction
+  const isInterp = productType === "interpretation" || /통역/.test(productCandidate);
+  let langPair = ""; let direction = "";
+
+  if (srcCode && tgtCode) {
+    langPair  = isInterp ? `${srcLabel} ↔ ${tgtLabel}` : `${srcLabel} → ${tgtLabel}`;
+    direction = isInterp ? "bidirectional" : `${srcCode}→${tgtCode}`;
+  } else if (srcCode && srcCode !== "ko") {
+    langPair  = `한국어 ↔ ${srcLabel}`;
+    direction = isInterp ? "bidirectional" : `ko↔${srcCode}`;
+  }
+
+  const isOptionCandidate = !!(productCandidate && (tgtCode || (srcCode && srcCode !== "ko")));
+  return { productCandidate, langPair, direction, difficulty, industry, isOptionCandidate };
 }
 
 // ─── taxonomy 자동 추천 ──────────────────────────────────────────────────────
