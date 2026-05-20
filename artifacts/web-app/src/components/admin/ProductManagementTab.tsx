@@ -1268,10 +1268,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                             </td>
                             <td style={{ padding: "4px 8px", color: "#c4c4c4", fontFamily: "monospace", fontSize: 11 }}>{item.rowNum}</td>
                             <td style={{ padding: "4px 8px", color: "#374151", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
-                            {/* Product 후보 */}
+                            {/* Product 후보 (AI 추천값 — 확정 아님) */}
                             <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
                               {an.productCandidate
-                                ? <span style={{ color: "#2563eb", fontWeight: 700 }}>{an.productCandidate}</span>
+                                ? <span title="AI 분석 추천값" style={{ fontSize: 11, color: "#374151", fontWeight: 500, background: "#f3f4f6", borderRadius: 3, padding: "1px 6px", border: "1px solid #e5e7eb" }}>{an.productCandidate}</span>
                                 : ""}
                               {an.isOptionCandidate && (
                                 <span title="동일 서비스가 여러 언어쌍/산업으로 반복 — 옵션화 가능" style={{ marginLeft: 4, fontSize: 10, color: "#6d28d9", background: "#ede9fe", borderRadius: 3, padding: "1px 4px", fontWeight: 600, cursor: "default" }}>옵션화 가능</span>

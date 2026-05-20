@@ -445,6 +445,8 @@ const CANONICAL_PRODUCTS: [RegExp, string][] = [
   [/동시통역/,   "동시통역"],
   [/순차통역/,   "순차통역"],
   [/통역/,       "통역"],
+  // 영문화/국문화/한글화 계열 → 번역으로 흡수 (번역 entry 이전에 배치)
+  [/영문화|국문화|한글화|영문작업|영문번역|영어번역/, "번역"],
   [/번역/,       "번역"],
   [/감수/,       "감수"],
 ];
@@ -532,6 +534,21 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
 
   if (!srcCode && !productCandidate) return none;
 
+  // ── Step 5b: 설명형/프로젝트명/운영성 항목 감지
+  // 강한 프로젝트 패턴 — 원본명 기준
+  const PROJ_KW   = /프로젝트|구축|프로세스/;
+  // 작업명 패턴 — 비canonical일 때만 적용
+  const WORK_DESC_KW = /개발|관리|입력|지원|작업|운영|세팅|대응/;
+  // 운영성 비용 항목
+  const OPS_ITEM_KW = /사후\s*AS|출장비|퀵비|장비사용료|택배비/i;
+
+  const hasProjKw     = PROJ_KW.test(name);
+  const hasWorkDescKw = !isCanonical && WORK_DESC_KW.test(name);
+  // 비canonical이면서 잔여 텍스트가 길면 설명형으로 판단
+  const isLongNonCanonical = !isCanonical && productCandidate.replace(/\s/g, "").length >= 8;
+  const isProjDesc = hasProjKw || isLongNonCanonical;
+  const isOpsItem  = OPS_ITEM_KW.test(name) || OPS_ITEM_KW.test(productCandidate);
+
   // ── Step 6: Language Pair (항상 관계형 ↔) + Direction (방향형)
   const isInterp = productType === "interpretation" || /통역/.test(productCandidate);
   let langPair = ""; let direction = "";
@@ -550,6 +567,9 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   if (productCandidate && !isCanonical) reviewReasons.push("Product 불명확");
   if (srcLabel.startsWith("미지원") || tgtLabel.startsWith("미지원")) reviewReasons.push("미지원 언어");
   if (industry2) reviewReasons.push("다중 산업 감지");
+  if (isProjDesc) reviewReasons.push("프로젝트명/설명형 가능성");
+  if (hasWorkDescKw && !isProjDesc) reviewReasons.push("작업명 패턴");
+  if (isOpsItem) reviewReasons.push("운영성 항목 (EX계열 가능)");
 
   // ── Step 8: Confidence Score (0–100)
   let score = 50;
@@ -561,7 +581,11 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   if (industry) score += 3;
   if (srcLabel.startsWith("미지원") || tgtLabel.startsWith("미지원")) score -= 20;
   if (!productCandidate) score -= 30;
-  score -= reviewReasons.length * 8;
+  // 설명형/프로젝트명 패널티 (canonical이면 약하게, 아니면 강하게)
+  if (isProjDesc) score -= isCanonical ? 15 : 22;
+  if (hasWorkDescKw && !isProjDesc) score -= 10;
+  if (isOpsItem) score -= 12;
+  score -= reviewReasons.length * 6;
   const confidenceScore = Math.max(0, Math.min(100, score));
 
   const isOptionCandidate = !!(productCandidate && (tgtCode || (srcCode && srcCode !== "ko")));

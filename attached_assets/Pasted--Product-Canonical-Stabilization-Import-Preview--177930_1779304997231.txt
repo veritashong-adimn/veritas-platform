@@ -1,0 +1,199 @@
+지시문 — Product Canonical Stabilization (상품 표준화 안정화)
+
+현재 상품 마스터 Import Preview 구조는 다음 방향으로 안정화되어 있습니다.
+
+- Product = 실제 판매/매출/견적 단위
+- Option = 언어/방향/산업/난이도 등 속성
+- Import Preview 기반 운영 검토 구조
+- Human-in-the-loop 승인 구조
+- 등록 안전장치 및 sticky header 완료 상태
+
+이번 작업은 새로운 구조 개발이 아니라:
+
+“실제 운영 데이터 기준 Product 품질 안정화”
+
+를 목표로 합니다.
+
+중요:
+- DB schema 수정 금지
+- API 구조 변경 금지
+- Import flow 변경 금지
+- Product/Option 철학 변경 금지
+- 자동등록 엔진 구현 금지
+- 이번 작업은 parser/canonical polishing 중심
+
+현재 문제
+
+실제 데이터에서 다음과 같은 항목들이 Product 후보로 남고 있습니다.
+
+예:
+- 차량전장SW표준개발프로세스영문화프로젝트
+- 시스템입력
+- 프로젝트대응
+- 영문화
+- 사후AS
+
+이 중 일부는:
+- 프로젝트명
+- 작업설명
+- 내부업무명
+- 운영항목
+
+인데도 Product 후보로 노출되고 있습니다.
+
+이번 작업 목표
+
+“AI가 설명형 문장이나 프로젝트명을 Product로 착각하지 않게 하는 것”
+
+즉:
+실제 판매 단위(Product)만 안정적으로 추출되도록 canonical 품질을 높여 주세요.
+
+수정 요청
+
+1. 설명형 Product 감지 강화
+
+다음 특징을 가진 경우 Product 확정 강도를 낮춰 주세요.
+
+예:
+- 지나치게 긴 문자열
+- 설명형 단어 포함
+- 프로젝트명 패턴
+- 작업설명 패턴
+
+대표 예:
+- 차량전장SW표준개발프로세스영문화프로젝트
+
+처리 방향:
+- reviewReason 추가
+- confidence 하락
+- “Product 불명확”
+또는
+“프로젝트명 가능성”
+reviewReason 추가
+
+중요:
+자동 등록 가능 대상으로 분류되지 않도록 해 주세요.
+
+2. 프로젝트/설명형 키워드 감지
+
+다음 단어가 포함된 경우 설명형 가능성을 높게 판단해 주세요.
+
+예:
+- 프로젝트
+- 개발
+- 구축
+- 대응
+- 운영
+- 작업
+- 프로세스
+- 관리
+- 입력
+- 지원
+- 세팅
+
+중요:
+무조건 제거하지 말고,
+reviewReason 및 confidence 조정 중심으로 처리해 주세요.
+
+3. Canonical Mapping 강화
+
+다음 계열은 “번역” Product로 canonicalizing 해 주세요.
+
+예:
+- 영문화 → 번역
+- 국문화 → 번역
+- 영어번역 → 번역
+- 한글화 → 번역
+- 영문작업 → 번역
+
+즉:
+“언어화/영문화” 계열은
+독립 Product보다 번역 Product로 흡수.
+
+4. Product 인정 기준 강화
+
+현재 일부 명사형 텍스트가 Product 후보가 되고 있습니다.
+
+강화 방향:
+다음 기준을 더 중요하게 반영해 주세요.
+
+- 실제 판매되는 서비스인가?
+- 실제 견적 항목인가?
+- 반복 가능한 서비스 단위인가?
+
+예:
+- 번역 → O
+- 감수 → O
+- 동시통역 → O
+- 시스템입력 → X 가능성 높음
+
+즉:
+단순 명사보다
+실제 revenue unit 성격을 더 중요하게 판단.
+
+5. 운영성 항목 분리
+
+다음 계열은 핵심 Product보다 운영성 항목(EX 계열) 가능성이 높습니다.
+
+예:
+- 사후AS
+- 출장비
+- 퀵비
+- 장비사용료
+
+처리 방향:
+- EX 계열 가능성 반영
+- reviewReason 가능
+- Product confidence 낮춤 가능
+
+단:
+실제 매출 항목일 수 있으므로 완전 제거 금지.
+
+6. Suggestion UI Tone Down
+
+현재 Product 후보가 너무 “확정값”처럼 보입니다.
+
+이번 작업에서는:
+“AI 추천값”
+느낌이 나도록 UI 톤을 약간 완화해 주세요.
+
+예:
+- badge 색상 완화
+- suggestion 느낌 강화
+- 확정값 느낌 감소
+
+단:
+기존 compact UX는 유지.
+
+7. 기존 구조 유지
+
+다음은 절대 변경 금지.
+
+- Sticky Header 구조
+- 등록 안전장치
+- Preview 탭 구조
+- Product/Option 철학
+- Import Preview flow
+- DB/API 구조
+
+8. 검증
+
+수정 후 다음 확인해 주세요.
+
+- Babel/TypeScript 통과
+- 기존 Preview 렌더링 정상
+- Sticky Header 유지
+- 기존 등록 안전장치 정상
+- 긴 프로젝트명 계열 review 처리 확인
+- 영문화 → 번역 canonicalizing 확인
+- 시스템입력 confidence/reviewReason 조정 확인
+- EX 계열 항목 confidence 조정 확인
+
+최종 보고 시 다음 형식으로 알려 주세요.
+
+1. 수정 파일
+2. 추가된 canonical 규칙
+3. 설명형/프로젝트명 감지 방식
+4. confidence 조정 방식
+5. reviewReason 추가 규칙
+6. 검증 결과
