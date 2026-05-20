@@ -121,10 +121,24 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [editingProduct, setEditingProduct] = useState<number | null>(null);
   const [savingProduct, setSavingProduct] = useState(false);
   const [productImporting, setProductImporting] = useState(false);
-  const [productImportResult, setProductImportResult] = useState<{
-    created: number; skipped: number; errors: { row: number; message: string }[];
-  } | null>(null);
   const productImportRef = useRef<HTMLInputElement>(null);
+
+  type ImportPreviewItem = {
+    rowNum: number; name: string; productType: string; mainCategory: string;
+    subCategory: string; sourceLanguage: string | null; targetLanguage: string | null;
+    unit: string; basePrice: number | null; description: string | null;
+    status: "new" | "duplicate" | "conflict" | "review";
+    issues: string[]; suggestedType: string;
+    duplicateOf: { code: string; name: string }[];
+  };
+  const [importPreview, setImportPreview] = useState<{
+    summary: { total: number; new: number; duplicate: number; conflict: number; review: number };
+    items: ImportPreviewItem[];
+    fileName: string;
+  } | null>(null);
+  const [importPreviewFilter, setImportPreviewFilter] = useState<"all" | "new" | "duplicate" | "conflict" | "review">("all");
+  const [importExecuting, setImportExecuting] = useState(false);
+  const [importResult, setImportResult] = useState<{ created: number; errors: { row: number; message: string }[] } | null>(null);
   const [productRequests, setProductRequests] = useState<ProductRequest[]>([]);
   const [productRequestsLoading, setProductRequestsLoading] = useState(false);
   const [productRequestStatusFilter, setProductRequestStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
@@ -436,18 +450,41 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   // ─── 엑셀 업로드 ────────────────────────────────────────────────────────
   const handleProductImport = async (file: File) => {
     setProductImporting(true);
-    setProductImportResult(null);
+    setImportPreview(null);
+    setImportResult(null);
+    setImportPreviewFilter("all");
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch(api("/api/admin/products/import"), { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form });
+      const res = await fetch(api("/api/admin/products/import/preview"), { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form });
       const data = await res.json();
-      if (!res.ok) { setToast(data.error ?? "업로드 실패"); return; }
-      setProductImportResult(data);
-      if (data.created > 0) await fetchProducts();
+      if (!res.ok) { setToast(data.error ?? "미리보기 실패"); return; }
+      setImportPreview(data);
     } finally {
       setProductImporting(false);
       if (productImportRef.current) productImportRef.current.value = "";
+    }
+  };
+
+  const handleProductImportExecute = async () => {
+    if (!importPreview) return;
+    const newRows = importPreview.items.filter(x => x.status === "new");
+    if (newRows.length === 0) { setToast("신규 등록 가능한 항목이 없습니다."); return; }
+    setImportExecuting(true);
+    try {
+      const res = await fetch(api("/api/admin/products/import/execute"), {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ rows: newRows, fileName: importPreview.fileName }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(data.error ?? "등록 실패"); return; }
+      setImportResult(data);
+      setImportPreview(null);
+      if (data.created > 0) await fetchProducts();
+      setToast(`✅ ${data.created}건 등록 완료${data.errors?.length ? ` (오류 ${data.errors.length}건)` : ""}`);
+    } finally {
+      setImportExecuting(false);
     }
   };
 
@@ -1019,7 +1056,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             ⬇ 엑셀 내보내기
           </button>
           <label style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#2563eb", cursor: productImporting ? "not-allowed" : "pointer", fontWeight: 600, opacity: productImporting ? 0.6 : 1 }}>
-            {productImporting ? "처리 중..." : "⬆ 엑셀 업로드"}
+            {productImporting ? "분석 중..." : "⬆ Import 미리보기"}
             <input ref={productImportRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
               onChange={e => { const f = e.target.files?.[0]; if (f) handleProductImport(f); }} />
           </label>
@@ -1028,7 +1065,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               setShowProductForm(v => !v);
               setEditingProduct(null);
               setProductForm(emptyProductForm);
-              setProductImportResult(null);
+              setImportPreview(null);
+              setImportResult(null);
               setProductNameCustom(false);
               setProductDupeWarning(null);
             }} style={{ fontSize: 13, padding: "7px 14px" }}>
@@ -1037,30 +1075,108 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           )}
         </div>
       }>
-        {/* 엑셀 업로드 결과 */}
-        {productImportResult && (
-          <div style={{ background: productImportResult.errors.length === 0 ? "#f0fdf4" : "#fffbeb", border: `1px solid ${productImportResult.errors.length === 0 ? "#bbf7d0" : "#fde68a"}`, borderRadius: 10, padding: "14px 18px", marginBottom: 14 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: productImportResult.errors.length > 0 ? 10 : 0 }}>
-              <div style={{ display: "flex", gap: 16 }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>✅ 신규 등록: {productImportResult.created}건</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "#9ca3af" }}>⏭ 중복 스킵: {productImportResult.skipped}건</span>
-                {productImportResult.errors.length > 0 && (
-                  <span style={{ fontSize: 13, fontWeight: 700, color: "#dc2626" }}>⚠ 오류: {productImportResult.errors.length}건</span>
-                )}
-              </div>
-              <button onClick={() => setProductImportResult(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 18 }}>×</button>
+        {/* Import 등록 결과 */}
+        {importResult && (
+          <div style={{ background: importResult.errors.length === 0 ? "#f0fdf4" : "#fffbeb", border: `1px solid ${importResult.errors.length === 0 ? "#bbf7d0" : "#fde68a"}`, borderRadius: 10, padding: "12px 16px", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>✅ 신규 등록: {importResult.created}건</span>
+              {importResult.errors.length > 0 && <span style={{ fontSize: 13, fontWeight: 700, color: "#dc2626" }}>⚠ 오류: {importResult.errors.length}건</span>}
             </div>
-            {productImportResult.errors.length > 0 && (
-              <div style={{ maxHeight: 130, overflowY: "auto", background: "#fff8f0", borderRadius: 6, padding: "8px 12px" }}>
-                {productImportResult.errors.map((e, i) => (
-                  <p key={i} style={{ margin: "2px 0", fontSize: 12, color: "#92400e" }}>
-                    <strong>{e.row}행:</strong> {e.message}
-                  </p>
-                ))}
-              </div>
-            )}
+            <button onClick={() => setImportResult(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 18, lineHeight: 1 }}>×</button>
           </div>
         )}
+
+        {/* Import Preview 패널 */}
+        {importPreview && (() => {
+          const STATUS_META: Record<string, { label: string; color: string; bg: string }> = {
+            new:       { label: "신규 등록", color: "#059669", bg: "#f0fdf4" },
+            duplicate: { label: "유사 중복", color: "#d97706", bg: "#fffbeb" },
+            conflict:  { label: "코드 충돌", color: "#dc2626", bg: "#fef2f2" },
+            review:    { label: "검토 필요", color: "#7c3aed", bg: "#f5f3ff" },
+          };
+          const s = importPreview.summary;
+          const filtered = importPreviewFilter === "all" ? importPreview.items : importPreview.items.filter(x => x.status === importPreviewFilter);
+          const TAB_LABELS: [typeof importPreviewFilter, string, number, string][] = [
+            ["all",       `전체 ${s.total}`,          s.total,     "#374151"],
+            ["new",       `신규 ${s.new}`,             s.new,       "#059669"],
+            ["duplicate", `유사중복 ${s.duplicate}`,   s.duplicate, "#d97706"],
+            ["conflict",  `충돌 ${s.conflict}`,        s.conflict,  "#dc2626"],
+            ["review",    `검토필요 ${s.review}`,      s.review,    "#7c3aed"],
+          ];
+          return (
+            <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
+              {/* 헤더 */}
+              <div style={{ background: "#f8fafc", borderBottom: "1px solid #e5e7eb", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>📋 Import 미리보기</span>
+                  <span style={{ fontSize: 11, color: "#6b7280", background: "#e5e7eb", borderRadius: 5, padding: "2px 7px" }}>{importPreview.fileName}</span>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button
+                    onClick={handleProductImportExecute}
+                    disabled={importExecuting || s.new === 0}
+                    style={{ fontSize: 12, padding: "6px 14px", borderRadius: 7, border: "none", background: s.new > 0 ? "#2563eb" : "#e5e7eb", color: s.new > 0 ? "#fff" : "#9ca3af", cursor: s.new > 0 ? "pointer" : "not-allowed", fontWeight: 700 }}>
+                    {importExecuting ? "등록 중..." : `신규 ${s.new}건 등록`}
+                  </button>
+                  <button onClick={() => setImportPreview(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 20, lineHeight: 1, padding: "0 4px" }}>×</button>
+                </div>
+              </div>
+
+              {/* 필터 탭 */}
+              <div style={{ display: "flex", gap: 0, borderBottom: "1px solid #e5e7eb", background: "#fff", overflowX: "auto" }}>
+                {TAB_LABELS.map(([key, label, count]) => count > 0 || key === "all" ? (
+                  <button key={key} onClick={() => setImportPreviewFilter(key)}
+                    style={{ padding: "8px 14px", fontSize: 12, fontWeight: importPreviewFilter === key ? 700 : 500, border: "none", background: "none", cursor: "pointer", color: importPreviewFilter === key ? "#2563eb" : "#6b7280", borderBottom: importPreviewFilter === key ? "2px solid #2563eb" : "2px solid transparent", whiteSpace: "nowrap" }}>
+                    {label}
+                  </button>
+                ) : null)}
+              </div>
+
+              {/* 미리보기 테이블 */}
+              <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                {filtered.length === 0 ? (
+                  <div style={{ textAlign: "center", padding: "24px 0", fontSize: 13, color: "#9ca3af" }}>해당 항목 없음</div>
+                ) : (
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
+                        {["행", "상품명", "유형", "대분류", "단위", "단가", "상태", "이슈"].map(h => (
+                          <th key={h} style={{ padding: "7px 10px", textAlign: "left", color: "#6b7280", fontWeight: 600, borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((item, idx) => {
+                        const sm = STATUS_META[item.status] ?? STATUS_META.review;
+                        return (
+                          <tr key={idx} style={{ borderBottom: "1px solid #f3f4f6", background: idx % 2 === 0 ? "#fff" : "#fafafa" }}>
+                            <td style={{ padding: "6px 10px", color: "#9ca3af", fontFamily: "monospace" }}>{item.rowNum}</td>
+                            <td style={{ padding: "6px 10px", color: "#111827", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
+                            <td style={{ padding: "6px 10px", color: "#374151", whiteSpace: "nowrap" }}>
+                              {item.productType}
+                              {item.suggestedType && item.suggestedType !== item.productType && (
+                                <span style={{ marginLeft: 4, fontSize: 10, color: "#7c3aed" }}>→{item.suggestedType}</span>
+                              )}
+                            </td>
+                            <td style={{ padding: "6px 10px", color: "#374151", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.mainCategory}</td>
+                            <td style={{ padding: "6px 10px", color: "#374151" }}>{item.unit}</td>
+                            <td style={{ padding: "6px 10px", color: "#374151", textAlign: "right" }}>{item.basePrice != null ? item.basePrice.toLocaleString() : "—"}</td>
+                            <td style={{ padding: "6px 10px" }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: sm.color, background: sm.bg, borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap" }}>{sm.label}</span>
+                            </td>
+                            <td style={{ padding: "6px 10px", color: "#6b7280", maxWidth: 220, fontSize: 11 }}>
+                              {item.issues.length > 0 ? item.issues.join(" · ") : ""}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* 등록/수정 폼 */}
         <div style={{ overflow: "hidden", maxHeight: showProductForm ? "900px" : "0", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>

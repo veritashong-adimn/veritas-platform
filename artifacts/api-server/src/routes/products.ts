@@ -342,6 +342,25 @@ async function findDuplicate(
   return rows.filter(r => r.id !== excludeId);
 }
 
+// ─── 상품명 normalize ─────────────────────────────────────────────────────────
+function normalizeProdName(s: string): string {
+  return (s ?? "")
+    .toLowerCase()
+    .replace(/[\s\-_·•]/g, "")
+    .replace(/[()（）\[\]【】]/g, "")
+    .normalize("NFC");
+}
+
+// ─── taxonomy 자동 추천 ──────────────────────────────────────────────────────
+function suggestProductType(name: string, mainCategory?: string): string {
+  const text = normalizeProdName((name ?? "") + (mainCategory ?? ""));
+  if (/동시통역|순차통역|수행통역|위스퍼링|화상통역|전화통역|출장이동|취소보상|할증|연장료|야간|휴일|대기료/.test(text)) return "interpretation";
+  if (/부스|리시버|fm장비|적외선|송신기|수신기|마이크|음향|엔지니어|설치|철수|장비/.test(text)) return "equipment";
+  if (/배송|퀵|숙박|식비|식대|교통비|출장비|인쇄|우편|택배|실비/.test(text)) return "expense";
+  if (/번역|감수|공증|원어민|교정/.test(text)) return "translation";
+  return "";
+}
+
 // ─── 엑셀 공통 설정 ──────────────────────────────────────────────────────────
 const EXCEL_HEADERS = [
   "상품코드(자동생성)", "상품유형*(번역/통역/통번역/통역장비/프로젝트/교통비/식대/숙박/기타비용)",
@@ -559,7 +578,178 @@ router.get("/admin/products/export", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 엑셀 업로드 ─────────────────────────────────────────────────────────────
+// ─── Import Preview (Dry-run) ─────────────────────────────────────────────────
+router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("file"), async (req, res) => {
+  if (!req.file) { res.status(400).json({ error: "파일이 없습니다." }); return; }
+
+  type PreviewStatus = "new" | "duplicate" | "conflict" | "review";
+  type PreviewItem = {
+    rowNum: number; name: string; productType: string; mainCategory: string;
+    subCategory: string; sourceLanguage: string | null; targetLanguage: string | null;
+    unit: string; basePrice: number | null; description: string | null;
+    status: PreviewStatus; issues: string[]; suggestedType: string;
+    duplicateOf: { code: string; name: string }[];
+  };
+
+  try {
+    const wb = XLSX.read(req.file.buffer, { type: "buffer" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows: (string | number | undefined)[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+
+    if (rows.length < 2) { res.status(400).json({ error: "데이터 행이 없습니다." }); return; }
+
+    const existingProducts = await db
+      .select({ id: productsTable.id, code: productsTable.code, name: productsTable.name, productType: productsTable.productType, mainCategory: productsTable.mainCategory })
+      .from(productsTable)
+      .where(isNull(productsTable.deletedAt));
+
+    const TYPE_LABEL_REV: Record<string, string> = {};
+    for (const [k, v] of Object.entries(PRODUCT_TYPES)) TYPE_LABEL_REV[v.label] = k;
+
+    const items: PreviewItem[] = [];
+
+    for (let i = 1; i < rows.length; i++) {
+      const rowNum = i + 1;
+      const r = rows[i];
+      const typeRaw   = String(r[1] ?? "").trim();
+      const srcLang   = String(r[2] ?? "").trim().toLowerCase() || null;
+      const tgtLang   = String(r[3] ?? "").trim().toLowerCase() || null;
+      const mainCat   = String(r[4] ?? "").trim();
+      const subCat    = String(r[5] ?? "").trim() || "";
+      const nameRaw   = String(r[6] ?? "").trim();
+      const unitRaw   = String(r[7] ?? "").trim();
+      const baseRaw   = r[8] !== "" && r[8] != null ? Number(r[8]) : null;
+      const desc      = String(r[11] ?? "").trim() || null;
+
+      if (!typeRaw && !mainCat && !nameRaw) continue;
+
+      const issues: string[] = [];
+      let status: PreviewStatus = "new";
+
+      const pType = TYPE_LABEL_REV[typeRaw] ?? typeRaw;
+
+      if (!PRODUCT_TYPES[pType]) {
+        issues.push(`상품유형 인식 불가: '${typeRaw}'`); status = "review";
+      }
+      if (!nameRaw) {
+        issues.push("상품명 없음"); status = "review";
+      } else if (nameRaw.length < 2) {
+        issues.push("상품명 너무 짧음"); if (status === "new") status = "review";
+      }
+      if (!mainCat) {
+        issues.push("대분류 없음"); if (status === "new") status = "review";
+      }
+      if (!unitRaw) {
+        issues.push("단위 없음"); if (status === "new") status = "review";
+      }
+      if (baseRaw !== null && isNaN(baseRaw)) {
+        issues.push(`단가 숫자 오류: '${r[8]}'`); if (status === "new") status = "review";
+      }
+
+      const validUnits = UNITS_BY_TYPE[pType] ?? ["건"];
+      const unit = validUnits.includes(unitRaw) ? unitRaw : (unitRaw || validUnits[0]);
+      if (unitRaw && !validUnits.includes(unitRaw)) {
+        issues.push(`단위 '${unitRaw}' → '${unit}' 자동 조정`);
+      }
+      const basePrice = baseRaw !== null && !isNaN(baseRaw) ? Math.round(baseRaw) : null;
+
+      const suggestedType = suggestProductType(nameRaw, mainCat);
+      if (suggestedType && PRODUCT_TYPES[pType] && suggestedType !== pType) {
+        issues.push(`taxonomy 추천: ${PRODUCT_TYPES[suggestedType]?.label ?? suggestedType}`);
+      }
+
+      const nameNorm = normalizeProdName(nameRaw);
+      const duplicateOf: { code: string; name: string }[] = [];
+      for (const ep of existingProducts) {
+        if (normalizeProdName(ep.name) === nameNorm) {
+          duplicateOf.push({ code: ep.code, name: ep.name });
+          if (!issues.some(s => s.startsWith("유사 중복"))) {
+            issues.push(`유사 중복: ${ep.code} (${ep.name})`);
+          }
+        }
+      }
+      if (duplicateOf.length > 0) {
+        status = duplicateOf.some(d => d.name === nameRaw) ? "conflict" : "duplicate";
+      }
+
+      items.push({ rowNum, name: nameRaw, productType: pType, mainCategory: mainCat, subCategory: subCat,
+        sourceLanguage: srcLang, targetLanguage: tgtLang, unit, basePrice, description: desc,
+        status, issues, suggestedType: suggestedType !== pType ? suggestedType : "", duplicateOf });
+    }
+
+    const summary = {
+      total: items.length,
+      new: items.filter(x => x.status === "new").length,
+      duplicate: items.filter(x => x.status === "duplicate").length,
+      conflict: items.filter(x => x.status === "conflict").length,
+      review: items.filter(x => x.status === "review").length,
+    };
+
+    res.json({ summary, items, fileName: req.file.originalname });
+  } catch (err) {
+    req.log.error({ err }, "Products import preview failed");
+    res.status(500).json({ error: "파일 파싱 실패." });
+  }
+});
+
+// ─── Import Execute ───────────────────────────────────────────────────────────
+router.post("/admin/products/import/execute", ...adminOnly, async (req, res) => {
+  type ExecuteRow = {
+    rowNum?: number; name: string; productType: string;
+    mainCategory: string; subCategory?: string;
+    sourceLanguage?: string | null; targetLanguage?: string | null;
+    unit?: string; basePrice?: number | null; description?: string | null;
+  };
+  const { rows, fileName } = req.body as { rows: ExecuteRow[]; fileName?: string };
+
+  if (!Array.isArray(rows) || rows.length === 0) {
+    res.status(400).json({ error: "등록할 행이 없습니다." }); return;
+  }
+
+  const result = { created: 0, skipped: 0, errors: [] as { row: number; message: string }[] };
+
+  try {
+    for (const row of rows) {
+      const rowNum = row.rowNum ?? 0;
+      const pType  = row.productType;
+      if (!PRODUCT_TYPES[pType]) {
+        result.errors.push({ row: rowNum, message: `상품유형 오류: '${pType}'` }); continue;
+      }
+      if (!row.name?.trim()) {
+        result.errors.push({ row: rowNum, message: "상품명 없음" }); continue;
+      }
+      const srcLang = row.sourceLanguage ?? null;
+      const tgtLang = row.targetLanguage ?? null;
+      const mainCat = row.mainCategory ?? "";
+      const subCat  = row.subCategory  ?? "";
+      const validUnits = UNITS_BY_TYPE[pType] ?? ["건"];
+      const unit = row.unit && validUnits.includes(row.unit) ? row.unit : validUnits[0];
+      try {
+        const code = await generateProductCode(pType, srcLang, tgtLang, mainCat, subCat);
+        await db.insert(productsTable).values({
+          code, name: row.name.trim(), productType: pType,
+          sourceLanguage: srcLang, targetLanguage: tgtLang,
+          mainCategory: mainCat || null, subCategory: subCat || null,
+          unit, basePrice: row.basePrice ?? null, description: row.description ?? null,
+        });
+        result.created++;
+      } catch (rowErr) {
+        result.errors.push({ row: rowNum, message: `저장 오류: ${(rowErr as Error).message}` });
+      }
+    }
+
+    await logEvent("products", 0, "products_imported", req.log, req.user as any, {
+      fileName: fileName ?? "unknown", created: result.created, errors: result.errors.length,
+    });
+
+    res.json(result);
+  } catch (err) {
+    req.log.error({ err }, "Products import execute failed");
+    res.status(500).json({ error: "가져오기 실패." });
+  }
+});
+
+// ─── 엑셀 업로드 (레거시 direct-import) ──────────────────────────────────────
 router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), async (req, res) => {
   if (!req.file) { res.status(400).json({ error: "파일이 없습니다." }); return; }
 
