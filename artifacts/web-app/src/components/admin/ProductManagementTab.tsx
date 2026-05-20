@@ -140,6 +140,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [importPreviewFilter, setImportPreviewFilter] = useState<"all" | "new" | "duplicate" | "conflict" | "review">("all");
   const [importExecuting, setImportExecuting] = useState(false);
   const [importResult, setImportResult] = useState<{ created: number; errors: { row: number; message: string }[] } | null>(null);
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const [importPreviewSort, setImportPreviewSort] = useState<"conf_asc" | "conf_desc">("conf_asc");
+  const [importQualFilter, setImportQualFilter] = useState<"all" | "review_only" | "safe_only" | "low_conf">("all");
+  const [importConfirmModal, setImportConfirmModal] = useState<{ mode: "selected" | "safe" | "all"; rows: ImportPreviewItem[] } | null>(null);
   const [productRequests, setProductRequests] = useState<ProductRequest[]>([]);
   const [productRequestsLoading, setProductRequestsLoading] = useState(false);
   const [productRequestStatusFilter, setProductRequestStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
@@ -454,6 +458,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     setImportPreview(null);
     setImportResult(null);
     setImportPreviewFilter("all");
+    setSelectedRows(new Set());
+    setImportPreviewSort("conf_asc");
+    setImportQualFilter("all");
+    setImportConfirmModal(null);
     try {
       const form = new FormData();
       form.append("file", file);
@@ -467,21 +475,21 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     }
   };
 
-  const handleProductImportExecute = async () => {
-    if (!importPreview) return;
-    const newRows = importPreview.items.filter(x => x.status === "new");
-    if (newRows.length === 0) { setToast("신규 등록 가능한 항목이 없습니다."); return; }
+  const handleProductImportExecute = async (rows: ImportPreviewItem[]) => {
+    if (!importPreview || rows.length === 0) { setToast("등록 대상 항목이 없습니다."); return; }
     setImportExecuting(true);
     try {
       const res = await fetch(api("/api/admin/products/import/execute"), {
         method: "POST",
         headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: newRows, fileName: importPreview.fileName }),
+        body: JSON.stringify({ rows, fileName: importPreview.fileName }),
       });
       const data = await res.json();
       if (!res.ok) { setToast(data.error ?? "등록 실패"); return; }
       setImportResult(data);
       setImportPreview(null);
+      setImportConfirmModal(null);
+      setSelectedRows(new Set());
       if (data.created > 0) await fetchProducts();
       setToast(`✅ ${data.created}건 등록 완료${data.errors?.length ? ` (오류 ${data.errors.length}건)` : ""}`);
     } finally {
@@ -1096,41 +1104,129 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             review:    { label: "검토 필요", color: "#7c3aed", bg: "#f5f3ff" },
           };
           const s = importPreview.summary;
-          const filtered = importPreviewFilter === "all" ? importPreview.items : importPreview.items.filter(x => x.status === importPreviewFilter);
-          const TAB_LABELS: [typeof importPreviewFilter, string, number, string][] = [
-            ["all",       `전체 ${s.total}`,          s.total,     "#374151"],
-            ["new",       `신규 ${s.new}`,             s.new,       "#059669"],
-            ["duplicate", `유사중복 ${s.duplicate}`,   s.duplicate, "#d97706"],
-            ["conflict",  `충돌 ${s.conflict}`,        s.conflict,  "#dc2626"],
-            ["review",    `검토필요 ${s.review}`,      s.review,    "#7c3aed"],
+
+          // 안전한 항목 판별 (status=new + reviewReasons 없음 + confidence≥60 + product확인 + 단일산업)
+          const isSafe = (item: ImportPreviewItem) =>
+            item.status === "new" &&
+            (item.analysis?.reviewReasons ?? []).length === 0 &&
+            (item.analysis?.confidenceScore ?? 0) >= 60 &&
+            !item.analysis?.industry2 &&
+            (item.analysis?.productCandidate ?? "") !== "";
+
+          const safeRows = importPreview.items.filter(isSafe);
+          const allNewRows = importPreview.items.filter(x => x.status === "new");
+
+          // 상태 탭 필터
+          let filtered = importPreviewFilter === "all"
+            ? importPreview.items
+            : importPreview.items.filter(x => x.status === importPreviewFilter);
+
+          // 품질 필터
+          if (importQualFilter === "review_only") filtered = filtered.filter(x => !isSafe(x));
+          else if (importQualFilter === "safe_only") filtered = filtered.filter(isSafe);
+          else if (importQualFilter === "low_conf") filtered = filtered.filter(x => (x.analysis?.confidenceScore ?? 0) < 80);
+
+          // 정렬 (기본: 낮은 confidence 먼저)
+          filtered = [...filtered].sort((a, b) => {
+            const ca = a.analysis?.confidenceScore ?? 0;
+            const cb = b.analysis?.confidenceScore ?? 0;
+            return importPreviewSort === "conf_asc" ? ca - cb : cb - ca;
+          });
+
+          const TAB_LABELS: [typeof importPreviewFilter, string, number][] = [
+            ["all",       `전체 ${s.total}`,          s.total],
+            ["new",       `신규 ${s.new}`,             s.new],
+            ["duplicate", `유사중복 ${s.duplicate}`,   s.duplicate],
+            ["conflict",  `충돌 ${s.conflict}`,        s.conflict],
+            ["review",    `검토필요 ${s.review}`,      s.review],
           ];
+
+          const allFilteredSelected = filtered.length > 0 && filtered.every(x => selectedRows.has(x.rowNum));
+          const thStyle: React.CSSProperties = { position: "sticky", top: 0, zIndex: 5, padding: "6px 8px", textAlign: "left", color: "#9ca3af", fontWeight: 600, background: "#f9fafb", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap", fontSize: 11 };
+          const qualBtnStyle = (k: string): React.CSSProperties => ({
+            fontSize: 11, padding: "3px 9px", borderRadius: 5, border: `1px solid ${importQualFilter === k ? "#2563eb" : "#e5e7eb"}`,
+            background: importQualFilter === k ? "#eff6ff" : "#fff", color: importQualFilter === k ? "#2563eb" : "#6b7280", cursor: "pointer", fontWeight: importQualFilter === k ? 700 : 400,
+          });
+          const sortBtnStyle = (k: string): React.CSSProperties => ({
+            fontSize: 11, padding: "3px 9px", borderRadius: 5, border: `1px solid ${importPreviewSort === k ? "#7c3aed" : "#e5e7eb"}`,
+            background: importPreviewSort === k ? "#f5f3ff" : "#fff", color: importPreviewSort === k ? "#7c3aed" : "#6b7280", cursor: "pointer", fontWeight: importPreviewSort === k ? 700 : 400,
+          });
+
           return (
             <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, marginBottom: 16, overflow: "hidden" }}>
               {/* 헤더 */}
-              <div style={{ background: "#f8fafc", borderBottom: "1px solid #e5e7eb", padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ background: "#f8fafc", borderBottom: "1px solid #e5e7eb", padding: "10px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>📋 Import 미리보기</span>
                   <span style={{ fontSize: 11, color: "#6b7280", background: "#e5e7eb", borderRadius: 5, padding: "2px 7px" }}>{importPreview.fileName}</span>
                 </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  {/* 선택 항목만 등록 */}
                   <button
-                    onClick={handleProductImportExecute}
-                    disabled={importExecuting || s.new === 0}
-                    style={{ fontSize: 12, padding: "6px 14px", borderRadius: 7, border: "none", background: s.new > 0 ? "#2563eb" : "#e5e7eb", color: s.new > 0 ? "#fff" : "#9ca3af", cursor: s.new > 0 ? "pointer" : "not-allowed", fontWeight: 700 }}>
-                    {importExecuting ? "등록 중..." : `신규 ${s.new}건 등록`}
+                    disabled={selectedRows.size === 0 || importExecuting}
+                    onClick={() => {
+                      const rows = importPreview.items.filter(x => selectedRows.has(x.rowNum));
+                      if (rows.length > 0) setImportConfirmModal({ mode: "selected", rows });
+                    }}
+                    style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, border: "none", background: selectedRows.size > 0 ? "#2563eb" : "#e5e7eb", color: selectedRows.size > 0 ? "#fff" : "#9ca3af", cursor: selectedRows.size > 0 ? "pointer" : "not-allowed", fontWeight: 700 }}>
+                    선택 {selectedRows.size}건 등록
                   </button>
-                  <button onClick={() => setImportPreview(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 20, lineHeight: 1, padding: "0 4px" }}>×</button>
+                  {/* 검토필요 제외하고 등록 */}
+                  <button
+                    disabled={safeRows.length === 0 || importExecuting}
+                    onClick={() => { if (safeRows.length > 0) setImportConfirmModal({ mode: "safe", rows: safeRows }); }}
+                    style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, border: "1px solid #059669", background: safeRows.length > 0 ? "#f0fdf4" : "#f9fafb", color: safeRows.length > 0 ? "#059669" : "#9ca3af", cursor: safeRows.length > 0 ? "pointer" : "not-allowed", fontWeight: 700 }}>
+                    검토필요 제외 {safeRows.length}건 등록
+                  </button>
+                  {/* 전체 등록 — 보조 버튼 스타일 */}
+                  <button
+                    disabled={allNewRows.length === 0 || importExecuting}
+                    onClick={() => { if (allNewRows.length > 0) setImportConfirmModal({ mode: "all", rows: allNewRows }); }}
+                    style={{ fontSize: 11, padding: "5px 10px", borderRadius: 7, border: "1px solid #d1d5db", background: "#f9fafb", color: allNewRows.length > 0 ? "#6b7280" : "#9ca3af", cursor: allNewRows.length > 0 ? "pointer" : "not-allowed", fontWeight: 500 }}>
+                    전체 {allNewRows.length}건
+                  </button>
+                  <button onClick={() => { setImportPreview(null); setSelectedRows(new Set()); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 20, lineHeight: 1, padding: "0 4px" }}>×</button>
                 </div>
               </div>
 
-              {/* 필터 탭 */}
+              {/* 카운트 바 */}
+              <div style={{ display: "flex", gap: 14, padding: "6px 16px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", fontSize: 12, flexWrap: "wrap", alignItems: "center" }}>
+                <span style={{ color: "#374151" }}>신규 <strong style={{ color: "#059669" }}>{s.new}</strong></span>
+                <span style={{ color: "#374151" }}>중복 <strong style={{ color: "#d97706" }}>{s.duplicate}</strong></span>
+                <span style={{ color: "#374151" }}>충돌 <strong style={{ color: "#dc2626" }}>{s.conflict}</strong></span>
+                <span style={{ color: "#374151" }}>검토필요 <strong style={{ color: "#7c3aed" }}>{s.review}</strong></span>
+                <span style={{ color: "#374151" }}>등록가능 <strong style={{ color: "#059669" }}>{safeRows.length}</strong></span>
+                {selectedRows.size > 0 && (
+                  <span style={{ color: "#374151" }}>선택됨 <strong style={{ color: "#2563eb" }}>{selectedRows.size}</strong>
+                    <button onClick={() => setSelectedRows(new Set())} style={{ marginLeft: 4, fontSize: 10, color: "#9ca3af", background: "none", border: "none", cursor: "pointer", padding: 0 }}>✕ 해제</button>
+                  </span>
+                )}
+              </div>
+
+              {/* 상태 탭 */}
               <div style={{ display: "flex", gap: 0, borderBottom: "1px solid #e5e7eb", background: "#fff", overflowX: "auto" }}>
                 {TAB_LABELS.map(([key, label, count]) => count > 0 || key === "all" ? (
                   <button key={key} onClick={() => setImportPreviewFilter(key)}
-                    style={{ padding: "8px 14px", fontSize: 12, fontWeight: importPreviewFilter === key ? 700 : 500, border: "none", background: "none", cursor: "pointer", color: importPreviewFilter === key ? "#2563eb" : "#6b7280", borderBottom: importPreviewFilter === key ? "2px solid #2563eb" : "2px solid transparent", whiteSpace: "nowrap" }}>
+                    style={{ padding: "7px 14px", fontSize: 12, fontWeight: importPreviewFilter === key ? 700 : 500, border: "none", background: "none", cursor: "pointer", color: importPreviewFilter === key ? "#2563eb" : "#6b7280", borderBottom: importPreviewFilter === key ? "2px solid #2563eb" : "2px solid transparent", whiteSpace: "nowrap" }}>
                     {label}
                   </button>
                 ) : null)}
+              </div>
+
+              {/* 품질 필터 + 정렬 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 14px", background: "#fafafa", borderBottom: "1px solid #f0f0f0", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, marginRight: 2 }}>품질:</span>
+                {(["all", "review_only", "safe_only", "low_conf"] as const).map(k => (
+                  <button key={k} onClick={() => setImportQualFilter(k)} style={qualBtnStyle(k)}>
+                    {k === "all" ? "전체" : k === "review_only" ? "검토필요만" : k === "safe_only" ? "등록가능만" : "신뢰도 80미만"}
+                  </button>
+                ))}
+                <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, marginLeft: 8, marginRight: 2 }}>정렬:</span>
+                {(["conf_asc", "conf_desc"] as const).map(k => (
+                  <button key={k} onClick={() => setImportPreviewSort(k)} style={sortBtnStyle(k)}>
+                    {k === "conf_asc" ? "낮은신뢰도순" : "높은신뢰도순"}
+                  </button>
+                ))}
               </div>
 
               {/* 미리보기 테이블 — 단일 scroll 컨테이너 (sticky 정상 동작) */}
@@ -1138,11 +1234,22 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 {filtered.length === 0 ? (
                   <div style={{ textAlign: "center", padding: "24px 0", fontSize: 13, color: "#9ca3af" }}>해당 항목 없음</div>
                 ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 980 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1040 }}>
                     <thead>
                       <tr>
+                        {/* 체크박스 헤더 */}
+                        <th style={{ ...thStyle, width: 32, textAlign: "center" }}>
+                          <input type="checkbox" checked={allFilteredSelected}
+                            onChange={e => {
+                              if (e.target.checked) {
+                                setSelectedRows(prev => new Set([...prev, ...filtered.map(x => x.rowNum)]));
+                              } else {
+                                setSelectedRows(prev => { const n = new Set(prev); filtered.forEach(x => n.delete(x.rowNum)); return n; });
+                              }
+                            }} />
+                        </th>
                         {["행", "원본 상품명", "Product 후보", "언어쌍", "방향", "난이도", "산업", "유형", "단위", "단가", "상태", "이슈"].map(h => (
-                          <th key={h} style={{ position: "sticky", top: 0, zIndex: 5, padding: "6px 10px", textAlign: "left", color: "#9ca3af", fontWeight: 600, background: "#f9fafb", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap", fontSize: 11 }}>{h}</th>
+                          <th key={h} style={thStyle}>{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -1151,13 +1258,18 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                         const sm = STATUS_META[item.status] ?? STATUS_META.review;
                         const an = item.analysis ?? { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", industry2: "", isOptionCandidate: false, confidenceScore: 0, reviewReasons: [] };
                         const isBidir = an.direction === "bidirectional";
-                        const allReasons = [...(an.reviewReasons ?? []), ...(item.issues.filter(s => !s.startsWith("유사 중복") && !s.startsWith("taxonomy")))];
+                        const isSelected = selectedRows.has(item.rowNum);
                         return (
-                          <tr key={idx} style={{ borderBottom: "1px solid #f3f4f6", background: idx % 2 === 0 ? "#fff" : "#fafafa" }}>
-                            <td style={{ padding: "4px 10px", color: "#c4c4c4", fontFamily: "monospace", fontSize: 11 }}>{item.rowNum}</td>
-                            <td style={{ padding: "4px 10px", color: "#374151", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
+                          <tr key={idx} style={{ borderBottom: "1px solid #f3f4f6", background: isSelected ? "#eff6ff" : (idx % 2 === 0 ? "#fff" : "#fafafa") }}>
+                            {/* 체크박스 */}
+                            <td style={{ padding: "4px 8px", textAlign: "center" }}>
+                              <input type="checkbox" checked={isSelected}
+                                onChange={e => setSelectedRows(prev => { const n = new Set(prev); if (e.target.checked) n.add(item.rowNum); else n.delete(item.rowNum); return n; })} />
+                            </td>
+                            <td style={{ padding: "4px 8px", color: "#c4c4c4", fontFamily: "monospace", fontSize: 11 }}>{item.rowNum}</td>
+                            <td style={{ padding: "4px 8px", color: "#374151", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
                             {/* Product 후보 */}
-                            <td style={{ padding: "4px 10px", whiteSpace: "nowrap" }}>
+                            <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
                               {an.productCandidate
                                 ? <span style={{ color: "#2563eb", fontWeight: 700 }}>{an.productCandidate}</span>
                                 : ""}
@@ -1166,11 +1278,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               )}
                             </td>
                             {/* 언어쌍 */}
-                            <td style={{ padding: "4px 10px", color: "#374151", whiteSpace: "nowrap", fontSize: 12 }}>
-                              {an.langPair || ""}
-                            </td>
+                            <td style={{ padding: "4px 8px", color: "#374151", whiteSpace: "nowrap", fontSize: 12 }}>{an.langPair || ""}</td>
                             {/* 방향 */}
-                            <td style={{ padding: "4px 10px", whiteSpace: "nowrap" }}>
+                            <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
                               {an.direction ? (
                                 <span style={{ fontFamily: "monospace", fontSize: 11, color: isBidir ? "#059669" : "#6b7280", background: isBidir ? "#f0fdf4" : "#f9fafb", border: `1px solid ${isBidir ? "#bbf7d0" : "#e5e7eb"}`, borderRadius: 3, padding: "1px 5px" }}>
                                   {isBidir ? "↔" : an.direction}
@@ -1178,13 +1288,13 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               ) : ""}
                             </td>
                             {/* 난이도 */}
-                            <td style={{ padding: "4px 10px", whiteSpace: "nowrap" }}>
+                            <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
                               {an.difficulty ? (
                                 <span style={{ fontSize: 11, color: "#6b7280", background: "#f3f4f6", borderRadius: 3, padding: "1px 5px" }}>{an.difficulty}</span>
                               ) : ""}
                             </td>
-                            {/* 산업 (+ industry2) */}
-                            <td style={{ padding: "4px 10px", whiteSpace: "nowrap" }}>
+                            {/* 산업 */}
+                            <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
                               {an.industry ? (
                                 <span style={{ fontSize: 11, color: "#0369a1", background: "#f0f9ff", borderRadius: 3, padding: "1px 5px" }}>{an.industry}</span>
                               ) : ""}
@@ -1193,25 +1303,25 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               ) : ""}
                             </td>
                             {/* 유형 */}
-                            <td style={{ padding: "4px 10px", color: "#374151", whiteSpace: "nowrap", fontSize: 11 }}>
+                            <td style={{ padding: "4px 8px", color: "#374151", whiteSpace: "nowrap", fontSize: 11 }}>
                               {item.productType}
                               {item.suggestedType && item.suggestedType !== item.productType && (
                                 <span style={{ marginLeft: 3, fontSize: 10, color: "#a78bfa" }}>→{item.suggestedType}</span>
                               )}
                             </td>
-                            <td style={{ padding: "4px 10px", color: "#6b7280", fontSize: 11 }}>{item.unit}</td>
-                            <td style={{ padding: "4px 10px", color: "#374151", textAlign: "right", fontSize: 11 }}>{item.basePrice != null ? item.basePrice.toLocaleString() : ""}</td>
+                            <td style={{ padding: "4px 8px", color: "#6b7280", fontSize: 11 }}>{item.unit}</td>
+                            <td style={{ padding: "4px 8px", color: "#374151", textAlign: "right", fontSize: 11 }}>{item.basePrice != null ? item.basePrice.toLocaleString() : ""}</td>
                             {/* 상태 + confidence */}
-                            <td style={{ padding: "4px 10px", whiteSpace: "nowrap" }}>
+                            <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
                               <span style={{ fontSize: 11, fontWeight: 600, color: sm.color, background: sm.bg, borderRadius: 4, padding: "1px 6px" }}>{sm.label}</span>
                               {typeof an.confidenceScore === "number" && (
-                                <span title={`분석 신뢰도 ${an.confidenceScore}점`} style={{ marginLeft: 4, fontSize: 10, color: an.confidenceScore >= 80 ? "#059669" : an.confidenceScore >= 55 ? "#d97706" : "#dc2626", cursor: "default" }}>
+                                <span title={`분석 신뢰도 ${an.confidenceScore}점`} style={{ marginLeft: 4, fontSize: 10, color: an.confidenceScore >= 80 ? "#059669" : an.confidenceScore >= 60 ? "#d97706" : "#dc2626", cursor: "default" }}>
                                   {an.confidenceScore}
                                 </span>
                               )}
                             </td>
                             {/* 이슈 + 검토 사유 chip */}
-                            <td style={{ padding: "4px 10px", maxWidth: 200, fontSize: 11 }}>
+                            <td style={{ padding: "4px 8px", maxWidth: 200, fontSize: 11 }}>
                               {(an.reviewReasons ?? []).map((r, i) => (
                                 <span key={i} style={{ display: "inline-block", marginRight: 3, marginBottom: 2, fontSize: 10, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 3, padding: "1px 4px" }}>{r}</span>
                               ))}
@@ -1491,6 +1601,73 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             <div style={{ display: "flex", gap: 8 }}>
               <PrimaryBtn onClick={handleConfirmDeactivate} style={{ fontSize: 13 }}>비활성화</PrimaryBtn>
               <GhostBtn onClick={() => setDeactivatingProductId(null)} style={{ fontSize: 13 }}>취소</GhostBtn>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Import 등록 확인 모달 */}
+      {importConfirmModal && importPreview && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1010 }}>
+          <Card style={{ width: 480, padding: "28px 32px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+              <div style={{ width: 40, height: 40, borderRadius: "50%", background: importConfirmModal.mode === "all" ? "#fee2e2" : "#fef3c7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>
+                {importConfirmModal.mode === "all" ? "⚠" : "📋"}
+              </div>
+              <div>
+                <p style={{ margin: 0, fontWeight: 700, fontSize: 16, color: "#111827" }}>
+                  {importConfirmModal.mode === "selected" ? "선택 항목 등록 확인" : importConfirmModal.mode === "safe" ? "검토필요 제외 등록 확인" : "전체 등록 확인"}
+                </p>
+                <p style={{ margin: "2px 0 0", fontSize: 12, color: "#9ca3af" }}>등록 후 되돌리기 어렵습니다</p>
+              </div>
+            </div>
+
+            {/* 통계 */}
+            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "12px 16px", marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 }}>
+                <span style={{ color: "#6b7280" }}>총 Preview 항목</span>
+                <strong>{importPreview.summary.total}건</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 13 }}>
+                <span style={{ color: "#6b7280" }}>실제 등록 대상</span>
+                <strong style={{ color: "#2563eb" }}>{importConfirmModal.rows.length}건</strong>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                <span style={{ color: "#6b7280" }}>제외 항목</span>
+                <strong style={{ color: "#7c3aed" }}>{importPreview.summary.total - importConfirmModal.rows.length}건</strong>
+              </div>
+              {importConfirmModal.rows.some(x => (x.analysis?.reviewReasons ?? []).length > 0) && (
+                <div style={{ marginTop: 8, fontSize: 12, color: "#dc2626", fontWeight: 600, background: "#fef2f2", borderRadius: 6, padding: "6px 10px" }}>
+                  ⚠ 등록 대상에 검토 사유가 있는 항목이 포함되어 있습니다.
+                </div>
+              )}
+            </div>
+
+            {/* 전체 등록 강한 경고 */}
+            {importConfirmModal.mode === "all" && (
+              <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "10px 14px", marginBottom: 12 }}>
+                <p style={{ margin: 0, fontSize: 13, color: "#dc2626", fontWeight: 700 }}>
+                  검토필요 항목까지 포함하여 전체 등록됩니다.
+                </p>
+                <p style={{ margin: "4px 0 0", fontSize: 12, color: "#ef4444" }}>
+                  실제 운영 상품 마스터에 반영되므로 신중히 확인하세요.
+                </p>
+              </div>
+            )}
+
+            <p style={{ margin: "0 0 20px", fontSize: 12, color: "#6b7280", lineHeight: 1.6 }}>
+              등록 후 개별 비활성화는 가능하지만 일괄 복구는 어렵습니다.<br />
+              계속 진행하시겠습니까?
+            </p>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => handleProductImportExecute(importConfirmModal.rows)}
+                disabled={importExecuting}
+                style={{ flex: 1, padding: "10px 0", fontSize: 14, borderRadius: 8, cursor: importExecuting ? "not-allowed" : "pointer", background: importExecuting ? "#9ca3af" : importConfirmModal.mode === "all" ? "#dc2626" : "#2563eb", color: "#fff", border: "none", fontWeight: 700 }}>
+                {importExecuting ? "등록 중..." : `${importConfirmModal.rows.length}건 등록 확인`}
+              </button>
+              <GhostBtn onClick={() => setImportConfirmModal(null)} style={{ fontSize: 13, padding: "10px 20px" }}>취소</GhostBtn>
             </div>
           </Card>
         </div>
