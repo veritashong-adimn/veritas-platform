@@ -1133,17 +1133,16 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 ) : null)}
               </div>
 
-              {/* 미리보기 테이블 */}
-              <div style={{ maxHeight: 320, overflowY: "auto" }}>
+              {/* 미리보기 테이블 — 단일 scroll 컨테이너 (sticky 정상 동작) */}
+              <div style={{ maxHeight: 320, overflowY: "auto", overflowX: "auto" }}>
                 {filtered.length === 0 ? (
                   <div style={{ textAlign: "center", padding: "24px 0", fontSize: 13, color: "#9ca3af" }}>해당 항목 없음</div>
                 ) : (
-                  <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 980 }}>
                     <thead>
-                      <tr style={{ background: "#f9fafb", position: "sticky", top: 0, zIndex: 2 }}>
+                      <tr>
                         {["행", "원본 상품명", "Product 후보", "언어쌍", "방향", "난이도", "산업", "유형", "단위", "단가", "상태", "이슈"].map(h => (
-                          <th key={h} style={{ padding: "6px 10px", textAlign: "left", color: "#9ca3af", fontWeight: 600, borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap", fontSize: 11, background: "#f9fafb" }}>{h}</th>
+                          <th key={h} style={{ position: "sticky", top: 0, zIndex: 5, padding: "6px 10px", textAlign: "left", color: "#9ca3af", fontWeight: 600, background: "#f9fafb", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap", fontSize: 11 }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
@@ -1225,7 +1224,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                       })}
                     </tbody>
                   </table>
-                  </div>
                 )}
               </div>
             </div>
