@@ -40,6 +40,14 @@ const TYPE_COLORS: Record<string, { bg: string; color: string; icon: string }> =
   expense:        { bg: "#fefce8", color: "#b45309", icon: "💰" },
 };
 
+// ─── 장비 대분류별 기본 수량단위 ─────────────────────────────────────────────
+const EQUIP_UNIT_BY_MAIN: Record<string, string> = {
+  "FM 장비":     "세트",
+  "적외선 장비": "세트",
+  "부스":        "부스",
+  "리시버":      "개",
+};
+
 // ─── 코드 미리보기 생성 ──────────────────────────────────────────────────────
 function previewCode(productType: string, mainCategory: string): string {
   const typeInfo = PRODUCT_TYPES_META[productType];
@@ -194,7 +202,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         targetLanguage: hasLang ? (prev.targetLanguage || "en") : "",
         equipmentItem: isEquip ? prev.equipmentItem : "",
         equipmentItemCustom: isEquip ? prev.equipmentItemCustom : "",
-        quantityUnit: isEquip ? "개" : "",
+        quantityUnit: isEquip ? (EQUIP_UNIT_BY_MAIN[defMain] ?? "개") : "",
         usagePeriod: isEquip ? "1일" : "",
         usagePeriodCustom: "",
         interpretationDirection: (newType === "interpretation" || newType === "combined") ? "양방향" : "",
@@ -635,6 +643,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               onChange={v => {
                 setForm(p => {
                   const updated = { ...p, mainCategory: v, subCategory: "" };
+                  if (p.productType === "equipment") {
+                    updated.quantityUnit = EQUIP_UNIT_BY_MAIN[v] ?? p.quantityUnit;
+                  }
                   if (!productNameCustom) updated.name = autoName(updated);
                   return updated;
                 });
@@ -780,7 +791,20 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           <div style={{ background: "#faf5ff", borderRadius: 8, padding: "10px 14px", border: "1px solid #e9d5ff", marginBottom: 12 }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
-                <label style={{ fontSize: 12, color: "#7c3aed", display: "block", marginBottom: 3 }}>기본 진행시간 (예: 4h)</label>
+                <label style={{ fontSize: 12, color: "#7c3aed", display: "block", marginBottom: 3 }}>기본 진행시간</label>
+                <div style={{ display: "flex", gap: 4, marginBottom: 5 }}>
+                  {([["2h","2시간"],["4h","반일(4h)"],["8h","종일(8h)"]] as [string,string][]).map(([val,lbl]) => (
+                    <button key={val} type="button"
+                      onClick={() => setForm(p => ({ ...p, interpretationDuration: val }))}
+                      style={{ padding: "3px 10px", fontSize: 11, borderRadius: 5, cursor: "pointer",
+                        border: `1px solid ${form.interpretationDuration === val ? "#7c3aed" : "#e9d5ff"}`,
+                        background: form.interpretationDuration === val ? "#ede9fe" : "#f5f3ff",
+                        color: form.interpretationDuration === val ? "#7c3aed" : "#9ca3af",
+                        fontWeight: form.interpretationDuration === val ? 700 : 400 }}>
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
                 <input value={form.interpretationDuration} onChange={e => setForm(p => ({ ...p, interpretationDuration: e.target.value }))}
                   placeholder="예: 4h, 반일, 종일"
                   style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
