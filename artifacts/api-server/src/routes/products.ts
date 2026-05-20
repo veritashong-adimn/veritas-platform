@@ -358,7 +358,10 @@ type ProductAnalysis = {
   direction: string;
   difficulty: string;
   industry: string;
+  industry2: string;
   isOptionCandidate: boolean;
+  confidenceScore: number;
+  reviewReasons: string[];
 };
 
 const ISO_LABEL: Record<string, string> = {
@@ -432,8 +435,22 @@ const LANG_ENTRIES: LangEntry[] = [
 const DIFFICULTY_LIST = ["프리미엄", "특급", "긴급", "VIP", "고급", "전문", "일반"];
 const INDUSTRY_LIST   = ["반도체", "화장품", "바이오", "자동차", "국방", "특허", "금융", "계약", "의료", "법률", "게임", "IT"];
 
+// Canonical service type dictionary (긴 패턴 우선)
+const CANONICAL_PRODUCTS: [RegExp, string][] = [
+  [/원어민감수/, "원어민감수"],
+  [/공증번역/,   "공증번역"],
+  [/화상통역/,   "화상통역"],
+  [/전화통역/,   "전화통역"],
+  [/수행통역/,   "수행통역"],
+  [/동시통역/,   "동시통역"],
+  [/순차통역/,   "순차통역"],
+  [/통역/,       "통역"],
+  [/번역/,       "번역"],
+  [/감수/,       "감수"],
+];
+
 function analyzeProductStructure(name: string, productType?: string): ProductAnalysis {
-  const none: ProductAnalysis = { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", isOptionCandidate: false };
+  const none: ProductAnalysis = { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", industry2: "", isOptionCandidate: false, confidenceScore: 0, reviewReasons: [] };
   if (!name?.trim()) return none;
 
   let workName = name.trim();
@@ -491,11 +508,27 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
     }
   }
 
-  // ── Step 5: Product 후보 — 잔여 ISO 토큰 제거 후 핵심 서비스 명만 남김
-  const productCandidate = workName
-    .replace(/\b[a-z]{2,3}[→\-_][a-z]{2,3}\b/gi, " ")  // 잔여 ISO pair 제거
+  // ── Step 4b: 두 번째 산업 감지
+  let industry2 = "";
+  for (const ind of INDUSTRY_LIST) {
+    const rx = new RegExp(ind, "i");
+    if (rx.test(workName)) {
+      industry2 = ind.toUpperCase() === "IT" ? "IT" : ind;
+      workName = workName.replace(rx, " ").replace(/\s+/g, " ").trim();
+      break;
+    }
+  }
+
+  // ── Step 5: Product 후보 — 잔여 ISO 토큰 제거 후 canonical 서비스명으로 정규화
+  let productCandidate = workName
+    .replace(/\b[a-z]{2,3}[→\-_][a-z]{2,3}\b/gi, " ")
     .replace(/\s+/g, "")
     .trim();
+
+  let isCanonical = false;
+  for (const [rx, canonical] of CANONICAL_PRODUCTS) {
+    if (rx.test(productCandidate)) { productCandidate = canonical; isCanonical = true; break; }
+  }
 
   if (!srcCode && !productCandidate) return none;
 
@@ -511,8 +544,28 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
     direction = isInterp ? "bidirectional" : `ko↔${srcCode}`;
   }
 
+  // ── Step 7: 검토 사유 (Review Reasons)
+  const reviewReasons: string[] = [];
+  if (!productCandidate) reviewReasons.push("서비스 미인식");
+  if (productCandidate && !isCanonical) reviewReasons.push("Product 불명확");
+  if (srcLabel.startsWith("미지원") || tgtLabel.startsWith("미지원")) reviewReasons.push("미지원 언어");
+  if (industry2) reviewReasons.push("다중 산업 감지");
+
+  // ── Step 8: Confidence Score (0–100)
+  let score = 50;
+  if (productCandidate && isCanonical) score += 25;
+  else if (productCandidate) score += 5;
+  if (langPair) score += 15;
+  if (direction && direction !== "bidirectional") score += 5;
+  if (difficulty) score += 3;
+  if (industry) score += 3;
+  if (srcLabel.startsWith("미지원") || tgtLabel.startsWith("미지원")) score -= 20;
+  if (!productCandidate) score -= 30;
+  score -= reviewReasons.length * 8;
+  const confidenceScore = Math.max(0, Math.min(100, score));
+
   const isOptionCandidate = !!(productCandidate && (tgtCode || (srcCode && srcCode !== "ko")));
-  return { productCandidate, langPair, direction, difficulty, industry, isOptionCandidate };
+  return { productCandidate, langPair, direction, difficulty, industry, industry2, isOptionCandidate, confidenceScore, reviewReasons };
 }
 
 // ─── taxonomy 자동 추천 ──────────────────────────────────────────────────────

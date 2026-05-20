@@ -130,7 +130,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     status: "new" | "duplicate" | "conflict" | "review";
     issues: string[]; suggestedType: string;
     duplicateOf: { code: string; name: string }[];
-    analysis: { productCandidate: string; langPair: string; direction: string; difficulty: string; industry: string; isOptionCandidate: boolean };
+    analysis: { productCandidate: string; langPair: string; direction: string; difficulty: string; industry: string; industry2: string; isOptionCandidate: boolean; confidenceScore: number; reviewReasons: string[] };
   };
   const [importPreview, setImportPreview] = useState<{
     summary: { total: number; new: number; duplicate: number; conflict: number; review: number };
@@ -1141,36 +1141,37 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 980 }}>
                     <thead>
-                      <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
+                      <tr style={{ background: "#f9fafb", position: "sticky", top: 0, zIndex: 2 }}>
                         {["행", "원본 상품명", "Product 후보", "언어쌍", "방향", "난이도", "산업", "유형", "단위", "단가", "상태", "이슈"].map(h => (
-                          <th key={h} style={{ padding: "6px 10px", textAlign: "left", color: "#9ca3af", fontWeight: 600, borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap", fontSize: 11 }}>{h}</th>
+                          <th key={h} style={{ padding: "6px 10px", textAlign: "left", color: "#9ca3af", fontWeight: 600, borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap", fontSize: 11, background: "#f9fafb" }}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {filtered.map((item, idx) => {
                         const sm = STATUS_META[item.status] ?? STATUS_META.review;
-                        const an = item.analysis ?? { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", isOptionCandidate: false };
+                        const an = item.analysis ?? { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", industry2: "", isOptionCandidate: false, confidenceScore: 0, reviewReasons: [] };
                         const isBidir = an.direction === "bidirectional";
+                        const allReasons = [...(an.reviewReasons ?? []), ...(item.issues.filter(s => !s.startsWith("유사 중복") && !s.startsWith("taxonomy")))];
                         return (
                           <tr key={idx} style={{ borderBottom: "1px solid #f3f4f6", background: idx % 2 === 0 ? "#fff" : "#fafafa" }}>
-                            <td style={{ padding: "5px 10px", color: "#c4c4c4", fontFamily: "monospace", fontSize: 11 }}>{item.rowNum}</td>
-                            <td style={{ padding: "5px 10px", color: "#374151", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
+                            <td style={{ padding: "4px 10px", color: "#c4c4c4", fontFamily: "monospace", fontSize: 11 }}>{item.rowNum}</td>
+                            <td style={{ padding: "4px 10px", color: "#374151", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
                             {/* Product 후보 */}
-                            <td style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>
+                            <td style={{ padding: "4px 10px", whiteSpace: "nowrap" }}>
                               {an.productCandidate
                                 ? <span style={{ color: "#2563eb", fontWeight: 700 }}>{an.productCandidate}</span>
-                                : <span style={{ color: "#e5e7eb" }}>—</span>}
+                                : ""}
                               {an.isOptionCandidate && (
-                                <span title="옵션화 가능" style={{ marginLeft: 4, fontSize: 10, color: "#6d28d9", background: "#ede9fe", borderRadius: 3, padding: "1px 4px", fontWeight: 600, cursor: "default" }}>옵션</span>
+                                <span title="동일 서비스가 여러 언어쌍/산업으로 반복 — 옵션화 가능" style={{ marginLeft: 4, fontSize: 10, color: "#6d28d9", background: "#ede9fe", borderRadius: 3, padding: "1px 4px", fontWeight: 600, cursor: "default" }}>옵션화 가능</span>
                               )}
                             </td>
-                            {/* 언어쌍 — 항상 ↔ 관계형 */}
-                            <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "nowrap", fontSize: 12 }}>
+                            {/* 언어쌍 */}
+                            <td style={{ padding: "4px 10px", color: "#374151", whiteSpace: "nowrap", fontSize: 12 }}>
                               {an.langPair || ""}
                             </td>
                             {/* 방향 */}
-                            <td style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>
+                            <td style={{ padding: "4px 10px", whiteSpace: "nowrap" }}>
                               {an.direction ? (
                                 <span style={{ fontFamily: "monospace", fontSize: 11, color: isBidir ? "#059669" : "#6b7280", background: isBidir ? "#f0fdf4" : "#f9fafb", border: `1px solid ${isBidir ? "#bbf7d0" : "#e5e7eb"}`, borderRadius: 3, padding: "1px 5px" }}>
                                   {isBidir ? "↔" : an.direction}
@@ -1178,35 +1179,46 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               ) : ""}
                             </td>
                             {/* 난이도 */}
-                            <td style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>
+                            <td style={{ padding: "4px 10px", whiteSpace: "nowrap" }}>
                               {an.difficulty ? (
-                                <span style={{ fontSize: 11, color: "#6b7280", background: "#f3f4f6", borderRadius: 3, padding: "1px 5px" }}>
-                                  {an.difficulty}
-                                </span>
+                                <span style={{ fontSize: 11, color: "#6b7280", background: "#f3f4f6", borderRadius: 3, padding: "1px 5px" }}>{an.difficulty}</span>
                               ) : ""}
                             </td>
-                            {/* 산업 */}
-                            <td style={{ padding: "5px 10px", whiteSpace: "nowrap" }}>
+                            {/* 산업 (+ industry2) */}
+                            <td style={{ padding: "4px 10px", whiteSpace: "nowrap" }}>
                               {an.industry ? (
-                                <span style={{ fontSize: 11, color: "#0369a1", background: "#f0f9ff", borderRadius: 3, padding: "1px 5px" }}>
-                                  {an.industry}
-                                </span>
+                                <span style={{ fontSize: 11, color: "#0369a1", background: "#f0f9ff", borderRadius: 3, padding: "1px 5px" }}>{an.industry}</span>
+                              ) : ""}
+                              {an.industry2 ? (
+                                <span title="추가 산업 감지" style={{ marginLeft: 3, fontSize: 10, color: "#64748b", background: "#f1f5f9", borderRadius: 3, padding: "1px 4px" }}>{an.industry2}</span>
                               ) : ""}
                             </td>
                             {/* 유형 */}
-                            <td style={{ padding: "5px 10px", color: "#374151", whiteSpace: "nowrap", fontSize: 11 }}>
+                            <td style={{ padding: "4px 10px", color: "#374151", whiteSpace: "nowrap", fontSize: 11 }}>
                               {item.productType}
                               {item.suggestedType && item.suggestedType !== item.productType && (
                                 <span style={{ marginLeft: 3, fontSize: 10, color: "#a78bfa" }}>→{item.suggestedType}</span>
                               )}
                             </td>
-                            <td style={{ padding: "5px 10px", color: "#6b7280", fontSize: 11 }}>{item.unit}</td>
-                            <td style={{ padding: "5px 10px", color: "#374151", textAlign: "right", fontSize: 11 }}>{item.basePrice != null ? item.basePrice.toLocaleString() : ""}</td>
-                            <td style={{ padding: "5px 10px" }}>
-                              <span style={{ fontSize: 11, fontWeight: 600, color: sm.color, background: sm.bg, borderRadius: 4, padding: "1px 6px", whiteSpace: "nowrap" }}>{sm.label}</span>
+                            <td style={{ padding: "4px 10px", color: "#6b7280", fontSize: 11 }}>{item.unit}</td>
+                            <td style={{ padding: "4px 10px", color: "#374151", textAlign: "right", fontSize: 11 }}>{item.basePrice != null ? item.basePrice.toLocaleString() : ""}</td>
+                            {/* 상태 + confidence */}
+                            <td style={{ padding: "4px 10px", whiteSpace: "nowrap" }}>
+                              <span style={{ fontSize: 11, fontWeight: 600, color: sm.color, background: sm.bg, borderRadius: 4, padding: "1px 6px" }}>{sm.label}</span>
+                              {typeof an.confidenceScore === "number" && (
+                                <span title={`분석 신뢰도 ${an.confidenceScore}점`} style={{ marginLeft: 4, fontSize: 10, color: an.confidenceScore >= 80 ? "#059669" : an.confidenceScore >= 55 ? "#d97706" : "#dc2626", cursor: "default" }}>
+                                  {an.confidenceScore}
+                                </span>
+                              )}
                             </td>
-                            <td style={{ padding: "5px 10px", color: "#9ca3af", maxWidth: 190, fontSize: 11 }}>
-                              {item.issues.join(" · ")}
+                            {/* 이슈 + 검토 사유 chip */}
+                            <td style={{ padding: "4px 10px", maxWidth: 200, fontSize: 11 }}>
+                              {(an.reviewReasons ?? []).map((r, i) => (
+                                <span key={i} style={{ display: "inline-block", marginRight: 3, marginBottom: 2, fontSize: 10, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 3, padding: "1px 4px" }}>{r}</span>
+                              ))}
+                              {item.issues.filter(s => s.startsWith("유사 중복") || s.startsWith("taxonomy") || s.startsWith("단가") || s.startsWith("단위")).map((s, i) => (
+                                <span key={`iss-${i}`} style={{ display: "inline-block", marginRight: 3, color: "#9ca3af" }}>{s}</span>
+                              ))}
                             </td>
                           </tr>
                         );
