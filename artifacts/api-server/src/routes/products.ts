@@ -351,6 +351,72 @@ function normalizeProdName(s: string): string {
     .normalize("NFC");
 }
 
+// ─── Product + Option 구조 분석 ──────────────────────────────────────────────
+type ProductAnalysis = {
+  productCandidate: string;
+  langPair: string;
+  direction: string;
+  isOptionCandidate: boolean;
+};
+
+function analyzeProductStructure(name: string, productType?: string): ProductAnalysis {
+  const none: ProductAnalysis = { productCandidate: "", langPair: "", direction: "", isOptionCandidate: false };
+  if (!name?.trim()) return none;
+
+  type L = { m: string; code: string; label: string };
+  const LANGS: L[] = [
+    { m: "한국어", code: "ko", label: "한국어" }, { m: "영국어", code: "en", label: "영어" },
+    { m: "영어",   code: "en", label: "영어" },   { m: "일본어", code: "ja", label: "일본어" },
+    { m: "중국어", code: "zh", label: "중국어" },  { m: "프랑스어", code: "fr", label: "프랑스어" },
+    { m: "불어",   code: "fr", label: "프랑스어" },{ m: "독일어", code: "de", label: "독일어" },
+    { m: "스페인어", code: "es", label: "스페인어" }, { m: "러시아어", code: "ru", label: "러시아어" },
+    { m: "아랍어", code: "ar", label: "아랍어" },  { m: "포르투갈어", code: "pt", label: "포르투갈어" },
+    { m: "베트남어", code: "vi", label: "베트남어" }, { m: "태국어", code: "th", label: "태국어" },
+    { m: "인도네시아어", code: "id", label: "인도네시아어" }, { m: "말레이어", code: "ms", label: "말레이어" },
+    { m: "힌디어", code: "hi", label: "힌디어" },
+    { m: "한", code: "ko", label: "한국어" }, { m: "영", code: "en", label: "영어" },
+    { m: "일", code: "ja", label: "일본어" }, { m: "중", code: "zh", label: "중국어" },
+    { m: "불", code: "fr", label: "프랑스어" }, { m: "독", code: "de", label: "독일어" },
+    { m: "스", code: "es", label: "스페인어" }, { m: "러", code: "ru", label: "러시아어" },
+    { m: "아", code: "ar", label: "아랍어" },   { m: "포", code: "pt", label: "포르투갈어" },
+    { m: "베", code: "vi", label: "베트남어" },  { m: "태", code: "th", label: "태국어" },
+  ];
+
+  let rest = name;
+  let lang1: L | null = null;
+  let lang2: L | null = null;
+
+  for (const l of LANGS) {
+    if (rest.startsWith(l.m)) { lang1 = l; rest = rest.slice(l.m.length); break; }
+  }
+  if (lang1) {
+    for (const l of LANGS) {
+      if (l.code !== lang1.code && rest.startsWith(l.m)) {
+        lang2 = l; rest = rest.slice(l.m.length); break;
+      }
+    }
+  }
+
+  if (!lang1) return none;
+
+  const productCandidate = rest.trim() || name;
+  const isInterp = productType === "interpretation" || /통역/.test(productCandidate);
+
+  let langPair: string;
+  let direction: string;
+
+  if (lang2) {
+    langPair  = isInterp ? `${lang1.label} ↔ ${lang2.label}` : `${lang1.label} → ${lang2.label}`;
+    direction = isInterp ? "bidirectional" : `${lang1.code}→${lang2.code}`;
+  } else {
+    if (lang1.code === "ko") return { productCandidate, langPair: "", direction: "", isOptionCandidate: false };
+    langPair  = `한국어 ↔ ${lang1.label}`;
+    direction = isInterp ? "bidirectional" : `ko↔${lang1.code}`;
+  }
+
+  return { productCandidate, langPair, direction, isOptionCandidate: true };
+}
+
 // ─── taxonomy 자동 추천 ──────────────────────────────────────────────────────
 function suggestProductType(name: string, mainCategory?: string): string {
   const text = normalizeProdName((name ?? "") + (mainCategory ?? ""));
@@ -589,6 +655,7 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
     unit: string; basePrice: number | null; description: string | null;
     status: PreviewStatus; issues: string[]; suggestedType: string;
     duplicateOf: { code: string; name: string }[];
+    analysis: ProductAnalysis;
   };
 
   try {
@@ -672,9 +739,25 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
         status = duplicateOf.some(d => d.name === nameRaw) ? "conflict" : "duplicate";
       }
 
+      const analysis = analyzeProductStructure(nameRaw, pType);
+
       items.push({ rowNum, name: nameRaw, productType: pType, mainCategory: mainCat, subCategory: subCat,
         sourceLanguage: srcLang, targetLanguage: tgtLang, unit, basePrice, description: desc,
-        status, issues, suggestedType: suggestedType !== pType ? suggestedType : "", duplicateOf });
+        status, issues, suggestedType: suggestedType !== pType ? suggestedType : "", duplicateOf, analysis });
+    }
+
+    // 옵션화 가능 탐지: 동일 productCandidate + 다른 langPair 조합이 2개 이상인 항목
+    const candidateGroups: Record<string, number> = {};
+    for (const item of items) {
+      if (item.analysis.isOptionCandidate && item.analysis.productCandidate) {
+        candidateGroups[item.analysis.productCandidate] = (candidateGroups[item.analysis.productCandidate] ?? 0) + 1;
+      }
+    }
+    for (const item of items) {
+      if (item.analysis.isOptionCandidate && item.analysis.productCandidate &&
+          (candidateGroups[item.analysis.productCandidate] ?? 0) > 1) {
+        item.analysis = { ...item.analysis, isOptionCandidate: true };
+      }
     }
 
     const summary = {

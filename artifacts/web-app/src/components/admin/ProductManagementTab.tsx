@@ -130,6 +130,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     status: "new" | "duplicate" | "conflict" | "review";
     issues: string[]; suggestedType: string;
     duplicateOf: { code: string; name: string }[];
+    analysis: { productCandidate: string; langPair: string; direction: string; isOptionCandidate: boolean };
   };
   const [importPreview, setImportPreview] = useState<{
     summary: { total: number; new: number; duplicate: number; conflict: number; review: number };
@@ -1137,10 +1138,11 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 {filtered.length === 0 ? (
                   <div style={{ textAlign: "center", padding: "24px 0", fontSize: 13, color: "#9ca3af" }}>해당 항목 없음</div>
                 ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                  <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 860 }}>
                     <thead>
                       <tr style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
-                        {["행", "상품명", "유형", "대분류", "단위", "단가", "상태", "이슈"].map(h => (
+                        {["행", "원본 상품명", "Product 후보", "언어쌍", "방향", "유형", "단위", "단가", "상태", "이슈"].map(h => (
                           <th key={h} style={{ padding: "7px 10px", textAlign: "left", color: "#6b7280", fontWeight: 600, borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" }}>{h}</th>
                         ))}
                       </tr>
@@ -1148,23 +1150,45 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                     <tbody>
                       {filtered.map((item, idx) => {
                         const sm = STATUS_META[item.status] ?? STATUS_META.review;
+                        const an = item.analysis ?? { productCandidate: "", langPair: "", direction: "", isOptionCandidate: false };
                         return (
                           <tr key={idx} style={{ borderBottom: "1px solid #f3f4f6", background: idx % 2 === 0 ? "#fff" : "#fafafa" }}>
                             <td style={{ padding: "6px 10px", color: "#9ca3af", fontFamily: "monospace" }}>{item.rowNum}</td>
-                            <td style={{ padding: "6px 10px", color: "#111827", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
+                            <td style={{ padding: "6px 10px", color: "#111827", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
+                            {/* Product 후보 */}
+                            <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
+                              {an.productCandidate ? (
+                                <span style={{ color: "#2563eb", fontWeight: 600 }}>{an.productCandidate}</span>
+                              ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                              {an.isOptionCandidate && (
+                                <span title="동일 서비스가 여러 언어쌍으로 반복됨 — 옵션화 가능" style={{ marginLeft: 4, fontSize: 10, color: "#7c3aed", background: "#f5f3ff", borderRadius: 4, padding: "1px 5px", fontWeight: 700, cursor: "default" }}>옵션</span>
+                              )}
+                            </td>
+                            {/* 언어쌍 */}
+                            <td style={{ padding: "6px 10px", color: "#374151", whiteSpace: "nowrap" }}>
+                              {an.langPair || <span style={{ color: "#d1d5db" }}>—</span>}
+                            </td>
+                            {/* 방향 */}
+                            <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
+                              {an.direction ? (
+                                <span style={{ fontFamily: "monospace", fontSize: 11, color: an.direction === "bidirectional" ? "#059669" : "#374151", background: an.direction === "bidirectional" ? "#f0fdf4" : "#f3f4f6", borderRadius: 4, padding: "2px 6px" }}>
+                                  {an.direction === "bidirectional" ? "↔ 양방향" : an.direction}
+                                </span>
+                              ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                            </td>
+                            {/* 유형 */}
                             <td style={{ padding: "6px 10px", color: "#374151", whiteSpace: "nowrap" }}>
                               {item.productType}
                               {item.suggestedType && item.suggestedType !== item.productType && (
                                 <span style={{ marginLeft: 4, fontSize: 10, color: "#7c3aed" }}>→{item.suggestedType}</span>
                               )}
                             </td>
-                            <td style={{ padding: "6px 10px", color: "#374151", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.mainCategory}</td>
                             <td style={{ padding: "6px 10px", color: "#374151" }}>{item.unit}</td>
                             <td style={{ padding: "6px 10px", color: "#374151", textAlign: "right" }}>{item.basePrice != null ? item.basePrice.toLocaleString() : "—"}</td>
                             <td style={{ padding: "6px 10px" }}>
                               <span style={{ fontSize: 11, fontWeight: 700, color: sm.color, background: sm.bg, borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap" }}>{sm.label}</span>
                             </td>
-                            <td style={{ padding: "6px 10px", color: "#6b7280", maxWidth: 220, fontSize: 11 }}>
+                            <td style={{ padding: "6px 10px", color: "#6b7280", maxWidth: 200, fontSize: 11 }}>
                               {item.issues.length > 0 ? item.issues.join(" · ") : ""}
                             </td>
                           </tr>
@@ -1172,6 +1196,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                       })}
                     </tbody>
                   </table>
+                  </div>
                 )}
               </div>
             </div>
