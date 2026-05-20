@@ -3295,6 +3295,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                           { value: "8시간", label: "8시간" },
                                           { value: "1일", label: "1일" },
                                           { value: "추가시간", label: "추가시간" },
+                                          { value: "건", label: "건" },
                                         ]} />
                                       {/* ── [명] InputGroup ── */}
                                       <div style={{ display: "flex", alignItems: "center", border: "1px solid #d8b4fe", borderRadius: 5, overflow: "hidden", background: "#fff", height: 26 }}>
@@ -3352,7 +3353,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                       <ClickSelect value={it.quantityUnit}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantityUnit: v } : p))}
                                         triggerStyle={{ fontSize: 10, padding: "5px 1px", borderRadius: 5, width: 56, borderColor: "#6ee7b7" }}
-                                        options={[{ value: "개", label: "개" }, { value: "세트", label: "세트" }, { value: "부스", label: "부스" }, { value: "대", label: "대" }]} />
+                                        options={[{ value: "개", label: "개" }, { value: "세트", label: "세트" }, { value: "부스", label: "부스" }, { value: "대", label: "대" }, { value: "건", label: "건" }]} />
                                       <ClickSelect value={it.usagePeriod}
                                         onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, usagePeriod: v } : p))}
                                         triggerStyle={{ fontSize: 10, padding: "5px 1px", borderRadius: 5, width: 64, borderColor: "#6ee7b7" }}

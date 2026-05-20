@@ -443,21 +443,27 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
     { label: "공증번역",   code: "CRT" },
   ],
   interpretation: [
-    { label: "통역",     code: "INT" },
-    { label: "수행통역", code: "ESC" },
-    { label: "화상통역", code: "VDO" },
-    { label: "전화통역", code: "TEL" },
+    { label: "통역",     code: "INT"    },
+    { label: "수행통역", code: "ESC"    },
+    { label: "화상통역", code: "VDO"    },
+    { label: "전화통역", code: "TEL"    },
+    { label: "출장/이동", code: "TRIP"  },
+    { label: "취소/보상", code: "CANCEL"},
+    { label: "할증/연장", code: "OT"    },
+    { label: "대기",      code: "WAIT"  },
   ],
   equipment: [
-    { label: "FM 장비",     code: "FM"  },
-    { label: "적외선 장비", code: "IR"  },
-    { label: "부스",        code: "BTH" },
-    { label: "리시버",      code: "RCV" },
+    { label: "FM 장비",     code: "FM"    },
+    { label: "적외선 장비", code: "IR"    },
+    { label: "부스",        code: "BTH"   },
+    { label: "리시버",      code: "RCV"   },
+    { label: "엔지니어",    code: "ENG"   },
+    { label: "설치/철수",   code: "SETUP" },
+    { label: "장비 연장",   code: "EXT"   },
   ],
   expense: [
     { label: "배송/퀵",   code: "DLV"  },
     { label: "교통비",    code: "TX"   },
-    { label: "출장비",    code: "TRIP" },
     { label: "식비",      code: "MEAL" },
     { label: "숙박",      code: "ACC"  },
     { label: "기타 실비", code: "ETC"  },
@@ -505,13 +511,13 @@ export const LANGUAGE_CODES: { code: string; label: string }[] = [
   { code: "custom",  label: "기타 직접입력" },
 ];
 
-export const EQUIPMENT_QUANTITY_UNITS = ["개", "세트", "부스"] as const;
+export const EQUIPMENT_QUANTITY_UNITS = ["개", "세트", "부스", "건"] as const;
 export const EQUIPMENT_USAGE_PERIODS = ["반일", "1일", "2일", "3일"] as const;
 export const INTERPRETATION_DIRECTIONS = ["양방향", "A→B", "B→A"] as const;
 
 export const UNITS_BY_PRODUCT_TYPE: Record<string, string[]> = {
   translation:    ["페이지", "단어", "글자", "어절", "건"],
-  interpretation: ["1시간", "2시간", "4시간", "6시간", "8시간", "1일", "추가시간"],
+  interpretation: ["1시간", "2시간", "4시간", "6시간", "8시간", "1일", "추가시간", "건"],
   equipment:      ["개", "세트", "부스", "대"],
   expense:        ["건", "인", "박"],
 };
@@ -540,9 +546,9 @@ export const EQUIPMENT_ITEMS: string[] = [
 
 export const PRODUCT_MAIN_CATEGORIES = [
   "번역", "감수", "원어민감수", "공증번역",
-  "통역", "수행통역", "화상통역", "전화통역",
-  "FM 장비", "적외선 장비", "부스", "리시버",
-  "배송/퀵", "교통비", "출장비", "식비", "숙박", "기타 실비",
+  "통역", "수행통역", "화상통역", "전화통역", "출장/이동", "취소/보상", "할증/연장", "대기",
+  "FM 장비", "적외선 장비", "부스", "리시버", "엔지니어", "설치/철수", "장비 연장",
+  "배송/퀵", "교통비", "식비", "숙박", "기타 실비",
 ] as const;
 export type ProductMainCategory = typeof PRODUCT_MAIN_CATEGORIES[number];
 
