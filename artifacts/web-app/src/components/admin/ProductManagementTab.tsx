@@ -36,44 +36,17 @@ const LANG_LABEL: Record<string, string> = Object.fromEntries(LANGUAGE_CODES.map
 const TYPE_COLORS: Record<string, { bg: string; color: string; icon: string }> = {
   translation:    { bg: "#eff6ff", color: "#2563eb", icon: "📄" },
   interpretation: { bg: "#f5f3ff", color: "#7c3aed", icon: "🎤" },
-  combined:       { bg: "#fdf4ff", color: "#9333ea", icon: "🔗" },
-  proofreading:   { bg: "#f0fdf4", color: "#059669", icon: "✍️" },
-  media:          { bg: "#fef3c7", color: "#d97706", icon: "🎬" },
-  equipment:      { bg: "#fff7ed", color: "#c2410c", icon: "🎧" },
-  editing:        { bg: "#fdf2f8", color: "#9d174d", icon: "🖨️" },
-  operations:     { bg: "#f1f5f9", color: "#475569", icon: "🏢" },
-  project:        { bg: "#ecfdf5", color: "#059669", icon: "📋" },
-  transport:      { bg: "#fefce8", color: "#d97706", icon: "🚗" },
-  meal:           { bg: "#fff1f2", color: "#e11d48", icon: "🍱" },
-  accommodation:  { bg: "#f0f9ff", color: "#0369a1", icon: "🏨" },
-  other_cost:     { bg: "#f9fafb", color: "#6b7280", icon: "💼" },
+  equipment:      { bg: "#fff7ed", color: "#c2410c", icon: "🔧" },
+  expense:        { bg: "#fefce8", color: "#b45309", icon: "💰" },
 };
 
 // ─── 코드 미리보기 생성 ──────────────────────────────────────────────────────
-function previewCode(
-  productType: string,
-  sourceLanguage: string,
-  targetLanguage: string,
-  mainCategory: string,
-  subCategory: string,
-): string {
+function previewCode(productType: string, mainCategory: string): string {
   const typeInfo = PRODUCT_TYPES_META[productType];
   if (!typeInfo) return "?";
-  const typeCode = typeInfo.code;
-  const hasLang = typeInfo.hasLanguage;
-
   const mainCats = MAIN_CATEGORIES_BY_TYPE[productType] ?? [];
   const mainCode = mainCats.find(c => c.label === mainCategory)?.code ?? "GEN";
-  const subCats = SUB_CATEGORIES_BY_MAIN[mainCategory] ?? [];
-  const subCode = subCategory ? (subCats.find(c => c.label === subCategory)?.code ?? "") : "";
-  const catCode = subCode || mainCode;
-
-  if (hasLang && sourceLanguage && targetLanguage) {
-    const srcCode = sourceLanguage === "custom" ? "ETC" : sourceLanguage.toUpperCase();
-    const tgtCode = targetLanguage === "custom" ? "ETC" : targetLanguage.toUpperCase();
-    return `${typeCode}-${srcCode}-${tgtCode}-${catCode}-###`;
-  }
-  return `${typeCode}-${catCode}-###`;
+  return `${typeInfo.code}-${mainCode}-###`;
 }
 
 // ─── 폼 타입 ────────────────────────────────────────────────────────────────
@@ -112,8 +85,8 @@ type ProductRequest = {
 const emptyProductForm: ProductFormType = {
   productType: "translation", sourceLanguage: "ko", sourceLanguageCustom: "", targetLanguage: "en", targetLanguageCustom: "",
   equipmentItem: "", equipmentItemCustom: "",
-  mainCategory: "일반번역", subCategory: "",
-  name: "", unit: "어절", quantityUnit: "개", usagePeriod: "1일", usagePeriodCustom: "", interpretationDirection: "양방향",
+  mainCategory: "번역", subCategory: "",
+  name: "", unit: "페이지", quantityUnit: "개", usagePeriod: "1일", usagePeriodCustom: "", interpretationDirection: "양방향",
   basePrice: "", description: "",
   interpretationDuration: "", overtimePrice: "", options: [],
 };
@@ -539,7 +512,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const typeColor = TYPE_COLORS[form.productType] ?? { bg: "#f9fafb", color: "#374151", icon: "📦" };
     const isInterp = form.productType === "interpretation" || form.productType === "combined";
     const isEquip = form.productType === "equipment";
-    const codePrev = previewCode(form.productType, form.sourceLanguage, form.targetLanguage, form.mainCategory, form.subCategory);
+    const codePrev = previewCode(form.productType, form.mainCategory);
 
     return (
       <>
