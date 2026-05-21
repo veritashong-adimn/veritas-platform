@@ -214,11 +214,25 @@ export function Navbar({
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 24 }}>
           <div style={{
-            width: 28, height: 28, background: "#2563eb", borderRadius: 6,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            color: "#fff", fontWeight: 800, fontSize: 13,
-          }}>T</div>
-          <span style={{ fontWeight: 700, fontSize: 15, color: "#111827" }}>통번역 플랫폼</span>
+            width: 28, height: 28, background: "#0f172a", borderRadius: 7,
+            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+          }}>
+            <svg width="16" height="16" viewBox="0 0 32 32" fill="none">
+              <path d="M4 5L16 25L28 5" stroke="#818cf8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <line x1="7.6" y1="11" x2="24.4" y2="11" stroke="#818cf8" strokeWidth="1.2" strokeLinecap="round" opacity="0.55"/>
+              <line x1="11.2" y1="17" x2="20.8" y2="17" stroke="#818cf8" strokeWidth="1" strokeLinecap="round" opacity="0.35"/>
+              <circle cx="4" cy="5" r="2" fill="#6366f1"/>
+              <circle cx="28" cy="5" r="2" fill="#6366f1"/>
+              <circle cx="16" cy="25" r="2.2" fill="#60a5fa"/>
+              <circle cx="7.6" cy="11" r="1.4" fill="#818cf8"/>
+              <circle cx="24.4" cy="11" r="1.4" fill="#818cf8"/>
+              <circle cx="11.2" cy="17" r="1.2" fill="#93c5fd" opacity="0.8"/>
+              <circle cx="20.8" cy="17" r="1.2" fill="#93c5fd" opacity="0.8"/>
+            </svg>
+          </div>
+          <span style={{ fontWeight: 700, fontSize: 14, color: "#111827", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
+            VERITAS <span style={{ fontWeight: 400, color: "#9ca3af", fontSize: 13, letterSpacing: "0.08em" }}>OS</span>
+          </span>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", flex: 1 }}>

@@ -63,7 +63,7 @@ export function SetPasswordPage() {
       <div style={{ width: "100%", maxWidth: 440 }}>
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <p style={{ margin: "0 0 4px", fontSize: 22, fontWeight: 800, color: "#111827" }}>비밀번호 설정</p>
-          <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>통번역 플랫폼 계정을 활성화합니다</p>
+          <p style={{ margin: 0, fontSize: 13, color: "#6b7280" }}>VERITAS OS 계정을 활성화합니다</p>
         </div>
 
         <Card style={{ padding: "28px 32px" }}>
