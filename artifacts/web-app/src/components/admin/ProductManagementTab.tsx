@@ -8,6 +8,61 @@ import {
 import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 import { LanguageSearchSelect, LangCustomInput, isLangCustom } from './LanguageSearchSelect';
 
+// ─── Review Persistence 모듈 레벨 타입 ─────────────────────────────────────
+type ImportPreviewItem = {
+  rowNum: number; name: string; productType: string; mainCategory: string;
+  subCategory: string; sourceLanguage: string | null; targetLanguage: string | null;
+  unit: string; basePrice: number | null; description: string | null;
+  status: "new" | "duplicate" | "conflict" | "review";
+  issues: string[]; suggestedType: string;
+  duplicateOf: { code: string; name: string }[];
+  analysis: { productCandidate: string; langPair: string; direction: string; difficulty: string; industry: string; industry2: string; isOptionCandidate: boolean; confidenceScore: number; reviewReasons: string[] };
+};
+
+type RowOverride = {
+  reviewStatus: "pending" | "approved" | "rejected";
+  rejectReason: string;
+  overriddenCandidate: string | undefined;
+  originalCandidate: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+};
+
+type ReviewSessionMeta = {
+  sessionId: string;
+  fileName: string;
+  uploadedAt: string;
+  totalRows: number;
+};
+
+type PersistedReviewSession = {
+  session: ReviewSessionMeta;
+  importPreview: {
+    summary: { total: number; new: number; duplicate: number; conflict: number; review: number };
+    items: ImportPreviewItem[];
+    fileName: string;
+  };
+  rowOverrides: Record<number, RowOverride>;
+};
+
+// ─── localStorage 헬퍼 ────────────────────────────────────────────────────
+const REVIEW_SESSION_KEY = "veritas_review_session_v1";
+
+function loadReviewSession(): PersistedReviewSession | null {
+  try {
+    const raw = localStorage.getItem(REVIEW_SESSION_KEY);
+    return raw ? (JSON.parse(raw) as PersistedReviewSession) : null;
+  } catch { return null; }
+}
+
+function saveReviewSession(data: PersistedReviewSession): void {
+  try { localStorage.setItem(REVIEW_SESSION_KEY, JSON.stringify(data)); } catch { /* storage quota */ }
+}
+
+function clearReviewSession(): void {
+  try { localStorage.removeItem(REVIEW_SESSION_KEY); } catch { /* ignore */ }
+}
+
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
   border: '1px solid #d1d5db', fontSize: 14, color: '#111827',
@@ -123,15 +178,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [productImporting, setProductImporting] = useState(false);
   const productImportRef = useRef<HTMLInputElement>(null);
 
-  type ImportPreviewItem = {
-    rowNum: number; name: string; productType: string; mainCategory: string;
-    subCategory: string; sourceLanguage: string | null; targetLanguage: string | null;
-    unit: string; basePrice: number | null; description: string | null;
-    status: "new" | "duplicate" | "conflict" | "review";
-    issues: string[]; suggestedType: string;
-    duplicateOf: { code: string; name: string }[];
-    analysis: { productCandidate: string; langPair: string; direction: string; difficulty: string; industry: string; industry2: string; isOptionCandidate: boolean; confidenceScore: number; reviewReasons: string[] };
-  };
   const [importPreview, setImportPreview] = useState<{
     summary: { total: number; new: number; duplicate: number; conflict: number; review: number };
     items: ImportPreviewItem[];
@@ -144,14 +190,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [importPreviewSort, setImportPreviewSort] = useState<"conf_asc" | "conf_desc">("conf_asc");
   const [importQualFilter, setImportQualFilter] = useState<"all" | "review_only" | "safe_only" | "low_conf">("all");
   const [importConfirmModal, setImportConfirmModal] = useState<{ mode: "selected" | "safe" | "all"; rows: ImportPreviewItem[] } | null>(null);
-  // ─── Review Workflow 상태 ──────────────────────────────────────────────────
-  type RowOverride = {
-    reviewStatus: "pending" | "approved" | "rejected";
-    rejectReason: string;
-    overriddenCandidate: string | undefined;
-    originalCandidate: string;
-  };
+  // ─── Review Workflow / Persistence 상태 ───────────────────────────────────
   const [rowOverrides, setRowOverrides] = useState<Record<number, RowOverride>>({});
+  const [reviewSession, setReviewSession] = useState<ReviewSessionMeta | null>(null);
+  const [sessionRestored, setSessionRestored] = useState(false);
   const [editingRowNum, setEditingRowNum] = useState<number | null>(null);
   const [editingValue, setEditingValue] = useState<string>("");
   const [importReviewFilter, setImportReviewFilter] = useState<"all" | "approved" | "rejected" | "pending" | "modified">("all");
