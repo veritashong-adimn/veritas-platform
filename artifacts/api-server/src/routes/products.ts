@@ -371,10 +371,12 @@ const ISO_LABEL: Record<string, string> = {
   ar: "아랍어",  pt: "포르투갈어", vi: "베트남어", th: "태국어",
   id: "인도네시아어", ms: "말레이어", hi: "힌디어", ph: "필리핀어",
   tr: "터키어",  it: "이탈리아어", mn: "몽골어",
-  bn: "벵골어",  ur: "우르두어",   fa: "페르시아어", km: "캄보디아어",
+  bn: "벵골어",  ur: "우르두어",   fa: "페르시아어", km: "크메르어",
   lo: "라오스어", sw: "스와힐리어", ne: "네팔어",  ta: "타밀어",
   yue: "광동어", sr: "세르비아어", uk: "우크라이나어", pl: "폴란드어",
   nl: "네덜란드어", cs: "체코어", ro: "루마니아어", hu: "헝가리어",
+  da: "덴마크어",  sv: "스웨덴어",  no: "노르웨이어", fi: "핀란드어",
+  bg: "불가리아어", hr: "크로아티아어",
   ky: "키르기스어", uz: "우즈베크어", tk: "투르크멘어",
   tl: "타갈로그어", my: "미얀마어", si: "싱할라어", he: "히브리어",
 };
@@ -388,11 +390,15 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "타갈로그어",   code: "tl",  label: "타갈로그어" },
   { m: "인도네시아어", code: "id",  label: "인도네시아어" },
   { m: "인니어",       code: "id",  label: "인도네시아어" },
+  { m: "인니",         code: "id",  label: "인도네시아어" },
   { m: "포르투갈어",   code: "pt",  label: "포르투갈어" },
+  { m: "포어",         code: "pt",  label: "포르투갈어" },
   { m: "이탈리아어",   code: "it",  label: "이탈리아어" },
+  { m: "이태리어",     code: "it",  label: "이탈리아어" },
   { m: "스와힐리어",   code: "sw",  label: "스와힐리어" },
-  { m: "캄보디아어",   code: "km",  label: "캄보디아어" },
-  { m: "크메르어",     code: "km",  label: "캄보디아어" },
+  { m: "캄보디아어",   code: "km",  label: "크메르어" },
+  { m: "크메르어",     code: "km",  label: "크메르어" },
+  { m: "캄",           code: "km",  label: "크메르어" },
   { m: "스페인어",     code: "es",  label: "스페인어" },
   { m: "러시아어",     code: "ru",  label: "러시아어" },
   { m: "페르시아어",   code: "fa",  label: "페르시아어" },
@@ -405,7 +411,14 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "헝가리어",     code: "hu",  label: "헝가리어" },
   { m: "라오스어",     code: "lo",  label: "라오스어" },
   { m: "루마니아어",   code: "ro",  label: "루마니아어" },
+  { m: "노르웨이어",   code: "no",  label: "노르웨이어" },
+  { m: "불가리아어",   code: "bg",  label: "불가리아어" },
+  { m: "크로아티아어", code: "hr",  label: "크로아티아어" },
+  { m: "스웨덴어",     code: "sv",  label: "스웨덴어" },
+  { m: "덴마크어",     code: "da",  label: "덴마크어" },
+  { m: "핀란드어",     code: "fi",  label: "핀란드어" },
   { m: "한국어",       code: "ko",  label: "한국어" },
+  { m: "한글",         code: "ko",  label: "한국어" },
   { m: "영국어",       code: "en",  label: "영어" },
   { m: "필리핀어",     code: "ph",  label: "필리핀어" },
   { m: "말레이시아어", code: "ms",  label: "말레이어" },
@@ -429,6 +442,11 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "미얀마어",     code: "my",  label: "미얀마어" },
   { m: "싱할라어",     code: "si",  label: "싱할라어" },
   { m: "히브리어",     code: "he",  label: "히브리어" },
+  // 2음절 alias
+  { m: "스웨", code: "sv", label: "스웨덴어" },
+  { m: "세르", code: "sr", label: "세르비아어" },
+  { m: "불가", code: "bg", label: "불가리아어" },
+  { m: "크로", code: "hr", label: "크로아티아어" },
   // 단음절
   { m: "한", code: "ko", label: "한국어" },
   { m: "영", code: "en", label: "영어" },
@@ -437,13 +455,24 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "불", code: "fr", label: "프랑스어" },
   { m: "독", code: "de", label: "독일어" },
   { m: "스", code: "es", label: "스페인어" },
+  { m: "서", code: "es", label: "스페인어" },
   { m: "러", code: "ru", label: "러시아어" },
   { m: "아", code: "ar", label: "아랍어" },
   { m: "포", code: "pt", label: "포르투갈어" },
   { m: "베", code: "vi", label: "베트남어" },
   { m: "태", code: "th", label: "태국어" },
+  { m: "몽", code: "mn", label: "몽골어" },
+  { m: "말", code: "ms", label: "말레이어" },
+  { m: "덴", code: "da", label: "덴마크어" },
+  { m: "노", code: "no", label: "노르웨이어" },
+  { m: "핀", code: "fi", label: "핀란드어" },
+  { m: "헝", code: "hu", label: "헝가리어" },
+  { m: "루", code: "ro", label: "루마니아어" },
+  { m: "체", code: "cs", label: "체코어" },
 ];
 
+
+const SORTED_LANG_ENTRIES: LangEntry[] = [...LANG_ENTRIES].sort((a, b) => b.m.length - a.m.length);
 
 // Canonical service type dictionary (긴 패턴 우선)
 const CANONICAL_PRODUCTS: [RegExp, string][] = [
@@ -461,6 +490,8 @@ const CANONICAL_PRODUCTS: [RegExp, string][] = [
   [/감수/,       "감수"],
 ];
 
+const COUNTRY_KEYWORDS = ["스위스", "벨기에", "유럽", "동남아", "중동", "아프리카"];
+
 function analyzeProductStructure(name: string, productType?: string): ProductAnalysis {
   const none: ProductAnalysis = { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", industry2: "", isOptionCandidate: false, confidenceScore: 0, reviewReasons: [], displayName: "" };
   if (!name?.trim()) return none;
@@ -468,33 +499,41 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   let workName = name.trim();
   let srcCode = ""; let tgtCode = ""; let srcLabel = ""; let tgtLabel = "";
 
-  // ── Step 1: 범용 ISO pair 감지 (미지원 코드 포함 — xx→yy / xx-yy / xx_yy)
-  // 알려진 코드만이 아니라 2-3자 소문자 패턴 전부 캡처 → Product에 남지 않도록 제거
-  const anyPairRx = /\b([a-z]{2,3})[→\-_]([a-z]{2,3})\b/i;
-  const isoM = workName.match(anyPairRx);
-  if (isoM) {
-    srcCode  = isoM[1].toLowerCase();
-    tgtCode  = isoM[2].toLowerCase();
-    srcLabel = ISO_LABEL[srcCode] ?? `미지원(${srcCode})`;
-    tgtLabel = ISO_LABEL[tgtCode] ?? `미지원(${tgtCode})`;
-    workName = workName.replace(isoM[0], " ").replace(/\s+/g, " ").trim();
-  } else {
-    // ── Step 2: 한국어 단어 기반 언어 감지 (prefix 순차 스캔)
-    let rest = workName;
-    let lang1: LangEntry | null = null;
-    let lang2: LangEntry | null = null;
-    for (const l of LANG_ENTRIES) {
-      if (rest.startsWith(l.m)) { lang1 = l; rest = rest.slice(l.m.length).replace(/^\s+/, ""); break; }
-    }
-    if (lang1) {
-      for (const l of LANG_ENTRIES) {
-        if (l.code !== lang1.code && rest.startsWith(l.m)) {
-          lang2 = l; rest = rest.slice(l.m.length).replace(/^\s+/, ""); break;
-        }
+  // ── Step 0: 국가명·도메인·다국어 조기 감지
+  const hasCountryKw   = COUNTRY_KEYWORDS.some(kw => name.includes(kw));
+  const hasDomainKw    = /할랄|코셔|종교|이슬람/.test(name);
+  const hasMultiLangKw = /다국어/.test(name);
+
+  if (!hasCountryKw) {
+    // ── Step 1: 범용 ISO pair 감지 (미지원 코드 포함 — xx→yy / xx-yy / xx_yy)
+    // 알려진 코드만이 아니라 2-3자 소문자 패턴 전부 캡처 → Product에 남지 않도록 제거
+    const anyPairRx = /\b([a-z]{2,3})[→\-_]([a-z]{2,3})\b/i;
+    const isoM = workName.match(anyPairRx);
+    if (isoM) {
+      srcCode  = isoM[1].toLowerCase();
+      tgtCode  = isoM[2].toLowerCase();
+      srcLabel = ISO_LABEL[srcCode] ?? `미지원(${srcCode})`;
+      tgtLabel = ISO_LABEL[tgtCode] ?? `미지원(${tgtCode})`;
+      workName = workName.replace(isoM[0], " ").replace(/\s+/g, " ").trim();
+    } else {
+      // ── Step 2: 한국어 단어 기반 언어 감지 (길이 내림차순 prefix 스캔)
+      let rest = workName;
+      let lang1: LangEntry | null = null;
+      let lang2: LangEntry | null = null;
+      for (const l of SORTED_LANG_ENTRIES) {
+        if (rest.startsWith(l.m)) { lang1 = l; rest = rest.slice(l.m.length).replace(/^[\s\-_·\/]+/, ""); break; }
       }
-      srcCode = lang1.code; srcLabel = lang1.label;
-      if (lang2) { tgtCode = lang2.code; tgtLabel = lang2.label; }
-      workName = rest;
+      if (lang1) {
+        rest = rest.replace(/^[\s\-_·\/]+/, "");
+        for (const l of SORTED_LANG_ENTRIES) {
+          if (l.code !== lang1.code && rest.startsWith(l.m)) {
+            lang2 = l; rest = rest.slice(l.m.length).replace(/^[\s\-_·\/]+/, ""); break;
+          }
+        }
+        srcCode = lang1.code; srcLabel = lang1.label;
+        if (lang2) { tgtCode = lang2.code; tgtLabel = lang2.label; }
+        workName = rest;
+      }
     }
   }
 
@@ -530,17 +569,19 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   const isInterp = productType === "interpretation" || /통역/.test(productCandidate);
   let langPair = ""; let direction = "";
 
-  if (srcCode && tgtCode) {
-    langPair  = `${srcLabel} ↔ ${tgtLabel}`;
-    direction = isInterp ? "bidirectional" : `${srcCode}→${tgtCode}`;
-  } else if (srcCode && srcCode !== "ko") {
-    langPair  = `한국어 ↔ ${srcLabel}`;
-    direction = isInterp ? "bidirectional" : `ko↔${srcCode}`;
+  if (!hasCountryKw) {
+    if (srcCode && tgtCode) {
+      langPair  = `${srcLabel} ↔ ${tgtLabel}`;
+      direction = isInterp ? "bidirectional" : `${srcCode}→${tgtCode}`;
+    } else if (srcCode && srcCode !== "ko") {
+      langPair  = `한국어 ↔ ${srcLabel}`;
+      direction = isInterp ? "bidirectional" : `ko↔${srcCode}`;
+    }
   }
 
-  // ── Step 6b: 번역 표시명 (displayName) — "한국어-영어 번역" 형식
-  let displayName = productCandidate;
-  if (productCandidate === "번역" && srcCode && tgtCode && ISO_LABEL[srcCode] && ISO_LABEL[tgtCode]) {
+  // ── Step 6b: 번역 표시명 (displayName) — 국가명 상품은 원본 유지
+  let displayName = hasCountryKw ? name.trim() : productCandidate;
+  if (!hasCountryKw && productCandidate === "번역" && srcCode && tgtCode && ISO_LABEL[srcCode] && ISO_LABEL[tgtCode]) {
     displayName = `${ISO_LABEL[srcCode]}-${ISO_LABEL[tgtCode]} 번역`;
   }
 
@@ -548,10 +589,14 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   const reviewReasons: string[] = [];
   if (!productCandidate) reviewReasons.push("서비스 미인식");
   if (productCandidate && !isCanonical) reviewReasons.push("Product 불명확");
-  if (srcLabel.startsWith("미지원") || tgtLabel.startsWith("미지원")) reviewReasons.push("미지원 언어");
+  if (srcLabel.startsWith("미지원") || tgtLabel.startsWith("미지원")) reviewReasons.push("UNKNOWN_LANGUAGE");
+  if (hasCountryKw)   reviewReasons.push("COUNTRY_NOT_LANGUAGE");
+  if (hasDomainKw)    reviewReasons.push("DOMAIN_BASED");
+  if (hasMultiLangKw) reviewReasons.push("MULTI_LANGUAGE_AMBIGUOUS");
   if (isProjDesc) reviewReasons.push("프로젝트명/설명형 가능성");
   if (hasWorkDescKw && !isProjDesc) reviewReasons.push("작업명 패턴");
   if (isOpsItem) reviewReasons.push("운영성 항목 (EX계열 가능)");
+  if (productCandidate === "번역" && !direction && !hasCountryKw && !hasDomainKw) reviewReasons.push("MISSING_DIRECTION");
 
   // ── Step 8: Confidence Score (0–100)
   let score = 50;
@@ -561,6 +606,9 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   if (direction && direction !== "bidirectional") score += 5;
   if (srcLabel.startsWith("미지원") || tgtLabel.startsWith("미지원")) score -= 20;
   if (!productCandidate) score -= 30;
+  if (hasCountryKw)   score -= 30;
+  if (hasDomainKw)    score -= 10;
+  if (hasMultiLangKw) score -= 15;
   // 설명형/프로젝트명 패널티 (canonical이면 약하게, 아니면 강하게)
   if (isProjDesc) score -= isCanonical ? 15 : 22;
   if (hasWorkDescKw && !isProjDesc) score -= 10;

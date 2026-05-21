@@ -1872,9 +1872,19 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                             </td>
                             {/* 이슈 + 검토 사유 chip */}
                             <td style={{ padding: "4px 8px", maxWidth: 200, fontSize: 11 }}>
-                              {(an.reviewReasons ?? []).map((r, i) => (
-                                <span key={i} style={{ display: "inline-block", marginRight: 3, marginBottom: 2, fontSize: 10, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 3, padding: "1px 4px" }}>{r}</span>
-                              ))}
+                              {(an.reviewReasons ?? []).map((r, i) => {
+                                const CODE_STYLE: Record<string, { color: string; background: string; border: string }> = {
+                                  COUNTRY_NOT_LANGUAGE:    { color: "#7c3aed", background: "#f5f3ff", border: "1px solid #ddd6fe" },
+                                  UNKNOWN_LANGUAGE:        { color: "#dc2626", background: "#fef2f2", border: "1px solid #fca5a5" },
+                                  MULTI_LANGUAGE_AMBIGUOUS:{ color: "#0891b2", background: "#ecfeff", border: "1px solid #a5f3fc" },
+                                  DOMAIN_BASED:            { color: "#059669", background: "#f0fdf4", border: "1px solid #86efac" },
+                                  MISSING_DIRECTION:       { color: "#d97706", background: "#fffbeb", border: "1px solid #fde68a" },
+                                };
+                                const st = CODE_STYLE[r] ?? { color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a" };
+                                return (
+                                  <span key={i} style={{ display: "inline-block", marginRight: 3, marginBottom: 2, fontSize: 10, borderRadius: 3, padding: "1px 4px", ...st }}>{r}</span>
+                                );
+                              })}
                               {item.issues.filter(s => s.startsWith("유사 중복") || s.startsWith("taxonomy") || s.startsWith("단가") || s.startsWith("단위")).map((s, i) => (
                                 <span key={`iss-${i}`} style={{ display: "inline-block", marginRight: 3, color: "#9ca3af" }}>{s}</span>
                               ))}

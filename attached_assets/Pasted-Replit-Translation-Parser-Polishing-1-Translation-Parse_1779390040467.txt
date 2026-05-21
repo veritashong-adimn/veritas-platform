@@ -1,0 +1,238 @@
+Replit 지시문 — Translation Parser Polishing 1차
+목표
+
+실제 운영 데이터 기반으로 Translation Parser를 고도화한다.
+
+이번 작업은:
+
+언어 alias 확장
+국가명 기반 상품 자동등록 방지
+개념형 상품 분리
+nullable direction 허용
+parser risk reason 고도화
+
+를 수행한다.
+
+구조 변경이 아니라:
+
+“운영 데이터 polishing 단계”
+
+작업이다.
+
+수정 대상 파일
+artifacts/api-server/src/routes/products.ts
+
+필요 시 타입 보강:
+
+artifacts/web-app/src/components/admin/ProductManagementTab.tsx
+1. 언어 alias 대량 확장
+ISO_LABEL 추가
+
+없으면 추가:
+
+da: "덴마크어",
+sv: "스웨덴어",
+no: "노르웨이어",
+fi: "핀란드어",
+cs: "체코어",
+hu: "헝가리어",
+ro: "루마니아어",
+bg: "불가리아어",
+hr: "크로아티아어",
+sr: "세르비아어",
+LANG_ENTRIES 추가
+
+긴 문자열 우선 유지.
+
+["덴마크어", "da"],
+["덴", "da"],
+
+["스웨덴어", "sv"],
+["스웨", "sv"],
+
+["노르웨이어", "no"],
+["노", "no"],
+
+["핀란드어", "fi"],
+["핀", "fi"],
+
+["체코어", "cs"],
+["체", "cs"],
+
+["헝가리어", "hu"],
+["헝", "hu"],
+
+["루마니아어", "ro"],
+["루", "ro"],
+
+["불가리아어", "bg"],
+["불가", "bg"],
+
+["크로아티아어", "hr"],
+["크로", "hr"],
+
+["세르비아어", "sr"],
+["세르", "sr"],
+2. 국가명 기반 상품 자동 review_needed 처리
+목표
+
+국가명은 언어가 아니므로
+자동 direction 생성 금지.
+
+COUNTRY_KEYWORDS 추가
+const COUNTRY_KEYWORDS = [
+  "스위스",
+  "벨기에",
+  "유럽",
+  "동남아",
+  "중동",
+  "아프리카",
+];
+parser 처리 규칙
+
+상품명에 COUNTRY_KEYWORDS 포함 시:
+
+reviewNeeded = true;
+reviewReason = "COUNTRY_NOT_LANGUAGE";
+riskLevel = "high";
+
+자동 적용.
+
+중요
+
+이 경우:
+
+❌ direction 자동 생성 금지
+❌ displayName 자동 생성 금지
+
+즉:
+
+스위스-한글번역
+
+은:
+
+productCandidate = "번역"
+direction = null
+displayName = 원본 유지
+reviewNeeded = true
+
+로 처리.
+
+3. 개념형 상품(Product taxonomy) 분리
+목표
+
+언어 기반 상품이 아닌
+서비스/도메인 기반 상품 분리.
+
+원어민감수 처리
+
+아래 패턴 감지 시:
+
+원어민감수
+다국어원어민감수
+원어민 감수
+
+자동 처리:
+
+productCandidate = "원어민감수";
+type = "translation";
+direction = null;
+reviewNeeded = false;
+할랄번역 처리
+할랄번역
+
+감지 시:
+
+productCandidate = "번역";
+domain = "halal";
+reviewReason = "DOMAIN_BASED";
+
+추가.
+
+direction은 nullable 허용.
+
+4. nullable direction 허용 안정화
+목표
+
+모든 상품이 language pair를 갖는다고 가정하지 않도록 수정.
+
+수정 대상
+
+direction/displayName 생성부.
+
+규칙
+
+다음 상품들은:
+
+원어민감수
+다국어원어민감수
+할랄번역
+
+direction 없어도 정상 처리.
+
+즉:
+
+direction = null
+
+허용.
+
+5. Parser Risk Reason 고도화
+목표
+
+왜 review_needed 인지
+운영자가 알 수 있게 한다.
+
+신규 reason 추가
+UNKNOWN_LANGUAGE
+COUNTRY_NOT_LANGUAGE
+MULTI_LANGUAGE_AMBIGUOUS
+DOMAIN_BASED
+MISSING_DIRECTION
+적용 규칙
+국가명 기반
+COUNTRY_NOT_LANGUAGE
+언어 인식 실패
+UNKNOWN_LANGUAGE
+다국어/모호 표현
+MULTI_LANGUAGE_AMBIGUOUS
+산업 기반 표현
+DOMAIN_BASED
+번역인데 direction 없음
+MISSING_DIRECTION
+6. Preview UI 표시 개선
+목표
+
+reviewReason을 Preview에서 쉽게 확인.
+
+Product 후보 아래 작은 chip 추가
+
+예:
+
+COUNTRY_NOT_LANGUAGE
+DOMAIN_BASED
+UNKNOWN_LANGUAGE
+
+badge/chip 형태로 표시.
+
+기존 UI 깨지지 않게 compact 유지.
+
+기대 결과
+원본	결과
+한-덴마크어번역	덴마크어 정상 인식
+스웨덴어-한국어번역	스웨덴어 정상 인식
+스위스-한글번역	자동 review_needed
+벨기에-한글번역	자동 review_needed
+다국어원어민감수	Product=원어민감수
+할랄번역	DOMAIN_BASED 처리
+검증
+
+수정 후 확인:
+
+✅ Preview 정상 렌더
+✅ 기존 displayName 유지
+✅ 기존 persistence 유지
+✅ 기존 sticky header 유지
+✅ 기존 analytics 영향 없음
+✅ 국가명 상품 자동 review_needed
+✅ 원어민감수 direction null 허용
+✅ reviewReason badge 정상 표시
