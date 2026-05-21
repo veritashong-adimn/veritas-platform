@@ -46,27 +46,24 @@ export function AuthPage({ onAuth }: { onAuth: (token: string, user: User, permi
       <div style={{ width: "100%", maxWidth: 420, padding: "0 16px" }}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
           <div style={{
-            width: 48, height: 48, background: "#0f172a", borderRadius: 12,
+            width: 52, height: 52, background: "#0b1220", borderRadius: 14,
             display: "flex", alignItems: "center", justifyContent: "center",
             margin: "0 auto 14px",
           }}>
-            <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
-              <path d="M4 5L16 25L28 5" stroke="#818cf8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-              <line x1="7.6" y1="11" x2="24.4" y2="11" stroke="#818cf8" strokeWidth="1.2" strokeLinecap="round" opacity="0.55"/>
-              <line x1="11.2" y1="17" x2="20.8" y2="17" stroke="#818cf8" strokeWidth="1" strokeLinecap="round" opacity="0.35"/>
-              <circle cx="4" cy="5" r="2" fill="#6366f1"/>
-              <circle cx="28" cy="5" r="2" fill="#6366f1"/>
-              <circle cx="16" cy="25" r="2.2" fill="#60a5fa"/>
-              <circle cx="7.6" cy="11" r="1.4" fill="#818cf8"/>
-              <circle cx="24.4" cy="11" r="1.4" fill="#818cf8"/>
-              <circle cx="11.2" cy="17" r="1.2" fill="#93c5fd" opacity="0.8"/>
-              <circle cx="20.8" cy="17" r="1.2" fill="#93c5fd" opacity="0.8"/>
+            <svg width="30" height="30" viewBox="0 0 32 32" fill="none">
+              <defs>
+                <linearGradient id="vg_a" x1="2" y1="4" x2="30" y2="29" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stopColor="#6366f1"/>
+                  <stop offset="100%" stopColor="#22d3ee"/>
+                </linearGradient>
+              </defs>
+              <path fillRule="evenodd" d="M2,4 L30,4 L16,29 Z M10,4 L22,4 L16,24 Z" fill="url(#vg_a)"/>
             </svg>
           </div>
-          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: "#111827", letterSpacing: "0.05em" }}>
-            VERITAS <span style={{ fontWeight: 300, color: "#9ca3af", letterSpacing: "0.08em" }}>OS</span>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, color: "#111827", letterSpacing: "0.06em" }}>
+            VERITAS <span style={{ fontWeight: 700, color: "#6366f1" }}>OS</span>
           </h1>
-          <p style={{ margin: "6px 0 0", fontSize: 11, color: "#9ca3af", letterSpacing: "0.1em", textTransform: "uppercase" }}>AI Business Operations Platform</p>
+          <p style={{ margin: "6px 0 0", fontSize: 11, color: "#9ca3af", letterSpacing: "0.05em" }}>AI Platform</p>
         </div>
 
         <Card>

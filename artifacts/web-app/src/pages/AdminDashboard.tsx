@@ -1408,27 +1408,26 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           flexShrink: 0,
         }}>
           {/* 로고 영역 — VERITAS OS */}
-          <div style={{ padding: "18px 18px 14px", borderBottom: "1px solid #2d3547", flexShrink: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 4 }}>
-              {/* V + Network Grid Symbol */}
-              <svg width="22" height="22" viewBox="0 0 32 32" fill="none" style={{ flexShrink: 0 }}>
-                <path d="M4 5L16 25L28 5" stroke="#818cf8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                <line x1="7.6" y1="11" x2="24.4" y2="11" stroke="#818cf8" strokeWidth="1.2" strokeLinecap="round" opacity="0.55"/>
-                <line x1="11.2" y1="17" x2="20.8" y2="17" stroke="#818cf8" strokeWidth="1" strokeLinecap="round" opacity="0.35"/>
-                <circle cx="4" cy="5" r="2" fill="#6366f1"/>
-                <circle cx="28" cy="5" r="2" fill="#6366f1"/>
-                <circle cx="16" cy="25" r="2.2" fill="#60a5fa"/>
-                <circle cx="7.6" cy="11" r="1.4" fill="#818cf8"/>
-                <circle cx="24.4" cy="11" r="1.4" fill="#818cf8"/>
-                <circle cx="11.2" cy="17" r="1.2" fill="#93c5fd" opacity="0.8"/>
-                <circle cx="20.8" cy="17" r="1.2" fill="#93c5fd" opacity="0.8"/>
+          <div style={{ padding: "20px 22px 16px", borderBottom: "1px solid #2d3547", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              {/* V Symbol — clean geometric, gradient fill */}
+              <svg width="28" height="28" viewBox="0 0 32 32" fill="none" style={{ flexShrink: 0 }}>
+                <defs>
+                  <linearGradient id="vg_s" x1="2" y1="4" x2="30" y2="29" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%" stopColor="#6366f1"/>
+                    <stop offset="100%" stopColor="#22d3ee"/>
+                  </linearGradient>
+                </defs>
+                <path fillRule="evenodd" d="M2,4 L30,4 L16,29 Z M10,4 L22,4 L16,24 Z" fill="url(#vg_s)"/>
               </svg>
-              <span style={{ fontSize: 14, fontWeight: 700, color: "#e2e8f0", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>
-                VERITAS <span style={{ fontWeight: 300, color: "#64748b", letterSpacing: "0.1em" }}>OS</span>
-              </span>
-            </div>
-            <div style={{ fontSize: 9, color: "#475569", letterSpacing: "0.07em", paddingLeft: 31, whiteSpace: "nowrap", textTransform: "uppercase" }}>
-              AI Business Operations Platform
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#e2e8f0", letterSpacing: "0.06em", lineHeight: 1.25, whiteSpace: "nowrap" }}>
+                  VERITAS <span style={{ fontWeight: 700, color: "#60a5fa" }}>OS</span>
+                </div>
+                <div style={{ fontSize: 10, fontWeight: 400, color: "#8b97a6", letterSpacing: "0.05em", marginTop: 2, whiteSpace: "nowrap" }}>
+                  AI Platform
+                </div>
+              </div>
             </div>
           </div>
 

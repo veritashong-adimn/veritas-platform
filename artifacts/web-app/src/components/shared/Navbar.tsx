@@ -214,24 +214,21 @@ export function Navbar({
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: 24 }}>
           <div style={{
-            width: 28, height: 28, background: "#0f172a", borderRadius: 7,
+            width: 28, height: 28, background: "#0b1220", borderRadius: 7,
             display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
           }}>
-            <svg width="16" height="16" viewBox="0 0 32 32" fill="none">
-              <path d="M4 5L16 25L28 5" stroke="#818cf8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-              <line x1="7.6" y1="11" x2="24.4" y2="11" stroke="#818cf8" strokeWidth="1.2" strokeLinecap="round" opacity="0.55"/>
-              <line x1="11.2" y1="17" x2="20.8" y2="17" stroke="#818cf8" strokeWidth="1" strokeLinecap="round" opacity="0.35"/>
-              <circle cx="4" cy="5" r="2" fill="#6366f1"/>
-              <circle cx="28" cy="5" r="2" fill="#6366f1"/>
-              <circle cx="16" cy="25" r="2.2" fill="#60a5fa"/>
-              <circle cx="7.6" cy="11" r="1.4" fill="#818cf8"/>
-              <circle cx="24.4" cy="11" r="1.4" fill="#818cf8"/>
-              <circle cx="11.2" cy="17" r="1.2" fill="#93c5fd" opacity="0.8"/>
-              <circle cx="20.8" cy="17" r="1.2" fill="#93c5fd" opacity="0.8"/>
+            <svg width="18" height="18" viewBox="0 0 32 32" fill="none">
+              <defs>
+                <linearGradient id="vg_n" x1="2" y1="4" x2="30" y2="29" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stopColor="#6366f1"/>
+                  <stop offset="100%" stopColor="#22d3ee"/>
+                </linearGradient>
+              </defs>
+              <path fillRule="evenodd" d="M2,4 L30,4 L16,29 Z M10,4 L22,4 L16,24 Z" fill="url(#vg_n)"/>
             </svg>
           </div>
-          <span style={{ fontWeight: 700, fontSize: 14, color: "#111827", letterSpacing: "0.05em", whiteSpace: "nowrap" }}>
-            VERITAS <span style={{ fontWeight: 400, color: "#9ca3af", fontSize: 13, letterSpacing: "0.08em" }}>OS</span>
+          <span style={{ fontWeight: 600, fontSize: 14, color: "#111827", letterSpacing: "0.06em", whiteSpace: "nowrap" }}>
+            VERITAS <span style={{ fontWeight: 700, color: "#6366f1" }}>OS</span>
           </span>
         </div>
 
