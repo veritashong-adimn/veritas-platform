@@ -376,7 +376,7 @@ const ISO_LABEL: Record<string, string> = {
   yue: "광동어", sr: "세르비아어", uk: "우크라이나어", pl: "폴란드어",
   nl: "네덜란드어", cs: "체코어", ro: "루마니아어", hu: "헝가리어",
   da: "덴마크어",  sv: "스웨덴어",  no: "노르웨이어", fi: "핀란드어",
-  bg: "불가리아어", hr: "크로아티아어",
+  bg: "불가리아어", hr: "크로아티아어", el: "그리스어",
   ky: "키르기스어", uz: "우즈베크어", tk: "투르크멘어",
   tl: "타갈로그어", my: "미얀마어", si: "싱할라어", he: "히브리어",
 };
@@ -409,7 +409,10 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "세르비아어",   code: "sr",  label: "세르비아어" },
   { m: "우르두어",     code: "ur",  label: "우르두어" },
   { m: "헝가리어",     code: "hu",  label: "헝가리어" },
+  { m: "그리스어",     code: "el",  label: "그리스어" },
   { m: "라오스어",     code: "lo",  label: "라오스어" },
+  { m: "라오어",       code: "lo",  label: "라오어" },
+  { m: "라오스",       code: "lo",  label: "라오어" },
   { m: "루마니아어",   code: "ro",  label: "루마니아어" },
   { m: "노르웨이어",   code: "no",  label: "노르웨이어" },
   { m: "불가리아어",   code: "bg",  label: "불가리아어" },
@@ -417,6 +420,8 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "스웨덴어",     code: "sv",  label: "스웨덴어" },
   { m: "덴마크어",     code: "da",  label: "덴마크어" },
   { m: "핀란드어",     code: "fi",  label: "핀란드어" },
+  { m: "한국말",       code: "ko",  label: "한국어" },
+  { m: "국문",         code: "ko",  label: "한국어" },
   { m: "한국어",       code: "ko",  label: "한국어" },
   { m: "한글",         code: "ko",  label: "한국어" },
   { m: "영국어",       code: "en",  label: "영어" },
@@ -491,6 +496,7 @@ const CANONICAL_PRODUCTS: [RegExp, string][] = [
 ];
 
 const COUNTRY_KEYWORDS = ["스위스", "벨기에", "유럽", "동남아", "중동", "아프리카"];
+const REGION_LANGUAGE_KEYWORDS = ["홍콩어", "대만어"];
 
 function analyzeProductStructure(name: string, productType?: string): ProductAnalysis {
   const none: ProductAnalysis = { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", industry2: "", isOptionCandidate: false, confidenceScore: 0, reviewReasons: [], displayName: "" };
@@ -499,12 +505,14 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   let workName = name.trim();
   let srcCode = ""; let tgtCode = ""; let srcLabel = ""; let tgtLabel = "";
 
-  // ── Step 0: 국가명·도메인·다국어 조기 감지
-  const hasCountryKw   = COUNTRY_KEYWORDS.some(kw => name.includes(kw));
-  const hasDomainKw    = /할랄|코셔|종교|이슬람/.test(name);
-  const hasMultiLangKw = /다국어/.test(name);
+  // ── Step 0: 국가명·지역어·도메인·다국어 조기 감지
+  const hasCountryKw    = COUNTRY_KEYWORDS.some(kw => name.includes(kw));
+  const hasRegionLangKw = REGION_LANGUAGE_KEYWORDS.some(kw => name.includes(kw));
+  const hasDomainKw     = /할랄|코셔|종교|이슬람/.test(name);
+  const hasMultiLangKw  = /다국어/.test(name);
+  const skipLangDetect  = hasCountryKw || hasRegionLangKw;
 
-  if (!hasCountryKw) {
+  if (!skipLangDetect) {
     // ── Step 1: 범용 ISO pair 감지 (미지원 코드 포함 — xx→yy / xx-yy / xx_yy)
     // 알려진 코드만이 아니라 2-3자 소문자 패턴 전부 캡처 → Product에 남지 않도록 제거
     const anyPairRx = /\b([a-z]{2,3})[→\-_]([a-z]{2,3})\b/i;
@@ -569,7 +577,7 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   const isInterp = productType === "interpretation" || /통역/.test(productCandidate);
   let langPair = ""; let direction = "";
 
-  if (!hasCountryKw) {
+  if (!skipLangDetect) {
     if (srcCode && tgtCode) {
       langPair  = `${srcLabel} ↔ ${tgtLabel}`;
       direction = isInterp ? "bidirectional" : `${srcCode}→${tgtCode}`;
@@ -579,9 +587,9 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
     }
   }
 
-  // ── Step 6b: 번역 표시명 (displayName) — 국가명 상품은 원본 유지
-  let displayName = hasCountryKw ? name.trim() : productCandidate;
-  if (!hasCountryKw && productCandidate === "번역" && srcCode && tgtCode && ISO_LABEL[srcCode] && ISO_LABEL[tgtCode]) {
+  // ── Step 6b: 번역 표시명 (displayName) — 국가명/지역어 상품은 원본 유지
+  let displayName = skipLangDetect ? name.trim() : productCandidate;
+  if (!skipLangDetect && productCandidate === "번역" && srcCode && tgtCode && ISO_LABEL[srcCode] && ISO_LABEL[tgtCode]) {
     displayName = `${ISO_LABEL[srcCode]}-${ISO_LABEL[tgtCode]} 번역`;
   }
 
@@ -590,13 +598,14 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   if (!productCandidate) reviewReasons.push("서비스 미인식");
   if (productCandidate && !isCanonical) reviewReasons.push("Product 불명확");
   if (srcLabel.startsWith("미지원") || tgtLabel.startsWith("미지원")) reviewReasons.push("UNKNOWN_LANGUAGE");
-  if (hasCountryKw)   reviewReasons.push("COUNTRY_NOT_LANGUAGE");
-  if (hasDomainKw)    reviewReasons.push("DOMAIN_BASED");
+  if (hasCountryKw)    reviewReasons.push("COUNTRY_NOT_LANGUAGE");
+  if (hasRegionLangKw) reviewReasons.push("REGION_LANGUAGE_AMBIGUOUS");
+  if (hasDomainKw)     reviewReasons.push("DOMAIN_BASED");
   if (hasMultiLangKw) reviewReasons.push("MULTI_LANGUAGE_AMBIGUOUS");
   if (isProjDesc) reviewReasons.push("프로젝트명/설명형 가능성");
   if (hasWorkDescKw && !isProjDesc) reviewReasons.push("작업명 패턴");
   if (isOpsItem) reviewReasons.push("운영성 항목 (EX계열 가능)");
-  if (productCandidate === "번역" && !direction && !hasCountryKw && !hasDomainKw) reviewReasons.push("MISSING_DIRECTION");
+  if (productCandidate === "번역" && !direction && !skipLangDetect && !hasDomainKw) reviewReasons.push("MISSING_DIRECTION");
 
   // ── Step 8: Confidence Score (0–100)
   let score = 50;
@@ -606,8 +615,9 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   if (direction && direction !== "bidirectional") score += 5;
   if (srcLabel.startsWith("미지원") || tgtLabel.startsWith("미지원")) score -= 20;
   if (!productCandidate) score -= 30;
-  if (hasCountryKw)   score -= 30;
-  if (hasDomainKw)    score -= 10;
+  if (hasCountryKw)    score -= 30;
+  if (hasRegionLangKw) score -= 25;
+  if (hasDomainKw)     score -= 10;
   if (hasMultiLangKw) score -= 15;
   // 설명형/프로젝트명 패널티 (canonical이면 약하게, 아니면 강하게)
   if (isProjDesc) score -= isCanonical ? 15 : 22;

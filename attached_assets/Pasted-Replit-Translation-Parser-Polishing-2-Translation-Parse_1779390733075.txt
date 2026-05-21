@@ -1,0 +1,163 @@
+Replit 지시문 — Translation Parser Polishing 2차
+목표
+
+Translation Parser의 실제 운영 데이터 대응력을 추가 고도화한다.
+
+이번 작업은:
+
+한국어 alias normalize 강화
+추가 언어 alias 보강
+지역명 기반 언어 ambiguity 처리
+MISSING_DIRECTION 감소
+displayName 자동 생성 안정화
+
+를 수행한다.
+
+수정 파일
+artifacts/api-server/src/routes/products.ts
+
+필요 시 Preview badge 타입 보강:
+
+artifacts/web-app/src/components/admin/ProductManagementTab.tsx
+1. 한국어 alias normalize 강화
+목표
+
+“한글”, “국문”, “한국말” 등도 모두 ko로 인식.
+
+LANG_ENTRIES 추가/확인
+["한국어", "ko"],
+["한국말", "ko"],
+["국문", "ko"],
+["한글", "ko"],
+["한", "ko"],
+
+긴 문자열 우선 유지.
+
+2. 추가 언어 alias 보강
+ISO_LABEL 추가
+
+없으면 추가:
+
+lo: "라오어",
+tr: "터키어",
+el: "그리스어",
+nl: "네덜란드어",
+pl: "폴란드어",
+uk: "우크라이나어",
+LANG_ENTRIES 추가
+["라오스어", "lo"],
+["라오어", "lo"],
+
+["터키어", "tr"],
+
+["그리스어", "el"],
+
+["네덜란드어", "nl"],
+
+["폴란드어", "pl"],
+
+["우크라이나어", "uk"],
+3. 지역명 기반 ambiguity 처리
+목표
+
+홍콩어 / 대만어 같은 표현은
+자동 direction 생성 금지.
+
+REGION_LANGUAGE_KEYWORDS 추가
+const REGION_LANGUAGE_KEYWORDS = [
+  "홍콩어",
+  "대만어",
+];
+처리 규칙
+
+상품명에 REGION_LANGUAGE_KEYWORDS 포함 시:
+
+reviewNeeded = true;
+reviewReasons.push("REGION_LANGUAGE_AMBIGUOUS");
+riskLevel = "high";
+
+자동 적용.
+
+중요
+
+이 경우:
+
+❌ direction 자동 생성 금지
+❌ displayName 자동 생성 금지
+
+즉:
+
+홍콩어-한글번역
+
+은:
+
+direction = null
+displayName = 원본 유지
+reviewNeeded = true
+
+처리.
+
+4. MISSING_DIRECTION 감소
+목표
+
+정상 alias가 있는 경우
+displayName/direction 자동 생성되도록 수정.
+
+검증 대상
+
+아래 입력이:
+
+입력	기대 결과
+한-터키어번역	한국어-터키어 번역
+한-그리스어번역	한국어-그리스어 번역
+라오스-한글번역	라오어-한국어 번역
+
+으로 자동 생성되어야 한다.
+
+처리 조건
+
+srcCode + tgtCode 둘 다 존재 시:
+
+direction = `${srcCode}→${tgtCode}`;
+displayName = `${ISO_LABEL[srcCode]}-${ISO_LABEL[tgtCode]} 번역`;
+
+정상 생성.
+
+5. 신규 reviewReason 추가
+추가 코드
+REGION_LANGUAGE_AMBIGUOUS
+badge 색상
+
+Preview UI에서:
+
+REGION_LANGUAGE_AMBIGUOUS
+
+badge는:
+
+파랑 계열
+
+사용.
+
+기존 compact UI 유지.
+
+6. Preview 검증
+
+수정 후 아래 결과 확인:
+
+원본	결과
+라오스-한글번역	라오어-한국어 번역
+한-터키어번역	한국어-터키어 번역
+한-그리스어번역	한국어-그리스어 번역
+홍콩어-한글번역	REGION_LANGUAGE_AMBIGUOUS
+대만어-한글번역	REGION_LANGUAGE_AMBIGUOUS
+7. 안정성 확인
+
+수정 후 반드시 확인:
+
+✅ Preview 정상 렌더
+✅ displayName 유지
+✅ 기존 persistence 유지
+✅ 기존 analytics 영향 없음
+✅ 기존 sticky header 유지
+✅ 기존 bulk workflow 영향 없음
+✅ 국가/지역 ambiguity 자동 검토 처리 정상 동작

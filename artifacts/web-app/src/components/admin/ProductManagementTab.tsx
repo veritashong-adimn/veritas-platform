@@ -1878,7 +1878,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                                   UNKNOWN_LANGUAGE:        { color: "#dc2626", background: "#fef2f2", border: "1px solid #fca5a5" },
                                   MULTI_LANGUAGE_AMBIGUOUS:{ color: "#0891b2", background: "#ecfeff", border: "1px solid #a5f3fc" },
                                   DOMAIN_BASED:            { color: "#059669", background: "#f0fdf4", border: "1px solid #86efac" },
-                                  MISSING_DIRECTION:       { color: "#d97706", background: "#fffbeb", border: "1px solid #fde68a" },
+                                  MISSING_DIRECTION:          { color: "#d97706", background: "#fffbeb", border: "1px solid #fde68a" },
+                                  REGION_LANGUAGE_AMBIGUOUS:  { color: "#1d4ed8", background: "#eff6ff", border: "1px solid #bfdbfe" },
                                 };
                                 const st = CODE_STYLE[r] ?? { color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a" };
                                 return (
