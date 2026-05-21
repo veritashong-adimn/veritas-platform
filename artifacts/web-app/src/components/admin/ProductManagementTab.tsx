@@ -16,7 +16,7 @@ type ImportPreviewItem = {
   status: "new" | "duplicate" | "conflict" | "review";
   issues: string[]; suggestedType: string;
   duplicateOf: { code: string; name: string }[];
-  analysis: { productCandidate: string; langPair: string; direction: string; difficulty: string; industry: string; industry2: string; isOptionCandidate: boolean; confidenceScore: number; reviewReasons: string[] };
+  analysis: { productCandidate: string; langPair: string; direction: string; difficulty: string; industry: string; industry2: string; isOptionCandidate: boolean; confidenceScore: number; reviewReasons: string[]; displayName?: string };
 };
 
 type RowOverride = {
@@ -617,10 +617,23 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     if (!importPreview || rows.length === 0) { setToast("등록 대상 항목이 없습니다."); return; }
     setImportExecuting(true);
     try {
+      const processedRows = rows.map(item => {
+        const an = item.analysis;
+        const ovr = rowOverrides[item.rowNum];
+        const effectiveName = ovr?.overriddenCandidate || an?.displayName || an?.productCandidate || item.name;
+        const dirStr = an?.direction ?? "";
+        const dirParts = dirStr.includes("→") && !dirStr.includes("↔") ? dirStr.split("→") : null;
+        return {
+          ...item,
+          name: effectiveName,
+          sourceLanguage: dirParts?.[0] ?? item.sourceLanguage,
+          targetLanguage: dirParts?.[1] ?? item.targetLanguage,
+        };
+      });
       const res = await fetch(api("/api/admin/products/import/execute"), {
         method: "POST",
         headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ rows, fileName: importPreview.fileName }),
+        body: JSON.stringify({ rows: processedRows, fileName: importPreview.fileName }),
       });
       const data = await res.json();
       if (!res.ok) { setToast(data.error ?? "등록 실패"); return; }
@@ -1802,7 +1815,12 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                                   </>
                                 );
                               })()}
-                              {an.isOptionCandidate && (
+                              {an.displayName && an.displayName !== an.productCandidate && !rowOverrides[item.rowNum]?.overriddenCandidate && (
+                                <div style={{ fontSize: 10, color: "#1d4ed8", marginTop: 2, background: "#eff6ff", borderRadius: 3, padding: "1px 5px", display: "inline-block", whiteSpace: "nowrap" }}>
+                                  {an.displayName}
+                                </div>
+                              )}
+                            {an.isOptionCandidate && (
                                 <span title="동일 서비스가 여러 언어쌍/산업으로 반복 — 옵션화 가능" style={{ marginLeft: 4, fontSize: 10, color: "#6d28d9", background: "#ede9fe", borderRadius: 3, padding: "1px 4px", fontWeight: 600, cursor: "default" }}>옵션화 가능</span>
                               )}
                             </td>

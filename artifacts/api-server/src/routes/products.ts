@@ -362,6 +362,7 @@ type ProductAnalysis = {
   isOptionCandidate: boolean;
   confidenceScore: number;
   reviewReasons: string[];
+  displayName: string;
 };
 
 const ISO_LABEL: Record<string, string> = {
@@ -374,12 +375,19 @@ const ISO_LABEL: Record<string, string> = {
   lo: "라오스어", sw: "스와힐리어", ne: "네팔어",  ta: "타밀어",
   yue: "광동어", sr: "세르비아어", uk: "우크라이나어", pl: "폴란드어",
   nl: "네덜란드어", cs: "체코어", ro: "루마니아어", hu: "헝가리어",
+  ky: "키르기스어", uz: "우즈베크어", tk: "투르크멘어",
+  tl: "타갈로그어", my: "미얀마어", si: "싱할라어", he: "히브리어",
 };
 
 type LangEntry = { m: string; code: string; label: string };
 const LANG_ENTRIES: LangEntry[] = [
   // 장음절 우선 (prefix 충돌 방지)
+  { m: "투르크멘어",   code: "tk",  label: "투르크멘어" },
+  { m: "우즈베크어",   code: "uz",  label: "우즈베크어" },
+  { m: "키르기스어",   code: "ky",  label: "키르기스어" },
+  { m: "타갈로그어",   code: "tl",  label: "타갈로그어" },
   { m: "인도네시아어", code: "id",  label: "인도네시아어" },
+  { m: "인니어",       code: "id",  label: "인도네시아어" },
   { m: "포르투갈어",   code: "pt",  label: "포르투갈어" },
   { m: "이탈리아어",   code: "it",  label: "이탈리아어" },
   { m: "스와힐리어",   code: "sw",  label: "스와힐리어" },
@@ -400,6 +408,7 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "한국어",       code: "ko",  label: "한국어" },
   { m: "영국어",       code: "en",  label: "영어" },
   { m: "필리핀어",     code: "ph",  label: "필리핀어" },
+  { m: "말레이시아어", code: "ms",  label: "말레이어" },
   { m: "말레이어",     code: "ms",  label: "말레이어" },
   { m: "체코어",       code: "cs",  label: "체코어" },
   { m: "광동어",       code: "yue", label: "광동어" },
@@ -417,6 +426,9 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "터키어",       code: "tr",  label: "터키어" },
   { m: "태국어",       code: "th",  label: "태국어" },
   { m: "몽골어",       code: "mn",  label: "몽골어" },
+  { m: "미얀마어",     code: "my",  label: "미얀마어" },
+  { m: "싱할라어",     code: "si",  label: "싱할라어" },
+  { m: "히브리어",     code: "he",  label: "히브리어" },
   // 단음절
   { m: "한", code: "ko", label: "한국어" },
   { m: "영", code: "en", label: "영어" },
@@ -450,7 +462,7 @@ const CANONICAL_PRODUCTS: [RegExp, string][] = [
 ];
 
 function analyzeProductStructure(name: string, productType?: string): ProductAnalysis {
-  const none: ProductAnalysis = { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", industry2: "", isOptionCandidate: false, confidenceScore: 0, reviewReasons: [] };
+  const none: ProductAnalysis = { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", industry2: "", isOptionCandidate: false, confidenceScore: 0, reviewReasons: [], displayName: "" };
   if (!name?.trim()) return none;
 
   let workName = name.trim();
@@ -526,6 +538,12 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
     direction = isInterp ? "bidirectional" : `ko↔${srcCode}`;
   }
 
+  // ── Step 6b: 번역 표시명 (displayName) — "한국어-영어 번역" 형식
+  let displayName = productCandidate;
+  if (productCandidate === "번역" && srcCode && tgtCode && ISO_LABEL[srcCode] && ISO_LABEL[tgtCode]) {
+    displayName = `${ISO_LABEL[srcCode]}-${ISO_LABEL[tgtCode]} 번역`;
+  }
+
   // ── Step 7: 검토 사유 (Review Reasons)
   const reviewReasons: string[] = [];
   if (!productCandidate) reviewReasons.push("서비스 미인식");
@@ -551,7 +569,7 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   const confidenceScore = Math.max(0, Math.min(100, score));
 
   const isOptionCandidate = !!(productCandidate && (tgtCode || (srcCode && srcCode !== "ko")));
-  return { productCandidate, langPair, direction, difficulty: "", industry: "", industry2: "", isOptionCandidate, confidenceScore, reviewReasons };
+  return { productCandidate, langPair, direction, difficulty: "", industry: "", industry2: "", isOptionCandidate, confidenceScore, reviewReasons, displayName };
 }
 
 // ─── taxonomy 자동 추천 ──────────────────────────────────────────────────────

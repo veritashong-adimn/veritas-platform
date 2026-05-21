@@ -1,0 +1,308 @@
+지시문 — 번역 상품명 표시 표준화 수정
+Translation Display Name Normalization
+
+현재 상품 마스터 Import Preview 구조는 다음 단계까지 완료된 상태입니다.
+
+- Product / Option 구조 정리
+- Import Preview 기반 검토 구조
+- Sticky Header
+- 등록 안전장치
+- Confidence Score
+- Review Reason
+- Canonical Stabilization
+- Review Workflow
+- Review Persistence
+- Bulk Review Workflow
+- Review Analytics Dashboard
+- Priority Queue Engine
+- Translation Simplification 완료
+  - 난이도 제거
+  - 산업 제거
+  - 일반번역/전문번역/법률번역/의료번역 → Product는 모두 “번역”으로 통합
+
+현재 문제
+
+번역 상품 Import Preview에서 다음과 같은 상품명이 보입니다.
+
+예:
+- ky→ko 일반번역
+- en→sr 일반번역
+- en→my 일반번역
+- ko→tl 일반번역
+
+이런 이름은 사용자가 사용하는 상품명이 아닙니다.
+
+ky→ko, en→sr 같은 값은 내부 direction 코드입니다.
+상품명으로 노출되거나 등록되면 안 됩니다.
+
+또한 “일반번역”이라는 표현도 이제 상품명으로 생성되면 안 됩니다.
+
+현재 상품 마스터 방향은 다음과 같습니다.
+
+Product:
+- 번역
+
+Direction:
+- ko→en
+- en→ko
+- ky→ko
+
+사용자 표시 상품명:
+- 한국어-영어 번역
+- 영어-한국어 번역
+- 키르기스어-한국어 번역
+
+즉:
+상품명 표시값과 내부 direction 값을 분리해야 합니다.
+
+이번 작업 목표
+
+번역 상품은 항상 다음 방식으로 정규화해 주세요.
+
+원본 상품명:
+- 한영번역
+- 영한번역
+- 인니어-한국어번역
+- 키르기스어-한국어 번역
+- en→sr 일반번역
+
+등록/표시 상품명:
+- 한국어-영어 번역
+- 영어-한국어 번역
+- 인도네시아어-한국어 번역
+- 키르기스어-한국어 번역
+- 영어-세르비아어 번역
+
+내부 direction:
+- ko→en
+- en→ko
+- id→ko
+- ky→ko
+- en→sr
+
+중요 원칙
+
+1.
+원본 상품명은 원본 그대로 보존합니다.
+
+2.
+등록 상품명/displayName은 사람이 읽는 한국어 자연어 형태로 생성합니다.
+
+3.
+direction 코드는 direction 필드에만 유지합니다.
+
+4.
+상품명에 다음 형태가 들어가면 안 됩니다.
+
+- ko→en 번역
+- ky→ko 일반번역
+- en→sr 일반번역
+- en-ko translation
+- 일반번역
+- 전문번역
+
+5.
+번역 Product 후보는 항상 “번역”입니다.
+
+수정 요청
+
+1. 번역 표시명 생성 함수 추가
+
+번역 상품일 경우 표시명을 생성하는 함수를 추가해 주세요.
+
+예시 개념:
+
+function buildTranslationDisplayName(sourceCode, targetCode) {
+  const sourceName = LANGUAGE_KO_NAME[sourceCode];
+  const targetName = LANGUAGE_KO_NAME[targetCode];
+
+  if (!sourceName || !targetName) return null;
+
+  return `${sourceName}-${targetName} 번역`;
+}
+
+예:
+- ko, en → 한국어-영어 번역
+- en, ko → 영어-한국어 번역
+- id, ko → 인도네시아어-한국어 번역
+- ky, ko → 키르기스어-한국어 번역
+- en, sr → 영어-세르비아어 번역
+
+2. language code → 한국어명 dictionary 보강
+
+최소한 현재 파일에서 등장하는 언어는 모두 한국어 표시명이 있어야 합니다.
+
+예:
+ko = 한국어
+en = 영어
+ja = 일본어
+zh = 중국어
+ru = 러시아어
+id = 인도네시아어
+ms = 말레이어
+my = 미얀마어
+mn = 몽골어
+vi = 베트남어
+th = 태국어
+tl = 타갈로그어
+km = 캄보디아어
+ky = 키르기스어
+uz = 우즈베크어
+tk = 투르크멘어
+sr = 세르비아어
+es = 스페인어
+fr = 프랑스어
+de = 독일어
+ar = 아랍어
+it = 이탈리아어
+pt = 포르투갈어
+tr = 튀르키예어
+hi = 힌디어
+bn = 벵골어
+si = 싱할라어
+fa = 페르시아어
+he = 히브리어
+
+기존 parser 언어 dictionary와 충돌하지 않도록 공통 사용 가능하면 재사용해 주세요.
+
+3. 약칭형 번역명 처리
+
+다음과 같은 한국식 약칭형도 표시명을 자연어로 통일해 주세요.
+
+예:
+- 한영번역 → 한국어-영어 번역
+- 영한번역 → 영어-한국어 번역
+- 한일번역 → 한국어-일본어 번역
+- 일한번역 → 일본어-한국어 번역
+- 한중번역 → 한국어-중국어 번역
+- 중한번역 → 중국어-한국어 번역
+- 영중번역 → 영어-중국어 번역
+- 중영번역 → 중국어-영어 번역
+- 영일번역 → 영어-일본어 번역
+- 일영번역 → 일본어-영어 번역
+- 한러번역 → 한국어-러시아어 번역
+- 러한번역 → 러시아어-한국어 번역
+- 영불번역 → 영어-프랑스어 번역
+- 불영번역 → 프랑스어-영어 번역
+
+4. 혼합형 번역명 처리
+
+다음과 같은 형태도 표시명을 자연어로 통일해 주세요.
+
+예:
+- 인니어-한국어번역 → 인도네시아어-한국어 번역
+- 키르기스어-한국어 번역 → 키르기스어-한국어 번역
+- 영어-세르비아어번역 → 영어-세르비아어 번역
+- 중국어-스페인어 번역 → 중국어-스페인어 번역
+- 영-말레이시아어 → 영어-말레이어 번역
+
+5. 일반번역/전문번역 제거
+
+displayName 또는 productName 생성 과정에서 다음 표현이 붙지 않도록 해 주세요.
+
+- 일반번역
+- 전문번역
+- 일반 번역
+- 전문 번역
+
+모두 최종 표시명에서는 단순히 “번역”으로 통일합니다.
+
+예:
+- ky→ko 일반번역 → 키르기스어-한국어 번역
+- en→sr 일반번역 → 영어-세르비아어 번역
+- ko→tl 전문번역 → 한국어-타갈로그어 번역
+
+6. Import Preview UI 반영
+
+Import Preview 테이블에서 다음을 분리해 보여주세요.
+
+- 원본 상품명: 엑셀 원본값 그대로
+- Product 후보: 번역
+- 표시 상품명 또는 등록 상품명: 한국어-영어 번역 형식
+- direction: ko→en 형식
+- languagePair: 한국어 ↔ 영어 형식
+
+중요:
+원본 상품명 칸에는 parser가 만든 normalized 이름이 들어가면 안 됩니다.
+
+7. 등록 payload 반영
+
+실제 상품 등록 시 사용되는 상품명은 displayName 기준이어야 합니다.
+
+예:
+원본:
+- ky→ko 일반번역
+
+등록:
+- 상품명: 키르기스어-한국어 번역
+- product: 번역
+- direction: ky→ko
+
+단:
+원본명은 별도 originalName/originalText에 유지 가능하면 유지합니다.
+
+8. 기존 구조 유지
+
+다음은 절대 깨지면 안 됩니다.
+
+- Sticky Header
+- 등록 안전장치
+- Review Workflow
+- Review Persistence
+- Bulk Review Workflow
+- Analytics Dashboard
+- Priority Queue
+- Direction 구조
+- Product = 번역 구조
+- 난이도/산업 제거 상태
+
+9. 이번 단계에서 하지 않는 것
+
+이번 작업에서는 하지 마세요.
+
+- DB schema 삭제
+- AI 자동학습
+- 자동 승인
+- 자동 제외
+- confidence 자동 변경
+- 통역/장비/실비 상품명 정규화
+- 전체 상품 자동등록
+
+이번 작업은 번역 상품명 표시 표준화만 합니다.
+
+10. 검증
+
+수정 후 다음 케이스를 반드시 확인해 주세요.
+
+- 한영번역 → 한국어-영어 번역
+- 영한번역 → 영어-한국어 번역
+- 한일번역 → 한국어-일본어 번역
+- 일한번역 → 일본어-한국어 번역
+- 인니어-한국어번역 → 인도네시아어-한국어 번역
+- 키르기스어-한국어 번역 → 키르기스어-한국어 번역
+- ky→ko 일반번역 → 키르기스어-한국어 번역
+- en→sr 일반번역 → 영어-세르비아어 번역
+- ko→tl 전문번역 → 한국어-타갈로그어 번역
+
+그리고 다음도 확인해 주세요.
+
+- 원본 상품명 칸은 원본 그대로 유지
+- 상품명에 ko→en 같은 코드가 노출되지 않음
+- 상품명에 일반번역/전문번역이 노출되지 않음
+- Product 후보는 번역
+- direction은 ko→en 형태로 유지
+- languagePair는 한국어 ↔ 영어 형태로 유지
+- 기존 Review/Bulk/Analytics/Priority 기능 정상
+- Babel/TypeScript 통과
+- HMR 오류 없음
+
+최종 보고 시 다음 형식으로 알려 주세요.
+
+1. 수정 파일
+2. 추가된 displayName 생성 로직
+3. 언어 dictionary 보강 내용
+4. 약칭형 처리 방식
+5. 혼합형 처리 방식
+6. 일반/전문번역 제거 방식
+7. 등록 payload 반영 방식
+8. 검증 결과
