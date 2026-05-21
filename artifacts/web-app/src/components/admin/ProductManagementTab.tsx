@@ -1729,7 +1729,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               }
                             }} />
                         </th>
-                        {["행", "원본 상품명", "Product 후보", "언어쌍", "방향", "난이도", "산업", "유형", "단위", "단가", "상태", "이슈", "검토"].map(h => (
+                        {["행", "원본 상품명", "Product 후보", "언어쌍", "방향", "유형", "단위", "단가", "상태", "이슈", "검토"].map(h => (
                           <th key={h} style={thStyle}>{h}</th>
                         ))}
                       </tr>
@@ -1814,21 +1814,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                                 <span style={{ fontFamily: "monospace", fontSize: 11, color: isBidir ? "#059669" : "#6b7280", background: isBidir ? "#f0fdf4" : "#f9fafb", border: `1px solid ${isBidir ? "#bbf7d0" : "#e5e7eb"}`, borderRadius: 3, padding: "1px 5px" }}>
                                   {isBidir ? "↔" : an.direction}
                                 </span>
-                              ) : ""}
-                            </td>
-                            {/* 난이도 */}
-                            <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
-                              {an.difficulty ? (
-                                <span style={{ fontSize: 11, color: "#6b7280", background: "#f3f4f6", borderRadius: 3, padding: "1px 5px" }}>{an.difficulty}</span>
-                              ) : ""}
-                            </td>
-                            {/* 산업 */}
-                            <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
-                              {an.industry ? (
-                                <span style={{ fontSize: 11, color: "#0369a1", background: "#f0f9ff", borderRadius: 3, padding: "1px 5px" }}>{an.industry}</span>
-                              ) : ""}
-                              {an.industry2 ? (
-                                <span title="추가 산업 감지" style={{ marginLeft: 3, fontSize: 10, color: "#64748b", background: "#f1f5f9", borderRadius: 3, padding: "1px 4px" }}>{an.industry2}</span>
                               ) : ""}
                             </td>
                             {/* 유형 */}

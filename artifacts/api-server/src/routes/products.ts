@@ -432,8 +432,6 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "태", code: "th", label: "태국어" },
 ];
 
-const DIFFICULTY_LIST = ["프리미엄", "특급", "긴급", "VIP", "고급", "전문", "일반"];
-const INDUSTRY_LIST   = ["반도체", "화장품", "바이오", "자동차", "국방", "특허", "금융", "계약", "의료", "법률", "게임", "IT"];
 
 // Canonical service type dictionary (긴 패턴 우선)
 const CANONICAL_PRODUCTS: [RegExp, string][] = [
@@ -488,39 +486,6 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
     }
   }
 
-  // ── Step 3: 난이도 추출 (긴 키워드 우선)
-  let difficulty = "";
-  for (const d of DIFFICULTY_LIST) {
-    const rx = new RegExp(d, "i");
-    if (rx.test(workName)) {
-      difficulty = d.toUpperCase() === "VIP" ? "VIP" : d;
-      workName = workName.replace(rx, " ").replace(/\s+/g, " ").trim();
-      break;
-    }
-  }
-
-  // ── Step 4: 산업 추출
-  let industry = "";
-  for (const ind of INDUSTRY_LIST) {
-    const rx = new RegExp(ind, "i");
-    if (rx.test(workName)) {
-      industry = ind.toUpperCase() === "IT" ? "IT" : ind;
-      workName = workName.replace(rx, " ").replace(/\s+/g, " ").trim();
-      break;
-    }
-  }
-
-  // ── Step 4b: 두 번째 산업 감지
-  let industry2 = "";
-  for (const ind of INDUSTRY_LIST) {
-    const rx = new RegExp(ind, "i");
-    if (rx.test(workName)) {
-      industry2 = ind.toUpperCase() === "IT" ? "IT" : ind;
-      workName = workName.replace(rx, " ").replace(/\s+/g, " ").trim();
-      break;
-    }
-  }
-
   // ── Step 5: Product 후보 — 잔여 ISO 토큰 제거 후 canonical 서비스명으로 정규화
   let productCandidate = workName
     .replace(/\b[a-z]{2,3}[→\-_][a-z]{2,3}\b/gi, " ")
@@ -566,7 +531,6 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   if (!productCandidate) reviewReasons.push("서비스 미인식");
   if (productCandidate && !isCanonical) reviewReasons.push("Product 불명확");
   if (srcLabel.startsWith("미지원") || tgtLabel.startsWith("미지원")) reviewReasons.push("미지원 언어");
-  if (industry2) reviewReasons.push("다중 산업 감지");
   if (isProjDesc) reviewReasons.push("프로젝트명/설명형 가능성");
   if (hasWorkDescKw && !isProjDesc) reviewReasons.push("작업명 패턴");
   if (isOpsItem) reviewReasons.push("운영성 항목 (EX계열 가능)");
@@ -577,8 +541,6 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   else if (productCandidate) score += 5;
   if (langPair) score += 15;
   if (direction && direction !== "bidirectional") score += 5;
-  if (difficulty) score += 3;
-  if (industry) score += 3;
   if (srcLabel.startsWith("미지원") || tgtLabel.startsWith("미지원")) score -= 20;
   if (!productCandidate) score -= 30;
   // 설명형/프로젝트명 패널티 (canonical이면 약하게, 아니면 강하게)
@@ -589,7 +551,7 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   const confidenceScore = Math.max(0, Math.min(100, score));
 
   const isOptionCandidate = !!(productCandidate && (tgtCode || (srcCode && srcCode !== "ko")));
-  return { productCandidate, langPair, direction, difficulty, industry, industry2, isOptionCandidate, confidenceScore, reviewReasons };
+  return { productCandidate, langPair, direction, difficulty: "", industry: "", industry2: "", isOptionCandidate, confidenceScore, reviewReasons };
 }
 
 // ─── taxonomy 자동 추천 ──────────────────────────────────────────────────────

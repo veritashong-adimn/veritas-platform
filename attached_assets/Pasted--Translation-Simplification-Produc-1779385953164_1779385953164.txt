@@ -1,0 +1,226 @@
+지시문 — 상품 마스터에서 난이도/산업 제거 (Translation Simplification)
+
+현재 상품 마스터 구조는 다음 방향으로 안정화되었습니다.
+
+- Product = 실제 판매 단위
+- Language Pair / Direction 중심 구조
+- Import Preview 기반 운영 검토
+- Review Workflow / Analytics / Priority Queue 완료 상태
+
+현재 검토 결과,
+상품 마스터 단계에서는:
+
+- 난이도
+- 산업
+
+정보를 유지하는 것이 오히려 Product 구조를 복잡하게 만들고,
+Product explosion(상품 폭발) 위험이 커진다고 판단했습니다.
+
+따라서 이번 작업 목표는:
+
+“상품 마스터를 Product + Language Direction 중심으로 단순화”
+
+하는 것입니다.
+
+핵심 방향
+
+번역 상품은:
+
+- 일반번역
+- 전문번역
+- 법률번역
+- 의료번역
+
+등으로 Product를 분리하지 않고,
+
+Product:
+- 번역
+
+Direction:
+- en→ko
+- ko→ja
+- zh→en
+
+등으로 정리합니다.
+
+즉:
+상품 마스터 단계에서는:
+
+❌ 산업
+❌ 난이도
+
+를 유지하지 않습니다.
+
+이 정보들은:
+향후 견적/프로젝트/매칭 단계에서 관리합니다.
+
+수정 요청
+
+1. Import Parser에서 산업 제거
+
+현재 parser에서 추출 중인:
+- industry
+- industry2
+- additional industry
+
+관련 처리 제거.
+
+예:
+- 반도체
+- 의료
+- 법률
+- 특허
+
+등을 Product Preview에 표시하지 않도록 수정.
+
+중요:
+DB schema 삭제까지는 하지 말고,
+우선 Product Import 흐름에서 사용 중단.
+
+2. 난이도 제거
+
+현재 parser에서 사용하는:
+- 일반
+- 전문
+- 긴급
+
+등 난이도 관련 처리 제거.
+
+예:
+- 일반번역 → 번역
+- 전문번역 → 번역
+- 긴급번역 → 번역
+
+canonical simplification 적용.
+
+중요:
+“일반번역”이라는 Product 개념 제거.
+
+3. Product Canonical 단순화
+
+번역 계열은 모두:
+
+Product = 번역
+
+으로 canonical 통합.
+
+예:
+- 일반번역 → 번역
+- 전문번역 → 번역
+- 영문번역 → 번역
+- 법률번역 → 번역
+- 의료번역 → 번역
+
+산업/난이도는 Product에서 제거.
+
+4. Direction 중심 구조 유지
+
+번역 상품은:
+
+- Product
+- sourceLanguage
+- targetLanguage
+- direction
+
+중심으로 유지.
+
+예:
+영어→한국어 번역
+
+↓
+
+product: 번역
+direction: en→ko
+
+display:
+영어→한국어 번역
+
+중요:
+내부 direction 구조는 유지하고,
+display만 자연어 형태 유지 가능.
+
+5. UI 정리
+
+Import Preview 및 Analytics에서:
+
+- 산업 chip
+- 난이도 chip
+
+표시 제거.
+
+예:
+- 반도체
+- 의료
+- 일반
+- 전문
+
+등 Product Preview에서 제거.
+
+6. Risk / Analytics 구조 유지
+
+다음은 그대로 유지:
+
+- Confidence Score
+- ReviewReason
+- Priority Queue
+- Review Workflow
+- Persistence
+- Bulk Workflow
+- Analytics Dashboard
+
+단:
+industry 기반 risk 계산이 있다면 제거 또는 무시.
+
+7. 기존 구조 유지
+
+다음은 절대 깨지면 안 됩니다.
+
+- Sticky Header
+- Import Preview flow
+- 등록 안전장치
+- Product/Option 철학
+- Direction 구조
+- Review Persistence
+- Bulk Workflow
+- Priority Queue
+- Analytics Dashboard
+
+8. 이번 단계에서 하지 않는 것
+
+중요:
+아직 구현 금지.
+
+- DB schema 삭제
+- 프로젝트/견적 구조 변경
+- AI 자동학습
+- 자동 canonical 생성
+- confidence 자동 변경
+
+현재는:
+“상품 마스터 단순화”
+만 수행.
+
+9. 검증
+
+수정 후 다음 확인해 주세요.
+
+- Babel/TypeScript 통과
+- 기존 Preview 정상 렌더링
+- 일반번역 → 번역 canonical 적용 확인
+- 전문번역 → 번역 canonical 적용 확인
+- 산업 chip 제거 확인
+- 난이도 표시 제거 확인
+- direction 구조 유지 확인
+- 기존 Risk/Analytics/Bulk Workflow 유지 확인
+- Sticky Header 유지
+- HMR 오류 없음
+
+최종 보고 시 다음 형식으로 알려 주세요.
+
+1. 수정 파일
+2. 제거된 industry/difficulty 처리
+3. canonical simplification 내용
+4. direction 유지 방식
+5. UI 제거 내용
+6. Risk/Analytics 영향 여부
+7. 검증 결과
