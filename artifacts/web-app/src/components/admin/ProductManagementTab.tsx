@@ -46,17 +46,29 @@ type PersistedReviewSession = {
 };
 
 // ─── localStorage 헬퍼 ────────────────────────────────────────────────────
-const REVIEW_SESSION_KEY = "veritas_review_session_v1";
+const IMPORT_PREVIEW_SCHEMA_VERSION = 2;
+const REVIEW_SESSION_KEY = "veritas_review_session_v2";
 
 function loadReviewSession(): PersistedReviewSession | null {
   try {
     const raw = localStorage.getItem(REVIEW_SESSION_KEY);
-    return raw ? (JSON.parse(raw) as PersistedReviewSession) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedReviewSession & { schemaVersion?: number };
+    if ((parsed.schemaVersion ?? 1) !== IMPORT_PREVIEW_SCHEMA_VERSION) return null;
+    if (parsed.importPreview?.items) {
+      parsed.importPreview.items = parsed.importPreview.items.map(item => ({
+        ...item,
+        analysis: item.analysis
+          ? { ...item.analysis, displayName: item.analysis.displayName ?? "" }
+          : item.analysis,
+      }));
+    }
+    return parsed;
   } catch { return null; }
 }
 
 function saveReviewSession(data: PersistedReviewSession): void {
-  try { localStorage.setItem(REVIEW_SESSION_KEY, JSON.stringify(data)); } catch { /* storage quota */ }
+  try { localStorage.setItem(REVIEW_SESSION_KEY, JSON.stringify({ ...data, schemaVersion: IMPORT_PREVIEW_SCHEMA_VERSION })); } catch { /* storage quota */ }
 }
 
 function clearReviewSession(): void {
@@ -584,6 +596,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     setSelectedRows(new Set());
     setImportPreviewSort("conf_asc");
     setImportQualFilter("all");
+    setImportPriorityFilter("all");
     setImportConfirmModal(null);
     setRowOverrides({});
     setEditingRowNum(null);
@@ -1367,6 +1380,11 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             const cb = b.analysis?.confidenceScore ?? 0;
             return importPreviewSort === "conf_asc" ? ca - cb : cb - ca;
           });
+
+          console.log("[ImportPreview]", { rows: importPreview.items.length, filtered: filtered.length, importPriorityFilter, importReviewFilter, importPreviewFilter, importQualFilter });
+          if (filtered.length === 0 && importPreview.items.length > 0) {
+            console.warn("[ImportPreview] filter returned 0 rows unexpectedly", { importPreviewFilter, importQualFilter, importReviewFilter, importPriorityFilter });
+          }
 
           const TAB_LABELS: [typeof importPreviewFilter, string, number][] = [
             ["all",       `전체 ${s.total}`,          s.total],
