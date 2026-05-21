@@ -1,0 +1,223 @@
+지시문 — Priority Queue Engine (우선순위 검토 엔진) 구축
+
+현재 상품 마스터 Import Preview는 다음 단계까지 완료된 상태입니다.
+
+- Product / Option 구조
+- Import Preview 기반 검토 구조
+- Sticky Header
+- 등록 안전장치
+- Confidence Score
+- Review Reason
+- Canonical Stabilization
+- Review Workflow
+- Review Persistence
+- Session Restore
+- Bulk Review Workflow
+- Review Analytics Dashboard
+
+현재 상태는:
+“운영자가 검토하고, 분석까지 볼 수 있는 상태”
+입니다.
+
+이번 작업 목표는:
+
+“운영자가 위험한 항목부터 먼저 검토할 수 있도록 우선순위 큐를 제공”
+
+하는 것입니다.
+
+중요:
+- AI 자동학습 구현 금지
+- 자동 승인 금지
+- 자동 제외 금지
+- confidence 자동 변경 금지
+- 자동 canonical 생성 금지
+- 기존 Import Preview UX 유지
+- Sticky Header 유지
+- Review Persistence 유지
+- Bulk Workflow 유지
+- Analytics Dashboard 유지
+
+이번 단계는:
+Priority Queue Engine
+(우선순위 검토 엔진)
+초기 구조만 구현합니다.
+
+핵심 목표
+
+현재:
+운영자가 전체 항목을 직접 훑어봐야 함
+
+다음:
+운영자가:
+- 고위험 항목
+- 수정 가능성 높은 항목
+- 제외 가능성 높은 항목
+- confidence 낮은 항목
+
+부터 먼저 볼 수 있게.
+
+즉:
+“검토 우선순위 표시와 정렬”
+이 목표입니다.
+
+수정 요청
+
+1. Risk Priority Score 추가
+
+각 Preview row에 riskPriorityScore를 계산해 주세요.
+
+예시 가중치:
+
+- confidenceScore 60 미만: +30
+- confidenceScore 60~69: +20
+- confidenceScore 70~79: +10
+- reviewReasons 1개당: +10
+- 프로젝트명/설명형 가능성 포함: +25
+- Product 불명확 포함: +20
+- 미지원 언어 포함: +20
+- 운영성 항목 포함: +10
+- overriddenCandidate 존재: +10
+- rejected 상태: +15
+
+중요:
+이 점수는 자동 판단용이 아닙니다.
+오직 정렬/표시/필터용입니다.
+
+2. Priority Level 분류
+
+riskPriorityScore 기준으로 row를 다음 3단계로 분류해 주세요.
+
+예:
+- High Risk: 50점 이상
+- Review Needed: 20~49점
+- Stable: 0~19점
+
+UI 표시:
+- High Risk: 빨간 계열 badge
+- Review Needed: 노란/주황 계열 badge
+- Stable: 회색/초록 계열 badge
+
+단, 너무 강한 색상은 피하고 compact UX 유지.
+
+3. Priority Queue 필터 추가
+
+기존 필터 영역에 Priority Queue 필터를 추가해 주세요.
+
+필터 예:
+- 전체
+- High Risk만
+- Review Needed만
+- Stable만
+
+가능하면 기존 품질 필터/검토상태 필터와 충돌 없이 동작하게 해 주세요.
+
+4. Smart Sorting 추가
+
+기존 정렬 옵션에 다음을 추가해 주세요.
+
+- 위험도 높은 순
+- 위험도 낮은 순
+
+기본 정렬을 무조건 변경하지는 말고,
+운영자가 선택 가능하게 해 주세요.
+
+5. High-risk Highlight 추가
+
+High Risk 항목은 행에서 눈에 띄게 하되 과하지 않게 표시해 주세요.
+
+예:
+- 왼쪽 얇은 border
+- risk badge
+- title tooltip
+
+tooltip 예:
+“검토 우선순위 높음: 낮은 신뢰도 + 프로젝트명 가능성”
+
+6. Priority Summary 추가
+
+Analytics Dashboard 또는 Import Preview 상단에 compact summary를 추가해 주세요.
+
+예:
+- High Risk 42
+- Review Needed 133
+- Stable 339
+
+이 숫자는 현재 session 기준 실시간 계산.
+
+Bulk Action / Override / Reject 상태 변경 시 즉시 갱신.
+
+7. Priority Insight 추가
+
+가능하면 Analytics Dashboard의 우선 검토 인사이트 영역에 다음 문구를 조건부 표시해 주세요.
+
+예:
+- High Risk 항목 N건 — 우선 검토 권장
+- Product 불명확 항목 N건
+- 미지원 언어 포함 항목 N건
+- 프로젝트명 가능성 항목 N건
+
+중요:
+AI 자동 판단처럼 보이지 않게,
+“통계 기반 안내” 수준으로 표시.
+
+8. 기존 구조 유지
+
+다음은 절대 깨지면 안 됩니다.
+
+- Sticky Header
+- Import Preview flow
+- 등록 안전장치
+- Review Workflow
+- Review Persistence
+- Session Restore
+- Bulk Review Workflow
+- Review Analytics Dashboard
+- 기존 필터/정렬
+- Product/Option 철학
+
+9. 이번 단계에서 하지 않는 것
+
+중요:
+아직 구현 금지.
+
+- AI 자동학습
+- confidence 자동 변경
+- 자동 canonical 생성
+- 자동 승인
+- 자동 제외
+- ML 모델 학습
+- 실제 AI retraining
+
+현재는:
+“위험도 표시/정렬/필터”
+만 구현.
+
+10. 검증
+
+수정 후 다음 확인해 주세요.
+
+- Babel/TypeScript 통과
+- 기존 Preview 정상 렌더링
+- Sticky Header 유지
+- 기존 등록 안전장치 유지
+- Bulk Workflow 유지
+- Analytics Dashboard 유지
+- riskPriorityScore 계산 정상
+- High Risk / Review Needed / Stable 분류 정상
+- Priority Queue 필터 정상
+- 위험도 정렬 정상
+- Bulk Action 후 Priority Summary 즉시 갱신
+- Session Restore 후 Priority 상태 복원
+- 기존 필터/정렬과 충돌 없음
+- HMR 오류 없음
+
+최종 보고 시 다음 형식으로 알려 주세요.
+
+1. 수정 파일
+2. 추가된 Priority Queue 구조
+3. riskPriorityScore 계산 방식
+4. Priority Level 분류 방식
+5. 필터/정렬 추가 내용
+6. Analytics 연동 방식
+7. UI 표시 방식
+8. 검증 결과

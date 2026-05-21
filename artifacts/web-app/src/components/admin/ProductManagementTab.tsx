@@ -187,8 +187,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [importExecuting, setImportExecuting] = useState(false);
   const [importResult, setImportResult] = useState<{ created: number; errors: { row: number; message: string }[] } | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
-  const [importPreviewSort, setImportPreviewSort] = useState<"conf_asc" | "conf_desc">("conf_asc");
+  const [importPreviewSort, setImportPreviewSort] = useState<"conf_asc" | "conf_desc" | "risk_desc" | "risk_asc">("conf_asc");
   const [importQualFilter, setImportQualFilter] = useState<"all" | "review_only" | "safe_only" | "low_conf">("all");
+  const [importPriorityFilter, setImportPriorityFilter] = useState<"all" | "high" | "review_needed" | "stable">("all");
   const [importConfirmModal, setImportConfirmModal] = useState<{ mode: "selected" | "safe" | "all"; rows: ImportPreviewItem[] } | null>(null);
   // ─── Review Workflow / Persistence 상태 ───────────────────────────────────
   const [rowOverrides, setRowOverrides] = useState<Record<number, RowOverride>>({});
@@ -1283,6 +1284,31 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               return { ...prev, [rowNum]: { ...ex, overriddenCandidate: value, originalCandidate: ex.originalCandidate || aiOriginal } };
             });
 
+          // ── Risk Priority Score ───────────────────────────────────────────
+          const calcRiskScore = (item: ImportPreviewItem): number => {
+            let score = 0;
+            const conf = item.analysis?.confidenceScore ?? 0;
+            if (conf < 60) score += 30;
+            else if (conf < 70) score += 20;
+            else if (conf < 80) score += 10;
+            const reasons = item.analysis?.reviewReasons ?? [];
+            score += reasons.length * 10;
+            if (reasons.some(r => r.includes("프로젝트명") || r.includes("설명형"))) score += 25;
+            if (reasons.some(r => r.includes("Product") || r.includes("불명확"))) score += 20;
+            if (reasons.some(r => r.includes("언어") || r.includes("미지원"))) score += 20;
+            if (reasons.some(r => r.includes("운영성"))) score += 10;
+            if (rowOverrides[item.rowNum]?.overriddenCandidate !== undefined) score += 10;
+            if (rowOverrides[item.rowNum]?.reviewStatus === "rejected") score += 15;
+            return score;
+          };
+          const getRiskLevel = (score: number): "high" | "review_needed" | "stable" =>
+            score >= 50 ? "high" : score >= 20 ? "review_needed" : "stable";
+          const RISK_META = {
+            high:          { label: "고위험", color: "#b91c1c", bg: "#fef2f2", border: "#fca5a5", borderLeft: "3px solid #f87171" },
+            review_needed: { label: "검토필요", color: "#92400e", bg: "#fffbeb", border: "#fde68a", borderLeft: "3px solid #fbbf24" },
+            stable:        { label: "안정",   color: "#6b7280", bg: "#f9fafb", border: "#e5e7eb", borderLeft: "none" },
+          };
+
           const safeRows = importPreview.items.filter(isSafe);
           const safeAndNotRejected = importPreview.items.filter(x => isSafe(x) && getReviewStatus(x) !== "rejected");
           const allNewRows = importPreview.items.filter(x => x.status === "new");
@@ -1293,6 +1319,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             const ov = rowOverrides[x.rowNum];
             return ov?.overriddenCandidate !== undefined && ov.overriddenCandidate !== (x.analysis?.productCandidate ?? "");
           }).length;
+          const highRiskCount = importPreview.items.filter(x => getRiskLevel(calcRiskScore(x)) === "high").length;
+          const reviewNeededCount = importPreview.items.filter(x => getRiskLevel(calcRiskScore(x)) === "review_needed").length;
+          const stableCount = importPreview.items.filter(x => getRiskLevel(calcRiskScore(x)) === "stable").length;
 
           // 상태 탭 필터
           let filtered = importPreviewFilter === "all"
@@ -1313,8 +1342,14 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             return ov?.overriddenCandidate !== undefined && ov.overriddenCandidate !== (x.analysis?.productCandidate ?? "");
           });
 
-          // 정렬 (기본: 낮은 confidence 먼저)
+          // Priority 필터
+          if (importPriorityFilter !== "all")
+            filtered = filtered.filter(x => getRiskLevel(calcRiskScore(x)) === importPriorityFilter);
+
+          // 정렬
           filtered = [...filtered].sort((a, b) => {
+            if (importPreviewSort === "risk_desc") return calcRiskScore(b) - calcRiskScore(a);
+            if (importPreviewSort === "risk_asc")  return calcRiskScore(a) - calcRiskScore(b);
             const ca = a.analysis?.confidenceScore ?? 0;
             const cb = b.analysis?.confidenceScore ?? 0;
             return importPreviewSort === "conf_asc" ? ca - cb : cb - ca;
@@ -1459,6 +1494,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 {approvedCount > 0 && <span style={{ color: "#374151" }}>승인 <strong style={{ color: "#059669" }}>{approvedCount}</strong></span>}
                 {rejectedCount > 0 && <span style={{ color: "#374151" }}>제외 <strong style={{ color: "#dc2626" }}>{rejectedCount}</strong></span>}
                 {modifiedCount > 0 && <span style={{ color: "#374151" }}>수정됨 <strong style={{ color: "#7c3aed" }}>{modifiedCount}</strong></span>}
+                <span style={{ color: "#6b7280", fontSize: 11 }}>|</span>
+                {highRiskCount > 0 && <span style={{ color: "#374151" }}>고위험 <strong style={{ color: "#b91c1c" }}>{highRiskCount}</strong></span>}
+                {reviewNeededCount > 0 && <span style={{ color: "#374151" }}>검토필요 <strong style={{ color: "#92400e" }}>{reviewNeededCount}</strong></span>}
+                {stableCount > 0 && <span style={{ color: "#374151" }}>안정 <strong style={{ color: "#6b7280" }}>{stableCount}</strong></span>}
                 {selectedRows.size > 0 && (
                   <span style={{ color: "#374151" }}>선택됨 <strong style={{ color: "#2563eb" }}>{selectedRows.size}</strong>
                     <button onClick={() => setSelectedRows(new Set())} style={{ marginLeft: 4, fontSize: 10, color: "#9ca3af", background: "none", border: "none", cursor: "pointer", padding: 0 }}>✕ 해제</button>
@@ -1522,11 +1561,17 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
 
                 // Priority insights
                 const insights: string[] = [];
+                const dashHighRisk = importPreview.items.filter(x => getRiskLevel(calcRiskScore(x)) === "high").length;
+                if (dashHighRisk > 0) insights.push(`고위험 항목 ${dashHighRisk}건 — 우선 검토 권장`);
                 if (rejectPatterns.length > 0) insights.push(`가장 빈번한 제외 사유: "${rejectPatterns[0][0]}" ${rejectPatterns[0][1]}건`);
                 const lowConfApproved = importPreview.items.filter(x => (x.analysis?.confidenceScore ?? 0) < 60 && rowOverrides[x.rowNum]?.reviewStatus === "approved").length;
                 if (lowConfApproved > 0) insights.push(`신뢰도 60미만 승인 항목 ${lowConfApproved}건 — 재검토 권장`);
                 const pendingUnsafe = importPreview.items.filter(x => !isSafe(x) && (rowOverrides[x.rowNum]?.reviewStatus ?? "pending") === "pending").length;
                 if (pendingUnsafe > 0) insights.push(`검토필요 보류 항목 ${pendingUnsafe}건 남음`);
+                const projNameItems = importPreview.items.filter(x => (x.analysis?.reviewReasons ?? []).some(r => r.includes("프로젝트명"))).length;
+                if (projNameItems > 0) insights.push(`프로젝트명 가능성 항목 ${projNameItems}건`);
+                const unsupportedLangItems = importPreview.items.filter(x => (x.analysis?.reviewReasons ?? []).some(r => r.includes("언어") || r.includes("미지원"))).length;
+                if (unsupportedLangItems > 0) insights.push(`미지원 언어 포함 항목 ${unsupportedLangItems}건`);
 
                 const statCard = (label: string, value: number, color: string, showPct?: boolean) => (
                   <div key={label} style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 12px", minWidth: 66, textAlign: "center", flex: "0 0 auto" }}>
@@ -1626,9 +1671,28 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   </button>
                 ))}
                 <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, marginLeft: 8, marginRight: 2 }}>정렬:</span>
-                {(["conf_asc", "conf_desc"] as const).map(k => (
+                {(["conf_asc", "conf_desc", "risk_desc", "risk_asc"] as const).map(k => (
                   <button key={k} onClick={() => setImportPreviewSort(k)} style={sortBtnStyle(k)}>
-                    {k === "conf_asc" ? "낮은신뢰도순" : "높은신뢰도순"}
+                    {k === "conf_asc" ? "낮은신뢰도순" : k === "conf_desc" ? "높은신뢰도순" : k === "risk_desc" ? "위험도높은순" : "위험도낮은순"}
+                  </button>
+                ))}
+              </div>
+              {/* Priority 필터 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 14px", background: "#fafafa", borderBottom: "1px solid #f0f0f0", flexWrap: "wrap" }}>
+                <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, marginRight: 2 }}>위험도:</span>
+                {([
+                  ["all",          "전체",                          "#6b7280", "#fff",    "#e5e7eb"],
+                  ["high",         `고위험 ${highRiskCount}`,       "#b91c1c", "#fef2f2", "#fca5a5"],
+                  ["review_needed",`검토필요 ${reviewNeededCount}`, "#92400e", "#fffbeb", "#fde68a"],
+                  ["stable",       `안정 ${stableCount}`,           "#6b7280", "#f9fafb", "#e5e7eb"],
+                ] as const).map(([k, label, tc, bg, bc]) => (
+                  <button key={k} onClick={() => setImportPriorityFilter(k)}
+                    style={{ fontSize: 11, padding: "3px 9px", borderRadius: 5, cursor: "pointer",
+                      border: `1px solid ${importPriorityFilter === k ? bc : "#e5e7eb"}`,
+                      background: importPriorityFilter === k ? bg : "#fff",
+                      color: importPriorityFilter === k ? tc : "#6b7280",
+                      fontWeight: importPriorityFilter === k ? 700 : 400 }}>
+                    {label}
                   </button>
                 ))}
               </div>
@@ -1676,14 +1740,25 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                         const an = item.analysis ?? { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", industry2: "", isOptionCandidate: false, confidenceScore: 0, reviewReasons: [] };
                         const isBidir = an.direction === "bidirectional";
                         const isSelected = selectedRows.has(item.rowNum);
+                        const riskScore = calcRiskScore(item);
+                        const riskLevel = getRiskLevel(riskScore);
+                        const riskMeta = RISK_META[riskLevel];
                         return (
-                          <tr key={idx} style={{ borderBottom: "1px solid #f3f4f6", background: isSelected ? "#eff6ff" : (idx % 2 === 0 ? "#fff" : "#fafafa") }}>
+                          <tr key={idx} style={{ borderBottom: "1px solid #f3f4f6", background: isSelected ? "#eff6ff" : (idx % 2 === 0 ? "#fff" : "#fafafa"), borderLeft: riskMeta.borderLeft }}>
                             {/* 체크박스 */}
                             <td style={{ padding: "4px 8px", textAlign: "center" }}>
                               <input type="checkbox" checked={isSelected}
                                 onChange={e => setSelectedRows(prev => { const n = new Set(prev); if (e.target.checked) n.add(item.rowNum); else n.delete(item.rowNum); return n; })} />
                             </td>
-                            <td style={{ padding: "4px 8px", color: "#c4c4c4", fontFamily: "monospace", fontSize: 11 }}>{item.rowNum}</td>
+                            <td style={{ padding: "4px 8px", color: "#c4c4c4", fontFamily: "monospace", fontSize: 11, verticalAlign: "top" }}>
+                              {riskLevel !== "stable" && (
+                                <div title={`위험도 ${riskScore}점 — ${riskLevel === "high" ? "우선 검토 권장" : "검토 필요"}`}
+                                  style={{ fontSize: 9, fontWeight: 700, color: riskMeta.color, background: riskMeta.bg, border: `1px solid ${riskMeta.border}`, borderRadius: 3, padding: "0 4px", marginBottom: 2, display: "inline-block", cursor: "default", whiteSpace: "nowrap" }}>
+                                  {riskMeta.label}
+                                </div>
+                              )}
+                              <div>{item.rowNum}</div>
+                            </td>
                             <td style={{ padding: "4px 8px", color: "#374151", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
                             {/* Product 후보 — 클릭하여 inline 수정 가능 */}
                             <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
