@@ -1,0 +1,239 @@
+지시문 — Review Analytics Dashboard (검토 분석 대시보드) 구축
+
+현재 상품 마스터 Import Preview는 다음 단계까지 완료된 상태입니다.
+
+- Product / Option 구조
+- Import Preview 기반 검토 구조
+- Sticky Header
+- 등록 안전장치
+- Confidence Score
+- Review Reason
+- Canonical Stabilization
+- Review Workflow
+- 승인 / 제외 / 보류 상태
+- Manual Override
+- Reject Reason
+- Review Persistence
+- Session Restore
+- Bulk Review Workflow
+
+현재 상태는:
+“운영자의 판단 데이터가 축적되기 시작한 상태”
+입니다.
+
+이번 작업 목표는:
+
+“운영자가 검토 패턴과 위험 영역을 빠르게 파악할 수 있는 분석 레이어”
+
+를 추가하는 것입니다.
+
+중요:
+- AI 자동학습 구현 금지
+- confidence 자동 변경 금지
+- 자동 canonical 생성 금지
+- 자동 승인/자동 제외 금지
+- 기존 Import Preview UX 유지
+- Sticky Header 유지
+- 기존 Review Persistence 유지
+- 기존 Bulk Workflow 유지
+- Product/Option 철학 유지
+
+이번 단계는:
+Review Analytics Dashboard
+(검토 분석 대시보드)
+초기 구조만 구현합니다.
+
+핵심 목표
+
+현재:
+운영자가 개별 건을 검토
+
+다음:
+운영자가:
+- 어떤 패턴이 위험한지
+- 어떤 항목이 반복 수정되는지
+- confidence가 실제로 맞는지
+
+빠르게 파악 가능하게.
+
+즉:
+“운영 판단 데이터의 시각화”
+가 목표입니다.
+
+수정 요청
+
+1. Review Analytics Summary 추가
+
+Import Preview 상단 또는 Session 영역 근처에
+Analytics Summary 카드/바 추가.
+
+표시 항목 예시:
+
+- 총 검토 건수
+- 승인 건수
+- 제외 건수
+- override 건수
+- 승인률
+- reject률
+- override률
+
+예:
+총 514건
+승인 320
+제외 41
+수정 72
+
+승인률 62%
+reject률 8%
+override률 14%
+
+중요:
+실시간 계산.
+
+2. Reject Pattern Analysis 추가
+
+rejectReason 기준 통계 표시.
+
+예:
+프로젝트명       52
+내부업무         31
+Product 아님     14
+설명형 텍스트     8
+
+형태.
+
+중요:
+현재 session 기준 통계만.
+
+3. Override Pattern Analysis 추가
+
+운영자가 많이 수정한 canonical 패턴 표시.
+
+예:
+영문화 → 번역      24
+영문작업 → 번역     11
+회의록작성 → 타이핑   7
+
+중요:
+- originalCandidate 기준
+- overriddenCandidate 기준
+- Top N 형태 가능
+
+4. Confidence Distribution 추가
+
+confidenceScore 구간별 통계 표시.
+
+예:
+90+      120
+80~89    240
+70~79    95
+60~69    41
+60 미만   18
+
+추가:
+각 구간의 승인률/제외률도 가능하면 표시.
+
+중요:
+현재 session 기준 통계만.
+
+5. Review Priority Insight 추가
+
+다음 유형을 별도 표시.
+
+예:
+- override 많이 발생한 패턴
+- reject 빈도 높은 패턴
+- 낮은 confidence인데 승인된 패턴
+
+즉:
+운영자가 우선 검토해야 할 유형을 빠르게 인식 가능하게.
+
+중요:
+AI 판단 아님.
+통계 기반 insight 수준만.
+
+6. Compact Dashboard 유지
+
+현재 ProductManagementTab은 compact UX 방향입니다.
+
+주의:
+- 지나치게 큰 차트 금지
+- 복잡한 그래프 금지
+- compact card / mini table / chip 중심
+
+추천:
+- 작은 summary card
+- mini list
+- compact stat block
+
+형태.
+
+7. Session 연동
+
+Analytics는 현재 review session 기준으로 계산.
+
+즉:
+- session restore 후 동일 통계 복원
+- bulk action 반영
+- override 반영
+- rejectReason 반영
+
+모두 실시간 연동.
+
+8. 기존 구조 유지
+
+다음은 절대 깨지면 안 됩니다.
+
+- Sticky Header
+- Import Preview flow
+- 등록 안전장치
+- Review Workflow
+- Review Persistence
+- Bulk Review Workflow
+- 기존 필터/정렬
+- Product/Option 철학
+
+9. 이번 단계에서 하지 않는 것
+
+중요:
+아직 구현 금지.
+
+- AI 자동학습
+- confidence 자동 변경
+- 자동 canonical 생성
+- 자동 승인
+- 자동 reject
+- ML 모델 학습
+- 실제 AI retraining
+
+현재는:
+“운영 통계 시각화”
+만 구현.
+
+10. 검증
+
+수정 후 다음 확인해 주세요.
+
+- Babel/TypeScript 통과
+- 기존 Preview 정상 렌더링
+- Sticky Header 유지
+- 기존 Bulk Workflow 유지
+- Analytics Summary 실시간 반영
+- Reject Pattern 통계 정상
+- Override Pattern 통계 정상
+- Confidence Distribution 정상
+- Session Restore 후 통계 복원
+- Bulk Action 후 통계 즉시 갱신
+- 기존 필터/정렬과 충돌 없음
+- HMR 오류 없음
+
+최종 보고 시 다음 형식으로 알려 주세요.
+
+1. 수정 파일
+2. 추가된 Analytics 구조
+3. Reject Pattern 계산 방식
+4. Override Pattern 계산 방식
+5. Confidence Distribution 계산 방식
+6. Session 연동 방식
+7. UI 구성 방식
+8. 검증 결과

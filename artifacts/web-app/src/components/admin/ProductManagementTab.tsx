@@ -203,6 +203,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   } | null>(null);
   const [bulkRejectReason, setBulkRejectReason] = useState("");
   const [bulkOverrideValue, setBulkOverrideValue] = useState("");
+  const [showAnalytics, setShowAnalytics] = useState(false);
   const [productRequests, setProductRequests] = useState<ProductRequest[]>([]);
   const [productRequestsLoading, setProductRequestsLoading] = useState(false);
   const [productRequestStatusFilter, setProductRequestStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
@@ -1378,6 +1379,11 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                     style={{ fontSize: 11, padding: "5px 10px", borderRadius: 7, border: "1px solid #d1d5db", background: "#f9fafb", color: allNewNotRejected.length > 0 ? "#6b7280" : "#9ca3af", cursor: allNewNotRejected.length > 0 ? "pointer" : "not-allowed", fontWeight: 500 }}>
                     전체 {allNewNotRejected.length}건
                   </button>
+                  <button
+                    onClick={() => setShowAnalytics(v => !v)}
+                    style={{ fontSize: 11, padding: "4px 10px", borderRadius: 6, border: `1px solid ${showAnalytics ? "#1d4ed8" : "#d1d5db"}`, background: showAnalytics ? "#eff6ff" : "#fff", color: showAnalytics ? "#1d4ed8" : "#6b7280", cursor: "pointer", fontWeight: showAnalytics ? 700 : 400 }}>
+                    📊 분석
+                  </button>
                   <button onClick={() => { setImportPreview(null); setSelectedRows(new Set()); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: 20, lineHeight: 1, padding: "0 4px" }}>×</button>
                 </div>
               </div>
@@ -1459,6 +1465,147 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   </span>
                 )}
               </div>
+
+              {/* Review Analytics Dashboard */}
+              {showAnalytics && (() => {
+                const total = importPreview.items.length;
+                const apvd = importPreview.items.filter(x => rowOverrides[x.rowNum]?.reviewStatus === "approved").length;
+                const rjcd = importPreview.items.filter(x => rowOverrides[x.rowNum]?.reviewStatus === "rejected").length;
+                const ovrd = importPreview.items.filter(x => {
+                  const ov = rowOverrides[x.rowNum];
+                  return ov?.overriddenCandidate !== undefined && ov.overriddenCandidate !== (x.analysis?.productCandidate ?? "");
+                }).length;
+                const pndg = total - apvd - rjcd;
+                const pct = (n: number) => total > 0 ? Math.round((n / total) * 100) : 0;
+
+                // Reject pattern
+                const rejectCounts: Record<string, number> = {};
+                importPreview.items.forEach(item => {
+                  const ov = rowOverrides[item.rowNum];
+                  if (ov?.reviewStatus === "rejected" && ov.rejectReason) {
+                    rejectCounts[ov.rejectReason] = (rejectCounts[ov.rejectReason] ?? 0) + 1;
+                  }
+                });
+                const rejectPatterns = Object.entries(rejectCounts).sort((a, b) => b[1] - a[1]);
+
+                // Override pattern (top 5)
+                const overridePairs: Record<string, number> = {};
+                importPreview.items.forEach(item => {
+                  const ov = rowOverrides[item.rowNum];
+                  if (ov?.overriddenCandidate !== undefined && ov.overriddenCandidate !== (item.analysis?.productCandidate ?? "")) {
+                    const key = `${ov.originalCandidate || (item.analysis?.productCandidate ?? "")} → ${ov.overriddenCandidate}`;
+                    overridePairs[key] = (overridePairs[key] ?? 0) + 1;
+                  }
+                });
+                const overridePatterns = Object.entries(overridePairs).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+                // Confidence distribution
+                const confBands = [
+                  { label: "90+",    min: 90, max: 100 },
+                  { label: "80~89",  min: 80, max: 89  },
+                  { label: "70~79",  min: 70, max: 79  },
+                  { label: "60~69",  min: 60, max: 69  },
+                  { label: "60미만", min: 0,  max: 59  },
+                ];
+                const confData = confBands.map(band => {
+                  const items = importPreview.items.filter(x => {
+                    const c = x.analysis?.confidenceScore ?? 0;
+                    return c >= band.min && c <= band.max;
+                  });
+                  return {
+                    ...band,
+                    count: items.length,
+                    approved: items.filter(x => rowOverrides[x.rowNum]?.reviewStatus === "approved").length,
+                    rejected: items.filter(x => rowOverrides[x.rowNum]?.reviewStatus === "rejected").length,
+                  };
+                });
+
+                // Priority insights
+                const insights: string[] = [];
+                if (rejectPatterns.length > 0) insights.push(`가장 빈번한 제외 사유: "${rejectPatterns[0][0]}" ${rejectPatterns[0][1]}건`);
+                const lowConfApproved = importPreview.items.filter(x => (x.analysis?.confidenceScore ?? 0) < 60 && rowOverrides[x.rowNum]?.reviewStatus === "approved").length;
+                if (lowConfApproved > 0) insights.push(`신뢰도 60미만 승인 항목 ${lowConfApproved}건 — 재검토 권장`);
+                const pendingUnsafe = importPreview.items.filter(x => !isSafe(x) && (rowOverrides[x.rowNum]?.reviewStatus ?? "pending") === "pending").length;
+                if (pendingUnsafe > 0) insights.push(`검토필요 보류 항목 ${pendingUnsafe}건 남음`);
+
+                const statCard = (label: string, value: number, color: string, showPct?: boolean) => (
+                  <div key={label} style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 12px", minWidth: 66, textAlign: "center", flex: "0 0 auto" }}>
+                    <div style={{ fontSize: 17, fontWeight: 700, color }}>{value}</div>
+                    <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1 }}>{label}</div>
+                    {showPct && <div style={{ fontSize: 10, fontWeight: 700, color }}>{pct(value)}%</div>}
+                  </div>
+                );
+
+                return (
+                  <div style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb", padding: "12px 16px" }}>
+                    {/* Summary */}
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+                      {statCard("총 항목", total, "#374151")}
+                      {statCard("승인", apvd, "#059669", true)}
+                      {statCard("제외", rjcd, "#dc2626", true)}
+                      {statCard("수정됨", ovrd, "#7c3aed", true)}
+                      {statCard("보류", pndg, "#6b7280", true)}
+                    </div>
+
+                    {/* 3-panel row */}
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      {/* Reject Pattern */}
+                      <div style={{ flex: "1 1 150px", background: "#fff", border: "1px solid #fca5a5", borderRadius: 8, padding: "8px 12px" }}>
+                        <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: "#dc2626" }}>🚫 제외 패턴</p>
+                        {rejectPatterns.length === 0
+                          ? <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>없음</p>
+                          : rejectPatterns.map(([reason, count]) => (
+                            <div key={reason} style={{ display: "flex", justifyContent: "space-between", marginBottom: 3, gap: 6 }}>
+                              <span style={{ fontSize: 11, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{reason}</span>
+                              <strong style={{ fontSize: 11, color: "#dc2626", flexShrink: 0 }}>{count}</strong>
+                            </div>
+                          ))
+                        }
+                      </div>
+
+                      {/* Override Pattern */}
+                      <div style={{ flex: "1 1 190px", background: "#fff", border: "1px solid #c4b5fd", borderRadius: 8, padding: "8px 12px" }}>
+                        <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: "#7c3aed" }}>✏️ 수정 패턴 (Top 5)</p>
+                        {overridePatterns.length === 0
+                          ? <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>없음</p>
+                          : overridePatterns.map(([pair, count]) => (
+                            <div key={pair} style={{ display: "flex", justifyContent: "space-between", marginBottom: 3, gap: 6 }}>
+                              <span style={{ fontSize: 11, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pair}</span>
+                              <strong style={{ fontSize: 11, color: "#7c3aed", flexShrink: 0 }}>{count}</strong>
+                            </div>
+                          ))
+                        }
+                      </div>
+
+                      {/* Confidence Distribution */}
+                      <div style={{ flex: "1 1 170px", background: "#fff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "8px 12px" }}>
+                        <p style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700, color: "#1d4ed8" }}>📊 신뢰도 분포</p>
+                        {confData.map(band => band.count === 0 ? null : (
+                          <div key={band.label} style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+                            <span style={{ fontSize: 10, color: "#6b7280", width: 38, flexShrink: 0 }}>{band.label}</span>
+                            <div style={{ flex: 1, height: 6, background: "#e5e7eb", borderRadius: 3, overflow: "hidden" }}>
+                              <div style={{ height: "100%", width: `${Math.round((band.count / total) * 100)}%`, background: band.min >= 80 ? "#059669" : band.min >= 60 ? "#d97706" : "#dc2626", borderRadius: 3 }} />
+                            </div>
+                            <span style={{ fontSize: 10, color: "#374151", width: 20, textAlign: "right", flexShrink: 0 }}>{band.count}</span>
+                            {band.approved > 0 && <span style={{ fontSize: 9, color: "#059669", flexShrink: 0 }}>✓{band.approved}</span>}
+                            {band.rejected > 0 && <span style={{ fontSize: 9, color: "#dc2626", flexShrink: 0 }}>✕{band.rejected}</span>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Priority Insights */}
+                    {insights.length > 0 && (
+                      <div style={{ marginTop: 10, background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "7px 12px" }}>
+                        <p style={{ margin: "0 0 4px", fontSize: 11, fontWeight: 700, color: "#92400e" }}>💡 우선 검토 인사이트</p>
+                        {insights.map((ins, i) => (
+                          <p key={i} style={{ margin: "2px 0 0", fontSize: 11, color: "#78350f" }}>• {ins}</p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* 상태 탭 */}
               <div style={{ display: "flex", gap: 0, borderBottom: "1px solid #e5e7eb", background: "#fff", overflowX: "auto" }}>
