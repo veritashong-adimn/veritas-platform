@@ -197,6 +197,12 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [editingRowNum, setEditingRowNum] = useState<number | null>(null);
   const [editingValue, setEditingValue] = useState<string>("");
   const [importReviewFilter, setImportReviewFilter] = useState<"all" | "approved" | "rejected" | "pending" | "modified">("all");
+  const [bulkConfirmModal, setBulkConfirmModal] = useState<{
+    action: "approve" | "reject" | "override";
+    rows: ImportPreviewItem[];
+  } | null>(null);
+  const [bulkRejectReason, setBulkRejectReason] = useState("");
+  const [bulkOverrideValue, setBulkOverrideValue] = useState("");
   const [productRequests, setProductRequests] = useState<ProductRequest[]>([]);
   const [productRequestsLoading, setProductRequestsLoading] = useState(false);
   const [productRequestStatusFilter, setProductRequestStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
@@ -340,6 +346,51 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     if (!reviewSession || !importPreview) return;
     saveReviewSession({ session: reviewSession, importPreview, rowOverrides });
   }, [reviewSession, importPreview, rowOverrides]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Bulk Review 핸들러 ─────────────────────────────────────────────────
+  const executeBulkApprove = (rows: ImportPreviewItem[]) => {
+    const now = new Date().toISOString();
+    setRowOverrides(prev => {
+      const next = { ...prev };
+      rows.forEach(item => {
+        const base = next[item.rowNum] ?? { reviewStatus: "pending" as const, rejectReason: "", overriddenCandidate: undefined, originalCandidate: item.analysis?.productCandidate ?? "" };
+        next[item.rowNum] = { ...base, reviewStatus: "approved", reviewedAt: now };
+      });
+      return next;
+    });
+    setBulkConfirmModal(null);
+    setSelectedRows(new Set());
+  };
+
+  const executeBulkReject = (rows: ImportPreviewItem[], reason: string) => {
+    const now = new Date().toISOString();
+    setRowOverrides(prev => {
+      const next = { ...prev };
+      rows.forEach(item => {
+        const base = next[item.rowNum] ?? { reviewStatus: "pending" as const, rejectReason: "", overriddenCandidate: undefined, originalCandidate: item.analysis?.productCandidate ?? "" };
+        next[item.rowNum] = { ...base, reviewStatus: "rejected", rejectReason: reason, reviewedAt: now };
+      });
+      return next;
+    });
+    setBulkConfirmModal(null);
+    setBulkRejectReason("");
+    setSelectedRows(new Set());
+  };
+
+  const executeBulkOverride = (rows: ImportPreviewItem[], candidate: string) => {
+    setRowOverrides(prev => {
+      const next = { ...prev };
+      rows.forEach(item => {
+        const aiOriginal = item.analysis?.productCandidate ?? "";
+        const ex = next[item.rowNum] ?? { reviewStatus: "pending" as const, rejectReason: "", overriddenCandidate: undefined, originalCandidate: aiOriginal };
+        next[item.rowNum] = { ...ex, overriddenCandidate: candidate, originalCandidate: ex.originalCandidate || aiOriginal };
+      });
+      return next;
+    });
+    setBulkConfirmModal(null);
+    setBulkOverrideValue("");
+    setSelectedRows(new Set());
+  };
 
   // ─── 상품 저장 ──────────────────────────────────────────────────────────
   const handleSaveProduct = async () => {
@@ -1354,6 +1405,43 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 </div>
               )}
 
+              {/* Bulk Review Toolbar — 선택 항목 있을 때만 표시 */}
+              {selectedRows.size > 0 && (() => {
+                const selItems = importPreview.items.filter(x => selectedRows.has(x.rowNum));
+                const selApproved = selItems.filter(x => rowOverrides[x.rowNum]?.reviewStatus === "approved").length;
+                const selRejected = selItems.filter(x => rowOverrides[x.rowNum]?.reviewStatus === "rejected").length;
+                const selPending = selItems.length - selApproved - selRejected;
+                return (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 14px", background: "#eff6ff", borderBottom: "1px solid #bfdbfe", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#1d4ed8", flexShrink: 0 }}>
+                      선택 {selectedRows.size}건
+                    </span>
+                    <span style={{ fontSize: 11, color: "#6b7280", paddingRight: 8, borderRight: "1px solid #bfdbfe" }}>
+                      승인 {selApproved} · 제외 {selRejected} · 보류 {selPending}
+                    </span>
+                    <button
+                      onClick={() => setBulkConfirmModal({ action: "approve", rows: selItems })}
+                      style={{ fontSize: 11, padding: "4px 11px", borderRadius: 5, border: "none", background: "#059669", color: "#fff", cursor: "pointer", fontWeight: 700 }}>
+                      ✅ 일괄 승인
+                    </button>
+                    <button
+                      onClick={() => { setBulkRejectReason(""); setBulkConfirmModal({ action: "reject", rows: selItems }); }}
+                      style={{ fontSize: 11, padding: "4px 11px", borderRadius: 5, border: "none", background: "#dc2626", color: "#fff", cursor: "pointer", fontWeight: 700 }}>
+                      🚫 일괄 제외
+                    </button>
+                    <button
+                      onClick={() => { setBulkOverrideValue(""); setBulkConfirmModal({ action: "override", rows: selItems }); }}
+                      style={{ fontSize: 11, padding: "4px 11px", borderRadius: 5, border: "1px solid #7c3aed", background: "#f5f3ff", color: "#7c3aed", cursor: "pointer", fontWeight: 700 }}>
+                      ✏️ Product 일괄 수정
+                    </button>
+                    <button onClick={() => setSelectedRows(new Set())}
+                      style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, border: "1px solid #d1d5db", background: "#fff", color: "#9ca3af", cursor: "pointer", marginLeft: "auto" }}>
+                      ✕ 선택 해제
+                    </button>
+                  </div>
+                );
+              })()}
+
               {/* 카운트 바 */}
               <div style={{ display: "flex", gap: 14, padding: "6px 16px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", fontSize: 12, flexWrap: "wrap", alignItems: "center" }}>
                 <span style={{ color: "#374151" }}>신규 <strong style={{ color: "#059669" }}>{s.new}</strong></span>
@@ -1926,6 +2014,128 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 {importExecuting ? "등록 중..." : `${importConfirmModal.rows.length}건 등록 확인`}
               </button>
               <GhostBtn onClick={() => setImportConfirmModal(null)} style={{ fontSize: 13, padding: "10px 20px" }}>취소</GhostBtn>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* Bulk Review 확인 모달 */}
+      {bulkConfirmModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1015 }}>
+          <Card style={{ width: 460, padding: "28px 32px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+              <div style={{ width: 40, height: 40, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0, background: bulkConfirmModal.action === "approve" ? "#dcfce7" : bulkConfirmModal.action === "reject" ? "#fee2e2" : "#f5f3ff" }}>
+                {bulkConfirmModal.action === "approve" ? "✅" : bulkConfirmModal.action === "reject" ? "🚫" : "✏️"}
+              </div>
+              <div>
+                <p style={{ margin: 0, fontWeight: 700, fontSize: 16, color: "#111827" }}>
+                  {bulkConfirmModal.action === "approve" ? "일괄 승인 확인" : bulkConfirmModal.action === "reject" ? "일괄 제외 확인" : "Product 일괄 수정 확인"}
+                </p>
+                <p style={{ margin: "2px 0 0", fontSize: 12, color: "#9ca3af" }}>선택된 {bulkConfirmModal.rows.length}건에 적용됩니다</p>
+              </div>
+            </div>
+
+            {/* 통계 */}
+            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", marginBottom: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontSize: 13 }}>
+                <span style={{ color: "#6b7280" }}>대상 항목</span>
+                <strong style={{ color: bulkConfirmModal.action === "approve" ? "#059669" : bulkConfirmModal.action === "reject" ? "#dc2626" : "#7c3aed" }}>
+                  {bulkConfirmModal.rows.length}건
+                </strong>
+              </div>
+              {bulkConfirmModal.action !== "override" && (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 2 }}>
+                    <span style={{ color: "#9ca3af" }}>현재 승인됨</span>
+                    <span>{bulkConfirmModal.rows.filter(x => rowOverrides[x.rowNum]?.reviewStatus === "approved").length}건</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                    <span style={{ color: "#9ca3af" }}>현재 제외됨</span>
+                    <span>{bulkConfirmModal.rows.filter(x => rowOverrides[x.rowNum]?.reviewStatus === "rejected").length}건</span>
+                  </div>
+                </>
+              )}
+              {bulkConfirmModal.action === "override" && (
+                <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
+                  선택된 {bulkConfirmModal.rows.length}건의 Product 후보가 아래 입력값으로 일괄 변경됩니다.<br />
+                  기존 AI 추천값은 취소선으로 보존됩니다.
+                </p>
+              )}
+            </div>
+
+            {/* Reject: 사유 선택 (필수) */}
+            {bulkConfirmModal.action === "reject" && (
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ margin: "0 0 7px", fontSize: 13, fontWeight: 700, color: "#dc2626" }}>⚠ 제외 사유 선택 (필수)</p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {["프로젝트명", "내부업무", "Product 아님", "설명형 텍스트", "중복 의미", "운영성 항목"].map(r => (
+                    <button key={r} onClick={() => setBulkRejectReason(r)}
+                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 5, cursor: "pointer", fontWeight: bulkRejectReason === r ? 700 : 400, background: bulkRejectReason === r ? "#fee2e2" : "#f9fafb", color: bulkRejectReason === r ? "#dc2626" : "#374151", border: `1px solid ${bulkRejectReason === r ? "#fca5a5" : "#e5e7eb"}` }}>
+                      {r}
+                    </button>
+                  ))}
+                </div>
+                {!bulkRejectReason && (
+                  <p style={{ margin: "5px 0 0", fontSize: 11, color: "#9ca3af" }}>사유를 선택해야 제외 실행이 가능합니다.</p>
+                )}
+              </div>
+            )}
+
+            {/* Override: 새 후보명 입력 (필수) */}
+            {bulkConfirmModal.action === "override" && (
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ margin: "0 0 6px", fontSize: 13, fontWeight: 700, color: "#7c3aed" }}>새 Product 후보명 (필수)</p>
+                <input
+                  autoFocus
+                  value={bulkOverrideValue}
+                  onChange={e => setBulkOverrideValue(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && bulkOverrideValue.trim()) executeBulkOverride(bulkConfirmModal.rows, bulkOverrideValue.trim());
+                  }}
+                  placeholder="예: 번역, 통역, 영문 교정..."
+                  style={{ ...inputStyle, fontSize: 13, padding: "8px 12px", border: "1px solid #c4b5fd" }}
+                />
+                {!bulkOverrideValue.trim() && (
+                  <p style={{ margin: "4px 0 0", fontSize: 11, color: "#9ca3af" }}>값을 입력해야 일괄 수정이 가능합니다.</p>
+                )}
+              </div>
+            )}
+
+            {/* Reject 경고 */}
+            {bulkConfirmModal.action === "reject" && bulkRejectReason && (
+              <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "8px 12px", marginBottom: 14 }}>
+                <p style={{ margin: 0, fontSize: 12, color: "#dc2626", fontWeight: 700 }}>
+                  제외된 항목은 등록 안전장치에서 자동으로 제외됩니다.
+                </p>
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                disabled={
+                  (bulkConfirmModal.action === "reject" && !bulkRejectReason) ||
+                  (bulkConfirmModal.action === "override" && !bulkOverrideValue.trim())
+                }
+                onClick={() => {
+                  if (bulkConfirmModal.action === "approve") executeBulkApprove(bulkConfirmModal.rows);
+                  else if (bulkConfirmModal.action === "reject") executeBulkReject(bulkConfirmModal.rows, bulkRejectReason);
+                  else if (bulkConfirmModal.action === "override") executeBulkOverride(bulkConfirmModal.rows, bulkOverrideValue.trim());
+                }}
+                style={{
+                  flex: 1, padding: "10px 0", fontSize: 14, borderRadius: 8, fontWeight: 700, border: "none",
+                  color: "#fff",
+                  cursor: (bulkConfirmModal.action === "reject" && !bulkRejectReason) || (bulkConfirmModal.action === "override" && !bulkOverrideValue.trim()) ? "not-allowed" : "pointer",
+                  background: (bulkConfirmModal.action === "reject" && !bulkRejectReason) || (bulkConfirmModal.action === "override" && !bulkOverrideValue.trim())
+                    ? "#9ca3af"
+                    : bulkConfirmModal.action === "approve" ? "#059669" : bulkConfirmModal.action === "reject" ? "#dc2626" : "#7c3aed",
+                }}>
+                {bulkConfirmModal.action === "approve"
+                  ? `${bulkConfirmModal.rows.length}건 승인`
+                  : bulkConfirmModal.action === "reject"
+                  ? `${bulkConfirmModal.rows.length}건 제외`
+                  : `${bulkConfirmModal.rows.length}건 수정`}
+              </button>
+              <GhostBtn onClick={() => setBulkConfirmModal(null)} style={{ fontSize: 13, padding: "10px 20px" }}>취소</GhostBtn>
             </div>
           </Card>
         </div>

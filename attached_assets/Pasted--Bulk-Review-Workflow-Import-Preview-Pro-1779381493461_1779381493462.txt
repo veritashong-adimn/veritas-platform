@@ -1,0 +1,235 @@
+지시문 — Bulk Review Workflow (대량 검토 워크플로우) 구축
+
+현재 상품 마스터 Import Preview는 다음 단계까지 완료된 상태입니다.
+
+- Product / Option 구조
+- Import Preview 기반 검토 구조
+- Sticky Header
+- 등록 안전장치
+- Confidence Score
+- Review Reason
+- Canonical Stabilization
+- Review Workflow
+- 승인 / 제외 / 보류 상태
+- Manual Override
+- Reject Reason
+- Review Persistence
+- Session Restore
+- Override History 표시
+
+현재 상태는:
+“운영자가 1건씩 검토 가능”
+한 상태입니다.
+
+이번 작업 목표는:
+
+“운영자가 수십~수백 건을 빠르게 검토할 수 있는 구조”
+
+를 만드는 것입니다.
+
+중요:
+- 기존 Import Preview 구조 유지
+- Sticky Header 유지
+- 기존 등록 안전장치 유지
+- Review Persistence 유지
+- Product/Option 철학 유지
+- DB schema 대규모 변경 금지
+- AI 자동학습 구현 금지
+- 자동 승인/자동 제외 구현 금지
+
+이번 단계는:
+Bulk Review Workflow(대량 검토 워크플로우)
+초기 구조만 구현합니다.
+
+핵심 목표
+
+현재:
+1건씩 승인/제외/수정
+
+다음:
+선택한 다수 항목을:
+- 한 번에 승인
+- 한 번에 제외
+- 한 번에 canonical 수정
+
+가능하게.
+
+즉:
+“운영 검토 속도 최적화”
+가 목표입니다.
+
+수정 요청
+
+1. Bulk Review Toolbar 추가
+
+현재 checkbox 선택 구조는 이미 존재합니다.
+
+추가:
+선택된 항목이 있을 경우 Preview 상단에 Bulk Toolbar를 표시해 주세요.
+
+예:
+- 선택 35건 승인
+- 선택 35건 제외
+- 선택 항목 Product 일괄 수정
+
+중요:
+선택 없을 때는 toolbar 숨김.
+
+2. Bulk Approve 구현
+
+선택 항목 전체를:
+reviewStatus = approved
+
+로 한 번에 변경 가능하게.
+
+중요:
+- 기존 row별 상태 UI와 동기화
+- 승인 카운트 즉시 반영
+
+3. Bulk Reject 구현
+
+선택 항목 전체를:
+reviewStatus = rejected
+
+로 일괄 변경 가능하게.
+
+추가:
+rejectReason을 먼저 선택하도록 해 주세요.
+
+예:
+- 프로젝트명
+- 내부업무
+- Product 아님
+- 설명형 텍스트
+- 중복 의미
+- 운영성 항목
+
+중요:
+reason 없이 reject 실행 금지.
+
+4. Bulk Override 구현
+
+매우 중요.
+
+선택된 여러 항목의 Product 후보를:
+한 번에 canonical 수정 가능하게 해 주세요.
+
+예:
+
+선택:
+- 영문화
+- 영어번역
+- 영문작업
+
+↓
+
+일괄 수정:
+- 번역
+
+처리 결과:
+- overriddenCandidate 저장
+- originalCandidate 유지
+- 수정됨 상태 반영
+
+중요:
+기존 override history 구조 유지.
+
+5. Bulk Action 확인 모달
+
+대량 작업은 위험하므로:
+실행 전 확인 모달 추가.
+
+예:
+- 승인 대상 수
+- 제외 대상 수
+- override 대상 수
+- 변경될 canonical 값
+
+등 표시.
+
+특히:
+Bulk Reject는 경고 강조.
+
+6. Bulk Action 대상 조건 표시
+
+Toolbar에 현재 선택 상태를 명확히 표시.
+
+예:
+- 선택 35건
+- 승인 예정 30
+- 제외 예정 5
+- 수정됨 12
+
+등.
+
+7. 기존 Review Persistence 연동
+
+Bulk 작업도:
+기존 persistence 구조와 연결.
+
+즉:
+- reviewStatus 저장
+- overriddenCandidate 저장
+- rejectReason 저장
+- reviewedAt 갱신
+- reviewedBy 유지
+
+등 기존 구조 정상 반영.
+
+8. 기존 구조 유지
+
+다음은 절대 깨지면 안 됩니다.
+
+- Sticky Header
+- Import Preview flow
+- 등록 안전장치
+- 기존 필터/정렬
+- Review Session
+- Session Restore
+- Override History
+- Confidence/ReviewReason 표시
+
+9. 이번 단계에서 하지 않는 것
+
+중요:
+아직 구현 금지.
+
+- AI 자동학습
+- 자동 canonical 생성
+- 자동 confidence 조정
+- 자동 승인
+- 자동 제외
+- AI retraining
+- 실제 ML 학습 구조
+
+현재는:
+“운영 대량 검토 UX”
+만 구현.
+
+10. 검증
+
+수정 후 다음 확인해 주세요.
+
+- Babel/TypeScript 통과
+- 기존 Preview 정상 렌더링
+- Sticky Header 유지
+- 기존 등록 안전장치 유지
+- Bulk Approve 정상
+- Bulk Reject 정상
+- Bulk Override 정상
+- Bulk 작업 후 persistence 유지
+- 새로고침 후 상태 유지
+- 기존 row별 override와 충돌 없음
+- 선택/필터/정렬 동시 사용 시 오류 없음
+- HMR 오류 없음
+
+최종 보고 시 다음 형식으로 알려 주세요.
+
+1. 수정 파일
+2. 추가된 Bulk Workflow 구조
+3. Bulk Approve 방식
+4. Bulk Reject 방식
+5. Bulk Override 방식
+6. Persistence 연동 방식
+7. 확인 모달 구조
+8. 검증 결과
