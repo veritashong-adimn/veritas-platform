@@ -16,7 +16,7 @@ type ImportPreviewItem = {
   status: "new" | "duplicate" | "conflict" | "review";
   issues: string[]; suggestedType: string;
   duplicateOf: { code: string; name: string }[];
-  analysis: { productCandidate: string; langPair: string; direction: string; difficulty: string; industry: string; industry2: string; isOptionCandidate: boolean; confidenceScore: number; reviewReasons: string[]; displayName?: string };
+  analysis: { productCandidate: string; langPair: string; direction: string; difficulty: string; industry: string; industry2: string; isOptionCandidate: boolean; confidenceScore: number; reviewReasons: string[]; displayName?: string; domain?: string; langHint?: string };
 };
 
 type RowOverride = {
@@ -1879,13 +1879,20 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                                   MULTI_LANGUAGE_AMBIGUOUS:{ color: "#0891b2", background: "#ecfeff", border: "1px solid #a5f3fc" },
                                   DOMAIN_BASED:            { color: "#059669", background: "#f0fdf4", border: "1px solid #86efac" },
                                   MISSING_DIRECTION:          { color: "#d97706", background: "#fffbeb", border: "1px solid #fde68a" },
-                                  REGION_LANGUAGE_AMBIGUOUS:  { color: "#1d4ed8", background: "#eff6ff", border: "1px solid #bfdbfe" },
+                                  REGION_LANGUAGE_AMBIGUOUS:   { color: "#1d4ed8", background: "#eff6ff", border: "1px solid #bfdbfe" },
+                                  DOMAIN_SPECIALIZED_REVIEW:   { color: "#7c3aed", background: "#faf5ff", border: "1px solid #e9d5ff" },
                                 };
                                 const st = CODE_STYLE[r] ?? { color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a" };
                                 return (
                                   <span key={i} style={{ display: "inline-block", marginRight: 3, marginBottom: 2, fontSize: 10, borderRadius: 3, padding: "1px 4px", ...st }}>{r}</span>
                                 );
                               })}
+                              {an.domain && (
+                                <span style={{ display: "inline-block", marginRight: 3, marginBottom: 2, fontSize: 10, color: "#4f46e5", background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 3, padding: "1px 4px" }}>{an.domain}</span>
+                              )}
+                              {an.langHint && (
+                                <span style={{ display: "inline-block", marginRight: 3, marginBottom: 2, fontSize: 10, color: "#6d28d9", background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 3, padding: "1px 4px" }}>{an.langHint}</span>
+                              )}
                               {item.issues.filter(s => s.startsWith("유사 중복") || s.startsWith("taxonomy") || s.startsWith("단가") || s.startsWith("단위")).map((s, i) => (
                                 <span key={`iss-${i}`} style={{ display: "inline-block", marginRight: 3, color: "#9ca3af" }}>{s}</span>
                               ))}

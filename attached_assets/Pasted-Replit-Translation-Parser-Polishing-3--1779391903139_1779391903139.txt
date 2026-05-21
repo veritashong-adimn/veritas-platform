@@ -1,0 +1,232 @@
+Replit 지시문 — Translation Parser Polishing 3차 (감수/원어민감수 패턴 정규화)
+목표
+
+실제 운영 데이터 기반으로:
+
+감수
+원어민감수
+전문가감수
+감수추가
+
+계열을 패턴 기반으로 정규화한다.
+
+이번 작업은:
+
+❌ 개별 상품 하드코딩
+아니고
+
+⭕ 패턴 기반 Rule Engine 고도화
+
+방향으로 진행한다.
+
+수정 대상 파일
+artifacts/api-server/src/routes/products.ts
+
+필요 시 Preview 표시 보강:
+
+artifacts/web-app/src/components/admin/ProductManagementTab.tsx
+1. 감수 taxonomy 정규화
+목표
+
+감수 계열을 번역과 분리된 Product taxonomy로 정리.
+
+Product 정책
+패턴	Product
+감수	감수
+감수추가	감수
+전문가감수	감수
+원어민감수	원어민감수
+중요
+
+현재:
+
+그리스어원어민감수
+
+같은 항목이:
+
+Product = 원어민감수
+
+로 유지되도록 한다.
+
+2. 패턴 기반 원어민감수 처리
+목표
+
+개별 언어 하드코딩 금지.
+
+다음 패턴 전체 처리:
+
+[언어명] + 원어민감수
+예시
+원본	결과
+그리스어원어민감수	그리스어 원어민감수
+우즈베키스탄어원어민감수	우즈베키스탄어 원어민감수
+핀란드어원어민감수	핀란드어 원어민감수
+처리 규칙
+
+언어명 파싱 성공 시:
+
+productCandidate = "원어민감수";
+displayName = `${languageName} 원어민감수`;
+direction = null;
+3. 감수 패턴 처리
+목표
+
+“감수”, “감수추가”, “전문가 감수” 등을 구조화.
+
+패턴
+
+다음 패턴 지원:
+
+감수
+감수추가
+전문가감수
+전문가 감수
+처리 규칙
+감수
+productCandidate = "감수";
+displayName = "감수";
+감수추가
+productCandidate = "감수";
+displayName = "감수 추가";
+optionType = "additional_review";
+전문가 감수
+productCandidate = "감수";
+reviewLevel = "expert";
+4. 도메인 metadata 분리
+목표
+
+다음 구조를 metadata로 분리:
+
+SW교육 전문가 감수(영문)
+법률 감수(일문)
+의료 감수(중문)
+domain 추출
+
+다음 형태 지원:
+
+[도메인] 감수
+[도메인] 전문가 감수
+예시
+원본	domain
+SW교육 전문가 감수	SW교육
+법률 감수	법률
+의료 감수	의료
+IT 감수	IT
+저장 규칙
+metadata.domain = extractedDomain;
+5. (영문)/(일문)/(중문) 언어 힌트 처리
+목표
+
+괄호 언어 힌트를 metadata로 분리.
+
+지원 패턴
+(영문)
+(일문)
+(중문)
+(국문)
+처리 규칙
+표현	languageHint
+영문	en
+일문	ja
+중문	zh
+국문	ko
+저장
+metadata.languageHint = "en";
+6. direction nullable 안정화
+목표
+
+감수 계열은 direction 필수 아님.
+
+규칙
+
+다음 Product는:
+
+감수
+원어민감수
+
+direction 없어도 정상 처리.
+
+즉:
+
+direction = null;
+
+허용.
+
+7. displayName 자연어 생성
+목표
+
+운영자가 읽기 쉬운 자연어 표시명 생성.
+
+예시
+원본	displayName
+감수	감수
+감수추가	감수 추가
+SW교육 전문가 감수(영문)	SW교육 영문 감수
+그리스어원어민감수	그리스어 원어민감수
+8. reviewReason 추가
+신규 코드
+DOMAIN_SPECIALIZED_REVIEW
+적용 대상
+SW교육 전문가 감수
+법률 감수
+의료 감수
+
+등 domain 기반 감수 상품.
+
+9. Preview UI 표시 개선
+목표
+
+감수 metadata를 compact하게 표시.
+
+Product 후보 아래 chip 표시
+
+예:
+
+SW교육
+영문
+전문가감수
+
+badge 형태.
+
+기존 UI compact 유지.
+
+10. 중요한 설계 원칙
+
+이번 작업은:
+
+❌ 개별 상품 하드코딩
+아니고
+
+⭕ 패턴 기반 canonicalization engine
+
+확장이다.
+
+즉 앞으로:
+
+[언어] + 원어민감수
+[도메인] + 감수
+[도메인] + 전문가감수 + (언어힌트)
+
+패턴 전체가 자동 처리되도록 설계한다.
+
+검증
+
+수정 후 반드시 확인:
+
+원본	기대 결과
+감수	감수
+감수추가	감수 추가
+SW교육 전문가 감수(영문)	SW교육 영문 감수
+그리스어원어민감수	그리스어 원어민감수
+우즈베키스탄어원어민감수	우즈베키스탄어 원어민감수
+안정성 확인
+
+수정 후 확인:
+
+✅ Preview 정상 렌더
+✅ 기존 translation parser 영향 없음
+✅ 기존 persistence 유지
+✅ 기존 analytics 영향 없음
+✅ 기존 bulk workflow 유지
+✅ direction nullable 정상 유지
+✅ reviewReason badge 정상 표시
