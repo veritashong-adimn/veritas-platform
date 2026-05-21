@@ -324,6 +324,23 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
 
   useEffect(() => { fetchProductRequests(); }, [productRequestStatusFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── 마운트 시 이전 세션 복원 ───────────────────────────────────────────────
+  useEffect(() => {
+    const saved = loadReviewSession();
+    if (saved) {
+      setImportPreview(saved.importPreview);
+      setRowOverrides(saved.rowOverrides);
+      setReviewSession(saved.session);
+      setSessionRestored(true);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── rowOverrides / importPreview 변경 시 자동 저장 ────────────────────────
+  useEffect(() => {
+    if (!reviewSession || !importPreview) return;
+    saveReviewSession({ session: reviewSession, importPreview, rowOverrides });
+  }, [reviewSession, importPreview, rowOverrides]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── 상품 저장 ──────────────────────────────────────────────────────────
   const handleSaveProduct = async () => {
     const effectiveName = productNameCustom ? productForm.name.trim() : autoName(productForm);
@@ -519,13 +536,24 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     setEditingRowNum(null);
     setEditingValue("");
     setImportReviewFilter("all");
+    setReviewSession(null);
+    setSessionRestored(false);
+    clearReviewSession();
     try {
       const form = new FormData();
       form.append("file", file);
       const res = await fetch(api("/api/admin/products/import/preview"), { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form });
       const data = await res.json();
       if (!res.ok) { setToast(data.error ?? "미리보기 실패"); return; }
+      const newSession: ReviewSessionMeta = {
+        sessionId: `rs_${Date.now()}`,
+        fileName: data.fileName ?? file.name,
+        uploadedAt: new Date().toISOString(),
+        totalRows: data.summary?.total ?? 0,
+      };
+      setReviewSession(newSession);
       setImportPreview(data);
+      saveReviewSession({ session: newSession, importPreview: data, rowOverrides: {} });
     } finally {
       setProductImporting(false);
       if (productImportRef.current) productImportRef.current.value = "";
@@ -547,6 +575,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
       setImportPreview(null);
       setImportConfirmModal(null);
       setSelectedRows(new Set());
+      clearReviewSession();
+      setReviewSession(null);
+      setSessionRestored(false);
+      setRowOverrides({});
       if (data.created > 0) await fetchProducts();
       setToast(`✅ ${data.created}건 등록 완료${data.errors?.length ? ` (오류 ${data.errors.length}건)` : ""}`);
     } finally {
@@ -1299,6 +1331,29 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 </div>
               </div>
 
+              {/* 세션 복원/진행 바 */}
+              {(sessionRestored || reviewSession) && (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 16px", background: sessionRestored ? "#fffbeb" : "#f0f9ff", borderBottom: "1px solid #e5e7eb", fontSize: 11, gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ color: sessionRestored ? "#92400e" : "#0369a1" }}>
+                    {sessionRestored
+                      ? `📂 이전 세션 복원됨 — ${reviewSession?.fileName ?? ""} · ${reviewSession?.uploadedAt ? new Date(reviewSession.uploadedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""} · 승인 ${approvedCount} / 제외 ${rejectedCount} / 수정 ${modifiedCount}`
+                      : `💾 세션 자동 저장 중 — ${reviewSession?.fileName ?? ""}`}
+                  </span>
+                  <button
+                    onClick={() => {
+                      clearReviewSession();
+                      setReviewSession(null);
+                      setSessionRestored(false);
+                      setRowOverrides({});
+                      setImportPreview(null);
+                      setSelectedRows(new Set());
+                    }}
+                    style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, border: "1px solid #d97706", background: "#fffbeb", color: "#92400e", cursor: "pointer", fontWeight: 600, flexShrink: 0 }}>
+                    초기화
+                  </button>
+                </div>
+              )}
+
               {/* 카운트 바 */}
               <div style={{ display: "flex", gap: 14, padding: "6px 16px", background: "#f8fafc", borderBottom: "1px solid #e5e7eb", fontSize: 12, flexWrap: "wrap", alignItems: "center" }}>
                 <span style={{ color: "#374151" }}>신규 <strong style={{ color: "#059669" }}>{s.new}</strong></span>
@@ -1413,21 +1468,28 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                                 const eff = getEffectiveCandidate(item);
                                 const isOverridden = rowOverrides[item.rowNum]?.overriddenCandidate !== undefined;
                                 return (
-                                  <span
-                                    title={isOverridden
-                                      ? `AI 추천: ${an.productCandidate} → 수정: ${eff} (클릭하여 재수정)`
-                                      : `AI 분석 추천값 — 클릭하여 수정`}
-                                    onClick={() => { setEditingRowNum(item.rowNum); setEditingValue(eff); }}
-                                    style={{
-                                      fontSize: 11, cursor: "text",
-                                      color: isOverridden ? "#7c3aed" : "#374151",
-                                      fontWeight: isOverridden ? 700 : 500,
-                                      background: isOverridden ? "#f5f3ff" : "#f3f4f6",
-                                      borderRadius: 3, padding: "1px 6px",
-                                      border: `1px solid ${isOverridden ? "#c4b5fd" : "#e5e7eb"}`,
-                                    }}>
-                                    {eff || <span style={{ color: "#c4c4c4" }}>—</span>}
-                                  </span>
+                                  <>
+                                    <span
+                                      title={isOverridden
+                                        ? `AI 추천: ${an.productCandidate} → 수정: ${eff} (클릭하여 재수정)`
+                                        : `AI 분석 추천값 — 클릭하여 수정`}
+                                      onClick={() => { setEditingRowNum(item.rowNum); setEditingValue(eff); }}
+                                      style={{
+                                        fontSize: 11, cursor: "text",
+                                        color: isOverridden ? "#7c3aed" : "#374151",
+                                        fontWeight: isOverridden ? 700 : 500,
+                                        background: isOverridden ? "#f5f3ff" : "#f3f4f6",
+                                        borderRadius: 3, padding: "1px 6px",
+                                        border: `1px solid ${isOverridden ? "#c4b5fd" : "#e5e7eb"}`,
+                                      }}>
+                                      {eff || <span style={{ color: "#c4c4c4" }}>—</span>}
+                                    </span>
+                                    {isOverridden && rowOverrides[item.rowNum]?.originalCandidate && rowOverrides[item.rowNum].originalCandidate !== eff && (
+                                      <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1, textDecoration: "line-through", lineHeight: "13px" }}>
+                                        {rowOverrides[item.rowNum].originalCandidate}
+                                      </div>
+                                    )}
+                                  </>
                                 );
                               })()}
                               {an.isOptionCandidate && (
