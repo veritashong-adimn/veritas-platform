@@ -493,6 +493,7 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "싱할라어",     code: "si",  label: "싱할라어" },
   { m: "히브리어",     code: "he",  label: "히브리어" },
   // 2음절 alias
+  { m: "독어", code: "de", label: "독일어" },   // "독어사용장비" 등에서 "독" 단음절 오파싱 방지
   { m: "스웨", code: "sv", label: "스웨덴어" },
   { m: "세르", code: "sr", label: "세르비아어" },
   { m: "불가", code: "bg", label: "불가리아어" },
@@ -525,19 +526,36 @@ const LANG_ENTRIES: LangEntry[] = [
 const SORTED_LANG_ENTRIES: LangEntry[] = [...LANG_ENTRIES].sort((a, b) => b.m.length - a.m.length);
 
 // Canonical service type dictionary (긴 패턴 우선)
+// 중요: 장비 계열을 통역/번역 패턴보다 반드시 먼저 배치해야 "동시통역장비"가 오분류되지 않음
 const CANONICAL_PRODUCTS: [RegExp, string][] = [
-  [/원어민감수/, "원어민감수"],
-  [/공증번역/,   "공증번역"],
-  [/화상통역/,   "화상통역"],
-  [/전화통역/,   "전화통역"],
-  [/수행통역/,   "수행통역"],
-  [/동시통역/,   "동시통역"],
-  [/순차통역/,   "순차통역"],
-  [/통역/,       "통역"],
-  // 영문화/국문화/한글화 계열 → 번역으로 흡수 (번역 entry 이전에 배치)
+  // ── 장비 계열 ─────────────────────────────────────────────────────────────
+  [/동시통역\s*장비/,               "동시통역장비"],
+  [/위스퍼링\s*장비/,               "위스퍼링장비"],
+  [/PA\s*장비|PA\s*시스템/i,        "PA장비"],
+  [/통역\s*부스/,                   "통역부스"],
+  [/통역용?\s*장비|통역\s*장비/,    "통역장비"],
+  [/사용\s*장비/,                   "통역장비"],  // "독어사용장비" workName 잔여 처리
+  [/수신기/,                        "수신기"],
+  [/송신기/,                        "송신기"],
+  [/헤드셋/,                        "헤드셋"],
+  // ── 번역 계열 ─────────────────────────────────────────────────────────────
+  [/원어민감수/,                    "원어민감수"],
+  [/공증번역/,                      "공증번역"],
   [/영문화|국문화|한글화|영문작업|영문번역|영어번역/, "번역"],
-  [/번역/,       "번역"],
-  [/감수/,       "감수"],
+  [/번역/,                          "번역"],
+  [/감수/,                          "감수"],
+  // ── 통역 subtype (구체적인 것 먼저, generic fallback 마지막) ───────────────
+  [/수행비서통역/,                  "수행비서통역"],
+  [/전시회통역/,                    "전시회통역"],
+  [/미팅통역/,                      "미팅통역"],
+  [/현장통역/,                      "현장통역"],
+  [/위스퍼링통역/,                  "위스퍼링통역"],
+  [/화상통역/,                      "화상통역"],
+  [/전화통역/,                      "전화통역"],
+  [/수행통역/,                      "수행통역"],
+  [/동시통역/,                      "동시통역"],
+  [/순차통역/,                      "순차통역"],
+  [/통역/,                          "통역"],      // generic fallback — 최후 수단
 ];
 
 const COUNTRY_KEYWORDS = ["스위스", "벨기에", "유럽", "동남아", "중동", "아프리카"];
@@ -560,9 +578,9 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   const skipLangDetect  = hasCountryKw || hasRegionLangKw;
 
   if (!skipLangDetect) {
-    // ── Step 1: 범용 ISO pair 감지 (미지원 코드 포함 — xx→yy / xx-yy / xx_yy)
+    // ── Step 1: 범용 ISO pair 감지 (미지원 코드 포함 — xx→yy / xx↔yy / xx-yy / xx_yy)
     // 알려진 코드만이 아니라 2-3자 소문자 패턴 전부 캡처 → Product에 남지 않도록 제거
-    const anyPairRx = /\b([a-z]{2,3})[→\-_]([a-z]{2,3})\b/i;
+    const anyPairRx = /\b([a-z]{2,3})[→↔\-_]([a-z]{2,3})\b/i;
     const isoM = workName.match(anyPairRx);
     if (isoM) {
       srcCode  = isoM[1].toLowerCase();
@@ -643,7 +661,10 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   const hasDomainReview = !!(extractedDomain && (productCandidate === "감수" || isExpertReview));
 
   // ── Step 6: Language Pair (항상 관계형 ↔) + Direction (방향형)
-  const isInterp = productType === "interpretation" || /통역/.test(productCandidate);
+  // 장비 canonical 집합 — isInterp 계산 및 displayName 분기에 사용
+  const EQUIP_CANONICALS = new Set(["동시통역장비","위스퍼링장비","PA장비","통역부스","통역장비","수신기","송신기","헤드셋"]);
+  const isEquipCanonical = EQUIP_CANONICALS.has(productCandidate);
+  const isInterp = !isEquipCanonical && (productType === "interpretation" || /통역/.test(productCandidate));
   let langPair = ""; let direction = "";
 
   if (!skipLangDetect) {
@@ -660,6 +681,22 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   let displayName = skipLangDetect ? name.trim() : productCandidate;
   if (!skipLangDetect && productCandidate === "번역" && srcCode && tgtCode && ISO_LABEL[srcCode] && ISO_LABEL[tgtCode]) {
     displayName = `${ISO_LABEL[srcCode]}-${ISO_LABEL[tgtCode]} 번역`;
+  }
+
+  // ── Step 6b-2: 통역 subtype displayName — 언어쌍 포함 (운영자 검색성 강화)
+  // 예: "영어 ↔ 한국어 동시통역", "베트남어 ↔ 한국어 위스퍼링통역"
+  const INTERP_SUBTYPES = new Set(["동시통역","순차통역","위스퍼링통역","수행통역","전화통역","화상통역","미팅통역","전시회통역","현장통역","수행비서통역","통역"]);
+  if (!skipLangDetect && INTERP_SUBTYPES.has(productCandidate)) {
+    if (srcCode && tgtCode && ISO_LABEL[srcCode] && ISO_LABEL[tgtCode]) {
+      displayName = `${ISO_LABEL[srcCode]} ↔ ${ISO_LABEL[tgtCode]} ${productCandidate}`;
+    } else if (srcCode && srcCode !== "ko" && ISO_LABEL[srcCode]) {
+      displayName = `한국어 ↔ ${ISO_LABEL[srcCode]} ${productCandidate}`;
+    }
+  }
+
+  // ── Step 6b-3: 장비 displayName — 언어 포함 (예: "독일어 통역장비")
+  if (isEquipCanonical && srcLabel && !srcLabel.startsWith("미지원")) {
+    displayName = `${srcLabel} ${productCandidate}`;
   }
 
   // ── Step 6c: 감수/원어민감수 displayName 자연어 생성 + direction null화
@@ -724,10 +761,11 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
 }
 
 // ─── taxonomy 자동 추천 ──────────────────────────────────────────────────────
+// 중요: 장비 패턴을 통역 패턴보다 먼저 검사해야 "동시통역장비"가 equipment로 분류됨
 function suggestProductType(name: string, mainCategory?: string): string {
   const text = normalizeProdName((name ?? "") + (mainCategory ?? ""));
-  if (/동시통역|순차통역|수행통역|위스퍼링|화상통역|전화통역|출장이동|취소보상|할증|연장료|야간|휴일|대기료/.test(text)) return "interpretation";
-  if (/부스|리시버|fm장비|적외선|송신기|수신기|마이크|음향|엔지니어|설치|철수|장비/.test(text)) return "equipment";
+  if (/장비|부스|수신기|송신기|헤드셋|리시버|fm|마이크|음향|pa장비/.test(text)) return "equipment";
+  if (/동시통역|순차통역|수행통역|위스퍼링|화상통역|전화통역|미팅통역|전시회통역|현장통역|수행비서통역|출장이동|취소보상|할증|연장료|야간|휴일|대기료/.test(text)) return "interpretation";
   if (/배송|퀵|숙박|식비|식대|교통비|출장비|인쇄|우편|택배|실비/.test(text)) return "expense";
   if (/번역|감수|공증|원어민|교정/.test(text)) return "translation";
   return "";
