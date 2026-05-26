@@ -5,6 +5,9 @@ import { requireAuth, requireRole } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import multer from "multer";
 import * as XLSX from "xlsx";
+import { expandCompactPattern }    from "../lib/product-parser/compactPatternRules";
+import { REVIEW_REASONS, NON_PENALTY_REASONS } from "../lib/product-parser/reviewReasonRules";
+import { INTERP_SUBTYPES, EQUIP_CANONICALS } from "../lib/product-parser/displayNamePolicy";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -466,7 +469,7 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "말레이어",     code: "ms",  label: "말레이어" },
   { m: "체코어",       code: "cs",  label: "체코어" },
   // 광동어: yue 정식 지원 전 zh-hant fallback + CANTONESE_REVIEW 검토 플래그
-  { m: "광동어", code: "zh-hant", label: "중국어(번체)", reviewReason: "CANTONESE_REVIEW" },
+  { m: "광동어",  code: "zh-hant", label: "중국어(번체)", reviewReason: REVIEW_REASONS.CANTONESE_REVIEW },
   { m: "타밀어",       code: "ta",  label: "타밀어" },
   { m: "네팔어",       code: "ne",  label: "네팔어" },
   { m: "벵골어",       code: "bn",  label: "벵골어" },
@@ -479,9 +482,9 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "간체중국어",     code: "zh-hans", label: "중국어(간체)" },
   { m: "번체중국어",     code: "zh-hant", label: "중국어(번체)" },
   { m: "대만어",         code: "zh-hant", label: "중국어(번체)" },
-  { m: "홍콩어",         code: "zh-hant", label: "중국어(번체)" },
+  { m: "홍콩어",         code: "zh-hant", label: "중국어(번체)", reviewReason: REVIEW_REASONS.CANTONESE_REVIEW },
   // 모호 표현 — zh-hans 기본값, ZH_AMBIGUOUS 검토 필요
-  { m: "중국어",  code: "zh-hans", label: "중국어(간체)", reviewReason: "ZH_AMBIGUOUS" },
+  { m: "중국어",  code: "zh-hans", label: "중국어(간체)", reviewReason: REVIEW_REASONS.ZH_AMBIGUOUS },
   { m: "불어",         code: "fr",  label: "프랑스어" },
   { m: "독일어",       code: "de",  label: "독일어" },
   { m: "아랍어",       code: "ar",  label: "아랍어" },
@@ -492,17 +495,25 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "미얀마어",     code: "my",  label: "미얀마어" },
   { m: "싱할라어",     code: "si",  label: "싱할라어" },
   { m: "히브리어",     code: "he",  label: "히브리어" },
+  // ── 국가명 alias (COUNTRY_LANGUAGE_ALIAS) ─────────────────────────────────
+  // 국가명이 언어명으로 통용되는 경우 — 실제 언어코드로 매핑 + 검토 플래그
+  { m: "파키스탄어",   code: "ur",      label: "우르두어",   reviewReason: REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS },
+  { m: "이란어",       code: "fa",      label: "페르시아어", reviewReason: REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS },
+  { m: "튀르키예어",   code: "tr",      label: "터키어",     reviewReason: REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS },
+  { m: "이라크어",     code: "ar",      label: "아랍어",     reviewReason: REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS },
+  { m: "이집트어",     code: "ar",      label: "아랍어",     reviewReason: REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS },
+  { m: "브라질어",     code: "pt",      label: "포르투갈어", reviewReason: REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS },
   // 2음절 alias
   { m: "독어", code: "de", label: "독일어" },   // "독어사용장비" 등에서 "독" 단음절 오파싱 방지
   { m: "스웨", code: "sv", label: "스웨덴어" },
   { m: "세르", code: "sr", label: "세르비아어" },
   { m: "불가", code: "bg", label: "불가리아어" },
   { m: "크로", code: "hr", label: "크로아티아어" },
-  // 단음절
+  // 단음절 (separator 필수 — SEP_RX 가드 적용)
   { m: "한", code: "ko", label: "한국어" },
   { m: "영", code: "en", label: "영어" },
   { m: "일", code: "ja", label: "일본어" },
-  { m: "중", code: "zh-hans", label: "중국어(간체)", reviewReason: "ZH_AMBIGUOUS" },
+  { m: "중", code: "zh-hans", label: "중국어(간체)", reviewReason: REVIEW_REASONS.ZH_AMBIGUOUS },
   { m: "불", code: "fr", label: "프랑스어" },
   { m: "독", code: "de", label: "독일어" },
   { m: "스", code: "es", label: "스페인어" },
@@ -520,6 +531,8 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "헝", code: "hu", label: "헝가리어" },
   { m: "루", code: "ro", label: "루마니아어" },
   { m: "체", code: "cs", label: "체코어" },
+  { m: "터", code: "tr", label: "터키어" },
+  { m: "인", code: "id", label: "인도네시아어" },
 ];
 
 
@@ -546,16 +559,20 @@ const CANONICAL_PRODUCTS: [RegExp, string][] = [
   [/감수/,                          "감수"],
   // ── 통역 subtype (구체적인 것 먼저, generic fallback 마지막) ───────────────
   [/수행비서통역/,                  "수행비서통역"],
+  [/VIP\s*수행통역/i,              "VIP수행통역"],  // VIP수행 (수행통역보다 먼저)
   [/전시회통역/,                    "전시회통역"],
   [/미팅통역/,                      "미팅통역"],
   [/현장통역/,                      "현장통역"],
+  [/가이드통역/,                    "가이드통역"],   // 수행통역과 별개 canonical
   [/위스퍼링통역/,                  "위스퍼링통역"],
   [/화상통역/,                      "화상통역"],
   [/전화통역/,                      "전화통역"],
+  [/출장통역/,                      "수행통역"],    // 출장통역 = 수행통역 (운영상 동일)
   [/수행통역/,                      "수행통역"],
   [/동시통역/,                      "동시통역"],
+  [/일반통역/,                      "순차통역"],    // 일반통역 = 순차통역 (업계 표준)
   [/순차통역/,                      "순차통역"],
-  [/통역/,                          "통역"],      // generic fallback — 최후 수단
+  [/통역/,                          "통역"],        // generic fallback — 최후 수단
 ];
 
 const COUNTRY_KEYWORDS = ["스위스", "벨기에", "유럽", "동남아", "중동", "아프리카"];
@@ -569,6 +586,7 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
   let workName = name.trim();
   let srcCode = ""; let tgtCode = ""; let srcLabel = ""; let tgtLabel = "";
   const detectedLangReviewReasons: string[] = [];
+  let isCompactExpansion = false;
 
   // ── Step 0: 국가명·지역어·도메인·다국어 조기 감지
   const hasCountryKw    = COUNTRY_KEYWORDS.some(kw => name.includes(kw));
@@ -576,6 +594,18 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
   const hasDomainKw     = /할랄|코셔|종교|이슬람/.test(name);
   const hasMultiLangKw  = /다국어/.test(name);
   const skipLangDetect  = hasCountryKw || hasRegionLangKw;
+
+  // ── Step 0.5: Compact Pattern Pre-Expansion
+  // 한영번역, 태한번역 등 separator 없는 2-char 약어 쌍 → ISO pair 형식으로 expand
+  // 이후 Step 1 ISO pair 감지가 정상 처리하도록 workName을 변환
+  if (!skipLangDetect) {
+    const compact = expandCompactPattern(workName);
+    if (compact) {
+      workName = compact.expanded;
+      isCompactExpansion = true;
+      detectedLangReviewReasons.push(REVIEW_REASONS.COMPACT_DIRECTION_PATTERN);
+    }
+  }
 
   if (!skipLangDetect) {
     // ── Step 1: 범용 ISO pair 감지 (미지원 코드 포함 — xx→yy / xx↔yy / xx-yy / xx_yy)
@@ -667,8 +697,7 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
   const hasDomainReview = !!(extractedDomain && (productCandidate === "감수" || isExpertReview));
 
   // ── Step 6: Language Pair (항상 관계형 ↔) + Direction (방향형)
-  // 장비 canonical 집합 — isInterp 계산 및 displayName 분기에 사용
-  const EQUIP_CANONICALS = new Set(["동시통역장비","위스퍼링장비","PA장비","통역부스","통역장비","수신기","송신기","헤드셋"]);
+  // EQUIP_CANONICALS / INTERP_SUBTYPES → displayNamePolicy.ts에서 import
   const isEquipCanonical = EQUIP_CANONICALS.has(productCandidate);
   const isInterp = !isEquipCanonical && (productType === "interpretation" || /통역/.test(productCandidate));
   let langPair = ""; let direction = "";
@@ -692,7 +721,6 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
   // ── Step 6b-2: 통역 subtype displayName — 상품명 스타일 (운영자 검색성 강화)
   // 예: "영어-한국어 동시통역", "베트남어-한국어 위스퍼링통역"
   // displayName은 상품명 형식(-), direction 컬럼이 방향 정보(→/↔) 담당
-  const INTERP_SUBTYPES = new Set(["동시통역","순차통역","위스퍼링통역","수행통역","전화통역","화상통역","미팅통역","전시회통역","현장통역","수행비서통역","통역"]);
   if (!skipLangDetect && INTERP_SUBTYPES.has(productCandidate)) {
     if (srcCode && tgtCode && ISO_LABEL[srcCode] && ISO_LABEL[tgtCode]) {
       displayName = `${ISO_LABEL[srcCode]}-${ISO_LABEL[tgtCode]} ${productCandidate}`;
@@ -750,6 +778,8 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
   else if (productCandidate) score += 5;
   if (langPair) score += 15;
   if (direction && direction !== "bidirectional") score += 5;
+  // compact pattern은 명확한 언어쌍 신호 — 부스트 (정보성 reviewReason이므로 페널티 없음)
+  if (isCompactExpansion) score += 12;
   if (srcLabel.startsWith("미지원") || tgtLabel.startsWith("미지원")) score -= 20;
   if (!productCandidate) score -= 30;
   if (hasCountryKw)    score -= 30;
@@ -760,7 +790,9 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
   if (isProjDesc) score -= isCanonical ? 15 : 22;
   if (hasWorkDescKw && !isProjDesc) score -= 10;
   if (isOpsItem) score -= 12;
-  score -= reviewReasons.length * 6;
+  // NON_PENALTY_REASONS (정보성 사유)는 페널티 제외 — reviewReasonRules.ts 참조
+  const penaltyCount = reviewReasons.filter(r => !NON_PENALTY_REASONS.has(r)).length;
+  score -= penaltyCount * 6;
   const confidenceScore = Math.max(0, Math.min(100, score));
 
   const isOptionCandidate = !!(productCandidate && (tgtCode || (srcCode && srcCode !== "ko")));
