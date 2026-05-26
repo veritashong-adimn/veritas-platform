@@ -1853,7 +1853,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 {filtered.length === 0 ? (
                   <div style={{ textAlign: "center", padding: "24px 0", fontSize: 13, color: "#9ca3af" }}>해당 항목 없음</div>
                 ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1200 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1400 }}>
                     <thead>
                       <tr>
                         {/* 체크박스 헤더 */}
@@ -1867,9 +1867,15 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               }
                             }} />
                         </th>
-                        {["행", "상품명(canonical)", "Product 후보", "언어쌍", "방향", "유형", "단위", "단가", "상태", "이슈", "검토"].map(h => (
-                          <th key={h} style={thStyle}>{h}</th>
-                        ))}
+                        {(["행", "상품명(canonical)", "Product 후보", "언어쌍", "방향", "유형", "단위", "단가", "상태", "이슈", "검토"] as const).map(h => {
+                          const minW: Record<string, number> = {
+                            "상품명(canonical)": 220,
+                            "Product 후보":       180,
+                            "언어쌍":             200,
+                            "방향":               150,
+                          };
+                          return <th key={h} style={{ ...thStyle, minWidth: minW[h] }}>{h}</th>;
+                        })}
                       </tr>
                     </thead>
                     <tbody>
@@ -1907,7 +1913,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               return (
                                 <td
                                   title={showTooltip ? `원본: ${item.name}` : item.name}
-                                  style={{ padding: "4px 8px", color: "#374151", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                                  style={{ padding: "4px 8px", color: "#374151", minWidth: 220, whiteSpace: "nowrap" }}
                                 >
                                   {canonicalLabel}
                                 </td>
