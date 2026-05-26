@@ -99,6 +99,74 @@ function Section({ title, sub, children, action }: {
 // ─── 언어 코드 레이블 ────────────────────────────────────────────────────────
 const LANG_LABEL: Record<string, string> = Object.fromEntries(LANGUAGE_CODES.map(l => [l.code, l.label]));
 
+// ─── 런타임 ISO→한글 확장 맵 (LANGUAGE_CODES 미포함 보완) ────────────────────
+// raw 데이터 보존 원칙: item.name은 파싱/debug용 rawOriginalName으로 유지.
+// 이 맵은 display layer에서만 사용 — API response shape 변경 없음.
+const ISO_TO_KR: Record<string, string> = {
+  ...LANG_LABEL,
+  zh:  "중국어",       // legacy DB fallback
+  si:  "싱할라어",
+  ne:  "네팔어",
+  sw:  "스와힐리어",
+  tl:  "타갈로그어",
+  sr:  "세르비아어",
+  ro:  "루마니아어",
+  hu:  "헝가리어",
+  bg:  "불가리아어",
+  hr:  "크로아티아어",
+  da:  "덴마크어",
+  no:  "노르웨이어",
+  fi:  "핀란드어",
+  lt:  "리투아니아어",
+  lv:  "라트비아어",
+  et:  "에스토니아어",
+  sk:  "슬로바키아어",
+  sl:  "슬로베니아어",
+  ky:  "키르기스어",
+  tk:  "투르크멘어",
+};
+
+/**
+ * rawOriginalName → cleanedOriginalName 변환 (Import Preview UI 표시용)
+ * ISO 언어 코드를 한글 표기로 교체. raw는 title 속성으로 보존.
+ *   "en→ta 일반번역"    → "영어 → 타밀어 일반번역"
+ *   "zh-hans→ko 번역"  → "중국어(간체) → 한국어 번역"
+ *   "ja↔ko 동시통역"   → "일본어 ↔ 한국어 동시통역"
+ */
+function humanizeProductName(raw: string): string {
+  if (!raw?.trim()) return raw;
+  let s = raw;
+  // zh-hans/zh-hant 복합 코드 먼저 처리 (표준 2-3자 regex보다 우선)
+  s = s.replace(/(zh-hans|zh-hant)([→↔])([a-z]{2,3})/gi, (_, src, arr, tgt) =>
+    `${ISO_TO_KR[src.toLowerCase()] ?? src} ${arr} ${ISO_TO_KR[tgt.toLowerCase()] ?? tgt}`);
+  s = s.replace(/([a-z]{2,3})([→↔])(zh-hans|zh-hant)/gi, (_, src, arr, tgt) =>
+    `${ISO_TO_KR[src.toLowerCase()] ?? src} ${arr} ${ISO_TO_KR[tgt.toLowerCase()] ?? tgt}`);
+  // 표준 2-3자 ISO pair (→ ↔ 구분자)
+  s = s.replace(/\b([a-z]{2,3})([→↔])([a-z]{2,3})\b/gi, (_, src, arr, tgt) =>
+    `${ISO_TO_KR[src.toLowerCase()] ?? src} ${arr} ${ISO_TO_KR[tgt.toLowerCase()] ?? tgt}`);
+  // 하이픈 구분자 (라인 시작: "ko-de 번역" 형식)
+  s = s.replace(/^([a-z]{2,3})-([a-z]{2,3})(\s)/gi, (_, src, tgt, sp) =>
+    `${ISO_TO_KR[src.toLowerCase()] ?? src}-${ISO_TO_KR[tgt.toLowerCase()] ?? tgt}${sp}`);
+  return s;
+}
+
+/**
+ * an.direction 값 표시 정규화 (display 전용)
+ * "bidirectional" → "↔"  |  "ko↔de" → "↔"  |  "en→ta" → "영어 → 타밀어"
+ * ↔ 패턴은 방향 기호만 표시해 langPair 컬럼과 중복 방지.
+ */
+function renderDirection(dir: string): string {
+  if (!dir) return "";
+  if (dir === "bidirectional") return "↔";
+  const d = dir.replace(/\bto\b/gi, "→").replace(/[*]/g, "↔").replace(/<->|<>/g, "↔");
+  if (/↔/.test(d)) return "↔"; // 장비/단일 언어 양방향 — 심볼만
+  // 단방향: ISO 코드 → 한글로 변환
+  let h = d;
+  h = h.replace(/(zh-hans|zh-hant)/gi, c => ISO_TO_KR[c.toLowerCase()] ?? c);
+  h = h.replace(/\b([a-z]{2,3})\b/gi, c => ISO_TO_KR[c.toLowerCase()] ?? c);
+  return h.replace(/\s*([→])\s*/g, " $1 ").trim();
+}
+
 // ─── 상품유형별 색상 ─────────────────────────────────────────────────────────
 const TYPE_COLORS: Record<string, { bg: string; color: string; icon: string }> = {
   translation:    { bg: "#eff6ff", color: "#2563eb", icon: "📄" },
@@ -1816,7 +1884,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               )}
                               <div>{item.rowNum}</div>
                             </td>
-                            <td style={{ padding: "4px 8px", color: "#374151", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</td>
+                            {/* 원본 상품명: cleanedOriginalName 표시, rawOriginalName은 title tooltip으로 보존 */}
+                            <td title={item.name} style={{ padding: "4px 8px", color: "#374151", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{humanizeProductName(item.name)}</td>
                             {/* Product 후보 — 클릭하여 inline 수정 가능 */}
                             <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
                               {editingRowNum === item.rowNum ? (
@@ -1873,8 +1942,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                             {/* 방향 */}
                             <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
                               {an.direction ? (
-                                <span style={{ fontFamily: "monospace", fontSize: 11, color: isBidir ? "#059669" : "#6b7280", background: isBidir ? "#f0fdf4" : "#f9fafb", border: `1px solid ${isBidir ? "#bbf7d0" : "#e5e7eb"}`, borderRadius: 3, padding: "1px 5px" }}>
-                                  {isBidir ? "↔" : an.direction}
+                                <span style={{ fontSize: 11, color: isBidir ? "#059669" : "#6b7280", background: isBidir ? "#f0fdf4" : "#f9fafb", border: `1px solid ${isBidir ? "#bbf7d0" : "#e5e7eb"}`, borderRadius: 3, padding: "1px 5px" }}>
+                                  {renderDirection(an.direction)}
                                 </span>
                               ) : ""}
                             </td>

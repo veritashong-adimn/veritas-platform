@@ -579,8 +579,8 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
 
   if (!skipLangDetect) {
     // ── Step 1: 범용 ISO pair 감지 (미지원 코드 포함 — xx→yy / xx↔yy / xx-yy / xx_yy)
-    // 알려진 코드만이 아니라 2-3자 소문자 패턴 전부 캡처 → Product에 남지 않도록 제거
-    const anyPairRx = /\b([a-z]{2,3})[→↔\-_]([a-z]{2,3})\b/i;
+    // zh-hans/zh-hant 복합 코드 우선 처리 (alternation 순서로 2-3자 코드보다 먼저 매칭)
+    const anyPairRx = /\b(zh-hans|zh-hant|[a-z]{2,3})[→↔\-_](zh-hans|zh-hant|[a-z]{2,3})\b/i;
     const isoM = workName.match(anyPairRx);
     if (isoM) {
       srcCode  = isoM[1].toLowerCase();
@@ -616,7 +616,7 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
 
   // ── Step 5: Product 후보 — 잔여 ISO 토큰 제거 후 canonical 서비스명으로 정규화
   let productCandidate = workName
-    .replace(/\b[a-z]{2,3}[→\-_][a-z]{2,3}\b/gi, " ")
+    .replace(/\b(zh-hans|zh-hant|[a-z]{2,3})[→↔\-_](zh-hans|zh-hant|[a-z]{2,3})\b/gi, " ")
     .replace(/\s+/g, "")
     .trim();
 
