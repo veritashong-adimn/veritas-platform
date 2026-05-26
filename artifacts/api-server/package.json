@@ -8,7 +8,8 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "seed": "node seed.mjs"
+    "seed": "node seed.mjs",
+    "test:naming": "node_modules/.bin/esbuild src/test-product-naming.ts --bundle --platform=node --format=esm --outfile=dist/test-product-naming.mjs --log-level=warning --external:*.node --external:pg-native '--external:@aws-sdk/*' '--external:@google-cloud/*' '--banner:js=import { createRequire as __cr } from \"node:module\"; globalThis.require = __cr(import.meta.url);' && node dist/test-product-naming.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1014.0",
