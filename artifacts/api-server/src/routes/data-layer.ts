@@ -708,8 +708,12 @@ const LANG_PAIR_LABEL: Record<string, string> = {
   "en-ko": "영한",
   "ko-ja": "한일",
   "ja-ko": "일한",
-  "ko-zh": "한중",
-  "zh-ko": "중한",
+  "ko-zh": "한중",       // 기존 DB 데이터 fallback
+  "zh-ko": "중한",       // 기존 DB 데이터 fallback
+  "ko-zh-hans": "한중(간체)",
+  "zh-hans-ko": "중한(간체)",
+  "ko-zh-hant": "한중(번체)",
+  "zh-hant-ko": "중한(번체)",
   "ko-de": "한독",
   "ko-fr": "한불",
   "ko-es": "한서",

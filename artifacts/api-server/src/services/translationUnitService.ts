@@ -45,7 +45,7 @@ function normalizeLang(raw: string): string {
     "한": "ko", "한국어": "ko", "korean": "ko",
     "영": "en", "영어": "en", "english": "en",
     "일": "ja", "일본어": "ja", "japanese": "ja",
-    "중": "zh", "중국어": "zh", "chinese": "zh",
+    "중": "zh-hans", "중국어": "zh-hans", "chinese": "zh-hans",
     "독": "de", "독일어": "de", "german": "de",
     "프": "fr", "프랑스어": "fr", "french": "fr",
     "스페인": "es", "spanish": "es",

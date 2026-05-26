@@ -103,19 +103,30 @@ const LANG_LABEL: Record<string, string> = Object.fromEntries(LANGUAGE_CODES.map
 const TYPE_COLORS: Record<string, { bg: string; color: string; icon: string }> = {
   translation:    { bg: "#eff6ff", color: "#2563eb", icon: "📄" },
   interpretation: { bg: "#f5f3ff", color: "#7c3aed", icon: "🎤" },
+  combined:       { bg: "#eef2ff", color: "#4338ca", icon: "🌐" },
+  proofreading:   { bg: "#f0fdf4", color: "#16a34a", icon: "✏️" },
+  media:          { bg: "#fff1f2", color: "#be123c", icon: "🎬" },
   equipment:      { bg: "#fff7ed", color: "#c2410c", icon: "🔧" },
+  editing:        { bg: "#fdf4ff", color: "#9333ea", icon: "🖨️" },
+  operations:     { bg: "#f0fdfa", color: "#0f766e", icon: "🏃" },
+  project:        { bg: "#f8fafc", color: "#334155", icon: "📋" },
+  transport:      { bg: "#fafafa", color: "#525252", icon: "🚌" },
+  meal:           { bg: "#fffbeb", color: "#d97706", icon: "🍽️" },
+  accommodation:  { bg: "#f0f9ff", color: "#0369a1", icon: "🏨" },
+  other_cost:     { bg: "#f9fafb", color: "#6b7280", icon: "🧾" },
   expense:        { bg: "#fefce8", color: "#b45309", icon: "💰" },
 };
 
 // ─── 장비 대분류별 기본 수량단위 ─────────────────────────────────────────────
 const EQUIP_UNIT_BY_MAIN: Record<string, string> = {
-  "FM 장비":     "세트",
-  "적외선 장비": "세트",
-  "부스":        "부스",
-  "리시버":      "개",
-  "엔지니어":    "건",
-  "설치/철수":   "건",
-  "장비 연장":   "건",
+  "동시통역장비": "대",
+  "가이드장비":   "대",
+  "위스퍼링장비": "대",
+  "마이크장비":   "대",
+  "음향장비":     "대",
+  "부스장비":     "일",
+  "운영장비":     "건",
+  "기타장비":     "건",
 };
 
 // ─── 코드 미리보기 생성 ──────────────────────────────────────────────────────
@@ -636,11 +647,16 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         const effectiveName = ovr?.overriddenCandidate || an?.displayName || an?.productCandidate || item.name;
         const dirStr = an?.direction ?? "";
         const dirParts = dirStr.includes("→") && !dirStr.includes("↔") ? dirStr.split("→") : null;
+        const parsedSrc = dirParts?.[0]?.trim() || null;
+        const parsedTgt = dirParts?.[1]?.trim() || null;
+        if (dirParts && (!parsedSrc || !parsedTgt)) {
+          console.warn("[reverse-parse-failed]", dirStr, { parsedSrc, parsedTgt, row: item.rowNum });
+        }
         return {
           ...item,
           name: effectiveName,
-          sourceLanguage: dirParts?.[0] ?? item.sourceLanguage,
-          targetLanguage: dirParts?.[1] ?? item.targetLanguage,
+          sourceLanguage: parsedSrc ?? item.sourceLanguage,
+          targetLanguage: parsedTgt ?? item.targetLanguage,
         };
       });
       const res = await fetch(api("/api/admin/products/import/execute"), {
@@ -1323,6 +1339,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             if (reasons.some(r => r.includes("Product") || r.includes("불명확"))) score += 20;
             if (reasons.some(r => r.includes("언어") || r.includes("미지원"))) score += 20;
             if (reasons.some(r => r.includes("운영성"))) score += 10;
+            // 중국어 계열 경고 — 운영자 확인 필요
+            if (reasons.includes("POTENTIAL_VARIANT_DUPLICATE")) score += 15;
+            if (reasons.includes("ZH_AMBIGUOUS")) score += 10;
+            if (reasons.includes("CANTONESE_REVIEW")) score += 5;
             if (rowOverrides[item.rowNum]?.overriddenCandidate !== undefined) score += 10;
             if (rowOverrides[item.rowNum]?.reviewStatus === "rejected") score += 15;
             return score;
@@ -1603,6 +1623,12 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 if (projNameItems > 0) insights.push(`프로젝트명 가능성 항목 ${projNameItems}건`);
                 const unsupportedLangItems = importPreview.items.filter(x => (x.analysis?.reviewReasons ?? []).some(r => r.includes("언어") || r.includes("미지원"))).length;
                 if (unsupportedLangItems > 0) insights.push(`미지원 언어 포함 항목 ${unsupportedLangItems}건`);
+                const zhAmbiguousItems = importPreview.items.filter(x => (x.analysis?.reviewReasons ?? []).includes("ZH_AMBIGUOUS")).length;
+                const variantItems = importPreview.items.filter(x => (x.analysis?.reviewReasons ?? []).includes("POTENTIAL_VARIANT_DUPLICATE")).length;
+                const cantoneseItems = importPreview.items.filter(x => (x.analysis?.reviewReasons ?? []).includes("CANTONESE_REVIEW")).length;
+                if (zhAmbiguousItems > 0) insights.push(`중국어 모호 표기 ${zhAmbiguousItems}건 — 간체/번체 확인 필요`);
+                if (variantItems > 0) insights.push(`기존 ZH 계열 variant ${variantItems}건 — 중복 여부 확인`);
+                if (cantoneseItems > 0) insights.push(`광동어 표기(zh-hant 분류됨) ${cantoneseItems}건`);
 
                 const statCard = (label: string, value: number, color: string, showPct?: boolean) => (
                   <div key={label} style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 12px", minWidth: 66, textAlign: "center", flex: "0 0 auto" }}>
@@ -1874,13 +1900,17 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                             <td style={{ padding: "4px 8px", maxWidth: 200, fontSize: 11 }}>
                               {(an.reviewReasons ?? []).map((r, i) => {
                                 const CODE_STYLE: Record<string, { color: string; background: string; border: string }> = {
-                                  COUNTRY_NOT_LANGUAGE:    { color: "#7c3aed", background: "#f5f3ff", border: "1px solid #ddd6fe" },
-                                  UNKNOWN_LANGUAGE:        { color: "#dc2626", background: "#fef2f2", border: "1px solid #fca5a5" },
-                                  MULTI_LANGUAGE_AMBIGUOUS:{ color: "#0891b2", background: "#ecfeff", border: "1px solid #a5f3fc" },
-                                  DOMAIN_BASED:            { color: "#059669", background: "#f0fdf4", border: "1px solid #86efac" },
-                                  MISSING_DIRECTION:          { color: "#d97706", background: "#fffbeb", border: "1px solid #fde68a" },
+                                  COUNTRY_NOT_LANGUAGE:        { color: "#7c3aed", background: "#f5f3ff", border: "1px solid #ddd6fe" },
+                                  UNKNOWN_LANGUAGE:            { color: "#dc2626", background: "#fef2f2", border: "1px solid #fca5a5" },
+                                  MULTI_LANGUAGE_AMBIGUOUS:    { color: "#0891b2", background: "#ecfeff", border: "1px solid #a5f3fc" },
+                                  DOMAIN_BASED:                { color: "#059669", background: "#f0fdf4", border: "1px solid #86efac" },
+                                  MISSING_DIRECTION:           { color: "#d97706", background: "#fffbeb", border: "1px solid #fde68a" },
                                   REGION_LANGUAGE_AMBIGUOUS:   { color: "#1d4ed8", background: "#eff6ff", border: "1px solid #bfdbfe" },
                                   DOMAIN_SPECIALIZED_REVIEW:   { color: "#7c3aed", background: "#faf5ff", border: "1px solid #e9d5ff" },
+                                  // 중국어 계열 — 색상으로 3종 구분
+                                  ZH_AMBIGUOUS:                { color: "#b45309", background: "#fef3c7", border: "1px solid #fcd34d" },
+                                  POTENTIAL_VARIANT_DUPLICATE: { color: "#6d28d9", background: "#ede9fe", border: "1px solid #c4b5fd" },
+                                  CANTONESE_REVIEW:            { color: "#0369a1", background: "#e0f2fe", border: "1px solid #7dd3fc" },
                                 };
                                 const st = CODE_STYLE[r] ?? { color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a" };
                                 return (

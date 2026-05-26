@@ -429,37 +429,107 @@ export const FEEDBACK_TAGS = [
 export type FeedbackTag = "general" | "bug" | "ux" | "idea" | "urgent";
 
 export const PRODUCT_TYPES_META: Record<string, { label: string; code: string; hasLanguage: boolean }> = {
-  translation:    { label: "번역", code: "TR", hasLanguage: true },
-  interpretation: { label: "통역", code: "IN", hasLanguage: true },
-  equipment:      { label: "장비", code: "EQ", hasLanguage: false },
-  expense:        { label: "실비", code: "EX", hasLanguage: false },
+  translation:    { label: "번역",      code: "TR", hasLanguage: true },
+  interpretation: { label: "통역",      code: "IN", hasLanguage: true },
+  combined:       { label: "통번역",    code: "CO", hasLanguage: true },
+  proofreading:   { label: "감수",      code: "PR", hasLanguage: true },
+  media:          { label: "미디어",    code: "MD", hasLanguage: true },
+  equipment:      { label: "통역장비",  code: "EQ", hasLanguage: false },
+  editing:        { label: "편집/DTP",  code: "ED", hasLanguage: false },
+  operations:     { label: "운영/실비", code: "OP", hasLanguage: false },
+  project:        { label: "프로젝트",  code: "PJ", hasLanguage: false },
+  transport:      { label: "교통비",    code: "TX", hasLanguage: false },
+  meal:           { label: "식대",      code: "ML", hasLanguage: false },
+  accommodation:  { label: "숙박",      code: "AC", hasLanguage: false },
+  other_cost:     { label: "기타비용",  code: "OT", hasLanguage: false },
+  expense:        { label: "실비",      code: "EX", hasLanguage: false },
 };
 
 export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: string }[]> = {
   translation: [
-    { label: "번역",       code: "TRS" },
-    { label: "감수",       code: "PRF" },
-    { label: "원어민감수", code: "NAT" },
-    { label: "공증번역",   code: "CRT" },
+    { label: "일반번역", code: "GEN"  },
+    { label: "전문번역", code: "SPEC" },
+    { label: "출판번역", code: "PUB"  },
+    { label: "번역공증", code: "CERT" },
+    { label: "영상번역", code: "VID"  },
+    { label: "자막번역", code: "SUB"  },
+    { label: "SW번역",   code: "SW"   },
+    { label: "기타번역", code: "ETC"  },
   ],
   interpretation: [
-    { label: "통역",     code: "INT"    },
-    { label: "수행통역", code: "ESC"    },
-    { label: "화상통역", code: "VDO"    },
-    { label: "전화통역", code: "TEL"    },
-    { label: "출장/이동", code: "TRIP"  },
-    { label: "취소/보상", code: "CANCEL"},
-    { label: "할증/연장", code: "OT"    },
-    { label: "대기",      code: "WAIT"  },
+    { label: "동시통역",    code: "SIM"  },
+    { label: "순차통역",    code: "CON"  },
+    { label: "위스퍼링통역", code: "WHP" },
+    { label: "수행통역",    code: "ESC"  },
+    { label: "VIP수행통역", code: "VIP"  },
+    { label: "가이드통역",  code: "GID"  },
+    { label: "미팅통역",    code: "MTG"  },
+    { label: "전시회통역",  code: "EXH"  },
+    { label: "화상통역",    code: "VDEO" },
+    { label: "전화통역",    code: "TEL"  },
+    { label: "기타통역",    code: "ETC"  },
+  ],
+  combined: [
+    { label: "일반번역", code: "GEN"  },
+    { label: "전문번역", code: "SPEC" },
+    { label: "동시통역", code: "SIM"  },
+    { label: "순차통역", code: "CON"  },
+    { label: "기타",     code: "ETC"  },
+  ],
+  proofreading: [
+    { label: "감수", code: "PRF" },
+  ],
+  media: [
+    { label: "미디어", code: "MED" },
   ],
   equipment: [
-    { label: "FM 장비",     code: "FM"    },
-    { label: "적외선 장비", code: "IR"    },
-    { label: "부스",        code: "BTH"   },
-    { label: "리시버",      code: "RCV"   },
-    { label: "엔지니어",    code: "ENG"   },
-    { label: "설치/철수",   code: "SETUP" },
-    { label: "장비 연장",   code: "EXT"   },
+    { label: "동시통역장비", code: "SIM" },
+    { label: "가이드장비",   code: "GID" },
+    { label: "위스퍼링장비", code: "WHP" },
+    { label: "마이크장비",   code: "MIC" },
+    { label: "음향장비",     code: "AUD" },
+    { label: "부스장비",     code: "BTH" },
+    { label: "운영장비",     code: "OPR" },
+    { label: "기타장비",     code: "ETC" },
+  ],
+  editing: [
+    { label: "편집/DTP", code: "EDT" },
+  ],
+  operations: [
+    { label: "교통비",    code: "TX"   },
+    { label: "퀵비용",    code: "QCK"  },
+    { label: "식대",      code: "MEAL" },
+    { label: "숙박",      code: "ACC"  },
+    { label: "보험료",    code: "INS"  },
+    { label: "운영관리비", code: "MGT" },
+    { label: "기타실비",  code: "ETC"  },
+  ],
+  project: [
+    { label: "번역프로젝트",   code: "TR"   },
+    { label: "통역프로젝트",   code: "IN"   },
+    { label: "종합언어서비스", code: "COMP" },
+    { label: "기타프로젝트",   code: "ETC"  },
+  ],
+  transport: [
+    { label: "항공",     code: "AIR"  },
+    { label: "기차",     code: "RAIL" },
+    { label: "버스",     code: "BUS"  },
+    { label: "택시",     code: "TAXI" },
+    { label: "기타교통", code: "ETC"  },
+  ],
+  meal: [
+    { label: "식비",     code: "MEAL" },
+    { label: "간식비",   code: "SNK"  },
+    { label: "접대비",   code: "ENT"  },
+    { label: "기타식대", code: "ETC"  },
+  ],
+  accommodation: [
+    { label: "호텔",        code: "HTL" },
+    { label: "게스트하우스", code: "GST" },
+    { label: "기타숙박",    code: "ETC" },
+  ],
+  other_cost: [
+    { label: "기타", code: "ETC" },
   ],
   expense: [
     { label: "배송/퀵",   code: "DLV"  },
@@ -470,7 +540,66 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
   ],
 };
 
-export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: string }[]> = {};
+export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: string }[]> = {
+  "전문번역": [
+    { label: "법률",   code: "LAW"  },
+    { label: "의료",   code: "MED"  },
+    { label: "기술",   code: "TECH" },
+    { label: "금융",   code: "FIN"  },
+    { label: "계약서", code: "CONT" },
+    { label: "논문",   code: "ACAD" },
+  ],
+  "감수": [
+    { label: "원어민감수",   code: "NAT" },
+    { label: "윤문",         code: "POL" },
+    { label: "원문대조감수", code: "CMP" },
+  ],
+  "미디어": [
+    { label: "자막작업",    code: "SUB" },
+    { label: "더빙",        code: "DUB" },
+    { label: "영상번역",    code: "VTR" },
+    { label: "스크립트작성", code: "SCR" },
+    { label: "STT",         code: "STT" },
+    { label: "TTS",         code: "TTS" },
+  ],
+  "편집/DTP": [
+    { label: "편집",    code: "EDT" },
+    { label: "DTP",     code: "DTP" },
+    { label: "인쇄",    code: "PRT" },
+    { label: "디자인",  code: "DSN" },
+    { label: "PPT작업", code: "PPT" },
+  ],
+  "동시통역장비": [
+    { label: "FM방식",    code: "FM"  },
+    { label: "적외선방식", code: "IR"  },
+    { label: "리시버",    code: "RCV" },
+    { label: "송신기",    code: "TRX" },
+  ],
+  "가이드장비": [
+    { label: "가이드수신기", code: "RCV" },
+    { label: "가이드송신기", code: "TRX" },
+  ],
+  "위스퍼링장비": [
+    { label: "위스퍼링수신기", code: "RCV" },
+    { label: "위스퍼링송신기", code: "TRX" },
+  ],
+  "마이크장비": [
+    { label: "무선마이크",   code: "WLS" },
+    { label: "유선마이크",   code: "WRD" },
+    { label: "핀마이크",     code: "PIN" },
+    { label: "회의용마이크", code: "CNF" },
+  ],
+  "음향장비": [
+    { label: "오디오인터페이스", code: "AOI" },
+    { label: "믹서",            code: "MIX" },
+    { label: "음향콘솔",        code: "CON" },
+    { label: "분배기",          code: "DST" },
+  ],
+  "부스장비": [
+    { label: "통역부스", code: "BTH" },
+    { label: "사전설치", code: "PRE" },
+  ],
+};
 
 export const LANGUAGE_CODES: { code: string; label: string }[] = [
   { code: "ko",      label: "한국어" },
@@ -516,9 +645,19 @@ export const EQUIPMENT_USAGE_PERIODS = ["반일", "1일", "2일", "3일"] as con
 export const INTERPRETATION_DIRECTIONS = ["양방향", "A→B", "B→A"] as const;
 
 export const UNITS_BY_PRODUCT_TYPE: Record<string, string[]> = {
-  translation:    ["페이지", "단어", "글자", "어절", "건"],
-  interpretation: ["1시간", "2시간", "4시간", "6시간", "8시간", "1일", "추가시간", "건"],
-  equipment:      ["개", "세트", "부스", "대"],
+  translation:    ["어절", "단어", "글자", "페이지", "건"],
+  interpretation: ["1시간", "반일", "종일", "추가시간"],
+  combined:       ["어절", "단어", "글자", "페이지", "건", "1시간", "반일", "종일"],
+  proofreading:   ["어절", "단어", "글자", "페이지", "건"],
+  media:          ["분", "초", "건"],
+  equipment:      ["대", "일", "건"],
+  editing:        ["페이지", "건", "시간"],
+  operations:     ["건", "인"],
+  project:        ["건", "식"],
+  transport:      ["건"],
+  meal:           ["건", "인"],
+  accommodation:  ["박", "건"],
+  other_cost:     ["건"],
   expense:        ["건", "인", "박"],
 };
 
@@ -545,14 +684,46 @@ export const EQUIPMENT_ITEMS: string[] = [
 ];
 
 export const PRODUCT_MAIN_CATEGORIES = [
-  "번역", "감수", "원어민감수", "공증번역",
-  "통역", "수행통역", "화상통역", "전화통역", "출장/이동", "취소/보상", "할증/연장", "대기",
-  "FM 장비", "적외선 장비", "부스", "리시버", "엔지니어", "설치/철수", "장비 연장",
-  "배송/퀵", "교통비", "식비", "숙박", "기타 실비",
+  // translation
+  "일반번역", "전문번역", "출판번역", "번역공증", "영상번역", "자막번역", "SW번역", "기타번역",
+  // interpretation
+  "동시통역", "순차통역", "위스퍼링통역", "수행통역", "VIP수행통역", "가이드통역", "미팅통역", "전시회통역", "화상통역", "전화통역", "기타통역",
+  // combined
+  // proofreading
+  "감수",
+  // media
+  "미디어",
+  // equipment
+  "동시통역장비", "가이드장비", "위스퍼링장비", "마이크장비", "음향장비", "부스장비", "운영장비", "기타장비",
+  // editing
+  "편집/DTP",
+  // operations
+  "퀵비용", "식대", "보험료", "운영관리비", "기타실비",
+  // project
+  "번역프로젝트", "통역프로젝트", "종합언어서비스", "기타프로젝트",
+  // transport
+  "항공", "기차", "버스", "택시", "기타교통",
+  // meal
+  "식비", "간식비", "접대비", "기타식대",
+  // accommodation
+  "호텔", "게스트하우스", "기타숙박",
+  // other_cost / expense
+  "배송/퀵", "교통비", "숙박", "기타 실비", "기타",
 ] as const;
 export type ProductMainCategory = typeof PRODUCT_MAIN_CATEGORIES[number];
 
-export const PRODUCT_SUB_CATEGORIES: Record<string, string[]> = {};
+export const PRODUCT_SUB_CATEGORIES: Record<string, string[]> = {
+  "전문번역":   ["법률", "의료", "기술", "금융", "계약서", "논문"],
+  "감수":       ["원어민감수", "윤문", "원문대조감수"],
+  "미디어":     ["자막작업", "더빙", "영상번역", "스크립트작성", "STT", "TTS"],
+  "편집/DTP":   ["편집", "DTP", "인쇄", "디자인", "PPT작업"],
+  "동시통역장비": ["FM방식", "적외선방식", "리시버", "송신기"],
+  "가이드장비":  ["가이드수신기", "가이드송신기"],
+  "위스퍼링장비": ["위스퍼링수신기", "위스퍼링송신기"],
+  "마이크장비":  ["무선마이크", "유선마이크", "핀마이크", "회의용마이크"],
+  "음향장비":    ["오디오인터페이스", "믹서", "음향콘솔", "분배기"],
+  "부스장비":    ["통역부스", "사전설치"],
+};
 
 export const PRODUCT_UNITS = ["어절", "단어", "글자", "페이지", "건", "1시간", "반일", "종일", "추가시간", "대", "일", "박", "인", "분", "초", "시간"] as const;
 export type ProductUnit = typeof PRODUCT_UNITS[number];

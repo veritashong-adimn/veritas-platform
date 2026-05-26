@@ -25,6 +25,8 @@ export const PRODUCT_TYPES: Record<string, { label: string; code: string; hasLan
   meal:           { label: "식대",      code: "ML", hasLanguage: false },
   accommodation:  { label: "숙박",      code: "AC", hasLanguage: false },
   other_cost:     { label: "기타비용",  code: "OT", hasLanguage: false },
+  // expense: 프론트엔드 통합 실비 타입 — 운영 호환성 유지
+  expense:        { label: "실비",      code: "EX", hasLanguage: false },
 };
 
 // ─── 대분류 정의 (productType → mainCategory 목록) ────────────────────────────
@@ -114,6 +116,13 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
   other_cost: [
     { label: "기타", code: "ETC" },
   ],
+  expense: [
+    { label: "배송/퀵",   code: "DLV"  },
+    { label: "교통비",    code: "TX"   },
+    { label: "식비",      code: "MEAL" },
+    { label: "숙박",      code: "ACC"  },
+    { label: "기타 실비", code: "ETC"  },
+  ],
 };
 
 // ─── 중분류 정의 (mainCategory label → subCategory 목록) ─────────────────────
@@ -180,11 +189,12 @@ export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: strin
 
 // ─── 언어 코드 정의 ───────────────────────────────────────────────────────────
 export const LANGUAGE_CODES: { code: string; label: string }[] = [
-  { code: "ko",  label: "한국어" },
-  { code: "en",  label: "영어" },
-  { code: "ja",  label: "일본어" },
-  { code: "zh",  label: "중국어" },
-  { code: "ru",  label: "러시아어" },
+  { code: "ko",      label: "한국어" },
+  { code: "en",      label: "영어" },
+  { code: "ja",      label: "일본어" },
+  { code: "zh-hans", label: "중국어(간체)" },
+  { code: "zh-hant", label: "중국어(번체)" },
+  { code: "ru",      label: "러시아어" },
   { code: "es",  label: "스페인어" },
   { code: "de",  label: "독일어" },
   { code: "fr",  label: "프랑스어" },
@@ -232,6 +242,7 @@ const UNITS_BY_TYPE: Record<string, string[]> = {
   meal:           ["건", "인"],
   accommodation:  ["박", "건"],
   other_cost:     ["건"],
+  expense:        ["건", "인", "박"],
 };
 
 // ─── 헬퍼 함수 ────────────────────────────────────────────────────────────────
@@ -254,7 +265,7 @@ function isLangType(productType: string): boolean {
 const LANG_PAIR_MIGRATION: Record<string, { src: string; tgt: string }> = {
   KOEN: { src: "ko", tgt: "en" },
   ENKO: { src: "en", tgt: "ko" },
-  KOCN: { src: "ko", tgt: "zh" },
+  KOCN: { src: "ko", tgt: "zh-hans" },
   KOJA: { src: "ko", tgt: "ja" },
   KORU: { src: "ko", tgt: "ru" },
   KOFR: { src: "ko", tgt: "fr" },
@@ -280,10 +291,17 @@ async function generateProductCode(
     ? (getSubCatCode(mainCategoryLabel, subCategoryLabel) || getMainCatCode(productType, mainCategoryLabel))
     : getMainCatCode(productType, mainCategoryLabel);
 
+  // zh-hans / zh-hant / zh → 모두 ZH 코드 유지 (기존 운영 코드 체계 backward compatibility)
+  // 내부 canonical 분리(zh-hans/zh-hant)는 언어 필드에서 유지, 코드 세그먼트는 ZH 단일 표기
+  function langCodeForProductCode(code: string): string {
+    if (code === "zh-hans" || code === "zh-hant" || code === "zh") return "ZH";
+    return code.toUpperCase();
+  }
+
   let prefix: string;
   if (hasLang && sourceLanguage && targetLanguage) {
-    const src = sourceLanguage.toUpperCase();
-    const tgt = targetLanguage.toUpperCase();
+    const src = langCodeForProductCode(sourceLanguage);
+    const tgt = langCodeForProductCode(targetLanguage);
     prefix = `${typeCode}-${src}-${tgt}-${catCode}`;
   } else {
     prefix = `${typeCode}-${catCode}`;
@@ -303,6 +321,17 @@ async function generateProductCode(
   return `${prefix}-${String(next).padStart(3, "0")}`;
 }
 
+// ─── 언어 코드 정규화 (zh / zh-hans → zh-hans, zh-hant 유지) ──────────────────
+// 기존 DB에 zh로 저장된 데이터와 신규 zh-hans 데이터 간 중복 감지를 위해
+// zh 단독 입력은 zh-hans로 통합하여 비교
+function normalizeLangCode(code: string | null): string {
+  if (!code) return "";
+  const c = code.toLowerCase().trim();
+  if (c === "zh") return "zh-hans";
+  if (c === "yue") return "zh-hant";  // 광동어 fallback — yue 정식 지원 전 임시
+  return c;
+}
+
 // ─── 중복 체크 ────────────────────────────────────────────────────────────────
 async function findDuplicate(
   productType: string,
@@ -316,16 +345,19 @@ async function findDuplicate(
   const hasLang = isLangType(productType);
   // 비언어형 상품(통역장비 등): 이름 기반 중복 체크
   // 언어형 상품: 출발언어+도착언어+대분류+중분류 기반 중복 체크
+  // zh / zh-hans 혼재 방지: normalizeLangCode로 정규화 후 비교
+  const normSrc = normalizeLangCode(sourceLanguage);
+  const normTgt = normalizeLangCode(targetLanguage);
   const conditions = hasLang
     ? and(
         sql`LOWER(${productsTable.productType}) = LOWER(${productType})`,
         sql`LOWER(COALESCE(${productsTable.mainCategory}, '')) = LOWER(${mainCategory || ""})`,
         sql`LOWER(COALESCE(${productsTable.subCategory}, '')) = LOWER(${subCategory || ""})`,
-        sourceLanguage
-          ? sql`LOWER(COALESCE(${productsTable.sourceLanguage}, '')) = LOWER(${sourceLanguage})`
+        normSrc
+          ? sql`LOWER(COALESCE(${productsTable.sourceLanguage}, '')) = ANY(ARRAY[${normSrc}, ${normSrc === "zh-hans" ? "zh" : normSrc}])`
           : sql`(${productsTable.sourceLanguage} IS NULL OR ${productsTable.sourceLanguage} = '')`,
-        targetLanguage
-          ? sql`LOWER(COALESCE(${productsTable.targetLanguage}, '')) = LOWER(${targetLanguage})`
+        normTgt
+          ? sql`LOWER(COALESCE(${productsTable.targetLanguage}, '')) = ANY(ARRAY[${normTgt}, ${normTgt === "zh-hans" ? "zh" : normTgt}])`
           : sql`(${productsTable.targetLanguage} IS NULL OR ${productsTable.targetLanguage} = '')`,
       )
     : and(
@@ -368,7 +400,9 @@ type ProductAnalysis = {
 };
 
 const ISO_LABEL: Record<string, string> = {
-  ko: "한국어", en: "영어",  ja: "일본어",     zh: "중국어",
+  ko: "한국어", en: "영어",  ja: "일본어",
+  "zh-hans": "중국어(간체)", "zh-hant": "중국어(번체)",
+  zh: "중국어",  // 기존 데이터 fallback — displayName 생성 시 사용
   fr: "프랑스어", de: "독일어", es: "스페인어", ru: "러시아어",
   ar: "아랍어",  pt: "포르투갈어", vi: "베트남어", th: "태국어",
   id: "인도네시아어", ms: "말레이어", hi: "힌디어", ph: "필리핀어",
@@ -383,7 +417,7 @@ const ISO_LABEL: Record<string, string> = {
   tl: "타갈로그어", my: "미얀마어", si: "싱할라어", he: "히브리어",
 };
 
-type LangEntry = { m: string; code: string; label: string };
+type LangEntry = { m: string; code: string; label: string; reviewReason?: string };
 const LANG_ENTRIES: LangEntry[] = [
   // 장음절 우선 (prefix 충돌 방지)
   { m: "투르크멘어",   code: "tk",  label: "투르크멘어" },
@@ -431,14 +465,23 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "말레이시아어", code: "ms",  label: "말레이어" },
   { m: "말레이어",     code: "ms",  label: "말레이어" },
   { m: "체코어",       code: "cs",  label: "체코어" },
-  { m: "광동어",       code: "yue", label: "광동어" },
+  // 광동어: yue 정식 지원 전 zh-hant fallback + CANTONESE_REVIEW 검토 플래그
+  { m: "광동어", code: "zh-hant", label: "중국어(번체)", reviewReason: "CANTONESE_REVIEW" },
   { m: "타밀어",       code: "ta",  label: "타밀어" },
   { m: "네팔어",       code: "ne",  label: "네팔어" },
   { m: "벵골어",       code: "bn",  label: "벵골어" },
   { m: "폴란드어",     code: "pl",  label: "폴란드어" },
   { m: "영어",         code: "en",  label: "영어" },
   { m: "일본어",       code: "ja",  label: "일본어" },
-  { m: "중국어",       code: "zh",  label: "중국어" },
+  // 중국어 명시적 간체/번체 표기 — 직접 분류 (검토 불필요)
+  { m: "중국어(간체)",   code: "zh-hans", label: "중국어(간체)" },
+  { m: "중국어(번체)",   code: "zh-hant", label: "중국어(번체)" },
+  { m: "간체중국어",     code: "zh-hans", label: "중국어(간체)" },
+  { m: "번체중국어",     code: "zh-hant", label: "중국어(번체)" },
+  { m: "대만어",         code: "zh-hant", label: "중국어(번체)" },
+  { m: "홍콩어",         code: "zh-hant", label: "중국어(번체)" },
+  // 모호 표현 — zh-hans 기본값, ZH_AMBIGUOUS 검토 필요
+  { m: "중국어",  code: "zh-hans", label: "중국어(간체)", reviewReason: "ZH_AMBIGUOUS" },
   { m: "불어",         code: "fr",  label: "프랑스어" },
   { m: "독일어",       code: "de",  label: "독일어" },
   { m: "아랍어",       code: "ar",  label: "아랍어" },
@@ -458,7 +501,7 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "한", code: "ko", label: "한국어" },
   { m: "영", code: "en", label: "영어" },
   { m: "일", code: "ja", label: "일본어" },
-  { m: "중", code: "zh", label: "중국어" },
+  { m: "중", code: "zh-hans", label: "중국어(간체)", reviewReason: "ZH_AMBIGUOUS" },
   { m: "불", code: "fr", label: "프랑스어" },
   { m: "독", code: "de", label: "독일어" },
   { m: "스", code: "es", label: "스페인어" },
@@ -498,7 +541,8 @@ const CANONICAL_PRODUCTS: [RegExp, string][] = [
 ];
 
 const COUNTRY_KEYWORDS = ["스위스", "벨기에", "유럽", "동남아", "중동", "아프리카"];
-const REGION_LANGUAGE_KEYWORDS = ["홍콩어", "대만어"];
+// "홍콩어"/"대만어"는 LANG_ENTRIES에서 zh-hant로 직접 분류되므로 여기서 제외
+const REGION_LANGUAGE_KEYWORDS: string[] = [];
 
 function analyzeProductStructure(name: string, productType?: string): ProductAnalysis {
   const none: ProductAnalysis = { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", industry2: "", isOptionCandidate: false, confidenceScore: 0, reviewReasons: [], displayName: "", domain: "", langHint: "" };
@@ -506,6 +550,7 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
 
   let workName = name.trim();
   let srcCode = ""; let tgtCode = ""; let srcLabel = ""; let tgtLabel = "";
+  const detectedLangReviewReasons: string[] = [];
 
   // ── Step 0: 국가명·지역어·도메인·다국어 조기 감지
   const hasCountryKw    = COUNTRY_KEYWORDS.some(kw => name.includes(kw));
@@ -541,7 +586,11 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
           }
         }
         srcCode = lang1.code; srcLabel = lang1.label;
-        if (lang2) { tgtCode = lang2.code; tgtLabel = lang2.label; }
+        if (lang1.reviewReason) detectedLangReviewReasons.push(lang1.reviewReason);
+        if (lang2) {
+          tgtCode = lang2.code; tgtLabel = lang2.label;
+          if (lang2.reviewReason) detectedLangReviewReasons.push(lang2.reviewReason);
+        }
         workName = rest;
       }
     }
@@ -581,7 +630,7 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   const isExpertReview     = /전문가\s*감수/.test(name);
 
   // (영문)/(일문)/(중문) 등 괄호 언어 힌트 추출
-  const LANG_HINT_MAP: Record<string, string> = { 영문: "en", 일문: "ja", 중문: "zh", 국문: "ko", 한문: "ko" };
+  const LANG_HINT_MAP: Record<string, string> = { 영문: "en", 일문: "ja", 중문: "zh-hans", 국문: "ko", 한문: "ko" };
   const langHintM   = name.match(/[（(]([가-힣A-Za-z]{2,4})[）)]/);
   const langHintRaw = langHintM ? langHintM[1] : "";
   const langHint    = LANG_HINT_MAP[langHintRaw] ?? "";
@@ -649,6 +698,7 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
   if (isOpsItem) reviewReasons.push("운영성 항목 (EX계열 가능)");
   if (hasDomainReview) reviewReasons.push("DOMAIN_SPECIALIZED_REVIEW");
   if (productCandidate === "번역" && !direction && !skipLangDetect && !hasDomainKw) reviewReasons.push("MISSING_DIRECTION");
+  detectedLangReviewReasons.forEach(r => { if (!reviewReasons.includes(r)) reviewReasons.push(r); });
 
   // ── Step 8: Confidence Score (0–100)
   let score = 50;
@@ -995,7 +1045,23 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
         status = duplicateOf.some(d => d.name === nameRaw) ? "conflict" : "duplicate";
       }
 
-      const analysis = analyzeProductStructure(nameRaw, pType);
+      let analysis = analyzeProductStructure(nameRaw, pType);
+
+      // zh-hant 신규 생성 시 기존 ZH 계열 상품 variant 경고
+      // 실제 duplicate merge 아님 — 운영자 인지 목적 warning 수준
+      if (status !== "duplicate" && status !== "conflict") {
+        const normSrcA = normalizeLangCode(srcLang);
+        const normTgtA = normalizeLangCode(tgtLang);
+        if (normSrcA === "zh-hant" || normTgtA === "zh-hant") {
+          const hasZhVariant = existingProducts.some(ep =>
+            ep.productType === pType && ep.mainCategory === mainCat && /-ZH-/.test(ep.code)
+          );
+          if (hasZhVariant) {
+            analysis = { ...analysis, reviewReasons: [...analysis.reviewReasons, "POTENTIAL_VARIANT_DUPLICATE"] };
+            if (status === "new") status = "review";
+          }
+        }
+      }
 
       items.push({ rowNum, name: nameRaw, productType: pType, mainCategory: mainCat, subCategory: subCat,
         sourceLanguage: srcLang, targetLanguage: tgtLang, unit, basePrice, description: desc,
