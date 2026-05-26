@@ -590,17 +590,23 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
       workName = workName.replace(isoM[0], " ").replace(/\s+/g, " ").trim();
     } else {
       // ── Step 2: 한국어 단어 기반 언어 감지 (길이 내림차순 prefix 스캔)
+      // 단음절 alias (m.length===1) 는 바로 다음 문자가 구분자일 때만 허용 — 오파싱 방지
+      // 예: "일반번역" → "일"(ja) 미매칭, "한-영번역" → "한"(ko)+"-" 매칭
+      const SEP_RX = /^[\s\-_·\/→↔]/;
       let rest = workName;
       let lang1: LangEntry | null = null;
       let lang2: LangEntry | null = null;
       for (const l of SORTED_LANG_ENTRIES) {
-        if (rest.startsWith(l.m)) { lang1 = l; rest = rest.slice(l.m.length).replace(/^[\s\-_·\/]+/, ""); break; }
+        if (!rest.startsWith(l.m)) continue;
+        if (l.m.length === 1 && rest.length > 1 && !SEP_RX.test(rest[1])) continue;
+        lang1 = l; rest = rest.slice(l.m.length).replace(/^[\s\-_·\/→↔]+/, ""); break;
       }
       if (lang1) {
-        rest = rest.replace(/^[\s\-_·\/]+/, "");
+        rest = rest.replace(/^[\s\-_·\/→↔]+/, "");
         for (const l of SORTED_LANG_ENTRIES) {
           if (l.code !== lang1.code && rest.startsWith(l.m)) {
-            lang2 = l; rest = rest.slice(l.m.length).replace(/^[\s\-_·\/]+/, ""); break;
+            if (l.m.length === 1 && rest.length > 1 && !SEP_RX.test(rest[1])) continue;
+            lang2 = l; rest = rest.slice(l.m.length).replace(/^[\s\-_·\/→↔]+/, ""); break;
           }
         }
         srcCode = lang1.code; srcLabel = lang1.label;
@@ -683,14 +689,15 @@ function analyzeProductStructure(name: string, productType?: string): ProductAna
     displayName = `${ISO_LABEL[srcCode]}-${ISO_LABEL[tgtCode]} 번역`;
   }
 
-  // ── Step 6b-2: 통역 subtype displayName — 언어쌍 포함 (운영자 검색성 강화)
-  // 예: "영어 ↔ 한국어 동시통역", "베트남어 ↔ 한국어 위스퍼링통역"
+  // ── Step 6b-2: 통역 subtype displayName — 상품명 스타일 (운영자 검색성 강화)
+  // 예: "영어-한국어 동시통역", "베트남어-한국어 위스퍼링통역"
+  // displayName은 상품명 형식(-), direction 컬럼이 방향 정보(→/↔) 담당
   const INTERP_SUBTYPES = new Set(["동시통역","순차통역","위스퍼링통역","수행통역","전화통역","화상통역","미팅통역","전시회통역","현장통역","수행비서통역","통역"]);
   if (!skipLangDetect && INTERP_SUBTYPES.has(productCandidate)) {
     if (srcCode && tgtCode && ISO_LABEL[srcCode] && ISO_LABEL[tgtCode]) {
-      displayName = `${ISO_LABEL[srcCode]} ↔ ${ISO_LABEL[tgtCode]} ${productCandidate}`;
+      displayName = `${ISO_LABEL[srcCode]}-${ISO_LABEL[tgtCode]} ${productCandidate}`;
     } else if (srcCode && srcCode !== "ko" && ISO_LABEL[srcCode]) {
-      displayName = `한국어 ↔ ${ISO_LABEL[srcCode]} ${productCandidate}`;
+      displayName = `한국어-${ISO_LABEL[srcCode]} ${productCandidate}`;
     }
   }
 
