@@ -705,10 +705,12 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
   if (!skipLangDetect) {
     if (srcCode && tgtCode) {
       langPair  = `${srcLabel} ↔ ${tgtLabel}`;
-      direction = isInterp ? "bidirectional" : `${srcCode}→${tgtCode}`;
+      // 통역: ISO pair 양방향 표시 (예: th↔ko) — execute flow에서 분해해 DB 저장에 사용
+      // 번역: 단방향 (예: ko→en)
+      direction = isInterp ? `${srcCode}↔${tgtCode}` : `${srcCode}→${tgtCode}`;
     } else if (srcCode && srcCode !== "ko") {
       langPair  = `한국어 ↔ ${srcLabel}`;
-      direction = isInterp ? "bidirectional" : `ko↔${srcCode}`;
+      direction = `ko↔${srcCode}`;  // 양방향 — interp/translation 공통
     }
   }
 

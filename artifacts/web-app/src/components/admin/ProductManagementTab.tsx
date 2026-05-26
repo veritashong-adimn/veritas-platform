@@ -714,11 +714,24 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         const ovr = rowOverrides[item.rowNum];
         const effectiveName = ovr?.overriddenCandidate || an?.displayName || an?.productCandidate || item.name;
         const dirStr = an?.direction ?? "";
-        const dirParts = dirStr.includes("→") && !dirStr.includes("↔") ? dirStr.split("→") : null;
-        const parsedSrc = dirParts?.[0]?.trim() || null;
-        const parsedTgt = dirParts?.[1]?.trim() || null;
-        if (dirParts && (!parsedSrc || !parsedTgt)) {
-          console.warn("[reverse-parse-failed]", dirStr, { parsedSrc, parsedTgt, row: item.rowNum });
+
+        // direction에서 ISO code 추출:
+        //   단방향 "ko→en"  → split("→") → src="ko", tgt="en"
+        //   양방향 "th↔ko"  → split("↔") → src="th", tgt="ko"
+        //   (legacy "bidirectional" 문자열은 item.sourceLanguage/targetLanguage fallback)
+        let parsedSrc: string | null = null;
+        let parsedTgt: string | null = null;
+        if (dirStr.includes("→") && !dirStr.includes("↔")) {
+          const p = dirStr.split("→");
+          parsedSrc = p[0]?.trim() || null;
+          parsedTgt = p[1]?.trim() || null;
+        } else if (dirStr.includes("↔")) {
+          const p = dirStr.split("↔");
+          parsedSrc = p[0]?.trim() || null;
+          parsedTgt = p[1]?.trim() || null;
+        }
+        if ((dirStr.includes("→") || dirStr.includes("↔")) && (!parsedSrc || !parsedTgt)) {
+          console.warn("[direction-parse-failed]", dirStr, { parsedSrc, parsedTgt, row: item.rowNum });
         }
         return {
           ...item,
@@ -1854,7 +1867,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               }
                             }} />
                         </th>
-                        {["행", "원본 상품명", "Product 후보", "언어쌍", "방향", "유형", "단위", "단가", "상태", "이슈", "검토"].map(h => (
+                        {["행", "상품명(canonical)", "Product 후보", "언어쌍", "방향", "유형", "단위", "단가", "상태", "이슈", "검토"].map(h => (
                           <th key={h} style={thStyle}>{h}</th>
                         ))}
                       </tr>
@@ -1863,7 +1876,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                       {filtered.map((item, idx) => {
                         const sm = STATUS_META[item.status] ?? STATUS_META.review;
                         const an = item.analysis ?? { productCandidate: "", langPair: "", direction: "", difficulty: "", industry: "", industry2: "", isOptionCandidate: false, confidenceScore: 0, reviewReasons: [] };
-                        const isBidir = an.direction === "bidirectional";
+                        const isBidir = an.direction === "bidirectional" || (an.direction?.includes("↔") ?? false);
                         const isSelected = selectedRows.has(item.rowNum);
                         const riskScore = calcRiskScore(item);
                         const riskLevel = getRiskLevel(riskScore);
@@ -1884,8 +1897,22 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               )}
                               <div>{item.rowNum}</div>
                             </td>
-                            {/* 원본 상품명: cleanedOriginalName 표시, rawOriginalName은 title tooltip으로 보존 */}
-                            <td title={item.name} style={{ padding: "4px 8px", color: "#374151", maxWidth: 150, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{humanizeProductName(item.name)}</td>
+                            {/* 상품명(canonical): parser displayName 우선, 원본은 tooltip으로 보존 */}
+                            {(() => {
+                              const canonicalLabel =
+                                (an?.displayName && an.displayName !== an?.productCandidate)
+                                  ? an.displayName
+                                  : humanizeProductName(item.name);
+                              const showTooltip = canonicalLabel !== item.name;
+                              return (
+                                <td
+                                  title={showTooltip ? `원본: ${item.name}` : item.name}
+                                  style={{ padding: "4px 8px", color: "#374151", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                                >
+                                  {canonicalLabel}
+                                </td>
+                              );
+                            })()}
                             {/* Product 후보 — 클릭하여 inline 수정 가능 */}
                             <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
                               {editingRowNum === item.rowNum ? (
@@ -1976,10 +2003,17 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                                   MISSING_DIRECTION:           { color: "#d97706", background: "#fffbeb", border: "1px solid #fde68a" },
                                   REGION_LANGUAGE_AMBIGUOUS:   { color: "#1d4ed8", background: "#eff6ff", border: "1px solid #bfdbfe" },
                                   DOMAIN_SPECIALIZED_REVIEW:   { color: "#7c3aed", background: "#faf5ff", border: "1px solid #e9d5ff" },
-                                  // 중국어 계열 — 색상으로 3종 구분
+                                  // 중국어 계열
                                   ZH_AMBIGUOUS:                { color: "#b45309", background: "#fef3c7", border: "1px solid #fcd34d" },
                                   POTENTIAL_VARIANT_DUPLICATE: { color: "#6d28d9", background: "#ede9fe", border: "1px solid #c4b5fd" },
                                   CANTONESE_REVIEW:            { color: "#0369a1", background: "#e0f2fe", border: "1px solid #7dd3fc" },
+                                  // 신규 — 정보성 (초록 계열, 문제 아님)
+                                  COMPACT_DIRECTION_PATTERN:   { color: "#065f46", background: "#ecfdf5", border: "1px solid #6ee7b7" },
+                                  COUNTRY_LANGUAGE_ALIAS:      { color: "#92400e", background: "#fffbeb", border: "1px solid #fcd34d" },
+                                  AMBIGUOUS_LANGUAGE:          { color: "#9a3412", background: "#fff7ed", border: "1px solid #fdba74" },
+                                  MULTI_LANGUAGE_DETECTED:     { color: "#0891b2", background: "#ecfeff", border: "1px solid #67e8f9" },
+                                  UNKNOWN_ABBREVIATION:        { color: "#dc2626", background: "#fef2f2", border: "1px solid #fca5a5" },
+                                  REVIEW_REQUIRED_LANGUAGE:    { color: "#d97706", background: "#fffbeb", border: "1px solid #fde68a" },
                                 };
                                 const st = CODE_STYLE[r] ?? { color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a" };
                                 return (

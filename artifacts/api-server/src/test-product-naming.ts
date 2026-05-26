@@ -42,7 +42,7 @@ const REGRESSION_CASES: Case[] = [
   },
   {
     input: "ja↔ko 동시통역",
-    expect: { displayName: "일본어-한국어 동시통역" },
+    expect: { displayName: "일본어-한국어 동시통역", direction: "ja↔ko" },
   },
   {
     input: "법률번역",
@@ -161,19 +161,19 @@ const NEW_CASES: Case[] = [
   },
   // ── Interpretation with full language names ───────────────────────────────
   {
-    // bidirectional: direction="bidirectional", 언어 확인은 displayName으로
+    // 통역 양방향: direction은 "en↔zh-hans" (ISO pair), 언어 확인은 displayName으로
     input: "영어↔중국어동시통역",
     expect: {
-      direction: "bidirectional",
+      direction: "en↔zh-hans",
       displayName: "영어-중국어(간체) 동시통역",
       minConfidence: 60,
     },
   },
   {
-    // bidirectional: direction="bidirectional", 언어 확인은 displayName으로
+    // 통역 양방향: direction은 "th↔ko" (ISO pair)
     input: "태국어↔한국어수행통역",
     expect: {
-      direction: "bidirectional",
+      direction: "th↔ko",
       displayName: "태국어-한국어 수행통역",
       minConfidence: 75,
     },
