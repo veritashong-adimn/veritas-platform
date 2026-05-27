@@ -422,6 +422,7 @@ const ISO_LABEL: Record<string, string> = {
   ky: "키르기스어", uz: "우즈베크어", tk: "투르크멘어", kk: "카자흐스탄어",
   sk: "슬로바키아어", lt: "리투아니아어",
   tl: "타갈로그어", my: "미얀마어", si: "싱할라어", he: "히브리어",
+  tg: "타지키스탄어", tet: "동티모르어",
   "multi": "다국어",
 };
 
@@ -445,6 +446,7 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "포르투갈어",   code: "pt",  label: "포르투갈어" },
   { m: "포어",         code: "pt",  label: "포르투갈어" },
   { m: "이탈리아어",   code: "it",  label: "이탈리아어" },
+  { m: "이탈리아",     code: "it",  label: "이탈리아어" },
   { m: "이태리어",     code: "it",  label: "이탈리아어" },
   { m: "스와힐리어",   code: "sw",  label: "스와힐리어" },
   { m: "캄보디아어",   code: "km",  label: "크메르어" },
@@ -509,6 +511,8 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "미얀마어",     code: "my",  label: "미얀마어" },
   { m: "싱할라어",     code: "si",  label: "싱할라어" },
   { m: "히브리어",     code: "he",  label: "히브리어" },
+  { m: "타지키스탄어", code: "tg",  label: "타지키스탄어", reviewReason: REVIEW_REASONS.REVIEW_REQUIRED_LANGUAGE },
+  { m: "타지키스탄",   code: "tg",  label: "타지키스탄어", reviewReason: REVIEW_REASONS.REVIEW_REQUIRED_LANGUAGE },
   // ── 국가명 alias (COUNTRY_LANGUAGE_ALIAS) ─────────────────────────────────
   // 국가명이 언어명으로 통용되는 경우 — 실제 언어코드로 매핑 + 검토 플래그
   { m: "파키스탄어",   code: "ur",  label: "우르두어" },

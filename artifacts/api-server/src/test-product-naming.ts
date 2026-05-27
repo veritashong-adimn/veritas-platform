@@ -254,10 +254,11 @@ const POLICY_CASES: Case[] = [
       reviewReasonExcludes: ["Product 불명확"],
     },
   },
-  // 작업 5+11: REVIEW_REQUIRED_LANGUAGE
+  // 작업 5+11: REVIEW_REQUIRED_LANGUAGE + displayName canonical
   {
     input: "동티모르어-한글번역",
     expect: {
+      displayName: "동티모르어-한국어 번역",
       direction: "tet→ko",
       reviewReasonIncludes: ["REVIEW_REQUIRED_LANGUAGE"],
     },
@@ -300,13 +301,46 @@ const FINAL_CASES: Case[] = [
       reviewReasonExcludes: ["UNKNOWN_LANGUAGE"],
     },
   },
-  // 작업 8: lt 신규 등록
+  // 작업 8: lt — 정식 표기 (어 포함)
   {
     input: "리투아니아어-한국어번역",
     expect: {
       displayName: "리투아니아어-한국어 번역",
       direction: "lt→ko",
       reviewReasonExcludes: ["UNKNOWN_LANGUAGE"],
+    },
+  },
+  // 작업 8: lt — 실제 Excel 형식 (한글 alias + 어 없는 국가명)
+  {
+    input: "리투아니아-한글번역",
+    expect: {
+      displayName: "리투아니아어-한국어 번역",
+      direction: "lt→ko",
+    },
+  },
+  // 타지키스탄어 신규 등록 (tg)
+  {
+    input: "한글-타지키스탄어번역",
+    expect: {
+      displayName: "한국어-타지키스탄어 번역",
+      direction: "ko→tg",
+      reviewReasonIncludes: ["REVIEW_REQUIRED_LANGUAGE"],
+    },
+  },
+  // 이탈리아 국가명 alias (어 없이)
+  {
+    input: "한-이탈리아",
+    expect: {
+      displayName: "한국어-이탈리아어 번역",
+      direction: "ko→it",
+    },
+  },
+  // 카자흐스탄 — 실제 Excel 형식
+  {
+    input: "카자흐스탄-한번역",
+    expect: {
+      displayName: "카자흐스탄어-한국어 번역",
+      direction: "kk→ko",
     },
   },
   // 작업 4+5: expense override (차량대여)
