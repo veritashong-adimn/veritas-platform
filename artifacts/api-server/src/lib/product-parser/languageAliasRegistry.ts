@@ -31,6 +31,7 @@ export const COMPACT_SINGLE_CHAR_MAP: Record<string, string> = {
 export const COMPACT_SERVICE_KEYWORDS = [
   "원어민감수",
   "공증번역",
+  "전문번역",
   "번역",
   "통역",
   "감수",

@@ -203,7 +203,7 @@ export const LANGUAGE_CODES: { code: string; label: string }[] = [
   { code: "fr",  label: "프랑스어" },
   { code: "ar",  label: "아랍어" },
   { code: "it",  label: "이탈리아어" },
-  { code: "tr",  label: "터키어" },
+  { code: "tr",  label: "튀르키예어" },
   { code: "pt",  label: "포르투갈어" },
   { code: "pl",  label: "폴란드어" },
   { code: "sv",  label: "스웨덴어" },
@@ -217,15 +217,18 @@ export const LANGUAGE_CODES: { code: string; label: string }[] = [
   { code: "th",  label: "태국어" },
   { code: "id",  label: "인도네시아어" },
   { code: "ms",  label: "말레이어" },
-  { code: "km",  label: "캄보디아어" },
+  { code: "km",  label: "크메르어" },
   { code: "hi",  label: "인도어" },
-  { code: "ur",  label: "파키스탄어" },
+  { code: "ur",  label: "우르두어" },
   { code: "si",  label: "스리랑카어" },
   { code: "bn",  label: "방글라데시어" },
   { code: "my",  label: "미얀마어" },
   { code: "lo",  label: "라오스어" },
   { code: "yue", label: "광동어" },
   { code: "uz",  label: "우즈베키스탄어" },
+  { code: "kk",  label: "카자흐스탄어" },
+  { code: "sk",  label: "슬로바키아어" },
+  { code: "lt",  label: "리투아니아어" },
   { code: "uk",  label: "우크라이나어" },
   { code: "other", label: "기타" },
 ];
@@ -409,15 +412,17 @@ const ISO_LABEL: Record<string, string> = {
   fr: "프랑스어", de: "독일어", es: "스페인어", ru: "러시아어",
   ar: "아랍어",  pt: "포르투갈어", vi: "베트남어", th: "태국어",
   id: "인도네시아어", ms: "말레이어", hi: "힌디어", ph: "필리핀어",
-  tr: "터키어",  it: "이탈리아어", mn: "몽골어",
+  tr: "튀르키예어", it: "이탈리아어", mn: "몽골어",
   bn: "벵골어",  ur: "우르두어",   fa: "페르시아어", km: "크메르어",
   lo: "라오스어", sw: "스와힐리어", ne: "네팔어",  ta: "타밀어",
   yue: "광동어", sr: "세르비아어", uk: "우크라이나어", pl: "폴란드어",
   nl: "네덜란드어", cs: "체코어", ro: "루마니아어", hu: "헝가리어",
   da: "덴마크어",  sv: "스웨덴어",  no: "노르웨이어", fi: "핀란드어",
   bg: "불가리아어", hr: "크로아티아어", el: "그리스어",
-  ky: "키르기스어", uz: "우즈베크어", tk: "투르크멘어",
+  ky: "키르기스어", uz: "우즈베크어", tk: "투르크멘어", kk: "카자흐스탄어",
+  sk: "슬로바키아어", lt: "리투아니아어",
   tl: "타갈로그어", my: "미얀마어", si: "싱할라어", he: "히브리어",
+  "multi": "다국어",
 };
 
 type LangEntry = { m: string; code: string; label: string; reviewReason?: string };
@@ -426,6 +431,13 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "투르크멘어",   code: "tk",  label: "투르크멘어" },
   { m: "우즈베크어",   code: "uz",  label: "우즈베크어" },
   { m: "키르기스어",   code: "ky",  label: "키르기스어" },
+  { m: "카자흐스탄어", code: "kk",  label: "카자흐스탄어" },
+  { m: "카자흐스탄",   code: "kk",  label: "카자흐스탄어" },
+  { m: "카자흐어",     code: "kk",  label: "카자흐스탄어" },
+  { m: "슬로바키아어", code: "sk",  label: "슬로바키아어" },
+  { m: "슬로바키아",   code: "sk",  label: "슬로바키아어" },
+  { m: "리투아니아어", code: "lt",  label: "리투아니아어" },
+  { m: "리투아니아",   code: "lt",  label: "리투아니아어" },
   { m: "타갈로그어",   code: "tl",  label: "타갈로그어" },
   { m: "인도네시아어", code: "id",  label: "인도네시아어" },
   { m: "인니어",       code: "id",  label: "인도네시아어" },
@@ -468,6 +480,7 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "말레이시아어", code: "ms",  label: "말레이어" },
   { m: "말레이어",     code: "ms",  label: "말레이어" },
   { m: "체코어",       code: "cs",  label: "체코어" },
+  { m: "체코",         code: "cs",  label: "체코어" },
   // 광동어: yue 정식 지원 전 zh-hant fallback + CANTONESE_REVIEW 검토 플래그
   { m: "광동어",  code: "zh-hant", label: "중국어(번체)", reviewReason: REVIEW_REASONS.CANTONESE_REVIEW },
   { m: "타밀어",       code: "ta",  label: "타밀어" },
@@ -489,7 +502,8 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "독일어",       code: "de",  label: "독일어" },
   { m: "아랍어",       code: "ar",  label: "아랍어" },
   { m: "힌디어",       code: "hi",  label: "힌디어" },
-  { m: "터키어",       code: "tr",  label: "터키어" },
+  { m: "터키어",       code: "tr",  label: "튀르키예어" },
+  { m: "터키",         code: "tr",  label: "튀르키예어" },
   { m: "태국어",       code: "th",  label: "태국어" },
   { m: "몽골어",       code: "mn",  label: "몽골어" },
   { m: "미얀마어",     code: "my",  label: "미얀마어" },
@@ -497,12 +511,17 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "히브리어",     code: "he",  label: "히브리어" },
   // ── 국가명 alias (COUNTRY_LANGUAGE_ALIAS) ─────────────────────────────────
   // 국가명이 언어명으로 통용되는 경우 — 실제 언어코드로 매핑 + 검토 플래그
-  { m: "파키스탄어",   code: "ur",      label: "우르두어",   reviewReason: REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS },
-  { m: "이란어",       code: "fa",      label: "페르시아어", reviewReason: REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS },
-  { m: "튀르키예어",   code: "tr",      label: "터키어",     reviewReason: REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS },
+  { m: "파키스탄어",   code: "ur",  label: "우르두어" },
+  { m: "이란어",       code: "fa",  label: "페르시아어" },
+  { m: "튀르키예어",   code: "tr",  label: "튀르키예어" },
+  { m: "튀르키예",     code: "tr",  label: "튀르키예어" },
   { m: "이라크어",     code: "ar",      label: "아랍어",     reviewReason: REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS },
   { m: "이집트어",     code: "ar",      label: "아랍어",     reviewReason: REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS },
   { m: "브라질어",     code: "pt",      label: "포르투갈어", reviewReason: REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS },
+  { m: "동티모르어",   code: "tet",     label: "동티모르어", reviewReason: REVIEW_REASONS.REVIEW_REQUIRED_LANGUAGE },
+  { m: "오스트리아어", code: "de",      label: "독일어",     reviewReason: REVIEW_REASONS.REVIEW_REQUIRED_LANGUAGE },
+  // 다국어 — multi language code (방향 없음, direction 생성 금지)
+  { m: "다국어",       code: "multi",   label: "다국어" },
   // 2음절 alias
   { m: "독어", code: "de", label: "독일어" },   // "독어사용장비" 등에서 "독" 단음절 오파싱 방지
   { m: "스웨", code: "sv", label: "스웨덴어" },
@@ -531,16 +550,33 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "헝", code: "hu", label: "헝가리어" },
   { m: "루", code: "ro", label: "루마니아어" },
   { m: "체", code: "cs", label: "체코어" },
-  { m: "터", code: "tr", label: "터키어" },
+  { m: "터", code: "tr", label: "튀르키예어" },
   { m: "인", code: "id", label: "인도네시아어" },
 ];
 
 
 const SORTED_LANG_ENTRIES: LangEntry[] = [...LANG_ENTRIES].sort((a, b) => b.m.length - a.m.length);
 
+// 단음절 SEP_RX 가드 예외: 서비스 키워드 직전에 단음절 언어코드가 오면 분리자 없어도 허용
+// 예: "카자흐스탄-한번역" → rest="한번역", "번역"이 서비스 키워드 → "한"=ko 감지 허용
+const SERVICE_KW_RX = /^(원어민감수|공증번역|전문번역|번역|통역|감수)/;
+
 // Canonical service type dictionary (긴 패턴 우선)
 // 중요: 장비 계열을 통역/번역 패턴보다 반드시 먼저 배치해야 "동시통역장비"가 오분류되지 않음
 const CANONICAL_PRODUCTS: [RegExp, string][] = [
+  // ── expense 계열 (interpretation 오분류 방지 — 장비/번역 패턴보다 먼저) ──────
+  [/식대|식비/,                     "식비"],
+  [/이동비|교통비/,                 "교통비"],
+  [/취소보상비?/,                   "취소보상비"],
+  [/차량\s*대여|차량\s*렌트/,       "차량대여"],
+  [/전화비|통화비/,                 "전화비"],
+  [/비자발급/,                      "비자발급비"],
+  // ── 통역 support 계열 ─────────────────────────────────────────────────────
+  [/사전미팅|사전준비|사전브리핑/,  "사전미팅"],
+  [/행사보조|현장지원|운영보조/,    "행사보조"],
+  // ── 미디어 계열 ──────────────────────────────────────────────────────────
+  [/더빙/,                          "더빙"],
+  [/녹음/,                          "녹음"],
   // ── 장비 계열 ─────────────────────────────────────────────────────────────
   [/동시통역\s*장비/,               "동시통역장비"],
   [/위스퍼링\s*장비/,               "위스퍼링장비"],
@@ -548,12 +584,14 @@ const CANONICAL_PRODUCTS: [RegExp, string][] = [
   [/통역\s*부스/,                   "통역부스"],
   [/통역용?\s*장비|통역\s*장비/,    "통역장비"],
   [/사용\s*장비/,                   "통역장비"],  // "독어사용장비" workName 잔여 처리
+  [/리시버/,                        "수신기"],
   [/수신기/,                        "수신기"],
   [/송신기/,                        "송신기"],
   [/헤드셋/,                        "헤드셋"],
   // ── 번역 계열 ─────────────────────────────────────────────────────────────
   [/원어민감수/,                    "원어민감수"],
-  [/공증번역/,                      "공증번역"],
+  [/공증번역|번역공증|아포스티유|대사관인증/, "공증번역"],
+  [/통번역/,                         "통번역"],
   [/영문화|국문화|한글화|영문작업|영문번역|영어번역/, "번역"],
   [/번역/,                          "번역"],
   [/감수/,                          "감수"],
@@ -628,14 +666,14 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
       let lang2: LangEntry | null = null;
       for (const l of SORTED_LANG_ENTRIES) {
         if (!rest.startsWith(l.m)) continue;
-        if (l.m.length === 1 && rest.length > 1 && !SEP_RX.test(rest[1])) continue;
+        if (l.m.length === 1 && rest.length > 1 && !SEP_RX.test(rest[1]) && !SERVICE_KW_RX.test(rest.slice(1))) continue;
         lang1 = l; rest = rest.slice(l.m.length).replace(/^[\s\-_·\/→↔]+/, ""); break;
       }
       if (lang1) {
         rest = rest.replace(/^[\s\-_·\/→↔]+/, "");
         for (const l of SORTED_LANG_ENTRIES) {
           if (l.code !== lang1.code && rest.startsWith(l.m)) {
-            if (l.m.length === 1 && rest.length > 1 && !SEP_RX.test(rest[1])) continue;
+            if (l.m.length === 1 && rest.length > 1 && !SEP_RX.test(rest[1]) && !SERVICE_KW_RX.test(rest.slice(1))) continue;
             lang2 = l; rest = rest.slice(l.m.length).replace(/^[\s\-_·\/→↔]+/, ""); break;
           }
         }
@@ -661,6 +699,12 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
     if (rx.test(productCandidate)) { productCandidate = canonical; isCanonical = true; break; }
   }
 
+  // ── Step 5a: 언어쌍 감지됐으나 서비스 미식별 — 번역 default 추정 (업계 관행)
+  // isCanonical = false 유지 → "Product 불명확" review reason + 낮은 confidence 부여
+  if (!productCandidate && srcCode && tgtCode && !skipLangDetect && !/통역/.test(name)) {
+    productCandidate = "번역";
+  }
+
   if (!srcCode && !productCandidate) return none;
 
   // ── Step 5b: 설명형/프로젝트명/운영성 항목 감지
@@ -675,7 +719,9 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
   const hasWorkDescKw = !isCanonical && WORK_DESC_KW.test(name);
   // 비canonical이면서 잔여 텍스트가 길면 설명형으로 판단
   const isLongNonCanonical = !isCanonical && productCandidate.replace(/\s/g, "").length >= 8;
-  const isProjDesc = hasProjKw || isLongNonCanonical;
+  // 통번역 canonical은 프로젝트성 hybrid service — 과도한 페널티 부여 금지
+  const isHybridService = productCandidate === "통번역";
+  const isProjDesc = !isHybridService && (hasProjKw || isLongNonCanonical);
   const isOpsItem  = OPS_ITEM_KW.test(name) || OPS_ITEM_KW.test(productCandidate);
 
   // ── Step 5c: 감수/원어민감수 패턴 분석
@@ -703,7 +749,11 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
   let langPair = ""; let direction = "";
 
   if (!skipLangDetect) {
-    if (srcCode && tgtCode) {
+    if (srcCode === "multi" || tgtCode === "multi") {
+      // 다국어 포함 시: langPair 생성, direction 생성 금지 — 단일방향 표현 불가
+      langPair  = `${srcLabel || "다국어"} ↔ ${tgtLabel || "다국어"}`;
+      direction = "";
+    } else if (srcCode && tgtCode) {
       langPair  = `${srcLabel} ↔ ${tgtLabel}`;
       // 통역: ISO pair 양방향 표시 (예: th↔ko) — execute flow에서 분해해 DB 저장에 사용
       // 번역: 단방향 (예: ko→en)
@@ -766,7 +816,10 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
   if (hasCountryKw)    reviewReasons.push("COUNTRY_NOT_LANGUAGE");
   if (hasRegionLangKw) reviewReasons.push("REGION_LANGUAGE_AMBIGUOUS");
   if (hasDomainKw)     reviewReasons.push("DOMAIN_BASED");
-  if (hasMultiLangKw) reviewReasons.push("MULTI_LANGUAGE_AMBIGUOUS");
+  if (hasMultiLangKw) {
+    const isMultiResolved = srcCode === "multi" || tgtCode === "multi";
+    reviewReasons.push(isMultiResolved ? REVIEW_REASONS.MULTI_LANGUAGE_DETECTED : "MULTI_LANGUAGE_AMBIGUOUS");
+  }
   if (isProjDesc) reviewReasons.push("프로젝트명/설명형 가능성");
   if (hasWorkDescKw && !isProjDesc) reviewReasons.push("작업명 패턴");
   if (isOpsItem) reviewReasons.push("운영성 항목 (EX계열 가능)");
@@ -787,9 +840,9 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
   if (hasCountryKw)    score -= 30;
   if (hasRegionLangKw) score -= 25;
   if (hasDomainKw)     score -= 10;
-  if (hasMultiLangKw) score -= 15;
-  // 설명형/프로젝트명 패널티 (canonical이면 약하게, 아니면 강하게)
-  if (isProjDesc) score -= isCanonical ? 15 : 22;
+  if (hasMultiLangKw && srcCode !== "multi" && tgtCode !== "multi") score -= 15;
+  // 설명형/프로젝트명 패널티 — 운영 데이터 과도 페널티 방지를 위해 완화
+  if (isProjDesc) score -= isCanonical ? 8 : 15;
   if (hasWorkDescKw && !isProjDesc) score -= 10;
   if (isOpsItem) score -= 12;
   // NON_PENALTY_REASONS (정보성 사유)는 페널티 제외 — reviewReasonRules.ts 참조
@@ -806,8 +859,11 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
 function suggestProductType(name: string, mainCategory?: string): string {
   const text = normalizeProdName((name ?? "") + (mainCategory ?? ""));
   if (/장비|부스|수신기|송신기|헤드셋|리시버|fm|마이크|음향|pa장비/.test(text)) return "equipment";
-  if (/동시통역|순차통역|수행통역|위스퍼링|화상통역|전화통역|미팅통역|전시회통역|현장통역|수행비서통역|출장이동|취소보상|할증|연장료|야간|휴일|대기료/.test(text)) return "interpretation";
-  if (/배송|퀵|숙박|식비|식대|교통비|출장비|인쇄|우편|택배|실비/.test(text)) return "expense";
+  if (/동시통역|순차통역|수행통역|위스퍼링|화상통역|전화통역|미팅통역|전시회통역|현장통역|수행비서통역|출장이동|할증|연장료|야간|휴일|대기료|사전미팅|사전준비|사전브리핑|행사보조/.test(text)) return "interpretation";
+  if (/배송|퀵|숙박|식비|식대|교통비|이동비|취소보상|출장비|인쇄|우편|택배|실비|차량대여|차량렌트|전화비|비자발급/.test(text)) return "expense";
+  if (/통번역/.test(text)) return "combined";
+  if (/번역.*감수|감수.*번역/.test(text)) return "proofreading";
+  if (/녹음|더빙/.test(text)) return "media";
   if (/번역|감수|공증|원어민|교정/.test(text)) return "translation";
   return "";
 }
@@ -1098,14 +1154,19 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
         issues.push(`단가 숫자 오류: '${r[8]}'`); if (status === "new") status = "review";
       }
 
-      const validUnits = UNITS_BY_TYPE[pType] ?? ["건"];
+      // suggestProductType 먼저 계산 — expense/equipment unit override에 활용
+      const suggestedType = suggestProductType(nameRaw, mainCat);
+      // expense/equipment 감지 시 해당 taxonomy의 default unit 강제 적용 (interpretation unit 오염 방지)
+      const effectiveTypeForUnit = suggestedType === "expense" ? "expense"
+                                 : suggestedType === "equipment" ? "equipment"
+                                 : pType;
+      const validUnits = UNITS_BY_TYPE[effectiveTypeForUnit] ?? ["건"];
       const unit = validUnits.includes(unitRaw) ? unitRaw : (unitRaw || validUnits[0]);
       if (unitRaw && !validUnits.includes(unitRaw)) {
         issues.push(`단위 '${unitRaw}' → '${unit}' 자동 조정`);
       }
       const basePrice = baseRaw !== null && !isNaN(baseRaw) ? Math.round(baseRaw) : null;
 
-      const suggestedType = suggestProductType(nameRaw, mainCat);
       if (suggestedType && PRODUCT_TYPES[pType] && suggestedType !== pType) {
         issues.push(`taxonomy 추천: ${PRODUCT_TYPES[suggestedType]?.label ?? suggestedType}`);
       }

@@ -4,7 +4,7 @@ import { logger } from "./lib/logger";
 import { seedAdmin } from "./lib/seedAdmin";
 import { seedRbac } from "./lib/rbac";
 
-const PORT = process.env.PORT;
+const PORT = process.env.PORT ?? "3001";
 
 async function startServer() {
   try {

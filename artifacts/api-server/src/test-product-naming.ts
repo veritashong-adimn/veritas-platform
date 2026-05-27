@@ -115,12 +115,12 @@ const NEW_CASES: Case[] = [
       direction: "ko→tr",
       sourceLanguage: "ko",
       targetLanguage: "tr",
-      displayName: "한국어-터키어 번역",
+      displayName: "한국어-튀르키예어 번역",  // 정책 변경: canonical = 튀르키예어
       minConfidence: 85,
       reviewReasonIncludes: ["COMPACT_DIRECTION_PATTERN"],
     },
   },
-  // ── Country language alias ────────────────────────────────────────────────
+  // ── Country language alias (확정 alias — COUNTRY_LANGUAGE_ALIAS 플래그 없음) ──
   {
     input: "파키스탄어-한국어번역",
     expect: {
@@ -129,7 +129,7 @@ const NEW_CASES: Case[] = [
       targetLanguage: "ko",
       displayName: "우르두어-한국어 번역",
       minConfidence: 75,
-      reviewReasonIncludes: ["COUNTRY_LANGUAGE_ALIAS"],
+      reviewReasonExcludes: ["COUNTRY_LANGUAGE_ALIAS"],  // 확정 alias — review 불필요
     },
   },
   {
@@ -140,7 +140,7 @@ const NEW_CASES: Case[] = [
       targetLanguage: "ko",
       displayName: "페르시아어-한국어 번역",
       minConfidence: 75,
-      reviewReasonIncludes: ["COUNTRY_LANGUAGE_ALIAS"],
+      reviewReasonExcludes: ["COUNTRY_LANGUAGE_ALIAS"],  // 확정 alias — review 불필요
     },
   },
   // ── Native review with alias ──────────────────────────────────────────────
@@ -180,9 +180,210 @@ const NEW_CASES: Case[] = [
   },
 ];
 
+// ── Policy 검증 케이스 (작업 1-12 기준) ──────────────────────────────────────
+const POLICY_CASES: Case[] = [
+  // 작업 2: 튀르키예어 canonical
+  {
+    input: "한-튀르키예번역",
+    expect: {
+      displayName: "한국어-튀르키예어 번역",
+      direction: "ko→tr",
+      reviewReasonExcludes: ["COUNTRY_LANGUAGE_ALIAS"],
+    },
+  },
+  // 작업 3: compact 번역 canonical display
+  {
+    input: "체코-한글번역",
+    expect: {
+      displayName: "체코어-한국어 번역",
+      direction: "cs→ko",
+    },
+  },
+  // 작업 4: 확정 alias — review 플래그 없음
+  {
+    input: "캄보디아어-한국어번역",
+    expect: {
+      displayName: "크메르어-한국어 번역",
+      direction: "km→ko",
+      reviewReasonExcludes: ["COUNTRY_LANGUAGE_ALIAS"],
+    },
+  },
+  // 작업 6: 다국어 — direction 없음, MULTI_LANGUAGE_DETECTED
+  {
+    input: "다국어-한글번역",
+    expect: {
+      displayName: "다국어-한국어 번역",
+      direction: "",
+      reviewReasonIncludes: ["MULTI_LANGUAGE_DETECTED"],
+    },
+  },
+  {
+    input: "한-다국어번역",
+    expect: {
+      displayName: "한국어-다국어 번역",
+      direction: "",
+      reviewReasonIncludes: ["MULTI_LANGUAGE_DETECTED"],
+    },
+  },
+  // 작업 8+9: expense canonical — direction 없음, Product 불명확 없음
+  {
+    input: "식비",
+    expect: {
+      productCandidate: "식비",
+      direction: "",
+      minConfidence: 70,
+      reviewReasonExcludes: ["Product 불명확"],
+    },
+  },
+  {
+    input: "교통비",
+    expect: {
+      productCandidate: "교통비",
+      direction: "",
+      minConfidence: 70,
+      reviewReasonExcludes: ["Product 불명확"],
+    },
+  },
+  // 작업 6+8: equipment alias — 수신기로 canonical
+  {
+    input: "리시버",
+    expect: {
+      productCandidate: "수신기",
+      direction: "",
+      minConfidence: 70,
+      reviewReasonExcludes: ["Product 불명확"],
+    },
+  },
+  // 작업 5+11: REVIEW_REQUIRED_LANGUAGE
+  {
+    input: "동티모르어-한글번역",
+    expect: {
+      direction: "tet→ko",
+      reviewReasonIncludes: ["REVIEW_REQUIRED_LANGUAGE"],
+    },
+  },
+  // compact 전문번역 (인한전문번역)
+  {
+    input: "인한전문번역",
+    expect: {
+      displayName: "인도네시아어-한국어 번역",
+      direction: "id→ko",
+      reviewReasonIncludes: ["COMPACT_DIRECTION_PATTERN"],
+    },
+  },
+];
+
+// ── Final Rendering 검증 (작업 1-13) ─────────────────────────────────────────
+const FINAL_CASES: Case[] = [
+  // 작업 1+2: bare language pair → 번역 inference, 한글→한국어 canonical
+  {
+    input: "한글-크메르어",
+    expect: {
+      displayName: "한국어-크메르어 번역",
+      direction: "ko→km",
+    },
+  },
+  // 작업 1: 카자흐스탄(without 어) + 한(single char + 서비스키워드)
+  {
+    input: "카자흐스탄-한번역",
+    expect: {
+      displayName: "카자흐스탄어-한국어 번역",
+      direction: "kk→ko",
+    },
+  },
+  // 작업 8: sk 신규 등록
+  {
+    input: "슬로바키아어 → 한국어 일반번역",
+    expect: {
+      displayName: "슬로바키아어-한국어 번역",
+      direction: "sk→ko",
+      reviewReasonExcludes: ["UNKNOWN_LANGUAGE"],
+    },
+  },
+  // 작업 8: lt 신규 등록
+  {
+    input: "리투아니아어-한국어번역",
+    expect: {
+      displayName: "리투아니아어-한국어 번역",
+      direction: "lt→ko",
+      reviewReasonExcludes: ["UNKNOWN_LANGUAGE"],
+    },
+  },
+  // 작업 4+5: expense override (차량대여)
+  {
+    input: "차량대여",
+    expect: {
+      productCandidate: "차량대여",
+      direction: "",
+      minConfidence: 70,
+      reviewReasonExcludes: ["Product 불명확"],
+    },
+  },
+  // 작업 9: 번역공증/아포스티유 — certification canonical
+  {
+    input: "번역공증/아포스티유",
+    expect: {
+      productCandidate: "공증번역",
+      minConfidence: 70,
+    },
+  },
+  {
+    input: "아포스티유",
+    expect: {
+      productCandidate: "공증번역",
+      minConfidence: 70,
+    },
+  },
+  // 작업 9: 사전미팅 — interpretation support canonical
+  {
+    input: "사전미팅",
+    expect: {
+      productCandidate: "사전미팅",
+      direction: "",
+      minConfidence: 70,
+    },
+  },
+  // 작업 9: 행사보조 canonical
+  {
+    input: "행사보조",
+    expect: {
+      productCandidate: "행사보조",
+      direction: "",
+      minConfidence: 70,
+    },
+  },
+  // 작업 11: 번역+감수 혼합 — proofreading 추천 (suggestProductType 기준)
+  {
+    input: "번역 및 감수",
+    expect: {
+      productCandidate: "번역",  // analyzeProductStructure는 번역 canonical 반환
+      // suggestProductType은 "proofreading" 반환 (import preview에서 taxonomy 추천)
+    },
+  },
+  // 작업 10: 프로젝트 penalty 완화 검증
+  {
+    input: "ERP 구축 통번역",
+    expect: {
+      productCandidate: "통번역",
+      minConfidence: 60,
+    },
+  },
+  // 작업 6: equipment vs expense 경계
+  {
+    input: "취소보상비",
+    expect: {
+      productCandidate: "취소보상비",
+      direction: "",
+      minConfidence: 70,
+    },
+  },
+];
+
 const ALL_CASES: { label: string; cases: Case[] }[] = [
   { label: "Regression (기존 9케이스)", cases: REGRESSION_CASES },
   { label: "New (신규 11케이스)",       cases: NEW_CASES },
+  { label: "Policy (정책 검증 10케이스)", cases: POLICY_CASES },
+  { label: "Final Rendering (작업 13 — 12케이스)", cases: FINAL_CASES },
 ];
 
 let passed = 0;

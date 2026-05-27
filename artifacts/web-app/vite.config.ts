@@ -53,6 +53,16 @@ export default defineConfig({
       strict: true,
       deny: ["**/.*"],
     },
+    proxy: {
+      "/api": {
+        target: "http://localhost:4567",
+        changeOrigin: true,
+      },
+      "/uploads": {
+        target: "http://localhost:4567",
+        changeOrigin: true,
+      },
+    },
   },
   preview: {
     port,
