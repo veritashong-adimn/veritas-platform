@@ -413,7 +413,7 @@ const ISO_LABEL: Record<string, string> = {
   ar: "아랍어",  pt: "포르투갈어", vi: "베트남어", th: "태국어",
   id: "인도네시아어", ms: "말레이어", hi: "힌디어", ph: "필리핀어",
   tr: "튀르키예어", it: "이탈리아어", mn: "몽골어",
-  bn: "벵골어",  ur: "우르두어",   fa: "페르시아어", km: "크메르어",
+  bn: "뱅골어",  ur: "우르두어",   fa: "페르시아어", km: "크메르어",
   lo: "라오스어", sw: "스와힐리어", ne: "네팔어",  ta: "타밀어",
   yue: "광동어", sr: "세르비아어", uk: "우크라이나어", pl: "폴란드어",
   nl: "네덜란드어", cs: "체코어", ro: "루마니아어", hu: "헝가리어",
@@ -423,6 +423,7 @@ const ISO_LABEL: Record<string, string> = {
   sk: "슬로바키아어", lt: "리투아니아어",
   tl: "타갈로그어", my: "미얀마어", si: "싱할라어", he: "히브리어",
   tg: "타지키스탄어", tet: "동티모르어",
+  am: "에티오피아어", lzh: "한문",
   "multi": "다국어",
 };
 
@@ -487,7 +488,8 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "광동어",  code: "zh-hant", label: "중국어(번체)", reviewReason: REVIEW_REASONS.CANTONESE_REVIEW },
   { m: "타밀어",       code: "ta",  label: "타밀어" },
   { m: "네팔어",       code: "ne",  label: "네팔어" },
-  { m: "벵골어",       code: "bn",  label: "벵골어" },
+  { m: "벵골어",       code: "bn",  label: "뱅골어" },
+  { m: "뱅골어",       code: "bn",  label: "뱅골어" },
   { m: "폴란드어",     code: "pl",  label: "폴란드어" },
   { m: "영어",         code: "en",  label: "영어" },
   { m: "일본어",       code: "ja",  label: "일본어" },
@@ -511,6 +513,9 @@ const LANG_ENTRIES: LangEntry[] = [
   { m: "미얀마어",     code: "my",  label: "미얀마어" },
   { m: "싱할라어",     code: "si",  label: "싱할라어" },
   { m: "히브리어",     code: "he",  label: "히브리어" },
+  { m: "에티오피아어", code: "am",  label: "에티오피아어", reviewReason: REVIEW_REASONS.REVIEW_REQUIRED_LANGUAGE },
+  { m: "에티오피아",   code: "am",  label: "에티오피아어", reviewReason: REVIEW_REASONS.REVIEW_REQUIRED_LANGUAGE },
+  { m: "한문",         code: "lzh", label: "한문" },
   { m: "타지키스탄어", code: "tg",  label: "타지키스탄어", reviewReason: REVIEW_REASONS.REVIEW_REQUIRED_LANGUAGE },
   { m: "타지키스탄",   code: "tg",  label: "타지키스탄어", reviewReason: REVIEW_REASONS.REVIEW_REQUIRED_LANGUAGE },
   // ── 국가명 alias (COUNTRY_LANGUAGE_ALIAS) ─────────────────────────────────
@@ -597,6 +602,7 @@ const CANONICAL_PRODUCTS: [RegExp, string][] = [
   [/공증번역|번역공증|아포스티유|대사관인증/, "공증번역"],
   [/통번역/,                         "통번역"],
   [/영문화|국문화|한글화|영문작업|영문번역|영어번역/, "번역"],
+  [/^화$/,                          "번역"],
   [/번역/,                          "번역"],
   [/감수/,                          "감수"],
   // ── 통역 subtype (구체적인 것 먼저, generic fallback 마지막) ───────────────

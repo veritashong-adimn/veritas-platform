@@ -411,13 +411,52 @@ const FINAL_CASES: Case[] = [
       minConfidence: 70,
     },
   },
+  // E2E 5-case: Import Preview 실제 화면 검증 케이스
+  {
+    input: "한글-타지키스탄어번역",
+    expect: {
+      displayName: "한국어-타지키스탄어 번역",
+      direction: "ko→tg",
+      reviewReasonIncludes: ["REVIEW_REQUIRED_LANGUAGE"],
+    },
+  },
+  {
+    input: "한문국문화",
+    expect: {
+      displayName: "한문-한국어 번역",
+      direction: "lzh→ko",
+    },
+  },
+  {
+    input: "에티오피아어-한국어번역",
+    expect: {
+      displayName: "에티오피아어-한국어 번역",
+      direction: "am→ko",
+      reviewReasonIncludes: ["REVIEW_REQUIRED_LANGUAGE"],
+    },
+  },
+  {
+    input: "한-뱅골어 번역",
+    expect: {
+      displayName: "한국어-뱅골어 번역",
+      direction: "ko→bn",
+    },
+  },
+  {
+    input: "프한번역",
+    expect: {
+      displayName: "프랑스어-한국어 번역",
+      direction: "fr→ko",
+      reviewReasonIncludes: ["COMPACT_DIRECTION_PATTERN"],
+    },
+  },
 ];
 
 const ALL_CASES: { label: string; cases: Case[] }[] = [
   { label: "Regression (기존 9케이스)", cases: REGRESSION_CASES },
   { label: "New (신규 11케이스)",       cases: NEW_CASES },
   { label: "Policy (정책 검증 10케이스)", cases: POLICY_CASES },
-  { label: "Final Rendering (작업 13 — 12케이스)", cases: FINAL_CASES },
+  { label: "Final Rendering (작업 13 + E2E 5케이스)", cases: FINAL_CASES },
 ];
 
 let passed = 0;

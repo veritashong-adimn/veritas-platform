@@ -46,7 +46,7 @@ type PersistedReviewSession = {
 };
 
 // ─── localStorage 헬퍼 ────────────────────────────────────────────────────
-const IMPORT_PREVIEW_SCHEMA_VERSION = 3;
+const IMPORT_PREVIEW_SCHEMA_VERSION = 4;
 const REVIEW_SESSION_KEY = "veritas_review_session_v2";
 
 function loadReviewSession(): PersistedReviewSession | null {

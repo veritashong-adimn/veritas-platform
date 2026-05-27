@@ -11,6 +11,7 @@ export const COMPACT_SINGLE_CHAR_MAP: Record<string, string> = {
   인: "id",
   캄: "km",
   불: "fr",
+  프: "fr",
   독: "de",
   러: "ru",
   터: "tr",
