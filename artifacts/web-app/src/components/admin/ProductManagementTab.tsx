@@ -688,8 +688,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
           <div>
             <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>
-              대분류 <span style={{ color: "#dc2626" }}>*</span>
-              {!isEdit && <span style={{ fontSize: 11, color: "#9ca3af", marginLeft: 4 }}>(상품유형에 따라 자동 변경)</span>}
+              대분류
+              <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 400, marginLeft: 5 }}>
+                ({!isEdit ? "선택사항 · 상품유형에 따라 자동 변경" : "선택사항"})
+              </span>
             </label>
             <ClickSelect
               value={form.mainCategory}
