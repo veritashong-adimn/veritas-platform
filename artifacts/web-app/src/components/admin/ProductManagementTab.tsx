@@ -7,6 +7,7 @@ import {
 } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 import { LanguageSearchSelect, LangCustomInput, isLangCustom } from './LanguageSearchSelect';
+import { LazyProductPanel } from './LazyProductPanel';
 import ImportPreviewPanel, {
   type ImportPreviewData,
   type ImportResult,
@@ -142,6 +143,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [savingProduct, setSavingProduct] = useState(false);
   const [productImporting, setProductImporting] = useState(false);
   const productImportRef = useRef<HTMLInputElement>(null);
+
+  const [showLazyPanel, setShowLazyPanel] = useState(false);
 
   // ─── Import Preview state (managed by ImportPreviewPanel) ────────────────
   const [importPreviewData, setImportPreviewData] = useState<ImportPreviewData | null>(null);
@@ -1071,6 +1074,14 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             <input ref={productImportRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
               onChange={e => { const f = e.target.files?.[0]; if (f) handleProductImport(f); }} />
           </label>
+          <button
+            onClick={() => setShowLazyPanel(v => !v)}
+            style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, fontWeight: 600, cursor: "pointer",
+              border: `1px solid ${showLazyPanel ? "#fcd34d" : "#e5e7eb"}`,
+              background: showLazyPanel ? "#fffbeb" : "#fff",
+              color: showLazyPanel ? "#92400e" : "#6b7280" }}>
+            ⚡ 빠른 생성
+          </button>
           {hasPerm("product.manage") && (
             <PrimaryBtn onClick={() => {
               setShowProductForm(v => !v);
@@ -1087,6 +1098,16 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           )}
         </div>
       }>
+        {/* Lazy Product Generation 패널 */}
+        {showLazyPanel && (
+          <LazyProductPanel
+            token={token}
+            authHeaders={authHeaders}
+            setToast={setToast}
+            onProductCreated={fetchProducts}
+          />
+        )}
+
         {/* Import 등록 결과 */}
         {importResult && (
           <div style={{ background: importResult.errors.length === 0 ? "#f0fdf4" : "#fffbeb", border: `1px solid ${importResult.errors.length === 0 ? "#bbf7d0" : "#fde68a"}`, borderRadius: 10, padding: "12px 16px", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>

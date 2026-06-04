@@ -9,6 +9,12 @@ import { expandCompactPattern }    from "../lib/product-parser/compactPatternRul
 import { REVIEW_REASONS, NON_PENALTY_REASONS } from "../lib/product-parser/reviewReasonRules";
 import { INTERP_SUBTYPES, EQUIP_CANONICALS } from "../lib/product-parser/displayNamePolicy";
 import { buildProductSearchText, normalizeSearchQuery } from "../lib/product-parser/searchNormalize";
+import {
+  LAZY_SERVICE_TYPES, isLazyServiceType,
+  buildCanonicalKey, buildVirtualProduct, buildAuditMetadata,
+  LAZY_SERVICE_CONFIG,
+  type LazyServiceType,
+} from "../lib/product-parser/lazyProductGen";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -1609,6 +1615,119 @@ router.delete("/admin/product-requests/:id", ...adminOnly, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "ProductRequests: failed to delete");
     res.status(500).json({ error: "상품 요청 삭제 실패." });
+  }
+});
+
+// ─── Lazy Product Generation ────────────────────────────────────────────────
+
+/**
+ * POST /admin/products/lazy-lookup
+ * 언어쌍 + 서비스 타입으로 상품을 조회한다.
+ * - 있으면: { found: true, product }
+ * - 없으면: { found: false, candidate: VirtualProduct }
+ */
+router.post("/admin/products/lazy-lookup", ...adminGuard, async (req, res) => {
+  const { serviceType, sourceLanguage, targetLanguage } = req.body as {
+    serviceType?: string;
+    sourceLanguage?: string;
+    targetLanguage?: string;
+  };
+
+  if (!serviceType || !isLazyServiceType(serviceType)) {
+    res.status(400).json({ error: `serviceType은 ${LAZY_SERVICE_TYPES.join(" / ")} 중 하나여야 합니다.` });
+    return;
+  }
+  if (!sourceLanguage?.trim() || !targetLanguage?.trim()) {
+    res.status(400).json({ error: "sourceLanguage, targetLanguage 는 필수입니다." });
+    return;
+  }
+
+  const src = sourceLanguage.trim().toLowerCase();
+  const tgt = targetLanguage.trim().toLowerCase();
+  const cfg = LAZY_SERVICE_CONFIG[serviceType as LazyServiceType];
+
+  try {
+    // canonicalKey 기반 기존 상품 조회 (방향 포함, 중복 방지와 동일한 조건)
+    const dupes = await findDuplicate(cfg.productType, src, tgt, cfg.mainCategory, "", undefined);
+    if (dupes.length > 0) {
+      const product = dupes[0];
+      res.json({ found: true, product });
+      return;
+    }
+
+    // 없으면 virtual candidate 생성
+    const candidate = buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL);
+    res.json({ found: false, candidate });
+  } catch (err) {
+    req.log.error({ err }, "lazy-lookup failed");
+    res.status(500).json({ error: "조회 실패." });
+  }
+});
+
+/**
+ * POST /admin/products/lazy-create
+ * VirtualProduct를 실제 Product로 등록한다.
+ * - 이미 존재하면 기존 상품 반환 (멱등)
+ * - 없으면 신규 생성 + logEvent audit
+ */
+router.post("/admin/products/lazy-create", ...adminOnly, async (req, res) => {
+  const { serviceType, sourceLanguage, targetLanguage, createdBy } = req.body as {
+    serviceType?: string;
+    sourceLanguage?: string;
+    targetLanguage?: string;
+    createdBy?: string;
+  };
+
+  if (!serviceType || !isLazyServiceType(serviceType)) {
+    res.status(400).json({ error: `serviceType은 ${LAZY_SERVICE_TYPES.join(" / ")} 중 하나여야 합니다.` });
+    return;
+  }
+  if (!sourceLanguage?.trim() || !targetLanguage?.trim()) {
+    res.status(400).json({ error: "sourceLanguage, targetLanguage 는 필수입니다." });
+    return;
+  }
+
+  const src = sourceLanguage.trim().toLowerCase();
+  const tgt = targetLanguage.trim().toLowerCase();
+  const cfg = LAZY_SERVICE_CONFIG[serviceType as LazyServiceType];
+  const virtual = buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL);
+
+  try {
+    // 멱등 체크: 이미 존재하면 기존 상품 반환
+    const dupes = await findDuplicate(cfg.productType, src, tgt, cfg.mainCategory, "", undefined);
+    if (dupes.length > 0) {
+      res.json({ created: false, product: dupes[0], message: "이미 존재하는 상품입니다." });
+      return;
+    }
+
+    const code = await generateProductCode(cfg.productType, src, tgt, cfg.mainCategory, "");
+    const audit = buildAuditMetadata(virtual, createdBy ?? "system");
+
+    const [product] = await db
+      .insert(productsTable)
+      .values({
+        code,
+        name: virtual.displayName,
+        productType: cfg.productType,
+        sourceLanguage: src,
+        targetLanguage: tgt,
+        mainCategory: cfg.mainCategory,
+        subCategory: null,
+        unit: virtual.unit,
+        basePrice: null,
+        description: null,
+      })
+      .returning();
+
+    await logEvent(
+      "product", product.id, "product_created_lazy", req.log, req.user as any,
+      JSON.stringify(audit),
+    );
+
+    res.status(201).json({ created: true, product });
+  } catch (err) {
+    req.log.error({ err }, "lazy-create failed");
+    res.status(500).json({ error: "상품 생성 실패." });
   }
 });
 
