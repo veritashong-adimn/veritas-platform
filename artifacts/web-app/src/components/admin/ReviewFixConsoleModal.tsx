@@ -123,28 +123,21 @@ export function ReviewFixConsoleModal({ item, token, onSave, onClose }: Props) {
   // Save: auto-reparse first if name changed and not yet reparsed
   const handleSave = async () => {
     if (!editedName.trim()) return;
-    console.log("[ReviewFix] save clicked", { rowNum: item.rowNum, editedName, needsReparse, reparsed });
     setSaving(true);
     try {
       let finalAnalysis = latestAnalysis;
       let didReparse = reparsed;
 
       if (needsReparse) {
-        // auto-reparse before saving so displayName/reviewReasons are fresh
         const result = await doReparse(editedName, editedType, editedSrc, editedTgt, editedMainCat);
         if (!result) {
-          // re-parse failed — keep original analysis and still save
           finalAnalysis = item.analysis;
           didReparse = false;
-          console.warn("[ReviewFix] reparse failed — saving with original analysis");
         } else {
           finalAnalysis = result;
           didReparse = true;
-          console.log("[ReviewFix] reparse ok", { displayName: result.displayName, reviewReasons: result.reviewReasons });
         }
       }
-
-      console.log("[ReviewFix] calling onSave", { rowNum: item.rowNum, editedName, didReparse, finalDisplayName: finalAnalysis?.displayName });
       onSave({
         rowNum: item.rowNum,
         editedName: editedName.trim(),

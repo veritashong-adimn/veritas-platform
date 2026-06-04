@@ -84,16 +84,12 @@ function loadReviewSession(): PersistedReviewSession | null {
           : item.analysis,
       }));
     }
-    console.log("[Import] ④restore fileName", parsed.session?.fileName);
     return parsed;
   } catch { return null; }
 }
 
 function saveReviewSession(data: PersistedReviewSession): void {
-  try {
-    console.log("[Import] ③localStorage 저장 fileName", data.session.fileName);
-    localStorage.setItem(REVIEW_SESSION_KEY, JSON.stringify({ ...data, schemaVersion: IMPORT_PREVIEW_SCHEMA_VERSION }));
-  } catch { /* storage quota */ }
+  try { localStorage.setItem(REVIEW_SESSION_KEY, JSON.stringify({ ...data, schemaVersion: IMPORT_PREVIEW_SCHEMA_VERSION })); } catch { /* storage quota */ }
 }
 
 function clearReviewSession(): void {
@@ -458,7 +454,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   useEffect(() => {
     const saved = loadReviewSession();
     if (saved) {
-      console.log("[Import] ⑤복원 후 UI render fileName", saved.session?.fileName);
       setImportPreview(saved.importPreview);
       setRowOverrides(saved.rowOverrides);
       setReviewSession(saved.session);
@@ -554,13 +549,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const now = new Date().toISOString();
     const originalItem = importPreview?.items.find(x => x.rowNum === rowNum);
 
-    console.log("[ReviewFix] save handler called", {
-      rowNum, editedName, reparsed,
-      originalName: originalItem?.name,
-      newDisplayName: newAnalysis?.displayName,
-      newReviewReasons: newAnalysis?.reviewReasons,
-    });
-
     // displayName이 productCandidate와 같으면 parser가 언어를 미인식한 것 — 편집명으로 대체
     const isGenericDisplay = !newAnalysis?.displayName ||
       newAnalysis.displayName === newAnalysis.productCandidate ||
@@ -577,7 +565,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           mainCategory: editedMainCat, analysis: newAnalysis,
         }),
       };
-      console.log("[ReviewFix] before item", originalItem?.name, "→ after item", editedName, "displayName:", editedDisplayName);
       return updated;
     });
 
@@ -602,7 +589,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         notes: updatedNotes,
         auditTrail: [...(base.auditTrail ?? []), entry],
       }};
-      console.log("[ReviewFix] rowOverrides updated", rowNum, "→", next[rowNum].reviewStatus, "editedDisplayName:", editedDisplayName);
       return next;
     });
 
@@ -814,13 +800,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
       const res = await fetch(api("/api/admin/products/import/preview"), { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form });
       const data = await res.json();
       if (!res.ok) { setToast(data.error ?? "미리보기 실패"); return; }
-      // ① 업로드 직후 원본 파일명 확인
-      console.log("[Import] ①업로드 직후 file.name", file.name, "server fileName", data.fileName);
-      // file.name은 브라우저 File 객체 — 항상 정확한 UTF-8 유니코드
-      // data.fileName은 서버에서 latin1→utf8 재디코딩한 값 (multer 버그 우회)
+      // file.name은 브라우저 File 객체 — 항상 정확한 UTF-8 유니코드 (multer latin1 버그 우회)
       const resolvedFileName = file.name || data.fileName;
-      // ② Persistence 저장 직전 파일명
-      console.log("[Import] ②세션 저장 직전 fileName", resolvedFileName);
       const newSession: ReviewSessionMeta = {
         sessionId: `rs_${Date.now()}`,
         fileName: resolvedFileName,
@@ -1617,7 +1598,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             return importPreviewSort === "conf_asc" ? ca - cb : cb - ca;
           });
 
-          console.log("[ImportPreview]", { rows: importPreview.items.length, filtered: filtered.length, importPriorityFilter, importReviewFilter, importPreviewFilter, importQualFilter });
           if (filtered.length === 0 && importPreview.items.length > 0) {
             console.warn("[ImportPreview] filter returned 0 rows unexpectedly", { importPreviewFilter, importQualFilter, importReviewFilter, importPriorityFilter });
           }
@@ -1657,12 +1637,13 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   <span style={{ fontSize: 11, color: "#6b7280", background: "#e5e7eb", borderRadius: 5, padding: "2px 7px" }}>{importPreview.fileName}</span>
                 </div>
                 <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                  {/* 선택 항목만 등록 */}
+                  {/* 선택 항목만 등록 — excluded(rejected) 행은 체크되어 있어도 항상 제외 */}
                   <button
                     disabled={selectedRows.size === 0 || importExecuting}
                     onClick={() => {
-                      const rows = importPreview.items.filter(x => selectedRows.has(x.rowNum));
+                      const rows = importPreview.items.filter(x => selectedRows.has(x.rowNum) && getReviewStatus(x) !== "rejected");
                       if (rows.length > 0) setImportConfirmModal({ mode: "selected", rows });
+                      else setToast("선택된 항목이 모두 제외 처리되어 등록 대상이 없습니다.");
                     }}
                     style={{ fontSize: 12, padding: "5px 12px", borderRadius: 7, border: "none", background: selectedRows.size > 0 ? "#2563eb" : "#e5e7eb", color: selectedRows.size > 0 ? "#fff" : "#9ca3af", cursor: selectedRows.size > 0 ? "pointer" : "not-allowed", fontWeight: 700 }}>
                     선택 {selectedRows.size}건 등록
