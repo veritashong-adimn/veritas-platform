@@ -1253,7 +1253,11 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
       review: items.filter(x => x.status === "review").length,
     };
 
-    res.json({ summary, items, fileName: req.file.originalname });
+    // multer parses Content-Disposition as latin1; re-decode UTF-8 Korean filenames
+    const rawName = req.file.originalname;
+    const decodedFileName = Buffer.from(rawName, 'latin1').toString('utf8');
+    req.log.debug({ raw: rawName, decoded: decodedFileName }, "[Import Preview] filename decoded");
+    res.json({ summary, items, fileName: decodedFileName });
   } catch (err) {
     req.log.error({ err }, "Products import preview failed");
     res.status(500).json({ error: "파일 파싱 실패." });

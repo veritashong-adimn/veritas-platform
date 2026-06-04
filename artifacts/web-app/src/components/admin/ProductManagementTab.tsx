@@ -84,12 +84,16 @@ function loadReviewSession(): PersistedReviewSession | null {
           : item.analysis,
       }));
     }
+    console.log("[Import] ④restore fileName", parsed.session?.fileName);
     return parsed;
   } catch { return null; }
 }
 
 function saveReviewSession(data: PersistedReviewSession): void {
-  try { localStorage.setItem(REVIEW_SESSION_KEY, JSON.stringify({ ...data, schemaVersion: IMPORT_PREVIEW_SCHEMA_VERSION })); } catch { /* storage quota */ }
+  try {
+    console.log("[Import] ③localStorage 저장 fileName", data.session.fileName);
+    localStorage.setItem(REVIEW_SESSION_KEY, JSON.stringify({ ...data, schemaVersion: IMPORT_PREVIEW_SCHEMA_VERSION }));
+  } catch { /* storage quota */ }
 }
 
 function clearReviewSession(): void {
@@ -454,6 +458,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   useEffect(() => {
     const saved = loadReviewSession();
     if (saved) {
+      console.log("[Import] ⑤복원 후 UI render fileName", saved.session?.fileName);
       setImportPreview(saved.importPreview);
       setRowOverrides(saved.rowOverrides);
       setReviewSession(saved.session);
@@ -809,15 +814,24 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
       const res = await fetch(api("/api/admin/products/import/preview"), { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form });
       const data = await res.json();
       if (!res.ok) { setToast(data.error ?? "미리보기 실패"); return; }
+      // ① 업로드 직후 원본 파일명 확인
+      console.log("[Import] ①업로드 직후 file.name", file.name, "server fileName", data.fileName);
+      // file.name은 브라우저 File 객체 — 항상 정확한 UTF-8 유니코드
+      // data.fileName은 서버에서 latin1→utf8 재디코딩한 값 (multer 버그 우회)
+      const resolvedFileName = file.name || data.fileName;
+      // ② Persistence 저장 직전 파일명
+      console.log("[Import] ②세션 저장 직전 fileName", resolvedFileName);
       const newSession: ReviewSessionMeta = {
         sessionId: `rs_${Date.now()}`,
-        fileName: data.fileName ?? file.name,
+        fileName: resolvedFileName,
         uploadedAt: new Date().toISOString(),
         totalRows: data.summary?.total ?? 0,
       };
+      // importPreview.fileName도 올바른 값으로 덮어씀
+      const previewWithCorrectName = { ...data, fileName: resolvedFileName };
       setReviewSession(newSession);
-      setImportPreview(data);
-      saveReviewSession({ session: newSession, importPreview: data, rowOverrides: {} });
+      setImportPreview(previewWithCorrectName);
+      saveReviewSession({ session: newSession, importPreview: previewWithCorrectName, rowOverrides: {} });
     } finally {
       setProductImporting(false);
       if (productImportRef.current) productImportRef.current.value = "";
