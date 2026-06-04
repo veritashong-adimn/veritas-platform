@@ -8,6 +8,7 @@ import * as XLSX from "xlsx";
 import { expandCompactPattern }    from "../lib/product-parser/compactPatternRules";
 import { REVIEW_REASONS, NON_PENALTY_REASONS } from "../lib/product-parser/reviewReasonRules";
 import { INTERP_SUBTYPES, EQUIP_CANONICALS } from "../lib/product-parser/displayNamePolicy";
+import { buildProductSearchText, normalizeSearchQuery } from "../lib/product-parser/searchNormalize";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -931,15 +932,11 @@ router.get("/admin/products", ...adminGuard, async (req, res) => {
       .orderBy(desc(productsTable.createdAt));
 
     if (search?.trim()) {
-      const s = search.trim().toLowerCase();
-      rows = rows.filter(p =>
-        p.name.toLowerCase().includes(s) ||
-        p.code.toLowerCase().includes(s) ||
-        (p.mainCategory ?? "").toLowerCase().includes(s) ||
-        (p.subCategory ?? "").toLowerCase().includes(s) ||
-        (p.sourceLanguage ?? "").toLowerCase().includes(s) ||
-        (p.targetLanguage ?? "").toLowerCase().includes(s)
-      );
+      const candidates = normalizeSearchQuery(search.trim());
+      rows = rows.filter(p => {
+        const searchText = buildProductSearchText(p, ISO_LABEL);
+        return candidates.some(c => searchText.includes(c));
+      });
     }
 
     if (productType?.trim()) {
