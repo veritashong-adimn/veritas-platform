@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { api, LANGUAGE_CODES } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn } from '../ui';
+import { getZhExcludeCodes, normalizeZhForType } from '../../lib/zhLangPolicy';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
 
@@ -59,6 +60,14 @@ const selectStyle: React.CSSProperties = {
   fontSize: 13, color: "#111827", background: "#fff", cursor: "pointer",
 };
 
+// serviceType → productType (zhLangPolicy 적용에 필요)
+const SERVICE_PRODUCT_TYPE: Record<LazyServiceType, string> = {
+  "번역":     "translation",
+  "순차통역": "interpretation",
+  "동시통역": "interpretation",
+  "상담회통역": "interpretation",
+};
+
 const serviceColors: Record<LazyServiceType, { bg: string; color: string; border: string }> = {
   "번역":     { bg: "#eff6ff", color: "#2563eb", border: "#bfdbfe" },
   "순차통역": { bg: "#f5f3ff", color: "#7c3aed", border: "#ddd6fe" },
@@ -77,6 +86,21 @@ export function LazyProductPanel({ token, authHeaders, setToast, onProductCreate
   const [creating, setCreating] = useState(false);
   const [result, setResult] = useState<LookupResult | null>(null);
   const [created, setCreated] = useState<ExistingProduct | null>(null);
+
+  const currentProductType = SERVICE_PRODUCT_TYPE[serviceType];
+  const zhExcludeCodes = getZhExcludeCodes(currentProductType);
+  const langOptions = LANGUAGE_CODES.filter(
+    l => l.code !== "other" && !zhExcludeCodes.includes(l.code)
+  );
+
+  const handleServiceTypeChange = (st: LazyServiceType) => {
+    const nextProductType = SERVICE_PRODUCT_TYPE[st];
+    setSrcLang(prev => normalizeZhForType(prev, nextProductType));
+    setTgtLang(prev => normalizeZhForType(prev, nextProductType));
+    setServiceType(st);
+    setResult(null);
+    setCreated(null);
+  };
 
   const handleLookup = async () => {
     if (!srcLang || !tgtLang) { setToast("출발언어와 도착언어를 선택하세요."); return; }
@@ -149,7 +173,7 @@ export function LazyProductPanel({ token, authHeaders, setToast, onProductCreate
             const colors = serviceColors[st];
             return (
               <button key={st}
-                onClick={() => { setServiceType(st); setResult(null); setCreated(null); }}
+                onClick={() => handleServiceTypeChange(st)}
                 style={{
                   fontSize: 12, padding: "6px 12px", borderRadius: 6, cursor: "pointer", fontWeight: active ? 700 : 500,
                   border: `1px solid ${active ? colors.border : "#e5e7eb"}`,
@@ -168,7 +192,7 @@ export function LazyProductPanel({ token, authHeaders, setToast, onProductCreate
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <label style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>출발언어</label>
           <select value={srcLang} onChange={e => { setSrcLang(e.target.value); setResult(null); setCreated(null); }} style={selectStyle} data-testid="lazy-src-lang">
-            {LANGUAGE_CODES.filter(l => l.code !== "other").map(l => (
+            {langOptions.map(l => (
               <option key={l.code} value={l.code}>{l.label}</option>
             ))}
           </select>
@@ -180,7 +204,7 @@ export function LazyProductPanel({ token, authHeaders, setToast, onProductCreate
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <label style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>도착언어</label>
           <select value={tgtLang} onChange={e => { setTgtLang(e.target.value); setResult(null); setCreated(null); }} style={selectStyle} data-testid="lazy-tgt-lang">
-            {LANGUAGE_CODES.filter(l => l.code !== "other").map(l => (
+            {langOptions.map(l => (
               <option key={l.code} value={l.code}>{l.label}</option>
             ))}
           </select>

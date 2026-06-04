@@ -8,6 +8,7 @@ import {
 import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 import { LanguageSearchSelect, LangCustomInput, isLangCustom } from './LanguageSearchSelect';
 import { LazyProductPanel } from './LazyProductPanel';
+import { getZhExcludeCodes, normalizeZhForType } from '../../lib/zhLangPolicy';
 import ImportPreviewPanel, {
   type ImportPreviewData,
   type ImportResult,
@@ -226,18 +227,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const mainCats = MAIN_CATEGORIES_BY_TYPE[newType] ?? [];
     const defMain = mainCats[0]?.label ?? "";
     const defUnit = (UNITS_BY_PRODUCT_TYPE[newType] ?? ["건"])[0];
-    // 중국어 코드 정규화: productType별 허용 코드가 다르므로 전환 시 자동 보정
-    // 통역으로 전환 → zh-hans/zh-hant는 zh로 통합 (spoken language 기준)
-    // 번역·기타로 전환 → zh는 zh-hans로 (script 기반, 가장 일반적)
-    function normalizeZhForType(code: string, targetType: string): string {
-      if (targetType === "interpretation") {
-        if (code === "zh-hans" || code === "zh-hant") return "zh";
-      } else if (targetType !== "combined") {
-        if (code === "zh") return "zh-hans";
-      }
-      return code;
-    }
-
     setter(prev => {
       const rawSrc = hasLang ? (prev.sourceLanguage || "ko") : "";
       const rawTgt = hasLang ? (prev.targetLanguage || "en") : "";
@@ -589,14 +578,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const isEquip = form.productType === "equipment";
     const codePrev = previewCode(form.productType, form.mainCategory);
 
-    // ─── 중국어 언어 옵션 정책 ───────────────────────────────────────────────
-    // 번역(TR): zh-hans/zh-hant/yue 표시, zh(통합) 제외
-    // 통역(IN): zh(통합)/yue 표시, zh-hans/zh-hant(script variant) 제외
-    // 통번역(CO): zh/zh-hans/zh-hant/yue 모두 표시
-    const zhExcludeCodes: string[] =
-      form.productType === "interpretation" ? ["zh-hans", "zh-hant"] :
-      form.productType === "combined"       ? [] :
-      ["zh"]; // translation + 기타 언어형 상품
+    const zhExcludeCodes = getZhExcludeCodes(form.productType);
 
     return (
       <>
