@@ -437,7 +437,7 @@ async function getOrCreateProduct(
   const pTypeCode = PRODUCT_TYPES[productType]?.code ?? productType.toUpperCase();
   const hasLang   = isLangType(productType);
 
-  // 계산 전용 canonicalKey — DB에 저장하지 않음 (향후 unique index 추가 시 활용)
+  // canonicalKey: 신규 생성 시 DB에 저장; partial unique index(deleted_at IS NULL)로 중복 방지
   const canonicalKey = hasLang && (sourceLanguage || targetLanguage)
     ? `${pTypeCode}:${mainCategory}:${normalizeLangCode(sourceLanguage)}:${normalizeLangCode(targetLanguage)}`
     : `${pTypeCode}:::${normalizeProdName(name)}`;
@@ -475,6 +475,7 @@ async function getOrCreateProduct(
       quantityUnit: input.quantityUnit?.trim() || null,
       usagePeriod: input.usagePeriod?.trim() || null,
       interpretationDirection: input.interpretationDirection?.trim() || null,
+      canonicalKey,
     })
     .returning();
 

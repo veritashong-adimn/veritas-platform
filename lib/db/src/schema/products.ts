@@ -22,6 +22,7 @@ export const productsTable = pgTable("products", {
   interpretationDirection: text("interpretation_direction"),
   active: boolean("active").notNull().default(true),
   deactivationReason: text("deactivation_reason"),
+  canonicalKey: text("canonical_key"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   deletedAt: timestamp("deleted_at"),
 });
