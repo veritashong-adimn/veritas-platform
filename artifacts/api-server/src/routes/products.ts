@@ -398,6 +398,92 @@ function normalizeProdName(s: string): string {
     .normalize("NFC");
 }
 
+// ─── 공통 상품 생성/조회 (모든 등록 경로의 단일 진입점) ─────────────────────────
+// canonicalKey = {typeCode}:{mainCategory}:{normSrc}:{normTgt}  (언어형)
+//              = {typeCode}:::{normName}                         (비언어형)
+// findDuplicate 기준과 동일하므로 중복 판단이 모든 경로에서 일관됨.
+
+type GetOrCreateInput = {
+  productType: string;
+  sourceLanguage: string | null;
+  targetLanguage: string | null;
+  mainCategory: string;
+  subCategory?: string;
+  name: string;
+  unit: string;
+  basePrice?: number | null;
+  description?: string | null;
+  interpretationDuration?: string | null;
+  overtimePrice?: number | null;
+  quantityUnit?: string | null;
+  usagePeriod?: string | null;
+  interpretationDirection?: string | null;
+  creationSource?: string;
+};
+
+type GetOrCreateResult = {
+  product: typeof productsTable.$inferSelect;
+  created: boolean;
+  reason: "new" | "existing_duplicate";
+  canonicalKey: string;
+};
+
+async function getOrCreateProduct(
+  input: GetOrCreateInput,
+  logger: import("pino").Logger | undefined,
+  user: { id: number; email: string } | undefined,
+): Promise<GetOrCreateResult> {
+  const { productType, sourceLanguage, targetLanguage, mainCategory, subCategory = "", name } = input;
+  const pTypeCode = PRODUCT_TYPES[productType]?.code ?? productType.toUpperCase();
+  const hasLang   = isLangType(productType);
+
+  // 계산 전용 canonicalKey — DB에 저장하지 않음 (향후 unique index 추가 시 활용)
+  const canonicalKey = hasLang && (sourceLanguage || targetLanguage)
+    ? `${pTypeCode}:${mainCategory}:${normalizeLangCode(sourceLanguage)}:${normalizeLangCode(targetLanguage)}`
+    : `${pTypeCode}:::${normalizeProdName(name)}`;
+
+  // 기존 상품 조회 (findDuplicate 재사용)
+  const dupes = await findDuplicate(
+    productType, sourceLanguage, targetLanguage,
+    mainCategory, subCategory, undefined,
+    hasLang ? undefined : name,
+  );
+
+  if (dupes.length > 0) {
+    // 전체 row가 필요한 호출자를 위해 full select
+    const [existing] = await db
+      .select().from(productsTable)
+      .where(and(eq(productsTable.id, dupes[0].id), isNull(productsTable.deletedAt)));
+    return { product: existing, created: false, reason: "existing_duplicate", canonicalKey };
+  }
+
+  // 신규 생성
+  const code = await generateProductCode(productType, sourceLanguage, targetLanguage, mainCategory, subCategory);
+  const [product] = await db
+    .insert(productsTable)
+    .values({
+      code, name: name.trim(), productType,
+      sourceLanguage: sourceLanguage || null,
+      targetLanguage: targetLanguage || null,
+      mainCategory: mainCategory || null,
+      subCategory: subCategory || null,
+      unit: input.unit,
+      basePrice: input.basePrice ?? null,
+      description: input.description?.trim() || null,
+      interpretationDuration: input.interpretationDuration?.trim() || null,
+      overtimePrice: input.overtimePrice ?? null,
+      quantityUnit: input.quantityUnit?.trim() || null,
+      usagePeriod: input.usagePeriod?.trim() || null,
+      interpretationDirection: input.interpretationDirection?.trim() || null,
+    })
+    .returning();
+
+  await logEvent("product", product.id, "product_created", logger, user,
+    JSON.stringify({ code, name: product.name, productType, sourceLanguage, targetLanguage, mainCategory, canonicalKey, creationSource: input.creationSource ?? "manual" }));
+
+  return { product, created: true, reason: "new", canonicalKey };
+}
+
 // ─── Product + Option 구조 분석 ──────────────────────────────────────────────
 type ProductAnalysis = {
   productCandidate: string;
@@ -1017,35 +1103,27 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
   }
 
   try {
-    const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCat, subCat, undefined, name?.trim());
-    if (dupes.length > 0) {
-      res.status(409).json({ error: "동일한 상품이 이미 존재합니다.", existing: dupes, isDuplicate: true });
+    const goc = await getOrCreateProduct({
+      productType: pType, sourceLanguage: srcLang, targetLanguage: tgtLang,
+      mainCategory: mainCat, subCategory: subCat,
+      name: name.trim(),
+      unit: unit ?? (UNITS_BY_TYPE[pType]?.[0] ?? "건"),
+      basePrice: basePrice != null ? basePrice : null,
+      description: description?.trim() || null,
+      interpretationDuration: interpretationDuration?.trim() || null,
+      overtimePrice: overtimePrice ?? null,
+      quantityUnit: quantityUnit?.trim() || null,
+      usagePeriod: usagePeriod?.trim() || null,
+      interpretationDirection: interpretationDirection?.trim() || null,
+      creationSource: "manual",
+    }, req.log, req.user as any);
+
+    if (!goc.created) {
+      res.status(409).json({ error: "동일한 상품이 이미 존재합니다.", existing: [goc.product], isDuplicate: true });
       return;
     }
 
-    const code = await generateProductCode(pType, srcLang, tgtLang, mainCat, subCat);
-
-    const [product] = await db
-      .insert(productsTable)
-      .values({
-        code,
-        name: name.trim(),
-        productType: pType,
-        sourceLanguage: srcLang,
-        targetLanguage: tgtLang,
-        mainCategory: mainCat || null,
-        subCategory: subCat || null,
-        unit: unit ?? (UNITS_BY_TYPE[pType]?.[0] ?? "건"),
-        basePrice: basePrice != null ? basePrice : null,
-        description: description?.trim() || null,
-        interpretationDuration: interpretationDuration?.trim() || null,
-        overtimePrice: overtimePrice ?? null,
-        quantityUnit: quantityUnit?.trim() || null,
-        usagePeriod: usagePeriod?.trim() || null,
-        interpretationDirection: interpretationDirection?.trim() || null,
-      })
-      .returning();
-
+    const product = goc.product;
     const optionRows = [];
     if (options && options.length > 0) {
       for (let i = 0; i < options.length; i++) {
@@ -1060,9 +1138,6 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
         optionRows.push(opt);
       }
     }
-
-    await logEvent("product", product.id, "product_created", req.log, req.user as any,
-      JSON.stringify({ code, name: product.name, productType: pType, sourceLanguage: srcLang, targetLanguage: tgtLang, mainCategory: mainCat }));
 
     res.status(201).json({ ...product, options: optionRows });
   } catch (err) {
@@ -1313,14 +1388,18 @@ router.post("/admin/products/import/execute", ...adminOnly, async (req, res) => 
       const validUnits = UNITS_BY_TYPE[pType] ?? ["건"];
       const unit = row.unit && validUnits.includes(row.unit) ? row.unit : validUnits[0];
       try {
-        const code = await generateProductCode(pType, srcLang, tgtLang, mainCat, subCat);
-        await db.insert(productsTable).values({
-          code, name: row.name.trim(), productType: pType,
-          sourceLanguage: srcLang, targetLanguage: tgtLang,
-          mainCategory: mainCat || null, subCategory: subCat || null,
-          unit, basePrice: row.basePrice ?? null, description: row.description ?? null,
-        });
-        result.created++;
+        const goc = await getOrCreateProduct({
+          productType: pType, sourceLanguage: srcLang, targetLanguage: tgtLang,
+          mainCategory: mainCat, subCategory: subCat,
+          name: row.name.trim(), unit,
+          basePrice: row.basePrice ?? null, description: row.description ?? null,
+          creationSource: "import",
+        }, req.log, req.user as any);
+        if (goc.created) {
+          result.created++;
+        } else {
+          result.skipped++;
+        }
       } catch (rowErr) {
         result.errors.push({ row: rowNum, message: `저장 오류: ${(rowErr as Error).message}` });
       }
@@ -1686,40 +1765,26 @@ router.post("/admin/products/lazy-create", ...adminOnly, async (req, res) => {
   const tgt = targetLanguage.trim().toLowerCase();
   const cfg = LAZY_SERVICE_CONFIG[serviceType as LazyServiceType];
   const virtual = buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL);
+  const audit   = buildAuditMetadata(virtual, createdBy ?? "system");
 
   try {
-    // 멱등 체크: 이미 존재하면 기존 상품 반환
-    const dupes = await findDuplicate(cfg.productType, src, tgt, cfg.mainCategory, "", undefined);
-    if (dupes.length > 0) {
-      res.json({ created: false, product: dupes[0], message: "이미 존재하는 상품입니다." });
+    const goc = await getOrCreateProduct({
+      productType: cfg.productType, sourceLanguage: src, targetLanguage: tgt,
+      mainCategory: cfg.mainCategory, subCategory: "",
+      name: virtual.displayName, unit: virtual.unit,
+      creationSource: "lazy_product_generation",
+    }, req.log, req.user as any);
+
+    if (!goc.created) {
+      res.json({ created: false, product: goc.product, message: "이미 존재하는 상품입니다." });
       return;
     }
 
-    const code = await generateProductCode(cfg.productType, src, tgt, cfg.mainCategory, "");
-    const audit = buildAuditMetadata(virtual, createdBy ?? "system");
+    // lazy-create 전용 audit (buildAuditMetadata 정보 별도 기록)
+    await logEvent("product", goc.product.id, "product_created_lazy", req.log, req.user as any,
+      JSON.stringify({ ...audit, canonicalKey: goc.canonicalKey }));
 
-    const [product] = await db
-      .insert(productsTable)
-      .values({
-        code,
-        name: virtual.displayName,
-        productType: cfg.productType,
-        sourceLanguage: src,
-        targetLanguage: tgt,
-        mainCategory: cfg.mainCategory,
-        subCategory: null,
-        unit: virtual.unit,
-        basePrice: null,
-        description: null,
-      })
-      .returning();
-
-    await logEvent(
-      "product", product.id, "product_created_lazy", req.log, req.user as any,
-      JSON.stringify(audit),
-    );
-
-    res.status(201).json({ created: true, product });
+    res.status(201).json({ created: true, product: goc.product });
   } catch (err) {
     req.log.error({ err }, "lazy-create failed");
     res.status(500).json({ error: "상품 생성 실패." });
