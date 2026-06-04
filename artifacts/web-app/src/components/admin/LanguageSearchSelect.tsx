@@ -12,6 +12,7 @@ interface Props {
   style?: React.CSSProperties;
   triggerStyle?: React.CSSProperties;
   disabled?: boolean;
+  excludeCodes?: string[]; // 표시에서 제외할 언어 코드 목록
 }
 
 const CUSTOM_CODE = "custom";
@@ -19,16 +20,18 @@ const CUSTOM_LABEL = "기타 직접입력";
 
 type LangOption = { value: string; label: string; code: string };
 
-function getLangOptions(mode: LangSelectMode): LangOption[] {
-  return LANGUAGE_CODES.map(l => ({
-    value: mode === "code" ? l.code : l.label,
-    label: l.label,
-    code: l.code,
-  }));
+function getLangOptions(mode: LangSelectMode, excludeCodes?: string[]): LangOption[] {
+  return LANGUAGE_CODES
+    .filter(l => !excludeCodes?.length || !excludeCodes.includes(l.code))
+    .map(l => ({
+      value: mode === "code" ? l.code : l.label,
+      label: l.label,
+      code: l.code,
+    }));
 }
 
-function findOption(value: string, mode: LangSelectMode): LangOption | undefined {
-  return getLangOptions(mode).find(o => o.value === value);
+function findOption(value: string, mode: LangSelectMode, excludeCodes?: string[]): LangOption | undefined {
+  return getLangOptions(mode, excludeCodes).find(o => o.value === value);
 }
 
 export function isLangCustom(value: string, mode: LangSelectMode): boolean {
@@ -38,7 +41,7 @@ export function isLangCustom(value: string, mode: LangSelectMode): boolean {
 export function LanguageSearchSelect({
   value, onChange,
   mode = "code", placeholder = "언어 선택...",
-  style, triggerStyle, disabled = false,
+  style, triggerStyle, disabled = false, excludeCodes,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -49,7 +52,7 @@ export function LanguageSearchSelect({
   const listRef = useRef<HTMLDivElement>(null);
   const portalRef = useRef<HTMLDivElement>(null);
 
-  const allOptions = getLangOptions(mode);
+  const allOptions = getLangOptions(mode, excludeCodes);
   const q = query.toLowerCase().trim();
   const filtered = q
     ? allOptions.filter(
@@ -59,7 +62,7 @@ export function LanguageSearchSelect({
       )
     : allOptions;
 
-  const selected = findOption(value, mode);
+  const selected = findOption(value, mode, excludeCodes);
   const showTriggerLabel = selected ? selected.label : value ? value : "";
 
   const calcPos = useCallback(() => {

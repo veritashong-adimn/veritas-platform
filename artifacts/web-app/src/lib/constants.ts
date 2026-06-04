@@ -605,6 +605,7 @@ export const LANGUAGE_CODES: { code: string; label: string }[] = [
   { code: "ko",      label: "한국어" },
   { code: "en",      label: "영어" },
   { code: "ja",      label: "일본어" },
+  { code: "zh",      label: "중국어" },
   { code: "zh-hans", label: "중국어(간체)" },
   { code: "zh-hant", label: "중국어(번체)" },
   { code: "yue",     label: "광동어" },
