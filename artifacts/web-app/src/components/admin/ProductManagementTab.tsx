@@ -577,6 +577,12 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const isInterp = form.productType === "interpretation" || form.productType === "combined";
     const isEquip = form.productType === "equipment";
     const codePrev = previewCode(form.productType, form.mainCategory);
+    const interpSrcLabel = form.sourceLanguage === "custom"
+      ? (form.sourceLanguageCustom || "기타")
+      : (form.sourceLanguage ? (LANG_LABEL[form.sourceLanguage] ?? form.sourceLanguage) : "");
+    const interpTgtLabel = form.targetLanguage === "custom"
+      ? (form.targetLanguageCustom || "기타")
+      : (form.targetLanguage ? (LANG_LABEL[form.targetLanguage] ?? form.targetLanguage) : "");
 
     const zhExcludeCodes = getZhExcludeCodes(form.productType);
 
@@ -682,7 +688,13 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                         background: form.interpretationDirection === dir ? "#dbeafe" : "#f0f7ff",
                         color: form.interpretationDirection === dir ? "#1d4ed8" : "#6b7280",
                         fontWeight: form.interpretationDirection === dir ? 700 : 400 }}>
-                      {dir === "양방향" ? "↔ 양방향" : dir === "A→B" ? "→ A→B" : "← B→A"}
+                      {dir === "양방향"
+                        ? "↔ 양방향"
+                        : interpSrcLabel && interpTgtLabel
+                          ? dir === "A→B"
+                            ? `${interpSrcLabel} → ${interpTgtLabel}`
+                            : `${interpTgtLabel} → ${interpSrcLabel}`
+                          : dir === "A→B" ? "언어 선택 필요" : "언어 선택 필요"}
                     </button>
                   ))}
                 </div>

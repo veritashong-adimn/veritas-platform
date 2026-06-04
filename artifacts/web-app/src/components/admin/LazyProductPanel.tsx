@@ -233,12 +233,22 @@ export function LazyProductPanel({ token, authHeaders, setToast, onProductCreate
         <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: 12 }}>
           {result.found ? (
             /* ── 기존 상품 존재 ── */
-            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8 }}>
-              <span style={{ fontSize: 16 }}>✅</span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>기존 상품</div>
-                <div style={{ fontSize: 13, color: "#374151", marginTop: 2 }}>{result.product.name}</div>
-                <div style={{ display: "flex", gap: 8, marginTop: 3, flexWrap: "wrap" }}>
+            <div style={{ padding: "10px 14px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 15 }}>✅</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#059669" }}>이미 등록된 상품입니다</span>
+                {created && (
+                  <span style={{ fontSize: 11, color: "#059669", background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 4, padding: "1px 6px" }}>
+                    방금 생성됨
+                  </span>
+                )}
+              </div>
+              <div style={{ background: "#fff", border: "1px solid #bbf7d0", borderRadius: 7, padding: "10px 14px" }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#111827", marginBottom: 4 }}>
+                  {result.product.name}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ fontSize: 11, color: "#6b7280" }}>ID #{result.product.id}</span>
                   <span style={{ fontSize: 11, fontFamily: "monospace", background: "#e5e7eb", padding: "1px 6px", borderRadius: 4, color: "#374151" }}>
                     {result.product.code}
                   </span>
@@ -247,23 +257,18 @@ export function LazyProductPanel({ token, authHeaders, setToast, onProductCreate
                       비활성
                     </span>
                   )}
-                  {created && (
-                    <span style={{ fontSize: 11, color: "#059669", background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 4, padding: "1px 6px" }}>
-                      방금 생성됨
-                    </span>
-                  )}
                 </div>
               </div>
             </div>
           ) : (
-            /* ── 자동 생성 가능 ── */
+            /* ── 미등록 — 자동 생성 가능 ── */
             <div style={{ padding: "10px 14px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 16 }}>✨</span>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>자동 생성 가능</div>
-                  <div style={{ fontSize: 12, color: "#78350f" }}>DB에 존재하지 않습니다. 저장 시 상품 마스터에 신규 등록됩니다.</div>
-                </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <span style={{ fontSize: 15 }}>✨</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#92400e" }}>등록되지 않은 상품입니다</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#d97706", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 4, padding: "1px 8px" }}>
+                  자동 생성 가능
+                </span>
               </div>
 
               {/* 후보 정보 */}
@@ -287,16 +292,21 @@ export function LazyProductPanel({ token, authHeaders, setToast, onProductCreate
                 </div>
               </div>
 
-              <div style={{ display: "flex", gap: 8 }}>
-                <PrimaryBtn onClick={handleCreate} disabled={creating} style={{ fontSize: 13, padding: "8px 20px", background: "#d97706" }} data-testid="lazy-create-btn">
-                  {creating ? "생성 중..." : "상품 생성"}
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <PrimaryBtn
+                  onClick={handleCreate}
+                  disabled={creating}
+                  style={{ fontSize: 13, padding: "8px 20px", background: "#d97706" }}
+                  data-testid="lazy-create-btn"
+                >
+                  {creating ? "생성 중..." : "+ 상품 생성"}
                 </PrimaryBtn>
                 <GhostBtn onClick={() => { setResult(null); setCreated(null); }} style={{ fontSize: 13 }}>
                   취소
                 </GhostBtn>
-              </div>
-              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 6 }}>
-                선택만으로는 DB에 저장되지 않습니다. "상품 생성" 버튼을 눌러야 등록됩니다.
+                <span style={{ fontSize: 11, color: "#9ca3af" }}>
+                  "조회"만으로는 저장되지 않습니다
+                </span>
               </div>
             </div>
           )}
