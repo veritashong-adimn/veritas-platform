@@ -202,7 +202,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const subLabel = f.subCategory;
     const isInterpType = f.productType === "interpretation" || f.productType === "combined";
     if (hasLang && srcLabel && tgtLabel) {
-      let sep = "→";
+      // 비통역(번역/감수/미디어 등): 하이픈(-) 구분자. 방향성 없는 서비스이므로 화살표 사용 안 함.
+      // 통역/통번역: 방향 표시 유지 (→ / ↔)
+      let sep = isInterpType ? "→" : "-";
       let aLabel = srcLabel;
       let bLabel = tgtLabel;
       if (isInterpType) {
@@ -296,9 +298,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const effectiveName = productNameCustom ? productForm.name.trim() : autoName(productForm);
     if (!effectiveName) {
       setToast("상품명은 필수입니다."); return;
-    }
-    if (!editingProduct && !productForm.mainCategory) {
-      setToast("대분류는 필수입니다."); return;
     }
     const hasLang = PRODUCT_TYPES_META[productForm.productType]?.hasLanguage ?? false;
     if (!editingProduct && hasLang && (!productForm.sourceLanguage || !productForm.targetLanguage)) {

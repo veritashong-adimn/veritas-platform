@@ -1011,9 +1011,6 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
   const mainCat = mainCategory?.trim() || "";
   const subCat = subCategory?.trim() || "";
 
-  if (!mainCat) {
-    res.status(400).json({ error: "대분류는 필수입니다." }); return;
-  }
   if (!name?.trim()) {
     res.status(400).json({ error: "상품명은 필수입니다." }); return;
   }
