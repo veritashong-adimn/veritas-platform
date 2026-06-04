@@ -1167,9 +1167,8 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
       } else if (nameRaw.length < 2) {
         issues.push("상품명 너무 짧음"); if (status === "new") status = "review";
       }
-      if (!mainCat) {
-        issues.push("대분류 없음"); if (status === "new") status = "review";
-      }
+      // 대분류는 선택값 — 없어도 등록 가능 (issue 표시만, review 강등 없음)
+      if (!mainCat) issues.push("대분류 없음 (선택)");
       if (!unitRaw) {
         issues.push("단위 없음"); if (status === "new") status = "review";
       }
@@ -1377,9 +1376,6 @@ router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), 
       if (!PRODUCT_TYPES[pType]) {
         result.errors.push({ row: rowNum, message: `상품유형 오류: '${typeRaw}'` }); continue;
       }
-      if (!mainCat) {
-        result.errors.push({ row: rowNum, message: `대분류가 없습니다` }); continue;
-      }
       if (!nameRaw) {
         result.errors.push({ row: rowNum, message: `상품명이 없습니다` }); continue;
       }
@@ -1452,16 +1448,17 @@ router.post("/admin/product-requests", ...adminGuard, async (req, res) => {
   if (!PRODUCT_TYPES[pType]) {
     res.status(400).json({ error: "유효하지 않은 상품유형입니다." }); return;
   }
-  if (!mainCategory?.trim() || !name?.trim()) {
-    res.status(400).json({ error: "대분류와 상품명은 필수입니다." }); return;
+  if (!name?.trim()) {
+    res.status(400).json({ error: "상품명은 필수입니다." }); return;
   }
 
   const hasLang = isLangType(pType);
   const srcLang = hasLang ? (sourceLanguage?.trim().toLowerCase() || null) : null;
   const tgtLang = hasLang ? (targetLanguage?.trim().toLowerCase() || null) : null;
+  const mainCatReq = mainCategory?.trim() || "";
 
   try {
-    const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCategory.trim(), subCategory?.trim() || "", undefined, name?.trim());
+    const dupes = await findDuplicate(pType, srcLang, tgtLang, mainCatReq, subCategory?.trim() || "", undefined, name?.trim());
     const dupeInfo = dupes.length > 0 ? { hasDuplicate: true, existing: dupes } : { hasDuplicate: false };
 
     const performer = req.user as { id: number; email: string } | undefined;
@@ -1469,7 +1466,7 @@ router.post("/admin/product-requests", ...adminGuard, async (req, res) => {
       productType: pType,
       sourceLanguage: srcLang,
       targetLanguage: tgtLang,
-      mainCategory: mainCategory.trim(),
+      mainCategory: mainCatReq || null,
       subCategory: subCategory?.trim() || null,
       serviceType: "",
       languagePair: "",
@@ -1732,8 +1729,8 @@ router.post("/admin/products/lazy-create", ...adminOnly, async (req, res) => {
 router.get("/admin/products/check-duplicate", ...adminGuard, async (req, res) => {
   const { productType, sourceLanguage, targetLanguage, mainCategory, subCategory, excludeId, name } = req.query as Record<string, string | undefined>;
 
-  if (!productType || !mainCategory) {
-    res.status(400).json({ error: "productType, mainCategory 는 필수입니다." }); return;
+  if (!productType) {
+    res.status(400).json({ error: "productType 은 필수입니다." }); return;
   }
 
   try {

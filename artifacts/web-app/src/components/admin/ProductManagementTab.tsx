@@ -383,8 +383,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   // ─── 상품 등록 요청 제출 ─────────────────────────────────────────────────
   const handleSubmitRequest = async () => {
     const effectiveName = autoName(requestForm);
-    if (!requestForm.mainCategory || !effectiveName) {
-      setToast("대분류와 상품명은 필수입니다."); return;
+    if (!effectiveName) {
+      setToast("상품명은 필수입니다."); return;
     }
     setSubmittingRequest(true);
     try {
