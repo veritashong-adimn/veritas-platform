@@ -27,6 +27,9 @@ export const REVIEW_REASONS = {
   UNKNOWN_ABBREVIATION:       "UNKNOWN_ABBREVIATION",
   // 언어 감수 필요
   REVIEW_REQUIRED_LANGUAGE:   "REVIEW_REQUIRED_LANGUAGE",
+  // 통역 계열에서 script variant(간체/번체) 제거됨 — 정보성, 페널티 없음
+  // spoken language 기반 통역에서는 문자체계 구분이 상품 identity에 영향 없음
+  SCRIPT_VARIANT_STRIPPED_FOR_INTERP: "SCRIPT_VARIANT_STRIPPED_FOR_INTERP",
 } as const;
 
 export type ReviewReason = typeof REVIEW_REASONS[keyof typeof REVIEW_REASONS];
@@ -36,4 +39,5 @@ export const NON_PENALTY_REASONS = new Set<string>([
   REVIEW_REASONS.COMPACT_DIRECTION_PATTERN,
   REVIEW_REASONS.COUNTRY_LANGUAGE_ALIAS,
   REVIEW_REASONS.MULTI_LANGUAGE_DETECTED,
+  REVIEW_REASONS.SCRIPT_VARIANT_STRIPPED_FOR_INTERP,
 ]);

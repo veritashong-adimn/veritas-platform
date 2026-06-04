@@ -386,6 +386,7 @@ function normalizeProdName(s: string): string {
     .toLowerCase()
     .replace(/[\s\-_·•]/g, "")
     .replace(/[()（）\[\]【】]/g, "")
+    .replace(/간체|번체/g, "")   // zh script qualifiers — canonical 비교 시 동일 취급
     .normalize("NFC");
 }
 
@@ -777,17 +778,29 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
   // ── Step 6b: 번역 표시명 (displayName) — 국가명/지역어 상품은 원본 유지
   let displayName = skipLangDetect ? name.trim() : productCandidate;
   if (!skipLangDetect && productCandidate === "번역" && srcCode && tgtCode && ISO_LABEL[srcCode] && ISO_LABEL[tgtCode]) {
-    displayName = `${ISO_LABEL[srcCode]}-${ISO_LABEL[tgtCode]} 번역`;
+    // 번역도 통역과 동일하게 zh script qualifier 제거 — displayName은 판매명 기준
+    const dSrc = (srcCode === "zh-hans" || srcCode === "zh-hant") ? "zh" : srcCode;
+    const dTgt = (tgtCode === "zh-hans" || tgtCode === "zh-hant") ? "zh" : tgtCode;
+    displayName = `${ISO_LABEL[dSrc]}-${ISO_LABEL[dTgt]} 번역`;
   }
 
   // ── Step 6b-2: 통역 subtype displayName — 상품명 스타일 (운영자 검색성 강화)
   // 예: "영어-한국어 동시통역", "베트남어-한국어 위스퍼링통역"
   // displayName은 상품명 형식(-), direction 컬럼이 방향 정보(→/↔) 담당
   if (!skipLangDetect && INTERP_SUBTYPES.has(productCandidate)) {
-    if (srcCode && tgtCode && ISO_LABEL[srcCode] && ISO_LABEL[tgtCode]) {
-      displayName = `${ISO_LABEL[srcCode]}-${ISO_LABEL[tgtCode]} ${productCandidate}`;
-    } else if (srcCode && srcCode !== "ko" && ISO_LABEL[srcCode]) {
-      displayName = `한국어-${ISO_LABEL[srcCode]} ${productCandidate}`;
+    // 통역은 spoken language 기반 — script variant(간체/번체) 제거
+    // 광동어(CANTONESE_REVIEW)는 별도 구어 언어이므로 예외 처리
+    const isCantoneseDetected = detectedLangReviewReasons.includes(REVIEW_REASONS.CANTONESE_REVIEW);
+    const dSrcCode = (!isCantoneseDetected && (srcCode === "zh-hans" || srcCode === "zh-hant")) ? "zh" : srcCode;
+    const dTgtCode = (!isCantoneseDetected && (tgtCode === "zh-hans" || tgtCode === "zh-hant")) ? "zh" : tgtCode;
+    if (srcCode && tgtCode && ISO_LABEL[dSrcCode] && ISO_LABEL[dTgtCode]) {
+      displayName = `${ISO_LABEL[dSrcCode]}-${ISO_LABEL[dTgtCode]} ${productCandidate}`;
+    } else if (srcCode && srcCode !== "ko" && ISO_LABEL[dSrcCode]) {
+      displayName = `한국어-${ISO_LABEL[dSrcCode]} ${productCandidate}`;
+    }
+    // script variant가 실제로 제거된 경우 정보성 review reason 기록
+    if (dSrcCode !== srcCode || dTgtCode !== tgtCode) {
+      detectedLangReviewReasons.push(REVIEW_REASONS.SCRIPT_VARIANT_STRIPPED_FOR_INTERP);
     }
   }
 
@@ -1244,6 +1257,22 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
   } catch (err) {
     req.log.error({ err }, "Products import preview failed");
     res.status(500).json({ error: "파일 파싱 실패." });
+  }
+});
+
+// ─── Single Row Re-Parse (Review Fix Console) ─────────────────────────────────
+router.post("/admin/products/analyze-row", ...adminOnly, async (req, res) => {
+  const { name, productType, sourceLanguage, targetLanguage, mainCategory } = req.body as {
+    name?: string; productType?: string; sourceLanguage?: string | null;
+    targetLanguage?: string | null; mainCategory?: string;
+  };
+  if (!name?.trim()) { res.status(400).json({ error: "상품명 필수" }); return; }
+  try {
+    const analysis = analyzeProductStructure(name.trim(), productType);
+    res.json({ analysis });
+  } catch (err) {
+    req.log.error({ err }, "analyze-row failed");
+    res.status(500).json({ error: "재분석 실패" });
   }
 });
 

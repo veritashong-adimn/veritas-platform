@@ -6,7 +6,18 @@ import {
   EQUIPMENT_QUANTITY_UNITS, EQUIPMENT_USAGE_PERIODS, INTERPRETATION_DIRECTIONS,
 } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
+import { ReviewFixConsoleModal, ReviewFixItem, ReparseSavePayload } from './ReviewFixConsoleModal';
 import { LanguageSearchSelect, LangCustomInput, isLangCustom } from './LanguageSearchSelect';
+
+// ─── Review Fix Console — Audit Trail ───────────────────────────────────────
+type AuditEntry = {
+  actionType: "edit" | "reparse" | "approve" | "exclude" | "delete";
+  changedAt: string;
+  originalRawName?: string;
+  editedRawName?: string;
+  beforeReviewReasons?: string[];
+  afterReviewReasons?: string[];
+};
 
 // ─── Review Persistence 모듈 레벨 타입 ─────────────────────────────────────
 type ImportPreviewItem = {
@@ -26,6 +37,16 @@ type RowOverride = {
   originalCandidate: string;
   reviewedAt?: string;
   reviewedBy?: string;
+  // Review Fix Console 확장
+  manuallyApproved?: boolean;
+  approvedAt?: string;
+  excluded?: boolean;
+  excludedAt?: string;
+  excludeReason?: string;
+  originalRawName?: string;
+  editedDisplayName?: string;   // ReviewFix 저장 후 canonical column 표시용
+  notes?: string;
+  auditTrail?: AuditEntry[];
 };
 
 type ReviewSessionMeta = {
@@ -46,7 +67,7 @@ type PersistedReviewSession = {
 };
 
 // ─── localStorage 헬퍼 ────────────────────────────────────────────────────
-const IMPORT_PREVIEW_SCHEMA_VERSION = 4;
+const IMPORT_PREVIEW_SCHEMA_VERSION = 6;
 const REVIEW_SESSION_KEY = "veritas_review_session_v2";
 
 function loadReviewSession(): PersistedReviewSession | null {
@@ -296,6 +317,12 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const [bulkRejectReason, setBulkRejectReason] = useState("");
   const [bulkOverrideValue, setBulkOverrideValue] = useState("");
   const [showAnalytics, setShowAnalytics] = useState(false);
+  // ─── Review Fix Console 상태 ──────────────────────────────────────────────
+  const [reviewFixModal, setReviewFixModal] = useState<{ item: ReviewFixItem } | null>(null);
+  const [excludeConfirmModal, setExcludeConfirmModal] = useState<{ item: ImportPreviewItem } | null>(null);
+  const [excludeReasonInput, setExcludeReasonInput] = useState("");
+  const [deletePreviewConfirmModal, setDeletePreviewConfirmModal] = useState<{ item: ImportPreviewItem } | null>(null);
+  const [highRiskApproveConfirm, setHighRiskApproveConfirm] = useState<{ item: ImportPreviewItem } | null>(null);
   const [productRequests, setProductRequests] = useState<ProductRequest[]>([]);
   const [productRequestsLoading, setProductRequestsLoading] = useState(false);
   const [productRequestStatusFilter, setProductRequestStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("all");
@@ -483,6 +510,98 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     setBulkConfirmModal(null);
     setBulkOverrideValue("");
     setSelectedRows(new Set());
+  };
+
+  // ─── Review Fix Console 핸들러 ───────────────────────────────────────────
+
+  const executeRowApprove = (item: ImportPreviewItem) => {
+    const now = new Date().toISOString();
+    setRowOverrides(prev => {
+      const base = prev[item.rowNum] ?? { reviewStatus: "pending" as const, rejectReason: "", overriddenCandidate: undefined, originalCandidate: item.analysis?.productCandidate ?? "" };
+      const entry: AuditEntry = { actionType: "approve", changedAt: now };
+      return { ...prev, [item.rowNum]: { ...base, reviewStatus: "approved", manuallyApproved: true, approvedAt: now, auditTrail: [...(base.auditTrail ?? []), entry] } };
+    });
+    setHighRiskApproveConfirm(null);
+  };
+
+  const executeRowExclude = (item: ImportPreviewItem, reason: string) => {
+    const now = new Date().toISOString();
+    setRowOverrides(prev => {
+      const base = prev[item.rowNum] ?? { reviewStatus: "pending" as const, rejectReason: reason, overriddenCandidate: undefined, originalCandidate: item.analysis?.productCandidate ?? "" };
+      const entry: AuditEntry = { actionType: "exclude", changedAt: now, originalRawName: item.name };
+      return { ...prev, [item.rowNum]: { ...base, reviewStatus: "rejected", excluded: true, excludedAt: now, excludeReason: reason, rejectReason: reason, auditTrail: [...(base.auditTrail ?? []), entry] } };
+    });
+    setExcludeConfirmModal(null);
+    setExcludeReasonInput("");
+  };
+
+  const executeDeleteFromPreview = (rowNum: number) => {
+    setImportPreview(prev => {
+      if (!prev) return prev;
+      return { ...prev, items: prev.items.filter(x => x.rowNum !== rowNum) };
+    });
+    setRowOverrides(prev => { const next = { ...prev }; delete next[rowNum]; return next; });
+    setSelectedRows(prev => { const next = new Set(prev); next.delete(rowNum); return next; });
+    setDeletePreviewConfirmModal(null);
+  };
+
+  const handleReparseSave = ({ rowNum, editedName, editedType, editedSrc, editedTgt, editedMainCat, analysis: newAnalysis, notes, reparsed }: ReparseSavePayload) => {
+    const now = new Date().toISOString();
+    const originalItem = importPreview?.items.find(x => x.rowNum === rowNum);
+
+    console.log("[ReviewFix] save handler called", {
+      rowNum, editedName, reparsed,
+      originalName: originalItem?.name,
+      newDisplayName: newAnalysis?.displayName,
+      newReviewReasons: newAnalysis?.reviewReasons,
+    });
+
+    // displayName이 productCandidate와 같으면 parser가 언어를 미인식한 것 — 편집명으로 대체
+    const isGenericDisplay = !newAnalysis?.displayName ||
+      newAnalysis.displayName === newAnalysis.productCandidate ||
+      newAnalysis.displayName === "";
+    const editedDisplayName = isGenericDisplay ? editedName : (newAnalysis?.displayName ?? editedName);
+
+    setImportPreview(prev => {
+      if (!prev) return prev;
+      const updated = {
+        ...prev,
+        items: prev.items.map(x => x.rowNum !== rowNum ? x : {
+          ...x, name: editedName, productType: editedType,
+          sourceLanguage: editedSrc, targetLanguage: editedTgt,
+          mainCategory: editedMainCat, analysis: newAnalysis,
+        }),
+      };
+      console.log("[ReviewFix] before item", originalItem?.name, "→ after item", editedName, "displayName:", editedDisplayName);
+      return updated;
+    });
+
+    setRowOverrides(prev => {
+      const base = prev[rowNum] ?? { reviewStatus: "pending" as const, rejectReason: "", overriddenCandidate: undefined, originalCandidate: originalItem?.analysis?.productCandidate ?? "" };
+      const entry: AuditEntry = {
+        actionType: reparsed ? "reparse" : "edit",
+        changedAt: now,
+        originalRawName: base.originalRawName ?? originalItem?.name,
+        editedRawName: editedName,
+        beforeReviewReasons: originalItem?.analysis?.reviewReasons ?? [],
+        afterReviewReasons: newAnalysis?.reviewReasons ?? [],
+      };
+      const autoApprove = reparsed && (newAnalysis?.reviewReasons ?? []).length === 0 && base.reviewStatus === "pending";
+      const updatedNotes = notes ? (base.notes ? `${base.notes}\n${notes}` : notes) : base.notes;
+      const next = { ...prev, [rowNum]: {
+        ...base,
+        reviewStatus: autoApprove ? "approved" : base.reviewStatus,
+        ...(autoApprove && { manuallyApproved: true, approvedAt: now }),
+        originalRawName: base.originalRawName ?? originalItem?.name,
+        editedDisplayName,
+        notes: updatedNotes,
+        auditTrail: [...(base.auditTrail ?? []), entry],
+      }};
+      console.log("[ReviewFix] rowOverrides updated", rowNum, "→", next[rowNum].reviewStatus, "editedDisplayName:", editedDisplayName);
+      return next;
+    });
+
+    setReviewFixModal(null);
   };
 
   // ─── 상품 저장 ──────────────────────────────────────────────────────────
@@ -1442,10 +1561,12 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           const allNewNotRejected = importPreview.items.filter(x => x.status === "new" && getReviewStatus(x) !== "rejected");
           const approvedCount = importPreview.items.filter(x => getReviewStatus(x) === "approved").length;
           const rejectedCount = importPreview.items.filter(x => getReviewStatus(x) === "rejected").length;
+          const excludedCount = importPreview.items.filter(x => rowOverrides[x.rowNum]?.excluded === true).length;
           const modifiedCount = importPreview.items.filter(x => {
             const ov = rowOverrides[x.rowNum];
             return ov?.overriddenCandidate !== undefined && ov.overriddenCandidate !== (x.analysis?.productCandidate ?? "");
           }).length;
+          const editedCount = importPreview.items.filter(x => !!rowOverrides[x.rowNum]?.editedDisplayName).length;
           const highRiskCount = importPreview.items.filter(x => getRiskLevel(calcRiskScore(x)) === "high").length;
           const reviewNeededCount = importPreview.items.filter(x => getRiskLevel(calcRiskScore(x)) === "review_needed").length;
           const stableCount = importPreview.items.filter(x => getRiskLevel(calcRiskScore(x)) === "stable").length;
@@ -1560,7 +1681,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 16px", background: sessionRestored ? "#fffbeb" : "#f0f9ff", borderBottom: "1px solid #e5e7eb", fontSize: 11, gap: 8, flexWrap: "wrap" }}>
                   <span style={{ color: sessionRestored ? "#92400e" : "#0369a1" }}>
                     {sessionRestored
-                      ? `📂 이전 세션 복원됨 — ${reviewSession?.fileName ?? ""} · ${reviewSession?.uploadedAt ? new Date(reviewSession.uploadedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""} · 승인 ${approvedCount} / 제외 ${rejectedCount} / 수정 ${modifiedCount}`
+                      ? `📂 이전 세션 복원됨 — ${reviewSession?.fileName ?? ""} · ${reviewSession?.uploadedAt ? new Date(reviewSession.uploadedAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : ""} · 승인 ${approvedCount} / 제외 ${rejectedCount} / 행편집 ${editedCount}`
                       : `💾 세션 자동 저장 중 — ${reviewSession?.fileName ?? ""}`}
                   </span>
                   <button
@@ -1624,8 +1745,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 <span style={{ color: "#374151" }}>등록가능 <strong style={{ color: "#059669" }}>{safeAndNotRejected.length}</strong></span>
                 <span style={{ color: "#6b7280", fontSize: 11 }}>|</span>
                 {approvedCount > 0 && <span style={{ color: "#374151" }}>승인 <strong style={{ color: "#059669" }}>{approvedCount}</strong></span>}
-                {rejectedCount > 0 && <span style={{ color: "#374151" }}>제외 <strong style={{ color: "#dc2626" }}>{rejectedCount}</strong></span>}
-                {modifiedCount > 0 && <span style={{ color: "#374151" }}>수정됨 <strong style={{ color: "#7c3aed" }}>{modifiedCount}</strong></span>}
+                {rejectedCount > 0 && <span style={{ color: "#374151" }}>제외 <strong style={{ color: "#dc2626" }}>{rejectedCount}</strong>{excludedCount > 0 && <span style={{ fontSize: 10, color: "#9ca3af" }}> ({excludedCount}명시)</span>}</span>}
+                {modifiedCount > 0 && <span style={{ color: "#374151" }}>후보수정 <strong style={{ color: "#7c3aed" }}>{modifiedCount}</strong></span>}
+                {editedCount > 0 && <span style={{ color: "#374151" }}>행편집 <strong style={{ color: "#059669" }}>{editedCount}</strong></span>}
                 <span style={{ color: "#6b7280", fontSize: 11 }}>|</span>
                 {highRiskCount > 0 && <span style={{ color: "#374151" }}>고위험 <strong style={{ color: "#b91c1c" }}>{highRiskCount}</strong></span>}
                 {reviewNeededCount > 0 && <span style={{ color: "#374151" }}>검토필요 <strong style={{ color: "#92400e" }}>{reviewNeededCount}</strong></span>}
@@ -1710,6 +1832,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 if (zhAmbiguousItems > 0) insights.push(`중국어 모호 표기 ${zhAmbiguousItems}건 — 간체/번체 확인 필요`);
                 if (variantItems > 0) insights.push(`기존 ZH 계열 variant ${variantItems}건 — 중복 여부 확인`);
                 if (cantoneseItems > 0) insights.push(`광동어 표기(zh-hant 분류됨) ${cantoneseItems}건`);
+                const strippedInterpItems = importPreview.items.filter(x => (x.analysis?.reviewReasons ?? []).includes("SCRIPT_VARIANT_STRIPPED_FOR_INTERP")).length;
+                if (strippedInterpItems > 0) insights.push(`통역 상품 script variant(간체/번체) 제거됨 ${strippedInterpItems}건 — 중국어로 통합 표시`);
 
                 const statCard = (label: string, value: number, color: string, showPct?: boolean) => (
                   <div key={label} style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 12px", minWidth: 66, textAlign: "center", flex: "0 0 auto" }}>
@@ -1867,7 +1991,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               }
                             }} />
                         </th>
-                        {(["행", "상품명(canonical)", "Product 후보", "언어쌍", "방향", "유형", "단위", "단가", "상태", "이슈", "검토"] as const).map(h => {
+                        {(["행", "상품명(canonical)", "Product 후보", "언어쌍", "방향", "유형", "단위", "단가", "상태", "이슈", "검토", "액션"] as const).map(h => {
                           const minW: Record<string, number> = {
                             "상품명(canonical)": 220,
                             "Product 후보":       180,
@@ -1903,19 +2027,26 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                               )}
                               <div>{item.rowNum}</div>
                             </td>
-                            {/* 상품명(canonical): parser displayName 우선, 원본은 tooltip으로 보존 */}
+                            {/* 상품명(canonical): ReviewFix 편집명 > parser displayName > humanize fallback */}
                             {(() => {
+                              const ovr = rowOverrides[item.rowNum];
+                              // ReviewFix로 저장된 editedDisplayName 우선, 없으면 parser displayName, 없으면 humanize
+                              const isGenericDisplay = !an?.displayName || an.displayName === an?.productCandidate;
                               const canonicalLabel =
-                                (an?.displayName && an.displayName !== an?.productCandidate)
-                                  ? an.displayName
-                                  : humanizeProductName(item.name);
-                              const showTooltip = canonicalLabel !== item.name;
+                                ovr?.editedDisplayName ||
+                                (!isGenericDisplay ? an?.displayName : null) ||
+                                humanizeProductName(item.name);
+                              const isEdited = !!ovr?.editedDisplayName;
+                              const originalName = ovr?.originalRawName ?? item.name;
                               return (
                                 <td
-                                  title={showTooltip ? `원본: ${item.name}` : item.name}
-                                  style={{ padding: "4px 8px", color: "#374151", minWidth: 220, whiteSpace: "nowrap" }}
+                                  title={`원본: ${originalName}${isEdited ? ` → 수정됨` : ""}`}
+                                  style={{ padding: "4px 8px", color: isEdited ? "#059669" : "#374151", minWidth: 220, whiteSpace: "nowrap", fontWeight: isEdited ? 600 : 400 }}
                                 >
                                   {canonicalLabel}
+                                  {isEdited && (
+                                    <span style={{ marginLeft: 4, fontSize: 9, color: "#059669", background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 3, padding: "0 3px" }}>수정됨</span>
+                                  )}
                                 </td>
                               );
                             })()}
@@ -2020,6 +2151,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                                   MULTI_LANGUAGE_DETECTED:     { color: "#0891b2", background: "#ecfeff", border: "1px solid #67e8f9" },
                                   UNKNOWN_ABBREVIATION:        { color: "#dc2626", background: "#fef2f2", border: "1px solid #fca5a5" },
                                   REVIEW_REQUIRED_LANGUAGE:    { color: "#d97706", background: "#fffbeb", border: "1px solid #fde68a" },
+                                  // 통역 script variant 제거 — 정보성 (초록 계열, 문제 아님)
+                                  SCRIPT_VARIANT_STRIPPED_FOR_INTERP: { color: "#065f46", background: "#ecfdf5", border: "1px solid #6ee7b7" },
                                 };
                                 const st = CODE_STYLE[r] ?? { color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a" };
                                 return (
@@ -2049,7 +2182,13 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                                         const active = rv === st;
                                         return (
                                           <button key={st}
-                                            onClick={() => setRowReviewStatus(item.rowNum, st)}
+                                            onClick={() => {
+                                              if (st === "approved" && getRiskLevel(riskScore) === "high") {
+                                                setHighRiskApproveConfirm({ item });
+                                              } else {
+                                                setRowReviewStatus(item.rowNum, st);
+                                              }
+                                            }}
                                             style={{
                                               fontSize: 10, padding: "2px 6px", borderRadius: 4,
                                               border: `1px solid ${active ? meta.border : "#e5e7eb"}`,
@@ -2074,6 +2213,32 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                                   </div>
                                 );
                               })()}
+                            </td>
+                            {/* 액션 — Review Fix Console */}
+                            <td style={{ padding: "4px 6px", whiteSpace: "nowrap", verticalAlign: "top" }}>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                <button
+                                  onClick={() => setReviewFixModal({ item: item as unknown as ReviewFixItem })}
+                                  title="수정 / 재분석"
+                                  data-testid={`action-edit-${item.rowNum}`}
+                                  style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, border: "1px solid #c7d2fe", background: "#eef2ff", color: "#4338ca", cursor: "pointer", fontWeight: 600, lineHeight: "15px" }}>
+                                  ✎ 수정
+                                </button>
+                                <button
+                                  onClick={() => setExcludeConfirmModal({ item })}
+                                  title="이번 Import에서 제외"
+                                  data-testid={`action-exclude-${item.rowNum}`}
+                                  style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, border: "1px solid #fca5a5", background: "#fef2f2", color: "#b91c1c", cursor: "pointer", fontWeight: 600, lineHeight: "15px" }}>
+                                  ⊗ 제외
+                                </button>
+                                <button
+                                  onClick={() => setDeletePreviewConfirmModal({ item })}
+                                  title="Preview 목록에서 삭제 (DB 삭제 아님)"
+                                  data-testid={`action-delete-${item.rowNum}`}
+                                  style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, border: "1px solid #e5e7eb", background: "#f9fafb", color: "#6b7280", cursor: "pointer", fontWeight: 600, lineHeight: "15px" }}>
+                                  ✕ 삭제
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         );
@@ -2349,6 +2514,117 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               <GhostBtn onClick={() => setDeactivatingProductId(null)} style={{ fontSize: 13 }}>취소</GhostBtn>
             </div>
           </Card>
+        </div>
+      )}
+
+      {/* ─── Review Fix Console 모달 ─────────────────────────────────────────── */}
+      {reviewFixModal && (
+        <ReviewFixConsoleModal
+          item={reviewFixModal.item}
+          token={token ?? ""}
+          onSave={handleReparseSave}
+          onClose={() => setReviewFixModal(null)}
+        />
+      )}
+
+      {/* 제외 확인 모달 */}
+      {excludeConfirmModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 900, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 10, boxShadow: "0 10px 40px rgba(0,0,0,0.15)", padding: "24px 28px", maxWidth: 440, width: "100%" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 6 }}>⊗ 제외 확인</div>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 14 }}>
+              <strong style={{ color: "#374151" }}>{excludeConfirmModal.item.name}</strong><br />
+              이번 Import 등록 대상에서 제외합니다. DB 삭제가 아닙니다.
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>제외 사유 (선택)</label>
+              <select
+                value={excludeReasonInput}
+                onChange={e => setExcludeReasonInput(e.target.value)}
+                style={{ width: "100%", padding: "7px 8px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13, marginBottom: 6 }}
+                data-testid="exclude-reason-select">
+                <option value="">선택 없음</option>
+                {["프로젝트명", "내부업무", "Product 아님", "설명형 텍스트", "중복 의미", "운영성 항목", "메모성 row", "임시 데이터", "SET 포함"].map(r => (
+                  <option key={r} value={r}>{r}</option>
+                ))}
+              </select>
+              <input
+                value={excludeReasonInput}
+                onChange={e => setExcludeReasonInput(e.target.value)}
+                placeholder="또는 직접 입력..."
+                data-testid="exclude-reason-input"
+                style={{ width: "100%", padding: "7px 9px", border: "1px solid #d1d5db", borderRadius: 6, fontSize: 13, boxSizing: "border-box" }}
+              />
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => { setExcludeConfirmModal(null); setExcludeReasonInput(""); }}
+                style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #d1d5db", background: "#fff", color: "#374151", fontSize: 13, cursor: "pointer" }}>
+                취소
+              </button>
+              <button
+                onClick={() => executeRowExclude(excludeConfirmModal.item, excludeReasonInput)}
+                data-testid="exclude-confirm-btn"
+                style={{ padding: "8px 18px", borderRadius: 7, border: "none", background: "#dc2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                제외 확정
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Preview 삭제 확인 모달 */}
+      {deletePreviewConfirmModal && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 900, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 10, boxShadow: "0 10px 40px rgba(0,0,0,0.15)", padding: "24px 28px", maxWidth: 420, width: "100%" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 6 }}>✕ Preview에서 삭제</div>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 6 }}>
+              <strong style={{ color: "#374151" }}>{deletePreviewConfirmModal.item.name}</strong>
+            </div>
+            <div style={{ fontSize: 12, color: "#b91c1c", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 6, padding: "8px 12px", marginBottom: 16 }}>
+              이번 업로드 목록에서만 삭제됩니다. 실제 상품 DB에는 영향이 없습니다.
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setDeletePreviewConfirmModal(null)}
+                style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #d1d5db", background: "#fff", color: "#374151", fontSize: 13, cursor: "pointer" }}>
+                취소
+              </button>
+              <button
+                onClick={() => executeDeleteFromPreview(deletePreviewConfirmModal.item.rowNum)}
+                data-testid="delete-preview-confirm-btn"
+                style={{ padding: "8px 18px", borderRadius: 7, border: "none", background: "#374151", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                이번 업로드 목록에서 삭제
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 고위험 승인 확인 모달 */}
+      {highRiskApproveConfirm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 900, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 10, boxShadow: "0 10px 40px rgba(0,0,0,0.15)", padding: "24px 28px", maxWidth: 440, width: "100%" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#b91c1c", marginBottom: 6 }}>⚠ 고위험 항목 승인 확인</div>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>
+              <strong style={{ color: "#374151" }}>{highRiskApproveConfirm.item.name}</strong>
+            </div>
+            <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 16 }}>
+              이 항목은 고위험(High Risk)으로 분류되었습니다.<br />
+              검토 사유: {(highRiskApproveConfirm.item.analysis?.reviewReasons ?? []).join(", ") || "없음"}
+              <br />수동 승인 후 등록 대상에 포함됩니다. 계속하시겠습니까?
+            </div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={() => setHighRiskApproveConfirm(null)}
+                style={{ padding: "8px 16px", borderRadius: 7, border: "1px solid #d1d5db", background: "#fff", color: "#374151", fontSize: 13, cursor: "pointer" }}>
+                취소
+              </button>
+              <button
+                onClick={() => executeRowApprove(highRiskApproveConfirm.item)}
+                data-testid="high-risk-approve-confirm-btn"
+                style={{ padding: "8px 18px", borderRadius: 7, border: "none", background: "#b91c1c", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                위험 인지 후 승인
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
