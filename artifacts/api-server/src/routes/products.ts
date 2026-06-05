@@ -26,7 +26,7 @@ export const PRODUCT_TYPES: Record<string, { label: string; code: string; hasLan
   interpretation: { label: "통역",      code: "IN", hasLanguage: true },
   combined:       { label: "통번역",    code: "CO", hasLanguage: true },
   proofreading:   { label: "감수",      code: "PR", hasLanguage: true },
-  media:          { label: "미디어",    code: "MD", hasLanguage: true },
+  media:          { label: "미디어",    code: "MD", hasLanguage: true, languageOptional: true },
   equipment:      { label: "통역장비",  code: "EQ", hasLanguage: false },
   editing:        { label: "편집/DTP",  code: "ED", hasLanguage: false },
   operations:     { label: "운영/실비", code: "OP", hasLanguage: false },
@@ -275,6 +275,11 @@ function isLangType(productType: string): boolean {
   return PRODUCT_TYPES[productType]?.hasLanguage ?? false;
 }
 
+// 언어가 선택사항인 타입 여부 (media: 언어 있을 수도, 없을 수도 있음)
+function isLangOptionalType(productType: string): boolean {
+  return (PRODUCT_TYPES[productType] as { languageOptional?: boolean })?.languageOptional ?? false;
+}
+
 // 레거시 languagePair 파싱 (예: KOEN → {src: ko, tgt: en})
 const LANG_PAIR_MIGRATION: Record<string, { src: string; tgt: string }> = {
   KOEN: { src: "ko", tgt: "en" },
@@ -368,8 +373,9 @@ async function findDuplicate(
   excludeId?: number,
   name?: string,
 ) {
-  const hasLang = isLangType(productType);
-  const isInterp = productType === "interpretation";
+  const hasLang   = isLangType(productType);
+  const isInterp  = productType === "interpretation";
+  const langOpt   = isLangOptionalType(productType);
 
   // 통역 계열: zh/zh-hans/zh-hant 모두 동일 상품으로 처리 (spoken language 기준)
   // 번역 계열: zh-hans ↔ zh 호환만 처리 (script variant는 별도 상품)
@@ -387,7 +393,10 @@ async function findDuplicate(
     return sql`LOWER(COALESCE(${sql.raw(colName)}, '')) = ${norm}`;
   }
 
-  const conditions = hasLang
+  // 미디어처럼 언어가 선택사항인 타입 + 언어 미선택 → 이름 기반 중복 체크로 전환
+  const useLangPath = hasLang && !(langOpt && !normSrc && !normTgt);
+
+  const conditions = useLangPath
     ? and(
         sql`LOWER(${productsTable.productType}) = LOWER(${productType})`,
         sql`LOWER(COALESCE(${productsTable.mainCategory}, '')) = LOWER(${mainCategory || ""})`,
@@ -473,10 +482,12 @@ async function getOrCreateProduct(
     : `${pTypeCode}:::${normalizeProdName(name)}`;
 
   // 기존 상품 조회 (findDuplicate 재사용) — 정규화된 언어 코드로 조회
+  // 미디어처럼 언어가 optional인 타입에서 언어가 없을 때는 name도 전달 (이름 기반 dedup으로 전환)
+  const noLangOptional = isLangOptionalType(productType) && !storedSrc && !storedTgt;
   const dupes = await findDuplicate(
     productType, storedSrc, storedTgt,
     mainCategory, subCategory, undefined,
-    hasLang ? undefined : name,
+    (noLangOptional || !hasLang) ? name : undefined,
   );
 
   if (dupes.length > 0) {
@@ -929,7 +940,24 @@ export function analyzeProductStructure(name: string, productType?: string): Pro
     }
   }
 
-  // ── Step 6b-3: 장비 displayName — 언어 포함 (예: "독일어 통역장비")
+  // ── Step 6b-3: 미디어 displayName — 언어 유무에 따라 분기
+  // Case 1: 양방향 → "한국어-영어 TTS"
+  // Case 2: 출발만  → "한국어 STT"
+  // Case 3: 없음   → "영상편집" (productCandidate 그대로)
+  if (!skipLangDetect && productType === "media" && productCandidate) {
+    const svcLabel = productCandidate;
+    if (srcCode && tgtCode && ISO_LABEL[srcCode] && ISO_LABEL[tgtCode]) {
+      displayName = `${ISO_LABEL[srcCode]}-${ISO_LABEL[tgtCode]} ${svcLabel}`;
+    } else if (srcCode && ISO_LABEL[srcCode]) {
+      displayName = `${ISO_LABEL[srcCode]} ${svcLabel}`;
+    } else if (tgtCode && ISO_LABEL[tgtCode]) {
+      displayName = `${ISO_LABEL[tgtCode]} ${svcLabel}`;
+    } else {
+      displayName = svcLabel;
+    }
+  }
+
+  // ── Step 6b-4: 장비 displayName — 언어 포함 (예: "독일어 통역장비")
   if (isEquipCanonical && srcLabel && !srcLabel.startsWith("미지원")) {
     displayName = `${srcLabel} ${productCandidate}`;
   }

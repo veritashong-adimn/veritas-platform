@@ -428,12 +428,12 @@ export const FEEDBACK_TAGS = [
 ] as const;
 export type FeedbackTag = "general" | "bug" | "ux" | "idea" | "urgent";
 
-export const PRODUCT_TYPES_META: Record<string, { label: string; code: string; hasLanguage: boolean }> = {
+export const PRODUCT_TYPES_META: Record<string, { label: string; code: string; hasLanguage: boolean; languageOptional?: boolean }> = {
   translation:    { label: "번역",      code: "TR", hasLanguage: true },
   interpretation: { label: "통역",      code: "IN", hasLanguage: true },
   combined:       { label: "통번역",    code: "CO", hasLanguage: true },
   proofreading:   { label: "감수",      code: "PR", hasLanguage: true },
-  media:          { label: "미디어",    code: "MD", hasLanguage: true },
+  media:          { label: "미디어",    code: "MD", hasLanguage: true, languageOptional: true },
   equipment:      { label: "통역장비",  code: "EQ", hasLanguage: false },
   editing:        { label: "편집/DTP",  code: "ED", hasLanguage: false },
   operations:     { label: "운영/실비", code: "OP", hasLanguage: false },
@@ -444,6 +444,12 @@ export const PRODUCT_TYPES_META: Record<string, { label: string; code: string; h
   other_cost:     { label: "기타비용",  code: "OT", hasLanguage: false },
   expense:        { label: "실비",      code: "EX", hasLanguage: false },
 };
+
+/** 언어 선택이 필수인 유형인지 여부 (media는 optional이므로 false) */
+export function isLangRequired(productType: string): boolean {
+  const m = PRODUCT_TYPES_META[productType];
+  return !!m?.hasLanguage && !m?.languageOptional;
+}
 
 export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: string }[]> = {
   translation: [
@@ -647,8 +653,8 @@ export const INTERPRETATION_DIRECTIONS = ["양방향", "A→B", "B→A"] as cons
 
 export const UNITS_BY_PRODUCT_TYPE: Record<string, string[]> = {
   translation:    ["어절", "단어", "글자", "페이지", "건"],
-  interpretation: ["1시간", "반일", "종일", "추가시간"],
-  combined:       ["어절", "단어", "글자", "페이지", "건", "1시간", "반일", "종일"],
+  interpretation: ["1시간", "2시간", "4시간", "6시간", "8시간", "추가시간"],
+  combined:       ["어절", "단어", "글자", "페이지", "건", "1시간", "2시간", "4시간", "6시간", "8시간", "추가시간"],
   proofreading:   ["어절", "단어", "글자", "페이지", "건"],
   media:          ["분", "초", "건"],
   equipment:      ["대", "일", "건"],
@@ -726,7 +732,13 @@ export const PRODUCT_SUB_CATEGORIES: Record<string, string[]> = {
   "부스장비":    ["통역부스", "사전설치"],
 };
 
-export const PRODUCT_UNITS = ["어절", "단어", "글자", "페이지", "건", "1시간", "반일", "종일", "추가시간", "대", "일", "박", "인", "분", "초", "시간"] as const;
+export const PRODUCT_UNITS = ["어절", "단어", "글자", "페이지", "건", "1시간", "2시간", "4시간", "6시간", "8시간", "추가시간", "대", "일", "박", "인", "분", "초", "시간"] as const;
 export type ProductUnit = typeof PRODUCT_UNITS[number];
+
+// 구버전 통역 단위 → 신규 단위 정규화 (반일→4시간, 종일→8시간)
+const INTERP_UNIT_LEGACY: Record<string, string> = { "반일": "4시간", "종일": "8시간" };
+export function normalizeInterpUnit(u: string): string {
+  return INTERP_UNIT_LEGACY[u] ?? u;
+}
 
 export const PRODUCT_OPTION_TYPES = ["언어", "방식", "시간", "기타"] as const;

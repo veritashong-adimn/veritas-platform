@@ -4,6 +4,7 @@ import {
   PRODUCT_TYPES_META, MAIN_CATEGORIES_BY_TYPE, SUB_CATEGORIES_BY_MAIN,
   LANGUAGE_CODES, UNITS_BY_PRODUCT_TYPE, PRODUCT_OPTION_TYPES,
   EQUIPMENT_QUANTITY_UNITS, EQUIPMENT_USAGE_PERIODS, INTERPRETATION_DIRECTIONS,
+  isLangRequired,
 } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 import { LanguageSearchSelect, LangCustomInput, isLangCustom } from './LanguageSearchSelect';
@@ -185,6 +186,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   function autoName(f: ProductFormType): string {
     const typeLabel = PRODUCT_TYPES_META[f.productType]?.label ?? f.productType;
     const hasLang = PRODUCT_TYPES_META[f.productType]?.hasLanguage ?? false;
+    const langOpt = PRODUCT_TYPES_META[f.productType]?.languageOptional ?? false;
 
     // 통역장비: 중분류(subCategory) → 대분류(mainCategory) 기반
     if (f.productType === "equipment") {
@@ -201,9 +203,22 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
       : "";
     const mainLabel = f.mainCategory;
     const subLabel = f.subCategory;
+
+    // 미디어: 언어 유무에 따라 3가지 패턴
+    // Case 1 (둘 다): "한국어-영어 TTS"
+    // Case 2 (하나만): "한국어 STT"
+    // Case 3 (없음): "영상편집" (subLabel 또는 mainLabel)
+    if (langOpt) {
+      const svcLabel = subLabel?.trim() || mainLabel?.trim() || typeLabel;
+      if (srcLabel && tgtLabel) return `${srcLabel}-${tgtLabel} ${svcLabel}`;
+      if (srcLabel) return `${srcLabel} ${svcLabel}`;
+      if (tgtLabel) return `${tgtLabel} ${svcLabel}`;
+      return svcLabel;
+    }
+
     const isInterpType = f.productType === "interpretation" || f.productType === "combined";
     if (hasLang && srcLabel && tgtLabel) {
-      // 비통역(번역/감수/미디어 등): 하이픈(-) 구분자. 방향성 없는 서비스이므로 화살표 사용 안 함.
+      // 비통역(번역/감수 등): 하이픈(-) 구분자. 방향성 없는 서비스이므로 화살표 사용 안 함.
       // 통역/통번역: 방향 표시 유지 (→ / ↔)
       let sep = isInterpType ? "→" : "-";
       let aLabel = srcLabel;
@@ -222,22 +237,24 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
 
   // ─── productType 변경 시 연관 필드 초기화 ───────────────────────────────
   function handleProductTypeChange(newType: string, setter: React.Dispatch<React.SetStateAction<ProductFormType>>) {
-    const hasLang = PRODUCT_TYPES_META[newType]?.hasLanguage ?? false;
-    const isEquip = newType === "equipment";
+    const hasLang  = PRODUCT_TYPES_META[newType]?.hasLanguage ?? false;
+    const langOpt  = PRODUCT_TYPES_META[newType]?.languageOptional ?? false;
+    const isEquip  = newType === "equipment";
     const mainCats = MAIN_CATEGORIES_BY_TYPE[newType] ?? [];
-    const defMain = mainCats[0]?.label ?? "";
-    const defUnit = (UNITS_BY_PRODUCT_TYPE[newType] ?? ["건"])[0];
+    const defMain  = mainCats[0]?.label ?? "";
+    const defUnit  = (UNITS_BY_PRODUCT_TYPE[newType] ?? ["건"])[0];
     setter(prev => {
-      const rawSrc = hasLang ? (prev.sourceLanguage || "ko") : "";
-      const rawTgt = hasLang ? (prev.targetLanguage || "en") : "";
+      // 언어 optional 타입(media)은 언어 초기값을 비워둠 — 사용자가 필요 시 선택
+      const rawSrc = (hasLang && !langOpt) ? (prev.sourceLanguage || "ko") : "";
+      const rawTgt = (hasLang && !langOpt) ? (prev.targetLanguage || "en") : "";
       const updated = {
         ...prev,
         productType: newType,
         mainCategory: defMain,
         subCategory: "",
         unit: defUnit,
-        sourceLanguage: hasLang ? normalizeZhForType(rawSrc, newType) : "",
-        targetLanguage: hasLang ? normalizeZhForType(rawTgt, newType) : "",
+        sourceLanguage: (hasLang && !langOpt) ? normalizeZhForType(rawSrc, newType) : "",
+        targetLanguage: (hasLang && !langOpt) ? normalizeZhForType(rawTgt, newType) : "",
         equipmentItem: isEquip ? prev.equipmentItem : "",
         equipmentItemCustom: isEquip ? prev.equipmentItemCustom : "",
         quantityUnit: isEquip ? (EQUIP_UNIT_BY_MAIN[defMain] ?? "개") : "",
@@ -302,8 +319,9 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     if (!effectiveName) {
       setToast("상품명은 필수입니다."); return;
     }
-    const hasLang = PRODUCT_TYPES_META[productForm.productType]?.hasLanguage ?? false;
-    if (!editingProduct && hasLang && (!productForm.sourceLanguage || !productForm.targetLanguage)) {
+    const hasLang    = PRODUCT_TYPES_META[productForm.productType]?.hasLanguage ?? false;
+    const langReq    = isLangRequired(productForm.productType);
+    if (!editingProduct && langReq && (!productForm.sourceLanguage || !productForm.targetLanguage)) {
       setToast("출발언어와 도착언어는 필수입니다."); return;
     }
     if (!editingProduct && hasLang && productForm.sourceLanguage === "custom" && !productForm.sourceLanguageCustom.trim()) {
@@ -340,8 +358,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         }
         : {
           productType: productForm.productType,
-          sourceLanguage: hasLang ? resolveLanguage(productForm.sourceLanguage, productForm.sourceLanguageCustom) : null,
-          targetLanguage: hasLang ? resolveLanguage(productForm.targetLanguage, productForm.targetLanguageCustom) : null,
+          sourceLanguage: hasLang ? (resolveLanguage(productForm.sourceLanguage, productForm.sourceLanguageCustom) || null) : null,
+          targetLanguage: hasLang ? (resolveLanguage(productForm.targetLanguage, productForm.targetLanguageCustom) || null) : null,
           mainCategory: productForm.mainCategory,
           subCategory: productForm.subCategory || null,
           name: effectiveName,
@@ -568,14 +586,15 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     isEdit: boolean,
     isRequest: boolean = false,
   ) {
-    const typeInfo = PRODUCT_TYPES_META[form.productType];
-    const hasLang = typeInfo?.hasLanguage ?? false;
-    const mainCats = MAIN_CATEGORIES_BY_TYPE[form.productType] ?? [];
-    const subCats = SUB_CATEGORIES_BY_MAIN[form.mainCategory] ?? [];
-    const units = UNITS_BY_PRODUCT_TYPE[form.productType] ?? ["건"];
+    const typeInfo  = PRODUCT_TYPES_META[form.productType];
+    const hasLang   = typeInfo?.hasLanguage ?? false;
+    const langOpt   = typeInfo?.languageOptional ?? false;
+    const mainCats  = MAIN_CATEGORIES_BY_TYPE[form.productType] ?? [];
+    const subCats   = SUB_CATEGORIES_BY_MAIN[form.mainCategory] ?? [];
+    const units     = UNITS_BY_PRODUCT_TYPE[form.productType] ?? ["건"];
     const typeColor = TYPE_COLORS[form.productType] ?? { bg: "#f9fafb", color: "#374151", icon: "📦" };
-    const isInterp = form.productType === "interpretation" || form.productType === "combined";
-    const isEquip = form.productType === "equipment";
+    const isInterp  = form.productType === "interpretation" || form.productType === "combined";
+    const isEquip   = form.productType === "equipment";
     const codePrev = previewCode(form.productType, form.mainCategory);
     const interpSrcLabel = form.sourceLanguage === "custom"
       ? (form.sourceLanguageCustom || "기타")
@@ -617,11 +636,14 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         {/* 언어 선택 (언어형 상품만) */}
         {!isEdit && hasLang && (
           <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: "12px 16px", marginBottom: 12 }}>
-            <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: "#1d4ed8" }}>언어 설정</p>
+            <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: "#1d4ed8" }}>
+              언어 설정{langOpt ? <span style={{ fontWeight: 400, color: "#6b7280", marginLeft: 4 }}>(선택)</span> : null}
+            </p>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
                 <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>
-                  {isInterp ? "언어 A" : "출발언어"} <span style={{ color: "#dc2626" }}>*</span>
+                  {isInterp ? "언어 A" : (langOpt ? "원본 언어" : "출발언어")}
+                  {!langOpt && <span style={{ color: "#dc2626" }}> *</span>}
                 </label>
                 <LanguageSearchSelect
                   value={form.sourceLanguage}
@@ -633,9 +655,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                     });
                   }}
                   mode="code"
-                  placeholder={isInterp ? "언어 A 선택..." : "출발언어 선택..."}
+                  placeholder={isInterp ? "언어 A 선택..." : (langOpt ? "선택 안 함 가능" : "출발언어 선택...")}
                   triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
                   excludeCodes={zhExcludeCodes}
+                  allowEmpty={langOpt}
                 />
                 {isLangCustom(form.sourceLanguage, "code") && (
                   <LangCustomInput
@@ -647,7 +670,8 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               </div>
               <div>
                 <label style={{ fontSize: 12, color: "#374151", display: "block", marginBottom: 3 }}>
-                  {isInterp ? "언어 B" : "도착언어"} <span style={{ color: "#dc2626" }}>*</span>
+                  {isInterp ? "언어 B" : (langOpt ? "출력 언어" : "도착언어")}
+                  {!langOpt && <span style={{ color: "#dc2626" }}> *</span>}
                 </label>
                 <LanguageSearchSelect
                   value={form.targetLanguage}
@@ -659,9 +683,10 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                     });
                   }}
                   mode="code"
-                  placeholder={isInterp ? "언어 B 선택..." : "도착언어 선택..."}
+                  placeholder={isInterp ? "언어 B 선택..." : (langOpt ? "선택 안 함 가능" : "도착언어 선택...")}
                   triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
                   excludeCodes={zhExcludeCodes}
+                  allowEmpty={langOpt}
                 />
                 {isLangCustom(form.targetLanguage, "code") && (
                   <LangCustomInput

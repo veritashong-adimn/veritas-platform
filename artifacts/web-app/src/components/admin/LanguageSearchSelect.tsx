@@ -13,6 +13,7 @@ interface Props {
   triggerStyle?: React.CSSProperties;
   disabled?: boolean;
   excludeCodes?: string[]; // 표시에서 제외할 언어 코드 목록
+  allowEmpty?: boolean;    // 선택 안 함 허용 (미디어 등 언어 optional 타입)
 }
 
 const CUSTOM_CODE = "custom";
@@ -41,7 +42,7 @@ export function isLangCustom(value: string, mode: LangSelectMode): boolean {
 export function LanguageSearchSelect({
   value, onChange,
   mode = "code", placeholder = "언어 선택...",
-  style, triggerStyle, disabled = false, excludeCodes,
+  style, triggerStyle, disabled = false, excludeCodes, allowEmpty = false,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -167,6 +168,14 @@ export function LanguageSearchSelect({
               {selected.code}
             </span>
           )}
+          {allowEmpty && value && (
+            <span
+              role="button"
+              onMouseDown={e => { e.preventDefault(); e.stopPropagation(); onChange(""); }}
+              style={{ fontSize: 11, color: "#9ca3af", cursor: "pointer", flexShrink: 0, padding: "0 2px" }}
+              title="선택 취소"
+            >✕</span>
+          )}
           <span style={{ fontSize: 8, color: "#9ca3af", flexShrink: 0, marginLeft: 2 }}>▼</span>
         </button>
       ) : (
@@ -215,6 +224,23 @@ export function LanguageSearchSelect({
             scrollbarWidth: "thin", padding: "4px 0",
           }}
         >
+          {allowEmpty && (
+            <button
+              type="button"
+              onMouseDown={e => { e.preventDefault(); e.stopPropagation(); handleSelect(""); }}
+              style={{
+                display: "flex", alignItems: "center", gap: 6,
+                width: "100%", textAlign: "left",
+                padding: "5px 12px", fontSize: 12, border: "none",
+                background: !value ? "#f0f9ff" : "transparent",
+                color: "#9ca3af", cursor: "pointer",
+                borderBottom: "1px solid #f3f4f6", fontStyle: "italic",
+              }}
+            >
+              <span style={{ fontSize: 9, color: "#2563eb", opacity: !value ? 1 : 0, flexShrink: 0 }}>✓</span>
+              선택 안 함
+            </button>
+          )}
           {filtered.length === 0 ? (
             <div style={{ padding: "8px 12px", fontSize: 12, color: "#9ca3af", textAlign: "center" }}>
               검색 결과 없음
