@@ -2,13 +2,13 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   api, Product, ProductOption,
   PRODUCT_TYPES_META, MAIN_CATEGORIES_BY_TYPE, SUB_CATEGORIES_BY_MAIN,
-  LANGUAGE_CODES, UNITS_BY_PRODUCT_TYPE, PRODUCT_OPTION_TYPES,
-  EQUIPMENT_QUANTITY_UNITS, EQUIPMENT_USAGE_PERIODS, INTERPRETATION_DIRECTIONS,
+  LANGUAGE_CODES, INTERPRETATION_DIRECTIONS,
   isLangRequired,
 } from '../../lib/constants';
-import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
+import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
 import { LanguageSearchSelect, LangCustomInput, isLangCustom } from './LanguageSearchSelect';
 import { LazyProductPanel } from './LazyProductPanel';
+import { ProductReviewPanel } from './ProductReviewPanel';
 import { getZhExcludeCodes, normalizeZhForType } from '../../lib/zhLangPolicy';
 import ImportPreviewPanel, {
   type ImportPreviewData,
@@ -19,6 +19,28 @@ import ImportPreviewPanel, {
   saveReviewSession,
   clearReviewSession,
 } from './ImportPreviewPanel';
+
+/** 대분류와 동일한 label을 가진 중분류 옵션 제거 (표시 중복 방지) */
+function filterSubCats<T extends { label: string }>(cats: T[], mainCategoryLabel: string): T[] {
+  if (!mainCategoryLabel) return cats;
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, "");
+  const key = norm(mainCategoryLabel);
+  return cats.filter(s => norm(s.label) !== key);
+}
+
+/** "기타" 계열 label 선택 시 직접 입력 활성화 여부 */
+function isCustomItem(label: string): boolean {
+  return label.startsWith("기타");
+}
+
+/** "기타" 직접 입력 placeholder */
+function customItemPlaceholder(mainCat: string, subCat: string): string {
+  const target = subCat || mainCat;
+  if (target === "기타식대") return "예: 카페, 편의점, 간식비";
+  if (target === "기타숙박") return "예: 에어비앤비, 펜션, 게스트하우스";
+  if (target === "기타실비") return "예: 공증서류 발송비, 복사비, 소모품";
+  return "예: 항목명 직접 입력";
+}
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
@@ -55,11 +77,6 @@ const TYPE_COLORS: Record<string, { bg: string; color: string; icon: string }> =
   editing:        { bg: "#fdf4ff", color: "#9333ea", icon: "🖨️" },
   operations:     { bg: "#f0fdfa", color: "#0f766e", icon: "🏃" },
   project:        { bg: "#f8fafc", color: "#334155", icon: "📋" },
-  transport:      { bg: "#fafafa", color: "#525252", icon: "🚌" },
-  meal:           { bg: "#fffbeb", color: "#d97706", icon: "🍽️" },
-  accommodation:  { bg: "#f0f9ff", color: "#0369a1", icon: "🏨" },
-  other_cost:     { bg: "#f9fafb", color: "#6b7280", icon: "🧾" },
-  expense:        { bg: "#fefce8", color: "#b45309", icon: "💰" },
 };
 
 // ─── 장비 대분류별 기본 수량단위 ─────────────────────────────────────────────
@@ -94,6 +111,7 @@ type ProductFormType = {
   equipmentItemCustom: string;
   mainCategory: string;
   subCategory: string;
+  customItemName: string;   // "기타" 계열 대/중분류 선택 시 직접 입력값
   name: string;
   unit: string;
   quantityUnit: string;
@@ -119,7 +137,7 @@ type ProductRequest = {
 const emptyProductForm: ProductFormType = {
   productType: "translation", sourceLanguage: "ko", sourceLanguageCustom: "", targetLanguage: "en", targetLanguageCustom: "",
   equipmentItem: "", equipmentItemCustom: "",
-  mainCategory: "번역", subCategory: "",
+  mainCategory: "번역", subCategory: "", customItemName: "",
   name: "", unit: "페이지", quantityUnit: "개", usagePeriod: "1일", usagePeriodCustom: "", interpretationDirection: "양방향",
   basePrice: "", description: "",
   interpretationDuration: "", overtimePrice: "", options: [],
@@ -147,6 +165,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
   const productImportRef = useRef<HTMLInputElement>(null);
 
   const [showLazyPanel, setShowLazyPanel] = useState(false);
+  const [showReviewPanel, setShowReviewPanel] = useState(false);
 
   // ─── Import Preview state (managed by ImportPreviewPanel) ────────────────
   const [importPreviewData, setImportPreviewData] = useState<ImportPreviewData | null>(null);
@@ -188,7 +207,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const hasLang = PRODUCT_TYPES_META[f.productType]?.hasLanguage ?? false;
     const langOpt = PRODUCT_TYPES_META[f.productType]?.languageOptional ?? false;
 
-    // 통역장비: 중분류(subCategory) → 대분류(mainCategory) 기반
+    // 통역장비: 중분류 → 상품명, 없으면 대분류
     if (f.productType === "equipment") {
       const sub = f.subCategory?.trim();
       const main = f.mainCategory?.trim();
@@ -229,8 +248,12 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         else if (dir === "B→A") { aLabel = tgtLabel; bLabel = srcLabel; sep = "→"; }
       }
       return subLabel
-        ? `${aLabel}${sep}${bLabel} ${subLabel} ${typeLabel}`
+        ? `${aLabel}${sep}${bLabel} ${subLabel}`
         : (mainLabel ? `${aLabel}${sep}${bLabel} ${mainLabel}` : `${aLabel}${sep}${bLabel} ${typeLabel}`);
+    }
+    // 비언어형 기타 선택 시 직접 입력값을 상품명으로 사용 (equipment 제외)
+    if (f.productType !== "equipment" && (isCustomItem(subLabel ?? "") || isCustomItem(mainLabel ?? ""))) {
+      return f.customItemName?.trim() || subLabel || mainLabel || typeLabel;
     }
     return mainLabel ? `${mainLabel}` : typeLabel;
   }
@@ -242,7 +265,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const isEquip  = newType === "equipment";
     const mainCats = MAIN_CATEGORIES_BY_TYPE[newType] ?? [];
     const defMain  = mainCats[0]?.label ?? "";
-    const defUnit  = (UNITS_BY_PRODUCT_TYPE[newType] ?? ["건"])[0];
     setter(prev => {
       // 언어 optional 타입(media)은 언어 초기값을 비워둠 — 사용자가 필요 시 선택
       const rawSrc = (hasLang && !langOpt) ? (prev.sourceLanguage || "ko") : "";
@@ -252,7 +274,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
         productType: newType,
         mainCategory: defMain,
         subCategory: "",
-        unit: defUnit,
+        customItemName: "",
         sourceLanguage: (hasLang && !langOpt) ? normalizeZhForType(rawSrc, newType) : "",
         targetLanguage: (hasLang && !langOpt) ? normalizeZhForType(rawTgt, newType) : "",
         equipmentItem: isEquip ? prev.equipmentItem : "",
@@ -334,11 +356,14 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const resolveLanguage = (code: string, custom: string) =>
       code === "custom" ? (custom.trim() || "custom") : code;
 
-    const isEquipForm = productForm.productType === "equipment";
-    const effectiveUnit = isEquipForm ? (productForm.quantityUnit || "개") : productForm.unit;
-    const effectiveUsagePeriod = isEquipForm
-      ? (productForm.usagePeriod === "직접입력" ? (productForm.usagePeriodCustom.trim() || null) : productForm.usagePeriod || null)
-      : null;
+    // 기타 직접입력 validation
+    const needsCustomItem = productForm.productType !== "equipment" &&
+      (isCustomItem(productForm.mainCategory) || isCustomItem(productForm.subCategory));
+    if (!editingProduct && needsCustomItem && !productForm.customItemName.trim()) {
+      setToast("기타 항목명을 입력해주세요."); return;
+    }
+
+    const isInterpForm = productForm.productType === "interpretation" || productForm.productType === "combined";
     setSavingProduct(true);
     try {
       const payload = editingProduct
@@ -346,15 +371,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           name: effectiveName,
           mainCategory: productForm.mainCategory || null,
           subCategory: productForm.subCategory || null,
-          unit: effectiveUnit,
-          basePrice: productForm.basePrice !== "" ? Number(productForm.basePrice) : null,
-          description: productForm.description || null,
-          interpretationDuration: productForm.interpretationDuration.trim() || null,
-          overtimePrice: productForm.overtimePrice ? Number(productForm.overtimePrice) : null,
-          options: productForm.options.filter(o => o.optionType.trim() && o.optionValue.trim()),
-          quantityUnit: isEquipForm ? (productForm.quantityUnit || null) : null,
-          usagePeriod: effectiveUsagePeriod,
-          interpretationDirection: productForm.interpretationDirection || null,
         }
         : {
           productType: productForm.productType,
@@ -363,15 +379,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           mainCategory: productForm.mainCategory,
           subCategory: productForm.subCategory || null,
           name: effectiveName,
-          unit: effectiveUnit,
-          basePrice: productForm.basePrice !== "" ? Number(productForm.basePrice) : null,
-          description: productForm.description || null,
-          interpretationDuration: productForm.interpretationDuration.trim() || null,
-          overtimePrice: productForm.overtimePrice ? Number(productForm.overtimePrice) : null,
-          options: productForm.options.filter(o => o.optionType.trim() && o.optionValue.trim()),
-          quantityUnit: isEquipForm ? (productForm.quantityUnit || null) : null,
-          usagePeriod: effectiveUsagePeriod,
-          interpretationDirection: productForm.interpretationDirection || null,
+          interpretationDirection: isInterpForm ? (productForm.interpretationDirection || null) : null,
         };
 
       const url = editingProduct ? `/api/admin/products/${editingProduct}` : "/api/admin/products";
@@ -420,8 +428,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
           mainCategory: requestForm.mainCategory,
           subCategory: requestForm.subCategory || null,
           name: effectiveName,
-          unit: requestForm.unit || "건",
-          description: requestForm.description.trim() || null,
         }),
       });
       const data = await res.json();
@@ -590,11 +596,12 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
     const hasLang   = typeInfo?.hasLanguage ?? false;
     const langOpt   = typeInfo?.languageOptional ?? false;
     const mainCats  = MAIN_CATEGORIES_BY_TYPE[form.productType] ?? [];
-    const subCats   = SUB_CATEGORIES_BY_MAIN[form.mainCategory] ?? [];
-    const units     = UNITS_BY_PRODUCT_TYPE[form.productType] ?? ["건"];
+    const rawSubCats = SUB_CATEGORIES_BY_MAIN[form.mainCategory] ?? [];
+    const subCats   = form.productType === "operations"
+      ? rawSubCats
+      : filterSubCats(rawSubCats, form.mainCategory);
     const typeColor = TYPE_COLORS[form.productType] ?? { bg: "#f9fafb", color: "#374151", icon: "📦" };
     const isInterp  = form.productType === "interpretation" || form.productType === "combined";
-    const isEquip   = form.productType === "equipment";
     const codePrev = previewCode(form.productType, form.mainCategory);
     const interpSrcLabel = form.sourceLanguage === "custom"
       ? (form.sourceLanguageCustom || "기타")
@@ -741,7 +748,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               value={form.mainCategory}
               onChange={v => {
                 setForm(p => {
-                  const updated = { ...p, mainCategory: v, subCategory: "" };
+                  const updated = { ...p, mainCategory: v, subCategory: "", customItemName: "" };
                   if (p.productType === "equipment") {
                     updated.quantityUnit = EQUIP_UNIT_BY_MAIN[v] ?? p.quantityUnit;
                   }
@@ -763,17 +770,44 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               value={form.subCategory}
               onChange={v => {
                 setForm(p => {
-                  const updated = { ...p, subCategory: v };
+                  const updated = { ...p, subCategory: v, customItemName: "" };
                   if (!productNameCustom) updated.name = autoName(updated);
                   return updated;
                 });
               }}
               style={{ width: "100%", opacity: subCats.length === 0 ? 0.4 : 1, pointerEvents: subCats.length === 0 ? "none" : undefined }}
               triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
-              options={[{ value: "", label: "선택" }, ...subCats.map(s => ({ value: s.label, label: s.label }))]}
+              options={[{ value: "", label: "선택" }, ...subCats.map(s => ({
+                value: s.label,
+                label: s.description ? `${s.label} (${s.description})` : s.label,
+              }))]}
             />
           </div>
         </div>
+
+        {/* 기타 직접 입력 (신규 등록만, equipment 제외) */}
+        {!isEdit && form.productType !== "equipment" &&
+          (isCustomItem(form.mainCategory) || isCustomItem(form.subCategory)) && (
+          <div style={{ background: "#fefce8", border: "1px solid #fde047", borderRadius: 8, padding: "10px 14px", marginBottom: 12 }}>
+            <label style={{ fontSize: 12, fontWeight: 700, color: "#92400e", display: "block", marginBottom: 6 }}>
+              기타 내용 입력 <span style={{ color: "#dc2626" }}>*</span>
+            </label>
+            <input
+              value={form.customItemName}
+              onChange={e => {
+                const val = e.target.value;
+                setForm(p => {
+                  const updated = { ...p, customItemName: val };
+                  if (!productNameCustom) updated.name = autoName(updated);
+                  return updated;
+                });
+              }}
+              placeholder={customItemPlaceholder(form.mainCategory, form.subCategory)}
+              style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
+              aria-label="기타 항목 직접 입력"
+            />
+          </div>
+        )}
 
         {/* 코드 미리보기 (신규 등록만) */}
         {!isEdit && (
@@ -813,154 +847,6 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               placeholder="예: 한영 법률번역" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
           )}
         </div>
-
-        {/* 단위 / 기본단가 */}
-        <div style={{ display: "grid", gridTemplateColumns: isEquip ? "1fr" : "1fr 1fr", gap: 12, marginBottom: 12 }}>
-          {!isEquip && (
-            <div>
-              <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>
-                단위 <span style={{ fontSize: 11, color: "#9ca3af" }}>(상품유형에 따라 자동 변경)</span>
-              </label>
-              <ClickSelect
-                value={form.unit}
-                onChange={v => setForm(p => ({ ...p, unit: v }))}
-                options={units.map(u => ({ value: u, label: u }))}
-                style={{ width: "100%" }}
-                triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
-              />
-            </div>
-          )}
-          <div>
-            <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>기본단가 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(선택)</span></label>
-            <NumericInput value={form.basePrice} onChange={raw => setForm(p => ({ ...p, basePrice: raw }))}
-              placeholder="미입력 시 견적에서 결정" suffix="원"
-              style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-          </div>
-        </div>
-
-        {/* 통역장비 전용: 수량단위 / 사용기간 */}
-        {isEquip && (
-          <div style={{ background: "#fff7ed", borderRadius: 8, padding: "10px 14px", border: "1px solid #fed7aa", marginBottom: 12 }}>
-            <p style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 700, color: "#c2410c" }}>장비 구성</p>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div>
-                <label style={{ fontSize: 12, color: "#c2410c", display: "block", marginBottom: 4 }}>수량단위</label>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                  {EQUIPMENT_QUANTITY_UNITS.map(u => (
-                    <button key={u} type="button" data-testid={`qty-unit-${u}`}
-                      onClick={() => setForm(prev => ({ ...prev, quantityUnit: u }))}
-                      style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer",
-                        border: `1px solid ${form.quantityUnit === u ? "#c2410c" : "#e5e7eb"}`,
-                        background: form.quantityUnit === u ? "#fff7ed" : "#f9fafb",
-                        color: form.quantityUnit === u ? "#c2410c" : "#6b7280",
-                        fontWeight: form.quantityUnit === u ? 700 : 400 }}>
-                      {u}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label style={{ fontSize: 12, color: "#c2410c", display: "block", marginBottom: 4 }}>사용기간</label>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: form.usagePeriod === "직접입력" ? 4 : 0 }}>
-                  {([...EQUIPMENT_USAGE_PERIODS, "직접입력"] as string[]).map(period => (
-                    <button key={period} type="button" data-testid={`usage-period-${period}`}
-                      onClick={() => setForm(prev => ({ ...prev, usagePeriod: period, usagePeriodCustom: period !== "직접입력" ? "" : prev.usagePeriodCustom }))}
-                      style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer",
-                        border: `1px solid ${form.usagePeriod === period ? "#c2410c" : "#e5e7eb"}`,
-                        background: form.usagePeriod === period ? "#fff7ed" : "#f9fafb",
-                        color: form.usagePeriod === period ? "#c2410c" : "#6b7280",
-                        fontWeight: form.usagePeriod === period ? 700 : 400 }}>
-                      {period}
-                    </button>
-                  ))}
-                </div>
-                {form.usagePeriod === "직접입력" && (
-                  <input value={form.usagePeriodCustom}
-                    onChange={e => setForm(prev => ({ ...prev, usagePeriodCustom: e.target.value }))}
-                    placeholder="예: 4일, 1주일"
-                    style={{ ...inputStyle, fontSize: 12, padding: "5px 8px" }} />
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 통역 전용: 기본진행시간 / 초과단가 */}
-        {isInterp && (
-          <div style={{ background: "#faf5ff", borderRadius: 8, padding: "10px 14px", border: "1px solid #e9d5ff", marginBottom: 12 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div>
-                <label style={{ fontSize: 12, color: "#7c3aed", display: "block", marginBottom: 3 }}>기본 진행시간</label>
-                <div style={{ display: "flex", gap: 4, marginBottom: 5 }}>
-                  {([["2h","2시간"],["4h","반일(4h)"],["8h","종일(8h)"]] as [string,string][]).map(([val,lbl]) => (
-                    <button key={val} type="button"
-                      onClick={() => setForm(p => ({ ...p, interpretationDuration: val }))}
-                      style={{ padding: "3px 10px", fontSize: 11, borderRadius: 5, cursor: "pointer",
-                        border: `1px solid ${form.interpretationDuration === val ? "#7c3aed" : "#e9d5ff"}`,
-                        background: form.interpretationDuration === val ? "#ede9fe" : "#f5f3ff",
-                        color: form.interpretationDuration === val ? "#7c3aed" : "#9ca3af",
-                        fontWeight: form.interpretationDuration === val ? 700 : 400 }}>
-                      {lbl}
-                    </button>
-                  ))}
-                </div>
-                <input value={form.interpretationDuration} onChange={e => setForm(p => ({ ...p, interpretationDuration: e.target.value }))}
-                  placeholder="예: 4h, 반일, 종일"
-                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-              </div>
-              <div>
-                <label style={{ fontSize: 12, color: "#7c3aed", display: "block", marginBottom: 3 }}>초과 단가 (1시간당)</label>
-                <NumericInput value={form.overtimePrice} onChange={raw => setForm(p => ({ ...p, overtimePrice: raw }))}
-                  placeholder="초과 시 적용 단가 (선택)" suffix="원"
-                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 설명 */}
-        <div style={{ marginBottom: 14 }}>
-          <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>설명 (선택)</label>
-          <input value={form.description} onChange={e => setForm(p => ({ ...p, description: e.target.value }))}
-            placeholder="상품에 대한 간단한 설명"
-            style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-        </div>
-
-        {/* 옵션 (요청 폼 제외) */}
-        {!isRequest && (
-          <div style={{ background: "#f9fafb", borderRadius: 10, padding: "14px 16px", border: "1px solid #e5e7eb" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-              <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#374151" }}>옵션 설정 <span style={{ fontWeight: 400, color: "#9ca3af", fontSize: 12 }}>(언어, 방식, 시간 등)</span></p>
-              <button onClick={() => setForm(p => ({ ...p, options: [...p.options, { optionType: "언어", optionValue: "" }] }))}
-                style={{ fontSize: 12, color: "#2563eb", background: "none", border: "1px solid #bfdbfe", borderRadius: 6, padding: "3px 10px", cursor: "pointer", fontWeight: 600 }}>
-                + 옵션 추가
-              </button>
-            </div>
-            {form.options.length === 0 ? (
-              <p style={{ margin: 0, fontSize: 12, color: "#9ca3af", textAlign: "center" }}>옵션이 없습니다.</p>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {form.options.map((opt, idx) => (
-                  <div key={idx} style={{ display: "grid", gridTemplateColumns: "140px 1fr 32px", gap: 8, alignItems: "center" }}>
-                    <ClickSelect
-                      value={opt.optionType}
-                      onChange={v => setForm(p => ({ ...p, options: p.options.map((o, i) => i === idx ? { ...o, optionType: v } : o) }))}
-                      triggerStyle={{ fontSize: 13, padding: "6px 8px", borderRadius: 7, width: "100%" }}
-                      options={PRODUCT_OPTION_TYPES.map(t => ({ value: t, label: t }))}
-                    />
-                    <input value={opt.optionValue} onChange={e => setForm(p => ({ ...p, options: p.options.map((o, i) => i === idx ? { ...o, optionValue: e.target.value } : o) }))}
-                      placeholder="예: 한→영"
-                      style={{ ...inputStyle, fontSize: 13, padding: "6px 10px" }} />
-                    <button onClick={() => setForm(p => ({ ...p, options: p.options.filter((_, i) => i !== idx) }))}
-                      style={{ background: "none", border: "1px solid #fca5a5", borderRadius: 6, width: 32, height: 32, cursor: "pointer", color: "#ef4444", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
 
         {/* 중복 경고 */}
         {productDupeWarning && (
@@ -1020,12 +906,15 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   {p.subCategory}
                 </span>
               )}
-              <span style={{ fontSize: 11, background: p.basePrice != null ? "#f0fdf4" : "#f9fafb", color: p.basePrice != null ? "#059669" : "#9ca3af", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>
-                {p.productType === "equipment"
-                  ? `${p.basePrice != null ? Number(p.basePrice).toLocaleString() + "원" : "미설정"} / ${p.quantityUnit || p.unit}${p.usagePeriod ? ` / ${p.usagePeriod}` : ""}`
-                  : p.basePrice != null ? `${Number(p.basePrice).toLocaleString()}원 / ${p.unit}` : `미설정 / ${p.unit}`
-                }
-              </span>
+              {(p.productType === "equipment" || p.productType === "translation") ? (
+                <span style={{ fontSize: 11, background: "#f3f4f6", color: "#6b7280", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>
+                  견적서에서 입력
+                </span>
+              ) : (
+                <span style={{ fontSize: 11, background: p.basePrice != null ? "#f0fdf4" : "#f9fafb", color: p.basePrice != null ? "#059669" : "#9ca3af", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>
+                  {p.basePrice != null ? `${Number(p.basePrice).toLocaleString()}원 / ${p.unit}` : `미설정 / ${p.unit}`}
+                </span>
+              )}
               {p.interpretationDuration && (
                 <span style={{ fontSize: 11, background: "#faf5ff", color: "#7c3aed", borderRadius: 5, padding: "2px 8px" }}>기본 {p.interpretationDuration}</span>
               )}
@@ -1061,6 +950,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                   equipmentItemCustom: "",
                   mainCategory: p.mainCategory ?? "",
                   subCategory: p.subCategory ?? "",
+                  customItemName: "",
                   name: p.name,
                   unit: p.unit,
                   quantityUnit: p.quantityUnit || (p.productType === "equipment" ? "개" : ""),
@@ -1127,6 +1017,14 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               color: showLazyPanel ? "#92400e" : "#6b7280" }}>
             ⚡ 빠른 생성
           </button>
+          <button
+            onClick={() => setShowReviewPanel(v => !v)}
+            style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, fontWeight: 600, cursor: "pointer",
+              border: `1px solid ${showReviewPanel ? "#a5b4fc" : "#e5e7eb"}`,
+              background: showReviewPanel ? "#eef2ff" : "#fff",
+              color: showReviewPanel ? "#4338ca" : "#6b7280" }}>
+            🔍 검수 리포트
+          </button>
           {hasPerm("product.manage") && (
             <PrimaryBtn onClick={() => {
               setShowProductForm(v => !v);
@@ -1151,6 +1049,13 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
             setToast={setToast}
             onProductCreated={fetchProducts}
           />
+        )}
+
+        {/* 검수 리포트 패널 */}
+        {showReviewPanel && (
+          <div style={{ marginBottom: 16, padding: "12px 16px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 }}>
+            <ProductReviewPanel products={products} />
+          </div>
         )}
 
         {/* Import 등록 결과 */}

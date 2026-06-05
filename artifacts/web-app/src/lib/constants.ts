@@ -433,16 +433,11 @@ export const PRODUCT_TYPES_META: Record<string, { label: string; code: string; h
   interpretation: { label: "통역",      code: "IN", hasLanguage: true },
   combined:       { label: "통번역",    code: "CO", hasLanguage: true },
   proofreading:   { label: "감수",      code: "PR", hasLanguage: true },
-  media:          { label: "미디어",    code: "MD", hasLanguage: true, languageOptional: true },
   equipment:      { label: "통역장비",  code: "EQ", hasLanguage: false },
   editing:        { label: "편집/DTP",  code: "ED", hasLanguage: false },
+  media:          { label: "미디어",    code: "MD", hasLanguage: true, languageOptional: true },
   operations:     { label: "운영/실비", code: "OP", hasLanguage: false },
   project:        { label: "프로젝트",  code: "PJ", hasLanguage: false },
-  transport:      { label: "교통비",    code: "TX", hasLanguage: false },
-  meal:           { label: "식대",      code: "ML", hasLanguage: false },
-  accommodation:  { label: "숙박",      code: "AC", hasLanguage: false },
-  other_cost:     { label: "기타비용",  code: "OT", hasLanguage: false },
-  expense:        { label: "실비",      code: "EX", hasLanguage: false },
 };
 
 /** 언어 선택이 필수인 유형인지 여부 (media는 optional이므로 false) */
@@ -463,6 +458,7 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
     { label: "기타번역", code: "ETC"  },
   ],
   interpretation: [
+    { label: "일반통역",    code: "GEN"  },
     { label: "동시통역",    code: "SIM"  },
     { label: "순차통역",    code: "CON"  },
     { label: "위스퍼링통역", code: "WHP" },
@@ -476,17 +472,24 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
     { label: "기타통역",    code: "ETC"  },
   ],
   combined: [
-    { label: "일반번역", code: "GEN"  },
-    { label: "전문번역", code: "SPEC" },
-    { label: "동시통역", code: "SIM"  },
-    { label: "순차통역", code: "CON"  },
-    { label: "기타",     code: "ETC"  },
+    { label: "일반통번역",  code: "GEN"   },
+    { label: "출장통번역",  code: "BIZ"   },
+    { label: "전시회통번역", code: "EXPO" },
+    { label: "상담회통번역", code: "MTG"  },
+    { label: "IR통번역",   code: "IR"    },
+    { label: "기타통번역",  code: "ETC"   },
+    // 레거시 (기존 DB 저장값 표시용)
+    { label: "일반번역", code: "GEN_L"  },
+    { label: "전문번역", code: "SPEC_L" },
+    { label: "동시통역", code: "SIM_L"  },
+    { label: "순차통역", code: "CON_L"  },
+    { label: "기타",     code: "ETC_L"  },
   ],
   proofreading: [
-    { label: "감수", code: "PRF" },
-  ],
-  media: [
-    { label: "미디어", code: "MED" },
+    { label: "감수",      code: "PRF" },
+    { label: "원어민감수", code: "NAT" },
+    { label: "AI감수",   code: "AI"  },
+    { label: "기타감수",  code: "ETC" },
   ],
   equipment: [
     { label: "동시통역장비", code: "SIM" },
@@ -501,14 +504,14 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
   editing: [
     { label: "편집/DTP", code: "EDT" },
   ],
+  media: [
+    { label: "미디어", code: "MED" },
+  ],
   operations: [
-    { label: "교통비",    code: "TX"   },
-    { label: "퀵비용",    code: "QCK"  },
-    { label: "식대",      code: "MEAL" },
-    { label: "숙박",      code: "ACC"  },
-    { label: "보험료",    code: "INS"  },
-    { label: "운영관리비", code: "MGT" },
-    { label: "기타실비",  code: "ETC"  },
+    { label: "교통비",   code: "TX"   },
+    { label: "식대",     code: "MEAL" },
+    { label: "숙박",     code: "ACC"  },
+    { label: "기타실비", code: "ETC"  },
   ],
   project: [
     { label: "번역프로젝트",   code: "TR"   },
@@ -516,37 +519,9 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
     { label: "종합언어서비스", code: "COMP" },
     { label: "기타프로젝트",   code: "ETC"  },
   ],
-  transport: [
-    { label: "항공",     code: "AIR"  },
-    { label: "기차",     code: "RAIL" },
-    { label: "버스",     code: "BUS"  },
-    { label: "택시",     code: "TAXI" },
-    { label: "기타교통", code: "ETC"  },
-  ],
-  meal: [
-    { label: "식비",     code: "MEAL" },
-    { label: "간식비",   code: "SNK"  },
-    { label: "접대비",   code: "ENT"  },
-    { label: "기타식대", code: "ETC"  },
-  ],
-  accommodation: [
-    { label: "호텔",        code: "HTL" },
-    { label: "게스트하우스", code: "GST" },
-    { label: "기타숙박",    code: "ETC" },
-  ],
-  other_cost: [
-    { label: "기타", code: "ETC" },
-  ],
-  expense: [
-    { label: "배송/퀵",   code: "DLV"  },
-    { label: "교통비",    code: "TX"   },
-    { label: "식비",      code: "MEAL" },
-    { label: "숙박",      code: "ACC"  },
-    { label: "기타 실비", code: "ETC"  },
-  ],
 };
 
-export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: string }[]> = {
+export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: string; description?: string }[]> = {
   "전문번역": [
     { label: "법률",   code: "LAW"  },
     { label: "의료",   code: "MED"  },
@@ -561,12 +536,15 @@ export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: strin
     { label: "원문대조감수", code: "CMP" },
   ],
   "미디어": [
-    { label: "자막작업",    code: "SUB" },
-    { label: "더빙",        code: "DUB" },
-    { label: "영상번역",    code: "VTR" },
-    { label: "스크립트작성", code: "SCR" },
-    { label: "STT",         code: "STT" },
-    { label: "TTS",         code: "TTS" },
+    { label: "STT",         code: "STT", description: "음성→텍스트"      },
+    { label: "TTS",         code: "TTS", description: "텍스트→음성"      },
+    { label: "자막작업",    code: "SUB", description: "Subtitle"         },
+    { label: "녹취록",      code: "TRN", description: "Transcription"    },
+    { label: "영상편집",    code: "VED", description: "Video Editing"    },
+    { label: "더빙",        code: "DUB", description: "음성교체"         },
+    { label: "영상번역",    code: "VTR", description: "Video Translation" },
+    { label: "스크립트작성", code: "SCR", description: "대본작성"        },
+    { label: "기타미디어",  code: "ETC"                                   },
   ],
   "편집/DTP": [
     { label: "편집",    code: "EDT" },
@@ -574,10 +552,11 @@ export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: strin
     { label: "인쇄",    code: "PRT" },
     { label: "디자인",  code: "DSN" },
     { label: "PPT작업", code: "PPT" },
+    { label: "기타편집", code: "ETC" },
   ],
   "동시통역장비": [
-    { label: "FM방식",    code: "FM"  },
-    { label: "적외선방식", code: "IR"  },
+    { label: "FM장비",    code: "FM"  },
+    { label: "적외선장비", code: "IR"  },
     { label: "리시버",    code: "RCV" },
     { label: "송신기",    code: "TRX" },
   ],
@@ -604,6 +583,37 @@ export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: strin
   "부스장비": [
     { label: "통역부스", code: "BTH" },
     { label: "사전설치", code: "PRE" },
+  ],
+  "교통비": [
+    { label: "항공료",   code: "AIR"  },
+    { label: "KTX/기차", code: "RAIL" },
+    { label: "택시비",   code: "TAXI" },
+    { label: "톨비",     code: "TOLL" },
+    { label: "렌터카",   code: "RNT"  },
+    { label: "주유비",   code: "FUEL" },
+    { label: "기타교통", code: "ETC"  },
+  ],
+  "식대": [
+    { label: "식비",     code: "MEAL" },
+    { label: "조식",     code: "BRK"  },
+    { label: "중식",     code: "LCH"  },
+    { label: "석식",     code: "DNN"  },
+    { label: "기타식대", code: "ETC"  },
+  ],
+  "숙박": [
+    { label: "호텔",    code: "HTL" },
+    { label: "숙박",    code: "ACC" },
+    { label: "기타숙박", code: "ETC" },
+  ],
+  "기타실비": [
+    { label: "퀵",             code: "QCK"  },
+    { label: "우편",           code: "POST" },
+    { label: "인쇄",           code: "PRT"  },
+    { label: "제본",           code: "BND"  },
+    { label: "출장비",         code: "BIZ"  },
+    { label: "엔지니어 출장비", code: "ENG" },
+    { label: "장비운송비",     code: "TRN"  },
+    { label: "기타실비",       code: "ETC"  },
   ],
 };
 
@@ -656,21 +666,16 @@ export const UNITS_BY_PRODUCT_TYPE: Record<string, string[]> = {
   interpretation: ["1시간", "2시간", "4시간", "6시간", "8시간", "추가시간"],
   combined:       ["어절", "단어", "글자", "페이지", "건", "1시간", "2시간", "4시간", "6시간", "8시간", "추가시간"],
   proofreading:   ["어절", "단어", "글자", "페이지", "건"],
-  media:          ["분", "초", "건"],
   equipment:      ["대", "일", "건"],
   editing:        ["페이지", "건", "시간"],
+  media:          ["분", "초", "건"],
   operations:     ["건", "인"],
   project:        ["건", "식"],
-  transport:      ["건"],
-  meal:           ["건", "인"],
-  accommodation:  ["박", "건"],
-  other_cost:     ["건"],
-  expense:        ["건", "인", "박"],
 };
 
 export const EQUIPMENT_ITEMS: string[] = [
-  "FM방식",
-  "적외선방식",
+  "FM장비",
+  "적외선장비",
   "리시버",
   "송신기",
   "가이드수신기",
@@ -705,17 +710,9 @@ export const PRODUCT_MAIN_CATEGORIES = [
   // editing
   "편집/DTP",
   // operations
-  "퀵비용", "식대", "보험료", "운영관리비", "기타실비",
+  "교통비", "식대", "숙박", "기타실비",
   // project
   "번역프로젝트", "통역프로젝트", "종합언어서비스", "기타프로젝트",
-  // transport
-  "항공", "기차", "버스", "택시", "기타교통",
-  // meal
-  "식비", "간식비", "접대비", "기타식대",
-  // accommodation
-  "호텔", "게스트하우스", "기타숙박",
-  // other_cost / expense
-  "배송/퀵", "교통비", "숙박", "기타 실비", "기타",
 ] as const;
 export type ProductMainCategory = typeof PRODUCT_MAIN_CATEGORIES[number];
 
@@ -724,12 +721,16 @@ export const PRODUCT_SUB_CATEGORIES: Record<string, string[]> = {
   "감수":       ["원어민감수", "윤문", "원문대조감수"],
   "미디어":     ["자막작업", "더빙", "영상번역", "스크립트작성", "STT", "TTS"],
   "편집/DTP":   ["편집", "DTP", "인쇄", "디자인", "PPT작업"],
-  "동시통역장비": ["FM방식", "적외선방식", "리시버", "송신기"],
+  "동시통역장비": ["FM장비", "적외선장비", "리시버", "송신기"],
   "가이드장비":  ["가이드수신기", "가이드송신기"],
   "위스퍼링장비": ["위스퍼링수신기", "위스퍼링송신기"],
   "마이크장비":  ["무선마이크", "유선마이크", "핀마이크", "회의용마이크"],
   "음향장비":    ["오디오인터페이스", "믹서", "음향콘솔", "분배기"],
   "부스장비":    ["통역부스", "사전설치"],
+  "교통비":     ["항공료", "KTX/기차", "택시비", "톨비", "렌터카", "주유비"],
+  "식대":       ["식비", "조식", "중식", "석식", "기타식대"],
+  "숙박":       ["호텔", "숙박", "기타숙박"],
+  "기타실비":   ["퀵", "우편", "인쇄", "제본", "출장비", "엔지니어 출장비", "장비운송비", "기타실비"],
 };
 
 export const PRODUCT_UNITS = ["어절", "단어", "글자", "페이지", "건", "1시간", "2시간", "4시간", "6시간", "8시간", "추가시간", "대", "일", "박", "인", "분", "초", "시간"] as const;

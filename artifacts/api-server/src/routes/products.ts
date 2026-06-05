@@ -31,11 +31,11 @@ export const PRODUCT_TYPES: Record<string, { label: string; code: string; hasLan
   editing:        { label: "편집/DTP",  code: "ED", hasLanguage: false },
   operations:     { label: "운영/실비", code: "OP", hasLanguage: false },
   project:        { label: "프로젝트",  code: "PJ", hasLanguage: false },
+  // 하위호환: DB에 저장된 구 타입 레이블 표시용 (신규 등록 불가)
   transport:      { label: "교통비",    code: "TX", hasLanguage: false },
   meal:           { label: "식대",      code: "ML", hasLanguage: false },
   accommodation:  { label: "숙박",      code: "AC", hasLanguage: false },
   other_cost:     { label: "기타비용",  code: "OT", hasLanguage: false },
-  // expense: 프론트엔드 통합 실비 타입 — 운영 호환성 유지
   expense:        { label: "실비",      code: "EX", hasLanguage: false },
 };
 
@@ -65,14 +65,24 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
     { label: "기타통역",    code: "ETC" },
   ],
   combined: [
-    { label: "일반번역", code: "GEN" },
-    { label: "전문번역", code: "SPEC" },
-    { label: "동시통역", code: "SIM" },
-    { label: "순차통역", code: "CON" },
-    { label: "기타",     code: "ETC" },
+    { label: "일반통번역",  code: "GEN"  },
+    { label: "출장통번역",  code: "BIZ"  },
+    { label: "전시회통번역", code: "EXPO" },
+    { label: "상담회통번역", code: "MTG"  },
+    { label: "IR통번역",   code: "IR"   },
+    { label: "기타통번역",  code: "ETC"  },
+    // 레거시 (기존 DB 저장값 표시용)
+    { label: "일반번역", code: "GEN_L"  },
+    { label: "전문번역", code: "SPEC_L" },
+    { label: "동시통역", code: "SIM_L"  },
+    { label: "순차통역", code: "CON_L"  },
+    { label: "기타",     code: "ETC_L"  },
   ],
   proofreading: [
-    { label: "감수", code: "PRF" },
+    { label: "감수",      code: "PRF" },
+    { label: "원어민감수", code: "NAT" },
+    { label: "AI감수",   code: "AI"  },
+    { label: "기타감수",  code: "ETC" },
   ],
   media: [
     { label: "미디어", code: "MED" },
@@ -91,47 +101,16 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
     { label: "편집/DTP", code: "EDT" },
   ],
   operations: [
-    { label: "교통비",    code: "TX" },
-    { label: "퀵비용",    code: "QCK" },
-    { label: "식대",      code: "MEAL" },
-    { label: "숙박",      code: "ACC" },
-    { label: "보험료",    code: "INS" },
-    { label: "운영관리비", code: "MGT" },
-    { label: "기타실비",  code: "ETC" },
+    { label: "교통비",   code: "TX"   },
+    { label: "식대",     code: "MEAL" },
+    { label: "숙박",     code: "ACC"  },
+    { label: "기타실비", code: "ETC"  },
   ],
   project: [
     { label: "번역프로젝트",   code: "TR" },
     { label: "통역프로젝트",   code: "IN" },
     { label: "종합언어서비스", code: "COMP" },
     { label: "기타프로젝트",   code: "ETC" },
-  ],
-  transport: [
-    { label: "항공",     code: "AIR" },
-    { label: "기차",     code: "RAIL" },
-    { label: "버스",     code: "BUS" },
-    { label: "택시",     code: "TAXI" },
-    { label: "기타교통", code: "ETC" },
-  ],
-  meal: [
-    { label: "식비",     code: "MEAL" },
-    { label: "간식비",   code: "SNK" },
-    { label: "접대비",   code: "ENT" },
-    { label: "기타식대", code: "ETC" },
-  ],
-  accommodation: [
-    { label: "호텔",        code: "HTL" },
-    { label: "게스트하우스", code: "GST" },
-    { label: "기타숙박",    code: "ETC" },
-  ],
-  other_cost: [
-    { label: "기타", code: "ETC" },
-  ],
-  expense: [
-    { label: "배송/퀵",   code: "DLV"  },
-    { label: "교통비",    code: "TX"   },
-    { label: "식비",      code: "MEAL" },
-    { label: "숙박",      code: "ACC"  },
-    { label: "기타 실비", code: "ETC"  },
   ],
 };
 
@@ -151,12 +130,15 @@ export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: strin
     { label: "원문대조감수", code: "CMP" },
   ],
   "미디어": [
+    { label: "STT",         code: "STT" },
+    { label: "TTS",         code: "TTS" },
     { label: "자막작업",    code: "SUB" },
+    { label: "녹취록",      code: "TRN" },
+    { label: "영상편집",    code: "VED" },
     { label: "더빙",        code: "DUB" },
     { label: "영상번역",    code: "VTR" },
     { label: "스크립트작성", code: "SCR" },
-    { label: "STT",         code: "STT" },
-    { label: "TTS",         code: "TTS" },
+    { label: "기타미디어",  code: "ETC" },
   ],
   "편집/DTP": [
     { label: "편집",    code: "EDT" },
@@ -164,10 +146,11 @@ export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: strin
     { label: "인쇄",    code: "PRT" },
     { label: "디자인",  code: "DSN" },
     { label: "PPT작업", code: "PPT" },
+    { label: "기타편집", code: "ETC" },
   ],
   "동시통역장비": [
-    { label: "FM방식",    code: "FM" },
-    { label: "적외선방식", code: "IR" },
+    { label: "FM장비",    code: "FM" },
+    { label: "적외선장비", code: "IR" },
     { label: "리시버",    code: "RCV" },
     { label: "송신기",    code: "TRX" },
   ],
@@ -194,6 +177,37 @@ export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: strin
   "부스장비": [
     { label: "통역부스", code: "BTH" },
     { label: "사전설치", code: "PRE" },
+  ],
+  "교통비": [
+    { label: "항공료",   code: "AIR"  },
+    { label: "KTX/기차", code: "RAIL" },
+    { label: "택시비",   code: "TAXI" },
+    { label: "톨비",     code: "TOLL" },
+    { label: "렌터카",   code: "RNT"  },
+    { label: "주유비",   code: "FUEL" },
+    { label: "기타교통", code: "ETC"  },
+  ],
+  "식대": [
+    { label: "식비",     code: "MEAL" },
+    { label: "조식",     code: "BRK"  },
+    { label: "중식",     code: "LCH"  },
+    { label: "석식",     code: "DNN"  },
+    { label: "기타식대", code: "ETC"  },
+  ],
+  "숙박": [
+    { label: "호텔",    code: "HTL" },
+    { label: "숙박",    code: "ACC" },
+    { label: "기타숙박", code: "ETC" },
+  ],
+  "기타실비": [
+    { label: "퀵",             code: "QCK"  },
+    { label: "우편",           code: "POST" },
+    { label: "인쇄",           code: "PRT"  },
+    { label: "제본",           code: "BND"  },
+    { label: "출장비",         code: "BIZ"  },
+    { label: "엔지니어 출장비", code: "ENG" },
+    { label: "장비운송비",     code: "TRN"  },
+    { label: "기타실비",       code: "ETC"  },
   ],
 };
 
@@ -252,11 +266,6 @@ const UNITS_BY_TYPE: Record<string, string[]> = {
   editing:        ["페이지", "건", "시간"],
   operations:     ["건", "인"],
   project:        ["건", "식"],
-  transport:      ["건"],
-  meal:           ["건", "인"],
-  accommodation:  ["박", "건"],
-  other_cost:     ["건"],
-  expense:        ["건", "인", "박"],
 };
 
 // ─── 헬퍼 함수 ────────────────────────────────────────────────────────────────
@@ -1036,7 +1045,7 @@ function suggestProductType(name: string, mainCategory?: string): string {
   const text = normalizeProdName((name ?? "") + (mainCategory ?? ""));
   if (/장비|부스|수신기|송신기|헤드셋|리시버|fm|마이크|음향|pa장비/.test(text)) return "equipment";
   if (/동시통역|순차통역|수행통역|위스퍼링|화상통역|전화통역|미팅통역|전시회통역|현장통역|수행비서통역|출장이동|할증|연장료|야간|휴일|대기료|사전미팅|사전준비|사전브리핑|행사보조/.test(text)) return "interpretation";
-  if (/배송|퀵|숙박|식비|식대|교통비|이동비|취소보상|출장비|인쇄|우편|택배|실비|차량대여|차량렌트|전화비|비자발급/.test(text)) return "expense";
+  if (/배송|퀵|숙박|식비|식대|교통비|이동비|취소보상|출장비|인쇄|우편|택배|실비|차량대여|차량렌트|전화비|비자발급/.test(text)) return "operations";
   if (/통번역/.test(text)) return "combined";
   if (/번역.*감수|감수.*번역/.test(text)) return "proofreading";
   if (/녹음|더빙/.test(text)) return "media";
@@ -1044,33 +1053,77 @@ function suggestProductType(name: string, mainCategory?: string): string {
   return "";
 }
 
-// ─── 엑셀 공통 설정 ──────────────────────────────────────────────────────────
-const EXCEL_HEADERS = [
-  "상품코드(자동생성)", "상품유형*(번역/통역/통번역/통역장비/프로젝트/교통비/식대/숙박/기타비용)",
-  "출발언어(ko/en/ja...)", "도착언어(ko/en/ja...)",
-  "대분류*", "중분류", "상품명*", "단위*", "기본단가*",
-  "기본진행시간(통역용)", "초과단가(통역용)", "비고",
+// ─── 엑셀 공통 설정 (Product Catalog Schema) ─────────────────────────────────
+// Template과 Export 동일한 10-column 스키마 사용
+// Template: 상품코드 = "(자동생성)", Export: 상품코드 = 실제 코드
+const CATALOG_HEADERS = [
+  "상품코드",
+  "상품유형",  // 번역/통역/통번역/감수/통역장비/편집/DTP/미디어/운영/실비/프로젝트
+  "하위유형",
+  "출발언어",
+  "도착언어",
+  "상품명",
+  "canonical_key",
+  "상태",
+  "생성방식",
+  "비고",
 ];
-const COL_WIDTHS = [18, 36, 16, 16, 20, 20, 24, 14, 12, 18, 14, 24];
+const CATALOG_COL_WIDTHS = [14, 14, 16, 12, 12, 32, 28, 8, 12, 20];
 const excelUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 const LANG_LABEL: Record<string, string> = Object.fromEntries(LANGUAGE_CODES.map(l => [l.code, l.label]));
 const TYPE_LABEL: Record<string, string> = Object.fromEntries(Object.entries(PRODUCT_TYPES).map(([k, v]) => [k, v.label]));
+const TYPE_LABEL_REV_GLOBAL: Record<string, string> = Object.fromEntries(Object.entries(PRODUCT_TYPES).map(([k, v]) => [v.label, k]));
 
-function productToRow(p: typeof productsTable.$inferSelect): (string | number)[] {
+// 하위호환 구 타입 키 — Export 시 모두 "운영/실비"로 표시 (DB 수정 없음)
+const OPS_COMPAT_TYPES = new Set(["transport", "meal", "accommodation", "other_cost", "expense"]);
+
+// 운영/실비 mainCategory 정규화 — Export 표시 전용 (DB 수정 없음)
+// 기존 DB 저장값(legacy) → canonical label 매핑
+const OPS_MAINCAT_NORMALIZE: Record<string, string> = {
+  "기타 실비":  "기타실비",   // 공백 제거
+  "식비":      "식대",       // 통일 용어 (constants.ts 기준)
+  "배송/퀵":   "기타실비",    // 세부 항목 → 상위 카테고리 통합
+};
+
+// 운영/실비 세부 항목 정규화 규칙 — 향후 Import 신규 등록 시 적용 예정 (현재 미적용)
+// DB UPDATE 없이 표시/입력 정규화 용도로만 사용
+export const OPS_SUBCAT_NORMALIZE_RULES: Array<[RegExp, string]> = [
+  [/항공|항공권|항공료/,           "항공료"],
+  [/택시|택시비/,                  "택시비"],
+  [/렌트카|차량\s*렌트|렌터카/,    "렌터카"],
+  [/KTX|기차|열차/i,              "KTX·기차"],
+  [/숙박|호텔/,                   "숙박"],
+  [/식비|식대/,                   "식대"],
+  [/퀵|배송|택배/,                 "배송/퀵"],
+  [/국제우편|우편/,                "국제우편"],
+  [/인쇄|제본/,                   "인쇄/제본"],
+  [/공증|인증/,                   "공증서류"],
+];
+
+function productToCatalogRow(
+  p: typeof productsTable.$inferSelect,
+  notes?: string,
+): (string | number)[] {
+  const isOpsCompat = OPS_COMPAT_TYPES.has(p.productType);
+  const typeLabel = isOpsCompat ? "운영/실비" : (TYPE_LABEL[p.productType] ?? p.productType);
+  const mainCat = isOpsCompat
+    ? (OPS_MAINCAT_NORMALIZE[p.mainCategory ?? ""] ?? p.mainCategory ?? "")
+    : (p.mainCategory ?? "");
+  const memo = notes
+    ? (p.description ? `${notes} / ${p.description}` : notes)
+    : (p.description ?? "");
   return [
     p.code,
-    TYPE_LABEL[p.productType] ?? p.productType,
+    typeLabel,
+    mainCat,
     p.sourceLanguage ?? "",
     p.targetLanguage ?? "",
-    p.mainCategory ?? "",
-    p.subCategory ?? "",
     p.name,
-    p.unit ?? "건",
-    p.basePrice ?? "",
-    p.interpretationDuration ?? "",
-    p.overtimePrice ?? "",
-    p.description ?? "",
+    p.canonicalKey ?? "",
+    p.active ? "활성" : "비활성",
+    "unknown",
+    memo,
   ];
 }
 
@@ -1208,13 +1261,23 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
 // ─── 엑셀 템플릿 다운로드 ─────────────────────────────────────────────────────
 router.get("/admin/products/template", ...adminGuard, (_req, res) => {
   const wb = XLSX.utils.book_new();
+  // 10-column Product Catalog Schema (상품코드 = "(자동생성)" in template)
+  // cols: 상품코드, 상품유형, 하위유형, 출발언어, 도착언어, 상품명, canonical_key, 상태, 생성방식, 비고
   const sampleRows = [
-    ["(자동생성)", "번역", "ko", "en", "전문번역", "법률", "한영 법률번역", "어절", 50, "", "", "법률 문서 번역"],
-    ["(자동생성)", "통역", "ko", "en", "동시통역", "", "한영 동시통역", "1시간", 200000, "4h", 50000, "컨퍼런스 동시통역"],
-    ["(자동생성)", "통역장비", "", "", "동시통역장비", "", "동시통역장비 임대", "일", 150000, "", "", ""],
+    ["(자동생성)", "번역",     "전문번역",   "ko", "en", "한국어-영어 번역",         "", "활성", "", "법률·계약 전문번역"],
+    ["(자동생성)", "번역",     "출판번역",   "ko", "ja", "한국어-일본어 번역",       "", "활성", "", "출판번역"],
+    ["(자동생성)", "통역",     "동시통역",   "ko", "en", "한국어-영어 동시통역",     "", "활성", "", "컨퍼런스"],
+    ["(자동생성)", "통번역",   "출장통번역", "ko", "en", "한국어-영어 출장통번역",   "", "활성", "", ""],
+    ["(자동생성)", "감수",     "원어민감수", "ko", "en", "한국어-영어 원어민감수",   "", "활성", "", ""],
+    ["(자동생성)", "통역장비", "동시통역장비","",  "",  "동시통역장비 임대",         "", "활성", "", ""],
+    ["(자동생성)", "편집/DTP", "편집",       "",  "",  "PPT 편집",                  "", "활성", "", ""],
+    ["(자동생성)", "미디어",   "자막",       "ko","en", "한국어-영어 자막 제작",     "", "활성", "", ""],
+    ["(자동생성)", "운영/실비","교통비",     "",  "",  "공항 픽업 교통비",           "", "활성", "", ""],
+    ["(자동생성)", "운영/실비","기타실비",   "",  "",  "공증서류 발송비",            "", "활성", "", ""],
+    ["(자동생성)", "프로젝트", "",           "",  "",  "신규 프로젝트 관리",         "", "활성", "", ""],
   ];
-  const ws = XLSX.utils.aoa_to_sheet([EXCEL_HEADERS, ...sampleRows]);
-  ws["!cols"] = COL_WIDTHS.map(wch => ({ wch }));
+  const ws = XLSX.utils.aoa_to_sheet([CATALOG_HEADERS, ...sampleRows]);
+  ws["!cols"] = CATALOG_COL_WIDTHS.map(wch => ({ wch }));
   XLSX.utils.book_append_sheet(wb, ws, "상품목록");
   const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
   res.setHeader("Content-Disposition", "attachment; filename*=UTF-8''%EC%83%81%ED%92%88_%ED%85%9C%ED%94%8C%EB%A6%BF.xlsx");
@@ -1228,9 +1291,42 @@ router.get("/admin/products/export", ...adminGuard, async (req, res) => {
     const rows = await db.select().from(productsTable)
       .where(isNull(productsTable.deletedAt))
       .orderBy(productsTable.productType, productsTable.mainCategory, productsTable.name);
+
+    // 통역장비 중복 후보 탐지: 동일 mainCategory 내 이름이 유사한 쌍 발견 시 그룹 전체 마킹
+    // 판정 기준: 정규화 이름에서 한쪽이 다른 쪽을 포함하는 경우 (설치비↔철수비 등 상이 쌍은 미해당)
+    function normForDup(s: string): string {
+      return s.replace(/[\s()（）]/g, "").toLowerCase();
+    }
+    type EquipRow = typeof rows[number];
+    const equipGroups = new Map<string, EquipRow[]>();
+    for (const r of rows) {
+      if (r.productType === "equipment") {
+        const key = r.mainCategory ?? "";
+        if (!equipGroups.has(key)) equipGroups.set(key, []);
+        equipGroups.get(key)!.push(r);
+      }
+    }
+    const dupCandidateIds = new Set<number>();
+    for (const [, group] of equipGroups) {
+      if (group.length <= 1) continue;
+      let hasSimilarPair = false;
+      outer: for (let i = 0; i < group.length; i++) {
+        for (let j = i + 1; j < group.length; j++) {
+          const a = normForDup(group[i].name);
+          const b = normForDup(group[j].name);
+          if (a.includes(b) || b.includes(a)) { hasSimilarPair = true; break outer; }
+        }
+      }
+      if (hasSimilarPair) group.forEach(r => dupCandidateIds.add(r.id));
+    }
+
+    const catalogRows = rows.map(p =>
+      productToCatalogRow(p, dupCandidateIds.has(p.id) ? "[중복후보]" : undefined)
+    );
+
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet([EXCEL_HEADERS, ...rows.map(productToRow)]);
-    ws["!cols"] = COL_WIDTHS.map(wch => ({ wch }));
+    const ws = XLSX.utils.aoa_to_sheet([CATALOG_HEADERS, ...catalogRows]);
+    ws["!cols"] = CATALOG_COL_WIDTHS.map(wch => ({ wch }));
     XLSX.utils.book_append_sheet(wb, ws, "상품목록");
     const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
     const now = new Date().toISOString().slice(0, 10).replace(/-/g, "");
@@ -1269,30 +1365,29 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
       .from(productsTable)
       .where(isNull(productsTable.deletedAt));
 
-    const TYPE_LABEL_REV: Record<string, string> = {};
-    for (const [k, v] of Object.entries(PRODUCT_TYPES)) TYPE_LABEL_REV[v.label] = k;
-
     const items: PreviewItem[] = [];
 
     for (let i = 1; i < rows.length; i++) {
       const rowNum = i + 1;
       const r = rows[i];
-      const typeRaw   = String(r[1] ?? "").trim();
-      const srcLang   = String(r[2] ?? "").trim().toLowerCase() || null;
-      const tgtLang   = String(r[3] ?? "").trim().toLowerCase() || null;
-      const mainCat   = String(r[4] ?? "").trim();
-      const subCat    = String(r[5] ?? "").trim() || "";
-      const nameRaw   = String(r[6] ?? "").trim();
-      const unitRaw   = String(r[7] ?? "").trim();
-      const baseRaw   = r[8] !== "" && r[8] != null ? Number(r[8]) : null;
-      const desc      = String(r[11] ?? "").trim() || null;
+      // Product Catalog Schema (10-col): 상품코드(0), 상품유형(1), 하위유형(2),
+      //   출발언어(3), 도착언어(4), 상품명(5), canonical_key(6), 상태(7), 생성방식(8), 비고(9)
+      // r[0] = 상품코드 (ignored on import — auto-generated)
+      const typeRaw = String(r[1] ?? "").trim();
+      const mainCat = String(r[2] ?? "").trim() || "";   // 하위유형 → mainCategory
+      const srcLang = String(r[3] ?? "").trim().toLowerCase() || null;
+      const tgtLang = String(r[4] ?? "").trim().toLowerCase() || null;
+      const nameRaw = String(r[5] ?? "").trim();
+      // r[6] = canonical_key (reference only), r[7] = 상태, r[8] = 생성방식 (ignored on import)
+      const desc    = String(r[9] ?? "").trim() || null;
+      const subCat  = "";
 
-      if (!typeRaw && !mainCat && !nameRaw) continue;
+      if (!typeRaw && !nameRaw) continue;
 
       const issues: string[] = [];
       let status: PreviewStatus = "new";
 
-      const pType = TYPE_LABEL_REV[typeRaw] ?? typeRaw;
+      const pType = TYPE_LABEL_REV_GLOBAL[typeRaw] ?? typeRaw;
 
       if (!PRODUCT_TYPES[pType]) {
         issues.push(`상품유형 인식 불가: '${typeRaw}'`); status = "review";
@@ -1302,27 +1397,11 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
       } else if (nameRaw.length < 2) {
         issues.push("상품명 너무 짧음"); if (status === "new") status = "review";
       }
-      // 대분류는 선택값 — 없어도 등록 가능 (issue 표시만, review 강등 없음)
-      if (!mainCat) issues.push("대분류 없음 (선택)");
-      if (!unitRaw) {
-        issues.push("단위 없음"); if (status === "new") status = "review";
-      }
-      if (baseRaw !== null && isNaN(baseRaw)) {
-        issues.push(`단가 숫자 오류: '${r[8]}'`); if (status === "new") status = "review";
-      }
 
-      // suggestProductType 먼저 계산 — expense/equipment unit override에 활용
+      // suggestProductType for taxonomy hints
       const suggestedType = suggestProductType(nameRaw, mainCat);
-      // expense/equipment 감지 시 해당 taxonomy의 default unit 강제 적용 (interpretation unit 오염 방지)
-      const effectiveTypeForUnit = suggestedType === "expense" ? "expense"
-                                 : suggestedType === "equipment" ? "equipment"
-                                 : pType;
-      const validUnits = UNITS_BY_TYPE[effectiveTypeForUnit] ?? ["건"];
-      const unit = validUnits.includes(unitRaw) ? unitRaw : (unitRaw || validUnits[0]);
-      if (unitRaw && !validUnits.includes(unitRaw)) {
-        issues.push(`단위 '${unitRaw}' → '${unit}' 자동 조정`);
-      }
-      const basePrice = baseRaw !== null && !isNaN(baseRaw) ? Math.round(baseRaw) : null;
+      const validUnits = UNITS_BY_TYPE[pType] ?? ["건"];
+      const unit = validUnits[0];
 
       if (suggestedType && PRODUCT_TYPES[pType] && suggestedType !== pType) {
         issues.push(`taxonomy 추천: ${PRODUCT_TYPES[suggestedType]?.label ?? suggestedType}`);
@@ -1351,7 +1430,7 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
         const normTgtA = normalizeLangCode(tgtLang);
         if (normSrcA === "zh-hant" || normTgtA === "zh-hant") {
           const hasZhVariant = existingProducts.some(ep =>
-            ep.productType === pType && ep.mainCategory === mainCat && /-ZH-/.test(ep.code)
+            ep.productType === pType && /-ZH-/.test(ep.code)
           );
           if (hasZhVariant) {
             analysis = { ...analysis, reviewReasons: [...analysis.reviewReasons, "POTENTIAL_VARIANT_DUPLICATE"] };
@@ -1361,7 +1440,7 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
       }
 
       items.push({ rowNum, name: nameRaw, productType: pType, mainCategory: mainCat, subCategory: subCat,
-        sourceLanguage: srcLang, targetLanguage: tgtLang, unit, basePrice, description: desc,
+        sourceLanguage: srcLang, targetLanguage: tgtLang, unit, basePrice: null, description: desc,
         status, issues, suggestedType: suggestedType !== pType ? suggestedType : "", duplicateOf, analysis });
     }
 

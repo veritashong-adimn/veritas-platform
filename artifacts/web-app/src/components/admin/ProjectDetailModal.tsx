@@ -1025,7 +1025,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       }
       onToast(`견적 생성 완료`);
       setQuoteAmount(""); setQuoteNote(""); setQuoteItemForms([defaultItem()]); setShowQuoteForm(false);
-      setEquipmentCommon({ eventStartDate: "", eventEndDate: "", usagePeriod: "1일", location: "", memo: "" });
       setQuoteValidUntil(_dateDefault(30)); setQuoteIssueDate(_dateDefault(0));
       setQuotePrepaidUsage(""); setSelectedPrepaidAcctId(null); setCompPrepaidAccounts([]); setAcctLedger([]);
       setQuoteBatchStart(""); setQuoteBatchEnd(""); setBatchCandidates([]); setBatchSelected(new Set()); setBatchQueried(false);

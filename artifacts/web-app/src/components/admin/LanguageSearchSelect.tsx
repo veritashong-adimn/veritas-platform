@@ -14,6 +14,7 @@ interface Props {
   disabled?: boolean;
   excludeCodes?: string[]; // 표시에서 제외할 언어 코드 목록
   allowEmpty?: boolean;    // 선택 안 함 허용 (미디어 등 언어 optional 타입)
+  customLabel?: string;    // "기타 직접입력" 대신 표시할 레이블 (예: "기타언어")
 }
 
 const CUSTOM_CODE = "custom";
@@ -21,18 +22,18 @@ const CUSTOM_LABEL = "기타 직접입력";
 
 type LangOption = { value: string; label: string; code: string };
 
-function getLangOptions(mode: LangSelectMode, excludeCodes?: string[]): LangOption[] {
+function getLangOptions(mode: LangSelectMode, excludeCodes?: string[], customLabel?: string): LangOption[] {
   return LANGUAGE_CODES
     .filter(l => !excludeCodes?.length || !excludeCodes.includes(l.code))
     .map(l => ({
       value: mode === "code" ? l.code : l.label,
-      label: l.label,
+      label: l.code === CUSTOM_CODE && customLabel ? customLabel : l.label,
       code: l.code,
     }));
 }
 
-function findOption(value: string, mode: LangSelectMode, excludeCodes?: string[]): LangOption | undefined {
-  return getLangOptions(mode, excludeCodes).find(o => o.value === value);
+function findOption(value: string, mode: LangSelectMode, excludeCodes?: string[], customLabel?: string): LangOption | undefined {
+  return getLangOptions(mode, excludeCodes, customLabel).find(o => o.value === value);
 }
 
 export function isLangCustom(value: string, mode: LangSelectMode): boolean {
@@ -42,7 +43,7 @@ export function isLangCustom(value: string, mode: LangSelectMode): boolean {
 export function LanguageSearchSelect({
   value, onChange,
   mode = "code", placeholder = "언어 선택...",
-  style, triggerStyle, disabled = false, excludeCodes, allowEmpty = false,
+  style, triggerStyle, disabled = false, excludeCodes, allowEmpty = false, customLabel,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -53,7 +54,7 @@ export function LanguageSearchSelect({
   const listRef = useRef<HTMLDivElement>(null);
   const portalRef = useRef<HTMLDivElement>(null);
 
-  const allOptions = getLangOptions(mode, excludeCodes);
+  const allOptions = getLangOptions(mode, excludeCodes, customLabel);
   const q = query.toLowerCase().trim();
   const filtered = q
     ? allOptions.filter(
@@ -63,7 +64,7 @@ export function LanguageSearchSelect({
       )
     : allOptions;
 
-  const selected = findOption(value, mode, excludeCodes);
+  const selected = findOption(value, mode, excludeCodes, customLabel);
   const showTriggerLabel = selected ? selected.label : value ? value : "";
 
   const calcPos = useCallback(() => {
@@ -89,14 +90,17 @@ export function LanguageSearchSelect({
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (
-        containerRef.current && !containerRef.current.contains(e.target as Node) &&
-        (portalRef.current === null || !portalRef.current.contains(e.target as Node))
-      ) { setOpen(false); setQuery(""); }
+    const handler = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (containerRef.current?.contains(t)) return;
+      // portalRef가 null이면 아직 렌더링 전 → 닫지 않음
+      if (portalRef.current == null || portalRef.current.contains(t)) return;
+      setOpen(false);
+      setQuery("");
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    // setTimeout(0): 트리거 클릭 이벤트 버블링이 완료된 후 리스너 등록
+    const tid = setTimeout(() => document.addEventListener("pointerdown", handler), 0);
+    return () => { clearTimeout(tid); document.removeEventListener("pointerdown", handler); };
   }, [open]);
 
   useEffect(() => {
@@ -340,14 +344,17 @@ export function ItemSearchSelect({
 
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (
-        containerRef.current && !containerRef.current.contains(e.target as Node) &&
-        (portalRef.current === null || !portalRef.current.contains(e.target as Node))
-      ) { setOpen(false); setQuery(""); }
+    const handler = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (containerRef.current?.contains(t)) return;
+      // portalRef가 null이면 아직 렌더링 전 → 닫지 않음
+      if (portalRef.current == null || portalRef.current.contains(t)) return;
+      setOpen(false);
+      setQuery("");
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    // setTimeout(0): 트리거 클릭 이벤트 버블링이 완료된 후 리스너 등록
+    const tid = setTimeout(() => document.addEventListener("pointerdown", handler), 0);
+    return () => { clearTimeout(tid); document.removeEventListener("pointerdown", handler); };
   }, [open]);
 
   useEffect(() => {
