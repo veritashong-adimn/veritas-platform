@@ -346,6 +346,18 @@ function normalizeLangCode(code: string | null): string {
   return c;
 }
 
+// ─── 통역 전용 언어 코드 정규화 ────────────────────────────────────────────────
+// spoken language 기반 통역에서는 zh-hans/zh-hant 구분이 상품 identity에 무관
+// 광동어(yue)는 별도 구어 언어이므로 제외
+function normalizeLangCodeForInterp(code: string | null): string {
+  const c = normalizeLangCode(code);
+  if (c === "zh-hans" || c === "zh-hant") return "zh";
+  return c;
+}
+
+// zh 계열 3종(zh / zh-hans / zh-hant) 을 모두 포함하는 SQL ARRAY 리터럴 반환
+const ZH_ALL_VARIANTS = "'zh', 'zh-hans', 'zh-hant'";
+
 // ─── 중복 체크 ────────────────────────────────────────────────────────────────
 async function findDuplicate(
   productType: string,
@@ -357,21 +369,34 @@ async function findDuplicate(
   name?: string,
 ) {
   const hasLang = isLangType(productType);
-  // 비언어형 상품(통역장비 등): 이름 기반 중복 체크
-  // 언어형 상품: 출발언어+도착언어+대분류+중분류 기반 중복 체크
-  // zh / zh-hans 혼재 방지: normalizeLangCode로 정규화 후 비교
-  const normSrc = normalizeLangCode(sourceLanguage);
-  const normTgt = normalizeLangCode(targetLanguage);
+  const isInterp = productType === "interpretation";
+
+  // 통역 계열: zh/zh-hans/zh-hant 모두 동일 상품으로 처리 (spoken language 기준)
+  // 번역 계열: zh-hans ↔ zh 호환만 처리 (script variant는 별도 상품)
+  const normSrc = isInterp ? normalizeLangCodeForInterp(sourceLanguage) : normalizeLangCode(sourceLanguage);
+  const normTgt = isInterp ? normalizeLangCodeForInterp(targetLanguage) : normalizeLangCode(targetLanguage);
+
+  function buildZhLangSql(colName: string, norm: string, isInterpCtx: boolean) {
+    const isZh = norm === "zh" || norm === "zh-hans" || norm === "zh-hant";
+    if (isInterpCtx && isZh) {
+      return sql.raw(`LOWER(COALESCE(${colName}, '')) = ANY(ARRAY[${ZH_ALL_VARIANTS}])`);
+    }
+    if (norm === "zh-hans") {
+      return sql`LOWER(COALESCE(${sql.raw(colName)}, '')) = ANY(ARRAY[${norm}, 'zh'])`;
+    }
+    return sql`LOWER(COALESCE(${sql.raw(colName)}, '')) = ${norm}`;
+  }
+
   const conditions = hasLang
     ? and(
         sql`LOWER(${productsTable.productType}) = LOWER(${productType})`,
         sql`LOWER(COALESCE(${productsTable.mainCategory}, '')) = LOWER(${mainCategory || ""})`,
         sql`LOWER(COALESCE(${productsTable.subCategory}, '')) = LOWER(${subCategory || ""})`,
         normSrc
-          ? sql`LOWER(COALESCE(${productsTable.sourceLanguage}, '')) = ANY(ARRAY[${normSrc}, ${normSrc === "zh-hans" ? "zh" : normSrc}])`
+          ? buildZhLangSql("products.source_language", normSrc, isInterp)
           : sql`(${productsTable.sourceLanguage} IS NULL OR ${productsTable.sourceLanguage} = '')`,
         normTgt
-          ? sql`LOWER(COALESCE(${productsTable.targetLanguage}, '')) = ANY(ARRAY[${normTgt}, ${normTgt === "zh-hans" ? "zh" : normTgt}])`
+          ? buildZhLangSql("products.target_language", normTgt, isInterp)
           : sql`(${productsTable.targetLanguage} IS NULL OR ${productsTable.targetLanguage} = '')`,
       )
     : and(
@@ -436,15 +461,20 @@ async function getOrCreateProduct(
   const { productType, sourceLanguage, targetLanguage, mainCategory, subCategory = "", name } = input;
   const pTypeCode = PRODUCT_TYPES[productType]?.code ?? productType.toUpperCase();
   const hasLang   = isLangType(productType);
+  const isInterp  = productType === "interpretation";
+
+  // 통역 계열: zh-hans/zh-hant → zh 정규화 (spoken language 기준, script variant 제거)
+  const storedSrc = isInterp ? (normalizeLangCodeForInterp(sourceLanguage) || null) : (sourceLanguage || null);
+  const storedTgt = isInterp ? (normalizeLangCodeForInterp(targetLanguage) || null) : (targetLanguage || null);
 
   // canonicalKey: 신규 생성 시 DB에 저장; partial unique index(deleted_at IS NULL)로 중복 방지
-  const canonicalKey = hasLang && (sourceLanguage || targetLanguage)
-    ? `${pTypeCode}:${mainCategory}:${normalizeLangCode(sourceLanguage)}:${normalizeLangCode(targetLanguage)}`
+  const canonicalKey = hasLang && (storedSrc || storedTgt)
+    ? `${pTypeCode}:${mainCategory}:${normalizeLangCode(storedSrc)}:${normalizeLangCode(storedTgt)}`
     : `${pTypeCode}:::${normalizeProdName(name)}`;
 
-  // 기존 상품 조회 (findDuplicate 재사용)
+  // 기존 상품 조회 (findDuplicate 재사용) — 정규화된 언어 코드로 조회
   const dupes = await findDuplicate(
-    productType, sourceLanguage, targetLanguage,
+    productType, storedSrc, storedTgt,
     mainCategory, subCategory, undefined,
     hasLang ? undefined : name,
   );
@@ -458,13 +488,13 @@ async function getOrCreateProduct(
   }
 
   // 신규 생성
-  const code = await generateProductCode(productType, sourceLanguage, targetLanguage, mainCategory, subCategory);
+  const code = await generateProductCode(productType, storedSrc, storedTgt, mainCategory, subCategory);
   const [product] = await db
     .insert(productsTable)
     .values({
       code, name: name.trim(), productType,
-      sourceLanguage: sourceLanguage || null,
-      targetLanguage: targetLanguage || null,
+      sourceLanguage: storedSrc,
+      targetLanguage: storedTgt,
       mainCategory: mainCategory || null,
       subCategory: subCategory || null,
       unit: input.unit,

@@ -1,5 +1,8 @@
 /**
- * canonical_key backfill — 기존 products 40건에 canonical_key 값 채우기
+ * canonical_key backfill + 통역 zh script variant 정규화
+ *
+ * 기존 interpretation 상품의 sourceLanguage/targetLanguage에 zh-hans/zh-hant가
+ * 저장된 경우 zh로 정규화하고, canonical_key도 재계산한다.
  * getOrCreateProduct와 동일한 로직을 사용해야 unique index와 일치함.
  *
  * 실행: DATABASE_URL=... pnpm run migrate:canonical-key
@@ -34,6 +37,14 @@ function normalizeLangCode(code: string | null): string {
   return c;
 }
 
+// ─── products.ts의 normalizeLangCodeForInterp와 동일 ─────────────────────────
+// 통역 계열: zh-hans/zh-hant → zh (spoken language 기준, script variant 제거)
+function normalizeLangCodeForInterp(code: string | null): string {
+  const c = normalizeLangCode(code);
+  if (c === "zh-hans" || c === "zh-hant") return "zh";
+  return c;
+}
+
 // ─── products.ts의 normalizeProdName과 동일 ──────────────────────────────────
 function normalizeProdName(s: string): string {
   return (s ?? "")
@@ -46,41 +57,66 @@ function normalizeProdName(s: string): string {
 
 // ─── getOrCreateProduct의 canonicalKey 계산 로직과 동일 ──────────────────────
 function buildCanonicalKey(p: typeof productsTable.$inferSelect): string {
-  const typeInfo = PRODUCT_TYPES[p.productType];
-  const typeCode = typeInfo?.code ?? p.productType.toUpperCase();
-  const hasLang  = typeInfo?.hasLanguage ?? false;
-  const src      = normalizeLangCode(p.sourceLanguage);
-  const tgt      = normalizeLangCode(p.targetLanguage);
-  const mainCat  = p.mainCategory ?? "";
+  const typeInfo  = PRODUCT_TYPES[p.productType];
+  const typeCode  = typeInfo?.code ?? p.productType.toUpperCase();
+  const hasLang   = typeInfo?.hasLanguage ?? false;
+  const isInterp  = p.productType === "interpretation";
+  const src       = isInterp ? normalizeLangCodeForInterp(p.sourceLanguage) : normalizeLangCode(p.sourceLanguage);
+  const tgt       = isInterp ? normalizeLangCodeForInterp(p.targetLanguage) : normalizeLangCode(p.targetLanguage);
+  const mainCat   = p.mainCategory ?? "";
 
   return hasLang && (src || tgt)
     ? `${typeCode}:${mainCat}:${src}:${tgt}`
     : `${typeCode}:::${normalizeProdName(p.name)}`;
 }
 
+// 통역 상품의 저장 언어 코드 정규화 여부 확인
+function normalizedLangForStorage(code: string | null, productType: string): string | null {
+  if (!code) return null;
+  if (productType === "interpretation") return normalizeLangCodeForInterp(code) || null;
+  return code;
+}
+
 async function main() {
-  console.log("\n🚀 canonical_key backfill 시작\n" + "─".repeat(60));
+  console.log("\n🚀 canonical_key backfill + 통역 zh 언어코드 정규화\n" + "─".repeat(60));
 
   // 1. 전체 활성 상품 조회
   const products = await db.select().from(productsTable).where(isNull(productsTable.deletedAt));
   console.log(`총 활성 상품: ${products.length}건`);
 
   // 2. 각 상품에 canonical_key 계산 및 업데이트
+  //    통역 상품은 sourceLanguage/targetLanguage의 zh script variant도 정규화
   let updated = 0;
-  let skipped = 0;
+  let langNormCount = 0;
   const results: { id: number; code: string; name: string; canonicalKey: string }[] = [];
 
   for (const p of products) {
-    const key = buildCanonicalKey(p);
+    const key     = buildCanonicalKey(p);
+    const newSrc  = normalizedLangForStorage(p.sourceLanguage, p.productType);
+    const newTgt  = normalizedLangForStorage(p.targetLanguage, p.productType);
+    const srcChanged = newSrc !== p.sourceLanguage;
+    const tgtChanged = newTgt !== p.targetLanguage;
+
     results.push({ id: p.id, code: p.code, name: p.name, canonicalKey: key });
 
+    if (srcChanged || tgtChanged) {
+      console.log(`  [${p.id}] ${p.name}`);
+      if (srcChanged) console.log(`    sourceLanguage: "${p.sourceLanguage}" → "${newSrc}"`);
+      if (tgtChanged) console.log(`    targetLanguage: "${p.targetLanguage}" → "${newTgt}"`);
+      langNormCount++;
+    }
+
     await db.execute(
-      sql`UPDATE products SET canonical_key = ${key} WHERE id = ${p.id}`,
+      sql`UPDATE products SET canonical_key = ${key}, source_language = ${newSrc}, target_language = ${newTgt} WHERE id = ${p.id}`,
     );
     updated++;
   }
 
-  console.log(`\n✅ 업데이트 완료: ${updated}건  스킵: ${skipped}건\n`);
+  if (langNormCount > 0) {
+    console.log(`\n  언어코드 정규화: ${langNormCount}건 (zh-hans/zh-hant → zh for interpretation)\n`);
+  }
+
+  console.log(`\n✅ 업데이트 완료: ${updated}건\n`);
 
   // 3. 결과 검증 — DB에서 다시 읽어 확인
   const verify = await db

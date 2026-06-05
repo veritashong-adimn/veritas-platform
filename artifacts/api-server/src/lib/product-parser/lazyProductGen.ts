@@ -55,15 +55,24 @@ export const LAZY_SERVICE_CONFIG: Record<LazyServiceType, LazyServiceConfig> = {
 /**
  * 중복 방지 키. 방향 포함 (ko:en ≠ en:ko).
  * 예: "TR:ko:en", "IN:consecutive:ko:en", "IN:business_meeting:ko:en"
+ *
+ * 통역 계열(productType === "interpretation")은 zh-hans/zh-hant → zh 정규화
  */
+function normalizeZhForCanonical(code: string, productType: string): string {
+  if (productType === "interpretation" && (code === "zh-hans" || code === "zh-hant")) return "zh";
+  if (code === "zh") return "zh-hans"; // translation 계열 기본값
+  return code;
+}
+
 export function buildCanonicalKey(
   serviceType: LazyServiceType,
   sourceLanguage: string,
   targetLanguage: string,
 ): string {
-  const { canonicalPrefix } = LAZY_SERVICE_CONFIG[serviceType];
-  const src = sourceLanguage.toLowerCase().trim();
-  const tgt = targetLanguage.toLowerCase().trim();
+  const cfg = LAZY_SERVICE_CONFIG[serviceType];
+  const { canonicalPrefix, productType } = cfg;
+  const src = normalizeZhForCanonical(sourceLanguage.toLowerCase().trim(), productType);
+  const tgt = normalizeZhForCanonical(targetLanguage.toLowerCase().trim(), productType);
   return `${canonicalPrefix}:${src}:${tgt}`;
 }
 
