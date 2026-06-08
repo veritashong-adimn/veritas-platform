@@ -1,0 +1,200 @@
+# 통역 상품의 Script Variant 제거 구조 수정 지시문
+
+현재 상품 구조에서 다음 문제가 발견되었다.
+
+예:
+
+* 한국어-중국어(번체) 통역
+* 한국어-중국어(간체) 통역
+* 중국어(번체) 순차통역
+
+이 구조는 언어학적·운영적으로 부정확하다.
+
+---
+
+## 핵심 개념
+
+“번체/간체”
+는 spoken language(구어 언어)가 아니라:
+
+* 문자체계(script variant)
+* writing system
+* text representation
+
+에 해당한다.
+
+즉:
+
+* 번역
+* 감수
+* 자막
+* DTP
+* 문서 기반 작업
+
+에서는 의미가 있지만,
+
+통역은:
+
+* 음성
+* 실시간 발화
+* spoken language
+
+기반 서비스이므로:
+
+* 중국어(번체) 통역
+* 중국어(간체) 순차통역
+
+같은 표현은 구조적으로 잘못된 상태다.
+
+---
+
+## 수정 목표
+
+통역 계열 상품에서는:
+
+* 간체
+* 번체
+* zh-hans
+* zh-hant
+* script variant metadata
+
+를 displayName 및 canonical product identity에서 제거한다.
+
+---
+
+## 정상 예시
+
+GOOD:
+
+* 한국어-중국어 통역
+* 한국어-중국어 순차통역
+* 광동어-한국어 순차통역
+* 일본어-한국어 동시통역
+
+BAD:
+
+* 한국어-중국어(번체) 통역
+* 중국어(간체) 순차통역
+* zh-hant interpretation
+
+---
+
+## 허용 범위
+
+script variant 허용:
+
+* translation
+* proofreading
+* subtitle
+* DTP
+* text-based services
+
+script variant 비허용:
+
+* interpretation
+* simultaneous interpretation
+* consecutive interpretation
+* whispering
+* phone interpretation
+* video interpretation
+
+---
+
+## 구현 방향
+
+1. serviceType 기반 rule 추가
+
+예시 개념:
+
+if (serviceType === interpretation) {
+removeScriptVariant()
+}
+
+또는:
+
+SCRIPT_VARIANTS_ALLOWED_SERVICES = [
+translation,
+proofreading,
+subtitle,
+dtp
+]
+
+2. parser 단계에서 normalization
+
+통역 계열에서는:
+
+* 중국어(번체) → 중국어
+* 중국어(간체) → 중국어
+
+normalize 처리.
+
+3. canonical product 분리
+
+현재:
+
+* 중국어(번체) 통역
+* 중국어(간체) 통역
+
+이 별도 canonical product로 생성될 가능성이 있음.
+
+이를:
+
+* 중국어 통역
+
+단일 canonical identity로 통합 필요.
+
+4. DisplayName deterministic rule 수정
+
+통역 계열:
+
+* script variant 제거
+
+번역 계열:
+
+* script variant 유지 가능
+
+---
+
+## 중요
+
+기존 translation 상품에는
+번체/간체 정보를 유지해야 한다.
+
+즉:
+
+* translation layer
+* interpretation layer
+
+규칙을 분리해야 한다.
+
+---
+
+## 추가 점검 요청
+
+아래 항목도 함께 점검:
+
+* zh / zh-hans / zh-hant normalize
+* 광동어 vs 중국어 분리 유지 여부
+* spoken language vs writing system separation
+* duplicate canonical product merge 위험
+* 기존 import 데이터 영향 범위
+* 기존 displayName 재생성 영향
+* review queue 영향
+
+---
+
+## 작업 원칙
+
+1. 기존 구조를 전면 재작성하지 말 것
+2. 현재 parser architecture 유지
+3. 최소 수정으로 안정화 우선
+4. 기존 translation 상품은 깨지지 않게 유지
+5. interpretation 계열에만 selective normalization 적용
+6. 변경 후 반드시:
+
+   * import preview
+   * duplicate detection
+   * displayName generation
+   * review workflow
+   * canonical mapping
+     검증할 것

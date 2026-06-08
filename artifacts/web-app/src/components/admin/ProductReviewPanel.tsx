@@ -276,7 +276,7 @@ function ReviewableGroup({
 function ReviewSection({ title, count, children, color = "#2563eb" }: {
   title: string; count: number; children: React.ReactNode; color?: string;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   return (
     <div style={{ marginBottom: 16, border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden" }}>
       <button

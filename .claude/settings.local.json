@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(pnpm run *)"
+      "Bash(pnpm run *)",
+      "Bash(node *)",
+      "Bash(curl -s -X POST http://localhost:8080/api/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"admin@veritas.com\",\"password\":\"admin1234\"}')",
+      "Bash(/home/runner/workspace/artifacts/web-app/node_modules/.bin/tsx src/test-product-naming.ts)",
+      "Bash(curl -s -X POST http://localhost:8080/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@platform.com\",\"password\":\"DevTest1234!\"}')",
+      "Bash(xargs -I{} grep -l \"ImportPreview\\\\|import.*preview\\\\|importPreview\" {})"
     ]
   }
 }

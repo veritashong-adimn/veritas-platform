@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s http://localhost:*)",
+      "Bash(curl -s -X GET http://localhost:*)",
+      "Bash(curl -s -X POST http://localhost:*)",
+      "Bash(curl -s -X PATCH http://localhost:*)",
+      "Bash(curl -s -X DELETE http://localhost:*)",
+      "Bash(curl -s -X PUT http://localhost:*)",
+      "Bash(/home/runner/workspace/artifacts/web-app/node_modules/.bin/tsx *)",
+      "Bash(/home/runner/workspace/scripts/node_modules/.bin/tsx *)",
+      "Bash(kill *)"
+    ]
+  }
+}
