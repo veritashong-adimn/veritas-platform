@@ -77,51 +77,65 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       )
       .orderBy(desc(usersTable.createdAt));
 
-    // 단가 관리(translator_rates)에서 대표단가 계산
     const translatorIds = rows.map(r => r.id);
-    const ratesMap: Record<number, { repRate: number; repUnit: string } | null> = {};
+
+    // ── 업무유형/세부유형 수집 (svc 필터 겸용) ─────────────────────────────
+    const serviceMap: Record<number, { workTypes: string[]; subTypes: string[] }> = {};
     if (translatorIds.length > 0) {
       const allRates = await db
         .select({
           translatorId: translatorRatesTable.translatorId,
-          rate: translatorRatesTable.rate,
-          unit: translatorRatesTable.unit,
           serviceType: translatorRatesTable.serviceType,
           subType: translatorRatesTable.subType,
-          language: translatorRatesTable.language,
-          languagePair: translatorRatesTable.languagePair,
-          id: translatorRatesTable.id,
         })
         .from(translatorRatesTable)
-        .where(inArray(translatorRatesTable.translatorId, translatorIds))
-        .orderBy(translatorRatesTable.id);
+        .where(inArray(translatorRatesTable.translatorId, translatorIds));
 
-      const grouped: Record<number, typeof allRates> = {};
       for (const r of allRates) {
-        if (!grouped[r.translatorId]) grouped[r.translatorId] = [];
-        grouped[r.translatorId].push(r);
-      }
-      for (const [tid, rates] of Object.entries(grouped)) {
-        // language=출발언어, languagePair=도착언어로 저장됨
-        const find = (svc: string, sub: string | null, srcLang: string | null, tgtLang: string | null, unit: string) =>
-          rates.find(r =>
-            r.serviceType === svc &&
-            (sub === null || r.subType === sub) &&
-            (srcLang === null || r.language === srcLang) &&
-            (tgtLang === null || r.languagePair === tgtLang) &&
-            r.unit === unit,
-          );
-        const rep =
-          find("번역", "일반번역", "한국어", "영어", "eojeol") ||
-          find("번역", "일반번역", "영어", "한국어", "eojeol") ||
-          find("통역", "순차통역", null, null, "4h") ||
-          find("통역", "동시통역", null, null, "4h") ||
-          rates[rates.length - 1]; // 가장 최근 등록된 단가
-        ratesMap[Number(tid)] = rep ? { repRate: rep.rate, repUnit: rep.unit } : null;
+        if (!serviceMap[r.translatorId]) serviceMap[r.translatorId] = { workTypes: [], subTypes: [] };
+        if (r.serviceType && !serviceMap[r.translatorId].workTypes.includes(r.serviceType))
+          serviceMap[r.translatorId].workTypes.push(r.serviceType);
+        if (r.subType && !serviceMap[r.translatorId].subTypes.includes(r.subType))
+          serviceMap[r.translatorId].subTypes.push(r.subType);
       }
     }
 
-    let result = rows.map(r => ({ ...r, ...(ratesMap[r.id] ?? { repRate: null, repUnit: null }) }));
+    // ── 주민번호 — 역할별 서버사이드 마스킹 ───────────────────────────────
+    // admin: 전체 노출 (900101-1234567), staff: 생년월일만 (900101-*******)
+    const isAdminRole = req.user!.role === "admin";
+    const sensitiveMap: Record<number, string | null> = {};
+    if (translatorIds.length > 0) {
+      const sensitiveRows = await db
+        .select({
+          translatorId: translatorSensitiveTable.translatorId,
+          residentNumber: translatorSensitiveTable.residentNumber,
+        })
+        .from(translatorSensitiveTable)
+        .where(inArray(translatorSensitiveTable.translatorId, translatorIds));
+
+      for (const s of sensitiveRows) {
+        if (!s.residentNumber) { sensitiveMap[s.translatorId] = null; continue; }
+        try {
+          const raw = decrypt(s.residentNumber).replace(/[^0-9]/g, "");
+          if (raw.length === 13) {
+            sensitiveMap[s.translatorId] = isAdminRole
+              ? `${raw.slice(0, 6)}-${raw.slice(6)}`   // 전체
+              : `${raw.slice(0, 6)}-*******`;            // 생년월일만
+          } else {
+            sensitiveMap[s.translatorId] = null;
+          }
+        } catch {
+          sensitiveMap[s.translatorId] = null;
+        }
+      }
+    }
+
+    let result = rows.map(r => ({
+      ...r,
+      workTypes: serviceMap[r.id]?.workTypes ?? [],
+      subTypes: serviceMap[r.id]?.subTypes ?? [],
+      residentNumber: sensitiveMap[r.id] ?? null,
+    }));
 
     if (search?.trim()) {
       const s = search.trim().toLowerCase();
@@ -152,19 +166,10 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
     if (grade?.trim()) {
       result = result.filter(t => t.grade === grade.trim());
     }
-    // 업무유형 필터: 해당 업무유형의 단가가 1개 이상 있는 통번역사만 반환
+    // 업무유형 필터: serviceMap에서 해당 업무유형 보유 여부 확인
     if (svc?.trim()) {
       const svcTrim = svc.trim();
-      const allRatesForSvc = translatorIds.length > 0
-        ? await db.select({ translatorId: translatorRatesTable.translatorId })
-            .from(translatorRatesTable)
-            .where(and(
-              inArray(translatorRatesTable.translatorId, translatorIds),
-              eq(translatorRatesTable.serviceType, svcTrim),
-            ))
-        : [];
-      const svcSet = new Set(allRatesForSvc.map(r => r.translatorId));
-      result = result.filter(t => svcSet.has(t.id));
+      result = result.filter(t => t.workTypes.includes(svcTrim));
     }
 
     res.json(result);
@@ -254,64 +259,48 @@ const excelUpload = multer({
 
 // ─── 샘플 엑셀 다운로드 ─────────────────────────────────────────────────────
 router.get("/admin/translators/sample-excel", ...adminGuard, (_req, res) => {
-  // ■ 최종 표준 컬럼 구조 (통번역사 기본정보 17 + 단가정보 14 = 31열)
+  // ■ 1차 마스터 등록용 컬럼 구조 (기본정보 17 + 업무유형/세부유형 2 = 19열)
+  // 단가 관련 컬럼은 2차 고도화 단계에서 추가 예정
   const headers = [
-    // 통번역사 기본정보 (언어/언어쌍 제거 → 출발언어·도착언어로만 사용)
     "이름", "이메일", "휴대폰",
     "지역", "등급", "전문분야", "경력", "상태",
     "학력", "전공", "평점", "가용상태", "상세정보",
     "주민번호", "은행명", "계좌번호", "예금주",
-    // 단가정보
-    "업무유형", "세부유형", "출발언어", "도착언어",
-    "단가단위", "단가", "통화", "VAT포함여부",
-    "최소금액", "기본시간", "추가시간단가",
-    "기본단가여부", "단가활성여부", "단가메모",
+    "업무유형", "세부유형",
   ];
 
-  // 예시 1: 번역 단가 포함
   const row1 = [
     "홍길동", "hong@example.com", "010-1234-5678",
     "서울", "A", "법률,금융", "번역 경력 10년", "Y",
     "서울대학교", "영어영문학", "4.5", "available", "",
     "", "국민은행", "", "홍길동",
-    "번역", "일반번역", "한국어", "영어",
-    "eojeol", "45", "KRW", "N",
-    "50000", "", "", "Y", "Y", "법률 문서 전문",
+    "번역", "일반번역",
   ];
-  // 예시 2: 통역 단가 포함
   const row2 = [
     "김영희", "kim@example.com", "010-9876-5432",
     "부산", "B", "의료,제약", "동시통역사 5년", "Y",
     "연세대학교", "영어통번역학", "4.0", "available", "",
     "", "", "", "",
-    "통역", "동시통역", "영어", "한국어",
-    "hour", "300000", "KRW", "N",
-    "", "4", "100000", "Y", "Y", "",
+    "통역", "동시통역",
   ];
-  // 예시 3: 미디어(자막) 단가
   const row3 = [
     "박철수", "park@example.com", "010-5555-1234",
     "대구", "C", "영상번역", "자막 경력 5년", "Y",
     "", "", "", "available", "",
     "", "", "", "",
-    "미디어", "자막작업", "한국어", "영어",
-    "min", "50000", "KRW", "N",
-    "", "", "", "Y", "Y", "영상 자막 전문",
+    "미디어", "자막작업",
   ];
-  // 예시 4: 단가 없는 통번역사 (단가 컬럼 전부 공백)
+  // 예시 4: 업무유형 없는 통번역사
   const row4 = [
     "이영수", "lee@example.com", "010-7777-8888",
     "광주", "B", "IT,기술", "번역 3년", "Y",
     "", "", "", "available", "",
     "", "", "", "",
-    "", "", "", "",
-    "", "", "", "",
-    "", "", "", "", "", "",
+    "", "",
   ];
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([headers, row1, row2, row3, row4]);
-  // 열 너비 — 기본 15, 이메일 22
   ws["!cols"] = headers.map((h) => ({ wch: h === "이메일" ? 24 : 16 }));
   // 헤더 행 굵게 (스타일은 xlsx 기본 지원 안 하나, 참고용으로 남김)
   XLSX.utils.book_append_sheet(wb, ws, "통번역사");
@@ -371,20 +360,10 @@ router.post("/admin/translators/upload-excel", ...adminGuard, excelUpload.single
       specializations: string; career: string; status: string;
       education: string; major: string; rating: string; availabilityStatus: string; bio: string;
       residentNumber: string; bankName: string; bankAccount: string; accountHolder: string;
-      workType: string; subType: string; sourceLang: string; targetLang: string;
-      unit: string; rate: string; currency: string; vatIncluded: string;
-      minPrice: string; baseHours: string; overtimeRate: string;
-      isDefault: string; rateActive: string; rateMemo: string;
+      workType: string; subType: string;
       error: string;
     };
     const parsed: ParsedRow[] = [];
-
-    // Y/N만 허용하는 필드 검증 헬퍼 (빈 값은 통과)
-    const checkYN = (val: string, label: string, errors: string[]) => {
-      if (val && val.toUpperCase() !== "Y" && val.toUpperCase() !== "N") {
-        errors.push(`${label}은 Y 또는 N만 허용됩니다 (입력값: "${val}")`);
-      }
-    };
 
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
@@ -393,50 +372,18 @@ router.post("/admin/translators/upload-excel", ...adminGuard, excelUpload.single
       if (!email) continue;
       const errors: string[] = [];
 
-      // ─ 기본 검증
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("이메일 형식 오류");
       const ratingVal = cell("rating");
       if (ratingVal && isNaN(Number(ratingVal))) errors.push("평점은 숫자여야 합니다");
 
-      // ─ 단가 관련 컬럼 수집
-      const rateVal      = cell("rate");
-      const workTypeVal  = cell("workType");
-      const subTypeVal   = cell("subType");
-      const sourceLangV  = cell("sourceLang");
-      const targetLangV  = cell("targetLang");
-      const unitVal      = cell("unit");
-      const currencyVal  = cell("currency");
-      const vatVal       = cell("vatIncluded");
-      const minPriceVal  = cell("minPrice");
-      const baseHoursVal = cell("baseHours");
-      const overtimeVal  = cell("overtimeRate");
-      const isDefaultVal = cell("isDefault");
-      const rateActiveV  = cell("rateActive");
-      const rateMemoVal  = cell("rateMemo");
+      const workTypeVal = cell("workType");
+      const subTypeVal  = cell("subType");
 
-      const rateAllEmpty = !rateVal && !workTypeVal && !subTypeVal && !sourceLangV && !targetLangV
-        && !unitVal && !currencyVal && !vatVal && !minPriceVal && !baseHoursVal && !overtimeVal
-        && !isDefaultVal && !rateActiveV && !rateMemoVal;
-
-      if (!rateAllEmpty) {
-        // 단가 컬럼 일부 입력 → 필수 필드 + 형식 검증
-        if (!workTypeVal) errors.push("단가 입력 시 업무유형 필수");
-        if (!rateVal)     errors.push("단가 입력 시 단가 필수");
-        else if (isNaN(Number(rateVal))) errors.push("단가는 숫자여야 합니다");
-        if (!unitVal)     errors.push("단가 입력 시 단가단위 필수");
-        if (minPriceVal && isNaN(Number(minPriceVal)))   errors.push("최소금액은 숫자여야 합니다");
-        if (baseHoursVal && isNaN(Number(baseHoursVal))) errors.push("기본시간은 숫자여야 합니다");
-        if (overtimeVal && isNaN(Number(overtimeVal)))   errors.push("추가시간단가는 숫자여야 합니다");
-        // Y/N 필드 검증
-        checkYN(vatVal,       "VAT포함여부",  errors);
-        checkYN(isDefaultVal, "기본단가여부", errors);
-        checkYN(rateActiveV,  "단가활성여부", errors);
-        // 미디어 업무유형 세부유형 검증
-        if (workTypeVal === "미디어") {
-          const MEDIA_SUBS = ["자막작업", "더빙"];
-          if (!subTypeVal) errors.push("미디어 업무유형은 세부유형(자막작업/더빙) 필수");
-          else if (!MEDIA_SUBS.includes(subTypeVal)) errors.push(`미디어 세부유형은 '자막작업' 또는 '더빙'만 허용됩니다 (입력값: "${subTypeVal}")`);
-        }
+      // 미디어 업무유형 세부유형 검증
+      if (workTypeVal === "미디어") {
+        const MEDIA_SUBS = ["자막작업", "더빙"];
+        if (subTypeVal && !MEDIA_SUBS.includes(subTypeVal))
+          errors.push(`미디어 세부유형은 '자막작업' 또는 '더빙'만 허용됩니다 (입력값: "${subTypeVal}")`);
       }
 
       parsed.push({
@@ -450,14 +397,6 @@ router.post("/admin/translators/upload-excel", ...adminGuard, excelUpload.single
         residentNumber: cell("residentNumber"), bankName: cell("bankName"),
         bankAccount: cell("bankAccount"), accountHolder: cell("accountHolder"),
         workType: workTypeVal, subType: subTypeVal,
-        sourceLang: sourceLangV, targetLang: targetLangV,
-        unit: unitVal || (rateVal ? "eojeol" : ""),
-        rate: rateVal, currency: currencyVal || (rateVal ? "KRW" : ""),
-        vatIncluded: vatVal,
-        minPrice: minPriceVal, baseHours: baseHoursVal,
-        overtimeRate: overtimeVal,
-        isDefault: isDefaultVal, rateActive: rateActiveV,
-        rateMemo: rateMemoVal,
         error: errors.join("; "),
       });
     }
@@ -491,10 +430,7 @@ router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) =>
     education?: string; major?: string; rating?: string;
     availabilityStatus?: string; bio?: string;
     residentNumber?: string; bankName?: string; bankAccount?: string; accountHolder?: string;
-    workType?: string; subType?: string; sourceLang?: string; targetLang?: string;
-    unit?: string; rate?: string; currency?: string; vatIncluded?: string;
-    minPrice?: string; baseHours?: string; overtimeRate?: string;
-    isDefault?: string; rateActive?: string; rateMemo?: string;
+    workType?: string; subType?: string;
   };
   const { rows } = req.body as { rows: BulkRow[] };
   if (!Array.isArray(rows) || rows.length === 0) {
@@ -533,13 +469,10 @@ router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) =>
 
       // ── 프로필 구성 ──────────────────────────────────────────────────────
       const bioText = [row.career?.trim(), row.bio?.trim()].filter(Boolean).join(" | ") || null;
-      // 언어쌍: 출발언어-도착언어 형식으로 저장
-      const langPairs = (row.sourceLang?.trim() && row.targetLang?.trim())
-        ? `${row.sourceLang.trim()}-${row.targetLang.trim()}` : null;
       await db.insert(translatorProfilesTable).values({
         userId: newUser.id,
         phone: row.phone?.trim() || null,
-        languagePairs: langPairs,
+        languagePairs: null,
         region: row.region?.trim() || null,
         grade: row.grade?.trim() || null,
         specializations: row.specializations?.trim() || null,
@@ -570,44 +503,20 @@ router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) =>
         });
       }
 
-      // ── 단가 등록 (업무유형 + 단가 모두 있을 때만) ─────────────────────
+      // ── 업무유형 등록 (업무유형 있으면 placeholder 레코드 생성) ──────────
+      // rate=0, isActive=false 로 저장 → 2차에서 실제 단가 설정 예정
       const workTypeVal = row.workType?.trim();
-      const rateVal = row.rate?.trim();
-      if (workTypeVal && rateVal && !isNaN(Number(rateVal))) {
-        const rSub  = row.subType?.trim()    || null;
-        const rLang = row.sourceLang?.trim() || null;
-        const rLp   = row.targetLang?.trim() || null;
-        const rUnit = row.unit?.trim()        || "eojeol";
-        const willBeDefault = yesNo(row.isDefault, false);  // 기본값 false
-        // 기본단가 설정 시 동일 서비스조건(serviceType+subType+언어쌍, unit 무관)의 기존 기본단가 자동 해제
-        if (willBeDefault) {
-          await db.update(translatorRatesTable)
-            .set({ isDefault: false, updatedAt: new Date() })
-            .where(and(
-              eq(translatorRatesTable.translatorId, newUser.id),
-              eq(translatorRatesTable.serviceType, workTypeVal),
-              eq(translatorRatesTable.isDefault, true),
-              rSub  ? eq(translatorRatesTable.subType,      rSub)  : sql`${translatorRatesTable.subType} IS NULL`,
-              rLang ? eq(translatorRatesTable.language,     rLang) : sql`${translatorRatesTable.language} IS NULL`,
-              rLp   ? eq(translatorRatesTable.languagePair, rLp)   : sql`${translatorRatesTable.languagePair} IS NULL`,
-            ));
-        }
+      if (workTypeVal) {
         await db.insert(translatorRatesTable).values({
           translatorId: newUser.id,
           serviceType: workTypeVal,
-          subType: rSub,
-          language: rLang,
-          languagePair: rLp,
-          unit: rUnit,
-          rate: Number(rateVal),
-          currency: (row.currency?.trim() || "KRW") as string,    // 기본값 KRW
-          vatIncluded: yesNo(row.vatIncluded, false),              // 기본값 false
-          isDefault: willBeDefault,                                 // 기본값 false
-          isActive: yesNo(row.rateActive, true),                   // 기본값 true
-          minPrice: row.minPrice?.trim() && !isNaN(Number(row.minPrice)) ? Number(row.minPrice) : null,
-          baseHours: row.baseHours?.trim() && !isNaN(Number(row.baseHours)) ? Number(row.baseHours) : null,
-          overtimeRate: row.overtimeRate?.trim() && !isNaN(Number(row.overtimeRate)) ? Number(row.overtimeRate) : null,
-          memo: row.rateMemo?.trim() || null,
+          subType: row.subType?.trim() || null,
+          unit: "word",
+          rate: 0,
+          currency: "KRW",
+          isActive: false,
+          isDefault: false,
+          memo: "단가 미설정 (1차 등록)",
         });
       }
 

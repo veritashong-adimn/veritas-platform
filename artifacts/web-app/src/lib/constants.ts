@@ -187,9 +187,11 @@ export type TranslatorListItem = {
   specializations: string | null; phone: string | null;
   region: string | null; grade: string | null;
   rating: number | null; availabilityStatus: string | null;
-  bio: string | null; ratePerWord: number | null; ratePerPage: number | null;
+  bio: string | null;
   resumeUrl: string | null; portfolioUrl: string | null;
   education: string | null; major: string | null;
+  workTypes: string[]; subTypes: string[];
+  residentNumber: string | null;
 };
 export type ContactDetail = {
   id: number; companyId: number; companyName: string | null; divisionId: number | null; divisionName: string | null;

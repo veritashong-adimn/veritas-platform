@@ -69,10 +69,7 @@ type ExcelRow = {
   specializations: string; career: string; status: string;
   education: string; major: string; rating: string; availabilityStatus: string; bio: string;
   residentNumber: string; bankName: string; bankAccount: string; accountHolder: string;
-  workType: string; subType: string; sourceLang: string; targetLang: string;
-  unit: string; rate: string; currency: string; vatIncluded: string;
-  minPrice: string; baseHours: string; overtimeRate: string;
-  isDefault: string; rateActive: string; rateMemo: string;
+  workType: string; subType: string;
   error: string;
 };
 /**
@@ -820,93 +817,97 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               </label>
             )}
             {/* 파싱 결과 */}
-            {excelPreview && !excelBulkResult && (
-              <>
-                <div style={{ display: "flex", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
-                  <div style={{ background: "#ecfdf5", borderRadius: 8, padding: "8px 16px", fontSize: 13, color: "#065f46", fontWeight: 600 }}>
-                    ✅ 정상 {excelPreview.valid.length}행
-                  </div>
-                  <div style={{ background: excelPreview.invalid.length > 0 ? "#fef2f2" : "#f3f4f6", borderRadius: 8, padding: "8px 16px", fontSize: 13, color: excelPreview.invalid.length > 0 ? "#991b1b" : "#6b7280", fontWeight: 600 }}>
-                    ⚠️ 오류 {excelPreview.invalid.length}행
-                  </div>
-                  <div style={{ background: "#eff6ff", borderRadius: 8, padding: "8px 16px", fontSize: 13, color: "#1d4ed8", fontWeight: 600 }}>
-                    전체 {excelPreview.totalRows}행
-                  </div>
-                </div>
-                {/* 정상 행 미리보기 */}
-                {excelPreview.valid.length > 0 && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, color: "#374151" }}>등록 예정 목록</div>
-                    <div style={{ overflowX: "auto", maxHeight: 260, border: "1px solid #e5e7eb", borderRadius: 8 }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                        <thead style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
-                          <tr>{["행","이름","이메일","휴대폰","언어쌍","지역","등급","전문분야","업무유형","단가단위","단가","통화","기본단가여부"].map(h => (
-                            <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#374151", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" }}>{h}</th>
-                          ))}</tr>
-                        </thead>
-                        <tbody>
-                          {excelPreview.valid.map(r => (
-                            <tr key={r.row} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                              <td style={{ padding: "5px 10px", color: "#9ca3af" }}>{r.row}</td>
-                              <td style={{ padding: "5px 10px", fontWeight: 600 }}>{r.name || "-"}</td>
-                              <td style={{ padding: "5px 10px", color: "#3b82f6" }}>{r.email}</td>
-                              <td style={{ padding: "5px 10px" }}>{r.phone || "-"}</td>
-                              <td style={{ padding: "5px 10px" }}>
-                                {r.sourceLang && r.targetLang ? `${r.sourceLang}→${r.targetLang}` : r.sourceLang || r.targetLang || "-"}
-                              </td>
-                              <td style={{ padding: "5px 10px" }}>{r.region || "-"}</td>
-                              <td style={{ padding: "5px 10px" }}>{r.grade || "-"}</td>
-                              <td style={{ padding: "5px 10px", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.specializations || "-"}</td>
-                              <td style={{ padding: "5px 10px", color: r.workType ? "#7c3aed" : "#9ca3af" }}>{r.workType || "-"}</td>
-                              <td style={{ padding: "5px 10px" }}>{r.unit || "-"}</td>
-                              <td style={{ padding: "5px 10px", fontWeight: r.rate ? 600 : 400, color: r.rate ? "#059669" : "#9ca3af" }}>{r.rate || "-"}</td>
-                              <td style={{ padding: "5px 10px" }}>{r.currency || (r.rate ? "KRW" : "-")}</td>
-                              <td style={{ padding: "5px 10px", textAlign: "center" }}>
-                                {r.isDefault ? <span style={{ background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 6px", fontSize: 11 }}>{r.isDefault}</span> : "-"}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+            {excelPreview && !excelBulkResult && (() => {
+                const duplicates = excelPreview.invalid.filter(r => r.error.includes("이미 등록된"));
+                const needsReview = excelPreview.invalid.filter(r => !r.error.includes("이미 등록된"));
+                return (
+                <>
+                  {/* 요약 배지 */}
+                  <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+                    <div style={{ background: "#ecfdf5", borderRadius: 8, padding: "8px 16px", fontSize: 13, color: "#065f46", fontWeight: 600 }}>
+                      ✅ 신규등록 {excelPreview.valid.length}명
+                    </div>
+                    {duplicates.length > 0 && (
+                      <div style={{ background: "#fef9c3", borderRadius: 8, padding: "8px 16px", fontSize: 13, color: "#92400e", fontWeight: 600 }}>
+                        ⚠️ 중복가능성 {duplicates.length}명
+                      </div>
+                    )}
+                    {needsReview.length > 0 && (
+                      <div style={{ background: "#fef2f2", borderRadius: 8, padding: "8px 16px", fontSize: 13, color: "#991b1b", fontWeight: 600 }}>
+                        🔍 검토필요 {needsReview.length}명
+                      </div>
+                    )}
+                    <div style={{ background: "#eff6ff", borderRadius: 8, padding: "8px 16px", fontSize: 13, color: "#1d4ed8", fontWeight: 600 }}>
+                      전체 {excelPreview.totalRows}행
                     </div>
                   </div>
-                )}
-                {/* 오류 행 */}
-                {excelPreview.invalid.length > 0 && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, color: "#991b1b" }}>오류 행 (등록 제외)</div>
-                    <div style={{ overflowX: "auto", maxHeight: 160, border: "1px solid #fecaca", borderRadius: 8, background: "#fef2f2" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                        <thead>
-                          <tr>{["행","이메일","오류 사유"].map(h => (
-                            <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#991b1b", borderBottom: "1px solid #fecaca", whiteSpace: "nowrap" }}>{h}</th>
-                          ))}</tr>
-                        </thead>
-                        <tbody>
-                          {excelPreview.invalid.map(r => (
-                            <tr key={r.row} style={{ borderBottom: "1px solid #fecaca" }}>
-                              <td style={{ padding: "5px 10px", color: "#9ca3af" }}>{r.row}</td>
-                              <td style={{ padding: "5px 10px" }}>{r.email}</td>
-                              <td style={{ padding: "5px 10px", color: "#dc2626" }}>{r.error}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                  {/* 신규등록 목록 */}
+                  {excelPreview.valid.length > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, color: "#374151" }}>신규등록 예정 목록</div>
+                      <div style={{ overflowX: "auto", maxHeight: 260, border: "1px solid #e5e7eb", borderRadius: 8 }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                          <thead style={{ background: "#f9fafb", position: "sticky", top: 0 }}>
+                            <tr>{["행","이름","이메일","휴대폰","지역","등급","전문분야","업무유형","세부유형"].map(h => (
+                              <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#374151", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap" }}>{h}</th>
+                            ))}</tr>
+                          </thead>
+                          <tbody>
+                            {excelPreview.valid.map(r => (
+                              <tr key={r.row} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                                <td style={{ padding: "5px 10px", color: "#9ca3af" }}>{r.row}</td>
+                                <td style={{ padding: "5px 10px", fontWeight: 600 }}>{r.name || "-"}</td>
+                                <td style={{ padding: "5px 10px", color: "#3b82f6" }}>{r.email}</td>
+                                <td style={{ padding: "5px 10px" }}>{r.phone || "-"}</td>
+                                <td style={{ padding: "5px 10px" }}>{r.region || "-"}</td>
+                                <td style={{ padding: "5px 10px" }}>{r.grade || "-"}</td>
+                                <td style={{ padding: "5px 10px", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.specializations || "-"}</td>
+                                <td style={{ padding: "5px 10px", color: r.workType ? "#7c3aed" : "#9ca3af" }}>{r.workType || "-"}</td>
+                                <td style={{ padding: "5px 10px" }}>{r.subType || "-"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
+                  )}
+                  {/* 중복/검토필요 행 */}
+                  {excelPreview.invalid.length > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, color: "#991b1b" }}>등록 제외 목록</div>
+                      <div style={{ overflowX: "auto", maxHeight: 160, border: "1px solid #fecaca", borderRadius: 8, background: "#fef2f2" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                          <thead>
+                            <tr>{["행","이메일","사유"].map(h => (
+                              <th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#991b1b", borderBottom: "1px solid #fecaca", whiteSpace: "nowrap" }}>{h}</th>
+                            ))}</tr>
+                          </thead>
+                          <tbody>
+                            {excelPreview.invalid.map(r => (
+                              <tr key={r.row} style={{ borderBottom: "1px solid #fecaca" }}>
+                                <td style={{ padding: "5px 10px", color: "#9ca3af" }}>{r.row}</td>
+                                <td style={{ padding: "5px 10px" }}>{r.email}</td>
+                                <td style={{ padding: "5px 10px", color: r.error.includes("이미 등록된") ? "#92400e" : "#dc2626" }}>{r.error}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                    <button onClick={() => { setExcelPreview(null); }}
+                      style={{ padding: "8px 18px", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", fontSize: 13, cursor: "pointer" }}>
+                      다시 선택
+                    </button>
+                    <PrimaryBtn onClick={handleBulkCreate} disabled={excelBulkLoading || excelPreview.valid.length === 0}
+                      style={{ padding: "8px 20px", fontSize: 13 }}>
+                      {excelBulkLoading ? "등록 중..." : `${excelPreview.valid.length}명 일괄 등록`}
+                    </PrimaryBtn>
                   </div>
-                )}
-                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                  <button onClick={() => { setExcelPreview(null); }}
-                    style={{ padding: "8px 18px", borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", fontSize: 13, cursor: "pointer" }}>
-                    다시 선택
-                  </button>
-                  <PrimaryBtn onClick={handleBulkCreate} disabled={excelBulkLoading || excelPreview.valid.length === 0}
-                    style={{ padding: "8px 20px", fontSize: 13 }}>
-                    {excelBulkLoading ? "등록 중..." : `${excelPreview.valid.length}명 일괄 등록`}
-                  </PrimaryBtn>
-                </div>
-              </>
-            )}
+                </>
+                );
+              })()}
             {/* 등록 결과 */}
             {excelBulkResult && (
               <div>
@@ -2131,24 +2132,28 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", minWidth: 960 }}>
                   <colgroup>
-                    <col style={{ width: "17%" }} />
-                    <col style={{ width: "11%" }} />
-                    <col style={{ width: "18%" }} />
-                    <col style={{ width: "15%" }} />
-                    <col style={{ width: "7%" }} />
+                    <col style={{ width: "14%" }} />
+                    <col style={{ width: "9%" }} />
+                    <col style={{ width: "13%" }} />
                     <col style={{ width: "10%" }} />
-                    <col style={{ width: "7%" }} />
+                    <col style={{ width: "10%" }} />
+                    <col style={{ width: "12%" }} />
+                    <col style={{ width: "5%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "6%" }} />
                     <col style={{ width: "7%" }} />
                     <col style={{ width: "5%" }} />
-                    <col style={{ width: "8%" }} />
+                    <col style={{ width: "7%" }} />
                   </colgroup>
                   <thead>
                     <tr>
-                      {([ ["이름","left"],["언어쌍","left"],["학력","left"],["전문분야","left"],
-                          ["등급","center"],["대표 단가","center"],["평점","center"],
-                          ["지역","center"],["상태","center"],["등록일","center"],
+                      {([
+                        ["이름","left"], ["언어쌍","left"], ["전문분야","left"],
+                        ["업무유형","left"], ["세부유형","left"], ["상세정보","left"],
+                        ["등급","center"], ["주민번호","center"], ["평점","center"],
+                        ["지역","center"], ["상태","center"], ["등록일","center"],
                       ] as [string, React.CSSProperties["textAlign"]][]).map(([h, align]) => (
                         <th key={h} style={{ ...tableTh, textAlign: align }}>{h}</th>
                       ))}
@@ -2186,16 +2191,36 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               </div>
                             ) : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
-                          {/* 학력 — 최대 2줄 말줄임 */}
-                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
-                            {t.education
-                              ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden", whiteSpace: "normal" }}>{t.education}</span>
-                              : <span style={{ color: "#d1d5db" }}>-</span>}
-                          </td>
                           {/* 전문분야 */}
                           <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
                             {t.specializations
                               ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden", whiteSpace: "normal" }}>{t.specializations}</span>
+                              : <span style={{ color: "#d1d5db" }}>-</span>}
+                          </td>
+                          {/* 업무유형 */}
+                          <td style={{ ...tableTd, fontSize: 12 }}>
+                            {(t.workTypes ?? []).length > 0
+                              ? <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                                  {(t.workTypes ?? []).map((w, i) => (
+                                    <span key={i} style={{ background: "#f3e8ff", color: "#7c3aed", borderRadius: 4, padding: "1px 5px", fontSize: 11, whiteSpace: "nowrap" }}>{w}</span>
+                                  ))}
+                                </div>
+                              : <span style={{ color: "#d1d5db" }}>-</span>}
+                          </td>
+                          {/* 세부유형 */}
+                          <td style={{ ...tableTd, fontSize: 12 }}>
+                            {(t.subTypes ?? []).length > 0
+                              ? <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
+                                  {(t.subTypes ?? []).map((s, i) => (
+                                    <span key={i} style={{ background: "#f0fdf4", color: "#065f46", borderRadius: 4, padding: "1px 5px", fontSize: 11, whiteSpace: "nowrap" }}>{s}</span>
+                                  ))}
+                                </div>
+                              : <span style={{ color: "#d1d5db" }}>-</span>}
+                          </td>
+                          {/* 상세정보 */}
+                          <td style={{ ...tableTd, fontSize: 11, color: "#6b7280" }}>
+                            {t.bio
+                              ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden", whiteSpace: "normal" }}>{t.bio}</span>
                               : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
                           {/* 등급 */}
@@ -2204,11 +2229,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               ? <span style={{ padding: "2px 9px", borderRadius: 10, background: gc.bg, color: gc.color, fontSize: 11, fontWeight: 800 }}>{t.grade}</span>
                               : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
-                          {/* 대표 단가 */}
-                          <td style={{ ...tableTd, fontSize: 12, textAlign: "center", whiteSpace: "nowrap" }}>
-                            {t.repRate != null
-                              ? <span style={{ fontWeight: 700, color: "#059669" }}>{Number(t.repRate).toLocaleString()}원<span style={{ fontWeight: 400, color: "#9ca3af" }}>/{t.repUnit ? getRateUnitLabel(t.repUnit) : "-"}</span></span>
-                              : <span style={{ color: "#d1d5db" }}>미설정</span>}
+                          {/* 주민번호 (서버사이드 마스킹) */}
+                          <td style={{ ...tableTd, fontSize: 11, textAlign: "center", whiteSpace: "nowrap", fontFamily: "monospace", color: t.residentNumber ? "#374151" : "#d1d5db" }}>
+                            {t.residentNumber ?? "-"}
                           </td>
                           {/* 평점 */}
                           <td style={{ ...tableTd, textAlign: "center" }}>
