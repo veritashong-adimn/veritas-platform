@@ -1575,7 +1575,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           </div>
                           {/* 언어 + 전문분야 + 점수 */}
                           <div style={{ fontSize: 11, color: "#6b7280" }}>
-                            {c.profile?.languagePairs ?? "언어쌍 미설정"}
+                            {c.profile?.languagePairs ?? "가능언어 미설정"}
                             {c.profile?.specializations && ` · ${c.profile.specializations}`}
                             {c.profile?.rating != null && <span style={{ color: "#d97706", marginLeft: 6 }}>⭐ {c.profile.rating.toFixed(1)}</span>}
                             <span style={{ color: "#9ca3af", marginLeft: 6 }}>점수 {c.score.toFixed(1)}</span>
@@ -1660,7 +1660,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 </div>
                                 {/* 언어 + 전문분야 + 평점 */}
                                 <div style={{ fontSize: 11, color: "#6b7280" }}>
-                                  {t.languagePairs ?? "언어쌍 미설정"}
+                                  {t.languagePairs ?? "가능언어 미설정"}
                                   {t.specializations && ` · ${t.specializations}`}
                                   {t.rating != null && <span style={{ color: "#d97706", marginLeft: 6 }}>⭐ {Number(t.rating).toFixed(1)}</span>}
                                 </div>
@@ -2132,7 +2132,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       </div>
                       {t.translatorProfile && (
                         <div style={{ padding: "10px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 20px" }}>
-                          <div style={dl}><span style={dt}>언어쌍</span><span>{t.translatorProfile.languagePairs ?? "-"}</span></div>
+                          <div style={dl}><span style={dt}>가능언어</span><span>{t.translatorProfile.languagePairs ?? "-"}</span></div>
                           <div style={dl}><span style={dt}>전문분야</span><span>{t.translatorProfile.specializations ?? "-"}</span></div>
                           {t.translatorProfile.rating != null && (
                             <div style={dl}><span style={dt}>평점</span><span style={{ color: "#d97706", fontWeight: 600 }}>⭐ {t.translatorProfile.rating.toFixed(1)}</span></div>

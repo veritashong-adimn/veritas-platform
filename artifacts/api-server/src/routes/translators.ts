@@ -7,10 +7,11 @@ import {
   db, usersTable, translatorProfilesTable, translatorRatesTable,
   translatorProductsTable, productsTable, translatorSensitiveTable,
   tasksTable, settlementsTable, logsTable, translatorEmailsTable,
-  notesTable, invitationsTable,
+  notesTable, invitationsTable, companiesTable,
 } from "@workspace/db";
-import { eq, and, ilike, or, sql, desc, gte, lte, inArray } from "drizzle-orm";
+import { eq, and, ilike, or, sql, desc, gte, lte, inArray, isNotNull } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
+import { getPermissionsForRole } from "../lib/rbac";
 import { encrypt, decrypt, maskResidentNumber } from "../lib/encrypt";
 import {
   uploadResumeToGCS, deleteResumeFromGCS, getResumeDownloadUrl, isAllowedMime,
@@ -67,6 +68,13 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         graduationYear: translatorProfilesTable.graduationYear,
         resumeUrl: translatorProfilesTable.resumeUrl,
         portfolioUrl: translatorProfilesTable.portfolioUrl,
+        affiliatedCompanyId: translatorProfilesTable.affiliatedCompanyId,
+        settlementType: translatorProfilesTable.settlementType,
+        affiliatedCompanyName: sql<string | null>`(SELECT c.name FROM companies c WHERE c.id = ${translatorProfilesTable.affiliatedCompanyId})`,
+        profileWorkTypes: translatorProfilesTable.profileWorkTypes,
+        profileSubTypes: translatorProfilesTable.profileSubTypes,
+        operationalStatus: translatorProfilesTable.operationalStatus,
+        reassignmentAllowed: translatorProfilesTable.reassignmentAllowed,
       })
       .from(usersTable)
       .leftJoin(translatorProfilesTable, eq(translatorProfilesTable.userId, usersTable.id))
@@ -134,6 +142,8 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       ...r,
       workTypes: serviceMap[r.id]?.workTypes ?? [],
       subTypes: serviceMap[r.id]?.subTypes ?? [],
+      profileWorkTypes: r.profileWorkTypes ?? null,
+      profileSubTypes: r.profileSubTypes ?? null,
       residentNumber: sensitiveMap[r.id] ?? null,
     }));
 
@@ -166,10 +176,13 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
     if (grade?.trim()) {
       result = result.filter(t => t.grade === grade.trim());
     }
-    // 업무유형 필터: serviceMap에서 해당 업무유형 보유 여부 확인
+    // 업무유형 필터: 프로필 업무유형 또는 단가 기반 업무유형 포함 여부 확인
     if (svc?.trim()) {
       const svcTrim = svc.trim();
-      result = result.filter(t => t.workTypes.includes(svcTrim));
+      result = result.filter(t =>
+        t.workTypes.includes(svcTrim) ||
+        (t.profileWorkTypes ?? "").split(",").map(s => s.trim()).filter(Boolean).includes(svcTrim)
+      );
     }
 
     res.json(result);
@@ -187,6 +200,7 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
     education, major, graduationYear, rating,
     grade, bio, ratePerWord, ratePerPage, unitType, unitPrice,
     resumeUrl, portfolioUrl, availabilityStatus,
+    affiliatedCompanyId, settlementType,
   } = req.body;
 
   if (!email?.trim()) { res.status(400).json({ error: "이메일은 필수입니다." }); return; }
@@ -217,6 +231,9 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
       unitPrice: unitPrice ? Number(unitPrice) : null,
       resumeUrl: resumeUrl?.trim() || null, portfolioUrl: portfolioUrl?.trim() || null,
       availabilityStatus: availabilityStatus ?? "available",
+      affiliatedCompanyId: (affiliatedCompanyId != null && Number(affiliatedCompanyId) > 0)
+        ? Number(affiliatedCompanyId) : null,
+      settlementType: settlementType?.trim() || null,
     }).returning();
 
     // 대표 이메일을 translator_emails에 시딩
@@ -259,44 +276,52 @@ const excelUpload = multer({
 
 // ─── 샘플 엑셀 다운로드 ─────────────────────────────────────────────────────
 router.get("/admin/translators/sample-excel", ...adminGuard, (_req, res) => {
-  // ■ 1차 마스터 등록용 컬럼 구조 (기본정보 17 + 업무유형/세부유형 2 = 19열)
-  // 단가 관련 컬럼은 2차 고도화 단계에서 추가 예정
+  // ■ 최신 표준 컬럼 순서 (21열)
   const headers = [
     "이름", "이메일", "휴대폰",
-    "지역", "등급", "전문분야", "경력", "상태",
-    "학력", "전공", "평점", "가용상태", "상세정보",
-    "주민번호", "은행명", "계좌번호", "예금주",
+    "주민번호", "상세정보", "가능언어",
+    "학력", "전공", "졸업년도",
     "업무유형", "세부유형",
+    "전문분야", "경력", "평점", "상태", "가용상태",
+    "지역", "등급",
+    "은행명", "계좌번호", "예금주",
   ];
 
   const row1 = [
     "홍길동", "hong@example.com", "010-1234-5678",
-    "서울", "A", "법률,금융", "번역 경력 10년", "Y",
-    "서울대학교", "영어영문학", "4.5", "available", "",
-    "", "국민은행", "", "홍길동",
+    "", "", "한국어, 영어",
+    "서울대학교", "영어영문학", "2005",
     "번역", "일반번역",
+    "법률, 금융", "번역 경력 10년", "4.5", "Y", "available",
+    "서울", "A",
+    "국민은행", "", "홍길동",
   ];
   const row2 = [
     "김영희", "kim@example.com", "010-9876-5432",
-    "부산", "B", "의료,제약", "동시통역사 5년", "Y",
-    "연세대학교", "영어통번역학", "4.0", "available", "",
-    "", "", "", "",
+    "", "", "영어, 한국어, 일본어",
+    "연세대학교", "영어통번역학", "2003",
     "통역", "동시통역",
+    "의료, 제약", "동시통역사 5년", "4.0", "Y", "available",
+    "부산", "B",
+    "", "", "",
   ];
   const row3 = [
     "박철수", "park@example.com", "010-5555-1234",
-    "대구", "C", "영상번역", "자막 경력 5년", "Y",
-    "", "", "", "available", "",
-    "", "", "", "",
+    "", "", "한국어, 영어, 일본어",
+    "", "", "",
     "미디어", "자막작업",
+    "영상번역", "자막 경력 5년", "", "Y", "available",
+    "대구", "C",
+    "", "", "",
   ];
-  // 예시 4: 업무유형 없는 통번역사
   const row4 = [
     "이영수", "lee@example.com", "010-7777-8888",
-    "광주", "B", "IT,기술", "번역 3년", "Y",
-    "", "", "", "available", "",
-    "", "", "", "",
+    "", "", "한국어, 중국어(간체), 중국어(번체)",
+    "", "", "",
     "", "",
+    "IT, 기술", "번역 3년", "", "Y", "available",
+    "광주", "B",
+    "", "", "",
   ];
 
   const wb = XLSX.utils.book_new();
@@ -318,16 +343,18 @@ const EXCEL_COL_MAP: Record<string, string> = {
   "휴대폰": "phone", "전화번호": "phone",
   "지역": "region", "등급": "grade", "전문분야": "specializations",
   "경력": "career", "상태": "status",
-  "학력": "education", "전공": "major",
+  "학력": "education", "전공": "major", "졸업년도": "graduationYear",
   "평점": "rating", "가용상태": "availabilityStatus",
   "상세정보": "bio",
   "주민번호": "residentNumber", "은행명": "bankName",
   "계좌번호": "bankAccount", "예금주": "accountHolder",
-  // 단가정보
+  // 가능언어 (신규 표준) + 하위 호환
+  "가능언어": "languages", "언어": "languages",
+  // 업무유형/세부유형
   "업무유형": "workType", "세부유형": "subType",
+  // 구형 단가 컬럼 — 현재 import에서 무시되나 파싱 오류 방지용으로 유지
   "출발언어": "sourceLang", "도착언어": "targetLang",
-  "단가단위": "unit",
-  "단가": "rate", "기본단가": "rate",          // 하위 호환: 기존 "기본단가" → rate
+  "단가단위": "unit", "단가": "rate", "기본단가": "rate",
   "통화": "currency",
   "VAT포함여부": "vatIncluded", "VAT포함(Y/N)": "vatIncluded",
   "최소금액": "minPrice", "기본시간": "baseHours",
@@ -350,71 +377,166 @@ router.post("/admin/translators/upload-excel", ...adminGuard, excelUpload.single
     const headerRow = rows[0].map(h => String(h ?? "").trim());
     headerRow.forEach((h, i) => { if (EXCEL_COL_MAP[h]) colMap[EXCEL_COL_MAP[h]] = i; });
 
-    if (colMap["email"] == null) {
-      res.status(400).json({ error: "엑셀에 '이메일' 열이 없습니다." }); return;
+    if (colMap["name"] == null && colMap["email"] == null && colMap["phone"] == null) {
+      res.status(400).json({ error: "이름/이메일/휴대폰 열을 찾을 수 없습니다. 샘플 형식을 확인하세요." }); return;
+    }
+
+    const normalizePhone = (v: string) => v.replace(/[^0-9]/g, "");
+    const normalizeSSN   = (v: string) => v.replace(/[^0-9]/g, "");
+
+    // ── 주민번호 표시 권한 확인 (서버사이드 마스킹) ─────────────────────────
+    const isSuperAdmin = req.user!.role === "admin" && !req.user!.roleId;
+    let canSeeSensitive = isSuperAdmin;
+    if (!canSeeSensitive && req.user!.roleId) {
+      const perms = await getPermissionsForRole(req.user!.roleId);
+      canSeeSensitive = perms.has("translator.sensitive");
     }
 
     type ParsedRow = {
-      row: number; email: string; name: string; phone: string;
+      rowNum: number; email: string; name: string; phone: string;
       region: string; grade: string;
       specializations: string; career: string; status: string;
-      education: string; major: string; rating: string; availabilityStatus: string; bio: string;
+      education: string; major: string; graduationYear: string;
+      rating: string; availabilityStatus: string; bio: string;
       residentNumber: string; bankName: string; bankAccount: string; accountHolder: string;
-      workType: string; subType: string;
-      error: string;
+      workType: string; subType: string; languages: string;
+      rowStatus: "ok" | "duplicate" | "review" | "error";
+      validationErrors: string[];
+      reviewWarnings: string[];
+      duplicateReasons: string[];
     };
     const parsed: ParsedRow[] = [];
 
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
       const cell = (key: string) => String(r[colMap[key] ?? -1] ?? "").trim();
+      const name  = cell("name");
       const email = cell("email");
-      if (!email) continue;
-      const errors: string[] = [];
+      const phone = cell("phone");
+      if (!name && !email && !phone) continue; // 빈 행 스킵
 
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("이메일 형식 오류");
+      const validationErrors: string[] = [];
+      const reviewWarnings:   string[] = [];
+
+      // 1. 이름 필수
+      if (!name) validationErrors.push("이름 필수");
+      // 2. 이메일 또는 휴대폰 중 하나 필수
+      if (!email && !phone) validationErrors.push("이메일 또는 휴대폰 중 하나 필수");
+      // 3. 이메일 형식 검증
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) validationErrors.push("이메일 형식 오류");
+      // 4. 휴대폰 형식 검증 (입력된 경우만)
+      if (phone) {
+        const digits = normalizePhone(phone);
+        if (!/^01[0-9]{8,9}$/.test(digits)) validationErrors.push("휴대폰 형식 오류");
+      }
+      // 5. 주민번호 형식 검증 (입력된 경우만)
+      const residentNumber = cell("residentNumber");
+      if (residentNumber && normalizeSSN(residentNumber).length !== 13) validationErrors.push("주민번호 형식 오류 (13자리)");
+      // 평점 숫자 여부
       const ratingVal = cell("rating");
-      if (ratingVal && isNaN(Number(ratingVal))) errors.push("평점은 숫자여야 합니다");
+      if (ratingVal && isNaN(Number(ratingVal))) validationErrors.push("평점은 숫자여야 합니다");
 
       const workTypeVal = cell("workType");
       const subTypeVal  = cell("subType");
+      const languagesRaw = cell("languages");
+      const languagesVal = languagesRaw
+        ? languagesRaw.split(",").map(l => l.trim()).filter(Boolean).join(", ")
+        : "";
 
-      // 미디어 업무유형 세부유형 검증
+      // 미디어 세부유형 검증
       if (workTypeVal === "미디어") {
         const MEDIA_SUBS = ["자막작업", "더빙"];
         if (subTypeVal && !MEDIA_SUBS.includes(subTypeVal))
-          errors.push(`미디어 세부유형은 '자막작업' 또는 '더빙'만 허용됩니다 (입력값: "${subTypeVal}")`);
+          validationErrors.push(`미디어 세부유형은 '자막작업' 또는 '더빙'만 허용됩니다 (입력: "${subTypeVal}")`);
       }
 
+      // 6. 가능언어 확인 (검토필요)
+      if (!languagesVal) reviewWarnings.push("가능언어 미입력");
+      // 7. 업무유형 확인 (검토필요)
+      if (!workTypeVal) reviewWarnings.push("업무유형 미입력");
+
       parsed.push({
-        row: i + 1, email,
-        name: cell("name"), phone: cell("phone"),
+        rowNum: i + 1, email, name, phone,
         region: cell("region"), grade: cell("grade"),
         specializations: cell("specializations"), career: cell("career"),
         status: cell("status"),
-        education: cell("education"), major: cell("major"),
+        education: cell("education"), major: cell("major"), graduationYear: cell("graduationYear"),
         rating: ratingVal, availabilityStatus: cell("availabilityStatus"), bio: cell("bio"),
-        residentNumber: cell("residentNumber"), bankName: cell("bankName"),
+        residentNumber: residentNumber
+          ? (canSeeSensitive ? residentNumber : maskResidentNumber(normalizeSSN(residentNumber).padEnd(13, "0")))
+          : "",
+        bankName: cell("bankName"),
         bankAccount: cell("bankAccount"), accountHolder: cell("accountHolder"),
-        workType: workTypeVal, subType: subTypeVal,
-        error: errors.join("; "),
+        workType: workTypeVal, subType: subTypeVal, languages: languagesVal,
+        rowStatus: validationErrors.length > 0 ? "error" : reviewWarnings.length > 0 ? "review" : "ok",
+        validationErrors,
+        reviewWarnings,
+        duplicateReasons: [],
       });
     }
 
-    const valid = parsed.filter(p => !p.error);
-    const invalid = parsed.filter(p => p.error);
+    // ── 중복 검사 (오류 행 제외) ──────────────────────────────────────────────
+    const checkableRows = parsed.filter(p => p.rowStatus !== "error");
 
-    // 이메일 중복 검사 (DB)
-    const emails = valid.map(p => p.email.toLowerCase());
-    const existingUsers = emails.length > 0
-      ? await db.select({ email: usersTable.email }).from(usersTable).where(inArray(usersTable.email, emails))
+    // 1. 이메일 중복 (usersTable)
+    const emailsToCheck = [...new Set(checkableRows.filter(p => p.email).map(p => p.email.toLowerCase()))];
+    const existingEmails = emailsToCheck.length > 0
+      ? await db.select({ email: usersTable.email }).from(usersTable).where(inArray(usersTable.email, emailsToCheck))
       : [];
-    const existingSet = new Set(existingUsers.map(u => u.email));
-    const duplicateRows = valid.filter(p => existingSet.has(p.email.toLowerCase()));
-    duplicateRows.forEach(p => { (p as ParsedRow).error = "이미 등록된 이메일"; invalid.push(p); });
-    const finalValid = valid.filter(p => !existingSet.has(p.email.toLowerCase()));
+    const existingEmailSet = new Set(existingEmails.map(u => u.email.toLowerCase()));
 
-    res.json({ valid: finalValid, invalid, totalRows: parsed.length });
+    // 2. 휴대폰 중복 (translatorProfilesTable — 전체 조회 후 정규화 비교)
+    const phonesToCheck = checkableRows.filter(p => p.phone).map(p => normalizePhone(p.phone));
+    let existingPhoneSet = new Set<string>();
+    if (phonesToCheck.length > 0) {
+      const allPhones = await db
+        .select({ phone: translatorProfilesTable.phone })
+        .from(translatorProfilesTable)
+        .where(isNotNull(translatorProfilesTable.phone));
+      existingPhoneSet = new Set(allPhones.map(p => normalizePhone(p.phone ?? "")).filter(Boolean));
+    }
+
+    // 3. 주민번호 중복 (translatorSensitiveTable — 복호화 비교)
+    const rowsWithSSN = checkableRows.filter(p => p.residentNumber);
+    let existingSSNSet = new Set<string>();
+    if (rowsWithSSN.length > 0) {
+      const allSensitive = await db
+        .select({ residentNumber: translatorSensitiveTable.residentNumber })
+        .from(translatorSensitiveTable)
+        .where(isNotNull(translatorSensitiveTable.residentNumber));
+      for (const s of allSensitive) {
+        if (!s.residentNumber) continue;
+        try {
+          const raw = normalizeSSN(decrypt(s.residentNumber));
+          if (raw.length === 13) existingSSNSet.add(raw);
+        } catch { /* 복호화 실패 무시 */ }
+      }
+    }
+
+    // 중복 상태 적용
+    for (const p of checkableRows) {
+      const dups: string[] = [];
+      if (p.email && existingEmailSet.has(p.email.toLowerCase())) dups.push("이메일 일치");
+      if (p.phone && existingPhoneSet.has(normalizePhone(p.phone)))  dups.push("휴대폰 일치");
+      if (p.residentNumber && existingSSNSet.has(normalizeSSN(p.residentNumber))) dups.push("주민번호 일치");
+      if (dups.length > 0) {
+        p.duplicateReasons = dups;
+        p.rowStatus = "duplicate";
+      }
+    }
+
+    // ── 요약 통계 ──────────────────────────────────────────────────────────────
+    const summary = {
+      total:          parsed.length,
+      ok:             parsed.filter(p => p.rowStatus === "ok").length,
+      duplicate:      parsed.filter(p => p.rowStatus === "duplicate").length,
+      review:         parsed.filter(p => p.rowStatus === "review").length,
+      error:          parsed.filter(p => p.rowStatus === "error").length,
+      missingRequired: parsed.filter(p => p.validationErrors.some(e => e.includes("필수"))).length,
+      formatError:    parsed.filter(p => p.validationErrors.some(e => e.includes("형식") || e.includes("숫자"))).length,
+    };
+
+    res.json({ rows: parsed, summary });
   } catch (err) {
     req.log.error({ err }, "Excel upload parse error");
     res.status(500).json({ error: "엑셀 파싱 중 오류가 발생했습니다." });
@@ -427,10 +549,10 @@ router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) =>
     email: string; name?: string; phone?: string;
     region?: string; grade?: string;
     specializations?: string; career?: string; status?: string;
-    education?: string; major?: string; rating?: string;
+    education?: string; major?: string; graduationYear?: string; rating?: string;
     availabilityStatus?: string; bio?: string;
     residentNumber?: string; bankName?: string; bankAccount?: string; accountHolder?: string;
-    workType?: string; subType?: string;
+    languages?: string; workType?: string; subType?: string;
   };
   const { rows } = req.body as { rows: BulkRow[] };
   if (!Array.isArray(rows) || rows.length === 0) {
@@ -469,15 +591,20 @@ router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) =>
 
       // ── 프로필 구성 ──────────────────────────────────────────────────────
       const bioText = [row.career?.trim(), row.bio?.trim()].filter(Boolean).join(" | ") || null;
+      // 가능언어: 쉼표 구분 trim 후 저장 (languagePairs 필드 재활용)
+      const langVal = row.languages?.trim()
+        ? row.languages.split(",").map(l => l.trim()).filter(Boolean).join(", ")
+        : null;
       await db.insert(translatorProfilesTable).values({
         userId: newUser.id,
         phone: row.phone?.trim() || null,
-        languagePairs: null,
+        languagePairs: langVal,
         region: row.region?.trim() || null,
         grade: row.grade?.trim() || null,
         specializations: row.specializations?.trim() || null,
         education: row.education?.trim() || null,
         major: row.major?.trim() || null,
+        graduationYear: row.graduationYear?.trim() && !isNaN(Number(row.graduationYear)) ? Number(row.graduationYear) : null,
         rating: row.rating?.trim() && !isNaN(Number(row.rating)) ? Number(row.rating) : null,
         availabilityStatus: normalizeAvailability(row.availabilityStatus),
         bio: bioText || null,
@@ -551,6 +678,9 @@ router.get("/admin/translators/:id", ...adminGuard, async (req, res) => {
     if (!user) { res.status(404).json({ error: "번역사를 찾을 수 없습니다." }); return; }
 
     const [profile] = await db.select().from(translatorProfilesTable).where(eq(translatorProfilesTable.userId, userId));
+    const affiliatedCompany = profile?.affiliatedCompanyId
+      ? await db.select({ id: companiesTable.id, name: companiesTable.name }).from(companiesTable).where(eq(companiesTable.id, profile.affiliatedCompanyId)).limit(1)
+      : [];
     const rates = await db.select().from(translatorRatesTable).where(eq(translatorRatesTable.translatorId, userId)).orderBy(desc(translatorRatesTable.createdAt));
 
     const translatorProducts = await db
@@ -586,7 +716,10 @@ router.get("/admin/translators/:id", ...adminGuard, async (req, res) => {
         isActive: user.isActive, inviteToken: user.inviteToken,
         inviteStatus, createdAt: user.createdAt,
       },
-      profile: profile ?? null,
+      profile: profile ? {
+        ...profile,
+        affiliatedCompanyName: affiliatedCompany[0]?.name ?? null,
+      } : null,
       rates,
       translatorProducts,
       emails: emailRows,
@@ -608,6 +741,9 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
     name,
     languagePairs, languageLevel, specializations, education, major,
     graduationYear, phone, region, grade, rating, availabilityStatus, bio,
+    affiliatedCompanyId, settlementType,
+    profileWorkTypes, profileSubTypes,
+    operationalStatus, operationalNote, reassignmentAllowed,
     emails,
   } = req.body;
 
@@ -636,6 +772,15 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
       rating: (rating != null && rating !== "") ? Number(rating) : null,
       availabilityStatus: availabilityStatus ?? "available",
       bio: bio?.trim() || null,
+      affiliatedCompanyId: (affiliatedCompanyId != null && affiliatedCompanyId !== "" && Number(affiliatedCompanyId) > 0)
+        ? Number(affiliatedCompanyId) : null,
+      settlementType: settlementType?.trim() || null,
+      profileWorkTypes: profileWorkTypes !== undefined ? (profileWorkTypes?.trim() || null) : undefined,
+      profileSubTypes: profileSubTypes !== undefined ? (profileSubTypes?.trim() || null) : undefined,
+      operationalStatus: (operationalStatus && ["normal","warning","hold","excluded"].includes(operationalStatus))
+        ? operationalStatus : undefined,
+      operationalNote: operationalNote !== undefined ? (operationalNote?.trim() || null) : undefined,
+      reassignmentAllowed: reassignmentAllowed !== undefined ? Boolean(reassignmentAllowed) : undefined,
       updatedAt: new Date(),
     };
 

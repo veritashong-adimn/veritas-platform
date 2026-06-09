@@ -191,8 +191,35 @@ export type TranslatorListItem = {
   resumeUrl: string | null; portfolioUrl: string | null;
   education: string | null; major: string | null;
   workTypes: string[]; subTypes: string[];
+  profileWorkTypes?: string | null; profileSubTypes?: string | null;
   residentNumber: string | null;
+  operationalStatus?: string | null;
+  reassignmentAllowed?: boolean | null;
 };
+
+// 가능언어 표시용 정규화 (읽기 전용 — DB 값 변경 없음)
+// "한-영, 영-한" → "한국어, 영어" / 이미 정규화된 값은 그대로 통과
+const LANG_ABBR: Record<string, string> = {
+  "한": "한국어", "영": "영어", "일": "일본어", "중": "중국어",
+  "불": "프랑스어", "독": "독일어", "스": "스페인어", "러": "러시아어",
+  "아": "아랍어", "포": "포르투갈어", "이": "이탈리아어", "태": "태국어",
+  "베": "베트남어", "인": "인도네시아어",
+};
+export function normalizeLanguages(raw: string | null | undefined): string {
+  if (!raw?.trim()) return "";
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const part of raw.split(",").map(p => p.trim()).filter(Boolean)) {
+    // "한-영", "영→한" 형태 → 각 측 분리
+    const sides = part.includes("→") ? part.split("→") : part.includes("-") ? part.split("-") : [part];
+    for (const side of sides.map(s => s.trim()).filter(Boolean)) {
+      const lang = LANG_ABBR[side] ?? side;
+      if (!seen.has(lang)) { seen.add(lang); result.push(lang); }
+    }
+  }
+  return result.join(", ");
+}
+
 export type ContactDetail = {
   id: number; companyId: number; companyName: string | null; divisionId: number | null; divisionName: string | null;
   name: string; department: string | null; position: string | null;
@@ -257,6 +284,14 @@ export type TranslatorProfile = {
   bio?: string | null; ratePerWord?: number | null; ratePerPage?: number | null;
   unitType?: string | null; unitPrice?: number | null;
   resumeUrl?: string | null; portfolioUrl?: string | null;
+  affiliatedCompanyId?: number | null;
+  affiliatedCompanyName?: string | null;
+  settlementType?: string | null;
+  profileWorkTypes?: string | null;
+  profileSubTypes?: string | null;
+  operationalStatus?: string | null;
+  operationalNote?: string | null;
+  reassignmentAllowed?: boolean | null;
 };
 
 export type TranslatorProduct = {

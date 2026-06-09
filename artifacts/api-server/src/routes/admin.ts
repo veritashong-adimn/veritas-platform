@@ -2995,7 +2995,8 @@ router.patch("/admin/translator-profiles/:userId", ...adminGuard, async (req, re
   const {
     languagePairs, specializations, education, major,
     graduationYear, region, rating, availabilityStatus, bio,
-    ratePerWord, ratePerPage,
+    ratePerWord, ratePerPage, affiliatedCompanyId, settlementType,
+    operationalStatus, operationalNote, reassignmentAllowed,
   } = req.body;
 
   try {
@@ -3013,6 +3014,13 @@ router.patch("/admin/translator-profiles/:userId", ...adminGuard, async (req, re
       availabilityStatus: availabilityStatus ?? "available",
       bio, ratePerWord: ratePerWord ? Number(ratePerWord) : undefined,
       ratePerPage: ratePerPage ? Number(ratePerPage) : undefined,
+      affiliatedCompanyId: (affiliatedCompanyId != null && Number(affiliatedCompanyId) > 0)
+        ? Number(affiliatedCompanyId) : null,
+      settlementType: settlementType?.trim() || null,
+      operationalStatus: (operationalStatus && ["normal","warning","hold","excluded"].includes(operationalStatus))
+        ? operationalStatus : undefined,
+      operationalNote: operationalNote !== undefined ? (operationalNote?.trim() || null) : undefined,
+      reassignmentAllowed: reassignmentAllowed !== undefined ? Boolean(reassignmentAllowed) : undefined,
       updatedAt: new Date(),
     };
 

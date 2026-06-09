@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { api, TranslatorProfile, TranslatorRate, NoteEntry } from "../../lib/constants";
+import { api, TranslatorProfile, TranslatorRate, NoteEntry, normalizeLanguages } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { DraggableModal } from "./DraggableModal";
@@ -7,6 +7,8 @@ import { SensitiveInfoModal } from "./SensitiveInfoModal";
 import {
   ALL_RATE_UNITS as ALL_UNITS,
   getRateUnitLabel as getUnitLabel,
+  SERVICE_TYPES as PROFILE_WORK_TYPES,
+  SUB_SERVICE_TYPES as PROFILE_SUB_TYPES_MAP,
 } from "./translatorRateConstants";
 import { TranslatorRateEntryCard, RateEntryData, emptyRateEntry } from "./TranslatorRateEntryCard";
 
@@ -29,11 +31,11 @@ function formatPhoneNumber(value: string): string {
   return `${n.slice(0, 3)}-${n.slice(3, 7)}-${n.slice(7, 11)}`;
 }
 
-export function TranslatorDetailModal({ userId, userEmail, token, permissions = [], onClose, onToast, onDeleted }: {
+export function TranslatorDetailModal({ userId, userEmail, token, permissions = [], onClose, onToast, onDeleted, onSaved }: {
   userId: number; userEmail: string; token: string;
   permissions?: string[];
   onClose: () => void; onToast: (msg: string) => void;
-  onDeleted?: () => void;
+  onDeleted?: () => void; onSaved?: () => void;
 }) {
   const hasPerm = (key: string) => permissions.includes(key);
   const [profile, setProfile] = useState<TranslatorProfile | null>(null);
@@ -65,18 +67,30 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     languagePairs: "", languageLevel: "", specializations: "", education: "", major: "",
     graduationYear: "", region: "", grade: "", rating: "", availabilityStatus: "available",
     bio: "",
+    affiliatedCompanyId: "" as string,
+    settlementType: "",
+    profileWorkTypes: "",
+    profileSubTypes: "",
+    operationalStatus: "normal",
+    operationalNote: "",
+    reassignmentAllowed: true,
   });
+  const [vendorCompanies, setVendorCompanies] = useState<Array<{ id: number; name: string }>>([]);
 
   const authH = { Authorization: `Bearer ${token}` };
 
   const load = async () => {
     setLoading(true);
     try {
-      const [dRes, nRes] = await Promise.all([
+      const [dRes, nRes, vcRes] = await Promise.all([
         fetch(api(`/api/admin/translators/${userId}`), { headers: authH }),
         fetch(api(`/api/admin/notes?entityType=translator&entityId=${userId}`), { headers: authH }),
+        fetch(api(`/api/admin/companies?companyType=vendor`), { headers: authH }),
       ]);
-      const [dData, nData] = await Promise.all([dRes.json(), nRes.json()]);
+      const [dData, nData, vcData] = await Promise.all([dRes.json(), nRes.json(), vcRes.json()]);
+      if (vcRes.ok && Array.isArray(vcData)) {
+        setVendorCompanies(vcData.map((c: { id: number; name: string }) => ({ id: c.id, name: c.name })));
+      }
       if (dRes.ok) {
         const u = dData.user;
         setUserInfo({ name: u?.name ?? "", email: u?.email ?? userEmail, isActive: u?.isActive ?? true, invitePending: dData.user?.inviteStatus === "pending" });
@@ -112,6 +126,13 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           rating: p?.rating ? String(p.rating) : "",
           availabilityStatus: p?.availabilityStatus ?? "available",
           bio: p?.bio ?? "",
+          affiliatedCompanyId: p?.affiliatedCompanyId ? String(p.affiliatedCompanyId) : "",
+          settlementType: p?.settlementType ?? "",
+          profileWorkTypes: p?.profileWorkTypes ?? "",
+          profileSubTypes: p?.profileSubTypes ?? "",
+          operationalStatus: p?.operationalStatus ?? "normal",
+          operationalNote: p?.operationalNote ?? "",
+          reassignmentAllowed: p?.reassignmentAllowed !== false,
         });
       }
       if (nRes.ok) setNotes(Array.isArray(nData) ? nData : []);
@@ -155,6 +176,13 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           rating: form.rating ? Number(form.rating) : null,
           grade: form.grade || null,
           languageLevel: form.languageLevel || null,
+          affiliatedCompanyId: form.affiliatedCompanyId ? Number(form.affiliatedCompanyId) : null,
+          settlementType: form.settlementType || null,
+          profileWorkTypes: form.profileWorkTypes.trim() || null,
+          profileSubTypes: form.profileSubTypes.trim() || null,
+          operationalStatus: form.operationalStatus || "normal",
+          operationalNote: form.operationalNote.trim() || null,
+          reassignmentAllowed: form.reassignmentAllowed,
           emails: validated.map(e => ({ email: e.email.trim().toLowerCase(), isPrimary: e.isPrimary })),
         }),
       });
@@ -177,11 +205,19 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         rating: data.rating ? String(data.rating) : "",
         availabilityStatus: data.availabilityStatus ?? "available",
         bio: data.bio ?? "",
+        affiliatedCompanyId: data.affiliatedCompanyId ? String(data.affiliatedCompanyId) : "",
+        settlementType: data.settlementType ?? "",
+        profileWorkTypes: data.profileWorkTypes ?? "",
+        profileSubTypes: data.profileSubTypes ?? "",
+        operationalStatus: data.operationalStatus ?? "normal",
+        operationalNote: data.operationalNote ?? "",
+        reassignmentAllowed: data.reassignmentAllowed !== false,
       }));
       // 대표 이메일 변경 시 userInfo 갱신
       const newPrimary = validated.find(e => e.isPrimary)?.email.trim().toLowerCase() ?? "";
       if (newPrimary) setUserInfo(prev => prev ? { ...prev, email: newPrimary } : prev);
       onToast("통번역사 프로필이 저장되었습니다.");
+      onSaved?.();
     } catch { onToast("오류: 저장 실패"); }
     finally { setSaving(false); }
   };
@@ -509,14 +545,44 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
                 />
               </div>
-              {/* 언어쌍 */}
+              {/* 소속업체 */}
               <div>
-                <label style={{ ...labelSt, fontSize: 11 }}>언어쌍 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(수정 가능)</span></label>
+                <label style={{ ...labelSt, fontSize: 11 }}>소속업체 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(외주업체 소속 시 선택)</span></label>
+                <select
+                  value={form.affiliatedCompanyId}
+                  onChange={e => setForm(p => ({ ...p, affiliatedCompanyId: e.target.value }))}
+                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
+                >
+                  <option value="">소속 없음 (프리랜서)</option>
+                  {vendorCompanies.map(c => (
+                    <option key={c.id} value={String(c.id)}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+              {/* 정산유형 */}
+              <div>
+                <label style={{ ...labelSt, fontSize: 11 }}>정산유형</label>
+                <ClickSelect
+                  value={form.settlementType}
+                  onChange={v => setForm(p => ({ ...p, settlementType: v }))}
+                  style={{ width: "100%" }}
+                  triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                  options={[
+                    { value: "", label: "선택 안 함" },
+                    { value: "개인", label: "개인 (3.3% 원천징수)" },
+                    { value: "사업자", label: "사업자 (세금계산서)" },
+                    { value: "업체정산", label: "업체정산 (소속업체 경유)" },
+                  ]}
+                />
+              </div>
+              {/* 가능언어 */}
+              <div>
+                <label style={{ ...labelSt, fontSize: 11 }}>가능언어 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(수정 가능)</span></label>
                 <input
                   type="text"
                   value={form.languagePairs}
                   onChange={e => setForm(p => ({ ...p, languagePairs: e.target.value }))}
-                  placeholder="예: 한→영, 영→한"
+                  placeholder="예: 한국어, 영어, 일본어"
                   style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
                 />
               </div>
@@ -553,6 +619,67 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               <input type="text" value={form.specializations} onChange={e => setForm(p => ({ ...p, specializations: e.target.value }))}
                 placeholder="예: 법률, IT, 의학" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
             </div>
+            {/* ── 프로필 업무유형 ── */}
+            <div style={{ gridColumn: "1 / -1" }}>
+              <label style={labelSt}>업무유형 (프로필)</label>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                {(PROFILE_WORK_TYPES as readonly string[]).map(wt => {
+                  const selected = form.profileWorkTypes.split(",").map(s => s.trim()).filter(Boolean).includes(wt);
+                  return (
+                    <button key={wt} type="button"
+                      onClick={() => {
+                        const cur = form.profileWorkTypes.split(",").map(s => s.trim()).filter(Boolean);
+                        const next = selected ? cur.filter(s => s !== wt) : [...cur, wt];
+                        setForm(p => ({ ...p, profileWorkTypes: next.join(",") }));
+                      }}
+                      style={{
+                        padding: "4px 12px", borderRadius: 20, fontSize: 12, cursor: "pointer",
+                        background: selected ? "#7c3aed" : "#f5f3ff",
+                        color: selected ? "#fff" : "#7c3aed",
+                        border: `1px solid ${selected ? "#7c3aed" : "#ddd8fe"}`,
+                        fontWeight: selected ? 700 : 400,
+                      }}>
+                      {wt}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {/* ── 프로필 세부유형 ── */}
+            {(() => {
+              const selectedTypes = form.profileWorkTypes.split(",").map(s => s.trim()).filter(Boolean);
+              const availableSubs = Array.from(new Set(
+                selectedTypes.flatMap(wt => PROFILE_SUB_TYPES_MAP[wt] ?? [])
+              ));
+              if (availableSubs.length === 0) return null;
+              return (
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <label style={labelSt}>세부유형 (프로필)</label>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                    {availableSubs.map(st => {
+                      const selected = form.profileSubTypes.split(",").map(s => s.trim()).filter(Boolean).includes(st);
+                      return (
+                        <button key={st} type="button"
+                          onClick={() => {
+                            const cur = form.profileSubTypes.split(",").map(s => s.trim()).filter(Boolean);
+                            const next = selected ? cur.filter(s => s !== st) : [...cur, st];
+                            setForm(p => ({ ...p, profileSubTypes: next.join(",") }));
+                          }}
+                          style={{
+                            padding: "3px 10px", borderRadius: 20, fontSize: 11, cursor: "pointer",
+                            background: selected ? "#059669" : "#f0fdf4",
+                            color: selected ? "#fff" : "#065f46",
+                            border: `1px solid ${selected ? "#059669" : "#a7f3d0"}`,
+                            fontWeight: selected ? 700 : 400,
+                          }}>
+                          {st}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
             <div>
               <label style={labelSt}>등급</label>
               <ClickSelect value={form.grade} onChange={v => setForm(p => ({ ...p, grade: v }))}
@@ -656,6 +783,54 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             <textarea value={form.bio} onChange={e => setForm(p => ({ ...p, bio: e.target.value }))}
               rows={3} style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", resize: "vertical" }} />
           </div>
+          {/* ── 운영 관리 ── */}
+          <p style={sH}>운영 관리</p>
+          <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: "14px 16px", marginBottom: 14 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px", marginBottom: 12 }}>
+              {/* 운영상태 */}
+              <div>
+                <label style={{ ...labelSt, fontSize: 11 }}>운영상태</label>
+                <ClickSelect
+                  value={form.operationalStatus}
+                  onChange={v => setForm(p => ({ ...p, operationalStatus: v }))}
+                  style={{ width: "100%" }}
+                  triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                  options={[
+                    { value: "normal",   label: "✅ 정상" },
+                    { value: "warning",  label: "⚠️ 주의" },
+                    { value: "hold",     label: "⏸ 보류" },
+                    { value: "excluded", label: "🚫 제외" },
+                  ]}
+                />
+              </div>
+              {/* 재배정 가능 여부 */}
+              <div>
+                <label style={{ ...labelSt, fontSize: 11 }}>재배정 가능 여부</label>
+                <ClickSelect
+                  value={form.reassignmentAllowed ? "true" : "false"}
+                  onChange={v => setForm(p => ({ ...p, reassignmentAllowed: v === "true" }))}
+                  style={{ width: "100%" }}
+                  triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                  options={[
+                    { value: "true",  label: "가능" },
+                    { value: "false", label: "불가" },
+                  ]}
+                />
+              </div>
+            </div>
+            {/* 운영메모 */}
+            <div>
+              <label style={{ ...labelSt, fontSize: 11 }}>운영메모 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(내부 전용 — 외부 비공개)</span></label>
+              <textarea
+                value={form.operationalNote}
+                onChange={e => setForm(p => ({ ...p, operationalNote: e.target.value }))}
+                rows={3}
+                placeholder="컴플레인 이력, 운영 리스크, 관리자 메모 등"
+                style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", resize: "vertical" }}
+              />
+            </div>
+          </div>
+
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
             <PrimaryBtn onClick={handleSave} disabled={saving} style={{ fontSize: 13, padding: "8px 20px" }}>
               {saving ? "저장 중..." : "프로필 저장"}

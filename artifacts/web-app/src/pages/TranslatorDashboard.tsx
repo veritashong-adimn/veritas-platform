@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from "react";
-import { api, User, Task, TranslatorProfile, TranslatorRate, MySettlement } from "../lib/constants";
+import { api, User, Task, TranslatorProfile, TranslatorRate, MySettlement, normalizeLanguages } from "../lib/constants";
 import { Card, Toast, PrimaryBtn, GhostBtn, ClickSelect } from "../components/ui";
 import { TaskCard } from "../components/projects";
 
@@ -267,7 +267,7 @@ export function TranslatorDashboard({ user, token }: { user: User; token: string
                   profile ? (
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 20px" }}>
                       {([
-                        ["언어쌍", profile.languagePairs ?? "-"],
+                        ["가능언어", normalizeLanguages(profile.languagePairs) || "-"],
                         ["전문분야", profile.specializations ?? "-"],
                         ["학력", `${profile.education ?? "-"}${profile.major ? ` / ${profile.major}` : ""}${profile.graduationYear ? ` (${profile.graduationYear})` : ""}`],
                         ["지역", profile.region ?? "-"],
@@ -296,7 +296,7 @@ export function TranslatorDashboard({ user, token }: { user: User; token: string
                 ) : (
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
                     {([
-                      ["languagePairs", "언어쌍", "예: EN-KO, JA-KO"],
+                      ["languagePairs", "가능언어", "예: 한국어, 영어, 일본어"],
                       ["specializations", "전문분야", "예: IT, 법률, 의료"],
                       ["region", "지역", "예: 서울"],
                       ["education", "학교", "예: 서울대학교"],

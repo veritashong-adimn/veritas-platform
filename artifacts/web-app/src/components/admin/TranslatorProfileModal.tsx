@@ -21,15 +21,23 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
     languagePairs: "", specializations: "", education: "", major: "",
     graduationYear: "", region: "", grade: "", rating: "",
     availabilityStatus: "available", bio: "",
+    affiliatedCompanyId: "" as string, settlementType: "",
   });
+  const [vendorCompanies, setVendorCompanies] = useState<Array<{ id: number; name: string }>>([]);
 
   const authH = { Authorization: `Bearer ${token}` };
 
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(api(`/api/admin/translator-profiles/${userId}`), { headers: authH });
-        const data = await res.json();
+        const [res, vcRes] = await Promise.all([
+          fetch(api(`/api/admin/translator-profiles/${userId}`), { headers: authH }),
+          fetch(api(`/api/admin/companies?companyType=vendor`), { headers: authH }),
+        ]);
+        const [data, vcData] = await Promise.all([res.json(), vcRes.json()]);
+        if (vcRes.ok && Array.isArray(vcData)) {
+          setVendorCompanies(vcData.map((c: { id: number; name: string }) => ({ id: c.id, name: c.name })));
+        }
         if (res.ok && data.profile) {
           const p = data.profile as TranslatorProfile;
           setForm({
@@ -43,6 +51,8 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
             rating: p.rating ? String(p.rating) : "",
             availabilityStatus: p.availabilityStatus ?? "available",
             bio: p.bio ?? "",
+            affiliatedCompanyId: p.affiliatedCompanyId ? String(p.affiliatedCompanyId) : "",
+            settlementType: p.settlementType ?? "",
           });
         }
       } catch { onToast("오류: 프로필 불러오기 실패"); }
@@ -60,6 +70,8 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
           graduationYear: form.graduationYear ? Number(form.graduationYear) : null,
           rating: form.rating ? Number(form.rating) : null,
           grade: form.grade || null,
+          affiliatedCompanyId: form.affiliatedCompanyId ? Number(form.affiliatedCompanyId) : null,
+          settlementType: form.settlementType || null,
         }),
       });
       const data = await res.json();
@@ -84,7 +96,7 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
             <div>
               <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#6b7280", textTransform: "uppercase" }}>기본 정보</p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px" }}>
-                <F label="언어 조합 (예: 한→영, 영→한)" field="languagePairs" placeholder="한→영, 영→한" />
+                <F label="가능언어 (예: 한국어, 영어, 일본어)" field="languagePairs" placeholder="한국어, 영어, 일본어" />
                 <F label="지역" field="region" placeholder="서울" />
               </div>
             </div>
@@ -118,6 +130,34 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
                     options={[
                       { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
                     ]} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>소속업체</label>
+                  <select
+                    value={form.affiliatedCompanyId}
+                    onChange={e => setForm(p => ({ ...p, affiliatedCompanyId: e.target.value }))}
+                    style={{ width: "100%", padding: "7px 10px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, color: "#111827", background: "#fff" }}
+                  >
+                    <option value="">소속 없음 (프리랜서)</option>
+                    {vendorCompanies.map(c => (
+                      <option key={c.id} value={String(c.id)}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>정산유형</label>
+                  <ClickSelect
+                    value={form.settlementType}
+                    onChange={v => setForm(p => ({ ...p, settlementType: v }))}
+                    style={{ width: "100%" }}
+                    triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                    options={[
+                      { value: "", label: "선택 안 함" },
+                      { value: "개인", label: "개인 (3.3% 원천징수)" },
+                      { value: "사업자", label: "사업자 (세금계산서)" },
+                      { value: "업체정산", label: "업체정산 (소속업체 경유)" },
+                    ]}
+                  />
                 </div>
               </div>
             </div>

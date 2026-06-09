@@ -292,10 +292,10 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         {F({ label: "이메일", field: "email", type: "email", placeholder: "example@email.com", required: true })}
         {F({ label: "지역", field: "region", placeholder: "서울, 경기..." })}
         <div>
-          <label style={labelSt}>언어쌍</label>
+          <label style={labelSt}>가능언어</label>
           <input value={form.languagePairs} onChange={e => setF("languagePairs", e.target.value)}
-            placeholder="예: 한→영, 영→한, 한→일" style={inputStyle} />
-          <span style={{ fontSize: 11, color: "#9ca3af" }}>쉼표로 구분하여 여러 언어쌍 입력</span>
+            placeholder="예: 한국어, 영어, 일본어" style={inputStyle} />
+          <span style={{ fontSize: 11, color: "#9ca3af" }}>쉼표로 구분하여 가능한 언어 입력</span>
         </div>
         <div>
           <label style={labelSt}>언어 레벨</label>
