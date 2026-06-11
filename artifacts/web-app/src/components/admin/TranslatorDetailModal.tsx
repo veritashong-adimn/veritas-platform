@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { api, TranslatorProfile, TranslatorRate, NoteEntry, normalizeLanguages } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
@@ -54,6 +54,187 @@ const inputStyle: React.CSSProperties = {
 const GRADE_OPTIONS = ["S", "A", "B", "C"];
 const LANG_LEVEL_OPTIONS = ["일반", "전문"];
 
+const EDUCATION_DOMESTIC = [
+  "한국외국어대학교 통번역대학원",
+  "서울외국어대학원대학교 통번역대학원",
+  "이화여자대학교 통역번역대학원",
+  "부산외국어대학교 통번역대학원",
+  "제주대학교 통번역대학원",
+  "선문대학교 통번역대학원",
+  "중앙대학교 국제대학원",
+];
+const EDUCATION_OVERSEAS = [
+  "Macquarie University",
+  "Middlebury Institute of International Studies at Monterey",
+  "Monterey Institute of International Studies",
+  "University of Bath",
+  "University of Westminster",
+  "University of Leeds",
+  "Université Paris Cité ESIT",
+  "Université Sorbonne Nouvelle ESIT",
+  "University of Geneva FTI",
+  "University of Ottawa",
+];
+const EDUCATION_ALL = [...EDUCATION_DOMESTIC, ...EDUCATION_OVERSEAS];
+
+const MAJOR_LANGUAGE = ["한영과", "한중과", "한일과", "한불과", "한독과", "한서과", "한노과", "한아과"];
+const MAJOR_INTERPRETATION = ["국제회의통역", "국제회의전공", "통역전공", "번역전공", "통번역전공"];
+const MAJOR_SPECIALIZED = ["의료통역전공", "법률통번역전공", "영상번역전공", "AI번역전공"];
+const MAJOR_ALL = [...MAJOR_LANGUAGE, ...MAJOR_INTERPRETATION, ...MAJOR_SPECIALIZED];
+
+const _CURRENT_YEAR = new Date().getFullYear();
+const GRAD_YEARS = Array.from({ length: _CURRENT_YEAR + 5 - 1979 }, (_, i) => String(_CURRENT_YEAR + 5 - i));
+
+const GRADUATION_STATUS_OPTIONS = ["졸업", "졸업예정", "재학중", "수료", "중퇴", "기타"];
+
+const REGION_COUNTRIES = [
+  "대한민국",
+  "미국", "캐나다", "영국", "호주", "뉴질랜드",
+  "일본", "중국", "대만", "홍콩", "싱가포르",
+  "말레이시아", "태국", "베트남", "인도네시아", "필리핀", "인도",
+  "독일", "프랑스", "이탈리아", "스페인", "네덜란드", "벨기에", "스위스", "오스트리아",
+  "러시아", "UAE", "사우디아라비아", "카타르",
+  "멕시코", "브라질",
+  "기타",
+] as const;
+
+const KOREA_REGIONS = [
+  "서울특별시", "경기도", "인천광역시",
+  "부산광역시", "대구광역시", "대전광역시", "광주광역시", "울산광역시",
+  "세종특별자치시",
+  "강원특별자치도", "충청북도", "충청남도",
+  "전북특별자치도", "전라남도",
+  "경상북도", "경상남도",
+  "제주특별자치도",
+] as const;
+
+const KOREA_REGION_DISTRICTS: readonly string[] = [
+  // 서울특별시 (25구)
+  "서울특별시 강남구", "서울특별시 강동구", "서울특별시 강북구", "서울특별시 강서구",
+  "서울특별시 관악구", "서울특별시 광진구", "서울특별시 구로구", "서울특별시 금천구",
+  "서울특별시 노원구", "서울특별시 도봉구", "서울특별시 동대문구", "서울특별시 동작구",
+  "서울특별시 마포구", "서울특별시 서대문구", "서울특별시 서초구", "서울특별시 성동구",
+  "서울특별시 성북구", "서울특별시 송파구", "서울특별시 양천구", "서울특별시 영등포구",
+  "서울특별시 용산구", "서울특별시 은평구", "서울특별시 종로구", "서울특별시 중구",
+  "서울특별시 중랑구",
+  // 경기도
+  "경기도 수원시", "경기도 수원시 장안구", "경기도 수원시 권선구", "경기도 수원시 팔달구", "경기도 수원시 영통구",
+  "경기도 성남시", "경기도 성남시 수정구", "경기도 성남시 중원구", "경기도 성남시 분당구",
+  "경기도 고양시", "경기도 고양시 덕양구", "경기도 고양시 일산동구", "경기도 고양시 일산서구",
+  "경기도 용인시", "경기도 용인시 처인구", "경기도 용인시 기흥구", "경기도 용인시 수지구",
+  "경기도 안양시", "경기도 안양시 만안구", "경기도 안양시 동안구",
+  "경기도 안산시", "경기도 안산시 상록구", "경기도 안산시 단원구",
+  "경기도 의정부시", "경기도 부천시", "경기도 광명시", "경기도 평택시",
+  "경기도 동두천시", "경기도 과천시", "경기도 구리시", "경기도 남양주시",
+  "경기도 오산시", "경기도 시흥시", "경기도 군포시", "경기도 의왕시",
+  "경기도 하남시", "경기도 파주시", "경기도 이천시", "경기도 안성시",
+  "경기도 김포시", "경기도 화성시", "경기도 광주시", "경기도 양주시",
+  "경기도 포천시", "경기도 여주시", "경기도 연천군", "경기도 가평군", "경기도 양평군",
+  // 인천광역시
+  "인천광역시 중구", "인천광역시 동구", "인천광역시 미추홀구", "인천광역시 연수구",
+  "인천광역시 남동구", "인천광역시 부평구", "인천광역시 계양구", "인천광역시 서구",
+  "인천광역시 강화군", "인천광역시 옹진군",
+  // 부산광역시
+  "부산광역시 중구", "부산광역시 서구", "부산광역시 동구", "부산광역시 영도구",
+  "부산광역시 부산진구", "부산광역시 동래구", "부산광역시 남구", "부산광역시 북구",
+  "부산광역시 해운대구", "부산광역시 사하구", "부산광역시 금정구", "부산광역시 강서구",
+  "부산광역시 연제구", "부산광역시 수영구", "부산광역시 사상구", "부산광역시 기장군",
+  // 대구광역시
+  "대구광역시 중구", "대구광역시 동구", "대구광역시 서구", "대구광역시 남구",
+  "대구광역시 북구", "대구광역시 수성구", "대구광역시 달서구", "대구광역시 달성군",
+  // 대전광역시
+  "대전광역시 동구", "대전광역시 중구", "대전광역시 서구", "대전광역시 유성구", "대전광역시 대덕구",
+  // 광주광역시
+  "광주광역시 동구", "광주광역시 서구", "광주광역시 남구", "광주광역시 북구", "광주광역시 광산구",
+  // 울산광역시
+  "울산광역시 중구", "울산광역시 남구", "울산광역시 동구", "울산광역시 북구", "울산광역시 울주군",
+  // 세종특별자치시
+  "세종특별자치시",
+  // 강원특별자치도
+  "강원특별자치도 춘천시", "강원특별자치도 원주시", "강원특별자치도 강릉시",
+  "강원특별자치도 동해시", "강원특별자치도 태백시", "강원특별자치도 속초시",
+  "강원특별자치도 삼척시", "강원특별자치도 홍천군", "강원특별자치도 횡성군",
+  "강원특별자치도 영월군", "강원특별자치도 평창군", "강원특별자치도 정선군",
+  "강원특별자치도 철원군", "강원특별자치도 화천군", "강원특별자치도 양구군",
+  "강원특별자치도 인제군", "강원특별자치도 고성군", "강원특별자치도 양양군",
+  // 충청북도
+  "충청북도 청주시", "충청북도 청주시 상당구", "충청북도 청주시 서원구", "충청북도 청주시 흥덕구", "충청북도 청주시 청원구",
+  "충청북도 충주시", "충청북도 제천시", "충청북도 보은군", "충청북도 옥천군",
+  "충청북도 영동군", "충청북도 증평군", "충청북도 진천군", "충청북도 괴산군",
+  "충청북도 음성군", "충청북도 단양군",
+  // 충청남도
+  "충청남도 천안시", "충청남도 천안시 동남구", "충청남도 천안시 서북구",
+  "충청남도 공주시", "충청남도 보령시", "충청남도 아산시", "충청남도 서산시",
+  "충청남도 논산시", "충청남도 계룡시", "충청남도 당진시", "충청남도 금산군",
+  "충청남도 부여군", "충청남도 서천군", "충청남도 청양군", "충청남도 홍성군",
+  "충청남도 예산군", "충청남도 태안군",
+  // 전북특별자치도
+  "전북특별자치도 전주시", "전북특별자치도 전주시 완산구", "전북특별자치도 전주시 덕진구",
+  "전북특별자치도 군산시", "전북특별자치도 익산시", "전북특별자치도 정읍시",
+  "전북특별자치도 남원시", "전북특별자치도 김제시", "전북특별자치도 완주군",
+  "전북특별자치도 진안군", "전북특별자치도 무주군", "전북특별자치도 장수군",
+  "전북특별자치도 임실군", "전북특별자치도 순창군", "전북특별자치도 고창군", "전북특별자치도 부안군",
+  // 전라남도
+  "전라남도 목포시", "전라남도 여수시", "전라남도 순천시", "전라남도 나주시", "전라남도 광양시",
+  "전라남도 담양군", "전라남도 곡성군", "전라남도 구례군", "전라남도 고흥군",
+  "전라남도 보성군", "전라남도 화순군", "전라남도 장흥군", "전라남도 강진군",
+  "전라남도 해남군", "전라남도 영암군", "전라남도 무안군", "전라남도 함평군",
+  "전라남도 영광군", "전라남도 장성군", "전라남도 완도군", "전라남도 진도군", "전라남도 신안군",
+  // 경상북도
+  "경상북도 포항시", "경상북도 포항시 남구", "경상북도 포항시 북구",
+  "경상북도 경주시", "경상북도 김천시", "경상북도 안동시", "경상북도 구미시",
+  "경상북도 영주시", "경상북도 영천시", "경상북도 상주시", "경상북도 문경시",
+  "경상북도 경산시", "경상북도 군위군", "경상북도 의성군", "경상북도 청송군",
+  "경상북도 영양군", "경상북도 영덕군", "경상북도 청도군", "경상북도 고령군",
+  "경상북도 성주군", "경상북도 칠곡군", "경상북도 예천군", "경상북도 봉화군",
+  "경상북도 울진군", "경상북도 울릉군",
+  // 경상남도
+  "경상남도 창원시", "경상남도 창원시 의창구", "경상남도 창원시 성산구", "경상남도 창원시 마산합포구",
+  "경상남도 창원시 마산회원구", "경상남도 창원시 진해구",
+  "경상남도 진주시", "경상남도 통영시", "경상남도 사천시", "경상남도 김해시",
+  "경상남도 밀양시", "경상남도 거제시", "경상남도 양산시", "경상남도 의령군",
+  "경상남도 함안군", "경상남도 창녕군", "경상남도 고성군", "경상남도 남해군",
+  "경상남도 하동군", "경상남도 산청군", "경상남도 함양군", "경상남도 거창군", "경상남도 합천군",
+  // 제주특별자치도
+  "제주특별자치도 제주시", "제주특별자치도 서귀포시",
+];
+
+// 시/도 + 시/군/구 통합 목록 (시/도 먼저)
+const KOREA_ALL_OPTIONS: readonly string[] = [...KOREA_REGIONS, ...KOREA_REGION_DISTRICTS];
+
+const OVERSEAS_CITIES: Record<string, readonly string[]> = {
+  "일본": ["도쿄", "오사카", "요코하마", "나고야", "후쿠오카", "교토", "고베", "삿포로", "히로시마", "센다이", "사이타마", "치바", "가와사키", "기타큐슈"],
+  "미국": ["캘리포니아주 로스앤젤레스", "캘리포니아주 샌프란시스코", "캘리포니아주 샌디에이고", "캘리포니아주 산호세", "뉴욕주 뉴욕", "뉴저지주 저지시티", "일리노이주 시카고", "텍사스주 댈러스", "텍사스주 휴스턴", "텍사스주 오스틴", "워싱턴주 시애틀", "조지아주 애틀랜타", "매사추세츠주 보스턴", "워싱턴 D.C.", "버지니아주", "메릴랜드주", "플로리다주 마이애미"],
+  "중국": ["베이징", "상하이", "광저우", "선전", "항저우", "난징", "칭다오", "톈진", "청두", "충칭", "우한", "시안", "쑤저우", "다롄", "선양"],
+  "대만": ["타이베이", "신베이", "타이중", "타이난", "가오슝", "신주"],
+  "홍콩": ["홍콩", "구룡", "신계"],
+  "싱가포르": ["싱가포르"],
+  "말레이시아": ["쿠알라룸푸르", "조호르바루", "페낭", "말라카", "코타키나발루"],
+  "태국": ["방콕", "치앙마이", "푸켓", "파타야"],
+  "베트남": ["하노이", "호치민", "다낭", "하이퐁", "나트랑"],
+  "인도네시아": ["자카르타", "수라바야", "발리", "반둥", "메단"],
+  "필리핀": ["마닐라", "세부", "클락", "다바오"],
+  "인도": ["뉴델리", "뭄바이", "벵갈루루", "첸나이", "하이데라바드", "푸네", "구르가온"],
+  "영국": ["런던", "맨체스터", "버밍엄", "에든버러", "글래스고", "리즈"],
+  "독일": ["베를린", "프랑크푸르트", "뮌헨", "함부르크", "뒤셀도르프", "슈투트가르트", "쾰른"],
+  "프랑스": ["파리", "리옹", "마르세유", "니스", "툴루즈"],
+  "이탈리아": ["로마", "밀라노", "베네치아", "피렌체", "토리노"],
+  "스페인": ["마드리드", "바르셀로나", "발렌시아", "세비야"],
+  "네덜란드": ["암스테르담", "로테르담", "헤이그", "에인트호번"],
+  "벨기에": ["브뤼셀", "앤트워프", "겐트"],
+  "스위스": ["취리히", "제네바", "바젤", "로잔"],
+  "오스트리아": ["빈", "잘츠부르크", "그라츠"],
+  "러시아": ["모스크바", "상트페테르부르크", "블라디보스토크"],
+  "캐나다": ["토론토", "밴쿠버", "몬트리올", "오타와", "캘거리", "에드먼턴"],
+  "호주": ["시드니", "멜버른", "브리즈번", "퍼스", "애들레이드", "캔버라"],
+  "뉴질랜드": ["오클랜드", "웰링턴", "크라이스트처치"],
+  "UAE": ["두바이", "아부다비"],
+  "사우디아라비아": ["리야드", "제다", "담맘"],
+  "카타르": ["도하"],
+  "멕시코": ["멕시코시티", "몬테레이", "과달라하라", "티후아나"],
+  "브라질": ["상파울루", "리우데자네이루", "브라질리아", "쿠리치바"],
+};
+
 type EmailEntry = { email: string; isPrimary: boolean; error: string };
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -62,6 +243,254 @@ function formatPhoneNumber(value: string): string {
   if (n.length <= 3) return n;
   if (n.length <= 7) return `${n.slice(0, 3)}-${n.slice(3)}`;
   return `${n.slice(0, 3)}-${n.slice(3, 7)}-${n.slice(7, 11)}`;
+}
+
+function parseRegionStr(regionStr: string): { country: string; city: string; countryCustom: string } {
+  if (!regionStr) return { country: "대한민국", city: "", countryCustom: "" };
+  const slashIdx = regionStr.indexOf(" / ");
+  if (slashIdx >= 0) {
+    const country = regionStr.slice(0, slashIdx).trim();
+    const city = regionStr.slice(slashIdx + 3).trim();
+    if ((REGION_COUNTRIES as readonly string[]).includes(country)) return { country, city, countryCustom: "" };
+    return { country: "기타", city, countryCustom: country };
+  }
+  // 구분자 없는 경우: 국가 목록 매칭 후 대한민국 지역으로 fallback
+  if ((REGION_COUNTRIES as readonly string[]).slice(0, -1).includes(regionStr)) return { country: regionStr, city: "", countryCustom: "" };
+  return { country: "대한민국", city: regionStr, countryCustom: "" };
+}
+
+function buildRegionString(country: string, countryCustom: string, city: string): string {
+  const label = country === "기타" ? countryCustom.trim() : country;
+  if (!label) return city.trim();
+  return city.trim() ? `${label} / ${city.trim()}` : label;
+}
+
+function KoreaRegionCombobox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [query, setQuery] = useState(value);
+  const [open, setOpen] = useState(false);
+  const [hoveredIdx, setHoveredIdx] = useState(-1);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { setQuery(value); }, [value]);
+
+  const filtered = query.trim()
+    ? KOREA_ALL_OPTIONS.filter(r => r.includes(query.trim()))
+    : [...KOREA_REGIONS]; // 기본값: 시/도 17개 표시
+
+  const isLegacy = Boolean(value) && !KOREA_ALL_OPTIONS.includes(value);
+
+  useEffect(() => {
+    const handle = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery(value); // 선택 없이 닫히면 저장값으로 복원
+      }
+    };
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [value]);
+
+  const handleSelect = (opt: string) => {
+    setQuery(opt);
+    onChange(opt);
+    setOpen(false);
+    setHoveredIdx(-1);
+  };
+
+  return (
+    <div ref={containerRef} style={{ position: "relative" }}>
+      <div style={{ position: "relative" }}>
+        <input
+          type="text"
+          value={query}
+          onFocus={() => setOpen(true)}
+          onChange={e => { setQuery(e.target.value); setOpen(true); setHoveredIdx(-1); }}
+          onKeyDown={e => {
+            if (e.key === "Escape") { setOpen(false); setQuery(value); }
+            else if (e.key === "Enter" && hoveredIdx >= 0 && filtered[hoveredIdx]) { handleSelect(filtered[hoveredIdx]); }
+            else if (e.key === "ArrowDown") { e.preventDefault(); setHoveredIdx(i => Math.min(i + 1, filtered.length - 1)); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); setHoveredIdx(i => Math.max(i - 1, 0)); }
+          }}
+          placeholder="검색 (예: 서울, 경기도, 강남구, 분당)"
+          style={{ ...inputStyle, fontSize: 13, padding: "7px 32px 7px 10px" }}
+        />
+        <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "#9ca3af", pointerEvents: "none" }}>▼</span>
+      </div>
+      {open && (
+        <ul style={{
+          position: "absolute", top: "calc(100% + 2px)", left: 0, right: 0,
+          background: "#fff", border: "1px solid #d1d5db", borderRadius: 8,
+          boxShadow: "0 6px 20px rgba(0,0,0,0.13)",
+          maxHeight: 240, overflowY: "auto",
+          margin: 0, padding: "4px 0", listStyle: "none", zIndex: 9999,
+        }}>
+          {isLegacy && (
+            <li
+              onMouseDown={e => { e.preventDefault(); handleSelect(value); }}
+              style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", color: "#9ca3af", background: "#fafafa", borderBottom: "1px solid #f3f4f6" }}>
+              {value} <span style={{ fontSize: 10, color: "#c4b5fd" }}>(기존값)</span>
+            </li>
+          )}
+          {filtered.length === 0 ? (
+            <li style={{ padding: "10px 12px", color: "#9ca3af", fontSize: 13 }}>검색 결과 없음</li>
+          ) : filtered.map((opt, i) => (
+            <li key={opt}
+              onMouseDown={e => { e.preventDefault(); handleSelect(opt); }}
+              onMouseEnter={() => setHoveredIdx(i)}
+              onMouseLeave={() => setHoveredIdx(-1)}
+              style={{
+                padding: "7px 12px", fontSize: 13, cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                background: i === hoveredIdx ? "#eff6ff" : opt === value ? "#f0f9ff" : "transparent",
+                color: i === hoveredIdx ? "#1d4ed8" : opt === value ? "#0369a1" : "#374151",
+                fontWeight: opt === value ? 600 : 400,
+              }}>
+              <span>{opt}</span>
+              {(KOREA_REGIONS as readonly string[]).includes(opt) && (
+                <span style={{ fontSize: 10, color: "#9ca3af", background: "#f3f4f6", borderRadius: 3, padding: "1px 5px", flexShrink: 0, marginLeft: 6 }}>시/도</span>
+              )}
+            </li>
+          ))}
+          {!query.trim() && (
+            <li style={{ padding: "5px 12px", fontSize: 11, color: "#9ca3af", borderTop: "1px solid #f3f4f6", textAlign: "center" as const }}>
+              검색 시 시/도·시/군/구 모두 표시됩니다
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function OverseasRegionCombobox({ value, onChange, country }: {
+  value: string;
+  onChange: (v: string) => void;
+  country: string;
+}) {
+  const options: readonly string[] = OVERSEAS_CITIES[country] ?? [];
+  const [query, setQuery] = useState(() => options.includes(value) ? value : "");
+  const [open, setOpen] = useState(false);
+  const [hoveredIdx, setHoveredIdx] = useState(-1);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const queryRef = useRef(query);
+  queryRef.current = query;
+  const mountedRef = useRef(false);
+
+  // 마운트 후 value 변경(선택/저장) 시 동기화 — 마운트 첫 실행은 스킵(스마트 초기화 유지)
+  useEffect(() => {
+    if (!mountedRef.current) { mountedRef.current = true; return; }
+    setQuery(value);
+  }, [value]);
+
+  // 해외 국가 전환 시 검색어 초기화 → 새 국가 도시 목록 즉시 표시
+  const prevCountry = useRef(country);
+  useEffect(() => {
+    if (prevCountry.current !== country) {
+      prevCountry.current = country;
+      const newOpts = OVERSEAS_CITIES[country] ?? [];
+      setQuery(newOpts.includes(value) ? value : "");
+    }
+  }, [country, value]);
+
+  const filtered = query.trim()
+    ? options.filter(r => r.includes(query.trim()))
+    : options;
+
+  const isLegacy = Boolean(value) && !options.includes(value);
+
+  useEffect(() => {
+    const handle = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        const q = queryRef.current.trim();
+        // 직접 입력값 저장 (선택 없이 닫혀도 타이핑한 값 유지)
+        if (q && q !== value) onChange(q);
+        else if (!q) setQuery(value);
+      }
+    };
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [value, onChange]);
+
+  const handleSelect = (opt: string) => {
+    setQuery(opt);
+    onChange(opt);
+    setOpen(false);
+    setHoveredIdx(-1);
+  };
+
+  const placeholder = options.length > 0
+    ? `${country} 주요 도시 검색 또는 직접 입력`
+    : "지역/도시 직접 입력";
+
+  return (
+    <div ref={containerRef} style={{ position: "relative" }}>
+      <div style={{ position: "relative" }}>
+        <input
+          type="text"
+          value={query}
+          onFocus={() => setOpen(true)}
+          onChange={e => { setQuery(e.target.value); setOpen(true); setHoveredIdx(-1); }}
+          onKeyDown={e => {
+            if (e.key === "Escape") { setOpen(false); setQuery(value); }
+            else if (e.key === "Enter") {
+              if (hoveredIdx >= 0 && filtered[hoveredIdx]) { handleSelect(filtered[hoveredIdx]); }
+              else if (query.trim()) { onChange(query.trim()); setOpen(false); }
+            }
+            else if (e.key === "ArrowDown") { e.preventDefault(); setHoveredIdx(i => Math.min(i + 1, filtered.length - 1)); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); setHoveredIdx(i => Math.max(i - 1, 0)); }
+          }}
+          placeholder={placeholder}
+          style={{ ...inputStyle, fontSize: 13, padding: "7px 32px 7px 10px" }}
+        />
+        <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "#9ca3af", pointerEvents: "none" }}>
+          {options.length > 0 ? "▼" : "✎"}
+        </span>
+      </div>
+      {open && (
+        <ul style={{
+          position: "absolute", top: "calc(100% + 2px)", left: 0, right: 0,
+          background: "#fff", border: "1px solid #d1d5db", borderRadius: 8,
+          boxShadow: "0 6px 20px rgba(0,0,0,0.13)",
+          maxHeight: 220, overflowY: "auto",
+          margin: 0, padding: "4px 0", listStyle: "none", zIndex: 9999,
+        }}>
+          {isLegacy && (
+            <li onMouseDown={e => { e.preventDefault(); handleSelect(value); }}
+              style={{ padding: "6px 12px", fontSize: 12, cursor: "pointer", color: "#9ca3af", background: "#fafafa", borderBottom: "1px solid #f3f4f6" }}>
+              {value} <span style={{ fontSize: 10, color: "#c4b5fd" }}>(기존값)</span>
+            </li>
+          )}
+          {filtered.length === 0 && query.trim() ? (
+            <li style={{ padding: "8px 12px", fontSize: 13, color: "#374151" }}>
+              <span style={{ fontWeight: 600, color: "#6366f1" }}>{query}</span>
+              <span style={{ color: "#9ca3af", fontSize: 12 }}> — Enter로 직접 저장</span>
+            </li>
+          ) : filtered.length === 0 && options.length === 0 ? (
+            <li style={{ padding: "10px 12px", color: "#9ca3af", fontSize: 13 }}>직접 입력해 주세요</li>
+          ) : filtered.map((opt, i) => (
+            <li key={opt}
+              onMouseDown={e => { e.preventDefault(); handleSelect(opt); }}
+              onMouseEnter={() => setHoveredIdx(i)}
+              onMouseLeave={() => setHoveredIdx(-1)}
+              style={{
+                padding: "7px 12px", fontSize: 13, cursor: "pointer",
+                background: i === hoveredIdx ? "#eff6ff" : opt === value ? "#f0f9ff" : "transparent",
+                color: i === hoveredIdx ? "#1d4ed8" : opt === value ? "#0369a1" : "#374151",
+                fontWeight: opt === value ? 600 : 400,
+              }}>
+              {opt}
+            </li>
+          ))}
+          {options.length > 0 && (
+            <li style={{ padding: "5px 12px", fontSize: 11, color: "#9ca3af", borderTop: "1px solid #f3f4f6", textAlign: "center" as const }}>
+              목록에 없으면 직접 입력 후 Enter
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 export function TranslatorDetailModal({ userId, userEmail, token, permissions = [], onClose, onToast, onDeleted, onSaved }: {
@@ -94,13 +523,20 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [resumeUploading, setResumeUploading] = useState(false);
   const [resumeDeleting, setResumeDeleting] = useState(false);
   const [showAllSubTypes, setShowAllSubTypes] = useState(false);
+  const [showAllSpecs, setShowAllSpecs] = useState(false);
+  const [regionCountry, setRegionCountry] = useState("대한민국");
+  const [regionCity, setRegionCity] = useState("");
+  const [regionCountryCustom, setRegionCountryCustom] = useState("");
   const [pinnedSubTypes, setPinnedSubTypes] = useState<Set<string>>(new Set());
   const [showOtherSpec, setShowOtherSpec] = useState(false);
   const [showAnalyzePanel, setShowAnalyzePanel] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [resumeFileName, setResumeFileName] = useState<string | null>(null);
+  const [eduIsCustom, setEduIsCustom] = useState(false);
+  const [eduCustom, setEduCustom] = useState("");
+  const [majorIsCustom, setMajorIsCustom] = useState(false);
+  const [majorCustom, setMajorCustom] = useState("");
   const [collapsed, setCollapsed] = useState({
-    education: true,
     resume: true,
     operational: true,
     operations: true,
@@ -113,7 +549,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     name: "",
     phone: "",
     languagePairs: "", languageLevel: "", specializations: "", education: "", major: "",
-    graduationYear: "", region: "", grade: "", rating: "", availabilityStatus: "available",
+    graduationYear: "", graduationStatus: "", region: "", grade: "", rating: "", availabilityStatus: "available",
     bio: "",
     affiliatedCompanyId: "" as string,
     settlementType: "",
@@ -170,6 +606,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           languagePairs: p?.languagePairs ?? "", languageLevel: normalizedLevel,
           specializations: p?.specializations ?? "", education: p?.education ?? "", major: p?.major ?? "",
           graduationYear: p?.graduationYear ? String(p.graduationYear) : "",
+          graduationStatus: p?.graduationStatus ?? "",
           region: p?.region ?? "", grade: p?.grade ?? "",
           rating: p?.rating ? String(p.rating) : "",
           availabilityStatus: p?.availabilityStatus ?? "available",
@@ -185,9 +622,27 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         // 앞 2개 = 대표 세부유형
         const rawSubs = (p?.profileSubTypes ?? "").split(",").map(s => s.trim()).filter(Boolean);
         setPinnedSubTypes(new Set(rawSubs.slice(0, 2)));
+        // 거주지역 파싱
+        const parsedRegion = parseRegionStr(p?.region ?? "");
+        setRegionCountry(parsedRegion.country);
+        setRegionCity(parsedRegion.city);
+        setRegionCountryCustom(parsedRegion.countryCustom);
         // 기타 전문분야 입력창: 기존 데이터에 preset 외 값이 있으면 열어둠
         const existingSpecs = (p?.specializations ?? "").split(",").map(s => s.trim()).filter(Boolean);
         setShowOtherSpec(existingSpecs.some(s => !(SPECIALIZATION_PRESETS as readonly string[]).includes(s)));
+        // 학력/전공 — 기존 데이터가 preset 외 값이면 custom 모드로 초기화
+        const loadedEdu = p?.education ?? "";
+        if (loadedEdu && !EDUCATION_ALL.includes(loadedEdu)) {
+          setEduIsCustom(true); setEduCustom(loadedEdu);
+        } else {
+          setEduIsCustom(false); setEduCustom("");
+        }
+        const loadedMajor = p?.major ?? "";
+        if (loadedMajor && !MAJOR_ALL.includes(loadedMajor)) {
+          setMajorIsCustom(true); setMajorCustom(loadedMajor);
+        } else {
+          setMajorIsCustom(false); setMajorCustom("");
+        }
       }
       if (nRes.ok) setNotes(Array.isArray(nData) ? nData : []);
     } catch { onToast("오류: 통번역사 정보 불러오기 실패"); }
@@ -265,6 +720,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         education: data.education ?? "",
         major: data.major ?? "",
         graduationYear: data.graduationYear ? String(data.graduationYear) : "",
+        graduationStatus: data.graduationStatus ?? "",
         specializations: data.specializations ?? "",
         languagePairs: data.languagePairs ?? "",
         languageLevel: data.languageLevel ?? "",
@@ -284,6 +740,18 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
       // 저장된 profileSubTypes 기준으로 pins 재동기화 (앞 N개 유지)
       const savedSubs = (data.profileSubTypes ?? "").split(",").map((s: string) => s.trim()).filter(Boolean);
       setPinnedSubTypes(prev => new Set(savedSubs.slice(0, prev.size)));
+      // 학력/전공 custom 상태 동기화
+      const savedEdu = data.education ?? "";
+      if (savedEdu && !EDUCATION_ALL.includes(savedEdu)) { setEduIsCustom(true); setEduCustom(savedEdu); }
+      else { setEduIsCustom(false); setEduCustom(""); }
+      const savedMajor = data.major ?? "";
+      if (savedMajor && !MAJOR_ALL.includes(savedMajor)) { setMajorIsCustom(true); setMajorCustom(savedMajor); }
+      else { setMajorIsCustom(false); setMajorCustom(""); }
+      // 거주지역 state 재동기화
+      const savedRegion = parseRegionStr(data.region ?? "");
+      setRegionCountry(savedRegion.country);
+      setRegionCity(savedRegion.city);
+      setRegionCountryCustom(savedRegion.countryCustom);
       // 대표 이메일 변경 시 userInfo 갱신
       const newPrimary = validated.find(e => e.isPrimary)?.email.trim().toLowerCase() ?? "";
       if (newPrimary) setUserInfo(prev => prev ? { ...prev, email: newPrimary } : prev);
@@ -555,18 +1023,14 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             )}
             {form.specializations && (() => {
               const specs = form.specializations.split(",").map(s => s.trim()).filter(Boolean);
-              const LIMIT = 3;
-              const visible = specs.slice(0, LIMIT);
-              const hiddenCount = specs.length - LIMIT;
+              if (specs.length === 0) return null;
+              const visible = specs.slice(0, 3);
+              const hiddenCount = specs.length - visible.length;
               return (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
-                  {visible.map((s, i) => (
-                    <span key={i} style={{ fontSize: 11, background: "#fef3c7", color: "#92400e", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>
-                      {s}
-                    </span>
-                  ))}
-                  {hiddenCount > 0 && <span style={{ fontSize: 11, color: "#9ca3af" }}>+{hiddenCount}</span>}
-                </div>
+                <span style={{ fontSize: 12, color: "#92400e", fontWeight: 600, background: "#fef3c7", borderRadius: 6, padding: "2px 8px", display: "inline-flex", alignItems: "center", gap: 3 }}>
+                  🏷 {visible.join(" · ")}
+                  {hiddenCount > 0 && <span style={{ color: "#9ca3af", fontWeight: 400, fontSize: 11 }}>+{hiddenCount}</span>}
+                </span>
               );
             })()}
             {form.rating && (
@@ -599,17 +1063,32 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 재배정 불가
               </span>
             )}
-            {/* 학력/경력 요약 — 두 번째 줄 (있을 때만) */}
-            {(form.education || form.bio) && (
-              <div style={{ width: "100%", display: "flex", gap: 12, flexWrap: "wrap", borderTop: "1px solid #bae6fd", paddingTop: 6, marginTop: 2 }}>
+            {/* 핵심정보 요약 — 두 번째 줄 (있을 때만) */}
+            {(form.education || form.major || pinnedSubTypes.size > 0 || form.specializations || form.bio) && (
+              <div style={{ width: "100%", display: "flex", gap: "4px 14px", flexWrap: "wrap", borderTop: "1px solid #bae6fd", paddingTop: 6, marginTop: 2, alignItems: "center" }}>
                 {form.education && (
-                  <span style={{ fontSize: 11, color: "#0369a1" }}>
-                    🎓 {form.education}{form.major ? ` · ${form.major}` : ""}{form.graduationYear ? ` (${form.graduationYear})` : ""}
+                  <span style={{ fontSize: 11, color: "#0369a1" }}>🎓 {form.education}</span>
+                )}
+                {form.major && (
+                  <span style={{ fontSize: 11, color: "#0369a1" }}>📚 {form.major}</span>
+                )}
+                {form.graduationStatus && (() => {
+                  const displayStatus = form.graduationStatus === "졸업예정" && form.graduationYear && Number(form.graduationYear) < _CURRENT_YEAR
+                    ? "졸업" : form.graduationStatus;
+                  return (
+                    <span style={{ fontSize: 11, color: "#6b7280" }}>
+                      🎓 {displayStatus}{form.graduationYear ? ` ${form.graduationYear}` : ""}
+                    </span>
+                  );
+                })()}
+                {pinnedSubTypes.size > 0 && (
+                  <span style={{ fontSize: 11, color: "#065f46", fontWeight: 600 }}>
+                    ⭐ {[...pinnedSubTypes].join(" / ")}
                   </span>
                 )}
                 {form.bio && (
-                  <span style={{ fontSize: 11, color: "#374151", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    📝 {form.bio.length > 60 ? form.bio.slice(0, 60) + "…" : form.bio}
+                  <span style={{ fontSize: 11, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100%" }}>
+                    ✎ {form.bio.length > 60 ? form.bio.slice(0, 60) + "…" : form.bio}
                   </span>
                 )}
               </div>
@@ -690,14 +1169,157 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   ))}
                 </div>
               </div>
-              {/* 언어 레벨 */}
-              <div>
-                <label style={{ ...labelSt, fontSize: 11 }}>언어 레벨</label>
-                <ClickSelect value={form.languageLevel} onChange={v => setForm(p => ({ ...p, languageLevel: v }))}
-                  style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
-                  options={[{ value: "", label: "선택 안 함" }, ...LANG_LEVEL_OPTIONS.map(l => ({ value: l, label: l }))]} />
+              {/* 학력 · 전공 · 졸업상태 · 졸업/예정년도 */}
+              <div style={{ gridColumn: "1 / -1" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "35fr 25fr 20fr 20fr", gap: "0 16px" }}>
+                  {/* 학력 */}
+                  <div>
+                    <label style={{ ...labelSt, fontSize: 11 }}>학력</label>
+                    <select
+                      value={eduIsCustom ? "__custom__" : form.education}
+                      onChange={e => {
+                        const v = e.target.value;
+                        if (v === "__custom__") { setEduIsCustom(true); setForm(p => ({ ...p, education: eduCustom })); }
+                        else { setEduIsCustom(false); setEduCustom(""); setForm(p => ({ ...p, education: v })); }
+                      }}
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
+                    >
+                      <option value="">선택 안 함</option>
+                      <optgroup label="국내">
+                        {EDUCATION_DOMESTIC.map(s => <option key={s} value={s}>{s}</option>)}
+                      </optgroup>
+                      <optgroup label="해외">
+                        {EDUCATION_OVERSEAS.map(s => <option key={s} value={s}>{s}</option>)}
+                      </optgroup>
+                      <option value="__custom__">기타(직접 입력)</option>
+                    </select>
+                    {eduIsCustom && (
+                      <input type="text" value={eduCustom}
+                        onChange={e => { setEduCustom(e.target.value); setForm(p => ({ ...p, education: e.target.value })); }}
+                        placeholder="직접 입력"
+                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", marginTop: 4 }} />
+                    )}
+                  </div>
+                  {/* 전공 */}
+                  <div>
+                    <label style={{ ...labelSt, fontSize: 11 }}>전공</label>
+                    <select
+                      value={majorIsCustom ? "__custom__" : form.major}
+                      onChange={e => {
+                        const v = e.target.value;
+                        if (v === "__custom__") { setMajorIsCustom(true); setForm(p => ({ ...p, major: majorCustom })); }
+                        else { setMajorIsCustom(false); setMajorCustom(""); setForm(p => ({ ...p, major: v })); }
+                      }}
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
+                    >
+                      <option value="">선택 안 함</option>
+                      <optgroup label="언어계열">
+                        {MAJOR_LANGUAGE.map(s => <option key={s} value={s}>{s}</option>)}
+                      </optgroup>
+                      <optgroup label="통대계열">
+                        {MAJOR_INTERPRETATION.map(s => <option key={s} value={s}>{s}</option>)}
+                      </optgroup>
+                      <optgroup label="전문분야계열">
+                        {MAJOR_SPECIALIZED.map(s => <option key={s} value={s}>{s}</option>)}
+                      </optgroup>
+                      <option value="__custom__">기타(직접 입력)</option>
+                    </select>
+                    {majorIsCustom && (
+                      <input type="text" value={majorCustom}
+                        onChange={e => { setMajorCustom(e.target.value); setForm(p => ({ ...p, major: e.target.value })); }}
+                        placeholder="직접 입력"
+                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", marginTop: 4 }} />
+                    )}
+                  </div>
+                  {/* 졸업상태 */}
+                  <div>
+                    <label style={{ ...labelSt, fontSize: 11 }}>졸업상태</label>
+                    <select
+                      value={form.graduationStatus}
+                      onChange={e => setForm(p => ({ ...p, graduationStatus: e.target.value }))}
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
+                    >
+                      <option value="">선택 안 함</option>
+                      {GRADUATION_STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    {/* 자동감지: 졸업예정 + 과거년도 → 졸업으로 표시 (DB 값은 변경 안 함) */}
+                    {form.graduationStatus === "졸업예정" && form.graduationYear && Number(form.graduationYear) < _CURRENT_YEAR && (
+                      <span style={{ fontSize: 10, color: "#059669", display: "block", marginTop: 3, fontWeight: 600 }}>
+                        ✓ 졸업 (자동감지)
+                      </span>
+                    )}
+                  </div>
+                  {/* 졸업/예정년도 */}
+                  <div>
+                    <label style={{ ...labelSt, fontSize: 11 }}>졸업/예정년도</label>
+                    <select
+                      value={form.graduationYear}
+                      onChange={e => setForm(p => ({ ...p, graduationYear: e.target.value }))}
+                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
+                    >
+                      <option value="">선택 안 함</option>
+                      {GRAD_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                  </div>
+                </div>
               </div>
-              {/* 소속업체 */}
+              {/* 언어레벨 | 거주국가 | 거주지역/도시 — 3컬럼 한 줄 */}
+              <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: "0 16px", alignItems: "start" }}>
+                <div>
+                  <label style={{ ...labelSt, fontSize: 11 }}>언어 레벨</label>
+                  <ClickSelect value={form.languageLevel} onChange={v => setForm(p => ({ ...p, languageLevel: v }))}
+                    style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                    options={[{ value: "", label: "선택 안 함" }, ...LANG_LEVEL_OPTIONS.map(l => ({ value: l, label: l }))]} />
+                </div>
+                <div>
+                  <label style={{ ...labelSt, fontSize: 11 }}>거주국가</label>
+                  <select
+                    value={regionCountry}
+                    onChange={e => {
+                      const c = e.target.value;
+                      setRegionCountry(c);
+                      if (c !== "기타") setRegionCountryCustom("");
+                      // 국가 변경 시 기존 도시값 유지 (사용자가 직접 수정하도록)
+                      setForm(p => ({ ...p, region: buildRegionString(c, c === "기타" ? "" : "", regionCity) }));
+                    }}
+                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}>
+                    {(REGION_COUNTRIES as readonly string[]).map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  {regionCountry === "기타" && (
+                    <input type="text" value={regionCountryCustom}
+                      onChange={e => {
+                        const custom = e.target.value;
+                        setRegionCountryCustom(custom);
+                        setForm(p => ({ ...p, region: buildRegionString("기타", custom, regionCity) }));
+                      }}
+                      placeholder="국가명 직접 입력"
+                      style={{ ...inputStyle, fontSize: 12, padding: "6px 10px", marginTop: 4 }} />
+                  )}
+                </div>
+                <div>
+                  <label style={{ ...labelSt, fontSize: 11 }}>거주지역/도시</label>
+                  {regionCountry === "대한민국" ? (
+                    <KoreaRegionCombobox
+                      value={regionCity}
+                      onChange={city => {
+                        setRegionCity(city);
+                        setForm(p => ({ ...p, region: buildRegionString("대한민국", "", city) }));
+                      }}
+                    />
+                  ) : (
+                    <OverseasRegionCombobox
+                      key={regionCountry === "기타" ? `기타-${regionCountryCustom}` : regionCountry}
+                      value={regionCity}
+                      country={regionCountry === "기타" ? regionCountryCustom : regionCountry}
+                      onChange={city => {
+                        setRegionCity(city);
+                        setForm(p => ({ ...p, region: buildRegionString(regionCountry, regionCountryCustom, city) }));
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+              {/* 소속업체 | 정산유형 */}
               <div>
                 <label style={{ ...labelSt, fontSize: 11 }}>소속업체</label>
                 <select value={form.affiliatedCompanyId} onChange={e => setForm(p => ({ ...p, affiliatedCompanyId: e.target.value }))}
@@ -706,13 +1328,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   {vendorCompanies.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
                 </select>
               </div>
-              {/* 지역 */}
-              <div>
-                <label style={{ ...labelSt, fontSize: 11 }}>지역</label>
-                <input type="text" value={form.region} onChange={e => setForm(p => ({ ...p, region: e.target.value }))}
-                  placeholder="서울, 경기..." style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-              </div>
-              {/* 정산유형 */}
               <div>
                 <label style={{ ...labelSt, fontSize: 11 }}>정산유형</label>
                 <ClickSelect value={form.settlementType} onChange={v => setForm(p => ({ ...p, settlementType: v }))}
@@ -723,6 +1338,13 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                     { value: "사업자", label: "사업자 (세금계산서)" },
                     { value: "업체정산", label: "업체정산 (소속업체 경유)" },
                   ]} />
+              </div>
+              {/* 상세정보 */}
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ ...labelSt, fontSize: 11 }}>상세정보</label>
+                <input type="text" value={form.bio} onChange={e => setForm(p => ({ ...p, bio: e.target.value }))}
+                  placeholder="예: 10년 이상의 전문 통역·번역 경력"
+                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
               </div>
             </div>
           </div>
@@ -827,18 +1449,18 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                               setForm(p => ({ ...p, profileSubTypes: next.join(",") }));
                             }}
                             style={{
-                              padding: "3px 10px", borderRadius: 20, fontSize: 11, cursor: "pointer",
+                              padding: "2px 7px", borderRadius: 20, fontSize: 10, cursor: "pointer",
                               background: isPinned ? "#065f46" : selected ? "#059669" : "#f0fdf4",
                               color: selected ? "#fff" : "#065f46",
                               border: `1px solid ${isPinned ? "#065f46" : selected ? "#059669" : "#a7f3d0"}`,
                               fontWeight: selected ? 700 : 400,
                             }}>
-                            {isPinned && <span style={{ marginRight: 3, fontSize: 10 }}>★</span>}{st}
+                            {isPinned && <span style={{ marginRight: 2, fontSize: 9 }}>★</span>}{st}
                           </button>
                           {selected && (
                             <button type="button" onClick={() => handleTogglePin(st)}
                               title={isPinned ? "대표 해제" : "대표로 지정"}
-                              style={{ background: "none", border: "none", padding: "0 1px", fontSize: 12, cursor: "pointer", lineHeight: 1, color: isPinned ? "#f59e0b" : "#d1d5db" }}>
+                              style={{ background: "none", border: "none", padding: "0 1px", fontSize: 11, cursor: "pointer", lineHeight: 1, color: isPinned ? "#f59e0b" : "#d1d5db" }}>
                               {isPinned ? "★" : "☆"}
                             </button>
                           )}
@@ -861,6 +1483,18 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               const selected = new Set(parseList(form.specializations));
               const presetSet = new Set<string>(SPECIALIZATION_PRESETS);
               const customVals = parseList(form.specializations).filter(x => !presetSet.has(x));
+
+              const allPresets = SPECIALIZATION_PRESETS as readonly string[];
+              const SPEC_FIRST_ROW = 6;
+
+              // 선택된 프리셋 우선 표시, 그 다음 미선택 순서
+              const sortedPresets = [
+                ...allPresets.filter(t => selected.has(t)),
+                ...allPresets.filter(t => !selected.has(t)),
+              ];
+              const visiblePresets = showAllSpecs ? sortedPresets : sortedPresets.slice(0, SPEC_FIRST_ROW);
+              // 숨겨진 수 = 나머지 프리셋 + 기타 버튼 (접힌 상태에서만)
+              const hiddenCount = (sortedPresets.length - visiblePresets.length) + (showAllSpecs ? 0 : 1);
 
               const togglePreset = (tag: string) => {
                 const cur = parseList(form.specializations);
@@ -894,9 +1528,15 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 
               return (
                 <div>
-                  <label style={labelSt}>전문분야</label>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 4 }}>
-                    {(SPECIALIZATION_PRESETS as readonly string[]).map(tag => {
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                    <label style={{ ...labelSt, marginBottom: 0 }}>전문분야</label>
+                    <button type="button" onClick={() => setShowAllSpecs(prev => !prev)}
+                      style={{ fontSize: 11, color: "#6366f1", background: "none", border: "1px solid #e0e7ff", borderRadius: 6, cursor: "pointer", padding: "2px 8px", whiteSpace: "nowrap" }}>
+                      {showAllSpecs ? "접기" : `+${hiddenCount}개 보기`}
+                    </button>
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {visiblePresets.map(tag => {
                       const isSelected = selected.has(tag);
                       const isGeneral = tag === "범용 대응 가능";
                       return (
@@ -907,13 +1547,14 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                           )}>{tag}</button>
                       );
                     })}
-                    {/* 기타 */}
-                    <button type="button" onClick={handleOtherToggle}
-                      style={tagStyle(showOtherSpec, { bg: "#7c3aed", bgOff: "#f5f3ff", fg: "#fff", fgOff: "#7c3aed", border: "#7c3aed", borderOff: "#ddd8fe" })}>
-                      기타
-                    </button>
+                    {showAllSpecs && (
+                      <button type="button" onClick={handleOtherToggle}
+                        style={tagStyle(showOtherSpec, { bg: "#7c3aed", bgOff: "#f5f3ff", fg: "#fff", fgOff: "#7c3aed", border: "#7c3aed", borderOff: "#ddd8fe" })}>
+                        기타
+                      </button>
+                    )}
                   </div>
-                  {showOtherSpec && (
+                  {showAllSpecs && showOtherSpec && (
                     <input
                       type="text"
                       value={customVals.join(", ")}
@@ -927,32 +1568,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             })()}
           </div>
 
-          {/* ═══ 4. 학력정보 (기본 접힘) ═══ */}
-          {secRow("학력 정보", "education")}
-          {!collapsed.education && (
-            <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 10 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px 16px" }}>
-                <div>
-                  <label style={labelSt}>학력</label>
-                  <input type="text" value={form.education} onChange={e => setForm(p => ({ ...p, education: e.target.value }))}
-                    placeholder="예: 서울대학교" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                </div>
-                <div>
-                  <label style={labelSt}>전공</label>
-                  <input type="text" value={form.major} onChange={e => setForm(p => ({ ...p, major: e.target.value }))}
-                    placeholder="예: 영어영문학" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                </div>
-                <div>
-                  <label style={labelSt}>졸업연도</label>
-                  <input type="number" value={form.graduationYear} onChange={e => setForm(p => ({ ...p, graduationYear: e.target.value }))}
-                    placeholder="예: 2018" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ═══ 5. 이력서 & 상세정보 (기본 접힘) ═══ */}
-          {secRow("이력서 & 상세정보", "resume")}
+          {/* ═══ 4. 이력서 관리 (기본 접힘) ═══ */}
+          {secRow("이력서 관리", "resume")}
           {!collapsed.resume && (
           <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 10 }}>
             <div style={{ marginBottom: 12 }}>
@@ -1129,11 +1746,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 </div>
               </div>
             </div>
-            <div>
-              <label style={labelSt}>상세정보 (경력·특이사항)</label>
-              <textarea value={form.bio} onChange={e => setForm(p => ({ ...p, bio: e.target.value }))}
-                rows={3} style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", resize: "vertical" }} />
-            </div>
           </div>
           )} {/* !collapsed.resume */}
 
@@ -1277,6 +1889,15 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             ...(result.region ? { region: result.region } : {}),
             ...(result.bio ? { bio: result.bio } : {}),
           }));
+          // 학력/전공 AI 분석 결과가 preset 외 값이면 custom 모드 동기화
+          if (result.education) {
+            if (!EDUCATION_ALL.includes(result.education)) { setEduIsCustom(true); setEduCustom(result.education); }
+            else { setEduIsCustom(false); setEduCustom(""); }
+          }
+          if (result.major) {
+            if (!MAJOR_ALL.includes(result.major)) { setMajorIsCustom(true); setMajorCustom(result.major); }
+            else { setMajorIsCustom(false); setMajorCustom(""); }
+          }
           setShowAnalyzePanel(false);
         }}
       />

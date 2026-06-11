@@ -14,6 +14,7 @@ export const translatorProfilesTable = pgTable("translator_profiles", {
   education: text("education"),
   major: text("major"),
   graduationYear: integer("graduation_year"),
+  graduationStatus: text("graduation_status"),
   phone: text("phone"),
   region: text("region"),
   grade: text("grade"),

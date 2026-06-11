@@ -751,7 +751,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
   const {
     name,
     languagePairs, languageLevel, specializations, education, major,
-    graduationYear, phone, region, grade, rating, availabilityStatus, bio,
+    graduationYear, graduationStatus, phone, region, grade, rating, availabilityStatus, bio,
     affiliatedCompanyId, settlementType,
     profileWorkTypes, profileSubTypes,
     operationalStatus, operationalNote, reassignmentAllowed,
@@ -777,6 +777,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
       education: education?.trim() || null,
       major: major?.trim() || null,
       graduationYear: (graduationYear != null && graduationYear !== "") ? Number(graduationYear) : null,
+      graduationStatus: graduationStatus?.trim() || null,
       phone: phone?.trim() || null,
       region: region?.trim() || null,
       grade: grade || null,

@@ -278,7 +278,7 @@ export type TranslatorProfile = {
   languagePairs?: string | null; languageLevel?: string | null;
   specializations?: string | null;
   education?: string | null; major?: string | null;
-  graduationYear?: number | null; region?: string | null;
+  graduationYear?: number | null; graduationStatus?: string | null; region?: string | null;
   grade?: string | null;
   rating?: number | null; availabilityStatus?: string;
   bio?: string | null; ratePerWord?: number | null; ratePerPage?: number | null;
