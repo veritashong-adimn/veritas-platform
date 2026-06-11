@@ -28,12 +28,12 @@ export type RateEntryData = {
 
 export const emptyRateEntry = (): RateEntryData => ({
   workType: "번역",
-  subType: "일반번역",
+  subType: "전문번역",
   sourceLang: "한국어",
   sourceCustom: "",
   targetLang: "영어",
   targetCustom: "",
-  unit: "eojeol",
+  unit: "word",
   rate: "",
   currency: "KRW",
   vatIncluded: false,
@@ -85,7 +85,7 @@ export function TranslatorRateEntryCard({
             onChange={v => {
               const units = UNIT_BY_TYPE[v] ?? UNIT_BY_TYPE["번역"];
               const subs = SUB_TYPES_MAP[v] ?? [];
-              up({ workType: v, subType: subs[0] ?? "", unit: units[0]?.value ?? "eojeol" });
+              up({ workType: v, subType: subs[0] ?? "", unit: units[0]?.value ?? "word" });
             }}
             triggerStyle={{ fontSize: 13, padding: "6px 10px", borderRadius: 7, width: "100%" }}
             options={WORK_TYPES.map(w => ({ value: w, label: w }))} />

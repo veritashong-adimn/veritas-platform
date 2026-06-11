@@ -28,14 +28,33 @@ function parsePrivateDir(): { bucketName: string; dirPrefix: string } {
   return { bucketName, dirPrefix };
 }
 
+// ── 단계별 지원 형식 ──────────────────────────────────────────────────────────
+// 1단계 (현재): PDF · DOC · DOCX · TXT
+// 2단계 (예정): HWP · HWPX  (MIME 타입이 브라우저/OS마다 상이하므로 ext 검사 병행 필요)
+// 3단계 (예정): JPG · PNG · 스캔 PDF OCR
+
+export const STAGE1_EXTS = [".pdf", ".doc", ".docx", ".txt"] as const;
+
+// HWP/HWPX는 MIME 식별 불안정 — 2단계 활성 시 ext 기반 검증으로 보완할 것
+// export const STAGE2_EXTS = [".hwp", ".hwpx"] as const;
+// export const STAGE3_EXTS = [".jpg", ".jpeg", ".png"] as const;
+
+export const ALLOWED_EXT: ReadonlyArray<string> = STAGE1_EXTS;
+
 export const ALLOWED_MIME = [
-  "application/pdf",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-];
+  "application/pdf",                                                                    // .pdf
+  "application/msword",                                                                 // .doc
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",           // .docx
+  "text/plain",                                                                         // .txt
+] as const;
 
 export function isAllowedMime(mime: string): boolean {
-  return ALLOWED_MIME.includes(mime);
+  return (ALLOWED_MIME as readonly string[]).includes(mime);
+}
+
+export function isAllowedExt(filename: string): boolean {
+  const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  return ALLOWED_EXT.includes(ext);
 }
 
 export async function uploadResumeToGCS(

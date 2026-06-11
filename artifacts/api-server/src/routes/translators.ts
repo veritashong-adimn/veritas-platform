@@ -14,15 +14,26 @@ import { requireAuth, requireRole, requirePermission } from "../middlewares/auth
 import { getPermissionsForRole } from "../lib/rbac";
 import { encrypt, decrypt, maskResidentNumber } from "../lib/encrypt";
 import {
-  uploadResumeToGCS, deleteResumeFromGCS, getResumeDownloadUrl, isAllowedMime,
+  uploadResumeToGCS, deleteResumeFromGCS, getResumeDownloadUrl, isAllowedMime, isAllowedExt,
 } from "../lib/gcsResume";
+import OpenAI from "openai";
+import { createRequire } from "node:module";
+import path from "node:path";
+
+const _require = createRequire(import.meta.url);
+// pdf-parse and mammoth are CJS-only modules; must use createRequire in ESM context
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const pdfParse = _require("pdf-parse") as (buf: Buffer, opts?: object) => Promise<{ text: string }>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const mammoth = _require("mammoth") as typeof import("mammoth");
 
 const resumeUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    if (isAllowedMime(file.mimetype)) cb(null, true);
-    else cb(new Error("PDF, DOC, DOCX 파일만 업로드 가능합니다."));
+    // MIME 타입 또는 확장자 중 하나를 통과하면 허용 (HWP 등 MIME 불안정 형식 대비)
+    if (isAllowedMime(file.mimetype) || isAllowedExt(file.originalname)) cb(null, true);
+    else cb(new Error("PDF, DOC, DOCX, TXT 형식만 업로드할 수 있습니다. (HWP/HWPX는 2단계 지원 예정)"));
   },
 });
 
@@ -887,8 +898,10 @@ router.post(
           .returning();
       }
 
-      req.log.info({ userId, storedPath }, "Resume uploaded");
-      res.json({ resumeUrl: storedPath, fileName: req.file.originalname });
+      // multer은 multipart filename 헤더를 latin1로 파싱하므로 UTF-8로 재디코딩
+      const fileName = Buffer.from(req.file.originalname, "latin1").toString("utf8");
+      req.log.info({ userId, storedPath, fileName }, "Resume uploaded");
+      res.json({ resumeUrl: storedPath, fileName });
     } catch (err) {
       req.log.error({ err }, "Resume upload failed");
       res.status(500).json({ error: "이력서 업로드에 실패했습니다." });
@@ -918,6 +931,38 @@ router.get("/admin/translators/:id/resume-url", ...adminGuard, async (req, res) 
   }
 });
 
+// ─── 이력서 강제 다운로드 (Content-Disposition: attachment 프록시) ────────────
+router.get("/admin/translators/:id/resume-download", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+  try {
+    const [profile] = await db
+      .select({ resumeUrl: translatorProfilesTable.resumeUrl })
+      .from(translatorProfilesTable)
+      .where(eq(translatorProfilesTable.userId, userId));
+    if (!profile?.resumeUrl) {
+      res.status(404).json({ error: "이력서가 없습니다." }); return;
+    }
+    const signedUrl = await getResumeDownloadUrl(profile.resumeUrl);
+    const fileRes = await fetch(signedUrl, { signal: AbortSignal.timeout(30_000) });
+    if (!fileRes.ok) throw new Error(`파일 로드 실패: ${fileRes.status}`);
+
+    const ext = path.extname(profile.resumeUrl).toLowerCase() || ".pdf";
+    const contentType = fileRes.headers.get("Content-Type") ?? "application/octet-stream";
+    const filename = encodeURIComponent(`이력서${ext}`);
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${filename}`);
+    res.setHeader("Content-Type", contentType);
+
+    const buf = Buffer.from(await fileRes.arrayBuffer());
+    res.send(buf);
+  } catch (err) {
+    req.log.error({ err }, "Resume download proxy failed");
+    if (!res.headersSent) res.status(500).json({ error: "이력서 다운로드 실패." });
+  }
+});
+
 // ─── 이력서 삭제 ──────────────────────────────────────────────────────────────
 router.delete("/admin/translators/:id/resume", ...adminGuard, async (req, res) => {
   const userId = Number(req.params.id);
@@ -939,6 +984,104 @@ router.delete("/admin/translators/:id/resume", ...adminGuard, async (req, res) =
   } catch (err) {
     req.log.error({ err }, "Resume delete failed");
     res.status(500).json({ error: "이력서 삭제 실패." });
+  }
+});
+
+// ─── 이력서 AI 분석 (Preview 전용 — DB 저장 없음) ────────────────────────────
+router.post("/admin/translators/:id/resume-analyze", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+  try {
+    // 1. 저장된 이력서 경로 조회
+    const [profile] = await db
+      .select({ resumeUrl: translatorProfilesTable.resumeUrl })
+      .from(translatorProfilesTable)
+      .where(eq(translatorProfilesTable.userId, userId));
+    if (!profile?.resumeUrl) {
+      res.status(400).json({ error: "등록된 이력서가 없습니다." }); return;
+    }
+
+    // 2. GCS에서 파일 다운로드
+    const signedUrl = await getResumeDownloadUrl(profile.resumeUrl);
+    const fileRes = await fetch(signedUrl, { signal: AbortSignal.timeout(30_000) });
+    if (!fileRes.ok) throw new Error(`파일 다운로드 실패: ${fileRes.status}`);
+    const arrayBuffer = await fileRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const ext = path.extname(profile.resumeUrl).toLowerCase();
+
+    // 3. 텍스트 추출
+    let resumeText = "";
+    if (ext === ".pdf") {
+      const parsed = await pdfParse(buffer);
+      resumeText = parsed.text;
+    } else if (ext === ".docx") {
+      const result = await mammoth.extractRawText({ buffer });
+      resumeText = result.value;
+    } else if (ext === ".doc") {
+      try {
+        const result = await mammoth.extractRawText({ buffer });
+        resumeText = result.value;
+      } catch {
+        res.status(422).json({ error: "DOC 형식 추출에 실패했습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요." }); return;
+      }
+    } else if (ext === ".txt") {
+      resumeText = buffer.toString("utf-8");
+    } else {
+      res.status(422).json({ error: `지원하지 않는 파일 형식입니다 (${ext}). PDF, DOCX, TXT를 사용해 주세요.` }); return;
+    }
+
+    if (!resumeText.trim()) {
+      res.status(422).json({ error: "이력서에서 텍스트를 추출할 수 없습니다. 이미지 기반 PDF이거나 빈 파일일 수 있습니다." }); return;
+    }
+
+    // 4. OpenAI 분석 (DB 저장 없음)
+    const openaiClient = new OpenAI({ apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY });
+    const WORK_TYPES = ["번역", "통역", "감수", "편집", "미디어", "DTP"];
+    const SUB_TYPES = [
+      "일반번역", "전문번역", "긴급번역", "공증번역",
+      "동시통역", "위스퍼링통역", "순차통역", "수행통역", "미팅통역", "전시회통역", "화상통역", "전화통역",
+      "교정", "윤문", "원어민감수", "원문대조감수",
+      "문서편집", "리라이팅",
+      "자막작업", "더빙",
+      "디자인작업",
+    ];
+
+    const completion = await openaiClient.chat.completions.create({
+      model: "gpt-4o",
+      response_format: { type: "json_object" },
+      temperature: 0.1,
+      messages: [
+        {
+          role: "system",
+          content: `당신은 통번역사 이력서를 분석하는 전문가입니다. 이력서에서 정보를 추출하여 정확한 JSON만 반환합니다.
+업무유형은 반드시 다음 목록에서만 선택하세요: ${WORK_TYPES.join(", ")}
+세부유형은 반드시 다음 목록에서만 선택하세요: ${SUB_TYPES.join(", ")}
+주민번호 및 개인 식별 번호는 절대 추출하지 마세요.
+확실하지 않은 항목은 null로 표시하고 confidence를 낮추세요.`,
+        },
+        {
+          role: "user",
+          content: `다음 이력서에서 정보를 추출해주세요:\n\n${resumeText.slice(0, 10000)}\n\n아래 JSON 스키마로만 응답하세요:\n{"name":string|null,"languagePairs":string|null,"education":string|null,"major":string|null,"graduationYear":number|null,"specializations":string|null,"profileWorkTypes":string|null,"profileSubTypes":string|null,"region":string|null,"bio":string|null,"confidence":"high"|"medium"|"low","notes":string|null}`,
+        },
+      ],
+    });
+
+    const raw = completion.choices[0].message.content ?? "{}";
+    let result: Record<string, unknown>;
+    try { result = JSON.parse(raw); } catch { result = {}; }
+
+    // 주민번호 필드 제거 보호
+    delete result.residentNumber;
+    delete result.ssn;
+    delete result.jumin;
+
+    req.log.info({ userId, confidence: result.confidence }, "Resume analyzed");
+    res.json(result);
+  } catch (err) {
+    req.log.error({ err }, "Resume analyze failed");
+    res.status(500).json({ error: "이력서 분석에 실패했습니다. 잠시 후 다시 시도해 주세요." });
   }
 });
 

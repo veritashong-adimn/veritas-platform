@@ -299,6 +299,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [translatorSvcFilter, setTranslatorSvcFilter] = useState("all");
   const [showInactiveTranslators, setShowInactiveTranslators] = useState(false);
   const [translatorDetailModal, setTranslatorDetailModal] = useState<{ userId: number; email: string } | null>(null);
+  const [expandedSubtypeRows, setExpandedSubtypeRows] = useState<Set<number>>(new Set());
   const [showTranslatorCreateModal, setShowTranslatorCreateModal] = useState(false);
   // 엑셀 대량 업로드 상태
   const [showExcelModal, setShowExcelModal] = useState(false);
@@ -2343,7 +2344,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", minWidth: 1160 }}>
                   <colgroup>
-                    {/* 이름(11%) 주민번호(7%) 가능언어(10%) 학력(7%) 전문분야(8%) 업무유형(8%) 세부유형(8%) 상세정보(11%) 평점(5%) 지역(4%) 가용상태(6%) 운영상태(8%) 등록일(7%) */}
+                    {/* 이름(11%) 주민번호(7%) 가능언어(10%) 학력(7%) 업무유형(8%) 세부유형(8%) 전문분야(8%) 상세정보(11%) 평점(5%) 지역(4%) 가용상태(6%) 운영상태(8%) 등록일(7%) */}
                     <col style={{ width: "11%" }} />
                     <col style={{ width: "7%" }} />
                     <col style={{ width: "10%" }} />
@@ -2362,8 +2363,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     <tr>
                       {([
                         ["이름","left"], ["주민번호","center"], ["가능언어","left"],
-                        ["학력","left"], ["전문분야","left"], ["업무유형","left"],
-                        ["세부유형","left"], ["상세정보","left"], ["평점","center"],
+                        ["학력","left"], ["업무유형","left"], ["세부유형","left"],
+                        ["전문분야","left"], ["상세정보","left"], ["평점","center"],
                         ["지역","center"], ["가용상태","center"], ["운영상태","center"], ["등록일","center"],
                       ] as [string, React.CSSProperties["textAlign"]][]).map(([h, align]) => (
                         <th key={h} style={{ ...tableTh, textAlign: align }}>{h}</th>
@@ -2408,12 +2409,6 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden", whiteSpace: "normal" }}>{t.education}</span>
                               : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
-                          {/* 전문분야 */}
-                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
-                            {t.specializations
-                              ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden", whiteSpace: "normal" }}>{t.specializations}</span>
-                              : <span style={{ color: "#d1d5db" }}>-</span>}
-                          </td>
                           {/* 업무유형 — 프로필 우선, 없으면 단가 기반 */}
                           <td style={{ ...tableTd, fontSize: 12 }}>
                             {(() => {
@@ -2433,13 +2428,56 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             {(() => {
                               const profileSTs = (t.profileSubTypes ?? "").split(",").map(s => s.trim()).filter(Boolean);
                               const display = profileSTs.length > 0 ? profileSTs : (t.subTypes ?? []);
-                              return display.length > 0
-                                ? <div style={{ display: "flex", flexWrap: "wrap", gap: 3 }}>
-                                    {display.map((s, i) => (
-                                      <span key={i} style={{ background: "#f0fdf4", color: "#065f46", borderRadius: 4, padding: "1px 5px", fontSize: 11, whiteSpace: "nowrap" }}>{s}</span>
-                                    ))}
-                                  </div>
-                                : <span style={{ color: "#d1d5db" }}>-</span>;
+                              if (display.length === 0) return <span style={{ color: "#d1d5db" }}>-</span>;
+                              const LIMIT = 2;
+                              const isExpanded = expandedSubtypeRows.has(t.id);
+                              const visible = isExpanded ? display : display.slice(0, LIMIT);
+                              const hiddenCount = display.length - LIMIT;
+                              const toggle = (e: React.MouseEvent) => {
+                                e.stopPropagation();
+                                setExpandedSubtypeRows(prev => {
+                                  const next = new Set(prev);
+                                  isExpanded ? next.delete(t.id) : next.add(t.id);
+                                  return next;
+                                });
+                              };
+                              return (
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
+                                  {visible.map((s, i) => (
+                                    <span key={i} style={{ background: "#f0fdf4", color: "#065f46", borderRadius: 4, padding: "1px 5px", fontSize: 11, whiteSpace: "nowrap" }}>{s}</span>
+                                  ))}
+                                  {!isExpanded && hiddenCount > 0 && (
+                                    <button onClick={toggle} style={{ background: "none", border: "none", padding: "0 2px", fontSize: 11, color: "#9ca3af", cursor: "pointer", whiteSpace: "nowrap", lineHeight: "inherit" }}>
+                                      +{hiddenCount}
+                                    </button>
+                                  )}
+                                  {isExpanded && (
+                                    <button onClick={toggle} style={{ background: "none", border: "none", padding: "0 2px", fontSize: 11, color: "#9ca3af", cursor: "pointer", whiteSpace: "nowrap", lineHeight: "inherit", textDecoration: "underline" }}>
+                                      접기
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                          </td>
+                          {/* 전문분야 — chip 렌더링, 3개 이상 +N */}
+                          <td style={{ ...tableTd, fontSize: 12 }}>
+                            {(() => {
+                              const items = (t.specializations ?? "").split(",").map(s => s.trim()).filter(Boolean);
+                              if (items.length === 0) return <span style={{ color: "#d1d5db" }}>-</span>;
+                              const LIMIT = 2;
+                              const visible = items.slice(0, LIMIT);
+                              const hiddenCount = items.length - LIMIT;
+                              return (
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
+                                  {visible.map((s, i) => (
+                                    <span key={i} style={{ background: "#fef3c7", color: "#92400e", borderRadius: 4, padding: "1px 5px", fontSize: 11, whiteSpace: "nowrap" }}>{s}</span>
+                                  ))}
+                                  {hiddenCount > 0 && (
+                                    <span style={{ fontSize: 11, color: "#9ca3af", whiteSpace: "nowrap" }}>+{hiddenCount}</span>
+                                  )}
+                                </div>
+                              );
                             })()}
                           </td>
                           {/* 상세정보 */}
