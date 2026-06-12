@@ -19,6 +19,9 @@ import {
 import OpenAI from "openai";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { writeFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 const _require = createRequire(import.meta.url);
 // pdf-parse and mammoth are CJS-only modules; must use createRequire in ESM context
@@ -86,6 +89,7 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         profileSubTypes: translatorProfilesTable.profileSubTypes,
         operationalStatus: translatorProfilesTable.operationalStatus,
         reassignmentAllowed: translatorProfilesTable.reassignmentAllowed,
+        languageExperiences: translatorProfilesTable.languageExperiences,
       })
       .from(usersTable)
       .leftJoin(translatorProfilesTable, eq(translatorProfilesTable.userId, usersTable.id))
@@ -155,6 +159,7 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       subTypes: serviceMap[r.id]?.subTypes ?? [],
       profileWorkTypes: r.profileWorkTypes ?? null,
       profileSubTypes: r.profileSubTypes ?? null,
+      languageExperiences: r.languageExperiences ?? null,
       residentNumber: sensitiveMap[r.id] ?? null,
     }));
 
@@ -208,10 +213,12 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
   const {
     email, name, phone, region,
     languagePairs, languageLevel, specializations,
-    education, major, graduationYear, rating,
+    education, major, graduationYear, graduationStatus, rating,
     grade, bio, ratePerWord, ratePerPage, unitType, unitPrice,
     resumeUrl, portfolioUrl, availabilityStatus,
     affiliatedCompanyId, settlementType,
+    profileWorkTypes, profileSubTypes,
+    languageExperiences: langExpsCreate,
   } = req.body;
 
   if (!email?.trim()) { res.status(400).json({ error: "이메일은 필수입니다." }); return; }
@@ -234,6 +241,7 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
       specializations: specializations?.trim() || null,
       education: education?.trim() || null, major: major?.trim() || null,
       graduationYear: graduationYear ? Number(graduationYear) : null,
+      graduationStatus: graduationStatus?.trim() || null,
       rating: rating ? Number(rating) : null,
       grade: grade || null, bio: bio?.trim() || null,
       ratePerWord: ratePerWord ? Number(ratePerWord) : null,
@@ -245,6 +253,9 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
       affiliatedCompanyId: (affiliatedCompanyId != null && Number(affiliatedCompanyId) > 0)
         ? Number(affiliatedCompanyId) : null,
       settlementType: settlementType?.trim() || null,
+      profileWorkTypes: profileWorkTypes?.trim() || null,
+      profileSubTypes: profileSubTypes?.trim() || null,
+      languageExperiences: (typeof langExpsCreate === "string" && langExpsCreate) ? langExpsCreate : null,
     }).returning();
 
     // 대표 이메일을 translator_emails에 시딩
@@ -741,6 +752,28 @@ router.get("/admin/translators/:id", ...adminGuard, async (req, res) => {
   }
 });
 
+// ─── 정산유형만 업데이트 (SensitiveInfoModal에서 호출) ───────────────────────
+router.patch("/admin/translators/:id/settlement-type", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+  const { settlementType } = req.body;
+  try {
+    const existing = await db.select().from(translatorProfilesTable).where(eq(translatorProfilesTable.userId, userId));
+    const value = typeof settlementType === "string" ? settlementType.trim() || null : null;
+    if (existing.length === 0) {
+      await db.insert(translatorProfilesTable).values({ userId, settlementType: value, updatedAt: new Date() });
+    } else {
+      await db.update(translatorProfilesTable).set({ settlementType: value, updatedAt: new Date() }).where(eq(translatorProfilesTable.userId, userId));
+    }
+    res.json({ settlementType: value });
+  } catch (err) {
+    console.error("[PATCH settlement-type]", err);
+    res.status(500).json({ error: "저장 실패" });
+  }
+});
+
 // ─── 번역사 프로필 업서트 ─────────────────────────────────────────────────────
 router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
   const userId = Number(req.params.id);
@@ -755,6 +788,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
     affiliatedCompanyId, settlementType,
     profileWorkTypes, profileSubTypes,
     operationalStatus, operationalNote, reassignmentAllowed,
+    languageExperiences,
     emails,
   } = req.body;
 
@@ -793,6 +827,9 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
         ? operationalStatus : undefined,
       operationalNote: operationalNote !== undefined ? (operationalNote?.trim() || null) : undefined,
       reassignmentAllowed: reassignmentAllowed !== undefined ? Boolean(reassignmentAllowed) : undefined,
+      languageExperiences: languageExperiences !== undefined
+        ? (typeof languageExperiences === "string" ? languageExperiences || null : null)
+        : undefined,
       updatedAt: new Date(),
     };
 
@@ -988,101 +1025,637 @@ router.delete("/admin/translators/:id/resume", ...adminGuard, async (req, res) =
   }
 });
 
-// ─── 이력서 AI 분석 (Preview 전용 — DB 저장 없음) ────────────────────────────
-router.post("/admin/translators/:id/resume-analyze", ...adminGuard, async (req, res) => {
-  const userId = Number(req.params.id);
-  if (isNaN(userId) || userId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+// ─── 이력서 AI 분석 공통 상수 & 정규화 헬퍼 ────────────────────────────────────
+const RESUME_WORK_TYPES = ["번역", "통역", "감수", "편집", "미디어", "DTP"];
+const RESUME_SUB_TYPES = [
+  "일반번역", "전문번역", "긴급번역", "공증번역",
+  "동시통역", "위스퍼링통역", "순차통역", "수행통역", "미팅통역", "전시회통역", "화상통역", "전화통역",
+  "교정", "윤문", "원어민감수", "원문대조감수",
+  "문서편집", "리라이팅",
+  "자막작업", "더빙",
+];
+const RESUME_EDUCATION_LIST = [
+  "한국외국어대학교 통번역대학원",
+  "서울외국어대학원대학교 통번역대학원",
+  "이화여자대학교 통역번역대학원",
+  "부산외국어대학교 통번역대학원",
+  "제주대학교 통번역대학원",
+  "선문대학교 통번역대학원",
+  "중앙대학교 국제대학원",
+  "Macquarie University",
+  "Middlebury Institute of International Studies at Monterey",
+  "University of Bath",
+  "University of Westminster",
+  "University of Leeds",
+  "Université Paris Cité ESIT",
+  "University of Geneva FTI",
+  "University of Ottawa",
+];
+const RESUME_MAJOR_LIST = [
+  "한영과", "한중과", "한일과", "한불과", "한독과", "한서과", "한노과", "한아과",
+  "국제회의통역", "국제회의전공", "통역전공", "번역전공", "통번역전공",
+  "의료통역전공", "법률통번역전공", "영상번역전공", "AI번역전공",
+];
+const RESUME_SPECIALIZATION_LIST = [
+  "범용 대응 가능",
+  "의료·의학", "제약·바이오", "GMP", "ERP", "자동차",
+  "반도체", "전자·전기", "기계·제조",
+  "법률", "금융", "특허",
+  "국방·방산", "조선·해양", "에너지·플랜트", "무역·물류", "정부·공공",
+  "IT·SW", "AI·데이터",
+  "화장품", "마케팅",
+];
+
+// 서버사이드 후처리 정규화 — AI가 지시를 따르지 않은 경우의 안전망
+function normalizeExtractedMajor(raw: string | null): string | null {
+  if (!raw) return null;
+  const t = raw.trim();
+  const MAJOR_EN_MAP: Record<string, string> = {
+    "translation and interpretation": "통번역전공",
+    "conference interpretation": "국제회의통역",
+    "simultaneous interpretation": "통역전공",
+    "interpretation": "통역전공",
+    "translation": "번역전공",
+    "t&i": "통번역전공",
+    "interpretation and translation": "통번역전공",
+  };
+  const mapped = MAJOR_EN_MAP[t.toLowerCase()];
+  if (mapped) return mapped;
+  // 한영과 패턴: "한영 통번역" → "한영과"
+  const langPairMatch = t.match(/^(한영|한중|한일|한불|한독|한서|한노|한아)/);
+  if (langPairMatch) {
+    const candidate = langPairMatch[1] + "과";
+    if (RESUME_MAJOR_LIST.includes(candidate)) return candidate;
   }
-  try {
-    // 1. 저장된 이력서 경로 조회
-    const [profile] = await db
-      .select({ resumeUrl: translatorProfilesTable.resumeUrl })
-      .from(translatorProfilesTable)
-      .where(eq(translatorProfilesTable.userId, userId));
-    if (!profile?.resumeUrl) {
-      res.status(400).json({ error: "등록된 이력서가 없습니다." }); return;
+  // 리스트에 있으면 그대로
+  if (RESUME_MAJOR_LIST.includes(t)) return t;
+  return t;
+}
+
+function normalizeExtractedEducation(raw: string | null): string | null {
+  if (!raw) return null;
+  const t = raw.trim();
+  if (RESUME_EDUCATION_LIST.includes(t)) return t;
+  // 부분 일치 퍼지 매칭 (학교명 포함 여부)
+  const ALIASES: Record<string, string> = {
+    "한국외대": "한국외국어대학교 통번역대학원",
+    "통역번역대학원": "한국외국어대학교 통번역대학원",
+    "중앙대": "중앙대학교 국제대학원",
+    "중앙대학교 대학원": "중앙대학교 국제대학원",
+    "이화여대": "이화여자대학교 통역번역대학원",
+    "서울외대": "서울외국어대학원대학교 통번역대학원",
+    "부산외대": "부산외국어대학교 통번역대학원",
+    "macquarie": "Macquarie University",
+    "middlebury": "Middlebury Institute of International Studies at Monterey",
+    "monterey": "Middlebury Institute of International Studies at Monterey",
+    "bath": "University of Bath",
+    "westminster": "University of Westminster",
+    "leeds": "University of Leeds",
+    "esit": "Université Paris Cité ESIT",
+    "geneva": "University of Geneva FTI",
+    "ottawa": "University of Ottawa",
+  };
+  const tl = t.toLowerCase();
+  for (const [key, val] of Object.entries(ALIASES)) {
+    if (tl.includes(key.toLowerCase())) return val;
+  }
+  return t;
+}
+
+function normalizeExtractedSpecializations(raw: string | null): string | null {
+  if (!raw) return null;
+  const SPEC_EN_MAP: Record<string, string> = {
+    "business": "무역·물류",
+    "trade": "무역·물류",
+    "logistics": "무역·물류",
+    "finance": "금융",
+    "financial": "금융",
+    "economics": "금융",
+    "banking": "금융",
+    "legal": "법률",
+    "law": "법률",
+    "legal affairs": "법률",
+    "it": "IT·SW",
+    "software": "IT·SW",
+    "tech": "IT·SW",
+    "technology": "IT·SW",
+    "medical": "의료·의학",
+    "healthcare": "의료·의학",
+    "health": "의료·의학",
+    "pharmaceutical": "제약·바이오",
+    "pharma": "제약·바이오",
+    "biotech": "제약·바이오",
+    "patent": "특허",
+    "intellectual property": "특허",
+    "defense": "국방·방산",
+    "military": "국방·방산",
+    "energy": "에너지·플랜트",
+    "oil": "에너지·플랜트",
+    "government": "정부·공공",
+    "public": "정부·공공",
+    "marketing": "마케팅",
+    "cosmetics": "화장품",
+    "beauty": "화장품",
+    "automotive": "자동차",
+    "automobile": "자동차",
+    "semiconductor": "반도체",
+    "electronics": "전자·전기",
+    "machinery": "기계·제조",
+    "manufacturing": "기계·제조",
+    "marine": "조선·해양",
+    "ai": "AI·데이터",
+    "data": "AI·데이터",
+    "tourism": "마케팅",
+    "general": "범용 대응 가능",
+  };
+  const parts = raw.split(/[,，;]/).map(p => p.trim()).filter(Boolean);
+  const result = new Set<string>();
+  for (const part of parts) {
+    const pl = part.toLowerCase();
+    const mapped = SPEC_EN_MAP[pl];
+    if (mapped) {
+      result.add(mapped);
+    } else if (RESUME_SPECIALIZATION_LIST.includes(part)) {
+      result.add(part);
+    } else {
+      // 부분 일치
+      let found = false;
+      for (const [key, val] of Object.entries(SPEC_EN_MAP)) {
+        if (pl.includes(key)) { result.add(val); found = true; break; }
+      }
+      if (!found) result.add(part); // 알 수 없으면 원문 유지
     }
+  }
+  return result.size > 0 ? [...result].join(", ") : null;
+}
 
-    // 2. GCS에서 파일 다운로드
-    const signedUrl = await getResumeDownloadUrl(profile.resumeUrl);
-    const fileRes = await fetch(signedUrl, { signal: AbortSignal.timeout(30_000) });
-    if (!fileRes.ok) throw new Error(`파일 다운로드 실패: ${fileRes.status}`);
-    const arrayBuffer = await fileRes.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const ext = path.extname(profile.resumeUrl).toLowerCase();
+function buildResumePromptMessages(resumeText: string): Array<{ role: "system" | "user"; content: string }> {
+  return [
+    {
+      role: "system",
+      content: `당신은 통번역사 이력서를 분석하는 전문가입니다. 이력서에서 정보를 추출하여 정확한 JSON만 반환합니다.
 
-    // 3. 텍스트 추출
-    let resumeText = "";
-    if (ext === ".pdf") {
-      const parsed = await pdfParse(buffer);
-      resumeText = parsed.text;
-    } else if (ext === ".docx") {
-      const result = await mammoth.extractRawText({ buffer });
-      resumeText = result.value;
-    } else if (ext === ".doc") {
+【최우선 추출 — 이름 / 휴대폰 / 이메일 / 주소】
+이력서 최상단(헤더·연락처 섹션)을 가장 먼저 탐색하세요. 다음 순서로 반드시 추출합니다:
+1. name: 성명·氏名·Full Name 등 — 이력서 상단에 가장 크게 표시됨. 한글 또는 영문 이름.
+2. phone: 010-, +82-10-, Mobile, Cell, Tel, 연락처 등 모든 형식의 전화번호.
+3. email: @ 포함 이메일 주소.
+4. address: 거주지·주소·Address·Location 등. 추출 실패 시 이력서 전체에서 재탐색.
+이 4가지는 불확실해도 최대한 추출하며 null로 남기지 마세요.
+
+【가능언어(languagePairs) — 엄격 기준 적용】
+반드시 실제 통역·번역 업무 수행이 가능한 언어만 포함합니다.
+
+✅ 포함 조건 (하나 이상 해당 시):
+- 통역·번역 실무 경력에 직접 사용된 언어
+- 통번역 대학원 전공 언어
+- 해외 초·중·고·대학·대학원을 해당 언어권에서 수학 (강력한 실무 근거)
+- 해외 거주 3년 이상이며 해당 언어 사용 환경
+- 고급·전문 수준으로 명시된 언어 (native, fluent, professional, 원어민, 고급 등)
+- 통번역 관련 공인 자격증 또는 공인 시험 성적(JLPT N1, HSK 5이상, DELF B2이상 등)으로 실무 가능성 확인
+
+❌ 제외 조건 (이 경우만 언급된 언어는 languagePairs 제외, referenceLangs로 분류):
+- 고등학교 제2외국어 수업만 이수
+- 대학 교양 수업 또는 단기 어학 과목만 수강
+- 취미·기초 회화·여행 회화 수준
+- "배운 적 있음", "수강한 적 있음" 수준
+- 실무 경력 또는 전문 교육과 연결되지 않은 언어
+
+반환 형식: 한국어 이름으로 쉼표 구분 (예: "한국어, 영어")
+방향성(한→영, 영→한, Korean-English)은 제거하고 언어 이름만 추출.
+영어 언어명 → 한국어: English→영어, Japanese→일본어, Chinese→중국어, French→프랑스어, German→독일어, Spanish→스페인어, Russian→러시아어, Arabic→아랍어, Vietnamese→베트남어, Thai→태국어, Indonesian→인도네시아어, Portuguese→포르투갈어, Italian→이탈리아어, Dutch→네덜란드어, Swedish→스웨덴어, Polish→폴란드어, Turkish→터키어, Hindi→힌디어
+
+【참고언어(referenceLangs) — 학습 이력만 있는 언어】
+languagePairs에서 제외된 언어 중 이력서에 언급된 언어.
+예: 고등학교 프랑스어 수강, 대학 일본어 교양, 기초 중국어 수강, 단기 어학원 수강
+반환 형식: 한국어 이름으로 쉼표 구분 (없으면 null)
+
+【언어·국제경험(languageExperiences) — JSON 배열】
+이력서에 언급된 모든 언어에 대해 배열 요소를 생성합니다. languagePairs + referenceLangs 언어 모두 포함.
+
+해외 수학·거주 탐지 키워드 (적극 탐색):
+- 해외 초등학교·중학교·고등학교·국제학교 이수 → abroadElementary/abroadMiddle/abroadHigh/internationalSchool = true
+- 해외 대학교·대학원 졸업 → abroadUniversity/abroadGraduate = true
+- 교환학생 → exchangeStudent = true
+- 어학연수 → languageStudyAbroad = true
+- 해외 거주 기간 언급 → residenceCountry, residenceCity, residencePeriod 추출
+
+canWork 결정:
+- languagePairs에 포함된 언어 → canWork: true
+- referenceLangs에만 있는 언어 → canWork: false
+- 해외 초·중·고·대학 졸업 언어이지만 실무 경력 없을 때도 canWork: true (강력한 실무 근거)
+
+level 결정:
+- 해외 초·중·고·대학 모두 해당 언어권 수학 + 거주 5년 이상 → "원어민"
+- 해외 대학·대학원 졸업 또는 거주 3년 이상 → "고급"
+- 어학연수·교환학생 경험 → "중급"
+- 교양수업·단기강좌만 → "초급"
+
+acquisitionBg 결정:
+- 해외 거주·유학 경험 → "해외거주" 또는 "해외유학"
+- 이중언어 가정환경 언급 → "이중언어(가정환경)"
+- 국내 대학 전공 → "국내교육"
+- 독학·자기학습 → "자기학습"
+
+배열 구조 (각 언어별 하나의 요소):
+{"language":"한국어언어명","canWork":boolean,"level":"원어민"|"고급"|"중급"|"초급"|"","acquisitionBg":"해외거주"|"해외유학"|"국내교육"|"자기학습"|"이중언어(가정환경)"|"기타"|"","residenceCountry":"","residenceCity":"","residencePeriod":"","abroadElementary":false,"abroadMiddle":false,"abroadHigh":false,"abroadUniversity":false,"abroadGraduate":false,"internationalSchool":false,"exchangeStudent":false,"languageStudyAbroad":false,"notes":""}
+
+【학력(education)】
+다음 목록 중 가장 가까운 학교명으로 반환하세요:
+${RESUME_EDUCATION_LIST.join(", ")}
+유사한 경우 목록에서 선택. 없으면 원문 그대로.
+
+【전공(major)】
+다음 목록 중 하나로 반환:
+${RESUME_MAJOR_LIST.join(", ")}
+영문 전공명 변환: "Translation and Interpretation"→"통번역전공", "Conference Interpretation"→"국제회의통역", "한영 국제회의 통역"→"한영과", "Interpretation"→"통역전공", "Translation"→"번역전공", "T&I"→"통번역전공"
+
+【전문분야(specializations)】
+반드시 다음 목록에서만 선택(쉼표 구분):
+${RESUME_SPECIALIZATION_LIST.join(", ")}
+영문 매핑: Business/Trade→"무역·물류", Finance/Economics→"금융", Legal/Law→"법률", IT/Software/Tech→"IT·SW", Medical/Healthcare→"의료·의학", Pharmaceutical/Medicine Device→"제약·바이오", Patent/IP→"특허", Defense/Military→"국방·방산", Energy/Oil→"에너지·플랜트", Government/Public→"정부·공공", Marketing/Advertisement→"마케팅", Cosmetics/Beauty→"화장품", Automotive/Car→"자동차", Semiconductor→"반도체", Electronics→"전자·전기", AI/Data/ML→"AI·데이터"
+
+【업무유형(profileWorkTypes)】
+반드시 다음에서만 선택(쉼표 구분): ${RESUME_WORK_TYPES.join(", ")}
+
+【세부유형(profileSubTypes)】
+반드시 다음에서만 선택(쉼표 구분): ${RESUME_SUB_TYPES.join(", ")}
+영문 매핑: "Simultaneous Interpretation"→"동시통역", "Consecutive Interpretation"→"순차통역", "Escort Interpretation"→"수행통역", "Whispering"→"위스퍼링통역", "Conference Interpretation"→"동시통역", "Phone Interpretation"→"전화통역", "Video Interpretation"→"화상통역"
+
+【지역(region)】
+"국가 / 도시" 형식으로 반환. 예: "대한민국 / 서울", "미국 / 뉴욕". 도시 불명이면 국가만.
+영문 국가명 → 한국어: South Korea→대한민국, USA/United States→미국, Japan→일본, China→중국, UK→영국, Australia→호주, Canada→캐나다, France→프랑스, Germany→독일.
+영문 도시명 → 한국어: Seoul→서울, Busan→부산, Incheon→인천, Tokyo→도쿄, New York→뉴욕, Los Angeles→로스앤젤레스, Sydney→시드니, London→런던, Paris→파리, Singapore→싱가포르.
+
+【상세정보(bio) — 구조화 요약】
+원문을 그대로 복사하지 말고 이력서 내용을 바탕으로 3~5줄 한국어 요약을 생성합니다:
+- 1줄: 통번역사 소개 (예: "영어·한국어 전문 통번역사 (경력 15년)")
+- 2줄: 전문분야 요약 (예: "금융·법률·IT 분야 전문")
+- 3줄: 주요 업무유형 (예: "동시통역 및 순차통역 수행")
+- 4줄(선택): 학력 또는 자격증 하이라이트
+- 5줄(선택): 주요 클라이언트 또는 실적
+각 줄은 \\n으로 구분, 줄당 15~35자 내외로 간결하게
+
+【졸업상태(graduationStatus)】
+다음 중 하나: 졸업, 졸업예정, 재학중, 수료, 중퇴
+
+【언어레벨(languageLevel)】
+주요 업무 언어의 레벨. 다음 중 하나: 원어민, 고급, 중급, 초급
+
+【주민번호 및 개인 식별 번호는 절대 추출하지 마세요.】
+확실하지 않은 항목은 null로 표시하고 confidence를 낮추세요.`,
+    },
+    {
+      role: "user",
+      content: `다음 이력서에서 정보를 추출해주세요:\n\n${resumeText.slice(0, 12000)}\n\n아래 JSON 스키마로만 응답하세요 (모든 필드 포함):\n{"name":string|null,"phone":string|null,"email":string|null,"address":string|null,"languagePairs":string|null,"referenceLangs":string|null,"languageLevel":"원어민"|"고급"|"중급"|"초급"|null,"education":string|null,"major":string|null,"graduationYear":number|null,"graduationStatus":"졸업"|"졸업예정"|"재학중"|"수료"|"중퇴"|null,"specializations":string|null,"profileWorkTypes":string|null,"profileSubTypes":string|null,"region":string|null,"careerYears":string|null,"certifications":string|null,"bio":string|null,"languageExperiences":array,"confidence":"high"|"medium"|"low","notes":string|null}`,
+    },
+  ];
+}
+
+function buildResumeDto(result: Record<string, unknown>) {
+  return {
+    name: (result.name as string) ?? null,
+    phone: (result.phone as string) ?? null,
+    email: (result.email as string) ?? null,
+    address: (result.address as string) ?? null,
+    languagePairs: (result.languagePairs as string) ?? null,
+    referenceLangs: (result.referenceLangs as string) ?? null,
+    languageLevel: (result.languageLevel as string) ?? null,
+    education: normalizeExtractedEducation((result.education as string) ?? null),
+    major: normalizeExtractedMajor((result.major as string) ?? null),
+    graduationYear: typeof result.graduationYear === "number" ? result.graduationYear : null,
+    graduationStatus: (result.graduationStatus as string) ?? null,
+    specializations: normalizeExtractedSpecializations((result.specializations as string) ?? null),
+    profileWorkTypes: (result.profileWorkTypes as string) ?? null,
+    profileSubTypes: (result.profileSubTypes as string) ?? null,
+    region: (result.region as string) ?? null,
+    careerYears: (result.careerYears as string) ?? null,
+    certifications: (result.certifications as string) ?? null,
+    bio: (result.bio as string) ?? null,
+    languageExperiences: (() => {
+      const raw = result.languageExperiences;
+      if (!raw) return null;
       try {
+        const arr = Array.isArray(raw) ? raw : JSON.parse(raw as string);
+        return Array.isArray(arr) && arr.length > 0 ? JSON.stringify(arr) : null;
+      } catch { return null; }
+    })(),
+    confidence: (result.confidence as "high" | "medium" | "low") ?? "low",
+    notes: (result.notes as string) ?? null,
+  };
+}
+
+// ─── 이력서 AI 분석 — 파일 직접 업로드 (userId 없이, 등록 단계용) ────────────
+router.post(
+  "/admin/translators/resume-analyze-upload",
+  ...adminGuard,
+  resumeUpload.single("file"),
+  async (req, res) => {
+    const file = req.file;
+    if (!file) { res.status(400).json({ error: "파일이 없습니다." }); return; }
+
+    const ext = path.extname(file.originalname).toLowerCase();
+    const buffer = file.buffer;
+    req.log.info({ ext, bytes: buffer.byteLength }, "[ANALYZE-UPLOAD] file received");
+
+    let resumeText = "";
+    try {
+      if (ext === ".pdf") {
+        const parsed = await pdfParse(buffer);
+        resumeText = parsed.text;
+      } else if (ext === ".docx") {
         const result = await mammoth.extractRawText({ buffer });
         resumeText = result.value;
-      } catch {
-        res.status(422).json({ error: "DOC 형식 추출에 실패했습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요." }); return;
+      } else if (ext === ".doc") {
+        const tmpPath = path.join(tmpdir(), `resume_upload_${Date.now()}.doc`);
+        await writeFile(tmpPath, buffer);
+        const antiwordBin = await new Promise<string | null>(resolve => {
+          execFile("which", ["antiword"], (e, out) => resolve(e ? null : out.trim()));
+        });
+        if (antiwordBin) {
+          try {
+            resumeText = await new Promise<string>((resolve, reject) => {
+              execFile(antiwordBin, ["-t", tmpPath], { timeout: 30_000, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
+                if (stdout?.trim()) resolve(stdout);
+                else reject(new Error(stderr?.trim() || err?.message || "antiword: empty output"));
+              });
+            });
+          } finally {
+            await unlink(tmpPath).catch(() => {});
+          }
+        } else {
+          await unlink(tmpPath).catch(() => {});
+          const result = await mammoth.extractRawText({ buffer });
+          resumeText = result.value;
+        }
+      } else if (ext === ".txt") {
+        resumeText = buffer.toString("utf-8");
+      } else {
+        res.status(422).json({ error: `지원하지 않는 파일 형식 (${ext}). PDF, DOCX, DOC, TXT를 사용해 주세요.` }); return;
       }
-    } else if (ext === ".txt") {
-      resumeText = buffer.toString("utf-8");
-    } else {
-      res.status(422).json({ error: `지원하지 않는 파일 형식입니다 (${ext}). PDF, DOCX, TXT를 사용해 주세요.` }); return;
+    } catch (extractErr) {
+      req.log.error({ extractErr }, "[ANALYZE-UPLOAD] text extraction failed");
+      res.status(422).json({ error: "텍스트 추출에 실패했습니다. 파일 형식을 확인해 주세요." }); return;
     }
 
     if (!resumeText.trim()) {
       res.status(422).json({ error: "이력서에서 텍스트를 추출할 수 없습니다. 이미지 기반 PDF이거나 빈 파일일 수 있습니다." }); return;
     }
 
-    // 4. OpenAI 분석 (DB 저장 없음)
-    const openaiClient = new OpenAI({ apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY });
-    const WORK_TYPES = ["번역", "통역", "감수", "편집", "미디어", "DTP"];
-    const SUB_TYPES = [
-      "일반번역", "전문번역", "긴급번역", "공증번역",
-      "동시통역", "위스퍼링통역", "순차통역", "수행통역", "미팅통역", "전시회통역", "화상통역", "전화통역",
-      "교정", "윤문", "원어민감수", "원문대조감수",
-      "문서편집", "리라이팅",
-      "자막작업", "더빙",
-      "디자인작업",
-    ];
+    try {
+      const openaiClient = new OpenAI({
+        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
+        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      });
+      const completion = await openaiClient.chat.completions.create({
+        model: "gpt-4o",
+        response_format: { type: "json_object" },
+        temperature: 0.1,
+        messages: buildResumePromptMessages(resumeText),
+      });
 
-    const completion = await openaiClient.chat.completions.create({
-      model: "gpt-4o",
-      response_format: { type: "json_object" },
-      temperature: 0.1,
-      messages: [
-        {
-          role: "system",
-          content: `당신은 통번역사 이력서를 분석하는 전문가입니다. 이력서에서 정보를 추출하여 정확한 JSON만 반환합니다.
-업무유형은 반드시 다음 목록에서만 선택하세요: ${WORK_TYPES.join(", ")}
-세부유형은 반드시 다음 목록에서만 선택하세요: ${SUB_TYPES.join(", ")}
-주민번호 및 개인 식별 번호는 절대 추출하지 마세요.
-확실하지 않은 항목은 null로 표시하고 confidence를 낮추세요.`,
+      const raw = completion.choices[0].message.content ?? "{}";
+      let result: Record<string, unknown> = {};
+      let jsonParseFailed = false;
+      try { result = JSON.parse(raw); } catch { result = {}; jsonParseFailed = true; }
+      delete result.residentNumber; delete result.ssn; delete result.jumin;
+
+      res.json({
+        ...buildResumeDto(result),
+        _debug: {
+          sourceType: "file_upload",
+          fileName: file.originalname,
+          extractedTextLength: resumeText.length,
+          extractedTextPreview: resumeText.slice(0, 120).replace(/\n/g, " "),
+          aiCalled: true,
+          currentValuesUsed: false,
+          jsonParseFailed,
         },
-        {
-          role: "user",
-          content: `다음 이력서에서 정보를 추출해주세요:\n\n${resumeText.slice(0, 10000)}\n\n아래 JSON 스키마로만 응답하세요:\n{"name":string|null,"languagePairs":string|null,"education":string|null,"major":string|null,"graduationYear":number|null,"specializations":string|null,"profileWorkTypes":string|null,"profileSubTypes":string|null,"region":string|null,"bio":string|null,"confidence":"high"|"medium"|"low","notes":string|null}`,
-        },
-      ],
+      });
+    } catch (err) {
+      req.log.error({ err }, "[ANALYZE-UPLOAD] OpenAI call failed");
+      res.status(500).json({ error: "AI 분석 실패: OpenAI 호출 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요." });
+    }
+  }
+);
+
+// ─── 이력서 AI 분석 (Preview 전용 — DB 저장 없음) ────────────────────────────
+router.post("/admin/translators/:id/resume-analyze", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 user id." }); return;
+  }
+
+  // ── STEP 로그 헬퍼 ──
+  const STEP = (n: number, msg: string, extra?: Record<string, unknown>) =>
+    req.log.info({ step: n, userId, ...extra }, `[ANALYZE-STEP-${n}] ${msg}`);
+  const FAIL = (n: number, msg: string, err: unknown) => {
+    const e = err instanceof Error ? err : new Error(String(err));
+    req.log.error({
+      step: n, userId,
+      errType: e.constructor?.name ?? typeof err,
+      errMsg: e.message,
+      errStack: e.stack,
+      errCause: (e as NodeJS.ErrnoException).cause,
+      errCode: (e as NodeJS.ErrnoException).code,
+      errFull: JSON.stringify(err, Object.getOwnPropertyNames(err instanceof Error ? err : {})),
+    }, `[ANALYZE-FAIL-${n}] ${msg}`);
+  };
+
+  STEP(0, "route entered");
+
+  try {
+    // ── STEP 1: DB에서 이력서 경로 조회 ──
+    STEP(1, "querying resume_url from DB");
+    const [profile] = await db
+      .select({ resumeUrl: translatorProfilesTable.resumeUrl })
+      .from(translatorProfilesTable)
+      .where(eq(translatorProfilesTable.userId, userId));
+
+    STEP(2, "DB query complete", { hasProfile: !!profile, resumeUrl: profile?.resumeUrl ?? null });
+    if (!profile?.resumeUrl) {
+      res.status(400).json({ error: "등록된 이력서가 없습니다." }); return;
+    }
+
+    // ── STEP 3: GCS signed URL 발급 ──
+    STEP(3, "generating signed URL", { resumeUrl: profile.resumeUrl });
+    const signedUrl = await getResumeDownloadUrl(profile.resumeUrl);
+    STEP(4, "signed URL obtained", { signedUrlPrefix: signedUrl.slice(0, 60) });
+
+    // ── STEP 5: 파일 다운로드 ──
+    STEP(5, "downloading file from GCS");
+    const fileRes = await fetch(signedUrl, { signal: AbortSignal.timeout(30_000) });
+    if (!fileRes.ok) {
+      FAIL(5, `GCS download failed HTTP ${fileRes.status}`, new Error(`HTTP ${fileRes.status} ${fileRes.statusText}`));
+      throw new Error(`파일 다운로드 실패: ${fileRes.status}`);
+    }
+    const arrayBuffer = await fileRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const ext = path.extname(profile.resumeUrl).toLowerCase();
+    STEP(6, "file downloaded", { ext, bufferBytes: buffer.byteLength });
+
+    // ── STEP 7: 텍스트 추출 ──
+    STEP(7, "extracting text", { ext });
+    let resumeText = "";
+    if (ext === ".pdf") {
+      const parsed = await pdfParse(buffer);
+      resumeText = parsed.text;
+      STEP(8, "PDF text extracted", { textLen: resumeText.length, preview: resumeText.slice(0, 100) });
+    } else if (ext === ".docx") {
+      const result = await mammoth.extractRawText({ buffer });
+      resumeText = result.value;
+      STEP(8, "DOCX text extracted", { textLen: resumeText.length, preview: resumeText.slice(0, 100) });
+    } else if (ext === ".doc") {
+      const tmpPath = path.join(tmpdir(), `resume_${Date.now()}_${Math.random().toString(36).slice(2)}.doc`);
+      STEP(8, "DOC: writing tmp file", { tmpPath });
+      await writeFile(tmpPath, buffer);
+      // antiword 바이너리 경로 확인 (Railway/Nixpacks는 /usr/bin/antiword)
+      const antiwordBin = await new Promise<string | null>(resolve => {
+        execFile("which", ["antiword"], (e, out) => resolve(e ? null : out.trim()));
+      });
+      STEP(8, "antiword binary check", { antiwordBin });
+
+      if (antiwordBin) {
+        try {
+          resumeText = await new Promise<string>((resolve, reject) => {
+            execFile(antiwordBin, ["-t", tmpPath], { timeout: 30_000, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
+              req.log.info({
+                antiwordBin,
+                antiwordStdoutLen: stdout?.length ?? 0,
+                antiwordStdoutPreview: stdout?.slice(0, 100) ?? null,
+                antiwordStderr: stderr?.slice(0, 300) ?? null,
+                antiwordErr: err?.message ?? null,
+                antiwordCode: (err as NodeJS.ErrnoException)?.code ?? null,
+              }, "[ANALYZE] antiword execution result");
+              if (stdout?.trim()) resolve(stdout);
+              else reject(new Error(stderr?.trim() || err?.message || "antiword: empty output"));
+            });
+          });
+          STEP(8, "DOC text extracted via antiword", { textLen: resumeText.length, preview: resumeText.slice(0, 100) });
+        } catch (docErr) {
+          FAIL(8, "antiword execution failed", docErr);
+          res.status(422).json({ error: "DOC 형식 추출에 실패했습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요." }); return;
+        } finally {
+          await unlink(tmpPath).catch(() => {});
+        }
+      } else {
+        // antiword 없음 → mammoth로 폴백 (일부 DOC 파일은 처리 가능)
+        await unlink(tmpPath).catch(() => {});
+        STEP(8, "antiword not found — fallback to mammoth for DOC");
+        try {
+          const result = await mammoth.extractRawText({ buffer });
+          resumeText = result.value;
+          STEP(8, "DOC fallback mammoth result", { textLen: resumeText.length, preview: resumeText.slice(0, 100) });
+        } catch (mamErr) {
+          FAIL(8, "DOC mammoth fallback also failed — antiword not installed", mamErr);
+          res.status(422).json({ error: "DOC 형식 추출에 실패했습니다. 서버에 antiword가 설치되지 않았습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요." }); return;
+        }
+      }
+    } else if (ext === ".txt") {
+      resumeText = buffer.toString("utf-8");
+      STEP(8, "TXT text extracted", { textLen: resumeText.length, preview: resumeText.slice(0, 100) });
+    } else {
+      res.status(422).json({ error: `지원하지 않는 파일 형식입니다 (${ext}). PDF, DOCX, TXT를 사용해 주세요.` }); return;
+    }
+
+    if (!resumeText.trim()) {
+      req.log.warn({ userId, ext }, "[ANALYZE] empty text after extraction");
+      res.status(422).json({ error: "이력서에서 텍스트를 추출할 수 없습니다. 이미지 기반 PDF이거나 빈 파일일 수 있습니다." }); return;
+    }
+
+    // ── STEP 9: OpenAI 설정 확인 ──
+    const openaiApiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+    const openaiBaseUrl = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
+    STEP(9, "OpenAI env check", {
+      hasApiKey: !!openaiApiKey,
+      apiKeyMask: openaiApiKey ? openaiApiKey.slice(0, 8) + "***" : null,
+      baseUrl: openaiBaseUrl ?? "(none — will use api.openai.com)",
+      textLenToSend: Math.min(resumeText.length, 10000),
+    });
+
+    const openaiClient = new OpenAI({
+      apiKey: openaiApiKey,
+      baseURL: openaiBaseUrl,
+    });
+    // ── STEP 10: OpenAI 호출 ──
+    STEP(10, "calling OpenAI chat.completions.create");
+    let completion: Awaited<ReturnType<typeof openaiClient.chat.completions.create>>;
+    try {
+      completion = await openaiClient.chat.completions.create({
+        model: "gpt-4o",
+        response_format: { type: "json_object" },
+        temperature: 0.1,
+        messages: buildResumePromptMessages(resumeText),
+      });
+    } catch (openaiErr) {
+      FAIL(10, "OpenAI API call failed", openaiErr);
+      throw openaiErr;
+    }
+
+    // ── STEP 11: OpenAI 응답 파싱 ──
+    STEP(11, "OpenAI response received", {
+      model: completion.model,
+      finishReason: completion.choices[0]?.finish_reason,
+      rawContentLen: completion.choices[0]?.message?.content?.length ?? 0,
+      rawContentPreview: completion.choices[0]?.message?.content?.slice(0, 200) ?? null,
+      usage: completion.usage,
     });
 
     const raw = completion.choices[0].message.content ?? "{}";
     let result: Record<string, unknown>;
-    try { result = JSON.parse(raw); } catch { result = {}; }
+    try {
+      result = JSON.parse(raw);
+      STEP(12, "JSON.parse succeeded", { keys: Object.keys(result), confidence: result.confidence });
+    } catch (parseErr) {
+      FAIL(12, "JSON.parse failed", parseErr);
+      req.log.error({ rawContent: raw }, "[ANALYZE] raw content that failed JSON.parse");
+      result = {};
+    }
 
-    // 주민번호 필드 제거 보호
+    // ── STEP 13: 민감 필드 제거 및 최종 DTO ──
     delete result.residentNumber;
     delete result.ssn;
     delete result.jumin;
 
-    req.log.info({ userId, confidence: result.confidence }, "Resume analyzed");
-    res.json(result);
+    let jsonParseFailed = false;
+    // result was already parsed above; check if it was an empty fallback
+    if (!result.name && !result.languagePairs && !result.education) jsonParseFailed = Object.keys(result).length === 0;
+
+    const dto = {
+      ...buildResumeDto(result),
+      _debug: {
+        sourceType: "stored_file" as const,
+        fileName: path.basename(profile.resumeUrl),
+        extractedTextLength: resumeText.length,
+        extractedTextPreview: resumeText.slice(0, 120).replace(/\n/g, " "),
+        aiCalled: true,
+        currentValuesUsed: false,
+        jsonParseFailed,
+      },
+    };
+
+    STEP(13, "DTO built — about to send 200", {
+      dtoKeys: Object.keys(dto),
+      confidence: dto.confidence,
+      hasName: !!dto.name,
+      hasLanguagePairs: !!dto.languagePairs,
+      extractedTextLength: resumeText.length,
+    });
+
+    res.json(dto);
+    STEP(14, "res.json() called — response sent");
+
   } catch (err) {
-    req.log.error({ err }, "Resume analyze failed");
-    res.status(500).json({ error: "이력서 분석에 실패했습니다. 잠시 후 다시 시도해 주세요." });
+    FAIL(99, "unhandled exception in resume-analyze", err);
+    if (!res.headersSent) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const category =
+        msg.includes("파일 다운로드") ? "파일을 찾을 수 없음: GCS 다운로드 실패" :
+        msg.includes("추출") ? "텍스트 추출 실패" :
+        msg.includes("OpenAI") || msg.includes("openai") ? "AI 분석 실패: OpenAI 호출 오류" :
+        "이력서 분석 실패 (서버 오류)";
+      res.status(500).json({ error: category, detail: msg });
+    }
   }
 });
 

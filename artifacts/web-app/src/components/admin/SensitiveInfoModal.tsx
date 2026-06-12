@@ -24,6 +24,14 @@ export const PAYMENT_METHODS = [
   { value: "other",                label: "기타" },
 ];
 
+export const SETTLEMENT_TYPES = [
+  { value: "개인(3.3%)", label: "개인 (3.3% 원천징수)", color: "#1d4ed8", bg: "#eff6ff", border: "#bfdbfe" },
+  { value: "사업자",      label: "사업자 (세금계산서)",  color: "#6d28d9", bg: "#f5f3ff", border: "#ddd8fe" },
+  { value: "해외개인",    label: "해외개인",              color: "#b45309", bg: "#fffbeb", border: "#fde68a" },
+  { value: "해외법인",    label: "해외법인",              color: "#0f766e", bg: "#f0fdfa", border: "#99f6e4" },
+  { value: "외주업체",    label: "외주업체 (소속업체 경유)", color: "#374151", bg: "#f3f4f6", border: "#d1d5db" },
+];
+
 const CURRENCIES = ["KRW", "USD", "EUR", "JPY", "GBP", "CAD", "AUD", "CNY", "HKD", "SGD"];
 const FEE_PAYER_OPTIONS = [
   { value: "sender",    label: "송금인 부담 (당사)" },
@@ -60,6 +68,7 @@ type SensitiveData = {
 };
 
 const emptyForm = () => ({
+  settlementType: "",
   paymentMethod: "",
   residentFront: "", residentBack: "",
   bankName: "", bankAccount: "", accountHolder: "",
@@ -71,15 +80,18 @@ const emptyForm = () => ({
   paymentHold: false, settlementMemo: "",
 });
 
-export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }: {
+export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, initialSettlementType, onSettlementTypeSaved }: {
   userId: number; userName: string; token: string;
   onClose: () => void; onToast: (msg: string) => void;
+  initialSettlementType?: string;
+  onSettlementTypeSaved?: (type: string) => void;
 }) {
   const [data, setData] = useState<SensitiveData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [form, setForm] = useState(emptyForm());
+  const [savedSettlementType, setSavedSettlementType] = useState(initialSettlementType ?? "");
   const backRef = useRef<HTMLInputElement>(null);
   const authH = { Authorization: `Bearer ${token}` };
 
@@ -90,6 +102,7 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
       .then((d: SensitiveData) => {
         setData(d);
         setForm({
+          settlementType: initialSettlementType ?? "",
           paymentMethod: d.paymentMethod ?? "",
           residentFront: "", residentBack: "",
           bankName: d.bankName ?? "", bankAccount: d.bankAccount ?? "", accountHolder: d.accountHolder ?? "",
@@ -150,6 +163,21 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
       if (!res.ok) { onToast(`오류: ${d.error}`); return; }
       setData(d);
       setForm(p => ({ ...p, residentFront: "", residentBack: "" }));
+
+      // 정산유형 별도 저장 (translator_profiles)
+      if (form.settlementType !== (initialSettlementType ?? "")) {
+        try {
+          await fetch(api(`/api/admin/translators/${userId}/settlement-type`), {
+            method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
+            body: JSON.stringify({ settlementType: form.settlementType || null }),
+          });
+          setSavedSettlementType(form.settlementType);
+          onSettlementTypeSaved?.(form.settlementType);
+        } catch { /* 정산유형 저장 실패는 무시하지 않음 */ }
+      } else {
+        setSavedSettlementType(form.settlementType);
+      }
+
       setEditMode(false);
       onToast("정산/지급 정보가 저장되었습니다.");
     } catch { onToast("오류: 저장 실패"); }
@@ -196,9 +224,24 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
                 </div>
               ) : (
                 <>
-                  {/* 지급방식 배지 */}
-                  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14 }}>
-                    <span style={{ fontSize:13, fontWeight:700, color:"#374151" }}>지급 방식</span>
+                  {/* 정산유형 + 지급방식 배지 */}
+                  <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
+                    {(() => {
+                      const st = SETTLEMENT_TYPES.find(s => s.value === savedSettlementType);
+                      if (!st && !savedSettlementType) return (
+                        <span style={{ fontSize:12, color:"#9ca3af", fontStyle:"italic" }}>정산유형 미설정</span>
+                      );
+                      const color = st?.color ?? "#374151";
+                      const bg = st?.bg ?? "#f3f4f6";
+                      const border = st?.border ?? "#d1d5db";
+                      return (
+                        <span style={{ padding:"4px 12px", borderRadius:20, fontSize:12, fontWeight:700, background:bg, color, border:`1px solid ${border}` }}>
+                          {st?.label ?? savedSettlementType}
+                        </span>
+                      );
+                    })()}
+                    <span style={{ fontSize:12, color:"#d1d5db" }}>|</span>
+                    <span style={{ fontSize:13, fontWeight:700, color:"#374151" }}>지급방식</span>
                     <span style={{ padding:"4px 12px", borderRadius:20, fontSize:12, fontWeight:700, background:"#eff6ff", color:"#1d4ed8", border:"1px solid #bfdbfe" }}>
                       {pmLabel(data.paymentMethod)}
                     </span>
@@ -310,8 +353,23 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
           {/* ─── 편집 모드 ─────────────────────────────────────────────────── */}
           {editMode && (
             <div style={{ display:"flex", flexDirection:"column", gap:0 }}>
+              {/* 정산유형 선택 */}
+              <p style={sH}>정산유형</p>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6, marginBottom:16 }}>
+                {SETTLEMENT_TYPES.map(st => (
+                  <button key={st.value} onClick={() => sf("settlementType", st.value === form.settlementType ? "" : st.value)}
+                    style={{
+                      padding:"9px 8px", borderRadius:8, fontSize:12, cursor:"pointer", textAlign:"center", lineHeight:1.3,
+                      border: form.settlementType === st.value ? `2px solid ${st.color}` : `1.5px solid ${st.border}`,
+                      background: form.settlementType === st.value ? st.bg : "#f9fafb",
+                      color: form.settlementType === st.value ? st.color : "#374151",
+                      fontWeight: form.settlementType === st.value ? 700 : 400,
+                    }}>{st.label}</button>
+                ))}
+              </div>
+
               {/* 지급방식 선택 */}
-              <p style={sH}>지급 방식 선택</p>
+              <p style={sH}>지급방식</p>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:4 }}>
                 {PAYMENT_METHODS.map(m => (
                   <button key={m.value} onClick={() => sf("paymentMethod", m.value)}
@@ -433,7 +491,10 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast }
                   {saving ? "저장 중..." : "저장"}
                 </PrimaryBtn>
                 {data?.exists && (
-                  <GhostBtn onClick={() => setEditMode(false)} style={{ fontSize:13, padding:"9px 16px" }}>취소</GhostBtn>
+                  <GhostBtn onClick={() => {
+                    setForm(p => ({ ...p, settlementType: savedSettlementType }));
+                    setEditMode(false);
+                  }} style={{ fontSize:13, padding:"9px 16px" }}>취소</GhostBtn>
                 )}
                 <GhostBtn onClick={onClose} style={{ fontSize:13, padding:"9px 16px" }}>닫기</GhostBtn>
               </div>

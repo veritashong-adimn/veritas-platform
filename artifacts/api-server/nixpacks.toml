@@ -1,0 +1,5 @@
+[phases.setup]
+nixPkgs = ["antiword"]
+
+[start]
+cmd = "node --enable-source-maps ./dist/index.mjs"

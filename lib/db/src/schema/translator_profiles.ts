@@ -40,6 +40,8 @@ export const translatorProfilesTable = pgTable("translator_profiles", {
   operationalNote: text("operational_note"),
   // 재배정 가능 여부
   reassignmentAllowed: boolean("reassignment_allowed").notNull().default(true),
+  // 언어·국제경험 (JSON 배열, LangExpEntry[])
+  languageExperiences: text("language_experiences"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 

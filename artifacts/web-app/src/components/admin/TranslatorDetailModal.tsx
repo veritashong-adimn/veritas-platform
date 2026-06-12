@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
-import { api, TranslatorProfile, TranslatorRate, NoteEntry, normalizeLanguages } from "../../lib/constants";
+import { api, TranslatorProfile, TranslatorRate, NoteEntry, normalizeLanguages, LangExpEntry, parseLangExperiences } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
-import { SensitiveInfoModal } from "./SensitiveInfoModal";
+import { SensitiveInfoModal, SETTLEMENT_TYPES } from "./SensitiveInfoModal";
+import { TranslatorLangExpSection } from "./TranslatorLangExpSection";
 import {
   ALL_RATE_UNITS as ALL_UNITS,
   getRateUnitLabel as getUnitLabel,
@@ -245,17 +246,56 @@ function formatPhoneNumber(value: string): string {
   return `${n.slice(0, 3)}-${n.slice(3, 7)}-${n.slice(7, 11)}`;
 }
 
+// AI가 반환하는 영문 국가명 → 한국어 매핑 (소문자 키)
+const COUNTRY_EN_TO_KO: Record<string, string> = {
+  "south korea": "대한민국", "korea": "대한민국",
+  "japan": "일본", "china": "중국", "taiwan": "대만", "hong kong": "홍콩", "singapore": "싱가포르",
+  "usa": "미국", "united states": "미국", "united states of america": "미국",
+  "uk": "영국", "united kingdom": "영국", "great britain": "영국",
+  "australia": "호주", "canada": "캐나다", "new zealand": "뉴질랜드",
+  "malaysia": "말레이시아", "thailand": "태국", "vietnam": "베트남", "viet nam": "베트남",
+  "indonesia": "인도네시아", "philippines": "필리핀", "india": "인도",
+  "germany": "독일", "france": "프랑스", "italy": "이탈리아", "spain": "스페인",
+  "netherlands": "네덜란드", "belgium": "벨기에", "switzerland": "스위스", "austria": "오스트리아",
+  "russia": "러시아", "uae": "UAE", "united arab emirates": "UAE",
+  "saudi arabia": "사우디아라비아", "qatar": "카타르",
+  "mexico": "멕시코", "brazil": "브라질",
+};
+function resolveCountry(raw: string): string {
+  return COUNTRY_EN_TO_KO[raw.trim().toLowerCase()] ?? raw.trim();
+}
+
 function parseRegionStr(regionStr: string): { country: string; city: string; countryCustom: string } {
   if (!regionStr) return { country: "대한민국", city: "", countryCustom: "" };
+
+  // 표준 형식: "대한민국 / 서울특별시 강남구"
   const slashIdx = regionStr.indexOf(" / ");
   if (slashIdx >= 0) {
-    const country = regionStr.slice(0, slashIdx).trim();
+    const rawCountry = regionStr.slice(0, slashIdx).trim();
     const city = regionStr.slice(slashIdx + 3).trim();
+    const country = resolveCountry(rawCountry);
     if ((REGION_COUNTRIES as readonly string[]).includes(country)) return { country, city, countryCustom: "" };
     return { country: "기타", city, countryCustom: country };
   }
-  // 구분자 없는 경우: 국가 목록 매칭 후 대한민국 지역으로 fallback
+
+  // AI "City, Country" 또는 "Country, City" 형식
+  const commaIdx = regionStr.indexOf(", ");
+  if (commaIdx >= 0) {
+    const part1 = regionStr.slice(0, commaIdx).trim();
+    const part2 = regionStr.slice(commaIdx + 2).trim();
+    const fromPart2 = resolveCountry(part2);
+    if ((REGION_COUNTRIES as readonly string[]).includes(fromPart2)) return { country: fromPart2, city: part1, countryCustom: "" };
+    const fromPart1 = resolveCountry(part1);
+    if ((REGION_COUNTRIES as readonly string[]).includes(fromPart1)) return { country: fromPart1, city: part2, countryCustom: "" };
+    return { country: "기타", city: part1, countryCustom: fromPart2 };
+  }
+
+  // 단일 값: 한국어 국가 목록 직접 매칭
   if ((REGION_COUNTRIES as readonly string[]).slice(0, -1).includes(regionStr)) return { country: regionStr, city: "", countryCustom: "" };
+  // 영어 국가명 단일 값 ("South Korea" 등)
+  const mappedCountry = resolveCountry(regionStr);
+  if ((REGION_COUNTRIES as readonly string[]).includes(mappedCountry)) return { country: mappedCountry, city: "", countryCustom: "" };
+  // 알 수 없는 값 → 대한민국 지역으로 처리
   return { country: "대한민국", city: regionStr, countryCustom: "" };
 }
 
@@ -519,7 +559,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [rateForm, setRateForm] = useState<RateEntryData>(emptyRateEntry());
   const [addingRate, setAddingRate] = useState(false);
   const [showSensitive, setShowSensitive] = useState(false);
-  const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [resumeUploading, setResumeUploading] = useState(false);
   const [resumeDeleting, setResumeDeleting] = useState(false);
   const [showAllSubTypes, setShowAllSubTypes] = useState(false);
@@ -544,6 +583,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   });
   const toggleSection = (key: keyof typeof collapsed) =>
     setCollapsed(p => ({ ...p, [key]: !p[key] }));
+  const [langExperiences, setLangExperiences] = useState<LangExpEntry[]>([]);
 
   const [form, setForm] = useState({
     name: "",
@@ -562,6 +602,34 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [vendorCompanies, setVendorCompanies] = useState<Array<{ id: number; name: string }>>([]);
 
   const authH = { Authorization: `Bearer ${token}` };
+
+  const handleResumeUpload = async (file: File) => {
+    const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+    if (!(RESUME_ALLOWED_EXTS as readonly string[]).includes(ext)) {
+      onToast(RESUME_UPLOAD_ERROR_MSG);
+      return;
+    }
+    if (profile?.resumeUrl && !window.confirm("기존 이력서를 새 파일로 교체하시겠습니까?")) return;
+    setResumeUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(api(`/api/admin/translators/${userId}/resume-upload`), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: fd,
+      });
+      const d = await r.json();
+      if (r.ok) {
+        setProfile(p => p ? { ...p, resumeUrl: d.resumeUrl } : p);
+        setResumeFileName(d.fileName ?? null);
+        onToast("이력서가 업로드되었습니다.");
+      } else {
+        onToast(`오류: ${d.error}`);
+      }
+    } catch { onToast("오류: 이력서 업로드 실패"); }
+    finally { setResumeUploading(false); }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -622,6 +690,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         // 앞 2개 = 대표 세부유형
         const rawSubs = (p?.profileSubTypes ?? "").split(",").map(s => s.trim()).filter(Boolean);
         setPinnedSubTypes(new Set(rawSubs.slice(0, 2)));
+        setLangExperiences(parseLangExperiences((p as any)?.languageExperiences));
         // 거주지역 파싱
         const parsedRegion = parseRegionStr(p?.region ?? "");
         setRegionCountry(parsedRegion.country);
@@ -706,6 +775,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           operationalStatus: form.operationalStatus || "normal",
           operationalNote: form.operationalNote.trim() || null,
           reassignmentAllowed: form.reassignmentAllowed,
+          languageExperiences: langExperiences.length > 0 ? JSON.stringify(langExperiences) : null,
           emails: validated.map(e => ({ email: e.email.trim().toLowerCase(), isPrimary: e.isPrimary })),
         }),
       });
@@ -1063,6 +1133,18 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 재배정 불가
               </span>
             )}
+            {form.settlementType && (() => {
+              const st = SETTLEMENT_TYPES.find(s => s.value === form.settlementType);
+              return (
+                <span style={{
+                  fontSize: 12, borderRadius: 20, padding: "2px 9px", fontWeight: 700,
+                  background: st?.bg ?? "#f3f4f6", color: st?.color ?? "#374151",
+                  border: `1px solid ${st?.border ?? "#d1d5db"}`,
+                }}>
+                  💳 {st?.label ?? form.settlementType}
+                </span>
+              );
+            })()}
             {/* 핵심정보 요약 — 두 번째 줄 (있을 때만) */}
             {(form.education || form.major || pinnedSubTypes.size > 0 || form.specializations || form.bio) && (
               <div style={{ width: "100%", display: "flex", gap: "4px 14px", flexWrap: "wrap", borderTop: "1px solid #bae6fd", paddingTop: 6, marginTop: 2, alignItems: "center" }}>
@@ -1319,7 +1401,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   )}
                 </div>
               </div>
-              {/* 소속업체 | 정산유형 */}
+              {/* 소속업체 */}
               <div>
                 <label style={{ ...labelSt, fontSize: 11 }}>소속업체</label>
                 <select value={form.affiliatedCompanyId} onChange={e => setForm(p => ({ ...p, affiliatedCompanyId: e.target.value }))}
@@ -1327,17 +1409,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   <option value="">소속 없음 (프리랜서)</option>
                   {vendorCompanies.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
                 </select>
-              </div>
-              <div>
-                <label style={{ ...labelSt, fontSize: 11 }}>정산유형</label>
-                <ClickSelect value={form.settlementType} onChange={v => setForm(p => ({ ...p, settlementType: v }))}
-                  style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
-                  options={[
-                    { value: "", label: "선택 안 함" },
-                    { value: "개인", label: "개인 (3.3% 원천징수)" },
-                    { value: "사업자", label: "사업자 (세금계산서)" },
-                    { value: "업체정산", label: "업체정산 (소속업체 경유)" },
-                  ]} />
               </div>
               {/* 상세정보 */}
               <div style={{ gridColumn: "1 / -1" }}>
@@ -1568,7 +1639,13 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             })()}
           </div>
 
-          {/* ═══ 4. 이력서 관리 (기본 접힘) ═══ */}
+          {/* ═══ 4. 언어·국제경험 ═══ */}
+          {secRow("언어·국제경험")}
+          <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 16 }}>
+            <TranslatorLangExpSection entries={langExperiences} onChange={setLangExperiences} />
+          </div>
+
+          {/* ═══ 5. 이력서 관리 (기본 접힘) ═══ */}
           {secRow("이력서 관리", "resume")}
           {!collapsed.resume && (
           <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 10 }}>
@@ -1667,14 +1744,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   e.preventDefault();
                   setDragOver(false);
                   const file = e.dataTransfer.files?.[0];
-                  if (!file) return;
-                  const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
-                  if (!(RESUME_ALLOWED_EXTS as readonly string[]).includes(ext)) {
-                    onToast(RESUME_UPLOAD_ERROR_MSG);
-                    return;
-                  }
-                  if (profile?.resumeUrl && !window.confirm("기존 이력서를 새 파일로 교체하시겠습니까?")) return;
-                  setResumeFile(file);
+                  if (file) handleResumeUpload(file);
                 }}
                 style={{
                   border: `2px dashed ${dragOver ? "#059669" : "#d1d5db"}`,
@@ -1683,67 +1753,30 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   background: dragOver ? "#f0fdf4" : "#f9fafb",
                   transition: "border-color 0.15s, background 0.15s",
                   textAlign: "center" as const,
+                  opacity: resumeUploading ? 0.6 : 1,
+                  pointerEvents: resumeUploading ? "none" : "auto",
                 }}
               >
                 <p style={{ fontSize: 11, color: dragOver ? "#059669" : "#9ca3af", margin: "0 0 8px", fontWeight: dragOver ? 600 : 400 }}>
-                  {dragOver ? "여기에 파일을 놓으세요" : `파일을 드래그하거나 아래 버튼으로 선택 (${RESUME_HINT})`}
+                  {resumeUploading ? "업로드 중..." : dragOver ? "여기에 파일을 놓으세요" : `파일을 드래그하거나 아래 버튼으로 선택 (${RESUME_HINT})`}
                 </p>
-                {resumeFile && (
-                  <p style={{ fontSize: 12, color: "#059669", margin: "0 0 8px", fontWeight: 600 }}>
-                    📎 {resumeFile.name}
-                  </p>
-                )}
-                <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center" }}>
-                  <label
-                    style={{ fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151" }}
-                    aria-label="파일 선택"
-                  >
-                    파일 선택
-                    <input
-                      type="file"
-                      accept={RESUME_ACCEPT}
-                      onChange={e => {
-                        const file = e.target.files?.[0] ?? null;
-                        if (!file) return;
-                        if (profile?.resumeUrl && !window.confirm("기존 이력서를 새 파일로 교체하시겠습니까?")) {
-                          e.target.value = "";
-                          return;
-                        }
-                        setResumeFile(file);
-                      }}
-                      style={{ display: "none" }}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    disabled={!resumeFile || resumeUploading}
-                    onClick={async () => {
-                      if (!resumeFile) return;
-                      setResumeUploading(true);
-                      try {
-                        const fd = new FormData();
-                        fd.append("file", resumeFile);
-                        const r = await fetch(api(`/api/admin/translators/${userId}/resume-upload`), {
-                          method: "POST",
-                          headers: { Authorization: `Bearer ${token}` },
-                          body: fd,
-                        });
-                        const d = await r.json();
-                        if (r.ok) {
-                          setProfile(p => p ? { ...p, resumeUrl: d.resumeUrl } : p);
-                          setResumeFileName(d.fileName ?? null);
-                          setResumeFile(null);
-                          onToast("이력서가 업로드되었습니다.");
-                        } else {
-                          onToast(`오류: ${d.error}`);
-                        }
-                      } catch { onToast("오류: 이력서 업로드 실패"); }
-                      finally { setResumeUploading(false); }
+                <label
+                  style={{ fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: resumeUploading ? "not-allowed" : "pointer", color: "#374151", display: "inline-block" }}
+                  aria-label="파일 선택"
+                >
+                  {resumeUploading ? "업로드 중..." : "파일 선택"}
+                  <input
+                    type="file"
+                    accept={RESUME_ACCEPT}
+                    disabled={resumeUploading}
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (file) handleResumeUpload(file);
                     }}
-                    style={{ fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid #6366f1", background: resumeFile ? "#6366f1" : "#e0e0e0", color: resumeFile ? "#fff" : "#999", cursor: resumeFile ? "pointer" : "not-allowed", whiteSpace: "nowrap" }}>
-                    {resumeUploading ? "업로드 중..." : "업로드"}
-                  </button>
-                </div>
+                    style={{ display: "none" }}
+                  />
+                </label>
               </div>
             </div>
           </div>
@@ -1864,6 +1897,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         token={token}
         onClose={() => setShowSensitive(false)}
         onToast={onToast}
+        initialSettlementType={form.settlementType}
+        onSettlementTypeSaved={(t) => setForm(p => ({ ...p, settlementType: t }))}
       />
     )}
 
@@ -1873,23 +1908,52 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         token={token}
         hasResume={!!profile?.resumeUrl}
         autoStart={true}
+        currentValues={{
+          name: form.name || null,
+          phone: form.phone || null,
+          languagePairs: form.languagePairs || null,
+          languageLevel: form.languageLevel || null,
+          education: form.education || null,
+          major: form.major || null,
+          graduationYear: form.graduationYear ? Number(form.graduationYear) : null,
+          graduationStatus: form.graduationStatus || null,
+          specializations: form.specializations || null,
+          profileWorkTypes: form.profileWorkTypes || null,
+          profileSubTypes: form.profileSubTypes || null,
+          region: form.region || null,
+          bio: form.bio || null,
+        }}
         onToast={onToast}
         onClose={() => setShowAnalyzePanel(false)}
         onApply={(result: ResumeAnalysisResult) => {
+          const normalizedLang = result.languagePairs ? normalizeLanguages(result.languagePairs) : null;
+          const normalizedRegion = (() => {
+            const raw = result.region ?? result.address ?? null;
+            if (!raw) return null;
+            const p = parseRegionStr(raw);
+            return buildRegionString(p.country, p.countryCustom, p.city);
+          })();
+
           setForm(prev => ({
             ...prev,
-            ...(result.name ? { name: result.name } : {}),
-            ...(result.languagePairs ? { languagePairs: result.languagePairs } : {}),
+            // 사용자 입력값 우선 — 비어있을 때만 AI 값 적용
+            ...(result.name && !prev.name ? { name: result.name } : {}),
+            ...(result.phone && !prev.phone ? { phone: result.phone } : {}),
+            // 언어: 영어 → 한국어 정규화 후 적용
+            ...(normalizedLang ? { languagePairs: normalizedLang } : {}),
+            ...(result.languageLevel && !prev.languageLevel ? { languageLevel: result.languageLevel } : {}),
             ...(result.education ? { education: result.education } : {}),
             ...(result.major ? { major: result.major } : {}),
             ...(result.graduationYear ? { graduationYear: String(result.graduationYear) } : {}),
+            ...(result.graduationStatus && !prev.graduationStatus ? { graduationStatus: result.graduationStatus } : {}),
             ...(result.specializations ? { specializations: result.specializations } : {}),
             ...(result.profileWorkTypes ? { profileWorkTypes: result.profileWorkTypes } : {}),
             ...(result.profileSubTypes ? { profileSubTypes: result.profileSubTypes } : {}),
-            ...(result.region ? { region: result.region } : {}),
-            ...(result.bio ? { bio: result.bio } : {}),
+            // 지역: region 우선, 없으면 address에서 파싱
+            ...(normalizedRegion ? { region: normalizedRegion } : {}),
+            ...(result.bio && !prev.bio ? { bio: result.bio } : {}),
           }));
-          // 학력/전공 AI 분석 결과가 preset 외 값이면 custom 모드 동기화
+          // 학력/전공 preset 외 값 → custom 모드 동기화
           if (result.education) {
             if (!EDUCATION_ALL.includes(result.education)) { setEduIsCustom(true); setEduCustom(result.education); }
             else { setEduIsCustom(false); setEduCustom(""); }
@@ -1897,6 +1961,21 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           if (result.major) {
             if (!MAJOR_ALL.includes(result.major)) { setMajorIsCustom(true); setMajorCustom(result.major); }
             else { setMajorIsCustom(false); setMajorCustom(""); }
+          }
+          // 지역 콤보박스 UI 상태 동기화
+          const regionRaw = result.region ?? result.address ?? null;
+          if (regionRaw) {
+            const parsed = parseRegionStr(regionRaw);
+            setRegionCountry(parsed.country);
+            setRegionCity(parsed.city);
+            setRegionCountryCustom(parsed.countryCustom);
+          }
+          // 언어·국제경험: 현재 비어있을 때만 AI 결과 반영
+          if (result.languageExperiences && langExperiences.length === 0) {
+            try {
+              const parsed = JSON.parse(result.languageExperiences);
+              if (Array.isArray(parsed) && parsed.length > 0) setLangExperiences(parsed);
+            } catch { /* ignore */ }
           }
           setShowAnalyzePanel(false);
         }}

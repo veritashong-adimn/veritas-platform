@@ -197,23 +197,93 @@ export type TranslatorListItem = {
   reassignmentAllowed?: boolean | null;
 };
 
+// ── 언어·국제경험 엔트리 ────────────────────────────────────────────────────
+export interface LangExpEntry {
+  language: string;
+  canWork: boolean;
+  level: "원어민" | "고급" | "중급" | "초급" | "";
+  acquisitionBg: string;
+  residenceCountry: string;
+  residenceCity: string;
+  residencePeriod: string;
+  abroadElementary: boolean;
+  abroadMiddle: boolean;
+  abroadHigh: boolean;
+  abroadUniversity: boolean;
+  abroadGraduate: boolean;
+  internationalSchool: boolean;
+  exchangeStudent: boolean;
+  languageStudyAbroad: boolean;
+  notes: string;
+}
+
+export function emptyLangExp(language = ""): LangExpEntry {
+  return {
+    language,
+    canWork: false,
+    level: "",
+    acquisitionBg: "",
+    residenceCountry: "",
+    residenceCity: "",
+    residencePeriod: "",
+    abroadElementary: false,
+    abroadMiddle: false,
+    abroadHigh: false,
+    abroadUniversity: false,
+    abroadGraduate: false,
+    internationalSchool: false,
+    exchangeStudent: false,
+    languageStudyAbroad: false,
+    notes: "",
+  };
+}
+
+export function parseLangExperiences(raw: string | null | undefined): LangExpEntry[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 // 가능언어 표시용 정규화 (읽기 전용 — DB 값 변경 없음)
-// "한-영, 영-한" → "한국어, 영어" / 이미 정규화된 값은 그대로 통과
+// "한-영, 영-한" → "한국어, 영어" / "Korean to Japanese" → "한국어, 일본어"
 const LANG_ABBR: Record<string, string> = {
   "한": "한국어", "영": "영어", "일": "일본어", "중": "중국어",
   "불": "프랑스어", "독": "독일어", "스": "스페인어", "러": "러시아어",
   "아": "아랍어", "포": "포르투갈어", "이": "이탈리아어", "태": "태국어",
   "베": "베트남어", "인": "인도네시아어",
 };
+// AI가 반환하는 영문 언어명 → 한국어 (모두 소문자 키)
+const LANG_EN_TO_KO: Record<string, string> = {
+  "korean": "한국어", "english": "영어", "japanese": "일본어", "chinese": "중국어",
+  "mandarin": "중국어", "mandarin chinese": "중국어", "cantonese": "중국어(광둥어)",
+  "french": "프랑스어", "german": "독일어", "spanish": "스페인어", "russian": "러시아어",
+  "arabic": "아랍어", "portuguese": "포르투갈어", "italian": "이탈리아어", "thai": "태국어",
+  "vietnamese": "베트남어", "indonesian": "인도네시아어", "malay": "말레이어",
+  "hindi": "힌디어", "dutch": "네덜란드어", "turkish": "터키어", "polish": "폴란드어",
+  "swedish": "스웨덴어", "danish": "덴마크어", "norwegian": "노르웨이어",
+  "finnish": "핀란드어", "hebrew": "히브리어", "tagalog": "필리핀어", "filipino": "필리핀어",
+  "czech": "체코어", "romanian": "루마니아어", "hungarian": "헝가리어",
+  "ukrainian": "우크라이나어", "persian": "페르시아어", "swahili": "스와힐리어",
+};
+function resolveLang(raw: string): string {
+  const t = raw.trim();
+  return LANG_ABBR[t] ?? LANG_EN_TO_KO[t.toLowerCase()] ?? t;
+}
 export function normalizeLanguages(raw: string | null | undefined): string {
   if (!raw?.trim()) return "";
   const seen = new Set<string>();
   const result: string[] = [];
-  for (const part of raw.split(",").map(p => p.trim()).filter(Boolean)) {
-    // "한-영", "영→한" 형태 → 각 측 분리
-    const sides = part.includes("→") ? part.split("→") : part.includes("-") ? part.split("-") : [part];
-    for (const side of sides.map(s => s.trim()).filter(Boolean)) {
-      const lang = LANG_ABBR[side] ?? side;
+  // AI "Korean to Japanese, Japanese to Korean" → 방향 제거 후 쉼표 분리
+  const flattened = raw.replace(/\s+to\s+/gi, ",").replace(/→/g, ",").replace(/\s*\/\s*/g, ",");
+  for (const part of flattened.split(",").map(p => p.trim()).filter(Boolean)) {
+    // "한-영" 혹은 "Korean-English" 형식 → 양측 분리
+    const sides = part.includes("-") ? part.split("-").map(s => s.trim()).filter(Boolean) : [part];
+    for (const side of sides) {
+      const lang = resolveLang(side);
       if (!seen.has(lang)) { seen.add(lang); result.push(lang); }
     }
   }
