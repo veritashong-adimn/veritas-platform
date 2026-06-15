@@ -15,16 +15,16 @@ import { TranslatorRateEntryCard, RateEntryData, emptyRateEntry } from "./Transl
 import { ResumeAnalyzePanel, ResumeAnalysisResult } from "./ResumeAnalyzePanel";
 
 // ── 이력서 파일 형식 정책 ──────────────────────────────────────────────────────
-// 1단계 (현재): PDF · DOC · DOCX · TXT
-// 2단계 (예정): HWP · HWPX
+// 1단계: PDF · DOC · DOCX · TXT
+// 2단계: HWP · HWPX  ← 활성화됨
 // 3단계 (예정): JPG · PNG · 스캔 PDF OCR
-const RESUME_ALLOWED_EXTS = [".pdf", ".doc", ".docx", ".txt"] as const;
+const RESUME_ALLOWED_EXTS = [".pdf", ".doc", ".docx", ".txt", ".hwp", ".hwpx"] as const;
 // 브라우저 미리보기 가능한 형식 (서명 URL을 새 탭으로 열면 바로 표시됨)
 // 3단계 활성 시 ".jpg", ".jpeg", ".png" 추가
 const RESUME_PREVIEWABLE_EXTS = [".pdf", ".txt"] as const;
-const RESUME_ACCEPT = ".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain";
-const RESUME_HINT = "PDF · DOC · DOCX · TXT (최대 10 MB)";
-const RESUME_UPLOAD_ERROR_MSG = "PDF, DOC, DOCX, TXT 형식만 업로드할 수 있습니다.";
+const RESUME_ACCEPT = ".pdf,.hwp,.hwpx,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/haansofthwp,application/x-hwp,application/vnd.hancom.hwp,application/vnd.hancom.hwpx";
+const RESUME_HINT = "PDF · HWP · HWPX · DOC · DOCX · TXT (최대 10 MB)";
+const RESUME_UPLOAD_ERROR_MSG = "PDF, HWP, HWPX, DOC, DOCX, TXT 형식만 업로드할 수 있습니다.";
 
 function getResumeExt(resumeUrl: string | null | undefined): string {
   if (!resumeUrl) return "";
@@ -78,8 +78,8 @@ const EDUCATION_OVERSEAS = [
 ];
 const EDUCATION_ALL = [...EDUCATION_DOMESTIC, ...EDUCATION_OVERSEAS];
 
-const MAJOR_LANGUAGE = ["한영과", "한중과", "한일과", "한불과", "한독과", "한서과", "한노과", "한아과"];
-const MAJOR_INTERPRETATION = ["국제회의통역", "국제회의전공", "통역전공", "번역전공", "통번역전공"];
+const MAJOR_LANGUAGE = ["한영과", "한중과", "한일과", "한불과", "한독과", "한서과", "한노과", "한아과", "한영통번역", "한중통번역", "한일통번역"];
+const MAJOR_INTERPRETATION = ["통번역학", "전문통번역학", "국제회의통역", "국제회의전공", "통역전공", "번역전공", "통번역전공"];
 const MAJOR_SPECIALIZED = ["의료통역전공", "법률통번역전공", "영상번역전공", "AI번역전공"];
 const MAJOR_ALL = [...MAJOR_LANGUAGE, ...MAJOR_INTERPRETATION, ...MAJOR_SPECIALIZED];
 
@@ -570,6 +570,9 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [showOtherSpec, setShowOtherSpec] = useState(false);
   const [showAnalyzePanel, setShowAnalyzePanel] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [docSubTab, setDocSubTab] = useState<"resume" | "id" | "bank">("resume");
+  const [idDragOver, setIdDragOver] = useState(false);
+  const [bankDragOver, setBankDragOver] = useState(false);
   const [resumeFileName, setResumeFileName] = useState<string | null>(null);
   const [eduIsCustom, setEduIsCustom] = useState(false);
   const [eduCustom, setEduCustom] = useState("");
@@ -1609,7 +1612,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
                     {visiblePresets.map(tag => {
                       const isSelected = selected.has(tag);
-                      const isGeneral = tag === "범용 대응 가능";
+                      const isGeneral = tag === "다분야 가능";
                       return (
                         <button key={tag} type="button" onClick={() => togglePreset(tag)}
                           style={tagStyle(isSelected, isGeneral
@@ -1645,10 +1648,34 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             <TranslatorLangExpSection entries={langExperiences} onChange={setLangExperiences} />
           </div>
 
-          {/* ═══ 5. 이력서 관리 (기본 접힘) ═══ */}
-          {secRow("이력서 관리", "resume")}
+          {/* ═══ 5. 이력서&증빙서류 (기본 접힘) ═══ */}
+          {secRow("이력서&증빙서류", "resume")}
           {!collapsed.resume && (
           <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 10 }}>
+
+            {/* ── 서류 유형 탭 ── */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: "1px solid #e5e7eb", paddingBottom: 10 }}>
+              {([
+                { key: "resume", label: "📄 이력서" },
+                { key: "id",     label: "🪪 신분증" },
+                { key: "bank",   label: "🏦 통장사본" },
+              ] as const).map(({ key, label }) => (
+                <button key={key} type="button"
+                  onClick={() => setDocSubTab(key)}
+                  style={{
+                    padding: "5px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer",
+                    background: docSubTab === key ? "#0ea5e9" : "#f0f9ff",
+                    color: docSubTab === key ? "#fff" : "#0369a1",
+                    border: `1px solid ${docSubTab === key ? "#0ea5e9" : "#bae6fd"}`,
+                    fontWeight: docSubTab === key ? 700 : 400,
+                  }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* ── ① 이력서 ── */}
+            {docSubTab === "resume" && (
             <div style={{ marginBottom: 12 }}>
               <label style={labelSt}>이력서 파일</label>
               {profile?.resumeUrl ? (
@@ -1779,6 +1806,84 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 </label>
               </div>
             </div>
+            )} {/* docSubTab === "resume" */}
+
+            {/* ── ② 신분증 ── */}
+            {docSubTab === "id" && (
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <label style={labelSt}>신분증 파일</label>
+                <span style={{ fontSize: 10, color: "#fff", background: "#f59e0b", borderRadius: 10, padding: "1px 8px", fontWeight: 700 }}>준비 중</span>
+              </div>
+              <div
+                onDragOver={e => { e.preventDefault(); setIdDragOver(true); }}
+                onDragLeave={() => setIdDragOver(false)}
+                onDrop={e => { e.preventDefault(); setIdDragOver(false); }}
+                style={{
+                  border: `2px dashed ${idDragOver ? "#f59e0b" : "#d1d5db"}`,
+                  borderRadius: 8, padding: "24px 14px",
+                  background: idDragOver ? "#fffbeb" : "#f9fafb",
+                  textAlign: "center" as const,
+                  transition: "border-color 0.15s, background 0.15s",
+                }}
+              >
+                <div style={{ fontSize: 28, marginBottom: 6 }}>🪪</div>
+                <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 4px" }}>
+                  {idDragOver ? "여기에 파일을 놓으세요" : "신분증 업로드"}
+                </p>
+                <p style={{ fontSize: 11, color: "#9ca3af", margin: 0 }}>JPG · PNG · PDF (최대 10 MB)</p>
+              </div>
+              <div style={{ marginTop: 12, padding: "10px 14px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
+                <p style={{ fontSize: 11, color: "#92400e", margin: "0 0 4px", fontWeight: 700 }}>🔐 민감정보 보안 정책</p>
+                <p style={{ fontSize: 11, color: "#78350f", margin: 0, lineHeight: 1.6 }}>
+                  신분증은 민감개인정보입니다. 향후 업로드 시 접근권한 관리 · 감사로그 · 승인 이력이 자동 기록됩니다.
+                </p>
+              </div>
+              <div style={{ marginTop: 10, padding: "10px 14px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
+                <p style={{ fontSize: 11, color: "#0369a1", margin: "0 0 3px", fontWeight: 700 }}>✨ AI 분석 예정 항목</p>
+                <p style={{ fontSize: 11, color: "#0c4a6e", margin: 0, lineHeight: 1.6 }}>이름 · 주민등록번호 · 생년월일 · 주소 → 관리자 검수 → 승인 반영</p>
+              </div>
+            </div>
+            )} {/* docSubTab === "id" */}
+
+            {/* ── ③ 통장사본 ── */}
+            {docSubTab === "bank" && (
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <label style={labelSt}>통장사본 파일</label>
+                <span style={{ fontSize: 10, color: "#fff", background: "#f59e0b", borderRadius: 10, padding: "1px 8px", fontWeight: 700 }}>준비 중</span>
+              </div>
+              <div
+                onDragOver={e => { e.preventDefault(); setBankDragOver(true); }}
+                onDragLeave={() => setBankDragOver(false)}
+                onDrop={e => { e.preventDefault(); setBankDragOver(false); }}
+                style={{
+                  border: `2px dashed ${bankDragOver ? "#059669" : "#d1d5db"}`,
+                  borderRadius: 8, padding: "24px 14px",
+                  background: bankDragOver ? "#f0fdf4" : "#f9fafb",
+                  textAlign: "center" as const,
+                  transition: "border-color 0.15s, background 0.15s",
+                }}
+              >
+                <div style={{ fontSize: 28, marginBottom: 6 }}>🏦</div>
+                <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 4px" }}>
+                  {bankDragOver ? "여기에 파일을 놓으세요" : "통장사본 업로드"}
+                </p>
+                <p style={{ fontSize: 11, color: "#9ca3af", margin: 0 }}>JPG · PNG · PDF (최대 10 MB)</p>
+              </div>
+              <div style={{ marginTop: 12, padding: "10px 14px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
+                <p style={{ fontSize: 11, color: "#92400e", margin: "0 0 4px", fontWeight: 700 }}>🔐 민감정보 보안 정책</p>
+                <p style={{ fontSize: 11, color: "#78350f", margin: 0, lineHeight: 1.6 }}>
+                  통장사본은 금융정보입니다. 향후 업로드 시 접근권한 관리 · 감사로그 · 승인 이력이 자동 기록됩니다.
+                </p>
+              </div>
+              <div style={{ marginTop: 10, padding: "10px 14px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
+                <p style={{ fontSize: 11, color: "#0369a1", margin: "0 0 3px", fontWeight: 700 }}>✨ AI 분석 예정 항목</p>
+                <p style={{ fontSize: 11, color: "#0c4a6e", margin: 0, lineHeight: 1.6 }}>은행명 · 예금주 · 계좌번호 → 관리자 검수 → 승인 반영</p>
+              </div>
+            </div>
+            )} {/* docSubTab === "bank" */}
+
           </div>
           )} {/* !collapsed.resume */}
 

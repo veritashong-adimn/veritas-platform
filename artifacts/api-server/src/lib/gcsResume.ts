@@ -34,18 +34,20 @@ function parsePrivateDir(): { bucketName: string; dirPrefix: string } {
 // 3단계 (예정): JPG · PNG · 스캔 PDF OCR
 
 export const STAGE1_EXTS = [".pdf", ".doc", ".docx", ".txt"] as const;
-
-// HWP/HWPX는 MIME 식별 불안정 — 2단계 활성 시 ext 기반 검증으로 보완할 것
-// export const STAGE2_EXTS = [".hwp", ".hwpx"] as const;
+export const STAGE2_EXTS = [".hwp", ".hwpx"] as const;
 // export const STAGE3_EXTS = [".jpg", ".jpeg", ".png"] as const;
 
-export const ALLOWED_EXT: ReadonlyArray<string> = STAGE1_EXTS;
+export const ALLOWED_EXT: ReadonlyArray<string> = [...STAGE1_EXTS, ...STAGE2_EXTS];
 
 export const ALLOWED_MIME = [
   "application/pdf",                                                                    // .pdf
   "application/msword",                                                                 // .doc
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",           // .docx
   "text/plain",                                                                         // .txt
+  "application/haansofthwp",                                                           // .hwp (한컴 공식)
+  "application/x-hwp",                                                                 // .hwp (비공식)
+  "application/vnd.hancom.hwp",                                                        // .hwp (IANA 등록)
+  "application/vnd.hancom.hwpx",                                                       // .hwpx
 ] as const;
 
 export function isAllowedMime(mime: string): boolean {

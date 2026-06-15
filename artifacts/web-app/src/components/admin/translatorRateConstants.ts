@@ -1,6 +1,6 @@
 import { LANGUAGE_CODES } from "../../lib/constants";
 
-export const SERVICE_TYPES = ["번역", "통역", "감수", "편집", "미디어", "DTP"] as const;
+export const SERVICE_TYPES = ["번역", "통역", "감수", "편집", "미디어", "DTP", "행사운영"] as const;
 
 export const SUB_SERVICE_TYPES: Record<string, string[]> = {
   "번역": ["전문번역", "일반번역"],
@@ -9,6 +9,7 @@ export const SUB_SERVICE_TYPES: Record<string, string[]> = {
   "편집": ["문서편집", "리라이팅"],
   "미디어": ["자막작업", "더빙"],
   "DTP": ["문서편집", "PPT편집", "InDesign", "PDF편집"],
+  "행사운영": ["행사스태프", "행사보조", "등록데스크", "안내요원", "VIP 의전", "현장운영", "바이어 상담보조", "전시회 운영지원", "해외 바이어 응대", "행사 MC", "행사 사회자", "기타 행사운영"],
 };
 
 export const TRANS_UNITS = [
@@ -42,6 +43,7 @@ export const UNIT_BY_SERVICE_TYPE: Record<string, { value: string; label: string
   "편집": TRANS_UNITS,
   "미디어": MEDIA_UNITS,
   "DTP": TRANS_UNITS,
+  "행사운영": INTERP_UNITS,
 };
 
 export const ALL_RATE_UNITS = [
@@ -56,7 +58,7 @@ export const getRateUnitLabel = (unit: string) =>
 export const CURRENCIES = ["KRW", "USD", "EUR", "JPY", "GBP", "CAD", "AUD", "CNY", "HKD", "SGD"];
 
 export const SPECIALIZATION_PRESETS = [
-  "범용 대응 가능",
+  "다분야 가능",
   "의료·의학", "제약·바이오", "GMP", "ERP", "자동차",
   "반도체", "전자·전기", "기계·제조",
   "법률", "금융", "특허",

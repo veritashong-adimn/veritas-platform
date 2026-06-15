@@ -110,6 +110,7 @@ export const ResumeAnalyzePanel: React.FC<Props> = (props) => {
   const [edited, setEdited] = useState<ResumeAnalysisResult | null>(null);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
   const [errorCategory, setErrorCategory] = useState<string | null>(null);
+  const [errorDebug, setErrorDebug] = useState<Record<string, unknown> | null>(null);
   const [showDebug, setShowDebug] = useState(false);
 
   useEffect(() => {
@@ -127,6 +128,7 @@ export const ResumeAnalyzePanel: React.FC<Props> = (props) => {
     setAnalyzing(true);
     setResult(null);
     setEdited(null);
+    setErrorDebug(null);
     setAnalyzeError(null);
     setErrorCategory(null);
     try {
@@ -147,7 +149,7 @@ export const ResumeAnalyzePanel: React.FC<Props> = (props) => {
         });
       }
       if (!resp.ok) {
-        const errBody = await resp.json().catch(() => ({})) as { error?: string };
+        const errBody = await resp.json().catch(() => ({})) as { error?: string; _debug?: Record<string, unknown> };
         const errMsg = errBody.error ?? `HTTP ${resp.status}`;
         const category =
           resp.status === 404 ? "API 경로 없음 (404)" :
@@ -156,6 +158,7 @@ export const ResumeAnalyzePanel: React.FC<Props> = (props) => {
           resp.status === 422 ? "텍스트 추출 실패" :
           "AI 분석 실패";
         setErrorCategory(category);
+        if (errBody._debug) setErrorDebug(errBody._debug);
         throw new Error(errMsg);
       }
       const data: ResumeAnalysisResult = await resp.json();
@@ -282,6 +285,13 @@ export const ResumeAnalyzePanel: React.FC<Props> = (props) => {
                 )}
               </div>
               <p style={{ margin: 0, fontSize: 12, color: "#b91c1c", fontFamily: "monospace" }}>{analyzeError}</p>
+              {errorDebug && (
+                <div style={{ marginTop: 8, padding: "8px 10px", background: "#fff7f7", border: "1px dashed #fca5a5", borderRadius: 6, fontSize: 11, fontFamily: "monospace", color: "#7f1d1d" }}>
+                  {Object.entries(errorDebug).map(([k, v]) => (
+                    <div key={k}><b>{k}:</b> {String(v)}</div>
+                  ))}
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                 <button type="button" onClick={handleAnalyze}
                   style={{ fontSize: 12, padding: "5px 14px", borderRadius: 6, border: "1px solid #dc2626", background: "#fff", color: "#dc2626", cursor: "pointer" }}>

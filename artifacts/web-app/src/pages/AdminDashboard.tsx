@@ -2296,7 +2296,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               triggerStyle={{ fontSize: 13, padding: "8px 12px", minWidth: 100, borderRadius: 8 }}
               options={[
                 { value: "all", label: "전체 업무" },
-                ...["번역","통역","감수","편집","미디어","DTP"].map(s => ({ value: s, label: s })),
+                ...["번역","통역","감수","편집","미디어","DTP","행사운영"].map(s => ({ value: s, label: s })),
               ]}
             />
             <ClickSelect

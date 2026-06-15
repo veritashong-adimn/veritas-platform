@@ -13,7 +13,8 @@
     "fix:zh-interp": "node_modules/.bin/esbuild src/fix-zh-interp-names.ts --bundle --platform=node --format=esm --outfile=dist/fix-zh-interp-names.mjs --log-level=warning --external:*.node --external:pg-native '--external:@aws-sdk/*' '--external:@google-cloud/*' '--banner:js=import { createRequire as __cr } from \"node:module\"; globalThis.require = __cr(import.meta.url);' && node dist/fix-zh-interp-names.mjs",
     "test:search-normalize": "node_modules/.bin/esbuild src/test-search-normalize.ts --bundle --platform=node --format=esm --outfile=dist/test-search-normalize.mjs --log-level=warning --external:*.node --external:pg-native '--external:@aws-sdk/*' '--external:@google-cloud/*' '--banner:js=import { createRequire as __cr } from \"node:module\"; globalThis.require = __cr(import.meta.url);' && node dist/test-search-normalize.mjs",
     "audit:products": "node_modules/.bin/esbuild src/audit-product-duplicates.ts --bundle --platform=node --format=esm --outfile=dist/audit-product-duplicates.mjs --log-level=warning --external:*.node --external:pg-native '--external:@aws-sdk/*' '--external:@google-cloud/*' '--banner:js=import { createRequire as __cr } from \"node:module\"; globalThis.require = __cr(import.meta.url);' && node dist/audit-product-duplicates.mjs",
-    "migrate:canonical-key": "node_modules/.bin/esbuild src/migrate-canonical-key.ts --bundle --platform=node --format=esm --outfile=dist/migrate-canonical-key.mjs --log-level=warning --external:*.node --external:pg-native '--external:@aws-sdk/*' '--external:@google-cloud/*' '--banner:js=import { createRequire as __cr } from \"node:module\"; globalThis.require = __cr(import.meta.url);' && node dist/migrate-canonical-key.mjs"
+    "migrate:canonical-key": "node_modules/.bin/esbuild src/migrate-canonical-key.ts --bundle --platform=node --format=esm --outfile=dist/migrate-canonical-key.mjs --log-level=warning --external:*.node --external:pg-native '--external:@aws-sdk/*' '--external:@google-cloud/*' '--banner:js=import { createRequire as __cr } from \"node:module\"; globalThis.require = __cr(import.meta.url);' && node dist/migrate-canonical-key.mjs",
+    "migrate:specializations": "node_modules/.bin/esbuild src/migrate-specializations.ts --bundle --platform=node --format=esm --outfile=dist/migrate-specializations.mjs --log-level=warning --external:*.node --external:pg-native '--external:@aws-sdk/*' '--external:@google-cloud/*' '--banner:js=import { createRequire as __cr } from \"node:module\"; globalThis.require = __cr(import.meta.url);' && node dist/migrate-specializations.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1014.0",
@@ -30,6 +31,7 @@
     "express": "^5",
     "google-auth-library": "^10.6.2",
     "jsonwebtoken": "^9.0.3",
+    "kordoc": "^3.1.1",
     "mammoth": "^1.12.0",
     "multer": "^2.1.1",
     "openai": "^4.103.0",

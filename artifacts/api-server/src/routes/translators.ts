@@ -24,11 +24,35 @@ import { writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 const _require = createRequire(import.meta.url);
-// pdf-parse and mammoth are CJS-only modules; must use createRequire in ESM context
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const pdfParse = _require("pdf-parse") as (buf: Buffer, opts?: object) => Promise<{ text: string }>;
+// pdf-parse v2.x and mammoth are CJS-only modules; must use createRequire in ESM context
+// pdf-parse v2.x changed API: no longer a callable function; now exports { PDFParse } class
+const { PDFParse: PdfParseClass } = _require("pdf-parse") as {
+  PDFParse: new(opts: { data: Buffer }) => { getText(): Promise<{ text: string }>; destroy(): Promise<void> };
+};
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mammoth = _require("mammoth") as typeof import("mammoth");
+// kordoc: HWP/HWPX parser (CJS)
+const kordoc = _require("kordoc") as {
+  parse: (input: Buffer | string, options?: { filePath?: string }) => Promise<{
+    success: boolean; markdown?: string; fileType?: string; warnings?: string[];
+  }>;
+};
+
+async function extractPdfText(buffer: Buffer): Promise<string> {
+  const parser = new PdfParseClass({ data: buffer });
+  try {
+    const result = await parser.getText();
+    return result.text ?? "";
+  } finally {
+    await parser.destroy().catch(() => {});
+  }
+}
+
+async function extractHwpText(buffer: Buffer): Promise<string> {
+  const result = await kordoc.parse(buffer);
+  if (!result.success) throw new Error(`kordoc parse 실패 (fileType: ${result.fileType ?? "unknown"})`);
+  return result.markdown ?? "";
+}
 
 const resumeUpload = multer({
   storage: multer.memoryStorage(),
@@ -36,7 +60,7 @@ const resumeUpload = multer({
   fileFilter: (_req, file, cb) => {
     // MIME 타입 또는 확장자 중 하나를 통과하면 허용 (HWP 등 MIME 불안정 형식 대비)
     if (isAllowedMime(file.mimetype) || isAllowedExt(file.originalname)) cb(null, true);
-    else cb(new Error("PDF, DOC, DOCX, TXT 형식만 업로드할 수 있습니다. (HWP/HWPX는 2단계 지원 예정)"));
+    else cb(new Error("PDF, HWP, HWPX, DOCX, DOC, TXT 형식만 업로드할 수 있습니다."));
   },
 });
 
@@ -238,7 +262,7 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
       userId: newUser.id,
       phone: phone?.trim() || null, region: region?.trim() || null,
       languagePairs: languagePairs?.trim() || null, languageLevel: languageLevel || null,
-      specializations: specializations?.trim() || null,
+      specializations: normalizeSpecializationsString(specializations?.trim() || null),
       education: education?.trim() || null, major: major?.trim() || null,
       graduationYear: graduationYear ? Number(graduationYear) : null,
       graduationStatus: graduationStatus?.trim() || null,
@@ -623,7 +647,7 @@ router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) =>
         languagePairs: langVal,
         region: row.region?.trim() || null,
         grade: row.grade?.trim() || null,
-        specializations: row.specializations?.trim() || null,
+        specializations: normalizeSpecializationsString(row.specializations?.trim() || null),
         education: row.education?.trim() || null,
         major: row.major?.trim() || null,
         graduationYear: row.graduationYear?.trim() && !isNaN(Number(row.graduationYear)) ? Number(row.graduationYear) : null,
@@ -807,7 +831,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
     const profileData = {
       languagePairs: languagePairs?.trim() || null,
       languageLevel: languageLevel?.trim() || null,
-      specializations: specializations?.trim() || null,
+      specializations: normalizeSpecializationsString(specializations?.trim() || null),
       education: education?.trim() || null,
       major: major?.trim() || null,
       graduationYear: (graduationYear != null && graduationYear !== "") ? Number(graduationYear) : null,
@@ -1026,13 +1050,15 @@ router.delete("/admin/translators/:id/resume", ...adminGuard, async (req, res) =
 });
 
 // ─── 이력서 AI 분석 공통 상수 & 정규화 헬퍼 ────────────────────────────────────
-const RESUME_WORK_TYPES = ["번역", "통역", "감수", "편집", "미디어", "DTP"];
+const RESUME_WORK_TYPES = ["번역", "통역", "감수", "편집", "미디어", "DTP", "행사운영"];
 const RESUME_SUB_TYPES = [
   "일반번역", "전문번역", "긴급번역", "공증번역",
   "동시통역", "위스퍼링통역", "순차통역", "수행통역", "미팅통역", "전시회통역", "화상통역", "전화통역",
   "교정", "윤문", "원어민감수", "원문대조감수",
   "문서편집", "리라이팅",
   "자막작업", "더빙",
+  "행사스태프", "행사보조", "등록데스크", "안내요원", "VIP 의전", "현장운영",
+  "바이어 상담보조", "전시회 운영지원", "해외 바이어 응대", "행사 MC", "행사 사회자", "기타 행사운영",
 ];
 const RESUME_EDUCATION_LIST = [
   "한국외국어대학교 통번역대학원",
@@ -1053,11 +1079,13 @@ const RESUME_EDUCATION_LIST = [
 ];
 const RESUME_MAJOR_LIST = [
   "한영과", "한중과", "한일과", "한불과", "한독과", "한서과", "한노과", "한아과",
+  "한영통번역", "한중통번역", "한일통번역",
+  "통번역학", "전문통번역학",
   "국제회의통역", "국제회의전공", "통역전공", "번역전공", "통번역전공",
   "의료통역전공", "법률통번역전공", "영상번역전공", "AI번역전공",
 ];
 const RESUME_SPECIALIZATION_LIST = [
-  "범용 대응 가능",
+  "다분야 가능",
   "의료·의학", "제약·바이오", "GMP", "ERP", "자동차",
   "반도체", "전자·전기", "기계·제조",
   "법률", "금융", "특허",
@@ -1066,10 +1094,34 @@ const RESUME_SPECIALIZATION_LIST = [
   "화장품", "마케팅",
 ];
 
+// 전문분야 alias → 표준값 맵
+// 구버전 레이블("범용 대응 가능"), 영문 별칭, 축약형을 모두 "다분야 가능"으로 정규화
+const SPECIALIZATION_ALIAS_MAP: Record<string, string> = {
+  "범용 대응 가능": "다분야 가능",
+  "범용대응가능": "다분야 가능",
+  "generalist": "다분야 가능",
+  "multi-domain": "다분야 가능",
+  "multidomain": "다분야 가능",
+  "general": "다분야 가능",
+};
+
+/**
+ * 쉼표 구분 전문분야 문자열에서 alias를 표준값으로 치환한다.
+ * 저장 직전 모든 경로에서 호출한다.
+ */
+function normalizeSpecializationsString(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const parts = raw.split(/[,，;]/).map(p => p.trim()).filter(Boolean);
+  const normalized = parts.map(p => SPECIALIZATION_ALIAS_MAP[p] ?? SPECIALIZATION_ALIAS_MAP[p.toLowerCase()] ?? p);
+  return normalized.join(", ");
+}
+
 // 서버사이드 후처리 정규화 — AI가 지시를 따르지 않은 경우의 안전망
 function normalizeExtractedMajor(raw: string | null): string | null {
   if (!raw) return null;
   const t = raw.trim();
+  // 강사/교수 직함으로 끝나는 경우 전공이 아닌 직책 → null 반환 (예: "한영과 강사")
+  if (/\s*(강사|교수|교원|lecturer|professor|instructor)\s*$/i.test(t)) return null;
   const MAJOR_EN_MAP: Record<string, string> = {
     "translation and interpretation": "통번역전공",
     "conference interpretation": "국제회의통역",
@@ -1081,14 +1133,14 @@ function normalizeExtractedMajor(raw: string | null): string | null {
   };
   const mapped = MAJOR_EN_MAP[t.toLowerCase()];
   if (mapped) return mapped;
-  // 한영과 패턴: "한영 통번역" → "한영과"
+  // 리스트에 있으면 그대로 반환 (한영통번역, 전문통번역학 등 포함)
+  if (RESUME_MAJOR_LIST.includes(t)) return t;
+  // 한영과 패턴: 언어쌍 prefix만 있는 경우 "과" 추가 (목록 직접 매칭 실패 시)
   const langPairMatch = t.match(/^(한영|한중|한일|한불|한독|한서|한노|한아)/);
   if (langPairMatch) {
     const candidate = langPairMatch[1] + "과";
     if (RESUME_MAJOR_LIST.includes(candidate)) return candidate;
   }
-  // 리스트에 있으면 그대로
-  if (RESUME_MAJOR_LIST.includes(t)) return t;
   return t;
 }
 
@@ -1166,11 +1218,18 @@ function normalizeExtractedSpecializations(raw: string | null): string | null {
     "ai": "AI·데이터",
     "data": "AI·데이터",
     "tourism": "마케팅",
-    "general": "범용 대응 가능",
+    "general": "다분야 가능",
+    "generalist": "다분야 가능",
+    "multi-domain": "다분야 가능",
+    "multidomain": "다분야 가능",
   };
   const parts = raw.split(/[,，;]/).map(p => p.trim()).filter(Boolean);
   const result = new Set<string>();
   for (const part of parts) {
+    // 한국어 alias 우선 처리 (구버전 레이블 포함)
+    const aliasMatch = SPECIALIZATION_ALIAS_MAP[part] ?? SPECIALIZATION_ALIAS_MAP[part.toLowerCase()];
+    if (aliasMatch) { result.add(aliasMatch); continue; }
+
     const pl = part.toLowerCase();
     const mapped = SPEC_EN_MAP[pl];
     if (mapped) {
@@ -1268,19 +1327,23 @@ ${RESUME_EDUCATION_LIST.join(", ")}
 【전공(major)】
 다음 목록 중 하나로 반환:
 ${RESUME_MAJOR_LIST.join(", ")}
-영문 전공명 변환: "Translation and Interpretation"→"통번역전공", "Conference Interpretation"→"국제회의통역", "한영 국제회의 통역"→"한영과", "Interpretation"→"통역전공", "Translation"→"번역전공", "T&I"→"통번역전공"
+주의: 학위(석사/학사 등)의 전공명을 추출하세요. 경력·직책(강사, 교수, 교원 등)은 전공이 아닙니다. 예) "전문통번역학 석사 / 한영과 강사" → "전문통번역학" (강사 직책은 무시).
+영문 전공명 변환: "Translation and Interpretation"→"통번역전공", "Conference Interpretation"→"국제회의통역", "Interpretation"→"통역전공", "Translation"→"번역전공", "T&I"→"통번역전공"
 
 【전문분야(specializations)】
 반드시 다음 목록에서만 선택(쉼표 구분):
 ${RESUME_SPECIALIZATION_LIST.join(", ")}
-영문 매핑: Business/Trade→"무역·물류", Finance/Economics→"금융", Legal/Law→"법률", IT/Software/Tech→"IT·SW", Medical/Healthcare→"의료·의학", Pharmaceutical/Medicine Device→"제약·바이오", Patent/IP→"특허", Defense/Military→"국방·방산", Energy/Oil→"에너지·플랜트", Government/Public→"정부·공공", Marketing/Advertisement→"마케팅", Cosmetics/Beauty→"화장품", Automotive/Car→"자동차", Semiconductor→"반도체", Electronics→"전자·전기", AI/Data/ML→"AI·데이터"
+영문 매핑: Business/Trade→"무역·물류", Finance/Economics→"금융", Legal/Law→"법률", IT/Software/Tech→"IT·SW", Medical/Healthcare→"의료·의학", Pharmaceutical/Medicine Device→"제약·바이오", Patent/IP→"특허", Defense/Military→"국방·방산", Energy/Oil→"에너지·플랜트", Government/Public→"정부·공공", Marketing/Advertisement→"마케팅", Cosmetics/Beauty→"화장품", Automotive/Car→"자동차", Semiconductor→"반도체", Electronics→"전자·전기", AI/Data/ML→"AI·데이터", General/Generalist/Multi-domain→"다분야 가능"
+주의: 특정 산업 전문분야가 명확하지 않거나 다양한 산업군 수행 경험이 있으면 "다분야 가능"을 사용. "전문분야 없음"과는 다른 개념임.
 
 【업무유형(profileWorkTypes)】
 반드시 다음에서만 선택(쉼표 구분): ${RESUME_WORK_TYPES.join(", ")}
+행사운영 키워드: 행사 스태프, 행사 운영, 행사 진행, 운영요원, 등록데스크, 안내데스크, VIP 의전, 수행비서, 행사 진행요원, 전시회 운영, 박람회 운영, 컨퍼런스 운영, 행사 코디네이터 → "행사운영" 추가
 
 【세부유형(profileSubTypes)】
 반드시 다음에서만 선택(쉼표 구분): ${RESUME_SUB_TYPES.join(", ")}
 영문 매핑: "Simultaneous Interpretation"→"동시통역", "Consecutive Interpretation"→"순차통역", "Escort Interpretation"→"수행통역", "Whispering"→"위스퍼링통역", "Conference Interpretation"→"동시통역", "Phone Interpretation"→"전화통역", "Video Interpretation"→"화상통역"
+행사운영 세부유형 매핑: 등록데스크·안내데스크→"등록데스크", VIP 의전·수행비서→"VIP 의전", 행사 스태프·진행요원→"행사스태프", 전시회·박람회 운영→"전시회 운영지원", 해외 바이어 응대→"해외 바이어 응대", 행사 MC·사회자→"행사 MC"
 
 【지역(region)】
 "국가 / 도시" 형식으로 반환. 예: "대한민국 / 서울", "미국 / 뉴욕". 도시 불명이면 국가만.
@@ -1354,19 +1417,35 @@ router.post(
     const file = req.file;
     if (!file) { res.status(400).json({ error: "파일이 없습니다." }); return; }
 
-    const ext = path.extname(file.originalname).toLowerCase();
+    // multer은 latin1로 파싱하므로 UTF-8 재디코딩 (ext 검출은 ASCII이므로 영향 없음)
+    const originalNameUtf8 = Buffer.from(file.originalname, "latin1").toString("utf8");
+    const ext = path.extname(originalNameUtf8).toLowerCase();
+    const mime = file.mimetype;
     const buffer = file.buffer;
-    req.log.info({ ext, bytes: buffer.byteLength }, "[ANALYZE-UPLOAD] file received");
+    req.log.info(
+      { ext, mime, bytes: buffer.byteLength, originalName: originalNameUtf8 },
+      "[ANALYZE-UPLOAD] file received"
+    );
 
     let resumeText = "";
+    let extractStep = "not_started";
     try {
       if (ext === ".pdf") {
-        const parsed = await pdfParse(buffer);
-        resumeText = parsed.text;
+        extractStep = "pdf_parser_start";
+        resumeText = await extractPdfText(buffer);
+        extractStep = "pdf_parser_done";
+        req.log.info(
+          { bytes: buffer.byteLength, textLen: resumeText.length, textPreview: resumeText.slice(0, 80).replace(/\n/g, " ") },
+          "[ANALYZE-UPLOAD] PDF text extracted"
+        );
       } else if (ext === ".docx") {
+        extractStep = "docx_parser_start";
         const result = await mammoth.extractRawText({ buffer });
         resumeText = result.value;
+        extractStep = "docx_parser_done";
+        req.log.info({ textLen: resumeText.length }, "[ANALYZE-UPLOAD] DOCX text extracted");
       } else if (ext === ".doc") {
+        extractStep = "doc_parser_start";
         const tmpPath = path.join(tmpdir(), `resume_upload_${Date.now()}.doc`);
         await writeFile(tmpPath, buffer);
         const antiwordBin = await new Promise<string | null>(resolve => {
@@ -1388,19 +1467,40 @@ router.post(
           const result = await mammoth.extractRawText({ buffer });
           resumeText = result.value;
         }
+        extractStep = "doc_parser_done";
+        req.log.info({ textLen: resumeText.length }, "[ANALYZE-UPLOAD] DOC text extracted");
       } else if (ext === ".txt") {
+        extractStep = "txt_parser_start";
         resumeText = buffer.toString("utf-8");
+        extractStep = "txt_parser_done";
+        req.log.info({ textLen: resumeText.length }, "[ANALYZE-UPLOAD] TXT text extracted");
+      } else if (ext === ".hwp" || ext === ".hwpx") {
+        extractStep = "hwp_parser_start";
+        resumeText = await extractHwpText(buffer);
+        extractStep = "hwp_parser_done";
+        req.log.info({ ext, textLen: resumeText.length, textPreview: resumeText.slice(0, 80).replace(/\n/g, " ") }, "[ANALYZE-UPLOAD] HWP text extracted");
       } else {
-        res.status(422).json({ error: `지원하지 않는 파일 형식 (${ext}). PDF, DOCX, DOC, TXT를 사용해 주세요.` }); return;
+        req.log.warn({ ext, mime, originalName: originalNameUtf8 }, "[ANALYZE-UPLOAD] unsupported extension");
+        res.status(422).json({ error: `지원하지 않는 파일 형식 (${ext}). PDF, HWP, HWPX, DOCX, DOC, TXT를 사용해 주세요.` }); return;
       }
     } catch (extractErr) {
-      req.log.error({ extractErr }, "[ANALYZE-UPLOAD] text extraction failed");
-      res.status(422).json({ error: "텍스트 추출에 실패했습니다. 파일 형식을 확인해 주세요." }); return;
+      const errMsg = extractErr instanceof Error ? extractErr.message : String(extractErr);
+      const errName = extractErr instanceof Error ? extractErr.constructor.name : typeof extractErr;
+      req.log.error(
+        { extractStep, ext, mime, bytes: buffer.byteLength, errName, errMsg, errStack: extractErr instanceof Error ? extractErr.stack : undefined },
+        "[ANALYZE-UPLOAD] text extraction failed"
+      );
+      res.status(422).json({
+        error: "텍스트 추출에 실패했습니다. 파일 형식을 확인해 주세요.",
+        _debug: { extractStep, ext, mime, bytes: buffer.byteLength, errName, errMsg },
+      }); return;
     }
 
     if (!resumeText.trim()) {
+      req.log.warn({ ext, bytes: buffer.byteLength }, "[ANALYZE-UPLOAD] empty text after extraction");
       res.status(422).json({ error: "이력서에서 텍스트를 추출할 수 없습니다. 이미지 기반 PDF이거나 빈 파일일 수 있습니다." }); return;
     }
+    req.log.info({ textLen: resumeText.trim().length }, "[ANALYZE-UPLOAD] text OK → calling OpenAI");
 
     try {
       const openaiClient = new OpenAI({
@@ -1498,8 +1598,7 @@ router.post("/admin/translators/:id/resume-analyze", ...adminGuard, async (req, 
     STEP(7, "extracting text", { ext });
     let resumeText = "";
     if (ext === ".pdf") {
-      const parsed = await pdfParse(buffer);
-      resumeText = parsed.text;
+      resumeText = await extractPdfText(buffer);
       STEP(8, "PDF text extracted", { textLen: resumeText.length, preview: resumeText.slice(0, 100) });
     } else if (ext === ".docx") {
       const result = await mammoth.extractRawText({ buffer });
@@ -1554,8 +1653,11 @@ router.post("/admin/translators/:id/resume-analyze", ...adminGuard, async (req, 
     } else if (ext === ".txt") {
       resumeText = buffer.toString("utf-8");
       STEP(8, "TXT text extracted", { textLen: resumeText.length, preview: resumeText.slice(0, 100) });
+    } else if (ext === ".hwp" || ext === ".hwpx") {
+      resumeText = await extractHwpText(buffer);
+      STEP(8, "HWP text extracted", { ext, textLen: resumeText.length, preview: resumeText.slice(0, 100) });
     } else {
-      res.status(422).json({ error: `지원하지 않는 파일 형식입니다 (${ext}). PDF, DOCX, TXT를 사용해 주세요.` }); return;
+      res.status(422).json({ error: `지원하지 않는 파일 형식입니다 (${ext}). PDF, HWP, HWPX, DOCX, TXT를 사용해 주세요.` }); return;
     }
 
     if (!resumeText.trim()) {
@@ -1962,7 +2064,7 @@ router.put("/translator-profiles/:id", requireAuth, async (req, res) => {
       userId: targetId,
       languagePairs: languagePairs ?? null,
       languageLevel: languageLevel ?? null,
-      specializations: specializations ?? null,
+      specializations: normalizeSpecializationsString(specializations ?? null),
       education: education ?? null,
       major: major ?? null,
       graduationYear: graduationYear ?? null,

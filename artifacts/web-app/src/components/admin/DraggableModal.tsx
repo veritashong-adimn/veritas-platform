@@ -127,7 +127,13 @@ export function DraggableModal({
       document.body.style.cursor     = "";
     };
 
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        const tag = (e.target as HTMLElement | null)?.tagName ?? "";
+        if (tag === "SELECT" || tag === "INPUT" || tag === "TEXTAREA") return;
+        onClose();
+      }
+    };
 
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup",   onUp);

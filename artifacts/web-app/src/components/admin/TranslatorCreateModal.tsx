@@ -39,8 +39,8 @@ const EDUCATION_OVERSEAS = [
 const EDUCATION_ALL = [...EDUCATION_DOMESTIC, ...EDUCATION_OVERSEAS];
 
 // ── 전공 ────────────────────────────────────────────────────────────────
-const MAJOR_LANGUAGE = ["한영과", "한중과", "한일과", "한불과", "한독과", "한서과", "한노과", "한아과"];
-const MAJOR_INTERPRETATION = ["국제회의통역", "국제회의전공", "통역전공", "번역전공", "통번역전공"];
+const MAJOR_LANGUAGE = ["한영과", "한중과", "한일과", "한불과", "한독과", "한서과", "한노과", "한아과", "한영통번역", "한중통번역", "한일통번역"];
+const MAJOR_INTERPRETATION = ["통번역학", "전문통번역학", "국제회의통역", "국제회의전공", "통역전공", "번역전공", "통번역전공"];
 const MAJOR_SPECIALIZED = ["의료통역전공", "법률통번역전공", "영상번역전공", "AI번역전공"];
 const MAJOR_ALL = [...MAJOR_LANGUAGE, ...MAJOR_INTERPRETATION, ...MAJOR_SPECIALIZED];
 
@@ -449,6 +449,9 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [showAnalyzePanel, setShowAnalyzePanel] = useState(false);
+  const [docSubTab, setDocSubTab] = useState<"resume" | "id" | "bank">("resume");
+  const [idDragOver, setIdDragOver] = useState(false);
+  const [bankDragOver, setBankDragOver] = useState(false);
   const [vendorCompanies, setVendorCompanies] = useState<Array<{ id: number; name: string }>>([]);
 
   // 거주지역 분리 state
@@ -519,12 +522,12 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
     }
   };
 
-  const RESUME_ALLOWED_EXTS = [".pdf", ".doc", ".docx", ".txt"];
+  const RESUME_ALLOWED_EXTS = [".pdf", ".hwp", ".hwpx", ".doc", ".docx", ".txt"];
   const handleResumeFile = (file: File | null | undefined) => {
     if (!file) return;
     const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
     if (!RESUME_ALLOWED_EXTS.includes(ext)) {
-      onToast("PDF, DOC, DOCX, TXT 형식만 업로드할 수 있습니다.");
+      onToast("PDF, HWP, HWPX, DOC, DOCX, TXT 형식만 업로드할 수 있습니다.");
       return;
     }
     setResumeFile(file);
@@ -795,24 +798,21 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           <div style={{ display: "grid", gridTemplateColumns: "35fr 25fr 20fr 20fr", gap: "0 14px" }}>
             <div>
               <label style={labelSt}>학력</label>
-              <select
+              <ClickSelect
                 value={eduIsCustom ? "__custom__" : form.education}
-                onChange={e => {
-                  const v = e.target.value;
+                onChange={v => {
                   if (v === "__custom__") { setEduIsCustom(true); setForm(p => ({ ...p, education: eduCustom })); }
                   else { setEduIsCustom(false); setEduCustom(""); setForm(p => ({ ...p, education: v })); }
                 }}
-                style={inputStyle}
-              >
-                <option value="">선택 안 함</option>
-                <optgroup label="국내">
-                  {EDUCATION_DOMESTIC.map(s => <option key={s} value={s}>{s}</option>)}
-                </optgroup>
-                <optgroup label="해외">
-                  {EDUCATION_OVERSEAS.map(s => <option key={s} value={s}>{s}</option>)}
-                </optgroup>
-                <option value="__custom__">기타(직접 입력)</option>
-              </select>
+                style={{ width: "100%" }}
+                triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8, textAlign: "left" }}
+                options={[
+                  { value: "", label: "선택 안 함" },
+                  ...EDUCATION_DOMESTIC.map(s => ({ value: s, label: s })),
+                  ...EDUCATION_OVERSEAS.map(s => ({ value: s, label: s })),
+                  { value: "__custom__", label: "기타(직접 입력)" },
+                ]}
+              />
               {eduIsCustom && (
                 <input type="text" value={eduCustom}
                   onChange={e => { setEduCustom(e.target.value); setForm(p => ({ ...p, education: e.target.value })); }}
@@ -821,27 +821,22 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
             </div>
             <div>
               <label style={labelSt}>전공</label>
-              <select
+              <ClickSelect
                 value={majorIsCustom ? "__custom__" : form.major}
-                onChange={e => {
-                  const v = e.target.value;
+                onChange={v => {
                   if (v === "__custom__") { setMajorIsCustom(true); setForm(p => ({ ...p, major: majorCustom })); }
                   else { setMajorIsCustom(false); setMajorCustom(""); setForm(p => ({ ...p, major: v })); }
                 }}
-                style={inputStyle}
-              >
-                <option value="">선택 안 함</option>
-                <optgroup label="언어계열">
-                  {MAJOR_LANGUAGE.map(s => <option key={s} value={s}>{s}</option>)}
-                </optgroup>
-                <optgroup label="통대계열">
-                  {MAJOR_INTERPRETATION.map(s => <option key={s} value={s}>{s}</option>)}
-                </optgroup>
-                <optgroup label="전문분야계열">
-                  {MAJOR_SPECIALIZED.map(s => <option key={s} value={s}>{s}</option>)}
-                </optgroup>
-                <option value="__custom__">기타(직접 입력)</option>
-              </select>
+                style={{ width: "100%" }}
+                triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8, textAlign: "left" }}
+                options={[
+                  { value: "", label: "선택 안 함" },
+                  ...MAJOR_LANGUAGE.map(s => ({ value: s, label: s })),
+                  ...MAJOR_INTERPRETATION.map(s => ({ value: s, label: s })),
+                  ...MAJOR_SPECIALIZED.map(s => ({ value: s, label: s })),
+                  { value: "__custom__", label: "기타(직접 입력)" },
+                ]}
+              />
               {majorIsCustom && (
                 <input type="text" value={majorCustom}
                   onChange={e => { setMajorCustom(e.target.value); setForm(p => ({ ...p, major: e.target.value })); }}
@@ -850,17 +845,29 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
             </div>
             <div>
               <label style={labelSt}>졸업상태</label>
-              <select value={form.graduationStatus} onChange={e => setF("graduationStatus", e.target.value)} style={inputStyle}>
-                <option value="">선택 안 함</option>
-                {GRADUATION_STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
+              <ClickSelect
+                value={form.graduationStatus}
+                onChange={v => setF("graduationStatus", v)}
+                style={{ width: "100%" }}
+                triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8, textAlign: "left" }}
+                options={[
+                  { value: "", label: "선택 안 함" },
+                  ...GRADUATION_STATUS_OPTIONS.map(s => ({ value: s, label: s })),
+                ]}
+              />
             </div>
             <div>
               <label style={labelSt}>졸업/예정년도</label>
-              <select value={form.graduationYear} onChange={e => setF("graduationYear", e.target.value)} style={inputStyle}>
-                <option value="">선택 안 함</option>
-                {GRAD_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
+              <ClickSelect
+                value={form.graduationYear}
+                onChange={v => setF("graduationYear", v)}
+                style={{ width: "100%" }}
+                triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8, textAlign: "left" }}
+                options={[
+                  { value: "", label: "선택 안 함" },
+                  ...GRAD_YEARS.map(y => ({ value: y, label: y })),
+                ]}
+              />
             </div>
           </div>
         </div>
@@ -875,18 +882,17 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           </div>
           <div>
             <label style={labelSt}>거주국가</label>
-            <select
+            <ClickSelect
               value={regionCountry}
-              onChange={e => {
-                const c = e.target.value;
+              onChange={c => {
                 setRegionCountry(c);
                 if (c !== "기타") setRegionCountryCustom("");
                 setForm(p => ({ ...p, region: buildRegionString(c, c === "기타" ? "" : "", regionCity) }));
               }}
-              style={inputStyle}
-            >
-              {(REGION_COUNTRIES as readonly string[]).map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+              style={{ width: "100%" }}
+              triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8, textAlign: "left" }}
+              options={(REGION_COUNTRIES as readonly string[]).map(c => ({ value: c, label: c }))}
+            />
             {regionCountry === "기타" && (
               <input type="text" value={regionCountryCustom}
                 onChange={e => {
@@ -925,10 +931,16 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         {/* 소속업체 */}
         <div style={{ marginTop: 10 }}>
           <label style={labelSt}>소속업체</label>
-          <select value={form.affiliatedCompanyId} onChange={e => setF("affiliatedCompanyId", e.target.value)} style={inputStyle}>
-            <option value="">소속 없음 (프리랜서)</option>
-            {vendorCompanies.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-          </select>
+          <ClickSelect
+            value={form.affiliatedCompanyId}
+            onChange={v => setF("affiliatedCompanyId", v)}
+            style={{ width: "100%" }}
+            triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8, textAlign: "left" }}
+            options={[
+              { value: "", label: "소속 없음 (프리랜서)" },
+              ...vendorCompanies.map(c => ({ value: String(c.id), label: c.name })),
+            ]}
+          />
         </div>
 
         {/* 등급 · 평점 · 가용상태 */}
@@ -1132,7 +1144,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
               <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
                 {visiblePresets.map(tag => {
                   const isSelected = selected.has(tag);
-                  const isGeneral = tag === "범용 대응 가능";
+                  const isGeneral = tag === "다분야 가능";
                   return (
                     <button key={tag} type="button" onClick={() => togglePreset(tag)}
                       style={tagStyle(isSelected, isGeneral
@@ -1158,70 +1170,154 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         })()}
       </div>
 
-      {/* ── 3. 이력서 관리 ── */}
-      <p style={sH}>이력서 관리</p>
+      {/* ── 3. 이력서&증빙서류 ── */}
+      <p style={sH}>이력서&증빙서류</p>
       <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
-        {/* 선택된 파일 표시 */}
-        {resumeFile && (
-          <div style={{
-            display: "flex", alignItems: "center", gap: 8,
-            padding: "8px 12px", marginBottom: 10,
-            background: "#f0fdf4", borderRadius: 8, border: "1px solid #a7f3d0",
-          }}>
-            <span style={{ fontSize: 16, flexShrink: 0 }}>📄</span>
-            <span style={{ fontSize: 12, color: "#065f46", fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-              {resumeFile.name}
-            </span>
-            <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-              <button
-                type="button"
-                onClick={() => setShowAnalyzePanel(true)}
-                style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #059669", background: "#f0fdf4", cursor: "pointer", color: "#065f46", fontWeight: 600, whiteSpace: "nowrap" }}>
-                ✨ AI 분석
-              </button>
-              <button
-                type="button"
-                onClick={() => setResumeFile(null)}
-                style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #fca5a5", background: "#fff5f5", cursor: "pointer", color: "#b91c1c", whiteSpace: "nowrap" }}>
-                삭제
-              </button>
+
+        {/* 서류 유형 탭 */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: "1px solid #e5e7eb", paddingBottom: 10 }}>
+          {([
+            { key: "resume", label: "📄 이력서" },
+            { key: "id",     label: "🪪 신분증" },
+            { key: "bank",   label: "🏦 통장사본" },
+          ] as const).map(({ key, label }) => (
+            <button key={key} type="button"
+              onClick={() => setDocSubTab(key)}
+              style={{
+                padding: "5px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer",
+                background: docSubTab === key ? "#0ea5e9" : "#f0f9ff",
+                color: docSubTab === key ? "#fff" : "#0369a1",
+                border: `1px solid ${docSubTab === key ? "#0ea5e9" : "#bae6fd"}`,
+                fontWeight: docSubTab === key ? 700 : 400,
+              }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* ① 이력서 탭 */}
+        {docSubTab === "resume" && (<>
+          {resumeFile && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8,
+              padding: "8px 12px", marginBottom: 10,
+              background: "#f0fdf4", borderRadius: 8, border: "1px solid #a7f3d0",
+            }}>
+              <span style={{ fontSize: 16, flexShrink: 0 }}>📄</span>
+              <span style={{ fontSize: 12, color: "#065f46", fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+                {resumeFile.name}
+              </span>
+              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                <button type="button" onClick={() => setShowAnalyzePanel(true)}
+                  style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #059669", background: "#f0fdf4", cursor: "pointer", color: "#065f46", fontWeight: 600, whiteSpace: "nowrap" }}>
+                  ✨ AI 분석
+                </button>
+                <button type="button" onClick={() => setResumeFile(null)}
+                  style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #fca5a5", background: "#fff5f5", cursor: "pointer", color: "#b91c1c", whiteSpace: "nowrap" }}>
+                  삭제
+                </button>
+              </div>
+            </div>
+          )}
+          <div
+            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={e => { e.preventDefault(); setDragOver(false); handleResumeFile(e.dataTransfer.files?.[0]); }}
+            style={{
+              border: `2px dashed ${dragOver ? "#059669" : "#d1d5db"}`,
+              borderRadius: 8, padding: "14px 16px",
+              background: dragOver ? "#f0fdf4" : "#fff",
+              transition: "border-color 0.15s, background 0.15s",
+              textAlign: "center" as const,
+            }}>
+            <p style={{ fontSize: 11, color: dragOver ? "#059669" : "#9ca3af", margin: "0 0 8px", fontWeight: dragOver ? 600 : 400 }}>
+              {dragOver ? "여기에 파일을 놓으세요" : "파일을 드래그하거나 아래 버튼으로 선택"}
+            </p>
+            <label style={{ fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151", display: "inline-block" }}>
+              파일 선택
+              <input type="file" hidden
+                accept=".pdf,.hwp,.hwpx,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/haansofthwp,application/x-hwp,application/vnd.hancom.hwp,application/vnd.hancom.hwpx"
+                onChange={e => handleResumeFile(e.target.files?.[0])} />
+            </label>
+            <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>PDF · HWP · HWPX · DOC · DOCX · TXT (최대 10 MB)</p>
+          </div>
+          {!resumeFile && (
+            <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>
+              이력서 선택 후 ✨ AI 분석으로 프로필 정보를 자동으로 채울 수 있습니다.
+            </p>
+          )}
+        </>)}
+
+        {/* ② 신분증 탭 */}
+        {docSubTab === "id" && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>신분증 파일</label>
+              <span style={{ fontSize: 10, color: "#fff", background: "#f59e0b", borderRadius: 10, padding: "1px 8px", fontWeight: 700 }}>준비 중</span>
+            </div>
+            <div
+              onDragOver={e => { e.preventDefault(); setIdDragOver(true); }}
+              onDragLeave={() => setIdDragOver(false)}
+              onDrop={e => { e.preventDefault(); setIdDragOver(false); }}
+              style={{
+                border: `2px dashed ${idDragOver ? "#f59e0b" : "#d1d5db"}`,
+                borderRadius: 8, padding: "24px 14px",
+                background: idDragOver ? "#fffbeb" : "#f9fafb",
+                textAlign: "center" as const,
+                transition: "border-color 0.15s, background 0.15s",
+              }}>
+              <div style={{ fontSize: 28, marginBottom: 6 }}>🪪</div>
+              <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 4px" }}>
+                {idDragOver ? "여기에 파일을 놓으세요" : "신분증 업로드"}
+              </p>
+              <p style={{ fontSize: 11, color: "#9ca3af", margin: 0 }}>JPG · PNG · PDF (최대 10 MB)</p>
+            </div>
+            <div style={{ marginTop: 10, padding: "10px 14px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
+              <p style={{ fontSize: 11, color: "#92400e", margin: "0 0 4px", fontWeight: 700 }}>🔐 민감정보 보안 정책</p>
+              <p style={{ fontSize: 11, color: "#78350f", margin: 0, lineHeight: 1.6 }}>신분증은 민감개인정보입니다. 향후 업로드 시 접근권한 관리 · 감사로그 · 승인 이력이 자동 기록됩니다.</p>
+            </div>
+            <div style={{ marginTop: 8, padding: "10px 14px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
+              <p style={{ fontSize: 11, color: "#0369a1", margin: "0 0 3px", fontWeight: 700 }}>✨ AI 분석 예정 항목</p>
+              <p style={{ fontSize: 11, color: "#0c4a6e", margin: 0, lineHeight: 1.6 }}>이름 · 주민등록번호 · 생년월일 · 주소 → 관리자 검수 → 승인 반영</p>
             </div>
           </div>
         )}
-        {/* 드래그&드롭 업로드 존 */}
-        <div
-          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={e => {
-            e.preventDefault();
-            setDragOver(false);
-            handleResumeFile(e.dataTransfer.files?.[0]);
-          }}
-          style={{
-            border: `2px dashed ${dragOver ? "#059669" : "#d1d5db"}`,
-            borderRadius: 8, padding: "14px 16px",
-            background: dragOver ? "#f0fdf4" : "#fff",
-            transition: "border-color 0.15s, background 0.15s",
-            textAlign: "center" as const,
-          }}>
-          <p style={{ fontSize: 11, color: dragOver ? "#059669" : "#9ca3af", margin: "0 0 8px", fontWeight: dragOver ? 600 : 400 }}>
-            {dragOver ? "여기에 파일을 놓으세요" : "파일을 드래그하거나 아래 버튼으로 선택"}
-          </p>
-          <label style={{ fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151", display: "inline-block" }}>
-            파일 선택
-            <input
-              type="file" hidden
-              accept=".pdf,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
-              onChange={e => handleResumeFile(e.target.files?.[0])}
-            />
-          </label>
-          <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>PDF · DOC · DOCX · TXT (최대 10 MB)</p>
-        </div>
-        {!resumeFile && (
-          <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>
-            이력서 선택 후 ✨ AI 분석으로 프로필 정보를 자동으로 채울 수 있습니다.
-          </p>
+
+        {/* ③ 통장사본 탭 */}
+        {docSubTab === "bank" && (
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>통장사본 파일</label>
+              <span style={{ fontSize: 10, color: "#fff", background: "#f59e0b", borderRadius: 10, padding: "1px 8px", fontWeight: 700 }}>준비 중</span>
+            </div>
+            <div
+              onDragOver={e => { e.preventDefault(); setBankDragOver(true); }}
+              onDragLeave={() => setBankDragOver(false)}
+              onDrop={e => { e.preventDefault(); setBankDragOver(false); }}
+              style={{
+                border: `2px dashed ${bankDragOver ? "#059669" : "#d1d5db"}`,
+                borderRadius: 8, padding: "24px 14px",
+                background: bankDragOver ? "#f0fdf4" : "#f9fafb",
+                textAlign: "center" as const,
+                transition: "border-color 0.15s, background 0.15s",
+              }}>
+              <div style={{ fontSize: 28, marginBottom: 6 }}>🏦</div>
+              <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 4px" }}>
+                {bankDragOver ? "여기에 파일을 놓으세요" : "통장사본 업로드"}
+              </p>
+              <p style={{ fontSize: 11, color: "#9ca3af", margin: 0 }}>JPG · PNG · PDF (최대 10 MB)</p>
+            </div>
+            <div style={{ marginTop: 10, padding: "10px 14px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
+              <p style={{ fontSize: 11, color: "#92400e", margin: "0 0 4px", fontWeight: 700 }}>🔐 민감정보 보안 정책</p>
+              <p style={{ fontSize: 11, color: "#78350f", margin: 0, lineHeight: 1.6 }}>통장사본은 금융정보입니다. 향후 업로드 시 접근권한 관리 · 감사로그 · 승인 이력이 자동 기록됩니다.</p>
+            </div>
+            <div style={{ marginTop: 8, padding: "10px 14px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
+              <p style={{ fontSize: 11, color: "#0369a1", margin: "0 0 3px", fontWeight: 700 }}>✨ AI 분석 예정 항목</p>
+              <p style={{ fontSize: 11, color: "#0c4a6e", margin: 0, lineHeight: 1.6 }}>은행명 · 예금주 · 계좌번호 → 관리자 검수 → 승인 반영</p>
+            </div>
+          </div>
         )}
+
       </div>
 
       {/* ── 4. 언어·국제경험 ── */}
