@@ -58,12 +58,15 @@ export async function renderPdfFirstPageAsPng(pdfBuffer: Buffer): Promise<Buffer
     await fs.writeFile(pdfPath, pdfBuffer);
     // -r 200: 200 DPI (OCR 품질 충분), -png: PNG 출력, -f 1 -l 1: 첫 페이지만
     await new Promise<void>((resolve, reject) => {
-      execFile(pdftoppmBin, ["-r", "200", "-png", "-f", "1", "-l", "1", pdfPath, outPrefix],
-        { timeout: 30_000 },
+      execFile(
+        pdftoppmBin,
+        ["-r", "200", "-png", "-f", "1", "-l", "1", pdfPath, outPrefix],
+        { timeout: 30_000, env: { ...process.env, HOME: process.env.HOME ?? "/root" } },
         (err, _stdout, stderr) => {
-          if (err) reject(new Error(stderr?.trim() || err.message));
+          if (err) reject(new Error(`pdftoppm(${pdftoppmBin}): ${stderr?.trim() || err.message}`));
           else resolve();
-        });
+        },
+      );
     });
     const files = await fs.readdir(tmpDir);
     const pngFile = files.find(f => f.startsWith("page") && f.endsWith(".png"));

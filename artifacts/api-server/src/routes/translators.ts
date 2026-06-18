@@ -127,17 +127,27 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
   }
 
   // antiword fallback (시스템 바이너리)
+  // -w 0: 줄바꿈 없이 전체 텍스트 출력 (AI 분석에 적합). -t 제거: 매핑 파일 의존성 제거.
+  // HOME을 명시하여 Railway 컨테이너에서 antiword가 데이터 파일을 찾지 못하는 문제 방지.
   const antiwordBin = await findAntiword();
   if (antiwordBin) {
     const tmpPath = path.join(tmpdir(), `doc_${label}_${Date.now()}.doc`);
     await writeFile(tmpPath, buffer);
     try {
       const text = await new Promise<string>((resolve, reject) => {
-        execFile(antiwordBin, ["-t", tmpPath], { timeout: 30_000, maxBuffer: 5 * 1024 * 1024 },
+        execFile(
+          antiwordBin,
+          ["-w", "0", tmpPath],
+          {
+            timeout: 30_000,
+            maxBuffer: 5 * 1024 * 1024,
+            env: { ...process.env, HOME: process.env.HOME ?? "/root" },
+          },
           (err, stdout, stderr) => {
             if (stdout?.trim()) resolve(stdout);
             else reject(new Error(stderr?.trim() || err?.message || "antiword: empty output"));
-          });
+          },
+        );
       });
       return { text, method: `antiword(${antiwordBin})` };
     } finally {
