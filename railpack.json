@@ -4,7 +4,6 @@
   "steps": {
     "install": {
       "commands": [
-        "apt-get update && apt-get install -y antiword poppler-utils",
         "corepack enable",
         "corepack prepare pnpm@10.26.1 --activate",
         "pnpm install --no-frozen-lockfile"
@@ -20,8 +19,7 @@
   },
   "deploy": {
     "aptPackages": ["antiword", "poppler-utils"],
-    "startCommand": "pnpm --filter @workspace/db run push-force && pnpm --filter @workspace/api-server run start",
-    "_comment": "DB 스키마 자동 적용 후 서버 시작"
+    "startCommand": "pnpm --filter @workspace/db run push-force && pnpm --filter @workspace/api-server run start"
   },
   "watchPatterns": [
     "**"
