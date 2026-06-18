@@ -33,6 +33,10 @@ const { PDFParse: PdfParseClass } = _require("pdf-parse") as {
 };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mammoth = _require("mammoth") as typeof import("mammoth");
+// word-extractor: pure-JS .doc (OLE2) parser — no system binary required
+const WordExtractorCls = _require("word-extractor") as new () => {
+  extract(source: Buffer | string): Promise<{ getBody(): string }>;
+};
 // kordoc: HWP/HWPX parser (CJS)
 const kordoc = _require("kordoc") as {
   parse: (input: Buffer | string, options?: { filePath?: string }) => Promise<{
@@ -100,10 +104,8 @@ async function findAntiword(): Promise<string | null> {
 
 /**
  * .doc / .docx 파일에서 텍스트를 추출한다.
- * - magic byte가 ZIP이면 mammoth로 처리 (확장자가 .doc여도 실제 DOCX인 경우 대응)
- * - magic byte가 OLE2이면 antiword 시도
- * - antiword 미설치 시 명확한 에러를 throw (mammoth로 fallback하지 않음 — 반드시 실패하기 때문)
- * @param label 로그/에러 메시지용 레이블 ("resume-analyze" | "resume-analyze-upload")
+ * 우선순위: mammoth(ZIP/DOCX) → word-extractor(OLE2, 순수 JS) → antiword(시스템 바이너리 fallback)
+ * word-extractor는 시스템 의존성 없이 OLE2 .doc를 파싱하므로 Railway/Docker 환경에서도 작동한다.
  */
 async function extractDocText(buffer: Buffer, label: string): Promise<{ text: string; method: string }> {
   const fmt = detectDocFormat(buffer);
@@ -114,7 +116,17 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
     return { text: result.value, method: "mammoth(zip-docx)" };
   }
 
-  // OLE2 또는 unknown → antiword 필요
+  // OLE2 또는 unknown → word-extractor 우선 시도 (순수 JS, 시스템 의존성 없음)
+  try {
+    const extractor = new WordExtractorCls();
+    const doc = await extractor.extract(buffer);
+    const text = doc.getBody();
+    if (text?.trim()) return { text, method: "word-extractor" };
+  } catch {
+    // word-extractor 실패 시 antiword로 fallback
+  }
+
+  // antiword fallback (시스템 바이너리)
   const antiwordBin = await findAntiword();
   if (antiwordBin) {
     const tmpPath = path.join(tmpdir(), `doc_${label}_${Date.now()}.doc`);
@@ -133,11 +145,11 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
     }
   }
 
-  // antiword 없음 — mammoth fallback은 OLE2에서 항상 실패하므로 명확한 에러로 종료
+  // 모두 실패
   throw Object.assign(
     new Error(
       fmt === "ole2"
-        ? "이 파일은 Word 97-2003 이진 형식(.doc)입니다. 서버에 antiword가 설치되지 않아 추출할 수 없습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요."
+        ? "이 파일은 Word 97-2003 이진 형식(.doc)입니다. 텍스트를 추출할 수 없습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요."
         : "DOC 파일 형식을 인식할 수 없습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요.",
     ),
     { docFmt: fmt, antiwordFound: false },

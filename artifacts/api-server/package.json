@@ -38,6 +38,7 @@
     "pdf-parse": "^2.4.5",
     "pino": "^9",
     "pino-http": "^10",
+    "word-extractor": "^1.0.4",
     "xlsx": "^0.18.5",
     "zod": "catalog:"
   },
