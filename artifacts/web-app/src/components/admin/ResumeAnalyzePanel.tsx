@@ -1,6 +1,42 @@
 import React, { useState, useEffect } from "react";
 import { api, parseLangExperiences, LangExpEntry } from "../../lib/constants";
 
+// 서버와 동일한 언어명 목록 (서버 stripLangNamesFromBio와 동기화 유지)
+const LANG_NAMES_KO = [
+  "한국어", "영어", "일본어", "중국어", "프랑스어", "독일어", "스페인어",
+  "러시아어", "아랍어", "베트남어", "태국어", "인도네시아어", "포르투갈어",
+  "이탈리아어", "네덜란드어", "스웨덴어", "폴란드어", "터키어", "힌디어",
+  "말레이어", "몽골어", "페르시아어", "우크라이나어", "체코어", "헝가리어",
+  "루마니아어", "그리스어", "핀란드어", "덴마크어", "노르웨이어",
+];
+
+/**
+ * AI Preview 표시 전 bio에서 언어명 반복 패턴을 제거한다.
+ * 서버 응답이 구버전이거나 strip이 적용되지 않은 경우 방어 레이어로 동작한다.
+ */
+function stripLangNamesFromBio(bio: string | null): string | null {
+  if (!bio) return null;
+  const langOr = LANG_NAMES_KO.join("|");
+  // 줄 앞머리 "언어A·언어B" / "언어A, 언어B" 나열 제거 (구분자: ·,、 공백 / & 등)
+  const leadingPattern = new RegExp(
+    `^(?:(?:${langOr})(?:[·•·,、\\s/&]+(?:${langOr}))*)[\\s]*`,
+    "u",
+  );
+  // "언어A·언어B" 연속 패턴 (중간 제거)
+  const midPattern = new RegExp(`(?:${langOr})(?:[·•·]+(?:${langOr}))+`, "gu");
+
+  const cleaned = bio
+    .split("\n")
+    .map(line => line.replace(leadingPattern, "").trim())
+    .filter(line => line.length > 0)
+    .join("\n")
+    .replace(midPattern, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  return cleaned || null;
+}
+
 export interface ResumeDebugInfo {
   sourceType: "file_upload" | "stored_file";
   fileName: string;
@@ -162,6 +198,10 @@ export const ResumeAnalyzePanel: React.FC<Props> = (props) => {
         throw new Error(errMsg);
       }
       const data: ResumeAnalysisResult = await resp.json();
+      // 서버 구버전 방어: Preview 표시 전 bio strip 적용 (DB 저장과 동일하게)
+      if (typeof data.bio === "string") {
+        data.bio = stripLangNamesFromBio(data.bio) as string;
+      }
       setResult(data);
       setEdited(data);
     } catch (e) {

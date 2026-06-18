@@ -44,6 +44,15 @@ app.get("/api/health", async (_req, res) => {
 
 app.use("/api", router);
 
+// /api 경로 중 어떤 라우터에도 매칭되지 않은 요청 — Express 기본 HTML 404 대신 항상 JSON으로 반환
+// (프론트가 .json()으로 파싱하므로 HTML 응답이 내려가면 "Unexpected token '<'" 파싱 오류로 이어짐)
+app.use("/api", (req: Request, res: Response) => {
+  res.status(404).json({
+    error: "요청한 API 경로를 찾을 수 없습니다.",
+    message: `Cannot ${req.method} ${req.originalUrl}`,
+  });
+});
+
 // 프론트엔드 정적 파일 서빙 (Railway 프로덕션)
 // __dirname = artifacts/api-server/dist/ → ../../web-app/dist/public
 const clientDist = path.resolve(__dirname, "../../web-app/dist/public");
@@ -59,7 +68,10 @@ if (fs.existsSync(clientDist)) {
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   logger.error({ err }, "Unhandled error");
   if (res.headersSent) return;
-  res.status(500).json({ error: "서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요." });
+  res.status(500).json({
+    error: "서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+    message: err?.message ?? "Internal Server Error",
+  });
 });
 
 export default app;

@@ -13,8 +13,10 @@ import { eq, and, ilike, or, sql, desc, gte, lte, inArray, isNotNull } from "dri
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { encrypt, decrypt, maskResidentNumber } from "../lib/encrypt";
+import { logEvent } from "../lib/logEvent";
 import {
   uploadResumeToGCS, deleteResumeFromGCS, getResumeDownloadUrl, isAllowedMime, isAllowedExt,
+  uploadDocumentToGCS, isAllowedDocumentMime, isAllowedDocumentExt,
 } from "../lib/gcsResume";
 import OpenAI from "openai";
 import { createRequire } from "node:module";
@@ -61,6 +63,15 @@ const resumeUpload = multer({
     // MIME 타입 또는 확장자 중 하나를 통과하면 허용 (HWP 등 MIME 불안정 형식 대비)
     if (isAllowedMime(file.mimetype) || isAllowedExt(file.originalname)) cb(null, true);
     else cb(new Error("PDF, HWP, HWPX, DOCX, DOC, TXT 형식만 업로드할 수 있습니다."));
+  },
+});
+
+const documentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (isAllowedDocumentMime(file.mimetype) || isAllowedDocumentExt(file.originalname)) cb(null, true);
+    else cb(new Error("JPG, PNG, PDF 형식만 업로드할 수 있습니다."));
   },
 });
 
@@ -267,7 +278,7 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
       graduationYear: graduationYear ? Number(graduationYear) : null,
       graduationStatus: graduationStatus?.trim() || null,
       rating: rating ? Number(rating) : null,
-      grade: grade || null, bio: bio?.trim() || null,
+      grade: grade || null, bio: stripLangNamesFromBio(bio?.trim() || null),
       ratePerWord: ratePerWord ? Number(ratePerWord) : null,
       ratePerPage: ratePerPage ? Number(ratePerPage) : null,
       unitType: unitType ?? "eojeol",
@@ -841,7 +852,12 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
       grade: grade || null,
       rating: (rating != null && rating !== "") ? Number(rating) : null,
       availabilityStatus: availabilityStatus ?? "available",
-      bio: bio?.trim() || null,
+      bio: (() => {
+        const rawBio = bio?.trim() || null;
+        const strippedBio = stripLangNamesFromBio(rawBio);
+        req.log.info({ bioOriginal: rawBio, bioStripped: strippedBio }, "[bio] AI Original → After strip → Saving");
+        return strippedBio;
+      })(),
       affiliatedCompanyId: (affiliatedCompanyId != null && affiliatedCompanyId !== "" && Number(affiliatedCompanyId) > 0)
         ? Number(affiliatedCompanyId) : null,
       settlementType: settlementType?.trim() || null,
@@ -1014,7 +1030,8 @@ router.get("/admin/translators/:id/resume-download", ...adminGuard, async (req, 
     const ext = path.extname(profile.resumeUrl).toLowerCase() || ".pdf";
     const contentType = fileRes.headers.get("Content-Type") ?? "application/octet-stream";
     const filename = encodeURIComponent(`이력서${ext}`);
-    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${filename}`);
+    const inline = req.query.inline === "true";
+    res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${filename}`);
     res.setHeader("Content-Type", contentType);
 
     const buf = Buffer.from(await fileRes.arrayBuffer());
@@ -1049,6 +1066,187 @@ router.delete("/admin/translators/:id/resume", ...adminGuard, async (req, res) =
   }
 });
 
+// ─── 증빙서류(신분증/통장사본) 업로드 ─────────────────────────────────────────
+type DocType = "id_card" | "bankbook";
+
+function docLabel(type: DocType): string {
+  return type === "id_card" ? "신분증" : "통장사본";
+}
+
+router.post(
+  "/admin/translators/:id/document-upload",
+  ...adminGuard,
+  requirePermission("translator.sensitive"),
+  documentUpload.single("file"),
+  async (req, res) => {
+    const userId = Number(req.params.id);
+    if (isNaN(userId) || userId <= 0) { res.status(400).json({ error: "유효하지 않은 user id." }); return; }
+    const docType = req.query.type as DocType | undefined;
+    if (docType !== "id_card" && docType !== "bankbook") {
+      res.status(400).json({ error: "type 파라미터는 id_card 또는 bankbook 이어야 합니다." }); return;
+    }
+    if (!req.file) { res.status(400).json({ error: "파일을 첨부해주세요. (필드명: file)" }); return; }
+    const label = docLabel(docType);
+    try {
+      const [existing] = await db
+        .select({ idCardUrl: translatorSensitiveTable.idCardUrl, bankbookUrl: translatorSensitiveTable.bankbookUrl })
+        .from(translatorSensitiveTable)
+        .where(eq(translatorSensitiveTable.translatorId, userId));
+
+      const prevUrl = docType === "id_card" ? existing?.idCardUrl : existing?.bankbookUrl;
+      if (prevUrl) await deleteResumeFromGCS(prevUrl).catch(() => {});
+
+      const subFolder = docType === "id_card" ? "id-cards" as const : "bankbooks" as const;
+      const storedPath = await uploadDocumentToGCS(req.file.buffer, req.file.originalname, req.file.mimetype, subFolder);
+      const fileName = Buffer.from(req.file.originalname, "latin1").toString("utf8");
+
+      if (!existing) {
+        if (docType === "id_card") {
+          await db.insert(translatorSensitiveTable).values({ translatorId: userId, idCardUrl: storedPath, idCardFileName: fileName });
+        } else {
+          await db.insert(translatorSensitiveTable).values({ translatorId: userId, bankbookUrl: storedPath, bankbookFileName: fileName });
+        }
+      } else {
+        if (docType === "id_card") {
+          await db.update(translatorSensitiveTable)
+            .set({ idCardUrl: storedPath, idCardFileName: fileName, updatedAt: new Date() })
+            .where(eq(translatorSensitiveTable.translatorId, userId));
+        } else {
+          await db.update(translatorSensitiveTable)
+            .set({ bankbookUrl: storedPath, bankbookFileName: fileName, updatedAt: new Date() })
+            .where(eq(translatorSensitiveTable.translatorId, userId));
+        }
+      }
+
+      req.log.info({ userId, docType, storedPath, fileName }, `${label} uploaded`);
+      res.json({ url: storedPath, fileName });
+    } catch (err) {
+      req.log.error({ err }, `${label} upload failed`);
+      res.status(500).json({ error: `${label} 업로드에 실패했습니다.` });
+    }
+  },
+);
+
+router.get("/admin/translators/:id/document-url", ...adminGuard, requirePermission("translator.sensitive"), async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) { res.status(400).json({ error: "유효하지 않은 user id." }); return; }
+  const docType = req.query.type as DocType | undefined;
+  if (docType !== "id_card" && docType !== "bankbook") {
+    res.status(400).json({ error: "type 파라미터는 id_card 또는 bankbook 이어야 합니다." }); return;
+  }
+  const label = docLabel(docType);
+  try {
+    const [row] = await db
+      .select({ idCardUrl: translatorSensitiveTable.idCardUrl, bankbookUrl: translatorSensitiveTable.bankbookUrl })
+      .from(translatorSensitiveTable)
+      .where(eq(translatorSensitiveTable.translatorId, userId));
+    const storedPath = docType === "id_card" ? row?.idCardUrl : row?.bankbookUrl;
+    if (!storedPath) { res.status(404).json({ error: `${label}가 없습니다.` }); return; }
+    const downloadUrl = await getResumeDownloadUrl(storedPath);
+    res.json({ downloadUrl });
+  } catch (err) {
+    req.log.error({ err }, `${label} URL generation failed`);
+    res.status(500).json({ error: `${label} 다운로드 URL 생성 실패.` });
+  }
+});
+
+router.get("/admin/translators/:id/document-download", ...adminGuard, requirePermission("translator.sensitive"), async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) { res.status(400).json({ error: "유효하지 않은 user id." }); return; }
+  const docType = req.query.type as DocType | undefined;
+  if (docType !== "id_card" && docType !== "bankbook") {
+    res.status(400).json({ error: "type 파라미터는 id_card 또는 bankbook 이어야 합니다." }); return;
+  }
+  const label = docLabel(docType);
+  try {
+    const [row] = await db
+      .select({
+        idCardUrl: translatorSensitiveTable.idCardUrl,
+        idCardFileName: translatorSensitiveTable.idCardFileName,
+        bankbookUrl: translatorSensitiveTable.bankbookUrl,
+        bankbookFileName: translatorSensitiveTable.bankbookFileName,
+      })
+      .from(translatorSensitiveTable)
+      .where(eq(translatorSensitiveTable.translatorId, userId));
+    const storedPath = docType === "id_card" ? row?.idCardUrl : row?.bankbookUrl;
+    const origFileName = docType === "id_card" ? row?.idCardFileName : row?.bankbookFileName;
+    if (!storedPath) { res.status(404).json({ error: `${label}가 없습니다.` }); return; }
+    const signedUrl = await getResumeDownloadUrl(storedPath);
+    const fileRes = await fetch(signedUrl, { signal: AbortSignal.timeout(30_000) });
+    if (!fileRes.ok) throw new Error(`파일 로드 실패: ${fileRes.status}`);
+    const ext = path.extname(storedPath).toLowerCase() || ".pdf";
+    const contentType = fileRes.headers.get("Content-Type") ?? "application/octet-stream";
+    const baseName = origFileName ?? `${label}${ext}`;
+    const filename = encodeURIComponent(baseName);
+    const inline = req.query.inline === "true";
+    res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename*=UTF-8''${filename}`);
+    res.setHeader("Content-Type", contentType);
+    const buf = Buffer.from(await fileRes.arrayBuffer());
+    res.send(buf);
+  } catch (err) {
+    req.log.error({ err }, `${label} download proxy failed`);
+    if (!res.headersSent) res.status(500).json({ error: `${label} 다운로드 실패.` });
+  }
+});
+
+router.delete("/admin/translators/:id/document", ...adminGuard, requirePermission("translator.sensitive"), async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) { res.status(400).json({ error: "유효하지 않은 user id." }); return; }
+  const docType = req.query.type as DocType | undefined;
+  if (docType !== "id_card" && docType !== "bankbook") {
+    res.status(400).json({ error: "type 파라미터는 id_card 또는 bankbook 이어야 합니다." }); return;
+  }
+  const label = docLabel(docType);
+  try {
+    const [row] = await db
+      .select({ idCardUrl: translatorSensitiveTable.idCardUrl, bankbookUrl: translatorSensitiveTable.bankbookUrl })
+      .from(translatorSensitiveTable)
+      .where(eq(translatorSensitiveTable.translatorId, userId));
+    const storedPath = docType === "id_card" ? row?.idCardUrl : row?.bankbookUrl;
+    if (storedPath) await deleteResumeFromGCS(storedPath).catch(() => {});
+    if (docType === "id_card") {
+      await db.update(translatorSensitiveTable)
+        .set({ idCardUrl: null, idCardFileName: null, updatedAt: new Date() })
+        .where(eq(translatorSensitiveTable.translatorId, userId));
+    } else {
+      await db.update(translatorSensitiveTable)
+        .set({ bankbookUrl: null, bankbookFileName: null, updatedAt: new Date() })
+        .where(eq(translatorSensitiveTable.translatorId, userId));
+    }
+    req.log.info({ userId, docType }, `${label} deleted`);
+    await logEvent("translator", userId, `document.${docType}.deleted`, req.log, req.user, JSON.stringify({ docType }));
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, `${label} delete failed`);
+    res.status(500).json({ error: `${label} 삭제 실패.` });
+  }
+});
+
+router.get("/admin/translators/:id/document-meta", ...adminGuard, async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) { res.status(400).json({ error: "유효하지 않은 user id." }); return; }
+  try {
+    const [row] = await db
+      .select({
+        idCardUrl: translatorSensitiveTable.idCardUrl,
+        idCardFileName: translatorSensitiveTable.idCardFileName,
+        bankbookUrl: translatorSensitiveTable.bankbookUrl,
+        bankbookFileName: translatorSensitiveTable.bankbookFileName,
+      })
+      .from(translatorSensitiveTable)
+      .where(eq(translatorSensitiveTable.translatorId, userId));
+    res.json({
+      idCardExists: !!row?.idCardUrl,
+      idCardFileName: row?.idCardFileName ?? null,
+      bankbookExists: !!row?.bankbookUrl,
+      bankbookFileName: row?.bankbookFileName ?? null,
+    });
+  } catch (err) {
+    req.log.error({ err }, "Document meta failed");
+    res.status(500).json({ error: "문서 메타 조회 실패." });
+  }
+});
+
 // ─── 이력서 AI 분석 공통 상수 & 정규화 헬퍼 ────────────────────────────────────
 const RESUME_WORK_TYPES = ["번역", "통역", "감수", "편집", "미디어", "DTP", "행사운영"];
 const RESUME_SUB_TYPES = [
@@ -1062,13 +1260,14 @@ const RESUME_SUB_TYPES = [
 ];
 const RESUME_EDUCATION_LIST = [
   "한국외국어대학교 통번역대학원",
-  "서울외국어대학원대학교 통번역대학원",
   "이화여자대학교 통역번역대학원",
+  "서울외국어대학원대학교 통번역대학원",
+  "중앙대학교 국제대학원",
   "부산외국어대학교 통번역대학원",
   "제주대학교 통번역대학원",
   "선문대학교 통번역대학원",
-  "중앙대학교 국제대학원",
-  "Macquarie University",
+  "계명대학교 통번역대학원",
+  "Macquarie University - Translation & Interpreting",
   "Middlebury Institute of International Studies at Monterey",
   "University of Bath",
   "University of Westminster",
@@ -1157,7 +1356,11 @@ function normalizeExtractedEducation(raw: string | null): string | null {
     "이화여대": "이화여자대학교 통역번역대학원",
     "서울외대": "서울외국어대학원대학교 통번역대학원",
     "부산외대": "부산외국어대학교 통번역대학원",
-    "macquarie": "Macquarie University",
+    "계명대": "계명대학교 통번역대학원",
+    "맥쿼리": "Macquarie University - Translation & Interpreting",
+    "macquarie": "Macquarie University - Translation & Interpreting",
+    "master of translation and interpreting": "Macquarie University - Translation & Interpreting",
+    "master of conference interpreting": "Macquarie University - Translation & Interpreting",
     "middlebury": "Middlebury Institute of International Studies at Monterey",
     "monterey": "Middlebury Institute of International Studies at Monterey",
     "bath": "University of Bath",
@@ -1246,6 +1449,20 @@ function normalizeExtractedSpecializations(raw: string | null): string | null {
     }
   }
   return result.size > 0 ? [...result].join(", ") : null;
+}
+
+function isGraduateInterpreterEducation(education: string | null): boolean {
+  if (!education) return false;
+  const edu = education.trim();
+  if (RESUME_EDUCATION_LIST.includes(edu)) return true;
+  const lower = edu.toLowerCase();
+  return lower.includes("통번역대학원") || lower.includes("통역번역대학원");
+}
+
+function filterSubTypesForGraduate(profileSubTypes: string | null, education: string | null): string | null {
+  if (!profileSubTypes || !isGraduateInterpreterEducation(education)) return profileSubTypes;
+  const filtered = profileSubTypes.split(",").map(s => s.trim()).filter(s => s && s !== "일반번역");
+  return filtered.length > 0 ? filtered.join(", ") : null;
 }
 
 function buildResumePromptMessages(resumeText: string): Array<{ role: "system" | "user"; content: string }> {
@@ -1344,20 +1561,49 @@ ${RESUME_SPECIALIZATION_LIST.join(", ")}
 반드시 다음에서만 선택(쉼표 구분): ${RESUME_SUB_TYPES.join(", ")}
 영문 매핑: "Simultaneous Interpretation"→"동시통역", "Consecutive Interpretation"→"순차통역", "Escort Interpretation"→"수행통역", "Whispering"→"위스퍼링통역", "Conference Interpretation"→"동시통역", "Phone Interpretation"→"전화통역", "Video Interpretation"→"화상통역"
 행사운영 세부유형 매핑: 등록데스크·안내데스크→"등록데스크", VIP 의전·수행비서→"VIP 의전", 행사 스태프·진행요원→"행사스태프", 전시회·박람회 운영→"전시회 운영지원", 해외 바이어 응대→"해외 바이어 응대", 행사 MC·사회자→"행사 MC"
+⚠️ 통번역대학원 출신 규칙: education 필드가 통번역대학원/통역번역대학원에 해당하면 "일반번역"을 세부유형에 포함하지 마세요. 대신 "전문번역"을 사용하세요.
 
 【지역(region)】
-"국가 / 도시" 형식으로 반환. 예: "대한민국 / 서울", "미국 / 뉴욕". 도시 불명이면 국가만.
+⚠️ 엄격한 규칙: 이력서에 현재 거주지를 명시한 경우에만 입력합니다. 반드시 아래 키워드가 명시적으로 존재해야만 추출:
+  - 한국어: 주소, 현주소, 거주지, 현재 거주, 현재 주소, 거주 국가, 거주지역
+  - 영어: Address, Residence, Current Location, Lives in, Residing in
+
+⛔ 다음은 절대 region으로 추출하지 마세요 (null 반환):
+  - 학교 소재지 (예: 한국외대→서울, 이화여대→서울, Macquarie University→시드니)
+  - 회사/기관 소재지 (예: "도쿄 소재 무역회사 근무" → null)
+  - 프로젝트/행사/출장 장소 (예: "뉴욕 컨퍼런스 통역", "파리 출장" → null)
+  - 해외 유학/체류 기간 (예: "호주에서 3년 유학" → null, languageExperiences에만 기록)
+  - 출신 지역/고향 (예: "부산 출신" → null)
+  - 과거 거주 이력 (현재 거주지임이 명확하지 않으면 null)
+
+반환 형식: "국가 / 도시" (예: "대한민국 / 서울", "미국 / 뉴욕"). 도시 불명이면 국가만. 명시된 거주지 없으면 null.
 영문 국가명 → 한국어: South Korea→대한민국, USA/United States→미국, Japan→일본, China→중국, UK→영국, Australia→호주, Canada→캐나다, France→프랑스, Germany→독일.
 영문 도시명 → 한국어: Seoul→서울, Busan→부산, Incheon→인천, Tokyo→도쿄, New York→뉴욕, Los Angeles→로스앤젤레스, Sydney→시드니, London→런던, Paris→파리, Singapore→싱가포르.
 
-【상세정보(bio) — 구조화 요약】
-원문을 그대로 복사하지 말고 이력서 내용을 바탕으로 3~5줄 한국어 요약을 생성합니다:
-- 1줄: 통번역사 소개 (예: "영어·한국어 전문 통번역사 (경력 15년)")
-- 2줄: 전문분야 요약 (예: "금융·법률·IT 분야 전문")
-- 3줄: 주요 업무유형 (예: "동시통역 및 순차통역 수행")
-- 4줄(선택): 학력 또는 자격증 하이라이트
-- 5줄(선택): 주요 클라이언트 또는 실적
-각 줄은 \\n으로 구분, 줄당 15~35자 내외로 간결하게
+【상세정보(bio) — 핵심 경쟁력 요약】
+원문을 그대로 복사하지 말고 이력서 내용을 바탕으로 2~4줄 한국어 요약을 생성합니다.
+
+⚠️ 금지 사항:
+- 언어명(한국어, 영어, 일본어, 중국어, 프랑스어 등)을 문장 앞이나 중간에 반복하지 마세요
+  (언어 정보는 별도 컬럼에 표시되므로 bio에서 제외)
+- 업무유형(번역, 통역, 동시통역 등) 나열만으로 채우지 마세요
+  (업무유형은 별도 컬럼에 표시됨)
+- "한국어·영어 전문 통번역사", "영어 번역가" 같은 표현 금지
+
+✅ 포함할 내용 (우선순위 순):
+- 총 경력 연수 (예: "20년 경력", "15년 이상 번역 경력")
+- 핵심 산업 또는 전문분야 (예: "의료·제약 GMP", "법률·금융·IT")
+- 대표 프로젝트 또는 주요 실적
+- 국제기구·대형 클라이언트 경험
+- 통번역대학원 출신 여부 (해당 시)
+- 자격증 또는 공인 시험 성적 (해당 시)
+
+예시:
+"전문 통번역사 (경력 20년 이상). 의료·법률 분야 동시통역 다수 수행."
+"15년 이상 번역 경력. ERP·제조·IT 프로젝트 전문."
+"의료·제약 GMP 프로젝트 전문. 국제회의 통역 다수. 한국외대 통번역대학원 졸업."
+
+각 줄은 \\n으로 구분, 전체 100자 내외로 간결하게
 
 【졸업상태(graduationStatus)】
 다음 중 하나: 졸업, 졸업예정, 재학중, 수료, 중퇴
@@ -1375,26 +1621,88 @@ ${RESUME_SPECIALIZATION_LIST.join(", ")}
   ];
 }
 
+function normalizePhoneNumber(phone: string | null): string | null {
+  if (!phone) return null;
+  const d = phone.replace(/\D/g, "");
+  if (d.length === 11 && /^01[016789]/.test(d)) return `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`;
+  if (d.startsWith("02") && d.length === 9) return `${d.slice(0,2)}-${d.slice(2,5)}-${d.slice(5)}`;
+  if (d.startsWith("02") && d.length === 10) return `${d.slice(0,2)}-${d.slice(2,6)}-${d.slice(6)}`;
+  if (d.length === 10) return `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`;
+  if (d.length === 11) return `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`;
+  return phone;
+}
+
+// 언어명 목록 (bio 후처리에서 제거 대상)
+const LANG_NAMES_KO = [
+  "한국어", "영어", "일본어", "중국어", "프랑스어", "독일어", "스페인어",
+  "러시아어", "아랍어", "베트남어", "태국어", "인도네시아어", "포르투갈어",
+  "이탈리아어", "네덜란드어", "스웨덴어", "폴란드어", "터키어", "힌디어",
+  "말레이어", "몽골어", "페르시아어", "우크라이나어", "체코어", "헝가리어",
+  "루마니아어", "그리스어", "핀란드어", "덴마크어", "노르웨이어",
+];
+
+/**
+ * AI가 생성한 bio에서 언어명 반복 패턴을 제거한다.
+ * - "영어·한국어 전문 통번역사" → "전문 통번역사"
+ * - "한국어, 영어, 일본어 번역가" → "번역가"
+ * - 문장 앞 언어명 나열(·/,/및 구분) 제거
+ */
+function stripLangNamesFromBio(bio: string | null): string | null {
+  if (!bio) return null;
+
+  // 언어명 OR 패턴
+  const langOr = LANG_NAMES_KO.join("|");
+  // 패턴 1: 문장 앞 "언어A·언어B·..." 또는 "언어A, 언어B" 나열 (뒤에 공백/조사/전문 등)
+  const leadingLangPattern = new RegExp(
+    `^(?:(?:${langOr})(?:[·,、\\s/·&]+(?:${langOr}))*)[\\s]*`,
+    "u",
+  );
+  // 패턴 2: 줄 앞 동일 패턴 (멀티라인)
+  const lineLeadingPattern = new RegExp(
+    `(?:^|\\n)(?:(?:${langOr})(?:[·,、\\s/·&]+(?:${langOr}))*)[\\s]*`,
+    "gu",
+  );
+
+  let cleaned = bio;
+
+  // 각 줄에서 앞머리 언어명 제거
+  cleaned = cleaned
+    .split("\n")
+    .map(line => line.replace(leadingLangPattern, "").trim())
+    .filter(line => line.length > 0)
+    .join("\n");
+
+  // 남은 "언어A·언어B" 연속 패턴 (·로만 연결된 것) 을 제거
+  const midPattern = new RegExp(
+    `(?:${langOr})(?:·(?:${langOr}))+`,
+    "gu",
+  );
+  cleaned = cleaned.replace(midPattern, "").replace(/\s{2,}/g, " ").trim();
+
+  return cleaned || null;
+}
+
 function buildResumeDto(result: Record<string, unknown>) {
+  const normalizedEducation = normalizeExtractedEducation((result.education as string) ?? null);
   return {
     name: (result.name as string) ?? null,
-    phone: (result.phone as string) ?? null,
+    phone: normalizePhoneNumber((result.phone as string) ?? null),
     email: (result.email as string) ?? null,
     address: (result.address as string) ?? null,
     languagePairs: (result.languagePairs as string) ?? null,
     referenceLangs: (result.referenceLangs as string) ?? null,
     languageLevel: (result.languageLevel as string) ?? null,
-    education: normalizeExtractedEducation((result.education as string) ?? null),
+    education: normalizedEducation,
     major: normalizeExtractedMajor((result.major as string) ?? null),
     graduationYear: typeof result.graduationYear === "number" ? result.graduationYear : null,
     graduationStatus: (result.graduationStatus as string) ?? null,
     specializations: normalizeExtractedSpecializations((result.specializations as string) ?? null),
     profileWorkTypes: (result.profileWorkTypes as string) ?? null,
-    profileSubTypes: (result.profileSubTypes as string) ?? null,
+    profileSubTypes: filterSubTypesForGraduate((result.profileSubTypes as string) ?? null, normalizedEducation),
     region: (result.region as string) ?? null,
     careerYears: (result.careerYears as string) ?? null,
     certifications: (result.certifications as string) ?? null,
-    bio: (result.bio as string) ?? null,
+    bio: stripLangNamesFromBio((result.bio as string) ?? null),
     languageExperiences: (() => {
       const raw = result.languageExperiences;
       if (!raw) return null;
@@ -1520,8 +1828,13 @@ router.post(
       try { result = JSON.parse(raw); } catch { result = {}; jsonParseFailed = true; }
       delete result.residentNumber; delete result.ssn; delete result.jumin;
 
+      const uploadDto = buildResumeDto(result);
+      req.log.info({
+        bioOriginal: (result.bio as string) ?? null,
+        bioStripped: uploadDto.bio,
+      }, "[bio] AI Original → After strip (analyze-upload, preview only — not saved to DB yet)");
       res.json({
-        ...buildResumeDto(result),
+        ...uploadDto,
         _debug: {
           sourceType: "file_upload",
           fileName: file.originalname,
@@ -1742,6 +2055,8 @@ router.post("/admin/translators/:id/resume-analyze", ...adminGuard, async (req, 
       hasName: !!dto.name,
       hasLanguagePairs: !!dto.languagePairs,
       extractedTextLength: resumeText.length,
+      bioOriginal: (result.bio as string) ?? null,
+      bioStripped: dto.bio,
     });
 
     res.json(dto);
@@ -2070,7 +2385,7 @@ router.put("/translator-profiles/:id", requireAuth, async (req, res) => {
       graduationYear: graduationYear ?? null,
       region: region ?? null,
       availabilityStatus: availabilityStatus ?? "available",
-      bio: bio ?? null,
+      bio: stripLangNamesFromBio(bio ?? null),
       ratePerWord: ratePerWord ?? null,
       ratePerPage: ratePerPage ?? null,
       resumeUrl: resumeUrl ?? null,
@@ -2358,6 +2673,9 @@ router.patch("/admin/translators/:id/activate", ...adminGuard, async (req, res) 
     await db.update(usersTable)
       .set({ isActive: true, updatedAt: new Date() })
       .where(eq(usersTable.id, userId));
+    await db.update(translatorProfilesTable)
+      .set({ availabilityStatus: "available", updatedAt: new Date() })
+      .where(eq(translatorProfilesTable.userId, userId));
 
     await db.insert(logsTable).values({
       entityType: "translator",
@@ -2368,7 +2686,7 @@ router.patch("/admin/translators/:id/activate", ...adminGuard, async (req, res) 
       metadata: JSON.stringify({ name: existing.name, email: existing.email }),
     });
 
-    res.json({ success: true });
+    res.json({ success: true, availabilityStatus: "available" });
   } catch (err) {
     req.log.error({ err }, "Translators: failed to activate");
     res.status(500).json({ error: "활성화 중 오류가 발생했습니다. 관리자에게 문의하세요." });
@@ -2473,6 +2791,9 @@ router.delete("/admin/translators/:id", ...adminGuard, async (req, res) => {
     await db.update(usersTable)
       .set({ isActive: false, updatedAt: new Date() })
       .where(eq(usersTable.id, userId));
+    await db.update(translatorProfilesTable)
+      .set({ availabilityStatus: "unavailable", updatedAt: new Date() })
+      .where(eq(translatorProfilesTable.userId, userId));
 
     await db.insert(logsTable).values({
       entityType: "translator",

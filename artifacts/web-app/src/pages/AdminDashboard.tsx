@@ -50,6 +50,24 @@ const RATE_UNIT_LABELS: Record<string, string> = {
 };
 const getRateUnitLabel = (unit: string) => RATE_UNIT_LABELS[unit] ?? unit;
 
+const formatRegionDisplay = (region: string | null | undefined): string => {
+  if (!region) return "-";
+  if (region.startsWith("대한민국 / ")) return region.slice("대한민국 / ".length);
+  if (region === "대한민국") return "-";
+  return region;
+};
+
+const formatPhoneDisplay = (phone: string | null | undefined): string => {
+  if (!phone) return "-";
+  const d = phone.replace(/\D/g, "");
+  if (d.length === 11 && /^01[016789]/.test(d)) return `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`;
+  if (d.startsWith("02") && d.length === 9) return `${d.slice(0,2)}-${d.slice(2,5)}-${d.slice(5)}`;
+  if (d.startsWith("02") && d.length === 10) return `${d.slice(0,2)}-${d.slice(2,6)}-${d.slice(6)}`;
+  if (d.length === 10) return `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`;
+  if (d.length === 11) return `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`;
+  return phone;
+};
+
 function Section({ title, sub, children, action }: { title: string; sub?: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 32 }}>
@@ -1068,7 +1086,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               {/* 이메일 */}
                               <td style={{ ...tdBase, color: "#3b82f6" }} title={r.email || undefined}>{r.email || <span style={{ color: "#d1d5db" }}>—</span>}</td>
                               {/* 휴대폰 */}
-                              <td style={{ ...tdBase }}>{r.phone || <span style={{ color: "#d1d5db" }}>—</span>}</td>
+                              <td style={{ ...tdBase }}>{r.phone ? formatPhoneDisplay(r.phone) : <span style={{ color: "#d1d5db" }}>—</span>}</td>
                               {/* 학력 */}
                               <td style={{ ...tdBase, color: r.education ? "#374151" : "#d1d5db" }} title={r.education || undefined}>
                                 {r.education || "—"}
@@ -2342,22 +2360,22 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", minWidth: 1160 }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", minWidth: 1180 }}>
                   <colgroup>
-                    {/* 이름(11%) 주민번호(7%) 가능언어(10%) 학력(7%) 업무유형(8%) 세부유형(8%) 전문분야(8%) 상세정보(11%) 평점(5%) 지역(4%) 가용상태(6%) 운영상태(8%) 등록일(7%) */}
-                    <col style={{ width: "11%" }} />
-                    <col style={{ width: "7%" }} />
-                    <col style={{ width: "10%" }} />
-                    <col style={{ width: "7%" }} />
-                    <col style={{ width: "8%" }} />
-                    <col style={{ width: "8%" }} />
-                    <col style={{ width: "8%" }} />
-                    <col style={{ width: "11%" }} />
-                    <col style={{ width: "5%" }} />
-                    <col style={{ width: "4%" }} />
+                    {/* 이름(12%) 주민번호(6%) 가능언어(8%) 학력(8%) 업무유형(6%) 세부유형(8%) 전문분야(8%) 상세정보(13%) 평점(5%) 지역(8%·말줄임) 가용상태(6%·고정) 운영상태(7%·고정) 등록일(5%) */}
+                    <col style={{ width: "12%" }} />
                     <col style={{ width: "6%" }} />
                     <col style={{ width: "8%" }} />
+                    <col style={{ width: "8%" }} />
+                    <col style={{ width: "6%" }} />
+                    <col style={{ width: "8%" }} />
+                    <col style={{ width: "8%" }} />
+                    <col style={{ width: "13%" }} />
+                    <col style={{ width: "5%" }} />
+                    <col style={{ width: "8%" }} />
+                    <col style={{ width: "6%" }} />
                     <col style={{ width: "7%" }} />
+                    <col style={{ width: "5%" }} />
                   </colgroup>
                   <thead>
                     <tr>
@@ -2373,10 +2391,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   </thead>
                   <tbody>
                     {translatorList.map(t => {
-                      const statusColor = t.availabilityStatus === "available" ? "#059669" : t.availabilityStatus === "busy" ? "#d97706" : "#dc2626";
-                      const statusBg = t.availabilityStatus === "available" ? "#f0fdf4" : t.availabilityStatus === "busy" ? "#fffbeb" : "#fef2f2";
+                      const inactive = t.isActive === false;
+                      const statusColor = inactive ? "#9ca3af" : t.availabilityStatus === "available" ? "#059669" : t.availabilityStatus === "busy" ? "#d97706" : "#dc2626";
+                      const statusBg = inactive ? "#f3f4f6" : t.availabilityStatus === "available" ? "#f0fdf4" : t.availabilityStatus === "busy" ? "#fffbeb" : "#fef2f2";
                       return (
-                        <tr key={t.id} onClick={() => setTranslatorDetailModal({ userId: t.id, email: t.email })} style={{ cursor: "pointer" }}
+                        <tr key={t.id} onClick={() => setTranslatorDetailModal({ userId: t.id, email: t.email })} style={{ cursor: "pointer", opacity: inactive ? 0.6 : 1 }}
                           onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                           {/* 이름 / 이메일 / 휴대폰 */}
@@ -2387,10 +2406,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                                 : <span style={{ fontSize: 13, color: "#374151" }}>{t.email}</span>}
                             </div>
                             {t.name && <div style={{ color: "#6b7280", fontSize: 11 }}>{t.email}</div>}
-                            {t.phone && <div style={{ fontSize: 11, color: "#9ca3af" }}>{t.phone}</div>}
+                            {t.phone && <div style={{ fontSize: 11, color: "#9ca3af" }}>{formatPhoneDisplay(t.phone)}</div>}
                           </td>
                           {/* 주민번호 (서버사이드 마스킹) */}
-                          <td style={{ ...tableTd, fontSize: 11, textAlign: "center", whiteSpace: "nowrap", fontFamily: "monospace", color: t.residentNumber ? "#374151" : "#d1d5db" }}>
+                          <td style={{ ...tableTd, fontSize: 11, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontFamily: "monospace", color: t.residentNumber ? "#374151" : "#d1d5db" }}>
                             {t.residentNumber ?? "-"}
                           </td>
                           {/* 가능언어 */}
@@ -2487,22 +2506,39 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
                           {/* 평점 */}
-                          <td style={{ ...tableTd, textAlign: "center" }}>
+                          <td style={{ ...tableTd, textAlign: "center", overflow: "hidden", whiteSpace: "nowrap" }}>
                             {t.rating != null ? <span style={{ fontWeight: 700, color: "#d97706" }}>★ {Number(t.rating).toFixed(1)}</span> : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
-                          {/* 지역 */}
-                          <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", textAlign: "center", whiteSpace: "nowrap" }}>{t.region ?? "-"}</td>
-                          {/* 가용상태 */}
-                          <td style={{ ...tableTd, padding: "9px 4px" }}>
+                          {/* 지역 — 국내(대한민국)는 국가명 생략, 해외는 국가 포함 표시 */}
+                          <td
+                            title={t.region ?? undefined}
+                            style={{
+                              ...tableTd, fontSize: 12, color: "#6b7280", textAlign: "center",
+                              whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 0,
+                            }}
+                          >
+                            {formatRegionDisplay(t.region)}
+                          </td>
+                          {/* 가용상태 — 고정폭 유지, 지역 등 인접 컬럼 텍스트 침범 방지용 overflow hidden */}
+                          <td style={{ ...tableTd, padding: "9px 4px", overflow: "hidden" }}>
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
                               <span style={{ padding: "2px 7px", borderRadius: 10, background: statusBg, color: statusColor, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
-                                {AVAILABILITY_LABEL[t.availabilityStatus ?? "available"] ?? t.availabilityStatus}
+                                {inactive ? "불가" : (AVAILABILITY_LABEL[t.availabilityStatus ?? "available"] ?? t.availabilityStatus)}
                               </span>
                             </div>
                           </td>
                           {/* 운영상태 */}
-                          <td style={{ ...tableTd, padding: "9px 4px" }}>
+                          <td style={{ ...tableTd, padding: "9px 4px", overflow: "hidden" }}>
                             {(() => {
+                              if (inactive) {
+                                return (
+                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                    <span style={{ padding: "2px 7px", borderRadius: 10, background: "#f3f4f6", color: "#9ca3af", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
+                                      비활성
+                                    </span>
+                                  </div>
+                                );
+                              }
                               const os = t.operationalStatus ?? "normal";
                               const osMeta: Record<string, { label: string; bg: string; color: string }> = {
                                 normal:   { label: "정상",  bg: "#f0fdf4", color: "#059669" },
@@ -2524,7 +2560,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             })()}
                           </td>
                           {/* 등록일 */}
-                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap", textAlign: "center" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap", overflow: "hidden", textAlign: "center" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</td>
                         </tr>
                       );
                     })}

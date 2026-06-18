@@ -13,14 +13,11 @@ import {
 } from "./translatorRateConstants";
 import { TranslatorRateEntryCard, RateEntryData, emptyRateEntry } from "./TranslatorRateEntryCard";
 import { ResumeAnalyzePanel, ResumeAnalysisResult } from "./ResumeAnalyzePanel";
+import { TranslatorEvidenceDocumentsSection } from "./TranslatorEvidenceDocumentsSection";
+import { DocumentPreviewModal } from "./DocumentPreviewModal";
 
 // ── 이력서 파일 형식 정책 ──────────────────────────────────────────────────────
-// 1단계: PDF · DOC · DOCX · TXT
-// 2단계: HWP · HWPX  ← 활성화됨
-// 3단계 (예정): JPG · PNG · 스캔 PDF OCR
 const RESUME_ALLOWED_EXTS = [".pdf", ".doc", ".docx", ".txt", ".hwp", ".hwpx"] as const;
-// 브라우저 미리보기 가능한 형식 (서명 URL을 새 탭으로 열면 바로 표시됨)
-// 3단계 활성 시 ".jpg", ".jpeg", ".png" 추가
 const RESUME_PREVIEWABLE_EXTS = [".pdf", ".txt"] as const;
 const RESUME_ACCEPT = ".pdf,.hwp,.hwpx,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/haansofthwp,application/x-hwp,application/vnd.hancom.hwp,application/vnd.hancom.hwpx";
 const RESUME_HINT = "PDF · HWP · HWPX · DOC · DOCX · TXT (최대 10 MB)";
@@ -57,15 +54,16 @@ const LANG_LEVEL_OPTIONS = ["일반", "전문"];
 
 const EDUCATION_DOMESTIC = [
   "한국외국어대학교 통번역대학원",
-  "서울외국어대학원대학교 통번역대학원",
   "이화여자대학교 통역번역대학원",
+  "서울외국어대학원대학교 통번역대학원",
+  "중앙대학교 국제대학원",
   "부산외국어대학교 통번역대학원",
   "제주대학교 통번역대학원",
   "선문대학교 통번역대학원",
-  "중앙대학교 국제대학원",
+  "계명대학교 통번역대학원",
 ];
 const EDUCATION_OVERSEAS = [
-  "Macquarie University",
+  "Macquarie University - Translation & Interpreting",
   "Middlebury Institute of International Studies at Monterey",
   "Monterey Institute of International Studies",
   "University of Bath",
@@ -77,6 +75,11 @@ const EDUCATION_OVERSEAS = [
   "University of Ottawa",
 ];
 const EDUCATION_ALL = [...EDUCATION_DOMESTIC, ...EDUCATION_OVERSEAS];
+
+const isGraduateInterpreterEducation = (education: string) =>
+  EDUCATION_ALL.includes(education) ||
+  education.includes("통번역대학원") ||
+  education.includes("통역번역대학원");
 
 const MAJOR_LANGUAGE = ["한영과", "한중과", "한일과", "한불과", "한독과", "한서과", "한노과", "한아과", "한영통번역", "한중통번역", "한일통번역"];
 const MAJOR_INTERPRETATION = ["통번역학", "전문통번역학", "국제회의통역", "국제회의전공", "통역전공", "번역전공", "통번역전공"];
@@ -571,9 +574,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [showAnalyzePanel, setShowAnalyzePanel] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [docSubTab, setDocSubTab] = useState<"resume" | "id" | "bank">("resume");
-  const [idDragOver, setIdDragOver] = useState(false);
-  const [bankDragOver, setBankDragOver] = useState(false);
   const [resumeFileName, setResumeFileName] = useState<string | null>(null);
+  const [resumePreview, setResumePreview] = useState<{ url: string; fileName: string } | null>(null);
   const [eduIsCustom, setEduIsCustom] = useState(false);
   const [eduCustom, setEduCustom] = useState("");
   const [majorIsCustom, setMajorIsCustom] = useState(false);
@@ -673,7 +675,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         const normalizedLevel = rawLevel === "비즈니스" ? "일반" : rawLevel;
         setForm({
           name: u?.name ?? "",
-          phone: p?.phone ?? "",
+          phone: formatPhoneNumber(p?.phone ?? ""),
           languagePairs: p?.languagePairs ?? "", languageLevel: normalizedLevel,
           specializations: p?.specializations ?? "", education: p?.education ?? "", major: p?.major ?? "",
           graduationYear: p?.graduationYear ? String(p.graduationYear) : "",
@@ -953,6 +955,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
       }
       onToast("통번역사가 활성화되었습니다.");
       setUserInfo(prev => prev ? { ...prev, isActive: true } : prev);
+      setForm(prev => ({ ...prev, availabilityStatus: "available" }));
       onDeleted?.(); // 목록 새로고침
     } catch (err) {
       console.error("[PATCH /activate] 예외:", err);
@@ -1019,7 +1022,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 
   return (
     <>
-    <DraggableModal title="통번역사 상세" subtitle={userEmail} onClose={onClose} width={860} height="88vh" zIndex={300} bodyPadding="20px 28px" resizable
+    <DraggableModal title="통번역사 상세" onClose={onClose} width={860} height="88vh" zIndex={300} bodyPadding="20px 28px" resizable
       headerExtra={
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -1116,12 +1119,16 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             )}
             <span style={{
               fontSize: 12, borderRadius: 20, padding: "2px 9px", fontWeight: 700,
-              background: form.availabilityStatus === "available" ? "#d1fae5" : form.availabilityStatus === "busy" ? "#fef3c7" : "#fee2e2",
-              color: form.availabilityStatus === "available" ? "#065f46" : form.availabilityStatus === "busy" ? "#92400e" : "#991b1b",
+              background: userInfo?.isActive === false ? "#f3f4f6" : form.availabilityStatus === "available" ? "#d1fae5" : form.availabilityStatus === "busy" ? "#fef3c7" : "#fee2e2",
+              color: userInfo?.isActive === false ? "#9ca3af" : form.availabilityStatus === "available" ? "#065f46" : form.availabilityStatus === "busy" ? "#92400e" : "#991b1b",
             }}>
-              {form.availabilityStatus === "available" ? "가능" : form.availabilityStatus === "busy" ? "바쁨" : "불가"}
+              {userInfo?.isActive === false ? "불가" : form.availabilityStatus === "available" ? "가능" : form.availabilityStatus === "busy" ? "바쁨" : "불가"}
             </span>
-            {form.operationalStatus && form.operationalStatus !== "normal" && (
+            {userInfo?.isActive === false ? (
+              <span style={{ fontSize: 12, borderRadius: 20, padding: "2px 9px", fontWeight: 700, background: "#f3f4f6", color: "#9ca3af", border: "1px solid #e5e7eb" }}>
+                비활성
+              </span>
+            ) : form.operationalStatus && form.operationalStatus !== "normal" && (
               <span style={{
                 fontSize: 12, borderRadius: 20, padding: "2px 9px", fontWeight: 700,
                 background: form.operationalStatus === "warning" ? "#fefce8" : form.operationalStatus === "hold" ? "#f0f9ff" : "#fef2f2",
@@ -1260,24 +1267,24 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   {/* 학력 */}
                   <div>
                     <label style={{ ...labelSt, fontSize: 11 }}>학력</label>
-                    <select
+                    <ClickSelect
                       value={eduIsCustom ? "__custom__" : form.education}
-                      onChange={e => {
-                        const v = e.target.value;
+                      onChange={v => {
                         if (v === "__custom__") { setEduIsCustom(true); setForm(p => ({ ...p, education: eduCustom })); }
                         else { setEduIsCustom(false); setEduCustom(""); setForm(p => ({ ...p, education: v })); }
                       }}
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
-                    >
-                      <option value="">선택 안 함</option>
-                      <optgroup label="국내">
-                        {EDUCATION_DOMESTIC.map(s => <option key={s} value={s}>{s}</option>)}
-                      </optgroup>
-                      <optgroup label="해외">
-                        {EDUCATION_OVERSEAS.map(s => <option key={s} value={s}>{s}</option>)}
-                      </optgroup>
-                      <option value="__custom__">기타(직접 입력)</option>
-                    </select>
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                      searchable
+                      options={[
+                        { value: "", label: "선택 안 함" },
+                        { value: "§국내§", label: "── 국내 ──", disabled: true },
+                        ...EDUCATION_DOMESTIC.map(s => ({ value: s, label: s })),
+                        { value: "§해외§", label: "── 해외 ──", disabled: true },
+                        ...EDUCATION_OVERSEAS.map(s => ({ value: s, label: s })),
+                        { value: "__custom__", label: "기타(직접 입력)" },
+                      ]}
+                    />
                     {eduIsCustom && (
                       <input type="text" value={eduCustom}
                         onChange={e => { setEduCustom(e.target.value); setForm(p => ({ ...p, education: e.target.value })); }}
@@ -1288,27 +1295,25 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   {/* 전공 */}
                   <div>
                     <label style={{ ...labelSt, fontSize: 11 }}>전공</label>
-                    <select
+                    <ClickSelect
                       value={majorIsCustom ? "__custom__" : form.major}
-                      onChange={e => {
-                        const v = e.target.value;
+                      onChange={v => {
                         if (v === "__custom__") { setMajorIsCustom(true); setForm(p => ({ ...p, major: majorCustom })); }
                         else { setMajorIsCustom(false); setMajorCustom(""); setForm(p => ({ ...p, major: v })); }
                       }}
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
-                    >
-                      <option value="">선택 안 함</option>
-                      <optgroup label="언어계열">
-                        {MAJOR_LANGUAGE.map(s => <option key={s} value={s}>{s}</option>)}
-                      </optgroup>
-                      <optgroup label="통대계열">
-                        {MAJOR_INTERPRETATION.map(s => <option key={s} value={s}>{s}</option>)}
-                      </optgroup>
-                      <optgroup label="전문분야계열">
-                        {MAJOR_SPECIALIZED.map(s => <option key={s} value={s}>{s}</option>)}
-                      </optgroup>
-                      <option value="__custom__">기타(직접 입력)</option>
-                    </select>
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                      options={[
+                        { value: "", label: "선택 안 함" },
+                        { value: "§언어§", label: "── 언어계열 ──", disabled: true },
+                        ...MAJOR_LANGUAGE.map(s => ({ value: s, label: s })),
+                        { value: "§통대§", label: "── 통대계열 ──", disabled: true },
+                        ...MAJOR_INTERPRETATION.map(s => ({ value: s, label: s })),
+                        { value: "§전문§", label: "── 전문분야계열 ──", disabled: true },
+                        ...MAJOR_SPECIALIZED.map(s => ({ value: s, label: s })),
+                        { value: "__custom__", label: "기타(직접 입력)" },
+                      ]}
+                    />
                     {majorIsCustom && (
                       <input type="text" value={majorCustom}
                         onChange={e => { setMajorCustom(e.target.value); setForm(p => ({ ...p, major: e.target.value })); }}
@@ -1319,14 +1324,16 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   {/* 졸업상태 */}
                   <div>
                     <label style={{ ...labelSt, fontSize: 11 }}>졸업상태</label>
-                    <select
+                    <ClickSelect
                       value={form.graduationStatus}
-                      onChange={e => setForm(p => ({ ...p, graduationStatus: e.target.value }))}
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
-                    >
-                      <option value="">선택 안 함</option>
-                      {GRADUATION_STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
+                      onChange={v => setForm(p => ({ ...p, graduationStatus: v }))}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                      options={[
+                        { value: "", label: "선택 안 함" },
+                        ...GRADUATION_STATUS_OPTIONS.map(s => ({ value: s, label: s })),
+                      ]}
+                    />
                     {/* 자동감지: 졸업예정 + 과거년도 → 졸업으로 표시 (DB 값은 변경 안 함) */}
                     {form.graduationStatus === "졸업예정" && form.graduationYear && Number(form.graduationYear) < _CURRENT_YEAR && (
                       <span style={{ fontSize: 10, color: "#059669", display: "block", marginTop: 3, fontWeight: 600 }}>
@@ -1337,14 +1344,17 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   {/* 졸업/예정년도 */}
                   <div>
                     <label style={{ ...labelSt, fontSize: 11 }}>졸업/예정년도</label>
-                    <select
+                    <ClickSelect
                       value={form.graduationYear}
-                      onChange={e => setForm(p => ({ ...p, graduationYear: e.target.value }))}
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}
-                    >
-                      <option value="">선택 안 함</option>
-                      {GRAD_YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-                    </select>
+                      onChange={v => setForm(p => ({ ...p, graduationYear: v }))}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                      searchable
+                      options={[
+                        { value: "", label: "선택 안 함" },
+                        ...GRAD_YEARS.map(y => ({ value: y, label: y })),
+                      ]}
+                    />
                   </div>
                 </div>
               </div>
@@ -1358,18 +1368,17 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 </div>
                 <div>
                   <label style={{ ...labelSt, fontSize: 11 }}>거주국가</label>
-                  <select
+                  <ClickSelect
                     value={regionCountry}
-                    onChange={e => {
-                      const c = e.target.value;
+                    onChange={c => {
                       setRegionCountry(c);
                       if (c !== "기타") setRegionCountryCustom("");
-                      // 국가 변경 시 기존 도시값 유지 (사용자가 직접 수정하도록)
                       setForm(p => ({ ...p, region: buildRegionString(c, c === "기타" ? "" : "", regionCity) }));
                     }}
-                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}>
-                    {(REGION_COUNTRIES as readonly string[]).map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
+                    style={{ width: "100%" }}
+                    triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                    options={(REGION_COUNTRIES as readonly string[]).map(c => ({ value: c, label: c }))}
+                  />
                   {regionCountry === "기타" && (
                     <input type="text" value={regionCountryCustom}
                       onChange={e => {
@@ -1407,11 +1416,17 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               {/* 소속업체 */}
               <div>
                 <label style={{ ...labelSt, fontSize: 11 }}>소속업체</label>
-                <select value={form.affiliatedCompanyId} onChange={e => setForm(p => ({ ...p, affiliatedCompanyId: e.target.value }))}
-                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }}>
-                  <option value="">소속 없음 (프리랜서)</option>
-                  {vendorCompanies.map(c => <option key={c.id} value={String(c.id)}>{c.name}</option>)}
-                </select>
+                <ClickSelect
+                  value={form.affiliatedCompanyId}
+                  onChange={v => setForm(p => ({ ...p, affiliatedCompanyId: v }))}
+                  style={{ width: "100%" }}
+                  triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                  searchable
+                  options={[
+                    { value: "", label: "소속 없음 (프리랜서)" },
+                    ...vendorCompanies.map(c => ({ value: String(c.id), label: c.name })),
+                  ]}
+                />
               </div>
               {/* 상세정보 */}
               <div style={{ gridColumn: "1 / -1" }}>
@@ -1511,10 +1526,16 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                     {visibleSubs.map(st => {
                       const selected = selectedSubSet.has(st);
                       const isPinned = pinnedSubTypes.has(st);
+                      const isBlockedForGraduate = !selected && st === "일반번역" && !!form.education && isGraduateInterpreterEducation(form.education);
                       return (
                         <span key={st} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
                           <button type="button"
+                            title={isBlockedForGraduate ? "통번역대학원 출신 전문 통번역사는 일반번역으로 분류하지 않습니다. 전문번역을 선택해 주세요." : undefined}
                             onClick={() => {
+                              if (isBlockedForGraduate) {
+                                alert("통번역대학원 출신 전문 통번역사는 일반번역으로 분류하지 않습니다.\n전문번역을 선택해 주세요.");
+                                return;
+                              }
                               const cur = form.profileSubTypes.split(",").map(s => s.trim()).filter(Boolean);
                               const next = selected ? cur.filter(s => s !== st) : [...cur, st];
                               if (selected && pinnedSubTypes.has(st)) {
@@ -1523,11 +1544,12 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                               setForm(p => ({ ...p, profileSubTypes: next.join(",") }));
                             }}
                             style={{
-                              padding: "2px 7px", borderRadius: 20, fontSize: 10, cursor: "pointer",
-                              background: isPinned ? "#065f46" : selected ? "#059669" : "#f0fdf4",
-                              color: selected ? "#fff" : "#065f46",
-                              border: `1px solid ${isPinned ? "#065f46" : selected ? "#059669" : "#a7f3d0"}`,
+                              padding: "2px 7px", borderRadius: 20, fontSize: 10, cursor: isBlockedForGraduate ? "not-allowed" : "pointer",
+                              background: isBlockedForGraduate ? "#fef2f2" : isPinned ? "#065f46" : selected ? "#059669" : "#f0fdf4",
+                              color: isBlockedForGraduate ? "#fca5a5" : selected ? "#fff" : "#065f46",
+                              border: `1px solid ${isBlockedForGraduate ? "#fca5a5" : isPinned ? "#065f46" : selected ? "#059669" : "#a7f3d0"}`,
                               fontWeight: selected ? 700 : 400,
+                              opacity: isBlockedForGraduate ? 0.6 : 1,
                             }}>
                             {isPinned && <span style={{ marginRight: 2, fontSize: 9 }}>★</span>}{st}
                           </button>
@@ -1702,14 +1724,27 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                         disabled={resumeUploading || resumeDeleting}
                         aria-label="이력서 미리보기"
                         onClick={async () => {
-                          try {
-                            const r = await fetch(api(`/api/admin/translators/${userId}/resume-url`), { headers: authH });
-                            const d = await r.json();
-                            if (!r.ok) { onToast(`오류: ${d.error}`); return; }
-                            if (!d.downloadUrl) { onToast("미리보기 URL을 가져올 수 없습니다."); return; }
-                            window.open(d.downloadUrl, "_blank", "noopener,noreferrer");
-                          } catch {
-                            onToast("오류: URL 생성 실패");
+                          const ext = getResumeExt(profile.resumeUrl);
+                          if (ext === ".pdf") {
+                            // PDF: 프록시 URL로 pdf.js 썸네일 + 새 탭 열기
+                            const proxyUrl =
+                              api(`/api/admin/translators/${userId}/resume-download?inline=true`) +
+                              `&token=${encodeURIComponent(token)}`;
+                            setResumePreview({
+                              url: proxyUrl,
+                              fileName: getResumeDisplayName(profile.resumeUrl, resumeFileName),
+                            });
+                          } else {
+                            // 기타 (txt 등): GCS URL로 새 탭 열기
+                            try {
+                              const r = await fetch(api(`/api/admin/translators/${userId}/resume-url`), { headers: authH });
+                              const d = await r.json();
+                              if (!r.ok) { onToast(`오류: ${d.error}`); return; }
+                              if (!d.downloadUrl) { onToast("미리보기 URL을 가져올 수 없습니다."); return; }
+                              window.open(d.downloadUrl, "_blank", "noopener,noreferrer");
+                            } catch {
+                              onToast("오류: URL 생성 실패");
+                            }
                           }
                         }}
                         style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151", whiteSpace: "nowrap" }}>
@@ -1811,76 +1846,29 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             {/* ── ② 신분증 ── */}
             {docSubTab === "id" && (
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                <label style={labelSt}>신분증 파일</label>
-                <span style={{ fontSize: 10, color: "#fff", background: "#f59e0b", borderRadius: 10, padding: "1px 8px", fontWeight: 700 }}>준비 중</span>
-              </div>
-              <div
-                onDragOver={e => { e.preventDefault(); setIdDragOver(true); }}
-                onDragLeave={() => setIdDragOver(false)}
-                onDrop={e => { e.preventDefault(); setIdDragOver(false); }}
-                style={{
-                  border: `2px dashed ${idDragOver ? "#f59e0b" : "#d1d5db"}`,
-                  borderRadius: 8, padding: "24px 14px",
-                  background: idDragOver ? "#fffbeb" : "#f9fafb",
-                  textAlign: "center" as const,
-                  transition: "border-color 0.15s, background 0.15s",
-                }}
-              >
-                <div style={{ fontSize: 28, marginBottom: 6 }}>🪪</div>
-                <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 4px" }}>
-                  {idDragOver ? "여기에 파일을 놓으세요" : "신분증 업로드"}
-                </p>
-                <p style={{ fontSize: 11, color: "#9ca3af", margin: 0 }}>JPG · PNG · PDF (최대 10 MB)</p>
-              </div>
-              <div style={{ marginTop: 12, padding: "10px 14px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
-                <p style={{ fontSize: 11, color: "#92400e", margin: "0 0 4px", fontWeight: 700 }}>🔐 민감정보 보안 정책</p>
-                <p style={{ fontSize: 11, color: "#78350f", margin: 0, lineHeight: 1.6 }}>
-                  신분증은 민감개인정보입니다. 향후 업로드 시 접근권한 관리 · 감사로그 · 승인 이력이 자동 기록됩니다.
-                </p>
-              </div>
-              <div style={{ marginTop: 10, padding: "10px 14px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
-                <p style={{ fontSize: 11, color: "#0369a1", margin: "0 0 3px", fontWeight: 700 }}>✨ AI 분석 예정 항목</p>
-                <p style={{ fontSize: 11, color: "#0c4a6e", margin: 0, lineHeight: 1.6 }}>이름 · 주민등록번호 · 생년월일 · 주소 → 관리자 검수 → 승인 반영</p>
-              </div>
+              <label style={labelSt}>신분증 파일</label>
+              <TranslatorEvidenceDocumentsSection
+                docType="id_card"
+                mode="detail"
+                translatorId={userId}
+                token={token}
+                onToast={onToast}
+                onAnalysisApplied={() => load()}
+              />
             </div>
             )} {/* docSubTab === "id" */}
 
             {/* ── ③ 통장사본 ── */}
             {docSubTab === "bank" && (
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                <label style={labelSt}>통장사본 파일</label>
-                <span style={{ fontSize: 10, color: "#fff", background: "#f59e0b", borderRadius: 10, padding: "1px 8px", fontWeight: 700 }}>준비 중</span>
-              </div>
-              <div
-                onDragOver={e => { e.preventDefault(); setBankDragOver(true); }}
-                onDragLeave={() => setBankDragOver(false)}
-                onDrop={e => { e.preventDefault(); setBankDragOver(false); }}
-                style={{
-                  border: `2px dashed ${bankDragOver ? "#059669" : "#d1d5db"}`,
-                  borderRadius: 8, padding: "24px 14px",
-                  background: bankDragOver ? "#f0fdf4" : "#f9fafb",
-                  textAlign: "center" as const,
-                  transition: "border-color 0.15s, background 0.15s",
-                }}
-              >
-                <div style={{ fontSize: 28, marginBottom: 6 }}>🏦</div>
-                <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 4px" }}>
-                  {bankDragOver ? "여기에 파일을 놓으세요" : "통장사본 업로드"}
-                </p>
-                <p style={{ fontSize: 11, color: "#9ca3af", margin: 0 }}>JPG · PNG · PDF (최대 10 MB)</p>
-              </div>
-              <div style={{ marginTop: 12, padding: "10px 14px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
-                <p style={{ fontSize: 11, color: "#92400e", margin: "0 0 4px", fontWeight: 700 }}>🔐 민감정보 보안 정책</p>
-                <p style={{ fontSize: 11, color: "#78350f", margin: 0, lineHeight: 1.6 }}>
-                  통장사본은 금융정보입니다. 향후 업로드 시 접근권한 관리 · 감사로그 · 승인 이력이 자동 기록됩니다.
-                </p>
-              </div>
-              <div style={{ marginTop: 10, padding: "10px 14px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
-                <p style={{ fontSize: 11, color: "#0369a1", margin: "0 0 3px", fontWeight: 700 }}>✨ AI 분석 예정 항목</p>
-                <p style={{ fontSize: 11, color: "#0c4a6e", margin: 0, lineHeight: 1.6 }}>은행명 · 예금주 · 계좌번호 → 관리자 검수 → 승인 반영</p>
-              </div>
+              <label style={labelSt}>통장사본 파일</label>
+              <TranslatorEvidenceDocumentsSection
+                docType="bankbook"
+                mode="detail"
+                translatorId={userId}
+                token={token}
+                onToast={onToast}
+              />
             </div>
             )} {/* docSubTab === "bank" */}
 
@@ -1906,25 +1894,37 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 </div>
                 <div>
                   <label style={labelSt}>가용 상태</label>
-                  <ClickSelect value={form.availabilityStatus} onChange={v => setForm(p => ({ ...p, availabilityStatus: v }))}
-                    style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
-                    options={[
-                      { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
-                    ]} />
+                  {userInfo?.isActive === false ? (
+                    <div style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid #e5e7eb", background: "#f9fafb", fontSize: 13, color: "#9ca3af", fontWeight: 600 }}>
+                      불가 (활성화 후 변경 가능)
+                    </div>
+                  ) : (
+                    <ClickSelect value={form.availabilityStatus} onChange={v => setForm(p => ({ ...p, availabilityStatus: v }))}
+                      style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                      options={[
+                        { value: "available", label: "가능" }, { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
+                      ]} />
+                  )}
                 </div>
               </div>
               {/* 운영상태 / 재배정 */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px", marginBottom: 12 }}>
                 <div>
                   <label style={labelSt}>운영상태</label>
-                  <ClickSelect value={form.operationalStatus} onChange={v => setForm(p => ({ ...p, operationalStatus: v }))}
-                    style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
-                    options={[
-                      { value: "normal",   label: "✅ 정상" },
-                      { value: "warning",  label: "⚠️ 주의" },
-                      { value: "hold",     label: "⏸ 보류" },
-                      { value: "excluded", label: "🚫 제외" },
-                    ]} />
+                  {userInfo?.isActive === false ? (
+                    <div style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid #e5e7eb", background: "#f9fafb", fontSize: 13, color: "#9ca3af", fontWeight: 600 }}>
+                      비활성 (활성화 후 변경 가능)
+                    </div>
+                  ) : (
+                    <ClickSelect value={form.operationalStatus} onChange={v => setForm(p => ({ ...p, operationalStatus: v }))}
+                      style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
+                      options={[
+                        { value: "normal",   label: "✅ 정상" },
+                        { value: "warning",  label: "⚠️ 주의" },
+                        { value: "hold",     label: "⏸ 보류" },
+                        { value: "excluded", label: "🚫 제외" },
+                      ]} />
+                  )}
                 </div>
                 <div>
                   <label style={labelSt}>재배정 가능 여부</label>
@@ -2043,7 +2043,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             ...prev,
             // 사용자 입력값 우선 — 비어있을 때만 AI 값 적용
             ...(result.name && !prev.name ? { name: result.name } : {}),
-            ...(result.phone && !prev.phone ? { phone: result.phone } : {}),
+            ...(result.phone && !prev.phone ? { phone: formatPhoneNumber(result.phone) } : {}),
             // 언어: 영어 → 한국어 정규화 후 적용
             ...(normalizedLang ? { languagePairs: normalizedLang } : {}),
             ...(result.languageLevel && !prev.languageLevel ? { languageLevel: result.languageLevel } : {}),
@@ -2084,6 +2084,14 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           }
           setShowAnalyzePanel(false);
         }}
+      />
+    )}
+
+    {resumePreview && (
+      <DocumentPreviewModal
+        url={resumePreview.url}
+        fileName={resumePreview.fileName}
+        onClose={() => setResumePreview(null)}
       />
     )}
     </>

@@ -47,6 +47,12 @@ export const translatorSensitiveTable = pgTable("translator_sensitive", {
   paymentHold: boolean("payment_hold").default(false), // 지급 보류
   settlementMemo: text("settlement_memo"),      // 정산 메모
 
+  // ── 증빙서류 ──────────────────────────────────────────────────────────────
+  idCardUrl: text("id_card_url"),               // 신분증 GCS 경로
+  idCardFileName: text("id_card_file_name"),    // 신분증 원본 파일명
+  bankbookUrl: text("bankbook_url"),            // 통장사본 GCS 경로
+  bankbookFileName: text("bankbook_file_name"), // 통장사본 원본 파일명
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

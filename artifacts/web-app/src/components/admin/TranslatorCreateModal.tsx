@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { api, normalizeLanguages, LangExpEntry, emptyLangExp } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
-import { PAYMENT_METHODS, SETTLEMENT_TYPES } from "./SensitiveInfoModal";
+import { PAYMENT_METHODS, SETTLEMENT_TYPES, BankNameSelect } from "./SensitiveInfoModal";
 import {
   CURRENCIES,
   SERVICE_TYPES as PROFILE_WORK_TYPES,
@@ -12,19 +12,21 @@ import {
 import { TranslatorRateEntryCard, RateEntryData, emptyRateEntry } from "./TranslatorRateEntryCard";
 import { ResumeAnalyzePanel, ResumeAnalysisResult } from "./ResumeAnalyzePanel";
 import { TranslatorLangExpSection } from "./TranslatorLangExpSection";
+import { TranslatorEvidenceDocumentsSection } from "./TranslatorEvidenceDocumentsSection";
 
 // ── 학력 ────────────────────────────────────────────────────────────────
 const EDUCATION_DOMESTIC = [
   "한국외국어대학교 통번역대학원",
-  "서울외국어대학원대학교 통번역대학원",
   "이화여자대학교 통역번역대학원",
+  "서울외국어대학원대학교 통번역대학원",
+  "중앙대학교 국제대학원",
   "부산외국어대학교 통번역대학원",
   "제주대학교 통번역대학원",
   "선문대학교 통번역대학원",
-  "중앙대학교 국제대학원",
+  "계명대학교 통번역대학원",
 ];
 const EDUCATION_OVERSEAS = [
-  "Macquarie University",
+  "Macquarie University - Translation & Interpreting",
   "Middlebury Institute of International Studies at Monterey",
   "Monterey Institute of International Studies",
   "University of Bath",
@@ -37,6 +39,11 @@ const EDUCATION_OVERSEAS = [
 ];
 
 const EDUCATION_ALL = [...EDUCATION_DOMESTIC, ...EDUCATION_OVERSEAS];
+
+const isGraduateInterpreterEducation = (education: string) =>
+  EDUCATION_ALL.includes(education) ||
+  education.includes("통번역대학원") ||
+  education.includes("통역번역대학원");
 
 // ── 전공 ────────────────────────────────────────────────────────────────
 const MAJOR_LANGUAGE = ["한영과", "한중과", "한일과", "한불과", "한독과", "한서과", "한노과", "한아과", "한영통번역", "한중통번역", "한일통번역"];
@@ -447,11 +454,11 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   const [rates, setRates] = useState<RateEntryData[]>([]);
   const [rateErrors, setRateErrors] = useState<string[]>([]);
   const [resumeFile, setResumeFile] = useState<File | null>(null);
+  const [idCardFile, setIdCardFile] = useState<File | null>(null);
+  const [bankbookFile, setBankbookFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [showAnalyzePanel, setShowAnalyzePanel] = useState(false);
   const [docSubTab, setDocSubTab] = useState<"resume" | "id" | "bank">("resume");
-  const [idDragOver, setIdDragOver] = useState(false);
-  const [bankDragOver, setBankDragOver] = useState(false);
   const [vendorCompanies, setVendorCompanies] = useState<Array<{ id: number; name: string }>>([]);
 
   // 거주지역 분리 state
@@ -546,7 +553,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       ...prev,
       // 사용자 입력값 우선 — 비어있을 때만 AI 값 적용
       ...(result.name && !prev.name ? { name: result.name } : {}),
-      ...(result.phone && !prev.phone ? { phone: result.phone } : {}),
+      ...(result.phone && !prev.phone ? { phone: formatPhoneNumber(result.phone) } : {}),
       ...(result.email && !prev.email ? { email: result.email } : {}),
       // 언어: 영어 → 한국어 정규화 (Preview에서 이미 검토됨)
       ...(normalizedLang ? { languagePairs: normalizedLang } : {}),
@@ -668,7 +675,9 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         });
       }
 
-      if (hasPerm("translator.sensitive") && sf.paymentMethod) {
+      const hasSensitiveInput = !!(sf.paymentMethod || sf.bankName || sf.bankAccount || sf.accountHolder
+        || sf.residentFront || sf.businessNumber || sf.paypalEmail || sf.settlementMemo || sf.paymentHold);
+      if (hasPerm("translator.sensitive") && hasSensitiveInput) {
         const rn = `${sf.residentFront.trim()}${sf.residentBack.trim()}`;
         const sbody: Record<string, unknown> = {
           paymentMethod: sf.paymentMethod || null,
@@ -694,6 +703,16 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         const fd = new FormData();
         fd.append("file", resumeFile);
         await fetch(api(`/api/admin/translators/${userId}/resume-upload`), {
+          method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd,
+        }).catch(() => {});
+      }
+
+      // 신분증/통장사본 업로드
+      for (const [docType, docFile] of [["id_card", idCardFile], ["bankbook", bankbookFile]] as const) {
+        if (!docFile) continue;
+        const fd = new FormData();
+        fd.append("file", docFile);
+        await fetch(api(`/api/admin/translators/${userId}/document-upload?type=${docType}`), {
           method: "POST", headers: { Authorization: `Bearer ${token}` }, body: fd,
         }).catch(() => {});
       }
@@ -1055,10 +1074,16 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                 {visibleSubs.map(st => {
                   const sel = selectedSubSet.has(st);
                   const isPinned = pinnedSubTypes.has(st);
+                  const isBlockedForGraduate = !sel && st === "일반번역" && !!form.education && isGraduateInterpreterEducation(form.education);
                   return (
                     <span key={st} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
                       <button type="button"
+                        title={isBlockedForGraduate ? "통번역대학원 출신 전문 통번역사는 일반번역으로 분류하지 않습니다. 전문번역을 선택해 주세요." : undefined}
                         onClick={() => {
+                          if (isBlockedForGraduate) {
+                            alert("통번역대학원 출신 전문 통번역사는 일반번역으로 분류하지 않습니다.\n전문번역을 선택해 주세요.");
+                            return;
+                          }
                           const cur = form.profileSubTypes.split(",").map(s => s.trim()).filter(Boolean);
                           const next = sel ? cur.filter(s => s !== st) : [...cur, st];
                           if (sel && pinnedSubTypes.has(st)) {
@@ -1067,11 +1092,12 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                           setForm(p => ({ ...p, profileSubTypes: next.join(",") }));
                         }}
                         style={{
-                          padding: "2px 7px", borderRadius: 20, fontSize: 10, cursor: "pointer",
-                          background: isPinned ? "#065f46" : sel ? "#059669" : "#f0fdf4",
-                          color: sel ? "#fff" : "#065f46",
-                          border: `1px solid ${isPinned ? "#065f46" : sel ? "#059669" : "#a7f3d0"}`,
+                          padding: "2px 7px", borderRadius: 20, fontSize: 10, cursor: isBlockedForGraduate ? "not-allowed" : "pointer",
+                          background: isBlockedForGraduate ? "#fef2f2" : isPinned ? "#065f46" : sel ? "#059669" : "#f0fdf4",
+                          color: isBlockedForGraduate ? "#fca5a5" : sel ? "#fff" : "#065f46",
+                          border: `1px solid ${isBlockedForGraduate ? "#fca5a5" : isPinned ? "#065f46" : sel ? "#059669" : "#a7f3d0"}`,
                           fontWeight: sel ? 700 : 400,
+                          opacity: isBlockedForGraduate ? 0.6 : 1,
                         }}>
                         {isPinned && <span style={{ marginRight: 2, fontSize: 9 }}>★</span>}{st}
                       </button>
@@ -1251,70 +1277,30 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         {/* ② 신분증 탭 */}
         {docSubTab === "id" && (
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>신분증 파일</label>
-              <span style={{ fontSize: 10, color: "#fff", background: "#f59e0b", borderRadius: 10, padding: "1px 8px", fontWeight: 700 }}>준비 중</span>
-            </div>
-            <div
-              onDragOver={e => { e.preventDefault(); setIdDragOver(true); }}
-              onDragLeave={() => setIdDragOver(false)}
-              onDrop={e => { e.preventDefault(); setIdDragOver(false); }}
-              style={{
-                border: `2px dashed ${idDragOver ? "#f59e0b" : "#d1d5db"}`,
-                borderRadius: 8, padding: "24px 14px",
-                background: idDragOver ? "#fffbeb" : "#f9fafb",
-                textAlign: "center" as const,
-                transition: "border-color 0.15s, background 0.15s",
-              }}>
-              <div style={{ fontSize: 28, marginBottom: 6 }}>🪪</div>
-              <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 4px" }}>
-                {idDragOver ? "여기에 파일을 놓으세요" : "신분증 업로드"}
-              </p>
-              <p style={{ fontSize: 11, color: "#9ca3af", margin: 0 }}>JPG · PNG · PDF (최대 10 MB)</p>
-            </div>
-            <div style={{ marginTop: 10, padding: "10px 14px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
-              <p style={{ fontSize: 11, color: "#92400e", margin: "0 0 4px", fontWeight: 700 }}>🔐 민감정보 보안 정책</p>
-              <p style={{ fontSize: 11, color: "#78350f", margin: 0, lineHeight: 1.6 }}>신분증은 민감개인정보입니다. 향후 업로드 시 접근권한 관리 · 감사로그 · 승인 이력이 자동 기록됩니다.</p>
-            </div>
-            <div style={{ marginTop: 8, padding: "10px 14px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
-              <p style={{ fontSize: 11, color: "#0369a1", margin: "0 0 3px", fontWeight: 700 }}>✨ AI 분석 예정 항목</p>
-              <p style={{ fontSize: 11, color: "#0c4a6e", margin: 0, lineHeight: 1.6 }}>이름 · 주민등록번호 · 생년월일 · 주소 → 관리자 검수 → 승인 반영</p>
-            </div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>신분증 파일</label>
+            <TranslatorEvidenceDocumentsSection
+              docType="id_card"
+              mode="create"
+              token={token}
+              onToast={onToast}
+              file={idCardFile}
+              onFileChange={setIdCardFile}
+            />
           </div>
         )}
 
         {/* ③ 통장사본 탭 */}
         {docSubTab === "bank" && (
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>통장사본 파일</label>
-              <span style={{ fontSize: 10, color: "#fff", background: "#f59e0b", borderRadius: 10, padding: "1px 8px", fontWeight: 700 }}>준비 중</span>
-            </div>
-            <div
-              onDragOver={e => { e.preventDefault(); setBankDragOver(true); }}
-              onDragLeave={() => setBankDragOver(false)}
-              onDrop={e => { e.preventDefault(); setBankDragOver(false); }}
-              style={{
-                border: `2px dashed ${bankDragOver ? "#059669" : "#d1d5db"}`,
-                borderRadius: 8, padding: "24px 14px",
-                background: bankDragOver ? "#f0fdf4" : "#f9fafb",
-                textAlign: "center" as const,
-                transition: "border-color 0.15s, background 0.15s",
-              }}>
-              <div style={{ fontSize: 28, marginBottom: 6 }}>🏦</div>
-              <p style={{ fontSize: 12, color: "#6b7280", margin: "0 0 4px" }}>
-                {bankDragOver ? "여기에 파일을 놓으세요" : "통장사본 업로드"}
-              </p>
-              <p style={{ fontSize: 11, color: "#9ca3af", margin: 0 }}>JPG · PNG · PDF (최대 10 MB)</p>
-            </div>
-            <div style={{ marginTop: 10, padding: "10px 14px", background: "#fffbeb", borderRadius: 8, border: "1px solid #fde68a" }}>
-              <p style={{ fontSize: 11, color: "#92400e", margin: "0 0 4px", fontWeight: 700 }}>🔐 민감정보 보안 정책</p>
-              <p style={{ fontSize: 11, color: "#78350f", margin: 0, lineHeight: 1.6 }}>통장사본은 금융정보입니다. 향후 업로드 시 접근권한 관리 · 감사로그 · 승인 이력이 자동 기록됩니다.</p>
-            </div>
-            <div style={{ marginTop: 8, padding: "10px 14px", background: "#f0f9ff", borderRadius: 8, border: "1px solid #bae6fd" }}>
-              <p style={{ fontSize: 11, color: "#0369a1", margin: "0 0 3px", fontWeight: 700 }}>✨ AI 분석 예정 항목</p>
-              <p style={{ fontSize: 11, color: "#0c4a6e", margin: 0, lineHeight: 1.6 }}>은행명 · 예금주 · 계좌번호 → 관리자 검수 → 승인 반영</p>
-            </div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>통장사본 파일</label>
+            <TranslatorEvidenceDocumentsSection
+              docType="bankbook"
+              mode="create"
+              token={token}
+              onToast={onToast}
+              file={bankbookFile}
+              onFileChange={setBankbookFile}
+            />
           </div>
         )}
 
@@ -1388,32 +1374,40 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
               ))}
             </div>
 
-            {isDomesticWith && (
-              <>
-                <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>주민등록번호</p>
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <input type="password" value={sf.residentFront}
-                      onChange={e => { const v = e.target.value.replace(/\D/g, "").slice(0, 6); setSf("residentFront", v); if (v.length === 6) backRef.current?.focus(); }}
-                      placeholder="앞 6자리" maxLength={6} autoComplete="off"
-                      style={{ width: 110, padding: "9px 12px", borderRadius: 8, border: "1px solid #fcd34d", fontSize: 13, textAlign: "center", fontFamily: "monospace", letterSpacing: 2, boxSizing: "border-box", background: "#fffbeb" }} />
-                    <span style={{ fontSize: 18, color: "#d97706", fontWeight: 700 }}>-</span>
-                    <input ref={backRef} type="password" value={sf.residentBack}
-                      onChange={e => setSf("residentBack", e.target.value.replace(/\D/g, "").slice(0, 7))}
-                      placeholder="뒤 7자리" maxLength={7} autoComplete="off"
-                      style={{ width: 125, padding: "9px 12px", borderRadius: 8, border: "1px solid #fcd34d", fontSize: 13, textAlign: "center", fontFamily: "monospace", letterSpacing: 2, boxSizing: "border-box", background: "#fffbeb" }} />
-                    <span style={{ fontSize: 11, color: "#b45309" }}>AES-256 암호화</span>
-                  </div>
-                </div>
-                <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>계좌정보</p>
-                <div style={{ ...grid3, marginBottom: 4 }}>
-                  {SA({ label: "은행명", field: "bankName", placeholder: "국민은행" })}
-                  {SA({ label: "예금주", field: "accountHolder", placeholder: "홍길동" })}
-                  {SA({ label: "계좌번호", field: "bankAccount", placeholder: "123-456-789012", mono: true })}
-                </div>
-              </>
-            )}
+            {/* 주민등록번호 — 항상 표시 */}
+            <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              주민등록번호
+              {(isPaypal || isBank || isOther) && (
+                <span style={{ fontSize: 10, fontWeight: 400, color: "#b45309", marginLeft: 8, textTransform: "none", letterSpacing: 0, opacity: 0.7 }}>해외 방식 — 선택 입력</span>
+              )}
+            </p>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input type="password" value={sf.residentFront}
+                  onChange={e => { const v = e.target.value.replace(/\D/g, "").slice(0, 6); setSf("residentFront", v); if (v.length === 6) backRef.current?.focus(); }}
+                  placeholder="앞 6자리" maxLength={6} autoComplete="off"
+                  style={{ width: 110, padding: "9px 12px", borderRadius: 8, border: "1px solid #fcd34d", fontSize: 13, textAlign: "center", fontFamily: "monospace", letterSpacing: 2, boxSizing: "border-box", background: "#fffbeb" }} />
+                <span style={{ fontSize: 18, color: "#d97706", fontWeight: 700 }}>-</span>
+                <input ref={backRef} type="password" value={sf.residentBack}
+                  onChange={e => setSf("residentBack", e.target.value.replace(/\D/g, "").slice(0, 7))}
+                  placeholder="뒤 7자리" maxLength={7} autoComplete="off"
+                  style={{ width: 125, padding: "9px 12px", borderRadius: 8, border: "1px solid #fcd34d", fontSize: 13, textAlign: "center", fontFamily: "monospace", letterSpacing: 2, boxSizing: "border-box", background: "#fffbeb" }} />
+                <span style={{ fontSize: 11, color: "#b45309" }}>AES-256 암호화</span>
+              </div>
+            </div>
 
+            {/* 계좌정보 — 항상 표시 */}
+            <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>계좌정보</p>
+            <div style={{ ...grid3, marginBottom: 12 }}>
+              <BankNameSelect
+                label="은행명" value={sf.bankName} onChange={v => setSf("bankName", v)}
+                inputStyle={inpAmber} labelStyle={labelAmber}
+              />
+              {SA({ label: "예금주", field: "accountHolder", placeholder: "홍길동" })}
+              {SA({ label: "계좌번호", field: "bankAccount", placeholder: "123-456-789012", mono: true })}
+            </div>
+
+            {/* 국내 사업자 — 사업자 추가 정보 */}
             {isDomesticBiz && (
               <>
                 <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>사업자 정보</p>
@@ -1422,12 +1416,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                   {SA({ label: "상호", field: "businessName", placeholder: "(주)회사명" })}
                   {SA({ label: "대표자명", field: "businessOwner", placeholder: "홍길동" })}
                   {SA({ label: "세금계산서 이메일", field: "taxInvoiceEmail", placeholder: "tax@company.com", type: "email" })}
-                </div>
-                <p style={{ fontSize: 11, fontWeight: 700, color: "#92400e", margin: "0 0 8px", textTransform: "uppercase", letterSpacing: "0.06em" }}>계좌정보</p>
-                <div style={{ ...grid3, marginBottom: 4 }}>
-                  {SA({ label: "은행명", field: "bankName", placeholder: "국민은행" })}
-                  {SA({ label: "예금주", field: "accountHolder", placeholder: "홍길동" })}
-                  {SA({ label: "계좌번호", field: "bankAccount", placeholder: "123-456-789012", mono: true })}
                 </div>
               </>
             )}
@@ -1477,31 +1465,35 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 
             {isOther && SA({ label: "정산 방식 설명", field: "settlementMemo", placeholder: "지급 방식 및 기타 정보를 입력하세요" })}
 
-            {hasMethod && (
-              <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px dashed #fde68a" }}>
-                <div style={{ ...grid2, marginBottom: 10 }}>
+            {/* 추가 정보 — 항상 표시 */}
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px dashed #fde68a" }}>
+              <div style={{ ...grid2, marginBottom: 10 }}>
+                <div>
+                  <label style={labelAmber}>기본 통화</label>
+                  <ClickSelect value={sf.baseCurrency} onChange={v => setSf("baseCurrency", v)}
+                    style={{ width: "100%" }} triggerStyle={{ ...inpAmber, width: "100%", boxSizing: "border-box" as const }}
+                    options={[{ value: "", label: "선택 안 함" }, ...CURRENCIES.map(c => ({ value: c, label: c }))]} />
+                </div>
+                {(isPaypal || isBank) && (
                   <div>
-                    <label style={labelAmber}>기본 통화</label>
-                    <ClickSelect value={sf.baseCurrency} onChange={v => setSf("baseCurrency", v)}
+                    <label style={labelAmber}>해외송금 수수료 부담</label>
+                    <ClickSelect value={sf.remittanceFeePayer} onChange={v => setSf("remittanceFeePayer", v)}
                       style={{ width: "100%" }} triggerStyle={{ ...inpAmber, width: "100%", boxSizing: "border-box" as const }}
-                      options={[{ value: "", label: "선택 안 함" }, ...CURRENCIES.map(c => ({ value: c, label: c }))]} />
+                      options={[{ value: "", label: "선택 안 함" }, ...FEE_PAYER_OPTIONS.map(f => ({ value: f.value, label: f.label }))]} />
                   </div>
-                  {(isPaypal || isBank) && (
-                    <div>
-                      <label style={labelAmber}>해외송금 수수료 부담</label>
-                      <ClickSelect value={sf.remittanceFeePayer} onChange={v => setSf("remittanceFeePayer", v)}
-                        style={{ width: "100%" }} triggerStyle={{ ...inpAmber, width: "100%", boxSizing: "border-box" as const }}
-                        options={[{ value: "", label: "선택 안 함" }, ...FEE_PAYER_OPTIONS.map(f => ({ value: f.value, label: f.label }))]} />
-                    </div>
-                  )}
-                </div>
-                <div style={{ marginBottom: 8 }}>
-                  <label style={labelAmber}>정산 메모 (내부용)</label>
-                  <input value={sf.settlementMemo} onChange={e => setSf("settlementMemo", e.target.value)}
-                    placeholder="특이사항, 지급 조건 등" style={inpAmber} />
-                </div>
+                )}
               </div>
-            )}
+              <div style={{ marginBottom: 8 }}>
+                <label style={labelAmber}>정산 메모 (내부용)</label>
+                <input value={sf.settlementMemo} onChange={e => setSf("settlementMemo", e.target.value)}
+                  placeholder="특이사항, 지급 조건 등" style={inpAmber} />
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", marginTop: 6, fontSize: 12, color: sf.paymentHold ? "#dc2626" : "#92400e" }}>
+                <input type="checkbox" checked={sf.paymentHold} onChange={e => setSf("paymentHold", e.target.checked)}
+                  style={{ width: 15, height: 15, accentColor: "#dc2626" }} />
+                <span style={{ fontWeight: sf.paymentHold ? 700 : 400 }}>⏸ 지급 보류</span>
+              </label>
+            </div>
           </div>
         </>
       )}

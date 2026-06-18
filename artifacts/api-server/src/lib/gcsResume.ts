@@ -59,6 +59,43 @@ export function isAllowedExt(filename: string): boolean {
   return ALLOWED_EXT.includes(ext);
 }
 
+// ── 증빙서류(신분증/통장사본) 지원 형식 ────────────────────────────────────────
+export const DOCUMENT_ALLOWED_EXTS = [".jpg", ".jpeg", ".png", ".pdf"] as const;
+
+export const DOCUMENT_ALLOWED_MIME = [
+  "image/jpeg",
+  "image/png",
+  "application/pdf",
+] as const;
+
+export function isAllowedDocumentMime(mime: string): boolean {
+  return (DOCUMENT_ALLOWED_MIME as readonly string[]).includes(mime);
+}
+
+export function isAllowedDocumentExt(filename: string): boolean {
+  const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  return (DOCUMENT_ALLOWED_EXTS as readonly string[]).includes(ext);
+}
+
+export async function uploadDocumentToGCS(
+  buffer: Buffer,
+  originalName: string,
+  mimeType: string,
+  subFolder: "id-cards" | "bankbooks",
+): Promise<string> {
+  const { bucketName, dirPrefix } = parsePrivateDir();
+  const ext = path.extname(originalName).toLowerCase() || ".pdf";
+  const objectName = [dirPrefix, "documents", subFolder, `${randomUUID()}${ext}`]
+    .filter(Boolean)
+    .join("/");
+
+  const bucket = gcsClient.bucket(bucketName);
+  const file = bucket.file(objectName);
+  await file.save(buffer, { contentType: mimeType, resumable: false });
+
+  return `/${bucketName}/${objectName}`;
+}
+
 export async function uploadResumeToGCS(
   buffer: Buffer,
   originalName: string,

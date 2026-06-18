@@ -3,6 +3,14 @@ import { api } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 
+export const BANK_LIST = [
+  "국민은행", "신한은행", "우리은행", "하나은행", "기업은행",
+  "농협은행", "카카오뱅크", "케이뱅크", "토스뱅크", "SC제일은행",
+  "씨티은행", "우체국", "수협은행", "산업은행", "부산은행",
+  "대구은행", "광주은행", "전북은행", "경남은행", "제주은행",
+  "새마을금고", "신협",
+] as const;
+
 const inp: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
   border: "1px solid #d1d5db", fontSize: 13, color: "#111827",
@@ -250,20 +258,16 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                     )}
                   </div>
 
-                  {/* 국내 3.3% 원천징수 */}
-                  {data.paymentMethod === "domestic_withholding" && (
-                    <>
-                      <p style={sH}>주민등록번호 · 계좌정보</p>
-                      <div style={grid2}>
-                        <InfoField label="주민등록번호" value={data.residentNumberMasked ?? "미등록"} sensitive />
-                        <InfoField label="은행명" value={data.bankName ?? "미등록"} />
-                        <InfoField label="계좌번호" value={data.bankAccount ?? "미등록"} mono />
-                        <InfoField label="예금주" value={data.accountHolder ?? "미등록"} />
-                      </div>
-                    </>
-                  )}
+                  {/* 주민등록번호 · 계좌정보 — 항상 표시 */}
+                  <p style={sH}>주민등록번호 · 계좌정보</p>
+                  <div style={grid2}>
+                    <InfoField label="주민등록번호" value={data.residentNumberMasked ?? "미등록"} sensitive />
+                    <InfoField label="은행명" value={data.bankName ?? "미등록"} />
+                    <InfoField label="계좌번호" value={data.bankAccount ?? "미등록"} mono />
+                    <InfoField label="예금주" value={data.accountHolder ?? "미등록"} />
+                  </div>
 
-                  {/* 국내 사업자 */}
+                  {/* 국내 사업자 — 사업자 추가 정보 */}
                   {data.paymentMethod === "domestic_business" && (
                     <>
                       <p style={sH}>사업자 정보</p>
@@ -272,12 +276,6 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                         <InfoField label="상호" value={data.businessName ?? "미등록"} />
                         <InfoField label="대표자명" value={data.businessOwner ?? "미등록"} />
                         <InfoField label="세금계산서 이메일" value={data.taxInvoiceEmail ?? "미등록"} />
-                      </div>
-                      <p style={sH}>계좌정보</p>
-                      <div style={grid3}>
-                        <InfoField label="은행명" value={data.bankName ?? "미등록"} />
-                        <InfoField label="계좌번호" value={data.bankAccount ?? "미등록"} mono />
-                        <InfoField label="예금주" value={data.accountHolder ?? "미등록"} />
                       </div>
                     </>
                   )}
@@ -372,7 +370,16 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
               <p style={sH}>지급방식</p>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:4 }}>
                 {PAYMENT_METHODS.map(m => (
-                  <button key={m.value} onClick={() => sf("paymentMethod", m.value)}
+                  <button key={m.value} onClick={() => {
+                      const AUTO_CURRENCY: Record<string, string> = {
+                        domestic_withholding: "KRW",
+                        domestic_business: "KRW",
+                        overseas_paypal: "USD",
+                        overseas_bank: "USD",
+                      };
+                      const auto = AUTO_CURRENCY[m.value];
+                      setForm(p => ({ ...p, paymentMethod: m.value, ...(auto ? { baseCurrency: auto } : {}) }));
+                    }}
                     style={{
                       padding:"10px 14px", borderRadius:8, fontSize:13, cursor:"pointer", textAlign:"left",
                       border: form.paymentMethod === m.value ? "2px solid #2563eb" : "1.5px solid #e5e7eb",
@@ -383,22 +390,25 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                 ))}
               </div>
 
-              {/* ── 국내 3.3% 원천징수 ── */}
-              {isDomesticWith && (
-                <>
-                  <p style={sH}>주민등록번호</p>
-                  <ResidentInput
-                    front={form.residentFront} back={form.residentBack} backRef={backRef}
-                    onFront={v => { sf("residentFront", v); if (v.length === 6) backRef.current?.focus(); }}
-                    onBack={v => sf("residentBack", v)}
-                    existing={data?.residentNumberMasked}
-                  />
-                  <p style={sH}>계좌정보</p>
-                  <BankFields form={form} sf={sf} />
-                </>
-              )}
+              {/* ── 주민등록번호 (항상 표시) ── */}
+              <p style={sH}>
+                주민등록번호
+                {(isPaypal || isBank || isOther) && (
+                  <span style={{ fontSize:10, fontWeight:400, color:"#9ca3af", marginLeft:8, textTransform:"none", letterSpacing:0 }}>해외 방식 — 선택 입력</span>
+                )}
+              </p>
+              <ResidentInput
+                front={form.residentFront} back={form.residentBack} backRef={backRef}
+                onFront={v => { sf("residentFront", v); if (v.length === 6) backRef.current?.focus(); }}
+                onBack={v => sf("residentBack", v)}
+                existing={data?.residentNumberMasked}
+              />
 
-              {/* ── 국내 사업자 ── */}
+              {/* ── 계좌정보 (항상 표시) ── */}
+              <p style={sH}>계좌정보</p>
+              <BankFields form={form} sf={sf} />
+
+              {/* ── 국내 사업자 — 사업자 추가 정보 ── */}
               {isDomesticBiz && (
                 <>
                   <p style={sH}>사업자 정보</p>
@@ -408,8 +418,6 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                     <Field label="대표자명" value={form.businessOwner} onChange={v => sf("businessOwner", v)} placeholder="홍길동" />
                     <Field label="세금계산서 이메일" value={form.taxInvoiceEmail} onChange={v => sf("taxInvoiceEmail", v)} placeholder="tax@company.com" type="email" />
                   </div>
-                  <p style={sH}>계좌정보</p>
-                  <BankFields form={form} sf={sf} />
                 </>
               )}
 
@@ -455,36 +463,34 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                 </div>
               )}
 
-              {/* ── 공통 추가 정보 ── */}
-              {pm && (
-                <>
-                  <p style={sH}>추가 정보</p>
-                  <div style={{ ...grid2, marginBottom:10 }}>
+              {/* ── 공통 추가 정보 (항상 표시) ── */}
+              <>
+                <p style={sH}>추가 정보</p>
+                <div style={{ ...grid2, marginBottom:10 }}>
+                  <div>
+                    <label style={lbl}>기본 통화</label>
+                    <ClickSelect value={form.baseCurrency} onChange={v => sf("baseCurrency", v)}
+                      style={{ width: "100%" }} triggerStyle={{ ...inp, width: "100%", boxSizing: "border-box" as const }}
+                      options={[{ value: "", label: "선택 안 함" }, ...CURRENCIES.map(c => ({ value: c, label: c }))]} />
+                  </div>
+                  {(isPaypal || isBank) && (
                     <div>
-                      <label style={lbl}>기본 통화</label>
-                      <ClickSelect value={form.baseCurrency} onChange={v => sf("baseCurrency", v)}
+                      <label style={lbl}>해외송금 수수료 부담</label>
+                      <ClickSelect value={form.remittanceFeePayer} onChange={v => sf("remittanceFeePayer", v)}
                         style={{ width: "100%" }} triggerStyle={{ ...inp, width: "100%", boxSizing: "border-box" as const }}
-                        options={[{ value: "", label: "선택 안 함" }, ...CURRENCIES.map(c => ({ value: c, label: c }))]} />
+                        options={[{ value: "", label: "선택 안 함" }, ...FEE_PAYER_OPTIONS.map(f => ({ value: f.value, label: f.label }))]} />
                     </div>
-                    {(isPaypal || isBank) && (
-                      <div>
-                        <label style={lbl}>해외송금 수수료 부담</label>
-                        <ClickSelect value={form.remittanceFeePayer} onChange={v => sf("remittanceFeePayer", v)}
-                          style={{ width: "100%" }} triggerStyle={{ ...inp, width: "100%", boxSizing: "border-box" as const }}
-                          options={[{ value: "", label: "선택 안 함" }, ...FEE_PAYER_OPTIONS.map(f => ({ value: f.value, label: f.label }))]} />
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ marginBottom:10 }}>
-                    <Field label="정산 메모 (내부용)" value={form.settlementMemo} onChange={v => sf("settlementMemo", v)} placeholder="특이사항, 지급 조건 등" />
-                  </div>
-                  <label style={{ display:"flex", alignItems:"center", gap:8, cursor:"pointer", marginBottom:14, fontSize:13, color:form.paymentHold ? "#dc2626" : "#374151" }}>
-                    <input type="checkbox" checked={form.paymentHold} onChange={e => sf("paymentHold", e.target.checked)}
-                      style={{ width:16, height:16, accentColor:"#dc2626" }} />
-                    <span style={{ fontWeight: form.paymentHold ? 700 : 400 }}>⏸ 지급 보류 (이 통번역사에게 지급을 일시 중단)</span>
-                  </label>
-                </>
-              )}
+                  )}
+                </div>
+                <div style={{ marginBottom:10 }}>
+                  <Field label="정산 메모 (내부용)" value={form.settlementMemo} onChange={v => sf("settlementMemo", v)} placeholder="특이사항, 지급 조건 등" />
+                </div>
+                <label style={{ display:"flex", alignItems:"center", gap:8, cursor:"pointer", marginBottom:14, fontSize:13, color:form.paymentHold ? "#dc2626" : "#374151" }}>
+                  <input type="checkbox" checked={form.paymentHold} onChange={e => sf("paymentHold", e.target.checked)}
+                    style={{ width:16, height:16, accentColor:"#dc2626" }} />
+                  <span style={{ fontWeight: form.paymentHold ? 700 : 400 }}>⏸ 지급 보류 (이 통번역사에게 지급을 일시 중단)</span>
+                </label>
+              </>
 
               <div style={{ display:"flex", gap:8, paddingTop:4 }}>
                 <PrimaryBtn onClick={handleSave} disabled={saving} style={{ fontSize:13, padding:"9px 20px" }}>
@@ -533,10 +539,50 @@ function CurrencySelect({ value, onChange, label }: { value: string; onChange: (
   );
 }
 
+export function BankNameSelect({ value, onChange, label, inputStyle, labelStyle }: {
+  value: string; onChange: (v: string) => void; label: string;
+  inputStyle: React.CSSProperties; labelStyle: React.CSSProperties;
+}) {
+  const inList = (BANK_LIST as readonly string[]).includes(value);
+  const [otherMode, setOtherMode] = useState(!inList && value !== "");
+
+  return (
+    <div>
+      <label style={labelStyle}>{label}</label>
+      <ClickSelect
+        value={otherMode ? "__other__" : (inList ? value : "")}
+        onChange={v => {
+          if (v === "__other__") { setOtherMode(true); onChange(""); }
+          else { setOtherMode(false); onChange(v); }
+        }}
+        style={{ width: "100%" }}
+        triggerStyle={{ ...inputStyle, width: "100%", boxSizing: "border-box" as const }}
+        searchable
+        options={[
+          { value: "", label: "선택 안 함" },
+          ...BANK_LIST.map(b => ({ value: b, label: b })),
+          { value: "__other__", label: "기타 (직접 입력)" },
+        ]}
+      />
+      {otherMode && (
+        <input
+          type="text"
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          placeholder="은행명 직접 입력"
+          // eslint-disable-next-line jsx-a11y/no-autofocus
+          autoFocus
+          style={{ ...inputStyle, marginTop: 6 }}
+        />
+      )}
+    </div>
+  );
+}
+
 function BankFields({ form, sf }: { form: ReturnType<typeof emptyForm>; sf: (k: keyof ReturnType<typeof emptyForm>, v: string | boolean) => void }) {
   return (
     <div style={{ ...grid3, marginBottom:10 }}>
-      <Field label="은행명" value={form.bankName} onChange={v => sf("bankName", v)} placeholder="국민은행" />
+      <BankNameSelect label="은행명" value={form.bankName} onChange={v => sf("bankName", v)} inputStyle={inp} labelStyle={lbl} />
       <Field label="예금주" value={form.accountHolder} onChange={v => sf("accountHolder", v)} placeholder="홍길동" />
       <Field label="계좌번호" value={form.bankAccount} onChange={v => sf("bankAccount", v)} placeholder="123-456-789012" mono />
     </div>
