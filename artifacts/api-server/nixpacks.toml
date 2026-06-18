@@ -1,5 +1,7 @@
 [phases.setup]
-nixPkgs = ["antiword"]
+nixPkgs = ["antiword", "poppler_utils"]
 
 [start]
-cmd = "node --enable-source-maps ./dist/index.mjs"
+# PATH에 nix 기본 프로파일 bin을 명시적으로 추가 — Node.js 프로세스가 PATH를 온전히
+# 상속하지 못하는 일부 런타임(Railway 등)에서 antiword/pdftoppm 탐색 실패를 방지한다
+cmd = "PATH=/usr/local/bin:/usr/bin:/bin:$PATH node --enable-source-maps ./dist/index.mjs"

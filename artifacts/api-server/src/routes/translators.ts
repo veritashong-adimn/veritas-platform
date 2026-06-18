@@ -22,7 +22,7 @@ import OpenAI from "openai";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { execFile } from "node:child_process";
-import { writeFile, unlink } from "node:fs/promises";
+import { writeFile, unlink, access, constants as fsConstants } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 const _require = createRequire(import.meta.url);
@@ -54,6 +54,94 @@ async function extractHwpText(buffer: Buffer): Promise<string> {
   const result = await kordoc.parse(buffer);
   if (!result.success) throw new Error(`kordoc parse 실패 (fileType: ${result.fileType ?? "unknown"})`);
   return result.markdown ?? "";
+}
+
+/**
+ * 파일 magic byte로 실제 포맷 판별 (확장자는 신뢰하지 않음).
+ * - "ole2" : OLE2 Compound Document (Word 97-2003 binary .doc)
+ * - "zip"  : ZIP 기반 (DOCX / XLSX — mammoth로 처리 가능)
+ * - "pdf"  : PDF
+ * - "hwp5" : HWP5 (한글 2.x~)
+ * - "unknown"
+ */
+function detectDocFormat(buf: Buffer): "ole2" | "zip" | "pdf" | "hwp5" | "unknown" {
+  if (buf.length < 4) return "unknown";
+  if (buf[0] === 0xD0 && buf[1] === 0xCF && buf[2] === 0x11 && buf[3] === 0xE0) return "ole2";
+  if (buf[0] === 0x50 && buf[1] === 0x4B && buf[2] === 0x03 && buf[3] === 0x04) return "zip";
+  if (buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46) return "pdf";
+  if (buf[0] === 0x48 && buf[1] === 0x57 && buf[2] === 0x50 && buf[3] === 0x20) return "hwp5";
+  return "unknown";
+}
+
+/**
+ * antiword 실행 파일 경로를 찾는다.
+ * Railway/Nixpacks 환경에서는 PATH가 Node.js 프로세스에 온전히 전달되지 않을 수 있어
+ * which 외에 알려진 고정 경로도 탐색한다.
+ */
+async function findAntiword(): Promise<string | null> {
+  // 1) which로 먼저 시도
+  const fromWhich = await new Promise<string | null>(resolve => {
+    execFile("which", ["antiword"], (e, out) => resolve(e ? null : (out.trim() || null)));
+  });
+  if (fromWhich) return fromWhich;
+
+  // 2) nixpkgs/Railway가 symlink를 생성하는 알려진 경로들
+  const candidates = [
+    "/usr/bin/antiword",
+    "/usr/local/bin/antiword",
+    "/opt/homebrew/bin/antiword",
+    "/nix/var/nix/profiles/default/bin/antiword",
+  ];
+  for (const p of candidates) {
+    try { await access(p, fsConstants.X_OK); return p; } catch { /* not found */ }
+  }
+  return null;
+}
+
+/**
+ * .doc / .docx 파일에서 텍스트를 추출한다.
+ * - magic byte가 ZIP이면 mammoth로 처리 (확장자가 .doc여도 실제 DOCX인 경우 대응)
+ * - magic byte가 OLE2이면 antiword 시도
+ * - antiword 미설치 시 명확한 에러를 throw (mammoth로 fallback하지 않음 — 반드시 실패하기 때문)
+ * @param label 로그/에러 메시지용 레이블 ("resume-analyze" | "resume-analyze-upload")
+ */
+async function extractDocText(buffer: Buffer, label: string): Promise<{ text: string; method: string }> {
+  const fmt = detectDocFormat(buffer);
+
+  // ZIP 서명 → 실제 DOCX (확장자가 .doc여도 mammoth로 처리)
+  if (fmt === "zip") {
+    const result = await mammoth.extractRawText({ buffer });
+    return { text: result.value, method: "mammoth(zip-docx)" };
+  }
+
+  // OLE2 또는 unknown → antiword 필요
+  const antiwordBin = await findAntiword();
+  if (antiwordBin) {
+    const tmpPath = path.join(tmpdir(), `doc_${label}_${Date.now()}.doc`);
+    await writeFile(tmpPath, buffer);
+    try {
+      const text = await new Promise<string>((resolve, reject) => {
+        execFile(antiwordBin, ["-t", tmpPath], { timeout: 30_000, maxBuffer: 5 * 1024 * 1024 },
+          (err, stdout, stderr) => {
+            if (stdout?.trim()) resolve(stdout);
+            else reject(new Error(stderr?.trim() || err?.message || "antiword: empty output"));
+          });
+      });
+      return { text, method: `antiword(${antiwordBin})` };
+    } finally {
+      await unlink(tmpPath).catch(() => {});
+    }
+  }
+
+  // antiword 없음 — mammoth fallback은 OLE2에서 항상 실패하므로 명확한 에러로 종료
+  throw Object.assign(
+    new Error(
+      fmt === "ole2"
+        ? "이 파일은 Word 97-2003 이진 형식(.doc)입니다. 서버에 antiword가 설치되지 않아 추출할 수 없습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요."
+        : "DOC 파일 형식을 인식할 수 없습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요.",
+    ),
+    { docFmt: fmt, antiwordFound: false },
+  );
 }
 
 const resumeUpload = multer({
@@ -1746,37 +1834,13 @@ router.post(
           { bytes: buffer.byteLength, textLen: resumeText.length, textPreview: resumeText.slice(0, 80).replace(/\n/g, " ") },
           "[ANALYZE-UPLOAD] PDF text extracted"
         );
-      } else if (ext === ".docx") {
-        extractStep = "docx_parser_start";
-        const result = await mammoth.extractRawText({ buffer });
-        resumeText = result.value;
-        extractStep = "docx_parser_done";
-        req.log.info({ textLen: resumeText.length }, "[ANALYZE-UPLOAD] DOCX text extracted");
-      } else if (ext === ".doc") {
-        extractStep = "doc_parser_start";
-        const tmpPath = path.join(tmpdir(), `resume_upload_${Date.now()}.doc`);
-        await writeFile(tmpPath, buffer);
-        const antiwordBin = await new Promise<string | null>(resolve => {
-          execFile("which", ["antiword"], (e, out) => resolve(e ? null : out.trim()));
-        });
-        if (antiwordBin) {
-          try {
-            resumeText = await new Promise<string>((resolve, reject) => {
-              execFile(antiwordBin, ["-t", tmpPath], { timeout: 30_000, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
-                if (stdout?.trim()) resolve(stdout);
-                else reject(new Error(stderr?.trim() || err?.message || "antiword: empty output"));
-              });
-            });
-          } finally {
-            await unlink(tmpPath).catch(() => {});
-          }
-        } else {
-          await unlink(tmpPath).catch(() => {});
-          const result = await mammoth.extractRawText({ buffer });
-          resumeText = result.value;
-        }
-        extractStep = "doc_parser_done";
-        req.log.info({ textLen: resumeText.length }, "[ANALYZE-UPLOAD] DOC text extracted");
+      } else if (ext === ".docx" || ext === ".doc") {
+        extractStep = ext === ".docx" ? "docx_parser_start" : "doc_parser_start";
+        const docFmt = detectDocFormat(buffer);
+        const { text: docText, method: docMethod } = await extractDocText(buffer, "analyze-upload");
+        resumeText = docText;
+        extractStep = ext === ".docx" ? "docx_parser_done" : "doc_parser_done";
+        req.log.info({ ext, docFmt, docMethod, textLen: resumeText.length }, "[ANALYZE-UPLOAD] DOC/DOCX text extracted");
       } else if (ext === ".txt") {
         extractStep = "txt_parser_start";
         resumeText = buffer.toString("utf-8");
@@ -1913,55 +1977,17 @@ router.post("/admin/translators/:id/resume-analyze", ...adminGuard, async (req, 
     if (ext === ".pdf") {
       resumeText = await extractPdfText(buffer);
       STEP(8, "PDF text extracted", { textLen: resumeText.length, preview: resumeText.slice(0, 100) });
-    } else if (ext === ".docx") {
-      const result = await mammoth.extractRawText({ buffer });
-      resumeText = result.value;
-      STEP(8, "DOCX text extracted", { textLen: resumeText.length, preview: resumeText.slice(0, 100) });
-    } else if (ext === ".doc") {
-      const tmpPath = path.join(tmpdir(), `resume_${Date.now()}_${Math.random().toString(36).slice(2)}.doc`);
-      STEP(8, "DOC: writing tmp file", { tmpPath });
-      await writeFile(tmpPath, buffer);
-      // antiword 바이너리 경로 확인 (Railway/Nixpacks는 /usr/bin/antiword)
-      const antiwordBin = await new Promise<string | null>(resolve => {
-        execFile("which", ["antiword"], (e, out) => resolve(e ? null : out.trim()));
-      });
-      STEP(8, "antiword binary check", { antiwordBin });
-
-      if (antiwordBin) {
-        try {
-          resumeText = await new Promise<string>((resolve, reject) => {
-            execFile(antiwordBin, ["-t", tmpPath], { timeout: 30_000, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
-              req.log.info({
-                antiwordBin,
-                antiwordStdoutLen: stdout?.length ?? 0,
-                antiwordStdoutPreview: stdout?.slice(0, 100) ?? null,
-                antiwordStderr: stderr?.slice(0, 300) ?? null,
-                antiwordErr: err?.message ?? null,
-                antiwordCode: (err as NodeJS.ErrnoException)?.code ?? null,
-              }, "[ANALYZE] antiword execution result");
-              if (stdout?.trim()) resolve(stdout);
-              else reject(new Error(stderr?.trim() || err?.message || "antiword: empty output"));
-            });
-          });
-          STEP(8, "DOC text extracted via antiword", { textLen: resumeText.length, preview: resumeText.slice(0, 100) });
-        } catch (docErr) {
-          FAIL(8, "antiword execution failed", docErr);
-          res.status(422).json({ error: "DOC 형식 추출에 실패했습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요." }); return;
-        } finally {
-          await unlink(tmpPath).catch(() => {});
-        }
-      } else {
-        // antiword 없음 → mammoth로 폴백 (일부 DOC 파일은 처리 가능)
-        await unlink(tmpPath).catch(() => {});
-        STEP(8, "antiword not found — fallback to mammoth for DOC");
-        try {
-          const result = await mammoth.extractRawText({ buffer });
-          resumeText = result.value;
-          STEP(8, "DOC fallback mammoth result", { textLen: resumeText.length, preview: resumeText.slice(0, 100) });
-        } catch (mamErr) {
-          FAIL(8, "DOC mammoth fallback also failed — antiword not installed", mamErr);
-          res.status(422).json({ error: "DOC 형식 추출에 실패했습니다. 서버에 antiword가 설치되지 않았습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요." }); return;
-        }
+    } else if (ext === ".docx" || ext === ".doc") {
+      const docFmt = detectDocFormat(buffer);
+      STEP(8, "DOC/DOCX: magic byte detection", { ext, docFmt });
+      try {
+        const { text: docText, method: docMethod } = await extractDocText(buffer, "analyze");
+        resumeText = docText;
+        STEP(8, "DOC/DOCX text extracted", { ext, docFmt, docMethod, textLen: resumeText.length, preview: resumeText.slice(0, 100) });
+      } catch (docErr) {
+        FAIL(8, "DOC/DOCX extraction failed", docErr);
+        const errMsg = docErr instanceof Error ? docErr.message : String(docErr);
+        res.status(422).json({ error: errMsg }); return;
       }
     } else if (ext === ".txt") {
       resumeText = buffer.toString("utf-8");
