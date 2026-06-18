@@ -4,6 +4,7 @@
   "steps": {
     "install": {
       "commands": [
+        "apt-get update && apt-get install -y antiword poppler-utils",
         "corepack enable",
         "corepack prepare pnpm@10.26.1 --activate",
         "pnpm install --no-frozen-lockfile"
