@@ -20,17 +20,15 @@ async function resolveSystemBin(name: string, candidates: string[]): Promise<str
 }
 
 async function startServer() {
-  // 시스템 바이너리 가용성 진단 — Railway Deploy Log에서 즉시 확인 가능
+  // 시스템 바이너리 가용성 진단
+  // console.log 사용: pino JSON이 아닌 plain text로 stdout 직접 출력 → Railway Deploy Log에서 검색 가능
   const antiwordPath = await resolveSystemBin("antiword", [
     "/usr/bin/antiword", "/usr/local/bin/antiword",
   ]);
   const pdftoppmPath = await resolveSystemBin("pdftoppm", [
     "/usr/bin/pdftoppm", "/usr/local/bin/pdftoppm",
   ]);
-  logger.info(
-    { antiwordPath: antiwordPath ?? "NOT FOUND", pdftoppmPath: pdftoppmPath ?? "NOT FOUND" },
-    "[Startup] system binary check",
-  );
+  console.log(`[BINARY-CHECK] antiword=${antiwordPath ?? "NOT_FOUND"} pdftoppm=${pdftoppmPath ?? "NOT_FOUND"}`);
 
   try {
     await seedAdmin();
