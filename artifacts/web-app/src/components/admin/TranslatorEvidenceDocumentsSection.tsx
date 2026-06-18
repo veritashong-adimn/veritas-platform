@@ -41,6 +41,8 @@ export interface TranslatorEvidenceDocumentsSectionProps {
   onFileChange?: (file: File | null) => void;
   /** detail 모드: AI 분석 결과가 승인 반영(저장)된 후 호출 — parent가 번역사 데이터를 새로고침해야 함 */
   onAnalysisApplied?: (fields: string[]) => void;
+  /** create 모드: AI 분석 결과 승인 시 호출 — parent가 폼 상태를 갱신한다 */
+  onOcrApply?: (fields: string[], values: Record<string, string>) => void;
 }
 
 const btnBase: React.CSSProperties = {
@@ -59,6 +61,7 @@ export function TranslatorEvidenceDocumentsSection({
   file: externalFile,
   onFileChange,
   onAnalysisApplied,
+  onOcrApply,
 }: TranslatorEvidenceDocumentsSectionProps) {
   const label       = docType === "id_card" ? "신분증" : "통장사본";
   const icon        = docType === "id_card" ? "🪪" : "🏦";
@@ -386,37 +389,48 @@ export function TranslatorEvidenceDocumentsSection({
             <p style={{ fontSize: 11, color: "#0369a1", margin: "0 0 3px", fontWeight: 700 }}>✨ AI 분석 항목</p>
             <p style={{ fontSize: 11, color: "#0c4a6e", margin: 0, lineHeight: 1.6 }}>
               {docType === "id_card"
-                ? "이름 · 주민등록번호 · 주소 → 관리자 검수 → 승인 반영 (JPG/PNG만 분석 가능)"
-                : "은행명 · 예금주 · 계좌번호 → 관리자 검수 → 승인 반영 (JPG/PNG만 분석 가능)"}
+                ? "이름 · 주민등록번호 · 주소 → 관리자 검수 → 승인 반영"
+                : "은행명 · 예금주 · 계좌번호 → 관리자 검수 → 승인 반영"}
             </p>
+            {mode === "create" && (
+              <p style={{ fontSize: 11, color: "#0369a1", margin: "3px 0 0", fontStyle: "italic" }}>
+                등록화면에서는 분석 결과가 폼에 임시 반영되며, 저장은 통번역사 등록 완료 시 처리됩니다.
+              </p>
+            )}
           </div>
-          {mode === "detail" && (
-            <button
-              type="button"
-              disabled={!exists}
-              aria-label={`${label} AI 분석 실행`}
-              data-testid={`btn-document-ocr-analyze-${docType}`}
-              onClick={() => setShowAnalyzePanel(true)}
-              style={{
-                fontSize: 12, padding: "6px 14px", borderRadius: 6, border: "1px solid #0284c7",
-                background: exists ? "#0284c7" : "#e5e7eb", color: exists ? "#fff" : "#9ca3af",
-                cursor: exists ? "pointer" : "not-allowed", fontWeight: 600, whiteSpace: "nowrap",
-              }}
-            >
-              ✨ AI 분석 실행
-            </button>
-          )}
+          <button
+            type="button"
+            disabled={!exists}
+            aria-label={`${label} AI 분석 실행`}
+            data-testid={`btn-document-ocr-analyze-${docType}`}
+            onClick={() => setShowAnalyzePanel(true)}
+            style={{
+              fontSize: 12, padding: "6px 14px", borderRadius: 6, border: "1px solid #0284c7",
+              background: exists ? "#0284c7" : "#e5e7eb", color: exists ? "#fff" : "#9ca3af",
+              cursor: exists ? "pointer" : "not-allowed", fontWeight: 600, whiteSpace: "nowrap",
+            }}
+          >
+            ✨ AI 분석 실행
+          </button>
         </div>
       </div>
 
-      {showAnalyzePanel && mode === "detail" && translatorId && (
+      {showAnalyzePanel && (
         <DocumentAnalyzePanel
-          userId={translatorId}
+          userId={mode === "detail" ? translatorId : undefined}
+          file={mode === "create" ? (externalFile ?? undefined) : undefined}
           docType={docType}
           token={token}
           onToast={onToast}
           onClose={() => setShowAnalyzePanel(false)}
-          onApplied={fields => onAnalysisApplied?.(fields)}
+          onApplied={(fields, values) => {
+            setShowAnalyzePanel(false);
+            if (mode === "detail") {
+              onAnalysisApplied?.(fields);
+            } else if (mode === "create" && values) {
+              onOcrApply?.(fields, values);
+            }
+          }}
         />
       )}
 

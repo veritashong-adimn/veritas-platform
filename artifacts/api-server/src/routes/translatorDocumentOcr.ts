@@ -2,11 +2,15 @@
 // 처리 흐름: 업로드(translators.ts) → 분석(document-analyze, DB 미반영)
 //          → 관리자 검수 → 승인(document-apply, 이때만 DB 반영) → 감사로그 기록
 //
+// 등록 화면 흐름(translatorId 없음): 파일 직접 업로드 → document-analyze-upload → 검수
+//          → onApplied 콜백으로 부모 폼 상태 갱신 (DB 반영은 translator 등록 완료 후)
+//
 // 주민등록번호·계좌번호 원문은 어떤 로그에도 남기지 않는다 (logEvent에는 마스킹된 값만 전달).
 // 모든 실패 응답은 { error, message, debug? } 형태의 JSON으로 통일한다 (프론트가 .json()으로
 // 파싱하므로, 라우트가 매칭되지 않거나 예외가 던져져도 절대 HTML이 내려가서는 안 됨 — app.ts의
 // "/api" 404 핸들러 및 전역 에러 핸들러가 동일한 형태로 한 번 더 방어한다).
 import { Router, type IRouter, type Response } from "express";
+import multer from "multer";
 import {
   db, usersTable, translatorProfilesTable, translatorSensitiveTable,
 } from "@workspace/db";
@@ -27,6 +31,20 @@ const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 const sensitiveGuard = [...adminGuard, requirePermission("translator.sensitive")];
 
+// multer: 등록화면 파일 직접 업로드용 (메모리 저장, 10 MB 제한)
+const docAnalyzeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (isOcrSupportedExt(ext) || ["image/jpeg", "image/png", "application/pdf"].includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error("JPG, PNG, PDF 형식만 분석할 수 있습니다."));
+    }
+  },
+});
+
 function docLabel(type: DocType): string {
   return type === "id_card" ? "신분증" : "통장사본";
 }
@@ -40,6 +58,102 @@ function parseDocType(req: { query: { type?: unknown } }): DocType | null {
 function sendError(res: Response, status: number, error: string, debug?: Record<string, unknown>) {
   res.status(status).json({ error, message: error, ...(debug ? { debug } : {}) });
 }
+
+// ─── 등록화면 전용: 파일 직접 업로드 분석 (translatorId 없음, DB 저장 없음) ─────
+// 상세화면의 document-analyze와 동일한 응답 형식을 반환하되,
+// current는 모두 null (비교 대상 없음)이고 감사로그를 남기지 않는다.
+router.post(
+  "/admin/translators/document-analyze-upload",
+  ...sensitiveGuard,
+  docAnalyzeUpload.single("file"),
+  async (req, res) => {
+    const docType = parseDocType(req);
+    if (!docType) { sendError(res, 400, "type 파라미터는 id_card 또는 bankbook 이어야 합니다."); return; }
+    const label = docLabel(docType);
+
+    if (!req.file) { sendError(res, 400, "파일이 없습니다. (필드명: file)"); return; }
+
+    const originalName = Buffer.from(req.file.originalname, "latin1").toString("utf8");
+    const ext = path.extname(originalName).toLowerCase();
+    if (!isOcrSupportedExt(ext)) {
+      sendError(res, 422, "OCR 분석은 JPG, PNG, PDF 형식만 지원합니다. 지원하지 않는 파일 형식입니다.", { ext });
+      return;
+    }
+
+    try {
+      const rawBuffer = req.file.buffer;
+      let buffer: Buffer;
+      let ocrExt: string;
+      if (ext === ".pdf") {
+        buffer = await renderPdfFirstPageAsPng(rawBuffer);
+        ocrExt = ".png";
+      } else {
+        buffer = rawBuffer;
+        ocrExt = ext;
+      }
+
+      const imageDataUrl = buildImageDataUrl(buffer, ocrExt);
+
+      const openaiApiKey = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
+      if (!openaiApiKey) {
+        req.log.error({ docType }, "AI_INTEGRATIONS_OPENAI_API_KEY 미설정");
+        sendError(res, 500, `${label} AI 분석을 사용할 수 없습니다. (OpenAI API 키 미설정)`);
+        return;
+      }
+
+      const openaiClient = new OpenAI({ apiKey: openaiApiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
+      const completion = await openaiClient.chat.completions.create({
+        model: "gpt-4o",
+        response_format: { type: "json_object" },
+        temperature: 0.1,
+        messages: buildOcrPromptMessages(docType, imageDataUrl),
+      });
+
+      const raw = completion.choices[0]?.message?.content ?? "{}";
+      let result: Record<string, unknown> = {};
+      let jsonParseFailed = false;
+      try { result = JSON.parse(raw); } catch { result = {}; jsonParseFailed = true; }
+
+      const confidence = (result.confidence as "high" | "medium" | "low") ?? "low";
+      const notes = (result.notes as string) ?? null;
+
+      let extracted: Record<string, unknown>;
+      let current: Record<string, null>;
+      let validations: Record<string, unknown>;
+
+      if (docType === "id_card") {
+        const { normalized: residentNumberNormalized, valid: residentNumberValid } =
+          normalizeResidentNumber((result.residentNumber as string) ?? null);
+        extracted = {
+          name: (result.name as string) ?? null,
+          residentNumber: residentNumberNormalized,
+          address: (result.address as string) ?? null,
+        };
+        current = { name: null, address: null, residentNumberMasked: null };
+        validations = { nameMismatch: false, residentNumberValid };
+      } else {
+        const extractedAccountHolder = (result.accountHolder as string) ?? null;
+        const { matched: matchedBankName, bankNameMatched } = matchBankName((result.bankName as string) ?? null);
+        extracted = {
+          bankName: matchedBankName,
+          accountHolder: extractedAccountHolder,
+          bankAccount: normalizeBankAccount((result.bankAccount as string) ?? null),
+        };
+        current = { bankName: null, accountHolder: null, bankAccount: null };
+        validations = { accountHolderMismatch: false, bankNameMatched };
+      }
+
+      res.json({
+        extracted, current, validations, confidence, notes,
+        _debug: { fileName: originalName, sourceExt: ext, ocrExt, pdfConverted: ext === ".pdf", aiCalled: true, jsonParseFailed },
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      req.log.error({ err, docType }, `${label} OCR 분석 실패 (upload mode)`);
+      sendError(res, 500, `${label} AI 분석 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.`, { reason });
+    }
+  },
+);
 
 // ─── 분석 (Preview 전용 — DB 저장 없음) ──────────────────────────────────────
 router.post("/admin/translators/:id/document-analyze", ...sensitiveGuard, async (req, res) => {

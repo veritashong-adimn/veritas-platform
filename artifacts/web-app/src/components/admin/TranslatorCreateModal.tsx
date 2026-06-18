@@ -595,6 +595,33 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
     onToast("AI 분석 결과가 반영되었습니다. 내용을 확인 후 등록하세요.");
   };
 
+  // 신분증/통장사본 OCR 승인 반영 — translatorId 없으므로 폼 상태에만 반영
+  const handleDocOcrApply = (docType: "id_card" | "bankbook", _fields: string[], values: Record<string, string>) => {
+    if (docType === "bankbook") {
+      if (values.bankName) setSf("bankName", values.bankName);
+      if (values.accountHolder) setSf("accountHolder", values.accountHolder);
+      if (values.bankAccount) setSf("bankAccount", values.bankAccount);
+      onToast("통장사본 AI 분석 결과가 정산정보에 반영되었습니다. 등록 완료 시 저장됩니다.");
+    } else {
+      // id_card: name, address → form; residentNumber → sf
+      if (values.name && !form.name) setF("name", values.name);
+      if (values.address) {
+        const p = parseRegionStr(values.address);
+        const regionStr = buildRegionString(p.country, p.countryCustom, p.city);
+        setF("region", regionStr);
+        setRegionCountry(p.country);
+        setRegionCity(p.city);
+        if (p.country === "기타") setRegionCountryCustom(p.countryCustom);
+      }
+      if (values.residentNumber) {
+        const digits = values.residentNumber.replace(/\D/g, "");
+        if (digits.length >= 6) setSf("residentFront", digits.slice(0, 6));
+        if (digits.length >= 13) setSf("residentBack", digits.slice(6, 13));
+      }
+      onToast("신분증 AI 분석 결과가 반영되었습니다. 등록 완료 시 저장됩니다.");
+    }
+  };
+
   const handleSubmit = async () => {
     if (!validate()) return;
     setSaving(true);
@@ -1285,6 +1312,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
               onToast={onToast}
               file={idCardFile}
               onFileChange={setIdCardFile}
+              onOcrApply={(fields, values) => handleDocOcrApply("id_card", fields, values)}
             />
           </div>
         )}
@@ -1300,6 +1328,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
               onToast={onToast}
               file={bankbookFile}
               onFileChange={setBankbookFile}
+              onOcrApply={(fields, values) => handleDocOcrApply("bankbook", fields, values)}
             />
           </div>
         )}

@@ -56,16 +56,30 @@ async function parseJsonResponse(r: Response): Promise<Record<string, unknown>> 
 }
 
 export function DocumentAnalyzePanel({
-  userId, docType, token, onToast, onClose, onApplied,
+  userId,
+  file,
+  docType,
+  token,
+  onToast,
+  onClose,
+  onApplied,
 }: {
-  userId: number;
+  /** 상세화면: 기존 통번역사 ID (서버에 저장된 파일 사용) */
+  userId?: number;
+  /** 등록화면: 로컬 파일 (서버에 직접 업로드해 분석) */
+  file?: File;
   docType: OcrDocType;
   token: string;
   onToast: (msg: string) => void;
   onClose: () => void;
-  /** 승인 반영(저장) 성공 후 부모가 데이터를 새로고침하도록 알림 */
-  onApplied: (appliedFields: string[]) => void;
+  /**
+   * 승인 반영 완료 콜백.
+   * - detail 모드: 서버 document-apply 완료 후 호출 (appliedValues는 undefined)
+   * - create 모드: 서버 호출 없이 즉시 호출, appliedValues에 적용된 값 전달
+   */
+  onApplied: (appliedFields: string[], appliedValues?: Record<string, string>) => void;
 }) {
+  const isCreateMode = !userId && !!file;
   const label = docType === "id_card" ? "신분증" : "통장사본";
   const fields = FIELD_CONFIG[docType];
   const authH = { Authorization: `Bearer ${token}` };
@@ -82,10 +96,23 @@ export function DocumentAnalyzePanel({
     setError(null);
     setResult(null);
     try {
-      const r = await fetch(api(`/api/admin/translators/${userId}/document-analyze?type=${docType}`), {
-        method: "POST",
-        headers: authH,
-      });
+      let r: Response;
+      if (isCreateMode) {
+        // 등록화면: 파일 직접 업로드
+        const fd = new FormData();
+        fd.append("file", file!);
+        r = await fetch(api(`/api/admin/translators/document-analyze-upload?type=${docType}`), {
+          method: "POST",
+          headers: authH,
+          body: fd,
+        });
+      } else {
+        // 상세화면: 서버에 저장된 파일 사용
+        r = await fetch(api(`/api/admin/translators/${userId}/document-analyze?type=${docType}`), {
+          method: "POST",
+          headers: authH,
+        });
+      }
       const d = await parseJsonResponse(r);
       if (!r.ok) { setError((d.error as string) ?? (d.message as string) ?? `HTTP ${r.status}`); return; }
       setResult(d as unknown as AnalyzeResult);
@@ -94,7 +121,7 @@ export function DocumentAnalyzePanel({
       for (const f of fields) {
         const v = (d as unknown as AnalyzeResult).extracted[f.key];
         initEdited[f.key] = v ?? "";
-        initChecked[f.key] = !!v; // 추출된 값이 있는 항목만 기본 체크 (전체 승인 시 그대로 사용)
+        initChecked[f.key] = !!v;
       }
       setEdited(initEdited);
       setChecked(initChecked);
@@ -113,6 +140,15 @@ export function DocumentAnalyzePanel({
       if (checked[f.key] && edited[f.key]?.trim()) body[f.key] = edited[f.key].trim();
     }
     if (Object.keys(body).length === 0) { onToast("반영할 항목을 선택해 주세요."); return; }
+
+    // 등록화면(create 모드): 서버 저장 없이 부모에게 추출값 전달
+    if (isCreateMode) {
+      onApplied(Object.keys(body), body);
+      onClose();
+      return;
+    }
+
+    // 상세화면(detail 모드): 서버 document-apply 호출
     setApplying(true);
     try {
       const r = await fetch(api(`/api/admin/translators/${userId}/document-apply?type=${docType}`), {
@@ -152,7 +188,11 @@ export function DocumentAnalyzePanel({
         <div style={{ padding: "16px 20px", borderBottom: "1px solid #e5e7eb", display: "flex", alignItems: "center", justifyContent: "space-between", background: "#fff7ed" }}>
           <div>
             <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#9a3412" }}>{label} AI 분석</h3>
-            <p style={{ margin: "2px 0 0", fontSize: 12, color: "#6b7280" }}>분석 결과를 검토 후 승인하면 즉시 저장됩니다. (업로드만으로는 저장되지 않습니다)</p>
+            <p style={{ margin: "2px 0 0", fontSize: 12, color: "#6b7280" }}>
+              {isCreateMode
+                ? "분석 결과를 검토 후 승인하면 등록 폼에 자동 반영됩니다. (저장은 통번역사 등록 완료 시 일괄 처리)"
+                : "분석 결과를 검토 후 승인하면 즉시 저장됩니다. (업로드만으로는 저장되지 않습니다)"}
+            </p>
           </div>
           <button type="button" onClick={onClose} aria-label="닫기" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 20, color: "#6b7280", lineHeight: 1, padding: "4px 8px" }}>×</button>
         </div>
@@ -190,6 +230,9 @@ export function DocumentAnalyzePanel({
                 <span style={{ fontSize: 12, fontWeight: 700, color: "#fff", background: confidenceColor[result.confidence] ?? "#6b7280", borderRadius: 4, padding: "2px 8px" }}>
                   {confidenceLabel[result.confidence] ?? result.confidence}
                 </span>
+                {isCreateMode && (
+                  <span style={{ fontSize: 11, color: "#0369a1", background: "#e0f2fe", borderRadius: 4, padding: "2px 8px", fontWeight: 600 }}>등록 폼 반영 모드</span>
+                )}
                 <span style={{ fontSize: 11, color: "#6b7280", marginLeft: "auto" }}>체크된 항목만 승인 반영됩니다.</span>
               </div>
 
@@ -211,7 +254,9 @@ export function DocumentAnalyzePanel({
               <div style={{ display: "grid", gridTemplateColumns: "26px 110px 1fr 1fr", gap: "0 8px", marginBottom: 6, paddingBottom: 4, borderBottom: "1px solid #e5e7eb" }}>
                 <div />
                 <div />
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textAlign: "center" }}>현재값</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textAlign: "center" }}>
+                  {isCreateMode ? "등록 폼 현재값" : "현재값"}
+                </div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", textAlign: "center" }}>AI 추출값 (수정 가능)</div>
               </div>
 
@@ -285,7 +330,7 @@ export function DocumentAnalyzePanel({
               cursor: result && !applying ? "pointer" : "not-allowed",
             }}
           >
-            {applying ? "반영 중..." : "선택 항목 승인 반영"}
+            {applying ? "반영 중..." : isCreateMode ? "폼에 반영" : "선택 항목 승인 반영"}
           </button>
         </div>
       </div>
