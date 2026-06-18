@@ -1,5 +1,6 @@
 {
   "$schema": "https://schema.railpack.com",
+  "buildAptPackages": ["antiword", "poppler-utils"],
   "steps": {
     "install": {
       "commands": [
@@ -17,6 +18,7 @@
     }
   },
   "deploy": {
+    "aptPackages": ["antiword", "poppler-utils"],
     "startCommand": "pnpm --filter @workspace/db run push-force && pnpm --filter @workspace/api-server run start"
   },
   "watchPatterns": [
