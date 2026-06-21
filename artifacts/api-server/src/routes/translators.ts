@@ -182,9 +182,11 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
             console.log(`[DOC-EXTRACT][${label}] stdout_preview="${(stdout ?? "").slice(0, 200).replace(/\n/g, "\\n")}"`);
             console.log(`[DOC-EXTRACT][${label}] stderr="${(stderr ?? "").slice(0, 500)}"`);
             if (err) {
+              console.log(`[DOC-EXTRACT][${label}] status=${typeof execErr?.code === "number" ? execErr.code : "(not a number: " + String(execErr?.code) + ")"}`);
+              console.log(`[DOC-EXTRACT][${label}] signal=${execErr?.signal ?? "(none)"}`);
               console.log(`[DOC-EXTRACT][${label}] err.code=${execErr?.code ?? "(none)"}`);
               console.log(`[DOC-EXTRACT][${label}] err.message=${err.message}`);
-              console.log(`[DOC-EXTRACT][${label}] err.killed=${execErr?.killed} err.signal=${execErr?.signal ?? "(none)"}`);
+              console.log(`[DOC-EXTRACT][${label}] err.killed=${execErr?.killed}`);
               console.log(`[DOC-EXTRACT][${label}] err.stack=${err.stack ?? "(no stack)"}`);
             }
             if (stdout?.trim()) resolve(stdout);
