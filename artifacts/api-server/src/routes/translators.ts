@@ -22,7 +22,7 @@ import OpenAI from "openai";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { execFile } from "node:child_process";
-import { writeFile, unlink, access, constants as fsConstants } from "node:fs/promises";
+import { writeFile, unlink, access, stat, constants as fsConstants } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 const _require = createRequire(import.meta.url);
@@ -45,10 +45,18 @@ const kordoc = _require("kordoc") as {
 };
 
 async function extractPdfText(buffer: Buffer): Promise<string> {
+  console.log(`[PDF-EXTRACT] start — bytes=${buffer.byteLength}`);
   const parser = new PdfParseClass({ data: buffer });
   try {
     const result = await parser.getText();
+    console.log(`[PDF-EXTRACT] OK — textLen=${result.text?.length ?? 0} preview="${(result.text ?? "").slice(0, 100).replace(/\n/g, "\\n")}"`);
     return result.text ?? "";
+  } catch (err) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    console.log(`[PDF-EXTRACT] FAILED`);
+    console.log(`[PDF-EXTRACT] err.message=${e.message}`);
+    console.log(`[PDF-EXTRACT] err.stack=${e.stack ?? "(no stack)"}`);
+    throw err;
   } finally {
     await parser.destroy().catch(() => {});
   }
@@ -109,11 +117,19 @@ async function findAntiword(): Promise<string | null> {
  */
 async function extractDocText(buffer: Buffer, label: string): Promise<{ text: string; method: string }> {
   const fmt = detectDocFormat(buffer);
+  console.log(`[DOC-EXTRACT][${label}] start — fmt=${fmt} bytes=${buffer.byteLength}`);
 
   // ZIP 서명 → 실제 DOCX (확장자가 .doc여도 mammoth로 처리)
   if (fmt === "zip") {
-    const result = await mammoth.extractRawText({ buffer });
-    return { text: result.value, method: "mammoth(zip-docx)" };
+    try {
+      const result = await mammoth.extractRawText({ buffer });
+      console.log(`[DOC-EXTRACT][${label}] mammoth(zip-docx) OK — textLen=${result.value.length}`);
+      return { text: result.value, method: "mammoth(zip-docx)" };
+    } catch (mammothErr) {
+      const e = mammothErr instanceof Error ? mammothErr : new Error(String(mammothErr));
+      console.log(`[DOC-EXTRACT][${label}] mammoth(zip-docx) FAILED — ${e.message}`);
+      throw mammothErr;
+    }
   }
 
   // OLE2 또는 unknown → word-extractor 우선 시도 (순수 JS, 시스템 의존성 없음)
@@ -121,34 +137,62 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
     const extractor = new WordExtractorCls();
     const doc = await extractor.extract(buffer);
     const text = doc.getBody();
-    if (text?.trim()) return { text, method: "word-extractor" };
-  } catch {
-    // word-extractor 실패 시 antiword로 fallback
+    if (text?.trim()) {
+      console.log(`[DOC-EXTRACT][${label}] word-extractor OK — textLen=${text.length}`);
+      return { text, method: "word-extractor" };
+    }
+    console.log(`[DOC-EXTRACT][${label}] word-extractor returned empty text — falling back to antiword`);
+  } catch (weErr) {
+    const e = weErr instanceof Error ? weErr : new Error(String(weErr));
+    console.log(`[DOC-EXTRACT][${label}] word-extractor FAILED — ${e.message} — falling back to antiword`);
   }
 
   // antiword fallback (시스템 바이너리)
-  // -w 0: 줄바꿈 없이 전체 텍스트 출력 (AI 분석에 적합). -t 제거: 매핑 파일 의존성 제거.
-  // HOME을 명시하여 Railway 컨테이너에서 antiword가 데이터 파일을 찾지 못하는 문제 방지.
   const antiwordBin = await findAntiword();
+  console.log(`[DOC-EXTRACT][${label}] antiwordBin=${antiwordBin ?? "NOT FOUND (which+fallback paths all failed)"}`);
+
   if (antiwordBin) {
     const tmpPath = path.join(tmpdir(), `doc_${label}_${Date.now()}.doc`);
+    const args = ["-w", "0", tmpPath];
+    console.log(`[DOC-EXTRACT][${label}] execFile cmd="${antiwordBin}" args=${JSON.stringify(args)}`);
+    console.log(`[DOC-EXTRACT][${label}] HOME env="${process.env.HOME ?? "(unset) → /root"}"`);
+
     await writeFile(tmpPath, buffer);
+    try {
+      const fileStat = await stat(tmpPath);
+      console.log(`[DOC-EXTRACT][${label}] tmpPath="${tmpPath}" exists=true size=${fileStat.size}`);
+    } catch (statErr) {
+      console.log(`[DOC-EXTRACT][${label}] tmpPath="${tmpPath}" exists=false — ${String(statErr)}`);
+    }
+
     try {
       const text = await new Promise<string>((resolve, reject) => {
         execFile(
           antiwordBin,
-          ["-w", "0", tmpPath],
+          args,
           {
             timeout: 30_000,
             maxBuffer: 5 * 1024 * 1024,
             env: { ...process.env, HOME: process.env.HOME ?? "/root" },
           },
           (err, stdout, stderr) => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const execErr = err as any;
+            console.log(`[DOC-EXTRACT][${label}] execFile callback — stdout.len=${stdout?.length ?? 0} stderr.len=${stderr?.length ?? 0}`);
+            console.log(`[DOC-EXTRACT][${label}] stdout_preview="${(stdout ?? "").slice(0, 200).replace(/\n/g, "\\n")}"`);
+            console.log(`[DOC-EXTRACT][${label}] stderr="${(stderr ?? "").slice(0, 500)}"`);
+            if (err) {
+              console.log(`[DOC-EXTRACT][${label}] err.code=${execErr?.code ?? "(none)"}`);
+              console.log(`[DOC-EXTRACT][${label}] err.message=${err.message}`);
+              console.log(`[DOC-EXTRACT][${label}] err.killed=${execErr?.killed} err.signal=${execErr?.signal ?? "(none)"}`);
+              console.log(`[DOC-EXTRACT][${label}] err.stack=${err.stack ?? "(no stack)"}`);
+            }
             if (stdout?.trim()) resolve(stdout);
-            else reject(new Error(stderr?.trim() || err?.message || "antiword: empty output"));
+            else reject(err ?? new Error("antiword: empty stdout"));
           },
         );
       });
+      console.log(`[DOC-EXTRACT][${label}] antiword OK — textLen=${text.length}`);
       return { text, method: `antiword(${antiwordBin})` };
     } finally {
       await unlink(tmpPath).catch(() => {});
@@ -156,6 +200,7 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
   }
 
   // 모두 실패
+  console.log(`[DOC-EXTRACT][${label}] ALL methods failed — fmt=${fmt} antiwordFound=false`);
   throw Object.assign(
     new Error(
       fmt === "ole2"
