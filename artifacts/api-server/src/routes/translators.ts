@@ -64,7 +64,10 @@ async function extractPdfText(buffer: Buffer): Promise<string> {
 
 async function extractHwpText(buffer: Buffer): Promise<string> {
   const result = await kordoc.parse(buffer);
-  if (!result.success) throw new Error(`kordoc parse 실패 (fileType: ${result.fileType ?? "unknown"})`);
+  if (!result.success) {
+    console.log(`[422][L67] extractHwpText: kordoc.parse failed — success=false fileType=${result.fileType ?? "unknown"}`);
+    throw new Error(`kordoc parse 실패 (fileType: ${result.fileType ?? "unknown"})`);
+  }
   return result.markdown ?? "";
 }
 
@@ -2069,6 +2072,7 @@ router.post("/admin/translators/:id/resume-analyze", ...adminGuard, async (req, 
       } catch (docErr) {
         FAIL(8, "DOC/DOCX extraction failed", docErr);
         const errMsg = docErr instanceof Error ? docErr.message : String(docErr);
+        console.log(`[422][L2072] resume-analyze: DOC/DOCX extraction threw — ext="${ext}" errMsg="${errMsg}"`);
         res.status(422).json({ error: errMsg }); return;
       }
     } else if (ext === ".txt") {
@@ -2078,10 +2082,12 @@ router.post("/admin/translators/:id/resume-analyze", ...adminGuard, async (req, 
       resumeText = await extractHwpText(buffer);
       STEP(8, "HWP text extracted", { ext, textLen: resumeText.length, preview: resumeText.slice(0, 100) });
     } else {
+      console.log(`[422][L2081] resume-analyze: unsupported ext="${ext}" userId=${userId}`);
       res.status(422).json({ error: `지원하지 않는 파일 형식입니다 (${ext}). PDF, HWP, HWPX, DOCX, TXT를 사용해 주세요.` }); return;
     }
 
     if (!resumeText.trim()) {
+      console.log(`[422][L2086] resume-analyze: empty text after extraction — ext="${ext}" userId=${userId} textLen=${resumeText.length}`);
       req.log.warn({ userId, ext }, "[ANALYZE] empty text after extraction");
       res.status(422).json({ error: "이력서에서 텍스트를 추출할 수 없습니다. 이미지 기반 PDF이거나 빈 파일일 수 있습니다." }); return;
     }
