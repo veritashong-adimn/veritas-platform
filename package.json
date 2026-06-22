@@ -10,7 +10,7 @@
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },
   "private": true,
-  "_railwayCacheBust": "2",
+  "_railwayCacheBust": "3",
   "devDependencies": {
     "drizzle-kit": "^0.31.10",
     "prettier": "^3.8.1",
