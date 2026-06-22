@@ -119,6 +119,8 @@ async function findAntiword(): Promise<string | null> {
  * word-extractor는 시스템 의존성 없이 OLE2 .doc를 파싱하므로 Railway/Docker 환경에서도 작동한다.
  */
 async function extractDocText(buffer: Buffer, label: string): Promise<{ text: string; method: string }> {
+  // [DOC-REAL] VER=6 — 이 마커가 Railway Logs에 보이면 신규 코드 실행 중
+  console.log(`[DOC-REAL] VER=6 label=${label} bytes=${buffer.byteLength} ts=${Date.now()}`);
   const fmt = detectDocFormat(buffer);
   console.log(`[DOC-EXTRACT][${label}] start — fmt=${fmt} bytes=${buffer.byteLength}`);
 
@@ -164,6 +166,8 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
 
   if (antiwordBin) {
     const tmpPath = path.join(tmpdir(), `doc_${label}_${Date.now()}.doc`);
+    // [ANTIWORD-REAL] VER=6 — 이 마커가 보이면 antiword 실행 분기에 진입한 것
+    console.log(`[ANTIWORD-REAL] VER=6 bin=${antiwordBin} tmp=${tmpPath} ts=${Date.now()}`);
     console.log(`[ANTIWORD] exec ${antiwordBin} ${tmpPath}`);
     console.log(`[ANTIWORD] HOME="${process.env.HOME ?? "(unset)"}" tmpdir="${tmpdir()}"`);
 
