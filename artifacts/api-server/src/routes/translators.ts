@@ -1879,8 +1879,31 @@ function buildResumeDto(result: Record<string, unknown>) {
 // ─── 이력서 AI 분석 — 파일 직접 업로드 (userId 없이, 등록 단계용) ────────────
 router.post(
   "/admin/translators/resume-analyze-upload",
+  // [D1] 라우트 매칭 확인 — adminGuard 이전
+  (req, _res, next) => {
+    console.log(`[D1-ROUTE-MATCHED] method=${req.method} ct="${(req.headers["content-type"] ?? "").slice(0, 80)}" auth=${req.headers.authorization ? "present" : "MISSING"}`);
+    next();
+  },
   ...adminGuard,
-  resumeUpload.single("file"),
+  // [D2] adminGuard 통과 확인 — multer 이전
+  (req, _res, next) => {
+    console.log(`[D2-AFTER-GUARD] user=${JSON.stringify(req.user ?? null)}`);
+    next();
+  },
+  // [D3] multer를 래핑해 에러·성공 모두 로그
+  (req, res, next) => {
+    resumeUpload.single("file")(req, res, (err) => {
+      if (err) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const me = err as any;
+        console.log(`[D3-MULTER-ERROR] code=${me.code ?? "N/A"} message="${me.message}" field="${me.field ?? "N/A"}"`);
+        return next(err);
+      }
+      const f = req.file;
+      console.log(`[D3-MULTER-OK] file=${f ? `"${f.originalname}" mime="${f.mimetype}" size=${f.size}` : "NOT_ATTACHED (no file field in request)"}`);
+      next();
+    });
+  },
   async (req, res) => {
     console.log("[ENTER] resume-analyze-upload");
     const file = req.file;
