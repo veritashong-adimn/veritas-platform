@@ -160,27 +160,26 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
   // antiword fallback (시스템 바이너리)
   console.log(`[DOC-EXTRACT][${label}] ENTERING antiword fallback`);
   const antiwordBin = await findAntiword();
-  console.log(`[DOC-EXTRACT][${label}] antiwordBin=${antiwordBin ?? "NOT FOUND (which+fallback paths all failed)"}`);
+  console.log(`[ANTIWORD] path ${antiwordBin ?? "NOT_FOUND"}`);
 
   if (antiwordBin) {
     const tmpPath = path.join(tmpdir(), `doc_${label}_${Date.now()}.doc`);
-    const args = ["-w", "0", tmpPath];
-    console.log(`[DOC-EXTRACT][${label}] execFile cmd="${antiwordBin}" args=${JSON.stringify(args)}`);
-    console.log(`[DOC-EXTRACT][${label}] HOME env="${process.env.HOME ?? "(unset) → /root"}"`);
+    console.log(`[ANTIWORD] exec ${antiwordBin} ${tmpPath}`);
+    console.log(`[ANTIWORD] HOME="${process.env.HOME ?? "(unset)"}" tmpdir="${tmpdir()}"`);
 
     await writeFile(tmpPath, buffer);
     try {
       const fileStat = await stat(tmpPath);
-      console.log(`[DOC-EXTRACT][${label}] tmpPath="${tmpPath}" exists=true size=${fileStat.size}`);
+      console.log(`[ANTIWORD] tmpFile exists=true size=${fileStat.size}`);
     } catch (statErr) {
-      console.log(`[DOC-EXTRACT][${label}] tmpPath="${tmpPath}" exists=false — ${String(statErr)}`);
+      console.log(`[ANTIWORD] tmpFile exists=false — ${String(statErr)}`);
     }
 
     try {
       const text = await new Promise<string>((resolve, reject) => {
         execFile(
           antiwordBin,
-          args,
+          ["-w", "0", tmpPath],
           {
             timeout: 30_000,
             maxBuffer: 5 * 1024 * 1024,
@@ -188,39 +187,46 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
           },
           (err, stdout, stderr) => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const execErr = err as any;
-            console.log(`[DOC-EXTRACT][${label}] execFile callback — stdout.len=${stdout?.length ?? 0} stderr.len=${stderr?.length ?? 0}`);
-            console.log(`[DOC-EXTRACT][${label}] stdout_preview="${(stdout ?? "").slice(0, 200).replace(/\n/g, "\\n")}"`);
-            console.log(`[DOC-EXTRACT][${label}] stderr="${(stderr ?? "").slice(0, 500)}"`);
+            const e = err as any;
+            console.log(`[ANTIWORD] stdout.length=${stdout?.length ?? 0}`);
+            console.log(`[ANTIWORD] stderr="${(stderr ?? "").slice(0, 500)}"`);
             if (err) {
-              console.log(`[DOC-EXTRACT][${label}] status=${typeof execErr?.code === "number" ? execErr.code : "(not a number: " + String(execErr?.code) + ")"}`);
-              console.log(`[DOC-EXTRACT][${label}] signal=${execErr?.signal ?? "(none)"}`);
-              console.log(`[DOC-EXTRACT][${label}] err.code=${execErr?.code ?? "(none)"}`);
-              console.log(`[DOC-EXTRACT][${label}] err.message=${err.message}`);
-              console.log(`[DOC-EXTRACT][${label}] err.killed=${execErr?.killed}`);
-              console.log(`[DOC-EXTRACT][${label}] err.stack=${err.stack ?? "(no stack)"}`);
+              console.log(`[ANTIWORD] error.message=${err.message}`);
+              console.log(`[ANTIWORD] error.code=${e?.code ?? "(none)"}`);
+              console.log(`[ANTIWORD] error.errno=${e?.errno ?? "(none)"}`);
+              console.log(`[ANTIWORD] error.signal=${e?.signal ?? "(none)"}`);
+              console.log(`[ANTIWORD] error.killed=${e?.killed}`);
+              console.log(`[ANTIWORD] error.stderr="${(e?.stderr ?? "").toString().slice(0, 300)}"`);
+              console.log(`[ANTIWORD] error.stdout="${(e?.stdout ?? "").toString().slice(0, 300)}"`);
+              // 실제 에러를 그대로 reject (고정 메시지 사용 안 함)
+              const detail = stderr?.trim() || stdout?.trim() || err.message || "empty output";
+              return reject(new Error(`antiword 실행 실패: ${detail} (code=${e?.code ?? "N/A"})`));
             }
             if (stdout?.trim()) resolve(stdout);
-            else reject(err ?? new Error("antiword: empty stdout"));
+            else {
+              console.log(`[ANTIWORD] stdout empty — rejecting`);
+              reject(new Error(`antiword: stdout가 비어있습니다. stderr="${(stderr ?? "").slice(0, 200)}"`));
+            }
           },
         );
       });
-      console.log(`[DOC-EXTRACT][${label}] antiword OK — textLen=${text.length}`);
+      console.log(`[ANTIWORD] OK textLen=${text.length}`);
       return { text, method: `antiword(${antiwordBin})` };
     } finally {
       await unlink(tmpPath).catch(() => {});
     }
   }
 
-  // 모두 실패
-  console.log(`[DOC-EXTRACT][${label}] ALL methods failed — fmt=${fmt} antiwordFound=false`);
+  // antiword도 없음 — 실제로 찾은 경로 정보를 에러에 포함
+  const checkedPaths = ["/usr/bin/antiword", "/usr/local/bin/antiword", "/opt/homebrew/bin/antiword", "/nix/var/nix/profiles/default/bin/antiword"];
+  console.log(`[ANTIWORD] NOT FOUND — checked: which + ${JSON.stringify(checkedPaths)}`);
   throw Object.assign(
     new Error(
       fmt === "ole2"
-        ? "이 파일은 Word 97-2003 이진 형식(.doc)입니다. 텍스트를 추출할 수 없습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요."
-        : "DOC 파일 형식을 인식할 수 없습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요.",
+        ? `DOC(OLE2) 추출 실패: antiword를 찾을 수 없습니다. 확인 경로: which antiword, ${checkedPaths.join(", ")}. DOCX 또는 PDF로 변환 후 업로드해 주세요.`
+        : `DOC 포맷 인식 불가(fmt=${fmt}): antiword를 찾을 수 없습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요.`,
     ),
-    { docFmt: fmt, antiwordFound: false },
+    { docFmt: fmt, antiwordFound: false, checkedPaths },
   );
 }
 
@@ -1978,7 +1984,7 @@ router.post(
         "[ANALYZE-UPLOAD] text extraction failed"
       );
       res.status(422).json({
-        error: "텍스트 추출에 실패했습니다. 파일 형식을 확인해 주세요.",
+        error: errMsg,
         _debug: { extractStep, ext, mime, bytes: buffer.byteLength, errName, errMsg },
       }); return;
     }
