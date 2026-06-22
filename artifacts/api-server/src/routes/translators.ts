@@ -1893,6 +1893,11 @@ function buildResumeDto(result: Record<string, unknown>) {
 // ─── 이력서 AI 분석 — 파일 직접 업로드 (userId 없이, 등록 단계용) ────────────
 router.post(
   "/admin/translators/resume-analyze-upload",
+  // [ROUTE-REAL] 이 코드가 실제로 실행되고 있음을 증명하는 마커 (VERITAS-BUILD-VER=6)
+  (req, _res, next) => {
+    console.log(`[ROUTE-REAL] VER=6 method=${req.method} ct="${(req.headers["content-type"] ?? "").slice(0, 80)}" ts=${Date.now()}`);
+    next();
+  },
   // [D1] 라우트 매칭 확인 — adminGuard 이전
   (req, _res, next) => {
     console.log(`[D1-ROUTE-MATCHED] method=${req.method} ct="${(req.headers["content-type"] ?? "").slice(0, 80)}" auth=${req.headers.authorization ? "present" : "MISSING"}`);

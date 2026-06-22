@@ -20,6 +20,9 @@ async function resolveSystemBin(name: string, candidates: string[]): Promise<str
 }
 
 async function startServer() {
+  // 배포 버전 확인용 마커 — Railway Runtime Logs에서 VERITAS-BUILD-VER 검색
+  console.log("VERITAS-BUILD-VER=6 built=" + new Date().toISOString());
+
   // 시스템 바이너리 가용성 진단
   // console.log 사용: pino JSON이 아닌 plain text로 stdout 직접 출력 → Railway Deploy Log에서 검색 가능
   const antiwordPath = await resolveSystemBin("antiword", [

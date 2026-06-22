@@ -12,6 +12,7 @@
     "build": {
       "dependsOn": ["install"],
       "commands": [
+        "echo '=== RAILWAY-BUILD-VER=6 cache-bust=2026-06-23 ==='",
         "pnpm --filter @workspace/api-server run build",
         "BASE_PATH=/ pnpm --filter @workspace/web-app run build"
       ]
