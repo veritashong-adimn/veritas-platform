@@ -136,21 +136,29 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
   }
 
   // OLE2 또는 unknown → word-extractor 우선 시도 (순수 JS, 시스템 의존성 없음)
+  console.log(`[DOC-EXTRACT][${label}] word-extractor: calling extract(buffer) — bufferBytes=${buffer.byteLength}`);
   try {
     const extractor = new WordExtractorCls();
     const doc = await extractor.extract(buffer);
     const text = doc.getBody();
+    // 반환값 상세 로그: null/undefined/빈 문자열/공백만 있는 경우를 모두 구분
+    const textType = text === null ? "null" : text === undefined ? "undefined" : typeof text;
+    const textLen = text?.length ?? -1;
+    const trimmedLen = text?.trim()?.length ?? -1;
+    const textPreview = JSON.stringify((text ?? "").slice(0, 100));
+    console.log(`[DOC-EXTRACT][${label}] word-extractor getBody() — type=${textType} len=${textLen} trimmedLen=${trimmedLen} preview=${textPreview}`);
     if (text?.trim()) {
-      console.log(`[DOC-EXTRACT][${label}] word-extractor OK — textLen=${text.length}`);
+      console.log(`[DOC-EXTRACT][${label}] word-extractor OK — textLen=${text.length} — RETURNING`);
       return { text, method: "word-extractor" };
     }
-    console.log(`[DOC-EXTRACT][${label}] word-extractor returned empty text — falling back to antiword`);
+    console.log(`[DOC-EXTRACT][${label}] word-extractor: trim() falsy (len=${textLen} trimmedLen=${trimmedLen}) — NOT returning, falling through to antiword`);
   } catch (weErr) {
     const e = weErr instanceof Error ? weErr : new Error(String(weErr));
-    console.log(`[DOC-EXTRACT][${label}] word-extractor FAILED — ${e.message} — falling back to antiword`);
+    console.log(`[DOC-EXTRACT][${label}] word-extractor THREW — name=${e.name} message="${e.message}" stack="${(e.stack ?? "").slice(0, 300)}" — falling through to antiword`);
   }
 
   // antiword fallback (시스템 바이너리)
+  console.log(`[DOC-EXTRACT][${label}] ENTERING antiword fallback`);
   const antiwordBin = await findAntiword();
   console.log(`[DOC-EXTRACT][${label}] antiwordBin=${antiwordBin ?? "NOT FOUND (which+fallback paths all failed)"}`);
 
