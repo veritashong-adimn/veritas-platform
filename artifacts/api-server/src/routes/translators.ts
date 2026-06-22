@@ -1879,14 +1879,19 @@ router.post(
   ...adminGuard,
   resumeUpload.single("file"),
   async (req, res) => {
+    console.log("[ENTER] resume-analyze-upload");
     const file = req.file;
-    if (!file) { res.status(400).json({ error: "파일이 없습니다." }); return; }
+    if (!file) {
+      console.log("[422] resume-analyze-upload: file is null/undefined (multer did not attach file)");
+      res.status(400).json({ error: "파일이 없습니다." }); return;
+    }
 
     // multer은 latin1로 파싱하므로 UTF-8 재디코딩 (ext 검출은 ASCII이므로 영향 없음)
     const originalNameUtf8 = Buffer.from(file.originalname, "latin1").toString("utf8");
     const ext = path.extname(originalNameUtf8).toLowerCase();
     const mime = file.mimetype;
     const buffer = file.buffer;
+    console.log(`[TRACE] resume-analyze-upload: originalName="${originalNameUtf8}" ext="${ext}" mime="${mime}" bytes=${buffer.byteLength}`);
     req.log.info(
       { ext, mime, bytes: buffer.byteLength, originalName: originalNameUtf8 },
       "[ANALYZE-UPLOAD] file received"
@@ -1896,6 +1901,7 @@ router.post(
     let extractStep = "not_started";
     try {
       if (ext === ".pdf") {
+        console.log("[TRACE] resume-analyze-upload: branch=PDF");
         extractStep = "pdf_parser_start";
         resumeText = await extractPdfText(buffer);
         extractStep = "pdf_parser_done";
@@ -1904,29 +1910,35 @@ router.post(
           "[ANALYZE-UPLOAD] PDF text extracted"
         );
       } else if (ext === ".docx" || ext === ".doc") {
+        console.log(`[TRACE] resume-analyze-upload: branch=DOC ext="${ext}"`);
         extractStep = ext === ".docx" ? "docx_parser_start" : "doc_parser_start";
         const docFmt = detectDocFormat(buffer);
+        console.log(`[TRACE] resume-analyze-upload: docFmt=${docFmt} — calling extractDocText`);
         const { text: docText, method: docMethod } = await extractDocText(buffer, "analyze-upload");
         resumeText = docText;
         extractStep = ext === ".docx" ? "docx_parser_done" : "doc_parser_done";
         req.log.info({ ext, docFmt, docMethod, textLen: resumeText.length }, "[ANALYZE-UPLOAD] DOC/DOCX text extracted");
       } else if (ext === ".txt") {
+        console.log("[TRACE] resume-analyze-upload: branch=TXT");
         extractStep = "txt_parser_start";
         resumeText = buffer.toString("utf-8");
         extractStep = "txt_parser_done";
         req.log.info({ textLen: resumeText.length }, "[ANALYZE-UPLOAD] TXT text extracted");
       } else if (ext === ".hwp" || ext === ".hwpx") {
+        console.log(`[TRACE] resume-analyze-upload: branch=HWP ext="${ext}"`);
         extractStep = "hwp_parser_start";
         resumeText = await extractHwpText(buffer);
         extractStep = "hwp_parser_done";
         req.log.info({ ext, textLen: resumeText.length, textPreview: resumeText.slice(0, 80).replace(/\n/g, " ") }, "[ANALYZE-UPLOAD] HWP text extracted");
       } else {
+        console.log(`[422] resume-analyze-upload: unsupported extension="${ext}" mime="${mime}"`);
         req.log.warn({ ext, mime, originalName: originalNameUtf8 }, "[ANALYZE-UPLOAD] unsupported extension");
         res.status(422).json({ error: `지원하지 않는 파일 형식 (${ext}). PDF, HWP, HWPX, DOCX, DOC, TXT를 사용해 주세요.` }); return;
       }
     } catch (extractErr) {
       const errMsg = extractErr instanceof Error ? extractErr.message : String(extractErr);
       const errName = extractErr instanceof Error ? extractErr.constructor.name : typeof extractErr;
+      console.log(`[422] resume-analyze-upload: extraction threw — extractStep="${extractStep}" errName="${errName}" errMsg="${errMsg}"`);
       req.log.error(
         { extractStep, ext, mime, bytes: buffer.byteLength, errName, errMsg, errStack: extractErr instanceof Error ? extractErr.stack : undefined },
         "[ANALYZE-UPLOAD] text extraction failed"
@@ -1938,6 +1950,7 @@ router.post(
     }
 
     if (!resumeText.trim()) {
+      console.log(`[422] resume-analyze-upload: empty text after extraction — ext="${ext}" extractStep="${extractStep}"`);
       req.log.warn({ ext, bytes: buffer.byteLength }, "[ANALYZE-UPLOAD] empty text after extraction");
       res.status(422).json({ error: "이력서에서 텍스트를 추출할 수 없습니다. 이미지 기반 PDF이거나 빈 파일일 수 있습니다." }); return;
     }
