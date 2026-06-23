@@ -2023,7 +2023,7 @@ router.post(
       );
       res.status(422).json({
         error: errMsg,
-        _debug: { extractStep, ext, mime, bytes: buffer.byteLength, errName, errMsg },
+        _debug: { extractStep, ext, mime, bytes: buffer.byteLength, errName, errMsg, errStack: extractErr instanceof Error ? extractErr.stack : undefined },
       }); return;
     }
 
