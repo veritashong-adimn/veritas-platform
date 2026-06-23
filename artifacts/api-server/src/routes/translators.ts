@@ -2147,8 +2147,10 @@ router.post("/admin/translators/:id/resume-analyze", ...adminGuard, async (req, 
       } catch (docErr) {
         FAIL(8, "DOC/DOCX extraction failed", docErr);
         const errMsg = docErr instanceof Error ? docErr.message : String(docErr);
+        const errStack = docErr instanceof Error ? docErr.stack : undefined;
         console.log(`[422][L2072] resume-analyze: DOC/DOCX extraction threw — ext="${ext}" errMsg="${errMsg}"`);
-        res.status(422).json({ error: errMsg }); return;
+        console.log("[EXTRACT-ERROR] message:", errMsg); console.log("[EXTRACT-ERROR] stack:", errStack);
+        res.status(422).json({ error: errMsg, _debug: { ext, errMsg, errStack } }); return;
       }
     } else if (ext === ".txt") {
       resumeText = buffer.toString("utf-8");
