@@ -2017,6 +2017,13 @@ router.post(
       const errMsg = extractErr instanceof Error ? extractErr.message : String(extractErr);
       const errName = extractErr instanceof Error ? extractErr.constructor.name : typeof extractErr;
       console.log(`[422] resume-analyze-upload: extraction threw — extractStep="${extractStep}" errName="${errName}" errMsg="${errMsg}"`);
+      console.log("[REAL-422]", {
+        extractStep,
+        testMarker: "REAL_422_FOUND",
+        resumeTextLen: resumeText.length,
+        errName,
+        errMsg,
+      });
       req.log.error(
         { extractStep, ext, mime, bytes: buffer.byteLength, errName, errMsg, errStack: extractErr instanceof Error ? extractErr.stack : undefined },
         "[ANALYZE-UPLOAD] text extraction failed"
