@@ -222,17 +222,41 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
     }
   }
 
-  // antiword도 없음 — 실제로 찾은 경로 정보를 에러에 포함
-  const checkedPaths = ["/usr/bin/antiword", "/usr/local/bin/antiword", "/opt/homebrew/bin/antiword", "/nix/var/nix/profiles/default/bin/antiword"];
-  console.log(`[ANTIWORD] NOT FOUND — checked: which + ${JSON.stringify(checkedPaths)}`);
-  throw Object.assign(
-    new Error(
-      fmt === "ole2"
-        ? `DOC(OLE2) 추출 실패: antiword를 찾을 수 없습니다. 확인 경로: which antiword, ${checkedPaths.join(", ")}. DOCX 또는 PDF로 변환 후 업로드해 주세요.`
-        : `DOC 포맷 인식 불가(fmt=${fmt}): antiword를 찾을 수 없습니다. DOCX 또는 PDF로 변환 후 업로드해 주세요.`,
-    ),
-    { docFmt: fmt, antiwordFound: false, checkedPaths },
-  );
+  // findAntiword()가 null 반환 — 고정 경로 탐색 실패.
+  // PATH를 통해 직접 execFile("antiword", ...) 시도하여 실제 OS 오류를 반환한다.
+  // (execvp는 PATH를 사용하므로 nix 환경에서도 동작 가능)
+  console.log(`[ANTIWORD] findAntiword=null — trying execFile("antiword") via PATH`);
+  const tmpPathFallback = path.join(tmpdir(), `doc_${label}_fallback_${Date.now()}.doc`);
+  await writeFile(tmpPathFallback, buffer);
+  try {
+    const text = await new Promise<string>((resolve, reject) => {
+      execFile(
+        "antiword",
+        ["-w", "0", tmpPathFallback],
+        {
+          timeout: 30_000,
+          maxBuffer: 5 * 1024 * 1024,
+          env: { ...process.env, HOME: process.env.HOME ?? "/root" },
+        },
+        (err, stdout, stderr) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const e = err as any;
+          console.log(`[ANTIWORD-PATH] stdout.length=${stdout?.length ?? 0} stderr="${(stderr ?? "").slice(0, 300)}"`);
+          if (err) {
+            console.log(`[ANTIWORD-PATH] error: ${err.message} code=${e?.code}`);
+            const detail = stderr?.trim() || stdout?.trim() || err.message || "empty output";
+            return reject(new Error(`antiword(PATH) 실행 실패: ${detail} (code=${e?.code ?? "N/A"})`));
+          }
+          if (stdout?.trim()) resolve(stdout);
+          else reject(new Error(`antiword(PATH): stdout 비어있음 stderr="${(stderr ?? "").slice(0, 200)}"`));
+        },
+      );
+    });
+    console.log(`[ANTIWORD-PATH] OK textLen=${text.length}`);
+    return { text, method: "antiword(PATH)" };
+  } finally {
+    await unlink(tmpPathFallback).catch(() => {});
+  }
 }
 
 const resumeUpload = multer({
