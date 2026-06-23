@@ -156,6 +156,7 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
     console.log(`[DOC-EXTRACT][${label}] word-extractor: trim() falsy (len=${textLen} trimmedLen=${trimmedLen}) — NOT returning, falling through to antiword`);
   } catch (weErr) {
     const e = weErr instanceof Error ? weErr : new Error(String(weErr));
+    console.log("[WE-ERROR] word-extractor threw:"); console.log(weErr); console.log("[WE-ERROR] message:", e.message); console.log("[WE-ERROR] stack:", e.stack);
     console.log(`[DOC-EXTRACT][${label}] word-extractor THREW — name=${e.name} message="${e.message}" stack="${(e.stack ?? "").slice(0, 300)}" — falling through to antiword`);
   }
 
@@ -2012,6 +2013,7 @@ router.post(
         res.status(422).json({ error: `지원하지 않는 파일 형식 (${ext}). PDF, HWP, HWPX, DOCX, DOC, TXT를 사용해 주세요.` }); return;
       }
     } catch (extractErr) {
+      console.log("[EXTRACT-ERROR] raw error object:"); console.log(extractErr); console.log("[EXTRACT-ERROR] message:", extractErr instanceof Error ? extractErr.message : String(extractErr)); console.log("[EXTRACT-ERROR] stack:", extractErr instanceof Error ? extractErr.stack : "(no stack)");
       const errMsg = extractErr instanceof Error ? extractErr.message : String(extractErr);
       const errName = extractErr instanceof Error ? extractErr.constructor.name : typeof extractErr;
       console.log(`[422] resume-analyze-upload: extraction threw — extractStep="${extractStep}" errName="${errName}" errMsg="${errMsg}"`);
