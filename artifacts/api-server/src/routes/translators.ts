@@ -2023,7 +2023,7 @@ router.post(
       );
       res.status(422).json({
         error: errMsg,
-        _debug: { extractStep, ext, mime, bytes: buffer.byteLength, errName, errMsg, errStack: extractErr instanceof Error ? extractErr.stack : undefined },
+        _debug: { testMarker: "REAL_422_FOUND", extractStep, ext, mime, bytes: buffer.byteLength, errName, errMsg, errStack: extractErr instanceof Error ? extractErr.stack : undefined },
       }); return;
     }
 
