@@ -166,6 +166,7 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
 
   if (antiwordBin) {
     const tmpPath = path.join(tmpdir(), `doc_${label}_${Date.now()}.doc`);
+    console.log("[REAL-ANTIWORD]");
     // [ANTIWORD-REAL] VER=6 — 이 마커가 보이면 antiword 실행 분기에 진입한 것
     console.log(`[ANTIWORD-REAL] VER=6 bin=${antiwordBin} tmp=${tmpPath} ts=${Date.now()}`);
     console.log(`[ANTIWORD] exec ${antiwordBin} ${tmpPath}`);
@@ -1928,6 +1929,7 @@ router.post(
     });
   },
   async (req, res) => {
+    console.log("[REAL-HANDLER] entered");
     console.log("[ENTER] resume-analyze-upload");
     const file = req.file;
     if (!file) {
@@ -1963,6 +1965,7 @@ router.post(
         extractStep = ext === ".docx" ? "docx_parser_start" : "doc_parser_start";
         const docFmt = detectDocFormat(buffer);
         console.log(`[TRACE] resume-analyze-upload: docFmt=${docFmt} — calling extractDocText`);
+        console.log("[REAL-DOC]");
         const { text: docText, method: docMethod } = await extractDocText(buffer, "analyze-upload");
         resumeText = docText;
         extractStep = ext === ".docx" ? "docx_parser_done" : "doc_parser_done";

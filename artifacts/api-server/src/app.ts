@@ -42,6 +42,14 @@ app.get("/api/health", async (_req, res) => {
   res.json({ status: "ok", db: dbStatus });
 });
 
+// [PRE-ROUTER] 라우터 매칭 전 전역 인터셉터 — 이 로그가 보이지 않으면 요청이 Express에 도달하지 않은 것
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  if (req.originalUrl.includes("resume-analyze-upload")) {
+    console.log(`[PRE-ROUTER] ${req.method} ${req.originalUrl} ct="${(req.headers["content-type"] ?? "").slice(0, 80)}" ts=${Date.now()}`);
+  }
+  next();
+});
+
 app.use("/api", router);
 
 // /api 경로 중 어떤 라우터에도 매칭되지 않은 요청 — Express 기본 HTML 404 대신 항상 JSON으로 반환
