@@ -2030,7 +2030,10 @@ router.post(
     if (!resumeText.trim()) {
       console.log(`[422] resume-analyze-upload: empty text after extraction — ext="${ext}" extractStep="${extractStep}"`);
       req.log.warn({ ext, bytes: buffer.byteLength }, "[ANALYZE-UPLOAD] empty text after extraction");
-      res.status(422).json({ error: "이력서에서 텍스트를 추출할 수 없습니다. 이미지 기반 PDF이거나 빈 파일일 수 있습니다." }); return;
+      res.status(422).json({
+        error: "이력서에서 텍스트를 추출할 수 없습니다. 이미지 기반 PDF이거나 빈 파일일 수 있습니다.",
+        _debug: { extractStep, ext, mime, bytes: buffer.byteLength, resumeTextLen: resumeText.length },
+      }); return;
     }
     req.log.info({ textLen: resumeText.trim().length }, "[ANALYZE-UPLOAD] text OK → calling OpenAI");
 
