@@ -27,6 +27,12 @@ app.use(
     },
   }),
 );
+// [REQUEST-START] 모든 요청의 최상단 — 이 로그가 보이면 Express에 도달한 것
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  console.log(`[REQUEST-START] ${req.method} ${req.originalUrl} ts=${Date.now()}`);
+  next();
+});
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
