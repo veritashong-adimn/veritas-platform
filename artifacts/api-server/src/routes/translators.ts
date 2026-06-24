@@ -22,7 +22,7 @@ import OpenAI from "openai";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { execFile } from "node:child_process";
-import { writeFile, unlink, access, stat, constants as fsConstants } from "node:fs/promises";
+import { writeFile, readFile, unlink, access, stat, constants as fsConstants } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
 const _require = createRequire(import.meta.url);
@@ -44,21 +44,65 @@ const kordoc = _require("kordoc") as {
   }>;
 };
 
+async function extractWithPdftotext(buffer: Buffer): Promise<string> {
+  const tag = `pdf_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const tmpIn = path.join(tmpdir(), `${tag}.pdf`);
+  const tmpOut = path.join(tmpdir(), `${tag}.txt`);
+  try {
+    await writeFile(tmpIn, buffer);
+    const pdfTotextBin = await new Promise<string>((resolve, reject) => {
+      execFile("which", ["pdftotext"], (err, out) => {
+        if (err || !out.trim()) reject(new Error("pdftotext not found in PATH"));
+        else resolve(out.trim());
+      });
+    });
+    console.log(`[POPPLER-REAL] bin=${pdfTotextBin}`);
+    await new Promise<void>((resolve, reject) => {
+      execFile(pdfTotextBin, ["-enc", "UTF-8", tmpIn, tmpOut], (err) => {
+        if (err) reject(err); else resolve();
+      });
+    });
+    return await readFile(tmpOut, "utf-8");
+  } finally {
+    await Promise.all([unlink(tmpIn).catch(() => {}), unlink(tmpOut).catch(() => {})]);
+  }
+}
+
 async function extractPdfText(buffer: Buffer): Promise<string> {
-  console.log(`[PDF-EXTRACT] start — bytes=${buffer.byteLength}`);
+  // [PDF-REAL] VER=1 — 이 마커가 Railway Logs에 보이면 신규 PDF 코드 실행 중
+  console.log(`[PDF-REAL] VER=1 bytes=${buffer.byteLength} ts=${Date.now()}`);
+
+  // 경로 1: pdf-parse (PDFParse class)
+  console.log(`[PDF-PARSE] start — bytes=${buffer.byteLength}`);
   const parser = new PdfParseClass({ data: buffer });
+  let pdfParseErr: unknown;
   try {
     const result = await parser.getText();
-    console.log(`[PDF-EXTRACT] OK — textLen=${result.text?.length ?? 0} preview="${(result.text ?? "").slice(0, 100).replace(/\n/g, "\\n")}"`);
-    return result.text ?? "";
+    const text = result.text ?? "";
+    console.log(`[PDF-PARSE] OK — textLen=${text.length} preview="${text.slice(0, 100).replace(/\n/g, "\\n")}"`);
+    return text;
   } catch (err) {
+    pdfParseErr = err;
     const e = err instanceof Error ? err : new Error(String(err));
-    console.log(`[PDF-EXTRACT] FAILED`);
-    console.log(`[PDF-EXTRACT] err.message=${e.message}`);
-    console.log(`[PDF-EXTRACT] err.stack=${e.stack ?? "(no stack)"}`);
-    throw err;
+    console.log(`[PDF-PARSE] FAILED — ${e.message}`);
+    console.log(`[PDF-ERROR] pdf-parse threw: name=${e.name} msg=${e.message}`);
+    console.log(`[PDF-ERROR] stack=${e.stack ?? "(no stack)"}`);
   } finally {
     await parser.destroy().catch(() => {});
+  }
+
+  // 경로 2: pdftotext (Poppler) — pdf-parse 실패 시 fallback
+  console.log(`[POPPLER-REAL] fallback start — bytes=${buffer.byteLength}`);
+  try {
+    const text = await extractWithPdftotext(buffer);
+    console.log(`[POPPLER-REAL] OK — textLen=${text.length} preview="${text.slice(0, 100).replace(/\n/g, "\\n")}"`);
+    return text;
+  } catch (popErr) {
+    const e2 = popErr instanceof Error ? popErr : new Error(String(popErr));
+    console.log(`[POPPLER-REAL] FAILED — ${e2.message}`);
+    console.log(`[PDF-ERROR] pdftotext also threw: name=${e2.name} msg=${e2.message}`);
+    console.log(`[PDF-ERROR] stack=${e2.stack ?? "(no stack)"}`);
+    throw pdfParseErr; // 원본 에러를 상위로 던짐
   }
 }
 
