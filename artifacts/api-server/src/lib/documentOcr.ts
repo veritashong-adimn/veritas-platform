@@ -1,15 +1,6 @@
 // ─── 증빙서류(신분증/통장사본) OCR/AI 분석 공통 유틸 ──────────────────────────
 // Preview 전용 분석에서 사용. DB 저장은 이 파일에서 다루지 않음(라우트에서 처리).
 import type OpenAI from "openai";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — legacy build 타입 선언이 없음; 런타임 동작 정상
-import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
-import { createCanvas } from "@napi-rs/canvas";
-
-// Node.js 환경: legacy 빌드 + import.meta.resolve로 실제 worker 경로 지정
-pdfjsLib.GlobalWorkerOptions.workerSrc = import.meta.resolve(
-  "pdfjs-dist/legacy/build/pdf.worker.mjs",
-);
 
 export type DocType = "id_card" | "bankbook";
 
@@ -20,20 +11,47 @@ export function isOcrSupportedExt(ext: string): boolean {
   return (OCR_SUPPORTED_EXTS as readonly string[]).includes(ext.toLowerCase());
 }
 
-// PDF 첫 페이지를 PNG 버퍼로 렌더링 (pdfjs-dist + @napi-rs/canvas — 순수 JS, 시스템 바이너리 불필요)
+// OCR 패키지를 실제 사용 시점에만 동적 로드 — 서버 시작 시 로드하지 않음.
+// Node.js dynamic import는 첫 호출 후 모듈 캐시에 저장되므로 반복 호출 오버헤드 없음.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function loadOcrModules(): Promise<{ pdfjsLib: any; createCanvas: (w: number, h: number) => any }> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs") as any;
+  const { createCanvas } = await import("@napi-rs/canvas");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = import.meta.resolve(
+    "pdfjs-dist/legacy/build/pdf.worker.mjs",
+  );
+  return { pdfjsLib, createCanvas };
+}
+
+// PDF 첫 페이지를 PNG 버퍼로 렌더링 (pdfjs-dist + @napi-rs/canvas — lazy load)
 export async function renderPdfFirstPageAsPng(pdfBuffer: Buffer): Promise<Buffer> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let pdfjsLib: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let createCanvas: (w: number, h: number) => any;
+
+  try {
+    ({ pdfjsLib, createCanvas } = await loadOcrModules());
+    console.log("[OCR] pdfjs-dist + @napi-rs/canvas loaded OK");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[OCR] LOAD FAILED — ${msg}`);
+    throw new Error(`OCR 패키지 로드 실패: ${msg}`);
+  }
+
   console.log(`[PDFJS] load — bytes=${pdfBuffer.byteLength}`);
 
   const pdf = await pdfjsLib.getDocument({
     data: new Uint8Array(pdfBuffer),
-    useSystemFonts: true, // Node.js 환경에서 폰트 리소스 오류 방지
-    verbosity: 0,         // pdfjs 내부 경고 억제
+    useSystemFonts: true,
+    verbosity: 0,
   }).promise;
 
   console.log(`[PDFJS] page — numPages=${pdf.numPages}`);
 
   const page = await pdf.getPage(1);
-  const viewport = page.getViewport({ scale: 2.0 }); // ~144DPI — OCR 품질 충분
+  const viewport = page.getViewport({ scale: 2.0 });
   const w = Math.round(viewport.width);
   const h = Math.round(viewport.height);
 
@@ -42,17 +60,19 @@ export async function renderPdfFirstPageAsPng(pdfBuffer: Buffer): Promise<Buffer
   const canvas = createCanvas(w, h);
   const ctx = canvas.getContext("2d");
 
-  // pdfjs-dist CanvasFactory 구현 (@napi-rs/canvas API와 매핑)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const canvasFactory = {
     create(width: number, height: number) {
       const c = createCanvas(width, height);
       return { canvas: c, context: c.getContext("2d") };
     },
-    reset(cac: { canvas: ReturnType<typeof createCanvas> }, width: number, height: number) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    reset(cac: { canvas: any }, width: number, height: number) {
       cac.canvas.width = width;
       cac.canvas.height = height;
     },
-    destroy(cac: { canvas: ReturnType<typeof createCanvas> }) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    destroy(cac: { canvas: any }) {
       cac.canvas.width = 0;
       cac.canvas.height = 0;
     },
