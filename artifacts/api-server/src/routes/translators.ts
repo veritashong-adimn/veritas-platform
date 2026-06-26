@@ -1083,8 +1083,13 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
 
     // 이름 업데이트 (변경된 경우)
     const trimmedName = typeof name === "string" ? name.trim() : null;
+    req.log.info({ userId, nameFromReq: name, trimmedName, currentDbName: user.name, willUpdate: !!(trimmedName && trimmedName !== user.name) }, "[NAME-TRACE][PATCH] name received from client → before DB save");
     if (trimmedName && trimmedName !== user.name) {
       await db.update(usersTable).set({ name: trimmedName, updatedAt: new Date() }).where(eq(usersTable.id, userId));
+      const [savedUser] = await db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, userId));
+      req.log.info({ userId, savedName: savedUser?.name }, "[NAME-TRACE][PATCH] name after DB save (re-queried)");
+    } else {
+      req.log.info({ userId, reason: trimmedName ? "same as current" : "no name in request" }, "[NAME-TRACE][PATCH] name NOT updated");
     }
 
     const profileData = {
@@ -1566,12 +1571,18 @@ function normalizeSpecializationsString(raw: string | null | undefined): string 
 // AI 분석 결과 이름 정규화 — 한글 전용 이름에서 내부 공백 제거
 // "양 지 연" → "양지연", "Hong Gil Dong" → 유지, 혼합("홍 Gil") → 유지
 function normalizeExtractedName(raw: string | null): string | null {
-  if (!raw) return null;
+  if (!raw) {
+    console.log("[NAME-NORMALIZE] input=null → output=null");
+    return null;
+  }
   const trimmed = raw.trim();
   // 공백 제거 후 전체가 한글(가-힣)로만 구성된 경우에만 공백 제거
   if (/^[가-힣\s]+$/.test(trimmed) && /\s/.test(trimmed)) {
-    return trimmed.replace(/\s+/g, "");
+    const result = trimmed.replace(/\s+/g, "");
+    console.log(`[NAME-NORMALIZE] koreanOnly=true input="${raw}" trimmed="${trimmed}" output="${result}"`);
+    return result;
   }
+  console.log(`[NAME-NORMALIZE] koreanOnly=false input="${raw}" trimmed="${trimmed}" output="${trimmed}"`);
   return trimmed;
 }
 
@@ -1944,8 +1955,11 @@ function stripLangNamesFromBio(bio: string | null): string | null {
 
 function buildResumeDto(result: Record<string, unknown>) {
   const normalizedEducation = normalizeExtractedEducation((result.education as string) ?? null);
+  const aiRawName = (result.name as string) ?? null;
+  const normalizedName = normalizeExtractedName(aiRawName);
+  console.log(`[BUILD-RESUME-DTO] [NAME-TRACE] aiRaw="${aiRawName}" normalized="${normalizedName}"`);
   return {
-    name: normalizeExtractedName((result.name as string) ?? null),
+    name: normalizedName,
     phone: normalizePhoneNumber((result.phone as string) ?? null),
     email: (result.email as string) ?? null,
     address: (result.address as string) ?? null,
