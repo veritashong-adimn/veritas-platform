@@ -1563,6 +1563,18 @@ function normalizeSpecializationsString(raw: string | null | undefined): string 
   return normalized.join(", ");
 }
 
+// AI 분석 결과 이름 정규화 — 한글 전용 이름에서 내부 공백 제거
+// "양 지 연" → "양지연", "Hong Gil Dong" → 유지, 혼합("홍 Gil") → 유지
+function normalizeExtractedName(raw: string | null): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  // 공백 제거 후 전체가 한글(가-힣)로만 구성된 경우에만 공백 제거
+  if (/^[가-힣\s]+$/.test(trimmed) && /\s/.test(trimmed)) {
+    return trimmed.replace(/\s+/g, "");
+  }
+  return trimmed;
+}
+
 // 서버사이드 후처리 정규화 — AI가 지시를 따르지 않은 경우의 안전망
 function normalizeExtractedMajor(raw: string | null): string | null {
   if (!raw) return null;
@@ -1933,7 +1945,7 @@ function stripLangNamesFromBio(bio: string | null): string | null {
 function buildResumeDto(result: Record<string, unknown>) {
   const normalizedEducation = normalizeExtractedEducation((result.education as string) ?? null);
   return {
-    name: (result.name as string) ?? null,
+    name: normalizeExtractedName((result.name as string) ?? null),
     phone: normalizePhoneNumber((result.phone as string) ?? null),
     email: (result.email as string) ?? null,
     address: (result.address as string) ?? null,
