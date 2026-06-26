@@ -864,6 +864,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           permissions={permissions}
           onClose={() => setShowTranslatorCreateModal(false)}
           onCreated={(newT) => {
+            console.log("[onCreated]", {
+              profileWorkTypes: newT.profileWorkTypes,
+              profileSubTypes: newT.profileSubTypes,
+              workTypes: (newT as any).workTypes,
+              subTypes: (newT as any).subTypes,
+              full: newT,
+            });
             setTranslatorList(prev => [newT, ...prev]);
           }}
           onToast={setToast}
@@ -2390,7 +2397,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     </tr>
                   </thead>
                   <tbody>
-                    {translatorList.map(t => {
+                    {translatorList.map((t, _tIdx) => {
+                      if (_tIdx === 0) {
+                        console.log("[TranslatorRow][0]", {
+                          id: t.id, name: t.name,
+                          profileWorkTypes: t.profileWorkTypes,
+                          profileSubTypes: t.profileSubTypes,
+                          workTypes: (t as any).workTypes,
+                          subTypes: (t as any).subTypes,
+                        });
+                      }
                       const inactive = t.isActive === false;
                       const statusColor = inactive ? "#9ca3af" : t.availabilityStatus === "available" ? "#059669" : t.availabilityStatus === "busy" ? "#d97706" : "#dc2626";
                       const statusBg = inactive ? "#f3f4f6" : t.availabilityStatus === "available" ? "#f0fdf4" : t.availabilityStatus === "busy" ? "#fffbeb" : "#fef2f2";
