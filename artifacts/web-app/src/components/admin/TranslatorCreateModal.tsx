@@ -670,13 +670,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         }),
       });
       const data = await res.json();
-      console.log("[CREATE RESPONSE]", {
-        profileWorkTypes: data.profileWorkTypes,
-        profileSubTypes: data.profileSubTypes,
-        workTypes: data.workTypes,
-        subTypes: data.subTypes,
-        full: data,
-      });
       if (!res.ok) {
         if (res.status === 409) setErrors({ email: data.error });
         else onToast(`오류: ${data.error}`);
