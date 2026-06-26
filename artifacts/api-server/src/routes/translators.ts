@@ -514,7 +514,7 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
     const [newUser] = await db.insert(usersTable).values({
       email: email.trim(), password: null,
       name: normalizeExtractedName(name?.trim() || null), role: "translator",
-      isActive: false, inviteToken,
+      isActive: true, inviteToken,
     }).returning();
 
     const [profile] = await db.insert(translatorProfilesTable).values({
