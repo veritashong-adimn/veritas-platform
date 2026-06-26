@@ -546,6 +546,15 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
       translatorId: newUser.id, email: newUser.email, isPrimary: true,
     });
 
+    // 소속 회사명 조회 (설정된 경우에만)
+    const affiliatedCompanyName = profile.affiliatedCompanyId
+      ? (await db.select({ name: companiesTable.name })
+          .from(companiesTable)
+          .where(eq(companiesTable.id, profile.affiliatedCompanyId))
+          .limit(1))[0]?.name ?? null
+      : null;
+
+    // 목록 조회(GET /admin/translators)와 동일한 shape으로 응답
     res.status(201).json({
       id: newUser.id, email: newUser.email, name: newUser.name,
       isActive: newUser.isActive, inviteToken: newUser.inviteToken,
@@ -557,11 +566,22 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
       phone: profile.phone, region: profile.region,
       grade: profile.grade, rating: profile.rating,
       availabilityStatus: profile.availabilityStatus,
+      operationalStatus: profile.operationalStatus,
       bio: profile.bio,
       ratePerWord: profile.ratePerWord, ratePerPage: profile.ratePerPage,
       unitType: profile.unitType, unitPrice: profile.unitPrice,
       resumeUrl: profile.resumeUrl, portfolioUrl: profile.portfolioUrl,
       education: profile.education, major: profile.major, graduationYear: profile.graduationYear,
+      profileWorkTypes: profile.profileWorkTypes ?? null,
+      profileSubTypes: profile.profileSubTypes ?? null,
+      affiliatedCompanyId: profile.affiliatedCompanyId ?? null,
+      affiliatedCompanyName,
+      settlementType: profile.settlementType ?? null,
+      reassignmentAllowed: profile.reassignmentAllowed ?? true,
+      languageExperiences: profile.languageExperiences ?? null,
+      workTypes: [],   // 등록 직후 단가 없음 — 단가 추가 후 목록 새로고침 시 반영
+      subTypes: [],
+      residentNumber: null,
     });
   } catch (err) {
     req.log.error({ err }, "Translators: failed to create");
