@@ -758,6 +758,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     }
 
     setSaving(true);
+    // ④ PATCH payload로 보내는 name
+    console.log(`[NAME-TRACE][4] handleSave PATCH payload name="${form.name.trim() || "null"}" (form.name raw="${form.name}")`);
     try {
       const res = await fetch(api(`/api/admin/translators/${userId}`), {
         method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
@@ -2039,7 +2041,10 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             return buildRegionString(p.country, p.countryCustom, p.city);
           })();
 
-          setForm(prev => ({
+          setForm(prev => {
+            // ③ onApply 실행 전 prev.name vs AI result.name
+            console.log(`[NAME-TRACE][3] onApply DetailModal prevName="${prev.name}" resultName="${result.name ?? "null"}" willApplyName=${!!(result.name && !prev.name)}`);
+            return ({
             ...prev,
             // 사용자 입력값 우선 — 비어있을 때만 AI 값 적용
             ...(result.name && !prev.name ? { name: result.name } : {}),
@@ -2057,7 +2062,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             // 지역: region 우선, 없으면 address에서 파싱
             ...(normalizedRegion ? { region: normalizedRegion } : {}),
             ...(result.bio && !prev.bio ? { bio: result.bio } : {}),
-          }));
+          });});
           // 학력/전공 preset 외 값 → custom 모드 동기화
           if (result.education) {
             if (!EDUCATION_ALL.includes(result.education)) { setEduIsCustom(true); setEduCustom(result.education); }

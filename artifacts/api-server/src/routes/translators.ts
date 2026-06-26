@@ -1083,13 +1083,15 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
 
     // 이름 업데이트 — 한글 전용 이름은 내부 공백 제거 후 저장
     const normalizedName = normalizeExtractedName(typeof name === "string" ? name.trim() : null);
-    req.log.info({ userId, nameFromReq: name, normalizedName, currentDbName: user.name, willUpdate: !!(normalizedName && normalizedName !== user.name) }, "[NAME-TRACE][PATCH] name received from client → before DB save");
+    // ⑤ 서버 PATCH 수신 name  ⑥ normalize 후 DB 저장 직전
+    console.log(`[NAME-TRACE][5] PATCH received userId=${userId} nameFromReq="${name ?? "null"}" normalizedName="${normalizedName ?? "null"}" currentDbName="${user.name ?? "null"}" willUpdate=${!!(normalizedName && normalizedName !== user.name)}`);
     if (normalizedName && normalizedName !== user.name) {
       await db.update(usersTable).set({ name: normalizedName, updatedAt: new Date() }).where(eq(usersTable.id, userId));
       const [savedUser] = await db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, userId));
-      req.log.info({ userId, savedName: savedUser?.name }, "[NAME-TRACE][PATCH] name after DB save (re-queried)");
+      // ⑦ DB 저장 후 조회
+      console.log(`[NAME-TRACE][7] after DB save userId=${userId} savedName="${savedUser?.name ?? "null"}"`);
     } else {
-      req.log.info({ userId, reason: normalizedName ? "same as current" : "no name in request" }, "[NAME-TRACE][PATCH] name NOT updated");
+      console.log(`[NAME-TRACE][5b] name NOT updated userId=${userId} reason="${normalizedName ? "same as current" : "no name in request"}"`);
     }
 
     const profileData = {
@@ -1957,7 +1959,7 @@ function buildResumeDto(result: Record<string, unknown>) {
   const normalizedEducation = normalizeExtractedEducation((result.education as string) ?? null);
   const aiRawName = (result.name as string) ?? null;
   const normalizedName = normalizeExtractedName(aiRawName);
-  console.log(`[BUILD-RESUME-DTO] [NAME-TRACE] aiRaw="${aiRawName}" normalized="${normalizedName}"`);
+  console.log(`[NAME-TRACE][2] buildResumeDto aiRaw="${aiRawName}" afterNormalize="${normalizedName}"`);
   return {
     name: normalizedName,
     phone: normalizePhoneNumber((result.phone as string) ?? null),
@@ -2132,6 +2134,9 @@ router.post(
       try { result = JSON.parse(raw); } catch { result = {}; jsonParseFailed = true; }
       delete result.residentNumber; delete result.ssn; delete result.jumin;
 
+      // ① AI 원본 name (정규화 전)
+      console.log(`[NAME-TRACE][1] analyze-upload ext="${ext}" AI_RAW_NAME="${result.name ?? "null"}"`);
+
       const uploadDto = buildResumeDto(result);
       req.log.info({
         bioOriginal: (result.bio as string) ?? null,
@@ -2302,6 +2307,9 @@ router.post("/admin/translators/:id/resume-analyze", ...adminGuard, async (req, 
     delete result.residentNumber;
     delete result.ssn;
     delete result.jumin;
+
+    // ① AI 원본 name (정규화 전)
+    console.log(`[NAME-TRACE][1] resume-analyze userId=${userId} ext="${ext}" AI_RAW_NAME="${result.name ?? "null"}"`);
 
     let jsonParseFailed = false;
     // result was already parsed above; check if it was an empty fallback
