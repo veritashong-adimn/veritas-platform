@@ -76,6 +76,12 @@ const EDUCATION_OVERSEAS = [
 ];
 const EDUCATION_ALL = [...EDUCATION_DOMESTIC, ...EDUCATION_OVERSEAS];
 
+const EDUCATION_LABEL_MAP: Record<string, string> = {
+  "Macquarie University - Translation & Interpreting": "Macquarie University (통번역대학원)",
+  "Monterey Institute of International Studies": "Monterey Institute (통번역대학원)",
+};
+const getEducationLabel = (v: string) => EDUCATION_LABEL_MAP[v] ?? v;
+
 const isGraduateInterpreterEducation = (education: string) =>
   EDUCATION_ALL.includes(education) ||
   education.includes("통번역대학원") ||
@@ -1161,7 +1167,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             {(form.education || form.major || pinnedSubTypes.size > 0 || form.specializations || form.bio) && (
               <div style={{ width: "100%", display: "flex", gap: "4px 14px", flexWrap: "wrap", borderTop: "1px solid #bae6fd", paddingTop: 6, marginTop: 2, alignItems: "center" }}>
                 {form.education && (
-                  <span style={{ fontSize: 11, color: "#0369a1" }}>🎓 {form.education}</span>
+                  <span style={{ fontSize: 11, color: "#0369a1" }}>🎓 {getEducationLabel(form.education)}</span>
                 )}
                 {form.major && (
                   <span style={{ fontSize: 11, color: "#0369a1" }}>📚 {form.major}</span>
@@ -1283,7 +1289,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                         { value: "§국내§", label: "── 국내 ──", disabled: true },
                         ...EDUCATION_DOMESTIC.map(s => ({ value: s, label: s })),
                         { value: "§해외§", label: "── 해외 ──", disabled: true },
-                        ...EDUCATION_OVERSEAS.map(s => ({ value: s, label: s })),
+                        ...EDUCATION_OVERSEAS.map(s => ({ value: s, label: getEducationLabel(s) })),
                         { value: "__custom__", label: "기타(직접 입력)" },
                       ]}
                     />

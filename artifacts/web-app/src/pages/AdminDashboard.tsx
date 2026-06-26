@@ -57,6 +57,12 @@ const formatRegionDisplay = (region: string | null | undefined): string => {
   return region;
 };
 
+const EDUCATION_LABEL_MAP: Record<string, string> = {
+  "Macquarie University - Translation & Interpreting": "Macquarie University (통번역대학원)",
+  "Monterey Institute of International Studies": "Monterey Institute (통번역대학원)",
+};
+const getEducationLabel = (v: string | null | undefined) => (v && EDUCATION_LABEL_MAP[v]) ? EDUCATION_LABEL_MAP[v] : (v ?? "");
+
 const formatPhoneDisplay = (phone: string | null | undefined): string => {
   if (!phone) return "-";
   const d = phone.replace(/\D/g, "");
@@ -1088,8 +1094,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               {/* 휴대폰 */}
                               <td style={{ ...tdBase }}>{r.phone ? formatPhoneDisplay(r.phone) : <span style={{ color: "#d1d5db" }}>—</span>}</td>
                               {/* 학력 */}
-                              <td style={{ ...tdBase, color: r.education ? "#374151" : "#d1d5db" }} title={r.education || undefined}>
-                                {r.education || "—"}
+                              <td style={{ ...tdBase, color: r.education ? "#374151" : "#d1d5db" }} title={r.education ? getEducationLabel(r.education) : undefined}>
+                                {r.education ? getEducationLabel(r.education) : "—"}
                               </td>
                               {/* 가능언어 */}
                               <td style={{ ...tdBase }} title={r.languages || undefined}>
@@ -2425,7 +2431,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           {/* 학력 */}
                           <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
                             {t.education
-                              ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden", whiteSpace: "normal" }}>{t.education}</span>
+                              ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden", whiteSpace: "normal" }}>{getEducationLabel(t.education)}</span>
                               : <span style={{ color: "#d1d5db" }}>-</span>}
                           </td>
                           {/* 업무유형 — 프로필 우선, 없으면 단가 기반 */}

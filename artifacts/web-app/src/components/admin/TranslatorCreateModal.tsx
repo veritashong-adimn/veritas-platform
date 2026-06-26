@@ -40,6 +40,12 @@ const EDUCATION_OVERSEAS = [
 
 const EDUCATION_ALL = [...EDUCATION_DOMESTIC, ...EDUCATION_OVERSEAS];
 
+const EDUCATION_LABEL_MAP: Record<string, string> = {
+  "Macquarie University - Translation & Interpreting": "Macquarie University (통번역대학원)",
+  "Monterey Institute of International Studies": "Monterey Institute (통번역대학원)",
+};
+const getEducationLabel = (v: string) => EDUCATION_LABEL_MAP[v] ?? v;
+
 const isGraduateInterpreterEducation = (education: string) =>
   EDUCATION_ALL.includes(education) ||
   education.includes("통번역대학원") ||
@@ -855,7 +861,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                 options={[
                   { value: "", label: "선택 안 함" },
                   ...EDUCATION_DOMESTIC.map(s => ({ value: s, label: s })),
-                  ...EDUCATION_OVERSEAS.map(s => ({ value: s, label: s })),
+                  ...EDUCATION_OVERSEAS.map(s => ({ value: s, label: getEducationLabel(s) })),
                   { value: "__custom__", label: "기타(직접 입력)" },
                 ]}
               />
