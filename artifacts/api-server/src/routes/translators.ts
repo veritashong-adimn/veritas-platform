@@ -513,7 +513,7 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
     const inviteToken = generateInviteToken();
     const [newUser] = await db.insert(usersTable).values({
       email: email.trim(), password: null,
-      name: name?.trim() || null, role: "translator",
+      name: normalizeExtractedName(name?.trim() || null), role: "translator",
       isActive: false, inviteToken,
     }).returning();
 
@@ -891,7 +891,7 @@ router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) =>
       // name은 usersTable에 저장
       const [newUser] = await db.insert(usersTable).values({
         email, password: hashed, role: "translator", isActive,
-        name: row.name?.trim() || null,
+        name: normalizeExtractedName(row.name?.trim() || null),
       }).returning({ id: usersTable.id });
 
       // ── 프로필 구성 ──────────────────────────────────────────────────────
@@ -1081,15 +1081,15 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
     );
     if (!user) { res.status(404).json({ error: "번역사를 찾을 수 없습니다." }); return; }
 
-    // 이름 업데이트 (변경된 경우)
-    const trimmedName = typeof name === "string" ? name.trim() : null;
-    req.log.info({ userId, nameFromReq: name, trimmedName, currentDbName: user.name, willUpdate: !!(trimmedName && trimmedName !== user.name) }, "[NAME-TRACE][PATCH] name received from client → before DB save");
-    if (trimmedName && trimmedName !== user.name) {
-      await db.update(usersTable).set({ name: trimmedName, updatedAt: new Date() }).where(eq(usersTable.id, userId));
+    // 이름 업데이트 — 한글 전용 이름은 내부 공백 제거 후 저장
+    const normalizedName = normalizeExtractedName(typeof name === "string" ? name.trim() : null);
+    req.log.info({ userId, nameFromReq: name, normalizedName, currentDbName: user.name, willUpdate: !!(normalizedName && normalizedName !== user.name) }, "[NAME-TRACE][PATCH] name received from client → before DB save");
+    if (normalizedName && normalizedName !== user.name) {
+      await db.update(usersTable).set({ name: normalizedName, updatedAt: new Date() }).where(eq(usersTable.id, userId));
       const [savedUser] = await db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, userId));
       req.log.info({ userId, savedName: savedUser?.name }, "[NAME-TRACE][PATCH] name after DB save (re-queried)");
     } else {
-      req.log.info({ userId, reason: trimmedName ? "same as current" : "no name in request" }, "[NAME-TRACE][PATCH] name NOT updated");
+      req.log.info({ userId, reason: normalizedName ? "same as current" : "no name in request" }, "[NAME-TRACE][PATCH] name NOT updated");
     }
 
     const profileData = {
