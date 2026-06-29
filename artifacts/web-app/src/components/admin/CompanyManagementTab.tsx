@@ -362,7 +362,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                 </div>
               </div>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
                 {/* ── Card 1: AI 문서 자동입력 ── */}
                 {(() => {
@@ -469,7 +469,10 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                 <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
                   <div style={{ padding: "12px 18px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ width: 3, height: 20, background: "#6366f1", borderRadius: 2, display: "inline-block", flexShrink: 0 }} />
-                    <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>거래처 기본정보</p>
+                    <div>
+                      <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>거래처 기본정보</p>
+                      <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>기본 정보를 입력하거나 AI 분석 결과를 확인 후 수정할 수 있습니다</p>
+                    </div>
                   </div>
                   <div style={{ padding: "18px 18px", display: "flex", flexDirection: "column", gap: 18 }}>
 
@@ -478,7 +481,8 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                       <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>
                         거래처 유형 <span style={{ color: "#dc2626" }}>*</span>
                       </label>
-                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      {/* 타입 버튼 + 외주유형 드롭다운 (같은 행) */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                         {[
                           { v: "client",  label: "고객사",   icon: "🏢", color: "#1d4ed8", bg: "#dbeafe", border: "#3b82f6", ring: "#3b82f620" },
                           { v: "vendor",  label: "외주업체", icon: "🔧", color: "#6d28d9", bg: "#ede9fe", border: "#7c3aed", ring: "#7c3aed20" },
@@ -486,37 +490,38 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                           <button key={opt.v} type="button"
                             onClick={() => setCompanyForm(p => ({ ...p, companyType: opt.v, vendorType: "" }))}
                             style={{
-                              padding: "10px 26px", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer",
-                              transition: "all 0.15s",
+                              padding: "6px 18px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
+                              transition: "all 0.15s", lineHeight: "22px",
                               background: companyForm.companyType === opt.v ? opt.bg : "#f9fafb",
                               color: companyForm.companyType === opt.v ? opt.color : "#9ca3af",
-                              border: `2.5px solid ${companyForm.companyType === opt.v ? opt.border : "#e5e7eb"}`,
+                              border: `2px solid ${companyForm.companyType === opt.v ? opt.border : "#e5e7eb"}`,
                               boxShadow: companyForm.companyType === opt.v ? `0 0 0 3px ${opt.ring}` : "none",
                             }}>
                             {opt.icon} {opt.label}
                           </button>
                         ))}
-                      </div>
-                      {companyForm.companyType === "vendor" && (
-                        <div style={{ marginTop: 12, padding: "12px 14px", background: "#faf5ff", borderRadius: 10, border: "1px solid #e9d5ff" }}>
-                          <label style={{ fontSize: 13, fontWeight: 600, color: "#6d28d9", display: "block", marginBottom: 8 }}>외주유형</label>
-                          <ClickSelect
-                            value={companyForm.vendorType}
-                            onChange={v => { setCompanyForm(p => ({ ...p, vendorType: v })); if (v !== "etc") setVendorTypeCustom(""); }}
-                            triggerStyle={{ fontSize: 14, padding: "9px 12px", minWidth: 200, borderRadius: 8 }}
-                            chips={VENDOR_TYPE_CATEGORY_CHIPS}
-                            options={[{ value: "", label: "선택 안 함" }, ...VENDOR_TYPE_OPTIONS]}
-                          />
-                          {companyForm.vendorType === "etc" && (
-                            <input
-                              value={vendorTypeCustom}
-                              onChange={e => setVendorTypeCustom(e.target.value)}
-                              placeholder="기타 외주유형 직접 입력"
-                              aria-label="기타 외주유형 직접 입력"
-                              style={{ ...inputStyle, marginTop: 8, borderColor: "#ddd6fe", color: "#7c3aed" }}
+                        {companyForm.companyType === "vendor" && (
+                          <>
+                            <span style={{ fontSize: 12, color: "#9ca3af" }}>|</span>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: "#6d28d9", whiteSpace: "nowrap" }}>외주유형</span>
+                            <ClickSelect
+                              value={companyForm.vendorType}
+                              onChange={v => { setCompanyForm(p => ({ ...p, vendorType: v })); if (v !== "etc") setVendorTypeCustom(""); }}
+                              triggerStyle={{ fontSize: 13, padding: "6px 10px", minWidth: 160, borderRadius: 8, borderColor: "#ddd6fe" }}
+                              chips={VENDOR_TYPE_CATEGORY_CHIPS}
+                              options={[{ value: "", label: "선택 안 함" }, ...VENDOR_TYPE_OPTIONS]}
                             />
-                          )}
-                        </div>
+                          </>
+                        )}
+                      </div>
+                      {companyForm.companyType === "vendor" && companyForm.vendorType === "etc" && (
+                        <input
+                          value={vendorTypeCustom}
+                          onChange={e => setVendorTypeCustom(e.target.value)}
+                          placeholder="기타 외주유형 직접 입력"
+                          aria-label="기타 외주유형 직접 입력"
+                          style={{ ...inputStyle, marginTop: 8, borderColor: "#ddd6fe", color: "#7c3aed" }}
+                        />
                       )}
                     </div>
 
