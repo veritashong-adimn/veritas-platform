@@ -5,6 +5,7 @@ import { formatPhone } from "../../lib/utils";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { PrepaidLedgerModal } from "./PrepaidLedgerModal";
 import { DraggableModal } from "./DraggableModal";
+import { CompanyDocumentAnalyzePanel, type CompanyOcrDocType } from "./CompanyDocumentAnalyzePanel";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -62,6 +63,10 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [addingDiv, setAddingDiv] = useState(false);
   const [editDivId, setEditDivId] = useState<number | null>(null);
   const [editDivForm, setEditDivForm] = useState({ name: "", type: "" });
+  const [editLicenseFile, setEditLicenseFile] = useState<File | null>(null);
+  const [editBankbookFile, setEditBankbookFile] = useState<File | null>(null);
+  const [editOcrPanel, setEditOcrPanel] = useState<CompanyOcrDocType | null>(null);
+  const [editDragOverType, setEditDragOverType] = useState<CompanyOcrDocType | null>(null);
 
   const authH = { Authorization: `Bearer ${token}` };
 
@@ -151,6 +156,36 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       onRefresh?.();
       onToast("거래처 정보가 수정되었습니다.");
     } catch { onToast("오류: 수정 실패"); }
+  };
+
+  const handleEditLicenseOcrApply = (_fields: string[], values: Record<string, string>) => {
+    setEditForm(prev => {
+      const next = { ...prev };
+      if (values.name) next.name = values.name;
+      if (values.businessNumber) next.businessNumber = values.businessNumber;
+      if (values.representativeName) next.representativeName = values.representativeName;
+      if (values.registeredAt) next.registeredAt = values.registeredAt;
+      if (values.industry) next.industry = values.industry;
+      if (values.businessCategory) next.businessCategory = values.businessCategory;
+      if (values.address) next.address = values.address;
+      return next;
+    });
+    onToast("사업자등록증 정보가 수정 폼에 자동 반영되었습니다.");
+  };
+
+  const handleEditBankbookOcrApply = (_fields: string[], values: Record<string, string>) => {
+    const parts = [
+      values.bankName && `은행: ${values.bankName}`,
+      values.accountHolder && `예금주: ${values.accountHolder}`,
+      values.bankAccount && `계좌번호: ${values.bankAccount}`,
+    ].filter(Boolean).join(" / ");
+    if (parts) {
+      setEditForm(prev => ({
+        ...prev,
+        notes: prev.notes ? `${prev.notes}\n${parts}` : parts,
+      }));
+      onToast("통장사본 정보가 메모에 추가되었습니다.");
+    }
   };
 
   const validateContactForm = (f: typeof emptyContactForm) => {
@@ -342,6 +377,16 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
 
   return (
     <>
+    {editOcrPanel && (editOcrPanel === "business_license" ? editLicenseFile : editBankbookFile) && (
+      <CompanyDocumentAnalyzePanel
+        docType={editOcrPanel}
+        token={token}
+        file={(editOcrPanel === "business_license" ? editLicenseFile : editBankbookFile)!}
+        onClose={() => setEditOcrPanel(null)}
+        onApplied={editOcrPanel === "business_license" ? handleEditLicenseOcrApply : handleEditBankbookOcrApply}
+        onToast={onToast}
+      />
+    )}
     <DraggableModal title={`거래처 #${companyId} 상세`} onClose={onClose} width={800} height="88vh" zIndex={300} bodyPadding="20px 28px" resizable
       headerExtra={
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -487,6 +532,73 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
+                {/* AI 문서 자동입력 */}
+                {(() => {
+                  const ALLOWED_EXTS = [".jpg", ".jpeg", ".png", ".pdf"];
+                  const handleEditDocDrop = (dt: CompanyOcrDocType, rawFile: File) => {
+                    const ext = rawFile.name.slice(rawFile.name.lastIndexOf(".")).toLowerCase();
+                    if (!ALLOWED_EXTS.includes(ext)) { onToast("JPG, PNG, PDF 형식만 업로드할 수 있습니다."); return; }
+                    if (dt === "business_license") setEditLicenseFile(rawFile);
+                    else setEditBankbookFile(rawFile);
+                  };
+                  const docCards: { dt: CompanyOcrDocType; label: string; file: File | null; icon: string }[] = [
+                    { dt: "business_license", label: "사업자등록증", file: editLicenseFile, icon: "📄" },
+                    { dt: "bankbook", label: "통장사본", file: editBankbookFile, icon: "🏦" },
+                  ];
+                  return (
+                    <div style={{ background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10, padding: "12px 14px", marginBottom: 4 }}>
+                      <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#0369a1" }}>📎 AI 문서 자동입력 (선택)</p>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        {docCards.map(({ dt, label, file, icon }) => {
+                          const isDragOver = editDragOverType === dt;
+                          return (
+                            <div key={dt}
+                              onDragOver={e => { e.preventDefault(); e.stopPropagation(); setEditDragOverType(dt); }}
+                              onDragEnter={e => { e.preventDefault(); e.stopPropagation(); setEditDragOverType(dt); }}
+                              onDragLeave={e => { e.stopPropagation(); if (!e.currentTarget.contains(e.relatedTarget as Node)) setEditDragOverType(null); }}
+                              onDrop={e => { e.preventDefault(); e.stopPropagation(); setEditDragOverType(null); const f = e.dataTransfer.files[0]; if (f) handleEditDocDrop(dt, f); }}
+                              style={{
+                                border: `2px dashed ${isDragOver ? "#38bdf8" : "#bae6fd"}`,
+                                borderRadius: 8,
+                                padding: "10px 12px",
+                                background: isDragOver ? "#e0f2fe" : "#fff",
+                                transition: "all 0.15s",
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 6,
+                              }}
+                            >
+                              <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#0369a1" }}>{icon} {label}</p>
+                              {file ? (
+                                <p style={{ margin: 0, fontSize: 11, color: "#0284c7", wordBreak: "break-all" }}>
+                                  {isDragOver ? "파일을 놓으면 교체됩니다" : `✓ ${file.name}`}
+                                </p>
+                              ) : (
+                                <p style={{ margin: 0, fontSize: 11, color: "#94a3b8" }}>
+                                  {isDragOver ? "파일을 여기에 놓으세요" : "파일을 드래그하거나 아래에서 선택"}
+                                </p>
+                              )}
+                              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                                <input type="file" accept=".jpg,.jpeg,.png,.pdf" style={{ display: "none" }}
+                                  onChange={e => { const f = e.target.files?.[0]; if (f) handleEditDocDrop(dt, f); e.target.value = ""; }} />
+                                <span style={{ fontSize: 11, padding: "4px 10px", background: "#e0f2fe", color: "#0369a1", borderRadius: 6, fontWeight: 600, whiteSpace: "nowrap" }}>
+                                  파일 선택
+                                </span>
+                              </label>
+                              {file && (
+                                <button type="button"
+                                  onClick={() => setEditOcrPanel(dt)}
+                                  style={{ fontSize: 11, padding: "5px 10px", background: "#0284c7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, width: "100%", textAlign: "center" }}>
+                                  AI 분석
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
                 {/* 1행: 거래처명 */}
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>거래처명 <span style={{ color: "#dc2626" }}>*</span></label>
@@ -590,7 +702,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <PrimaryBtn onClick={handleSaveEdit} style={{ fontSize: 13, padding: "7px 16px" }}>저장</PrimaryBtn>
-                  <GhostBtn onClick={() => { setEditMode(false); setFormErrors({}); setNameChangeReason(""); }} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
+                  <GhostBtn onClick={() => { setEditMode(false); setFormErrors({}); setNameChangeReason(""); setEditLicenseFile(null); setEditBankbookFile(null); setEditOcrPanel(null); }} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
                 </div>
               </div>
             )}
