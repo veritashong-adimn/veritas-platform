@@ -218,7 +218,7 @@ export function ClickSelect({
 }) {
   const [open, setOpen] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(-1);
-  const [dropPos, setDropPos] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
+  const [dropPos, setDropPos] = useState<{ left: number; top?: number; bottom?: number; width: number; maxH: number } | null>(null);
   const [search, setSearch] = useState("");
   const [activeChip, setActiveChip] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
@@ -232,10 +232,14 @@ export function ClickSelect({
   const calcPos = useCallback(() => {
     if (!triggerRef.current) return;
     const r = triggerRef.current.getBoundingClientRect();
+    const MARGIN = 8;
+    const spaceBelow = window.innerHeight - r.bottom - MARGIN;
+    const spaceAbove = r.top - MARGIN;
+    const goUp = openUp || (!openUp && spaceBelow < 160 && spaceAbove > spaceBelow);
     setDropPos(
-      openUp
-        ? { left: r.left, bottom: window.innerHeight - r.top + 2, width: r.width }
-        : { left: r.left, top: r.bottom + 2, width: r.width }
+      goUp
+        ? { left: r.left, bottom: window.innerHeight - r.top + 2, width: r.width, maxH: Math.max(80, spaceAbove) }
+        : { left: r.left, top: r.bottom + 2, width: r.width, maxH: Math.max(80, spaceBelow) }
     );
   }, [openUp]);
 
@@ -329,6 +333,9 @@ export function ClickSelect({
         zIndex: 9500,
         padding: 0,
         overflow: "hidden",
+        maxHeight: dropPos.maxH,
+        display: "flex",
+        flexDirection: "column",
         ...(menuStyle ?? {}),
       }}
     >
@@ -359,7 +366,7 @@ export function ClickSelect({
           />
         </div>
       )}
-      <div ref={optionsListRef} style={{ overflowY: "auto", maxHeight: 220 }}>
+      <div ref={optionsListRef} style={{ overflowY: "auto", maxHeight: 220, flex: 1, minHeight: 0 }}>
         {filteredOpts.length === 0 ? (
           <div style={{ padding: "8px 12px", fontSize: 11, color: "#9ca3af" }}>검색 결과가 없습니다.</div>
         ) : filteredOpts.map((opt, idx) => {

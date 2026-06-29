@@ -15,39 +15,36 @@ import { TranslatorLangExpSection } from "./TranslatorLangExpSection";
 import { TranslatorEvidenceDocumentsSection } from "./TranslatorEvidenceDocumentsSection";
 
 // ── 학력 ────────────────────────────────────────────────────────────────
-const EDUCATION_DOMESTIC = [
-  "한국외국어대학교 통번역대학원",
-  "이화여자대학교 통역번역대학원",
-  "서울외국어대학원대학교 통번역대학원",
-  "중앙대학교 국제대학원",
-  "부산외국어대학교 통번역대학원",
-  "제주대학교 통번역대학원",
-  "선문대학교 통번역대학원",
-  "계명대학교 통번역대학원",
+const EDUCATION_DOMESTIC: { value: string; label: string }[] = [
+  { value: "한국외국어대학교 통번역대학원",      label: "한국외대 통번역대학원" },
+  { value: "서울외국어대학원대학교 통번역대학원", label: "서울외대 통번역대학원" },
+  { value: "이화여자대학교 통역번역대학원",       label: "이화여대 통번역대학원" },
+  { value: "중앙대학교 국제대학원",              label: "중앙대 국제대학원" },
+  { value: "부산외국어대학교 통번역대학원",       label: "부산외대 통번역대학원" },
+  { value: "제주대학교 통번역대학원",            label: "제주대 통번역대학원" },
+  { value: "선문대학교 통번역대학원",            label: "선문대 통번역대학원" },
+  { value: "계명대학교 통번역대학원",            label: "계명대 통번역대학원" },
 ];
-const EDUCATION_OVERSEAS = [
-  "Macquarie University - Translation & Interpreting",
-  "Middlebury Institute of International Studies at Monterey",
-  "Monterey Institute of International Studies",
-  "University of Bath",
-  "University of Westminster",
-  "University of Leeds",
-  "Université Paris Cité ESIT",
-  "Université Sorbonne Nouvelle ESIT",
-  "University of Geneva FTI",
-  "University of Ottawa",
+const EDUCATION_OVERSEAS: { value: string; label: string }[] = [
+  { value: "Middlebury Institute of International Studies at Monterey", label: "Monterey Institute (MIIS)" },
+  { value: "Macquarie University - Translation & Interpreting",         label: "Macquarie University" },
+  { value: "Université Paris Cité ESIT",                                label: "Université Paris Cité ESIT" },
+  { value: "University of Geneva FTI",                                  label: "University of Geneva FTI" },
+  { value: "University of Bath",                                        label: "University of Bath" },
+  { value: "University of Leeds",                                       label: "University of Leeds" },
+  { value: "University of Westminster",                                 label: "University of Westminster" },
 ];
 
-const EDUCATION_ALL = [...EDUCATION_DOMESTIC, ...EDUCATION_OVERSEAS];
+const EDUCATION_ALL_VALUES = [...EDUCATION_DOMESTIC, ...EDUCATION_OVERSEAS].map(e => e.value);
 
-const EDUCATION_LABEL_MAP: Record<string, string> = {
-  "Macquarie University - Translation & Interpreting": "Macquarie University (통번역대학원)",
-  "Monterey Institute of International Studies": "Monterey Institute (통번역대학원)",
-};
+const EDUCATION_LABEL_MAP: Record<string, string> = Object.fromEntries(
+  [...EDUCATION_DOMESTIC, ...EDUCATION_OVERSEAS].map(e => [e.value, e.label])
+);
 const getEducationLabel = (v: string) => EDUCATION_LABEL_MAP[v] ?? v;
 
 const isGraduateInterpreterEducation = (education: string) =>
-  EDUCATION_ALL.includes(education) ||
+  EDUCATION_DOMESTIC.some(e => e.value === education) ||
+  EDUCATION_OVERSEAS.some(e => e.value === education) ||
   education.includes("통번역대학원") ||
   education.includes("통역번역대학원");
 
@@ -576,7 +573,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       ...(result.bio && !prev.bio ? { bio: result.bio } : {}),
     }));
     if (result.education) {
-      if (!EDUCATION_ALL.includes(result.education)) { setEduIsCustom(true); setEduCustom(result.education); }
+      if (!EDUCATION_ALL_VALUES.includes(result.education)) { setEduIsCustom(true); setEduCustom(result.education); }
       else { setEduIsCustom(false); setEduCustom(""); }
     }
     if (result.major) {
@@ -860,8 +857,10 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                 triggerStyle={{ width: "100%", fontSize: 13, padding: "9px 12px", borderRadius: 8, textAlign: "left" }}
                 options={[
                   { value: "", label: "선택 안 함" },
-                  ...EDUCATION_DOMESTIC.map(s => ({ value: s, label: s })),
-                  ...EDUCATION_OVERSEAS.map(s => ({ value: s, label: getEducationLabel(s) })),
+                  { value: "§국내§", label: "── 국내 ──", disabled: true },
+                  ...EDUCATION_DOMESTIC.map(e => ({ value: e.value, label: e.label })),
+                  { value: "§해외§", label: "── 해외 ──", disabled: true },
+                  ...EDUCATION_OVERSEAS.map(e => ({ value: e.value, label: e.label })),
                   { value: "__custom__", label: "기타(직접 입력)" },
                 ]}
               />

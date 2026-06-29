@@ -58,8 +58,17 @@ const formatRegionDisplay = (region: string | null | undefined): string => {
 };
 
 const EDUCATION_LABEL_MAP: Record<string, string> = {
-  "Macquarie University - Translation & Interpreting": "Macquarie University (통번역대학원)",
-  "Monterey Institute of International Studies": "Monterey Institute (통번역대학원)",
+  "한국외국어대학교 통번역대학원":      "한국외대 통번역대학원",
+  "서울외국어대학원대학교 통번역대학원": "서울외대 통번역대학원",
+  "이화여자대학교 통역번역대학원":       "이화여대 통번역대학원",
+  "중앙대학교 국제대학원":              "중앙대 국제대학원",
+  "부산외국어대학교 통번역대학원":       "부산외대 통번역대학원",
+  "제주대학교 통번역대학원":            "제주대 통번역대학원",
+  "선문대학교 통번역대학원":            "선문대 통번역대학원",
+  "계명대학교 통번역대학원":            "계명대 통번역대학원",
+  "Middlebury Institute of International Studies at Monterey": "Monterey Institute (MIIS)",
+  "Monterey Institute of International Studies":               "Monterey Institute (MIIS)",
+  "Macquarie University - Translation & Interpreting":         "Macquarie University",
 };
 const getEducationLabel = (v: string | null | undefined) => (v && EDUCATION_LABEL_MAP[v]) ? EDUCATION_LABEL_MAP[v] : (v ?? "");
 
