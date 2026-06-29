@@ -250,7 +250,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
         ) : undefined
       }>
         {showCompanyForm && (
-          <Card style={{ marginBottom: 16, padding: "16px 20px" }}>
+          <Card style={{ marginBottom: 16, padding: "20px 20px", background: "#f8fafc" }}>
             {createdCompanyId !== null ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                 {/* 완료 배너 */}
@@ -362,10 +362,9 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                 </div>
               </div>
             ) : (
-              <>
-                <p style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#111827" }}>새 거래처 등록</p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
 
-                {/* AI 문서 자동입력 */}
+                {/* ── Card 1: AI 문서 자동입력 ── */}
                 {(() => {
                   const ALLOWED_EXTS = [".jpg", ".jpeg", ".png", ".pdf"];
                   const handleDocDrop = (dt: CompanyOcrDocType, rawFile: File) => {
@@ -378,231 +377,249 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                     else setBankbookFile(rawFile);
                   };
                   return (
-                    <div style={{ marginBottom: 14, padding: "12px 14px", background: "#f0f9ff", borderRadius: 10, border: "1px solid #bae6fd" }}>
-                      <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#0369a1" }}>✨ AI 문서 자동입력</p>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                        {(["business_license", "bankbook"] as const).map(dt => {
-                          const isLicense = dt === "business_license";
-                          const file = isLicense ? licenseFile : bankbookFile;
-                          const setFile = isLicense ? setLicenseFile : setBankbookFile;
-                          const icon = isLicense ? "📄" : "🏦";
-                          const label = isLicense ? "사업자등록증" : "통장사본";
-                          const desc = isLicense
-                            ? "거래처명 · 사업자번호 · 대표자 · 업태 · 주소 자동 추출"
-                            : "은행명 · 예금주 · 계좌번호 추출 → 메모 반영";
-                          const isDragging = dragOverType === dt;
-                          return (
-                            <div
-                              key={dt}
-                              onDragOver={e => { e.preventDefault(); setDragOverType(dt); }}
-                              onDragEnter={e => { e.preventDefault(); setDragOverType(dt); }}
-                              onDragLeave={e => {
-                                if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverType(null);
-                              }}
-                              onDrop={e => {
-                                e.preventDefault();
-                                setDragOverType(null);
-                                const dropped = e.dataTransfer.files?.[0];
-                                if (dropped) handleDocDrop(dt, dropped);
-                              }}
-                              style={{
-                                background: isDragging ? "#e0f2fe" : "#fff",
-                                borderRadius: 8,
-                                border: isDragging ? "2px dashed #0284c7" : "1px solid #e0f2fe",
-                                padding: "10px 12px",
-                                transition: "border-color 0.15s, background 0.15s",
-                              }}
-                            >
-                              <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 700, color: isDragging ? "#0284c7" : "#0369a1" }}>{icon} {label}</p>
-                              <p style={{ margin: "0 0 8px", fontSize: 11, color: "#6b7280" }}>{desc}</p>
-
-                              {/* 드롭존 힌트 (파일 없을 때) */}
-                              {!file && (
-                                <div style={{
-                                  marginBottom: 8, padding: "10px", borderRadius: 6,
-                                  border: `1.5px dashed ${isDragging ? "#0284c7" : "#93c5fd"}`,
-                                  background: isDragging ? "#bae6fd" : "#f0f9ff",
-                                  textAlign: "center",
-                                  transition: "all 0.15s",
-                                }}>
-                                  <p style={{ margin: 0, fontSize: 11, color: isDragging ? "#0369a1" : "#7dd3fc", fontWeight: isDragging ? 700 : 400 }}>
-                                    {isDragging ? "여기에 파일을 놓으세요" : "파일을 여기에 드래그하거나"}
-                                  </p>
-                                  {!isDragging && <p style={{ margin: "2px 0 0", fontSize: 10, color: "#93c5fd" }}>PDF · JPG · PNG (최대 10 MB)</p>}
+                    <div style={{ background: "#fff", border: "1px solid #bae6fd", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 4px rgba(14,165,233,0.08)" }}>
+                      <div style={{ background: "#f0f9ff", padding: "12px 18px", borderBottom: "1px solid #bae6fd", display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 20 }}>✨</span>
+                        <div>
+                          <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#0369a1" }}>AI 문서 자동입력</p>
+                          <p style={{ margin: "2px 0 0", fontSize: 12, color: "#0284c7" }}>사업자등록증·통장사본 업로드 시 기본정보 자동 추출</p>
+                        </div>
+                      </div>
+                      <div style={{ padding: "14px 18px" }}>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                          {(["business_license", "bankbook"] as const).map(dt => {
+                            const isLicense = dt === "business_license";
+                            const file = isLicense ? licenseFile : bankbookFile;
+                            const setFile = isLicense ? setLicenseFile : setBankbookFile;
+                            const icon = isLicense ? "📄" : "🏦";
+                            const label = isLicense ? "사업자등록증" : "통장사본";
+                            const desc = isLicense
+                              ? "거래처명 · 사업자번호 · 대표자 · 업태 · 주소 자동 추출"
+                              : "은행명 · 예금주 · 계좌번호 추출 → 메모 반영";
+                            const isDragging = dragOverType === dt;
+                            return (
+                              <div
+                                key={dt}
+                                onDragOver={e => { e.preventDefault(); setDragOverType(dt); }}
+                                onDragEnter={e => { e.preventDefault(); setDragOverType(dt); }}
+                                onDragLeave={e => {
+                                  if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverType(null);
+                                }}
+                                onDrop={e => {
+                                  e.preventDefault();
+                                  setDragOverType(null);
+                                  const dropped = e.dataTransfer.files?.[0];
+                                  if (dropped) handleDocDrop(dt, dropped);
+                                }}
+                                style={{
+                                  background: isDragging ? "#e0f2fe" : "#f8fafc",
+                                  borderRadius: 10,
+                                  border: isDragging ? "2px dashed #0284c7" : "1.5px solid #e0f2fe",
+                                  padding: "12px 14px",
+                                  transition: "border-color 0.15s, background 0.15s",
+                                }}
+                              >
+                                <p style={{ margin: "0 0 4px", fontSize: 13, fontWeight: 700, color: isDragging ? "#0284c7" : "#0369a1" }}>{icon} {label}</p>
+                                <p style={{ margin: "0 0 10px", fontSize: 11, color: "#6b7280" }}>{desc}</p>
+                                {!file && (
+                                  <div style={{ marginBottom: 10, padding: "12px", borderRadius: 8, border: `1.5px dashed ${isDragging ? "#0284c7" : "#93c5fd"}`, background: isDragging ? "#bae6fd" : "#f0f9ff", textAlign: "center", transition: "all 0.15s" }}>
+                                    <p style={{ margin: 0, fontSize: 11, color: isDragging ? "#0369a1" : "#7dd3fc", fontWeight: isDragging ? 700 : 400 }}>
+                                      {isDragging ? "여기에 파일을 놓으세요" : "파일을 여기에 드래그하거나"}
+                                    </p>
+                                    {!isDragging && <p style={{ margin: "2px 0 0", fontSize: 10, color: "#93c5fd" }}>PDF · JPG · PNG (최대 10 MB)</p>}
+                                  </div>
+                                )}
+                                {file && (
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, padding: "6px 10px", background: isDragging ? "#bae6fd" : "#f0fdf4", borderRadius: 8, border: `1px solid ${isDragging ? "#7dd3fc" : "#bbf7d0"}` }}>
+                                    <span style={{ fontSize: 11, color: isDragging ? "#0369a1" : "#065f46", fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                      {isDragging ? "파일을 놓으면 교체됩니다" : file.name}
+                                    </span>
+                                    {!isDragging && (
+                                      <button type="button" onClick={() => setFile(null)} aria-label={`${label} 제거`}
+                                        style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, border: "1px solid #fca5a5", background: "#fff", color: "#dc2626", cursor: "pointer", whiteSpace: "nowrap" }}>
+                                        제거
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                                <div style={{ display: "flex", gap: 6 }}>
+                                  <label style={{ fontSize: 11, padding: "5px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151", whiteSpace: "nowrap" }}
+                                    aria-label={`${label} ${file ? "교체" : "파일 선택"}`}>
+                                    {file ? "교체" : "파일 선택"}
+                                    <input type="file" accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
+                                      style={{ display: "none" }} data-testid={`input-company-doc-${dt}`}
+                                      onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) handleDocDrop(dt, f); }} />
+                                  </label>
+                                  <button type="button" disabled={!file} onClick={() => setOcrPanel(dt)} aria-label={`${label} AI 분석`}
+                                    data-testid={`btn-company-ocr-${dt}`}
+                                    style={{ fontSize: 11, padding: "5px 10px", borderRadius: 6, border: "1px solid #0284c7", background: file ? "#0284c7" : "#e5e7eb", color: file ? "#fff" : "#9ca3af", cursor: file ? "pointer" : "not-allowed", fontWeight: 600, whiteSpace: "nowrap" }}>
+                                    ✨ AI 분석
+                                  </button>
                                 </div>
-                              )}
-
-                              {/* 선택된 파일 표시 */}
-                              {file && (
-                                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, padding: "5px 8px", background: isDragging ? "#bae6fd" : "#f0fdf4", borderRadius: 6, border: `1px solid ${isDragging ? "#7dd3fc" : "#bbf7d0"}` }}>
-                                  <span style={{ fontSize: 11, color: isDragging ? "#0369a1" : "#065f46", fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    {isDragging ? "파일을 놓으면 교체됩니다" : file.name}
-                                  </span>
-                                  {!isDragging && (
-                                    <button type="button" onClick={() => setFile(null)} aria-label={`${label} 제거`}
-                                      style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, border: "1px solid #fca5a5", background: "#fff", color: "#dc2626", cursor: "pointer", whiteSpace: "nowrap" }}>
-                                      제거
-                                    </button>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* 버튼 행 */}
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <label style={{ fontSize: 11, padding: "5px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151", whiteSpace: "nowrap" }}
-                                  aria-label={`${label} ${file ? "교체" : "파일 선택"}`}>
-                                  {file ? "교체" : "파일 선택"}
-                                  <input
-                                    type="file"
-                                    accept=".jpg,.jpeg,.png,.pdf,image/jpeg,image/png,application/pdf"
-                                    style={{ display: "none" }}
-                                    data-testid={`input-company-doc-${dt}`}
-                                    onChange={e => {
-                                      const f = e.target.files?.[0];
-                                      e.target.value = "";
-                                      if (f) handleDocDrop(dt, f);
-                                    }}
-                                  />
-                                </label>
-                                <button type="button" disabled={!file} onClick={() => setOcrPanel(dt)} aria-label={`${label} AI 분석`}
-                                  data-testid={`btn-company-ocr-${dt}`}
-                                  style={{ fontSize: 11, padding: "5px 10px", borderRadius: 6, border: "1px solid #0284c7", background: file ? "#0284c7" : "#e5e7eb", color: file ? "#fff" : "#9ca3af", cursor: file ? "pointer" : "not-allowed", fontWeight: 600, whiteSpace: "nowrap" }}>
-                                  ✨ AI 분석
-                                </button>
                               </div>
-                            </div>
-                          );
-                        })}
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
                   );
                 })()}
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {/* 0행: 거래처 유형 */}
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 6 }}>거래처 유형 <span style={{ color: "#dc2626" }}>*</span></label>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                      {[{ v: "client", label: "고객사", color: "#1d4ed8", bg: "#eff6ff", border: "#93c5fd" }, { v: "vendor", label: "외주업체", color: "#7c3aed", bg: "#f5f3ff", border: "#c4b5fd" }].map(opt => (
-                        <button key={opt.v} type="button" onClick={() => setCompanyForm(p => ({ ...p, companyType: opt.v, vendorType: "" }))}
-                          style={{ padding: "7px 18px", borderRadius: 20, fontSize: 13, fontWeight: 700, cursor: "pointer", transition: "all 0.12s",
-                            background: companyForm.companyType === opt.v ? opt.bg : "#f9fafb",
-                            color: companyForm.companyType === opt.v ? opt.color : "#6b7280",
-                            border: `2px solid ${companyForm.companyType === opt.v ? opt.border : "#e5e7eb"}`,
-                          }}>
-                          {opt.label}
-                        </button>
-                      ))}
+                {/* ── Card 2: 거래처 기본정보 ── */}
+                <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
+                  <div style={{ padding: "12px 18px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ width: 3, height: 20, background: "#6366f1", borderRadius: 2, display: "inline-block", flexShrink: 0 }} />
+                    <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>거래처 기본정보</p>
+                  </div>
+                  <div style={{ padding: "18px 18px", display: "flex", flexDirection: "column", gap: 18 }}>
+
+                    {/* 거래처 유형 */}
+                    <div>
+                      <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>
+                        거래처 유형 <span style={{ color: "#dc2626" }}>*</span>
+                      </label>
+                      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                        {[
+                          { v: "client",  label: "고객사",   icon: "🏢", color: "#1d4ed8", bg: "#dbeafe", border: "#3b82f6", ring: "#3b82f620" },
+                          { v: "vendor",  label: "외주업체", icon: "🔧", color: "#6d28d9", bg: "#ede9fe", border: "#7c3aed", ring: "#7c3aed20" },
+                        ].map(opt => (
+                          <button key={opt.v} type="button"
+                            onClick={() => setCompanyForm(p => ({ ...p, companyType: opt.v, vendorType: "" }))}
+                            style={{
+                              padding: "10px 26px", borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: "pointer",
+                              transition: "all 0.15s",
+                              background: companyForm.companyType === opt.v ? opt.bg : "#f9fafb",
+                              color: companyForm.companyType === opt.v ? opt.color : "#9ca3af",
+                              border: `2.5px solid ${companyForm.companyType === opt.v ? opt.border : "#e5e7eb"}`,
+                              boxShadow: companyForm.companyType === opt.v ? `0 0 0 3px ${opt.ring}` : "none",
+                            }}>
+                            {opt.icon} {opt.label}
+                          </button>
+                        ))}
+                      </div>
                       {companyForm.companyType === "vendor" && (
-                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                            <span style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>외주 유형:</span>
-                            <ClickSelect
-                              value={companyForm.vendorType}
-                              onChange={v => { setCompanyForm(p => ({ ...p, vendorType: v })); if (v !== "etc") setVendorTypeCustom(""); }}
-                              triggerStyle={{ fontSize: 13, padding: "6px 10px", minWidth: 140 }}
-                              chips={VENDOR_TYPE_CATEGORY_CHIPS}
-                              options={[
-                                { value: "", label: "선택 안 함" },
-                                ...VENDOR_TYPE_OPTIONS,
-                              ]}
-                            />
-                          </div>
+                        <div style={{ marginTop: 12, padding: "12px 14px", background: "#faf5ff", borderRadius: 10, border: "1px solid #e9d5ff" }}>
+                          <label style={{ fontSize: 13, fontWeight: 600, color: "#6d28d9", display: "block", marginBottom: 8 }}>외주유형</label>
+                          <ClickSelect
+                            value={companyForm.vendorType}
+                            onChange={v => { setCompanyForm(p => ({ ...p, vendorType: v })); if (v !== "etc") setVendorTypeCustom(""); }}
+                            triggerStyle={{ fontSize: 14, padding: "9px 12px", minWidth: 200, borderRadius: 8 }}
+                            chips={VENDOR_TYPE_CATEGORY_CHIPS}
+                            options={[{ value: "", label: "선택 안 함" }, ...VENDOR_TYPE_OPTIONS]}
+                          />
                           {companyForm.vendorType === "etc" && (
                             <input
                               value={vendorTypeCustom}
                               onChange={e => setVendorTypeCustom(e.target.value)}
                               placeholder="기타 외주유형 직접 입력"
                               aria-label="기타 외주유형 직접 입력"
-                              style={{ fontSize: 12, padding: "5px 10px", borderRadius: 7, border: "1px solid #ddd6fe", outline: "none", width: 220, color: "#7c3aed" }}
+                              style={{ ...inputStyle, marginTop: 8, borderColor: "#ddd6fe", color: "#7c3aed" }}
                             />
                           )}
                         </div>
                       )}
                     </div>
-                  </div>
-                  {/* 1행: 거래처명 */}
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>거래처명 <span style={{ color: "#dc2626" }}>*</span></label>
-                    <input value={companyForm.name} onChange={e => setCompanyForm(p => ({ ...p, name: e.target.value }))}
-                      placeholder="(주)아크로네이처" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    {companyForm.name.trim().length >= 2 && (() => {
-                      const q = companyForm.name.trim().toLowerCase();
-                      const dupes = companies.filter(c =>
-                        c.name.toLowerCase().includes(q) ||
-                        (c.divisionNames ?? []).some(d => d.toLowerCase().includes(q))
-                      ).slice(0, 3);
-                      if (dupes.length === 0) return null;
-                      return (
-                        <div style={{ marginTop: 6, padding: "8px 12px", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8 }}>
-                          <p style={{ margin: "0 0 5px", fontSize: 11, fontWeight: 700, color: "#92400e" }}>⚠ 유사 거래처가 이미 등록되어 있습니다</p>
-                          {dupes.map(c => {
-                            const matchedDiv = (c.divisionNames ?? []).find(d => d.toLowerCase().includes(q));
-                            return (
-                              <div key={c.id} style={{ fontSize: 12, color: "#78350f", marginTop: 2 }}>
-                                <button type="button" onClick={() => setCompanyModal(c.id)}
-                                  style={{ background: "none", border: "none", cursor: "pointer", color: "#b45309", fontWeight: 700, padding: 0, textDecoration: "underline", fontSize: 12 }}>
-                                  {c.name}{matchedDiv ? `(${matchedDiv})` : ""}
-                                </button>
-                                <span style={{ color: "#92400e", marginLeft: 6 }}>→ 클릭하면 상세보기</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                  {/* 2행: 사업자등록번호 / 대표자명 / 등록일 */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+
+                    {/* 거래처명 */}
                     <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>사업자등록번호</label>
-                      <input value={companyForm.businessNumber} onChange={e => setCompanyForm(p => ({ ...p, businessNumber: e.target.value }))}
-                        placeholder="000-00-00000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                      <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>
+                        거래처명 <span style={{ color: "#dc2626" }}>*</span>
+                      </label>
+                      <input value={companyForm.name} onChange={e => setCompanyForm(p => ({ ...p, name: e.target.value }))}
+                        placeholder="(주)아크로네이처" style={inputStyle} />
+                      {companyForm.name.trim().length >= 2 && (() => {
+                        const q = companyForm.name.trim().toLowerCase();
+                        const dupes = companies.filter(c =>
+                          c.name.toLowerCase().includes(q) ||
+                          (c.divisionNames ?? []).some(d => d.toLowerCase().includes(q))
+                        ).slice(0, 3);
+                        if (dupes.length === 0) return null;
+                        return (
+                          <div style={{ marginTop: 6, padding: "8px 12px", background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8 }}>
+                            <p style={{ margin: "0 0 5px", fontSize: 11, fontWeight: 700, color: "#92400e" }}>⚠ 유사 거래처가 이미 등록되어 있습니다</p>
+                            {dupes.map(c => {
+                              const matchedDiv = (c.divisionNames ?? []).find(d => d.toLowerCase().includes(q));
+                              return (
+                                <div key={c.id} style={{ fontSize: 12, color: "#78350f", marginTop: 2 }}>
+                                  <button type="button" onClick={() => setCompanyModal(c.id)}
+                                    style={{ background: "none", border: "none", cursor: "pointer", color: "#b45309", fontWeight: 700, padding: 0, textDecoration: "underline", fontSize: 12 }}>
+                                    {c.name}{matchedDiv ? `(${matchedDiv})` : ""}
+                                  </button>
+                                  <span style={{ color: "#92400e", marginLeft: 6 }}>→ 클릭하면 상세보기</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
                     </div>
+
+                    {/* 사업자등록번호 / 대표자명 / 등록일 */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 14px" }}>
+                      <div>
+                        <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>사업자등록번호</label>
+                        <input value={companyForm.businessNumber} onChange={e => setCompanyForm(p => ({ ...p, businessNumber: e.target.value }))}
+                          placeholder="000-00-00000" style={inputStyle} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>대표자명</label>
+                        <input value={companyForm.representativeName} onChange={e => setCompanyForm(p => ({ ...p, representativeName: e.target.value }))}
+                          placeholder="홍길동" style={inputStyle} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>등록일</label>
+                        <input type="date" value={companyForm.registeredAt} onChange={e => setCompanyForm(p => ({ ...p, registeredAt: e.target.value }))}
+                          style={inputStyle} />
+                      </div>
+                    </div>
+
+                    {/* 업태 / 종목 */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 14px" }}>
+                      <div>
+                        <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>업태</label>
+                        <input value={companyForm.industry} onChange={e => setCompanyForm(p => ({ ...p, industry: e.target.value }))}
+                          placeholder="제조업, 서비스업 등" style={inputStyle} />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>종목</label>
+                        <input value={companyForm.businessCategory} onChange={e => setCompanyForm(p => ({ ...p, businessCategory: e.target.value }))}
+                          placeholder="통역, 번역, 소프트웨어 등" style={inputStyle} />
+                      </div>
+                    </div>
+
+                    {/* 주소 */}
                     <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대표자명</label>
-                      <input value={companyForm.representativeName} onChange={e => setCompanyForm(p => ({ ...p, representativeName: e.target.value }))}
-                        placeholder="홍길동" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                      <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>주소</label>
+                      <input value={companyForm.address} onChange={e => setCompanyForm(p => ({ ...p, address: e.target.value }))}
+                        placeholder="서울시 강남구 테헤란로 123" style={inputStyle} />
                     </div>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>등록일</label>
-                      <input type="date" value={companyForm.registeredAt} onChange={e => setCompanyForm(p => ({ ...p, registeredAt: e.target.value }))}
-                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
+
                   </div>
-                  {/* 3행: 업태 / 종목 */}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>업태</label>
-                      <input value={companyForm.industry} onChange={e => setCompanyForm(p => ({ ...p, industry: e.target.value }))}
-                        placeholder="제조업, 서비스업 등" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>종목</label>
-                      <input value={companyForm.businessCategory} onChange={e => setCompanyForm(p => ({ ...p, businessCategory: e.target.value }))}
-                        placeholder="통역, 번역, 소프트웨어 등" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
+                </div>
+
+                {/* ── Card 3: 메모 ── */}
+                <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
+                  <div style={{ padding: "12px 18px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ width: 3, height: 20, background: "#6366f1", borderRadius: 2, display: "inline-block", flexShrink: 0 }} />
+                    <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>메모</p>
+                    <span style={{ fontSize: 12, color: "#9ca3af" }}>(선택)</span>
                   </div>
-                  {/* 5행: 주소 */}
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>주소</label>
-                    <input value={companyForm.address} onChange={e => setCompanyForm(p => ({ ...p, address: e.target.value }))}
-                      placeholder="서울시 강남구 테헤란로 123" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                  </div>
-                  {/* 6행: 메모 */}
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>메모</label>
+                  <div style={{ padding: "14px 18px" }}>
                     <textarea value={companyForm.notes} onChange={e => setCompanyForm(p => ({ ...p, notes: e.target.value }))}
-                      rows={2} placeholder="거래처 관련 특이사항을 입력하세요." style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", resize: "vertical" }} />
+                      rows={3} placeholder="거래처 관련 특이사항을 입력하세요."
+                      style={{ ...inputStyle, resize: "vertical" }} />
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                  <PrimaryBtn onClick={handleCreateCompany} disabled={savingCompany || !companyForm.name.trim()} style={{ fontSize: 13, padding: "8px 18px" }}>
-                    {savingCompany ? "등록 중..." : "등록"}
+
+                {/* ── 액션 버튼 ── */}
+                <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                  <GhostBtn onClick={() => { setShowCompanyForm(false); setCreatedCompanyId(null); }} style={{ fontSize: 14, padding: "9px 18px" }}>취소</GhostBtn>
+                  <PrimaryBtn onClick={handleCreateCompany} disabled={savingCompany || !companyForm.name.trim()} style={{ fontSize: 14, padding: "9px 24px" }}>
+                    {savingCompany ? "등록 중..." : "거래처 등록"}
                   </PrimaryBtn>
-                  <GhostBtn onClick={() => { setShowCompanyForm(false); setCreatedCompanyId(null); }} style={{ fontSize: 13, padding: "8px 14px" }}>취소</GhostBtn>
                 </div>
-              </>
+
+              </div>
             )}
           </Card>
         )}
