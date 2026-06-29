@@ -25,6 +25,7 @@ import {
   type DocType, isOcrSupportedExt, buildImageDataUrl, buildOcrPromptMessages,
   renderPdfFirstPageAsPng,
   normalizeResidentNumber, normalizeBankAccount, matchBankName, namesMatch, maskForLog,
+  normalizeAccountHolder,
 } from "../lib/documentOcr";
 
 const router: IRouter = Router();
@@ -132,7 +133,7 @@ router.post(
         current = { name: null, address: null, residentNumberMasked: null };
         validations = { nameMismatch: false, residentNumberValid };
       } else {
-        const extractedAccountHolder = (result.accountHolder as string) ?? null;
+        const extractedAccountHolder = normalizeAccountHolder((result.accountHolder as string) ?? null);
         const { matched: matchedBankName, bankNameMatched } = matchBankName((result.bankName as string) ?? null);
         extracted = {
           bankName: matchedBankName,
@@ -255,7 +256,7 @@ router.post("/admin/translators/:id/document-analyze", ...sensitiveGuard, async 
         residentNumberValid,
       };
     } else {
-      const extractedAccountHolder = (result.accountHolder as string) ?? null;
+      const extractedAccountHolder = normalizeAccountHolder((result.accountHolder as string) ?? null);
       const { matched: matchedBankName, bankNameMatched } = matchBankName((result.bankName as string) ?? null);
 
       extracted = {

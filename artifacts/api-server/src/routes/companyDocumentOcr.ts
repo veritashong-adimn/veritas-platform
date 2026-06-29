@@ -8,7 +8,7 @@ import OpenAI from "openai";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import {
   isOcrSupportedExt, buildImageDataUrl, buildOcrPromptMessages,
-  renderPdfFirstPageAsPng, normalizeBankAccount, matchBankName,
+  renderPdfFirstPageAsPng, normalizeBankAccount, matchBankName, normalizeAccountHolder,
 } from "../lib/documentOcr";
 
 const router: IRouter = Router();
@@ -116,7 +116,7 @@ router.post(
         const { matched: matchedBankName, bankNameMatched } = matchBankName((result.bankName as string) ?? null);
         extracted = {
           bankName: matchedBankName,
-          accountHolder: (result.accountHolder as string) ?? null,
+          accountHolder: normalizeAccountHolder((result.accountHolder as string) ?? null),
           bankAccount: normalizeBankAccount((result.bankAccount as string) ?? null),
         };
         current = { bankName: null, accountHolder: null, bankAccount: null };

@@ -139,6 +139,22 @@ export function normalizeBankAccount(raw: string | null): string | null {
   return cleaned || null;
 }
 
+// ── 예금주 정규화 (은행 앱 호칭 접미사 제거) ─────────────────────────────────
+// 은행 앱/화면에서 "홍길동 님", "(주)베리타스 고객님" 등으로 표시되는 호칭을 제거한다.
+// 긴 패턴을 먼저 검사해 부분 매칭 오작동을 방지한다.
+export function normalizeAccountHolder(raw: string | null): string | null {
+  if (!raw) return null;
+  const HONORIFICS = ["고객님", "님께", "님의", "귀하", "님"];
+  let result = raw.trim();
+  for (const h of HONORIFICS) {
+    if (result.endsWith(h)) {
+      result = result.slice(0, -h.length);
+      break;
+    }
+  }
+  return result.trim().replace(/\s+/g, " ") || null;
+}
+
 // ── 이름 비교 (공백 무시, 대소문자 무시) ──────────────────────────────────────
 export function namesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
   if (!a || !b) return true; // 비교 대상이 없으면 불일치로 간주하지 않음(경고 표시 안 함)
