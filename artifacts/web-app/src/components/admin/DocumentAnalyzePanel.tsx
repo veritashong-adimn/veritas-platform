@@ -250,19 +250,49 @@ export function DocumentAnalyzePanel({
                 <div style={warningBannerStyle}>⚠️ 은행명이 등록된 은행 목록과 일치하지 않습니다. 입력값을 확인해 주세요.</div>
               )}
 
-              {/* 비교 헤더 */}
-              <div style={{ display: "grid", gridTemplateColumns: "26px 110px 1fr 1fr", gap: "0 8px", marginBottom: 6, paddingBottom: 4, borderBottom: "1px solid #e5e7eb" }}>
-                <div />
-                <div />
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textAlign: "center" }}>
-                  {isCreateMode ? "등록 폼 현재값" : "현재값"}
+              {/* 비교 헤더 — bankbook은 현재값 컬럼 미표시 */}
+              {docType === "bankbook" ? (
+                <div style={{ display: "grid", gridTemplateColumns: "26px 110px 1fr", gap: "0 8px", marginBottom: 6, paddingBottom: 4, borderBottom: "1px solid #e5e7eb" }}>
+                  <div /><div />
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", textAlign: "center" }}>AI 추출값 (수정 가능)</div>
                 </div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", textAlign: "center" }}>AI 추출값 (수정 가능)</div>
-              </div>
+              ) : (
+                <div style={{ display: "grid", gridTemplateColumns: "26px 110px 1fr 1fr", gap: "0 8px", marginBottom: 6, paddingBottom: 4, borderBottom: "1px solid #e5e7eb" }}>
+                  <div /><div />
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", textAlign: "center" }}>
+                    {isCreateMode ? "등록 폼 현재값" : "현재값"}
+                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: "#059669", textAlign: "center" }}>AI 추출값 (수정 가능)</div>
+                </div>
+              )}
 
               {fields.map(f => {
                 const curVal = result.current[f.currentKey ?? f.key] ?? null;
-                return (
+                return docType === "bankbook" ? (
+                  <div key={f.key} style={{ display: "grid", gridTemplateColumns: "26px 110px 1fr", gap: "0 8px", marginBottom: 10, alignItems: "start" }}>
+                    <input
+                      type="checkbox"
+                      checked={!!checked[f.key]}
+                      onChange={e => setChecked(p => ({ ...p, [f.key]: e.target.checked }))}
+                      aria-label={`${f.label} 승인 포함`}
+                      data-testid={`doc-ocr-check-${f.key}`}
+                      style={{ marginTop: 9 }}
+                    />
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", paddingTop: 7, paddingRight: 4 }}>{f.label}</label>
+                    <input
+                      type="text"
+                      value={edited[f.key] ?? ""}
+                      onChange={e => setEdited(p => ({ ...p, [f.key]: e.target.value }))}
+                      aria-label={`${f.label} AI 추출값`}
+                      data-testid={`doc-ocr-input-${f.key}`}
+                      style={{
+                        width: "100%", border: checked[f.key] ? "1.5px solid #059669" : "1px solid #d1d5db",
+                        borderRadius: 6, padding: "6px 10px", fontSize: 12, color: "#111827", boxSizing: "border-box",
+                        fontFamily: f.mono ? "monospace" : undefined, background: checked[f.key] ? "#f0fdf4" : "#fff",
+                      }}
+                    />
+                  </div>
+                ) : (
                   <div key={f.key} style={{ display: "grid", gridTemplateColumns: "26px 110px 1fr 1fr", gap: "0 8px", marginBottom: 10, alignItems: "start" }}>
                     <input
                       type="checkbox"
