@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
   api, Company,
-  VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS,
+  VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS, VENDOR_TYPE_CATEGORY_CHIPS,
+  resolveVendorType, finalVendorType,
 } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
 import { CompanyDetailModal } from './CompanyDetailModal';
@@ -58,6 +59,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
     notes: "", registeredAt: new Date().toISOString().slice(0, 10),
     companyType: "client", vendorType: "",
   });
+  const [vendorTypeCustom, setVendorTypeCustom] = useState("");
   const [savingCompany, setSavingCompany] = useState(false);
   const [createdCompanyId, setCreatedCompanyId] = useState<number | null>(null);
   const [createdCompanyName, setCreatedCompanyName] = useState("");
@@ -98,9 +100,10 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
     if (!companyForm.name.trim()) { onToast("회사명을 입력하세요."); return; }
     setSavingCompany(true);
     try {
+      const body = { ...companyForm, vendorType: finalVendorType(companyForm.vendorType, vendorTypeCustom) };
       const res = await fetch(api("/api/admin/companies"), {
         method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify(companyForm),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
@@ -165,6 +168,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
       notes: "", registeredAt: new Date().toISOString().slice(0, 10),
       companyType: "client", vendorType: "",
     });
+    setVendorTypeCustom("");
     setLicenseFile(null);
     setBankbookFile(null);
     setShowCompanyForm(false);
@@ -180,6 +184,11 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
       if (values.industry) next.industry = values.industry;
       if (values.businessCategory) next.businessCategory = values.businessCategory;
       if (values.address) next.address = values.address;
+      if (values.vendorType && prev.companyType === "vendor") {
+        const resolved = resolveVendorType(values.vendorType);
+        next.vendorType = resolved.vendorType;
+        setVendorTypeCustom(resolved.vendorTypeCustom);
+      }
       return next;
     });
     onToast("사업자등록증 정보가 폼에 자동 반영되었습니다.");
@@ -485,17 +494,29 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                         </button>
                       ))}
                       {companyForm.companyType === "vendor" && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <span style={{ fontSize: 12, color: "#6b7280" }}>외주 유형:</span>
-                          <ClickSelect
-                            value={companyForm.vendorType}
-                            onChange={v => setCompanyForm(p => ({ ...p, vendorType: v }))}
-                            triggerStyle={{ fontSize: 13, padding: "6px 10px" }}
-                            options={[
-                              { value: "", label: "선택 안 함" },
-                              ...VENDOR_TYPE_OPTIONS.map(o => ({ value: o.value, label: o.label })),
-                            ]}
-                          />
+                        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 12, color: "#6b7280", whiteSpace: "nowrap" }}>외주 유형:</span>
+                            <ClickSelect
+                              value={companyForm.vendorType}
+                              onChange={v => { setCompanyForm(p => ({ ...p, vendorType: v })); if (v !== "etc") setVendorTypeCustom(""); }}
+                              triggerStyle={{ fontSize: 13, padding: "6px 10px", minWidth: 140 }}
+                              chips={VENDOR_TYPE_CATEGORY_CHIPS}
+                              options={[
+                                { value: "", label: "선택 안 함" },
+                                ...VENDOR_TYPE_OPTIONS,
+                              ]}
+                            />
+                          </div>
+                          {companyForm.vendorType === "etc" && (
+                            <input
+                              value={vendorTypeCustom}
+                              onChange={e => setVendorTypeCustom(e.target.value)}
+                              placeholder="기타 외주유형 직접 입력"
+                              aria-label="기타 외주유형 직접 입력"
+                              style={{ fontSize: 12, padding: "5px 10px", borderRadius: 7, border: "1px solid #ddd6fe", outline: "none", width: 220, color: "#7c3aed" }}
+                            />
+                          )}
                         </div>
                       )}
                     </div>

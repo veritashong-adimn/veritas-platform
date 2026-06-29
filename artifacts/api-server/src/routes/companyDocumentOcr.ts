@@ -109,8 +109,9 @@ router.post(
           industry: (result.industry as string) ?? null,
           businessCategory: (result.businessCategory as string) ?? null,
           address: (result.address as string) ?? null,
+          vendorType: (result.vendorType as string) ?? null,
         };
-        current = { name: null, businessNumber: null, representativeName: null, registeredAt: null, industry: null, businessCategory: null, address: null };
+        current = { name: null, businessNumber: null, representativeName: null, registeredAt: null, industry: null, businessCategory: null, address: null, vendorType: null };
         validations = {};
       } else {
         const { matched: matchedBankName, bankNameMatched } = matchBankName((result.bankName as string) ?? null);

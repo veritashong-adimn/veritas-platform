@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { api, CompanyDetail, Contact, Division, NoteEntry, VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS } from "../../lib/constants";
+import { api, CompanyDetail, Contact, Division, NoteEntry, VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS, VENDOR_TYPE_CATEGORY_CHIPS, resolveVendorType, finalVendorType } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { formatPhone } from "../../lib/utils";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
@@ -63,6 +63,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [addingDiv, setAddingDiv] = useState(false);
   const [editDivId, setEditDivId] = useState<number | null>(null);
   const [editDivForm, setEditDivForm] = useState({ name: "", type: "" });
+  const [editVendorTypeCustom, setEditVendorTypeCustom] = useState("");
   const [editLicenseFile, setEditLicenseFile] = useState<File | null>(null);
   const [editBankbookFile, setEditBankbookFile] = useState<File | null>(null);
   const [editOcrPanel, setEditOcrPanel] = useState<CompanyOcrDocType | null>(null);
@@ -81,6 +82,8 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       if (dRes.ok) {
         setDetail(data);
         setOriginalName(data.name);
+        const resolvedVT = resolveVendorType((data as any).vendorType ?? null);
+        setEditVendorTypeCustom(resolvedVT.vendorTypeCustom);
         setEditForm({
           name: data.name,
           businessNumber: data.businessNumber ?? "",
@@ -91,7 +94,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
           notes: data.notes ?? "",
           registeredAt: (data as any).registeredAt ?? "",
           companyType: (data as any).companyType ?? "client",
-          vendorType: (data as any).vendorType ?? "",
+          vendorType: resolvedVT.vendorType,
         });
       }
       if (nRes.ok) setCompNotes(Array.isArray(nData) ? nData : []);
@@ -139,7 +142,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
     if (Object.keys(errs).length > 0) return;
 
     try {
-      const body: Record<string, any> = { ...editForm };
+      const body: Record<string, any> = { ...editForm, vendorType: finalVendorType(editForm.vendorType, editVendorTypeCustom) };
       if (isNameChanged) body.nameChangeReason = nameChangeReason.trim();
       const res = await fetch(api(`/api/admin/companies/${companyId}`), {
         method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
@@ -168,6 +171,11 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       if (values.industry) next.industry = values.industry;
       if (values.businessCategory) next.businessCategory = values.businessCategory;
       if (values.address) next.address = values.address;
+      if (values.vendorType && prev.companyType === "vendor") {
+        const resolved = resolveVendorType(values.vendorType);
+        next.vendorType = resolved.vendorType;
+        setEditVendorTypeCustom(resolved.vendorTypeCustom);
+      }
       return next;
     });
     onToast("사업자등록증 정보가 수정 폼에 자동 반영되었습니다.");
@@ -647,9 +655,23 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                   {editForm.companyType === "vendor" && (
                     <div>
                       <label style={{ fontSize: 12, color: "#7c3aed", fontWeight: 600, display: "block", marginBottom: 4 }}>외주유형</label>
-                      <ClickSelect value={editForm.vendorType} onChange={v => setEditForm(p => ({ ...p, vendorType: v }))}
-                        style={{ width: "100%" }} triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8, borderColor: "#ddd6fe" }}
-                        options={[{ value: "", label: "— 선택 안 함 —" }, ...VENDOR_TYPE_OPTIONS.map(o => ({ value: o.value, label: o.label }))]} />
+                      <ClickSelect
+                        value={editForm.vendorType}
+                        onChange={v => { setEditForm(p => ({ ...p, vendorType: v })); if (v !== "etc") setEditVendorTypeCustom(""); }}
+                        style={{ width: "100%" }}
+                        triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8, borderColor: "#ddd6fe" }}
+                        chips={VENDOR_TYPE_CATEGORY_CHIPS}
+                        options={[{ value: "", label: "— 선택 안 함 —" }, ...VENDOR_TYPE_OPTIONS]}
+                      />
+                      {editForm.vendorType === "etc" && (
+                        <input
+                          value={editVendorTypeCustom}
+                          onChange={e => setEditVendorTypeCustom(e.target.value)}
+                          placeholder="기타 외주유형 직접 입력"
+                          aria-label="기타 외주유형 직접 입력"
+                          style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", marginTop: 6, borderColor: "#ddd6fe", color: "#7c3aed" }}
+                        />
+                      )}
                     </div>
                   )}
                 </div>
@@ -702,7 +724,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <PrimaryBtn onClick={handleSaveEdit} style={{ fontSize: 13, padding: "7px 16px" }}>저장</PrimaryBtn>
-                  <GhostBtn onClick={() => { setEditMode(false); setFormErrors({}); setNameChangeReason(""); setEditLicenseFile(null); setEditBankbookFile(null); setEditOcrPanel(null); }} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
+                  <GhostBtn onClick={() => { setEditMode(false); setFormErrors({}); setNameChangeReason(""); setEditLicenseFile(null); setEditBankbookFile(null); setEditOcrPanel(null); setEditVendorTypeCustom(""); }} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
                 </div>
               </div>
             )}

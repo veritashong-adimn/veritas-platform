@@ -18,6 +18,7 @@ const FIELD_CONFIG: Record<CompanyOcrDocType, FieldConfig[]> = {
     { key: "industry", label: "업태" },
     { key: "businessCategory", label: "종목" },
     { key: "address", label: "주소" },
+    { key: "vendorType", label: "외주유형 (추천)" },
   ],
   bankbook: [
     { key: "bankName", label: "은행명" },

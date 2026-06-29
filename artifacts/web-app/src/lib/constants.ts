@@ -125,23 +125,108 @@ export type ProjectDetail = AdminProject & {
   contact: { id: number; name: string; department: string | null; position: string | null; email: string | null; phone: string | null } | null;
 };
 export type CompanyType = "client" | "vendor";
-export type VendorType = "interpretation_equipment" | "editing" | "translation_agency" | "cleaning" | "water_supply" | "etc" | string;
+export type VendorType = string;
+
 export const VENDOR_TYPE_LABELS: Record<string, string> = {
+  // 구 영문 키 → 한글 표기 (하위 호환)
   interpretation_equipment: "통역장비",
-  editing: "편집/감수",
+  editing: "편집업체",
   translation_agency: "통번역업체",
   cleaning: "청소",
   water_supply: "생수",
   etc: "기타",
 };
-export const VENDOR_TYPE_OPTIONS = [
-  { value: "interpretation_equipment", label: "통역장비" },
-  { value: "editing",                  label: "편집/감수" },
-  { value: "translation_agency",       label: "통번역업체" },
-  { value: "cleaning",                 label: "청소" },
-  { value: "water_supply",             label: "생수" },
-  { value: "etc",                      label: "기타" },
+
+export const VENDOR_TYPE_CATEGORY_CHIPS: { value: string; label: string }[] = [
+  { value: "통번역", label: "통번역" },
+  { value: "행사·운영", label: "행사·운영" },
+  { value: "디자인·마케팅", label: "디자인·마케팅" },
+  { value: "IT", label: "IT" },
+  { value: "물류·시설", label: "물류·시설" },
+  { value: "전문서비스", label: "전문서비스" },
 ];
+
+export const VENDOR_TYPE_OPTIONS: { value: string; label: string; group?: string }[] = [
+  // 통번역
+  { value: "통번역업체",   label: "통번역업체",   group: "통번역" },
+  { value: "번역업체",     label: "번역업체",     group: "통번역" },
+  { value: "통역업체",     label: "통역업체",     group: "통번역" },
+  { value: "감수업체",     label: "감수업체",     group: "통번역" },
+  { value: "편집업체",     label: "편집업체",     group: "통번역" },
+  { value: "DTP업체",      label: "DTP업체",      group: "통번역" },
+  { value: "자막업체",     label: "자막업체",     group: "통번역" },
+  { value: "녹취업체",     label: "녹취업체",     group: "통번역" },
+  { value: "속기사",       label: "속기사",       group: "통번역" },
+  // 행사·운영
+  { value: "통역장비",     label: "통역장비",     group: "행사·운영" },
+  { value: "음향장비",     label: "음향장비",     group: "행사·운영" },
+  { value: "영상장비",     label: "영상장비",     group: "행사·운영" },
+  { value: "행사운영",     label: "행사운영",     group: "행사·운영" },
+  { value: "행사인력",     label: "행사인력",     group: "행사·운영" },
+  { value: "MC",           label: "MC",           group: "행사·운영" },
+  { value: "사회자",       label: "사회자",       group: "행사·운영" },
+  { value: "촬영",         label: "촬영",         group: "행사·운영" },
+  { value: "사진",         label: "사진",         group: "행사·운영" },
+  { value: "영상제작",     label: "영상제작",     group: "행사·운영" },
+  // 디자인·마케팅
+  { value: "디자인",       label: "디자인",       group: "디자인·마케팅" },
+  { value: "인쇄",         label: "인쇄",         group: "디자인·마케팅" },
+  { value: "홈페이지 제작", label: "홈페이지 제작", group: "디자인·마케팅" },
+  { value: "광고대행",     label: "광고대행",     group: "디자인·마케팅" },
+  { value: "마케팅",       label: "마케팅",       group: "디자인·마케팅" },
+  { value: "홍보물 제작",  label: "홍보물 제작",  group: "디자인·마케팅" },
+  // IT
+  { value: "개발",         label: "개발",         group: "IT" },
+  { value: "AI 개발",      label: "AI 개발",      group: "IT" },
+  { value: "서버",         label: "서버",         group: "IT" },
+  { value: "클라우드",     label: "클라우드",     group: "IT" },
+  { value: "보안",         label: "보안",         group: "IT" },
+  // 물류·시설
+  { value: "택배",         label: "택배",         group: "물류·시설" },
+  { value: "퀵서비스",     label: "퀵서비스",     group: "물류·시설" },
+  { value: "물류",         label: "물류",         group: "물류·시설" },
+  { value: "배송",         label: "배송",         group: "물류·시설" },
+  { value: "청소",         label: "청소",         group: "물류·시설" },
+  { value: "생수",         label: "생수",         group: "물류·시설" },
+  { value: "케이터링",     label: "케이터링",     group: "물류·시설" },
+  { value: "도시락",       label: "도시락",       group: "물류·시설" },
+  { value: "사무용품",     label: "사무용품",     group: "물류·시설" },
+  // 전문서비스
+  { value: "법무",         label: "법무",         group: "전문서비스" },
+  { value: "회계",         label: "회계",         group: "전문서비스" },
+  { value: "세무",         label: "세무",         group: "전문서비스" },
+  { value: "노무",         label: "노무",         group: "전문서비스" },
+  { value: "특허",         label: "특허",         group: "전문서비스" },
+  { value: "인증",         label: "인증",         group: "전문서비스" },
+  { value: "컨설팅",       label: "컨설팅",       group: "전문서비스" },
+  // 기타 (group 없음 → 항상 표시)
+  { value: "etc",          label: "기타(직접 입력)" },
+];
+
+const _VENDOR_LEGACY_MAP: Record<string, string> = {
+  interpretation_equipment: "통역장비",
+  editing: "편집업체",
+  translation_agency: "통번역업체",
+  cleaning: "청소",
+  water_supply: "생수",
+  etc: "etc",
+};
+const _VENDOR_OPTION_VALUES = new Set(VENDOR_TYPE_OPTIONS.map(o => o.value));
+
+export function resolveVendorType(raw: string | null | undefined): { vendorType: string; vendorTypeCustom: string } {
+  if (!raw) return { vendorType: "", vendorTypeCustom: "" };
+  if (_VENDOR_LEGACY_MAP[raw] !== undefined) {
+    const m = _VENDOR_LEGACY_MAP[raw];
+    return { vendorType: m, vendorTypeCustom: "" };
+  }
+  if (_VENDOR_OPTION_VALUES.has(raw)) return { vendorType: raw, vendorTypeCustom: "" };
+  return { vendorType: "etc", vendorTypeCustom: raw };
+}
+
+export function finalVendorType(vendorType: string, vendorTypeCustom: string): string {
+  if (vendorType === "etc") return vendorTypeCustom.trim() || "기타";
+  return vendorType;
+}
 export type Company = {
   id: number; name: string; businessNumber: string | null; industry: string | null;
   address: string | null; website: string | null; notes: string | null;
