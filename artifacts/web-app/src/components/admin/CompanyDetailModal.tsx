@@ -12,10 +12,16 @@ const inputStyle: React.CSSProperties = {
   outline: "none", boxSizing: "border-box", background: "#fff",
 };
 const sH: React.CSSProperties = {
-  fontSize: 12, fontWeight: 700, color: "#6b7280",
-  textTransform: "uppercase", letterSpacing: "0.06em",
-  margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
+  fontSize: 14, fontWeight: 700, color: "#111827",
+  borderLeft: "3px solid #6366f1", paddingLeft: 10,
+  margin: 0, lineHeight: 1.5,
 };
+const secRow = (label: string, extra?: React.ReactNode): React.ReactNode => (
+  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "20px 0 10px" }}>
+    <p style={sH}>{label}</p>
+    {extra && <div style={{ display: "flex", alignItems: "center", gap: 8 }}>{extra}</div>}
+  </div>
+);
 
 export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject, onRefresh, onDeleted }: {
   companyId: number; token: string; onClose: () => void;
@@ -356,42 +362,98 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
         {loading ? <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p> : !detail ? <p style={{ color: "#dc2626" }}>데이터를 불러올 수 없습니다.</p> : (
           <>
             <ReviewMemoPanel storageKey={`company_${companyId}`} label="이 거래처 검수 메모" />
-            <p style={sH}>거래처 정보</p>
+
+            {/* ══════════════════════════════════════════════
+                상단 요약 카드
+            ══════════════════════════════════════════════ */}
+            <div style={{
+              background: "#f0f9ff",
+              border: "1px solid #bae6fd",
+              borderRadius: 12,
+              padding: "14px 18px",
+              marginBottom: 6,
+              marginTop: 12,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "8px 16px",
+              alignItems: "center",
+            }}>
+              <span style={{ fontSize: 17, fontWeight: 700, color: "#0c4a6e" }}>{detail.name}</span>
+              <span style={{
+                fontSize: 12, borderRadius: 20, padding: "2px 9px", fontWeight: 700,
+                background: (detail as any).companyType === "vendor" ? "#f5f3ff" : "#eff6ff",
+                color: (detail as any).companyType === "vendor" ? "#7c3aed" : "#1d4ed8",
+              }}>
+                {(detail as any).companyType === "vendor" ? "외주업체" : "고객사"}
+              </span>
+              {(detail as any).vendorType && (
+                <span style={{ fontSize: 12, borderRadius: 20, padding: "2px 9px", fontWeight: 600, background: "#ede9fe", color: "#6d28d9" }}>
+                  {VENDOR_TYPE_LABELS[(detail as any).vendorType] ?? (detail as any).vendorType}
+                </span>
+              )}
+              {(detail.industry || (detail as any).businessCategory) && (
+                <span style={{ fontSize: 12, color: "#374151" }}>
+                  {[detail.industry, (detail as any).businessCategory].filter(Boolean).join(" · ")}
+                </span>
+              )}
+              <span style={{ fontSize: 12, color: "#0369a1", fontWeight: 600 }}>
+                담당자 {detail.contacts.filter((c: Contact) => c.isActive).length}명
+              </span>
+              <span style={{ fontSize: 12, color: "#0369a1", fontWeight: 600 }}>
+                프로젝트 {detail.projects.length}건
+              </span>
+              <span style={{ fontSize: 12, color: "#059669", fontWeight: 700 }}>
+                총 결제 {Number(detail.totalPayment).toLocaleString()}원
+              </span>
+              {(detail as any).prepaidBalance > 0 && (
+                <span style={{ fontSize: 12, color: "#15803d", fontWeight: 700, background: "#dcfce7", borderRadius: 20, padding: "2px 9px" }}>
+                  선입금 {Number((detail as any).prepaidBalance).toLocaleString()}원
+                </span>
+              )}
+              {(detail as any).unpaidAmount > 0 && (
+                <span style={{ fontSize: 12, color: "#92400e", fontWeight: 700, background: "#fef3c7", borderRadius: 20, padding: "2px 9px" }}>
+                  미수금 {Number((detail as any).unpaidAmount).toLocaleString()}원
+                </span>
+              )}
+            </div>
+
+            {secRow("기본 정보", <GhostBtn onClick={() => setEditMode(true)} style={{ fontSize: 12, padding: "4px 12px" }}>정보 수정</GhostBtn>)}
             {!editMode ? (
               <div style={{ marginBottom: 10 }}>
-                {/* 기본정보 그리드 */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px 0", marginBottom: 10 }}>
-                  {([
-                    ["거래처명", detail.name, true],
-                    ["거래처 유형", (detail as any).companyType === "vendor" ? "외주업체" : "고객사", false],
-                    ...((detail as any).vendorType ? [["외주 유형", VENDOR_TYPE_LABELS[(detail as any).vendorType] ?? (detail as any).vendorType, false] as [string, string, boolean]] : []),
-                    ["사업자번호", detail.businessNumber ?? "-", false],
-                    ["대표자명", detail.representativeName ?? "-", false],
-                    ["등록일", (detail as any).registeredAt ?? "-", false],
-                    ["업태", detail.industry ?? "-", false],
-                    ["종목", (detail as any).businessCategory ?? "-", false],
-                  ] as [string, string, boolean][]).map(([l, v, bold]) => (
-                    <div key={l} style={{ display: "flex", flexDirection: "column", gap: 1, paddingRight: 12 }}>
-                      <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase" }}>{l}</span>
-                      <span style={{ fontSize: 13, color: "#374151", fontWeight: bold ? 700 : 400 }}>{v}</span>
+                {/* 기본정보 카드 */}
+                <div style={{ background: "#f9fafb", borderRadius: 12, border: "1px solid #f3f4f6", padding: "16px 18px", marginBottom: 10 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 24px" }}>
+                    {([
+                      ["거래처명", detail.name],
+                      ["거래처 유형", (detail as any).companyType === "vendor" ? "외주업체" : "고객사"],
+                      ...((detail as any).vendorType ? [["외주 유형", VENDOR_TYPE_LABELS[(detail as any).vendorType] ?? (detail as any).vendorType]] : []),
+                      ["사업자번호", detail.businessNumber ?? "-"],
+                      ["대표자명", detail.representativeName ?? "-"],
+                      ["등록일", (detail as any).registeredAt ?? "-"],
+                      ["업태", detail.industry ?? "-"],
+                      ["종목", (detail as any).businessCategory ?? "-"],
+                    ] as [string, string][]).map(([l, v]) => (
+                      <div key={l} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                        <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>{l}</span>
+                        <span style={{ fontSize: 13, color: "#111827", fontWeight: l === "거래처명" ? 700 : 400 }}>{v}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {/* 주소 */}
+                  {detail.address && (
+                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f4f6" }}>
+                      <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>주소</span>
+                      <p style={{ margin: "4px 0 0", fontSize: 13, color: "#374151" }}>{detail.address}</p>
                     </div>
-                  ))}
+                  )}
+                  {/* 메모 */}
+                  {detail.notes && (
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #f3f4f6" }}>
+                      <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>메모</span>
+                      <p style={{ margin: "4px 0 0", fontSize: 13, color: "#374151", whiteSpace: "pre-wrap" }}>{detail.notes}</p>
+                    </div>
+                  )}
                 </div>
-                {/* 주소 */}
-                {detail.address && (
-                  <div style={{ display: "flex", gap: 6, fontSize: 13, marginBottom: 6 }}>
-                    <span style={{ color: "#9ca3af", minWidth: 56, fontSize: 10, fontWeight: 600, textTransform: "uppercase", paddingTop: 2 }}>주소</span>
-                    <span style={{ color: "#374151" }}>{detail.address}</span>
-                  </div>
-                )}
-                {/* 메모 */}
-                {detail.notes && (
-                  <div style={{ background: "#f9fafb", borderRadius: 8, padding: "8px 12px", marginBottom: 6 }}>
-                    <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase" }}>메모</span>
-                    <p style={{ margin: "4px 0 0", fontSize: 13, color: "#374151", whiteSpace: "pre-wrap" }}>{detail.notes}</p>
-                  </div>
-                )}
-                <GhostBtn onClick={() => setEditMode(true)} style={{ width: "fit-content", fontSize: 12, padding: "5px 12px", marginTop: 4 }}>정보 수정</GhostBtn>
                 {/* 상호 변경 이력 */}
                 {(() => {
                   const history = (detail as any).nameHistory ?? [];
@@ -533,7 +595,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
               </div>
             )}
 
-            <p style={sH}>재무 요약</p>
+            {secRow("재무 요약")}
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               {[
                 { label: "담당자 수", value: `활성 ${detail.contacts.filter((c: Contact) => c.isActive).length}명 / 비활성 ${detail.contacts.filter((c: Contact) => !c.isActive).length}명`, color: "#6b7280", bg: "#f3f4f6" },
@@ -572,8 +634,8 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
 
             {/* ── 선입금 계정 섹션 ── */}
             {prepaidAccounts.length > 0 && (
-              <div style={{ marginTop: 18, marginBottom: 4 }}>
-                <p style={sH}>선입금 계정 ({prepaidAccounts.length})</p>
+              <div style={{ marginBottom: 4 }}>
+                {secRow(`선입금 계정 (${prepaidAccounts.length})`)}
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {prepaidAccounts.map(acct => (
                     <div key={acct.id} onClick={() => setSelectedLedgerAccountId(acct.id)}
@@ -597,10 +659,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
             )}
 
             {/* ── 브랜드/부서 섹션 ── */}
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 20, marginBottom: 10 }}>
-              <p style={{ ...sH, margin: 0 }}>브랜드 / 부서 ({detail.divisions.length})</p>
-              <GhostBtn onClick={() => setShowDivForm(v => !v)} style={{ fontSize: 12, padding: "4px 10px" }}>+ 추가</GhostBtn>
-            </div>
+            {secRow(`브랜드 / 부서 (${detail.divisions.length})`, <GhostBtn onClick={() => setShowDivForm(v => !v)} style={{ fontSize: 12, padding: "4px 10px" }}>+ 추가</GhostBtn>)}
             <div style={{ overflow: "hidden", maxHeight: showDivForm ? "240px" : "0", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
             {showDivForm && (
               <div style={{ background: "#f9fafb", borderRadius: 10, padding: "14px 16px", marginBottom: 12, border: "1px solid #e5e7eb" }}>
@@ -669,25 +728,20 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
             }
 
             {/* ── 담당자 목록 ───────────────────────────────────────────── */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 20, marginBottom: 8 }}>
-              <p style={{ ...sH, margin: 0, flex: 1 }}>
-                담당자 ({detail.contacts.filter((c: Contact) => c.isActive).length}명
+            {secRow(
+              `담당자 (${detail.contacts.filter((c: Contact) => c.isActive).length}명${detail.contacts.some((c: Contact) => !c.isActive) ? ` / 비활성 ${detail.contacts.filter((c: Contact) => !c.isActive).length}명` : ""})`,
+              <>
                 {detail.contacts.some((c: Contact) => !c.isActive) && (
-                  <span style={{ color: "#9ca3af", fontWeight: 400, marginLeft: 4 }}>
-                    / 비활성 {detail.contacts.filter((c: Contact) => !c.isActive).length}명
-                  </span>
-                )})
-              </p>
-              {detail.contacts.some((c: Contact) => !c.isActive) && (
-                <button onClick={() => setShowInactiveContacts(v => !v)}
-                  style={{ background: "none", border: "1px solid #d1d5db", borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", color: "#6b7280" }}>
-                  {showInactiveContacts ? "비활성 숨기기" : "비활성 보기"}
-                </button>
-              )}
-              <GhostBtn onClick={() => { setShowContactForm(v => !v); setEditContactId(null); }} style={{ fontSize: 12, padding: "4px 10px" }}>
-                {showContactForm ? "닫기" : "+ 담당자 추가"}
-              </GhostBtn>
-            </div>
+                  <button onClick={() => setShowInactiveContacts(v => !v)}
+                    style={{ background: "none", border: "1px solid #d1d5db", borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", color: "#6b7280" }}>
+                    {showInactiveContacts ? "비활성 숨기기" : "비활성 보기"}
+                  </button>
+                )}
+                <GhostBtn onClick={() => { setShowContactForm(v => !v); setEditContactId(null); }} style={{ fontSize: 12, padding: "4px 10px" }}>
+                  {showContactForm ? "닫기" : "+ 담당자 추가"}
+                </GhostBtn>
+              </>
+            )}
 
             {/* 안내 문구 */}
             <p style={{ fontSize: 11, color: "#9ca3af", margin: "0 0 10px" }}>
@@ -914,7 +968,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
               )
             }
 
-            <p style={{ ...sH, marginTop: 20 }}>프로젝트 목록 ({detail.projects.length})</p>
+            {secRow(`프로젝트 목록 (${detail.projects.length})`)}
             {detail.projects.length === 0 ? <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "10px 0" }}>등록된 프로젝트가 없습니다.</p> : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {detail.projects.map(p => (
@@ -934,7 +988,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
               </div>
             )}
 
-            <p style={{ ...sH, marginTop: 20 }}>메모 ({compNotes.length})</p>
+            {secRow(`메모 (${compNotes.length})`)}
             <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
               <input value={compNoteText} onChange={e => setCompNoteText(e.target.value)} placeholder="메모 입력..."
                 style={{ ...inputStyle, flex: 1, fontSize: 13, padding: "7px 10px" }}
