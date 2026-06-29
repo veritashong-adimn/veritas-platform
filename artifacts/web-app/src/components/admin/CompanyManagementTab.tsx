@@ -5,6 +5,7 @@ import {
 } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
 import { CompanyDetailModal } from './CompanyDetailModal';
+import { CompanyDocumentAnalyzePanel, type CompanyOcrDocType } from './CompanyDocumentAnalyzePanel';
 import { formatPhone } from '../../lib/utils';
 
 const inputStyle: React.CSSProperties = {
@@ -72,6 +73,11 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
   const [savingNewCompanyContact, setSavingNewCompanyContact] = useState(false);
   const [companyTypeFilter, setCompanyTypeFilter] = useState<"all" | "client" | "vendor">("all");
   const [companyVendorTypeFilter, setCompanyVendorTypeFilter] = useState<string>("all");
+
+  // AI 문서 자동입력
+  const [licenseFile, setLicenseFile] = useState<File | null>(null);
+  const [bankbookFile, setBankbookFile] = useState<File | null>(null);
+  const [ocrPanel, setOcrPanel] = useState<CompanyOcrDocType | null>(null);
 
   const fetchCompanies = useCallback(async () => {
     setCompaniesLoading(true);
@@ -158,7 +164,39 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
       notes: "", registeredAt: new Date().toISOString().slice(0, 10),
       companyType: "client", vendorType: "",
     });
+    setLicenseFile(null);
+    setBankbookFile(null);
     setShowCompanyForm(false);
+  };
+
+  const handleLicenseOcrApply = (_fields: string[], values: Record<string, string>) => {
+    setCompanyForm(prev => {
+      const next = { ...prev };
+      if (values.name) next.name = values.name;
+      if (values.businessNumber) next.businessNumber = values.businessNumber;
+      if (values.representativeName) next.representativeName = values.representativeName;
+      if (values.registeredAt) next.registeredAt = values.registeredAt;
+      if (values.industry) next.industry = values.industry;
+      if (values.businessCategory) next.businessCategory = values.businessCategory;
+      if (values.address) next.address = values.address;
+      return next;
+    });
+    onToast("사업자등록증 정보가 폼에 자동 반영되었습니다.");
+  };
+
+  const handleBankbookOcrApply = (_fields: string[], values: Record<string, string>) => {
+    const parts = [
+      values.bankName && `은행: ${values.bankName}`,
+      values.accountHolder && `예금주: ${values.accountHolder}`,
+      values.bankAccount && `계좌번호: ${values.bankAccount}`,
+    ].filter(Boolean).join(" / ");
+    if (parts) {
+      setCompanyForm(prev => ({
+        ...prev,
+        notes: prev.notes ? `${prev.notes}\n${parts}` : parts,
+      }));
+      onToast("통장사본 정보가 메모에 추가되었습니다.");
+    }
   };
 
   return (
@@ -172,6 +210,26 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
           onOpenProject={(id) => { setCompanyModal(null); onOpenProject(id); }}
           onRefresh={fetchCompanies}
           onDeleted={() => { setCompanyModal(null); fetchCompanies(); }}
+        />
+      )}
+      {ocrPanel === "business_license" && licenseFile && (
+        <CompanyDocumentAnalyzePanel
+          file={licenseFile}
+          docType="business_license"
+          token={token}
+          onToast={onToast}
+          onClose={() => setOcrPanel(null)}
+          onApplied={(fields, values) => { handleLicenseOcrApply(fields, values); setOcrPanel(null); }}
+        />
+      )}
+      {ocrPanel === "bankbook" && bankbookFile && (
+        <CompanyDocumentAnalyzePanel
+          file={bankbookFile}
+          docType="bankbook"
+          token={token}
+          onToast={onToast}
+          onClose={() => setOcrPanel(null)}
+          onApplied={(fields, values) => { handleBankbookOcrApply(fields, values); setOcrPanel(null); }}
         />
       )}
       <Section title={`거래처 관리 (${companies.length})`} action={
@@ -296,6 +354,51 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
             ) : (
               <>
                 <p style={{ margin: "0 0 14px", fontSize: 14, fontWeight: 700, color: "#111827" }}>새 거래처 등록</p>
+
+                {/* AI 문서 자동입력 */}
+                <div style={{ marginBottom: 14, padding: "12px 14px", background: "#f0f9ff", borderRadius: 10, border: "1px solid #bae6fd" }}>
+                  <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#0369a1" }}>✨ AI 문서 자동입력</p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    {/* 사업자등록증 */}
+                    {(["business_license", "bankbook"] as const).map(dt => {
+                      const isLicense = dt === "business_license";
+                      const file = isLicense ? licenseFile : bankbookFile;
+                      const setFile = isLicense ? setLicenseFile : setBankbookFile;
+                      const icon = isLicense ? "📄" : "🏦";
+                      const label = isLicense ? "사업자등록증" : "통장사본";
+                      const desc = isLicense
+                        ? "거래처명 · 사업자번호 · 대표자 · 업태 · 주소 자동 추출"
+                        : "은행명 · 예금주 · 계좌번호 추출 → 메모 반영";
+                      return (
+                        <div key={dt} style={{ background: "#fff", borderRadius: 8, border: "1px solid #e0f2fe", padding: "10px 12px" }}>
+                          <p style={{ margin: "0 0 6px", fontSize: 12, fontWeight: 700, color: "#0369a1" }}>{icon} {label}</p>
+                          <p style={{ margin: "0 0 8px", fontSize: 11, color: "#6b7280" }}>{desc}</p>
+                          {file ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, padding: "5px 8px", background: "#f0fdf4", borderRadius: 6, border: "1px solid #bbf7d0" }}>
+                              <span style={{ fontSize: 11, color: "#065f46", fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</span>
+                              <button type="button" onClick={() => setFile(null)} aria-label={`${label} 제거`}
+                                style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, border: "1px solid #fca5a5", background: "#fff", color: "#dc2626", cursor: "pointer", whiteSpace: "nowrap" }}>
+                                제거
+                              </button>
+                            </div>
+                          ) : null}
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <label style={{ fontSize: 11, padding: "5px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151", whiteSpace: "nowrap" }}>
+                              {file ? "교체" : "파일 선택"}
+                              <input type="file" accept=".jpg,.jpeg,.png,.pdf" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (f) setFile(f); }} />
+                            </label>
+                            <button type="button" disabled={!file} onClick={() => setOcrPanel(dt)} aria-label={`${label} AI 분석`}
+                              data-testid={`btn-company-ocr-${dt}`}
+                              style={{ fontSize: 11, padding: "5px 10px", borderRadius: 6, border: "1px solid #0284c7", background: file ? "#0284c7" : "#e5e7eb", color: file ? "#fff" : "#9ca3af", cursor: file ? "pointer" : "not-allowed", fontWeight: 600, whiteSpace: "nowrap" }}>
+                              ✨ AI 분석
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   {/* 0행: 거래처 유형 */}
                   <div>
