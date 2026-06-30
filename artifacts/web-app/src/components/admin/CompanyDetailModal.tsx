@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { Building2, FileBadge, User, BriefcaseBusiness, Tag, MapPinned, BadgeCheck, Calendar } from "lucide-react";
 import { api, CompanyDetail, Contact, Division, NoteEntry, VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS, VENDOR_TYPE_CATEGORY_CHIPS, resolveVendorType, finalVendorType } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { formatPhone } from "../../lib/utils";
@@ -395,7 +396,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
         onToast={onToast}
       />
     )}
-    <DraggableModal title={`거래처 #${companyId} 상세`} onClose={onClose} width={800} height="88vh" zIndex={300} bodyPadding="20px 28px" resizable
+    <DraggableModal title={`거래처 #${companyId} 상세`} onClose={onClose} width={1100} height="90vh" zIndex={300} bodyPadding="24px 36px" resizable
       headerExtra={
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {allowHardDelete && (
@@ -423,89 +424,128 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
               background: "#f0f9ff",
               border: "1px solid #bae6fd",
               borderRadius: 12,
-              padding: "14px 18px",
+              padding: "16px 20px",
               marginBottom: 6,
               marginTop: 12,
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "8px 16px",
-              alignItems: "center",
             }}>
-              <span style={{ fontSize: 17, fontWeight: 700, color: "#0c4a6e" }}>{detail.name}</span>
-              <span style={{
-                fontSize: 12, borderRadius: 20, padding: "2px 9px", fontWeight: 700,
-                background: (detail as any).companyType === "vendor" ? "#f5f3ff" : "#eff6ff",
-                color: (detail as any).companyType === "vendor" ? "#7c3aed" : "#1d4ed8",
-              }}>
-                {(detail as any).companyType === "vendor" ? "외주업체" : "고객사"}
-              </span>
-              {(detail as any).vendorType && (
-                <span style={{ fontSize: 12, borderRadius: 20, padding: "2px 9px", fontWeight: 600, background: "#ede9fe", color: "#6d28d9" }}>
-                  {VENDOR_TYPE_LABELS[(detail as any).vendorType] ?? (detail as any).vendorType}
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px 10px" }}>
+                <span style={{ fontSize: 20, fontWeight: 800, color: "#0c4a6e" }}>{detail.name}</span>
+                <span style={{
+                  fontSize: 12, borderRadius: 20, padding: "3px 11px", fontWeight: 700,
+                  background: (detail as any).companyType === "vendor" ? "#f5f3ff" : "#eff6ff",
+                  color: (detail as any).companyType === "vendor" ? "#7c3aed" : "#1d4ed8",
+                  border: `1px solid ${(detail as any).companyType === "vendor" ? "#c4b5fd" : "#93c5fd"}`,
+                }}>
+                  {(detail as any).companyType === "vendor" ? "외주업체" : "고객사"}
                 </span>
-              )}
-              {(detail.industry || (detail as any).businessCategory) && (
-                <span style={{ fontSize: 12, color: "#374151" }}>
-                  {[detail.industry, (detail as any).businessCategory].filter(Boolean).join(" · ")}
+                {(detail as any).vendorType && (
+                  <span style={{ fontSize: 12, borderRadius: 20, padding: "3px 11px", fontWeight: 600, background: "#ede9fe", color: "#6d28d9", border: "1px solid #c4b5fd" }}>
+                    {VENDOR_TYPE_LABELS[(detail as any).vendorType] ?? (detail as any).vendorType}
+                  </span>
+                )}
+                {(detail.industry || (detail as any).businessCategory) && (
+                  <>
+                    <span style={{ color: "#94a3b8", fontSize: 14, margin: "0 2px" }}>|</span>
+                    <span style={{ fontSize: 13, color: "#334155" }}>
+                      {[detail.industry, (detail as any).businessCategory].filter(Boolean).join(" · ")}
+                    </span>
+                  </>
+                )}
+                <div style={{ flex: 1 }} />
+                <span style={{ color: "#94a3b8", fontSize: 13 }}>|</span>
+                <span style={{ fontSize: 13, color: "#0369a1", fontWeight: 600 }}>
+                  담당자 {detail.contacts.filter((c: Contact) => c.isActive).length}명
                 </span>
-              )}
-              <span style={{ fontSize: 12, color: "#0369a1", fontWeight: 600 }}>
-                담당자 {detail.contacts.filter((c: Contact) => c.isActive).length}명
-              </span>
-              <span style={{ fontSize: 12, color: "#0369a1", fontWeight: 600 }}>
-                프로젝트 {detail.projects.length}건
-              </span>
-              <span style={{ fontSize: 12, color: "#059669", fontWeight: 700 }}>
-                총 결제 {Number(detail.totalPayment).toLocaleString()}원
-              </span>
-              {(detail as any).prepaidBalance > 0 && (
-                <span style={{ fontSize: 12, color: "#15803d", fontWeight: 700, background: "#dcfce7", borderRadius: 20, padding: "2px 9px" }}>
-                  선입금 {Number((detail as any).prepaidBalance).toLocaleString()}원
+                <span style={{ color: "#94a3b8", fontSize: 13 }}>|</span>
+                <span style={{ fontSize: 13, color: "#0369a1", fontWeight: 600 }}>
+                  프로젝트 {detail.projects.length}건
                 </span>
-              )}
-              {(detail as any).unpaidAmount > 0 && (
-                <span style={{ fontSize: 12, color: "#92400e", fontWeight: 700, background: "#fef3c7", borderRadius: 20, padding: "2px 9px" }}>
-                  미수금 {Number((detail as any).unpaidAmount).toLocaleString()}원
+                <span style={{ color: "#94a3b8", fontSize: 13 }}>|</span>
+                <span style={{ fontSize: 13, color: "#059669", fontWeight: 700 }}>
+                  총 결제 {Number(detail.totalPayment).toLocaleString()}원
                 </span>
+              </div>
+              {((detail as any).prepaidBalance > 0 || (detail as any).unpaidAmount > 0) && (
+                <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                  {(detail as any).prepaidBalance > 0 && (
+                    <span style={{ fontSize: 12, color: "#15803d", fontWeight: 700, background: "#dcfce7", borderRadius: 20, padding: "2px 9px" }}>
+                      선입금 {Number((detail as any).prepaidBalance).toLocaleString()}원
+                    </span>
+                  )}
+                  {(detail as any).unpaidAmount > 0 && (
+                    <span style={{ fontSize: 12, color: "#92400e", fontWeight: 700, background: "#fef3c7", borderRadius: 20, padding: "2px 9px" }}>
+                      미수금 {Number((detail as any).unpaidAmount).toLocaleString()}원
+                    </span>
+                  )}
+                </div>
               )}
             </div>
 
             {secRow("기본 정보", <GhostBtn onClick={() => setEditMode(true)} style={{ fontSize: 12, padding: "4px 12px" }}>정보 수정</GhostBtn>)}
             {!editMode ? (
               <div style={{ marginBottom: 10 }}>
-                {/* 기본정보 카드 */}
-                <div style={{ background: "#f9fafb", borderRadius: 12, border: "1px solid #f3f4f6", padding: "16px 18px", marginBottom: 10 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 24px" }}>
-                    {([
-                      ["거래처명", detail.name],
-                      ["거래처 유형", (detail as any).companyType === "vendor" ? "외주업체" : "고객사"],
-                      ...((detail as any).vendorType ? [["외주 유형", VENDOR_TYPE_LABELS[(detail as any).vendorType] ?? (detail as any).vendorType]] : []),
-                      ["사업자번호", detail.businessNumber ?? "-"],
-                      ["대표자명", detail.representativeName ?? "-"],
-                      ["등록일", (detail as any).registeredAt ?? "-"],
-                      ["업태", detail.industry ?? "-"],
-                      ["종목", (detail as any).businessCategory ?? "-"],
-                    ] as [string, string][]).map(([l, v]) => (
-                      <div key={l} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                        <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>{l}</span>
-                        <span style={{ fontSize: 13, color: "#111827", fontWeight: l === "거래처명" ? 700 : 400 }}>{v}</span>
-                      </div>
-                    ))}
+                {/* 기본정보 카드 - row/table 형식 */}
+                <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden", marginBottom: 10 }}>
+                  {([
+                    { label: "거래처명",     icon: <Building2 size={17} color="#6b7280" />, value: detail.name },
+                    { label: "사업자등록번호", icon: <FileBadge  size={17} color="#6b7280" />, value: detail.businessNumber ?? "-" },
+                    { label: "대표자명",     icon: <User        size={17} color="#6b7280" />, value: detail.representativeName ?? "-" },
+                    { label: "업태",         icon: <BriefcaseBusiness size={17} color="#6b7280" />, value: detail.industry ?? "-" },
+                    { label: "종목",         icon: <Tag         size={17} color="#6b7280" />, value: (detail as any).businessCategory ?? "-" },
+                    { label: "주소",         icon: <MapPinned   size={17} color="#6b7280" />, value: detail.address ?? "-" },
+                    ...(detail.notes ? [{ label: "메모", icon: <FileBadge size={17} color="#6b7280" />, value: detail.notes }] : []),
+                  ] as { label: string; icon: React.ReactNode; value: string }[]).map(({ label, icon, value }, i, arr) => (
+                    <div key={label} style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      padding: "13px 20px",
+                      borderBottom: i < arr.length - 1 ? "1px solid #f3f4f6" : "none",
+                      gap: 14,
+                      background: i % 2 === 0 ? "#fff" : "#fafafa",
+                    }}>
+                      <span style={{ flexShrink: 0, marginTop: 1, display: "flex" }}>{icon}</span>
+                      <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 600, width: 140, flexShrink: 0 }}>{label}</span>
+                      <div style={{ width: 1, alignSelf: "stretch", background: "#e5e7eb", flexShrink: 0 }} />
+                      <span style={{ fontSize: 14, color: "#111827", fontWeight: 600, flex: 1, paddingLeft: 2, whiteSpace: label === "메모" ? "pre-wrap" : undefined }}>{value}</span>
+                    </div>
+                  ))}
+                </div>
+                {/* Info Strip - 거래처 유형 + 등록일 */}
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  background: "#f9fafb",
+                  borderRadius: 10,
+                  border: "1px solid #e5e7eb",
+                  padding: "12px 20px",
+                  gap: 20,
+                  marginBottom: 10,
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <BadgeCheck size={17} color="#6b7280" style={{ flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 600 }}>거래처 유형</span>
+                    <span style={{
+                      fontSize: 12, borderRadius: 20, padding: "2px 10px", fontWeight: 700,
+                      background: (detail as any).companyType === "vendor" ? "#f5f3ff" : "#eff6ff",
+                      color: (detail as any).companyType === "vendor" ? "#7c3aed" : "#1d4ed8",
+                      border: `1px solid ${(detail as any).companyType === "vendor" ? "#c4b5fd" : "#93c5fd"}`,
+                    }}>
+                      {(detail as any).companyType === "vendor" ? "외주업체" : "고객사"}
+                    </span>
+                    {(detail as any).vendorType && (
+                      <span style={{ fontSize: 12, borderRadius: 20, padding: "2px 10px", fontWeight: 600, background: "#ede9fe", color: "#6d28d9", border: "1px solid #c4b5fd" }}>
+                        {VENDOR_TYPE_LABELS[(detail as any).vendorType] ?? (detail as any).vendorType}
+                      </span>
+                    )}
                   </div>
-                  {/* 주소 */}
-                  {detail.address && (
-                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #f3f4f6" }}>
-                      <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>주소</span>
-                      <p style={{ margin: "4px 0 0", fontSize: 13, color: "#374151" }}>{detail.address}</p>
-                    </div>
-                  )}
-                  {/* 메모 */}
-                  {detail.notes && (
-                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #f3f4f6" }}>
-                      <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>메모</span>
-                      <p style={{ margin: "4px 0 0", fontSize: 13, color: "#374151", whiteSpace: "pre-wrap" }}>{detail.notes}</p>
-                    </div>
-                  )}
+                  <div style={{ width: 1, height: 20, background: "#d1d5db", flexShrink: 0 }} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <Calendar size={17} color="#6b7280" style={{ flexShrink: 0 }} />
+                    <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 600 }}>등록일</span>
+                    <span style={{ fontSize: 14, color: "#111827", fontWeight: 600 }}>
+                      {(detail as any).registeredAt ?? "-"}
+                    </span>
+                  </div>
                 </div>
                 {/* 상호 변경 이력 */}
                 {(() => {
@@ -738,9 +778,9 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 { label: "총 결제 금액", value: `${Number(detail.totalPayment).toLocaleString()}원`, color: "#059669", bg: "#f0fdf4" },
                 { label: "총 정산 금액", value: `${Number(detail.totalSettlement).toLocaleString()}원`, color: "#7c3aed", bg: "#faf5ff" },
               ].map(s => (
-                <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.color}22`, borderRadius: 10, padding: "10px 16px", flex: "1 1 100px" }}>
-                  <p style={{ margin: "0 0 2px", fontSize: 11, fontWeight: 600, color: s.color }}>{s.label}</p>
-                  <p style={{ margin: 0, fontSize: 18, fontWeight: 800, color: s.color }}>{s.value}</p>
+                <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.color}33`, borderRadius: 12, padding: "14px 20px", flex: "1 1 120px" }}>
+                  <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 600, color: s.color }}>{s.label}</p>
+                  <p style={{ margin: 0, fontSize: 20, fontWeight: 800, color: s.color }}>{s.value}</p>
                 </div>
               ))}
             </div>
