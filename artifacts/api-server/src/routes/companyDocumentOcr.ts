@@ -143,7 +143,18 @@ router.post(
         const contactName  = (result.contactName as string) ?? null;
         const mobilePhone  = formatKoreanPhone((result.mobilePhone as string) ?? null);
         const officePhone  = formatKoreanPhone((result.officePhone as string) ?? null);
-        console.log(`[DOC-AI] CONTACT_CARD RESULT contactName=${contactName ?? "null"} mobilePhone=${mobilePhone ?? "null"} officePhone=${officePhone ?? "null"} confidence=${confidence}`);
+        // 대표전화/팩스/홈페이지: 별도 등록폼 필드 없음 → 메모에 구조화 텍스트로 저장
+        const companyPhone = formatKoreanPhone((result.companyPhone as string) ?? null);
+        const fax          = formatKoreanPhone((result.fax as string) ?? null);
+        const website      = (result.website as string) ?? null;
+        const rawMemo      = (result.memo as string) ?? null;
+        const memoParts: string[] = [];
+        if (companyPhone) memoParts.push(`대표전화: ${companyPhone}`);
+        if (fax)          memoParts.push(`팩스: ${fax}`);
+        if (website)      memoParts.push(`홈페이지: ${website}`);
+        if (rawMemo)      memoParts.push(rawMemo);
+        const memo = memoParts.length > 0 ? memoParts.join("\n") : null;
+        console.log(`[DOC-AI] CONTACT_CARD RESULT contactName=${contactName ?? "null"} mobilePhone=${mobilePhone ?? "null"} officePhone=${officePhone ?? "null"} companyPhone=${companyPhone ?? "null"} fax=${fax ?? "null"} website=${website ?? "null"} confidence=${confidence}`);
         extracted = {
           contactName,
           companyName: (result.companyName as string) ?? null,
@@ -152,7 +163,7 @@ router.post(
           email:       (result.email as string) ?? null,
           mobilePhone,
           officePhone,
-          memo:        (result.memo as string) ?? null,
+          memo,
         };
         current = { contactName: null, companyName: null, department: null, position: null, email: null, mobilePhone: null, officePhone: null, memo: null };
         validations = {};
