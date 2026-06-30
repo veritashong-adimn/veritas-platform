@@ -17,6 +17,9 @@ const adminGuard = [requireAuth, requireRole("admin", "staff")];
 // business_license, bankbook: 거래처 증빙서류
 // contact_card: 담당자 명함/이메일서명 — 동일 Document AI Framework 공유
 type CompanyDocType = "business_license" | "bankbook" | "contact_card";
+const ALLOWED_DOC_TYPES = "business_license,bankbook,contact_card";
+console.log("[DOC-AI] contact_card enabled");
+console.log(`[DOC-AI] allowedTypes=${ALLOWED_DOC_TYPES}`);
 
 const docUpload = multer({
   storage: multer.memoryStorage(),
@@ -57,6 +60,9 @@ router.post(
   ...adminGuard,
   docUpload.single("file"),
   async (req, res) => {
+    console.log("[DOC-AI] VALIDATION FILE = artifacts/api-server/src/routes/companyDocumentOcr.ts");
+    console.log(`[DOC-AI] INCOMING TYPE = ${String(req.query.type ?? "")}`);
+    console.log(`[DOC-AI] ALLOWED TYPES = ${ALLOWED_DOC_TYPES}`);
     const docType = parseCompanyDocType(req.query.type);
     if (!docType) {
       sendError(res, 400, "type 파라미터는 business_license, bankbook, contact_card 중 하나이어야 합니다.");
