@@ -1,5 +1,10 @@
 import React, { useState, useEffect } from "react";
+import {
+  User, Building2, Building, BriefcaseBusiness, Mail, Smartphone,
+  Phone, BadgeCheck, CircleCheck, Calendar,
+} from "lucide-react";
 import { api, ContactDetail, NoteEntry } from "../../lib/constants";
+import { formatPhoneDisplay } from "../../lib/utils";
 import { StatusBadge, PrimaryBtn } from "../ui";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { DraggableModal } from "./DraggableModal";
@@ -10,13 +15,19 @@ const inputStyle: React.CSSProperties = {
   border: "1px solid #d1d5db", fontSize: 13, color: "#111827",
   outline: "none", boxSizing: "border-box", background: "#fff",
 };
+
 const sH: React.CSSProperties = {
-  fontSize: 12, fontWeight: 700, color: "#6b7280",
-  textTransform: "uppercase", letterSpacing: "0.06em",
-  margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
+  fontSize: 14, fontWeight: 700, color: "#111827",
+  borderLeft: "3px solid #6366f1", paddingLeft: 10,
+  margin: 0, lineHeight: 1.5,
 };
-const readLabel: React.CSSProperties = { color: "#9ca3af", minWidth: 64, fontSize: 13, flexShrink: 0 };
-const readValue: React.CSSProperties = { color: "#374151", fontSize: 13 };
+
+const secRow = (label: string, extra?: React.ReactNode): React.ReactNode => (
+  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "20px 0 10px" }}>
+    <p style={sH}>{label}</p>
+    {extra && <div style={{ display: "flex", alignItems: "center", gap: 8 }}>{extra}</div>}
+  </div>
+);
 
 export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenProject, onRefreshList }: {
   contactId: number; token: string; onClose: () => void;
@@ -74,7 +85,7 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
 
   return (
     <>
-      <DraggableModal title="담당자 상세" headerExtra={headerExtra} onClose={onClose} width={720} zIndex={300} bodyPadding="20px 28px" resizable>
+      <DraggableModal title="담당자 상세" headerExtra={headerExtra} onClose={onClose} width={1100} height="90vh" zIndex={300} bodyPadding="24px 36px" resizable>
         {loading ? (
           <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px 0" }}>불러오는 중...</p>
         ) : !detail ? (
@@ -83,47 +94,168 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
           <>
             <ReviewMemoPanel storageKey={`contact_${contactId}`} label="이 담당자 검수 메모" />
 
-            {/* ── 기본 정보 ── */}
-            <p style={sH}>기본 정보</p>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 24px", marginBottom: 8 }}>
+            {/* ══ Summary Card ══ */}
+            <div style={{
+              background: "#f0f9ff",
+              border: "1px solid #bae6fd",
+              borderRadius: 12,
+              padding: "16px 20px",
+              marginBottom: 6,
+              marginTop: 12,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px 10px" }}>
+                <span style={{ fontSize: 20, fontWeight: 800, color: "#0c4a6e" }}>{detail.name}</span>
+
+                {/* 담당자 유형 badges */}
+                {detail.isPrimary && (
+                  <span style={{ fontSize: 12, borderRadius: 20, padding: "3px 11px", fontWeight: 700, background: "#dbeafe", color: "#1d4ed8", border: "1px solid #93c5fd" }}>
+                    기본 담당자
+                  </span>
+                )}
+                {detail.isQuoteContact && (
+                  <span style={{ fontSize: 12, borderRadius: 20, padding: "3px 11px", fontWeight: 700, background: "#d1fae5", color: "#065f46", border: "1px solid #6ee7b7" }}>
+                    견적 담당자
+                  </span>
+                )}
+                {detail.isBillingContact && (
+                  <span style={{ fontSize: 12, borderRadius: 20, padding: "3px 11px", fontWeight: 700, background: "#ede9fe", color: "#5b21b6", border: "1px solid #c4b5fd" }}>
+                    청구 담당자
+                  </span>
+                )}
+                <span style={{
+                  fontSize: 12, borderRadius: 20, padding: "3px 11px", fontWeight: 700,
+                  background: detail.isActive ? "#dcfce7" : "#f3f4f6",
+                  color: detail.isActive ? "#15803d" : "#9ca3af",
+                  border: `1px solid ${detail.isActive ? "#86efac" : "#d1d5db"}`,
+                }}>
+                  {detail.isActive ? "활성" : "비활성"}
+                </span>
+
+                {/* 구분 */}
+                {(detail.companyName || detail.divisionName || detail.position) && (
+                  <>
+                    <span style={{ color: "#94a3b8", fontSize: 14, margin: "0 2px" }}>|</span>
+                    {detail.companyName && (
+                      <span style={{ fontSize: 13, color: "#334155" }}>{detail.companyName}</span>
+                    )}
+                    {detail.divisionName && (
+                      <span style={{ fontSize: 13, color: "#64748b" }}>{detail.divisionName}</span>
+                    )}
+                    {detail.position && (
+                      <span style={{ fontSize: 13, color: "#64748b" }}>{detail.position}</span>
+                    )}
+                  </>
+                )}
+
+                <div style={{ flex: 1 }} />
+                <span style={{ color: "#94a3b8", fontSize: 13 }}>|</span>
+                <span style={{ fontSize: 13, color: "#0369a1", fontWeight: 600 }}>
+                  담당 프로젝트 {detail.projects.length}건
+                </span>
+                <span style={{ color: "#94a3b8", fontSize: 13 }}>|</span>
+                <span style={{ fontSize: 13, color: "#0369a1", fontWeight: 600 }}>
+                  메모 {notes.length}건
+                </span>
+              </div>
+            </div>
+
+            {/* ══ 기본 정보 ══ */}
+            {secRow("기본 정보", (
+              <button onClick={() => setShowEditModal(true)}
+                style={{ fontSize: 12, fontWeight: 700, color: "#2563eb", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 6, padding: "4px 12px", cursor: "pointer" }}>
+                정보 수정
+              </button>
+            ))}
+            <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden", marginBottom: 10 }}>
               {([
-                ["이름", detail.name],
-                ["거래처", detail.companyName ?? "-"],
-                ["브랜드/부서", detail.divisionName ?? "-"],
-                ["부서", detail.department ?? "-"],
-                ["직책", detail.position ?? "-"],
-                ["이메일", detail.email ?? "-"],
-                ["전화", detail.phone ?? "-"],
-                ["휴대폰", detail.mobile ?? "-"],
-                ["사무실", detail.officePhone ?? "-"],
-              ] as [string, string][]).map(([l, v]) => (
-                <div key={l} style={{ display: "flex", gap: 6, marginBottom: 5, alignItems: "flex-start" }}>
-                  <span style={readLabel}>{l}</span>
-                  <span style={{ ...readValue, fontWeight: l === "이름" ? 700 : 400 }}>{v}</span>
+                { label: "이름",     icon: <User             size={17} color="#6b7280" />, value: detail.name },
+                { label: "거래처",   icon: <Building2        size={17} color="#6b7280" />, value: detail.companyName ?? "-" },
+                { label: "브랜드/부서", icon: <Building      size={17} color="#6b7280" />, value: detail.divisionName ?? "-" },
+                { label: "직책",     icon: <BriefcaseBusiness size={17} color="#6b7280" />, value: [detail.department, detail.position].filter(Boolean).join(" · ") || "-" },
+                { label: "이메일",   icon: <Mail             size={17} color="#6b7280" />, value: detail.email ?? "-" },
+                { label: "휴대폰",   icon: <Smartphone       size={17} color="#6b7280" />, value: formatPhoneDisplay(detail.mobile) },
+                { label: "전화",     icon: <Phone            size={17} color="#6b7280" />, value: formatPhoneDisplay(detail.phone) },
+                ...(detail.memo ? [{ label: "메모", icon: <Mail size={17} color="#6b7280" />, value: detail.memo }] : []),
+              ] as { label: string; icon: React.ReactNode; value: string }[]).map(({ label, icon, value }, i, arr) => (
+                <div key={label} style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  padding: "13px 20px",
+                  borderBottom: i < arr.length - 1 ? "1px solid #f3f4f6" : "none",
+                  gap: 14,
+                  background: i % 2 === 0 ? "#fff" : "#fafafa",
+                }}>
+                  <span style={{ flexShrink: 0, marginTop: 1, display: "flex" }}>{icon}</span>
+                  <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 600, width: 140, flexShrink: 0 }}>{label}</span>
+                  <div style={{ width: 1, alignSelf: "stretch", background: "#e5e7eb", flexShrink: 0 }} />
+                  <span style={{ fontSize: 14, color: "#111827", fontWeight: 600, flex: 1, paddingLeft: 2, whiteSpace: label === "메모" ? "pre-wrap" : undefined }}>{value}</span>
                 </div>
               ))}
-              {detail.memo && (
-                <div style={{ gridColumn: "1 / -1", display: "flex", gap: 6, marginTop: 2 }}>
-                  <span style={readLabel}>메모</span>
-                  <span style={{ ...readValue, whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{detail.memo}</span>
+            </div>
+
+            {/* ══ 상태 정보 Strip ══ */}
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              background: "#f9fafb",
+              borderRadius: 10,
+              border: "1px solid #e5e7eb",
+              padding: "12px 20px",
+              gap: 20,
+              marginBottom: 10,
+            }}>
+              {/* 담당자 유형 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <BadgeCheck size={17} color="#6b7280" style={{ flexShrink: 0 }} />
+                <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 600 }}>담당자 유형</span>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {detail.isPrimary && (
+                    <span style={{ fontSize: 12, borderRadius: 20, padding: "2px 10px", fontWeight: 700, background: "#dbeafe", color: "#1d4ed8", border: "1px solid #93c5fd" }}>기본</span>
+                  )}
+                  {detail.isQuoteContact && (
+                    <span style={{ fontSize: 12, borderRadius: 20, padding: "2px 10px", fontWeight: 700, background: "#d1fae5", color: "#065f46", border: "1px solid #6ee7b7" }}>견적</span>
+                  )}
+                  {detail.isBillingContact && (
+                    <span style={{ fontSize: 12, borderRadius: 20, padding: "2px 10px", fontWeight: 700, background: "#ede9fe", color: "#5b21b6", border: "1px solid #c4b5fd" }}>청구</span>
+                  )}
+                  {!detail.isPrimary && !detail.isQuoteContact && !detail.isBillingContact && (
+                    <span style={{ fontSize: 12, color: "#9ca3af" }}>일반</span>
+                  )}
                 </div>
-              )}
+              </div>
+
+              <div style={{ width: 1, height: 20, background: "#d1d5db", flexShrink: 0 }} />
+
+              {/* 활성 상태 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <CircleCheck size={17} color="#6b7280" style={{ flexShrink: 0 }} />
+                <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 600 }}>상태</span>
+                <span style={{
+                  fontSize: 12, borderRadius: 20, padding: "2px 10px", fontWeight: 700,
+                  background: detail.isActive ? "#dcfce7" : "#f3f4f6",
+                  color: detail.isActive ? "#15803d" : "#9ca3af",
+                  border: `1px solid ${detail.isActive ? "#86efac" : "#d1d5db"}`,
+                }}>
+                  {detail.isActive ? "활성" : "비활성"}
+                </span>
+              </div>
+
+              <div style={{ width: 1, height: 20, background: "#d1d5db", flexShrink: 0 }} />
+
+              {/* 등록일 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Calendar size={17} color="#6b7280" style={{ flexShrink: 0 }} />
+                <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 600 }}>등록일</span>
+                <span style={{ fontSize: 14, color: "#111827", fontWeight: 600 }}>
+                  {new Date(detail.createdAt).toLocaleDateString("ko-KR")}
+                </span>
+              </div>
             </div>
 
-            {/* ── 역할 ── */}
-            <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
-              {detail.isPrimary && <span style={{ fontSize: 11, background: "#dbeafe", color: "#1d4ed8", borderRadius: 5, padding: "2px 8px", fontWeight: 700 }}>기본 담당자</span>}
-              {detail.isQuoteContact && <span style={{ fontSize: 11, background: "#d1fae5", color: "#065f46", borderRadius: 5, padding: "2px 8px", fontWeight: 700 }}>견적 담당자</span>}
-              {detail.isBillingContact && <span style={{ fontSize: 11, background: "#ede9fe", color: "#5b21b6", borderRadius: 5, padding: "2px 8px", fontWeight: 700 }}>청구 담당자</span>}
-              <span style={{ fontSize: 11, background: detail.isActive ? "#d1fae5" : "#f3f4f6", color: detail.isActive ? "#065f46" : "#9ca3af", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>
-                {detail.isActive ? "활성" : "비활성"}
-              </span>
-            </div>
-
-            {/* ── 연관 프로젝트 ── */}
-            <p style={{ ...sH, marginTop: 20 }}>연관 프로젝트 ({detail.projects.length})</p>
+            {/* ══ 연관 프로젝트 ══ */}
+            {secRow(`연관 프로젝트 (${detail.projects.length})`)}
             {detail.projects.length === 0 ? (
-              <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "8px 0" }}>프로젝트가 없습니다.</p>
+              <p style={{ color: "#9ca3af", fontSize: 13, textAlign: "center", padding: "10px 0" }}>프로젝트가 없습니다.</p>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {detail.projects.map(p => (
@@ -140,26 +272,26 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
               </div>
             )}
 
-            {/* ── 커뮤니케이션 이력 ── */}
+            {/* ══ 커뮤니케이션 이력 ══ */}
             {detail.communications.length > 0 && (
               <>
-                <p style={{ ...sH, marginTop: 20 }}>커뮤니케이션 이력 ({detail.communications.length})</p>
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {secRow(`커뮤니케이션 이력 (${detail.communications.length})`)}
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {detail.communications.map(c => (
-                    <div key={c.id} style={{ padding: "8px 12px", background: "#f9fafb", borderRadius: 8, fontSize: 12, border: "1px solid #f3f4f6" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
-                        <span style={{ fontWeight: 600, color: "#6b7280" }}>{c.type}</span>
-                        <span style={{ color: "#9ca3af" }}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
+                    <div key={c.id} style={{ padding: "10px 14px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: "#6b7280" }}>{c.type}</span>
+                        <span style={{ fontSize: 12, color: "#9ca3af" }}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
                       </div>
-                      <p style={{ margin: 0, color: "#374151" }}>{c.content}</p>
+                      <p style={{ margin: 0, fontSize: 13, color: "#374151" }}>{c.content}</p>
                     </div>
                   ))}
                 </div>
               </>
             )}
 
-            {/* ── 메모 ── */}
-            <p style={{ ...sH, marginTop: 20 }}>메모 ({notes.length})</p>
+            {/* ══ 메모 ══ */}
+            {secRow(`메모 (${notes.length})`)}
             <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
               <input value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="메모 입력..."
                 style={{ ...inputStyle, flex: 1, padding: "7px 10px" }}
@@ -187,7 +319,7 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
         )}
       </DraggableModal>
 
-      {/* ── 담당자 수정 모달 ── */}
+      {/* ══ 담당자 수정 모달 ══ */}
       {showEditModal && detail && (
         <ContactFormModal
           mode="edit"

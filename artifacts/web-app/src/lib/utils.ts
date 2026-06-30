@@ -19,3 +19,10 @@ export function formatPhone(value: string): string {
   if (digits.length <= 10) return digits.replace(/(\d{3})(\d{3,4})(\d{0,4})/, "$1-$2-$3");
   return digits.replace(/(\d{3})(\d{4})(\d{4})/, "$1-$2-$3").slice(0, 13);
 }
+
+/** 저장된 전화번호를 표시용으로 포맷. null/빈 값/"-" → "-" 반환 */
+export function formatPhoneDisplay(value: string | null | undefined): string {
+  if (!value || value.trim() === "" || value.trim() === "-") return "-";
+  const formatted = formatPhone(value);
+  return formatted || value;
+}

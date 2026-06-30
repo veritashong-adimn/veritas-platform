@@ -13,6 +13,7 @@ import {
   VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS,
 } from '../lib/constants';
 import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../components/ui';
+import { formatPhoneDisplay } from '../lib/utils';
 import { LogModal } from '../components/admin/LogModal';
 import { DraggableModal } from '../components/admin/DraggableModal';
 import { ContactDetailModal } from '../components/admin/ContactDetailModal';
@@ -72,16 +73,6 @@ const EDUCATION_LABEL_MAP: Record<string, string> = {
 };
 const getEducationLabel = (v: string | null | undefined) => (v && EDUCATION_LABEL_MAP[v]) ? EDUCATION_LABEL_MAP[v] : (v ?? "");
 
-const formatPhoneDisplay = (phone: string | null | undefined): string => {
-  if (!phone) return "-";
-  const d = phone.replace(/\D/g, "");
-  if (d.length === 11 && /^01[016789]/.test(d)) return `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`;
-  if (d.startsWith("02") && d.length === 9) return `${d.slice(0,2)}-${d.slice(2,5)}-${d.slice(5)}`;
-  if (d.startsWith("02") && d.length === 10) return `${d.slice(0,2)}-${d.slice(2,6)}-${d.slice(6)}`;
-  if (d.length === 10) return `${d.slice(0,3)}-${d.slice(3,6)}-${d.slice(6)}`;
-  if (d.length === 11) return `${d.slice(0,3)}-${d.slice(3,7)}-${d.slice(7)}`;
-  return phone;
-};
 
 function Section({ title, sub, children, action }: { title: string; sub?: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
@@ -2069,7 +2060,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }} onClick={() => setContactModal(c.id)}>
                             {[c.department, c.position].filter(Boolean).join(" / ") || "-"}
                           </td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#374151" }} onClick={() => setContactModal(c.id)}>{(c as any).mobile ?? c.phone ?? "-"}</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#374151" }} onClick={() => setContactModal(c.id)}>{formatPhoneDisplay((c as any).mobile ?? c.phone)}</td>
                           <td style={{ ...tableTd, color: "#2563eb", fontSize: 12 }} onClick={() => setContactModal(c.id)}>{c.email ?? "-"}</td>
                           <td style={{ ...tableTd }} onClick={() => setContactModal(c.id)}>
                             <div style={{ display: "flex", gap: 3, flexWrap: "wrap" }}>
