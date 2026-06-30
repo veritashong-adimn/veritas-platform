@@ -26,6 +26,23 @@ const tableTd: React.CSSProperties = {
   borderBottom: "1px solid #edf0f3", verticalAlign: "middle",
 };
 
+// ─── Design System: Information Hierarchy Badge Styles ───────────────────────
+// Secondary: 상위 분류 (고객사 / 외주업체) — 거래처명보다 낮은 존재감
+const BADGE_SECONDARY_CLIENT: React.CSSProperties = {
+  fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 5,
+  background: "#f0f9ff", color: "#3b82f6", border: "1px solid #bfdbfe",
+};
+const BADGE_SECONDARY_VENDOR: React.CSSProperties = {
+  fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 5,
+  background: "#f5f3ff", color: "#8b5cf6", border: "1px solid #ddd6fe",
+};
+// Tertiary: 하위 분류 (통번역업체 / 통역장비 / 편집·감수 등) — 상위보다 더 낮은 존재감
+const BADGE_TERTIARY: React.CSSProperties = {
+  fontSize: 9, fontWeight: 500, padding: "1px 5px", borderRadius: 4,
+  background: "transparent", color: "#a78bfa", border: "1px solid #ede9fe",
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
 function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 32 }}>
@@ -702,7 +719,8 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                               onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                               <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
                               <td style={{ ...tableTd }}>
-                                <div style={{ fontWeight: 700, color: "#111827", marginBottom: 2 }}>
+                                {/* Primary: 거래처명 — 가장 강한 존재감 */}
+                                <div style={{ fontSize: 14, fontWeight: 700, color: "#111827", marginBottom: 3 }}>
                                   {c.name}
                                   {c.matchedDivisionName && (
                                     <span style={{ fontWeight: 600, color: "#7c3aed", marginLeft: 4 }}>({c.matchedDivisionName})</span>
@@ -713,17 +731,14 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                                     {c.divisionNames!.slice(0, 3).join(" · ")}{c.divisionNames!.length > 3 ? ` 외 ${c.divisionNames!.length - 3}개` : ""}
                                   </div>
                                 )}
-                                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                                  <span style={{
-                                    fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 8,
-                                    background: c.companyType === "vendor" ? "#f5f3ff" : "#eff6ff",
-                                    color: c.companyType === "vendor" ? "#7c3aed" : "#1d4ed8",
-                                    border: `1px solid ${c.companyType === "vendor" ? "#ddd6fe" : "#bfdbfe"}`,
-                                  }}>
+                                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+                                  {/* Secondary: 고객사 / 외주업체 — 상위 분류, 낮은 존재감 */}
+                                  <span style={c.companyType === "vendor" ? BADGE_SECONDARY_VENDOR : BADGE_SECONDARY_CLIENT}>
                                     {c.companyType === "vendor" ? "외주업체" : "고객사"}
                                   </span>
+                                  {/* Tertiary: 하위 유형 — 부가 설명, 가장 낮은 존재감 */}
                                   {c.vendorType && (
-                                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 8, background: "#faf5ff", color: "#9333ea", border: "1px solid #e9d5ff" }}>
+                                    <span style={BADGE_TERTIARY}>
                                       {VENDOR_TYPE_LABELS[c.vendorType] ?? c.vendorType}
                                     </span>
                                   )}
