@@ -9,7 +9,7 @@ import {
   divisionsTable, companyNameHistoryTable, logsTable,
   prepaidAccountsTable, prepaidLedgerTable,
   quoteItemsTable, quoteItemFilesTable,
-  projectFilesTable,
+  projectFilesTable, translatorProfilesTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, inArray, sql, desc, ne } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
@@ -24,7 +24,7 @@ const adminGuard = [requireAuth, requireRole("admin", "staff")];
 // ─── 거래처 목록 ─────────────────────────────────────────────────────────────
 router.get("/admin/companies", ...adminGuard, async (req, res) => {
   try {
-    const { search, companyType, vendorType } = req.query as { search?: string; companyType?: string; vendorType?: string };
+    const { search, companyType, vendorType, customerType } = req.query as { search?: string; companyType?: string; vendorType?: string; customerType?: string };
 
     const rows = await db
       .select({
@@ -44,6 +44,7 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
         createdAt: companiesTable.createdAt,
         companyType: companiesTable.companyType,
         vendorType: companiesTable.vendorType,
+        customerType: companiesTable.customerType,
         contactCount: sql<number>`COUNT(DISTINCT ${contactsTable.id})::int`,
         projectCount: sql<number>`COUNT(DISTINCT ${projectsTable.id})::int`,
         totalPayment: sql<number>`COALESCE(SUM(${paymentsTable.amount}) FILTER (WHERE ${paymentsTable.status} = 'paid'), 0)::int`,
@@ -115,6 +116,9 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
     if (vendorType) {
       result = result.filter(c => c.vendorType === vendorType);
     }
+    if (customerType === "CORPORATE" || customerType === "PUBLIC" || customerType === "INDIVIDUAL") {
+      result = result.filter(c => (c.customerType ?? "CORPORATE") === customerType);
+    }
 
     res.json(result);
   } catch (err) {
@@ -125,11 +129,11 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
 
 // ─── 거래처 생성 ─────────────────────────────────────────────────────────────
 router.post("/admin/companies", ...adminGuard, requirePermission("company.create"), async (req, res) => {
-  const { name, businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, registeredAt, companyType, vendorType } = req.body as {
+  const { name, businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, registeredAt, companyType, vendorType, customerType } = req.body as {
     name?: string; businessNumber?: string; representativeName?: string;
     email?: string; phone?: string; mobile?: string; industry?: string; businessCategory?: string;
     address?: string; website?: string; notes?: string; registeredAt?: string;
-    companyType?: string; vendorType?: string;
+    companyType?: string; vendorType?: string; customerType?: string;
   };
 
   if (!name?.trim()) {
@@ -138,6 +142,9 @@ router.post("/admin/companies", ...adminGuard, requirePermission("company.create
 
   const resolvedCompanyType = companyType === "vendor" ? "vendor" : "client";
   const resolvedVendorType = resolvedCompanyType === "vendor" ? (vendorType || null) : null;
+  const resolvedCustomerType = resolvedCompanyType === "client"
+    ? (customerType === "INDIVIDUAL" ? "INDIVIDUAL" : customerType === "PUBLIC" ? "PUBLIC" : "CORPORATE")
+    : null;
 
   // 오늘 날짜를 기본 등록일로
   const today = new Date().toISOString().slice(0, 10);
@@ -145,7 +152,7 @@ router.post("/admin/companies", ...adminGuard, requirePermission("company.create
   try {
     const [company] = await db
       .insert(companiesTable)
-      .values({ name: name.trim(), businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, registeredAt: registeredAt ?? today, companyType: resolvedCompanyType, vendorType: resolvedVendorType })
+      .values({ name: name.trim(), businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, registeredAt: registeredAt ?? today, companyType: resolvedCompanyType, vendorType: resolvedVendorType, customerType: resolvedCustomerType })
       .returning();
 
     // 최초 상호를 이력으로 기록
@@ -318,7 +325,7 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
 
-  const { name, businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, registeredAt, nameChangeReason, companyType, vendorType } = req.body;
+  const { name, businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, registeredAt, nameChangeReason, companyType, vendorType, customerType } = req.body;
 
   try {
     const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
@@ -330,6 +337,9 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
 
     const resolvedCompanyType = companyType === "vendor" ? "vendor" : companyType === "client" ? "client" : existing.companyType;
     const resolvedVendorType = resolvedCompanyType === "vendor" ? (vendorType !== undefined ? (vendorType || null) : existing.vendorType) : null;
+    const resolvedCustomerType = resolvedCompanyType === "client"
+      ? (customerType !== undefined ? (customerType === "INDIVIDUAL" ? "INDIVIDUAL" : customerType === "PUBLIC" ? "PUBLIC" : "CORPORATE") : (existing.customerType ?? "CORPORATE"))
+      : null;
 
     const [updated] = await db
       .update(companiesTable)
@@ -348,6 +358,7 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
         registeredAt: registeredAt !== undefined ? (registeredAt || null) : existing.registeredAt,
         companyType: resolvedCompanyType,
         vendorType: resolvedVendorType,
+        customerType: resolvedCustomerType,
       })
       .where(eq(companiesTable.id, companyId))
       .returning();
@@ -383,6 +394,88 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
   } catch (err) {
     req.log.error({ err }, "Companies: failed to update");
     res.status(500).json({ error: "거래처 수정 실패." });
+  }
+});
+
+// ─── 중복 인물 후보 검색 (차단 아닌 안내용) ────────────────────────────────────
+router.get("/admin/people/duplicate-candidates", ...adminGuard, async (req, res) => {
+  const { name, email, mobile } = req.query as { name?: string; email?: string; mobile?: string };
+
+  const normalizedName   = name?.trim() || null;
+  const normalizedEmail  = email?.trim().toLowerCase() || null;
+  const normalizedMobile = mobile?.trim().replace(/\D/g, "") || null;
+
+  if (!normalizedEmail && !normalizedMobile) {
+    res.json({ candidates: [] }); return;
+  }
+
+  type MatchReason = "name_mobile" | "name_email" | "mobile" | "email";
+  type RawCandidate = {
+    source: "contact" | "individual_customer" | "translator";
+    id: number; name: string; companyId?: number; companyName?: string;
+    email?: string; mobile?: string; roleLabel: string;
+    matchReason: MatchReason; priority: number;
+  };
+  const PRIORITY: Record<MatchReason, number> = { name_mobile: 1, name_email: 2, mobile: 3, email: 4 };
+  const allMatches: RawCandidate[] = [];
+
+  const pushContact = (r: { id: number; name: string; email: string | null; mobile: string | null; companyId: number | null; companyName: string | null }, reason: MatchReason) =>
+    allMatches.push({ source: "contact", id: r.id, name: r.name, companyId: r.companyId ?? undefined, companyName: r.companyName ?? undefined, email: r.email ?? undefined, mobile: r.mobile ?? undefined, roleLabel: "담당자", matchReason: reason, priority: PRIORITY[reason] });
+  const pushIndiv = (r: { id: number; name: string; email: string | null; mobile: string | null }, reason: MatchReason) =>
+    allMatches.push({ source: "individual_customer", id: r.id, name: r.name, email: r.email ?? undefined, mobile: r.mobile ?? undefined, roleLabel: "개인고객", matchReason: reason, priority: PRIORITY[reason] });
+  const pushTranslator = (r: { id: number; name: string | null; email: string; phone: string | null }, reason: MatchReason) =>
+    allMatches.push({ source: "translator", id: r.id, name: r.name ?? "(이름 없음)", email: r.email, mobile: r.phone ?? undefined, roleLabel: "통번역사", matchReason: reason, priority: PRIORITY[reason] });
+
+  try {
+    const nameSql    = (col: Parameters<typeof sql>[0] extends TemplateStringsArray ? never : any) => sql`lower(${col}) = ${normalizedName!.toLowerCase()}`;
+    const mobileSql  = (col: any) => sql`regexp_replace(${col}, '[^0-9]', '', 'g') = ${normalizedMobile}`;
+    const emailSql   = (col: any) => sql`lower(${col}) = ${normalizedEmail}`;
+
+    // ── contacts ─────────────────────────────────────────────────────────────
+    const cSel = { id: contactsTable.id, name: contactsTable.name, email: contactsTable.email, mobile: contactsTable.mobile, companyId: contactsTable.companyId, companyName: companiesTable.name };
+    const cFrom = () => db.select(cSel).from(contactsTable).innerJoin(companiesTable, eq(contactsTable.companyId, companiesTable.id));
+    const cActive = eq(contactsTable.isActive, true);
+
+    if (normalizedName && normalizedMobile) { (await cFrom().where(and(cActive, nameSql(contactsTable.name), mobileSql(contactsTable.mobile)))).forEach(r => pushContact(r, "name_mobile")); }
+    if (normalizedName && normalizedEmail)  { (await cFrom().where(and(cActive, nameSql(contactsTable.name), emailSql(contactsTable.email)))).forEach(r => pushContact(r, "name_email")); }
+    if (normalizedMobile)                   { (await cFrom().where(and(cActive, mobileSql(contactsTable.mobile)))).forEach(r => pushContact(r, "mobile")); }
+    if (normalizedEmail)                    { (await cFrom().where(and(cActive, emailSql(contactsTable.email)))).forEach(r => pushContact(r, "email")); }
+
+    // ── companies(INDIVIDUAL) ─────────────────────────────────────────────────
+    const iSel  = { id: companiesTable.id, name: companiesTable.name, email: companiesTable.email, mobile: companiesTable.mobile };
+    const iBase = eq(companiesTable.customerType, "INDIVIDUAL");
+    const iFrom = () => db.select(iSel).from(companiesTable);
+
+    if (normalizedName && normalizedMobile) { (await iFrom().where(and(iBase, nameSql(companiesTable.name), mobileSql(companiesTable.mobile)))).forEach(r => pushIndiv(r, "name_mobile")); }
+    if (normalizedName && normalizedEmail)  { (await iFrom().where(and(iBase, nameSql(companiesTable.name), emailSql(companiesTable.email)))).forEach(r => pushIndiv(r, "name_email")); }
+    if (normalizedMobile)                   { (await iFrom().where(and(iBase, mobileSql(companiesTable.mobile)))).forEach(r => pushIndiv(r, "mobile")); }
+    if (normalizedEmail)                    { (await iFrom().where(and(iBase, emailSql(companiesTable.email)))).forEach(r => pushIndiv(r, "email")); }
+
+    // ── translators (email uses leftJoin to catch no-profile users) ───────────
+    const tSel  = { id: usersTable.id, name: usersTable.name, email: usersTable.email, phone: translatorProfilesTable.phone };
+    const tBase = and(eq(usersTable.role, "translator"), eq(usersTable.isActive, true));
+    const tInner = () => db.select(tSel).from(usersTable).innerJoin(translatorProfilesTable, eq(translatorProfilesTable.userId, usersTable.id));
+    const tLeft  = () => db.select(tSel).from(usersTable).leftJoin(translatorProfilesTable, eq(translatorProfilesTable.userId, usersTable.id));
+
+    if (normalizedName && normalizedMobile) { (await tInner().where(and(tBase, nameSql(usersTable.name), mobileSql(translatorProfilesTable.phone)))).forEach(r => pushTranslator(r as any, "name_mobile")); }
+    if (normalizedName && normalizedEmail)  { (await tLeft().where(and(tBase, nameSql(usersTable.name), emailSql(usersTable.email)))).forEach(r => pushTranslator(r as any, "name_email")); }
+    if (normalizedMobile)                   { (await tInner().where(and(tBase, mobileSql(translatorProfilesTable.phone)))).forEach(r => pushTranslator(r as any, "mobile")); }
+    if (normalizedEmail)                    { (await tLeft().where(and(tBase, emailSql(usersTable.email)))).forEach(r => pushTranslator(r as any, "email")); }
+
+    // ── dedup: keep highest-priority match per (source:id), then sort ─────────
+    const best = new Map<string, RawCandidate>();
+    for (const m of allMatches) {
+      const key = `${m.source}:${m.id}`;
+      if (!best.has(key) || best.get(key)!.priority > m.priority) best.set(key, m);
+    }
+    const candidates = [...best.values()]
+      .sort((a, b) => a.priority - b.priority)
+      .map(({ priority, ...c }) => c);
+
+    res.json({ candidates });
+  } catch (err) {
+    req.log.error({ err }, "People: failed to find duplicate candidates");
+    res.status(500).json({ error: "후보 검색 실패." });
   }
 });
 

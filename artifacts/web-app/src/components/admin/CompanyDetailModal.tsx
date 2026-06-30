@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Building2, FileBadge, User, BriefcaseBusiness, Tag, MapPinned, BadgeCheck, Calendar } from "lucide-react";
-import { api, CompanyDetail, Contact, Division, NoteEntry, VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS, VENDOR_TYPE_CATEGORY_CHIPS, resolveVendorType, finalVendorType } from "../../lib/constants";
+import { api, CompanyDetail, Contact, Division, NoteEntry, VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS, VENDOR_TYPE_CATEGORY_CHIPS, resolveVendorType, finalVendorType, CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS, getCustomerTypeBadgeColors } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { formatPhone } from "../../lib/utils";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
@@ -49,7 +49,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [savingContact, setSavingContact] = useState(false);
   const [showInactiveContacts, setShowInactiveContacts] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", representativeName: "", industry: "", businessCategory: "", address: "", notes: "", registeredAt: "", companyType: "client", vendorType: "" });
+  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", representativeName: "", industry: "", businessCategory: "", address: "", email: "", mobile: "", notes: "", registeredAt: "", companyType: "client", vendorType: "", customerType: "CORPORATE" });
   const [originalName, setOriginalName] = useState("");
   const [nameChangeReason, setNameChangeReason] = useState("");
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
@@ -69,6 +69,16 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [editBankbookFile, setEditBankbookFile] = useState<File | null>(null);
   const [editOcrPanel, setEditOcrPanel] = useState<CompanyOcrDocType | null>(null);
   const [editDragOverType, setEditDragOverType] = useState<CompanyOcrDocType | null>(null);
+
+  // 담당자 중복 경고 모달
+  type ContactWarning = {
+    message: string;
+    warnings: string[];
+    type?: string;
+    duplicates?: Array<{ id: number; name: string; companyName?: string; mobile?: string; email?: string }>;
+    duplicateContact?: { id: number; name: string } | null;
+  };
+  const [contactWarningModal, setContactWarningModal] = useState<ContactWarning | null>(null);
 
   const authH = { Authorization: `Bearer ${token}` };
 
@@ -92,10 +102,13 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
           industry: data.industry ?? "",
           businessCategory: (data as any).businessCategory ?? "",
           address: data.address ?? "",
+          email: data.email ?? "",
+          mobile: data.mobile ?? "",
           notes: data.notes ?? "",
           registeredAt: (data as any).registeredAt ?? "",
           companyType: (data as any).companyType ?? "client",
           vendorType: resolvedVT.vendorType,
+          customerType: (data as any).customerType ?? "CORPORATE",
         });
       }
       if (nRes.ok) setCompNotes(Array.isArray(nData) ? nData : []);
@@ -205,7 +218,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
     return errs;
   };
 
-  const handleAddContact = async () => {
+  const handleAddContact = async (force = false) => {
     const errs = validateContactForm(contactForm);
     setContactFormErrors(errs);
     if (Object.keys(errs).length > 0) return;
@@ -213,10 +226,20 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
     try {
       const res = await fetch(api("/api/admin/contacts"), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
-        body: JSON.stringify({ ...contactForm, companyId }),
+        body: JSON.stringify({ ...contactForm, companyId, force }),
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      if (data.warning === true) {
+        setContactWarningModal({
+          message: data.message,
+          warnings: data.warnings ?? [],
+          type: data.type,
+          duplicates: data.duplicates,
+          duplicateContact: data.duplicateContact ?? null,
+        });
+        return;
+      }
       setContactForm(emptyContactForm);
       setContactFormErrors({});
       setShowContactForm(false);
@@ -386,6 +409,47 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
 
   return (
     <>
+    {/* ── 담당자 중복 경고 확인 모달 ── */}
+    {contactWarningModal && (
+      <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ background: "#fff", borderRadius: 14, padding: "28px 28px 22px", width: 420, maxWidth: "92vw", boxShadow: "0 8px 40px rgba(0,0,0,0.18)" }}>
+          <div style={{ fontSize: 16, fontWeight: 700, color: "#111827", marginBottom: 12 }}>⚠️ 중복 연락처 안내</div>
+          <div style={{ fontSize: 13, color: "#374151", lineHeight: 1.7, marginBottom: 14 }}>
+            {contactWarningModal.warnings.length > 0
+              ? contactWarningModal.warnings.map((w, i) => <div key={i} style={{ marginBottom: 4 }}>• {w}</div>)
+              : <div>{contactWarningModal.message}</div>
+            }
+          </div>
+          {contactWarningModal.type === "cross_company_duplicate" && contactWarningModal.duplicates && (
+            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "#374151" }}>
+              {contactWarningModal.duplicates.map((d, i) => (
+                <div key={i} style={{ marginBottom: i < contactWarningModal.duplicates!.length - 1 ? 8 : 0 }}>
+                  <span style={{ fontWeight: 700 }}>{d.name}</span>
+                  {d.companyName && <span style={{ color: "#6b7280" }}> · {d.companyName}</span>}
+                  {d.mobile && <span style={{ color: "#6b7280" }}> · {d.mobile}</span>}
+                  {d.email && <span style={{ color: "#6b7280" }}> · {d.email}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+          {contactWarningModal.duplicateContact && !contactWarningModal.type && (
+            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "#374151" }}>
+              <span style={{ fontWeight: 700 }}>{contactWarningModal.duplicateContact.name}</span>
+            </div>
+          )}
+          <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 18 }}>계속 등록하시겠습니까?</div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <GhostBtn onClick={() => setContactWarningModal(null)} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
+            <button
+              onClick={async () => { setContactWarningModal(null); await handleAddContact(true); }}
+              style={{ padding: "7px 18px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", background: "#1d4ed8", color: "#fff", border: "none" }}>
+              계속 등록
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     {editOcrPanel && (editOcrPanel === "business_license" ? editLicenseFile : editBankbookFile) && (
       <CompanyDocumentAnalyzePanel
         docType={editOcrPanel}
@@ -430,6 +494,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
             }}>
               <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px 10px" }}>
                 <span style={{ fontSize: 20, fontWeight: 800, color: "#0c4a6e" }}>{detail.name}</span>
+                {/* 거래처 유형 계층 배지 */}
                 <span style={{
                   fontSize: 12, borderRadius: 20, padding: "3px 11px", fontWeight: 700,
                   background: (detail as any).companyType === "vendor" ? "#f5f3ff" : "#eff6ff",
@@ -438,10 +503,25 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 }}>
                   {(detail as any).companyType === "vendor" ? "외주업체" : "고객사"}
                 </span>
-                {(detail as any).vendorType && (
-                  <span style={{ fontSize: 12, borderRadius: 20, padding: "3px 11px", fontWeight: 600, background: "#ede9fe", color: "#6d28d9", border: "1px solid #c4b5fd" }}>
-                    {VENDOR_TYPE_LABELS[(detail as any).vendorType] ?? (detail as any).vendorType}
-                  </span>
+                {(detail as any).companyType === "client" && (() => {
+                  const ct = (detail as any).customerType ?? "CORPORATE";
+                  const { bg, color, border } = getCustomerTypeBadgeColors(ct);
+                  return (
+                    <>
+                      <span style={{ fontSize: 11, color: "#cbd5e1" }}>›</span>
+                      <span style={{ fontSize: 12, borderRadius: 20, padding: "3px 11px", fontWeight: 700, background: bg, color, border: `1px solid ${border}` }}>
+                        {CUSTOMER_TYPE_LABELS[ct] ?? "기업"}
+                      </span>
+                    </>
+                  );
+                })()}
+                {(detail as any).companyType === "vendor" && (detail as any).vendorType && (
+                  <>
+                    <span style={{ fontSize: 11, color: "#cbd5e1" }}>›</span>
+                    <span style={{ fontSize: 12, borderRadius: 20, padding: "3px 11px", fontWeight: 600, background: "#ede9fe", color: "#6d28d9", border: "1px solid #c4b5fd" }}>
+                      {VENDOR_TYPE_LABELS[(detail as any).vendorType] ?? (detail as any).vendorType}
+                    </span>
+                  </>
                 )}
                 {(detail.industry || (detail as any).businessCategory) && (
                   <>
@@ -486,15 +566,27 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
               <div style={{ marginBottom: 10 }}>
                 {/* 기본정보 카드 - row/table 형식 */}
                 <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden", marginBottom: 10 }}>
-                  {([
-                    { label: "거래처명",     icon: <Building2 size={17} color="#6b7280" />, value: detail.name },
-                    { label: "사업자등록번호", icon: <FileBadge  size={17} color="#6b7280" />, value: detail.businessNumber ?? "-" },
-                    { label: "대표자명",     icon: <User        size={17} color="#6b7280" />, value: detail.representativeName ?? "-" },
-                    { label: "업태",         icon: <BriefcaseBusiness size={17} color="#6b7280" />, value: detail.industry ?? "-" },
-                    { label: "종목",         icon: <Tag         size={17} color="#6b7280" />, value: (detail as any).businessCategory ?? "-" },
-                    { label: "주소",         icon: <MapPinned   size={17} color="#6b7280" />, value: detail.address ?? "-" },
-                    ...(detail.notes ? [{ label: "메모", icon: <FileBadge size={17} color="#6b7280" />, value: detail.notes }] : []),
-                  ] as { label: string; icon: React.ReactNode; value: string }[]).map(({ label, icon, value }, i, arr) => (
+                  {((() => {
+                    const isIndividual = (detail as any).companyType === "client" && ((detail as any).customerType ?? "CORPORATE") === "INDIVIDUAL";
+                    if (isIndividual) {
+                      return [
+                        { label: "성명",     icon: <User        size={17} color="#6b7280" />, value: detail.name },
+                        { label: "휴대폰",   icon: <User        size={17} color="#6b7280" />, value: detail.mobile ?? "-" },
+                        { label: "이메일",   icon: <FileBadge   size={17} color="#6b7280" />, value: detail.email ?? "-" },
+                        { label: "주소",     icon: <MapPinned   size={17} color="#6b7280" />, value: detail.address ?? "-" },
+                        ...(detail.notes ? [{ label: "메모", icon: <FileBadge size={17} color="#6b7280" />, value: detail.notes }] : []),
+                      ];
+                    }
+                    return [
+                      { label: "거래처명",     icon: <Building2 size={17} color="#6b7280" />, value: detail.name },
+                      { label: "사업자등록번호", icon: <FileBadge  size={17} color="#6b7280" />, value: detail.businessNumber ?? "-" },
+                      { label: "대표자명",     icon: <User        size={17} color="#6b7280" />, value: detail.representativeName ?? "-" },
+                      { label: "업태",         icon: <BriefcaseBusiness size={17} color="#6b7280" />, value: detail.industry ?? "-" },
+                      { label: "종목",         icon: <Tag         size={17} color="#6b7280" />, value: (detail as any).businessCategory ?? "-" },
+                      { label: "주소",         icon: <MapPinned   size={17} color="#6b7280" />, value: detail.address ?? "-" },
+                      ...(detail.notes ? [{ label: "메모", icon: <FileBadge size={17} color="#6b7280" />, value: detail.notes }] : []),
+                    ];
+                  })() as { label: string; icon: React.ReactNode; value: string }[]).map(({ label, icon, value }, i, arr) => (
                     <div key={label} style={{
                       display: "flex",
                       alignItems: "flex-start",
@@ -521,7 +613,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                   gap: 20,
                   marginBottom: 10,
                 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <BadgeCheck size={17} color="#6b7280" style={{ flexShrink: 0 }} />
                     <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 600 }}>거래처 유형</span>
                     <span style={{
@@ -532,10 +624,25 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     }}>
                       {(detail as any).companyType === "vendor" ? "외주업체" : "고객사"}
                     </span>
-                    {(detail as any).vendorType && (
-                      <span style={{ fontSize: 12, borderRadius: 20, padding: "2px 10px", fontWeight: 600, background: "#ede9fe", color: "#6d28d9", border: "1px solid #c4b5fd" }}>
-                        {VENDOR_TYPE_LABELS[(detail as any).vendorType] ?? (detail as any).vendorType}
-                      </span>
+                    {(detail as any).companyType === "client" && (() => {
+                      const ct = (detail as any).customerType ?? "CORPORATE";
+                      const { bg, color, border } = getCustomerTypeBadgeColors(ct);
+                      return (
+                        <>
+                          <span style={{ fontSize: 11, color: "#cbd5e1" }}>›</span>
+                          <span style={{ fontSize: 12, borderRadius: 20, padding: "2px 10px", fontWeight: 700, background: bg, color, border: `1px solid ${border}` }}>
+                            {CUSTOMER_TYPE_LABELS[ct] ?? "기업"}
+                          </span>
+                        </>
+                      );
+                    })()}
+                    {(detail as any).companyType === "vendor" && (detail as any).vendorType && (
+                      <>
+                        <span style={{ fontSize: 11, color: "#cbd5e1" }}>›</span>
+                        <span style={{ fontSize: 12, borderRadius: 20, padding: "2px 10px", fontWeight: 600, background: "#ede9fe", color: "#6d28d9", border: "1px solid #c4b5fd" }}>
+                          {VENDOR_TYPE_LABELS[(detail as any).vendorType] ?? (detail as any).vendorType}
+                        </span>
+                      </>
                     )}
                   </div>
                   <div style={{ width: 1, height: 20, background: "#d1d5db", flexShrink: 0 }} />
@@ -669,32 +776,60 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     {formErrors.nameChangeReason && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.nameChangeReason}</p>}
                   </div>
                 )}
-                {/* 1.5행: 거래처 유형 / 외주유형 */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, background: "#f9fafb", borderRadius: 10, padding: "12px 14px", border: "1px solid #f3f4f6" }}>
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 6 }}>거래처 유형</label>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      {[
-                        { v: "client", label: "고객사", bg: "#eff6ff", color: "#1d4ed8", border: "#93c5fd" },
-                        { v: "vendor", label: "외주업체", bg: "#f5f3ff", color: "#7c3aed", border: "#c4b5fd" },
-                      ].map(opt => (
-                        <button key={opt.v} type="button"
-                          onClick={() => setEditForm(p => ({ ...p, companyType: opt.v, vendorType: opt.v === "client" ? "" : p.vendorType }))}
-                          style={{
-                            padding: "6px 18px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
-                            background: editForm.companyType === opt.v ? opt.bg : "#fff",
-                            color: editForm.companyType === opt.v ? opt.color : "#9ca3af",
-                            border: `2px solid ${editForm.companyType === opt.v ? opt.border : "#e5e7eb"}`,
-                            transition: "all 0.15s",
-                          }}>
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
+                {/* 1.5행: 거래처 유형 (계층형) */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 0, background: "#f9fafb", borderRadius: 10, padding: "12px 14px", border: "1px solid #f3f4f6" }}>
+                  {/* 1차: 거래처 유형 */}
+                  <label style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 8 }}>거래처 유형</label>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {[
+                      { v: "client", label: "고객사", bg: "#eff6ff", color: "#1d4ed8", border: "#93c5fd" },
+                      { v: "vendor", label: "외주업체", bg: "#f5f3ff", color: "#7c3aed", border: "#c4b5fd" },
+                    ].map(opt => (
+                      <button key={opt.v} type="button"
+                        onClick={() => setEditForm(p => ({ ...p, companyType: opt.v, vendorType: opt.v === "client" ? "" : p.vendorType, customerType: opt.v === "vendor" ? "CORPORATE" : p.customerType }))}
+                        style={{
+                          padding: "6px 18px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
+                          background: editForm.companyType === opt.v ? opt.bg : "#fff",
+                          color: editForm.companyType === opt.v ? opt.color : "#9ca3af",
+                          border: `2px solid ${editForm.companyType === opt.v ? opt.border : "#e5e7eb"}`,
+                          transition: "all 0.15s",
+                        }}>
+                        {opt.label}
+                      </button>
+                    ))}
                   </div>
+                  {/* 2차: 고객 분류 */}
+                  {editForm.companyType === "client" && (
+                    <div style={{ marginTop: 8, paddingLeft: 14, borderLeft: "3px solid #93c5fd" }}>
+                      <div style={{ padding: "10px 12px", background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10 }}>
+                        <label style={{ fontSize: 12, color: "#1d4ed8", fontWeight: 700, display: "block", marginBottom: 8, letterSpacing: "-0.01em" }}>고객 분류</label>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {CUSTOMER_TYPE_OPTIONS.map(opt => {
+                            const isActive = editForm.customerType === opt.value;
+                            const { bg, color, border } = getCustomerTypeBadgeColors(opt.value);
+                            return (
+                              <button key={opt.value} type="button"
+                                onClick={() => setEditForm(p => ({ ...p, customerType: opt.value }))}
+                                style={{
+                                  padding: "6px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700,
+                                  cursor: "pointer", transition: "all 0.15s", lineHeight: "1.4",
+                                  background: isActive ? bg : "#fff",
+                                  color: isActive ? color : "#9ca3af",
+                                  border: `2px solid ${isActive ? border : "#e5e7eb"}`,
+                                }}>
+                                {opt.label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {/* 2차: 외주 분류 */}
                   {editForm.companyType === "vendor" && (
-                    <div>
-                      <label style={{ fontSize: 12, color: "#7c3aed", fontWeight: 600, display: "block", marginBottom: 4 }}>외주유형</label>
+                    <div style={{ marginTop: 8, paddingLeft: 14, borderLeft: "3px solid #c4b5fd" }}>
+                      <div style={{ padding: "10px 12px", background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 10 }}>
+                      <label style={{ fontSize: 12, color: "#6d28d9", fontWeight: 700, display: "block", marginBottom: 8, letterSpacing: "-0.01em" }}>외주 분류</label>
                       <ClickSelect
                         value={editForm.vendorType}
                         onChange={v => { setEditForm(p => ({ ...p, vendorType: v })); if (v !== "etc") setEditVendorTypeCustom(""); }}
@@ -712,43 +847,75 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                           style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", marginTop: 6, borderColor: "#ddd6fe", color: "#7c3aed" }}
                         />
                       )}
+                      </div>
                     </div>
                   )}
                 </div>
 
-                {/* 2행: 사업자등록번호 / 대표자명 / 등록일 */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>사업자등록번호</label>
-                    <input value={editForm.businessNumber} onChange={e => setEditForm(p => ({ ...p, businessNumber: e.target.value }))}
-                      placeholder="000-00-00000"
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.businessNumber ? "#fca5a5" : undefined }} />
-                    {formErrors.businessNumber && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.businessNumber}</p>}
+                {/* 개인고객: 휴대폰 / 이메일 */}
+                {editForm.companyType === "client" && editForm.customerType === "INDIVIDUAL" && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>휴대폰</label>
+                      <input value={editForm.mobile} onChange={e => setEditForm(p => ({ ...p, mobile: e.target.value }))}
+                        placeholder="010-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>이메일</label>
+                      <input type="email" value={editForm.email} onChange={e => setEditForm(p => ({ ...p, email: e.target.value }))}
+                        placeholder="name@example.com" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                    </div>
                   </div>
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대표자명</label>
-                    <input value={editForm.representativeName} onChange={e => setEditForm(p => ({ ...p, representativeName: e.target.value }))}
-                      placeholder="홍길동" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                )}
+
+                {/* 2행: 사업자등록번호 / 대표자명 / 등록일 (기업고객 / 외주업체만) */}
+                {!(editForm.companyType === "client" && editForm.customerType === "INDIVIDUAL") && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>사업자등록번호</label>
+                      <input value={editForm.businessNumber} onChange={e => setEditForm(p => ({ ...p, businessNumber: e.target.value }))}
+                        placeholder="000-00-00000"
+                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.businessNumber ? "#fca5a5" : undefined }} />
+                      {formErrors.businessNumber && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.businessNumber}</p>}
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대표자명</label>
+                      <input value={editForm.representativeName} onChange={e => setEditForm(p => ({ ...p, representativeName: e.target.value }))}
+                        placeholder="홍길동" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>등록일</label>
+                      <input type="date" value={editForm.registeredAt} onChange={e => setEditForm(p => ({ ...p, registeredAt: e.target.value }))}
+                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                    </div>
                   </div>
+                )}
+
+                {/* 개인고객: 등록일 (단독 행) */}
+                {editForm.companyType === "client" && editForm.customerType === "INDIVIDUAL" && (
                   <div>
                     <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>등록일</label>
                     <input type="date" value={editForm.registeredAt} onChange={e => setEditForm(p => ({ ...p, registeredAt: e.target.value }))}
                       style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
                   </div>
-                </div>
-                {/* 3행: 업태 / 종목 */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>업태</label>
-                    <input value={editForm.industry} onChange={e => setEditForm(p => ({ ...p, industry: e.target.value }))}
-                      placeholder="제조업, 서비스업 등" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                )}
+
+                {/* 3행: 업태 / 종목 (기업고객 / 외주업체만) */}
+                {!(editForm.companyType === "client" && editForm.customerType === "INDIVIDUAL") && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>업태</label>
+                      <input value={editForm.industry} onChange={e => setEditForm(p => ({ ...p, industry: e.target.value }))}
+                        placeholder="제조업, 서비스업 등" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>종목</label>
+                      <input value={editForm.businessCategory} onChange={e => setEditForm(p => ({ ...p, businessCategory: e.target.value }))}
+                        placeholder="통역, 번역, 소프트웨어 등" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                    </div>
                   </div>
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>종목</label>
-                    <input value={editForm.businessCategory} onChange={e => setEditForm(p => ({ ...p, businessCategory: e.target.value }))}
-                      placeholder="통역, 번역, 소프트웨어 등" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                  </div>
-                </div>
+                )}
+
                 {/* 5행: 주소 */}
                 <div>
                   <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>주소</label>
@@ -994,7 +1161,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     ))}
                   </div>
                   <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                    <PrimaryBtn onClick={handleAddContact} disabled={addingContact} style={{ fontSize: 13, padding: "7px 16px" }}>
+                    <PrimaryBtn onClick={() => handleAddContact()} disabled={addingContact} style={{ fontSize: 13, padding: "7px 16px" }}>
                       {addingContact ? "추가 중..." : "담당자 추가"}
                     </PrimaryBtn>
                     <GhostBtn onClick={() => { setShowContactForm(false); setContactForm(emptyContactForm); setContactFormErrors({}); }} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>

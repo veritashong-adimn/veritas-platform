@@ -20,6 +20,8 @@ export const companiesTable = pgTable("companies", {
   companyType: varchar("company_type", { length: 30 }).notNull().default("client"),
   // vendor 전용: interpretation_equipment | editing | translation_agency | cleaning | water_supply | etc
   vendorType: varchar("vendor_type", { length: 50 }),
+  // client 전용: CORPORATE | PUBLIC | INDIVIDUAL (NULL = vendor 또는 레거시 client → CORPORATE 처리)
+  customerType: varchar("customer_type", { length: 20 }).default("CORPORATE"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

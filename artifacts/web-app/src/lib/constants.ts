@@ -126,6 +126,26 @@ export type ProjectDetail = AdminProject & {
 };
 export type CompanyType = "client" | "vendor";
 export type VendorType = string;
+export type CustomerType = "CORPORATE" | "PUBLIC" | "INDIVIDUAL";
+
+export const CUSTOMER_TYPE_LABELS: Record<string, string> = {
+  CORPORATE: "기업",
+  PUBLIC: "공공기관",
+  INDIVIDUAL: "개인",
+};
+
+export const CUSTOMER_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: "CORPORATE", label: "기업" },
+  { value: "PUBLIC", label: "공공기관" },
+  { value: "INDIVIDUAL", label: "개인" },
+];
+
+// 고객 분류별 Badge 색상 — 기업(blue) / 공공기관(green) / 개인(orange)
+export function getCustomerTypeBadgeColors(ct: string): { bg: string; color: string; border: string } {
+  if (ct === "PUBLIC")     return { bg: "#f0fdf4", color: "#15803d", border: "#bbf7d0" };
+  if (ct === "INDIVIDUAL") return { bg: "#fff7ed", color: "#c2410c", border: "#fed7aa" };
+  return { bg: "#eff6ff", color: "#2563eb", border: "#bfdbfe" }; // CORPORATE
+}
 
 export const VENDOR_TYPE_LABELS: Record<string, string> = {
   // 구 영문 키 → 한글 표기 (하위 호환)
@@ -233,6 +253,7 @@ export type Company = {
   representativeName: string | null; email: string | null; phone: string | null; mobile: string | null;
   createdAt: string; contactCount: number; projectCount: number; totalPayment: number;
   companyType: CompanyType; vendorType: VendorType | null;
+  customerType: CustomerType | null;
   /** 소속 브랜드/부서명 목록 */
   divisionNames?: string[];
   /** 검색어와 매칭된 브랜드/부서명 (검색 시만 존재) */

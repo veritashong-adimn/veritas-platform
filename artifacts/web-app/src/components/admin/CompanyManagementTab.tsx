@@ -3,6 +3,7 @@ import {
   api, Company,
   VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS, VENDOR_TYPE_CATEGORY_CHIPS,
   resolveVendorType, finalVendorType,
+  CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS, getCustomerTypeBadgeColors,
 } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
 import { CompanyDetailModal } from './CompanyDetailModal';
@@ -27,20 +28,25 @@ const tableTd: React.CSSProperties = {
 };
 
 // ─── Design System: Information Hierarchy Badge Styles ───────────────────────
-// Secondary: 상위 분류 (고객사 / 외주업체) — 거래처명보다 낮은 존재감
+// Secondary: 상위 분류 (고객사 / 외주업체)
 const BADGE_SECONDARY_CLIENT: React.CSSProperties = {
-  fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 5,
-  background: "#f0f9ff", color: "#3b82f6", border: "1px solid #bfdbfe",
+  fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 5,
+  background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe",
 };
 const BADGE_SECONDARY_VENDOR: React.CSSProperties = {
-  fontSize: 10, fontWeight: 600, padding: "1px 6px", borderRadius: 5,
-  background: "#f5f3ff", color: "#8b5cf6", border: "1px solid #ddd6fe",
+  fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 5,
+  background: "#f5f3ff", color: "#6d28d9", border: "1px solid #ddd6fe",
 };
-// Tertiary: 하위 분류 (통번역업체 / 통역장비 / 편집·감수 등) — 상위보다 더 낮은 존재감
-const BADGE_TERTIARY: React.CSSProperties = {
-  fontSize: 9, fontWeight: 500, padding: "1px 5px", borderRadius: 4,
-  background: "transparent", color: "#a78bfa", border: "1px solid #ede9fe",
+// Tertiary: 외주 세부 분류 (통번역업체 등) — purple 계열
+const BADGE_TERTIARY_VENDOR: React.CSSProperties = {
+  fontSize: 9, fontWeight: 600, padding: "1px 6px", borderRadius: 4,
+  background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd6fe",
 };
+// 고객 분류 Badge: customerType에 따라 색상 동적 적용
+function getCustomerSubBadgeStyle(ct: string): React.CSSProperties {
+  const { bg, color, border } = getCustomerTypeBadgeColors(ct);
+  return { fontSize: 9, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: bg, color, border: `1px solid ${border}` };
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
@@ -59,10 +65,11 @@ interface CompanyManagementTabProps {
   token: string;
   onToast: (msg: string) => void;
   onOpenProject: (id: number) => void;
+  onOpenTranslator?: (userId: number, email: string) => void;
   hasPerm: (key: string | undefined) => boolean;
 }
 
-export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }: CompanyManagementTabProps) {
+export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTranslator, hasPerm }: CompanyManagementTabProps) {
   const authHeaders = { Authorization: `Bearer ${token}` };
 
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -73,8 +80,9 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
   const [companyForm, setCompanyForm] = useState({
     name: "", businessNumber: "", representativeName: "",
     industry: "", businessCategory: "", address: "",
+    email: "", mobile: "",
     notes: "", registeredAt: new Date().toISOString().slice(0, 10),
-    companyType: "client", vendorType: "",
+    companyType: "client", vendorType: "", customerType: "CORPORATE",
   });
   const [vendorTypeCustom, setVendorTypeCustom] = useState("");
   const [savingCompany, setSavingCompany] = useState(false);
@@ -92,12 +100,26 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
   const [savingNewCompanyContact, setSavingNewCompanyContact] = useState(false);
   const [companyTypeFilter, setCompanyTypeFilter] = useState<"all" | "client" | "vendor">("all");
   const [companyVendorTypeFilter, setCompanyVendorTypeFilter] = useState<string>("all");
+  const [companyCustomerTypeFilter, setCompanyCustomerTypeFilter] = useState<string>("all");
 
   // AI 문서 자동입력
   const [licenseFile, setLicenseFile] = useState<File | null>(null);
   const [bankbookFile, setBankbookFile] = useState<File | null>(null);
   const [ocrPanel, setOcrPanel] = useState<CompanyOcrDocType | null>(null);
   const [dragOverType, setDragOverType] = useState<CompanyOcrDocType | null>(null);
+
+  // 담당자 중복 경고 모달 (신규 거래처 등록 중 담당자 추가 시)
+  type ContactWarning = {
+    message: string; warnings: string[]; type?: string;
+    duplicates?: Array<{ id: number; name: string; companyName?: string; mobile?: string; email?: string }>;
+    duplicateContact?: { id: number; name: string } | null;
+  };
+  const [newContactWarningModal, setNewContactWarningModal] = useState<ContactWarning | null>(null);
+
+  // 개인고객 등록 시 기존 인물 후보 안내 모달
+  type PersonCandidate = { source: string; id: number; name: string; companyId?: number; companyName?: string; email?: string; mobile?: string; roleLabel: string; matchReason?: string };
+  const [personCandidateModal, setPersonCandidateModal] = useState<{ show: boolean; candidates: PersonCandidate[] } | null>(null);
+  const [pendingCompanyCreate, setPendingCompanyCreate] = useState(false);
 
   const fetchCompanies = useCallback(async () => {
     setCompaniesLoading(true);
@@ -113,8 +135,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
 
   useEffect(() => { fetchCompanies(); }, []);
 
-  const handleCreateCompany = async () => {
-    if (!companyForm.name.trim()) { onToast("회사명을 입력하세요."); return; }
+  const doCreateCompany = async () => {
     setSavingCompany(true);
     try {
       const body = { ...companyForm, vendorType: finalVendorType(companyForm.vendorType, vendorTypeCustom) };
@@ -136,6 +157,35 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
     finally { setSavingCompany(false); }
   };
 
+  const handleCreateCompany = async () => {
+    if (!companyForm.name.trim()) {
+      onToast(companyForm.companyType === "client" && companyForm.customerType === "INDIVIDUAL" ? "성명을 입력하세요." : "회사명을 입력하세요.");
+      return;
+    }
+    // 개인고객 등록 시: 기존 인물 후보 검색 (차단 아님, 안내만)
+    if (companyForm.companyType === "client" && companyForm.customerType === "INDIVIDUAL") {
+      const mobile = companyForm.mobile?.trim().replace(/\D/g, "") || "";
+      const email  = companyForm.email?.trim().toLowerCase() || "";
+      if (mobile || email) {
+        try {
+          const params = new URLSearchParams();
+          const personName = companyForm.name.trim();
+          if (personName) params.set("name", personName);
+          if (mobile) params.set("mobile", mobile);
+          if (email)  params.set("email", email);
+          const r = await fetch(api(`/api/admin/people/duplicate-candidates?${params}`), { headers: authHeaders });
+          const d = await r.json();
+          if (r.ok && Array.isArray(d.candidates) && d.candidates.length > 0) {
+            setPersonCandidateModal({ show: true, candidates: d.candidates });
+            setPendingCompanyCreate(true);
+            return;
+          }
+        } catch { /* 후보 검색 실패는 무시하고 등록 진행 */ }
+      }
+    }
+    await doCreateCompany();
+  };
+
   const handleAddNewCompanyDivision = async () => {
     if (!newCompanyDivForm.name.trim() || !createdCompanyId) return;
     setSavingNewCompanyDiv(true);
@@ -152,16 +202,24 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
     finally { setSavingNewCompanyDiv(false); }
   };
 
-  const handleAddNewCompanyContact = async () => {
+  const handleAddNewCompanyContact = async (force = false) => {
     if (!newCompanyContactForm.name.trim() || !createdCompanyId) return;
     setSavingNewCompanyContact(true);
     try {
       const res = await fetch(api(`/api/admin/companies/${createdCompanyId}/contacts`), {
         method: "POST", headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ ...newCompanyContactForm, companyId: createdCompanyId }),
+        body: JSON.stringify({ ...newCompanyContactForm, companyId: createdCompanyId, force }),
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      if (data.warning === true) {
+        setNewContactWarningModal({
+          message: data.message, warnings: data.warnings ?? [],
+          type: data.type, duplicates: data.duplicates,
+          duplicateContact: data.duplicateContact ?? null,
+        });
+        return;
+      }
       const divName = newCompanyContactForm.divisionId
         ? newCompanyDivisions.find(d => d.id === newCompanyContactForm.divisionId)?.name
         : undefined;
@@ -182,8 +240,9 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
     setCompanyForm({
       name: "", businessNumber: "", representativeName: "",
       industry: "", businessCategory: "", address: "",
+      email: "", mobile: "",
       notes: "", registeredAt: new Date().toISOString().slice(0, 10),
-      companyType: "client", vendorType: "",
+      companyType: "client", vendorType: "", customerType: "CORPORATE",
     });
     setVendorTypeCustom("");
     setLicenseFile(null);
@@ -228,6 +287,134 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
 
   return (
     <>
+      {/* ── 담당자 중복 경고 확인 모달 (신규 거래처 등록 중) ── */}
+      {newContactWarningModal && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "28px 28px 22px", width: 420, maxWidth: "92vw", boxShadow: "0 8px 40px rgba(0,0,0,0.18)" }}>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#111827", marginBottom: 12 }}>⚠️ 중복 연락처 안내</div>
+            <div style={{ fontSize: 13, color: "#374151", lineHeight: 1.7, marginBottom: 14 }}>
+              {(newContactWarningModal.warnings ?? []).length > 0
+                ? newContactWarningModal.warnings.map((w, i) => <div key={i} style={{ marginBottom: 4 }}>• {w}</div>)
+                : <div>{newContactWarningModal.message}</div>}
+            </div>
+            {newContactWarningModal.type === "cross_company_duplicate" && newContactWarningModal.duplicates && (
+              <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "#374151" }}>
+                {newContactWarningModal.duplicates.map((d, i) => (
+                  <div key={i} style={{ marginBottom: i < newContactWarningModal.duplicates!.length - 1 ? 8 : 0 }}>
+                    <span style={{ fontWeight: 700 }}>{d.name}</span>
+                    {d.companyName && <span style={{ color: "#6b7280" }}> · {d.companyName}</span>}
+                    {d.mobile && <span style={{ color: "#6b7280" }}> · {d.mobile}</span>}
+                    {d.email && <span style={{ color: "#6b7280" }}> · {d.email}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {newContactWarningModal.duplicateContact && !newContactWarningModal.type && (
+              <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 12, color: "#374151" }}>
+                <span style={{ fontWeight: 700 }}>{newContactWarningModal.duplicateContact.name}</span>
+              </div>
+            )}
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 18 }}>계속 등록하시겠습니까?</div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <GhostBtn onClick={() => setNewContactWarningModal(null)} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
+              <button onClick={async () => { setNewContactWarningModal(null); await handleAddNewCompanyContact(true); }}
+                style={{ padding: "7px 18px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", background: "#1d4ed8", color: "#fff", border: "none" }}>
+                계속 등록
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 개인고객 기존 인물 후보 안내 모달 ── */}
+      {personCandidateModal?.show && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "28px 28px 22px", width: 520, maxWidth: "94vw", boxShadow: "0 8px 40px rgba(0,0,0,0.18)", maxHeight: "82vh", overflowY: "auto" }}>
+            {/* 헤더 */}
+            <div style={{ marginBottom: 4 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "#111827" }}>기존 인물 후보 {personCandidateModal.candidates.length}명 발견</div>
+            </div>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 18, paddingBottom: 14, borderBottom: "1px solid #f3f4f6" }}>
+              등록은 가능하지만 기존 등록 여부를 확인하세요.
+            </div>
+
+            {/* 카드 목록 */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 22 }}>
+              {personCandidateModal.candidates.map((c, i) => {
+                const roleBg    = c.source === "contact" ? "#eff6ff" : c.source === "translator" ? "#f5f3ff" : "#fff7ed";
+                const roleColor = c.source === "contact" ? "#1d4ed8" : c.source === "translator" ? "#6d28d9" : "#c2410c";
+                const roleBdr   = c.source === "contact" ? "#bfdbfe" : c.source === "translator" ? "#ddd6fe" : "#fed7aa";
+                const affiliation = c.source === "translator" ? "통번역사" : (c.companyName ?? "—");
+                const matchLabel = c.matchReason === "name_mobile" ? "이름 + 휴대폰 일치"
+                  : c.matchReason === "name_email" ? "이름 + 이메일 일치"
+                  : c.matchReason === "mobile" ? "휴대폰 일치"
+                  : c.matchReason === "email" ? "이메일 일치" : null;
+
+                const handleView = () => {
+                  setPersonCandidateModal(null);
+                  setPendingCompanyCreate(false);
+                  if (c.source === "contact" && c.companyId != null) {
+                    setCompanyModal(c.companyId);
+                  } else if (c.source === "individual_customer") {
+                    setCompanyModal(c.id);
+                  } else if (c.source === "translator" && onOpenTranslator) {
+                    onOpenTranslator(c.id, c.email ?? "");
+                  }
+                };
+
+                const canView = c.source === "contact" ? c.companyId != null
+                  : c.source === "individual_customer" ? true
+                  : c.source === "translator" ? !!onOpenTranslator
+                  : false;
+
+                return (
+                  <div key={i} style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: "14px 16px", display: "flex", gap: 12, alignItems: "flex-start" }}>
+                    {/* 정보 영역 */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {/* 역할 배지 + 매칭 이유 */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 20, background: roleBg, color: roleColor, border: `1px solid ${roleBdr}`, whiteSpace: "nowrap" }}>{c.roleLabel}</span>
+                        {matchLabel && (
+                          <span style={{ fontSize: 10, color: "#6b7280", background: "#f3f4f6", border: "1px solid #e5e7eb", padding: "2px 8px", borderRadius: 20, whiteSpace: "nowrap" }}>{matchLabel}</span>
+                        )}
+                      </div>
+                      {/* 이름 */}
+                      <div style={{ fontSize: 15, fontWeight: 700, color: "#111827", marginBottom: 8 }}>{c.name}</div>
+                      {/* 상세 정보 그리드 */}
+                      <div style={{ display: "grid", gridTemplateColumns: "3.2em 1fr", rowGap: 4, fontSize: 12 }}>
+                        <span style={{ color: "#9ca3af", fontWeight: 500 }}>소속</span>
+                        <span style={{ color: "#374151" }}>{affiliation}</span>
+                        <span style={{ color: "#9ca3af", fontWeight: 500 }}>휴대폰</span>
+                        <span style={{ color: "#374151" }}>{c.mobile || "—"}</span>
+                        <span style={{ color: "#9ca3af", fontWeight: 500 }}>이메일</span>
+                        <span style={{ color: "#374151", wordBreak: "break-all" }}>{c.email || "—"}</span>
+                      </div>
+                    </div>
+                    {/* 상세보기 버튼 */}
+                    {canView && (
+                      <button
+                        onClick={handleView}
+                        style={{ flexShrink: 0, padding: "6px 12px", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", background: "#fff", color: "#374151", border: "1px solid #d1d5db", whiteSpace: "nowrap", alignSelf: "flex-start" }}>
+                        상세보기
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 하단 버튼 */}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <GhostBtn onClick={() => { setPersonCandidateModal(null); setPendingCompanyCreate(false); }} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
+              <button onClick={async () => { setPersonCandidateModal(null); setPendingCompanyCreate(false); await doCreateCompany(); }}
+                style={{ padding: "7px 18px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer", background: "#1d4ed8", color: "#fff", border: "none" }}>
+                계속 등록
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {companyModal !== null && (
         <CompanyDetailModal
           companyId={companyModal}
@@ -275,12 +462,17 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                   <span style={{ fontSize: 18 }}>✓</span>
                   <div>
                     <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#166534" }}>{createdCompanyName} 등록 완료</p>
-                    <p style={{ margin: 0, fontSize: 12, color: "#15803d" }}>브랜드/부서와 담당자를 추가하거나 완료하세요.</p>
+                    <p style={{ margin: 0, fontSize: 12, color: "#15803d" }}>
+                      {companyForm.companyType === "client" && companyForm.customerType === "INDIVIDUAL"
+                        ? "담당자를 추가하거나 완료하세요."
+                        : "브랜드/부서와 담당자를 추가하거나 완료하세요."}
+                    </p>
                   </div>
                   <button onClick={handleDoneCompanyCreate} style={{ marginLeft: "auto", padding: "6px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700, background: "#166534", color: "#fff", border: "none", cursor: "pointer" }}>완료</button>
                 </div>
 
-                {/* 단계 2: 브랜드/부서 */}
+                {/* 단계 2: 브랜드/부서 (기업고객 / 외주업체만) */}
+                {!(companyForm.companyType === "client" && companyForm.customerType === "INDIVIDUAL") && (
                 <div style={{ border: "1px solid #e9d5ff", borderRadius: 10, padding: "12px 14px", background: "#faf5ff" }}>
                   <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#7c3aed", textTransform: "uppercase", letterSpacing: "0.06em" }}>브랜드 / 부서 추가</p>
                   <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
@@ -305,6 +497,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                     <p style={{ margin: 0, fontSize: 12, color: "#a78bfa" }}>아직 추가된 브랜드/부서가 없습니다.</p>
                   )}
                 </div>
+                )}
 
                 {/* 단계 3: 담당자 */}
                 <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: "12px 14px", background: "#f9fafb" }}>
@@ -359,7 +552,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                       ))}
                     </div>
                   </div>
-                  <button onClick={handleAddNewCompanyContact} disabled={savingNewCompanyContact || !newCompanyContactForm.name.trim()}
+                  <button onClick={() => handleAddNewCompanyContact()} disabled={savingNewCompanyContact || !newCompanyContactForm.name.trim()}
                     style={{ padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700, background: "#374151", color: "#fff", border: "none", cursor: "pointer" }}>
                     {savingNewCompanyContact ? "추가 중..." : "+ 담당자 추가"}
                   </button>
@@ -381,8 +574,8 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-                {/* ── Card 1: AI 문서 자동입력 ── */}
-                {(() => {
+                {/* ── Card 1: AI 문서 자동입력 (기업고객 / 외주업체만) ── */}
+                {!(companyForm.companyType === "client" && companyForm.customerType === "INDIVIDUAL") && (() => {
                   const ALLOWED_EXTS = [".jpg", ".jpeg", ".png", ".pdf"];
                   const handleDocDrop = (dt: CompanyOcrDocType, rawFile: File) => {
                     const ext = rawFile.name.slice(rawFile.name.lastIndexOf(".")).toLowerCase();
@@ -483,6 +676,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                 })()}
 
                 {/* ── Card 2: 거래처 기본정보 ── */}
+
                 <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
                   <div style={{ padding: "12px 18px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8 }}>
                     <span style={{ width: 3, height: 20, background: "#6366f1", borderRadius: 2, display: "inline-block", flexShrink: 0 }} />
@@ -498,14 +692,14 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                       <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>
                         거래처 유형 <span style={{ color: "#dc2626" }}>*</span>
                       </label>
-                      {/* 타입 버튼 + 외주유형 드롭다운 (같은 행) */}
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      {/* 1차: 고객사 / 외주업체 */}
+                      <div style={{ display: "flex", gap: 8 }}>
                         {[
                           { v: "client",  label: "고객사",   icon: "🏢", color: "#1d4ed8", bg: "#dbeafe", border: "#3b82f6", ring: "#3b82f620" },
                           { v: "vendor",  label: "외주업체", icon: "🔧", color: "#6d28d9", bg: "#ede9fe", border: "#7c3aed", ring: "#7c3aed20" },
                         ].map(opt => (
                           <button key={opt.v} type="button"
-                            onClick={() => setCompanyForm(p => ({ ...p, companyType: opt.v, vendorType: "" }))}
+                            onClick={() => setCompanyForm(p => ({ ...p, companyType: opt.v, vendorType: "", customerType: "CORPORATE" }))}
                             style={{
                               padding: "6px 18px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
                               transition: "all 0.15s", lineHeight: "22px",
@@ -517,38 +711,68 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                             {opt.icon} {opt.label}
                           </button>
                         ))}
-                        {companyForm.companyType === "vendor" && (
-                          <>
-                            <span style={{ fontSize: 12, color: "#9ca3af" }}>|</span>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: "#6d28d9", whiteSpace: "nowrap" }}>외주유형</span>
+                      </div>
+                      {/* 2차: 고객 분류 (고객사 선택 시) */}
+                      {companyForm.companyType === "client" && (
+                        <div style={{ marginTop: 8, paddingLeft: 16, borderLeft: "3px solid #93c5fd" }}>
+                          <div style={{ padding: "10px 14px", background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10 }}>
+                            <label style={{ fontSize: 12, fontWeight: 700, color: "#1d4ed8", display: "block", marginBottom: 8, letterSpacing: "-0.01em" }}>고객 분류</label>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                              {CUSTOMER_TYPE_OPTIONS.map(opt => {
+                                const isActive = companyForm.customerType === opt.value;
+                                const { bg, color, border } = getCustomerTypeBadgeColors(opt.value);
+                                return (
+                                  <button key={opt.value} type="button"
+                                    onClick={() => setCompanyForm(p => ({ ...p, customerType: opt.value }))}
+                                    style={{
+                                      padding: "6px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700,
+                                      cursor: "pointer", transition: "all 0.15s", lineHeight: "1.4",
+                                      background: isActive ? bg : "#fff",
+                                      color: isActive ? color : "#9ca3af",
+                                      border: `2px solid ${isActive ? border : "#e5e7eb"}`,
+                                    }}>
+                                    {opt.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {/* 2차: 외주 분류 (외주업체 선택 시) */}
+                      {companyForm.companyType === "vendor" && (
+                        <div style={{ marginTop: 10, paddingLeft: 16, borderLeft: "2px solid #c4b5fd" }}>
+                          <div style={{ padding: "12px 14px", background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 10 }}>
+                            <label style={{ fontSize: 12, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 8 }}>외주 분류</label>
                             <ClickSelect
                               value={companyForm.vendorType}
                               onChange={v => { setCompanyForm(p => ({ ...p, vendorType: v })); if (v !== "etc") setVendorTypeCustom(""); }}
-                              triggerStyle={{ fontSize: 13, padding: "6px 10px", minWidth: 160, borderRadius: 8, borderColor: "#ddd6fe" }}
+                              triggerStyle={{ fontSize: 13, padding: "6px 10px", minWidth: 160, borderRadius: 8, borderColor: "#ddd6fe", width: "100%" }}
+                              style={{ width: "100%" }}
                               chips={VENDOR_TYPE_CATEGORY_CHIPS}
                               options={[{ value: "", label: "선택 안 함" }, ...VENDOR_TYPE_OPTIONS]}
                             />
-                          </>
-                        )}
-                      </div>
-                      {companyForm.companyType === "vendor" && companyForm.vendorType === "etc" && (
-                        <input
-                          value={vendorTypeCustom}
-                          onChange={e => setVendorTypeCustom(e.target.value)}
-                          placeholder="기타 외주유형 직접 입력"
-                          aria-label="기타 외주유형 직접 입력"
-                          style={{ ...inputStyle, marginTop: 8, borderColor: "#ddd6fe", color: "#7c3aed" }}
-                        />
+                            {companyForm.vendorType === "etc" && (
+                              <input
+                                value={vendorTypeCustom}
+                                onChange={e => setVendorTypeCustom(e.target.value)}
+                                placeholder="기타 외주유형 직접 입력"
+                                aria-label="기타 외주유형 직접 입력"
+                                style={{ ...inputStyle, marginTop: 8, borderColor: "#ddd6fe", color: "#7c3aed" }}
+                              />
+                            )}
+                          </div>
+                        </div>
                       )}
                     </div>
 
-                    {/* 거래처명 */}
+                    {/* 거래처명 / 성명 */}
                     <div>
                       <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>
-                        거래처명 <span style={{ color: "#dc2626" }}>*</span>
+                        {companyForm.companyType === "client" && companyForm.customerType === "INDIVIDUAL" ? "성명" : "거래처명"} <span style={{ color: "#dc2626" }}>*</span>
                       </label>
                       <input value={companyForm.name} onChange={e => setCompanyForm(p => ({ ...p, name: e.target.value }))}
-                        placeholder="(주)아크로네이처" style={inputStyle} />
+                        placeholder={companyForm.companyType === "client" && companyForm.customerType === "INDIVIDUAL" ? "홍길동" : "(주)아크로네이처"} style={inputStyle} />
                       {companyForm.name.trim().length >= 2 && (() => {
                         const q = companyForm.name.trim().toLowerCase();
                         const dupes = companies.filter(c =>
@@ -576,38 +800,67 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                       })()}
                     </div>
 
-                    {/* 사업자등록번호 / 대표자명 / 등록일 */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 14px" }}>
-                      <div>
-                        <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>사업자등록번호</label>
-                        <input value={companyForm.businessNumber} onChange={e => setCompanyForm(p => ({ ...p, businessNumber: e.target.value }))}
-                          placeholder="000-00-00000" style={inputStyle} />
+                    {/* 개인고객: 휴대폰 / 이메일 */}
+                    {companyForm.companyType === "client" && companyForm.customerType === "INDIVIDUAL" && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 14px" }}>
+                        <div>
+                          <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>휴대폰</label>
+                          <input value={companyForm.mobile} onChange={e => setCompanyForm(p => ({ ...p, mobile: e.target.value }))}
+                            placeholder="010-0000-0000" style={inputStyle} />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>이메일</label>
+                          <input type="email" value={companyForm.email} onChange={e => setCompanyForm(p => ({ ...p, email: e.target.value }))}
+                            placeholder="name@example.com" style={inputStyle} />
+                        </div>
                       </div>
-                      <div>
-                        <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>대표자명</label>
-                        <input value={companyForm.representativeName} onChange={e => setCompanyForm(p => ({ ...p, representativeName: e.target.value }))}
-                          placeholder="홍길동" style={inputStyle} />
+                    )}
+
+                    {/* 기업고객 / 외주업체: 사업자등록번호 / 대표자명 / 등록일 */}
+                    {!(companyForm.companyType === "client" && companyForm.customerType === "INDIVIDUAL") && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 14px" }}>
+                        <div>
+                          <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>사업자등록번호</label>
+                          <input value={companyForm.businessNumber} onChange={e => setCompanyForm(p => ({ ...p, businessNumber: e.target.value }))}
+                            placeholder="000-00-00000" style={inputStyle} />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>대표자명</label>
+                          <input value={companyForm.representativeName} onChange={e => setCompanyForm(p => ({ ...p, representativeName: e.target.value }))}
+                            placeholder="홍길동" style={inputStyle} />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>등록일</label>
+                          <input type="date" value={companyForm.registeredAt} onChange={e => setCompanyForm(p => ({ ...p, registeredAt: e.target.value }))}
+                            style={inputStyle} />
+                        </div>
                       </div>
+                    )}
+
+                    {/* 개인고객: 등록일 (단독 행) */}
+                    {companyForm.companyType === "client" && companyForm.customerType === "INDIVIDUAL" && (
                       <div>
                         <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>등록일</label>
                         <input type="date" value={companyForm.registeredAt} onChange={e => setCompanyForm(p => ({ ...p, registeredAt: e.target.value }))}
                           style={inputStyle} />
                       </div>
-                    </div>
+                    )}
 
-                    {/* 업태 / 종목 */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 14px" }}>
-                      <div>
-                        <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>업태</label>
-                        <input value={companyForm.industry} onChange={e => setCompanyForm(p => ({ ...p, industry: e.target.value }))}
-                          placeholder="제조업, 서비스업 등" style={inputStyle} />
+                    {/* 기업고객 / 외주업체: 업태 / 종목 */}
+                    {!(companyForm.companyType === "client" && companyForm.customerType === "INDIVIDUAL") && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 14px" }}>
+                        <div>
+                          <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>업태</label>
+                          <input value={companyForm.industry} onChange={e => setCompanyForm(p => ({ ...p, industry: e.target.value }))}
+                            placeholder="제조업, 서비스업 등" style={inputStyle} />
+                        </div>
+                        <div>
+                          <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>종목</label>
+                          <input value={companyForm.businessCategory} onChange={e => setCompanyForm(p => ({ ...p, businessCategory: e.target.value }))}
+                            placeholder="통역, 번역, 소프트웨어 등" style={inputStyle} />
+                        </div>
                       </div>
-                      <div>
-                        <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>종목</label>
-                        <input value={companyForm.businessCategory} onChange={e => setCompanyForm(p => ({ ...p, businessCategory: e.target.value }))}
-                          placeholder="통역, 번역, 소프트웨어 등" style={inputStyle} />
-                      </div>
-                    </div>
+                    )}
 
                     {/* 주소 */}
                     <div>
@@ -653,44 +906,90 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
             { value: "client", label: "고객사",  activeBg: "#1d4ed8" },
             { value: "vendor", label: "외주업체", activeBg: "#7c3aed" },
           ];
+          const CUSTOMER_SUB_TABS = [
+            { value: "all",        label: "전체" },
+            { value: "CORPORATE",  label: "기업" },
+            { value: "PUBLIC",     label: "공공기관" },
+            { value: "INDIVIDUAL", label: "개인" },
+          ];
           const filteredCompanies = companies.filter(c => {
             if (companyTypeFilter !== "all" && c.companyType !== companyTypeFilter) return false;
             if (companyVendorTypeFilter !== "all" && c.vendorType !== companyVendorTypeFilter) return false;
+            if (companyTypeFilter === "client" && companyCustomerTypeFilter !== "all") {
+              const ct = c.customerType ?? "CORPORATE";
+              if (ct !== companyCustomerTypeFilter) return false;
+            }
             return true;
           });
           return (
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: "#6b7280", marginRight: 4, whiteSpace: "nowrap" }}>거래처 유형</span>
+            <div style={{ marginBottom: 16 }}>
+              {/* 1행: 거래처 유형 (1차) */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginRight: 6, whiteSpace: "nowrap", letterSpacing: "-0.01em" }}>거래처 유형</span>
                 {TYPE_TABS.map(tab => {
                   const isActive = companyTypeFilter === tab.value;
                   return (
-                    <button key={tab.value} onClick={() => { setCompanyTypeFilter(tab.value as "all" | "client" | "vendor"); setCompanyVendorTypeFilter("all"); }}
-                      style={{ padding: "6px 14px", borderRadius: 20, fontSize: 13, fontWeight: isActive ? 700 : 500, cursor: "pointer", transition: "all 0.12s",
+                    <button key={tab.value} onClick={() => { setCompanyTypeFilter(tab.value as "all" | "client" | "vendor"); setCompanyVendorTypeFilter("all"); setCompanyCustomerTypeFilter("all"); }}
+                      style={{
+                        padding: "6px 14px", borderRadius: 20, fontSize: 13, fontWeight: isActive ? 700 : 500,
+                        cursor: "pointer", transition: "all 0.12s",
                         border: isActive ? `2px solid ${tab.activeBg}` : "2px solid #e5e7eb",
                         background: isActive ? tab.activeBg : "#fff",
                         color: isActive ? "#fff" : "#374151",
+                        lineHeight: "1.4",
                       }}>
                       {tab.label}
-                      <span style={{ marginLeft: 5, fontSize: 11, opacity: 0.8 }}>
+                      <span style={{ marginLeft: 5, fontSize: 11, opacity: 0.75 }}>
                         ({companies.filter(c => tab.value === "all" ? true : c.companyType === tab.value).length})
                       </span>
                     </button>
                   );
                 })}
-                {companyTypeFilter === "vendor" && (
+              </div>
+              {/* 2행: 고객 분류 (고객사 선택 시) */}
+              {companyTypeFilter === "client" && (
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, paddingLeft: 18, paddingTop: 6, paddingBottom: 6, borderLeft: "3px solid #93c5fd" }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#1d4ed8", marginRight: 6, whiteSpace: "nowrap", letterSpacing: "-0.01em" }}>고객 분류</span>
+                  {CUSTOMER_SUB_TABS.map(tab => {
+                    const isActive = companyCustomerTypeFilter === tab.value;
+                    const { bg, color, border } = tab.value !== "all" ? getCustomerTypeBadgeColors(tab.value) : { bg: "", color: "", border: "" };
+                    return (
+                      <button key={tab.value} onClick={() => setCompanyCustomerTypeFilter(tab.value)}
+                        style={{
+                          padding: "5px 13px", borderRadius: 20, fontSize: 12, fontWeight: isActive ? 700 : 500,
+                          cursor: "pointer", transition: "all 0.12s", lineHeight: "1.4",
+                          border: isActive ? (tab.value === "all" ? "2px solid #1d4ed8" : `2px solid ${border}`) : "2px solid #e5e7eb",
+                          background: isActive ? (tab.value === "all" ? "#1d4ed8" : bg) : "#fff",
+                          color: isActive ? (tab.value === "all" ? "#fff" : color) : "#6b7280",
+                        }}>
+                        {tab.label}
+                        {tab.value !== "all" && (
+                          <span style={{ marginLeft: 4, fontSize: 10, opacity: 0.8 }}>
+                            ({companies.filter(c => c.companyType === "client" && (c.customerType ?? "CORPORATE") === tab.value).length})
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {/* 2행: 외주 분류 (외주업체 선택 시) */}
+              {companyTypeFilter === "vendor" && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, paddingLeft: 18, paddingTop: 6, paddingBottom: 6, borderLeft: "3px solid #c4b5fd" }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "#6d28d9", whiteSpace: "nowrap", marginRight: 6, letterSpacing: "-0.01em" }}>외주 분류</span>
                   <ClickSelect
                     value={companyVendorTypeFilter}
                     onChange={setCompanyVendorTypeFilter}
-                    triggerStyle={{ fontSize: 12, padding: "6px 10px", marginLeft: 4 }}
+                    triggerStyle={{ fontSize: 12, padding: "5px 11px", borderRadius: 20, lineHeight: "1.4" }}
                     options={[
-                      { value: "all", label: "전체 외주유형" },
+                      { value: "all", label: "전체 외주 분류" },
                       ...VENDOR_TYPE_OPTIONS.map(o => ({ value: o.value, label: o.label })),
                     ]}
                   />
-                )}
-              </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
                 <input value={companySearch} onChange={e => setCompanySearch(e.target.value)}
                   placeholder="회사명, 브랜드명, 사업자번호, 전화, 이메일, 담당자..."
                   style={{ ...inputStyle, maxWidth: 340, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
@@ -732,13 +1031,18 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, hasPerm }:
                                   </div>
                                 )}
                                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
-                                  {/* Secondary: 고객사 / 외주업체 — 상위 분류, 낮은 존재감 */}
+                                  {/* 1차: 고객사 / 외주업체 */}
                                   <span style={c.companyType === "vendor" ? BADGE_SECONDARY_VENDOR : BADGE_SECONDARY_CLIENT}>
                                     {c.companyType === "vendor" ? "외주업체" : "고객사"}
                                   </span>
-                                  {/* Tertiary: 하위 유형 — 부가 설명, 가장 낮은 존재감 */}
-                                  {c.vendorType && (
-                                    <span style={BADGE_TERTIARY}>
+                                  {/* 2차: 고객 분류(색상) / 외주 세부 분류(purple) */}
+                                  {c.companyType === "client" && (
+                                    <span style={getCustomerSubBadgeStyle(c.customerType ?? "CORPORATE")}>
+                                      {CUSTOMER_TYPE_LABELS[c.customerType ?? "CORPORATE"] ?? "기업"}
+                                    </span>
+                                  )}
+                                  {c.companyType === "vendor" && c.vendorType && (
+                                    <span style={BADGE_TERTIARY_VENDOR}>
                                       {VENDOR_TYPE_LABELS[c.vendorType] ?? c.vendorType}
                                     </span>
                                   )}

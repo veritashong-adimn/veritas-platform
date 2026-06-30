@@ -1949,6 +1949,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           token={token}
           onToast={setToast}
           onOpenProject={(id) => openDetail(id)}
+          onOpenTranslator={(userId, email) => { setAdminTab("translators"); setTranslatorDetailModal({ userId, email }); }}
           hasPerm={hasPerm}
         />
       )}
