@@ -35,6 +35,18 @@ function parseCompanyDocType(q: unknown): CompanyDocType | null {
   return q === "business_license" || q === "bankbook" || q === "contact_card" ? q : null;
 }
 
+function formatKoreanPhone(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const d = raw.replace(/\D/g, "");
+  if (d.length === 11) return `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
+  if (d.length === 10) {
+    if (d.startsWith("02")) return `${d.slice(0, 2)}-${d.slice(2, 6)}-${d.slice(6)}`;
+    return `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`;
+  }
+  if (d.length === 9 && d.startsWith("02")) return `${d.slice(0, 2)}-${d.slice(2, 5)}-${d.slice(5)}`;
+  return raw.trim() || null;
+}
+
 function sendError(res: Response, status: number, error: string, debug?: Record<string, unknown>) {
   res.status(status).json({ error, message: error, ...(debug ? { debug } : {}) });
 }
@@ -63,6 +75,7 @@ router.post(
     }
 
     try {
+      if (docType === "contact_card") console.log(`[DOC-AI] CONTACT_CARD OCR START file=${originalName} ext=${ext}`);
       const rawBuffer = req.file.buffer;
       let buffer: Buffer;
       let ocrExt: string;
@@ -73,6 +86,7 @@ router.post(
         buffer = rawBuffer;
         ocrExt = ext;
       }
+      if (docType === "contact_card") console.log(`[DOC-AI] CONTACT_CARD OCR COMPLETE ocrExt=${ocrExt} bytes=${buffer.byteLength}`);
 
       const imageDataUrl = buildImageDataUrl(buffer, ocrExt);
 
@@ -84,12 +98,14 @@ router.post(
       }
 
       const openaiClient = new OpenAI({ apiKey: openaiApiKey, baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL });
+      if (docType === "contact_card") console.log(`[DOC-AI] CONTACT_CARD OPENAI START model=gpt-4o`);
       const completion = await openaiClient.chat.completions.create({
         model: "gpt-4o",
         response_format: { type: "json_object" },
         temperature: 0.1,
         messages: buildOcrPromptMessages(docType, imageDataUrl),
       });
+      if (docType === "contact_card") console.log(`[DOC-AI] CONTACT_CARD OPENAI COMPLETE tokens=${completion.usage?.total_tokens ?? "?"}`);
 
       const raw = completion.choices[0]?.message?.content ?? "{}";
       let result: Record<string, unknown> = {};
@@ -118,17 +134,21 @@ router.post(
         validations = {};
       } else if (docType === "contact_card") {
         // 담당자 명함/이메일서명 분석 — 거래처 문서 분석과 동일한 Document AI Framework 사용
+        const contactName  = (result.contactName as string) ?? null;
+        const mobilePhone  = formatKoreanPhone((result.mobilePhone as string) ?? null);
+        const officePhone  = formatKoreanPhone((result.officePhone as string) ?? null);
+        console.log(`[DOC-AI] CONTACT_CARD RESULT contactName=${contactName ?? "null"} mobilePhone=${mobilePhone ?? "null"} officePhone=${officePhone ?? "null"} confidence=${confidence}`);
         extracted = {
-          name:        (result.name as string) ?? null,
+          contactName,
           companyName: (result.companyName as string) ?? null,
           department:  (result.department as string) ?? null,
           position:    (result.position as string) ?? null,
           email:       (result.email as string) ?? null,
-          mobile:      (result.mobile as string) ?? null,
-          officePhone: (result.officePhone as string) ?? null,
+          mobilePhone,
+          officePhone,
           memo:        (result.memo as string) ?? null,
         };
-        current = { name: null, companyName: null, department: null, position: null, email: null, mobile: null, officePhone: null, memo: null };
+        current = { contactName: null, companyName: null, department: null, position: null, email: null, mobilePhone: null, officePhone: null, memo: null };
         validations = {};
       } else {
         const { matched: matchedBankName, bankNameMatched } = matchBankName((result.bankName as string) ?? null);

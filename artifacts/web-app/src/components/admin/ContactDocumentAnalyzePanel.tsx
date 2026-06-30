@@ -4,12 +4,12 @@ import { api } from "../../lib/constants";
 // 거래처 Document AI Framework 공통 응답 구조 (current/validations는 contact_card에서 무시)
 interface ContactAnalyzeResult {
   extracted: {
-    name: string | null;
+    contactName: string | null;
     companyName: string | null;
     department: string | null;
     position: string | null;
     email: string | null;
-    mobile: string | null;
+    mobilePhone: string | null;
     officePhone: string | null;
     memo: string | null;
   };
@@ -20,14 +20,14 @@ interface ContactAnalyzeResult {
 }
 
 const CONTACT_FIELDS: { key: keyof ContactAnalyzeResult["extracted"]; label: string }[] = [
-  { key: "name",        label: "담당자명" },
-  { key: "companyName", label: "회사명/거래처" },
-  { key: "department",  label: "부서" },
-  { key: "position",    label: "직책" },
-  { key: "email",       label: "이메일" },
-  { key: "mobile",      label: "휴대폰" },
-  { key: "officePhone", label: "직장전화" },
-  { key: "memo",        label: "메모" },
+  { key: "contactName",  label: "담당자명" },
+  { key: "companyName",  label: "회사명/거래처" },
+  { key: "department",   label: "부서" },
+  { key: "position",     label: "직책" },
+  { key: "email",        label: "이메일" },
+  { key: "mobilePhone",  label: "휴대폰" },
+  { key: "officePhone",  label: "직장전화" },
+  { key: "memo",         label: "메모" },
 ];
 
 const confidenceColor: Record<string, string> = { high: "#059669", medium: "#d97706", low: "#dc2626" };

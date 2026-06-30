@@ -142,11 +142,11 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
   const handleAiApplied = (values: Record<string, string | null | undefined>) => {
     setForm(prev => {
       const next = { ...prev };
-      if (values.name) next.name = values.name;
+      if (values.contactName) next.name = values.contactName;
       if (values.department) next.department = values.department;
       if (values.position) next.position = values.position;
       if (values.email) next.email = values.email;
-      if (values.mobile) next.mobile = formatPhone(values.mobile);
+      if (values.mobilePhone) next.mobile = formatPhone(values.mobilePhone);
       if (values.officePhone) next.officePhone = formatPhone(values.officePhone);
       if (values.memo) next.memo = values.memo;
       return next;
