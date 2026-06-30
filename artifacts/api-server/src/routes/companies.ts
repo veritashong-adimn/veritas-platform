@@ -1266,6 +1266,8 @@ router.delete("/admin/company-contacts/:id", ...adminGuard, async (req, res) => 
 });
 
 // ─── 담당자 명함/이메일서명 AI 분석 (companies.ts 에 직접 등록 — 별도 라우터 파일 불필요) ──
+console.log("[CONTACT-OCR-REGISTERED] POST /api/admin/contacts/document-analyze-upload ready ✓");
+
 const _contactOcrUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -1305,7 +1307,7 @@ router.post(
   ...adminGuard,
   _contactOcrUpload.single("file"),
   async (req, res) => {
-    console.log(`[CONTACT-OCR] 요청 수신 file=${req.file?.originalname ?? "없음"} ct="${(req.headers["content-type"] ?? "").slice(0, 80)}"`);
+    console.log(`[CONTACT-OCR] HIT method=${req.method} originalUrl=${req.originalUrl} file=${req.file?.originalname ?? "없음"} ct="${(req.headers["content-type"] ?? "").slice(0, 80)}"`);
     if (!req.file) { _sendContactOcrError(res, 400, "파일이 없습니다. (필드명: file)"); return; }
 
     const originalName = Buffer.from(req.file.originalname, "latin1").toString("utf8");

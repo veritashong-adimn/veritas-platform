@@ -69,13 +69,21 @@ export function ContactDocumentAnalyzePanel({
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch(api("/api/admin/contacts/document-analyze-upload"), {
+      const requestUrl = api("/api/admin/contacts/document-analyze-upload");
+      console.log("[CONTACT-OCR] fetch →", requestUrl, "method=POST file=", file.name);
+      const r = await fetch(requestUrl, {
         method: "POST",
         headers: authH,
         body: fd,
       });
+      console.log("[CONTACT-OCR] response status=", r.status, r.statusText);
       const d = await parseJsonResponse(r);
-      if (!r.ok) { setError((d.error as string) ?? `HTTP ${r.status}`); return; }
+      if (!r.ok) {
+        const errDetail = `${(d.error as string) ?? ""} | ${(d.message as string) ?? ""} | HTTP ${r.status}`;
+        console.error("[CONTACT-OCR] 실패:", errDetail, d);
+        setError(errDetail.trim());
+        return;
+      }
       const res = d as unknown as ContactAnalyzeResult;
       setResult(res);
       const initEdited: Record<string, string> = {};
