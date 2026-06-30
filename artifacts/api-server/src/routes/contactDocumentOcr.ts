@@ -52,6 +52,7 @@ router.post(
   ...adminGuard,
   docUpload.single("file"),
   async (req, res) => {
+    console.log(`[CONTACT-OCR] 요청 수신 file=${req.file?.originalname ?? "없음"} ct="${(req.headers["content-type"] ?? "").slice(0, 80)}"`);
     if (!req.file) { sendError(res, 400, "파일이 없습니다. (필드명: file)"); return; }
 
     const originalName = Buffer.from(req.file.originalname, "latin1").toString("utf8");
