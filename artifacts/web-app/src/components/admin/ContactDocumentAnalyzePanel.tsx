@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { api } from "../../lib/constants";
 
+// 거래처 Document AI Framework 공통 응답 구조 (current/validations는 contact_card에서 무시)
 interface ContactAnalyzeResult {
   extracted: {
     name: string | null;
@@ -12,6 +13,8 @@ interface ContactAnalyzeResult {
     officePhone: string | null;
     memo: string | null;
   };
+  current?: Record<string, string | null>;
+  validations?: Record<string, unknown>;
   confidence: "high" | "medium" | "low";
   notes: string | null;
 }
@@ -69,7 +72,9 @@ export function ContactDocumentAnalyzePanel({
     try {
       const fd = new FormData();
       fd.append("file", file);
-      const requestUrl = api("/api/admin/contacts/document-analyze-upload");
+      // 거래처 Document AI Framework 공용 route 사용 (type=contact_card)
+      // POST /api/admin/companies/document-analyze-upload?type=contact_card
+      const requestUrl = api("/api/admin/companies/document-analyze-upload?type=contact_card");
       console.log("[CONTACT-OCR] fetch →", requestUrl, "method=POST file=", file.name);
       const r = await fetch(requestUrl, {
         method: "POST",

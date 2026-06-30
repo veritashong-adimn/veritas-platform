@@ -14,7 +14,9 @@ import {
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
-type CompanyDocType = "business_license" | "bankbook";
+// business_license, bankbook: 거래처 증빙서류
+// contact_card: 담당자 명함/이메일서명 — 동일 Document AI Framework 공유
+type CompanyDocType = "business_license" | "bankbook" | "contact_card";
 
 const docUpload = multer({
   storage: multer.memoryStorage(),
@@ -30,7 +32,7 @@ const docUpload = multer({
 });
 
 function parseCompanyDocType(q: unknown): CompanyDocType | null {
-  return q === "business_license" || q === "bankbook" ? q : null;
+  return q === "business_license" || q === "bankbook" || q === "contact_card" ? q : null;
 }
 
 function sendError(res: Response, status: number, error: string, debug?: Record<string, unknown>) {
@@ -45,10 +47,11 @@ router.post(
   async (req, res) => {
     const docType = parseCompanyDocType(req.query.type);
     if (!docType) {
-      sendError(res, 400, "type 파라미터는 business_license 또는 bankbook 이어야 합니다.");
+      sendError(res, 400, "type 파라미터는 business_license, bankbook, contact_card 중 하나이어야 합니다.");
       return;
     }
-    const label = docType === "business_license" ? "사업자등록증" : "통장사본";
+    const label = docType === "business_license" ? "사업자등록증" : docType === "contact_card" ? "명함" : "통장사본";
+    console.log(`[DOC-AI] HIT docType=${docType} file=${req.file?.originalname ?? "없음"} originalUrl=${req.originalUrl}`);
 
     if (!req.file) { sendError(res, 400, "파일이 없습니다. (필드명: file)"); return; }
 
@@ -112,6 +115,20 @@ router.post(
           vendorType: (result.vendorType as string) ?? null,
         };
         current = { name: null, businessNumber: null, representativeName: null, registeredAt: null, industry: null, businessCategory: null, address: null, vendorType: null };
+        validations = {};
+      } else if (docType === "contact_card") {
+        // 담당자 명함/이메일서명 분석 — 거래처 문서 분석과 동일한 Document AI Framework 사용
+        extracted = {
+          name:        (result.name as string) ?? null,
+          companyName: (result.companyName as string) ?? null,
+          department:  (result.department as string) ?? null,
+          position:    (result.position as string) ?? null,
+          email:       (result.email as string) ?? null,
+          mobile:      (result.mobile as string) ?? null,
+          officePhone: (result.officePhone as string) ?? null,
+          memo:        (result.memo as string) ?? null,
+        };
+        current = { name: null, companyName: null, department: null, position: null, email: null, mobile: null, officePhone: null, memo: null };
         validations = {};
       } else {
         const { matched: matchedBankName, bankNameMatched } = matchBankName((result.bankName as string) ?? null);
