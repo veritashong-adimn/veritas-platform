@@ -187,14 +187,26 @@ export function ContactDocumentAnalyzePanel({
                     onChange={e => setChecked(p => ({ ...p, [f.key]: e.target.checked }))}
                     aria-label={`${f.label} 포함`} style={{ marginTop: 9 }} />
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", paddingTop: 7, paddingRight: 4 }}>{f.label}</label>
-                  <input type="text" value={edited[f.key] ?? ""}
-                    onChange={e => setEdited(p => ({ ...p, [f.key]: e.target.value }))}
-                    aria-label={`${f.label} AI 추출값`}
-                    style={{
-                      width: "100%", border: checked[f.key] ? "1.5px solid #059669" : "1px solid #d1d5db",
-                      borderRadius: 6, padding: "6px 10px", fontSize: 12, color: "#111827", boxSizing: "border-box",
-                      background: checked[f.key] ? "#f0fdf4" : "#fff",
-                    }} />
+                  {f.key === "memo" ? (
+                    <textarea value={edited[f.key] ?? ""}
+                      onChange={e => setEdited(p => ({ ...p, [f.key]: e.target.value }))}
+                      aria-label={`${f.label} AI 추출값`}
+                      rows={3}
+                      style={{
+                        width: "100%", border: checked[f.key] ? "1.5px solid #059669" : "1px solid #d1d5db",
+                        borderRadius: 6, padding: "6px 10px", fontSize: 12, color: "#111827", boxSizing: "border-box",
+                        background: checked[f.key] ? "#f0fdf4" : "#fff", resize: "vertical", lineHeight: 1.5,
+                      }} />
+                  ) : (
+                    <input type="text" value={edited[f.key] ?? ""}
+                      onChange={e => setEdited(p => ({ ...p, [f.key]: e.target.value }))}
+                      aria-label={`${f.label} AI 추출값`}
+                      style={{
+                        width: "100%", border: checked[f.key] ? "1.5px solid #059669" : "1px solid #d1d5db",
+                        borderRadius: 6, padding: "6px 10px", fontSize: 12, color: "#111827", boxSizing: "border-box",
+                        background: checked[f.key] ? "#f0fdf4" : "#fff",
+                      }} />
+                  )}
                 </div>
               ))}
 

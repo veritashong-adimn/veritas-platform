@@ -47,6 +47,8 @@ function formatKoreanPhone(raw: string | null | undefined): string | null {
     return `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`;
   }
   if (d.length === 9 && d.startsWith("02")) return `${d.slice(0, 2)}-${d.slice(2, 5)}-${d.slice(5)}`;
+  // 8자리 대표번호: 1600-xxxx, 1588-xxxx, 1544-xxxx 등
+  if (d.length === 8 && /^1[5-9]/.test(d)) return `${d.slice(0, 4)}-${d.slice(4)}`;
   return raw.trim() || null;
 }
 
