@@ -1230,73 +1230,74 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
               const srcLabel = req.sourceLanguage ? (LANG_LABEL[req.sourceLanguage] ?? req.sourceLanguage) : null;
               const tgtLabel = req.targetLanguage ? (LANG_LABEL[req.targetLanguage] ?? req.targetLanguage) : null;
               return (
-                <Card key={req.id} style={{ padding: "14px 18px", background: req.status === "pending" ? "#fffbeb" : req.status === "approved" ? "#f0fdf4" : "#fef2f2" }}>
-                  <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <Card key={req.id} style={{ padding: "10px 16px", background: req.status === "pending" ? "#fffbeb" : req.status === "approved" ? "#f0fdf4" : "#fef2f2" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 4 }}>
-                        <span style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>{req.name}</span>
-                        <span style={{ fontSize: 11, borderRadius: 5, padding: "2px 8px", fontWeight: 700, background: tc.bg, color: tc.color }}>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 2 }}>
+                        <span style={{ fontWeight: 700, fontSize: 13, color: "#111827" }}>{req.name}</span>
+                        <span style={{ fontSize: 11, borderRadius: 4, padding: "1px 7px", fontWeight: 700, background: tc.bg, color: tc.color }}>
                           {tc.icon} {typeLabel}
                         </span>
                         {srcLabel && tgtLabel && (
-                          <span style={{ fontSize: 11, background: "#dbeafe", color: "#1d4ed8", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>
+                          <span style={{ fontSize: 11, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 7px", fontWeight: 600 }}>
                             {srcLabel} → {tgtLabel}
                           </span>
                         )}
                         {req.mainCategory && (
-                          <span style={{ fontSize: 11, background: "#ede9fe", color: "#5b21b6", borderRadius: 5, padding: "2px 8px" }}>
+                          <span style={{ fontSize: 11, background: "#ede9fe", color: "#5b21b6", borderRadius: 4, padding: "1px 7px" }}>
                             {req.mainCategory}{req.subCategory ? ` / ${req.subCategory}` : ""}
                           </span>
                         )}
-                        <span style={{ fontSize: 11, borderRadius: 5, padding: "2px 8px", fontWeight: 700, background: req.status === "pending" ? "#fef3c7" : req.status === "approved" ? "#dcfce7" : "#fee2e2", color: req.status === "pending" ? "#92400e" : req.status === "approved" ? "#166534" : "#991b1b" }}>
+                        <span style={{ fontSize: 11, borderRadius: 4, padding: "1px 7px", fontWeight: 700, background: req.status === "pending" ? "#fef3c7" : req.status === "approved" ? "#dcfce7" : "#fee2e2", color: req.status === "pending" ? "#92400e" : req.status === "approved" ? "#166534" : "#991b1b" }}>
                           {req.status === "pending" ? "⏳ 대기" : req.status === "approved" ? "✅ 승인" : "❌ 거절"}
                         </span>
                       </div>
-                      <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>
+                      <p style={{ margin: 0, fontSize: 11, color: "#6b7280" }}>
                         요청자: {req.requestedByEmail ?? "-"} · {new Date(req.createdAt).toLocaleDateString("ko-KR")}
                         {req.description && ` · ${req.description}`}
                       </p>
                       {req.status === "rejected" && req.rejectionReason && (
-                        <p style={{ margin: "4px 0 0", fontSize: 12, color: "#991b1b" }}>거절 사유: {req.rejectionReason}</p>
+                        <p style={{ margin: "2px 0 0", fontSize: 11, color: "#991b1b" }}>거절 사유: {req.rejectionReason}</p>
                       )}
                     </div>
                     {user?.role === "admin" && (
-                      <div style={{ display: "flex", gap: 6, flexShrink: 0, flexDirection: "column" }}>
-                        {req.status === "pending" && (
-                          <>
-                            <button onClick={() => handleApproveRequest(req.id)}
-                              style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#dcfce7", color: "#166534", border: "none", fontWeight: 700 }}>
-                              ✅ 승인
-                            </button>
-                            {rejectingRequestId === req.id ? (
-                              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                                <input value={rejectReason} onChange={e => setRejectReason(e.target.value)}
-                                  placeholder="거절 사유 (선택)"
-                                  style={{ ...inputStyle, fontSize: 12, padding: "4px 8px", width: 160 }} />
-                                <div style={{ display: "flex", gap: 4 }}>
-                                  <button onClick={() => handleRejectRequest(req.id)}
-                                    style={{ padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#fee2e2", color: "#991b1b", border: "none", fontWeight: 700 }}>
-                                    확인
-                                  </button>
-                                  <button onClick={() => setRejectingRequestId(null)}
-                                    style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#f3f4f6", color: "#6b7280", border: "none" }}>
-                                    취소
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <button onClick={() => { setRejectingRequestId(req.id); setRejectReason(""); }}
-                                style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#fee2e2", color: "#991b1b", border: "none", fontWeight: 700 }}>
-                                ❌ 거절
+                      <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0, alignItems: "flex-end" }}>
+                        <div style={{ display: "flex", flexDirection: "row", gap: 6, alignItems: "center", whiteSpace: "nowrap" }}>
+                          {req.status === "pending" && (
+                            <>
+                              <button onClick={() => handleApproveRequest(req.id)}
+                                style={{ padding: "3px 10px", fontSize: 11, borderRadius: 5, cursor: "pointer", background: "#dcfce7", color: "#166534", border: "none", fontWeight: 700 }}>
+                                ✅ 승인
                               </button>
-                            )}
-                          </>
+                              {rejectingRequestId !== req.id && (
+                                <button onClick={() => { setRejectingRequestId(req.id); setRejectReason(""); }}
+                                  style={{ padding: "3px 10px", fontSize: 11, borderRadius: 5, cursor: "pointer", background: "#fee2e2", color: "#991b1b", border: "none", fontWeight: 700 }}>
+                                  ❌ 거절
+                                </button>
+                              )}
+                            </>
+                          )}
+                          <button onClick={() => setDeletingRequestId(req.id)}
+                            aria-label="등록요청 삭제"
+                            style={{ padding: "3px 10px", fontSize: 11, borderRadius: 5, cursor: "pointer", background: "#f3f4f6", color: "#6b7280", border: "1px solid #e5e7eb", fontWeight: 600 }}>
+                            🗑 요청삭제
+                          </button>
+                        </div>
+                        {rejectingRequestId === req.id && (
+                          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                            <input value={rejectReason} onChange={e => setRejectReason(e.target.value)}
+                              placeholder="거절 사유 (선택)"
+                              style={{ ...inputStyle, fontSize: 11, padding: "3px 7px", width: 140 }} />
+                            <button onClick={() => handleRejectRequest(req.id)}
+                              style={{ padding: "3px 8px", fontSize: 11, borderRadius: 5, cursor: "pointer", background: "#fee2e2", color: "#991b1b", border: "none", fontWeight: 700 }}>
+                              확인
+                            </button>
+                            <button onClick={() => setRejectingRequestId(null)}
+                              style={{ padding: "3px 8px", fontSize: 11, borderRadius: 5, cursor: "pointer", background: "#f3f4f6", color: "#6b7280", border: "none" }}>
+                              취소
+                            </button>
+                          </div>
                         )}
-                        <button onClick={() => setDeletingRequestId(req.id)}
-                          aria-label="등록요청 삭제"
-                          style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, cursor: "pointer", background: "#f3f4f6", color: "#6b7280", border: "1px solid #e5e7eb", fontWeight: 600 }}>
-                          🗑 요청삭제
-                        </button>
                       </div>
                     )}
                   </div>
