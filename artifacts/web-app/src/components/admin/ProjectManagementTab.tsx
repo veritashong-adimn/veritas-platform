@@ -5,7 +5,6 @@ import {
 } from '../../lib/constants';
 import { StatusBadge, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../ui';
 import { DraggableModal } from './DraggableModal';
-import { QuoteEditorModal } from './QuoteEditorModal';
 
 // ─── 인라인 스타일 ─────────────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
@@ -242,8 +241,6 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
 
   // ── 진입 선택 모달 state ──────────────────────────────────────────────────
-  const [showEntryChooser, setShowEntryChooser] = useState(false);
-  const [showQuoteEditor, setShowQuoteEditor] = useState(false);
 
   // ── 프로젝트 직접 등록 모달 state ─────────────────────────────────────────
   const [showCreateProject, setShowCreateProject] = useState(false);
@@ -500,79 +497,6 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
         </div>
       )}
 
-      {/* ── 견적 작성 방식 선택 모달 ── */}
-      {showEntryChooser && (
-        <div style={{ position: "fixed", inset: 0, zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.35)" }}
-          onClick={e => { if (e.target === e.currentTarget) setShowEntryChooser(false); }}>
-          <div style={{ background: "#fff", borderRadius: 16, padding: "28px 28px 24px", width: 460, boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
-            <p style={{ margin: "0 0 4px", fontSize: 17, fontWeight: 800, color: "#111827" }}>견적 작성</p>
-            <p style={{ margin: "0 0 20px", fontSize: 12, color: "#6b7280" }}>접수된 의뢰를 기반으로 견적을 작성하는 방식을 선택하세요.</p>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {/* ① AI 견적 작성 */}
-              <button
-                onClick={() => { setShowEntryChooser(false); /* TODO: AI 견적 작성 화면 연결 */ }}
-                style={{ border: "1.5px solid #c4b5fd", borderRadius: 12, padding: "16px 18px", background: "#f5f3ff", cursor: "pointer", textAlign: "left", transition: "border-color 0.15s, box-shadow 0.15s" }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = "#7c3aed"; e.currentTarget.style.boxShadow = "0 0 0 3px #ede9fe"; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = "#c4b5fd"; e.currentTarget.style.boxShadow = "none"; }}
-              >
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-                  <span style={{ fontSize: 24, marginTop: 1 }}>🤖</span>
-                  <div style={{ flex: 1 }}>
-                    <p style={{ margin: "0 0 4px", fontSize: 14, fontWeight: 700, color: "#4c1d95" }}>AI 견적 작성</p>
-                    <p style={{ margin: 0, fontSize: 11, color: "#6d28d9", lineHeight: 1.7 }}>
-                      이메일, 의뢰 내용, 첨부파일 등을 AI가 분석하여<br />
-                      견적서를 자동 작성합니다.
-                    </p>
-                  </div>
-                  <span style={{ fontSize: 14, color: "#7c3aed", marginTop: 2 }}>→</span>
-                </div>
-              </button>
-
-              {/* ② 직접 견적 작성 */}
-              <button
-                onClick={() => { setShowEntryChooser(false); setShowQuoteEditor(true); }}
-                style={{ border: "1.5px solid #d1d5db", borderRadius: 12, padding: "16px 18px", background: "#fff", cursor: "pointer", textAlign: "left", transition: "border-color 0.15s, box-shadow 0.15s" }}
-                onMouseEnter={e => { e.currentTarget.style.borderColor = "#6366f1"; e.currentTarget.style.boxShadow = "0 0 0 3px #eef2ff"; }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = "#d1d5db"; e.currentTarget.style.boxShadow = "none"; }}
-              >
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-                  <span style={{ fontSize: 24, marginTop: 1 }}>📋</span>
-                  <div style={{ flex: 1 }}>
-                    <p style={{ margin: "0 0 4px", fontSize: 14, fontWeight: 700, color: "#374151" }}>직접 견적 작성</p>
-                    <p style={{ margin: 0, fontSize: 11, color: "#6b7280", lineHeight: 1.7 }}>
-                      관리자가 접수된 의뢰를 확인하며<br />
-                      직접 견적서를 작성합니다.
-                    </p>
-                  </div>
-                  <span style={{ fontSize: 14, color: "#9ca3af", marginTop: 2 }}>→</span>
-                </div>
-              </button>
-            </div>
-
-            <div style={{ marginTop: 20, textAlign: "right" }}>
-              <GhostBtn onClick={() => setShowEntryChooser(false)}>닫기</GhostBtn>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── 견적 작성 모달 ── */}
-      {showQuoteEditor && (
-        <QuoteEditorModal
-          token={token}
-          projectId={null}
-          onClose={() => setShowQuoteEditor(false)}
-          onSaved={({ quoteId, projectId: pid }) => {
-            setShowQuoteEditor(false);
-            fetchProjects();
-            // 프로젝트가 생성된 경우에만 프로젝트 상세 오픈
-            if (pid != null) openDetail(pid, 'quote');
-          }}
-          onToast={msg => setToast(msg)}
-          adminList={adminUsers}
-        />
-      )}
 
       {/* ── 프로젝트 직접 등록 모달 ── */}
       {showCreateProject && (
@@ -767,16 +691,8 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       )}
 
       {/* ── 프로젝트 탭 ── */}
-      <Section title={`전체 프로젝트 (${projects.length})`} action={
+      <Section title={`전체 판매건 (${projects.length})`} action={
         <div style={{ display: "flex", gap: 8 }}>
-          {hasPerm("project.create") && (
-            <PrimaryBtn
-              onClick={() => setShowEntryChooser(true)}
-              style={{ fontSize: 13, padding: "7px 14px" }}
-            >
-              + 견적 작성
-            </PrimaryBtn>
-          )}
           <GhostBtn onClick={handleExportProjects} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
         </div>
       }>

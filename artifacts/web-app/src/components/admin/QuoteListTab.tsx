@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../../lib/constants';
-import { GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
+import { PrimaryBtn, ClickSelect } from '../ui';
 import { QuoteEditorModal } from './QuoteEditorModal';
 
 // ─── 타입 ──────────────────────────────────────────────────────────────────────
@@ -50,9 +50,11 @@ interface QuoteListTabProps {
   token: string;
   onToast: (msg: string) => void;
   adminUsers?: Array<{ id: number; name: string | null; email: string }>;
+  /** AdminDashboard fetchAll 호출 시 증가 — QuoteListTab 자동 재조회 트리거 */
+  refreshTick?: number;
 }
 
-export function QuoteListTab({ token, onToast, adminUsers = [] }: QuoteListTabProps) {
+export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: QuoteListTabProps) {
   const authH = { Authorization: `Bearer ${token}` };
 
   const [quotes, setQuotes]             = useState<QuoteRow[]>([]);
@@ -81,6 +83,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [] }: QuoteListTabPr
   }, [token, statusFilter, typeFilter, dateFrom, dateTo]);
 
   useEffect(() => { fetchQuotes(); }, [fetchQuotes]);
+  useEffect(() => { if (refreshTick) fetchQuotes(); }, [refreshTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 견적 상태 변경
   const handleStatusChange = async (quoteId: number, newStatus: string) => {
@@ -102,7 +105,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [] }: QuoteListTabPr
     } finally { setUpdatingId(null); }
   };
 
-  // 검색 필터 (견적번호·견적서명·고객사·고객명·관리매니저·상품명)
+  // 검색 필터 (견적번호·견적서명·고객사·고객명·담당PM·상품명)
   const filtered = quotes.filter(q => {
     if (!search) return true;
     const s = search.toLowerCase();
@@ -127,7 +130,6 @@ export function QuoteListTab({ token, onToast, adminUsers = [] }: QuoteListTabPr
           <PrimaryBtn onClick={() => setShowEditor(true)} style={{ fontSize: 13, padding: '7px 16px' }}>
             + 견적서 작성
           </PrimaryBtn>
-          <GhostBtn onClick={fetchQuotes} style={{ fontSize: 12, padding: '7px 12px' }}>새로고침</GhostBtn>
         </div>
       </div>
 
@@ -137,7 +139,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [] }: QuoteListTabPr
         <input
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder="견적번호 · 견적서명 · 고객사 · 고객명 · 관리매니저 · 상품명 검색"
+          placeholder="견적번호 · 견적서명 · 고객사 · 고객명 · 담당PM · 상품명 검색"
           style={{ flex: '1 1 260px', padding: '7px 10px', fontSize: 13, border: '1px solid #d1d5db', borderRadius: 7, outline: 'none' }}
         />
 
@@ -229,7 +231,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [] }: QuoteListTabPr
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e5e7eb' }}>
-                {['견적번호', '발행일', '견적서명', '고객사', '고객명', '금액', '견적유형', '관리매니저', '상태', '상태변경'].map(h => (
+                {['견적번호', '발행일', '견적서명', '고객사', '고객명', '금액', '견적유형', '담당PM', '상태', '상태변경'].map(h => (
                   <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr>
@@ -301,7 +303,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [] }: QuoteListTabPr
                       </span>
                     </td>
 
-                    {/* 관리매니저 */}
+                    {/* 담당PM */}
                     <td style={{ padding: '8px 10px', maxWidth: 90 }}>
                       {q.adminName ? (
                         <span style={{ fontSize: 12, color: '#374151', whiteSpace: 'nowrap' }}>

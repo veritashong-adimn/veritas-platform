@@ -243,6 +243,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(true);
+  const [quoteTick, setQuoteTick] = useState(0);
   const [customersLoading, setCustomersLoading] = useState(false);
 
 
@@ -395,6 +396,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       if (tRes.ok) setTasks(Array.isArray(tData) ? tData : []);
       if (sRes.ok) setSettlements(Array.isArray(sData) ? sData : []);
       if (auRes.ok) setAdminUsers(Array.isArray(auData) ? auData : []);
+      setQuoteTick(t => t + 1);
     } catch { setToast("오류: 데이터 불러오기 실패"); }
     finally { setLoading(false); }
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1681,6 +1683,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           token={token}
           onToast={setToast}
           adminUsers={adminUsers}
+          refreshTick={quoteTick}
         />
       )}
 
