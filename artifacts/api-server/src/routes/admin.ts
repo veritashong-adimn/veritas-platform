@@ -26,14 +26,14 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
       search, status, financialStatus: financialStatusFilter, dateFrom, dateTo, assignedAdminId, companyName, contactName,
       companyId: companyIdFilter, contactId: contactIdFilter,
       quoteType: quoteTypeFilter, billingType: billingTypeFilter,
-      paymentDueDateFrom, paymentDueDateTo, quickFilter,
+      paymentDueDateFrom, paymentDueDateTo, quickFilter, salesOnly,
     } = req.query as {
       search?: string; status?: string; financialStatus?: string; dateFrom?: string; dateTo?: string;
       assignedAdminId?: string; companyName?: string; contactName?: string;
       companyId?: string; contactId?: string;
       quoteType?: string; billingType?: string;
       paymentDueDateFrom?: string; paymentDueDateTo?: string;
-      quickFilter?: string;
+      quickFilter?: string; salesOnly?: string;
     };
 
     const contactAlias = db
@@ -99,6 +99,13 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
     }).from(tasksTable).groupBy(tasksTable.projectId);
     const taskCountByProject = new Map(taskCountRows.map(r => [r.projectId, r.cnt]));
 
+    // 프로젝트별 완료 작업 수 집계 (납품 필터용)
+    const doneTaskCountRows = await db.select({
+      projectId: tasksTable.projectId,
+      cnt: sql<number>`count(*)::int`,
+    }).from(tasksTable).where(eq(tasksTable.status, "done")).groupBy(tasksTable.projectId);
+    const doneTaskCountByProject = new Map(doneTaskCountRows.map(r => [r.projectId, r.cnt]));
+
     // 프로젝트 + 견적 + 결제 + 작업 데이터 병합
     let result = rows.reverse().map(p => ({
       ...p,
@@ -111,6 +118,11 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
       hasPaid: paidProjectIds.has(p.id),
       taskCount: taskCountByProject.get(p.id) ?? 0,
     }));
+
+    // ── 판매관리 전용 필터 (견적 단계 제외) ──
+    if (salesOnly === "true" && !status?.trim()) {
+      result = result.filter(p => !["created", "quoted", "approved"].includes(p.status));
+    }
 
     // ── 기존 필터 ──
     if (search?.trim()) {
@@ -183,7 +195,13 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
 
     // ── 빠른 필터 ──
     if (quickFilter === "needs_assignment") {
-      result = result.filter(p => p.status === "approved" && (taskCountByProject.get(p.id) ?? 0) === 0);
+      result = result.filter(p => p.status === "paid" && (taskCountByProject.get(p.id) ?? 0) === 0);
+    } else if (quickFilter === "delivered") {
+      result = result.filter(p => {
+        const total = taskCountByProject.get(p.id) ?? 0;
+        const done = doneTaskCountByProject.get(p.id) ?? 0;
+        return p.status === "in_progress" && total > 0 && done >= total;
+      });
     } else if (quickFilter === "prepaid_deduction") {
       result = result.filter(p => p.quoteType === "prepaid_deduction");
     } else if (quickFilter === "accumulated_in_progress") {
@@ -819,9 +837,12 @@ router.patch("/admin/projects/:id/cancel", ...adminGuard, requirePermission("pro
   if (project.status === "cancelled") { res.status(400).json({ error: "이미 취소된 프로젝트입니다." }); return; }
   if (project.status === "completed") { res.status(400).json({ error: "완료된 프로젝트는 취소할 수 없습니다." }); return; }
 
+  const { reason } = req.body as { reason?: string };
+
   try {
     const [updated] = await db.update(projectsTable).set({ status: "cancelled" }).where(eq(projectsTable.id, projectId)).returning();
-    await logEvent("project", projectId, "project_cancelled", req.log, req.user ?? undefined);
+    const metadata = reason?.trim() ? JSON.stringify({ reason: reason.trim() }) : undefined;
+    await logEvent("project", projectId, "project_cancelled", req.log, req.user ?? undefined, metadata);
     res.json(updated);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to cancel project");

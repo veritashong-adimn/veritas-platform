@@ -31,15 +31,11 @@ type WorkflowFilter =
 
 const WORKFLOW_FILTERS: WorkflowFilter[] = [
   { type: "status", value: "all",                  label: "전체" },
-  { type: "status", value: "created",              label: "접수" },
-  { type: "status", value: "quoted",               label: "견적중" },
-  { type: "status", value: "approved",             label: "미확정" },
   { type: "status", value: "paid",                 label: "확정" },
   { type: "quick",  value: "needs_assignment",     label: "배정필요" },
   { type: "status", value: "in_progress,matched",  label: "진행중" },
   { type: "quick",  value: "delivered",            label: "납품" },
   { type: "status", value: "completed",            label: "완료" },
-  { type: "status", value: "cancelled",            label: "취소" },
 ];
 
 // ─── "다음 해야 할 일" 계산 ────────────────────────────────────────────────────
@@ -224,6 +220,11 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [deleting, setDeleting] = useState(false);
 
+  // ── 판매 취소 모달 ─────────────────────────────────────────────────────────
+  const [cancelProject, setCancelProject] = useState<{ id: number; title: string } | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelling, setCancelling] = useState(false);
+
   // ── 필터 state ────────────────────────────────────────────────────────────
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [projectSearch, setProjectSearch] = useState("");
@@ -353,6 +354,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     setLoading(true);
     try {
       const params = new URLSearchParams();
+      params.set("salesOnly", "true");
       if (projectSearch.trim()) params.set("search", projectSearch.trim());
       if (projectFilter !== "all") params.set("status", projectFilter);
       if (dateFrom) params.set("dateFrom", dateFrom);
@@ -414,6 +416,30 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       fetchProjects();
     } catch { setToast("오류: 삭제 요청에 실패했습니다."); }
     finally { setDeleting(false); }
+  };
+
+  // ── 판매 취소 실행 ────────────────────────────────────────────────────────
+  const handleCancelProject = async () => {
+    if (!cancelProject) return;
+    if (!cancelReason.trim()) { setToast("취소 사유를 입력하세요."); return; }
+    setCancelling(true);
+    try {
+      const res = await fetch(api(`/api/admin/projects/${cancelProject.id}/cancel`), {
+        method: "PATCH",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: cancelReason.trim() }),
+      });
+      if (res.ok) {
+        setToast("판매가 취소되었습니다.");
+        setCancelProject(null);
+        setCancelReason("");
+        fetchProjects();
+      } else {
+        const d = await res.json();
+        setToast(`오류: ${d.error}`);
+      }
+    } catch { setToast("오류: 판매 취소 요청에 실패했습니다."); }
+    finally { setCancelling(false); }
   };
 
   // ── CSV 내보내기 ──────────────────────────────────────────────────────────
@@ -557,6 +583,44 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
         </div>
       )}
 
+
+      {/* ── 판매 취소 모달 ── */}
+      {cancelProject && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 9000, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 460, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+            <h2 style={{ margin: "0 0 8px", fontSize: 18, fontWeight: 800, color: "#b45309" }}>판매 취소</h2>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "#374151", lineHeight: 1.6 }}>
+              취소 처리 후에도 프로젝트와 견적 데이터는 보존됩니다.
+            </p>
+            <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "10px 14px", marginBottom: 18 }}>
+              <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 700, color: "#92400e" }}>취소 대상</p>
+              <p style={{ margin: 0, fontSize: 13, color: "#78350f" }}>
+                #{cancelProject.id} — {cancelProject.title || "(제목 없음)"}
+              </p>
+            </div>
+            <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
+              취소 사유 <span style={{ color: "#dc2626" }}>*</span>
+            </label>
+            <textarea
+              value={cancelReason}
+              onChange={e => setCancelReason(e.target.value)}
+              placeholder="취소 사유를 입력하세요."
+              rows={3}
+              style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 14, boxSizing: "border-box", outline: "none", resize: "vertical", marginBottom: 18, fontFamily: "inherit" }}
+            />
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => { setCancelProject(null); setCancelReason(""); }} disabled={cancelling}
+                style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
+                닫기
+              </button>
+              <button onClick={handleCancelProject} disabled={!cancelReason.trim() || cancelling}
+                style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: cancelReason.trim() ? "#b45309" : "#d97706", color: "#fff", fontSize: 13, fontWeight: 700, cursor: cancelReason.trim() ? "pointer" : "not-allowed", transition: "background 0.15s" }}>
+                {cancelling ? "취소 중..." : "판매 취소 확정"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── 프로젝트 직접 등록 모달 ── */}
       {showCreateProject && (
@@ -1056,17 +1120,9 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                                 </button>
                                 {p.status !== "cancelled" && p.status !== "completed" && (
                                   <button
-                                    onClick={async () => {
-                                      if (!confirm(`프로젝트 #${p.id}를 취소하시겠습니까?`)) return;
-                                      const res = await fetch(api(`/api/admin/projects/${p.id}/cancel`), {
-                                        method: "PATCH",
-                                        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-                                      });
-                                      if (res.ok) { setToast("프로젝트가 취소되었습니다."); fetchProjects(); }
-                                      else { const d = await res.json(); setToast(`오류: ${d.error}`); }
-                                    }}
-                                    style={{ background: "transparent", color: "#ef4444", border: "1px solid #fca5a5", borderRadius: 6, padding: "4px 7px", fontSize: 10, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
-                                    취소
+                                    onClick={() => { setCancelProject({ id: p.id, title: p.title }); setCancelReason(""); }}
+                                    style={{ background: "transparent", color: "#b45309", border: "1px solid #fcd34d", borderRadius: 6, padding: "4px 7px", fontSize: 10, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
+                                    판매취소
                                   </button>
                                 )}
                                 {user.role === "admin" && (
