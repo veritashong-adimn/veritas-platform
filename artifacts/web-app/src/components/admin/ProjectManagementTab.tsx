@@ -239,6 +239,15 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const [projectCompanyIdFilter, setProjectCompanyIdFilter] = useState<string>("");
   const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
 
+  // 상세필터 드래프트 — 패널 내부 변경은 드래프트에만 반영, "적용" 클릭 시 실제 상태로 복사
+  const [draftFinancial,    setDraftFinancial]    = useState("all");
+  const [draftBillingType,  setDraftBillingType]  = useState("all");
+  const [draftDateFrom,     setDraftDateFrom]     = useState("");
+  const [draftDateTo,       setDraftDateTo]       = useState("");
+  const [draftPaymentFrom,  setDraftPaymentFrom]  = useState("");
+  const [draftPaymentTo,    setDraftPaymentTo]    = useState("");
+  const [fetchTrigger,      setFetchTrigger]      = useState(0);
+
   // ── 진입 선택 모달 state ──────────────────────────────────────────────────
 
   // ── 프로젝트 직접 등록 모달 state ─────────────────────────────────────────
@@ -291,6 +300,54 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     }
   };
 
+  // ── 상세필터 헬퍼 ─────────────────────────────────────────────────────────
+  const getFinancialValue = () => {
+    if (projectQuickFilter === "prepaid_deduction")      return "prepaid_used";
+    if (projectQuickFilter === "has_prepaid_balance")    return "balance";
+    if (projectQuickFilter === "accumulated_in_progress") return "ongoing";
+    return projectFinancialFilter;
+  };
+
+  // 패널 열릴 때 현재 실제 값을 드래프트에 동기화
+  useEffect(() => {
+    if (showAdvancedFilter) {
+      setDraftFinancial(getFinancialValue());
+      setDraftBillingType(projectBillingTypeFilter);
+      setDraftDateFrom(dateFrom);
+      setDraftDateTo(dateTo);
+      setDraftPaymentFrom(projectPaymentDueDateFrom);
+      setDraftPaymentTo(projectPaymentDueDateTo);
+    }
+  }, [showAdvancedFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 드래프트 → 실제 상태 적용. setFetchTrigger 증가 → 아래 useEffect가 새 fetchProjects(최신 클로저) 호출
+  const applyAdvancedFilter = () => {
+    if (draftFinancial === "prepaid_used")  { setProjectQuickFilter("prepaid_deduction");       setProjectFinancialFilter("all"); }
+    else if (draftFinancial === "balance")  { setProjectQuickFilter("has_prepaid_balance");      setProjectFinancialFilter("all"); }
+    else if (draftFinancial === "ongoing")  { setProjectQuickFilter("accumulated_in_progress");  setProjectFinancialFilter("all"); }
+    else                                    { setProjectFinancialFilter(draftFinancial);          setProjectQuickFilter("all"); }
+    setProjectBillingTypeFilter(draftBillingType);
+    setDateFrom(draftDateFrom);
+    setDateTo(draftDateTo);
+    setProjectPaymentDueDateFrom(draftPaymentFrom);
+    setProjectPaymentDueDateTo(draftPaymentTo);
+    setProjectPage(1);
+    setShowAdvancedFilter(false);
+    setFetchTrigger(t => t + 1);
+  };
+
+  const resetAdvancedFilter = () => {
+    setDraftFinancial("all"); setDraftBillingType("all");
+    setDraftDateFrom(""); setDraftDateTo("");
+    setDraftPaymentFrom(""); setDraftPaymentTo("");
+    setProjectFinancialFilter("all"); setProjectQuickFilter("all");
+    setProjectBillingTypeFilter("all");
+    setDateFrom(""); setDateTo("");
+    setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo("");
+    setProjectPage(1);
+    setFetchTrigger(t => t + 1);
+  };
+
   // ── 프로젝트 조회 ─────────────────────────────────────────────────────────
   const fetchProjects = useCallback(async () => {
     setLoading(true);
@@ -334,6 +391,11 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     fetchProjects();
     fetchModalData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // applyAdvancedFilter / resetAdvancedFilter 에서 증가 → 최신 fetchProjects(새 클로저) 호출
+  useEffect(() => {
+    if (fetchTrigger > 0) fetchProjects();
+  }, [fetchTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 삭제 실행 ─────────────────────────────────────────────────────────────
   const handleDeleteProject = async () => {
@@ -740,74 +802,97 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
           </div>
 
           {/* 상세 필터 패널 */}
-          <div style={{ overflow: "hidden", maxHeight: showAdvancedFilter ? "400px" : "0", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
-            {showAdvancedFilter && (
-              <div style={{ marginTop: 4, borderTop: "1px solid #f0f0f0", paddingTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>재무 상태</div>
-                    <ClickSelect
-                      value={
-                        projectQuickFilter === "prepaid_deduction" ? "prepaid_used" :
-                        projectQuickFilter === "has_prepaid_balance" ? "balance" :
-                        projectQuickFilter === "accumulated_in_progress" ? "ongoing" :
-                        projectFinancialFilter
-                      }
-                      onChange={v => {
-                        if (v === "prepaid_used") { setProjectQuickFilter("prepaid_deduction"); setProjectFinancialFilter("all"); setProjectPage(1); }
-                        else if (v === "balance") { setProjectQuickFilter("has_prepaid_balance"); setProjectFinancialFilter("all"); setProjectPage(1); }
-                        else if (v === "ongoing") { setProjectQuickFilter("accumulated_in_progress"); setProjectFinancialFilter("all"); setProjectPage(1); }
-                        else { setProjectFinancialFilter(v); setProjectQuickFilter("all"); setProjectPage(1); }
-                      }}
-                      style={{ width: "100%" }}
-                      triggerStyle={{ width: "100%", fontSize: 11 }}
-                      options={[
-                        { value: "all", label: "전체" }, { value: "unbilled", label: "미청구" },
-                        { value: "billed", label: "청구 완료" }, { value: "receivable", label: "미수금" },
-                        { value: "paid", label: "입금 완료" }, { value: "prepaid_used", label: "선입금 차감" },
-                        { value: "balance", label: "잔액 남음" }, { value: "ongoing", label: "누적 진행중" },
-                      ]}
-                    />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>청구 방식</div>
-                    <ClickSelect
-                      value={projectBillingTypeFilter}
-                      onChange={v => { setProjectBillingTypeFilter(v); setProjectPage(1); }}
-                      style={{ width: "100%" }}
-                      triggerStyle={{ width: "100%", fontSize: 11 }}
-                      options={[
-                        { value: "all", label: "전체" }, { value: "postpaid_per_project", label: "건별 후불" },
-                        { value: "monthly_billing", label: "누적 청구" }, { value: "prepaid_wallet", label: "선입금 차감" },
-                        { value: "prepay_upfront", label: "선결제(카드/현금)" },
-                      ]}
-                    />
+          <div style={{
+            overflow: "hidden",
+            maxHeight: showAdvancedFilter ? "520px" : "0",
+            opacity: showAdvancedFilter ? 1 : 0,
+            marginTop: showAdvancedFilter ? 10 : 0,
+            transition: "max-height 0.25s cubic-bezier(0.22,1,0.36,1), opacity 0.2s ease, margin-top 0.2s ease",
+          }}>
+            <div style={{
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
+              borderRadius: 12,
+              padding: "16px 18px 14px",
+            }}>
+              {/* 패널 제목 */}
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 14, display: "flex", alignItems: "center", gap: 5 }}>
+                🔍 상세 검색 조건
+              </div>
+
+              {/* 드롭다운 필터 2열 */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 5 }}>재무 상태</div>
+                  <ClickSelect
+                    value={draftFinancial}
+                    onChange={setDraftFinancial}
+                    style={{ width: "100%" }}
+                    triggerStyle={{ width: "100%", fontSize: 12 }}
+                    options={[
+                      { value: "all", label: "전체" }, { value: "unbilled", label: "미청구" },
+                      { value: "billed", label: "청구 완료" }, { value: "receivable", label: "미수금" },
+                      { value: "paid", label: "입금 완료" }, { value: "prepaid_used", label: "선입금 차감" },
+                      { value: "balance", label: "잔액 남음" }, { value: "ongoing", label: "누적 진행중" },
+                    ]}
+                  />
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 5 }}>청구 방식</div>
+                  <ClickSelect
+                    value={draftBillingType}
+                    onChange={setDraftBillingType}
+                    style={{ width: "100%" }}
+                    triggerStyle={{ width: "100%", fontSize: 12 }}
+                    options={[
+                      { value: "all", label: "전체" }, { value: "postpaid_per_project", label: "건별 후불" },
+                      { value: "monthly_billing", label: "누적 청구" }, { value: "prepaid_wallet", label: "선입금 차감" },
+                      { value: "prepay_upfront", label: "선결제(카드/현금)" },
+                    ]}
+                  />
+                </div>
+              </div>
+
+              {/* 날짜 범위 2열 */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 5 }}>등록일</div>
+                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <input type="date" value={draftDateFrom} onChange={e => setDraftDateFrom(e.target.value)}
+                      style={{ ...inputStyle, flex: 1, padding: "5px 7px", fontSize: 12 }} />
+                    <span style={{ color: "#d1d5db", fontSize: 11 }}>~</span>
+                    <input type="date" value={draftDateTo} onChange={e => setDraftDateTo(e.target.value)}
+                      style={{ ...inputStyle, flex: 1, padding: "5px 7px", fontSize: 12 }} />
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 10 }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>등록일</div>
-                    <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
-                      <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
-                      <span style={{ color: "#d1d5db", fontSize: 10 }}>~</span>
-                      <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
-                    </div>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>입금 예정일</div>
-                    <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
-                      <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
-                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
-                      <span style={{ color: "#d1d5db", fontSize: 10 }}>~</span>
-                      <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
-                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
-                    </div>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 5 }}>입금 예정일</div>
+                  <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <input type="date" value={draftPaymentFrom} onChange={e => setDraftPaymentFrom(e.target.value)}
+                      style={{ ...inputStyle, flex: 1, padding: "5px 7px", fontSize: 12 }} />
+                    <span style={{ color: "#d1d5db", fontSize: 11 }}>~</span>
+                    <input type="date" value={draftPaymentTo} onChange={e => setDraftPaymentTo(e.target.value)}
+                      style={{ ...inputStyle, flex: 1, padding: "5px 7px", fontSize: 12 }} />
                   </div>
                 </div>
               </div>
-            )}
+
+              {/* 하단 버튼 */}
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16, paddingTop: 12, borderTop: "1px solid #e5e7eb" }}>
+                <button
+                  onClick={resetAdvancedFilter}
+                  style={{ padding: "6px 14px", fontSize: 12, fontWeight: 600, background: "#fff", color: "#6b7280", border: "1px solid #d1d5db", borderRadius: 7, cursor: "pointer" }}
+                >
+                  초기화
+                </button>
+                <button
+                  onClick={applyAdvancedFilter}
+                  style={{ padding: "6px 18px", fontSize: 12, fontWeight: 700, background: "#2563eb", color: "#fff", border: "none", borderRadius: 7, cursor: "pointer" }}
+                >
+                  적용
+                </button>
+              </div>
+            </div>
           </div>
         </div>
         {/* 필터 영역 끝 */}
