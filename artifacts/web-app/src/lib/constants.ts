@@ -60,6 +60,14 @@ export type AdminProject = {
   requestingDivisionId?: number | null;
   billingCompanyId?: number | null;
   payerCompanyId?: number | null;
+  // 목록 API 추가 필드
+  hasQuote?: boolean;
+  hasPaid?: boolean;
+  taskCount?: number;
+  quotePrice?: string | number | null;
+  quoteStatus?: string | null;
+  quoteType?: string | null;
+  billingType?: string | null;
 };
 export type AdminPayment = {
   id: number; projectId: number; amount: number; status: string;
@@ -505,10 +513,13 @@ export function getDefaultPage(role: Role): NavPage {
 }
 
 export const STATUS_LABEL: Record<string, string> = {
-  created: "접수됨", quoted: "견적 발송", approved: "견적 승인",
-  paid: "결제 완료", matched: "통번역사 배정", in_progress: "진행 중",
-  completed: "완료", cancelled: "취소됨", waiting: "대기", assigned: "배정됨",
-  working: "작업 중", done: "완료",
+  // 프로젝트 업무 상태 (워크플로우 기준 라벨)
+  created: "접수", quoted: "견적중", approved: "미확정",
+  paid: "확정", matched: "배정완료", in_progress: "진행중",
+  completed: "완료", cancelled: "취소",
+  // 작업 상태
+  waiting: "대기", assigned: "배정됨", working: "작업 중", done: "완료",
+  // 정산/결제 상태
   pending: "대기", ready: "지급 준비",
   draft: "정보 부족", pending_review: "검토 필요",
 };
@@ -525,18 +536,21 @@ export const FINANCIAL_STATUS_STYLE: Record<string, React.CSSProperties> = {
   paid:       { background: "#f0fdf4", color: "#15803d" },
 };
 export const STATUS_STYLE: Record<string, React.CSSProperties> = {
+  // 프로젝트 상태
   created:     { background: "#f3f4f6", color: "#6b7280" },
-  quoted:      { background: "#eff6ff", color: "#2563eb" },
-  approved:    { background: "#f0fdf4", color: "#16a34a" },
+  quoted:      { background: "#dbeafe", color: "#1d4ed8" },
+  approved:    { background: "#fef3c7", color: "#b45309" },
   paid:        { background: "#ecfeff", color: "#0891b2" },
-  matched:     { background: "#faf5ff", color: "#9333ea" },
-  in_progress: { background: "#fffbeb", color: "#d97706" },
+  matched:     { background: "#f3e8ff", color: "#7c3aed" },
+  in_progress: { background: "#fff7ed", color: "#c2410c" },
   completed:   { background: "#f0fdf4", color: "#059669" },
   cancelled:   { background: "#fef2f2", color: "#dc2626" },
+  // 작업 상태
   waiting:     { background: "#f3f4f6", color: "#6b7280" },
   assigned:    { background: "#eff6ff", color: "#2563eb" },
   working:     { background: "#fffbeb", color: "#d97706" },
   done:        { background: "#f0fdf4", color: "#059669" },
+  // 정산/결제 상태
   pending:        { background: "#f3f4f6", color: "#6b7280" },
   ready:          { background: "#ecfdf5", color: "#059669" },
   draft:          { background: "#f3f4f6", color: "#6b7280" },
@@ -561,7 +575,7 @@ export const ROLE_LABEL: Record<Role, string> = {
 };
 export const BOARD_CATEGORY_LABEL: Record<string, string> = { notice: "공지", reference: "통역자료", manual: "내부매뉴얼" };
 export const AVAILABILITY_LABEL: Record<string, string> = { available: "가능", busy: "바쁨", unavailable: "불가" };
-export const ALL_PROJECT_STATUSES = ["created","quoted","approved","matched","in_progress","completed","cancelled"] as const;
+export const ALL_PROJECT_STATUSES = ["created","quoted","approved","paid","matched","in_progress","completed","cancelled"] as const;
 export const ALL_FINANCIAL_STATUSES = ["unbilled","billed","receivable","paid"] as const;
 export const ALL_PAYMENT_STATUSES = ["pending","paid","failed"] as const;
 export const ALL_SETTLEMENT_STATUSES = ["pending_review", "ready", "pending", "draft", "paid"] as const;

@@ -1,30 +1,96 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   api, User, AdminProject, AdminUser, AdminCustomer, Company, Contact,
-  STATUS_LABEL, ALL_PROJECT_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE,
+  STATUS_LABEL, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE,
 } from '../../lib/constants';
 import { StatusBadge, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../ui';
 import { DraggableModal } from './DraggableModal';
+import { QuoteEditorModal } from './QuoteEditorModal';
 
-// ─── 인라인 스타일 ────────────────────────────────────────────────────────────
+// ─── 인라인 스타일 ─────────────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
   border: '1px solid #d1d5db', fontSize: 14, color: '#111827',
   outline: 'none', boxSizing: 'border-box', background: '#fff',
 };
 const tableTh: React.CSSProperties = {
-  padding: "10px 12px", textAlign: "left", fontSize: 12,
+  padding: "8px 10px", textAlign: "left", fontSize: 11,
   fontWeight: 600, color: "#6b7280", background: "#f9fafb",
   borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap",
 };
 const tableTd: React.CSSProperties = {
-  padding: "9px 12px", fontSize: 13, color: "#374151",
+  padding: "8px 10px", fontSize: 12, color: "#374151",
   borderBottom: "1px solid #edf0f3", verticalAlign: "middle",
 };
 
 const PROJECT_PAGE_SIZE = 20;
 
-// ─── Section 헬퍼 ─────────────────────────────────────────────────────────────
+// ─── 워크플로우 필터 정의 ──────────────────────────────────────────────────────
+type WorkflowFilter =
+  | { type: "status"; value: string; label: string }
+  | { type: "quick"; value: string; label: string };
+
+const WORKFLOW_FILTERS: WorkflowFilter[] = [
+  { type: "status", value: "all",                  label: "전체" },
+  { type: "status", value: "created",              label: "접수" },
+  { type: "status", value: "quoted",               label: "견적중" },
+  { type: "status", value: "approved",             label: "미확정" },
+  { type: "status", value: "paid",                 label: "확정" },
+  { type: "quick",  value: "needs_assignment",     label: "배정필요" },
+  { type: "status", value: "in_progress,matched",  label: "진행중" },
+  { type: "quick",  value: "delivered",            label: "납품" },
+  { type: "status", value: "completed",            label: "완료" },
+  { type: "status", value: "cancelled",            label: "취소" },
+];
+
+// ─── "다음 해야 할 일" 계산 ────────────────────────────────────────────────────
+function getNextAction(p: AdminProject): { text: string; color: string; bg: string } {
+  const urgentStyle = { color: "#dc2626", bg: "#fef2f2" };
+  const warningStyle = { color: "#b45309", bg: "#fef3c7" };
+  const infoStyle = { color: "#2563eb", bg: "#eff6ff" };
+  const neutralStyle = { color: "#6b7280", bg: "#f3f4f6" };
+  const doneStyle = { color: "#059669", bg: "#f0fdf4" };
+
+  switch (p.status) {
+    case "created":
+      return p.hasQuote
+        ? { text: "견적 발송 필요", ...warningStyle }
+        : { text: "견적 생성 필요", ...urgentStyle };
+    case "quoted":
+      return { text: "고객 회신 대기", ...infoStyle };
+    case "approved":
+      return (p.taskCount ?? 0) === 0
+        ? { text: "통번역사 배정 필요", ...urgentStyle }
+        : { text: "작업 준비 중", ...neutralStyle };
+    case "paid":
+      return (p.taskCount ?? 0) === 0
+        ? { text: "통번역사 배정 필요", ...urgentStyle }
+        : { text: "작업 준비 중", ...neutralStyle };
+    case "matched":
+      return { text: "작업 시작 대기", ...warningStyle };
+    case "in_progress":
+      return { text: "납품 대기", ...infoStyle };
+    case "completed":
+      if (p.financialStatus === "receivable") return { text: "결제 확인 필요", ...urgentStyle };
+      if (p.financialStatus === "unbilled")   return { text: "청구 필요", ...warningStyle };
+      if (p.financialStatus === "billed")     return { text: "입금 대기", ...infoStyle };
+      return { text: "정산 처리 필요", ...neutralStyle };
+    case "cancelled":
+      return { text: "—", ...neutralStyle };
+    default:
+      return { text: "—", ...neutralStyle };
+  }
+}
+
+// ─── 견적금액 포맷 ─────────────────────────────────────────────────────────────
+function fmtPrice(v: string | number | null | undefined): string {
+  if (v == null || v === "") return "—";
+  const n = typeof v === "string" ? parseFloat(v) : v;
+  if (isNaN(n)) return "—";
+  return n.toLocaleString("ko-KR") + "원";
+}
+
+// ─── Section 헬퍼 ──────────────────────────────────────────────────────────────
 function Section({ title, sub, children, action }: { title: string; sub?: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 32 }}>
@@ -135,7 +201,7 @@ function SearchableSelect({ items, value, onChange, placeholder, accentBorder = 
   );
 }
 
-// ─── Props ────────────────────────────────────────────────────────────────────
+// ─── Props ─────────────────────────────────────────────────────────────────────
 interface Props {
   token: string;
   user: User;
@@ -147,19 +213,19 @@ interface Props {
   onProjectCreated?: () => void;
 }
 
-// ─── 컴포넌트 ─────────────────────────────────────────────────────────────────
+// ─── 컴포넌트 ──────────────────────────────────────────────────────────────────
 export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeaders, adminUsers, openDetail, onProjectCreated }: Props) {
 
-  // ── 프로젝트 목록 ────────────────────────────────────────────────────────
+  // ── 프로젝트 목록 ──────────────────────────────────────────────────────────
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // ── 프로젝트 완전 삭제 (admin 전용) ─────────────────────────────────────
+  // ── 삭제 확인 모달 ─────────────────────────────────────────────────────────
   const [deleteConfirmProject, setDeleteConfirmProject] = useState<{ id: number; title: string } | null>(null);
   const [deleteConfirmInput, setDeleteConfirmInput] = useState("");
   const [deleting, setDeleting] = useState(false);
 
-  // ── 필터 state ───────────────────────────────────────────────────────────
+  // ── 필터 state ────────────────────────────────────────────────────────────
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [projectSearch, setProjectSearch] = useState("");
   const [dateFrom, setDateFrom] = useState("");
@@ -175,7 +241,11 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const [projectCompanyIdFilter, setProjectCompanyIdFilter] = useState<string>("");
   const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
 
-  // ── 프로젝트 생성 모달 state ─────────────────────────────────────────────
+  // ── 진입 선택 모달 state ──────────────────────────────────────────────────
+  const [showEntryChooser, setShowEntryChooser] = useState(false);
+  const [showQuoteEditor, setShowQuoteEditor] = useState(false);
+
+  // ── 프로젝트 직접 등록 모달 state ─────────────────────────────────────────
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newProjectTitle, setNewProjectTitle] = useState("");
   const [newProjectCustomerId, setNewProjectCustomerId] = useState<number | null>(null);
@@ -196,16 +266,36 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState("");
-  // 초대 후 생성된 프로젝트 ID를 임시 보관 (프로젝트 생성 → 초대 링크)
   const [pendingInviteProjectId, setPendingInviteProjectId] = useState<number | null>(null);
 
-  // ── 모달용 데이터 ────────────────────────────────────────────────────────
+  // ── 모달용 데이터 ─────────────────────────────────────────────────────────
   const [companies, setCompanies] = useState<Company[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [customers, setCustomers] = useState<AdminCustomer[]>([]);
   const [platformUsers, setPlatformUsers] = useState<{id:number;name:string|null;email:string}[]>([]);
 
-  // ── 프로젝트 조회 ────────────────────────────────────────────────────────
+  // ── 현재 활성 워크플로우 필터 계산 ────────────────────────────────────────
+  const activeWorkflowLabel = (() => {
+    for (const wf of WORKFLOW_FILTERS) {
+      if (wf.type === "quick" && projectQuickFilter === wf.value) return wf.label;
+      if (wf.type === "status" && projectQuickFilter === "all" && projectFilter === wf.value) return wf.label;
+    }
+    return "전체";
+  })();
+
+  // ── 워크플로우 필터 클릭 핸들러 ───────────────────────────────────────────
+  const handleWorkflowFilter = (wf: WorkflowFilter) => {
+    setProjectPage(1);
+    if (wf.type === "quick") {
+      setProjectFilter("all");
+      setProjectQuickFilter(wf.value);
+    } else {
+      setProjectFilter(wf.value);
+      setProjectQuickFilter("all");
+    }
+  };
+
+  // ── 프로젝트 조회 ─────────────────────────────────────────────────────────
   const fetchProjects = useCallback(async () => {
     setLoading(true);
     try {
@@ -250,7 +340,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     fetchModalData();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── 프로젝트 완전 삭제 실행 ─────────────────────────────────────────────
+  // ── 삭제 실행 ─────────────────────────────────────────────────────────────
   const handleDeleteProject = async () => {
     if (!deleteConfirmProject) return;
     setDeleting(true);
@@ -269,7 +359,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     finally { setDeleting(false); }
   };
 
-  // ── 프로젝트 CSV 내보내기 ────────────────────────────────────────────────
+  // ── CSV 내보내기 ──────────────────────────────────────────────────────────
   const handleExportProjects = async () => {
     try {
       const res = await fetch(api("/api/admin/export/projects"), { headers: authHeaders });
@@ -286,7 +376,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     } catch { setToast("오류: CSV 내보내기 실패"); }
   };
 
-  // ── 프로젝트 생성 ────────────────────────────────────────────────────────
+  // ── 프로젝트 직접 등록 ────────────────────────────────────────────────────
   const handleCreateAdminProject = async () => {
     if (!newProjectTitle.trim()) { setToast("프로젝트 제목을 입력하세요."); return; }
     setCreatingProject(true);
@@ -307,7 +397,6 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
 
-      // 기존 플랫폼 계정 연결 시 알림 발송
       if (newProjectCustomerUserId && data.id) {
         try {
           await fetch(api("/api/notifications/project-created"), {
@@ -317,7 +406,6 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
         } catch { /* 알림 실패는 무시 */ }
       }
 
-      // 초대 이메일이 입력된 경우 → 초대 발송
       if (inviteEmail.trim() && data.id) {
         try {
           const invRes = await fetch(api("/api/invitations"), {
@@ -344,7 +432,6 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     finally { setCreatingProject(false); }
   };
 
-  // ── 초대 폼 확인 (실제 API 호출은 프로젝트 등록 시) ─────────────────────
   const handleInviteFormConfirm = () => {
     if (!inviteEmail.trim()) { setInviteError("이메일을 입력하세요."); return; }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -364,10 +451,18 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     setPendingInviteProjectId(null); setShowInviteModal(false);
   };
 
-  // ── JSX ─────────────────────────────────────────────────────────────────
+  // ── 담당PM 이름 조회 ──────────────────────────────────────────────────────
+  const getPmLabel = (adminId: number | null): string => {
+    if (!adminId) return "—";
+    const u = adminUsers.find(a => a.id === adminId);
+    if (!u) return `#${adminId}`;
+    return u.name ?? u.email.split("@")[0];
+  };
+
+  // ── JSX ──────────────────────────────────────────────────────────────────
   return (
     <>
-      {/* ── 프로젝트 완전 삭제 확인 모달 (admin 전용) ── */}
+      {/* ── 삭제 확인 모달 ── */}
       {deleteConfirmProject && (
         <div style={{ position: "fixed", inset: 0, zIndex: 9000, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 440, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
@@ -392,15 +487,11 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
               style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #fca5a5", fontSize: 14, boxSizing: "border-box", outline: "none", marginBottom: 18 }}
             />
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button
-                onClick={() => { setDeleteConfirmProject(null); setDeleteConfirmInput(""); }}
-                disabled={deleting}
+              <button onClick={() => { setDeleteConfirmProject(null); setDeleteConfirmInput(""); }} disabled={deleting}
                 style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
                 취소
               </button>
-              <button
-                onClick={handleDeleteProject}
-                disabled={deleteConfirmInput !== "삭제" || deleting}
+              <button onClick={handleDeleteProject} disabled={deleteConfirmInput !== "삭제" || deleting}
                 style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: deleteConfirmInput === "삭제" ? "#dc2626" : "#fca5a5", color: "#fff", fontSize: 13, fontWeight: 700, cursor: deleteConfirmInput === "삭제" ? "pointer" : "not-allowed", transition: "background 0.15s" }}>
                 {deleting ? "삭제 중..." : "최종 삭제"}
               </button>
@@ -409,239 +500,267 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
         </div>
       )}
 
-      {/* ── 프로젝트 생성 모달 ── */}
+      {/* ── 견적 작성 방식 선택 모달 ── */}
+      {showEntryChooser && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.35)" }}
+          onClick={e => { if (e.target === e.currentTarget) setShowEntryChooser(false); }}>
+          <div style={{ background: "#fff", borderRadius: 16, padding: "28px 28px 24px", width: 460, boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
+            <p style={{ margin: "0 0 4px", fontSize: 17, fontWeight: 800, color: "#111827" }}>견적 작성</p>
+            <p style={{ margin: "0 0 20px", fontSize: 12, color: "#6b7280" }}>접수된 의뢰를 기반으로 견적을 작성하는 방식을 선택하세요.</p>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {/* ① AI 견적 작성 */}
+              <button
+                onClick={() => { setShowEntryChooser(false); /* TODO: AI 견적 작성 화면 연결 */ }}
+                style={{ border: "1.5px solid #c4b5fd", borderRadius: 12, padding: "16px 18px", background: "#f5f3ff", cursor: "pointer", textAlign: "left", transition: "border-color 0.15s, box-shadow 0.15s" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = "#7c3aed"; e.currentTarget.style.boxShadow = "0 0 0 3px #ede9fe"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "#c4b5fd"; e.currentTarget.style.boxShadow = "none"; }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                  <span style={{ fontSize: 24, marginTop: 1 }}>🤖</span>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: "0 0 4px", fontSize: 14, fontWeight: 700, color: "#4c1d95" }}>AI 견적 작성</p>
+                    <p style={{ margin: 0, fontSize: 11, color: "#6d28d9", lineHeight: 1.7 }}>
+                      이메일, 의뢰 내용, 첨부파일 등을 AI가 분석하여<br />
+                      견적서를 자동 작성합니다.
+                    </p>
+                  </div>
+                  <span style={{ fontSize: 14, color: "#7c3aed", marginTop: 2 }}>→</span>
+                </div>
+              </button>
+
+              {/* ② 직접 견적 작성 */}
+              <button
+                onClick={() => { setShowEntryChooser(false); setShowQuoteEditor(true); }}
+                style={{ border: "1.5px solid #d1d5db", borderRadius: 12, padding: "16px 18px", background: "#fff", cursor: "pointer", textAlign: "left", transition: "border-color 0.15s, box-shadow 0.15s" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = "#6366f1"; e.currentTarget.style.boxShadow = "0 0 0 3px #eef2ff"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "#d1d5db"; e.currentTarget.style.boxShadow = "none"; }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                  <span style={{ fontSize: 24, marginTop: 1 }}>📋</span>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: "0 0 4px", fontSize: 14, fontWeight: 700, color: "#374151" }}>직접 견적 작성</p>
+                    <p style={{ margin: 0, fontSize: 11, color: "#6b7280", lineHeight: 1.7 }}>
+                      관리자가 접수된 의뢰를 확인하며<br />
+                      직접 견적서를 작성합니다.
+                    </p>
+                  </div>
+                  <span style={{ fontSize: 14, color: "#9ca3af", marginTop: 2 }}>→</span>
+                </div>
+              </button>
+            </div>
+
+            <div style={{ marginTop: 20, textAlign: "right" }}>
+              <GhostBtn onClick={() => setShowEntryChooser(false)}>닫기</GhostBtn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── 견적 작성 모달 ── */}
+      {showQuoteEditor && (
+        <QuoteEditorModal
+          token={token}
+          projectId={null}
+          onClose={() => setShowQuoteEditor(false)}
+          onSaved={({ quoteId, projectId: pid }) => {
+            setShowQuoteEditor(false);
+            fetchProjects();
+            // 프로젝트가 생성된 경우에만 프로젝트 상세 오픈
+            if (pid != null) openDetail(pid, 'quote');
+          }}
+          onToast={msg => setToast(msg)}
+          adminList={adminUsers}
+        />
+      )}
+
+      {/* ── 프로젝트 직접 등록 모달 ── */}
       {showCreateProject && (
         <DraggableModal
           title="프로젝트 직접 등록"
-          subtitle="거래처, 담당자, 의뢰/청구/납부 주체를 지정하여 프로젝트를 직접 등록합니다."
+          subtitle="내부 업무 또는 예외 업무용 — 거래처, 담당자, 의뢰/청구/납부 주체를 지정하여 프로젝트를 직접 등록합니다."
           onClose={resetCreateModal}
           width={520}
           zIndex={400}
           bodyPadding="20px 28px"
         >
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>제목 *</label>
+              <input value={newProjectTitle} onChange={e => setNewProjectTitle(e.target.value)}
+                placeholder="프로젝트 제목" autoFocus
+                style={{ width: "100%", boxSizing: "border-box", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, outline: "none" }}
+                onKeyDown={e => e.key === "Enter" && handleCreateAdminProject()} />
+            </div>
+            {/* ── 요청 주체 ── */}
+            <div style={{ borderRadius: 10, border: "1px solid #e5e7eb", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10, background: "#fafafa" }}>
+              <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>요청 주체</p>
               <div>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>제목 *</label>
-                <input value={newProjectTitle} onChange={e => setNewProjectTitle(e.target.value)}
-                  placeholder="프로젝트 제목" autoFocus
-                  style={{ width: "100%", boxSizing: "border-box", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, outline: "none" }}
-                  onKeyDown={e => e.key === "Enter" && handleCreateAdminProject()} />
-              </div>
-              {/* ── 요청 주체 ── */}
-              <div style={{ borderRadius: 10, border: "1px solid #e5e7eb", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 10, background: "#fafafa" }}>
-                <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>요청 주체</p>
-                <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>거래처</label>
-                  <SearchableSelect
-                    items={companies.map(c => ({ id: c.id, label: c.name, sub: (c.divisionNames?.length ?? 0) > 0 ? c.divisionNames!.slice(0, 3).join(" · ") : undefined }))}
-                    value={newProjectCompanyId}
-                    placeholder="회사명, 브랜드명으로 검색..."
-                    accentBorder="#6366f1"
-                    onChange={async (cid) => {
-                      setNewProjectCompanyId(cid);
-                      setNewProjectContactId(null);
-                      setNewProjectDivisionId(null);
-                      setNewProjectBillingCompanyId(null);
-                      setNewProjectPayerCompanyId(null);
-                      setShowBillingOverride(false);
-                      setShowPayerOverride(false);
-                      setCompanyDivisions([]);
-                      if (cid) {
-                        const res = await fetch(api(`/api/admin/companies/${cid}/divisions`), { headers: authHeaders });
-                        if (res.ok) setCompanyDivisions(await res.json());
-                      }
-                    }}
-                  />
-                </div>
-                {companyDivisions.length > 0 && (
-                  <div>
-                    <label style={{ fontSize: 12, fontWeight: 600, color: "#7c3aed", display: "block", marginBottom: 4 }}>브랜드 / 부서</label>
-                    <ClickSelect
-                      value={String(newProjectDivisionId ?? "")}
-                      onChange={val => setNewProjectDivisionId(val ? Number(val) : null)}
-                      options={[
-                        { value: "", label: "— 본사 직접 의뢰 —" },
-                        ...companyDivisions.map(d => ({ value: String(d.id), label: d.name + (d.type ? ` (${d.type})` : "") })),
-                      ]}
-                      style={{ width: "100%" }}
-                      triggerStyle={{ width: "100%", border: "1px solid #e9d5ff", background: "#faf5ff", color: "#7c3aed", fontWeight: 600, fontSize: 14, padding: "9px 12px" }}
-                      menuStyle={{ minWidth: "100%" }}
-                    />
-                  </div>
-                )}
-                <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>담당자</label>
-                  <SearchableSelect
-                    items={(contacts as Contact[])
-                      .filter(c => !newProjectCompanyId || c.companyId === newProjectCompanyId)
-                      .filter(c => !newProjectDivisionId || c.divisionId === newProjectDivisionId || c.divisionId === null)
-                      .map(c => {
-                        const divName = c.divisionId ? companyDivisions.find(d => d.id === c.divisionId)?.name : null;
-                        const subParts = [divName ? `📌 ${divName}` : null, c.email, c.phone].filter(Boolean) as string[];
-                        return { id: c.id, label: c.name, sub: subParts.join(" · ") || undefined };
-                      })}
-                    value={newProjectContactId}
-                    placeholder="이름 · 이메일 · 전화번호 검색..."
-                    accentBorder="#6366f1"
-                    onChange={setNewProjectContactId}
-                  />
-                </div>
-              </div>
-
-              {/* ── 고객 로그인 계정 ── */}
-              <div style={{ padding: "12px 14px", borderRadius: 10, border: "1px solid #e5e7eb", background: "#fafafa" }}>
-                <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
-                  고객 로그인 계정
-                  <span style={{ fontWeight: 400, color: "#9ca3af" }}>(선택)</span>
-                  <span
-                    title={"로그인하여 프로젝트 조회, 견적 확인, 결제를 할 수 있는 고객 계정입니다.\n선택하면 고객이 직접 프로젝트를 확인하고 진행할 수 있습니다.\n선택하지 않으면 내부에서만 관리되는 프로젝트로 등록됩니다."}
-                    style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", background: "#e5e7eb", color: "#6b7280", fontSize: 10, fontWeight: 700, cursor: "help", flexShrink: 0 }}
-                  >?</span>
-                </label>
-
-                {/* 기존 계정 선택 셀렉트 */}
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>거래처</label>
                 <SearchableSelect
-                  items={platformUsers.map(u => ({ id: u.id, label: u.name ?? u.email, sub: u.name ? u.email : undefined }))}
-                  value={inviteEmail ? null : newProjectCustomerUserId}
-                  placeholder="기존 계정 검색..."
-                  accentBorder="#374151"
-                  onChange={id => {
-                    // 초대 예정이 있으면 제거하고 기존 계정 선택
-                    if (inviteEmail) { setInviteEmail(""); setInviteName(""); }
-                    setNewProjectCustomerUserId(id);
+                  items={companies.map(c => ({ id: c.id, label: c.name, sub: (c.divisionNames?.length ?? 0) > 0 ? c.divisionNames!.slice(0, 3).join(" · ") : undefined }))}
+                  value={newProjectCompanyId}
+                  placeholder="회사명, 브랜드명으로 검색..."
+                  accentBorder="#6366f1"
+                  onChange={async (cid) => {
+                    setNewProjectCompanyId(cid);
+                    setNewProjectContactId(null);
+                    setNewProjectDivisionId(null);
+                    setNewProjectBillingCompanyId(null);
+                    setNewProjectPayerCompanyId(null);
+                    setShowBillingOverride(false);
+                    setShowPayerOverride(false);
+                    setCompanyDivisions([]);
+                    if (cid) {
+                      const res = await fetch(api(`/api/admin/companies/${cid}/divisions`), { headers: authHeaders });
+                      if (res.ok) setCompanyDivisions(await res.json());
+                    }
                   }}
                 />
-
-                {/* 선택된 기존 계정 표시 */}
-                {newProjectCustomerUserId && !inviteEmail && (() => {
-                  const u = platformUsers.find(p => p.id === newProjectCustomerUserId);
-                  return u ? (
-                    <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", background: "#f0fdf4", borderRadius: 6, border: "1px solid #bbf7d0" }}>
-                      <span style={{ fontSize: 12 }}>✓</span>
-                      <span style={{ fontSize: 12, color: "#065f46", flex: 1 }}>
-                        <strong>{u.name ?? u.email}</strong>{u.name ? ` (${u.email})` : ""} — 등록 시 알림 발송
-                      </span>
-                    </div>
-                  ) : null;
-                })()}
-
-                {/* 초대 예정 배지 */}
-                {inviteEmail && (
-                  <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", background: "#eff6ff", borderRadius: 6, border: "1px solid #bfdbfe" }}>
-                    <span style={{ fontSize: 13, color: "#2563eb" }}>✉</span>
-                    <span style={{ fontSize: 12, color: "#1d4ed8", flex: 1 }}>
-                      <span style={{ fontSize: 10, fontWeight: 700, background: "#dbeafe", color: "#1e40af", borderRadius: 4, padding: "1px 5px", marginRight: 5 }}>초대 예정</span>
-                      <strong>{inviteName || inviteEmail}</strong>
-                      {inviteName ? <span style={{ color: "#6b7280" }}> ({inviteEmail})</span> : ""}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => { setInviteEmail(""); setInviteName(""); setInviteError(""); }}
-                      style={{ fontSize: 12, color: "#9ca3af", background: "none", border: "none", cursor: "pointer", padding: "2px 6px", borderRadius: 4, lineHeight: 1 }}
-                      title="초대 예정 취소"
-                    >✕</button>
-                    <button
-                      type="button"
-                      onClick={() => { setInviteError(""); setShowInviteModal(true); }}
-                      style={{ fontSize: 11, color: "#2563eb", background: "none", border: "none", cursor: "pointer", padding: "2px 6px", fontWeight: 600, borderRadius: 4, textDecoration: "underline" }}
-                    >수정</button>
-                  </div>
-                )}
-
-                {/* + 고객 계정 초대 버튼 — 항상 표시 */}
-                <div style={{ marginTop: 8, borderTop: "1px dashed #e5e7eb", paddingTop: 8 }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      // 기존 계정 선택 해제 후 초대 모달 열기
-                      setNewProjectCustomerUserId(null);
-                      setInviteError("");
-                      setShowInviteModal(true);
-                    }}
-                    style={{
-                      display: "inline-flex", alignItems: "center", gap: 6,
-                      fontSize: 13, fontWeight: 700, color: "#2563eb",
-                      background: "#eff6ff", border: "1.5px solid #bfdbfe",
-                      borderRadius: 8, cursor: "pointer", padding: "7px 14px",
-                      transition: "background 0.15s",
-                    }}
-                    onMouseEnter={e => (e.currentTarget.style.background = "#dbeafe")}
-                    onMouseLeave={e => (e.currentTarget.style.background = "#eff6ff")}
-                  >
-                    <span style={{ fontSize: 15, lineHeight: 1 }}>+</span>
-                    고객 계정 초대
-                  </button>
-                  <p style={{ margin: "5px 0 0", fontSize: 11, color: "#9ca3af" }}>
-                    기존 계정이 없는 경우 이메일로 초대 링크를 발송합니다
-                  </p>
-                </div>
               </div>
+              {companyDivisions.length > 0 && (
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#7c3aed", display: "block", marginBottom: 4 }}>브랜드 / 부서</label>
+                  <ClickSelect
+                    value={String(newProjectDivisionId ?? "")}
+                    onChange={val => setNewProjectDivisionId(val ? Number(val) : null)}
+                    options={[
+                      { value: "", label: "— 본사 직접 의뢰 —" },
+                      ...companyDivisions.map(d => ({ value: String(d.id), label: d.name + (d.type ? ` (${d.type})` : "") })),
+                    ]}
+                    style={{ width: "100%" }}
+                    triggerStyle={{ width: "100%", border: "1px solid #e9d5ff", background: "#faf5ff", color: "#7c3aed", fontWeight: 600, fontSize: 14, padding: "9px 12px" }}
+                    menuStyle={{ minWidth: "100%" }}
+                  />
+                </div>
+              )}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>담당자</label>
+                <SearchableSelect
+                  items={(contacts as Contact[])
+                    .filter(c => !newProjectCompanyId || c.companyId === newProjectCompanyId)
+                    .filter(c => !newProjectDivisionId || c.divisionId === newProjectDivisionId || c.divisionId === null)
+                    .map(c => {
+                      const divName = c.divisionId ? companyDivisions.find(d => d.id === c.divisionId)?.name : null;
+                      const subParts = [divName ? `📌 ${divName}` : null, c.email, c.phone].filter(Boolean) as string[];
+                      return { id: c.id, label: c.name, sub: subParts.join(" · ") || undefined };
+                    })}
+                  value={newProjectContactId}
+                  placeholder="이름 · 이메일 · 전화번호 검색..."
+                  accentBorder="#6366f1"
+                  onChange={setNewProjectContactId}
+                />
+              </div>
+            </div>
 
+            {/* ── 고객 로그인 계정 ── */}
+            <div style={{ padding: "12px 14px", borderRadius: 10, border: "1px solid #e5e7eb", background: "#fafafa" }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: "#374151", display: "flex", alignItems: "center", gap: 4, marginBottom: 8 }}>
+                고객 로그인 계정
+                <span style={{ fontWeight: 400, color: "#9ca3af" }}>(선택)</span>
+                <span
+                  title={"로그인하여 프로젝트 조회, 견적 확인, 결제를 할 수 있는 고객 계정입니다."}
+                  style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 15, height: 15, borderRadius: "50%", background: "#e5e7eb", color: "#6b7280", fontSize: 10, fontWeight: 700, cursor: "help", flexShrink: 0 }}
+                >?</span>
+              </label>
+
+              <SearchableSelect
+                items={platformUsers.map(u => ({ id: u.id, label: u.name ?? u.email, sub: u.name ? u.email : undefined }))}
+                value={inviteEmail ? null : newProjectCustomerUserId}
+                placeholder="기존 계정 검색..."
+                accentBorder="#374151"
+                onChange={id => {
+                  if (inviteEmail) { setInviteEmail(""); setInviteName(""); }
+                  setNewProjectCustomerUserId(id);
+                }}
+              />
+
+              {newProjectCustomerUserId && !inviteEmail && (() => {
+                const u = platformUsers.find(p => p.id === newProjectCustomerUserId);
+                return u ? (
+                  <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", background: "#f0fdf4", borderRadius: 6, border: "1px solid #bbf7d0" }}>
+                    <span style={{ fontSize: 12 }}>✓</span>
+                    <span style={{ fontSize: 12, color: "#065f46", flex: 1 }}>
+                      <strong>{u.name ?? u.email}</strong>{u.name ? ` (${u.email})` : ""} — 등록 시 알림 발송
+                    </span>
+                  </div>
+                ) : null;
+              })()}
+
+              {inviteEmail && (
+                <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, padding: "7px 10px", background: "#eff6ff", borderRadius: 6, border: "1px solid #bfdbfe" }}>
+                  <span style={{ fontSize: 13, color: "#2563eb" }}>✉</span>
+                  <span style={{ fontSize: 12, color: "#1d4ed8", flex: 1 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, background: "#dbeafe", color: "#1e40af", borderRadius: 4, padding: "1px 5px", marginRight: 5 }}>초대 예정</span>
+                    <strong>{inviteName || inviteEmail}</strong>
+                    {inviteName ? <span style={{ color: "#6b7280" }}> ({inviteEmail})</span> : ""}
+                  </span>
+                  <button type="button" onClick={() => { setInviteEmail(""); setInviteName(""); setInviteError(""); }}
+                    style={{ fontSize: 12, color: "#9ca3af", background: "none", border: "none", cursor: "pointer", padding: "2px 6px", borderRadius: 4, lineHeight: 1 }} title="초대 예정 취소">✕</button>
+                  <button type="button" onClick={() => { setInviteError(""); setShowInviteModal(true); }}
+                    style={{ fontSize: 11, color: "#2563eb", background: "none", border: "none", cursor: "pointer", padding: "2px 6px", fontWeight: 600, borderRadius: 4, textDecoration: "underline" }}>수정</button>
+                </div>
+              )}
+
+              <div style={{ marginTop: 8, borderTop: "1px dashed #e5e7eb", paddingTop: 8 }}>
+                <button type="button"
+                  onClick={() => { setNewProjectCustomerUserId(null); setInviteError(""); setShowInviteModal(true); }}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700, color: "#2563eb", background: "#eff6ff", border: "1.5px solid #bfdbfe", borderRadius: 8, cursor: "pointer", padding: "7px 14px", transition: "background 0.15s" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "#dbeafe")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "#eff6ff")}
+                >
+                  <span style={{ fontSize: 15, lineHeight: 1 }}>+</span>
+                  고객 계정 초대
+                </button>
+                <p style={{ margin: "5px 0 0", fontSize: 11, color: "#9ca3af" }}>
+                  기존 계정이 없는 경우 이메일로 초대 링크를 발송합니다
+                </p>
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
-              <GhostBtn onClick={resetCreateModal}>취소</GhostBtn>
-              <PrimaryBtn onClick={handleCreateAdminProject} disabled={creatingProject || !newProjectTitle.trim()} style={{ padding: "9px 20px" }}>
-                {creatingProject ? "생성 중..." : "프로젝트 등록"}
-              </PrimaryBtn>
-            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
+            <GhostBtn onClick={resetCreateModal}>취소</GhostBtn>
+            <PrimaryBtn onClick={handleCreateAdminProject} disabled={creatingProject || !newProjectTitle.trim()} style={{ padding: "9px 20px" }}>
+              {creatingProject ? "생성 중..." : "프로젝트 등록"}
+            </PrimaryBtn>
+          </div>
         </DraggableModal>
       )}
 
       {/* ── 고객 초대 미니 모달 ── */}
       {showInviteModal && (
-        <div style={{
-          position: "fixed", inset: 0, zIndex: 500,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          background: "rgba(0,0,0,0.35)",
-        }} onClick={e => { if (e.target === e.currentTarget) setShowInviteModal(false); }}>
-          <div style={{
-            background: "#fff", borderRadius: 14, padding: "28px 28px 24px",
-            width: 420, boxShadow: "0 20px 60px rgba(0,0,0,0.18)",
-          }}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 500, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.35)" }}
+          onClick={e => { if (e.target === e.currentTarget) setShowInviteModal(false); }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: "28px 28px 24px", width: 420, boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
             <p style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800, color: "#111827" }}>고객 계정 초대</p>
             <p style={{ margin: "0 0 20px", fontSize: 12, color: "#6b7280" }}>
               이 이메일로 로그인 계정을 초대합니다.<br />
               기존 계정이 있으면 해당 계정에 연결되고,<br />
               없으면 프로젝트 등록 완료 시 초대 이메일이 발송됩니다.
             </p>
-
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
               <div>
                 <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>
                   이름 <span style={{ color: "#9ca3af", fontWeight: 400 }}>(선택)</span>
                 </label>
-                <input
-                  value={inviteName}
-                  onChange={e => setInviteName(e.target.value)}
-                  placeholder="고객 이름"
-                  style={{ ...inputStyle }}
-                />
+                <input value={inviteName} onChange={e => setInviteName(e.target.value)} placeholder="고객 이름" style={{ ...inputStyle }} />
               </div>
               <div>
                 <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>
                   이메일 <span style={{ color: "#dc2626" }}>*</span>
                 </label>
-                <input
-                  type="email"
-                  value={inviteEmail}
-                  onChange={e => setInviteEmail(e.target.value)}
-                  placeholder="customer@example.com"
-                  style={{ ...inputStyle }}
-                  onKeyDown={e => e.key === "Enter" && handleInviteFormConfirm()}
-                />
+                <input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)}
+                  placeholder="customer@example.com" style={{ ...inputStyle }}
+                  onKeyDown={e => e.key === "Enter" && handleInviteFormConfirm()} />
               </div>
               {inviteError && (
-                <p style={{ margin: 0, fontSize: 12, color: "#dc2626", background: "#fef2f2", padding: "7px 10px", borderRadius: 6 }}>
-                  {inviteError}
-                </p>
+                <p style={{ margin: 0, fontSize: 12, color: "#dc2626", background: "#fef2f2", padding: "7px 10px", borderRadius: 6 }}>{inviteError}</p>
               )}
             </div>
-
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 20 }}>
               <GhostBtn onClick={() => { setShowInviteModal(false); setInviteError(""); }}>취소</GhostBtn>
-              <PrimaryBtn onClick={handleInviteFormConfirm} style={{ padding: "9px 20px" }}>
-                초대 추가
-              </PrimaryBtn>
+              <PrimaryBtn onClick={handleInviteFormConfirm} style={{ padding: "9px 20px" }}>초대 추가</PrimaryBtn>
             </div>
           </div>
         </div>
@@ -650,16 +769,21 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       {/* ── 프로젝트 탭 ── */}
       <Section title={`전체 프로젝트 (${projects.length})`} action={
         <div style={{ display: "flex", gap: 8 }}>
-          {hasPerm("project.create") && <PrimaryBtn onClick={() => { fetchModalData(); setShowCreateProject(true); }} style={{ fontSize: 13, padding: "7px 14px" }}>+ 프로젝트 등록</PrimaryBtn>}
+          {hasPerm("project.create") && (
+            <PrimaryBtn
+              onClick={() => setShowEntryChooser(true)}
+              style={{ fontSize: 13, padding: "7px 14px" }}
+            >
+              + 견적 작성
+            </PrimaryBtn>
+          )}
           <GhostBtn onClick={handleExportProjects} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
         </div>
       }>
-        {/* ══════════════════════════════════════════
-             필터 영역 (sticky)
-        ══════════════════════════════════════════ */}
+        {/* 필터 영역 (sticky) */}
         <div style={{ position: "sticky", top: 0, zIndex: 30, background: "#fff", paddingBottom: 8, marginBottom: 18 }}>
 
-          {/* ── 검색 바 ── */}
+          {/* 검색 바 */}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
             <input
               value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
@@ -682,135 +806,134 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
             </GhostBtn>
           </div>
 
-          {/* ── 업무 상태 필터 카드 ── */}
+          {/* 업무 흐름 기준 상태 필터 */}
           <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "7px 12px", marginBottom: 5 }}>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: "#374151", letterSpacing: "0.3px", minWidth: 44, marginRight: 2 }}>업무 상태</span>
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#374151", letterSpacing: "0.3px", minWidth: 44, marginRight: 2 }}>업무 흐름</span>
               <div style={{ width: 1, height: 14, background: "#d1d5db", marginRight: 4 }} />
-              <FilterPill label="전체" active={projectFilter === "all"} onClick={() => { setProjectFilter("all"); setProjectPage(1); }} />
-              {ALL_PROJECT_STATUSES.map(s => (
-                <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
-                  active={projectFilter === s} onClick={() => { setProjectFilter(s); setProjectPage(1); }} />
-              ))}
+              {WORKFLOW_FILTERS.map(wf => {
+                const isActive = wf.label === activeWorkflowLabel;
+                return (
+                  <FilterPill
+                    key={wf.label}
+                    label={wf.label}
+                    active={isActive}
+                    onClick={() => { handleWorkflowFilter(wf); fetchProjects(); }}
+                  />
+                );
+              })}
             </div>
           </div>
 
-          {/* ── 상세 필터 패널 ── */}
+          {/* 상세 필터 패널 */}
           <div style={{ overflow: "hidden", maxHeight: showAdvancedFilter ? "400px" : "0", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
-          {showAdvancedFilter && (
-            <div style={{ marginTop: 4, borderTop: "1px solid #f0f0f0", paddingTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
-              {/* 3열 그리드: 담당 / 거래처 / 재무 상태 / 견적 유형 / 청구 방식 */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                {/* [담당] */}
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>담당</div>
-                  <ClickSelect
-                    value={assignedAdminFilter}
-                    onChange={setAssignedAdminFilter}
-                    style={{ width: "100%" }}
-                    triggerStyle={{ width: "100%", fontSize: 11 }}
-                    options={[
-                      { value: "all", label: "전체 담당자" },
-                      ...adminUsers.map(a => ({ value: String(a.id), label: a.email })),
-                    ]}
-                  />
-                </div>
-                {/* [거래처] */}
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>거래처</div>
-                  <ClickSelect
-                    value={projectCompanyIdFilter}
-                    onChange={v => { setProjectCompanyIdFilter(v); setProjectPage(1); }}
-                    style={{ width: "100%" }}
-                    triggerStyle={{ width: "100%", fontSize: 11 }}
-                    options={[
-                      { value: "", label: "전체 거래처" },
-                      ...companies.map(c => ({ value: String(c.id), label: c.name })),
-                    ]}
-                  />
-                </div>
-                {/* [재무 상태] */}
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>재무 상태</div>
-                  <ClickSelect
-                    value={
-                      projectQuickFilter === "prepaid_deduction" ? "prepaid_used" :
-                      projectQuickFilter === "has_prepaid_balance" ? "balance" :
-                      projectQuickFilter === "accumulated_in_progress" ? "ongoing" :
-                      projectFinancialFilter
-                    }
-                    onChange={v => {
-                      if (v === "prepaid_used") { setProjectQuickFilter("prepaid_deduction"); setProjectFinancialFilter("all"); setProjectPage(1); }
-                      else if (v === "balance") { setProjectQuickFilter("has_prepaid_balance"); setProjectFinancialFilter("all"); setProjectPage(1); }
-                      else if (v === "ongoing") { setProjectQuickFilter("accumulated_in_progress"); setProjectFinancialFilter("all"); setProjectPage(1); }
-                      else { setProjectFinancialFilter(v); setProjectQuickFilter("all"); setProjectPage(1); }
-                    }}
-                    style={{ width: "100%" }}
-                    triggerStyle={{ width: "100%", fontSize: 11 }}
-                    options={[
-                      { value: "all", label: "전체" }, { value: "unbilled", label: "미청구" },
-                      { value: "billed", label: "청구 완료" }, { value: "receivable", label: "미수금" },
-                      { value: "paid", label: "입금 완료" }, { value: "prepaid_used", label: "선입금 차감" },
-                      { value: "balance", label: "잔액 남음" }, { value: "ongoing", label: "누적 진행중" },
-                    ]}
-                  />
-                </div>
-                {/* [견적 유형] */}
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>견적 유형</div>
-                  <ClickSelect
-                    value={projectQuoteTypeFilter}
-                    onChange={v => { setProjectQuoteTypeFilter(v); setProjectPage(1); }}
-                    style={{ width: "100%" }}
-                    triggerStyle={{ width: "100%", fontSize: 11 }}
-                    options={[
-                      { value: "all", label: "전체" }, { value: "b2b_standard", label: "B2B 표준" },
-                      { value: "b2c_prepaid", label: "선입금" }, { value: "prepaid_deduction", label: "선입금 차감" },
-                      { value: "accumulated_batch", label: "누적 견적" },
-                    ]}
-                  />
-                </div>
-                {/* [청구 방식] */}
-                <div>
-                  <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>청구 방식</div>
-                  <ClickSelect
-                    value={projectBillingTypeFilter}
-                    onChange={v => { setProjectBillingTypeFilter(v); setProjectPage(1); }}
-                    style={{ width: "100%" }}
-                    triggerStyle={{ width: "100%", fontSize: 11 }}
-                    options={[
-                      { value: "all", label: "전체" }, { value: "postpaid_per_project", label: "건별 후불" },
-                      { value: "monthly_billing", label: "누적 청구" }, { value: "prepaid_wallet", label: "선입금 차감" },
-                      { value: "prepay_upfront", label: "선결제(카드/현금)" },
-                    ]}
-                  />
-                </div>
-              </div>
-              {/* 날짜 행: 생성일 / 입금 예정일 */}
-              <div style={{ display: "flex", gap: 10 }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>생성일</div>
-                  <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
-                    <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-                      style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
-                    <span style={{ color: "#d1d5db", fontSize: 10 }}>~</span>
-                    <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-                      style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
+            {showAdvancedFilter && (
+              <div style={{ marginTop: 4, borderTop: "1px solid #f0f0f0", paddingTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>담당PM</div>
+                    <ClickSelect
+                      value={assignedAdminFilter}
+                      onChange={setAssignedAdminFilter}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 11 }}
+                      options={[
+                        { value: "all", label: "전체 담당자" },
+                        ...adminUsers.map(a => ({ value: String(a.id), label: a.name ?? a.email })),
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>거래처</div>
+                    <ClickSelect
+                      value={projectCompanyIdFilter}
+                      onChange={v => { setProjectCompanyIdFilter(v); setProjectPage(1); }}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 11 }}
+                      options={[
+                        { value: "", label: "전체 거래처" },
+                        ...companies.map(c => ({ value: String(c.id), label: c.name })),
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>재무 상태</div>
+                    <ClickSelect
+                      value={
+                        projectQuickFilter === "prepaid_deduction" ? "prepaid_used" :
+                        projectQuickFilter === "has_prepaid_balance" ? "balance" :
+                        projectQuickFilter === "accumulated_in_progress" ? "ongoing" :
+                        projectFinancialFilter
+                      }
+                      onChange={v => {
+                        if (v === "prepaid_used") { setProjectQuickFilter("prepaid_deduction"); setProjectFinancialFilter("all"); setProjectPage(1); }
+                        else if (v === "balance") { setProjectQuickFilter("has_prepaid_balance"); setProjectFinancialFilter("all"); setProjectPage(1); }
+                        else if (v === "ongoing") { setProjectQuickFilter("accumulated_in_progress"); setProjectFinancialFilter("all"); setProjectPage(1); }
+                        else { setProjectFinancialFilter(v); setProjectQuickFilter("all"); setProjectPage(1); }
+                      }}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 11 }}
+                      options={[
+                        { value: "all", label: "전체" }, { value: "unbilled", label: "미청구" },
+                        { value: "billed", label: "청구 완료" }, { value: "receivable", label: "미수금" },
+                        { value: "paid", label: "입금 완료" }, { value: "prepaid_used", label: "선입금 차감" },
+                        { value: "balance", label: "잔액 남음" }, { value: "ongoing", label: "누적 진행중" },
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>견적 유형</div>
+                    <ClickSelect
+                      value={projectQuoteTypeFilter}
+                      onChange={v => { setProjectQuoteTypeFilter(v); setProjectPage(1); }}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 11 }}
+                      options={[
+                        { value: "all", label: "전체" }, { value: "b2b_standard", label: "B2B 표준" },
+                        { value: "b2c_prepaid", label: "차감 견적서" }, { value: "prepaid_deduction", label: "차감 견적서(구)" },
+                        { value: "accumulated_batch", label: "누적 견적" },
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>청구 방식</div>
+                    <ClickSelect
+                      value={projectBillingTypeFilter}
+                      onChange={v => { setProjectBillingTypeFilter(v); setProjectPage(1); }}
+                      style={{ width: "100%" }}
+                      triggerStyle={{ width: "100%", fontSize: 11 }}
+                      options={[
+                        { value: "all", label: "전체" }, { value: "postpaid_per_project", label: "건별 후불" },
+                        { value: "monthly_billing", label: "누적 청구" }, { value: "prepaid_wallet", label: "선입금 차감" },
+                        { value: "prepay_upfront", label: "선결제(카드/현금)" },
+                      ]}
+                    />
                   </div>
                 </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>입금 예정일</div>
-                  <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
-                    <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
-                      style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
-                    <span style={{ color: "#d1d5db", fontSize: 10 }}>~</span>
-                    <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
-                      style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
+                <div style={{ display: "flex", gap: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>생성일</div>
+                    <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                      <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
+                      <span style={{ color: "#d1d5db", fontSize: 10 }}>~</span>
+                      <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
+                    </div>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>입금 예정일</div>
+                    <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+                      <input type="date" value={projectPaymentDueDateFrom} onChange={e => { setProjectPaymentDueDateFrom(e.target.value); setProjectPage(1); }}
+                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
+                      <span style={{ color: "#d1d5db", fontSize: 10 }}>~</span>
+                      <input type="date" value={projectPaymentDueDateTo} onChange={e => { setProjectPaymentDueDateTo(e.target.value); setProjectPage(1); }}
+                        style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
           </div>
         </div>
         {/* 필터 영역 끝 */}
@@ -825,6 +948,14 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
           const totalPages = Math.ceil(projects.length / PROJECT_PAGE_SIZE);
           const safePage = Math.min(projectPage, totalPages);
           const pagedProjects = projects.slice((safePage - 1) * PROJECT_PAGE_SIZE, safePage * PROJECT_PAGE_SIZE);
+
+          const QUOTE_TYPE_LABEL: Record<string, string> = {
+            b2b_standard: "B2B",
+            b2c_prepaid: "차감 견적",
+            prepaid_deduction: "차감 견적",
+            accumulated_batch: "누적",
+          };
+
           return (
             <>
               <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden", background: "#fff" }}>
@@ -832,38 +963,44 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
                       <tr style={{ background: "#f8fafc" }}>
-                        {["ID","프로젝트","거래처 · 담당자","상태 / 재무","등록일","액션"].map(h => (
-                          <th key={h} style={{ ...tableTh, background: "transparent", fontSize: 11, letterSpacing: "0.2px" }}>{h}</th>
+                        {[
+                          { label: "ID",           w: 44  },
+                          { label: "프로젝트명",    w: 200 },
+                          { label: "거래처",        w: 130 },
+                          { label: "담당자",        w: 90  },
+                          { label: "유형",          w: 64  },
+                          { label: "견적금액",      w: 90  },
+                          { label: "입금현황",      w: 72  },
+                          { label: "현재상태",      w: 72  },
+                          { label: "담당PM",        w: 80  },
+                          { label: "다음 해야 할 일", w: 150 },
+                          { label: "등록일",        w: 76  },
+                          { label: "액션",          w: 120 },
+                        ].map(h => (
+                          <th key={h.label} style={{ ...tableTh, minWidth: h.w }}>{h.label}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {pagedProjects.map(p => {
-                        type SectionKey = "info"|"finance"|"work"|"settlement"|"history";
+                        const pp = p as any;
+                        const reqName = pp.requestingCompanyName ?? p.companyName ?? "—";
+                        const nextAction = getNextAction(p);
+
+                        // 액션 버튼 매핑
+                        type SectionKey = "info"|"quote"|"progress"|"payment"|"settlement"|"history";
                         const ACTION_MAP: Record<string, { label: string; section: SectionKey; color: string; bg: string }> = {
-                          created:     { label: "견적 생성",     section: "finance",    color: "#fff",    bg: "#2563eb" },
-                          quoted:      { label: "견적 확인",     section: "finance",    color: "#fff",    bg: "#2563eb" },
-                          approved:    { label: "통번역사 배정", section: "work",       color: "#fff",    bg: "#7c3aed" },
-                          matched:     { label: "배정 관리",    section: "work",       color: "#fff",    bg: "#7c3aed" },
-                          in_progress: { label: "작업 보기",     section: "work",       color: "#fff",    bg: "#6d28d9" },
+                          created:     { label: "견적 생성",     section: "quote",      color: "#fff",    bg: "#2563eb" },
+                          quoted:      { label: "견적 확인",     section: "quote",      color: "#fff",    bg: "#2563eb" },
+                          approved:    { label: "통번역사 배정", section: "progress",   color: "#fff",    bg: "#7c3aed" },
+                          paid:        { label: "배정 관리",    section: "progress",   color: "#fff",    bg: "#7c3aed" },
+                          matched:     { label: "배정 관리",    section: "progress",   color: "#fff",    bg: "#7c3aed" },
+                          in_progress: { label: "진행 보기",     section: "progress",   color: "#fff",    bg: "#6d28d9" },
                           completed:   { label: "정산 확인",     section: "settlement", color: "#fff",    bg: "#059669" },
                           cancelled:   { label: "상세보기",      section: "info",       color: "#6b7280", bg: "#f3f4f6" },
                         };
                         const action = ACTION_MAP[p.status] ?? { label: "상세보기", section: "info" as SectionKey, color: "#6b7280", bg: "#f3f4f6" };
-                        const qt = (p as any).quoteType as string | undefined;
-                        const QUOTE_STYLE: Record<string, { label: string; bg: string; color: string }> = {
-                          b2b_standard:     { label: "B2B",  bg: "#f1f5f9", color: "#475569" },
-                          b2c_prepaid:      { label: "선입금", bg: "#fef3c7", color: "#92400e" },
-                          prepaid_deduction:{ label: "차감",  bg: "#ede9fe", color: "#5b21b6" },
-                          accumulated_batch:{ label: "누적",  bg: "#dbeafe", color: "#1e40af" },
-                        };
-                        const qs = qt ? QUOTE_STYLE[qt] : null;
-                        const chipStyle = (borderColor: string, color: string): React.CSSProperties => ({
-                          display: "inline-block", padding: "2px 7px", borderRadius: 10,
-                          fontSize: 11, fontWeight: 500, lineHeight: "18px",
-                          whiteSpace: "nowrap", background: "transparent",
-                          border: `1px solid ${borderColor}`, color,
-                        });
+
                         return (
                           <tr key={p.id}
                             onClick={() => openDetail(p.id)}
@@ -872,94 +1009,77 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                             onMouseLeave={e => (e.currentTarget.style.background = "")}>
 
                             {/* ID */}
-                            <td style={{ ...tableTd, color: "#d1d5db", fontSize: 11, width: 40 }}>#{p.id}</td>
+                            <td style={{ ...tableTd, color: "#c0c8d4", fontSize: 11 }}>#{p.id}</td>
 
-                            {/* 프로젝트 제목 + 이메일 */}
-                            <td style={{ ...tableTd, maxWidth: 240 }}>
+                            {/* 프로젝트명 */}
+                            <td style={{ ...tableTd, maxWidth: 200 }}>
                               <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 600, color: "#111827" }}>{p.title}</div>
                               {p.customerEmail && <div style={{ fontSize: 11, color: "#c0c8d4", marginTop: 1 }}>{p.customerEmail}</div>}
                             </td>
 
-                            {/* 의뢰/청구/납부 구조 조건부 표시 */}
-                            {(() => {
-                              const pp = p as any;
-                              const reqId = pp.requestingCompanyId ?? p.companyId;
-                              const billId = pp.billingCompanyId ?? reqId;
-                              const payId = pp.payerCompanyId ?? reqId;
-                              const isComplex = (billId && billId !== reqId) || (payId && payId !== reqId);
-
-                              const reqName = pp.requestingCompanyName ?? p.companyName;
-                              const billName = pp.billingCompanyName ?? reqName;
-                              const payName = pp.payerCompanyName ?? reqName;
-                              const contact = pp.contactName as string | null;
-
-                              if (!isComplex) {
-                                const baseName = reqName ?? p.companyName ?? "-";
-                                return (
-                                  <td style={{ ...tableTd, fontSize: 12, maxWidth: 180 }}>
-                                    <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", overflow: "hidden" }}>
-                                      <span style={{ color: "#4b5563", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{baseName}</span>
-                                      {pp.divisionName && (
-                                        <span style={{ flexShrink: 0, background: "#ede9fe", color: "#7c3aed", borderRadius: 4, padding: "1px 6px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
-                                          {pp.divisionName}
-                                        </span>
-                                      )}
-                                    </div>
-                                    {contact && (
-                                      <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                        {contact}
-                                      </div>
-                                    )}
-                                  </td>
-                                );
-                              }
-
-                              const reqDisplay = pp.divisionName
-                                ? <><span style={{ fontWeight: 500, color: "#374151" }}>{reqName}</span><span style={{ marginLeft: 4, background: "#ede9fe", color: "#7c3aed", borderRadius: 4, padding: "1px 6px", fontSize: 11, fontWeight: 700 }}>{pp.divisionName}</span></>
-                                : <span style={{ fontWeight: 500, color: "#374151" }}>{reqName ?? "-"}</span>;
-
-                              return (
-                                <td style={{ ...tableTd, fontSize: 11, maxWidth: 200 }}>
-                                  <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    {reqDisplay}
-                                  </div>
-                                  {contact && (
-                                    <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                      {contact}
-                                    </div>
-                                  )}
-                                  {billId && billId !== reqId && (
-                                    <div style={{ fontSize: 10, color: "#0369a1", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                      청구: {billName}
-                                    </div>
-                                  )}
-                                  {payId && payId !== reqId && (
-                                    <div style={{ fontSize: 10, color: "#059669", marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                      납부: {payName}
-                                    </div>
-                                  )}
-                                </td>
-                              );
-                            })()}
-
-                            {/* 업무 상태 / 재무 상태 */}
-                            <td style={{ ...tableTd, minWidth: 200 }}>
-                              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
-                                  <StatusBadge status={p.status} />
-                                  {qs && <span style={chipStyle(qs.color + "66", qs.color)}>{qs.label}</span>}
-                                </div>
-                                {(() => {
-                                  const fs = (p as any).financialStatus as string ?? "unbilled";
-                                  const fStyle = FINANCIAL_STATUS_STYLE[fs] ?? { background: "#f3f4f6", color: "#6b7280" };
-                                  const fLabel = FINANCIAL_STATUS_LABEL[fs] ?? fs;
-                                  return (
-                                    <span style={{ ...fStyle, fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "2px 7px", display: "inline-block", width: "fit-content" }}>
-                                      {fLabel}
-                                    </span>
-                                  );
-                                })()}
+                            {/* 거래처 */}
+                            <td style={{ ...tableTd, maxWidth: 130 }}>
+                              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500, color: "#374151" }}>
+                                {reqName}
                               </div>
+                              {pp.divisionName && (
+                                <span style={{ background: "#ede9fe", color: "#7c3aed", borderRadius: 4, padding: "1px 5px", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap" }}>
+                                  {pp.divisionName}
+                                </span>
+                              )}
+                            </td>
+
+                            {/* 담당자 */}
+                            <td style={{ ...tableTd, maxWidth: 90 }}>
+                              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, color: "#6b7280" }}>
+                                {p.contactName ?? "—"}
+                              </div>
+                            </td>
+
+                            {/* 유형 (quoteType) */}
+                            <td style={{ ...tableTd }}>
+                              {p.quoteType ? (
+                                <span style={{ fontSize: 10, fontWeight: 700, background: "#f1f5f9", color: "#475569", borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap" }}>
+                                  {QUOTE_TYPE_LABEL[p.quoteType] ?? p.quoteType}
+                                </span>
+                              ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>—</span>}
+                            </td>
+
+                            {/* 견적금액 */}
+                            <td style={{ ...tableTd, whiteSpace: "nowrap", fontWeight: 500, color: "#1e3a5f", fontSize: 12 }}>
+                              {fmtPrice(p.quotePrice)}
+                            </td>
+
+                            {/* 입금현황 */}
+                            <td style={{ ...tableTd }}>
+                              {(() => {
+                                const fs = p.financialStatus ?? "unbilled";
+                                const fStyle = FINANCIAL_STATUS_STYLE[fs] ?? { background: "#f3f4f6", color: "#6b7280" };
+                                return (
+                                  <span style={{ ...fStyle, fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "2px 6px", display: "inline-block" }}>
+                                    {FINANCIAL_STATUS_LABEL[fs] ?? fs}
+                                  </span>
+                                );
+                              })()}
+                            </td>
+
+                            {/* 현재상태 */}
+                            <td style={{ ...tableTd }}>
+                              <StatusBadge status={p.status} />
+                            </td>
+
+                            {/* 담당PM */}
+                            <td style={{ ...tableTd, maxWidth: 80 }}>
+                              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 11, color: "#6b7280" }}>
+                                {getPmLabel(p.adminId)}
+                              </div>
+                            </td>
+
+                            {/* 다음 해야 할 일 */}
+                            <td style={{ ...tableTd, maxWidth: 150 }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 6, background: nextAction.bg, color: nextAction.color, whiteSpace: "nowrap" }}>
+                                {nextAction.text}
+                              </span>
                             </td>
 
                             {/* 등록일 */}
@@ -968,17 +1088,11 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                             </td>
 
                             {/* 액션 */}
-                            <td style={{ ...tableTd, width: 155 }} onClick={e => e.stopPropagation()}>
-                              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                                <button
-                                  title="컨트롤타워 — 판매·수행·결제 종합"
-                                  onClick={() => openDetail(p.id, "control-tower")}
-                                  style={{ background: "#eef2ff", color: "#4f46e5", border: "1px solid #c7d2fe", borderRadius: 6, padding: "4px 8px", fontSize: 13, cursor: "pointer", lineHeight: 1 }}>
-                                  🗼
-                                </button>
+                            <td style={{ ...tableTd }} onClick={e => e.stopPropagation()}>
+                              <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "nowrap" }}>
                                 <button
                                   onClick={() => openDetail(p.id, action.section)}
-                                  style={{ background: action.bg, color: action.color, border: "none", borderRadius: 6, padding: "4px 11px", fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                                  style={{ background: action.bg, color: action.color, border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 10, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
                                   {action.label}
                                 </button>
                                 {p.status !== "cancelled" && p.status !== "completed" && (
@@ -992,15 +1106,15 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                                       if (res.ok) { setToast("프로젝트가 취소되었습니다."); fetchProjects(); }
                                       else { const d = await res.json(); setToast(`오류: ${d.error}`); }
                                     }}
-                                    style={{ background: "transparent", color: "#ef4444", border: "1px solid #fca5a5", borderRadius: 6, padding: "4px 8px", fontSize: 11, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
+                                    style={{ background: "transparent", color: "#ef4444", border: "1px solid #fca5a5", borderRadius: 6, padding: "4px 7px", fontSize: 10, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
                                     취소
                                   </button>
                                 )}
                                 {user.role === "admin" && (
                                   <button
                                     onClick={() => { setDeleteConfirmProject({ id: p.id, title: p.title }); setDeleteConfirmInput(""); }}
-                                    style={{ background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, padding: "4px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>
-                                    완전 삭제
+                                    style={{ background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, padding: "4px 7px", fontSize: 10, cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>
+                                    삭제
                                   </button>
                                 )}
                               </div>
@@ -1012,6 +1126,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                   </table>
                 </div>
               </div>
+
               {/* 페이지네이션 */}
               {totalPages > 1 && (
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 12 }}>

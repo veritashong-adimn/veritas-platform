@@ -7,9 +7,14 @@ export const quoteStatusEnum = pgEnum("quote_status", ["pending", "sent", "appro
 
 export const quotesTable = pgTable("quotes", {
   id: serial("id").primaryKey(),
+  // nullable — 견적서 독립 생성 후 approved 시 프로젝트가 자동 연결됨
   projectId: integer("project_id")
-    .notNull()
     .references(() => projectsTable.id),
+
+  // ── 견적서 기본 정보 ────────────────────────────────────
+  quoteNumber: varchar("quote_number", { length: 30 }),   // Q20260703-001
+  title: varchar("title", { length: 255 }),               // 견적서명
+
   price: numeric("price", { precision: 12, scale: 2 }).notNull(),
   status: quoteStatusEnum("status").notNull().default("pending"),
   note: text("note"),

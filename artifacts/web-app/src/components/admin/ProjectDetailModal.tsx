@@ -3,7 +3,7 @@ import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, CO
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 import { ReviewMemoPanel } from './ReviewMemoPanel';
 import { DraggableModal } from './DraggableModal';
-import { ProjectControlTowerTab } from './ProjectControlTowerTab';
+import { QuoteEditorModal } from './QuoteEditorModal';
 
 /* ────── SearchableSelect (거래처 검색용 공통 컴포넌트) ────── */
 type SSItem = { id: number; label: string; sub?: string };
@@ -84,11 +84,12 @@ function getStatusTransitionBlock(
 
 /* 현재 상태별 안내 */
 const STATUS_NEXT_HINT: Record<string, { text: string; color: string; bg: string }> = {
-  created:     { text: "견적 생성 또는 드롭다운으로 상태를 변경할 수 있습니다.",           color: "#2563eb", bg: "#eff6ff" },
-  quoted:      { text: "드롭다운으로 상태를 변경할 수 있습니다.",                        color: "#7c3aed", bg: "#faf5ff" },
-  approved:    { text: "통번역사를 배정하려면 아래 '통번역사 추천' 버튼을 사용하세요.\n견적을 수정하려면 '견적 발송' 단계로 되돌리세요.", color: "#9333ea", bg: "#fdf4ff" },
-  matched:     { text: "통번역사 배정 또는 드롭다운으로 상태를 변경할 수 있습니다.",        color: "#0891b2", bg: "#ecfeff" },
-  in_progress: { text: "드롭다운으로 상태를 변경할 수 있습니다.",                        color: "#059669", bg: "#f0fdf4" },
+  created:     { text: "좌측 '견적서' 메뉴에서 견적을 작성·승인하면 이 프로젝트와 자동으로 연결됩니다.",  color: "#2563eb", bg: "#eff6ff" },
+  quoted:      { text: "견적이 발송되었습니다. 고객 회신을 대기 중입니다.",              color: "#7c3aed", bg: "#faf5ff" },
+  approved:    { text: "의뢰가 미확정 상태입니다. '진행' 탭에서 통번역사를 배정하세요.", color: "#9333ea", bg: "#fdf4ff" },
+  paid:        { text: "결제가 확정되었습니다. '진행' 탭에서 통번역사를 배정하세요.",      color: "#0369a1", bg: "#eff6ff" },
+  matched:     { text: "통번역사가 배정되었습니다. '진행' 탭에서 작업 현황을 관리하세요.", color: "#0891b2", bg: "#ecfeff" },
+  in_progress: { text: "진행 중인 의뢰입니다. '진행' 탭에서 작업 현황을 확인하세요.",     color: "#059669", bg: "#f0fdf4" },
 };
 
 const inputStyle: React.CSSProperties = {
@@ -106,7 +107,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   projectId: number; token: string; onClose: () => void;
   onRefresh: () => void; onToast: (msg: string) => void;
   adminList?: AdminUser[];
-  initialSection?: "info"|"finance"|"work"|"settlement"|"history"|"control-tower";
+  initialSection?: "info"|"quote"|"progress"|"payment"|"settlement"|"history"|"finance"|"work"|"control-tower";
   isAdmin?: boolean;
 }) {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
@@ -153,7 +154,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [translatorSearch, setTranslatorSearch] = useState("");
   const [translatorSearchResults, setTranslatorSearchResults] = useState<any[]>([]);
   const [searchingTranslator, setSearchingTranslator] = useState(false);
-  const [activeSection, setActiveSection] = useState<"info"|"finance"|"work"|"settlement"|"history"|"control-tower">(initialSection ?? "info");
+  // 구버전 initialSection 값 정규화 (하위 호환)
+  const normalizeSection = (s?: string): "info"|"quote"|"progress"|"payment"|"settlement"|"history" => {
+    if (s === "finance" || s === "control-tower") return "quote";
+    if (s === "work") return "progress";
+    if (s === "quote" || s === "progress" || s === "payment" || s === "settlement" || s === "history") return s;
+    return "info";
+  };
+  const [activeSection, setActiveSection] = useState<"info"|"quote"|"progress"|"payment"|"settlement"|"history">(normalizeSection(initialSection));
 
   type ProjectFile = { id: number; fileType: string; fileName: string; objectPath: string; fileSize: number | null; mimeType: string | null; createdAt: string; uploaderName: string | null; uploaderEmail: string | null };
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
@@ -205,7 +213,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     else if (val === "b2b_standard") setQuoteBillingType("postpaid_per_project"); // 일반 견적서 → 건별 후불 기본
     // prepaid_deduction은 레거시 타입 — 신규 생성 불가, 기존 데이터 표시용
   };
-  const [showQuoteForm, setShowQuoteForm] = useState(true);
+  const [showQuoteForm, setShowQuoteForm] = useState(false);
+  const [showQuoteEditorModal, setShowQuoteEditorModal] = useState(false);
   const [showTaxOptions, setShowTaxOptions] = useState(false);
   const [showPaySchedule, setShowPaySchedule] = useState(false);
   type PayScheduleRow = { label: string; amountType: "percent"|"fixed"; amount: string; dueDate: string; invoiceTiming: "after_payment"|"after_final"|"on_date"|"none" };
@@ -1226,15 +1235,16 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   });
 
   const sections: Array<{ key: typeof activeSection; label: string }> = [
-    { key: "control-tower", label: "🗼 컨트롤타워" },
     { key: "info", label: "기본정보" },
-    { key: "finance", label: "견적/결제" },
-    { key: "work", label: "작업" },
+    { key: "quote", label: "견적" },
+    { key: "progress", label: "진행" },
+    { key: "payment", label: "결제" },
     { key: "settlement", label: "정산" },
     { key: "history", label: `기록${projectFiles.length > 0 ? ` (📎${projectFiles.length})` : ""}` },
   ];
 
   return (
+    <>
     <DraggableModal
       title={`프로젝트 #${projectId} 상세`}
       onClose={onClose}
@@ -1306,27 +1316,34 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             <ReviewMemoPanel storageKey={`project_${projectId}`} label="이 프로젝트 검수 메모" />
             {/* 액션 바 */}
             <div style={{ background: "#f9fafb", borderRadius: 10, padding: "10px 12px", marginBottom: 14, border: "1px solid #e5e7eb" }}>
-              {/* ── Progress Step Bar ── */}
+              {/* ── Progress Step Bar ──────────────────────────────────────────────── */}
+              {/* 아래 STEPS 배열만 수정하면 단계 추가/변경/제거가 가능합니다.          */}
+              {/* 향후 목표 단계: 접수 → 견적 → 미확정 → 확정 → 배정 → 진행 → 납품 → 완료 */}
               {(() => {
-                const STEP_KEYS = ["created", "quoted", "approved", "matched", "in_progress", "completed"] as const;
-                const STEP_LABELS: Record<string, string> = {
-                  created: "접수됨", quoted: "견적 발송", approved: "견적 승인",
-                  matched: "통번역사 배정", in_progress: "진행 중", completed: "완료",
-                };
+                // ── 단계 정의 (추가/변경 시 이 배열만 수정) ──────────────────────
+                const STEPS: Array<{ key: string; label: string; assignStep?: boolean }> = [
+                  { key: "created",     label: "접수" },
+                  { key: "quoted",      label: "견적" },
+                  { key: "approved",    label: "미확정" },
+                  { key: "paid",        label: "확정" },
+                  { key: "matched",     label: "배정", assignStep: true },
+                  { key: "in_progress", label: "진행" },
+                  { key: "completed",   label: "완료" },
+                ];
+                // ─────────────────────────────────────────────────────────────────
+
                 const isCancelled = detail.status === "cancelled";
-                const currentIdx = isCancelled ? -1 : STEP_KEYS.indexOf(detail.status as typeof STEP_KEYS[number]);
+                const currentIdx = isCancelled ? -1 : STEPS.findIndex(s => s.key === detail.status);
                 const hasTranslator = (detail.tasks ?? []).length > 0;
                 const transitions = PROJECT_STATUS_TRANSITIONS[detail.status] ?? [];
 
                 const elements: React.ReactNode[] = [];
-                STEP_KEYS.forEach((stepKey, idx) => {
+                STEPS.forEach(({ key: stepKey, label: stepLabel, assignStep }, idx) => {
                   const isDone = !isCancelled && idx < currentIdx;
                   const isCurrent = !isCancelled && idx === currentIdx;
-                  const isMatchedStep = stepKey === "matched";
                   const canTransition = !isCurrent && transitions.includes(stepKey);
                   const isClickable = canTransition && !changingStatus;
 
-                  // 원 색상: 완료=초록채움, 현재=파란채움, 미완=회색테두리
                   const circleBg = isDone ? "#16a34a" : isCurrent ? "#2563eb" : "#f3f4f6";
                   const circleBorder = isDone ? "#16a34a" : isCurrent ? "#2563eb" : "#d1d5db";
                   const circleText = (isDone || isCurrent) ? "#fff" : "#9ca3af";
@@ -1344,15 +1361,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     <div key={stepKey}
                       onClick={() => {
                         if (!isClickable) return;
-                        if (isMatchedStep && !hasTranslator) { loadCandidates(); return; }
+                        if (assignStep && !hasTranslator) { loadCandidates(); return; }
                         applyStatus(stepKey);
                       }}
                       title={isClickable
-                        ? (isMatchedStep && !hasTranslator ? "통번역사 배정하기" : `"${STEP_LABELS[stepKey]}"로 변경`)
+                        ? (assignStep && !hasTranslator ? "통번역사 배정하기" : `"${stepLabel}"로 변경`)
                         : undefined}
                       style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, flexShrink: 0, cursor: isClickable ? "pointer" : "default" }}
                     >
-                      {/* 원 */}
                       <div style={{
                         width: 28, height: 28, borderRadius: "50%",
                         border: `2px solid ${circleBorder}`,
@@ -1363,34 +1379,19 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       }}>
                         {isDone ? "✓" : idx + 1}
                       </div>
-
-                      {/* 라벨 영역 */}
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
                         <span style={{
                           fontSize: 10, textAlign: "center", whiteSpace: "nowrap", lineHeight: 1.3,
                           fontWeight: (isCurrent || isDone) ? 700 : 400,
                           color: isDone ? "#15803d" : isCurrent ? "#1d4ed8" : "#9ca3af",
                         }}>
-                          {STEP_LABELS[stepKey]}
+                          {stepLabel}
                         </span>
-
-                        {/* "(현재)" 배지 */}
                         {isCurrent && (
-                          <span style={{
-                            fontSize: 9, fontWeight: 700, color: "#2563eb",
-                            background: "#dbeafe", borderRadius: 3, padding: "1px 4px",
-                            whiteSpace: "nowrap",
-                          }}>현재</span>
+                          <span style={{ fontSize: 9, fontWeight: 700, color: "#2563eb", background: "#dbeafe", borderRadius: 3, padding: "1px 4px", whiteSpace: "nowrap" }}>현재</span>
                         )}
-
-                        {/* 통번역사 배정 상태 배지 */}
-                        {isMatchedStep && !hasTranslator && (
-                          <span style={{
-                            fontSize: 9, fontWeight: 600, whiteSpace: "nowrap",
-                            color: "#d97706",
-                          }}>
-                            (필요)
-                          </span>
+                        {assignStep && !hasTranslator && !isCancelled && (
+                          <span style={{ fontSize: 9, fontWeight: 600, whiteSpace: "nowrap", color: "#d97706" }}>(필요)</span>
                         )}
                       </div>
                     </div>
@@ -1401,7 +1402,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   <div style={{ marginBottom: 0, paddingBottom: 4 }}>
                     {isCancelled && (
                       <div style={{ marginBottom: 6, display: "inline-flex", alignItems: "center", gap: 5, padding: "3px 10px", background: "#fee2e2", borderRadius: 6, fontSize: 11, fontWeight: 700, color: "#dc2626" }}>
-                        🚫 취소된 프로젝트
+                        🚫 취소된 의뢰
                       </div>
                     )}
                     <div style={{ display: "flex", alignItems: "flex-start", overflowX: "auto", paddingBottom: 2 }}>
@@ -1410,29 +1411,51 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   </div>
                 );
               })()}
-              {/* ── 재무 상태 — StepBar 직하단 (global status bar) ── */}
-              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 12, paddingTop: 8, paddingBottom: 10, borderBottom: "1px dashed #e5e7eb" }}>
-                <span style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", letterSpacing: "0.04em", flexShrink: 0 }}>재무</span>
-                {ALL_FINANCIAL_STATUSES.map(fs => {
-                  const isActive = (detail.financialStatus ?? "unbilled") === fs;
-                  const target = financialStatusTarget === fs;
-                  const fStyle = FINANCIAL_STATUS_STYLE[fs] ?? { background: "#f3f4f6", color: "#6b7280" };
-                  return (
-                    <button key={fs} onClick={() => setFinancialStatusTarget(fs)}
-                      style={{ padding: "3px 10px", borderRadius: 8, border: `2px solid ${target ? (fStyle.color as string) : "#e5e7eb"}`,
-                        fontWeight: target || isActive ? 700 : 400, fontSize: 12, cursor: "pointer",
-                        background: target ? (fStyle.background as string) : isActive ? "#f9fafb" : "#fff",
-                        color: target || isActive ? (fStyle.color as string) : "#6b7280" }}>
-                      {FINANCIAL_STATUS_LABEL[fs]}{isActive && " ✓"}
+              {/* ── 재무 상태 — 읽기 전용 요약 배지 (상세 수정은 결제 탭에서) ── */}
+              {(() => {
+                const fs = detail.financialStatus ?? "unbilled";
+                const fStyle = FINANCIAL_STATUS_STYLE[fs] ?? { background: "#f3f4f6", color: "#6b7280" };
+                const quotePrice = detail.quotes.length > 0
+                  ? Number((detail.quotes[0] as any).price ?? (detail.quotes[0] as any).amount ?? 0)
+                  : null;
+                const paidAmount = detail.payments
+                  .filter((pm: any) => pm.status === "paid")
+                  .reduce((s: number, pm: any) => s + Number(pm.amount ?? 0), 0);
+                const unpaid = quotePrice != null ? quotePrice - paidAmount : null;
+                return (
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10, paddingTop: 6, paddingBottom: 8, borderBottom: "1px dashed #e5e7eb" }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "#b0b8c6", letterSpacing: "0.04em", flexShrink: 0 }}>재무</span>
+                    {quotePrice != null && (
+                      <span style={{ fontSize: 11, color: "#374151" }}>
+                        견적금액 <strong style={{ color: "#1e3a5f" }}>{quotePrice.toLocaleString()}원</strong>
+                      </span>
+                    )}
+                    <span style={{ fontSize: 10, color: "#d1d5db" }}>|</span>
+                    <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 6, fontWeight: 700, background: fStyle.background as string, color: fStyle.color as string }}>
+                      {FINANCIAL_STATUS_LABEL[fs]}
+                    </span>
+                    {unpaid != null && unpaid > 0 && (
+                      <>
+                        <span style={{ fontSize: 10, color: "#d1d5db" }}>|</span>
+                        <span style={{ fontSize: 11, color: "#dc2626" }}>
+                          미수금 <strong>{unpaid.toLocaleString()}원</strong>
+                        </span>
+                      </>
+                    )}
+                    {paidAmount > 0 && unpaid != null && unpaid <= 0 && (
+                      <>
+                        <span style={{ fontSize: 10, color: "#d1d5db" }}>|</span>
+                        <span style={{ fontSize: 11, color: "#059669", fontWeight: 600 }}>입금 완료</span>
+                      </>
+                    )}
+                    <button
+                      onClick={() => setActiveSection("payment")}
+                      style={{ marginLeft: "auto", fontSize: 10, color: "#6b7280", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+                      결제 탭에서 관리 →
                     </button>
-                  );
-                })}
-                <GhostBtn onClick={handleFinancialStatusChange}
-                  disabled={changingFinancialStatus || financialStatusTarget === (detail.financialStatus ?? "unbilled")}
-                  color="#059669" style={{ fontSize: 12, padding: "3px 10px" }}>
-                  {changingFinancialStatus ? "변경 중..." : "적용"}
-                </GhostBtn>
-              </div>
+                  </div>
+                );
+              })()}
               {/* 현재 상태 안내 */}
               {(() => {
                 const noTranslatorBlock = ["approved", "matched", "in_progress"].includes(detail.status) && (detail.tasks ?? []).length === 0;
@@ -1448,7 +1471,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         <span style={{ fontSize: 12, color: "#7c3aed", lineHeight: 1.6 }}>
                           아직 통번역사가 배정되지 않았습니다.<br />
                           아래 <strong>'통번역사 배정하기'</strong> 버튼으로 배정하면 상태가 자동으로 변경됩니다.
-                          <span style={{ color: "#a78bfa", fontWeight: 400 }}> (드롭다운으로 직접 변경할 수 없습니다)</span>
                         </span>
                         <div style={{ marginTop: 8 }}>
                           <GhostBtn onClick={loadCandidates} disabled={loadingCandidates} color="#7c3aed"
@@ -1476,50 +1498,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               })()}
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                {/* 상태 변경 */}
-                {(PROJECT_STATUS_TRANSITIONS[detail.status] ?? []).length > 0 && (() => {
-                  const block = statusTarget !== detail.status
-                    ? getStatusTransitionBlock(statusTarget, detail)
-                    : { blocked: false };
-                  const isBlocked = block.blocked;
-                  return (
-                    <>
-                      <ClickSelect
-                        value={statusTarget}
-                        onChange={setStatusTarget}
-                        triggerStyle={{ fontSize: 12, padding: "6px 10px" }}
-                        options={[
-                          { value: detail.status, label: `${STATUS_LABEL[detail.status] ?? detail.status} (현재)` },
-                          ...(PROJECT_STATUS_TRANSITIONS[detail.status] ?? [])
-                            .filter(s => s !== "matched" || (detail.tasks ?? []).length > 0)
-                            .map(s => ({ value: s, label: STATUS_LABEL[s] ?? s })),
-                        ]}
-                      />
-                      <GhostBtn
-                        onClick={handleStatusChange}
-                        disabled={changingStatus || statusTarget === detail.status || isBlocked}
-                        color={isBlocked ? "#9ca3af" : "#2563eb"}
-                        style={{ fontSize: 12, padding: "6px 12px" }}
-                      >
-                        {changingStatus ? "변경 중..." : "상태 변경 적용"}
-                      </GhostBtn>
-                      <span style={{ color: "#d1d5db", fontSize: 14 }}>|</span>
-                      {/* 검증 실패 경고 메시지 */}
-                      {block.blocked && block.reason && (
-                        <div style={{
-                          width: "100%", marginTop: 6,
-                          display: "flex", gap: 6, alignItems: "flex-start",
-                          background: "#fef2f2", border: "1px solid #fca5a5",
-                          borderRadius: 7, padding: "7px 10px",
-                        }}>
-                          <span style={{ fontSize: 16, lineHeight: 1 }}>⚠️</span>
-                          <span style={{ fontSize: 12, color: "#991b1b", lineHeight: 1.5 }}>{block.reason}</span>
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-
                 {/* 통번역사 추천 — 이미 배정된 경우 재배정용으로만 표시 (미배정 시 위 통합 경고에 표시됨) */}
                 {["approved", "matched", "in_progress"].includes(detail.status) && (detail.tasks ?? []).length > 0 && (
                   <GhostBtn onClick={loadCandidates} disabled={loadingCandidates} color="#7c3aed" style={{ fontSize: 12, padding: "6px 12px" }}>
@@ -1717,12 +1695,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             {/* ── 탭 콘텐츠 영역 (내부 스크롤 없이 고정 높이 모달 내에서 흐름) ── */}
             <div style={{ padding: "16px 28px 24px", minHeight: 320 }}>
 
-            {/* 기본 정보 */}
+            {/* 기본정보 탭 */}
             {activeSection === "info" && (
               <>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                  {["의뢰처", "담당자", "등록 정보", "상태"].map(k => (
+                    <span key={k} style={{ fontSize: 10, fontWeight: 600, background: "#f1f5f9", color: "#64748b", borderRadius: 5, padding: "2px 8px" }}>{k}</span>
+                  ))}
+                </div>
                 {!editingInfo ? (
                   <>
                     <div style={{ background: "#fcfcfd", borderRadius: 8, padding: "10px 12px", border: "1px solid #f0f2f5", marginBottom: 2 }}>
+
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px" }}>
                       <div style={{ gridColumn: "span 2", marginBottom: 4, paddingBottom: 10, borderBottom: "1px solid #e5e9ef" }}>
                         <span style={{ fontSize: 11, color: "#b0b8c6", display: "block", marginBottom: 3 }}>프로젝트명 <Req /></span>
@@ -2112,13 +2096,19 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               </div>
             )}
 
-            {/* 작업 (통번역사 배정 / 작업 관리) */}
-            {activeSection === "work" && (
+            {/* 진행 탭 (통번역사 배정 / 작업 관리) */}
+            {activeSection === "progress" && (
               <>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                  {["통번역사 배정", "작업 현황", "일정", "납품"].map(k => (
+                    <span key={k} style={{ fontSize: 10, fontWeight: 600, background: "#f1f5f9", color: "#64748b", borderRadius: 5, padding: "2px 8px" }}>{k}</span>
+                  ))}
+                </div>
+                <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.05em" }}>배정</p>
                 {detail.tasks.length === 0 ? (
-                  <div style={{ textAlign: "center", padding: "24px 0", color: "#9ca3af" }}>
-                    <p style={{ margin: 0 }}>배정된 통번역사가 없습니다.</p>
-                    <p style={{ margin: "6px 0 0", fontSize: 12 }}>상단 '통번역사 추천/배정' 버튼으로 통번역사를 배정하세요.</p>
+                  <div style={{ textAlign: "center", padding: "20px 0", color: "#9ca3af", background: "#fafafa", borderRadius: 8, border: "1px dashed #e5e7eb" }}>
+                    <p style={{ margin: 0, fontSize: 13 }}>배정된 통번역사가 없습니다.</p>
+                    <p style={{ margin: "6px 0 0", fontSize: 12 }}>상단 '통번역사 추천/배정' 버튼으로 배정하세요.</p>
                   </div>
                 ) : detail.tasks.map(t => {
                   const avStyle = AVAIL_STYLE[t.translatorProfile?.availabilityStatus ?? ""] ?? AVAIL_STYLE.unavailable;
@@ -2162,1437 +2152,206 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               </>
             )}
 
-            {/* 견적/결제 탭 */}
-            {activeSection === "finance" && (
+            {/* 견적 탭 */}
+            {activeSection === "quote" && (
               <>
-                {/* 견적 섹션 */}
-                {(() => {
-                  const canQuote = !["cancelled"].includes(detail.status);
-                  const hasQuotes = detail.quotes.length > 0;
-                  const formVisible = canQuote && (showQuoteForm || !hasQuotes);
-                  const companyBillingType = (detail.company as any)?.billingType ?? "postpaid_per_project";
+                {/* ── 탭 제목 칩 ── */}
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+                  {["연결된 견적서", "견적 이력", "보기/다운로드"].map(k => (
+                    <span key={k} style={{ fontSize: 10, fontWeight: 600, background: "#f5f3ff", color: "#6d28d9", borderRadius: 5, padding: "2px 8px" }}>{k}</span>
+                  ))}
+                </div>
 
-                  // 공통 인라인 스타일 (컴포넌트 정의 금지 — 매 렌더마다 새 참조가 생기면 React가 remount)
-                  const qfIs = { ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, borderColor: "#d8b4fe" };
-                  const qfLbl = (txt: string) => (
-                    <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>{txt}</label>
-                  );
+                {/* ── 견적 목록 헤더 ── */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, paddingBottom: 8, borderBottom: "1px solid #ede9fe" }}>
+                  <p style={{ ...sectionHd, margin: 0, paddingBottom: 0, borderBottom: "none", color: "#5b21b6", letterSpacing: "0.04em", borderLeft: "3px solid #8b5cf6", paddingLeft: 8 }}>
+                    연결된 견적서 ({detail.quotes.length})
+                  </p>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {!["cancelled"].includes(detail.status) && detail.quotes.length > 0 && (
+                      <button
+                        onClick={() => setShowQuoteEditorModal(true)}
+                        style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", border: "1px solid #d8b4fe", borderRadius: 6, padding: "4px 11px", cursor: "pointer" }}>
+                        ✏️ 견적 수정
+                      </button>
+                    )}
+                    <span style={{ fontSize: 11, color: "#9ca3af" }}>
+                      새 견적서는 좌측 '견적서' 메뉴에서 작성
+                    </span>
+                  </div>
+                </div>
 
-                  // 견적 유형별 추가 입력 필드 (JSX 변수 — 컴포넌트 아님)
-                  const quoteTypeExtraJsx = (() => {
-                    if (quoteType === "b2b_standard") return null;
-                    if (quoteType === "b2c_prepaid" || quoteType === "prepaid_deduction") {
-                      // ── 선입금 계정 원장 방식 ─────────────────────────────────────────────
-                      const selectedAcct = compPrepaidAccounts.find(a => a.id === selectedPrepaidAcctId) ?? null;
-                      const curBalance = selectedAcct?.currentBalance ?? 0;
-                      const usageNum = quoteItemsGrandTotal;
-                      const afterBalance = selectedAcct ? curBalance - usageNum : null;
-                      const isInsufficient = selectedAcct != null && usageNum > 0 && usageNum > curBalance;
-                      const shortageAmount = isInsufficient ? usageNum - curBalance : 0;
+                {/* ── 견적 없음 안내 ── */}
+                {detail.quotes.length === 0 ? (
+                  <div style={{ padding: "20px 16px", background: "#faf5ff", borderRadius: 10, border: "1px dashed #c4b5fd", textAlign: "center" }}>
+                    <p style={{ margin: "0 0 6px", fontSize: 14, fontWeight: 600, color: "#7c3aed" }}>연결된 견적서가 없습니다</p>
+                    <p style={{ margin: 0, fontSize: 12, color: "#9ca3af", lineHeight: 1.6 }}>
+                      좌측 <strong style={{ color: "#7c3aed" }}>'견적서'</strong> 메뉴에서 견적을 작성하고<br/>
+                      승인(approved) 하면 이 프로젝트에 자동으로 연결됩니다.
+                    </p>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {detail.quotes.map((q, qIdx) => {
+                      const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", zero_tax_invoice: "세금계산서(영세율)", bill: "계산서" };
+                      const taxCatLabel: Record<string, string> = { normal: "일반", zero_rated: "영세율", consignment: "위수탁", consignment_zero_rated: "위수탁영세율" };
+                      const qtLabel: Record<string, [string, string, string]> = {
+                        b2b_standard:      ["일반 견적", "#eff6ff", "#1d4ed8"],
+                        b2c_prepaid:       ["차감 견적", "#fef3c7", "#92400e"],
+                        prepaid_deduction: ["차감 견적", "#fdf4ff", "#7c3aed"],
+                        accumulated_batch: ["누적 견적", "#ecfdf5", "#065f46"],
+                      };
+                      const btLabelMap: Record<string, string> = {
+                        postpaid_per_project: "건별 후불", monthly_billing: "누적 청구",
+                        prepaid_wallet: "선입금 차감", prepay_upfront: "선결제",
+                      };
+                      const pmLabel: Record<string, string> = { card: "카드", cash: "현금", bank: "계좌이체" };
+                      const qt = (q as any).quoteType ?? "b2b_standard";
+                      const bt = (q as any).billingType ?? "postpaid_per_project";
+                      const pm = (q as any).paymentMethod ?? null;
+                      const tdt = (q as any).taxDocumentType ?? "tax_invoice";
+                      const tc = (q as any).taxCategory ?? "normal";
+                      const [qtText, qtBg, qtColor] = qtLabel[qt] ?? ["기본", "#f8fafc", "#374151"];
+                      const btText = bt === "prepay_upfront" && pm ? `선결제(${pmLabel[pm] ?? pm})` : (btLabelMap[bt] ?? bt);
+                      const quoteNum = (q as any).quoteNumber ?? null;
+                      const quoteTitle = (q as any).title ?? null;
+                      const issueDate = (q as any).issueDate ?? null;
+                      const items = Array.isArray((q as any).items) ? (q as any).items : [];
+                      const [expanded, setExpanded] = React.useState(false);
 
-                      // ─── Case A-0: 프로젝트에 거래처가 없음 ──────────────────────────
-                      if (!detail.companyId) {
-                        return (
-                          <div style={{ marginBottom: 10 }}>
-                            <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 8, padding: "12px 14px" }}>
-                              <div style={{ fontSize: 10, fontWeight: 800, color: "#dc2626", marginBottom: 8 }}>선입금 견적서 — 거래처 없음</div>
-                              <div style={{ fontSize: 12, color: "#dc2626" }}>
-                                ⚠️ 이 프로젝트에 거래처가 연결되어 있지 않습니다.<br/>
-                                <span style={{ fontWeight: 400, color: "#374151" }}>프로젝트 기본 정보에서 거래처를 먼저 설정하세요.</span>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      }
-
-                      // ─── Case A: 이 거래처의 선입금 계정이 없음 → 인라인 빠른 등록 ───
-                      if (!loadingCompPrepaid && compPrepaidAccounts.length === 0) {
-                        return (
-                          <div style={{ marginBottom: 10 }}>
-                            <div style={{ background: "#fef9eb", border: "1px solid #fde68a", borderRadius: 8, padding: "12px 14px" }}>
-                              <div style={{ fontSize: 10, fontWeight: 800, color: "#92400e", marginBottom: 8 }}>선입금 견적서 — 계정 없음</div>
-                              <div style={{ padding: "8px 12px", background: "#fffbeb", borderRadius: 6, border: "1px solid #fde68a", fontSize: 12, color: "#92400e", marginBottom: 12 }}>
-                                ⚠️ 이 거래처에 등록된 선입금 계정이 없습니다. 아래에서 바로 등록할 수 있습니다.
-                              </div>
-                              <div style={{ fontSize: 11, fontWeight: 700, color: "#6b7280", marginBottom: 8 }}>선입금 계정 빠른 등록</div>
-                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-                                <div>
-                                  {qfLbl("최초 입금액 (원) *")}
-                                  <NumericInput
-                                    value={quickPrepaidAmount} onChange={raw => setQuickPrepaidAmount(raw)} placeholder="0" suffix="원"
-                                    style={{ ...qfIs, borderColor: "#fde68a" }}
-                                  />
-                                </div>
-                                <div>
-                                  {qfLbl("메모 (선택)")}
-                                  <input
-                                    type="text" value={quickPrepaidNote} placeholder="예: 1분기 선입금"
-                                    onChange={e => setQuickPrepaidNote(e.target.value)}
-                                    style={{ ...qfIs, borderColor: "#fde68a" }}
-                                  />
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={e => { e.stopPropagation(); handleQuickRegisterPrepaid(); }}
-                                disabled={registeringPrepaid || !quickPrepaidAmount}
-                                style={{ padding: "7px 14px", background: registeringPrepaid || !quickPrepaidAmount ? "#9ca3af" : "#d97706", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: registeringPrepaid || !quickPrepaidAmount ? "not-allowed" : "pointer" }}
-                              >
-                                {registeringPrepaid ? "등록 중..." : "선입금 계정 등록 후 차감 진행"}
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      }
-
-                      // ─── 로딩 중 ───────────────────────────────────────────────────────────
-                      if (loadingCompPrepaid) {
-                        return <div style={{ padding: "12px 0", fontSize: 12, color: "#9ca3af" }}>선입금 계정 불러오는 중...</div>;
-                      }
-
-                      // ─── Case B / C: 계정 있음 ─────────────────────────────────────────────
                       return (
-                        <div style={{ marginBottom: 10 }}>
-                          <div style={{ background: "#fdf4ff", border: `1px solid ${isInsufficient ? "#f87171" : "#d8b4fe"}`, borderRadius: 8, padding: "12px 14px" }}>
-                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                              <div style={{ fontSize: 10, fontWeight: 800, color: "#7c3aed" }}>
-                                {quoteType === "b2c_prepaid" ? "선입금 견적서 — 잔액 차감" : "B2B 선입금 차감"}
-                              </div>
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <button
-                                  type="button"
-                                  onClick={e => {
-                                    e.stopPropagation();
-                                    setDepositTargetAcctId(selectedAcct?.id ?? null);
-                                    setDepositDate(new Date().toISOString().slice(0, 10));
-                                    setDepositAmount(""); setDepositMemo("");
-                                    setShowDepositModal(true);
-                                  }}
-                                  style={{ fontSize: 11, fontWeight: 700, color: "#166534", background: "#dcfce7", border: "1px solid #86efac", borderRadius: 5, padding: "3px 10px", cursor: "pointer" }}>
-                                  + 입금 등록
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={e => { e.stopPropagation(); handleOpenLedgerModal(); }}
-                                  style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", border: "1px solid #d8b4fe", borderRadius: 5, padding: "3px 10px", cursor: "pointer" }}>
-                                  이력 보기
-                                </button>
-                              </div>
-                            </div>
-                            {/* 선입금 견적서(b2c_prepaid)에 견적일 입력 */}
-                            {quoteType === "b2c_prepaid" && (
-                              <div style={{ marginBottom: 10 }}>
-                                {qfLbl("견적일 *")}
-                                <input type="date" value={quoteIssueDate} onChange={e => setQuoteIssueDate(e.target.value)} style={{ ...qfIs, borderColor: "#d8b4fe" }} />
-                              </div>
+                        <div key={q.id} style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden" }}>
+                          {/* ── 견적 요약 행 ── */}
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 14px" }}>
+                            {/* 견적번호 */}
+                            <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700, color: "#6d28d9", background: "#f5f3ff", borderRadius: 4, padding: "2px 7px" }}>
+                              {quoteNum ?? `#${q.id}`}
+                            </span>
+                            {/* 견적서명 */}
+                            {quoteTitle && (
+                              <span style={{ fontSize: 12, fontWeight: 600, color: "#111827", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {quoteTitle}
+                              </span>
                             )}
-
-                            {/* 계정 선택 (여러 계정 있을 때) */}
-                            {compPrepaidAccounts.length > 1 && (
-                              <div style={{ marginBottom: 10 }}>
-                                {qfLbl("차감할 선입금 계정 선택")}
-                                <ClickSelect
-                                  value={String(selectedPrepaidAcctId ?? "")}
-                                  onChange={v => setSelectedPrepaidAcctId(Number(v))}
-                                  style={{ width: "100%" }}
-                                  triggerStyle={{ width: "100%", fontSize: 12, padding: "5px 8px", borderRadius: 7 }}
-                                  options={compPrepaidAccounts.map(a => ({
-                                    value: String(a.id),
-                                    label: `${a.depositDate ?? "-"}${a.note ? ` · ${a.note}` : ""} — 잔액 ${a.currentBalance.toLocaleString()}원`,
-                                  }))}
-                                />
-                              </div>
-                            )}
-
-                            {/* 잔액 요약 */}
-                            {selectedAcct && (
-                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12, padding: "10px 12px", background: "#f5f3ff", borderRadius: 7, border: "1px solid #ede9fe" }}>
-                                {[
-                                  { label: "최초 입금액", value: `${selectedAcct.initialAmount.toLocaleString()}원`, color: "#7c3aed" },
-                                  { label: "사용 누계", value: `${(selectedAcct.initialAmount - selectedAcct.currentBalance).toLocaleString()}원`, color: "#6b7280" },
-                                  { label: "현재 잔액", value: `${selectedAcct.currentBalance.toLocaleString()}원`, color: selectedAcct.currentBalance > 0 ? "#15803d" : "#dc2626", bold: true },
-                                ].map(s => (
-                                  <div key={s.label} style={{ flex: "1 1 120px", minWidth: 110 }}>
-                                    <div style={{ fontSize: 10, fontWeight: 700, color: "#9ca3af", marginBottom: 2 }}>{s.label}</div>
-                                    <div style={{ fontSize: 14, fontWeight: s.bold ? 800 : 600, color: s.color }}>{s.value}</div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-
-                            {/* Case B: 잔액 0원 */}
-                            {selectedAcct && selectedAcct.currentBalance === 0 && (
-                              <div style={{ padding: "8px 12px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fca5a5", fontSize: 12, color: "#dc2626", fontWeight: 600 }}>
-                                ⚠️ 현재 선입금 잔액이 <strong>0원</strong>입니다. 선입금 현황 탭에서 추가 입금 후 차감하세요.
-                              </div>
-                            )}
-
-                            {/* Case C: 잔액 있음 — 항목 합계로 자동 차감 */}
-                            {selectedAcct && selectedAcct.currentBalance > 0 && (
-                              <div>
-                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                                  <div>
-                                    {qfLbl("현재 잔액 (원)")}
-                                    <div style={{ ...qfIs, background: "#f0fdf4", color: "#15803d", cursor: "not-allowed", display: "flex", alignItems: "center", fontWeight: 700, border: "1px solid #86efac" }}>
-                                      {curBalance.toLocaleString()}
-                                    </div>
-                                  </div>
-                                  <div>
-                                    {qfLbl("이번 차감 금액 (아래 항목 합계)")}
-                                    <div style={{ ...qfIs, background: usageNum > 0 ? "#fdf4ff" : "#f8fafc", color: usageNum > 0 ? "#7c3aed" : "#9ca3af", border: `1px solid ${isInsufficient ? "#f87171" : usageNum > 0 ? "#d8b4fe" : "#e2e8f0"}`, display: "flex", alignItems: "center", fontWeight: 700, cursor: "default" }}>
-                                      {usageNum > 0 ? usageNum.toLocaleString() : <span style={{ color: "#9ca3af", fontWeight: 400, fontSize: 11 }}>아래 항목 입력 시 자동</span>}
-                                    </div>
-                                  </div>
-                                  <div>
-                                    {qfLbl("차감 후 잔액 (원)")}
-                                    <div style={{ ...qfIs, background: isInsufficient ? "#fef2f2" : "#f5f3ff", color: isInsufficient ? "#dc2626" : "#374151", cursor: "not-allowed", display: "flex", alignItems: "center", fontWeight: isInsufficient ? 700 : 500 }}>
-                                      {afterBalance != null ? afterBalance.toLocaleString() : <span style={{ color: "#9ca3af" }}>-</span>}
-                                    </div>
-                                  </div>
-                                </div>
-
-                                {/* 잔액 부족 경고 */}
-                                {isInsufficient && (
-                                  <div style={{ marginTop: 8, padding: "10px 12px", background: "#fef2f2", borderRadius: 6, border: "1px solid #fca5a5" }}>
-                                    <div style={{ fontSize: 12, color: "#dc2626", fontWeight: 700, marginBottom: 6 }}>⚠️ 잔액 부족 — 견적 생성 불가</div>
-                                    <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-                                      {[
-                                        { label: "차감 요청 금액", value: `${usageNum.toLocaleString()}원`, color: "#dc2626" },
-                                        { label: "현재 잔액", value: `${curBalance.toLocaleString()}원`, color: "#374151" },
-                                        { label: "부족 금액", value: `${shortageAmount.toLocaleString()}원`, color: "#b45309", bold: true },
-                                      ].map(item => (
-                                        <div key={item.label}>
-                                          <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>{item.label}</div>
-                                          <div style={{ fontSize: 13, fontWeight: item.bold ? 800 : 600, color: item.color }}>{item.value}</div>
-                                        </div>
-                                      ))}
-                                    </div>
-                                    <div style={{ marginTop: 8, fontSize: 11, color: "#92400e", background: "#fef3c7", borderRadius: 5, padding: "5px 10px", border: "1px solid #fde68a" }}>
-                                      💡 선입금 현황 탭에서 이 거래처의 선입금 계정에 {shortageAmount.toLocaleString()}원 이상 추가 입금하세요.
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-
-                            {/* ─── 누적 거래 내역 테이블 ─── */}
-                            {acctLedger.length > 0 && (
-                              <div style={{ marginTop: 12, borderTop: "1px solid #ede9fe", paddingTop: 10 }}>
-                                <div style={{ fontSize: 10, fontWeight: 800, color: "#6d28d9", marginBottom: 6, letterSpacing: "0.5px" }}>
-                                  거래 내역 ({acctLedger.length}건)
-                                </div>
-                                <div style={{ overflowX: "auto" }}>
-                                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-                                    <thead>
-                                      <tr style={{ background: "#f5f3ff" }}>
-                                        {[
-                                          { h: "날짜", align: "left" as const },
-                                          { h: "구분", align: "center" as const },
-                                          { h: "내용 / 프로젝트", align: "left" as const },
-                                          { h: "공급가", align: "right" as const },
-                                          { h: "부가세", align: "right" as const },
-                                          { h: "합계", align: "right" as const },
-                                          { h: "잔액", align: "right" as const },
-                                        ].map(({ h, align }) => (
-                                          <th key={h} style={{ padding: "5px 8px", fontWeight: 700, color: "#4b5563", borderBottom: "2px solid #d8b4fe", whiteSpace: "nowrap", textAlign: align, fontSize: 10 }}>{h}</th>
-                                        ))}
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {acctLedger.map((tx, idx) => {
-                                        const dateStr = tx.transactionDate ? tx.transactionDate.slice(0, 10) : (tx.createdAt ? tx.createdAt.slice(0, 10) : "-");
-                                        const desc = tx.projectTitle ? `${tx.projectTitle}${tx.description ? " · " + tx.description : ""}` : (tx.description || "-");
-                                        const typeLabel = tx.type === "deposit" ? "입금" : tx.type === "deduction" ? "차감" : "조정";
-                                        const typeColor = tx.type === "deposit" ? "#166534" : tx.type === "deduction" ? "#7c3aed" : "#374151";
-                                        const bgColor = tx.type === "deduction" ? (idx % 2 === 0 ? "#fdf4ff" : "#f5f0ff") : (idx % 2 === 0 ? "#fff" : "#f9fafb");
-                                        const isDeduct = tx.type === "deduction";
-                                        const tdBase: React.CSSProperties = { padding: "5px 8px", borderBottom: "1px solid #f0e7ff", whiteSpace: "nowrap" };
-                                        return (
-                                          <tr key={tx.id} style={{ background: bgColor }}>
-                                            <td style={{ ...tdBase, color: "#6b7280" }}>{dateStr}</td>
-                                            <td style={{ ...tdBase, textAlign: "center" }}>
-                                              <span style={{ background: isDeduct ? "#ede9fe" : tx.type === "deposit" ? "#dcfce7" : "#f3f4f6", color: typeColor, fontWeight: 700, fontSize: 10, borderRadius: 4, padding: "1px 6px" }}>{typeLabel}</span>
-                                            </td>
-                                            <td style={{ ...tdBase, color: "#374151", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis" }}>{desc}</td>
-                                            {/* 공급가 */}
-                                            <td style={{ ...tdBase, textAlign: "right", color: "#374151" }}>
-                                              {isDeduct && tx.supplyAmount != null ? tx.supplyAmount.toLocaleString() : <span style={{ color: "#d1d5db" }}>-</span>}
-                                            </td>
-                                            {/* 부가세 */}
-                                            <td style={{ ...tdBase, textAlign: "right", color: isDeduct && tx.taxAmount != null && tx.taxAmount > 0 ? "#7c3aed" : "#374151" }}>
-                                              {isDeduct && tx.taxAmount != null ? (tx.taxAmount > 0 ? tx.taxAmount.toLocaleString() : "0") : <span style={{ color: "#d1d5db" }}>-</span>}
-                                            </td>
-                                            {/* 합계 */}
-                                            <td style={{ ...tdBase, textAlign: "right", fontWeight: 800, color: typeColor }}>
-                                              {tx.type === "deposit" ? "+" : tx.type === "deduction" ? "-" : "±"}{tx.amount.toLocaleString()}
-                                            </td>
-                                            {/* 잔액 */}
-                                            <td style={{ ...tdBase, textAlign: "right", fontWeight: 700, color: tx.balanceAfter < 0 ? "#dc2626" : "#15803d" }}>
-                                              {tx.balanceAfter.toLocaleString()}
-                                            </td>
-                                          </tr>
-                                        );
-                                      })}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              </div>
-                            )}
-                            {loadingLedger && (
-                              <div style={{ marginTop: 10, fontSize: 11, color: "#9ca3af" }}>거래 내역 불러오는 중...</div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }
-                    if (quoteType === "accumulated_batch") {
-                      const companyId = detail.companyId;
-                      const batchData = activeBatch === "loading" ? null : activeBatch;
-                      const isLoading = activeBatch === "loading";
-                      const wis = batchData?.workItems ?? [];
-                      const wiTotal = wis.reduce((s, w) => s + w.amount, 0);
-                      const thSt = { padding: "4px 6px", textAlign: "left" as const, color: "#065f46", borderBottom: "1px solid #6ee7b7", fontSize: 10, fontWeight: 700 };
-                      const tdSt = { padding: "4px 5px", fontSize: 11, verticalAlign: "middle" as const };
-                      const inpSt = { width: "100%", fontSize: 11, padding: "2px 4px", border: "1px solid #6ee7b7", borderRadius: 4, boxSizing: "border-box" as const };
-                      return (
-                        <div style={{ marginBottom: 10 }}>
-                          <div style={{ background: "#ecfdf5", border: "1px solid #6ee7b7", borderRadius: 8, padding: "12px 14px" }}>
-                            <div style={{ fontSize: 10, fontWeight: 800, color: "#065f46", marginBottom: 10 }}>🗂️ 누적 청구 배치</div>
-
-                            {!companyId && (
-                              <div style={{ padding: "8px 10px", background: "#fef3c7", borderRadius: 6, border: "1px solid #fcd34d", fontSize: 12, color: "#92400e", marginBottom: 8 }}>
-                                ⚠️ 이 프로젝트에 거래처를 먼저 설정해야 누적 배치를 사용할 수 있습니다.
-                              </div>
-                            )}
-
-                            {isLoading && (
-                              <div style={{ textAlign: "center", fontSize: 12, color: "#6b7280", padding: "12px 0" }}>배치 정보 로딩 중...</div>
-                            )}
-
-                            {!isLoading && batchData === null && companyId && (
-                              <div>
-                                <div style={{ padding: "10px 12px", background: "#f0fdf4", borderRadius: 6, border: "1px solid #bbf7d0", fontSize: 12, color: "#065f46", marginBottom: 10 }}>
-                                  진행 중인 누적 배치가 없습니다. 새 배치를 시작하여 작업 항목을 건별로 입력하고 월말에 합산 발행하세요.
-                                </div>
-                                <button type="button" onClick={() => createNewBatch(companyId)} disabled={activeBatchOp}
-                                  style={{ padding: "7px 16px", background: "#065f46", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
-                                  {activeBatchOp ? "생성 중..." : "🆕 새 누적 배치 시작"}
-                                </button>
-                              </div>
-                            )}
-
-                            {!isLoading && batchData != null && (
-                              <div>
-                                {/* 배치 헤더 */}
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, padding: "7px 10px", background: "#d1fae5", borderRadius: 6 }}>
-                                  <div>
-                                    <span style={{ fontSize: 11, fontWeight: 700, color: "#065f46" }}>배치 #{batchData.id}</span>
-                                    <span style={{ fontSize: 10, color: "#6b7280", marginLeft: 8 }}>{batchData.periodStart?.slice(0, 10)} ~ {batchData.periodEnd?.slice(0, 10)}</span>
-                                  </div>
-                                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                                    <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4, background: "#065f46", color: "#fff", fontWeight: 700 }}>진행 중</span>
-                                    <span style={{ fontSize: 12, fontWeight: 800, color: "#065f46" }}>{wiTotal.toLocaleString()}원</span>
-                                  </div>
-                                </div>
-
-                                {/* 작업 항목 테이블 */}
-                                <div style={{ overflowX: "auto", marginBottom: 6 }}>
-                                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 560 }}>
-                                    <thead>
-                                      <tr style={{ background: "#d1fae5" }}>
-                                        <th style={{ ...thSt, width: 86 }}>작업일</th>
-                                        <th style={{ ...thSt }}>프로젝트명</th>
-                                        <th style={{ ...thSt, width: 80 }}>언어</th>
-                                        <th style={{ ...thSt }}>내용</th>
-                                        <th style={{ ...thSt, width: 50, textAlign: "right" }}>수량</th>
-                                        <th style={{ ...thSt, width: 80, textAlign: "right" }}>단가</th>
-                                        <th style={{ ...thSt, width: 80, textAlign: "right" }}>금액</th>
-                                        <th style={{ ...thSt, width: 48, textAlign: "center" }}></th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {wis.length === 0 && !showAddWI && (
-                                        <tr>
-                                          <td colSpan={8} style={{ textAlign: "center", fontSize: 12, color: "#9ca3af", padding: "12px 0" }}>
-                                            아직 작업 항목이 없습니다. 아래 버튼으로 추가하세요.
-                                          </td>
-                                        </tr>
-                                      )}
-                                      {wis.map((w, i) => {
-                                        const isEditing = editingWIId === w.id;
-                                        if (isEditing) {
-                                          return (
-                                            <tr key={w.id} style={{ background: "#fefce8" }}>
-                                              <td style={tdSt}><input type="date" value={editWI.workDate} onChange={e => setEditWI(p => ({ ...p, workDate: e.target.value }))} style={inpSt} /></td>
-                                              <td style={tdSt}><input value={editWI.projectName} onChange={e => setEditWI(p => ({ ...p, projectName: e.target.value }))} style={inpSt} placeholder="프로젝트명" /></td>
-                                              <td style={tdSt}><input value={editWI.language} onChange={e => setEditWI(p => ({ ...p, language: e.target.value }))} style={inpSt} placeholder="KO→EN" /></td>
-                                              <td style={tdSt}><input value={editWI.description} onChange={e => setEditWI(p => ({ ...p, description: e.target.value }))} style={inpSt} placeholder="내용" /></td>
-                                              <td style={{ ...tdSt, textAlign: "right" }}><NumericInput allowDecimal value={editWI.quantity} onChange={raw => {
-                                                const qty = parseFloat(raw) || 0;
-                                                const price = parseFloat(editWI.unitPrice) || 0;
-                                                setEditWI(p => ({ ...p, quantity: raw, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
-                                              }} style={{ ...inpSt, textAlign: "right" }} /></td>
-                                              <td style={{ ...tdSt, textAlign: "right" }}><NumericInput value={editWI.unitPrice} onChange={raw => {
-                                                const price = parseFloat(raw) || 0;
-                                                const qty = parseFloat(editWI.quantity) || 0;
-                                                setEditWI(p => ({ ...p, unitPrice: raw, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
-                                              }} style={{ ...inpSt, textAlign: "right" }} /></td>
-                                              <td style={{ ...tdSt, textAlign: "right" }}><NumericInput value={editWI.amount} onChange={raw => setEditWI(p => ({ ...p, amount: raw }))} style={{ ...inpSt, textAlign: "right" }} placeholder="자동" /></td>
-                                              <td style={{ ...tdSt, textAlign: "center" }}>
-                                                <button type="button" onClick={() => saveWorkItem(batchData.id, w.id, editWI)} disabled={activeBatchOp}
-                                                  style={{ fontSize: 10, padding: "2px 6px", background: "#065f46", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer", marginBottom: 2, display: "block", width: "100%" }}>저장</button>
-                                                <button type="button" onClick={() => setEditingWIId(null)}
-                                                  style={{ fontSize: 10, padding: "2px 6px", background: "#f3f4f6", color: "#374151", border: "1px solid #d1d5db", borderRadius: 3, cursor: "pointer", display: "block", width: "100%" }}>취소</button>
-                                              </td>
-                                            </tr>
-                                          );
-                                        }
-                                        return (
-                                          <tr key={w.id} style={{ background: i % 2 === 0 ? "#fff" : "#f0fdf4" }}>
-                                            <td style={{ ...tdSt, color: "#6b7280" }}>{w.workDate || "-"}</td>
-                                            <td style={{ ...tdSt, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={w.projectName ?? ""}>{w.projectName || "-"}</td>
-                                            <td style={{ ...tdSt, color: "#6b7280" }}>{w.language || "-"}</td>
-                                            <td style={{ ...tdSt, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={w.description ?? ""}>{w.description || "-"}</td>
-                                            <td style={{ ...tdSt, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{w.quantity}</td>
-                                            <td style={{ ...tdSt, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{w.unitPrice > 0 ? w.unitPrice.toLocaleString() : "-"}</td>
-                                            <td style={{ ...tdSt, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{w.amount.toLocaleString()}원</td>
-                                            <td style={{ ...tdSt, textAlign: "center" }}>
-                                              <button type="button" disabled={activeBatchOp}
-                                                onClick={() => { setEditingWIId(w.id); setEditWI({ workDate: w.workDate ?? "", projectName: w.projectName ?? "", language: w.language ?? "", description: w.description ?? "", quantity: String(w.quantity), unitPrice: String(w.unitPrice), amount: String(w.amount) }); }}
-                                                style={{ fontSize: 10, padding: "1px 5px", background: "#e0f2fe", color: "#0369a1", border: "1px solid #7dd3fc", borderRadius: 3, cursor: "pointer", marginBottom: 2, display: "block", width: "100%" }}>수정</button>
-                                              <button type="button" disabled={activeBatchOp} onClick={() => deleteWorkItem(batchData.id, w.id)}
-                                                style={{ fontSize: 10, padding: "1px 5px", background: "#fef2f2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 3, cursor: "pointer", display: "block", width: "100%" }}>삭제</button>
-                                            </td>
-                                          </tr>
-                                        );
-                                      })}
-
-                                      {/* 항목 추가 폼 행 */}
-                                      {showAddWI && (
-                                        <tr style={{ background: "#f0fdf4" }}>
-                                          <td style={tdSt}><input type="date" value={newWI.workDate} onChange={e => setNewWI(p => ({ ...p, workDate: e.target.value }))} style={inpSt} /></td>
-                                          <td style={tdSt}><input value={newWI.projectName} onChange={e => setNewWI(p => ({ ...p, projectName: e.target.value }))} style={inpSt} placeholder="프로젝트명" /></td>
-                                          <td style={tdSt}><input value={newWI.language} onChange={e => setNewWI(p => ({ ...p, language: e.target.value }))} style={inpSt} placeholder="KO→EN" /></td>
-                                          <td style={tdSt}><input value={newWI.description} onChange={e => setNewWI(p => ({ ...p, description: e.target.value }))} style={inpSt} placeholder="내용" /></td>
-                                          <td style={{ ...tdSt }}><NumericInput allowDecimal value={newWI.quantity} onChange={raw => {
-                                            const qty = parseFloat(raw) || 0;
-                                            const price = parseFloat(newWI.unitPrice) || 0;
-                                            setNewWI(p => ({ ...p, quantity: raw, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
-                                          }} style={{ ...inpSt, textAlign: "right" }} /></td>
-                                          <td style={{ ...tdSt }}><NumericInput value={newWI.unitPrice} onChange={raw => {
-                                            const price = parseFloat(raw) || 0;
-                                            const qty = parseFloat(newWI.quantity) || 0;
-                                            setNewWI(p => ({ ...p, unitPrice: raw, amount: qty && price ? String(Math.round(qty * price)) : p.amount }));
-                                          }} style={{ ...inpSt, textAlign: "right" }} placeholder="단가" /></td>
-                                          <td style={{ ...tdSt }}><NumericInput value={newWI.amount} onChange={raw => setNewWI(p => ({ ...p, amount: raw }))} style={{ ...inpSt, textAlign: "right" }} placeholder="(수량×단가)" /></td>
-                                          <td style={{ ...tdSt, textAlign: "center" }}>
-                                            <button type="button" onClick={() => addWorkItem(batchData.id, newWI)} disabled={activeBatchOp}
-                                              style={{ fontSize: 10, padding: "2px 6px", background: "#065f46", color: "#fff", border: "none", borderRadius: 3, cursor: "pointer", marginBottom: 2, display: "block", width: "100%" }}>추가</button>
-                                            <button type="button" onClick={() => { setShowAddWI(false); setNewWI(emptyNewWI()); }}
-                                              style={{ fontSize: 10, padding: "2px 6px", background: "#f3f4f6", color: "#374151", border: "1px solid #d1d5db", borderRadius: 3, cursor: "pointer", display: "block", width: "100%" }}>취소</button>
-                                          </td>
-                                        </tr>
-                                      )}
-                                    </tbody>
-                                    {wis.length > 0 && (
-                                      <tfoot>
-                                        <tr style={{ background: "#065f46" }}>
-                                          <td colSpan={6} style={{ padding: "5px 6px", color: "#d1fae5", fontSize: 11, fontWeight: 700 }}>합계 ({wis.length}건)</td>
-                                          <td style={{ padding: "5px 6px", textAlign: "right", color: "#fff", fontSize: 12, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{wiTotal.toLocaleString()}원</td>
-                                          <td></td>
-                                        </tr>
-                                      </tfoot>
-                                    )}
-                                  </table>
-                                </div>
-
-                                {/* 항목 추가 버튼 */}
-                                {!showAddWI && (
-                                  <button type="button" onClick={() => { setShowAddWI(true); setNewWI(emptyNewWI()); }} disabled={activeBatchOp}
-                                    style={{ fontSize: 11, padding: "4px 12px", background: "#f0fdf4", color: "#065f46", border: "1px solid #6ee7b7", borderRadius: 5, cursor: "pointer", fontWeight: 600, marginBottom: 8 }}>
-                                    ➕ 작업 항목 추가
-                                  </button>
-                                )}
-
-                                {/* 발행 영역 */}
-                                {wis.length > 0 && (
-                                  <div style={{ marginTop: 8, padding: "10px 12px", background: "#f0fdf4", borderRadius: 7, border: "1px solid #6ee7b7" }}>
-                                    <div style={{ fontSize: 11, fontWeight: 700, color: "#065f46", marginBottom: 8 }}>📄 세금계산서 발행 (배치 확정)</div>
-                                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
-                                      <div>
-                                        {qfLbl("발행일 *")}
-                                        <input type="date" value={issueDateBatch} onChange={e => setIssueDateBatch(e.target.value)} style={{ ...qfIs, borderColor: "#6ee7b7", width: 130 }} />
-                                      </div>
-                                      <div>
-                                        {qfLbl("입금 예정일")}
-                                        <input type="date" value={paymentDueDateBatch} onChange={e => setPaymentDueDateBatch(e.target.value)} style={{ ...qfIs, borderColor: "#6ee7b7", width: 130 }} />
-                                      </div>
-                                      <button type="button" onClick={() => issueBatch(batchData.id)} disabled={activeBatchOp || !issueDateBatch}
-                                        style={{ padding: "7px 16px", background: activeBatchOp ? "#9ca3af" : "#065f46", color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", marginBottom: 1 }}>
-                                        {activeBatchOp ? "발행 중..." : `🧾 ${wis.length}건 합산 세금계산서 발행`}
-                                      </button>
-                                    </div>
-                                    <div style={{ marginTop: 6, fontSize: 10, color: "#6b7280" }}>
-                                      ⚠️ 발행 후 배치가 확정되며, 이 프로젝트에 누적 견적서가 생성됩니다. 발행 후 항목 수정은 불가능합니다.
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    }
-                    return null;
-                  })();
-
-                  // 견적 폼 JSX (컴포넌트 아님 — IIFE로 즉시 계산)
-                  const quoteFormJsx = (
-                    <div style={{ background: "#fdf4ff", borderRadius: 10, padding: "14px 16px", marginBottom: 12, border: "1px solid #e9d5ff" }}>
-                      {/* 헤더 */}
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#7c3aed" }}>
-                            {hasQuotes ? "✏️ 견적 수정/재생성" : "📋 견적 생성"}
-                          </p>
-                          {hasQuotes && <span style={{ fontSize: 11, color: "#9ca3af" }}>기존 견적이 대체됩니다</span>}
-                        </div>
-                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                          {hasQuotes && (
-                            <button onClick={() => setShowQuoteForm(false)}
-                              style={{ background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "0 2px" }}>×</button>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* 상태 롤백 경고 배너 */}
-                      {hasQuotes && ["approved", "matched", "in_progress", "completed"].includes(detail.status) && (
-                        <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 6, padding: "7px 10px", marginBottom: 10, fontSize: 12, color: "#92400e", display: "flex", alignItems: "center", gap: 6 }}>
-                          ⚠️ 이 변경은 현재 상태를 되돌립니다 (프로젝트: 견적발송 / 견적: 검토대기)
-                        </div>
-                      )}
-
-                      {/* 견적서 유형 + 견적일 inline */}
-                      <div style={{ marginBottom: 10, display: "flex", gap: 6, flexWrap: "wrap", alignItems: "flex-end" }}>
-                        <div style={{ flex: quoteType === "b2b_standard" ? "0 0 64%" : "1 1 100%", minWidth: 0 }}>
-                          <label style={{ fontSize: 10, fontWeight: 700, color: "#1e3a8a", display: "block", marginBottom: 3 }}>견적서 유형 *</label>
-                          <ClickSelect
-                            value={quoteType}
-                            onChange={v => changeQuoteType(v as typeof quoteType)}
-                            style={{ width: "100%" }}
-                            triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #93c5fd", background: "#eff6ff" }}
-                            options={[
-                              { value: "b2b_standard", label: "일반 견적서", sub: "일반 프로젝트에 사용하는 기본 견적" },
-                              { value: "b2c_prepaid", label: "선입금 견적서", sub: "선입금 잔액 기반으로 사용하는 견적" },
-                              { value: "accumulated_batch", label: "누적 견적서", sub: "월별 또는 기간별 누적 청구용 견적" },
-                            ]}
-                          />
-                        </div>
-                        {quoteType === "b2b_standard" && (
-                          <div style={{ flex: "1 1 0", minWidth: 90 }}>
-                            {qfLbl("견적일 *")}
-                            <input type="date" value={quoteIssueDate} onChange={e => setQuoteIssueDate(e.target.value)}
-                              style={{ ...qfIs, borderColor: "#93c5fd" }} />
-                          </div>
-                        )}
-                      </div>
-
-                      {/* 유형별 추가 입력 필드 (견적일 등) */}
-                      {quoteTypeExtraJsx}
-
-                      {/* 회계/세무 옵션 접기 패널 */}
-                      <div style={{ marginBottom: 10, border: "1px solid #e5e7eb", borderRadius: 8, overflow: "hidden" }}>
-                        <button
-                          type="button"
-                          onClick={() => setShowTaxOptions(v => !v)}
-                          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "7px 10px", background: "#f9fafb", border: "none", cursor: "pointer", fontSize: 11, fontWeight: 700, color: "#6b7280" }}
-                        >
-                          <span>⚙️ 회계/세무 옵션 (과세유형 · 매출구분 · 결제방식 · 문서구분)</span>
-                          <span style={{ fontSize: 10, color: "#9ca3af" }}>{showTaxOptions ? "▲ 접기" : "▼ 펼치기"}</span>
-                        </button>
-                        <div style={{
-                          maxHeight: showTaxOptions ? "420px" : "0px",
-                          overflow: "hidden",
-                          transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)",
-                        }}>
-                          <div style={{ padding: "10px 10px 6px", background: "#fff" }}>
-
-                            {/* 1. 매출구분 + 통화(해외입금 시) + 과세유형 — 한 row */}
-                            <div style={{ marginBottom: 10, display: "flex", gap: 5, flexWrap: "wrap", alignItems: "flex-end" }}>
-                              {/* 매출 구분 */}
-                              <div style={{ flex: revenueType === "foreign" ? "0 0 44%" : "0 0 58%", minWidth: 0 }}>
-                                <label style={{ fontSize: 10, fontWeight: 700, color: "#1d4ed8", display: "block", marginBottom: 3 }}>매출 구분</label>
-                                <ClickSelect
-                                  value={revenueType}
-                                  onChange={v => {
-                                    const rt = v as typeof revenueType;
-                                    setRevenueType(rt);
-                                    if (rt === "card") { setQuotePaymentMethod("card"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); setQuoteVatType("taxable"); }
-                                    else if (rt === "cash") { setQuotePaymentMethod("cash"); setQuoteBillingType("prepay_upfront"); setPaymentTiming("prepay"); setQuoteVatType("taxable"); }
-                                    else if (rt === "foreign") { setQuotePaymentMethod(""); setPaymentTiming("postpay"); setQuoteVatType("exempt"); }
-                                    else { setQuotePaymentMethod(""); setQuoteVatType("taxable"); }
-                                  }}
-                                  style={{ width: "100%" }}
-                                  triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #93c5fd" }}
-                                  options={[
-                                    { value: "tax_invoice", label: "세금계산서", sub: "일반 B2B 청구" },
-                                    { value: "card", label: "카드 결제", sub: "카드 단말기 / PG" },
-                                    { value: "cash", label: "현금 결제", sub: "현금 직접 수령" },
-                                    { value: "foreign", label: "해외 입금", sub: "외화 수취" },
-                                  ]}
-                                />
-                              </div>
-                              {/* 통화 — 해외입금 시만 */}
-                              {revenueType === "foreign" && (
-                                <div style={{ flex: "0 0 18%", minWidth: 64 }}>
-                                  <label style={{ fontSize: 10, fontWeight: 700, color: "#0369a1", display: "block", marginBottom: 3 }}>통화</label>
-                                  <ClickSelect
-                                    value={foreignCurrency}
-                                    onChange={v => { setForeignCurrency(v as typeof foreignCurrency); if (v !== "custom") setForeignCurrencyInput(""); }}
-                                    style={{ width: "100%" }}
-                                    triggerStyle={{ width: "100%", fontSize: 11, padding: "6px 3px", borderRadius: 7, border: "1px solid #bae6fd" }}
-                                    options={[
-                                      { value: "KRW", label: "KRW" }, { value: "USD", label: "USD" },
-                                      { value: "EUR", label: "EUR" }, { value: "JPY", label: "JPY" },
-                                      { value: "GBP", label: "GBP" }, { value: "CNY", label: "CNY" },
-                                      { value: "SGD", label: "SGD" }, { value: "custom", label: "기타" },
-                                    ]}
-                                  />
-                                  {foreignCurrency === "custom" && (
-                                    <input value={foreignCurrencyInput} onChange={e => setForeignCurrencyInput(e.target.value)}
-                                      placeholder="코드" style={{ ...inputStyle, fontSize: 10, padding: "4px 5px", width: "100%", marginTop: 3, boxSizing: "border-box" as const }} />
-                                  )}
-                                </div>
-                              )}
-                              {/* 과세 유형 */}
-                              <div style={{ flex: "1 1 0", minWidth: 76 }}>
-                                <label style={{ fontSize: 10, fontWeight: 700, color: "#059669", display: "block", marginBottom: 3 }}>과세 유형</label>
-                                <ClickSelect
-                                  value={quoteVatType}
-                                  onChange={v => setQuoteVatType(v as "taxable" | "exempt" | "zero_rate")}
-                                  style={{ width: "100%" }}
-                                  triggerStyle={{ width: "100%", fontSize: 11, padding: "6px 4px", borderRadius: 7, border: "1px solid #6ee7b7" }}
-                                  options={[
-                                    { value: "taxable", label: "부가세 10%" },
-                                    { value: "exempt", label: "면세" },
-                                    { value: "zero_rate", label: "영세율" },
-                                  ]}
-                                />
-                              </div>
-                            </div>
-
-                            {/* 4. 결제 방식 (payment timing) */}
-                            <div style={{ marginBottom: 10 }}>
-                              <label style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", display: "block", marginBottom: 3 }}>
-                                결제 방식
-                                <span style={{ fontWeight: 400, color: "#9ca3af", marginLeft: 4 }}>
-                                  (거래처 기본: {companyBillingType === "prepaid_wallet" ? "선입금 차감" : companyBillingType === "monthly_billing" ? "누적 청구" : companyBillingType === "prepay_upfront" ? "선결제" : "후불"})
-                                </span>
-                              </label>
-                              {quoteType === "accumulated_batch" ? (
-                                <div style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, background: "#ecfdf5", borderColor: "#6ee7b7", color: "#065f46", fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
-                                  🗂️ 누적 청구 <span style={{ fontSize: 9, color: "#6b7280", fontWeight: 400 }}>(누적 견적 고정)</span>
-                                </div>
-                              ) : quoteType === "b2c_prepaid" ? (
-                                <div style={{ ...inputStyle, width: "100%", fontSize: 12, padding: "6px 8px", boxSizing: "border-box" as const, background: "#fdf4ff", borderColor: "#d8b4fe", color: "#7c3aed", fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
-                                  💳 선입금 차감 <span style={{ fontSize: 9, color: "#9ca3af", fontWeight: 400 }}>(선입금 견적 고정)</span>
-                                </div>
-                              ) : (
-                                <ClickSelect
-                                  value={paymentTiming}
-                                  onChange={v => {
-                                    const t = v as typeof paymentTiming;
-                                    setPaymentTiming(t);
-                                    setQuoteBillingType(t === "prepay" ? "prepay_upfront" : "postpaid_per_project");
-                                  }}
-                                  style={{ width: "100%" }}
-                                  triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7 }}
-                                  options={[
-                                    { value: "postpay", label: "후불 결제", sub: "작업 완료 후 청구" },
-                                    { value: "prepay", label: "선결제", sub: "결제 완료 후 진행" },
-                                  ]}
-                                />
-                              )}
-                            </div>
-
-                            {/* 5. ☐ 분할 결제 사용 */}
-                            <div style={{ marginBottom: showPaySchedule ? 6 : 4 }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: showPaySchedule ? 8 : 0 }}>
-                                <input type="checkbox" id="payScheduleToggle" checked={showPaySchedule}
-                                  onChange={e => setShowPaySchedule(e.target.checked)}
-                                  style={{ cursor: "pointer", accentColor: "#0369a1" }} />
-                                <label htmlFor="payScheduleToggle" style={{ fontSize: 10, fontWeight: 700, color: "#0369a1", cursor: "pointer" }}>
-                                  ☐ 분할 결제 사용
-                                </label>
-                              </div>
-                              <div style={{ maxHeight: showPaySchedule ? "320px" : "0px", overflow: "hidden", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
-                                <div>
-                                  <ClickSelect
-                                    value={payScheduleType}
-                                    onChange={v => { const t = v as typeof payScheduleType; setPayScheduleType(t); setPayScheduleRows(makeDefaultPayRows(t)); }}
-                                    style={{ width: "100%", marginBottom: 6 }}
-                                    triggerStyle={{ width: "100%", fontSize: 11, padding: "5px 8px", borderRadius: 6, border: "1px solid #bae6fd", background: "#f0f9ff" }}
-                                    options={[
-                                      { value: "split2", label: "선금 / 잔금", sub: "2회 분할" },
-                                      { value: "split3", label: "선금 / 중도금 / 잔금", sub: "3회 분할" },
-                                      { value: "custom", label: "사용자 정의", sub: "단계 직접 구성" },
-                                    ]}
-                                  />
-                                  <div style={{ display: "grid", gridTemplateColumns: "40px 56px 108px 1fr", gap: 3, marginBottom: 2, paddingLeft: 1 }}>
-                                    {["단계", "비율/금액", "입금예정일", "발행 방식"].map(h => (
-                                      <span key={h} style={{ fontSize: 9, color: "#9ca3af", fontWeight: 600 }}>{h}</span>
-                                    ))}
-                                  </div>
-                                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                                    {payScheduleRows.map((row, ri) => (
-                                      <div key={ri} style={{ display: "grid", gridTemplateColumns: "40px 56px 108px 1fr" + (payScheduleType === "custom" ? " 18px" : ""), gap: 3, alignItems: "center" }}>
-                                        <input value={row.label}
-                                          onChange={e => setPayScheduleRows(prev => prev.map((r, i) => i === ri ? { ...r, label: e.target.value } : r))}
-                                          style={{ ...inputStyle, fontSize: 10, padding: "4px 3px", textAlign: "center" }} />
-                                        <div style={{ display: "flex", gap: 1 }}>
-                                          <input value={row.amount}
-                                            onChange={e => setPayScheduleRows(prev => prev.map((r, i) => i === ri ? { ...r, amount: e.target.value } : r))}
-                                            placeholder={row.amountType === "percent" ? "%" : "원"}
-                                            style={{ ...inputStyle, fontSize: 11, padding: "4px 2px", textAlign: "right", flex: 1, minWidth: 0 }} />
-                                          <button
-                                            onClick={() => setPayScheduleRows(prev => prev.map((r, i) => i === ri ? { ...r, amountType: r.amountType === "percent" ? "fixed" : "percent" } : r))}
-                                            style={{ fontSize: 9, padding: "0 4px", borderRadius: 4, border: "1px solid #bae6fd", background: row.amountType === "percent" ? "#e0f2fe" : "#f0fdf4", color: "#0369a1", cursor: "pointer", fontWeight: 700, flexShrink: 0 }}>
-                                            {row.amountType === "percent" ? "%" : "원"}
-                                          </button>
-                                        </div>
-                                        <input type="date" value={row.dueDate}
-                                          onChange={e => setPayScheduleRows(prev => prev.map((r, i) => i === ri ? { ...r, dueDate: e.target.value } : r))}
-                                          style={{ ...inputStyle, fontSize: 10, padding: "4px 3px" }} />
-                                        <ClickSelect value={row.invoiceTiming}
-                                          onChange={v => setPayScheduleRows(prev => prev.map((r, i) => i === ri ? { ...r, invoiceTiming: v as PayScheduleRow["invoiceTiming"] } : r))}
-                                          triggerStyle={{ width: "100%", fontSize: 10, padding: "4px 5px", borderRadius: 5, border: "1px solid #bae6fd" }}
-                                          options={[
-                                            { value: "after_payment", label: "입금 후 발행" },
-                                            { value: "after_final", label: "잔금 후 일괄" },
-                                            { value: "on_date", label: "특정일 발행" },
-                                            { value: "none", label: "미발행" },
-                                          ]}
-                                        />
-                                        {payScheduleType === "custom" && (
-                                          <button onClick={() => setPayScheduleRows(prev => prev.filter((_, i) => i !== ri))}
-                                            style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>×</button>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                  {payScheduleType === "custom" && (
-                                    <button
-                                      onClick={() => setPayScheduleRows(prev => [...prev, { label: `${prev.length + 1}차`, amountType: "percent", amount: "", dueDate: "", invoiceTiming: "after_payment" }])}
-                                      style={{ marginTop: 5, fontSize: 10, padding: "3px 9px", background: "#f0f9ff", color: "#0369a1", border: "1px solid #bae6fd", borderRadius: 5, cursor: "pointer", fontWeight: 600 }}>
-                                      ＋ 단계 추가
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* 6. 문서구분 + 발행유형 (세무 보조) */}
-                            <div style={{ borderTop: "1px dashed #e5e7eb", paddingTop: 8, marginBottom: 4 }}>
-                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                                <div>
-                                  <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>문서 구분</label>
-                                  <ClickSelect
-                                    value={quoteTaxDocType}
-                                    onChange={v => setQuoteTaxDocType(v as "tax_invoice" | "zero_tax_invoice" | "bill")}
-                                    style={{ width: "100%" }}
-                                    triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #d8b4fe" }}
-                                    options={[
-                                      { value: "tax_invoice", label: "세금계산서" },
-                                      { value: "zero_tax_invoice", label: "세금계산서(영세율)" },
-                                      { value: "bill", label: "계산서" },
-                                    ]}
-                                  />
-                                </div>
-                                <div>
-                                  <label style={{ fontSize: 10, fontWeight: 700, color: "#7c3aed", display: "block", marginBottom: 3 }}>발행 유형</label>
-                                  <ClickSelect
-                                    value={quoteTaxCategory}
-                                    onChange={v => setQuoteTaxCategory(v as "normal" | "zero_rated" | "consignment" | "consignment_zero_rated")}
-                                    style={{ width: "100%" }}
-                                    triggerStyle={{ width: "100%", fontSize: 12, padding: "6px 8px", borderRadius: 7, border: "1px solid #d8b4fe" }}
-                                    options={[
-                                      { value: "normal", label: "일반" }, { value: "zero_rated", label: "영세율" },
-                                      { value: "consignment", label: "위수탁" }, { value: "consignment_zero_rated", label: "위수탁영세율" },
-                                    ]}
-                                  />
-                                </div>
-                              </div>
-                            </div>
-
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 항목 입력 그리드 — 누적 배치 제외 모든 유형 공통 */}
-                      {quoteType !== "accumulated_batch" && (
-                        <div>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                            <span style={{ fontSize: 10, fontWeight: 700, color: "#6b7280" }}>견적 항목 — 상품 선택 시 번역(📄)·통역(🎤) 자동 구분</span>
-                          </div>
-                          {quoteItemForms.map((it, idx) => {
-                            const { supply } = calcItemTotal(it);
-                            const roSt: React.CSSProperties = {
-                              ...inputStyle, fontSize: 11, padding: "5px 3px", textAlign: "right",
-                              background: "#f9fafb", borderColor: "#e4e7eb", cursor: "default",
-                              color: supply > 0 ? "#374151" : "#9ca3af", fontWeight: supply > 0 ? 500 : 400,
-                            };
-                            const detailBtn: React.CSSProperties = {
-                              fontSize: 10, minWidth: 64, width: "auto", display: "inline-flex", alignItems: "center",
-                              justifyContent: "center", gap: 2, padding: "0 10px", height: 26, borderRadius: 999,
-                              border: "none", background: it.showDetail ? "#4f46e5" : "#f0f0f0",
-                              color: it.showDetail ? "#fff" : "#9ca3af", cursor: "pointer", fontWeight: 600, flexShrink: 0,
-                            };
-                            const detailArea: React.CSSProperties = {
-                              marginTop: 4, padding: "5px 6px", background: "#fafafa",
-                              borderRadius: 5, borderTop: "1px dashed #e5e7eb",
-                            };
-                            const TYPE_META = {
-                              translation:    { lbl: "번역", icon: "📄", c: "#1e40af", bg: "rgba(59,130,246,0.03)",  hdr: "rgba(59,130,246,0.04)",  border: "#dbeafe" },
-                              interpretation: { lbl: "통역", icon: "🎤", c: "#7c3aed", bg: "rgba(139,92,246,0.03)", hdr: "rgba(139,92,246,0.05)",  border: "#ede9fe" },
-                              equipment:      { lbl: "장비", icon: "🔧", c: "#047857", bg: "rgba(16,185,129,0.03)", hdr: "rgba(16,185,129,0.05)",  border: "#d1fae5" },
-                              expense:        { lbl: "실비", icon: "💰", c: "#b45309", bg: "rgba(245,158,11,0.03)", hdr: "rgba(245,158,11,0.05)",  border: "#fef3c7" },
-                            } as const;
-                            const tm = TYPE_META[it.productType as keyof typeof TYPE_META] ?? TYPE_META.translation;
-                            return (
-                              <div key={idx} style={{ marginBottom: 12, border: "1px solid #cfd5dd", borderRadius: 8, background: tm.bg, boxShadow: "0 1px 2px rgba(0,0,0,0.03)", overflow: "hidden" }}>
-                                {/* ── HEADER ── */}
-                                <div style={{ display: "flex", alignItems: "center", gap: 5, background: `color-mix(in srgb, ${tm.hdr}, rgba(0,0,0,0.02))`, borderBottom: "1px solid #e3e7ee", padding: "4px 8px", borderRadius: "6px 6px 0 0" }}>
-                                  {/* 번호 + 선택 유형 badge */}
-                                  <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 700, flexShrink: 0 }}>#{idx + 1}</span>
-                                  <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 10, background: tm.bg, color: tm.c, fontWeight: 700, border: `1px solid ${tm.border}`, flexShrink: 0 }}>
-                                    {tm.icon} {tm.lbl}
-                                  </span>
-                                  {/* 상품명 */}
-                                  <span style={{ flex: 1, fontSize: 11, color: it.productName ? "#374151" : "#c4c9d1", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    {it.productName || "상품 미선택"}
-                                  </span>
-                                  {/* 유형 변경 아이콘 */}
-                                  <div style={{ display: "flex", gap: 1, flexShrink: 0 }}>
-                                    {(["translation","interpretation","equipment","expense"] as const).map(v => (
-                                      <button key={v} onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productType: v } : p))}
-                                        title={TYPE_META[v].lbl}
-                                        style={{ fontSize: 11, padding: "1px 3px", borderRadius: 4, border: "none", background: "transparent", opacity: it.productType === v ? 1 : 0.3, cursor: "pointer" }}>
-                                        {TYPE_META[v].icon}
-                                      </button>
-                                    ))}
-                                  </div>
-                                  {/* 액션 그룹 */}
-                                  <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
-                                    <button
-                                      onClick={() => { setRegisterRequestIdx(null); setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDirectInput: !p.showDirectInput, isCustomProduct: !p.showDirectInput, productId: p.showDirectInput ? p.productId : null } : p)); }}
-                                      style={{ fontSize: 10, padding: "2px 6px", borderRadius: 5, border: "1px solid #e5e7eb", background: it.showDirectInput ? "#f3f4f6" : "#fff", color: it.showDirectInput ? "#374151" : "#6b7280", cursor: "pointer", whiteSpace: "nowrap" }}>
-                                      {it.showDirectInput ? "✕ 커스텀" : "+ 커스텀"}
-                                    </button>
-                                    <button onClick={() => setQuoteItemForms(prev => prev.filter((_, i) => i !== idx))}
-                                      style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: "0 2px" }}>×</button>
-                                  </div>
-                                </div>
-                                {/* ── BODY ── */}
-                                <div style={{ padding: "6px 8px" }}>
-                                {/* ── 상품 선택 / 직접 입력 ── */}
-                                <div style={{ marginBottom: 5 }}>
-                                  {!it.showDirectInput ? (
-                                    <ClickSelect
-                                      value={String(it.productId ?? "")}
-                                      onChange={v => {
-                                        const pid = v ? Number(v) : null;
-                                        if (pid) {
-                                          const prod = quoteProducts.find(p => p.id === pid);
-                                          if (prod) {
-                                            setQuoteItemForms(prev => prev.map((p, i) => {
-                                              if (i !== idx) return p;
-                                              const pType = (prod as any).productType ?? "translation";
-                                              return {
-                                                ...p,
-                                                productId: prod.id, productName: prod.name,
-                                                unit: pType === "equipment" ? ((prod as any).quantityUnit || "개") : pType === "translation" ? (prod.unit && prod.unit !== "어절" ? prod.unit : "페이지") : prod.unit,
-                                                unitPrice: prod.basePrice != null ? String(prod.basePrice) : "",
-                                                productType: pType,
-                                                sourceLanguage: pType === "translation" ? ((prod as any).sourceLanguage ?? p.sourceLanguage) : p.sourceLanguage,
-                                                targetLanguage: pType === "translation" ? ((prod as any).targetLanguage ?? p.targetLanguage) : p.targetLanguage,
-                                                langA: pType === "interpretation" ? ((prod as any).sourceLanguage ?? p.langA) : p.langA,
-                                                langB: pType === "interpretation" ? ((prod as any).targetLanguage ?? p.langB) : p.langB,
-                                                interpretationDuration: (prod as any).interpretationDuration ?? p.interpretationDuration,
-                                                interpretationDirection: (prod as any).interpretationDirection ?? p.interpretationDirection,
-                                                quantityUnit: (prod as any).quantityUnit ?? p.quantityUnit,
-                                                usagePeriod: (prod as any).usagePeriod ?? p.usagePeriod,
-                                                quantity: pType === "interpretation" ? "1" : p.quantity,
-                                              };
-                                            }));
-                                            return;
-                                          }
-                                        }
-                                        setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productId: null, productName: "" } : p));
-                                      }}
-                                      searchable
-                                      chips={[
-                                        { value: "", label: "전체" },
-                                        { value: "translation", label: "📄 번역" },
-                                        { value: "interpretation", label: "🎤 통역" },
-                                        { value: "equipment", label: "🔧 장비" },
-                                        { value: "expense", label: "💰 실비" },
-                                      ]}
-                                      style={{ width: "100%" }}
-                                      triggerStyle={{ fontSize: 11, padding: "5px 6px", borderRadius: 6, color: it.productId ? "#1e40af" : "#9ca3af", width: "100%" }}
-                                      options={[
-                                        { value: "", label: "상품 선택..." },
-                                        ...quoteProducts.map(p => ({
-                                          value: String(p.id),
-                                          label: `${(p as any).productType === "interpretation" ? "🎤 " : (p as any).productType === "equipment" ? "🔧 " : (p as any).productType === "expense" ? "💰 " : "📄 "}${p.mainCategory ? `[${p.mainCategory}] ` : ""}${p.name} — ${p.basePrice != null ? `${Number(p.basePrice).toLocaleString()}원` : "미설정"}/${p.unit}`,
-                                          group: (p as any).productType ?? "translation",
-                                        })),
-                                      ]}
-                                    />
-                                  ) : (
-                                    <>
-                                      <input value={it.productName} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, productName: e.target.value } : p))}
-                                        placeholder="커스텀 상품명 입력" style={{ ...inputStyle, fontSize: 12, padding: "5px 7px", width: "100%" }} autoFocus />
-                                      <div style={{ marginTop: 3 }}>
-                                        {registerDoneIdxs.includes(idx) ? (
-                                          <span style={{ fontSize: 10, color: "#16a34a" }}>✓ 등록 요청 전송됨</span>
-                                        ) : registerRequestIdx === idx ? (
-                                          <div style={{ padding: "7px 8px", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 5, marginTop: 3 }}>
-                                            {/* 헤더: 타이틀 + 유형 선택 한 줄 */}
-                                            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 5 }}>
-                                              <span style={{ fontSize: 10.5, fontWeight: 700, color: "#166534", flexShrink: 0 }}>정식 상품 등록 요청</span>
-                                              <select value={registerRequestForm.serviceType} onChange={e => {
-                                                const st = e.target.value;
-                                                setRegisterRequestForm(p => ({
-                                                  ...p, serviceType: st, languagePair: "",
-                                                  unit: st === "translation" ? "페이지" : st === "interpretation" ? "시간" : st === "equipment" ? "개" : "건",
-                                                  usagePeriod: "1일",
-                                                }));
-                                              }} style={{ ...inputStyle, fontSize: 10, padding: "2px 4px", border: "1px solid #86efac", borderRadius: 4 }}>
-                                                <option value="translation">번역</option>
-                                                <option value="interpretation">통역</option>
-                                                <option value="equipment">장비</option>
-                                                <option value="expense">실비</option>
-                                              </select>
-                                            </div>
-                                            {/* ── 번역 폼 ── */}
-                                            {registerRequestForm.serviceType === "translation" && (
-                                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 8px", marginBottom: 5 }}>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>언어쌍</div>
-                                                  <input value={registerRequestForm.languagePair} onChange={e => setRegisterRequestForm(p => ({ ...p, languagePair: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="예: ko→en" />
-                                                </div>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>단위</div>
-                                                  <select value={registerRequestForm.unit} onChange={e => setRegisterRequestForm(p => ({ ...p, unit: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }}>
-                                                    <option>페이지</option><option>단어</option><option>글자</option><option>어절</option><option>건</option>
-                                                  </select>
-                                                </div>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>제안 단가</div>
-                                                  <input value={registerRequestForm.unitPrice} onChange={e => setRegisterRequestForm(p => ({ ...p, unitPrice: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="숫자만" />
-                                                </div>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>메모</div>
-                                                  <input value={registerRequestForm.description} onChange={e => setRegisterRequestForm(p => ({ ...p, description: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="추가 설명" />
-                                                </div>
-                                              </div>
-                                            )}
-                                            {/* ── 통역 폼 ── */}
-                                            {registerRequestForm.serviceType === "interpretation" && (
-                                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 8px", marginBottom: 5 }}>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>언어쌍</div>
-                                                  <input value={registerRequestForm.languagePair} onChange={e => setRegisterRequestForm(p => ({ ...p, languagePair: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="예: ko↔en" />
-                                                </div>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>단위</div>
-                                                  <select value={registerRequestForm.unit} onChange={e => setRegisterRequestForm(p => ({ ...p, unit: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }}>
-                                                    <option>시간</option><option>일</option><option>회</option><option>건</option>
-                                                  </select>
-                                                </div>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>제안 단가</div>
-                                                  <input value={registerRequestForm.unitPrice} onChange={e => setRegisterRequestForm(p => ({ ...p, unitPrice: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="숫자만" />
-                                                </div>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>메모</div>
-                                                  <input value={registerRequestForm.description} onChange={e => setRegisterRequestForm(p => ({ ...p, description: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="추가 설명" />
-                                                </div>
-                                              </div>
-                                            )}
-                                            {/* ── 장비 폼 ── */}
-                                            {registerRequestForm.serviceType === "equipment" && (
-                                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 8px", marginBottom: 5 }}>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>단위</div>
-                                                  <select value={registerRequestForm.unit} onChange={e => setRegisterRequestForm(p => ({ ...p, unit: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }}>
-                                                    <option>개</option><option>세트</option><option>부스</option><option>대</option>
-                                                  </select>
-                                                </div>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>사용기간</div>
-                                                  <select value={registerRequestForm.usagePeriod} onChange={e => setRegisterRequestForm(p => ({ ...p, usagePeriod: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }}>
-                                                    <option>반일</option><option>1일</option><option>2일</option><option>3일</option><option>4일</option><option>5일</option>
-                                                  </select>
-                                                </div>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>제안 단가</div>
-                                                  <input value={registerRequestForm.unitPrice} onChange={e => setRegisterRequestForm(p => ({ ...p, unitPrice: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="숫자만" />
-                                                </div>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>메모</div>
-                                                  <input value={registerRequestForm.description} onChange={e => setRegisterRequestForm(p => ({ ...p, description: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="추가 설명" />
-                                                </div>
-                                              </div>
-                                            )}
-                                            {/* ── 실비 폼 ── */}
-                                            {registerRequestForm.serviceType === "expense" && (
-                                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 8px", marginBottom: 5 }}>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>금액</div>
-                                                  <input value={registerRequestForm.unitPrice} onChange={e => setRegisterRequestForm(p => ({ ...p, unitPrice: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="숫자만" />
-                                                </div>
-                                                <div>
-                                                  <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 1 }}>메모</div>
-                                                  <input value={registerRequestForm.description} onChange={e => setRegisterRequestForm(p => ({ ...p, description: e.target.value }))}
-                                                    style={{ ...inputStyle, fontSize: 11, width: "100%" }} placeholder="추가 설명" />
-                                                </div>
-                                              </div>
-                                            )}
-                                            <div style={{ display: "flex", gap: 5 }}>
-                                              <button onClick={handleSubmitRegisterRequest} disabled={registerSubmitting}
-                                                style={{ fontSize: 10, padding: "3px 10px", borderRadius: 4, border: "none", background: "#16a34a", color: "#fff", cursor: "pointer" }}>
-                                                {registerSubmitting ? "전송 중..." : "요청 전송"}
-                                              </button>
-                                              <button onClick={() => setRegisterRequestIdx(null)}
-                                                style={{ fontSize: 10, padding: "3px 8px", borderRadius: 4, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer" }}>취소</button>
-                                            </div>
-                                          </div>
-                                        ) : (
-                                          <button onClick={() => {
-                                            setRegisterRequestIdx(idx);
-                                            const st = it.productType;
-                                            setRegisterRequestForm({
-                                              name: it.productName.trim(),
-                                              serviceType: st,
-                                              languagePair: st === "translation" ? `${it.sourceLanguage}→${it.targetLanguage}` : st === "interpretation" ? `${it.langA}↔${it.langB}` : "",
-                                              unit: st === "translation" ? (it.unit || "페이지") : st === "interpretation" ? (it.unit || "시간") : st === "equipment" ? (it.quantityUnit || "개") : "건",
-                                              usagePeriod: st === "equipment" ? (it.usagePeriod || "1일") : "1일",
-                                              unitPrice: it.unitPrice,
-                                              description: it.memo,
-                                            });
-                                          }}
-                                            style={{ fontSize: 10, color: "#16a34a", background: "none", border: "none", cursor: "pointer", padding: "1px 0", textDecoration: "underline" }}>
-                                            + 정식 상품 등록 요청
-                                          </button>
-                                        )}
-                                      </div>
-                                    </>
-                                  )}
-                                </div>
-                                {/* ── 번역 행 ── */}
-                                {it.productType === "translation" && (
-                                  <div>
-                                    <div style={{ display: "grid", gridTemplateColumns: "44px 8px 44px 40px 52px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
-                                      <input value={it.sourceLanguage} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, sourceLanguage: e.target.value } : p))}
-                                        placeholder="출발어" style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "center", textTransform: "uppercase" }} />
-                                      <span style={{ textAlign: "center", color: "#9ca3af", fontSize: 11 }}>→</span>
-                                      <input value={it.targetLanguage} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, targetLanguage: e.target.value } : p))}
-                                        placeholder="도착어" style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "center", textTransform: "uppercase" }} />
-                                      <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
-                                        style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "right" }} />
-                                      <ClickSelect value={it.unit} onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: v } : p))}
-                                        triggerStyle={{ fontSize: 10, padding: "5px 1px", borderRadius: 5, width: 52 }}
-                                        options={[{ value: "페이지", label: "페이지" }, { value: "글자", label: "글자" }, { value: "단어", label: "단어" }, { value: "어절", label: "어절" }, { value: "건", label: "건" }]} />
-                                      <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
-                                        placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
-                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={roSt} />
-                                      <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))} style={detailBtn}>
-                                        {it.showDetail ? "▲" : "▼"} 상세
-                                      </button>
-                                    </div>
-                                    <div style={{ maxHeight: it.showDetail ? "120px" : "0px", overflow: "hidden", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
-                                      <div style={{ ...detailArea, display: "flex", gap: 4, alignItems: "center" }}>
-                                        <label style={{ fontSize: 11, color: "#7c3aed", cursor: "pointer", border: "1px dashed #d8b4fe", borderRadius: 5, padding: "3px 7px", whiteSpace: "nowrap", background: "#faf5ff" }}>
-                                          📎 파일
-                                          <input type="file" multiple style={{ display: "none" }} onChange={async e => {
-                                            const files = Array.from(e.target.files ?? []);
-                                            if (files.length === 0) return;
-                                            for (const file of files) {
-                                              setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, files: [...p.files, { name: file.name, url: "", size: file.size, uploading: true }] } : p));
-                                              try {
-                                                const rsRes = await fetch(`/api/storage/uploads/request-url?fileName=${encodeURIComponent(file.name)}&contentType=${encodeURIComponent(file.type || "application/octet-stream")}`, { headers: { Authorization: `Bearer ${localStorage.getItem("token")}` } });
-                                                if (!rsRes.ok) throw new Error("URL 발급 실패");
-                                                const { uploadUrl, publicUrl } = await rsRes.json();
-                                                await fetch(uploadUrl, { method: "PUT", body: file, headers: { "Content-Type": file.type || "application/octet-stream" } });
-                                                setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, files: p.files.map(f => f.name === file.name && f.uploading ? { name: file.name, url: publicUrl, size: file.size, uploading: false } : f) } : p));
-                                              } catch {
-                                                setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, files: p.files.filter(f => !(f.name === file.name && f.uploading)) } : p));
-                                                onToast(`${file.name} 업로드 실패`);
-                                              }
-                                            }
-                                            e.target.value = "";
-                                          }} />
-                                        </label>
-                                        {(it.files || []).map((f, fi) => (
-                                          <span key={fi} style={{ fontSize: 10, background: f.uploading ? "#fef9c3" : "#f0fdf4", borderRadius: 4, padding: "2px 6px", border: `1px solid ${f.uploading ? "#fde047" : "#86efac"}`, display: "flex", alignItems: "center", gap: 3, maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                            {f.uploading ? "⏳" : "📄"} {f.name}
-                                            {!f.uploading && <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, files: p.files.filter((_, fi2) => fi2 !== fi) } : p))} style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 12, lineHeight: 1, padding: 0, marginLeft: 2 }}>×</button>}
-                                          </span>
-                                        ))}
-                                        <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
-                                          placeholder="메모" style={{ ...inputStyle, fontSize: 11, padding: "4px 7px", flex: 1 }} />
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                                {/* ── 통역 행 ── */}
-                                {it.productType === "interpretation" && (
-                                  <div>
-                                    <div style={{ display: "grid", gridTemplateColumns: "38px 38px 62px 84px 70px 66px 80px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
-                                      <input value={it.langA} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, langA: e.target.value } : p))}
-                                        placeholder="A" style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "center", textTransform: "uppercase" }} />
-                                      <input value={it.langB} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, langB: e.target.value } : p))}
-                                        placeholder="B" style={{ ...inputStyle, fontSize: 10, padding: "5px 2px", textAlign: "center", textTransform: "uppercase" }} />
-                                      <ClickSelect value={it.interpretationDirection}
-                                        onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretationDirection: v } : p))}
-                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 62, borderColor: "#d8b4fe" }}
-                                        options={[{ value: "양방향", label: "양방향" }, { value: "A→B", label: "A→B" }, { value: "B→A", label: "B→A" }]} />
-                                      <ClickSelect value={it.interpretType}
-                                        onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretType: v } : p))}
-                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 84, borderColor: "#d8b4fe" }}
-                                        options={[
-                                          { value: "동시통역", label: "동시통역" },
-                                          { value: "순차통역", label: "순차통역" },
-                                          { value: "위스퍼링통역", label: "위스퍼링통역" },
-                                          { value: "수행통역", label: "수행통역" },
-                                          { value: "전시회통역", label: "전시회통역" },
-                                          { value: "화상통역", label: "화상통역" },
-                                          { value: "가이드통역", label: "가이드통역" },
-                                        ]} />
-                                      <ClickSelect value={it.unit}
-                                        onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unit: v } : p))}
-                                        triggerStyle={{ fontSize: 9, padding: "5px 1px", borderRadius: 5, width: 70, borderColor: "#d8b4fe" }}
-                                        options={[
-                                          { value: "1시간", label: "1시간" },
-                                          { value: "2시간", label: "2시간" },
-                                          { value: "4시간", label: "4시간" },
-                                          { value: "6시간", label: "6시간" },
-                                          { value: "8시간", label: "8시간" },
-                                          { value: "1일", label: "1일" },
-                                          { value: "추가시간", label: "추가시간" },
-                                          { value: "건", label: "건" },
-                                        ]} />
-                                      {/* ── [명] InputGroup ── */}
-                                      <div style={{ display: "flex", alignItems: "center", border: "1px solid #d8b4fe", borderRadius: 5, overflow: "hidden", background: "#fff", height: 26 }}>
-                                        <NumericInput allowDecimal value={it.interpreterCount} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpreterCount: raw } : p))}
-                                          placeholder="0" style={{ border: "none", outline: "none", boxShadow: "none", borderRadius: 0, background: "transparent", fontSize: 11, padding: "0 4px", textAlign: "right", width: "100%", minWidth: 0, height: "100%" }} />
-                                        <span style={{ display: "flex", alignItems: "center", padding: "0 5px", fontSize: 10, color: "#7c3aed", fontWeight: 700, background: "#fdf4ff", borderLeft: "1px solid #e9d5ff", flexShrink: 0, height: "100%", lineHeight: 1 }}>명</span>
-                                      </div>
-                                      {/* ── [수량 + 단위] InputGroup ── */}
-                                      <div style={{ display: "flex", alignItems: "center", border: "1px solid #d8b4fe", borderRadius: 5, overflow: "hidden", background: "#fff", height: 26 }}>
-                                        <NumericInput allowDecimal value={it.workQuantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, workQuantity: raw } : p))}
-                                          placeholder="0" style={{ border: "none", outline: "none", boxShadow: "none", borderRadius: 0, background: "transparent", fontSize: 11, padding: "0 4px", textAlign: "right", width: "100%", minWidth: 0, height: "100%" }} />
-                                        <ClickSelect value={it.workUnit}
-                                          onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, workUnit: v } : p))}
-                                          triggerStyle={{ border: "none", borderLeft: "1px solid #e9d5ff", borderRadius: 0, background: "#fdf4ff", fontSize: 9, padding: "0 3px", width: 34, flexShrink: 0, height: 26 }}
-                                          options={[
-                                            { value: "시간", label: "시간" },
-                                            { value: "일", label: "일" },
-                                            { value: "회", label: "회" },
-                                            { value: "건", label: "건" },
-                                          ]} />
-                                      </div>
-                                      <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
-                                        placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
-                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={roSt} />
-                                      <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))} style={detailBtn}>
-                                        {it.showDetail ? "▲" : "▼"} 상세
-                                      </button>
-                                    </div>
-                                    <div style={{ maxHeight: it.showDetail ? "60px" : "0px", overflow: "hidden", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
-                                      <div style={{ ...detailArea, display: "grid", gridTemplateColumns: "110px 1fr 72px 46px 46px 1fr", gap: 3, alignItems: "center" }}>
-                                        <input type="date" value={it.interpretDate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretDate: e.target.value } : p))}
-                                          style={{ ...inputStyle, fontSize: 11, padding: "4px 4px" }} />
-                                        <input value={it.interpretPlace} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretPlace: e.target.value } : p))}
-                                          placeholder="장소" style={{ ...inputStyle, fontSize: 11, padding: "4px 6px" }} />
-                                        <input value={it.interpretationDuration} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, interpretationDuration: e.target.value } : p))}
-                                          placeholder="진행시간" style={{ ...inputStyle, fontSize: 11, padding: "4px 4px" }} />
-                                        <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, color: "#7c3aed", cursor: "pointer" }}>
-                                          <input type="checkbox" checked={it.hasTravelExpense} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, hasTravelExpense: e.target.checked } : p))} />출장
-                                        </label>
-                                        <label style={{ display: "flex", alignItems: "center", gap: 3, fontSize: 11, color: "#7c3aed", cursor: "pointer" }}>
-                                          <input type="checkbox" checked={it.hasEquipment} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, hasEquipment: e.target.checked } : p))} />장비
-                                        </label>
-                                        <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
-                                          placeholder="메모" style={{ ...inputStyle, fontSize: 11, padding: "4px 7px" }} />
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                                {/* ── 장비 행 ── */}
-                                {it.productType === "equipment" && (
-                                  <div>
-                                    <div style={{ display: "grid", gridTemplateColumns: "40px 56px 64px 1fr 72px 56px", gap: 3, alignItems: "center" }}>
-                                      <NumericInput allowDecimal value={it.quantity} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantity: raw } : p))}
-                                        style={{ ...inputStyle, fontSize: 11, padding: "5px 2px", textAlign: "right" }} />
-                                      <ClickSelect value={it.quantityUnit}
-                                        onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, quantityUnit: v } : p))}
-                                        triggerStyle={{ fontSize: 10, padding: "5px 1px", borderRadius: 5, width: 56, borderColor: "#6ee7b7" }}
-                                        options={[{ value: "개", label: "개" }, { value: "세트", label: "세트" }, { value: "부스", label: "부스" }, { value: "대", label: "대" }, { value: "건", label: "건" }]} />
-                                      <ClickSelect value={it.usagePeriod}
-                                        onChange={v => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, usagePeriod: v } : p))}
-                                        triggerStyle={{ fontSize: 10, padding: "5px 1px", borderRadius: 5, width: 64, borderColor: "#6ee7b7" }}
-                                        options={[{ value: "반일", label: "반일" }, { value: "1일", label: "1일" }, { value: "2일", label: "2일" }, { value: "3일", label: "3일" }, { value: "4일", label: "4일" }, { value: "5일", label: "5일" }]} />
-                                      <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw } : p))}
-                                        placeholder="단가" style={{ ...inputStyle, fontSize: 12, padding: "5px 4px", textAlign: "right" }} />
-                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={roSt} />
-                                      <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))} style={detailBtn}>
-                                        {it.showDetail ? "▲" : "▼"} 상세
-                                      </button>
-                                    </div>
-                                    <div style={{ maxHeight: it.showDetail ? "60px" : "0px", overflow: "hidden", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
-                                      <div style={{ ...detailArea, display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 3 }}>
-                                        <input type="date" value={it.eventStartDate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, eventStartDate: e.target.value } : p))}
-                                          style={{ ...inputStyle, fontSize: 11, padding: "4px 5px" }} />
-                                        <input type="date" value={it.eventEndDate} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, eventEndDate: e.target.value } : p))}
-                                          style={{ ...inputStyle, fontSize: 11, padding: "4px 5px" }} />
-                                        <input value={it.itemLocation} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, itemLocation: e.target.value } : p))}
-                                          placeholder="장소" style={{ ...inputStyle, fontSize: 11, padding: "4px 6px" }} />
-                                        <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
-                                          placeholder="메모" style={{ ...inputStyle, fontSize: 11, padding: "4px 6px" }} />
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                                {/* ── 실비 행 ── */}
-                                {it.productType === "expense" && (
-                                  <div>
-                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 72px 64px", gap: 3, alignItems: "center" }}>
-                                      <NumericInput value={it.unitPrice} onChange={raw => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, unitPrice: raw, quantity: "1" } : p))}
-                                        placeholder="금액 (원)" style={{ ...inputStyle, fontSize: 13, padding: "5px 7px", textAlign: "right" }} />
-                                      <input readOnly value={supply > 0 ? supply.toLocaleString() : ""} placeholder="공급가액" style={roSt} />
-                                      <button onClick={() => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, showDetail: !p.showDetail } : p))} style={detailBtn}>
-                                        {it.showDetail ? "▲" : "▼"} 상세
-                                      </button>
-                                    </div>
-                                    <div style={{ maxHeight: it.showDetail ? "44px" : "0px", overflow: "hidden", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
-                                      <div style={detailArea}>
-                                        <input value={it.memo} onChange={e => setQuoteItemForms(prev => prev.map((p, i) => i === idx ? { ...p, memo: e.target.value } : p))}
-                                          placeholder="메모" style={{ ...inputStyle, fontSize: 11, padding: "4px 8px", width: "100%" }} />
-                                      </div>
-                                    </div>
-                                  </div>
-                                )}
-                                </div>{/* ── /BODY ── */}
-                              </div>
-                            );
-                          })}
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, paddingTop: 8, borderTop: "1px dashed #e5e7eb", gap: 8 }}>
-                            <button onClick={() => setQuoteItemForms(prev => [...prev, defaultItem()])}
-                              style={{ fontSize: 12, color: "#7c3aed", background: "none", border: "1px dashed #d8b4fe", borderRadius: 6, padding: "4px 10px", cursor: "pointer" }}>
-                              + 항목 추가
-                            </button>
-                            {(() => { const gt = calcGrandTotals(); return gt.supply > 0 ? (
-                              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, background: "#f0fdf4", borderRadius: 7, padding: "6px 12px", border: "1px solid #86efac", fontSize: 12, minWidth: 180 }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", width: "100%", gap: 12 }}>
-                                  <span style={{ color: "#6b7280" }}>공급가액</span>
-                                  <b style={{ color: "#1e40af" }}>{gt.supply.toLocaleString()}원</b>
-                                </div>
-                                <div style={{ display: "flex", justifyContent: "space-between", width: "100%", gap: 12 }}>
-                                  <span style={{ color: "#6b7280" }}>
-                                    {gt.tax === 0 ? "부가세" : "부가세 (VAT 10%)"}
-                                  </span>
-                                  <b style={{ color: "#7c3aed" }}>
-                                    {gt.tax === 0
-                                      ? <span style={{ color: "#9ca3af", fontWeight: 400 }}>영세율/면세</span>
-                                      : `${gt.tax.toLocaleString()}원`}
-                                  </b>
-                                </div>
-                                <div style={{ display: "flex", justifyContent: "space-between", width: "100%", gap: 12, borderTop: "1px solid #86efac", paddingTop: 3, marginTop: 1 }}>
-                                  <span style={{ color: "#065f46", fontWeight: 700 }}>총금액</span>
-                                  <b style={{ color: "#065f46", fontSize: 13 }}>{gt.total.toLocaleString()}원</b>
-                                </div>
-                              </div>
-                            ) : null; })()}
-                          </div>
-                          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 8 }}>
-                            <input
-                              value={quoteNote}
-                              onChange={e => setQuoteNote(e.target.value)}
-                              placeholder="비고/메모 (선택)"
-                              style={{ ...inputStyle, fontSize: 12, padding: "6px 10px" }}
-                            />
-                            {(() => {
-                              let cannotCreate = false;
-                              if (quoteType === "prepaid_deduction" || quoteType === "b2c_prepaid") {
-                                const selAcct = compPrepaidAccounts.find(a => a.id === selectedPrepaidAcctId) ?? null;
-                                const noAcct = compPrepaidAccounts.length === 0;
-                                const zeroBalance2 = selAcct !== null && selAcct.currentBalance === 0;
-                                const isInsuff2 = selAcct != null && quoteItemsGrandTotal > 0 && quoteItemsGrandTotal > selAcct.currentBalance;
-                                cannotCreate = noAcct || zeroBalance2 || isInsuff2;
-                              }
-                              return (
-                                <PrimaryBtn onClick={handleCreateQuote}
-                                  disabled={creatingQuote || cannotCreate || (!hasQuotes && quoteItemsGrandTotal === 0)}
-                                  style={{ fontSize: 12, padding: "7px 14px", background: (cannotCreate || (!hasQuotes && quoteItemsGrandTotal === 0)) ? "#9ca3af" : "#7c3aed", border: "none", alignSelf: "flex-end" }}>
-                                  {creatingQuote ? "생성 중..." : hasQuotes ? "견적 재생성" : "견적 생성"}
-                                </PrimaryBtn>
-                              );
-                            })()}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-
-                  return (
-                    <>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: formVisible ? 8 : 10, paddingBottom: formVisible ? 7 : 0, borderBottom: formVisible ? "1px solid #ede9fe" : "none" }}>
-                        <p style={{ ...sectionHd, margin: 0, paddingBottom: 0, borderBottom: "none", color: "#5b21b6", letterSpacing: "0.04em", borderLeft: "3px solid #8b5cf6", paddingLeft: 8 }}>견적 ({detail.quotes.length})</p>
-                        {canQuote && hasQuotes && !showQuoteForm && (
-                          <button onClick={() => {
-                            const doOpen = () => {
-                              const eq0 = detail.quotes[0] as any;
-                              if (eq0?.quoteType) changeQuoteType(eq0.quoteType as typeof quoteType);
-                              if (eq0?.billingType) setQuoteBillingType(eq0.billingType);
-                              if (eq0?.taxDocumentType) setQuoteTaxDocType(eq0.taxDocumentType as typeof quoteTaxDocType);
-                              if (eq0?.taxCategory) setQuoteTaxCategory(eq0.taxCategory as typeof quoteTaxCategory);
-                              if (Array.isArray(eq0?.items) && eq0.items.length > 0 && eq0.items[0]?.taxType) {
-                                setQuoteVatType(eq0.items[0].taxType as "taxable"|"exempt"|"zero_rate");
-                              }
-                              if (eq0?.paymentMethod) setQuotePaymentMethod(eq0.paymentMethod);
-                              if (eq0?.validUntil) setQuoteValidUntil(eq0.validUntil);
-                              if (eq0?.issueDate) setQuoteIssueDate(eq0.issueDate);
-                              if (eq0?.batchPeriodStart) setQuoteBatchStart(eq0.batchPeriodStart);
-                              if (eq0?.batchPeriodEnd) setQuoteBatchEnd(eq0.batchPeriodEnd);
-                              if (Array.isArray(eq0?.items) && eq0.items.length > 0) {
-                                setQuoteItemForms(eq0.items.map((it: any) => {
-                                  const lp = it.languagePair ?? "";
-                                  const arrowIdx = lp.indexOf("→");
-                                  const biIdx = lp.indexOf("↔");
-                                  const sepIdx = arrowIdx >= 0 ? arrowIdx : biIdx;
-                                  const parsedA = sepIdx >= 0 ? lp.slice(0, sepIdx).trim() : "";
-                                  const parsedB = sepIdx >= 0 ? lp.slice(sepIdx + 1).trim() : "";
-                                  const itemType = it.itemType ?? "translation";
-                                  return {
-                                    productId: it.productId ?? null,
-                                    productName: it.productName ?? "",
-                                    languagePair: lp,
-                                    sourceLanguage: itemType === "translation" ? parsedA : "",
-                                    targetLanguage: itemType === "translation" ? parsedB : "",
-                                    langA: itemType === "interpretation" ? parsedA : "",
-                                    langB: itemType === "interpretation" ? parsedB : "",
-                                    interpretationDirection: it.interpretationDirection ?? "양방향",
-                                    quantityUnit: it.quantityUnit ?? "개",
-                                    usagePeriod: it.usagePeriod ?? "1일",
-                                    unit: it.unit ?? (itemType === "interpretation" ? "1일" : "건"),
-                                    quantity: String(it.quantity ?? "1"),
-                                    unitPrice: String(it.unitPrice ?? ""),
-                                    taxType: (it.taxType ?? "taxable") as "taxable"|"exempt"|"zero_rate",
-                                    productType: itemType,
-                                    interpreterCount: itemType === "interpretation" ? String(it.quantity ?? "1") : "1",
-                                    workQuantity: itemType === "interpretation" ? "1" : "1",
-                                    workUnit: itemType === "interpretation" ? (it.usagePeriod ?? "일") : "일",
-                                    interpretDate: it.interpretDate ?? "",
-                                    interpretPlace: it.interpretPlace ?? "",
-                                    interpretType: it.interpretType ?? "동시통역",
-                                    interpretationDuration: it.interpretDuration ?? "",
-                                    hasTravelExpense: it.hasTravelExpense ?? false,
-                                    hasEquipment: it.hasEquipment ?? false,
-                                    files: [],
-                                    memo: it.memo ?? "",
-                                    showDetail: !!(it.eventStartDate || it.eventEndDate || it.itemLocation),
-                                    showDirectInput: it.isCustomProduct ?? !it.productId,
-                                    isCustomProduct: it.isCustomProduct ?? !it.productId,
-                                    eventStartDate: it.eventStartDate ?? "",
-                                    eventEndDate: it.eventEndDate ?? "",
-                                    itemLocation: it.itemLocation ?? "",
-                                  };
-                                }));
-                              }
-                              setShowQuoteForm(true);
-                            };
-                            if (detail.status === "completed") {
-                              setCompletedConfirmAction(() => doOpen);
-                              setCompletedConfirmShow(true);
-                            } else {
-                              doOpen();
-                            }
-                          }}
-                            style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", background: "#fdf4ff", border: "1px solid #d8b4fe", borderRadius: 6, padding: "3px 10px", cursor: "pointer" }}>
-                            ✏️ 수정/재생성
-                          </button>
-                        )}
-                      </div>
-                      <div style={{ overflow: "hidden", maxHeight: formVisible ? "1600px" : "0", transition: formVisible ? "max-height 560ms cubic-bezier(0.22, 1, 0.36, 1)" : "max-height 840ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
-                        {formVisible && quoteFormJsx}
-                      </div>
-                      {hasQuotes ? detail.quotes.map(q => {
-                        const taxDocLabel: Record<string, string> = { tax_invoice: "세금계산서", zero_tax_invoice: "세금계산서(영세율)", bill: "계산서" };
-                        const taxCatLabel: Record<string, string> = { normal: "일반", zero_rated: "영세율", consignment: "위수탁", consignment_zero_rated: "위수탁영세율" };
-                        const qtLabel: Record<string, [string, string, string]> = {
-                          b2b_standard:      ["일반 견적", "#eff6ff", "#1d4ed8"],
-                          b2c_prepaid:       ["선입금 견적", "#fef3c7", "#92400e"],
-                          prepaid_deduction: ["선입금 견적", "#fdf4ff", "#7c3aed"],  // 레거시 — 선입금 견적으로 표시
-                          accumulated_batch: ["누적 견적", "#ecfdf5", "#065f46"],
-                        };
-                        const pmLabel: Record<string, string> = { card: "카드", cash: "현금", bank: "계좌이체" };
-                        const btLabelMap: Record<string, string> = {
-                          postpaid_per_project: "건별 후불", monthly_billing: "누적 청구",
-                          prepaid_wallet: "선입금 차감", prepay_upfront: "선결제",
-                        };
-                        const tdt = (q as any).taxDocumentType ?? "tax_invoice";
-                        const tc = (q as any).taxCategory ?? "normal";
-                        const qt = (q as any).quoteType ?? "b2b_standard";
-                        const bt = (q as any).billingType ?? "postpaid_per_project";
-                        const pm = (q as any).paymentMethod ?? null;
-                        const [qtText, qtBg, qtColor] = qtLabel[qt] ?? ["기본", "#f8fafc", "#374151"];
-                        const btText = bt === "prepay_upfront" && pm ? `선결제(${pmLabel[pm] ?? pm})` : (btLabelMap[bt] ?? bt);
-                        return (
-                        <div key={q.id} style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 12px", marginBottom: 6, fontSize: 13, border: "1px solid #e5e7eb" }}>
-                          <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-                            <span style={{ color: "#9ca3af", fontSize: 11 }}>#{q.id}</span>
-                            <span style={{ fontWeight: 700, color: "#0891b2", fontSize: 14 }}>{Number((q as any).price ?? (q as any).amount).toLocaleString()}원</span>
+                            {/* 견적금액 */}
+                            <span style={{ fontWeight: 800, color: "#0891b2", fontSize: 14, marginLeft: quoteTitle ? 0 : 4 }}>
+                              {Number((q as any).price ?? (q as any).amount).toLocaleString()}원
+                            </span>
+                            {/* 견적상태 */}
                             <StatusBadge status={q.status} />
+                            {/* 유형 배지 */}
                             <span style={{ fontSize: 10, padding: "1px 8px", borderRadius: 4, background: qtBg, color: qtColor, border: `1px solid ${qtColor}33`, fontWeight: 800 }}>
                               {qtText}
                             </span>
-                            <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 4, background: bt === "prepay_upfront" ? "#ecfdf5" : "#f8fafc", color: bt === "prepay_upfront" ? "#065f46" : "#374151", border: "1px solid #d1fae5", fontWeight: 700 }}>
+                            {/* 청구방식 */}
+                            <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 4, background: "#f8fafc", color: "#374151", border: "1px solid #e2e8f0", fontWeight: 600 }}>
                               {btText}
                             </span>
+                            {/* 세무 구분 */}
                             <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 4, background: tdt === "bill" ? "#fef3c7" : "#eff6ff", color: tdt === "bill" ? "#92400e" : "#1d4ed8", border: `1px solid ${tdt === "bill" ? "#fde68a" : "#bfdbfe"}`, fontWeight: 700 }}>
                               {taxDocLabel[tdt] ?? tdt}
                             </span>
-                            <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 4, background: tc === "zero_rated" || tc === "consignment_zero_rated" ? "#f0fdf4" : tc === "consignment" ? "#fdf4ff" : "#f8fafc", color: tc === "zero_rated" || tc === "consignment_zero_rated" ? "#166534" : tc === "consignment" ? "#7c3aed" : "#374151", border: "1px solid #e2e8f0" }}>
-                              {taxCatLabel[tc] ?? tc}
+                            {/* 발행일 */}
+                            <span style={{ fontSize: 11, color: "#9ca3af", marginLeft: "auto", whiteSpace: "nowrap" }}>
+                              {issueDate ?? new Date(q.createdAt).toLocaleDateString("ko-KR")}
                             </span>
-                            <span style={{ color: "#9ca3af", fontSize: 11, marginLeft: "auto" }}>{new Date(q.createdAt).toLocaleDateString("ko-KR")}</span>
                           </div>
-                          {(q as any).note && <p style={{ margin: "5px 0 0", fontSize: 12, color: "#6b7280" }}>📝 {(q as any).note}</p>}
-                        </div>
-                        );
-                      }) : !formVisible ? (
-                        <p style={{ color: "#9ca3af", fontSize: 13, paddingBottom: 8 }}>등록된 견적이 없습니다.</p>
-                      ) : null}
-                    </>
-                  );
-                })()}
 
-                {/* 결제 섹션 */}
+                          {/* ── 견적서명 (quoteTitle 없을 때 구 프로젝트 제목으로 표시) ── */}
+                          {!quoteTitle && detail.title && (
+                            <div style={{ padding: "0 14px 6px", fontSize: 11, color: "#9ca3af" }}>
+                              의뢰명: {detail.title}
+                            </div>
+                          )}
+
+                          {/* ── 비고 ── */}
+                          {(q as any).note && (
+                            <div style={{ padding: "0 14px 8px", fontSize: 12, color: "#6b7280" }}>
+                              📝 {(q as any).note}
+                            </div>
+                          )}
+
+                          {/* ── 액션 버튼 + 품목 토글 ── */}
+                          <div style={{ display: "flex", gap: 6, alignItems: "center", padding: "8px 14px", borderTop: "1px solid #f1f5f9", background: "#f8fafc" }}>
+                            <button
+                              type="button"
+                              onClick={() => setExpanded(v => !v)}
+                              style={{ fontSize: 11, padding: "3px 10px", borderRadius: 5, border: "1px solid #e2e8f0", background: expanded ? "#ede9fe" : "#fff", color: expanded ? "#7c3aed" : "#374151", cursor: "pointer", fontWeight: 600 }}>
+                              {expanded ? "▲ 접기" : "▼ 품목 보기"}
+                              {items.length > 0 && <span style={{ marginLeft: 4, fontSize: 10, color: "#9ca3af" }}>({items.length}건)</span>}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => window.print()}
+                              style={{ fontSize: 11, padding: "3px 10px", borderRadius: 5, border: "1px solid #e2e8f0", background: "#fff", color: "#374151", cursor: "pointer" }}>
+                              🖨️ 인쇄
+                            </button>
+                            <span style={{ flex: 1 }} />
+                            <span style={{ fontSize: 10, color: "#d1d5db" }}>견적 #{q.id} · 등록 {new Date(q.createdAt).toLocaleDateString("ko-KR")}</span>
+                          </div>
+
+                          {/* ── 품목 목록 (토글) ── */}
+                          {expanded && items.length > 0 && (
+                            <div style={{ padding: "10px 14px 12px", borderTop: "1px solid #ede9fe", background: "#fdf8ff" }}>
+                              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                                <thead>
+                                  <tr style={{ background: "#f5f3ff" }}>
+                                    {["상품명", "언어", "수량", "단가", "공급가", "세액", "합계"].map(h => (
+                                      <th key={h} style={{ padding: "5px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#6d28d9", borderBottom: "1px solid #d8b4fe", whiteSpace: "nowrap" }}>{h}</th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {items.map((it: any, ii: number) => (
+                                    <tr key={ii} style={{ borderBottom: "1px solid #ede9fe" }}>
+                                      <td style={{ padding: "5px 8px", color: "#111827", fontWeight: 600 }}>{it.productName}</td>
+                                      <td style={{ padding: "5px 8px", color: "#6b7280", fontSize: 11 }}>{it.languagePair ?? "—"}</td>
+                                      <td style={{ padding: "5px 8px", color: "#374151" }}>{it.quantity}{it.unit ? ` ${it.unit}` : ""}</td>
+                                      <td style={{ padding: "5px 8px", color: "#374151", textAlign: "right" }}>{Number(it.unitPrice).toLocaleString()}</td>
+                                      <td style={{ padding: "5px 8px", color: "#374151", textAlign: "right" }}>{Number(it.supplyAmount ?? 0).toLocaleString()}</td>
+                                      <td style={{ padding: "5px 8px", color: "#7c3aed", textAlign: "right" }}>{Number(it.taxAmount ?? 0).toLocaleString()}</td>
+                                      <td style={{ padding: "5px 8px", color: "#0891b2", fontWeight: 700, textAlign: "right" }}>{Number(it.totalAmount ?? 0).toLocaleString()}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                                <tfoot>
+                                  <tr style={{ background: "#f5f3ff" }}>
+                                    <td colSpan={5} style={{ padding: "6px 8px", fontSize: 11, color: "#6d28d9", fontWeight: 700, textAlign: "right" }}>합계</td>
+                                    <td style={{ padding: "6px 8px", color: "#7c3aed", fontWeight: 700, textAlign: "right" }}>
+                                      {items.reduce((s: number, it: any) => s + Number(it.taxAmount ?? 0), 0).toLocaleString()}
+                                    </td>
+                                    <td style={{ padding: "6px 8px", color: "#0891b2", fontWeight: 800, textAlign: "right" }}>
+                                      {items.reduce((s: number, it: any) => s + Number(it.totalAmount ?? 0), 0).toLocaleString()}
+                                    </td>
+                                  </tr>
+                                </tfoot>
+                              </table>
+                              {(q as any).note && (
+                                <p style={{ margin: "8px 0 0", fontSize: 11, color: "#6b7280" }}>📝 {(q as any).note}</p>
+                              )}
+                            </div>
+                          )}
+                          {expanded && items.length === 0 && (
+                            <div style={{ padding: "10px 14px", fontSize: 12, color: "#9ca3af", borderTop: "1px solid #ede9fe" }}>
+                              등록된 견적 항목이 없습니다.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* 결제 탭 */}
+            {activeSection === "payment" && (
+              <>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                  {["고객 결제", "입금 확인", "결제 등록"].map(k => (
+                    <span key={k} style={{ fontSize: 10, fontWeight: 600, background: "#f0fdf4", color: "#059669", borderRadius: 5, padding: "2px 8px" }}>{k}</span>
+                  ))}
+                </div>
                 {(() => {
                   const paidPayments = detail.payments.filter((pm: any) => pm.status === "paid");
                   const canPay = detail.status === "approved";
@@ -4007,6 +2766,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             {/* 정산 탭 */}
             {activeSection === "settlement" && (
               <>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                  {["통번역사 지급", "정산 내역", "지급 관리"].map(k => (
+                    <span key={k} style={{ fontSize: 10, fontWeight: 600, background: "#ecfeff", color: "#0891b2", borderRadius: 5, padding: "2px 8px" }}>{k}</span>
+                  ))}
+                </div>
                 {(() => {
                   const hasPaid = detail.payments.some((pm: any) => pm.status === "paid");
                   const hasSettlement = detail.settlements.length > 0;
@@ -4037,9 +2801,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         </div>
                       ))}
                       <div style={{ marginTop: 12 }}>
-                        <button onClick={() => setActiveSection("finance")}
+                        <button onClick={() => setActiveSection("payment")}
                           style={{ fontSize: 11, padding: "4px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb", cursor: "pointer", color: "#6b7280" }}>
-                          ← 견적/결제 탭으로
+                          ← 결제 탭으로
                         </button>
                       </div>
                     </>
@@ -4048,31 +2812,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               </>
             )}
 
-            {/* ── 컨트롤타워 탭 ─────────────────────────────────── */}
-            {activeSection === "control-tower" && (
-              <ProjectControlTowerTab
-                projectId={projectId}
-                token={token}
-                onToast={onToast}
-                onOpenQuoteForm={() => {
-                  setActiveSection("finance");
-                  setShowQuoteForm(true);
-                }}
-                onOpenPaymentForm={() => {
-                  setActiveSection("finance");
-                  setShowPaymentForm(true);
-                }}
-                onOpenAssignPanel={() => {
-                  setActiveSection("work");
-                  setShowCandidates(true);
-                }}
-                onGoToFinance={() => setActiveSection("finance")}
-              />
-            )}
-
-            {/* 기록 탭 (파일 / 커뮤니케이션 / 메모 / 이벤트 로그) */}
+            {/* 기록 탭 (파일 / 메모 / 이벤트 로그) */}
             {activeSection === "history" && (
               <>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+                  {["파일", "메모", "이벤트 로그", "변경 이력"].map(k => (
+                    <span key={k} style={{ fontSize: 10, fontWeight: 600, background: "#f1f5f9", color: "#64748b", borderRadius: 5, padding: "2px 8px" }}>{k}</span>
+                  ))}
+                </div>
                 {/* 업로드 영역 */}
                 <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 10, padding: "16px 18px", marginBottom: 16 }}>
                   <p style={sectionHd}>파일 업로드</p>
@@ -4503,5 +3250,24 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         </div>
       )}
     </DraggableModal>
+
+    {showQuoteEditorModal && detail && (
+      <QuoteEditorModal
+        token={token}
+        projectId={projectId}
+        initialCompanyId={(detail as any).companyId ?? null}
+        initialContactId={(detail as any).contactId ?? null}
+        initialTitle={detail.title}
+        onClose={() => setShowQuoteEditorModal(false)}
+        onSaved={() => {
+          setShowQuoteEditorModal(false);
+          loadDetail();
+          onRefresh?.();
+        }}
+        onToast={onToast}
+        adminList={adminList}
+      />
+    )}
+    </>
   );
 }

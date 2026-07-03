@@ -26,6 +26,7 @@ import { ProjectDetailModal } from '../components/admin/ProjectDetailModal';
 import { PrepaidLedgerModal } from '../components/admin/PrepaidLedgerModal';
 import { ProductManagementTab } from '../components/admin/ProductManagementTab';
 import { ProjectManagementTab } from '../components/admin/ProjectManagementTab';
+import { QuoteListTab } from '../components/admin/QuoteListTab';
 import { CompanyManagementTab } from '../components/admin/CompanyManagementTab';
 import { DataLayerTab } from '../components/admin/DataLayerTab';
 import { LanguageServiceDataTab } from '../components/admin/LanguageServiceDataTab';
@@ -216,7 +217,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     return permissions.includes(key);
   };
 
-  const [adminTab, setAdminTab] = useState<"dashboard"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics">("dashboard");
+  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics">("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // 섹션 기본 열림/닫힘 정책: customer·project는 기본 열림, 나머지 기본 닫힘
   const SIDEBAR_DEFAULT_OPEN: Record<string, boolean> = {
@@ -372,7 +373,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
 
   // modals
-  type DetailModalState = { id: number; initialSection?: "info"|"finance"|"work"|"settlement"|"history"|"control-tower" };
+  type DetailModalState = { id: number; initialSection?: "info"|"quote"|"progress"|"payment"|"settlement"|"history" };
   const [detailModal, setDetailModal] = useState<DetailModalState | null>(null);
   const openDetail = (id: number, initialSection?: DetailModalState["initialSection"]) => setDetailModal({ id, initialSection });
 
@@ -1673,6 +1674,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               </div>
             );
           })()}
+
+      {/* ── 견적서 탭 ── */}
+      {adminTab === "quotes" && (
+        <QuoteListTab
+          token={token}
+          onToast={setToast}
+          adminUsers={adminUsers}
+        />
+      )}
 
       {/* ── 프로젝트 탭 ── */}
       {adminTab === "projects" && (

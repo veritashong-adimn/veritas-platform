@@ -92,7 +92,14 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
       .from(paymentsTable).where(eq(paymentsTable.status, "paid"));
     const paidProjectIds = new Set(paidRows.map(p => p.projectId));
 
-    // 프로젝트 + 견적 + 결제 데이터 병합
+    // 프로젝트별 작업 수 집계
+    const taskCountRows = await db.select({
+      projectId: tasksTable.projectId,
+      cnt: sql<number>`count(*)::int`,
+    }).from(tasksTable).groupBy(tasksTable.projectId);
+    const taskCountByProject = new Map(taskCountRows.map(r => [r.projectId, r.cnt]));
+
+    // 프로젝트 + 견적 + 결제 + 작업 데이터 병합
     let result = rows.reverse().map(p => ({
       ...p,
       quoteType: latestQuoteByProject.get(p.id)?.quoteType ?? null,
@@ -102,6 +109,7 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
       quoteStatus: latestQuoteByProject.get(p.id)?.status ?? null,
       hasQuote: latestQuoteByProject.has(p.id),
       hasPaid: paidProjectIds.has(p.id),
+      taskCount: taskCountByProject.get(p.id) ?? 0,
     }));
 
     // ── 기존 필터 ──
@@ -174,7 +182,9 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
     }
 
     // ── 빠른 필터 ──
-    if (quickFilter === "prepaid_deduction") {
+    if (quickFilter === "needs_assignment") {
+      result = result.filter(p => p.status === "approved" && (taskCountByProject.get(p.id) ?? 0) === 0);
+    } else if (quickFilter === "prepaid_deduction") {
       result = result.filter(p => p.quoteType === "prepaid_deduction");
     } else if (quickFilter === "accumulated_in_progress") {
       result = result.filter(p => p.quoteType === "accumulated_batch" && !p.hasPaid);
@@ -1146,6 +1156,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
     isCustomProduct?: boolean;
   };
   const {
+    title: quoteTitle,
     amount, items, note,
     taxDocumentType, taxCategory,
     quoteType, billingType, paymentMethod,
@@ -1154,6 +1165,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
     prepaidAccountId,
     batchPeriodStart, batchPeriodEnd,
   } = req.body as {
+    title?: string;
     amount?: number; items?: ItemInput[]; note?: string;
     taxDocumentType?: string; taxCategory?: string;
     quoteType?: string; billingType?: string; paymentMethod?: string;
@@ -1309,9 +1321,13 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
       ? batchProjectItems.length
       : (calcItems.length > 0 ? calcItems.length : undefined);
 
+    const qNum = await generateQuoteNumber();
+
     const result = await db.transaction(async tx => {
       const [quote] = await tx.insert(quotesTable).values({
         projectId, price: String(totalPrice), status: isRegeneration ? "pending" : "sent",
+        quoteNumber: qNum,
+        title: quoteTitle?.trim() || null,
         note: note?.trim() || null,
         taxDocumentType: taxDocumentType || "tax_invoice",
         taxCategory: taxCategory || "normal",
@@ -1420,6 +1436,266 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
   } catch (err) {
     req.log.error({ err }, "Admin: failed to create quote");
     res.status(500).json({ error: "견적 생성 실패." });
+  }
+});
+
+// ─── 견적번호 생성 헬퍼 (Q000001 ~ Q999999 순번 체계) ─────────────────────────
+async function generateQuoteNumber(): Promise<string> {
+  const [{ maxSeq }] = await db
+    .select({ maxSeq: sql<number | null>`COALESCE(MAX(CAST(SUBSTRING(${quotesTable.quoteNumber} FROM 2) AS INTEGER)), 0)` })
+    .from(quotesTable)
+    .where(sql`${quotesTable.quoteNumber} ~ '^Q[0-9]{6}$'`);
+  const seq = ((maxSeq ?? 0) + 1).toString().padStart(6, "0");
+  return `Q${seq}`;
+}
+
+// ─── 견적서 목록 조회 (전체 — 프로젝트 연결 여부 무관) ────────────────────────
+router.get("/admin/quotes", ...adminGuard, async (req, res) => {
+  try {
+    const { companyId: companyIdQ, status, quoteType: qtFilter, dateFrom, dateTo, page = "1", limit: limitQ = "50" } = req.query as Record<string, string>;
+    const pageNum = Math.max(1, Number(page));
+    const pageSize = Math.min(200, Math.max(1, Number(limitQ)));
+    const offset = (pageNum - 1) * pageSize;
+
+    const conditions: ReturnType<typeof eq>[] = [];
+    if (status && status !== "all") conditions.push(eq(quotesTable.status, status as any));
+    if (qtFilter && qtFilter !== "all") conditions.push(eq(quotesTable.quoteType, qtFilter));
+    if (dateFrom) conditions.push(gte(quotesTable.issueDate, dateFrom) as any);
+    if (dateTo)   conditions.push(lte(quotesTable.issueDate, dateTo) as any);
+
+    const rows = await db
+      .select({
+        id: quotesTable.id,
+        projectId: quotesTable.projectId,
+        quoteNumber: quotesTable.quoteNumber,
+        title: quotesTable.title,
+        price: quotesTable.price,
+        status: quotesTable.status,
+        quoteType: quotesTable.quoteType,
+        billingType: quotesTable.billingType,
+        issueDate: quotesTable.issueDate,
+        validUntil: quotesTable.validUntil,
+        createdAt: quotesTable.createdAt,
+        projectTitle: projectsTable.title,
+        projectStatus: projectsTable.status,
+        projectCompanyId: projectsTable.companyId,
+        companyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.companyId})`,
+        contactName: sql<string | null>`(SELECT name FROM contacts WHERE id = ${projectsTable.contactId})`,
+        adminName:   sql<string | null>`(SELECT name FROM users WHERE id = ${projectsTable.adminId})`,
+      })
+      .from(quotesTable)
+      .leftJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))
+      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .orderBy(desc(quotesTable.id))
+      .limit(pageSize)
+      .offset(offset);
+
+    // companyId 필터 (프로젝트 경유)
+    const filtered = companyIdQ && companyIdQ !== "all"
+      ? rows.filter(r => r.projectCompanyId === Number(companyIdQ))
+      : rows;
+
+    // 각 견적의 quote_items 첫 번째 상품명 조회 (표시용)
+    const quoteIds = filtered.map(r => r.id);
+    let firstItemMap = new Map<number, string>();
+    if (quoteIds.length > 0) {
+      const items = await db
+        .select({ quoteId: quoteItemsTable.quoteId, productName: quoteItemsTable.productName })
+        .from(quoteItemsTable)
+        .where(inArray(quoteItemsTable.quoteId, quoteIds))
+        .orderBy(quoteItemsTable.id);
+      for (const it of items) {
+        if (!firstItemMap.has(it.quoteId)) firstItemMap.set(it.quoteId, it.productName);
+      }
+    }
+
+    const result = filtered.map(r => ({
+      ...r,
+      firstProductName: firstItemMap.get(r.id) ?? null,
+    }));
+
+    res.json({ quotes: result, total: result.length });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch quotes");
+    res.status(500).json({ error: "견적 목록 조회 실패." });
+  }
+});
+
+// ─── 독립 견적서 생성 (프로젝트 없이) ────────────────────────────────────────
+router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
+  const {
+    title, companyId, contactId, adminId,
+    amount, items, note,
+    taxDocumentType, taxCategory,
+    quoteType, billingType, paymentMethod,
+    validUntil, issueDate, invoiceDueDate, paymentDueDate,
+    prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
+    batchPeriodStart, batchPeriodEnd,
+  } = req.body as {
+    title?: string; companyId?: number; contactId?: number; adminId?: number;
+    amount?: number; items?: Array<{
+      productName: string; unit?: string; quantity?: number;
+      unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string;
+      itemType?: string; taxType?: string;
+    }>;
+    note?: string; taxDocumentType?: string; taxCategory?: string;
+    quoteType?: string; billingType?: string; paymentMethod?: string;
+    validUntil?: string; issueDate?: string; invoiceDueDate?: string; paymentDueDate?: string;
+    prepaidBalanceBefore?: number; prepaidUsageAmount?: number; prepaidBalanceAfter?: number;
+    batchPeriodStart?: string; batchPeriodEnd?: string;
+  };
+
+  if (!title?.trim()) { res.status(400).json({ error: "견적서명은 필수입니다." }); return; }
+
+  const hasItems = Array.isArray(items) && items.length > 0;
+  const totalPrice = hasItems
+    ? items!.reduce((s, it) => {
+        const qty = Number(it.quantity ?? 1);
+        const up = Number(it.unitPrice);
+        const tax = Math.round(Math.round(qty * up) * (it.taxRate ?? 0));
+        return s + Math.round(qty * up) + tax;
+      }, 0)
+    : Number(amount ?? 0);
+
+  if (totalPrice <= 0 && !hasItems) {
+    res.status(400).json({ error: "견적 금액 또는 품목 목록이 필요합니다." }); return;
+  }
+
+  try {
+    const stgQ = await getSettings();
+    const qNum = await generateQuoteNumber();
+
+    const result = await db.transaction(async tx => {
+      const [quote] = await tx.insert(quotesTable).values({
+        projectId: null,
+        quoteNumber: qNum,
+        title: title.trim(),
+        price: String(totalPrice),
+        status: "pending",
+        note: note?.trim() || null,
+        taxDocumentType: taxDocumentType || "tax_invoice",
+        taxCategory: taxCategory || "normal",
+        quoteType: quoteType || "b2b_standard",
+        billingType: billingType || stgQ.defaultBillingType,
+        paymentMethod: billingType === "prepay_upfront" ? (paymentMethod || "card") : null,
+        validUntil: validUntil || (() => {
+          const base = issueDate ? new Date(issueDate) : new Date();
+          base.setDate(base.getDate() + stgQ.quoteValidityDays);
+          return base.toISOString().slice(0, 10);
+        })(),
+        issueDate: issueDate || new Date().toISOString().slice(0, 10),
+        invoiceDueDate: invoiceDueDate || null,
+        paymentDueDate: paymentDueDate || (() => {
+          const base = new Date();
+          base.setDate(base.getDate() + stgQ.paymentDueDays);
+          return base.toISOString().slice(0, 10);
+        })(),
+        prepaidBalanceBefore: prepaidBalanceBefore != null ? String(prepaidBalanceBefore) : null,
+        prepaidUsageAmount: prepaidUsageAmount != null ? String(prepaidUsageAmount) : null,
+        prepaidBalanceAfter: prepaidBalanceAfter != null ? String(prepaidBalanceAfter) : null,
+        batchPeriodStart: batchPeriodStart || null,
+        batchPeriodEnd: batchPeriodEnd || null,
+        batchItemCount: hasItems ? items!.length : null,
+        equipmentCommon: null,
+      }).returning();
+
+      if (hasItems) {
+        const calcItems = items!.map(it => {
+          const qty = Number(it.quantity ?? 1);
+          const up = Number(it.unitPrice);
+          const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0);
+          return { ...it, supplyAmount, taxAmount, totalAmount };
+        });
+        await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
+          quoteId: quote.id,
+          productId: it.productId ?? null,
+          productName: it.productName,
+          unit: it.unit ?? "건",
+          quantity: String(it.quantity ?? 1),
+          unitPrice: String(it.unitPrice),
+          supplyAmount: String(it.supplyAmount),
+          taxAmount: String(it.taxAmount),
+          totalAmount: String(it.totalAmount),
+          memo: it.memo ?? null,
+          itemType: it.itemType ?? "translation",
+          taxType: it.taxType ?? "taxable",
+        })));
+      }
+      return quote;
+    });
+
+    req.log.info({ quoteId: result.id, quoteNumber: qNum, companyId }, "Admin: standalone quote created");
+    res.status(201).json(result);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to create standalone quote");
+    res.status(500).json({ error: "견적서 생성 실패." });
+  }
+});
+
+// ─── 견적 상태 변경 (approved → 프로젝트 자동 생성) ──────────────────────────
+router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
+  const quoteId = Number(req.params.quoteId);
+  if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 quote id." }); return; }
+
+  const { status } = req.body as { status?: string };
+  const validStatuses = ["pending", "sent", "approved", "rejected"] as const;
+  if (!status || !validStatuses.includes(status as any)) {
+    res.status(400).json({ error: `유효하지 않은 상태입니다. (${validStatuses.join(", ")})` }); return;
+  }
+
+  try {
+    const [quote] = await db
+      .select()
+      .from(quotesTable)
+      .where(eq(quotesTable.id, quoteId));
+    if (!quote) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }
+
+    const adminUser = (req as any).user as { id: number };
+
+    // approved 전환 + 프로젝트 미연결 → 프로젝트 자동 생성
+    if (status === "approved" && !quote.projectId) {
+      const projectTitle = quote.title?.trim() || `견적서 #${quoteId}`;
+
+      const result = await db.transaction(async tx => {
+        // 프로젝트 생성 (status = "approved" 로 바로 설정)
+        const [project] = await tx.insert(projectsTable).values({
+          userId: adminUser.id,
+          adminId: adminUser.id,
+          title: projectTitle,
+          status: "approved",
+        }).returning();
+
+        // 견적에 projectId 연결 + status 업데이트
+        const [updatedQuote] = await tx.update(quotesTable)
+          .set({ status: "approved", projectId: project.id })
+          .where(eq(quotesTable.id, quoteId))
+          .returning();
+
+        return { quote: updatedQuote, project };
+      });
+
+      await logEvent("project", result.project.id, "project_created", req.log, req.user ?? undefined);
+      req.log.info({ quoteId, projectId: result.project.id }, "Admin: quote approved → project auto-created");
+      res.json({ quote: result.quote, project: result.project, autoCreatedProject: true });
+      return;
+    }
+
+    // 일반 상태 변경 (프로젝트가 이미 연결된 경우 project status도 동기화)
+    const [updatedQuote] = await db.update(quotesTable)
+      .set({ status: status as any })
+      .where(eq(quotesTable.id, quoteId))
+      .returning();
+
+    if (quote.projectId && status === "approved") {
+      await db.update(projectsTable)
+        .set({ status: "approved" })
+        .where(eq(projectsTable.id, quote.projectId));
+    }
+
+    res.json({ quote: updatedQuote, autoCreatedProject: false });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to update quote status");
+    res.status(500).json({ error: "견적 상태 변경 실패." });
   }
 });
 

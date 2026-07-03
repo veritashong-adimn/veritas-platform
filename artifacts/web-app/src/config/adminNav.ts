@@ -63,6 +63,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     accentColor: "#3b82f6",
     perm: "menu.project",
     items: [
+      { id: "quotes",   label: "견적서",   icon: "📄", perm: "menu.project" },
       { id: "projects", label: "프로젝트", icon: "📋", perm: "menu.project" },
       { id: "tasks",    label: "작업",     icon: "⚙️", perm: "menu.project" },
     ],
@@ -118,6 +119,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
 
 export const ADMIN_PAGE_TITLE: Record<string, string> = {
   dashboard:   "대시보드",
+  quotes:      "견적서",
   projects:    "프로젝트",
   tasks:       "작업",
   payments:    "결제",
