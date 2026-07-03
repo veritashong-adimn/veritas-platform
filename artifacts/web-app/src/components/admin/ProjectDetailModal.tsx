@@ -151,6 +151,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [showCandidates, setShowCandidates] = useState(false);
   const [expandedCandidate, setExpandedCandidate] = useState<number | null>(null);
   const [expandedSearchResult, setExpandedSearchResult] = useState<number | null>(null);
+  const [expandedQuotes, setExpandedQuotes] = useState<Record<number, boolean>>({});
   const [translatorSearch, setTranslatorSearch] = useState("");
   const [translatorSearchResults, setTranslatorSearchResults] = useState<any[]>([]);
   const [searchingTranslator, setSearchingTranslator] = useState(false);
@@ -2220,7 +2221,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       const quoteTitle = (q as any).title ?? null;
                       const issueDate = (q as any).issueDate ?? null;
                       const items = Array.isArray((q as any).items) ? (q as any).items : [];
-                      const [expanded, setExpanded] = React.useState(false);
+                      const expanded = expandedQuotes[q.id] ?? false;
 
                       return (
                         <div key={q.id} style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden" }}>
@@ -2278,7 +2279,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           <div style={{ display: "flex", gap: 6, alignItems: "center", padding: "8px 14px", borderTop: "1px solid #f1f5f9", background: "#f8fafc" }}>
                             <button
                               type="button"
-                              onClick={() => setExpanded(v => !v)}
+                              onClick={() => setExpandedQuotes(prev => ({ ...prev, [q.id]: !(prev[q.id] ?? false) }))}
                               style={{ fontSize: 11, padding: "3px 10px", borderRadius: 5, border: "1px solid #e2e8f0", background: expanded ? "#ede9fe" : "#fff", color: expanded ? "#7c3aed" : "#374151", cursor: "pointer", fontWeight: 600 }}>
                               {expanded ? "▲ 접기" : "▼ 품목 보기"}
                               {items.length > 0 && <span style={{ marginLeft: 4, fontSize: 10, color: "#9ca3af" }}>({items.length}건)</span>}
