@@ -59,13 +59,12 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
   },
   {
     key: "project",
-    label: "프로젝트 관리",
+    label: "영업관리",
     accentColor: "#3b82f6",
     perm: "menu.project",
     items: [
-      { id: "quotes",   label: "견적서",   icon: "📄", perm: "menu.project" },
-      { id: "projects", label: "프로젝트", icon: "📋", perm: "menu.project" },
-      { id: "tasks",    label: "작업",     icon: "⚙️", perm: "menu.project" },
+      { id: "quotes",   label: "견적관리", icon: "📄", perm: "menu.project" },
+      { id: "projects", label: "판매관리", icon: "📋", perm: "menu.project" },
     ],
   },
   {
@@ -119,8 +118,8 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
 
 export const ADMIN_PAGE_TITLE: Record<string, string> = {
   dashboard:   "대시보드",
-  quotes:      "견적서",
-  projects:    "프로젝트",
+  quotes:      "견적관리",
+  projects:    "판매관리",
   tasks:       "작업",
   payments:    "결제",
   settlements: "정산",

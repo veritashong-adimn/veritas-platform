@@ -122,7 +122,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [] }: QuoteListTabPr
     <div style={{ padding: '0 0 40px' }}>
       {/* ── 페이지 헤더 (제목 + 액션 버튼) ── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#111827' }}>견적서 관리</h2>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#111827' }}>견적관리</h2>
         <div style={{ display: 'flex', gap: 8 }}>
           <PrimaryBtn onClick={() => setShowEditor(true)} style={{ fontSize: 13, padding: '7px 16px' }}>
             + 견적서 작성
