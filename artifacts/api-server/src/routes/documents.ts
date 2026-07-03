@@ -60,7 +60,9 @@ async function loadProjectData(projectId: number) {
   if (!project) return null;
 
   const [quotes, payments, settlements, rawNotes] = await Promise.all([
-    db.select().from(quotesTable).where(eq(quotesTable.projectId, projectId)).limit(1),
+    db.select().from(quotesTable)
+      .where(and(eq(quotesTable.projectId, projectId), eq(quotesTable.isCurrent, true)))
+      .limit(1),
     db.select().from(paymentsTable)
       .where(and(eq(paymentsTable.projectId, projectId), eq(paymentsTable.status, "paid")))
       .limit(1),
