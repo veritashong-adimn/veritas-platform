@@ -233,7 +233,6 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const [projectPage, setProjectPage] = useState(1);
   const [projectFinancialFilter, setProjectFinancialFilter] = useState<string>("all");
   const [projectQuickFilter, setProjectQuickFilter] = useState<string>("all");
-  const [projectQuoteTypeFilter, setProjectQuoteTypeFilter] = useState<string>("all");
   const [projectBillingTypeFilter, setProjectBillingTypeFilter] = useState<string>("all");
   const [projectPaymentDueDateFrom, setProjectPaymentDueDateFrom] = useState("");
   const [projectPaymentDueDateTo, setProjectPaymentDueDateTo] = useState("");
@@ -304,7 +303,6 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       if (assignedAdminFilter !== "all") params.set("assignedAdminId", assignedAdminFilter);
       if (projectFinancialFilter !== "all") params.set("financialStatus", projectFinancialFilter);
       if (projectQuickFilter !== "all") params.set("quickFilter", projectQuickFilter);
-      if (projectQuoteTypeFilter !== "all") params.set("quoteType", projectQuoteTypeFilter);
       if (projectBillingTypeFilter !== "all") params.set("billingType", projectBillingTypeFilter);
       if (projectPaymentDueDateFrom) params.set("paymentDueDateFrom", projectPaymentDueDateFrom);
       if (projectPaymentDueDateTo) params.set("paymentDueDateTo", projectPaymentDueDateTo);
@@ -314,7 +312,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       if (res.ok) setProjects(Array.isArray(data) ? data : []);
     } catch { setToast("오류: 프로젝트 조회 실패"); }
     finally { setLoading(false); }
-  }, [token, projectSearch, projectFilter, dateFrom, dateTo, assignedAdminFilter, projectFinancialFilter, projectQuickFilter, projectQuoteTypeFilter, projectBillingTypeFilter, projectPaymentDueDateFrom, projectPaymentDueDateTo, projectCompanyIdFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, projectSearch, projectFilter, dateFrom, dateTo, assignedAdminFilter, projectFinancialFilter, projectQuickFilter, projectBillingTypeFilter, projectPaymentDueDateFrom, projectPaymentDueDateTo, projectCompanyIdFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 거래처/담당자/고객 데이터 로드 (모달용) ──────────────────────────────
   const fetchModalData = useCallback(async () => {
@@ -703,16 +701,16 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
             <input
               value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
-              placeholder="제목, 이메일, 거래처, 담당자 검색..."
+              placeholder="판매번호 · 판매명 · 거래처 · 고객명 · 담당PM 검색"
               style={{ ...inputStyle, maxWidth: 320, flex: "1 1 180px", padding: "7px 11px", fontSize: 13 }}
               onKeyDown={e => e.key === "Enter" && fetchProjects()}
             />
             <PrimaryBtn onClick={fetchProjects} disabled={loading} style={{ padding: "7px 14px", fontSize: 13 }}>
               {loading ? "검색 중..." : "검색"}
             </PrimaryBtn>
-            {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all" || projectFinancialFilter !== "all" || projectQuickFilter !== "all" || projectQuoteTypeFilter !== "all" || projectBillingTypeFilter !== "all" || projectPaymentDueDateFrom || projectPaymentDueDateTo || projectCompanyIdFilter) && (
+            {(projectSearch || dateFrom || dateTo || assignedAdminFilter !== "all" || projectFilter !== "all" || projectFinancialFilter !== "all" || projectQuickFilter !== "all" || projectBillingTypeFilter !== "all" || projectPaymentDueDateFrom || projectPaymentDueDateTo || projectCompanyIdFilter) && (
               <button
-                onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectFinancialFilter("all"); setProjectQuickFilter("all"); setProjectQuoteTypeFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }}
+                onClick={() => { setProjectSearch(""); setDateFrom(""); setDateTo(""); setAssignedAdminFilter("all"); setProjectFilter("all"); setProjectFinancialFilter("all"); setProjectQuickFilter("all"); setProjectBillingTypeFilter("all"); setProjectPaymentDueDateFrom(""); setProjectPaymentDueDateTo(""); setProjectCompanyIdFilter(""); setProjectPage(1); }}
                 style={{ padding: "7px 12px", fontSize: 12, fontWeight: 700, background: "#fef2f2", color: "#dc2626", border: "1.5px solid #fca5a5", borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", gap: 4 }}>
                 ✕ 필터 초기화
               </button>
@@ -798,20 +796,6 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                     />
                   </div>
                   <div>
-                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>견적 유형</div>
-                    <ClickSelect
-                      value={projectQuoteTypeFilter}
-                      onChange={v => { setProjectQuoteTypeFilter(v); setProjectPage(1); }}
-                      style={{ width: "100%" }}
-                      triggerStyle={{ width: "100%", fontSize: 11 }}
-                      options={[
-                        { value: "all", label: "전체" }, { value: "b2b_standard", label: "B2B 표준" },
-                        { value: "b2c_prepaid", label: "차감 견적서" }, { value: "prepaid_deduction", label: "차감 견적서(구)" },
-                        { value: "accumulated_batch", label: "누적 견적" },
-                      ]}
-                    />
-                  </div>
-                  <div>
                     <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>청구 방식</div>
                     <ClickSelect
                       value={projectBillingTypeFilter}
@@ -828,7 +812,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                 </div>
                 <div style={{ display: "flex", gap: 10 }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>생성일</div>
+                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>등록일</div>
                     <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
                       <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
                         style={{ ...inputStyle, flex: 1, padding: "3px 6px", fontSize: 11 }} />
