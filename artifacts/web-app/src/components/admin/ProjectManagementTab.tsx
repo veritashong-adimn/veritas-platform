@@ -743,33 +743,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
           <div style={{ overflow: "hidden", maxHeight: showAdvancedFilter ? "400px" : "0", transition: "max-height 320ms cubic-bezier(0.22, 1, 0.36, 1)" }}>
             {showAdvancedFilter && (
               <div style={{ marginTop: 4, borderTop: "1px solid #f0f0f0", paddingTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>담당PM</div>
-                    <ClickSelect
-                      value={assignedAdminFilter}
-                      onChange={setAssignedAdminFilter}
-                      style={{ width: "100%" }}
-                      triggerStyle={{ width: "100%", fontSize: 11 }}
-                      options={[
-                        { value: "all", label: "전체 담당자" },
-                        ...adminUsers.map(a => ({ value: String(a.id), label: a.name ?? a.email })),
-                      ]}
-                    />
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>거래처</div>
-                    <ClickSelect
-                      value={projectCompanyIdFilter}
-                      onChange={v => { setProjectCompanyIdFilter(v); setProjectPage(1); }}
-                      style={{ width: "100%" }}
-                      triggerStyle={{ width: "100%", fontSize: 11 }}
-                      options={[
-                        { value: "", label: "전체 거래처" },
-                        ...companies.map(c => ({ value: String(c.id), label: c.name })),
-                      ]}
-                    />
-                  </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <div>
                     <div style={{ fontSize: 11, fontWeight: 500, color: "#9ca3af", marginBottom: 4 }}>재무 상태</div>
                     <ClickSelect
