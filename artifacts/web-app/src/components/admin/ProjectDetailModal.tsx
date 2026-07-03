@@ -197,6 +197,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [completedEditForce, setCompletedEditForce] = useState(false);
 
   // 견적 생성
+  const [quoteVersionReason, setQuoteVersionReason] = useState("최초 견적");
   const [quoteAmount, setQuoteAmount] = useState("");
   const [quoteNote, setQuoteNote] = useState("");
   const [quoteTaxDocType, setQuoteTaxDocType] = useState<"tax_invoice" | "zero_tax_invoice" | "bill">("tax_invoice");
@@ -1003,6 +1004,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       // 배치 기간 (필요시 본문에 추가)
       if (quoteBatchStart) body.batchPeriodStart = quoteBatchStart;
       if (quoteBatchEnd) body.batchPeriodEnd = quoteBatchEnd;
+      if (quoteVersionReason.trim()) body.versionReason = quoteVersionReason.trim();
       const res = await fetch(api(`/api/admin/projects/${projectId}/quote`), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1038,6 +1040,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       setQuotePrepaidUsage(""); setSelectedPrepaidAcctId(null); setCompPrepaidAccounts([]); setAcctLedger([]);
       setQuoteBatchStart(""); setQuoteBatchEnd(""); setBatchCandidates([]); setBatchSelected(new Set()); setBatchQueried(false);
       setQuoteBillingType("postpaid_per_project"); setQuotePaymentMethod("card");
+      setQuoteVersionReason("견적 변경");
       await loadDetail(); onRefresh();
     } catch { onToast("오류: 견적 생성 실패"); }
     finally { setCreatingQuote(false); }
@@ -2168,11 +2171,11 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     연결된 견적서 ({detail.quotes.length})
                   </p>
                   <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    {!["cancelled"].includes(detail.status) && detail.quotes.length > 0 && (
+                    {!["cancelled"].includes(detail.status) && (
                       <button
                         onClick={() => setShowQuoteEditorModal(true)}
                         style={{ fontSize: 11, fontWeight: 700, color: "#7c3aed", background: "#f5f3ff", border: "1px solid #d8b4fe", borderRadius: 6, padding: "4px 11px", cursor: "pointer" }}>
-                        ✏️ 견적 수정
+                        {detail.quotes.length > 0 ? "📋 새 버전 생성" : "📋 견적 작성"}
                       </button>
                     )}
                     <span style={{ fontSize: 11, color: "#9ca3af" }}>
@@ -2478,6 +2481,65 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         );
                       })}
                     </>
+                  );
+                })()}
+
+                {/* ── 견적 Version 이력 ── */}
+                {(() => {
+                  const versions = (detail as any).quoteVersions as Array<{
+                    id: number; version: number; isCurrent: boolean;
+                    versionReason: string | null; price: string;
+                    status: string; quoteNumber: string | null;
+                    quoteType: string | null; createdAt: string;
+                  }> | undefined;
+                  if (!versions || versions.length <= 1) return null;
+                  const statusLabel: Record<string, string> = { pending: "대기", sent: "발송", approved: "승인", rejected: "반려" };
+                  return (
+                    <div style={{ marginTop: 18, marginBottom: 4 }}>
+                      <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#374151", borderLeft: "3px solid #d1d5db", paddingLeft: 8 }}>
+                        견적 Version 이력
+                      </p>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                        {versions.map((v, idx) => (
+                          <div key={v.id} style={{
+                            display: "flex", alignItems: "flex-start", gap: 10,
+                            padding: "8px 0", borderBottom: idx < versions.length - 1 ? "1px dashed #e5e7eb" : "none",
+                          }}>
+                            {/* 버전 뱃지 */}
+                            <div style={{ flexShrink: 0, width: 32, textAlign: "center" }}>
+                              <span style={{
+                                fontSize: 11, fontWeight: 800,
+                                color: v.isCurrent ? "#7c3aed" : "#9ca3af",
+                                background: v.isCurrent ? "#f5f3ff" : "#f3f4f6",
+                                border: `1px solid ${v.isCurrent ? "#d8b4fe" : "#e5e7eb"}`,
+                                borderRadius: 6, padding: "2px 5px",
+                              }}>V{v.version}</span>
+                            </div>
+                            {/* 내용 */}
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: v.isCurrent ? "#111827" : "#6b7280" }}>
+                                  {v.versionReason || "—"}
+                                </span>
+                                {v.isCurrent && (
+                                  <span style={{ fontSize: 10, fontWeight: 700, background: "#7c3aed", color: "#fff", borderRadius: 4, padding: "1px 5px" }}>현재</span>
+                                )}
+                                <span style={{ fontSize: 10, color: "#9ca3af" }}>
+                                  {statusLabel[v.status] ?? v.status}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
+                                {Number(v.price).toLocaleString("ko-KR")}원
+                                {v.quoteNumber && <span style={{ marginLeft: 6 }}>{v.quoteNumber}</span>}
+                                <span style={{ marginLeft: 6 }}>
+                                  {new Date(v.createdAt).toLocaleDateString("ko-KR")}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   );
                 })()}
 

@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, numeric, timestamp, pgEnum, text, varchar, date } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, numeric, timestamp, pgEnum, text, varchar, date, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
@@ -49,6 +49,12 @@ export const quotesTable = pgTable("quotes", {
 
   // ── 장비 공통 설정 (JSON string) ────────────────────────
   equipmentCommon: text("equipment_common"),
+
+  // ── Version Engine ──────────────────────────────────────
+  version: integer("version").notNull().default(1),
+  isCurrent: boolean("is_current").notNull().default(true),
+  versionReason: text("version_reason"),
+  parentVersionId: integer("parent_version_id"),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });

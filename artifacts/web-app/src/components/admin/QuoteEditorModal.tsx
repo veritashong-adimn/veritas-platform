@@ -172,6 +172,7 @@ export function QuoteEditorModal({
   const [quoteType,    setQuoteType]    = useState<QuoteType>('b2b_standard');
   const [vatType,      setVatType]      = useState<VatType>('taxable');
   const [note,         setNote]         = useState('');
+  const [versionReason, setVersionReason] = useState('');
 
   // ── 견적 항목 ───────────────────────────────────────────────────────────────
   const [items, setItems] = useState<QuoteItemForm[]>([defaultItem()]);
@@ -295,7 +296,7 @@ export function QuoteEditorModal({
       // ── 기존 프로젝트에 견적 추가 ──────────────────────────────────────────
       const res = await fetch(api(`/api/admin/projects/${projectId}/quote`), {
         method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...commonBody, title: title.trim() || undefined }),
+        body: JSON.stringify({ ...commonBody, title: title.trim() || undefined, versionReason: versionReason.trim() || undefined }),
       });
       const data = await res.json();
       if (!res.ok) { onToast(`견적 저장 실패: ${data.error}`); return; }
@@ -537,6 +538,19 @@ export function QuoteEditorModal({
           <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="견적 관련 메모 또는 안내 사항"
             rows={2} style={{ ...inp, resize: 'vertical', fontFamily: 'inherit' }} />
         </div>
+
+        {/* 버전 변경 사유 (projectId 있을 때만) */}
+        {projectId !== null && (
+          <div style={{ background: '#fffbeb', borderRadius: 8, padding: '10px 14px', border: '1px solid #fde68a' }}>
+            <label style={{ fontSize: 11, fontWeight: 700, color: '#92400e', display: 'block', marginBottom: 5 }}>
+              버전 변경 사유
+              <span style={{ marginLeft: 4, fontWeight: 400, color: '#b45309' }}>(저장 시 새 Version으로 기록됩니다)</span>
+            </label>
+            <input value={versionReason} onChange={e => setVersionReason(e.target.value)}
+              placeholder="예: 최초 견적 / 일정 변경 / 금액 수정 / 고객 요청 / 장비 추가"
+              style={{ ...inp, background: '#fff' }} />
+          </div>
+        )}
 
         {/* ── D. 액션 버튼 ───────────────────────────────────────────────────── */}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', paddingTop: 4, borderTop: '1px solid #f0f2f5' }}>

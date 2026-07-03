@@ -284,13 +284,16 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
       return;
     }
 
-    const [quotes, payments, rawTasks, settlements, logs, notes, communications] = await Promise.all([
-      db.select().from(quotesTable).where(eq(quotesTable.projectId, projectId)).then(qs =>
-        Promise.all(qs.map(async q => {
-          const items = await db.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, q.id)).orderBy(quoteItemsTable.id);
-          return { ...q, items };
-        }))
-      ),
+    const [quotes, payments, rawTasks, settlements, logs, notes, communications, quoteVersions] = await Promise.all([
+      // 현재 버전(isCurrent=true)만 조회 — 기존 코드 backward compat
+      db.select().from(quotesTable)
+        .where(and(eq(quotesTable.projectId, projectId), eq(quotesTable.isCurrent, true)))
+        .then(qs =>
+          Promise.all(qs.map(async q => {
+            const items = await db.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, q.id)).orderBy(quoteItemsTable.id);
+            return { ...q, items };
+          }))
+        ),
       db.select().from(paymentsTable).where(eq(paymentsTable.projectId, projectId)),
       db
         .select({
@@ -321,6 +324,22 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
         .from(communicationsTable)
         .where(eq(communicationsTable.projectId, projectId))
         .orderBy(communicationsTable.createdAt),
+      // 전체 버전 이력 요약 (version DESC)
+      db.select({
+        id: quotesTable.id,
+        version: quotesTable.version,
+        isCurrent: quotesTable.isCurrent,
+        versionReason: quotesTable.versionReason,
+        parentVersionId: quotesTable.parentVersionId,
+        price: quotesTable.price,
+        status: quotesTable.status,
+        quoteNumber: quotesTable.quoteNumber,
+        title: quotesTable.title,
+        quoteType: quotesTable.quoteType,
+        createdAt: quotesTable.createdAt,
+      }).from(quotesTable)
+        .where(eq(quotesTable.projectId, projectId))
+        .orderBy(desc(quotesTable.version)),
     ]);
 
     // 거래처 + 담당자
@@ -336,14 +355,15 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
           .where(eq(projectsTable.companyId, project.companyId));
         const companyProjectIds = companyProjects.map(p => p.id);
 
-        // 최신 선입금 잔액 (prepaid_balance_after 기준)
+        // 최신 선입금 잔액 (prepaid_balance_after 기준 — isCurrent=true만)
         const [lastPrepaidQuote] = await db
           .select({ prepaidBalanceAfter: quotesTable.prepaidBalanceAfter })
           .from(quotesTable)
           .innerJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))
           .where(and(
             eq(projectsTable.companyId, project.companyId),
-            sql`${quotesTable.quoteType} IN ('prepaid_deduction', 'b2c_prepaid')`
+            sql`${quotesTable.quoteType} IN ('prepaid_deduction', 'b2c_prepaid')`,
+            eq(quotesTable.isCurrent, true)
           ))
           .orderBy(desc(quotesTable.id))
           .limit(1);
@@ -360,17 +380,19 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
             .from(quotesTable)
             .where(and(
               inArray(quotesTable.projectId, companyProjectIds),
-              sql`${quotesTable.quoteType} = 'b2c_prepaid'`
+              sql`${quotesTable.quoteType} = 'b2c_prepaid'`,
+              eq(quotesTable.isCurrent, true)
             ));
           prepaidTotalDeposited = depRow?.total ?? 0;
 
-          // 누적 사용액 (prepaid_deduction 견적의 usage_amount 합산)
+          // 누적 사용액 (prepaid_deduction 견적의 usage_amount 합산 — isCurrent=true만)
           const [usedRow] = await db
             .select({ total: sql<number>`COALESCE(SUM(${quotesTable.prepaidUsageAmount}), 0)::int` })
             .from(quotesTable)
             .where(and(
               inArray(quotesTable.projectId, companyProjectIds),
-              sql`${quotesTable.quoteType} = 'prepaid_deduction'`
+              sql`${quotesTable.quoteType} = 'prepaid_deduction'`,
+              eq(quotesTable.isCurrent, true)
             ));
           prepaidTotalUsed = usedRow?.total ?? 0;
         }
@@ -400,12 +422,35 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
     );
 
     res.json({
-      ...project, quotes, payments, tasks, settlements, logs, notes, communications,
+      ...project, quotes, quoteVersions, payments, tasks, settlements, logs, notes, communications,
       company, contact,
     });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch project detail");
     res.status(500).json({ error: "프로젝트 상세 조회 실패." });
+  }
+});
+
+// ─── 견적 Version 이력 전체 조회 ──────────────────────────────────────────────
+router.get("/admin/projects/:id/quote-versions", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 project id." }); return;
+  }
+  try {
+    const versions = await db.select().from(quotesTable)
+      .where(eq(quotesTable.projectId, projectId))
+      .orderBy(desc(quotesTable.version));
+    const versionsWithItems = await Promise.all(versions.map(async q => {
+      const items = await db.select().from(quoteItemsTable)
+        .where(eq(quoteItemsTable.quoteId, q.id))
+        .orderBy(quoteItemsTable.id);
+      return { ...q, items };
+    }));
+    res.json(versionsWithItems);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch quote versions");
+    res.status(500).json({ error: "견적 버전 이력 조회 실패." });
   }
 });
 
@@ -1185,6 +1230,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
     prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
     prepaidAccountId,
     batchPeriodStart, batchPeriodEnd,
+    versionReason,
   } = req.body as {
     title?: string;
     amount?: number; items?: ItemInput[]; note?: string;
@@ -1195,6 +1241,7 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
     prepaidBalanceBefore?: number; prepaidUsageAmount?: number; prepaidBalanceAfter?: number;
     prepaidAccountId?: number;
     batchPeriodStart?: string; batchPeriodEnd?: string;
+    versionReason?: string;
   };
   const selectedProjectIds: number[] = Array.isArray(req.body.selectedProjectIds)
     ? (req.body.selectedProjectIds as unknown[]).map(Number).filter(n => !isNaN(n) && n > 0)
@@ -1255,7 +1302,8 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
           .innerJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))
           .where(and(
             eq(projectsTable.companyId, project.companyId),
-            sql`${quotesTable.quoteType} IN ('prepaid_deduction', 'b2c_prepaid')`
+            sql`${quotesTable.quoteType} IN ('prepaid_deduction', 'b2c_prepaid')`,
+            eq(quotesTable.isCurrent, true)
           ))
           .orderBy(desc(quotesTable.id))
           .limit(1);
@@ -1298,8 +1346,16 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
       }
     }
 
-    // 기존 견적 삭제 (재생성)
-    await db.delete(quotesTable).where(eq(quotesTable.projectId, projectId));
+    // ── Version Engine: 현재 버전 조회 후 isCurrent=false 처리 ─────────────
+    const [currentQuote] = await db
+      .select({ id: quotesTable.id, version: quotesTable.version })
+      .from(quotesTable)
+      .where(and(eq(quotesTable.projectId, projectId), eq(quotesTable.isCurrent, true)));
+    const nextVersion = currentQuote ? currentQuote.version + 1 : 1;
+    const parentVersionId = currentQuote?.id ?? null;
+    if (currentQuote) {
+      await db.update(quotesTable).set({ isCurrent: false }).where(eq(quotesTable.id, currentQuote.id));
+    }
 
     // 품목 기반 합계 계산
     let totalPrice = isPrepaidDeduction ? (computedAmount ?? 0) : Number(amount ?? 0);
@@ -1379,6 +1435,10 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
         batchPeriodEnd: batchPeriodEnd || null,
         batchItemCount: computedBatchItemCount ?? null,
         equipmentCommon: null,
+        version: nextVersion,
+        isCurrent: true,
+        versionReason: versionReason?.trim() || (nextVersion === 1 ? "최초 견적" : "견적 변경"),
+        parentVersionId,
       }).returning();
 
       if (calcItems.length > 0) {
@@ -1452,7 +1512,8 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
       await tx.update(projectsTable).set({ status: "quoted" }).where(eq(projectsTable.id, projectId));
       return quote;
     });
-    await logEvent("project", projectId, isRegeneration ? "quote_updated" : "quote_created", req.log, req.user ?? undefined);
+    const logMeta = JSON.stringify({ version: result.version, versionReason: result.versionReason });
+    await logEvent("project", projectId, nextVersion === 1 ? "quote_v1_created" : `quote_v${nextVersion}_created`, req.log, req.user ?? undefined, logMeta);
     res.status(201).json(result);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to create quote");
