@@ -64,19 +64,16 @@ function getUnitOptions(v: string) {
 
 const CHARS_PER_PAGE = 700;
 
-/** 글자수 → 페이지 수 자동 계산 (0.5단위 반올림)
- *  소수점: 0.0~0.1 → 내림, 0.2~0.5 → 0.5, 0.6~0.9 → 올림 */
-function calcPages(charCountStr: string): string {
+/** 글자수 → 페이지 수 (0.5단위 반올림): 0.0~0.1 내림 / 0.2~0.5 → 0.5 / 0.6~0.9 올림 */
+function calcPagesNum(charCountStr: string): number | null {
   const chars = Number(charCountStr.replace?.(/,/g, '') || 0);
-  if (!chars || chars <= 0) return '';
+  if (!chars || chars <= 0) return null;
   const raw   = chars / CHARS_PER_PAGE;
   const floor = Math.floor(raw);
   const dec   = raw - floor;
-  let pages: number;
-  if      (dec <= 0.1) pages = floor;
-  else if (dec <= 0.5) pages = floor + 0.5;
-  else                 pages = floor + 1;
-  return `${pages}페이지`;
+  if      (dec <= 0.1) return floor;
+  else if (dec <= 0.5) return floor + 0.5;
+  else                 return floor + 1;
 }
 
 // ─── 계산 ─────────────────────────────────────────────────────────────────────
@@ -339,8 +336,7 @@ function CountInput({ value, onChange, unit, placeholder, style }: {
 
 function ServiceFields({ it, update }: { it: QuoteItemForm; update: (p: Partial<QuoteItemForm>) => void }) {
   switch (it.productType) {
-    case 'translation': {
-      const pages = calcPages(it.charCount);
+    case 'translation':
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
           {/* 파일명 */}
@@ -352,19 +348,19 @@ function ServiceFields({ it, update }: { it: QuoteItemForm; update: (p: Partial<
           {/* 단어수 — 천 단위 콤마 + "단어" 자동 표시 */}
           <CountInput value={it.wordCount} onChange={v => update({ wordCount: v })}
             unit="단어" placeholder="단어수" style={rinp(72)} />
-          {/* 글자수 — 천 단위 콤마 + "글자" 자동 표시 */}
-          <CountInput value={it.charCount} onChange={v => update({ charCount: v })}
+          {/* 글자수 — 천 단위 콤마 + "글자" 자동 표시.
+              변경 시 수량·단위 자동 갱신 (700글자=1페이지, 0.5단위 반올림) */}
+          <CountInput value={it.charCount}
+            onChange={v => {
+              const n = calcPagesNum(v);
+              update({
+                charCount: v,
+                ...(n !== null ? { quantity: String(n), unit: '페이지' } : {}),
+              });
+            }}
             unit="글자" placeholder="글자수" style={rinp(72, { color: '#374151' })} />
-          {/* 페이지 자동 계산 (읽기 전용) */}
-          {pages && (
-            <span style={{ fontSize: 11, fontWeight: 600, color: '#2563eb', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6, padding: '3px 7px', whiteSpace: 'nowrap', flexShrink: 0 }}
-              title="700글자 = 1페이지 기준 자동 계산">
-              ≈ {pages}
-            </span>
-          )}
         </div>
       );
-    }
     case 'interpretation':
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
