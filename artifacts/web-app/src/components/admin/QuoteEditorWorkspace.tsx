@@ -44,9 +44,10 @@ export interface QuoteItemForm {
   interpretPlace:   string;
   interpreterCount: string;  // 투입 인원
   // 장비 전용
-  eventStartDate: string;
+  eventStartDate: string;  // 사용 시작일
+  eventEndDate:   string;  // 사용 종료일 (기간 사용)
   itemLocation:   string;
-  usagePeriod:    string;
+  usagePeriod:    string;  // 사용일수 (숫자, "일" 표시는 UI에서만)
 }
 
 interface Company   { id: number; name: string; divisionNames?: string[] }
@@ -100,7 +101,7 @@ function defaultItem(): QuoteItemForm {
     sourceLanguage: 'ko',
     fileName: '', fileFormat: '', wordCount: '', charCount: '',
     interpretDate: '', interpretEndDate: '', startTime: '', endTime: '', interpretPlace: '', interpreterCount: '',
-    eventStartDate: '', itemLocation: '', usagePeriod: '',
+    eventStartDate: '', eventEndDate: '', itemLocation: '', usagePeriod: '',
   };
 }
 function defaultItemForType(t: ServiceType): Partial<QuoteItemForm> {
@@ -142,7 +143,14 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
       };
     }
     case 'equipment':
-      return { ...base, eventStartDate: it.eventStartDate || undefined, itemLocation: it.itemLocation || undefined, usagePeriod: it.usagePeriod || undefined, memo: it.memo || undefined };
+      return {
+        ...base,
+        eventStartDate: it.eventStartDate || undefined,
+        eventEndDate:   it.eventEndDate   || undefined,
+        itemLocation:   it.itemLocation   || undefined,
+        usagePeriod:    it.usagePeriod    || undefined,  // 숫자값만 저장
+        memo:           it.memo           || undefined,
+      };
     default:
       return { ...base, memo: it.memo || undefined };
   }
@@ -569,10 +577,23 @@ function ServiceFields({ it, update, products }: {
       );
     case 'equipment':
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <input type="date" value={it.eventStartDate} onChange={e => update({ eventStartDate: e.target.value })} style={rinp(98)} title="장비 사용일" />
-          <input value={it.itemLocation} onChange={e => update({ itemLocation: e.target.value })} placeholder="사용 장소" style={{ ...rinp('auto'), flex: 1, minWidth: 80 }} title="장비 사용 장소" />
-          <input value={it.usagePeriod} onChange={e => update({ usagePeriod: e.target.value })} placeholder="사용기간" style={rinp(68)} title="사용 기간 (예: 1일, 반일)" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
+          {/* 사용 시작일 */}
+          <input type="date" value={it.eventStartDate}
+            onChange={e => update({ eventStartDate: e.target.value })}
+            style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="사용 시작일" />
+          <span style={sep_s}>~</span>
+          {/* 사용 종료일 — 당일 사용이면 비워둠 */}
+          <input type="date" value={it.eventEndDate}
+            onChange={e => update({ eventEndDate: e.target.value })}
+            style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="사용 종료일 (당일 사용이면 비워두세요)" />
+          {/* 사용 장소 */}
+          <input value={it.itemLocation}
+            onChange={e => update({ itemLocation: e.target.value })}
+            placeholder="사용 장소" style={{ ...rinp('auto'), flex: 1, minWidth: 50 }} title="장비 사용 장소" />
+          {/* 사용일수 — 숫자 입력, "일" 자동 표시 (번역 단어수·글자수와 동일 UX) */}
+          <CountInput value={it.usagePeriod} onChange={v => update({ usagePeriod: v })}
+            unit="일" placeholder="사용일수" style={{ ...rinp(72), flexShrink: 0 }} />
         </div>
       );
     default:
@@ -752,7 +773,7 @@ const COL_H: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#6b7
 const SVC_FIELD_HINTS: Record<ServiceType, string> = {
   translation:    '언어 / 파일명 / 형식 / 단어수 / 글자수',
   interpretation: '시작일 ~ 종료일 / 시작시간 ~ 종료시간 / 장소 / 인원',
-  equipment:      '사용일 / 사용장소 / 사용기간',
+  equipment:      '시작일 ~ 종료일 / 사용 장소 / 사용일수',
   expense:        '',
 };
 
