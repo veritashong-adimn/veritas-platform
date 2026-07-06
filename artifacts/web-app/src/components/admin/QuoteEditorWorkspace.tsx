@@ -9,6 +9,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api, Product } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect, NumericInput } from '../ui';
+import { dsInput, dsColH, dsRow, dsAmount, C, TBL } from '../../lib/ds';
 import {
   getPolicy, getActivePolicies, validateCounts, calcPagesFromStr,
   type ValidationResult,
@@ -171,21 +172,15 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
   }
 }
 
-// ─── 공통 인풋 스타일 ─────────────────────────────────────────────────────────
+// ─── 공통 인풋 스타일 — DS Compact 스케일 ────────────────────────────────────
+// dsInput()의 로컬 alias. 이 파일의 모든 Grid Row 입력칸에 사용.
+const rinp = dsInput;
+const sep_s: React.CSSProperties = { flexShrink: 0, fontSize: 11, color: C.textMuted, userSelect: 'none' };
 
-const rinp = (w: number | string = '100%', x: React.CSSProperties = {}): React.CSSProperties => ({
-  width: typeof w === 'number' ? w : w, boxSizing: 'border-box', border: '1px solid #d1d5db',
-  borderRadius: 6, padding: '5px 7px', fontSize: 13, outline: 'none', minWidth: 0, background: '#fff', ...x,
-});
-const sep_s: React.CSSProperties = { flexShrink: 0, fontSize: 11, color: '#9ca3af', userSelect: 'none' };
-
-// ─── 상품정보 Table Grid 정의 ─────────────────────────────────────────────────
+// ─── 상품정보 Table Grid 정의 — DS TBL 토큰 기반 ─────────────────────────────
 // Header와 모든 Body Row가 동일한 grid-template-columns를 공유 → 컬럼 폭 변경 시 1곳만 수정
 const TABLE_COLS = '82px 60px 170px 1fr 28px 72px 64px 112px 112px minmax(130px, 220px)';
-const tblRow: React.CSSProperties = {
-  display: 'grid', gridTemplateColumns: TABLE_COLS,
-  columnGap: 5, padding: '4px 8px', alignItems: 'center',
-};
+const tblRow: React.CSSProperties = dsRow(TABLE_COLS);
 
 // ─── 검색 팝업 ────────────────────────────────────────────────────────────────
 
@@ -914,7 +909,7 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
         </div>
 
         {/* ⑨ 공급가액 */}
-        <div style={{ textAlign: 'right', fontWeight: 600, color: supply > 0 ? '#1e3a5f' : '#d1d5db', fontSize: 13, whiteSpace: 'nowrap', paddingRight: 6 }}>
+        <div style={dsAmount(supply > 0, { paddingRight: 6 })}>
           {supply > 0 ? supply.toLocaleString() + '원' : '—'}
         </div>
 
@@ -977,9 +972,9 @@ function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint }: {
   );
 }
 
-// ─── 컬럼 헤더 레이블 스타일 ─────────────────────────────────────────────────
+// ─── 컬럼 헤더 레이블 스타일 — DS dsColH 기반 ────────────────────────────────
 
-const COL_H: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: '#374151', textAlign: 'center' };
+const COL_H: React.CSSProperties = dsColH('center');
 
 const SVC_FIELD_HINTS: Record<ServiceType, string> = {
   translation:    '언어 / 파일명 / 파일형식 / 단어수 / 글자수',

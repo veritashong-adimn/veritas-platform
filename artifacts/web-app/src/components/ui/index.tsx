@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { STATUS_LABEL, STATUS_STYLE, ROLE_LABEL, ROLE_STYLE, Role } from "../../lib/constants";
+import { C, BD, BTN, TYPO, SP, type BtnVariant, type BtnSize } from "../../lib/ds";
 
 export const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", border: "1px solid #e5e7eb", borderRadius: 8,
@@ -679,6 +680,81 @@ export function NumericInput({
           fontSize: 12, pointerEvents: "none", userSelect: "none",
           lineHeight: 1, whiteSpace: "nowrap",
         }}>{suffix}</span>
+      )}
+    </div>
+  );
+}
+
+// ─── DsButton — VERITAS Design System 표준 버튼 ──────────────────────────────
+// variant: primary | secondary | outline | ghost | danger | ai
+// size:    sm (28px) | md (32px) | lg (38px)
+// 모든 화면의 신규 버튼은 이 컴포넌트를 사용한다.
+
+export function DsButton({
+  children, variant = 'primary', size = 'md',
+  onClick, disabled = false, type = 'button', style, icon,
+  title,
+}: {
+  children?: React.ReactNode;
+  variant?:  BtnVariant;
+  size?:     BtnSize;
+  onClick?:  () => void;
+  disabled?: boolean;
+  type?:     'button' | 'submit' | 'reset';
+  style?:    React.CSSProperties;
+  icon?:     React.ReactNode;
+  title?:    string;
+}) {
+  const [hov, setHov] = useState(false);
+  return (
+    <button
+      type={type}
+      title={title}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+      onMouseEnter={() => !disabled && setHov(true)}
+      onMouseLeave={() => setHov(false)}
+      style={{
+        ...BTN.base,
+        ...BTN.size[size],
+        ...BTN.variant[variant],
+        ...(hov && !disabled ? BTN.hover[variant] : {}),
+        opacity: disabled ? 0.5 : 1,
+        cursor:  disabled ? 'not-allowed' : 'pointer',
+        flexShrink: 0,
+        ...style,
+      }}
+    >
+      {icon && <span style={{ flexShrink: 0, lineHeight: 1, display: 'flex', alignItems: 'center' }}>{icon}</span>}
+      {children}
+    </button>
+  );
+}
+
+// ─── FieldLabel — VERITAS 표준 폼 레이블 ─────────────────────────────────────
+// compact: grid 내 레이블 (12px)  |  standard: 모달 폼 레이블 (13px)
+// 모든 폼 필드 레이블은 이 컴포넌트를 사용한다.
+
+export function FieldLabel({
+  children, required, hint, compact = false, style,
+}: {
+  children:  React.ReactNode;
+  required?: boolean;
+  hint?:     string;
+  compact?:  boolean;
+  style?:    React.CSSProperties;
+}) {
+  const base = compact ? TYPO.compactLabel : TYPO.fieldLabel;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: SP[2], marginBottom: SP[2], ...style }}>
+      <label style={{ ...base }}>
+        {children}
+        {required && (
+          <span style={{ color: C.danger, marginLeft: 2, fontWeight: 700 }}>*</span>
+        )}
+      </label>
+      {hint && (
+        <span style={{ ...TYPO.helper }}>{hint}</span>
       )}
     </div>
   );
