@@ -355,7 +355,7 @@ function UnitSelect({ value, onChange, serviceType }: { value: string; onChange:
   return (
     <div ref={ref} style={{ position: 'relative', width: '100%' }}>
       <button type="button" onClick={() => setOpen(v => !v)}
-        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? '#6366f1' : '#d1d5db'}`, borderRadius: 6, padding: '0 7px', fontSize: 13, background: '#fff', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
+        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, border: `1px solid ${open ? '#6366f1' : '#d1d5db'}`, borderRadius: 6, padding: '0 6px', fontSize: 13, background: '#fff', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value || '단위'}</span>
         <span style={{ fontSize: 8, color: '#9ca3af', flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
       </button>
@@ -854,7 +854,7 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
         </div>
 
         {/* ② 유형 */}
-        <div>
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
           <ServiceTypeSelector value={it.productType}
             onChange={t => updateItem(idx, { ...defaultItemForType(t), productId: null, productName: '' })} />
         </div>
@@ -894,7 +894,7 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
         {/* ⑥ 수량 */}
         <div>
           <NumericInput value={it.quantity} onChange={v => updateItem(idx, { quantity: v })} placeholder="1"
-            style={rinp()} />
+            style={rinp('100%', { textAlign: 'center' })} />
         </div>
 
         {/* ⑦ 단위 */}
@@ -906,7 +906,7 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
         <div title={it.productType === 'interpretation' ? '통역사 1인 기준 단가 (공급가액 = 투입인원 × 수량 × 단가)' : undefined}>
           <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })}
             placeholder={it.productType === 'interpretation' ? '1인 기준' : '0'} suffix="원"
-            style={rinp()} />
+            style={rinp('100%', { textAlign: 'right' })} />
         </div>
 
         {/* ⑨ 공급가액 */}
@@ -914,8 +914,8 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
           {supply > 0 ? supply.toLocaleString() + '원' : '—'}
         </div>
 
-        {/* ⑩ 비고 */}
-        <div>
+        {/* ⑩ 비고 — 공급가액과 명확히 구분 */}
+        <div style={{ borderLeft: '2px solid #e5e7eb', paddingLeft: 8 }}>
           <input value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
             placeholder="비고 (긴급, 감수 포함, 출장비 별도 등)"
             style={{ ...rinp('100%'), color: '#6b7280' }}
@@ -975,7 +975,7 @@ function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint }: {
 
 // ─── 컬럼 헤더 레이블 스타일 ─────────────────────────────────────────────────
 
-const COL_H: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#6b7280', textAlign: 'center' };
+const COL_H: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: '#374151', textAlign: 'center' };
 
 const SVC_FIELD_HINTS: Record<ServiceType, string> = {
   translation:    '언어 / 파일명 / 파일형식 / 단어수 / 글자수',
@@ -1174,9 +1174,9 @@ export function QuoteEditorWorkspace({
           <div style={{ ...COL_H }}>AI</div>
           <div style={{ ...COL_H }}>수량</div>
           <div style={{ ...COL_H }}>단위</div>
-          <div style={{ ...COL_H }}>단가</div>
+          <div style={{ ...COL_H, textAlign: 'right' }}>단가</div>
           <div style={{ ...COL_H, textAlign: 'right' }}>공급가액</div>
-          <div style={{ ...COL_H, textAlign: 'left' }}>비고</div>
+          <div style={{ ...COL_H, textAlign: 'left', borderLeft: '2px solid #e5e7eb', paddingLeft: 10 }}>비고</div>
         </div>
 
         {/* 항목 행 */}
