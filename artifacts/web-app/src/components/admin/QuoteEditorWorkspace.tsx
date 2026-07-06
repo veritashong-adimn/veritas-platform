@@ -466,6 +466,89 @@ function LangSelect({ value, onChange }: { value: string; onChange: (code: strin
   );
 }
 
+// ─── 파일형식 선택 ─────────────────────────────────────────────────────────
+// 번역 Row 원문 파일형식 — Popover 기반
+
+const FILE_FORMATS = [
+  'Word', '한글(HWP)', 'PDF', 'PPT', 'Excel', 'JPG', 'PNG', '책', '스캔본',
+] as const;
+
+const FILE_FORMAT_CUSTOM = '기타(직접입력)';
+
+/** 파일 확장자 → 파일형식 자동 감지 */
+function detectFormatFromExt(fileName: string): string {
+  const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+  const map: Record<string, string> = {
+    doc: 'Word', docx: 'Word',
+    hwp: '한글(HWP)', hwpx: '한글(HWP)',
+    pdf: 'PDF',
+    ppt: 'PPT', pptx: 'PPT',
+    xls: 'Excel', xlsx: 'Excel',
+    jpg: 'JPG', jpeg: 'JPG',
+    png: 'PNG',
+  };
+  return map[ext] ?? '';
+}
+
+function FileFormatSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const isCustom = value !== '' && !(FILE_FORMATS as readonly string[]).includes(value);
+  const btnLabel = isCustom ? FILE_FORMAT_CUSTOM : (value || '파일형식');
+
+  useEffect(() => {
+    if (!open) return;
+    const onMD  = (e: MouseEvent)    => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onMD);
+    document.addEventListener('keydown',   onKey);
+    return () => {
+      document.removeEventListener('mousedown', onMD);
+      document.removeEventListener('keydown',   onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: 'relative', flexShrink: 0, width: 104 }}>
+      <button type="button" onClick={() => setOpen(v => !v)}
+        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? '#2563eb' : '#d1d5db'}`, borderRadius: 6, padding: '0 7px', fontSize: 12, background: '#fff', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
+          {btnLabel}
+        </span>
+        <span style={{ fontSize: 8, flexShrink: 0, color: '#9ca3af' }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 114, padding: 4, maxHeight: 300, overflowY: 'auto' }}>
+          {value && (
+            <button type="button" onClick={() => { onChange(''); setOpen(false); }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: '#9ca3af', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2, whiteSpace: 'nowrap' }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#f3f4f6')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
+              선택 해제
+            </button>
+          )}
+          {FILE_FORMATS.map(f => (
+            <button key={f} type="button" onClick={() => { onChange(f); setOpen(false); }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === f ? '#eff6ff' : 'none', color: value === f ? '#1d4ed8' : '#374151', fontWeight: value === f ? 700 : 400, whiteSpace: 'nowrap' }}
+              onMouseEnter={e => { if (value !== f) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === f ? '#eff6ff' : 'none'; }}>
+              {f}
+            </button>
+          ))}
+          <div style={{ height: 1, background: '#f0f2f5', margin: '4px 6px' }} />
+          <button type="button" onClick={() => { onChange(FILE_FORMAT_CUSTOM); setOpen(false); }}
+            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: isCustom ? '#eff6ff' : 'none', color: isCustom ? '#2563eb' : '#6b7280', fontWeight: isCustom ? 700 : 400, whiteSpace: 'nowrap' }}
+            onMouseEnter={e => { if (!isCustom) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = isCustom ? '#eff6ff' : 'none'; }}>
+            {FILE_FORMAT_CUSTOM}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── 기타 서비스 유형 선택 ───────────────────────────────────────────────────
 // Popover 기반, mousedown 외부 클릭/ESC 시만 닫힘
 
@@ -609,12 +692,31 @@ function ServiceFields({ it, update, products }: {
           ) : (
             <LangSelect value={it.sourceLanguage} onChange={handleLangChange} />
           )}
-          {/* 파일명 */}
-          <input value={it.fileName} onChange={e => update({ fileName: e.target.value })}
-            placeholder="파일명" style={{ ...rinp('auto'), flex: 1, minWidth: 70 }} title="원본 파일명" />
-          {/* 파일형식 */}
-          <input value={it.fileFormat} onChange={e => update({ fileFormat: e.target.value })}
-            placeholder="형식" style={rinp(54)} title="파일 형식 (예: docx, pdf)" />
+          {/* 파일명 — 확장자 감지 시 파일형식 자동 설정 */}
+          <input value={it.fileName}
+            onChange={e => {
+              const name = e.target.value;
+              const upd: Partial<QuoteItemForm> = { fileName: name };
+              if (!it.fileFormat) {
+                const detected = detectFormatFromExt(name);
+                if (detected) upd.fileFormat = detected;
+              }
+              update(upd);
+            }}
+            placeholder="파일명" style={{ ...rinp('auto'), flex: 1, minWidth: 60 }} title="원본 파일명" />
+          {/* 파일형식 선택 (Popover) */}
+          <FileFormatSelect value={it.fileFormat} onChange={v => update({ fileFormat: v })} />
+          {/* 기타(직접입력) 모드일 때 텍스트 입력 */}
+          {(it.fileFormat === FILE_FORMAT_CUSTOM ||
+            (it.fileFormat !== '' && !(FILE_FORMATS as readonly string[]).includes(it.fileFormat))) && (
+            <input
+              value={it.fileFormat === FILE_FORMAT_CUSTOM ? '' : it.fileFormat}
+              onChange={e => update({ fileFormat: e.target.value || FILE_FORMAT_CUSTOM })}
+              placeholder="형식 입력 (예: InDesign, CAD)"
+              style={{ ...rinp(90), flexShrink: 0 }}
+              autoFocus={it.fileFormat === FILE_FORMAT_CUSTOM}
+            />
+          )}
           {/* 단어수 — 천 단위 콤마 + "단어". word 기준 언어 시 수량 자동 갱신 */}
           <CountInput value={it.wordCount} onChange={handleWordChange}
             unit="단어" placeholder="단어수" style={rinp(88)} />
@@ -876,7 +978,7 @@ function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint }: {
 const COL_H: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#6b7280', textAlign: 'center' };
 
 const SVC_FIELD_HINTS: Record<ServiceType, string> = {
-  translation:    '언어 / 파일명 / 형식 / 단어수 / 글자수',
+  translation:    '언어 / 파일명 / 파일형식 / 단어수 / 글자수',
   interpretation: '시작일 ~ 종료일 / 시작시간 ~ 종료시간 / 장소 / 인원',
   equipment:      '시작일 ~ 종료일 / 사용 장소 / 사용일수',
   expense:        '서비스유형 (공증·속기·녹취·더빙·편집·감수·DTP 등)',
