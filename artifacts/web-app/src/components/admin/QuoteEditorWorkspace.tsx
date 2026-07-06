@@ -474,9 +474,16 @@ const EXPENSE_TYPES = [
   '디자인', '인쇄', '배송', '출장', '실비', '기타',
 ] as const;
 
+/** 직접 입력 모드를 나타내는 sentinel 값 */
+const EXPENSE_CUSTOM = '기타(직접입력)';
+
 function ExpenseTypeSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+
+  // 미리 정의된 목록에 없는 비어 있지 않은 값 = 직접 입력 모드
+  const isCustom  = value !== '' && !(EXPENSE_TYPES as readonly string[]).includes(value);
+  const btnLabel  = isCustom ? EXPENSE_CUSTOM : (value || '서비스유형');
 
   useEffect(() => {
     if (!open) return;
@@ -491,16 +498,16 @@ function ExpenseTypeSelect({ value, onChange }: { value: string; onChange: (v: s
   }, [open]);
 
   return (
-    <div ref={ref} style={{ position: 'relative', flexShrink: 0, width: 110 }}>
+    <div ref={ref} style={{ position: 'relative', flexShrink: 0, width: 120 }}>
       <button type="button" onClick={() => setOpen(v => !v)}
         style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? '#6b7280' : '#d1d5db'}`, borderRadius: 6, padding: '0 7px', fontSize: 12, background: '#fff', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
-          {value || '서비스유형'}
+          {btnLabel}
         </span>
         <span style={{ fontSize: 8, flexShrink: 0, color: '#9ca3af' }}>{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 110, padding: 4, maxHeight: 300, overflowY: 'auto' }}>
+        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 130, padding: 4, maxHeight: 320, overflowY: 'auto' }}>
           {value && (
             <button type="button" onClick={() => { onChange(''); setOpen(false); }}
               style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: '#9ca3af', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2, whiteSpace: 'nowrap' }}
@@ -509,6 +516,7 @@ function ExpenseTypeSelect({ value, onChange }: { value: string; onChange: (v: s
               선택 해제
             </button>
           )}
+          {/* 미리 정의된 서비스 유형 */}
           {EXPENSE_TYPES.map(t => (
             <button key={t} type="button" onClick={() => { onChange(t); setOpen(false); }}
               style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === t ? '#f9fafb' : 'none', color: value === t ? '#111827' : '#374151', fontWeight: value === t ? 700 : 400, whiteSpace: 'nowrap' }}
@@ -517,6 +525,15 @@ function ExpenseTypeSelect({ value, onChange }: { value: string; onChange: (v: s
               {t}
             </button>
           ))}
+          {/* 구분선 */}
+          <div style={{ height: 1, background: '#f0f2f5', margin: '4px 6px' }} />
+          {/* 직접 입력 옵션 */}
+          <button type="button" onClick={() => { onChange(EXPENSE_CUSTOM); setOpen(false); }}
+            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: isCustom ? '#f0fdf4' : 'none', color: isCustom ? '#059669' : '#6b7280', fontWeight: isCustom ? 700 : 400, whiteSpace: 'nowrap' }}
+            onMouseEnter={e => { if (!isCustom) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = isCustom ? '#f0fdf4' : 'none'; }}>
+            {EXPENSE_CUSTOM}
+          </button>
         </div>
       )}
     </div>
@@ -662,12 +679,28 @@ function ServiceFields({ it, update, products }: {
             unit="일" placeholder="사용일수" style={{ ...rinp(72), flexShrink: 0 }} />
         </div>
       );
-    case 'expense':
+    case 'expense': {
+      // EXPENSE_CUSTOM sentinel 또는 미리 정의 목록 외 값 = 직접 입력 모드
+      const isCustomInput = it.expenseType === EXPENSE_CUSTOM ||
+        (it.expenseType !== '' && !(EXPENSE_TYPES as readonly string[]).includes(it.expenseType));
+      // 텍스트 입력란에 표시할 값 — sentinel 자체는 빈 문자열 표시
+      const customDisplayValue = it.expenseType === EXPENSE_CUSTOM ? '' : it.expenseType;
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <ExpenseTypeSelect value={it.expenseType} onChange={v => update({ expenseType: v })} />
+          {isCustomInput && (
+            <input
+              value={customDisplayValue}
+              onChange={e => update({ expenseType: e.target.value || EXPENSE_CUSTOM })}
+              placeholder="서비스명 입력 (예: 행사 운영, AI 음성합성)"
+              style={{ ...rinp('auto'), flex: 1, minWidth: 100 }}
+              // eslint-disable-next-line jsx-a11y/no-autofocus
+              autoFocus={it.expenseType === EXPENSE_CUSTOM}
+            />
+          )}
         </div>
       );
+    }
     default:
       return <div />;
   }
