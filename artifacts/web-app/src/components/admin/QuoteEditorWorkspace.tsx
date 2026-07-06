@@ -905,17 +905,17 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
         {/* ⑧ 단가 — 통역은 1인 기준 단가 */}
         <div title={it.productType === 'interpretation' ? '통역사 1인 기준 단가 (공급가액 = 투입인원 × 수량 × 단가)' : undefined}>
           <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })}
-            placeholder={it.productType === 'interpretation' ? '1인 기준' : '0'} suffix="원"
+            placeholder="0" suffix="원"
             style={rinp('100%', { textAlign: 'right' })} />
         </div>
 
         {/* ⑨ 공급가액 */}
-        <div style={{ textAlign: 'right', fontWeight: 600, color: supply > 0 ? '#1e3a5f' : '#d1d5db', fontSize: 13, whiteSpace: 'nowrap' }}>
+        <div style={{ textAlign: 'right', fontWeight: 600, color: supply > 0 ? '#1e3a5f' : '#d1d5db', fontSize: 13, whiteSpace: 'nowrap', paddingRight: 6 }}>
           {supply > 0 ? supply.toLocaleString() + '원' : '—'}
         </div>
 
         {/* ⑩ 비고 — 공급가액과 명확히 구분 */}
-        <div style={{ borderLeft: '2px solid #e5e7eb', paddingLeft: 8 }}>
+        <div style={{ borderLeft: '2px solid #e5e7eb', paddingLeft: 14 }}>
           <input value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
             placeholder="비고 (긴급, 감수 포함, 출장비 별도 등)"
             style={{ ...rinp('100%'), color: '#6b7280' }}
@@ -1175,8 +1175,8 @@ export function QuoteEditorWorkspace({
           <div style={{ ...COL_H }}>수량</div>
           <div style={{ ...COL_H }}>단위</div>
           <div style={{ ...COL_H, textAlign: 'right' }}>단가</div>
-          <div style={{ ...COL_H, textAlign: 'right' }}>공급가액</div>
-          <div style={{ ...COL_H, textAlign: 'left', borderLeft: '2px solid #e5e7eb', paddingLeft: 10 }}>비고</div>
+          <div style={{ ...COL_H, textAlign: 'right', paddingRight: 6 }}>공급가액</div>
+          <div style={{ ...COL_H, textAlign: 'left', borderLeft: '2px solid #e5e7eb', paddingLeft: 14 }}>비고</div>
         </div>
 
         {/* 항목 행 */}

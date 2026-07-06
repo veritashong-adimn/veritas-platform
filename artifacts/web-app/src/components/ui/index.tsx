@@ -671,11 +671,11 @@ export function NumericInput({
         placeholder={placeholder}
         disabled={disabled}
         inputMode="numeric"
-        style={{ width: "100%", boxSizing: "border-box", paddingRight: hasSuffix ? 32 : undefined, ...style }}
+        style={{ width: "100%", boxSizing: "border-box", ...style, paddingRight: hasSuffix ? 28 : undefined }}
       />
       {hasSuffix && (
         <span style={{
-          position: "absolute", right: 10, color: "#9ca3af",
+          position: "absolute", right: 8, color: "#6b7280",
           fontSize: 12, pointerEvents: "none", userSelect: "none",
           lineHeight: 1, whiteSpace: "nowrap",
         }}>{suffix}</span>
