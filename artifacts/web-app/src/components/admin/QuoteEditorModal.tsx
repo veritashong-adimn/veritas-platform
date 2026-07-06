@@ -223,7 +223,7 @@ export function QuoteEditorModal({
   // ── 상품 검색 ───────────────────────────────────────────────────────────────
   const productOptions = products.map(p => ({
     id: p.id,
-    label: p.displayName || p.name,
+    label: p.name,
     sub: p.code ?? undefined,
   }));
 
@@ -235,9 +235,9 @@ export function QuoteEditorModal({
     const p = pid != null ? products.find(pr => pr.id === pid) : null;
     updateItem(idx, {
       productId:   p?.id ?? null,
-      productName: p?.displayName || p?.name || '',
-      productType: (p?.type as QuoteItemForm['productType']) ?? 'translation',
-      unit: p?.defaultUnit ?? '건',
+      productName: p?.name || '',
+      productType: (p?.productType as QuoteItemForm['productType']) ?? 'translation',
+      unit: p?.unit ?? '건',
     });
   };
 

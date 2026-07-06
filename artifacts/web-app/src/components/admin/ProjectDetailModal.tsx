@@ -3,7 +3,7 @@ import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, CO
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 import { ReviewMemoPanel } from './ReviewMemoPanel';
 import { DraggableModal } from './DraggableModal';
-import { QuoteEditorModal } from './QuoteEditorModal';
+import { QuoteEditorWorkspace } from './QuoteEditorWorkspace';
 
 /* ────── SearchableSelect (거래처 검색용 공통 컴포넌트) ────── */
 type SSItem = { id: number; label: string; sub?: string };
@@ -3315,7 +3315,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     </DraggableModal>
 
     {showQuoteEditorModal && detail && (
-      <QuoteEditorModal
+      <QuoteEditorWorkspace
         token={token}
         projectId={projectId}
         initialCompanyId={(detail as any).companyId ?? null}

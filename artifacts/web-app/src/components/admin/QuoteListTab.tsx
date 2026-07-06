@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../../lib/constants';
 import { PrimaryBtn, ClickSelect } from '../ui';
-import { QuoteEditorModal } from './QuoteEditorModal';
+import { QuoteEditorWorkspace } from './QuoteEditorWorkspace';
 
 // ─── 타입 ──────────────────────────────────────────────────────────────────────
 interface QuoteRow {
@@ -359,7 +359,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
 
       {/* ── 견적서 작성 모달 ── */}
       {showEditor && (
-        <QuoteEditorModal
+        <QuoteEditorWorkspace
           token={token}
           projectId={null}
           onClose={() => setShowEditor(false)}
