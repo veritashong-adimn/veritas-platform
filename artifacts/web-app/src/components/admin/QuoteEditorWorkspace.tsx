@@ -339,10 +339,19 @@ function LangSelect({ value, onChange }: { value: string; onChange: (code: strin
 
 // ─── 서비스 유형별 동적 필드 ─────────────────────────────────────────────────
 
-function ServiceFields({ it, update }: { it: QuoteItemForm; update: (p: Partial<QuoteItemForm>) => void }) {
+function ServiceFields({ it, update, products }: {
+  it: QuoteItemForm;
+  update: (p: Partial<QuoteItemForm>) => void;
+  products: Product[];
+}) {
   switch (it.productType) {
     case 'translation': {
       const policy = getPolicy(it.sourceLanguage);
+
+      // 선택된 상품의 언어 정보 → 있으면 읽기 전용 표시, 없으면 수동 선택
+      const product       = it.productId !== null ? products.find(p => p.id === it.productId) ?? null : null;
+      const langFromProd  = !!product?.sourceLanguage;
+      const langLabel     = getPolicy(it.sourceLanguage)?.languageName ?? it.sourceLanguage;
 
       // 언어 변경 → 해당 언어 기준으로 수량·단위 자동 재계산
       const handleLangChange = (code: string) => {
@@ -385,8 +394,18 @@ function ServiceFields({ it, update }: { it: QuoteItemForm; update: (p: Partial<
 
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
-          {/* 언어 선택 → Language Policy 기준 자동 적용 */}
-          <LangSelect value={it.sourceLanguage} onChange={handleLangChange} />
+          {/* 언어: 상품에 언어 정보 있으면 읽기 전용 배지 / 없으면 수동 선택 */}
+          {langFromProd ? (
+            <div style={{ flexShrink: 0, width: 72, height: 28, display: 'flex', alignItems: 'center',
+              background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6,
+              padding: '0 6px', fontSize: 11, fontWeight: 600, color: '#1d4ed8',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={`상품에서 자동 설정: ${langLabel}`}>
+              {langLabel}
+            </div>
+          ) : (
+            <LangSelect value={it.sourceLanguage} onChange={handleLangChange} />
+          )}
           {/* 파일명 */}
           <input value={it.fileName} onChange={e => update({ fileName: e.target.value })}
             placeholder="파일명" style={{ ...rinp('auto'), flex: 1, minWidth: 60 }} title="원본 파일명" />
@@ -395,10 +414,10 @@ function ServiceFields({ it, update }: { it: QuoteItemForm; update: (p: Partial<
             placeholder="형식" style={rinp(48)} title="파일 형식 (예: docx, pdf)" />
           {/* 단어수 — 천 단위 콤마 + "단어". word 기준 언어 시 수량 자동 갱신 */}
           <CountInput value={it.wordCount} onChange={handleWordChange}
-            unit="단어" placeholder="단어수" style={rinp(68)} />
+            unit="단어" placeholder="단어수" style={rinp(90)} />
           {/* 글자수 — 천 단위 콤마 + "글자". char 기준 언어 시 수량 자동 갱신 */}
           <CountInput value={it.charCount} onChange={handleCharChange}
-            unit="글자" placeholder="글자수" style={rinp(68, { color: '#374151' })} />
+            unit="글자" placeholder="글자수" style={rinp(90, { color: '#374151' })} />
         </div>
       );
     }
@@ -484,7 +503,7 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
         </div>
 
         {/* ④ 서비스별 동적 필드 */}
-        <ServiceFields it={it} update={p => updateItem(idx, p)} />
+        <ServiceFields it={it} update={p => updateItem(idx, p)} products={products} />
 
         {/* ⑤ AI 교차검증 배지 (번역 전용) */}
         <div style={{ flexShrink: 0, width: 24, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -500,7 +519,7 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
         </div>
 
         {/* ⑥ 수량 */}
-        <div style={{ flexShrink: 0, width: 58 }}>
+        <div style={{ flexShrink: 0, width: 66 }}>
           <NumericInput value={it.quantity} onChange={v => updateItem(idx, { quantity: v })} placeholder="1" />
         </div>
 
@@ -510,12 +529,12 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
         </div>
 
         {/* ⑧ 단가 */}
-        <div style={{ flexShrink: 0, width: 90 }}>
+        <div style={{ flexShrink: 0, width: 112 }}>
           <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })} placeholder="0" suffix="원" />
         </div>
 
         {/* ⑨ 공급가액 */}
-        <div style={{ flexShrink: 0, width: 82, textAlign: 'right', fontWeight: 600, color: supply > 0 ? '#1e3a5f' : '#d1d5db', fontSize: 12, whiteSpace: 'nowrap' }}>
+        <div style={{ flexShrink: 0, width: 112, textAlign: 'right', fontWeight: 600, color: supply > 0 ? '#1e3a5f' : '#d1d5db', fontSize: 12, whiteSpace: 'nowrap' }}>
           {supply > 0 ? supply.toLocaleString() + '원' : '—'}
         </div>
 
@@ -771,10 +790,10 @@ export function QuoteEditorWorkspace({
           <div style={{ ...COL_H, width: 150, textAlign: 'left' }}>상품 🔍🧽</div>
           <div style={{ flex: 1, fontSize: 10, fontWeight: 700, color: '#9ca3af', minWidth: 0 }}>{fieldHint}</div>
           <div style={{ flexShrink: 0, width: 24, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'center' }}>AI</div>
-          <div style={{ ...COL_H, width: 58 }}>수량</div>
+          <div style={{ ...COL_H, width: 66 }}>수량</div>
           <div style={{ ...COL_H, width: 60 }}>단위</div>
-          <div style={{ ...COL_H, width: 90 }}>단가</div>
-          <div style={{ ...COL_H, width: 82, textAlign: 'right' }}>공급가액</div>
+          <div style={{ ...COL_H, width: 112 }}>단가</div>
+          <div style={{ ...COL_H, width: 112, textAlign: 'right' }}>공급가액</div>
           <div style={{ flex: 1, minWidth: 120, maxWidth: 220, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'left' }}>비고</div>
         </div>
 
