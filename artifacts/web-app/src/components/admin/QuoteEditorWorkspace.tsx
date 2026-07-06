@@ -1,9 +1,8 @@
 /**
- * QuoteEditorWorkspace — AI-First 견적 작성 Workspace (2차 개편)
+ * QuoteEditorWorkspace — AI-First 견적 작성 Workspace (3차 개편)
  *
- * 서비스 유형(번역/통역/장비/기타)별 입력 구조 전환.
- * quote_items 기존 컬럼(interpretDate, interpretPlace, eventStartDate 등) 활용.
- * Version Engine 및 저장 구조 100% 유지.
+ * 서비스 유형별 1행 입력 구조 + 언어쌍 제거 + 단위 선택형 + 비고 컬럼.
+ * Version Engine 및 저장 로직 100% 유지.
  */
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api, Product } from '../../lib/constants';
@@ -16,36 +15,37 @@ type VatType      = 'taxable' | 'exempt' | 'zero_rate';
 type CreationMode = 'direct' | 'ai';
 type ServiceType  = 'translation' | 'interpretation' | 'equipment' | 'expense';
 
-/** 견적 항목 폼 (서비스 유형별 전용 필드 포함) */
+/**
+ * 견적 항목 폼 — 서비스 유형별 전용 필드 포함.
+ * 언어쌍(출발어/도착어)은 상품 Master에서 자동 반영되므로 UI 입력 제거.
+ */
 export interface QuoteItemForm {
   // ── 공통 ─────────────────────────────────────────────────
   productId:    number | null;
   productName:  string;
   productType:  ServiceType;
-  unit:         string;
   quantity:     string;
+  unit:         string;
   unitPrice:    string;
   taxType:      VatType;
-  memo:         string;
+  memo:         string;   // 비고 (행별 특이사항)
 
   // ── 번역 전용 ────────────────────────────────────────────
-  sourceLanguage: string;  // languagePair 생성에 사용
-  targetLanguage: string;
-  wordCount:      string;  // 참고용 → memo 패킹
-  charCount:      string;  // 참고용 → memo 패킹
+  fileName:   string;  // 파일명
+  fileFormat: string;  // 파일형식 (예: docx, pdf)
+  wordCount:  string;  // 단어수 → memo 패킹
+  charCount:  string;  // 글자수 → memo 패킹
 
   // ── 통역 전용 ────────────────────────────────────────────
-  interpretDate:  string;  // → interpretDate
-  startTime:      string;  // ─┐ interpretDuration 패킹
-  endTime:        string;  // ─┘ "09:00~18:00"
-  interpretPlace: string;  // → interpretPlace
-  headcount:      string;  // → memo
+  interpretDate:  string;  // 행사일 → interpretDate
+  startTime:      string;  // 시작시간 ─┐ interpretDuration 패킹
+  endTime:        string;  // 종료시간 ─┘
+  interpretPlace: string;  // 장소 → interpretPlace
 
   // ── 장비 전용 ────────────────────────────────────────────
-  eventStartDate: string;  // → eventStartDate
-  itemLocation:   string;  // → itemLocation
-  quantityUnit:   string;  // → quantityUnit
-  usagePeriod:    string;  // → usagePeriod
+  eventStartDate: string;  // 사용일 → eventStartDate
+  itemLocation:   string;  // 사용장소 → itemLocation
+  usagePeriod:    string;  // 사용기간 → usagePeriod
 }
 
 interface Company   { id: number; name: string; divisionNames?: string[] }
@@ -61,12 +61,22 @@ const SVC_CFG: Record<ServiceType, { label: string; color: string; bg: string; b
   expense:        { label: '기타',   color: '#6b7280', bg: '#f9fafb', border: '#d1d5db', dot: '#9ca3af' },
 };
 
-const SVC_UNITS: Record<ServiceType, string> = {
+const SVC_DEFAULT_UNIT: Record<ServiceType, string> = {
   translation:    '건',
   interpretation: '시간',
   equipment:      '개',
   expense:        '건',
 };
+
+// ─── 단위 선택 목록 ───────────────────────────────────────────────────────────
+
+const BASE_UNITS = ['건', '페이지', '시간', '일', '명', '개', '회', '식', '단어', '글자'];
+
+function getUnitOptions(currentUnit: string): string[] {
+  return BASE_UNITS.includes(currentUnit) || !currentUnit
+    ? BASE_UNITS
+    : [currentUnit, ...BASE_UNITS];
+}
 
 // ─── 계산 ─────────────────────────────────────────────────────────────────────
 
@@ -93,15 +103,15 @@ function dateOffset(days: number) {
 function defaultItem(): QuoteItemForm {
   return {
     productId: null, productName: '', productType: 'translation',
-    unit: '건', quantity: '1', unitPrice: '', taxType: 'taxable', memo: '',
-    sourceLanguage: '', targetLanguage: '', wordCount: '', charCount: '',
-    interpretDate: '', startTime: '', endTime: '', interpretPlace: '', headcount: '',
-    eventStartDate: '', itemLocation: '', quantityUnit: '', usagePeriod: '',
+    quantity: '1', unit: '건', unitPrice: '', taxType: 'taxable', memo: '',
+    fileName: '', fileFormat: '', wordCount: '', charCount: '',
+    interpretDate: '', startTime: '', endTime: '', interpretPlace: '',
+    eventStartDate: '', itemLocation: '', usagePeriod: '',
   };
 }
 
 function defaultItemForType(type: ServiceType): Partial<QuoteItemForm> {
-  return { productType: type, unit: SVC_UNITS[type] };
+  return { productType: type, unit: SVC_DEFAULT_UNIT[type] };
 }
 
 // ─── 저장 시 API 항목 변환 ────────────────────────────────────────────────────
@@ -110,39 +120,35 @@ function toApiItem(it: QuoteItemForm, vatType: VatType) {
   const base = {
     productId:   it.productId ?? undefined,
     productName: it.productName.trim(),
-    unit:        it.unit || SVC_UNITS[it.productType],
+    unit:        it.unit || SVC_DEFAULT_UNIT[it.productType],
     quantity:    Number(it.quantity) || 1,
     unitPrice:   Number(it.unitPrice.replace?.(/,/g, '') || 0),
     taxRate:     (vatType === 'taxable' ? 0.1 : 0) as 0 | 0.1,
     taxType:     vatType,
     itemType:    it.productType,
-    memo:        it.memo || undefined,
   };
 
   switch (it.productType) {
     case 'translation': {
       const refParts = [
-        it.wordCount && `단어수: ${it.wordCount}`,
-        it.charCount && `글자수: ${it.charCount}`,
+        it.fileName    && `파일: ${it.fileName}`,
+        it.fileFormat  && `형식: ${it.fileFormat}`,
+        it.wordCount   && `단어수: ${it.wordCount}`,
+        it.charCount   && `글자수: ${it.charCount}`,
       ].filter(Boolean).join(' | ');
-      const langPair = [it.sourceLanguage.trim(), it.targetLanguage.trim()].filter(Boolean).join('→');
       return {
         ...base,
-        languagePair: langPair || undefined,
-        memo: [it.memo, refParts].filter(Boolean).join(' | ') || undefined,
+        memo: [it.memo, refParts].filter(Boolean).join(' / ') || undefined,
       };
     }
     case 'interpretation': {
-      const langPair = [it.sourceLanguage.trim(), it.targetLanguage.trim()].filter(Boolean).join('↔');
-      const dur      = [it.startTime, it.endTime].filter(Boolean).join('~');
-      const hcMemo   = it.headcount ? `인원: ${it.headcount}명` : '';
+      const dur = [it.startTime, it.endTime].filter(Boolean).join('~');
       return {
         ...base,
-        languagePair:     langPair || undefined,
-        interpretDate:    it.interpretDate   || undefined,
-        interpretPlace:   it.interpretPlace  || undefined,
+        interpretDate:     it.interpretDate  || undefined,
+        interpretPlace:    it.interpretPlace || undefined,
         interpretDuration: dur               || undefined,
-        memo: [it.memo, hcMemo].filter(Boolean).join(' | ') || undefined,
+        memo:              it.memo           || undefined,
       };
     }
     case 'equipment':
@@ -150,11 +156,11 @@ function toApiItem(it: QuoteItemForm, vatType: VatType) {
         ...base,
         eventStartDate: it.eventStartDate || undefined,
         itemLocation:   it.itemLocation   || undefined,
-        quantityUnit:   it.quantityUnit   || undefined,
         usagePeriod:    it.usagePeriod    || undefined,
+        memo:           it.memo           || undefined,
       };
     default:
-      return base;
+      return { ...base, memo: it.memo || undefined };
   }
 }
 
@@ -215,7 +221,9 @@ function SearchPopup({ title, items, value, onSelect, onClose }: {
               선택 해제
             </div>
           )}
-          {filtered.length === 0 && <div style={{ padding: '24px 18px', textAlign: 'center', fontSize: 13, color: '#9ca3af' }}>검색 결과 없습니다.</div>}
+          {filtered.length === 0 && (
+            <div style={{ padding: '24px 18px', textAlign: 'center', fontSize: 13, color: '#9ca3af' }}>검색 결과 없습니다.</div>
+          )}
           {filtered.map(item => (
             <div key={item.id} onClick={() => { onSelect(item.id); onClose(); }}
               style={{ padding: '10px 18px', cursor: 'pointer', background: item.id === value ? '#eff6ff' : undefined, borderBottom: '1px solid #f8f9fa' }}
@@ -234,18 +242,18 @@ function SearchPopup({ title, items, value, onSelect, onClose }: {
 // ─── 인라인 검색 필드 (하이브리드) ────────────────────────────────────────────
 
 function InlineSearchField({ items, value, onChange, placeholder = '검색…', popupTitle = '검색', accentColor = '#6366f1', compact = false }: {
-  items:       { id: number; label: string; sub?: string }[];
-  value:       number | null;
-  onChange:    (id: number | null) => void;
+  items:        { id: number; label: string; sub?: string }[];
+  value:        number | null;
+  onChange:     (id: number | null) => void;
   placeholder?: string;
-  popupTitle?: string;
+  popupTitle?:  string;
   accentColor?: string;
-  compact?:    boolean;
+  compact?:     boolean;
 }) {
-  const [open, setOpen]         = useState(false);
-  const [q, setQ]               = useState('');
+  const [open, setOpen]           = useState(false);
+  const [q, setQ]                 = useState('');
   const [showPopup, setShowPopup] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const ref      = useRef<HTMLDivElement>(null);
   const selected = items.find(i => i.id === value);
 
   const filtered = q.trim()
@@ -253,7 +261,9 @@ function InlineSearchField({ items, value, onChange, placeholder = '검색…', 
     : items.slice(0, 12);
 
   useEffect(() => {
-    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setQ(''); } };
+    const h = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setQ(''); }
+    };
     document.addEventListener('mousedown', h);
     return () => document.removeEventListener('mousedown', h);
   }, []);
@@ -279,8 +289,19 @@ function InlineSearchField({ items, value, onChange, placeholder = '검색…', 
         )}
         {open && (
           <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0, zIndex: 700, background: '#fff', border: `1px solid ${accentColor}`, borderRadius: 9, boxShadow: '0 6px 20px rgba(0,0,0,0.1)', maxHeight: 200, overflowY: 'auto' }}>
-            {value !== null && <div onClick={() => { onChange(null); setQ(''); setOpen(false); }} style={{ padding: '6px 10px', fontSize: 12, color: '#9ca3af', cursor: 'pointer', borderBottom: '1px solid #f3f4f6' }} onMouseEnter={e => (e.currentTarget.style.background = '#f8f9fa')} onMouseLeave={e => (e.currentTarget.style.background = '')}>선택 해제</div>}
-            {filtered.length === 0 && <div style={{ padding: '8px 10px', fontSize: 12, color: '#9ca3af' }}>결과 없음 — <span style={{ color: accentColor, cursor: 'pointer', fontWeight: 600 }} onClick={() => { setOpen(false); setShowPopup(true); }}>전체 검색 🔍</span></div>}
+            {value !== null && (
+              <div onClick={() => { onChange(null); setQ(''); setOpen(false); }}
+                style={{ padding: '6px 10px', fontSize: 12, color: '#9ca3af', cursor: 'pointer', borderBottom: '1px solid #f3f4f6' }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#f8f9fa')}
+                onMouseLeave={e => (e.currentTarget.style.background = '')}>선택 해제</div>
+            )}
+            {filtered.length === 0 && (
+              <div style={{ padding: '8px 10px', fontSize: 12, color: '#9ca3af' }}>
+                결과 없음 —{' '}
+                <span style={{ color: accentColor, cursor: 'pointer', fontWeight: 600 }}
+                  onClick={() => { setOpen(false); setShowPopup(true); }}>전체 검색 🔍</span>
+              </div>
+            )}
             {filtered.map(item => (
               <div key={item.id} onClick={() => { onChange(item.id); setQ(''); setOpen(false); }}
                 style={{ padding: '6px 10px', cursor: 'pointer', background: item.id === value ? '#eff6ff' : undefined }}
@@ -317,12 +338,16 @@ function RowControls({ idx, total, onRemove, onAddBelow, onMoveUp, onMoveDown }:
         style={{ ...btn(total <= 1), color: total > 1 ? '#e11d48' : '#d1d5db', borderColor: total > 1 ? '#fca5a5' : '#e5e7eb' }}
         onMouseEnter={e => { if (total > 1) hoverBg(e.currentTarget, '#fef2f2'); }}
         onMouseLeave={e => { hoverBg(e.currentTarget, 'none'); }}>−</button>
-      <button type="button" title="아래 행 추가" onClick={() => onAddBelow(idx)} style={{ ...btn(false), color: '#2563eb', borderColor: '#bfdbfe' }}
-        onMouseEnter={e => hoverBg(e.currentTarget, '#eff6ff')} onMouseLeave={e => hoverBg(e.currentTarget, 'none')}>+</button>
+      <button type="button" title="아래 행 추가" onClick={() => onAddBelow(idx)}
+        style={{ ...btn(false), color: '#2563eb', borderColor: '#bfdbfe' }}
+        onMouseEnter={e => hoverBg(e.currentTarget, '#eff6ff')}
+        onMouseLeave={e => hoverBg(e.currentTarget, 'none')}>+</button>
       <button type="button" title="위로 이동" onClick={() => onMoveUp(idx)} disabled={idx === 0} style={btn(idx === 0)}
-        onMouseEnter={e => { if (idx > 0) hoverBg(e.currentTarget, '#f3f4f6'); }} onMouseLeave={e => hoverBg(e.currentTarget, 'none')}>▲</button>
+        onMouseEnter={e => { if (idx > 0) hoverBg(e.currentTarget, '#f3f4f6'); }}
+        onMouseLeave={e => hoverBg(e.currentTarget, 'none')}>▲</button>
       <button type="button" title="아래로 이동" onClick={() => onMoveDown(idx)} disabled={idx === total - 1} style={btn(idx === total - 1)}
-        onMouseEnter={e => { if (idx < total - 1) hoverBg(e.currentTarget, '#f3f4f6'); }} onMouseLeave={e => hoverBg(e.currentTarget, 'none')}>▼</button>
+        onMouseEnter={e => { if (idx < total - 1) hoverBg(e.currentTarget, '#f3f4f6'); }}
+        onMouseLeave={e => hoverBg(e.currentTarget, 'none')}>▼</button>
     </div>
   );
 }
@@ -343,13 +368,13 @@ function ServiceTypeSelector({ value, onChange }: { value: ServiceType; onChange
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       <button type="button" onClick={() => setOpen(v => !v)}
-        style={{ display: 'flex', alignItems: 'center', gap: 3, background: cfg.bg, color: cfg.color, border: `1.5px solid ${cfg.border}`, borderRadius: 6, padding: '3px 7px', fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', width: 56 }}>
+        style={{ display: 'flex', alignItems: 'center', gap: 3, background: cfg.bg, color: cfg.color, border: `1.5px solid ${cfg.border}`, borderRadius: 6, padding: '3px 7px', fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', width: 58 }}>
         <span style={{ width: 5, height: 5, borderRadius: '50%', background: cfg.dot, flexShrink: 0 }} />
         {cfg.label}
         <span style={{ fontSize: 7, marginLeft: 'auto' }}>▼</span>
       </button>
       {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, zIndex: 800, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 9, boxShadow: '0 4px 20px rgba(0,0,0,0.12)', padding: 4, minWidth: 72 }}>
+        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, zIndex: 800, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 9, boxShadow: '0 4px 20px rgba(0,0,0,0.12)', padding: 4, minWidth: 74 }}>
           {(Object.entries(SVC_CFG) as [ServiceType, typeof SVC_CFG[ServiceType]][]).map(([k, c]) => (
             <button key={k} type="button"
               onClick={() => { onChange(k); setOpen(false); }}
@@ -364,11 +389,23 @@ function ServiceTypeSelector({ value, onChange }: { value: ServiceType; onChange
   );
 }
 
+// ─── 단위 선택 드롭다운 ───────────────────────────────────────────────────────
+
+function UnitSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const options = getUnitOptions(value);
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)}
+      style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 4px', fontSize: 12, outline: 'none', background: '#fff', cursor: 'pointer', height: 28 }}>
+      {!value && <option value="">단위</option>}
+      {options.map(u => <option key={u} value={u}>{u}</option>)}
+    </select>
+  );
+}
+
 // ─── 서비스 유형별 동적 입력 필드 ────────────────────────────────────────────
 
-function ServiceFields({ it, idx, update }: {
-  it: QuoteItemForm;
-  idx: number;
+function ServiceFields({ it, update }: {
+  it:     QuoteItemForm;
   update: (patch: Partial<QuoteItemForm>) => void;
 }) {
   const i = row_inp;
@@ -377,45 +414,37 @@ function ServiceFields({ it, idx, update }: {
     case 'translation':
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
-          {/* 언어쌍 */}
-          <input value={it.sourceLanguage} onChange={e => update({ sourceLanguage: e.target.value })}
-            placeholder="출발어" style={i(46)} title="출발 언어 (예: 한국어, KO)" />
-          <span style={sep_style}>→</span>
-          <input value={it.targetLanguage} onChange={e => update({ targetLanguage: e.target.value })}
-            placeholder="도착어" style={i(46)} title="도착 언어 (예: 영어, EN)" />
+          {/* 파일명 */}
+          <input value={it.fileName} onChange={e => update({ fileName: e.target.value })}
+            placeholder="파일명" style={{ ...i('auto'), flex: 1, minWidth: 80 }} title="원본 파일명" />
+          {/* 파일형식 */}
+          <input value={it.fileFormat} onChange={e => update({ fileFormat: e.target.value })}
+            placeholder="형식" style={i(56)} title="파일 형식 (예: docx, pdf, hwp)" />
           {/* 단어수 */}
           <input value={it.wordCount} onChange={e => update({ wordCount: e.target.value })}
-            placeholder="단어수" style={i(64)} title="단어수 (참고용)" />
+            placeholder="단어수" style={i(60)} title="단어수 (참고용)" />
           {/* 글자수 */}
           <input value={it.charCount} onChange={e => update({ charCount: e.target.value })}
-            placeholder="글자수" style={{ ...i(64), color: '#6b7280' }} title="글자수 (참고용)" />
+            placeholder="글자수" style={{ ...i(60), color: '#6b7280' }} title="글자수 (참고용)" />
         </div>
       );
 
     case 'interpretation':
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
-          {/* 언어쌍 */}
-          <input value={it.sourceLanguage} onChange={e => update({ sourceLanguage: e.target.value })}
-            placeholder="출발어" style={i(44)} />
-          <span style={sep_style}>↔</span>
-          <input value={it.targetLanguage} onChange={e => update({ targetLanguage: e.target.value })}
-            placeholder="도착어" style={i(44)} />
           {/* 행사일 */}
           <input type="date" value={it.interpretDate} onChange={e => update({ interpretDate: e.target.value })}
-            style={i(96)} title="행사일" />
-          {/* 시작~종료 */}
+            style={i(98)} title="행사일" />
+          {/* 시작시간 */}
           <input value={it.startTime} onChange={e => update({ startTime: e.target.value })}
-            placeholder="시작" style={i(44)} title="시작 시간 (예: 09:00)" />
+            placeholder="시작" style={i(50)} title="시작 시간 (예: 09:00)" />
           <span style={sep_style}>~</span>
+          {/* 종료시간 */}
           <input value={it.endTime} onChange={e => update({ endTime: e.target.value })}
-            placeholder="종료" style={i(44)} title="종료 시간 (예: 18:00)" />
+            placeholder="종료" style={i(50)} title="종료 시간 (예: 18:00)" />
           {/* 장소 */}
           <input value={it.interpretPlace} onChange={e => update({ interpretPlace: e.target.value })}
-            placeholder="장소" style={{ ...i('auto'), flex: 1, minWidth: 60 }} title="통역 장소" />
-          {/* 인원 */}
-          <input value={it.headcount} onChange={e => update({ headcount: e.target.value })}
-            placeholder="인원" style={i(44)} title="인원수 (참고용)" />
+            placeholder="장소" style={{ ...i('auto'), flex: 1, minWidth: 60 }} title="통역 행사 장소" />
         </div>
       );
 
@@ -424,8 +453,8 @@ function ServiceFields({ it, idx, update }: {
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
           {/* 사용일 */}
           <input type="date" value={it.eventStartDate} onChange={e => update({ eventStartDate: e.target.value })}
-            style={i(96)} title="장비 사용일" />
-          {/* 장소 */}
+            style={i(98)} title="장비 사용일" />
+          {/* 사용장소 */}
           <input value={it.itemLocation} onChange={e => update({ itemLocation: e.target.value })}
             placeholder="사용 장소" style={{ ...i('auto'), flex: 1, minWidth: 80 }} title="장비 사용 장소" />
           {/* 사용기간 */}
@@ -436,33 +465,23 @@ function ServiceFields({ it, idx, update }: {
 
     case 'expense':
     default:
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
-          <input value={it.memo} onChange={e => update({ memo: e.target.value })}
-            placeholder="항목 설명 / 메모" style={{ ...i('auto'), flex: 1 }} />
-        </div>
-      );
+      // 기타: 중간 동적 필드 없음 (메모는 공통 비고 컬럼에서 입력)
+      return <div style={{ flex: 1, minWidth: 0 }} />;
   }
 }
-
-// ─── 상품 유형별 컬럼 힌트 ────────────────────────────────────────────────────
-
-const SVC_HINTS: Record<ServiceType, string> = {
-  translation:    '언어쌍 / 단어수',
-  interpretation: '언어쌍 / 행사일 / 시간 / 장소 / 인원',
-  equipment:      '사용일 / 장소 / 사용기간',
-  expense:        '메모',
-};
 
 // ─── 견적 항목 행 컴포넌트 ────────────────────────────────────────────────────
 
 function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeItem, addItemBelow, moveItem }: {
-  it: QuoteItemForm; idx: number; total: number; vatType: VatType;
-  products: Product[];
-  updateItem: (idx: number, patch: Partial<QuoteItemForm>) => void;
-  removeItem: (idx: number) => void;
-  addItemBelow: (idx: number) => void;
-  moveItem: (idx: number, dir: 'up' | 'down') => void;
+  it:          QuoteItemForm;
+  idx:         number;
+  total:       number;
+  vatType:     VatType;
+  products:    Product[];
+  updateItem:  (idx: number, patch: Partial<QuoteItemForm>) => void;
+  removeItem:  (idx: number) => void;
+  addItemBelow:(idx: number) => void;
+  moveItem:    (idx: number, dir: 'up' | 'down') => void;
 }) {
   const supply = calcItem(it, vatType).supply;
   const cfg    = SVC_CFG[it.productType];
@@ -477,7 +496,7 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
       productId:   p?.id ?? null,
       productName: p?.name ?? '',
       productType: (p?.productType as ServiceType) ?? it.productType,
-      unit:        p?.unit ?? SVC_UNITS[it.productType],
+      unit:        p?.unit ?? SVC_DEFAULT_UNIT[it.productType],
     });
   };
 
@@ -491,7 +510,7 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
       onMouseEnter={e => (e.currentTarget.style.background = '#fafcff')}
       onMouseLeave={e => (e.currentTarget.style.background = '')}
     >
-      {/* ① 행 제어 (항상 가장 왼쪽) */}
+      {/* ① 행 제어 */}
       <div style={{ flexShrink: 0, width: 90 }}>
         <RowControls idx={idx} total={total}
           onRemove={removeItem} onAddBelow={addItemBelow}
@@ -499,12 +518,12 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
       </div>
 
       {/* ② 서비스 유형 */}
-      <div style={{ flexShrink: 0 }}>
+      <div style={{ flexShrink: 0, width: 60 }}>
         <ServiceTypeSelector value={it.productType} onChange={handleTypeChange} />
       </div>
 
       {/* ③ 상품 검색 (하이브리드) */}
-      <div style={{ flexShrink: 0, width: 158, display: 'flex' }}>
+      <div style={{ flexShrink: 0, width: 150, display: 'flex' }}>
         <InlineSearchField
           items={productOptions}
           value={it.productId}
@@ -517,35 +536,43 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
       </div>
 
       {/* ④ 서비스 유형별 동적 입력 필드 */}
-      <ServiceFields it={it} idx={idx} update={patch => updateItem(idx, patch)} />
+      <ServiceFields it={it} update={patch => updateItem(idx, patch)} />
 
-      {/* ⑤ 단위 */}
-      <div style={{ flexShrink: 0, width: 50 }}>
-        <input value={it.unit} onChange={e => updateItem(idx, { unit: e.target.value })}
-          placeholder="단위" style={row_inp(50)} />
-      </div>
-
-      {/* ⑥ 수량 */}
-      <div style={{ flexShrink: 0, width: 68 }}>
+      {/* ⑤ 수량 */}
+      <div style={{ flexShrink: 0, width: 58 }}>
         <NumericInput value={it.quantity} onChange={v => updateItem(idx, { quantity: v })} placeholder="1" />
       </div>
 
+      {/* ⑥ 단위 (선택형) */}
+      <div style={{ flexShrink: 0, width: 60 }}>
+        <UnitSelect value={it.unit} onChange={v => updateItem(idx, { unit: v })} />
+      </div>
+
       {/* ⑦ 단가 */}
-      <div style={{ flexShrink: 0, width: 96 }}>
+      <div style={{ flexShrink: 0, width: 90 }}>
         <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })} placeholder="0" suffix="원" />
       </div>
 
       {/* ⑧ 공급가액 */}
-      <div style={{ flexShrink: 0, width: 86, textAlign: 'right', fontWeight: 600, color: supply > 0 ? '#1e3a5f' : '#d1d5db', fontSize: 12, whiteSpace: 'nowrap' }}>
+      <div style={{ flexShrink: 0, width: 82, textAlign: 'right', fontWeight: 600, color: supply > 0 ? '#1e3a5f' : '#d1d5db', fontSize: 12, whiteSpace: 'nowrap' }}>
         {supply > 0 ? supply.toLocaleString() + '원' : '—'}
+      </div>
+
+      {/* ⑨ 비고 */}
+      <div style={{ flexShrink: 0, width: 88 }}>
+        <input value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
+          placeholder="비고" style={row_inp(88, { color: '#6b7280' })} title="긴급, 감수 포함, DTP 포함 등 특이사항" />
       </div>
     </div>
   );
 }
 
-// ─── 상단 섹션 스타일 ─────────────────────────────────────────────────────────
+// ─── 섹션 헤더 스타일 ─────────────────────────────────────────────────────────
 
-const inp: React.CSSProperties = { width: '100%', boxSizing: 'border-box', border: '1px solid #d1d5db', borderRadius: 8, padding: '8px 10px', fontSize: 13, outline: 'none' };
+const inp: React.CSSProperties = {
+  width: '100%', boxSizing: 'border-box', border: '1px solid #d1d5db',
+  borderRadius: 8, padding: '8px 10px', fontSize: 13, outline: 'none',
+};
 const lbl = (txt: string, required = false) => (
   <label style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', display: 'block', marginBottom: 4 }}>
     {txt}{required && <span style={{ color: '#e11d48', marginLeft: 2 }}>*</span>}
@@ -558,6 +585,17 @@ const sectionTitle = (letter: string, bg: string, color: string, text: string, h
     {hint && <span style={{ fontSize: 10, fontWeight: 400, color: '#9ca3af', marginLeft: 4 }}>{hint}</span>}
   </div>
 );
+
+// ─── 컬럼 헤더 레이블 ────────────────────────────────────────────────────────
+
+const COL_H: React.CSSProperties = { flexShrink: 0, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'center' };
+
+const SVC_FIELD_HINTS: Record<ServiceType, string> = {
+  translation:    '파일명 / 파일형식 / 단어수 / 글자수',
+  interpretation: '행사일 / 시작 ~ 종료 / 장소',
+  equipment:      '사용일 / 사용장소 / 사용기간',
+  expense:        '',
+};
 
 // ─── 메인 Props ───────────────────────────────────────────────────────────────
 
@@ -582,32 +620,26 @@ export function QuoteEditorWorkspace({
 
   const authH = { Authorization: `Bearer ${token}` };
 
-  // ── 생성 방식 ──────────────────────────────────────────────────────────────
   const [creationMode, setCreationMode] = useState<CreationMode>('direct');
 
-  // ── 기본 정보 ──────────────────────────────────────────────────────────────
-  const [title,         setTitle]        = useState(initialTitle);
-  const [titleEdited,   setTitleEdited]  = useState(!!initialTitle);
-  const [companyId,     setCompanyId]    = useState<number | null>(initialCompanyId);
-  const [contactId,     setContactId]    = useState<number | null>(initialContactId);
-  const [adminId,       setAdminId]      = useState<number | null>(null);
-  const [issueDate,     setIssueDate]    = useState(() => dateOffset(0));
-  const [quoteType,     setQuoteType]    = useState<QuoteType>('b2b_standard');
-  const [vatType,       setVatType]      = useState<VatType>('taxable');
-  const [note,          setNote]         = useState('');
-  const [versionReason, setVersionReason] = useState('');
+  const [title,          setTitle]         = useState(initialTitle);
+  const [titleEdited,    setTitleEdited]   = useState(!!initialTitle);
+  const [companyId,      setCompanyId]     = useState<number | null>(initialCompanyId);
+  const [contactId,      setContactId]     = useState<number | null>(initialContactId);
+  const [adminId,        setAdminId]       = useState<number | null>(null);
+  const [issueDate,      setIssueDate]     = useState(() => dateOffset(0));
+  const [quoteType,      setQuoteType]     = useState<QuoteType>('b2b_standard');
+  const [vatType,        setVatType]       = useState<VatType>('taxable');
+  const [note,           setNote]          = useState('');
+  const [versionReason,  setVersionReason] = useState('');
+  const [items,          setItems]         = useState<QuoteItemForm[]>([defaultItem()]);
 
-  // ── 견적 항목 ──────────────────────────────────────────────────────────────
-  const [items, setItems] = useState<QuoteItemForm[]>([defaultItem()]);
-
-  // ── 참조 데이터 ────────────────────────────────────────────────────────────
   const [companies, setCompanies] = useState<Company[]>([]);
   const [contacts,  setContacts]  = useState<Contact[]>([]);
   const [products,  setProducts]  = useState<Product[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [saving,    setSaving]    = useState(false);
 
-  // ── 데이터 로딩 ────────────────────────────────────────────────────────────
   useEffect(() => {
     setLoading(true);
     Promise.all([
@@ -621,10 +653,9 @@ export function QuoteEditorWorkspace({
     }).finally(() => setLoading(false));
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── 견적서명 자동생성 ───────────────────────────────────────────────────────
   useEffect(() => {
     if (titleEdited || projectId !== null) return;
-    const company = companies.find(c => c.id === companyId);
+    const company    = companies.find(c => c.id === companyId);
     const validItems = items.filter(it => it.productName.trim());
     if (!company || validItems.length === 0) return;
     setTitle(`${company.name}_${validItems[0].productName.trim()}_${issueDate.replace(/-/g, '')}`);
@@ -634,13 +665,18 @@ export function QuoteEditorWorkspace({
 
   const isStandalone   = projectId === null;
   const companyOptions = companies.map(c => ({ id: c.id, label: c.name, sub: c.divisionNames?.slice(0, 2).join(' · ') }));
-  const contactOptions = (contactId !== null || companyId === null ? contacts : contacts.filter(c => c.companyId === companyId)).map(c => ({ id: c.id, label: c.name }));
-  const adminOptions   = adminList.map(u => ({ id: u.id, label: u.name ?? u.email }));
+  const contactOptions = (contactId !== null || companyId === null
+    ? contacts
+    : contacts.filter(c => c.companyId === companyId)
+  ).map(c => ({ id: c.id, label: c.name }));
+  const adminOptions = adminList.map(u => ({ id: u.id, label: u.name ?? u.email }));
 
-  // ── 항목 조작 ──────────────────────────────────────────────────────────────
-  const updateItem   = (idx: number, patch: Partial<QuoteItemForm>) => setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
-  const addItemBelow = (idx: number) => setItems(prev => [...prev.slice(0, idx + 1), defaultItem(), ...prev.slice(idx + 1)]);
-  const removeItem   = (idx: number) => setItems(prev => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev);
+  const updateItem   = (idx: number, patch: Partial<QuoteItemForm>) =>
+    setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
+  const addItemBelow = (idx: number) =>
+    setItems(prev => [...prev.slice(0, idx + 1), defaultItem(), ...prev.slice(idx + 1)]);
+  const removeItem   = (idx: number) =>
+    setItems(prev => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev);
   const moveItem     = (idx: number, dir: 'up' | 'down') => setItems(prev => {
     const next = [...prev]; const swap = dir === 'up' ? idx - 1 : idx + 1;
     if (swap < 0 || swap >= next.length) return prev;
@@ -649,13 +685,21 @@ export function QuoteEditorWorkspace({
 
   const totals = calcTotals(items, vatType);
 
+  // 동적 서비스 필드 힌트 (단일 유형이면 구체적, 복수면 일반)
+  const fieldHint = (() => {
+    const types = [...new Set(items.map(it => it.productType))];
+    if (types.length === 1) return SVC_FIELD_HINTS[types[0]];
+    return '서비스별 상세 입력 필드';
+  })();
+
   // ── 저장 (Version Engine 유지) ─────────────────────────────────────────────
   const handleSave = useCallback(async () => {
-    const validItems = items.filter(it => it.productName.trim() && Number(it.unitPrice.replace?.(/,/g, '') || 0) > 0);
+    const validItems = items.filter(it =>
+      it.productName.trim() && Number(it.unitPrice.replace?.(/,/g, '') || 0) > 0,
+    );
     if (validItems.length === 0) { onToast('품목명과 단가를 입력하세요.'); return; }
 
     const itemsBody = validItems.map(it => toApiItem(it, vatType));
-
     const commonBody = {
       items: itemsBody,
       quoteType,
@@ -738,7 +782,7 @@ export function QuoteEditorWorkspace({
         {loading ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, color: '#9ca3af', fontSize: 14 }}>데이터 불러오는 중…</div>
         ) : (
-          <div style={{ maxWidth: 1160, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <div style={{ maxWidth: 1180, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 18 }}>
 
             {/* ── A. 기본정보 ──────────────────────────────────────────────────── */}
             <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', padding: '18px 22px' }}>
@@ -758,7 +802,7 @@ export function QuoteEditorWorkspace({
 
                 <div>
                   {lbl('견적일')}
-                  <input type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)} style={{ ...inp }} />
+                  <input type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)} style={inp} />
                 </div>
 
                 <div>
@@ -778,7 +822,8 @@ export function QuoteEditorWorkspace({
                       {lbl('견적서명', true)}
                       {!titleEdited && title && <span style={{ fontSize: 10, color: '#6b7280', fontStyle: 'italic', marginBottom: 4 }}>자동생성됨</span>}
                     </div>
-                    <input value={title} onChange={e => { setTitle(e.target.value); setTitleEdited(true); }} placeholder="예: 삼성전자_한영동시통역_20260715" style={{ ...inp }} />
+                    <input value={title} onChange={e => { setTitle(e.target.value); setTitleEdited(true); }}
+                      placeholder="예: 삼성전자_한영동시통역_20260715" style={inp} />
                   </div>
                 )}
 
@@ -805,21 +850,19 @@ export function QuoteEditorWorkspace({
 
             {/* ── B. 상품정보 ──────────────────────────────────────────────────── */}
             <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', padding: '18px 22px' }}>
-              {sectionTitle('B', '#f0fdf4', '#16a34a', '상품정보', '← 유형 클릭으로 번역 / 통역 / 장비 / 기타 전환 | − 삭제 + 추가 ▲▼ 이동')}
+              {sectionTitle('B', '#f0fdf4', '#16a34a', '상품정보', '← 유형 클릭으로 번역 / 통역 / 장비 / 기타 전환')}
 
               {/* 컬럼 헤더 */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '0 8px 4px', borderBottom: '1.5px solid #e5e7eb', marginBottom: 2 }}>
-                <div style={{ width: 90, flexShrink: 0, fontSize: 10, fontWeight: 700, color: '#9ca3af' }}>행 제어</div>
-                <div style={{ width: 56, flexShrink: 0, fontSize: 10, fontWeight: 700, color: '#9ca3af' }}>유형</div>
-                <div style={{ width: 158, flexShrink: 0, fontSize: 10, fontWeight: 700, color: '#9ca3af' }}>상품 🔍🧽</div>
-                <div style={{ flex: 1, fontSize: 10, fontWeight: 700, color: '#9ca3af', minWidth: 0 }}>
-                  {/* 행별로 다른 필드가 표시됨 */}
-                  {items.length === 1 ? SVC_HINTS[items[0].productType] : '서비스별 입력 필드'}
-                </div>
-                <div style={{ width: 50, flexShrink: 0, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'center' }}>단위</div>
-                <div style={{ width: 68, flexShrink: 0, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'center' }}>수량</div>
-                <div style={{ width: 96, flexShrink: 0, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'center' }}>단가</div>
-                <div style={{ width: 86, flexShrink: 0, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'right' }}>공급가액</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '0 8px 5px', borderBottom: '1.5px solid #e5e7eb', marginBottom: 2 }}>
+                <div style={{ ...COL_H, width: 90 }}>행 제어</div>
+                <div style={{ ...COL_H, width: 60 }}>유형</div>
+                <div style={{ ...COL_H, width: 150, textAlign: 'left' }}>상품 🔍🧽</div>
+                <div style={{ flex: 1, fontSize: 10, fontWeight: 700, color: '#9ca3af', minWidth: 0 }}>{fieldHint}</div>
+                <div style={{ ...COL_H, width: 58 }}>수량</div>
+                <div style={{ ...COL_H, width: 60 }}>단위</div>
+                <div style={{ ...COL_H, width: 90 }}>단가</div>
+                <div style={{ ...COL_H, width: 82, textAlign: 'right' }}>공급가액</div>
+                <div style={{ ...COL_H, width: 88 }}>비고</div>
               </div>
 
               {/* 항목 행 목록 */}
@@ -833,14 +876,14 @@ export function QuoteEditorWorkspace({
                 ))}
               </div>
 
-              {/* 항목 추가 버튼 */}
+              {/* 유형별 항목 추가 버튼 */}
               <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
                 {(['translation', 'interpretation', 'equipment', 'expense'] as ServiceType[]).map(type => {
                   const c = SVC_CFG[type];
                   return (
                     <button key={type} type="button"
                       onClick={() => setItems(prev => [...prev, { ...defaultItem(), ...defaultItemForType(type) }])}
-                      style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: c.color, background: c.bg, border: `1px dashed ${c.border}`, borderRadius: 7, padding: '5px 12px', cursor: 'pointer', fontWeight: 600, transition: 'opacity 0.1s' }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: c.color, background: c.bg, border: `1px dashed ${c.border}`, borderRadius: 7, padding: '5px 12px', cursor: 'pointer', fontWeight: 600 }}
                       onMouseEnter={e => (e.currentTarget.style.opacity = '0.75')}
                       onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
                     >
@@ -855,24 +898,24 @@ export function QuoteEditorWorkspace({
             <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', padding: '16px 22px' }}>
               {sectionTitle('C', '#fffbeb', '#d97706', '금액 요약')}
 
-              {/* 서비스 유형별 소계 */}
+              {/* 서비스 유형별 소계 (복수 유형 시) */}
               {(() => {
                 const groups = (['translation', 'interpretation', 'equipment', 'expense'] as ServiceType[])
                   .map(type => {
-                    const typeItems = items.filter(it => it.productType === type);
-                    if (typeItems.length === 0) return null;
-                    const sub = calcTotals(typeItems, vatType);
-                    const cfg = SVC_CFG[type];
+                    const tItems = items.filter(it => it.productType === type);
+                    if (tItems.length === 0) return null;
+                    const sub = calcTotals(tItems, vatType);
+                    const c   = SVC_CFG[type];
                     return sub.supply > 0 ? (
-                      <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', background: cfg.bg, border: `1px solid ${cfg.border}`, borderRadius: 7 }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: cfg.color }}>{cfg.label}</span>
+                      <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', background: c.bg, border: `1px solid ${c.border}`, borderRadius: 7 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: c.color }}>{c.label}</span>
                         <span style={{ fontSize: 12, color: '#374151', fontWeight: 500 }}>{sub.supply.toLocaleString()}원</span>
                       </div>
                     ) : null;
                   }).filter(Boolean);
-                return groups.length > 1 ? (
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>{groups}</div>
-                ) : null;
+                return groups.length > 1
+                  ? <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>{groups}</div>
+                  : null;
               })()}
 
               <div style={{ display: 'flex', gap: 16, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
@@ -895,8 +938,9 @@ export function QuoteEditorWorkspace({
             <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e5e7eb', padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
               {sectionTitle('D', '#f5f3ff', '#7c3aed', '비고 / 기타')}
               <div>
-                {lbl('비고')}
-                <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="견적 관련 메모 또는 안내 사항" rows={2}
+                {lbl('견적 비고')}
+                <textarea value={note} onChange={e => setNote(e.target.value)}
+                  placeholder="견적 관련 메모 또는 안내 사항" rows={2}
                   style={{ ...inp, resize: 'vertical', fontFamily: 'inherit' }} />
               </div>
               {projectId !== null && (
