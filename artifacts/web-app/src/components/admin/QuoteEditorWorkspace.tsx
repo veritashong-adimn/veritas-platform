@@ -9,6 +9,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api, Product } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect, NumericInput } from '../ui';
+import {
+  getPolicy, getActivePolicies, validateCounts, calcPagesFromStr,
+  type ValidationResult,
+} from '../../lib/languagePagePolicy';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
 
@@ -27,6 +31,7 @@ export interface QuoteItemForm {
   taxType:      VatType;
   memo:         string;
   // 번역 전용
+  sourceLanguage: string;  // Language Policy 조회 키 (ko, en, ja, zh-hans …)
   fileName:     string;
   fileFormat:   string;
   wordCount:    string;
@@ -62,20 +67,6 @@ function getUnitOptions(v: string) {
   return BASE_UNITS.includes(v) || !v ? BASE_UNITS : [v, ...BASE_UNITS];
 }
 
-const CHARS_PER_PAGE = 700;
-
-/** 글자수 → 페이지 수 (0.5단위 반올림): 0.0~0.1 내림 / 0.2~0.5 → 0.5 / 0.6~0.9 올림 */
-function calcPagesNum(charCountStr: string): number | null {
-  const chars = Number(charCountStr.replace?.(/,/g, '') || 0);
-  if (!chars || chars <= 0) return null;
-  const raw   = chars / CHARS_PER_PAGE;
-  const floor = Math.floor(raw);
-  const dec   = raw - floor;
-  if      (dec <= 0.1) return floor;
-  else if (dec <= 0.5) return floor + 0.5;
-  else                 return floor + 1;
-}
-
 // ─── 계산 ─────────────────────────────────────────────────────────────────────
 
 function calcItem(it: QuoteItemForm, vat: VatType) {
@@ -96,6 +87,7 @@ function defaultItem(): QuoteItemForm {
   return {
     productId: null, productName: '', productType: 'translation',
     quantity: '1', unit: '건', unitPrice: '', taxType: 'taxable', memo: '',
+    sourceLanguage: 'ko',
     fileName: '', fileFormat: '', wordCount: '', charCount: '',
     interpretDate: '', startTime: '', endTime: '', interpretPlace: '',
     eventStartDate: '', itemLocation: '', usagePeriod: '',
@@ -332,35 +324,84 @@ function CountInput({ value, onChange, unit, placeholder, style }: {
   );
 }
 
+// ─── 언어 선택 (Language Policy 기반 페이지 계산용) ──────────────────────────
+
+function LangSelect({ value, onChange }: { value: string; onChange: (code: string) => void }) {
+  const active = getActivePolicies();
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)}
+      style={{ width: 72, flexShrink: 0, boxSizing: 'border-box', border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 2px', fontSize: 11, outline: 'none', background: value ? '#fff' : '#f9fafb', cursor: 'pointer', height: 28, color: value ? '#111827' : '#9ca3af' }}>
+      <option value="">언어</option>
+      {active.map(p => <option key={p.languageCode} value={p.languageCode}>{p.languageName}</option>)}
+    </select>
+  );
+}
+
 // ─── 서비스 유형별 동적 필드 ─────────────────────────────────────────────────
 
 function ServiceFields({ it, update }: { it: QuoteItemForm; update: (p: Partial<QuoteItemForm>) => void }) {
   switch (it.productType) {
-    case 'translation':
+    case 'translation': {
+      const policy = getPolicy(it.sourceLanguage);
+
+      // 언어 변경 → 해당 언어 기준으로 수량·단위 자동 재계산
+      const handleLangChange = (code: string) => {
+        const p = getPolicy(code);
+        const upd: Partial<QuoteItemForm> = { sourceLanguage: code };
+        if (p?.active) {
+          const src = p.calcType === 'character' ? it.charCount : it.wordCount;
+          if (src) {
+            const n = calcPagesFromStr(src, p.standardValue);
+            if (n !== null) { upd.quantity = String(n); upd.unit = '페이지'; }
+          }
+        }
+        update(upd);
+      };
+
+      // 글자수 변경: char 기준 언어 or 언어 미지정(기본 700글자/페이지) → 수량 갱신
+      const handleCharChange = (v: string) => {
+        const upd: Partial<QuoteItemForm> = { charCount: v };
+        if (v) {
+          const std = (policy?.calcType === 'character' || !policy)
+            ? (policy?.standardValue ?? 700)
+            : null;
+          if (std) {
+            const n = calcPagesFromStr(v, std);
+            if (n !== null) { upd.quantity = String(n); upd.unit = '페이지'; }
+          }
+        }
+        update(upd);
+      };
+
+      // 단어수 변경: word 기준 언어 → 수량 갱신
+      const handleWordChange = (v: string) => {
+        const upd: Partial<QuoteItemForm> = { wordCount: v };
+        if (v && policy?.calcType === 'word') {
+          const n = calcPagesFromStr(v, policy.standardValue);
+          if (n !== null) { upd.quantity = String(n); upd.unit = '페이지'; }
+        }
+        update(upd);
+      };
+
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
+          {/* 언어 선택 → Language Policy 기준 자동 적용 */}
+          <LangSelect value={it.sourceLanguage} onChange={handleLangChange} />
           {/* 파일명 */}
           <input value={it.fileName} onChange={e => update({ fileName: e.target.value })}
-            placeholder="파일명" style={{ ...rinp('auto'), flex: 1, minWidth: 80 }} title="원본 파일명" />
+            placeholder="파일명" style={{ ...rinp('auto'), flex: 1, minWidth: 60 }} title="원본 파일명" />
           {/* 파일형식 */}
           <input value={it.fileFormat} onChange={e => update({ fileFormat: e.target.value })}
-            placeholder="형식" style={rinp(52)} title="파일 형식 (예: docx, pdf)" />
-          {/* 단어수 — 천 단위 콤마 + "단어" 자동 표시 */}
-          <CountInput value={it.wordCount} onChange={v => update({ wordCount: v })}
-            unit="단어" placeholder="단어수" style={rinp(72)} />
-          {/* 글자수 — 천 단위 콤마 + "글자" 자동 표시.
-              변경 시 수량·단위 자동 갱신 (700글자=1페이지, 0.5단위 반올림) */}
-          <CountInput value={it.charCount}
-            onChange={v => {
-              const n = calcPagesNum(v);
-              update({
-                charCount: v,
-                ...(n !== null ? { quantity: String(n), unit: '페이지' } : {}),
-              });
-            }}
-            unit="글자" placeholder="글자수" style={rinp(72, { color: '#374151' })} />
+            placeholder="형식" style={rinp(48)} title="파일 형식 (예: docx, pdf)" />
+          {/* 단어수 — 천 단위 콤마 + "단어". word 기준 언어 시 수량 자동 갱신 */}
+          <CountInput value={it.wordCount} onChange={handleWordChange}
+            unit="단어" placeholder="단어수" style={rinp(68)} />
+          {/* 글자수 — 천 단위 콤마 + "글자". char 기준 언어 시 수량 자동 갱신 */}
+          <CountInput value={it.charCount} onChange={handleCharChange}
+            unit="글자" placeholder="글자수" style={rinp(68, { color: '#374151' })} />
         </div>
       );
+    }
     case 'interpretation':
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
@@ -393,68 +434,127 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
   addItemBelow: (idx: number) => void;
   moveItem: (idx: number, dir: 'up' | 'down') => void;
 }) {
+  const [showWarning, setShowWarning] = useState(false);
   const supply = calcItem(it, vatType).supply;
   const cfg    = SVC_CFG[it.productType];
 
+  // 번역 항목 교차검증 (글자수·단어수 모두 입력된 경우에만)
+  const validationPolicy = it.productType === 'translation' ? getPolicy(it.sourceLanguage) : null;
+  const validation: ValidationResult | null = (
+    validationPolicy && it.charCount && it.wordCount
+  ) ? validateCounts(validationPolicy, it.charCount, it.wordCount) : null;
+
+  // 상품 선택 시 productType, unit, sourceLanguage 자동 적용
   const selectProduct = (pid: number | null) => {
     const p = pid != null ? products.find(pr => pr.id === pid) : null;
-    updateItem(idx, { productId: p?.id ?? null, productName: p?.name ?? '', productType: (p?.productType as ServiceType) ?? it.productType, unit: p?.unit ?? SVC_DEFAULT_UNIT[it.productType] });
+    const productType = (p?.productType as ServiceType) ?? it.productType;
+    updateItem(idx, {
+      productId: p?.id ?? null,
+      productName: p?.name ?? '',
+      productType,
+      unit: p?.unit ?? SVC_DEFAULT_UNIT[productType],
+      ...(productType === 'translation' && p?.sourceLanguage
+        ? { sourceLanguage: p.sourceLanguage }
+        : {}),
+    });
   };
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 8px', borderBottom: '1px solid #f0f2f5', minHeight: 40, transition: 'background 0.1s' }}
-      onMouseEnter={e => (e.currentTarget.style.background = '#fafcff')} onMouseLeave={e => (e.currentTarget.style.background = '')}>
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 8px', borderBottom: '1px solid #f0f2f5', minHeight: 40, transition: 'background 0.1s' }}
+        onMouseEnter={e => (e.currentTarget.style.background = '#fafcff')} onMouseLeave={e => (e.currentTarget.style.background = '')}>
 
-      {/* ① 행 제어 */}
-      <div style={{ flexShrink: 0, width: 90 }}>
-        <RowControls idx={idx} total={total} onRemove={removeItem} onAddBelow={addItemBelow}
-          onMoveUp={i => moveItem(i, 'up')} onMoveDown={i => moveItem(i, 'down')} />
+        {/* ① 행 제어 */}
+        <div style={{ flexShrink: 0, width: 90 }}>
+          <RowControls idx={idx} total={total} onRemove={removeItem} onAddBelow={addItemBelow}
+            onMoveUp={i => moveItem(i, 'up')} onMoveDown={i => moveItem(i, 'down')} />
+        </div>
+
+        {/* ② 유형 */}
+        <div style={{ flexShrink: 0, width: 60 }}>
+          <ServiceTypeSelector value={it.productType}
+            onChange={t => updateItem(idx, { ...defaultItemForType(t), productId: null, productName: '' })} />
+        </div>
+
+        {/* ③ 상품 */}
+        <div style={{ flexShrink: 0, width: 150, display: 'flex' }}>
+          <InlineSearchField items={products.map(p => ({ id: p.id, label: p.name, sub: p.code ?? undefined }))}
+            value={it.productId} onChange={selectProduct} placeholder="상품 검색…" popupTitle="상품 검색"
+            accentColor={cfg.border} compact />
+        </div>
+
+        {/* ④ 서비스별 동적 필드 */}
+        <ServiceFields it={it} update={p => updateItem(idx, p)} />
+
+        {/* ⑤ AI 교차검증 배지 (번역 전용) */}
+        <div style={{ flexShrink: 0, width: 24, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          {validation?.status === 'ok' && (
+            <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 800, lineHeight: 1 }}
+              title="AI 교차검증 완료 — 글자수·단어수 비율 정상">✓</span>
+          )}
+          {validation?.status === 'warning' && (
+            <button type="button" onClick={() => setShowWarning(v => !v)}
+              style={{ background: showWarning ? '#fef3c7' : 'none', border: 'none', cursor: 'pointer', color: '#d97706', fontSize: 13, fontWeight: 800, padding: '1px 3px', borderRadius: 4, lineHeight: 1 }}
+              title={`AI 교차검증: ${validation.message}`}>⚠</button>
+          )}
+        </div>
+
+        {/* ⑥ 수량 */}
+        <div style={{ flexShrink: 0, width: 58 }}>
+          <NumericInput value={it.quantity} onChange={v => updateItem(idx, { quantity: v })} placeholder="1" />
+        </div>
+
+        {/* ⑦ 단위 */}
+        <div style={{ flexShrink: 0, width: 60 }}>
+          <UnitSelect value={it.unit} onChange={v => updateItem(idx, { unit: v })} />
+        </div>
+
+        {/* ⑧ 단가 */}
+        <div style={{ flexShrink: 0, width: 90 }}>
+          <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })} placeholder="0" suffix="원" />
+        </div>
+
+        {/* ⑨ 공급가액 */}
+        <div style={{ flexShrink: 0, width: 82, textAlign: 'right', fontWeight: 600, color: supply > 0 ? '#1e3a5f' : '#d1d5db', fontSize: 12, whiteSpace: 'nowrap' }}>
+          {supply > 0 ? supply.toLocaleString() + '원' : '—'}
+        </div>
+
+        {/* ⑩ 비고 — flex 가변폭 */}
+        <div style={{ flex: 1, minWidth: 120, maxWidth: 220 }}>
+          <input value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
+            placeholder="비고 (긴급, 감수 포함, 출장비 별도 등)"
+            style={{ ...rinp('100%'), color: '#6b7280' }}
+            title="긴급, 감수 포함, DTP 포함, 출장비 별도, 장비 설치 포함 등" />
+        </div>
       </div>
 
-      {/* ② 유형 */}
-      <div style={{ flexShrink: 0, width: 60 }}>
-        <ServiceTypeSelector value={it.productType}
-          onChange={t => updateItem(idx, { ...defaultItemForType(t), productId: null, productName: '' })} />
-      </div>
-
-      {/* ③ 상품 */}
-      <div style={{ flexShrink: 0, width: 150, display: 'flex' }}>
-        <InlineSearchField items={products.map(p => ({ id: p.id, label: p.name, sub: p.code ?? undefined }))}
-          value={it.productId} onChange={selectProduct} placeholder="상품 검색…" popupTitle="상품 검색"
-          accentColor={cfg.border} compact />
-      </div>
-
-      {/* ④ 서비스별 동적 필드 */}
-      <ServiceFields it={it} update={p => updateItem(idx, p)} />
-
-      {/* ⑤ 수량 */}
-      <div style={{ flexShrink: 0, width: 58 }}>
-        <NumericInput value={it.quantity} onChange={v => updateItem(idx, { quantity: v })} placeholder="1" />
-      </div>
-
-      {/* ⑥ 단위 */}
-      <div style={{ flexShrink: 0, width: 60 }}>
-        <UnitSelect value={it.unit} onChange={v => updateItem(idx, { unit: v })} />
-      </div>
-
-      {/* ⑦ 단가 */}
-      <div style={{ flexShrink: 0, width: 90 }}>
-        <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })} placeholder="0" suffix="원" />
-      </div>
-
-      {/* ⑧ 공급가액 */}
-      <div style={{ flexShrink: 0, width: 82, textAlign: 'right', fontWeight: 600, color: supply > 0 ? '#1e3a5f' : '#d1d5db', fontSize: 12, whiteSpace: 'nowrap' }}>
-        {supply > 0 ? supply.toLocaleString() + '원' : '—'}
-      </div>
-
-      {/* ⑨ 비고 — flex 가변폭 (충분한 메모 입력 공간) */}
-      <div style={{ flex: 1, minWidth: 120, maxWidth: 220 }}>
-        <input value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
-          placeholder="비고 (긴급, 감수 포함, 출장비 별도 등)"
-          style={{ ...rinp('100%'), color: '#6b7280' }}
-          title="긴급, 감수 포함, DTP 포함, 출장비 별도, 장비 설치 포함 등" />
-      </div>
-    </div>
+      {/* AI 경고 패널 — ⚠ 클릭 시 토글 */}
+      {showWarning && validation?.status === 'warning' && (
+        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderTop: 'none', borderRadius: '0 0 8px 8px', padding: '10px 16px', marginBottom: 2 }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#92400e', marginBottom: 4 }}>
+                ⚠ AI 문서 검증 결과 — {validation.message}
+              </div>
+              {validation.detail && (
+                <div style={{ fontSize: 11, color: '#78350f', marginBottom: 6 }}>
+                  실제 글자÷단어 비율: <strong>{validation.detail.actualRatio.toFixed(2)}</strong>
+                  &nbsp;(언어 정책 허용 범위: {validation.detail.expectedMin} ~ {validation.detail.expectedMax})
+                </div>
+              )}
+              <div style={{ fontSize: 11, color: '#92400e', lineHeight: 1.6 }}>
+                <strong>예상 원인:</strong> {validation.causes?.join(' · ')}
+              </div>
+              <div style={{ fontSize: 11, color: '#78350f', marginTop: 4 }}>
+                내용을 확인한 후 견적을 진행해 주세요. PM이 수량을 직접 수정하면 해당 값이 우선 적용됩니다.
+              </div>
+            </div>
+            <button onClick={() => setShowWarning(false)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: '#92400e', flexShrink: 0, padding: '0 4px' }}>×</button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -477,7 +577,7 @@ function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint }: {
 const COL_H: React.CSSProperties = { flexShrink: 0, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'center' };
 
 const SVC_FIELD_HINTS: Record<ServiceType, string> = {
-  translation:    '파일명 / 형식 / 단어수 / 글자수',
+  translation:    '언어 / 파일명 / 형식 / 단어수 / 글자수',
   interpretation: '행사일 / 시작 ~ 종료 / 장소',
   equipment:      '사용일 / 사용장소 / 사용기간',
   expense:        '',
@@ -670,6 +770,7 @@ export function QuoteEditorWorkspace({
           <div style={{ ...COL_H, width: 60 }}>유형</div>
           <div style={{ ...COL_H, width: 150, textAlign: 'left' }}>상품 🔍🧽</div>
           <div style={{ flex: 1, fontSize: 10, fontWeight: 700, color: '#9ca3af', minWidth: 0 }}>{fieldHint}</div>
+          <div style={{ flexShrink: 0, width: 24, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'center' }}>AI</div>
           <div style={{ ...COL_H, width: 58 }}>수량</div>
           <div style={{ ...COL_H, width: 60 }}>단위</div>
           <div style={{ ...COL_H, width: 90 }}>단가</div>
