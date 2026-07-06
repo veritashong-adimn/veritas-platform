@@ -62,19 +62,27 @@ const SVC_CFG: Record<ServiceType, { label: string; color: string; bg: string; b
   expense:        { label: '기타',   color: '#6b7280', bg: '#f9fafb', border: '#d1d5db', dot: '#9ca3af' },
 };
 const SVC_DEFAULT_UNIT: Record<ServiceType, string> = {
-  translation: '건', interpretation: '시간', equipment: '개', expense: '건',
+  translation: '페이지', interpretation: '일', equipment: '세트', expense: '건',
 };
-const BASE_UNITS = ['건', '페이지', '시간', '일', '명', '개', '회', '식', '단어', '글자'];
-function getUnitOptions(v: string) {
-  return BASE_UNITS.includes(v) || !v ? BASE_UNITS : [v, ...BASE_UNITS];
+const SVC_UNITS: Record<ServiceType, string[]> = {
+  translation:    ['페이지', '단어', '글자', '건', '개'],
+  interpretation: ['일', '시간', '회', '건'],
+  equipment:      ['세트', '개', '일', '회', '건'],
+  expense:        ['건', '개', '회', '일'],
+};
+function getUnitOptions(serviceType: ServiceType, v: string): string[] {
+  const list = SVC_UNITS[serviceType];
+  return list.includes(v) || !v ? list : [v, ...list];
 }
 
 // ─── 계산 ─────────────────────────────────────────────────────────────────────
 
 function calcItem(it: QuoteItemForm, vat: VatType) {
-  const p = Number(it.unitPrice.replace?.(/,/g, '') || 0);
-  const q = Number(it.quantity || 1);
-  const s = Math.round(q * p);
+  const p   = Number(it.unitPrice.replace?.(/,/g, '') || 0);
+  const q   = Number(it.quantity || 1);
+  // 통역: 투입인원 × 수량 × 단가(1인 기준). 인원 미입력 시 1명으로 계산
+  const cnt = it.productType === 'interpretation' ? (Number(it.interpreterCount) || 1) : 1;
+  const s   = Math.round(cnt * q * p);
   return { supply: s, tax: vat === 'taxable' ? Math.round(s * 0.1) : 0, total: s + (vat === 'taxable' ? Math.round(s * 0.1) : 0) };
 }
 function calcTotals(items: QuoteItemForm[], vat: VatType) {
@@ -88,7 +96,7 @@ function dateOffset(d: number) {
 function defaultItem(): QuoteItemForm {
   return {
     productId: null, productName: '', productType: 'translation',
-    quantity: '1', unit: '건', unitPrice: '', taxType: 'taxable', memo: '',
+    quantity: '1', unit: SVC_DEFAULT_UNIT['translation'], unitPrice: '', taxType: 'taxable', memo: '',
     sourceLanguage: 'ko',
     fileName: '', fileFormat: '', wordCount: '', charCount: '',
     interpretDate: '', interpretEndDate: '', startTime: '', endTime: '', interpretPlace: '', interpreterCount: '',
@@ -118,15 +126,18 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
       return { ...base, memo: [it.memo, ref].filter(Boolean).join(' / ') || undefined };
     }
     case 'interpretation': {
-      const dur = [it.startTime, it.endTime].filter(Boolean).join('~');
+      const cnt      = Number(it.interpreterCount) || 1;
+      const dur      = [it.startTime, it.endTime].filter(Boolean).join('~');
       const countTag = it.interpreterCount ? `투입인원: ${it.interpreterCount}명` : '';
-      const memo = [countTag, it.memo].filter(Boolean).join(' / ');
+      const memo     = [countTag, it.memo].filter(Boolean).join(' / ');
       return {
         ...base,
+        // 서버측 공급가액(quantity × unitPrice) 정합성 유지: 투입인원 × 수량을 quantity로 전송
+        quantity:          cnt * (Number(it.quantity) || 1),
         interpretDate:     it.interpretDate     || undefined,
         interpretPlace:    it.interpretPlace    || undefined,
         interpretDuration: dur                  || undefined,
-        eventEndDate:      it.interpretEndDate  || undefined,  // 기간 행사 종료일 저장
+        eventEndDate:      it.interpretEndDate  || undefined,
         memo:              memo                 || undefined,
       };
     }
@@ -307,10 +318,10 @@ function ServiceTypeSelector({ value, onChange }: { value: ServiceType; onChange
 // native <select>는 blur 이벤트로 즉시 닫혀 캡처·검수 불가.
 // mousedown 기반으로만 닫기 → 스크린샷/포커스 이동 시 목록 유지.
 
-function UnitSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function UnitSelect({ value, onChange, serviceType }: { value: string; onChange: (v: string) => void; serviceType: ServiceType }) {
   const [open, setOpen] = useState(false);
   const ref  = useRef<HTMLDivElement>(null);
-  const opts = getUnitOptions(value);
+  const opts = getUnitOptions(serviceType, value);
 
   useEffect(() => {
     if (!open) return;
@@ -660,12 +671,13 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
 
         {/* ⑦ 단위 */}
         <div>
-          <UnitSelect value={it.unit} onChange={v => updateItem(idx, { unit: v })} />
+          <UnitSelect value={it.unit} onChange={v => updateItem(idx, { unit: v })} serviceType={it.productType} />
         </div>
 
-        {/* ⑧ 단가 */}
-        <div>
-          <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })} placeholder="0" suffix="원"
+        {/* ⑧ 단가 — 통역은 1인 기준 단가 */}
+        <div title={it.productType === 'interpretation' ? '통역사 1인 기준 단가 (공급가액 = 투입인원 × 수량 × 단가)' : undefined}>
+          <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })}
+            placeholder={it.productType === 'interpretation' ? '1인 기준' : '0'} suffix="원"
             style={rinp()} />
         </div>
 
