@@ -574,8 +574,15 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
           )}
           {validation?.status === 'warning' && (
             <button type="button" onClick={() => setShowWarning(v => !v)}
-              style={{ background: showWarning ? '#fef3c7' : 'none', border: 'none', cursor: 'pointer', color: '#d97706', fontSize: 13, fontWeight: 800, padding: '1px 3px', borderRadius: 4, lineHeight: 1 }}
-              title={`AI 교차검증: ${validation.message}`}>⚠</button>
+              style={{
+                background: showWarning ? (validation.severity === 'danger' ? '#fee2e2' : '#fef3c7') : 'none',
+                border: 'none', cursor: 'pointer',
+                color: validation.severity === 'danger' ? '#dc2626' : '#d97706',
+                fontSize: 13, fontWeight: 800, padding: '1px 3px', borderRadius: 4, lineHeight: 1,
+              }}
+              title={`AI 교차검증: ${validation.message}`}>
+              {validation.severity === 'danger' ? '✕' : '⚠'}
+            </button>
           )}
         </div>
 
@@ -612,27 +619,33 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
 
       {/* AI 경고 패널 — ⚠ 클릭 시 토글 */}
       {showWarning && validation?.status === 'warning' && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderTop: 'none', borderRadius: '0 0 8px 8px', padding: '10px 16px', marginBottom: 2 }}>
+        <div style={{
+          background: validation.severity === 'danger' ? '#fff5f5' : '#fffbeb',
+          border: `1px solid ${validation.severity === 'danger' ? '#fca5a5' : '#fde68a'}`,
+          borderTop: 'none', borderRadius: '0 0 8px 8px', padding: '10px 16px', marginBottom: 2,
+        }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#92400e', marginBottom: 4 }}>
-                ⚠ AI 문서 검증 결과 — {validation.message}
+              <div style={{ fontSize: 12, fontWeight: 700, color: validation.severity === 'danger' ? '#991b1b' : '#92400e', marginBottom: 4 }}>
+                {validation.severity === 'danger' ? '✕ 위험' : '⚠ 주의'} — AI 문서 검증 결과
               </div>
               {validation.detail && (
-                <div style={{ fontSize: 11, color: '#78350f', marginBottom: 6 }}>
-                  실제 글자÷단어 비율: <strong>{validation.detail.actualRatio.toFixed(2)}</strong>
-                  &nbsp;(언어 정책 허용 범위: {validation.detail.expectedMin} ~ {validation.detail.expectedMax})
+                <div style={{ fontSize: 11, color: validation.severity === 'danger' ? '#7f1d1d' : '#78350f', marginBottom: 6 }}>
+                  {validation.detail.basis === 'character' ? '예상 단어수' : '예상 글자수'}:&nbsp;
+                  <strong>{validation.detail.expectedVal.toLocaleString()}</strong>
+                  &nbsp;/ 실제: <strong>{validation.detail.actualVal.toLocaleString()}</strong>
+                  &nbsp;— 오차 <strong>{validation.detail.deviationPct.toFixed(0)}%</strong>
                 </div>
               )}
-              <div style={{ fontSize: 11, color: '#92400e', lineHeight: 1.6 }}>
+              <div style={{ fontSize: 11, color: validation.severity === 'danger' ? '#991b1b' : '#92400e', lineHeight: 1.6 }}>
                 <strong>예상 원인:</strong> {validation.causes?.join(' · ')}
               </div>
-              <div style={{ fontSize: 11, color: '#78350f', marginTop: 4 }}>
+              <div style={{ fontSize: 11, color: validation.severity === 'danger' ? '#7f1d1d' : '#78350f', marginTop: 4 }}>
                 내용을 확인한 후 견적을 진행해 주세요. PM이 수량을 직접 수정하면 해당 값이 우선 적용됩니다.
               </div>
             </div>
             <button onClick={() => setShowWarning(false)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: '#92400e', flexShrink: 0, padding: '0 4px' }}>×</button>
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: validation.severity === 'danger' ? '#991b1b' : '#92400e', flexShrink: 0, padding: '0 4px' }}>×</button>
           </div>
         </div>
       )}
