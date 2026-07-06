@@ -106,12 +106,89 @@ export const LANGUAGE_PAGE_POLICIES: LanguagePagePolicy[] = [
     active: true, remark: '기본',
   },
 
-  // ── 기준 미확정 — 향후 업계 기준 조사 후 추가 ─────────────────────────────
-  { languageCode: 'ar', languageName: '아랍어',     calcType: 'word',      standardValue: 250, expectedCharsPerWord: null, active: false, remark: '기준 미확정' },
-  { languageCode: 'th', languageName: '태국어',     calcType: 'character', standardValue: 700, expectedCharsPerWord: null, active: false, remark: '기준 미확정' },
-  { languageCode: 'vi', languageName: '베트남어',   calcType: 'word',      standardValue: 250, expectedCharsPerWord: null, active: false, remark: '기준 미확정' },
-  { languageCode: 'ru', languageName: '러시아어',   calcType: 'word',      standardValue: 250, expectedCharsPerWord: null, active: false, remark: '기준 미확정' },
-  { languageCode: 'hi', languageName: '힌디어',     calcType: 'word',      standardValue: 250, expectedCharsPerWord: null, active: false, remark: '기준 미확정' },
+  // ── 유럽어 추가 (단어수 기준) ────────────────────────────────────────────────
+  {
+    languageCode: 'ru', languageName: '러시아어',
+    calcType: 'word', standardValue: 250,
+    expectedCharsPerWord: { min: 4.0, max: 10.0 },
+    active: true, remark: '기본',
+  },
+  {
+    languageCode: 'nl', languageName: '네덜란드어',
+    calcType: 'word', standardValue: 250,
+    expectedCharsPerWord: { min: 3.5, max: 9.0 },
+    active: true, remark: '기본',
+  },
+  {
+    languageCode: 'pl', languageName: '폴란드어',
+    calcType: 'word', standardValue: 250,
+    expectedCharsPerWord: { min: 4.0, max: 10.0 },
+    active: true, remark: '기본',
+  },
+  {
+    languageCode: 'cs', languageName: '체코어',
+    calcType: 'word', standardValue: 250,
+    expectedCharsPerWord: { min: 3.5, max: 9.0 },
+    active: true, remark: '기본',
+  },
+  {
+    languageCode: 'uk', languageName: '우크라이나어',
+    calcType: 'word', standardValue: 250,
+    expectedCharsPerWord: { min: 4.0, max: 10.0 },
+    active: true, remark: '기본',
+  },
+
+  // ── 아시아어 추가 ────────────────────────────────────────────────────────────
+  {
+    languageCode: 'vi', languageName: '베트남어',
+    calcType: 'word', standardValue: 250,
+    expectedCharsPerWord: null, active: true, remark: '기준 미확정',
+  },
+  {
+    languageCode: 'th', languageName: '태국어',
+    calcType: 'character', standardValue: 700,
+    expectedCharsPerWord: null, active: true, remark: '기준 미확정',
+  },
+  {
+    languageCode: 'id', languageName: '인도네시아어',
+    calcType: 'word', standardValue: 250,
+    expectedCharsPerWord: { min: 3.5, max: 8.0 },
+    active: true, remark: '기본',
+  },
+  {
+    languageCode: 'ms', languageName: '말레이어',
+    calcType: 'word', standardValue: 250,
+    expectedCharsPerWord: { min: 3.5, max: 8.0 },
+    active: true, remark: '기본',
+  },
+  {
+    languageCode: 'hi', languageName: '힌디어',
+    calcType: 'word', standardValue: 250,
+    expectedCharsPerWord: null, active: true, remark: '기준 미확정',
+  },
+  {
+    languageCode: 'mn', languageName: '몽골어',
+    calcType: 'character', standardValue: 700,
+    expectedCharsPerWord: null, active: true, remark: '기준 미확정',
+  },
+
+  // ── 중동어 추가 ──────────────────────────────────────────────────────────────
+  {
+    languageCode: 'ar', languageName: '아랍어',
+    calcType: 'word', standardValue: 250,
+    expectedCharsPerWord: null, active: true, remark: '기준 미확정',
+  },
+  {
+    languageCode: 'tr', languageName: '터키어',
+    calcType: 'word', standardValue: 250,
+    expectedCharsPerWord: { min: 3.5, max: 9.0 },
+    active: true, remark: '기본',
+  },
+  {
+    languageCode: 'fa', languageName: '페르시아어',
+    calcType: 'word', standardValue: 250,
+    expectedCharsPerWord: null, active: true, remark: '기준 미확정',
+  },
 ];
 
 /** 활성 정책 목록 (언어 선택 UI용) */

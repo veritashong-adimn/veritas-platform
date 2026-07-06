@@ -130,9 +130,17 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
 
 const rinp = (w: number | string = '100%', x: React.CSSProperties = {}): React.CSSProperties => ({
   width: typeof w === 'number' ? w : w, boxSizing: 'border-box', border: '1px solid #d1d5db',
-  borderRadius: 6, padding: '4px 6px', fontSize: 12, outline: 'none', minWidth: 0, background: '#fff', ...x,
+  borderRadius: 6, padding: '5px 7px', fontSize: 13, outline: 'none', minWidth: 0, background: '#fff', ...x,
 });
 const sep_s: React.CSSProperties = { flexShrink: 0, fontSize: 11, color: '#9ca3af', userSelect: 'none' };
+
+// ─── 상품정보 Table Grid 정의 ─────────────────────────────────────────────────
+// Header와 모든 Body Row가 동일한 grid-template-columns를 공유 → 컬럼 폭 변경 시 1곳만 수정
+const TABLE_COLS = '82px 60px 170px 1fr 28px 72px 64px 112px 112px minmax(130px, 220px)';
+const tblRow: React.CSSProperties = {
+  display: 'grid', gridTemplateColumns: TABLE_COLS,
+  columnGap: 5, padding: '4px 8px', alignItems: 'center',
+};
 
 // ─── 검색 팝업 ────────────────────────────────────────────────────────────────
 
@@ -192,8 +200,8 @@ function InlineSearchField({ items, value, onChange, placeholder = '검색…', 
     document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h);
   }, []);
 
-  const pad = compact ? '4px 6px' : '7px 10px';
-  const fs  = compact ? 12 : 13;
+  const pad = compact ? '5px 7px' : '7px 10px';
+  const fs  = compact ? 13 : 13;
 
   return (
     <>
@@ -234,12 +242,12 @@ function RowControls({ idx, total, onRemove, onAddBelow, onMoveUp, onMoveDown }:
 }) {
   const btn = (dis: boolean): React.CSSProperties => ({
     background: 'none', border: '1px solid #e5e7eb', borderRadius: 4,
-    cursor: dis ? 'default' : 'pointer', fontSize: 10, lineHeight: 1,
-    padding: '3px 5px', color: dis ? '#d1d5db' : '#6b7280',
+    cursor: dis ? 'default' : 'pointer', fontSize: 11, lineHeight: 1,
+    padding: '3px 6px', color: dis ? '#d1d5db' : '#6b7280',
   });
   const hov = (el: HTMLButtonElement, c: string) => { el.style.background = c; };
   return (
-    <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+    <div style={{ display: 'flex', gap: 2, alignItems: 'center', justifyContent: 'center' }}>
       <button type="button" title="행 삭제" onClick={() => onRemove(idx)} disabled={total <= 1}
         style={{ ...btn(total <= 1), color: total > 1 ? '#e11d48' : '#d1d5db', borderColor: total > 1 ? '#fca5a5' : '#e5e7eb' }}
         onMouseEnter={e => { if (total > 1) hov(e.currentTarget, '#fef2f2'); }} onMouseLeave={e => hov(e.currentTarget, 'none')}>−</button>
@@ -266,7 +274,7 @@ function ServiceTypeSelector({ value, onChange }: { value: ServiceType; onChange
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       <button type="button" onClick={() => setOpen(v => !v)}
-        style={{ display: 'flex', alignItems: 'center', gap: 3, background: cfg.bg, color: cfg.color, border: `1.5px solid ${cfg.border}`, borderRadius: 6, padding: '3px 7px', fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', width: 58 }}>
+        style={{ display: 'flex', alignItems: 'center', gap: 3, background: cfg.bg, color: cfg.color, border: `1.5px solid ${cfg.border}`, borderRadius: 6, padding: '3px 7px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', width: 58 }}>
         <span style={{ width: 5, height: 5, borderRadius: '50%', background: cfg.dot, flexShrink: 0 }} />
         {cfg.label}<span style={{ fontSize: 7, marginLeft: 'auto' }}>▼</span>
       </button>
@@ -290,7 +298,7 @@ function UnitSelect({ value, onChange }: { value: string; onChange: (v: string) 
   const opts = getUnitOptions(value);
   return (
     <select value={value} onChange={e => onChange(e.target.value)}
-      style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 4px', fontSize: 12, outline: 'none', background: '#fff', cursor: 'pointer', height: 28 }}>
+      style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #d1d5db', borderRadius: 6, padding: '5px 6px', fontSize: 13, outline: 'none', background: '#fff', cursor: 'pointer', height: 32 }}>
       {!value && <option value="">단위</option>}
       {opts.map(u => <option key={u} value={u}>{u}</option>)}
     </select>
@@ -350,10 +358,10 @@ function LangSelect({ value, onChange }: { value: string; onChange: (code: strin
   }, [open]);
 
   return (
-    <div ref={ref} style={{ position: 'relative', flexShrink: 0, width: 72 }}>
+    <div ref={ref} style={{ position: 'relative', flexShrink: 0, width: 110 }}>
       {/* 트리거 버튼 */}
       <button type="button" onClick={() => setOpen(v => !v)}
-        style={{ width: '100%', height: 28, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? '#6366f1' : '#d1d5db'}`, borderRadius: 6, padding: '0 5px', fontSize: 11, background: value ? '#fff' : '#f9fafb', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
+        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? '#6366f1' : '#d1d5db'}`, borderRadius: 6, padding: '0 7px', fontSize: 12, background: value ? '#fff' : '#f9fafb', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
           {selected?.languageName ?? '언어'}
         </span>
@@ -362,11 +370,11 @@ function LangSelect({ value, onChange }: { value: string; onChange: (code: strin
 
       {/* 팝오버 목록 — mousedown 외부 클릭 시만 닫힘 */}
       {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 128, padding: 4, maxHeight: 300, overflowY: 'auto' }}>
+        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 180, padding: 4, maxHeight: 300, overflowY: 'auto' }}>
           {/* 선택 해제 */}
           {value && (
             <button type="button" onClick={() => { onChange(''); setOpen(false); }}
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: '#9ca3af', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2 }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: '#9ca3af', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2, whiteSpace: 'nowrap' }}
               onMouseEnter={e => (e.currentTarget.style.background = '#f3f4f6')}
               onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
               선택 해제
@@ -375,7 +383,7 @@ function LangSelect({ value, onChange }: { value: string; onChange: (code: strin
           {active.map(p => (
             <button key={p.languageCode} type="button"
               onClick={() => { onChange(p.languageCode); setOpen(false); }}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === p.languageCode ? '#eff6ff' : 'none', color: value === p.languageCode ? '#1d4ed8' : '#111827', fontWeight: value === p.languageCode ? 700 : 400 }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === p.languageCode ? '#eff6ff' : 'none', color: value === p.languageCode ? '#1d4ed8' : '#111827', fontWeight: value === p.languageCode ? 700 : 400, whiteSpace: 'nowrap' }}
               onMouseEnter={e => { if (value !== p.languageCode) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
               onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === p.languageCode ? '#eff6ff' : 'none'; }}>
               <span style={{ fontSize: 9, color: '#9ca3af', flexShrink: 0 }}>{p.calcType === 'character' ? '글자' : '단어'}</span>
@@ -444,12 +452,12 @@ function ServiceFields({ it, update, products }: {
       };
 
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           {/* 언어: 상품에 언어 정보 있으면 읽기 전용 배지 / 없으면 수동 선택 */}
           {langFromProd ? (
-            <div style={{ flexShrink: 0, width: 72, height: 28, display: 'flex', alignItems: 'center',
+            <div style={{ flexShrink: 0, width: 110, height: 32, display: 'flex', alignItems: 'center',
               background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6,
-              padding: '0 6px', fontSize: 11, fontWeight: 600, color: '#1d4ed8',
+              padding: '0 8px', fontSize: 12, fontWeight: 600, color: '#1d4ed8',
               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               title={`상품에서 자동 설정: ${langLabel}`}>
               {langLabel}
@@ -459,22 +467,22 @@ function ServiceFields({ it, update, products }: {
           )}
           {/* 파일명 */}
           <input value={it.fileName} onChange={e => update({ fileName: e.target.value })}
-            placeholder="파일명" style={{ ...rinp('auto'), flex: 1, minWidth: 60 }} title="원본 파일명" />
+            placeholder="파일명" style={{ ...rinp('auto'), flex: 1, minWidth: 70 }} title="원본 파일명" />
           {/* 파일형식 */}
           <input value={it.fileFormat} onChange={e => update({ fileFormat: e.target.value })}
-            placeholder="형식" style={rinp(48)} title="파일 형식 (예: docx, pdf)" />
+            placeholder="형식" style={rinp(54)} title="파일 형식 (예: docx, pdf)" />
           {/* 단어수 — 천 단위 콤마 + "단어". word 기준 언어 시 수량 자동 갱신 */}
           <CountInput value={it.wordCount} onChange={handleWordChange}
-            unit="단어" placeholder="단어수" style={rinp(90)} />
+            unit="단어" placeholder="단어수" style={rinp(88)} />
           {/* 글자수 — 천 단위 콤마 + "글자". char 기준 언어 시 수량 자동 갱신 */}
           <CountInput value={it.charCount} onChange={handleCharChange}
-            unit="글자" placeholder="글자수" style={rinp(90, { color: '#374151' })} />
+            unit="글자" placeholder="글자수" style={rinp(88, { color: '#374151' })} />
         </div>
       );
     }
     case 'interpretation':
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <input type="date" value={it.interpretDate} onChange={e => update({ interpretDate: e.target.value })} style={rinp(98)} title="행사일" />
           <input value={it.startTime} onChange={e => update({ startTime: e.target.value })} placeholder="시작" style={rinp(50)} title="시작 시간 (예: 09:00)" />
           <span style={sep_s}>~</span>
@@ -484,14 +492,14 @@ function ServiceFields({ it, update, products }: {
       );
     case 'equipment':
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <input type="date" value={it.eventStartDate} onChange={e => update({ eventStartDate: e.target.value })} style={rinp(98)} title="장비 사용일" />
           <input value={it.itemLocation} onChange={e => update({ itemLocation: e.target.value })} placeholder="사용 장소" style={{ ...rinp('auto'), flex: 1, minWidth: 80 }} title="장비 사용 장소" />
           <input value={it.usagePeriod} onChange={e => update({ usagePeriod: e.target.value })} placeholder="사용기간" style={rinp(68)} title="사용 기간 (예: 1일, 반일)" />
         </div>
       );
     default:
-      return <div style={{ flex: 1, minWidth: 0 }} />;
+      return <div />;
   }
 }
 
@@ -531,33 +539,35 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
 
   return (
     <>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '4px 8px', borderBottom: '1px solid #f0f2f5', minHeight: 40, transition: 'background 0.1s' }}
+      <div style={{ ...tblRow, borderBottom: '1px solid #f0f2f5', minHeight: 42, transition: 'background 0.1s' }}
         onMouseEnter={e => (e.currentTarget.style.background = '#fafcff')} onMouseLeave={e => (e.currentTarget.style.background = '')}>
 
         {/* ① 행 제어 */}
-        <div style={{ flexShrink: 0, width: 90 }}>
+        <div>
           <RowControls idx={idx} total={total} onRemove={removeItem} onAddBelow={addItemBelow}
             onMoveUp={i => moveItem(i, 'up')} onMoveDown={i => moveItem(i, 'down')} />
         </div>
 
         {/* ② 유형 */}
-        <div style={{ flexShrink: 0, width: 60 }}>
+        <div>
           <ServiceTypeSelector value={it.productType}
             onChange={t => updateItem(idx, { ...defaultItemForType(t), productId: null, productName: '' })} />
         </div>
 
         {/* ③ 상품 */}
-        <div style={{ flexShrink: 0, width: 150, display: 'flex' }}>
+        <div style={{ display: 'flex' }}>
           <InlineSearchField items={products.map(p => ({ id: p.id, label: p.name, sub: p.code ?? undefined }))}
             value={it.productId} onChange={selectProduct} placeholder="상품 검색…" popupTitle="상품 검색"
             accentColor={cfg.border} compact />
         </div>
 
-        {/* ④ 서비스별 동적 필드 */}
-        <ServiceFields it={it} update={p => updateItem(idx, p)} products={products} />
+        {/* ④ 서비스별 동적 필드 — 1fr 셀, minWidth:0 으로 축소 허용 */}
+        <div style={{ minWidth: 0 }}>
+          <ServiceFields it={it} update={p => updateItem(idx, p)} products={products} />
+        </div>
 
         {/* ⑤ AI 교차검증 배지 (번역 전용) */}
-        <div style={{ flexShrink: 0, width: 24, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           {validation?.status === 'ok' && (
             <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 800, lineHeight: 1 }}
               title="AI 교차검증 완료 — 글자수·단어수 비율 정상">✓</span>
@@ -570,27 +580,29 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
         </div>
 
         {/* ⑥ 수량 */}
-        <div style={{ flexShrink: 0, width: 66 }}>
-          <NumericInput value={it.quantity} onChange={v => updateItem(idx, { quantity: v })} placeholder="1" />
+        <div>
+          <NumericInput value={it.quantity} onChange={v => updateItem(idx, { quantity: v })} placeholder="1"
+            style={rinp()} />
         </div>
 
         {/* ⑦ 단위 */}
-        <div style={{ flexShrink: 0, width: 60 }}>
+        <div>
           <UnitSelect value={it.unit} onChange={v => updateItem(idx, { unit: v })} />
         </div>
 
         {/* ⑧ 단가 */}
-        <div style={{ flexShrink: 0, width: 112 }}>
-          <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })} placeholder="0" suffix="원" />
+        <div>
+          <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })} placeholder="0" suffix="원"
+            style={rinp()} />
         </div>
 
         {/* ⑨ 공급가액 */}
-        <div style={{ flexShrink: 0, width: 112, textAlign: 'right', fontWeight: 600, color: supply > 0 ? '#1e3a5f' : '#d1d5db', fontSize: 12, whiteSpace: 'nowrap' }}>
+        <div style={{ textAlign: 'right', fontWeight: 600, color: supply > 0 ? '#1e3a5f' : '#d1d5db', fontSize: 13, whiteSpace: 'nowrap' }}>
           {supply > 0 ? supply.toLocaleString() + '원' : '—'}
         </div>
 
-        {/* ⑩ 비고 — flex 가변폭 */}
-        <div style={{ flex: 1, minWidth: 120, maxWidth: 220 }}>
+        {/* ⑩ 비고 */}
+        <div>
           <input value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
             placeholder="비고 (긴급, 감수 포함, 출장비 별도 등)"
             style={{ ...rinp('100%'), color: '#6b7280' }}
@@ -644,7 +656,7 @@ function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint }: {
 
 // ─── 컬럼 헤더 레이블 스타일 ─────────────────────────────────────────────────
 
-const COL_H: React.CSSProperties = { flexShrink: 0, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'center' };
+const COL_H: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#6b7280', textAlign: 'center' };
 
 const SVC_FIELD_HINTS: Record<ServiceType, string> = {
   translation:    '언어 / 파일명 / 형식 / 단어수 / 글자수',
@@ -834,18 +846,18 @@ export function QuoteEditorWorkspace({
       <Card>
         <CardSectionHeader badge="B" badgeBg="#f0fdf4" badgeColor="#16a34a" title="상품정보" hint="← 유형 클릭으로 번역/통역/장비/기타 전환" />
 
-        {/* 컬럼 헤더 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '0 8px 5px', borderBottom: '1.5px solid #e5e7eb', marginBottom: 2 }}>
-          <div style={{ ...COL_H, width: 90 }}>행 제어</div>
-          <div style={{ ...COL_H, width: 60 }}>유형</div>
-          <div style={{ ...COL_H, width: 150, textAlign: 'left' }}>상품 🔍🧽</div>
-          <div style={{ flex: 1, fontSize: 10, fontWeight: 700, color: '#9ca3af', minWidth: 0 }}>{fieldHint}</div>
-          <div style={{ flexShrink: 0, width: 24, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'center' }}>AI</div>
-          <div style={{ ...COL_H, width: 66 }}>수량</div>
-          <div style={{ ...COL_H, width: 60 }}>단위</div>
-          <div style={{ ...COL_H, width: 112 }}>단가</div>
-          <div style={{ ...COL_H, width: 112, textAlign: 'right' }}>공급가액</div>
-          <div style={{ flex: 1, minWidth: 120, maxWidth: 220, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'left' }}>비고</div>
+        {/* 컬럼 헤더 — TABLE_COLS 공유 Grid (Body Row와 완전 동일 구조) */}
+        <div style={{ ...tblRow, padding: '0 8px 7px', borderBottom: '1.5px solid #e5e7eb', marginBottom: 3 }}>
+          <div style={{ ...COL_H }}>행 제어</div>
+          <div style={{ ...COL_H }}>유형</div>
+          <div style={{ ...COL_H, textAlign: 'left' }}>상품 🔍🧽</div>
+          <div style={{ ...COL_H, textAlign: 'left' }}>{fieldHint}</div>
+          <div style={{ ...COL_H }}>AI</div>
+          <div style={{ ...COL_H }}>수량</div>
+          <div style={{ ...COL_H }}>단위</div>
+          <div style={{ ...COL_H }}>단가</div>
+          <div style={{ ...COL_H, textAlign: 'right' }}>공급가액</div>
+          <div style={{ ...COL_H, textAlign: 'left' }}>비고</div>
         </div>
 
         {/* 항목 행 */}
