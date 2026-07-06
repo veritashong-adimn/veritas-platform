@@ -37,10 +37,12 @@ export interface QuoteItemForm {
   wordCount:    string;
   charCount:    string;
   // 통역 전용
-  interpretDate:  string;
-  startTime:      string;
-  endTime:        string;
-  interpretPlace: string;
+  interpretDate:    string;  // 행사 시작일
+  interpretEndDate: string;  // 행사 종료일 (기간 행사)
+  startTime:        string;
+  endTime:          string;
+  interpretPlace:   string;
+  interpreterCount: string;  // 투입 인원
   // 장비 전용
   eventStartDate: string;
   itemLocation:   string;
@@ -89,7 +91,7 @@ function defaultItem(): QuoteItemForm {
     quantity: '1', unit: '건', unitPrice: '', taxType: 'taxable', memo: '',
     sourceLanguage: 'ko',
     fileName: '', fileFormat: '', wordCount: '', charCount: '',
-    interpretDate: '', startTime: '', endTime: '', interpretPlace: '',
+    interpretDate: '', interpretEndDate: '', startTime: '', endTime: '', interpretPlace: '', interpreterCount: '',
     eventStartDate: '', itemLocation: '', usagePeriod: '',
   };
 }
@@ -117,7 +119,16 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
     }
     case 'interpretation': {
       const dur = [it.startTime, it.endTime].filter(Boolean).join('~');
-      return { ...base, interpretDate: it.interpretDate || undefined, interpretPlace: it.interpretPlace || undefined, interpretDuration: dur || undefined, memo: it.memo || undefined };
+      const countTag = it.interpreterCount ? `투입인원: ${it.interpreterCount}명` : '';
+      const memo = [countTag, it.memo].filter(Boolean).join(' / ');
+      return {
+        ...base,
+        interpretDate:     it.interpretDate     || undefined,
+        interpretPlace:    it.interpretPlace    || undefined,
+        interpretDuration: dur                  || undefined,
+        eventEndDate:      it.interpretEndDate  || undefined,  // 기간 행사 종료일 저장
+        memo:              memo                 || undefined,
+      };
     }
     case 'equipment':
       return { ...base, eventStartDate: it.eventStartDate || undefined, itemLocation: it.itemLocation || undefined, usagePeriod: it.usagePeriod || undefined, memo: it.memo || undefined };
@@ -292,16 +303,47 @@ function ServiceTypeSelector({ value, onChange }: { value: ServiceType; onChange
   );
 }
 
-// ─── 단위 선택 ───────────────────────────────────────────────────────────────
+// ─── 단위 선택 — Popover 기반 커스텀 드롭다운 ──────────────────────────────────
+// native <select>는 blur 이벤트로 즉시 닫혀 캡처·검수 불가.
+// mousedown 기반으로만 닫기 → 스크린샷/포커스 이동 시 목록 유지.
 
 function UnitSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref  = useRef<HTMLDivElement>(null);
   const opts = getUnitOptions(value);
+
+  useEffect(() => {
+    if (!open) return;
+    const onMD  = (e: MouseEvent)   => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onMD);
+    document.addEventListener('keydown',   onKey);
+    return () => {
+      document.removeEventListener('mousedown', onMD);
+      document.removeEventListener('keydown',   onKey);
+    };
+  }, [open]);
+
   return (
-    <select value={value} onChange={e => onChange(e.target.value)}
-      style={{ width: '100%', boxSizing: 'border-box', border: '1px solid #d1d5db', borderRadius: 6, padding: '5px 6px', fontSize: 13, outline: 'none', background: '#fff', cursor: 'pointer', height: 32 }}>
-      {!value && <option value="">단위</option>}
-      {opts.map(u => <option key={u} value={u}>{u}</option>)}
-    </select>
+    <div ref={ref} style={{ position: 'relative', width: '100%' }}>
+      <button type="button" onClick={() => setOpen(v => !v)}
+        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? '#6366f1' : '#d1d5db'}`, borderRadius: 6, padding: '0 7px', fontSize: 13, background: '#fff', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value || '단위'}</span>
+        <span style={{ fontSize: 8, color: '#9ca3af', flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, zIndex: 900, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 9, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 72, padding: 4 }}>
+          {opts.map(u => (
+            <button key={u} type="button" onClick={() => { onChange(u); setOpen(false); }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 13, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === u ? '#eff6ff' : 'none', color: value === u ? '#1d4ed8' : '#111827', fontWeight: value === u ? 700 : 400 }}
+              onMouseEnter={e => { if (value !== u) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === u ? '#eff6ff' : 'none'; }}>
+              {u}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -482,12 +524,36 @@ function ServiceFields({ it, update, products }: {
     }
     case 'interpretation':
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <input type="date" value={it.interpretDate} onChange={e => update({ interpretDate: e.target.value })} style={rinp(98)} title="행사일" />
-          <input value={it.startTime} onChange={e => update({ startTime: e.target.value })} placeholder="시작" style={rinp(50)} title="시작 시간 (예: 09:00)" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
+          {/* 행사 시작일 */}
+          <input type="date" value={it.interpretDate}
+            onChange={e => update({ interpretDate: e.target.value })}
+            style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="행사 시작일" />
           <span style={sep_s}>~</span>
-          <input value={it.endTime} onChange={e => update({ endTime: e.target.value })} placeholder="종료" style={rinp(50)} title="종료 시간 (예: 18:00)" />
-          <input value={it.interpretPlace} onChange={e => update({ interpretPlace: e.target.value })} placeholder="장소" style={{ ...rinp('auto'), flex: 1, minWidth: 60 }} title="행사 장소" />
+          {/* 행사 종료일 — 기간 행사 시 입력 / 당일은 비워둠 */}
+          <input type="date" value={it.interpretEndDate}
+            onChange={e => update({ interpretEndDate: e.target.value })}
+            style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="행사 종료일 (기간 행사 시 입력, 당일은 비워두세요)" />
+          {/* 날짜 / 시간 구분선 */}
+          <span style={{ ...sep_s, color: '#d1d5db', fontSize: 15, flexShrink: 0 }}>|</span>
+          {/* 시작시간 */}
+          <input value={it.startTime}
+            onChange={e => update({ startTime: e.target.value })}
+            placeholder="시작시간" style={{ ...rinp(62), flexShrink: 0 }} title="시작 시간 (예: 09:00)" />
+          <span style={sep_s}>~</span>
+          {/* 종료시간 */}
+          <input value={it.endTime}
+            onChange={e => update({ endTime: e.target.value })}
+            placeholder="종료시간" style={{ ...rinp(62), flexShrink: 0 }} title="종료 시간 (예: 18:00)" />
+          {/* 장소 */}
+          <input value={it.interpretPlace}
+            onChange={e => update({ interpretPlace: e.target.value })}
+            placeholder="장소" style={{ ...rinp('auto'), flex: 1, minWidth: 50 }} title="행사 장소" />
+          {/* 투입 인원 */}
+          <input value={it.interpreterCount}
+            onChange={e => update({ interpreterCount: e.target.value.replace(/[^\d]/g, '') })}
+            placeholder="인원" style={{ ...rinp(46), flexShrink: 0 }} title="투입 통역사 인원 수 (예: 2)" />
+          <span style={{ ...sep_s, flexShrink: 0 }}>명</span>
         </div>
       );
     case 'equipment':
@@ -673,7 +739,7 @@ const COL_H: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#6b7
 
 const SVC_FIELD_HINTS: Record<ServiceType, string> = {
   translation:    '언어 / 파일명 / 형식 / 단어수 / 글자수',
-  interpretation: '행사일 / 시작 ~ 종료 / 장소',
+  interpretation: '시작일 ~ 종료일 / 시작시간 ~ 종료시간 / 장소 / 인원',
   equipment:      '사용일 / 사용장소 / 사용기간',
   expense:        '',
 };
