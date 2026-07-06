@@ -122,6 +122,24 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
   const fmt = (v: string | null) => v ? Number(v).toLocaleString() : '—';
   const hasAnyFilter = !!(search || dateFrom || dateTo || statusFilter !== 'all' || typeFilter !== 'all');
 
+  // ── 견적서 작성 Workspace: asPage 인라인 렌더링 (사이드바 유지) ──────────────
+  if (showEditor) {
+    return (
+      // AdminDashboard 스크롤 컨텐츠 padding(24px 28px)을 상쇄 → 전체 폭 활용
+      <div style={{ margin: '-24px -28px' }}>
+        <QuoteEditorWorkspace
+          asPage
+          token={token}
+          projectId={null}
+          onClose={() => setShowEditor(false)}
+          onSaved={() => { setShowEditor(false); fetchQuotes(); }}
+          onToast={onToast}
+          adminList={adminUsers}
+        />
+      </div>
+    );
+  }
+
   // 현황 KPI 데이터
   const kpiItems = [
     { label: '전체', value: 'all',      count: quotes.length,                                       color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe' },
@@ -357,17 +375,6 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
         )}
       </div>
 
-      {/* ── 견적서 작성 모달 ── */}
-      {showEditor && (
-        <QuoteEditorWorkspace
-          token={token}
-          projectId={null}
-          onClose={() => setShowEditor(false)}
-          onSaved={() => { setShowEditor(false); fetchQuotes(); }}
-          onToast={onToast}
-          adminList={adminUsers}
-        />
-      )}
     </div>
   );
 }
