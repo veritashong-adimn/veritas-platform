@@ -324,16 +324,67 @@ function CountInput({ value, onChange, unit, placeholder, style }: {
   );
 }
 
-// ─── 언어 선택 (Language Policy 기반 페이지 계산용) ──────────────────────────
+// ─── 언어 선택 — Popover 기반 커스텀 드롭다운 ──────────────────────────────────
+// native <select>는 blur 이벤트로 즉시 닫혀 캡처·검수 불가.
+// mousedown 기반으로만 닫기 → 스크린샷/포커스 이동 시 목록 유지.
 
 function LangSelect({ value, onChange }: { value: string; onChange: (code: string) => void }) {
-  const active = getActivePolicies();
+  const [open, setOpen] = useState(false);
+  const ref             = useRef<HTMLDivElement>(null);
+  const active          = getActivePolicies();
+  const selected        = active.find(p => p.languageCode === value);
+
+  useEffect(() => {
+    if (!open) return;
+    // mousedown만 감지 — blur/focusout 은 감지하지 않아 캡처·포커스 이동 시 안 닫힘
+    const onMD = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onMD);
+    document.addEventListener('keydown',   onKey);
+    return () => {
+      document.removeEventListener('mousedown', onMD);
+      document.removeEventListener('keydown',   onKey);
+    };
+  }, [open]);
+
   return (
-    <select value={value} onChange={e => onChange(e.target.value)}
-      style={{ width: 72, flexShrink: 0, boxSizing: 'border-box', border: '1px solid #d1d5db', borderRadius: 6, padding: '4px 2px', fontSize: 11, outline: 'none', background: value ? '#fff' : '#f9fafb', cursor: 'pointer', height: 28, color: value ? '#111827' : '#9ca3af' }}>
-      <option value="">언어</option>
-      {active.map(p => <option key={p.languageCode} value={p.languageCode}>{p.languageName}</option>)}
-    </select>
+    <div ref={ref} style={{ position: 'relative', flexShrink: 0, width: 72 }}>
+      {/* 트리거 버튼 */}
+      <button type="button" onClick={() => setOpen(v => !v)}
+        style={{ width: '100%', height: 28, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? '#6366f1' : '#d1d5db'}`, borderRadius: 6, padding: '0 5px', fontSize: 11, background: value ? '#fff' : '#f9fafb', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
+          {selected?.languageName ?? '언어'}
+        </span>
+        <span style={{ fontSize: 8, flexShrink: 0, color: '#9ca3af' }}>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {/* 팝오버 목록 — mousedown 외부 클릭 시만 닫힘 */}
+      {open && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 128, padding: 4, maxHeight: 300, overflowY: 'auto' }}>
+          {/* 선택 해제 */}
+          {value && (
+            <button type="button" onClick={() => { onChange(''); setOpen(false); }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: '#9ca3af', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2 }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#f3f4f6')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
+              선택 해제
+            </button>
+          )}
+          {active.map(p => (
+            <button key={p.languageCode} type="button"
+              onClick={() => { onChange(p.languageCode); setOpen(false); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === p.languageCode ? '#eff6ff' : 'none', color: value === p.languageCode ? '#1d4ed8' : '#111827', fontWeight: value === p.languageCode ? 700 : 400 }}
+              onMouseEnter={e => { if (value !== p.languageCode) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === p.languageCode ? '#eff6ff' : 'none'; }}>
+              <span style={{ fontSize: 9, color: '#9ca3af', flexShrink: 0 }}>{p.calcType === 'character' ? '글자' : '단어'}</span>
+              {p.languageName}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
