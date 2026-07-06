@@ -62,6 +62,23 @@ function getUnitOptions(v: string) {
   return BASE_UNITS.includes(v) || !v ? BASE_UNITS : [v, ...BASE_UNITS];
 }
 
+const CHARS_PER_PAGE = 700;
+
+/** 글자수 → 페이지 수 자동 계산 (0.5단위 반올림)
+ *  소수점: 0.0~0.1 → 내림, 0.2~0.5 → 0.5, 0.6~0.9 → 올림 */
+function calcPages(charCountStr: string): string {
+  const chars = Number(charCountStr.replace?.(/,/g, '') || 0);
+  if (!chars || chars <= 0) return '';
+  const raw   = chars / CHARS_PER_PAGE;
+  const floor = Math.floor(raw);
+  const dec   = raw - floor;
+  let pages: number;
+  if      (dec <= 0.1) pages = floor;
+  else if (dec <= 0.5) pages = floor + 0.5;
+  else                 pages = floor + 1;
+  return `${pages}페이지`;
+}
+
 // ─── 계산 ─────────────────────────────────────────────────────────────────────
 
 function calcItem(it: QuoteItemForm, vat: VatType) {
@@ -291,19 +308,63 @@ function UnitSelect({ value, onChange }: { value: string; onChange: (v: string) 
   );
 }
 
+// ─── 숫자 + 단위 서식 입력 (단어수/글자수 전용) ─────────────────────────────────
+
+/** 포커스 중: 숫자만 편집 / 포커스 해제: "50,000단어" 형식 표시 */
+function CountInput({ value, onChange, unit, placeholder, style }: {
+  value:        string;
+  onChange:     (raw: string) => void;
+  unit:         string;
+  placeholder?: string;
+  style?:       React.CSSProperties;
+}) {
+  const [focused, setFocused] = useState(false);
+  const num = Number(value.replace?.(/,/g, '') || 0);
+  const displayVal = focused
+    ? value
+    : (value ? `${num.toLocaleString()}${unit}` : '');
+  return (
+    <input
+      value={displayVal}
+      onChange={e => onChange(e.target.value.replace(/[^\d]/g, ''))}
+      onFocus={e => { setFocused(true); e.target.select(); }}
+      onBlur={() => setFocused(false)}
+      placeholder={placeholder}
+      style={style}
+    />
+  );
+}
+
 // ─── 서비스 유형별 동적 필드 ─────────────────────────────────────────────────
 
 function ServiceFields({ it, update }: { it: QuoteItemForm; update: (p: Partial<QuoteItemForm>) => void }) {
   switch (it.productType) {
-    case 'translation':
+    case 'translation': {
+      const pages = calcPages(it.charCount);
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
-          <input value={it.fileName}   onChange={e => update({ fileName: e.target.value })}   placeholder="파일명"  style={{ ...rinp('auto'), flex: 1, minWidth: 80 }} title="원본 파일명" />
-          <input value={it.fileFormat} onChange={e => update({ fileFormat: e.target.value })} placeholder="형식"   style={rinp(56)}  title="파일 형식 (예: docx, pdf)" />
-          <input value={it.wordCount}  onChange={e => update({ wordCount: e.target.value })}  placeholder="단어수" style={rinp(60)}  title="단어수 (참고용)" />
-          <input value={it.charCount}  onChange={e => update({ charCount: e.target.value })}  placeholder="글자수" style={rinp(60, { color: '#6b7280' })} title="글자수 (참고용)" />
+          {/* 파일명 */}
+          <input value={it.fileName} onChange={e => update({ fileName: e.target.value })}
+            placeholder="파일명" style={{ ...rinp('auto'), flex: 1, minWidth: 80 }} title="원본 파일명" />
+          {/* 파일형식 */}
+          <input value={it.fileFormat} onChange={e => update({ fileFormat: e.target.value })}
+            placeholder="형식" style={rinp(52)} title="파일 형식 (예: docx, pdf)" />
+          {/* 단어수 — 천 단위 콤마 + "단어" 자동 표시 */}
+          <CountInput value={it.wordCount} onChange={v => update({ wordCount: v })}
+            unit="단어" placeholder="단어수" style={rinp(72)} />
+          {/* 글자수 — 천 단위 콤마 + "글자" 자동 표시 */}
+          <CountInput value={it.charCount} onChange={v => update({ charCount: v })}
+            unit="글자" placeholder="글자수" style={rinp(72, { color: '#374151' })} />
+          {/* 페이지 자동 계산 (읽기 전용) */}
+          {pages && (
+            <span style={{ fontSize: 11, fontWeight: 600, color: '#2563eb', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6, padding: '3px 7px', whiteSpace: 'nowrap', flexShrink: 0 }}
+              title="700글자 = 1페이지 기준 자동 계산">
+              ≈ {pages}
+            </span>
+          )}
         </div>
       );
+    }
     case 'interpretation':
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1, minWidth: 0 }}>
@@ -390,10 +451,12 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
         {supply > 0 ? supply.toLocaleString() + '원' : '—'}
       </div>
 
-      {/* ⑨ 비고 */}
-      <div style={{ flexShrink: 0, width: 88 }}>
+      {/* ⑨ 비고 — flex 가변폭 (충분한 메모 입력 공간) */}
+      <div style={{ flex: 1, minWidth: 120, maxWidth: 220 }}>
         <input value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
-          placeholder="비고" style={rinp(88, { color: '#6b7280' })} title="긴급, 감수 포함, 출장비 별도 등" />
+          placeholder="비고 (긴급, 감수 포함, 출장비 별도 등)"
+          style={{ ...rinp('100%'), color: '#6b7280' }}
+          title="긴급, 감수 포함, DTP 포함, 출장비 별도, 장비 설치 포함 등" />
       </div>
     </div>
   );
@@ -615,7 +678,7 @@ export function QuoteEditorWorkspace({
           <div style={{ ...COL_H, width: 60 }}>단위</div>
           <div style={{ ...COL_H, width: 90 }}>단가</div>
           <div style={{ ...COL_H, width: 82, textAlign: 'right' }}>공급가액</div>
-          <div style={{ ...COL_H, width: 88 }}>비고</div>
+          <div style={{ flex: 1, minWidth: 120, maxWidth: 220, fontSize: 10, fontWeight: 700, color: '#9ca3af', textAlign: 'left' }}>비고</div>
         </div>
 
         {/* 항목 행 */}
