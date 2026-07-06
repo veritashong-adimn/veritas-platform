@@ -83,9 +83,11 @@ function getUnitOptions(serviceType: ServiceType, v: string): string[] {
 function calcItem(it: QuoteItemForm, vat: VatType) {
   const p   = Number(it.unitPrice.replace?.(/,/g, '') || 0);
   const q   = Number(it.quantity || 1);
-  // 통역: 투입인원 × 수량 × 단가(1인 기준). 인원 미입력 시 1명으로 계산
-  const cnt = it.productType === 'interpretation' ? (Number(it.interpreterCount) || 1) : 1;
-  const s   = Math.round(cnt * q * p);
+  // 통역: 투입인원 × 수량 × 단가(1인 기준). 미입력 시 1명
+  const cnt  = it.productType === 'interpretation' ? (Number(it.interpreterCount) || 1) : 1;
+  // 장비: 사용일수 × 수량 × 단가. 미입력 시 1일
+  const days = it.productType === 'equipment'      ? (Number(it.usagePeriod)      || 1) : 1;
+  const s    = Math.round(days * cnt * q * p);
   return { supply: s, tax: vat === 'taxable' ? Math.round(s * 0.1) : 0, total: s + (vat === 'taxable' ? Math.round(s * 0.1) : 0) };
 }
 function calcTotals(items: QuoteItemForm[], vat: VatType) {
@@ -145,15 +147,19 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
         memo:              memo                 || undefined,
       };
     }
-    case 'equipment':
+    case 'equipment': {
+      const useDays = Number(it.usagePeriod) || 1;
       return {
         ...base,
+        // 서버측 공급가액(quantity × unitPrice) 정합성 유지: 사용일수 × 수량을 quantity로 전송
+        quantity:       useDays * (Number(it.quantity) || 1),
         eventStartDate: it.eventStartDate || undefined,
         eventEndDate:   it.eventEndDate   || undefined,
         itemLocation:   it.itemLocation   || undefined,
-        usagePeriod:    it.usagePeriod    || undefined,  // 숫자값만 저장
+        usagePeriod:    it.usagePeriod    || undefined,
         memo:           it.memo           || undefined,
       };
+    }
     case 'expense':
       return {
         ...base,
@@ -753,11 +759,9 @@ function ServiceFields({ it, update, products }: {
           <input value={it.interpretPlace}
             onChange={e => update({ interpretPlace: e.target.value })}
             placeholder="장소" style={{ ...rinp('auto'), flex: 1, minWidth: 50 }} title="행사 장소" />
-          {/* 투입 인원 */}
-          <input value={it.interpreterCount}
-            onChange={e => update({ interpreterCount: e.target.value.replace(/[^\d]/g, '') })}
-            placeholder="인원" style={{ ...rinp(46), flexShrink: 0 }} title="투입 통역사 인원 수 (예: 2)" />
-          <span style={{ ...sep_s, flexShrink: 0 }}>명</span>
+          {/* 투입 인원 — "2명" 형태 표시 (CountInput) */}
+          <CountInput value={it.interpreterCount} onChange={v => update({ interpreterCount: v })}
+            unit="명" placeholder="인원" style={{ ...rinp(72), flexShrink: 0 }} />
         </div>
       );
     case 'equipment':
