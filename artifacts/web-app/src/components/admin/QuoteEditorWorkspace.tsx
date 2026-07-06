@@ -48,6 +48,8 @@ export interface QuoteItemForm {
   eventEndDate:   string;  // 사용 종료일 (기간 사용)
   itemLocation:   string;
   usagePeriod:    string;  // 사용일수 (숫자, "일" 표시는 UI에서만)
+  // 기타 전용
+  expenseType:    string;  // 서비스 유형 (공증/속기/녹취 등)
 }
 
 interface Company   { id: number; name: string; divisionNames?: string[] }
@@ -69,7 +71,7 @@ const SVC_UNITS: Record<ServiceType, string[]> = {
   translation:    ['페이지', '단어', '글자', '건', '개'],
   interpretation: ['일', '시간', '회', '건'],
   equipment:      ['세트', '개', '일', '회', '건'],
-  expense:        ['건', '개', '회', '일'],
+  expense:        ['건', '회', '시간', '일', '페이지', '부', '권', '개', '세트'],
 };
 function getUnitOptions(serviceType: ServiceType, v: string): string[] {
   const list = SVC_UNITS[serviceType];
@@ -102,6 +104,7 @@ function defaultItem(): QuoteItemForm {
     fileName: '', fileFormat: '', wordCount: '', charCount: '',
     interpretDate: '', interpretEndDate: '', startTime: '', endTime: '', interpretPlace: '', interpreterCount: '',
     eventStartDate: '', eventEndDate: '', itemLocation: '', usagePeriod: '',
+    expenseType: '',
   };
 }
 function defaultItemForType(t: ServiceType): Partial<QuoteItemForm> {
@@ -150,6 +153,12 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
         itemLocation:   it.itemLocation   || undefined,
         usagePeriod:    it.usagePeriod    || undefined,  // 숫자값만 저장
         memo:           it.memo           || undefined,
+      };
+    case 'expense':
+      return {
+        ...base,
+        interpretType: it.expenseType || undefined,  // 서비스 유형 (interpretType 컬럼 재활용)
+        memo:          it.memo        || undefined,
       };
     default:
       return { ...base, memo: it.memo || undefined };
@@ -457,6 +466,63 @@ function LangSelect({ value, onChange }: { value: string; onChange: (code: strin
   );
 }
 
+// ─── 기타 서비스 유형 선택 ───────────────────────────────────────────────────
+// Popover 기반, mousedown 외부 클릭/ESC 시만 닫힘
+
+const EXPENSE_TYPES = [
+  '공증', '속기', '녹취', '더빙', '편집', '감수', 'DTP',
+  '디자인', '인쇄', '배송', '출장', '실비', '기타',
+] as const;
+
+function ExpenseTypeSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onMD  = (e: MouseEvent)    => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onMD);
+    document.addEventListener('keydown',   onKey);
+    return () => {
+      document.removeEventListener('mousedown', onMD);
+      document.removeEventListener('keydown',   onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: 'relative', flexShrink: 0, width: 110 }}>
+      <button type="button" onClick={() => setOpen(v => !v)}
+        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? '#6b7280' : '#d1d5db'}`, borderRadius: 6, padding: '0 7px', fontSize: 12, background: '#fff', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
+          {value || '서비스유형'}
+        </span>
+        <span style={{ fontSize: 8, flexShrink: 0, color: '#9ca3af' }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 110, padding: 4, maxHeight: 300, overflowY: 'auto' }}>
+          {value && (
+            <button type="button" onClick={() => { onChange(''); setOpen(false); }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: '#9ca3af', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2, whiteSpace: 'nowrap' }}
+              onMouseEnter={e => (e.currentTarget.style.background = '#f3f4f6')}
+              onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
+              선택 해제
+            </button>
+          )}
+          {EXPENSE_TYPES.map(t => (
+            <button key={t} type="button" onClick={() => { onChange(t); setOpen(false); }}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === t ? '#f9fafb' : 'none', color: value === t ? '#111827' : '#374151', fontWeight: value === t ? 700 : 400, whiteSpace: 'nowrap' }}
+              onMouseEnter={e => { if (value !== t) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === t ? '#f9fafb' : 'none'; }}>
+              {t}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── 서비스 유형별 동적 필드 ─────────────────────────────────────────────────
 
 function ServiceFields({ it, update, products }: {
@@ -594,6 +660,12 @@ function ServiceFields({ it, update, products }: {
           {/* 사용일수 — 숫자 입력, "일" 자동 표시 (번역 단어수·글자수와 동일 UX) */}
           <CountInput value={it.usagePeriod} onChange={v => update({ usagePeriod: v })}
             unit="일" placeholder="사용일수" style={{ ...rinp(72), flexShrink: 0 }} />
+        </div>
+      );
+    case 'expense':
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <ExpenseTypeSelect value={it.expenseType} onChange={v => update({ expenseType: v })} />
         </div>
       );
     default:
@@ -774,7 +846,7 @@ const SVC_FIELD_HINTS: Record<ServiceType, string> = {
   translation:    '언어 / 파일명 / 형식 / 단어수 / 글자수',
   interpretation: '시작일 ~ 종료일 / 시작시간 ~ 종료시간 / 장소 / 인원',
   equipment:      '시작일 ~ 종료일 / 사용 장소 / 사용일수',
-  expense:        '',
+  expense:        '서비스유형 (공증·속기·녹취·더빙·편집·감수·DTP 등)',
 };
 
 // ─── Props ────────────────────────────────────────────────────────────────────
