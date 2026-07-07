@@ -11,15 +11,22 @@ import { renderPdfFirstPageAsPng, buildImageDataUrl } from "../lib/documentOcr";
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
-// ─── multer — 메모리 저장, 최대 5파일 × 20MB ──────────────────────────────────
+// ─── multer — 목적별 파일 업로드 (각 최대 10파일 × 20MB) ───────────────────────
+// requestFiles: 고객 요청자료 (이메일·발주서·이미지 등) — OCR/GPT로 요청 의도 파악
+// sourceFiles:  번역 원문 파일 — 글자수·단어수·페이지수 추출
+
+const REQUEST_FILE_EXTS = [".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx", ".txt", ".ppt", ".pptx"];
+const SOURCE_FILE_EXTS  = [".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx", ".txt", ".ppt", ".pptx", ".xls", ".xlsx"];
 
 const aiUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const allowed = [".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"];
-    cb(null, allowed.includes(ext));
+    const ext  = path.extname(file.originalname).toLowerCase();
+    const name = file.fieldname;
+    if (name === "requestFiles") { cb(null, REQUEST_FILE_EXTS.includes(ext)); return; }
+    if (name === "sourceFiles")  { cb(null, SOURCE_FILE_EXTS.includes(ext));  return; }
+    cb(null, false);
   },
 });
 
@@ -95,7 +102,8 @@ RESPONSE FORMAT (strict JSON only):
 
 function buildUserMessage(
   requestText: string,
-  filesInfo: string,
+  requestFilesInfo: string,   // 고객 요청자료 (서비스 의도 파악용)
+  sourceFilesInfo: string,    // 번역 원문 (글자수·단어수 추출용)
   products: Array<{
     id: number; name: string; productType: string;
     sourceLanguage: string | null; targetLanguage: string | null;
@@ -103,25 +111,27 @@ function buildUserMessage(
   }>,
 ): string {
   const productList = products.map(p => ({
-    id: p.id,
-    name: p.name,
-    type: p.productType,
-    src: p.sourceLanguage,
-    tgt: p.targetLanguage,
-    unit: p.unit,
-    basePrice: p.basePrice ?? 0,
+    id: p.id, name: p.name, type: p.productType,
+    src: p.sourceLanguage, tgt: p.targetLanguage,
+    unit: p.unit, basePrice: p.basePrice ?? 0,
   }));
 
-  return `## 고객 요청내용
+  return `## 고객 요청내용 (텍스트)
 ${requestText || "(없음)"}
 
-## 업로드 파일 정보
-${filesInfo || "(없음)"}
+## 고객 요청자료 파일 (서비스 의도·납기·언어·장소·인원 파악용)
+※ 이 파일들은 '무엇을 해달라는지'를 이해하기 위한 자료이다. 글자수/단어수 계산에는 사용하지 않는다.
+${requestFilesInfo || "(없음)"}
 
-## 사용 가능한 상품 목록 (이 목록에서만 선택할 것)
+## 번역 원문 파일 (글자수·단어수·페이지수 추출용)
+※ 이 파일들이 실제 번역 대상이다. 각 파일의 파일명·형식·글자수·단어수를 추출하여 번역 Row를 생성한다.
+※ 파일 하나당 번역 Row 하나를 생성하는 것을 기본 원칙으로 한다.
+${sourceFilesInfo || "(없음)"}
+
+## 사용 가능한 상품 목록 (반드시 이 목록에서만 선택)
 ${JSON.stringify(productList, null, 2)}
 
-위 정보를 분석하여 견적 초안 JSON을 생성하라.`;
+위 정보를 종합하여 견적 초안 JSON을 생성하라.`;
 }
 
 // ─── 이미지/PDF 파일 → vision content 생성 ───────────────────────────────────
@@ -155,12 +165,18 @@ async function buildFileVisionContent(
 router.post(
   "/quotes/ai-draft",
   ...adminGuard,
-  aiUpload.array("files", 5),
+  aiUpload.fields([
+    { name: "requestFiles", maxCount: 10 },
+    { name: "sourceFiles",  maxCount: 10 },
+  ]),
   async (req, res) => {
-    const requestText = (req.body.requestText as string) ?? "";
-    const files = (req.files as Express.Multer.File[]) ?? [];
+    const requestText  = (req.body.requestText as string) ?? "";
+    const allFiles     = (req.files ?? {}) as Record<string, Express.Multer.File[]>;
+    const requestFiles = allFiles["requestFiles"] ?? [];
+    const sourceFiles  = allFiles["sourceFiles"]  ?? [];
+    const totalFiles   = requestFiles.length + sourceFiles.length;
 
-    if (!requestText.trim() && files.length === 0) {
+    if (!requestText.trim() && totalFiles === 0) {
       res.status(400).json({ error: "요청내용을 입력하거나 파일을 업로드해 주세요." });
       return;
     }
@@ -187,32 +203,56 @@ router.post(
         .from(productsTable)
         .where(and(eq(productsTable.active, true), isNull(productsTable.deletedAt)));
 
-      // 파일 정보 텍스트 + vision content 준비
-      const filesInfoParts: string[] = [];
-      const visionContents: Array<{ type: "image_url"; image_url: { url: string } }> = [];
+      // ── 파일 분류별 처리 ────────────────────────────────────────────────────
+      type VisionImg = { type: "image_url"; image_url: { url: string } };
       const fileWarnings: string[] = [];
 
-      for (const file of files) {
-        const originalName = Buffer.from(file.originalname, "latin1").toString("utf8");
-        const ext = path.extname(originalName).toLowerCase();
-        const sizeKb = Math.round(file.size / 1024);
-        filesInfoParts.push(`- 파일명: ${originalName}, 형식: ${ext.replace(".", "").toUpperCase()}, 크기: ${sizeKb}KB`);
+      // 고객 요청자료: 텍스트 요약 + 이미지 vision
+      const reqInfoParts: string[] = [];
+      const reqVision: VisionImg[] = [];
+
+      for (const file of requestFiles) {
+        const name = Buffer.from(file.originalname, "latin1").toString("utf8");
+        const ext  = path.extname(name).toLowerCase();
+        const kb   = Math.round(file.size / 1024);
+        reqInfoParts.push(`- 파일명: ${name}, 형식: ${ext.replace(".", "").toUpperCase()}, 크기: ${kb}KB`);
 
         if ([".pdf", ".jpg", ".jpeg", ".png"].includes(ext)) {
-          const visionContent = await buildFileVisionContent(file.buffer, originalName);
-          if (visionContent) {
-            visionContents.push(visionContent);
-          } else {
-            fileWarnings.push(`${originalName}: 이미지 변환 실패 — 파일 정보만 참고합니다.`);
-          }
+          const vc = await buildFileVisionContent(file.buffer, name);
+          if (vc) reqVision.push(vc);
+          else fileWarnings.push(`${name}: 요청자료 변환 실패 — 파일 정보만 참고합니다.`);
         } else {
-          filesInfoParts.push(`  (DOC/DOCX/XLS/XLSX/PPT/PPTX — 내용 분석 불가, 파일명·형식만 참고)`);
+          reqInfoParts.push(`  (텍스트/내용 분석 불가, 파일명·형식만 참고)`);
         }
       }
 
-      const filesInfo = filesInfoParts.join("\n");
+      // 번역 원문: 파일명·형식 명시 + 이미지 vision (글자수·단어수 추출 지시)
+      const srcInfoParts: string[] = [];
+      const srcVision: VisionImg[] = [];
 
-      // OpenAI 호출
+      for (const file of sourceFiles) {
+        const name = Buffer.from(file.originalname, "latin1").toString("utf8");
+        const ext  = path.extname(name).toLowerCase();
+        const kb   = Math.round(file.size / 1024);
+        srcInfoParts.push(`- 파일명: ${name}, 형식: ${ext.replace(".", "").toUpperCase()}, 크기: ${kb}KB`);
+
+        if ([".pdf", ".jpg", ".jpeg", ".png"].includes(ext)) {
+          const vc = await buildFileVisionContent(file.buffer, name);
+          if (vc) {
+            srcVision.push(vc);
+            srcInfoParts.push(`  → 이미지 첨부됨: 글자수·단어수·언어를 직접 분석할 것`);
+          } else {
+            fileWarnings.push(`${name}: 원문 파일 변환 실패 — 파일 정보만 사용합니다.`);
+          }
+        } else {
+          srcInfoParts.push(`  → 내용 직접 분석 불가. 파일명·형식을 기반으로 번역 Row를 1건 생성하고 수량=1, 글자수/단어수=0으로 처리하라.`);
+        }
+      }
+
+      const requestFilesInfo = reqInfoParts.join("\n");
+      const sourceFilesInfo  = srcInfoParts.join("\n");
+
+      // ── OpenAI 호출 ─────────────────────────────────────────────────────────
       const openai = new OpenAI({
         apiKey: openaiApiKey,
         baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
@@ -220,8 +260,9 @@ router.post(
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const userContent: any[] = [
-        { type: "text", text: buildUserMessage(requestText, filesInfo, products) },
-        ...visionContents,
+        { type: "text", text: buildUserMessage(requestText, requestFilesInfo, sourceFilesInfo, products) },
+        ...reqVision,   // 고객 요청자료 이미지 (의도 파악용)
+        ...srcVision,   // 번역 원문 이미지 (글자수·단어수 추출용)
       ];
 
       const completion = await openai.chat.completions.create({

@@ -1,8 +1,12 @@
 /**
  * AiQuoteModal — AI 견적 생성 v1
  *
- * 흐름: 요청 입력 → AI 분석 → Preview → "견적에 반영" → Workspace Row 추가
- * AI는 절대 자동 저장하지 않는다. 관리자가 검토 후 반영해야 한다.
+ * 파일 업로드 두 영역:
+ *   ① 고객 요청자료 — 이메일·발주서·이미지 등 (서비스 의도 파악용)
+ *   ② 번역 원문     — 실제 번역 대상 파일 (글자수·단어수·페이지수 추출용)
+ *
+ * AI는 절대 자동 저장하지 않는다.
+ * 관리자가 Preview 검토 후 "견적에 반영"을 눌렀을 때만 Workspace Row에 추가된다.
  */
 import React, { useState, useRef } from 'react';
 import { api } from '../../lib/constants';
@@ -12,22 +16,21 @@ import { getPolicy } from '../../lib/languagePagePolicy';
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
 
 type ServiceType = 'translation' | 'interpretation' | 'equipment' | 'expense';
-type VatType     = 'taxable' | 'exempt' | 'zero_rate';
 
 export interface AiDraftRow {
-  productId:       number | null;
-  productName:     string;
-  productType:     ServiceType;
-  quantity:        number;
-  unit:            string;
-  unitPrice:       number;
-  memo:            string;
-  sourceLanguage:  string;
-  targetLanguage:  string;
-  fileName:        string;
-  fileFormat:      string;
-  wordCount:       number;
-  charCount:       number;
+  productId:        number | null;
+  productName:      string;
+  productType:      ServiceType;
+  quantity:         number;
+  unit:             string;
+  unitPrice:        number;
+  memo:             string;
+  sourceLanguage:   string;
+  targetLanguage:   string;
+  fileName:         string;
+  fileFormat:       string;
+  wordCount:        number;
+  charCount:        number;
   interpretDate:    string;
   interpretEndDate: string;
   startTime:        string;
@@ -39,8 +42,8 @@ export interface AiDraftRow {
   itemLocation:     string;
   usagePeriod:      number;
   expenseType:      string;
-  warnings:        string[];
-  needsReview:     boolean;
+  warnings:         string[];
+  needsReview:      boolean;
 }
 
 export interface AiDraftResult {
@@ -57,10 +60,10 @@ interface Props {
 // ─── 서비스 유형 설정 ─────────────────────────────────────────────────────────
 
 const SVC_CFG: Record<ServiceType, { label: string; color: string; bg: string }> = {
-  translation:    { label: '번역',   color: C.primary,      bg: C.primaryBg  },
-  interpretation: { label: '통역',   color: C.successText,  bg: C.successBg  },
-  equipment:      { label: '장비',   color: C.warning,      bg: C.warningBg  },
-  expense:        { label: '기타',   color: C.textMuted,    bg: C.g50        },
+  translation:    { label: '번역',  color: C.primary,     bg: C.primaryBg },
+  interpretation: { label: '통역',  color: C.successText, bg: C.successBg },
+  equipment:      { label: '장비',  color: C.warning,     bg: C.warningBg },
+  expense:        { label: '기타',  color: C.textMuted,   bg: C.g50       },
 };
 
 const CONF_CFG: Record<string, { label: string; color: string; bg: string }> = {
@@ -69,9 +72,7 @@ const CONF_CFG: Record<string, { label: string; color: string; bg: string }> = {
   low:    { label: '낮음', color: '#dc2626', bg: '#fee2e2' },
 };
 
-const ALLOWED_EXTS = '.pdf,.jpg,.jpeg,.png,.doc,.docx,.ppt,.pptx,.xls,.xlsx';
-
-// ─── 서비스별 상세 문자열 (Preview 표시용) ───────────────────────────────────
+// ─── 서비스별 상세 문자열 ─────────────────────────────────────────────────────
 
 function getLangName(code: string): string {
   if (!code) return '';
@@ -91,32 +92,29 @@ function fmtDetail(row: AiDraftRow): string {
       if (row.charCount > 0) parts.push(`${row.charCount.toLocaleString()}글자`);
       break;
     }
-    case 'interpretation': {
+    case 'interpretation':
       if (row.interpretDate) {
         parts.push(row.interpretEndDate
-          ? `${row.interpretDate}~${row.interpretEndDate}`
-          : row.interpretDate);
+          ? `${row.interpretDate}~${row.interpretEndDate}` : row.interpretDate);
       }
-      const time = [row.startTime, row.endTime].filter(Boolean).join('~');
-      if (time) parts.push(time);
-      if (row.interpretPlace)  parts.push(row.interpretPlace);
+      {
+        const time = [row.startTime, row.endTime].filter(Boolean).join('~');
+        if (time) parts.push(time);
+      }
+      if (row.interpretPlace)    parts.push(row.interpretPlace);
       if (row.interpreterCount > 0) parts.push(`${row.interpreterCount}명`);
       break;
-    }
-    case 'equipment': {
+    case 'equipment':
       if (row.eventStartDate) {
         parts.push(row.eventEndDate
-          ? `${row.eventStartDate}~${row.eventEndDate}`
-          : row.eventStartDate);
+          ? `${row.eventStartDate}~${row.eventEndDate}` : row.eventStartDate);
       }
-      if (row.itemLocation) parts.push(row.itemLocation);
+      if (row.itemLocation)  parts.push(row.itemLocation);
       if (row.usagePeriod > 0) parts.push(`${row.usagePeriod}일`);
       break;
-    }
-    case 'expense': {
+    case 'expense':
       if (row.expenseType) parts.push(row.expenseType);
       break;
-    }
   }
   return parts.join(' / ') || '-';
 }
@@ -127,7 +125,95 @@ function calcSupply(row: AiDraftRow): number {
   return Math.round(days * cnt * (row.quantity || 1) * (row.unitPrice || 0));
 }
 
-// ─── 스타일 상수 ──────────────────────────────────────────────────────────────
+// ─── 파일 업로드 Card ─────────────────────────────────────────────────────────
+
+interface FileUploadCardProps {
+  label:       string;
+  description: string;
+  accept:      string;
+  files:       File[];
+  onAdd:       (files: FileList | File[]) => void;
+  onRemove:    (idx: number) => void;
+  testId:      string;
+}
+
+function FileUploadCard({ label, description, accept, files, onAdd, onRemove, testId }: FileUploadCardProps) {
+  const [dragOver, setDragOver] = useState(false);
+  const ref = useRef<HTMLInputElement>(null);
+
+  return (
+    <div style={{
+      border: BD.card, borderRadius: BD.radius.lg,
+      overflow: 'hidden',
+    }}>
+      {/* 카드 헤더 */}
+      <div style={{
+        padding: '10px 14px',
+        background: C.g50,
+        borderBottom: BD.card,
+        display: 'flex', alignItems: 'baseline', gap: 8,
+      }}>
+        <span style={{ ...TYPO.fieldLabel }}>{label}</span>
+        <span style={{ ...TYPO.helper }}>{description}</span>
+      </div>
+
+      {/* 드롭 영역 */}
+      <div style={{ padding: '12px 14px' }}>
+        <div
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={e => { e.preventDefault(); setDragOver(false); onAdd(e.dataTransfer.files); }}
+          onClick={() => ref.current?.click()}
+          style={{
+            border: `2px dashed ${dragOver ? C.primary : C.g300}`,
+            borderRadius: BD.radius.md,
+            padding: '14px 12px',
+            textAlign: 'center',
+            cursor: 'pointer',
+            background: dragOver ? C.primaryBg : C.bgCard,
+            transition: 'all 0.15s',
+          }}
+          data-testid={testId}
+        >
+          <div style={{ fontSize: 20, marginBottom: 4 }}>📎</div>
+          <div style={{ ...TYPO.helper, color: C.textMuted }}>
+            클릭하거나 드래그하여 업로드
+          </div>
+          <input ref={ref} type="file" accept={accept} multiple style={{ display: 'none' }}
+            onChange={e => e.target.files && onAdd(e.target.files)} />
+        </div>
+
+        {/* 파일 목록 */}
+        {files.length > 0 && (
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {files.map((f, i) => (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '5px 10px',
+                background: C.g50, borderRadius: BD.radius.sm, border: BD.card,
+              }}>
+                <span style={{ fontSize: 13 }}>📄</span>
+                <span style={{ ...TYPO.inputValue, flex: 1, overflow: 'hidden',
+                  textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                <span style={{ ...TYPO.helper, flexShrink: 0 }}>
+                  {(f.size / 1024).toFixed(0)}KB
+                </span>
+                <button
+                  onClick={e => { e.stopPropagation(); onRemove(i); }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer',
+                    color: C.textMuted, fontSize: 16, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
+                  aria-label={`${f.name} 제거`}
+                >×</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── 스타일 ───────────────────────────────────────────────────────────────────
 
 const OVERLAY: React.CSSProperties = {
   position: 'fixed', inset: 0, zIndex: 1000,
@@ -139,7 +225,7 @@ const MODAL: React.CSSProperties = {
   background: C.bgCard,
   borderRadius: BD.radius.xl,
   boxShadow: BD.shadow.modal,
-  width: '92vw', maxWidth: 900,
+  width: '92vw', maxWidth: 960,
   maxHeight: '90vh',
   display: 'flex', flexDirection: 'column',
   overflow: 'hidden',
@@ -162,32 +248,31 @@ const TD = (align: 'left' | 'center' | 'right' = 'left'): React.CSSProperties =>
   verticalAlign: 'top',
 });
 
-// ─── 컴포넌트 ─────────────────────────────────────────────────────────────────
+// ─── 메인 컴포넌트 ────────────────────────────────────────────────────────────
 
 export default function AiQuoteModal({ onApply, onClose }: Props) {
-  const [requestText,   setRequestText]   = useState('');
-  const [files,         setFiles]         = useState<File[]>([]);
-  const [loading,       setLoading]       = useState(false);
-  const [error,         setError]         = useState('');
-  const [result,        setResult]        = useState<AiDraftResult | null>(null);
-  const [dragOver,      setDragOver]      = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [requestText,  setRequestText]  = useState('');
+  const [reqFiles,     setReqFiles]     = useState<File[]>([]);   // 고객 요청자료
+  const [srcFiles,     setSrcFiles]     = useState<File[]>([]);   // 번역 원문
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState('');
+  const [result,       setResult]       = useState<AiDraftResult | null>(null);
 
-  // 파일 추가 (중복 제거)
-  const addFiles = (incoming: FileList | File[]) => {
-    const arr = Array.from(incoming);
-    setFiles(prev => {
-      const names = new Set(prev.map(f => f.name));
-      return [...prev, ...arr.filter(f => !names.has(f.name))];
-    });
-  };
+  const addTo = (setter: React.Dispatch<React.SetStateAction<File[]>>) =>
+    (incoming: FileList | File[]) => {
+      const arr = Array.from(incoming);
+      setter(prev => {
+        const names = new Set(prev.map(f => f.name));
+        return [...prev, ...arr.filter(f => !names.has(f.name))];
+      });
+    };
 
-  const removeFile = (idx: number) =>
-    setFiles(prev => prev.filter((_, i) => i !== idx));
+  const removeFrom = (setter: React.Dispatch<React.SetStateAction<File[]>>) =>
+    (idx: number) => setter(prev => prev.filter((_, i) => i !== idx));
 
   // AI 분석 실행
   const handleAnalyze = async () => {
-    if (!requestText.trim() && files.length === 0) {
+    if (!requestText.trim() && reqFiles.length === 0 && srcFiles.length === 0) {
       setError('요청내용을 입력하거나 파일을 업로드해 주세요.');
       return;
     }
@@ -198,7 +283,8 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
     try {
       const fd = new FormData();
       fd.append('requestText', requestText);
-      files.forEach(f => fd.append('files', f));
+      reqFiles.forEach(f => fd.append('requestFiles', f));
+      srcFiles.forEach(f => fd.append('sourceFiles',  f));
 
       const token = localStorage.getItem('auth_token');
       const resp  = await fetch(api('/api/quotes/ai-draft'), {
@@ -229,6 +315,7 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
   };
 
   const confCfg = result ? (CONF_CFG[result.confidence] ?? CONF_CFG.medium) : null;
+  const hasAnyFile = reqFiles.length > 0 || srcFiles.length > 0;
 
   return (
     <div style={OVERLAY} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
@@ -236,7 +323,7 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
 
         {/* ── 헤더 ── */}
         <div style={{
-          padding: '20px 24px 16px',
+          padding: '18px 24px 14px',
           borderBottom: BD.card,
           display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
         }}>
@@ -244,8 +331,7 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
           <div>
             <div style={{ ...TYPO.sectionTitle }}>AI 견적 생성</div>
             <div style={{ ...TYPO.helper, marginTop: 2 }}>
-              AI가 초안을 생성합니다. 검토 후 &quot;견적에 반영&quot;을 클릭하세요.
-              저장은 자동으로 이루어지지 않습니다.
+              AI가 초안을 생성합니다. 검토 후 &quot;견적에 반영&quot;을 클릭하세요. 저장은 자동으로 이루어지지 않습니다.
             </div>
           </div>
           <button
@@ -257,10 +343,10 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
         </div>
 
         {/* ── 본문 (스크롤) ── */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: SP[6] }}>
 
           {/* 1. 고객 요청내용 */}
-          <div style={{ marginBottom: SP[6] }}>
+          <div>
             <label style={{ ...TYPO.fieldLabel, display: 'block', marginBottom: SP[3] }}>
               고객 요청내용
             </label>
@@ -268,7 +354,7 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
               value={requestText}
               onChange={e => setRequestText(e.target.value)}
               placeholder={`고객이 요청한 번역/통역/장비/기타 내용을 입력하세요.\n예: 한영 계약서 번역, PDF 3개, 납기 7월 15일, 긴급 건입니다.`}
-              rows={5}
+              rows={4}
               style={{
                 width: '100%', boxSizing: 'border-box',
                 border: BD.input, borderRadius: BD.radius.lg,
@@ -280,72 +366,35 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
             />
           </div>
 
-          {/* 2. 파일 업로드 */}
-          <div style={{ marginBottom: SP[6] }}>
-            <label style={{ ...TYPO.fieldLabel, display: 'block', marginBottom: SP[3] }}>
-              파일 업로드 <span style={{ ...TYPO.helper, fontWeight: 400 }}>(선택 — PDF, DOC, DOCX, PPT, XLS, XLSX, JPG, PNG)</span>
-            </label>
-            <div
-              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={e => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); }}
-              onClick={() => fileInputRef.current?.click()}
-              style={{
-                border: `2px dashed ${dragOver ? C.primary : C.g300}`,
-                borderRadius: BD.radius.lg,
-                padding: '20px 16px',
-                textAlign: 'center',
-                cursor: 'pointer',
-                background: dragOver ? C.primaryBg : C.g50,
-                transition: 'all 0.15s',
-              }}
-              data-testid="ai-file-drop"
-            >
-              <div style={{ fontSize: 24, marginBottom: 6 }}>📎</div>
-              <div style={{ ...TYPO.inputValue, color: C.textMuted }}>
-                클릭하거나 파일을 드래그하여 업로드
-              </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept={ALLOWED_EXTS}
-                multiple
-                style={{ display: 'none' }}
-                onChange={e => e.target.files && addFiles(e.target.files)}
-                data-testid="ai-file-input"
-              />
-            </div>
+          {/* 2. 파일 업로드 — 2분할 */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: SP[5] }}>
+            {/* ① 고객 요청자료 */}
+            <FileUploadCard
+              label="① 고객 요청자료"
+              description="이메일·발주서·견적요청서 등 — 서비스 의도 파악용"
+              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.txt,.ppt,.pptx"
+              files={reqFiles}
+              onAdd={addTo(setReqFiles)}
+              onRemove={removeFrom(setReqFiles)}
+              testId="ai-req-drop"
+            />
 
-            {/* 업로드된 파일 목록 */}
-            {files.length > 0 && (
-              <div style={{ marginTop: SP[3], display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {files.map((f, i) => (
-                  <div key={i} style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    padding: '6px 10px', background: C.g50, borderRadius: BD.radius.md,
-                    border: BD.card,
-                  }}>
-                    <span style={{ fontSize: 14 }}>📄</span>
-                    <span style={{ ...TYPO.inputValue, flex: 1 }}>{f.name}</span>
-                    <span style={{ ...TYPO.helper }}>
-                      {(f.size / 1024).toFixed(0)}KB
-                    </span>
-                    <button
-                      onClick={e => { e.stopPropagation(); removeFile(i); }}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer',
-                        color: C.textMuted, fontSize: 16, lineHeight: 1, padding: '0 2px' }}
-                      aria-label={`${f.name} 제거`}
-                    >×</button>
-                  </div>
-                ))}
-              </div>
-            )}
+            {/* ② 번역 원문 */}
+            <FileUploadCard
+              label="② 번역 원문"
+              description="번역 대상 파일 — 글자수·단어수·페이지수 자동 분석"
+              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.txt,.ppt,.pptx,.xls,.xlsx"
+              files={srcFiles}
+              onAdd={addTo(setSrcFiles)}
+              onRemove={removeFrom(setSrcFiles)}
+              testId="ai-src-drop"
+            />
           </div>
 
           {/* 3. 오류 메시지 */}
           {error && (
             <div style={{
-              padding: '10px 14px', borderRadius: BD.radius.md, marginBottom: SP[5],
+              padding: '10px 14px', borderRadius: BD.radius.md,
               background: C.dangerBg, border: `1px solid ${C.dangerBorder}`,
               ...TYPO.inputValue, color: C.dangerText,
             }}>
@@ -353,26 +402,20 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
             </div>
           )}
 
-          {/* 4. AI 분석하기 버튼 */}
+          {/* 4. AI 분석하기 */}
           <button
             onClick={handleAnalyze}
             disabled={loading}
             style={{
-              ...BTN.base,
-              ...BTN.size.lg,
-              ...(loading ? { background: C.g200, color: C.textDisabled, cursor: 'not-allowed' }
-                          : { background: C.ai, color: '#ffffff' }),
+              ...BTN.base, ...BTN.size.lg,
+              ...(loading
+                ? { background: C.g200, color: C.textDisabled, cursor: 'not-allowed' }
+                : { background: C.ai, color: '#ffffff' }),
               width: '100%', justifyContent: 'center',
-              marginBottom: result ? SP[7] : 0,
             }}
             data-testid="ai-analyze-btn"
           >
-            {loading ? (
-              <>
-                <span style={{ display: 'inline-block', animation: 'spin 1s linear infinite', marginRight: 6 }}>⏳</span>
-                AI 분석 중…
-              </>
-            ) : '🤖 AI 분석하기'}
+            {loading ? '⏳ AI 분석 중…' : `🤖 AI 분석하기${hasAnyFile ? ` (파일 ${reqFiles.length + srcFiles.length}개)` : ''}`}
           </button>
 
           {/* 5. Preview */}
@@ -389,6 +432,9 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
                     신뢰도: {confCfg.label}
                   </span>
                 )}
+                <span style={{ ...TYPO.helper }}>
+                  총 {result.draftRows.length}건
+                </span>
               </div>
 
               {result.warnings.length > 0 && (
@@ -429,22 +475,18 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
                       </thead>
                       <tbody>
                         {result.draftRows.map((row, i) => {
-                          const cfg     = SVC_CFG[row.productType] ?? SVC_CFG.expense;
-                          const supply  = calcSupply(row);
-                          const hasWarn = row.needsReview || row.warnings.length > 0;
+                          const cfg    = SVC_CFG[row.productType] ?? SVC_CFG.expense;
+                          const supply = calcSupply(row);
+                          const hasW   = row.needsReview || row.warnings.length > 0;
                           return (
-                            <tr key={i} style={{ background: hasWarn ? '#fffbeb' : undefined }}>
+                            <tr key={i} style={{ background: hasW ? '#fffbeb' : undefined }}>
                               <td style={TD('center')}>{i + 1}</td>
                               <td style={TD()}>
                                 <span style={{
-                                  display: 'inline-block',
-                                  fontSize: 11, fontWeight: 700,
+                                  display: 'inline-block', fontSize: 11, fontWeight: 700,
                                   padding: '2px 6px', borderRadius: 4,
-                                  background: cfg.bg, color: cfg.color,
-                                  whiteSpace: 'nowrap',
-                                }}>
-                                  {cfg.label}
-                                </span>
+                                  background: cfg.bg, color: cfg.color, whiteSpace: 'nowrap',
+                                }}>{cfg.label}</span>
                               </td>
                               <td style={TD()}>
                                 {row.productId ? (
@@ -456,7 +498,7 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
                                   }}>상품 확인 필요</span>
                                 )}
                               </td>
-                              <td style={{ ...TD(), maxWidth: 260, color: C.textSecondary }}>
+                              <td style={{ ...TD(), maxWidth: 240, color: C.textSecondary }}>
                                 {fmtDetail(row)}
                               </td>
                               <td style={TD('right')}>{row.quantity.toLocaleString()}</td>
@@ -477,9 +519,7 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
                                     fontSize: 11, color: C.warningText,
                                     background: C.warningBg, padding: '1px 5px',
                                     borderRadius: 3, marginTop: 2, display: 'inline-block',
-                                  }}>
-                                    ⚠ {w}
-                                  </div>
+                                  }}>⚠ {w}</div>
                                 ))}
                               </td>
                             </tr>
@@ -496,17 +536,14 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
 
         {/* ── 하단 버튼 ── */}
         <div style={{
-          padding: '16px 24px',
+          padding: '14px 24px',
           borderTop: BD.card,
           display: 'flex', justifyContent: 'flex-end', gap: 10,
           flexShrink: 0, background: C.bgCard,
         }}>
           <button
             onClick={onClose}
-            style={{
-              ...BTN.base, ...BTN.size.md,
-              ...BTN.variant.secondary, border: `1px solid ${C.g300}`,
-            }}
+            style={{ ...BTN.base, ...BTN.size.md, ...BTN.variant.secondary, border: `1px solid ${C.g300}` }}
             data-testid="ai-cancel-btn"
           >
             취소
@@ -523,9 +560,6 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
           )}
         </div>
       </div>
-
-      {/* spin 애니메이션 */}
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
