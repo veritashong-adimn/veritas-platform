@@ -1,19 +1,31 @@
 import React, { useState, useRef, useEffect, useCallback, useLayoutEffect } from "react";
 import { createPortal } from "react-dom";
 import { STATUS_LABEL, STATUS_STYLE, ROLE_LABEL, ROLE_STYLE, Role } from "../../lib/constants";
-import { C, BD, BTN, TYPO, SP, type BtnVariant, type BtnSize } from "../../lib/ds";
+import { C, BD, BTN, TYPO, SP, FORM, type BtnVariant, type BtnSize } from "../../lib/ds";
 
+// DS-aligned standard input style (Standard scale: 14px / padding 9×12 / radius 8)
 export const inputStyle: React.CSSProperties = {
-  width: "100%", padding: "9px 12px", border: "1px solid #e5e7eb", borderRadius: 8,
-  fontSize: 14, outline: "none", boxSizing: "border-box", background: "#fff",
+  width: "100%",
+  padding: `${FORM.standard.paddingY}px ${FORM.standard.paddingX}px`,
+  border: BD.input,
+  borderRadius: BD.radius.lg,
+  fontSize: FORM.standard.fontSize,
+  outline: "none",
+  boxSizing: "border-box",
+  background: C.bgCard,
 };
+// DS-aligned field label style
 export const labelStyle: React.CSSProperties = {
-  display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 5,
+  display: "block",
+  ...TYPO.fieldLabel,
+  marginBottom: SP[2],
 };
+// DS-aligned section header style
 export const sectionHeaderStyle: React.CSSProperties = {
-  fontSize: 12, fontWeight: 700, color: "#6b7280",
-  textTransform: "uppercase", letterSpacing: "0.06em",
-  margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
+  ...TYPO.sectionTitle,
+  margin: `${SP[7]}px 0 ${SP[5]}px`,
+  paddingBottom: SP[3],
+  borderBottom: BD.divider,
 };
 
 export function StatusBadge({ status }: { status: string }) {
@@ -60,8 +72,12 @@ export function Toast({ msg, onClose }: { msg: string; onClose: () => void }) {
 export function Card({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return (
     <div style={{
-      background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14,
-      padding: "20px 22px", boxShadow: "0 1px 3px rgba(0,0,0,0.07)", ...style,
+      background: C.bgCard,
+      border: BD.card,
+      borderRadius: BD.radius.xxl,
+      padding: `${SP[7]}px 22px`,
+      boxShadow: BD.shadow.card,
+      ...style,
     }}>
       {children}
     </div>
@@ -74,14 +90,14 @@ type BtnProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 export function PrimaryBtn({ children, style, color, disabled, ...rest }: BtnProps) {
-  const bg = color ?? "#2563eb";
+  const bg = color ?? C.primary;
   return (
     <button
       disabled={disabled}
       style={{
-        background: disabled ? "#d1d5db" : bg,
-        color: "#fff", border: "none", borderRadius: 8,
-        padding: "8px 18px", fontSize: 14, fontWeight: 700,
+        background: disabled ? C.g300 : bg,
+        color: C.white, border: "none", borderRadius: BD.radius.lg,
+        padding: "8px 18px", fontSize: FORM.standard.fontSize, fontWeight: 700,
         cursor: disabled ? "not-allowed" : "pointer",
         transition: "background 0.15s",
         ...style,
@@ -94,14 +110,14 @@ export function PrimaryBtn({ children, style, color, disabled, ...rest }: BtnPro
 }
 
 export function GhostBtn({ children, style, color, disabled, ...rest }: BtnProps) {
-  const c = color ?? "#374151";
+  const c = color ?? C.textSecondary;
   return (
     <button
       disabled={disabled}
       style={{
-        background: "transparent", color: disabled ? "#9ca3af" : c,
-        border: `1px solid ${disabled ? "#e5e7eb" : c + "60"}`,
-        borderRadius: 8, padding: "8px 18px", fontSize: 14, fontWeight: 600,
+        background: "transparent", color: disabled ? C.g400 : c,
+        border: `1px solid ${disabled ? C.border : c + "60"}`,
+        borderRadius: BD.radius.lg, padding: "8px 18px", fontSize: FORM.standard.fontSize, fontWeight: 600,
         cursor: disabled ? "not-allowed" : "pointer", transition: "all 0.15s",
         ...style,
       }}

@@ -30,17 +30,20 @@ export const C = {
   successText:   '#15803d',
 
   // Status — Warning (Amber)
-  warning:       '#d97706',
-  warningBg:     '#fffbeb',
-  warningBorder: '#fde68a',
-  warningText:   '#92400e',
+  warning:         '#d97706',
+  warningBg:       '#fffbeb',
+  warningBorder:   '#fde68a',
+  warningText:     '#92400e',
+  warningTextDeep: '#78350f',  // validation panel body text
 
   // Status — Danger (Red)
-  danger:        '#dc2626',
-  dangerBg:      '#fee2e2',
-  dangerBorder:  '#fca5a5',
-  dangerText:    '#991b1b',
-  dangerHover:   '#b91c1c',
+  danger:         '#dc2626',
+  dangerBg:       '#fee2e2',
+  dangerBgPanel:  '#fff5f5',  // validation panel bg (lighter)
+  dangerBorder:   '#fca5a5',
+  dangerText:     '#991b1b',
+  dangerTextDeep: '#7f1d1d',  // validation panel body text
+  dangerHover:    '#b91c1c',
 
   // AI — Violet
   ai:            '#7c3aed',
@@ -84,33 +87,77 @@ export const C = {
 
 // ─── Typography Tokens ─────────────────────────────────────────────────────────
 
+// Level 2/3 공통 레이블 토큰 — Form 필드 레이블과 Grid 컬럼 헤더는 같은 정보 계층
+// 위치가 달라도 동일한 역할이므로 하나의 토큰을 공유한다
+const _label = {
+  fontSize:      12,
+  fontWeight:    600,
+  color:         C.g700,    // #374151
+  letterSpacing: '0.01em',
+  lineHeight:    1.4,
+} as const;
+
 export const TYPO = {
-  // Section headers (A 기본정보, B 상품정보…)
+  // ── Level 1 — 섹션 구분자 (기본정보 / 상품정보 / 금액 요약 / 비고)
+  // 가장 크고 가장 선명하게 — 화면 내 최상위 구조를 즉시 인식시킨다
   sectionTitle: {
-    fontSize: 13, fontWeight: 700, color: C.textSecondary,
-    textTransform: 'uppercase' as const, letterSpacing: '0.06em',
+    fontSize:      14,
+    fontWeight:    700,
+    color:         C.g900,         // #111827 — maximum contrast
+    letterSpacing: '0.02em',
+    lineHeight:    1.3,
   },
-  // Card / modal title
-  cardTitle: { fontSize: 14, fontWeight: 600, color: C.textPrimary },
 
-  // Grid column header (compact scale)
-  gridHeader: { fontSize: 12, fontWeight: 700, color: C.textSecondary },
+  // Card / modal main title
+  cardTitle: { fontSize: 14, fontWeight: 600, color: C.g900 },
 
-  // Form field label (standard scale)
-  fieldLabel: { fontSize: 13, fontWeight: 600, color: C.textSecondary },
-  // Compact label (inside grid)
-  compactLabel: { fontSize: 12, fontWeight: 500, color: C.textMuted },
+  // ── Level 2 — Form 필드 레이블 (견적유형 / 견적일 / 부가세 / 거래처…)
+  fieldLabel: _label,
 
-  // Input values
-  inputValue: { fontSize: 13, color: C.textPrimary },        // compact
-  formValue:  { fontSize: 14, color: C.textPrimary },        // standard
+  // ── Level 2 — Grid 컬럼 헤더 (행 제어 / 유형 / 상품 / 단가 / 공급가액…)
+  // fieldLabel과 동일한 계층 — _label 토큰 공유 (의도적 동일 스타일)
+  gridHeader: _label,
 
-  // Amounts
-  amount:        { fontSize: 13, fontWeight: 600, color: C.amount, whiteSpace: 'nowrap' as const },
-  summaryAmount: { fontSize: 16, fontWeight: 700, color: C.amount },
+  // Compact label — grid 안의 보조 레이블
+  compactLabel: {
+    fontSize:   11,
+    fontWeight: 500,
+    color:      C.textMuted,
+    lineHeight: 1.3,
+  },
 
-  // Supplemental
-  helper: { fontSize: 11, fontWeight: 400, color: C.textMuted },
+  // ── Level 4 — 입력값 (사용자가 입력하는 실제 데이터)
+  // 레이블보다 크지만 굵기는 낮아 '데이터'임을 구분한다
+  inputValue: {
+    fontSize:   13,
+    fontWeight: 400,
+    color:      C.textPrimary,     // #111827 — full readability
+    lineHeight: 1.4,
+  },
+  formValue: {
+    fontSize:   14,
+    fontWeight: 400,
+    color:      C.textPrimary,
+    lineHeight: 1.4,
+  },
+
+  // Financial amounts
+  amount: {
+    fontSize: 13, fontWeight: 600, color: C.amount, whiteSpace: 'nowrap' as const,
+  },
+  summaryAmount: {
+    fontSize: 15, fontWeight: 700, color: C.amount,
+  },
+
+  // ── Level 5 — Placeholder / Helper Text
+  // 가장 연한 색상으로 입력값과 명확히 구분한다
+  helper: {
+    fontSize:   11,
+    fontWeight: 400,
+    color:      C.g400,            // #9ca3af — lightest
+    lineHeight: 1.4,
+  },
+
   badge:  { fontSize: 11, fontWeight: 700 },
 } as const;
 
@@ -148,7 +195,7 @@ export const BD = {
   } as const,
 
   shadow: {
-    card:    '0 1px 4px rgba(0,0,0,0.06)',
+    card:    '0 1px 3px rgba(0,0,0,0.07)',
     raised:  '0 2px 8px rgba(0,0,0,0.10)',
     popover: '0 8px 24px rgba(0,0,0,0.14)',
     modal:   '0 4px 20px rgba(0,0,0,0.18)',
