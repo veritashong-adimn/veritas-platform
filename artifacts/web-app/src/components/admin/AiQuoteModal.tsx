@@ -8,7 +8,7 @@
  * AI는 절대 자동 저장하지 않는다.
  * 관리자가 Preview 검토 후 "견적에 반영"을 눌렀을 때만 Workspace Row에 추가된다.
  */
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { api } from '../../lib/constants';
 import { C, BD, TYPO, SP, BTN } from '../../lib/ds';
 import { getPolicy } from '../../lib/languagePagePolicy';
@@ -218,10 +218,10 @@ function FileUploadCard({ label, description, accept, files, onAdd, onRemove, te
 const OVERLAY: React.CSSProperties = {
   position: 'fixed', inset: 0, zIndex: 1000,
   background: 'rgba(0,0,0,0.45)',
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
 };
 
-const MODAL: React.CSSProperties = {
+// MODAL 위치는 pos 여부에 따라 컴포넌트 내부에서 동적으로 계산
+const MODAL_BASE: React.CSSProperties = {
   background: C.bgCard,
   borderRadius: BD.radius.xl,
   boxShadow: BD.shadow.modal,
@@ -229,6 +229,7 @@ const MODAL: React.CSSProperties = {
   maxHeight: '90vh',
   display: 'flex', flexDirection: 'column',
   overflow: 'hidden',
+  position: 'fixed',
 };
 
 const THEAD_CELL = (align: 'left' | 'center' | 'right' = 'left'): React.CSSProperties => ({
@@ -252,11 +253,53 @@ const TD = (align: 'left' | 'center' | 'right' = 'left'): React.CSSProperties =>
 
 export default function AiQuoteModal({ onApply, onClose }: Props) {
   const [requestText,  setRequestText]  = useState('');
-  const [reqFiles,     setReqFiles]     = useState<File[]>([]);   // 고객 요청자료
-  const [srcFiles,     setSrcFiles]     = useState<File[]>([]);   // 번역 원문
+  const [reqFiles,     setReqFiles]     = useState<File[]>([]);
+  const [srcFiles,     setSrcFiles]     = useState<File[]>([]);
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState('');
   const [result,       setResult]       = useState<AiDraftResult | null>(null);
+
+  // ── 드래그 이동 ───────────────────────────────────────────────────────────
+  // pos=null → 화면 중앙 (초기·리셋). pos 설정 후 → fixed 절대 좌표
+  const [pos,        setPos]        = useState<{ x: number; y: number } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
+  const drag     = useRef({ active: false, mouseX: 0, mouseY: 0, startX: 0, startY: 0 });
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!drag.current.active) return;
+      const dx = e.clientX - drag.current.mouseX;
+      const dy = e.clientY - drag.current.mouseY;
+      const modal   = modalRef.current;
+      const w       = modal?.offsetWidth  ?? 900;
+      const HEADER  = 60;
+      const newX    = Math.max(-(w - 120), Math.min(window.innerWidth - 120,  drag.current.startX + dx));
+      const newY    = Math.max(0,          Math.min(window.innerHeight - HEADER, drag.current.startY + dy));
+      setPos({ x: newX, y: newY });
+    };
+    const onUp = () => {
+      if (!drag.current.active) return;
+      drag.current.active = false;
+      setIsDragging(false);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+    };
+  }, []);
+
+  const handleHeaderMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('button')) return; // 닫기 버튼 제외
+    const rect = modalRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    drag.current = { active: true, mouseX: e.clientX, mouseY: e.clientY, startX: rect.left, startY: rect.top };
+    setPos({ x: rect.left, y: rect.top });
+    setIsDragging(true);
+    e.preventDefault();
+  };
 
   const addTo = (setter: React.Dispatch<React.SetStateAction<File[]>>) =>
     (incoming: FileList | File[]) => {
@@ -317,16 +360,26 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
   const confCfg = result ? (CONF_CFG[result.confidence] ?? CONF_CFG.medium) : null;
   const hasAnyFile = reqFiles.length > 0 || srcFiles.length > 0;
 
+  // 드래그 위치가 설정되면 절대 좌표, 아니면 화면 중앙 고정
+  const modalStyle: React.CSSProperties = pos
+    ? { ...MODAL_BASE, left: pos.x, top: pos.y }
+    : { ...MODAL_BASE, left: '50%', top: '50%', transform: 'translate(-50%, -50%)' };
+
   return (
     <div style={OVERLAY} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={MODAL}>
+      <div ref={modalRef} style={modalStyle}>
 
-        {/* ── 헤더 ── */}
-        <div style={{
-          padding: '18px 24px 14px',
-          borderBottom: BD.card,
-          display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
-        }}>
+        {/* ── 헤더 (Drag Handle) ── */}
+        <div
+          onMouseDown={handleHeaderMouseDown}
+          style={{
+            padding: '18px 24px 14px',
+            borderBottom: BD.card,
+            display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
+            cursor: isDragging ? 'grabbing' : 'grab',
+            userSelect: 'none',
+          }}
+        >
           <span style={{ fontSize: 20 }}>🤖</span>
           <div>
             <div style={{ ...TYPO.sectionTitle }}>AI 견적 생성</div>
