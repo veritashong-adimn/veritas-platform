@@ -1,12 +1,12 @@
 /**
- * VERITAS Quote Excel Export v2
+ * VERITAS Quote Excel Export — 견적 데이터 출력
  *
- * 고객 전달 가능 수준의 공식 견적서 Excel을 생성한다.
- * excelKit.ts의 공통 스타일·회사정보를 사용하여 일관된 브랜드를 유지한다.
+ * Workspace의 A 기본정보 + B 상품정보를 Excel 데이터로 추출한다.
+ * 고객 전달용 견적서가 아닌 내부 관리·데이터 활용 목적이다.
  *
  * 공통 재사용 함수:
- *   formatServiceDetail(item, products) — 서비스별 상세 문자열 (판매관리 등에서도 재사용)
- *   downloadQuoteExcel(data)            — Excel Blob 생성 + 다운로드 트리거
+ *   formatServiceDetail(item, products) — 서비스별 상세 문자열
+ *   downloadQuoteExcel(data)            — Excel 생성 + 다운로드
  */
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -14,7 +14,6 @@
 import XLSX from 'xlsx-js-style';
 import { getPolicy } from './languagePagePolicy';
 import type { Product } from './constants';
-import { COMPANY_INFO, XC, XST, xBorder } from './excelKit';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
 
@@ -45,7 +44,6 @@ export interface ExportItem {
 }
 
 export interface QuoteExportData {
-  quoteId?:    number;
   title:       string;
   quoteType:   string;
   issueDate:   string;
@@ -59,16 +57,13 @@ export interface QuoteExportData {
   totals:      { supply: number; tax: number; total: number };
 }
 
-// ─── 레이블 매핑 ──────────────────────────────────────────────────────────────
+// ─── 레이블 ───────────────────────────────────────────────────────────────────
 
 const QUOTE_TYPE_LABEL: Record<string, string> = {
   b2b_standard: '일반 견적서', b2c_prepaid: '선불 (B2C)', accumulated_batch: '누적 배치',
 };
 const VAT_LABEL: Record<string, string> = {
   taxable: '과세 (10%)', exempt: '면세', zero_rate: '영세율 (0%)',
-};
-const VAT_PCT: Record<string, string> = {
-  taxable: '10%', exempt: '면세', zero_rate: '0%',
 };
 const SVC_LABEL: Record<string, string> = {
   translation: '번역', interpretation: '통역', equipment: '장비', expense: '기타',
@@ -85,18 +80,8 @@ function fmtN(v: string): number {
   return Number(String(v).replace(/,/g, '')) || 0;
 }
 
-function validDate(d: string): string {
-  if (!d) return '';
-  try {
-    const dt = new Date(d);
-    dt.setDate(dt.getDate() + 30);
-    return dt.toISOString().split('T')[0];
-  } catch { return ''; }
-}
-
 // ─── formatServiceDetail ──────────────────────────────────────────────────────
-// 공통 재사용 함수: 서비스별 상세 문자열 생성
-// 판매관리 목록 / 프로젝트 목록 / 활동 로그 / 검색결과 등에서 동일 함수 사용
+// 서비스별 상세 문자열 — 판매관리·프로젝트·활동 로그 등에서 동일 함수 재사용
 
 export function formatServiceDetail(item: ExportItem, products: Product[]): string {
   const parts: string[] = [];
@@ -122,7 +107,7 @@ export function formatServiceDetail(item: ExportItem, products: Product[]): stri
       }
       const time = [item.startTime, item.endTime].filter(Boolean).join('~');
       if (time) parts.push(time);
-      if (item.interpretPlace) parts.push(item.interpretPlace);
+      if (item.interpretPlace)  parts.push(item.interpretPlace);
       const cnt = fmtN(item.interpreterCount);
       if (cnt > 0) parts.push(`${cnt}명`);
       break;
@@ -156,233 +141,146 @@ function calcSupply(item: ExportItem): number {
   return Math.round(days * cnt * q * p);
 }
 
-// ─── 컬럼 인덱스 ─────────────────────────────────────────────────────────────
-// A(0)=No  B(1)=품목  C(2)=상세내용  D(3)=수량  E(4)=단위  F(5)=단가  G(6)=공급가액  H(7)=비고
+// ─── 스타일 ───────────────────────────────────────────────────────────────────
 
-const C = { NO: 0, ITEM: 1, DETAIL: 2, QTY: 3, UNIT: 4, PRICE: 5, SUPPLY: 6, MEMO: 7, N: 8 };
+const S = {
+  // A. 기본정보
+  infoKey: {
+    font:  { bold: true, sz: 10 },
+    fill:  { patternType: 'solid', fgColor: { rgb: 'F9FAFB' } },
+    alignment: { horizontal: 'left', vertical: 'center' },
+  },
+  infoVal: {
+    font:  { sz: 10 },
+    alignment: { horizontal: 'left', vertical: 'center' },
+  },
 
-// ─── 셀 조작 헬퍼 ────────────────────────────────────────────────────────────
+  // B. 상품 테이블 헤더
+  thC: { font: { bold: true, sz: 10 }, fill: { patternType: 'solid', fgColor: { rgb: 'F3F4F6' } }, alignment: { horizontal: 'center', vertical: 'center' } },
+  thL: { font: { bold: true, sz: 10 }, fill: { patternType: 'solid', fgColor: { rgb: 'F3F4F6' } }, alignment: { horizontal: 'left',   vertical: 'center' } },
+  thR: { font: { bold: true, sz: 10 }, fill: { patternType: 'solid', fgColor: { rgb: 'F3F4F6' } }, alignment: { horizontal: 'right',  vertical: 'center' } },
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type WS  = Record<string, any>;
-type Rng = { s: { r: number; c: number }; e: { r: number; c: number } };
+  // B. 상품 테이블 데이터
+  td:    { font: { sz: 10 }, alignment: { vertical: 'center', wrapText: true } },
+  tdC:   { font: { sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } },
+  tdNum: { font: { sz: 10 }, numFmt: '#,##0', alignment: { horizontal: 'right', vertical: 'center' } },
+  tdTxt: { font: { sz: 10 }, alignment: { vertical: 'center', wrapText: true } },
 
-function sc(ws: WS, r: number, c: number, v: string | number, s: object, t?: 's' | 'n') {
-  ws[XLSX.utils.encode_cell({ r, c })] = { v, s, t: t ?? (typeof v === 'number' ? 'n' : 's') };
-}
+  // C. 금액 요약
+  sumKey: { font: { bold: true, sz: 10 }, alignment: { horizontal: 'right' } },
+  sumVal: { font: { bold: true, sz: 10 }, numFmt: '#,##0', alignment: { horizontal: 'right' } },
+  totKey: { font: { bold: true, sz: 11 }, fill: { patternType: 'solid', fgColor: { rgb: 'EFF6FF' } }, alignment: { horizontal: 'right' } },
+  totVal: { font: { bold: true, sz: 11 }, numFmt: '#,##0', fill: { patternType: 'solid', fgColor: { rgb: 'EFF6FF' } }, alignment: { horizontal: 'right' } },
+};
 
-// 빈 셀에 border만 적용 (merge 안의 나머지 셀에 사용)
-function sb(ws: WS, r: number, c: number, border: object) {
-  ws[XLSX.utils.encode_cell({ r, c })] = { v: '', t: 's', s: { border } };
-}
-
-// merge 등록 + 범위 내 border 셀 채우기
-function merge(ws: WS, merges: Rng[], r1: number, c1: number, r2: number, c2: number, borderStyle?: object) {
-  merges.push({ s: { r: r1, c: c1 }, e: { r: r2, c: c2 } });
-  if (borderStyle) {
-    for (let r = r1; r <= r2; r++) {
-      for (let c = c1; c <= c2; c++) {
-        if (r === r1 && c === c1) continue;
-        sb(ws, r, c, borderStyle);
-      }
-    }
-  }
-}
-
-// 특정 행의 모든 열에 동일한 스타일 적용 (구분선 행 등)
-function fillRow(ws: WS, r: number, cols: number, s: object) {
-  for (let c = 0; c < cols; c++) {
-    ws[XLSX.utils.encode_cell({ r, c })] = { v: '', t: 's', s };
-  }
-}
+// 컬럼 인덱스 (A=0 … I=8)
+const COL = { NO: 0, TYPE: 1, PRODUCT: 2, DETAIL: 3, QTY: 4, UNIT: 5, PRICE: 6, SUPPLY: 7, MEMO: 8, N: 9 };
 
 // ─── downloadQuoteExcel ───────────────────────────────────────────────────────
 
 export function downloadQuoteExcel(data: QuoteExportData): void {
-  const wb     = XLSX.utils.book_new();
-  const ws: WS = {};
-  const merges: Rng[] = [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const rowH: any[] = [];   // ws['!rows'] — row height array
-
-  const setH = (r: number, hpt: number) => { rowH[r] = { hpt }; };
+  const ws: Record<string, any> = {};
   let r = 0;
 
-  // 견적번호 생성
-  const quoteNo = data.quoteId
-    ? `QT-${data.issueDate.replace(/-/g, '')}-${String(data.quoteId).padStart(4, '0')}`
-    : 'DRAFT';
-  const validUntil = validDate(data.issueDate);
+  function sc(row: number, col: number, v: string | number, s: object, t?: 's' | 'n') {
+    ws[XLSX.utils.encode_cell({ r: row, c: col })] = {
+      v, s, t: t ?? (typeof v === 'number' ? 'n' : 's'),
+    };
+  }
 
-  // ── 1. 문서 헤더 ──────────────────────────────────────────────────────────
+  // ── A. 기본정보 ─────────────────────────────────────────────────────────────
 
-  // Row 0: VERITAS 브랜드 | 견적서 제목
-  setH(r, 36);
-  sc(ws, r, C.NO,   COMPANY_INFO.name, XST.brand);
-  merge(ws, merges, r, C.NO, r, C.QTY);
-  sc(ws, r, C.UNIT, '견  적  서',      XST.docTitle);
-  merge(ws, merges, r, C.UNIT, r, C.MEMO);
+  const infoRows: [string, string][] = [
+    ['견적명',    data.title || '(제목 없음)'],
+    ['견적유형',  QUOTE_TYPE_LABEL[data.quoteType] ?? data.quoteType],
+    ['견적일',    data.issueDate],
+    ['거래처',    data.companyName || '-'],
+    ['담당자',    data.contactName || '-'],
+    ['담당 PM',   data.pmName     || '-'],
+    ['부가세',    VAT_LABEL[data.vatType] ?? data.vatType],
+  ];
+  for (const [k, v] of infoRows) {
+    sc(r, 0, k, S.infoKey);
+    sc(r, 1, v, S.infoVal);
+    r++;
+  }
+
+  r++; // 빈 행
+
+  // ── B. 상품정보 헤더 ────────────────────────────────────────────────────────
+
+  sc(r, COL.NO,      'No',       S.thC);
+  sc(r, COL.TYPE,    '유형',     S.thC);
+  sc(r, COL.PRODUCT, '상품',     S.thL);
+  sc(r, COL.DETAIL,  '서비스별 상세', S.thL);
+  sc(r, COL.QTY,     '수량',     S.thR);
+  sc(r, COL.UNIT,    '단위',     S.thC);
+  sc(r, COL.PRICE,   '단가',     S.thR);
+  sc(r, COL.SUPPLY,  '공급가액', S.thR);
+  sc(r, COL.MEMO,    '비고',     S.thL);
   r++;
 
-  // Row 1: 태그라인 | QUOTATION (+ 두꺼운 하단 구분선)
-  setH(r, 14);
-  sc(ws, r, C.NO,   COMPANY_INFO.tagline, XST.tagline);
-  merge(ws, merges, r, C.NO, r, C.QTY, xBorder.botMed(XC.border));
-  sc(ws, r, C.UNIT, 'QUOTATION',          XST.docSub);
-  merge(ws, merges, r, C.UNIT, r, C.MEMO, xBorder.botMed(XC.border));
-  r++;
+  // ── B. 상품정보 데이터 ──────────────────────────────────────────────────────
 
-  // ── 2. 기본정보 ───────────────────────────────────────────────────────────
-
-  // 2열 레이아웃: [레이블|값 (A-D)] | [레이블|값 (E-H)]
-  const INFO_VAL_BORDER = xBorder.allThin(XC.border);
-  const infoRow = (
-    row: number,
-    lbl1: string, val1: string,
-    lbl2: string, val2: string,
-  ) => {
-    setH(row, 20);
-    sc(ws, row, C.NO,    lbl1, XST.infoLbl);
-    sc(ws, row, C.ITEM,  val1, XST.infoVal);
-    merge(ws, merges, row, C.ITEM, row, C.QTY, INFO_VAL_BORDER);
-    sc(ws, row, C.UNIT,  lbl2, XST.infoLbl);
-    sc(ws, row, C.PRICE, val2, XST.infoVal);
-    merge(ws, merges, row, C.PRICE, row, C.MEMO, INFO_VAL_BORDER);
-  };
-
-  infoRow(r, '수  신', data.companyName || '-', '견적번호', quoteNo);     r++;
-  infoRow(r, '담당자', data.contactName || '-', '견적일',   data.issueDate); r++;
-  infoRow(r, '담당 PM', data.pmName    || '-', '유효기간', validUntil || '-'); r++;
-  infoRow(r, '견적유형', QUOTE_TYPE_LABEL[data.quoteType] ?? data.quoteType,
-             '부가세',  VAT_LABEL[data.vatType] ?? data.vatType); r++;
-
-  // 스페이서
-  setH(r, 10);
-  r++;
-
-  // ── 3. 상품 테이블 ────────────────────────────────────────────────────────
-
-  // 3-1. 헤더 행
-  setH(r, 22);
-  sc(ws, r, C.NO,     'No',      XST.thC);
-  sc(ws, r, C.ITEM,   '품목',    XST.thL);
-  sc(ws, r, C.DETAIL, '상세내용', XST.thL);
-  sc(ws, r, C.QTY,    '수량',    XST.thR);
-  sc(ws, r, C.UNIT,   '단위',    XST.thC);
-  sc(ws, r, C.PRICE,  '단가',    XST.thR);
-  sc(ws, r, C.SUPPLY, '공급가액', XST.thR);
-  sc(ws, r, C.MEMO,   '비고',    XST.thL);
-  r++;
-
-  // 3-2. 데이터 행
   data.items.forEach((item, idx) => {
     const supply = calcSupply(item);
     const detail = formatServiceDetail(item, data.products);
-    setH(r, 20);
-    sc(ws, r, C.NO,     idx + 1,                                        XST.tdC, 'n');
-    sc(ws, r, C.ITEM,   item.productName || '-',                        XST.td);
-    sc(ws, r, C.DETAIL, detail,                                         XST.td);
-    sc(ws, r, C.QTY,    Number(item.quantity) || 1,                     XST.tdNum, 'n');
-    sc(ws, r, C.UNIT,   item.unit || '-',                               XST.tdC);
-    sc(ws, r, C.PRICE,  fmtN(item.unitPrice),                           XST.tdNum, 'n');
-    sc(ws, r, C.SUPPLY, supply,                                         XST.tdNum, 'n');
-    sc(ws, r, C.MEMO,   item.memo || '',                                XST.td);
+    sc(r, COL.NO,      idx + 1,                              S.tdC,   'n');
+    sc(r, COL.TYPE,    SVC_LABEL[item.productType] ?? item.productType, S.tdC);
+    sc(r, COL.PRODUCT, item.productName || '-',              S.td);
+    sc(r, COL.DETAIL,  detail,                               S.tdTxt);
+    sc(r, COL.QTY,     Number(item.quantity) || 1,           S.tdNum, 'n');
+    sc(r, COL.UNIT,    item.unit || '-',                     S.tdC);
+    sc(r, COL.PRICE,   fmtN(item.unitPrice),                 S.tdNum, 'n');
+    sc(r, COL.SUPPLY,  supply,                               S.tdNum, 'n');
+    sc(r, COL.MEMO,    item.memo || '',                      S.tdTxt);
     r++;
   });
 
-  // ── 4. 금액 요약 ──────────────────────────────────────────────────────────
-  // 단가(F=5) 열: 레이블 / 공급가액(G=6) 열: 금액 — 재무 컬럼 수직 정렬
+  r++; // 빈 행
 
-  setH(r, 8);
-  r++; // 스페이서
-
-  const vatPctStr = VAT_PCT[data.vatType] ?? '';
+  // ── C. 금액 요약 ────────────────────────────────────────────────────────────
+  // 단가(G=6) 열에 레이블, 공급가액(H=7) 열에 금액
 
   const summaryRows: [string, number, object, object][] = [
-    [`공급가액 합계`,      data.totals.supply, XST.sumLbl,   XST.sumVal],
-    [`부가세 ${vatPctStr}`, data.totals.tax,   XST.sumLbl,   XST.sumVal],
-    [`총  견적금액`,        data.totals.total, XST.totalLbl, XST.totalVal],
+    ['공급가액 합계', data.totals.supply, S.sumKey, S.sumVal],
+    ['부가세',        data.totals.tax,    S.sumKey, S.sumVal],
+    ['총 견적금액',   data.totals.total,  S.totKey, S.totVal],
   ];
-  for (const [lbl, val, ls, vs] of summaryRows) {
-    setH(r, lbl.startsWith('총') ? 26 : 20);
-    // A-E: 빈 셀 (no border)
-    sc(ws, r, C.PRICE,  lbl, ls);
-    sc(ws, r, C.SUPPLY, val, vs, 'n');
-    // H: empty with no style
+  for (const [k, v, ks, vs] of summaryRows) {
+    sc(r, COL.PRICE,  k, ks);
+    sc(r, COL.SUPPLY, v, vs, 'n');
     r++;
   }
 
-  // ── 5. 비고 ───────────────────────────────────────────────────────────────
-
+  // 견적 비고
   if (data.note && data.note.trim()) {
-    setH(r, 8);
-    r++; // 스페이서
-
-    setH(r, 18);
-    sc(ws, r, C.NO, '비  고', XST.secLbl);
-    merge(ws, merges, r, C.NO, r, C.MEMO, xBorder.allThin(XC.border));
     r++;
-
-    setH(r, 54);
-    sc(ws, r, C.NO, data.note, XST.noteVal);
-    merge(ws, merges, r, C.NO, r, C.MEMO, xBorder.allThin(XC.borderLt));
+    sc(r, 0, '비고', S.infoKey);
+    sc(r, 1, data.note, S.infoVal);
     r++;
   }
 
-  // ── 6. 회사정보 Footer ─────────────────────────────────────────────────────
+  // ── 시트 범위 · 컬럼 너비 ──────────────────────────────────────────────────
 
-  setH(r, 10);
-  r++; // 스페이서
-
-  setH(r, 4);
-  fillRow(ws, r, C.N, { border: xBorder.topMed(XC.border) });
-  r++;
-
-  const footerStr = [
-    COMPANY_INFO.name,
-    `주소: ${COMPANY_INFO.addr}`,
-    `전화: ${COMPANY_INFO.tel}`,
-    `이메일: ${COMPANY_INFO.email}`,
-    `홈페이지: ${COMPANY_INFO.web}`,
-    `사업자번호: ${COMPANY_INFO.bizNo}`,
-  ].join('  |  ');
-  setH(r, 16);
-  sc(ws, r, C.NO, footerStr, XST.footer);
-  merge(ws, merges, r, C.NO, r, C.MEMO);
-  r++;
-
-  // ── 시트 설정 ─────────────────────────────────────────────────────────────
-
-  ws['!ref']    = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: r - 1, c: C.MEMO } });
-  ws['!merges'] = merges;
-  ws['!rows']   = rowH;
-
-  // 컬럼 너비 — A4 세로 기준 최적화
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: r - 1, c: COL.MEMO } });
   ws['!cols'] = [
-    { wch:  5 }, // A: No
-    { wch: 24 }, // B: 품목
-    { wch: 36 }, // C: 상세내용 (가장 넓게)
-    { wch:  7 }, // D: 수량
-    { wch:  7 }, // E: 단위
-    { wch: 14 }, // F: 단가
-    { wch: 14 }, // G: 공급가액
-    { wch: 20 }, // H: 비고
+    { wch: 12 }, // A: No / 기본정보 키
+    { wch: 28 }, // B: 유형 / 기본정보 값
+    { wch: 22 }, // C: 상품
+    { wch: 54 }, // D: 서비스별 상세
+    { wch:  7 }, // E: 수량
+    { wch:  7 }, // F: 단위
+    { wch: 15 }, // G: 단가
+    { wch: 15 }, // H: 공급가액
+    { wch: 32 }, // I: 비고
   ];
 
-  // 인쇄 설정: A4 세로, 여백 최소화, 1페이지 폭 맞춤
-  ws['!pageSetup'] = {
-    paperSize:   9,    // A4
-    orientation: 'portrait',
-    fitToPage:   true,
-    fitToWidth:  1,
-    fitToHeight: 0,
-    scale:       90,
-  };
-  ws['!margins'] = { left: 0.5, right: 0.5, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 };
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '견적관리');
 
-  XLSX.utils.book_append_sheet(wb, ws, '견적서');
-
-  // 파일명: VERITAS_견적서_견적명_견적일.xlsx
+  // 파일명: VERITAS_견적관리_견적명_견적일.xlsx
   const safeName = (data.title || '견적').replace(/[\\/:*?"<>|\s]+/g, '_');
-  XLSX.writeFile(wb, `VERITAS_견적서_${safeName}_${data.issueDate}.xlsx`);
+  XLSX.writeFile(wb, `VERITAS_견적관리_${safeName}_${data.issueDate}.xlsx`);
 }
