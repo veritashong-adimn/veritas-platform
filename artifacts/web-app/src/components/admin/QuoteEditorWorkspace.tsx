@@ -15,6 +15,7 @@ import {
   getPolicy, validateCounts, calcPagesFromStr,
   type ValidationResult,
 } from '../../lib/languagePagePolicy';
+import AiQuoteModal, { type AiDraftRow } from './AiQuoteModal';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
 
@@ -916,7 +917,8 @@ export function QuoteEditorWorkspace({
 }: QuoteEditorWorkspaceProps) {
 
   const authH = { Authorization: `Bearer ${token}` };
-  const [creationMode, setCreationMode] = useState<CreationMode>('direct');
+  const [creationMode,  setCreationMode]  = useState<CreationMode>('direct');
+  const [showAiModal,   setShowAiModal]   = useState(false);
   const [title,          setTitle]         = useState(initialTitle);
   const [titleEdited,    setTitleEdited]   = useState(!!initialTitle);
   const [companyId,      setCompanyId]     = useState<number | null>(initialCompanyId);
@@ -969,6 +971,48 @@ export function QuoteEditorWorkspace({
     if (swap < 0 || swap >= next.length) return prev;
     [next[idx], next[swap]] = [next[swap], next[idx]]; return next;
   });
+
+  // AI 초안 → QuoteItemForm 변환 후 기존 Row 아래에 추가
+  const handleApplyAiRows = (draftRows: AiDraftRow[]) => {
+    const defaultUnit: Record<ServiceType, string> = {
+      translation: '페이지', interpretation: '일', equipment: '세트', expense: '건',
+    };
+    const converted: QuoteItemForm[] = draftRows.map(d => ({
+      productId:        d.productId,
+      productName:      d.productName || '',
+      productType:      d.productType as ServiceType,
+      quantity:         String(d.quantity || 1),
+      unit:             d.unit || defaultUnit[d.productType as ServiceType] || '건',
+      unitPrice:        d.unitPrice > 0 ? String(d.unitPrice) : '',
+      taxType:          vatType,
+      memo:             [d.memo, ...d.warnings].filter(Boolean).join(' / '),
+      sourceLanguage:   d.sourceLanguage || 'ko',
+      fileName:         d.fileName || '',
+      fileFormat:       d.fileFormat || '',
+      wordCount:        d.wordCount > 0 ? String(d.wordCount) : '',
+      charCount:        d.charCount > 0 ? String(d.charCount) : '',
+      interpretDate:    d.interpretDate || '',
+      interpretEndDate: d.interpretEndDate || '',
+      startTime:        d.startTime || '',
+      endTime:          d.endTime || '',
+      interpretPlace:   d.interpretPlace || '',
+      interpreterCount: d.interpreterCount > 0 ? String(d.interpreterCount) : '',
+      eventStartDate:   d.eventStartDate || '',
+      eventEndDate:     d.eventEndDate || '',
+      itemLocation:     d.itemLocation || '',
+      usagePeriod:      d.usagePeriod > 0 ? String(d.usagePeriod) : '',
+      expenseType:      d.expenseType || '',
+    }));
+    // 기존에 빈 기본 Row 하나만 있으면 교체, 아니면 아래 추가
+    setItems(prev => {
+      const isOnlyDefault =
+        prev.length === 1 &&
+        !prev[0].productName.trim() &&
+        !prev[0].unitPrice.trim();
+      return isOnlyDefault ? converted : [...prev, ...converted];
+    });
+    onToast(`AI 초안 ${converted.length}건이 반영되었습니다.`);
+  };
 
   const totals = calcTotals(items, vatType);
   const fieldHint = (() => { const t = [...new Set(items.map(it => it.productType))]; return t.length === 1 ? SVC_FIELD_HINTS[t[0]] : '서비스별 상세 입력 필드'; })();
@@ -1211,9 +1255,9 @@ export function QuoteEditorWorkspace({
       </div>
       {/* AI 생성 토글 */}
       <div style={{ marginLeft: 'auto', marginRight: 'auto', display: 'flex', gap: 4, background: C.g100, borderRadius: 10, padding: 4 }}>
-        <button type="button" disabled title="AI 견적 생성 (준비 중)"
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'not-allowed', background: creationMode === 'ai' ? C.ai : 'transparent', color: C.g400 }}>
-          🤖 AI 견적 생성 <span style={{ fontSize: 10, fontWeight: 700, background: C.aiBg, color: C.ai, borderRadius: 4, padding: '1px 5px' }}>준비 중</span>
+        <button type="button" onClick={() => setShowAiModal(true)}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: C.ai, color: '#ffffff' }}>
+          🤖 AI 견적 생성
         </button>
         <button type="button" onClick={() => setCreationMode('direct')}
           style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: creationMode === 'direct' ? C.bgCard : 'transparent', color: creationMode === 'direct' ? C.textPrimary : C.textMuted, boxShadow: creationMode === 'direct' ? '0 1px 4px rgba(0,0,0,0.1)' : 'none' }}>
@@ -1239,6 +1283,12 @@ export function QuoteEditorWorkspace({
   if (asPage) {
     return (
       <div style={{ background: C.g50, minHeight: '100vh' }}>
+        {showAiModal && (
+          <AiQuoteModal
+            onApply={handleApplyAiRows}
+            onClose={() => setShowAiModal(false)}
+          />
+        )}
         {/* 인라인 Workspace 헤더 — 스크롤 영역에서 sticky */}
         <div style={{ position: 'sticky', top: 0, zIndex: 20, background: C.bgCard, borderBottom: BD.card, height: 52, display: 'flex', alignItems: 'center', gap: 16, padding: '0 28px', boxShadow: BD.shadow.card }}>
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, color: C.textMuted, fontSize: 13, padding: '4px 0' }}>
@@ -1250,9 +1300,9 @@ export function QuoteEditorWorkspace({
             {projectId !== null && <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 8 }}>프로젝트 #{projectId} — Version Engine</span>}
           </div>
           <div style={{ marginLeft: 'auto', marginRight: 'auto', display: 'flex', gap: 4, background: C.g100, borderRadius: 10, padding: 4 }}>
-            <button type="button" disabled title="AI 견적 생성 (준비 중)"
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'not-allowed', background: creationMode === 'ai' ? C.ai : 'transparent', color: C.g400 }}>
-              🤖 AI 견적 생성 <span style={{ fontSize: 10, fontWeight: 700, background: C.aiBg, color: C.ai, borderRadius: 4, padding: '1px 5px' }}>준비 중</span>
+            <button type="button" onClick={() => setShowAiModal(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: C.ai, color: '#ffffff' }}>
+              🤖 AI 견적 생성
             </button>
             <button type="button" onClick={() => setCreationMode('direct')}
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: creationMode === 'direct' ? C.bgCard : 'transparent', color: creationMode === 'direct' ? C.textPrimary : C.textMuted, boxShadow: creationMode === 'direct' ? '0 1px 4px rgba(0,0,0,0.1)' : 'none' }}>
@@ -1282,6 +1332,12 @@ export function QuoteEditorWorkspace({
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 800, background: C.g50, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {showAiModal && (
+        <AiQuoteModal
+          onApply={handleApplyAiRows}
+          onClose={() => setShowAiModal(false)}
+        />
+      )}
       {wsHeader(C.bgCard, BD.card, BD.shadow.card, '24px')}
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px 64px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>

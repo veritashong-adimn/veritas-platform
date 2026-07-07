@@ -1,0 +1,531 @@
+/**
+ * AiQuoteModal — AI 견적 생성 v1
+ *
+ * 흐름: 요청 입력 → AI 분석 → Preview → "견적에 반영" → Workspace Row 추가
+ * AI는 절대 자동 저장하지 않는다. 관리자가 검토 후 반영해야 한다.
+ */
+import React, { useState, useRef } from 'react';
+import { api } from '../../lib/constants';
+import { C, BD, TYPO, SP, BTN } from '../../lib/ds';
+import { getPolicy } from '../../lib/languagePagePolicy';
+
+// ─── 타입 ─────────────────────────────────────────────────────────────────────
+
+type ServiceType = 'translation' | 'interpretation' | 'equipment' | 'expense';
+type VatType     = 'taxable' | 'exempt' | 'zero_rate';
+
+export interface AiDraftRow {
+  productId:       number | null;
+  productName:     string;
+  productType:     ServiceType;
+  quantity:        number;
+  unit:            string;
+  unitPrice:       number;
+  memo:            string;
+  sourceLanguage:  string;
+  targetLanguage:  string;
+  fileName:        string;
+  fileFormat:      string;
+  wordCount:       number;
+  charCount:       number;
+  interpretDate:    string;
+  interpretEndDate: string;
+  startTime:        string;
+  endTime:          string;
+  interpretPlace:   string;
+  interpreterCount: number;
+  eventStartDate:   string;
+  eventEndDate:     string;
+  itemLocation:     string;
+  usagePeriod:      number;
+  expenseType:      string;
+  warnings:        string[];
+  needsReview:     boolean;
+}
+
+export interface AiDraftResult {
+  draftRows:  AiDraftRow[];
+  warnings:   string[];
+  confidence: 'high' | 'medium' | 'low';
+}
+
+interface Props {
+  onApply: (rows: AiDraftRow[]) => void;
+  onClose: () => void;
+}
+
+// ─── 서비스 유형 설정 ─────────────────────────────────────────────────────────
+
+const SVC_CFG: Record<ServiceType, { label: string; color: string; bg: string }> = {
+  translation:    { label: '번역',   color: C.primary,      bg: C.primaryBg  },
+  interpretation: { label: '통역',   color: C.successText,  bg: C.successBg  },
+  equipment:      { label: '장비',   color: C.warning,      bg: C.warningBg  },
+  expense:        { label: '기타',   color: C.textMuted,    bg: C.g50        },
+};
+
+const CONF_CFG: Record<string, { label: string; color: string; bg: string }> = {
+  high:   { label: '높음', color: '#15803d', bg: '#f0fdf4' },
+  medium: { label: '보통', color: '#d97706', bg: '#fffbeb' },
+  low:    { label: '낮음', color: '#dc2626', bg: '#fee2e2' },
+};
+
+const ALLOWED_EXTS = '.pdf,.jpg,.jpeg,.png,.doc,.docx,.ppt,.pptx,.xls,.xlsx';
+
+// ─── 서비스별 상세 문자열 (Preview 표시용) ───────────────────────────────────
+
+function getLangName(code: string): string {
+  if (!code) return '';
+  return getPolicy(code)?.languageName ?? code;
+}
+
+function fmtDetail(row: AiDraftRow): string {
+  const parts: string[] = [];
+  switch (row.productType) {
+    case 'translation': {
+      const src = getLangName(row.sourceLanguage);
+      const tgt = getLangName(row.targetLanguage);
+      if (src || tgt) parts.push(`${src}→${tgt}`);
+      if (row.fileName)   parts.push(row.fileName);
+      if (row.fileFormat) parts.push(row.fileFormat);
+      if (row.wordCount > 0) parts.push(`${row.wordCount.toLocaleString()}단어`);
+      if (row.charCount > 0) parts.push(`${row.charCount.toLocaleString()}글자`);
+      break;
+    }
+    case 'interpretation': {
+      if (row.interpretDate) {
+        parts.push(row.interpretEndDate
+          ? `${row.interpretDate}~${row.interpretEndDate}`
+          : row.interpretDate);
+      }
+      const time = [row.startTime, row.endTime].filter(Boolean).join('~');
+      if (time) parts.push(time);
+      if (row.interpretPlace)  parts.push(row.interpretPlace);
+      if (row.interpreterCount > 0) parts.push(`${row.interpreterCount}명`);
+      break;
+    }
+    case 'equipment': {
+      if (row.eventStartDate) {
+        parts.push(row.eventEndDate
+          ? `${row.eventStartDate}~${row.eventEndDate}`
+          : row.eventStartDate);
+      }
+      if (row.itemLocation) parts.push(row.itemLocation);
+      if (row.usagePeriod > 0) parts.push(`${row.usagePeriod}일`);
+      break;
+    }
+    case 'expense': {
+      if (row.expenseType) parts.push(row.expenseType);
+      break;
+    }
+  }
+  return parts.join(' / ') || '-';
+}
+
+function calcSupply(row: AiDraftRow): number {
+  const cnt  = row.productType === 'interpretation' ? (row.interpreterCount || 1) : 1;
+  const days = row.productType === 'equipment'      ? (row.usagePeriod      || 1) : 1;
+  return Math.round(days * cnt * (row.quantity || 1) * (row.unitPrice || 0));
+}
+
+// ─── 스타일 상수 ──────────────────────────────────────────────────────────────
+
+const OVERLAY: React.CSSProperties = {
+  position: 'fixed', inset: 0, zIndex: 1000,
+  background: 'rgba(0,0,0,0.45)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+};
+
+const MODAL: React.CSSProperties = {
+  background: C.bgCard,
+  borderRadius: BD.radius.xl,
+  boxShadow: BD.shadow.modal,
+  width: '92vw', maxWidth: 900,
+  maxHeight: '90vh',
+  display: 'flex', flexDirection: 'column',
+  overflow: 'hidden',
+};
+
+const THEAD_CELL = (align: 'left' | 'center' | 'right' = 'left'): React.CSSProperties => ({
+  ...TYPO.gridHeader,
+  textAlign: align,
+  padding: '8px 10px',
+  background: C.g50,
+  borderBottom: `2px solid ${C.g200}`,
+  whiteSpace: 'nowrap',
+});
+
+const TD = (align: 'left' | 'center' | 'right' = 'left'): React.CSSProperties => ({
+  ...TYPO.inputValue,
+  textAlign: align,
+  padding: '8px 10px',
+  borderBottom: `1px solid ${C.g100}`,
+  verticalAlign: 'top',
+});
+
+// ─── 컴포넌트 ─────────────────────────────────────────────────────────────────
+
+export default function AiQuoteModal({ onApply, onClose }: Props) {
+  const [requestText,   setRequestText]   = useState('');
+  const [files,         setFiles]         = useState<File[]>([]);
+  const [loading,       setLoading]       = useState(false);
+  const [error,         setError]         = useState('');
+  const [result,        setResult]        = useState<AiDraftResult | null>(null);
+  const [dragOver,      setDragOver]      = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 파일 추가 (중복 제거)
+  const addFiles = (incoming: FileList | File[]) => {
+    const arr = Array.from(incoming);
+    setFiles(prev => {
+      const names = new Set(prev.map(f => f.name));
+      return [...prev, ...arr.filter(f => !names.has(f.name))];
+    });
+  };
+
+  const removeFile = (idx: number) =>
+    setFiles(prev => prev.filter((_, i) => i !== idx));
+
+  // AI 분석 실행
+  const handleAnalyze = async () => {
+    if (!requestText.trim() && files.length === 0) {
+      setError('요청내용을 입력하거나 파일을 업로드해 주세요.');
+      return;
+    }
+    setError('');
+    setLoading(true);
+    setResult(null);
+
+    try {
+      const fd = new FormData();
+      fd.append('requestText', requestText);
+      files.forEach(f => fd.append('files', f));
+
+      const token = localStorage.getItem('auth_token');
+      const resp  = await fetch(api('/api/quotes/ai-draft'), {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `HTTP ${resp.status}`);
+      }
+
+      const data = (await resp.json()) as AiDraftResult;
+      setResult(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'AI 견적 생성 중 오류가 발생했습니다. 다시 시도해 주세요.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 견적에 반영
+  const handleApply = () => {
+    if (!result?.draftRows.length) return;
+    onApply(result.draftRows);
+    onClose();
+  };
+
+  const confCfg = result ? (CONF_CFG[result.confidence] ?? CONF_CFG.medium) : null;
+
+  return (
+    <div style={OVERLAY} onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={MODAL}>
+
+        {/* ── 헤더 ── */}
+        <div style={{
+          padding: '20px 24px 16px',
+          borderBottom: BD.card,
+          display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
+        }}>
+          <span style={{ fontSize: 20 }}>🤖</span>
+          <div>
+            <div style={{ ...TYPO.sectionTitle }}>AI 견적 생성</div>
+            <div style={{ ...TYPO.helper, marginTop: 2 }}>
+              AI가 초안을 생성합니다. 검토 후 &quot;견적에 반영&quot;을 클릭하세요.
+              저장은 자동으로 이루어지지 않습니다.
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: 20, color: C.textMuted, lineHeight: 1, padding: 4 }}
+            aria-label="닫기"
+          >×</button>
+        </div>
+
+        {/* ── 본문 (스크롤) ── */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px' }}>
+
+          {/* 1. 고객 요청내용 */}
+          <div style={{ marginBottom: SP[6] }}>
+            <label style={{ ...TYPO.fieldLabel, display: 'block', marginBottom: SP[3] }}>
+              고객 요청내용
+            </label>
+            <textarea
+              value={requestText}
+              onChange={e => setRequestText(e.target.value)}
+              placeholder={`고객이 요청한 번역/통역/장비/기타 내용을 입력하세요.\n예: 한영 계약서 번역, PDF 3개, 납기 7월 15일, 긴급 건입니다.`}
+              rows={5}
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                border: BD.input, borderRadius: BD.radius.lg,
+                padding: '10px 12px', fontSize: 13, color: C.textPrimary,
+                resize: 'vertical', outline: 'none', fontFamily: 'inherit',
+                lineHeight: 1.6,
+              }}
+              data-testid="ai-request-text"
+            />
+          </div>
+
+          {/* 2. 파일 업로드 */}
+          <div style={{ marginBottom: SP[6] }}>
+            <label style={{ ...TYPO.fieldLabel, display: 'block', marginBottom: SP[3] }}>
+              파일 업로드 <span style={{ ...TYPO.helper, fontWeight: 400 }}>(선택 — PDF, DOC, DOCX, PPT, XLS, XLSX, JPG, PNG)</span>
+            </label>
+            <div
+              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={e => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); }}
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                border: `2px dashed ${dragOver ? C.primary : C.g300}`,
+                borderRadius: BD.radius.lg,
+                padding: '20px 16px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                background: dragOver ? C.primaryBg : C.g50,
+                transition: 'all 0.15s',
+              }}
+              data-testid="ai-file-drop"
+            >
+              <div style={{ fontSize: 24, marginBottom: 6 }}>📎</div>
+              <div style={{ ...TYPO.inputValue, color: C.textMuted }}>
+                클릭하거나 파일을 드래그하여 업로드
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept={ALLOWED_EXTS}
+                multiple
+                style={{ display: 'none' }}
+                onChange={e => e.target.files && addFiles(e.target.files)}
+                data-testid="ai-file-input"
+              />
+            </div>
+
+            {/* 업로드된 파일 목록 */}
+            {files.length > 0 && (
+              <div style={{ marginTop: SP[3], display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {files.map((f, i) => (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'center', gap: 8,
+                    padding: '6px 10px', background: C.g50, borderRadius: BD.radius.md,
+                    border: BD.card,
+                  }}>
+                    <span style={{ fontSize: 14 }}>📄</span>
+                    <span style={{ ...TYPO.inputValue, flex: 1 }}>{f.name}</span>
+                    <span style={{ ...TYPO.helper }}>
+                      {(f.size / 1024).toFixed(0)}KB
+                    </span>
+                    <button
+                      onClick={e => { e.stopPropagation(); removeFile(i); }}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer',
+                        color: C.textMuted, fontSize: 16, lineHeight: 1, padding: '0 2px' }}
+                      aria-label={`${f.name} 제거`}
+                    >×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 3. 오류 메시지 */}
+          {error && (
+            <div style={{
+              padding: '10px 14px', borderRadius: BD.radius.md, marginBottom: SP[5],
+              background: C.dangerBg, border: `1px solid ${C.dangerBorder}`,
+              ...TYPO.inputValue, color: C.dangerText,
+            }}>
+              {error}
+            </div>
+          )}
+
+          {/* 4. AI 분석하기 버튼 */}
+          <button
+            onClick={handleAnalyze}
+            disabled={loading}
+            style={{
+              ...BTN.base,
+              ...BTN.size.lg,
+              ...(loading ? { background: C.g200, color: C.textDisabled, cursor: 'not-allowed' }
+                          : { background: C.ai, color: '#ffffff' }),
+              width: '100%', justifyContent: 'center',
+              marginBottom: result ? SP[7] : 0,
+            }}
+            data-testid="ai-analyze-btn"
+          >
+            {loading ? (
+              <>
+                <span style={{ display: 'inline-block', animation: 'spin 1s linear infinite', marginRight: 6 }}>⏳</span>
+                AI 분석 중…
+              </>
+            ) : '🤖 AI 분석하기'}
+          </button>
+
+          {/* 5. Preview */}
+          {result && (
+            <div>
+              {/* 신뢰도 + 전역 경고 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: SP[4] }}>
+                <div style={{ ...TYPO.fieldLabel }}>AI 분석 결과</div>
+                {confCfg && (
+                  <span style={{
+                    fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 99,
+                    background: confCfg.bg, color: confCfg.color,
+                  }}>
+                    신뢰도: {confCfg.label}
+                  </span>
+                )}
+              </div>
+
+              {result.warnings.length > 0 && (
+                <div style={{
+                  padding: '8px 12px', borderRadius: BD.radius.md, marginBottom: SP[4],
+                  background: C.warningBg, border: `1px solid ${C.warningBorder}`,
+                }}>
+                  {result.warnings.map((w, i) => (
+                    <div key={i} style={{ ...TYPO.helper, color: C.warningText }}>⚠ {w}</div>
+                  ))}
+                </div>
+              )}
+
+              {result.draftRows.length === 0 ? (
+                <div style={{
+                  padding: '24px', textAlign: 'center',
+                  ...TYPO.inputValue, color: C.textMuted,
+                  background: C.g50, borderRadius: BD.radius.lg, border: BD.card,
+                }}>
+                  분석 가능한 항목을 찾지 못했습니다. 요청내용을 더 상세하게 입력해 보세요.
+                </div>
+              ) : (
+                <div style={{ border: BD.card, borderRadius: BD.radius.lg, overflow: 'hidden' }}>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr>
+                          <th style={THEAD_CELL('center')}>#</th>
+                          <th style={THEAD_CELL()}>유형</th>
+                          <th style={THEAD_CELL()}>추천 상품</th>
+                          <th style={THEAD_CELL()}>서비스별 상세</th>
+                          <th style={THEAD_CELL('right')}>수량</th>
+                          <th style={THEAD_CELL('center')}>단위</th>
+                          <th style={THEAD_CELL('right')}>단가</th>
+                          <th style={THEAD_CELL('right')}>공급가액</th>
+                          <th style={THEAD_CELL()}>비고 / 확인</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {result.draftRows.map((row, i) => {
+                          const cfg     = SVC_CFG[row.productType] ?? SVC_CFG.expense;
+                          const supply  = calcSupply(row);
+                          const hasWarn = row.needsReview || row.warnings.length > 0;
+                          return (
+                            <tr key={i} style={{ background: hasWarn ? '#fffbeb' : undefined }}>
+                              <td style={TD('center')}>{i + 1}</td>
+                              <td style={TD()}>
+                                <span style={{
+                                  display: 'inline-block',
+                                  fontSize: 11, fontWeight: 700,
+                                  padding: '2px 6px', borderRadius: 4,
+                                  background: cfg.bg, color: cfg.color,
+                                  whiteSpace: 'nowrap',
+                                }}>
+                                  {cfg.label}
+                                </span>
+                              </td>
+                              <td style={TD()}>
+                                {row.productId ? (
+                                  <span style={{ color: C.textPrimary }}>{row.productName}</span>
+                                ) : (
+                                  <span style={{
+                                    color: C.dangerText, fontSize: 11, fontWeight: 700,
+                                    background: C.dangerBg, padding: '1px 5px', borderRadius: 4,
+                                  }}>상품 확인 필요</span>
+                                )}
+                              </td>
+                              <td style={{ ...TD(), maxWidth: 260, color: C.textSecondary }}>
+                                {fmtDetail(row)}
+                              </td>
+                              <td style={TD('right')}>{row.quantity.toLocaleString()}</td>
+                              <td style={TD('center')}>{row.unit}</td>
+                              <td style={TD('right')}>
+                                {row.unitPrice > 0
+                                  ? row.unitPrice.toLocaleString()
+                                  : <span style={{ color: C.dangerText, fontSize: 11, fontWeight: 700 }}>확인필요</span>
+                                }
+                              </td>
+                              <td style={{ ...TD('right'), fontWeight: 600, color: C.amount }}>
+                                {supply > 0 ? supply.toLocaleString() : '-'}
+                              </td>
+                              <td style={TD()}>
+                                {row.memo && <div style={{ color: C.textMuted }}>{row.memo}</div>}
+                                {row.warnings.map((w, wi) => (
+                                  <div key={wi} style={{
+                                    fontSize: 11, color: C.warningText,
+                                    background: C.warningBg, padding: '1px 5px',
+                                    borderRadius: 3, marginTop: 2, display: 'inline-block',
+                                  }}>
+                                    ⚠ {w}
+                                  </div>
+                                ))}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── 하단 버튼 ── */}
+        <div style={{
+          padding: '16px 24px',
+          borderTop: BD.card,
+          display: 'flex', justifyContent: 'flex-end', gap: 10,
+          flexShrink: 0, background: C.bgCard,
+        }}>
+          <button
+            onClick={onClose}
+            style={{
+              ...BTN.base, ...BTN.size.md,
+              ...BTN.variant.secondary, border: `1px solid ${C.g300}`,
+            }}
+            data-testid="ai-cancel-btn"
+          >
+            취소
+          </button>
+          {result && result.draftRows.length > 0 && (
+            <button
+              onClick={handleApply}
+              style={{ ...BTN.base, ...BTN.size.md, ...BTN.variant.ai }}
+              data-testid="ai-apply-btn"
+              aria-label="AI 초안을 현재 견적에 반영"
+            >
+              ✅ 견적에 반영 ({result.draftRows.length}건)
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* spin 애니메이션 */}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
