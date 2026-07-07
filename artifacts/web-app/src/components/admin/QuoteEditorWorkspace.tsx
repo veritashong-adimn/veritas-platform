@@ -9,6 +9,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api, Product } from '../../lib/constants';
 import { Card, DsButton, ClickSelect, NumericInput } from '../ui';
+import { downloadQuoteExcel, type ExportItem } from '../../lib/quoteExcel';
 import { dsInput, dsInputStd, dsColH, dsRow, dsAmount, C, BD, TBL, TYPO, SP, FORM } from '../../lib/ds';
 import {
   getPolicy, validateCounts, calcPagesFromStr,
@@ -1006,6 +1007,27 @@ export function QuoteEditorWorkspace({
     finally { setSaving(false); }
   }, [items, projectId, title, companyId, contactId, adminId, issueDate, quoteType, vatType, note, versionReason, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ─── Excel Export ─────────────────────────────────────────────────────────
+
+  const handleExcelExport = () => {
+    const company = companies.find(c => c.id === companyId);
+    const contact = contacts.find(c => c.id === contactId);
+    const admin   = adminList.find(a => a.id === adminId);
+    downloadQuoteExcel({
+      title:       title,
+      quoteType:   quoteType,
+      issueDate:   issueDate,
+      companyName: company?.name ?? '',
+      contactName: contact?.name ?? '',
+      pmName:      admin?.name ?? admin?.email ?? '',
+      vatType:     vatType,
+      note:        note,
+      items:       items as ExportItem[],
+      products:    products,
+      totals,
+    });
+  };
+
   // ─── 공통 Form 컨텐츠 ─────────────────────────────────────────────────────
 
   const inpSt: React.CSSProperties = dsInputStd();
@@ -1164,10 +1186,11 @@ export function QuoteEditorWorkspace({
         </div>
       </Card>
 
-      {/* ── 하단 저장 버튼 ──────────────────────────────────────────────── */}
+      {/* ── 하단 버튼 ─────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, paddingBottom: 8 }}>
-        <DsButton variant="outline" size="lg" onClick={onClose} disabled={saving}>취소</DsButton>
-        <DsButton variant="primary" size="lg" onClick={handleSave} disabled={saving}>
+        <DsButton variant="secondary" size="lg" onClick={handleExcelExport}>📊 Excel 출력</DsButton>
+        <DsButton variant="outline"   size="lg" onClick={onClose} disabled={saving}>취소</DsButton>
+        <DsButton variant="primary"   size="lg" onClick={handleSave} disabled={saving}>
           {saving ? '저장 중…' : (isStandalone ? '💾 견적서 저장 (프로젝트 생성)' : '💾 견적 저장')}
         </DsButton>
       </div>
@@ -1197,8 +1220,9 @@ export function QuoteEditorWorkspace({
           ✏ 직접 작성
         </button>
       </div>
-      {/* 저장 버튼 */}
+      {/* 액션 버튼 */}
       <div style={{ display: 'flex', gap: 8 }}>
+        <DsButton variant="secondary" size="md" onClick={handleExcelExport}>📊 Excel</DsButton>
         <DsButton variant="outline" size="md" onClick={onClose} disabled={saving}>취소</DsButton>
         <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving}>
           {saving ? '저장 중…' : '💾 저장'}
@@ -1236,6 +1260,7 @@ export function QuoteEditorWorkspace({
             </button>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
+            <DsButton variant="secondary" size="md" onClick={handleExcelExport}>📊 Excel</DsButton>
             <DsButton variant="outline" size="md" onClick={onClose} disabled={saving}>취소</DsButton>
             <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving}>
               {saving ? '저장 중…' : '💾 저장'}
