@@ -28,6 +28,7 @@ import publicInsightsRouter from "./public-insights";
 import invitationsRouter from "./invitations";
 import customerRouter from "./customer";
 import prepaidRouter from "./prepaid";
+import aiQuoteDraftRouter from "./aiQuoteDraft";
 
 const router: IRouter = Router();
 
@@ -35,6 +36,7 @@ router.use(healthRouter);
 router.use(authRouter);
 router.use(usersRouter);
 router.use(projectsRouter);
+router.use(aiQuoteDraftRouter);
 router.use(quotesRouter);
 router.use(tasksRouter);
 router.use(uploadRouter);
