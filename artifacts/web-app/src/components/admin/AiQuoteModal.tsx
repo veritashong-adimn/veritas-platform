@@ -79,19 +79,9 @@ function getLangName(code: string): string {
   return getPolicy(code)?.languageName ?? code;
 }
 
-function fmtDetail(row: AiDraftRow): string {
+function fmtDetailText(row: AiDraftRow): string {
   const parts: string[] = [];
   switch (row.productType) {
-    case 'translation': {
-      const src = getLangName(row.sourceLanguage);
-      const tgt = getLangName(row.targetLanguage);
-      if (src || tgt) parts.push(`${src}→${tgt}`);
-      if (row.fileName)   parts.push(row.fileName);
-      if (row.fileFormat) parts.push(row.fileFormat);
-      if (row.wordCount > 0) parts.push(`${row.wordCount.toLocaleString()}단어`);
-      if (row.charCount > 0) parts.push(`${row.charCount.toLocaleString()}글자`);
-      break;
-    }
     case 'interpretation':
       if (row.interpretDate) {
         parts.push(row.interpretEndDate
@@ -101,7 +91,7 @@ function fmtDetail(row: AiDraftRow): string {
         const time = [row.startTime, row.endTime].filter(Boolean).join('~');
         if (time) parts.push(time);
       }
-      if (row.interpretPlace)    parts.push(row.interpretPlace);
+      if (row.interpretPlace)       parts.push(row.interpretPlace);
       if (row.interpreterCount > 0) parts.push(`${row.interpreterCount}명`);
       break;
     case 'equipment':
@@ -109,14 +99,52 @@ function fmtDetail(row: AiDraftRow): string {
         parts.push(row.eventEndDate
           ? `${row.eventStartDate}~${row.eventEndDate}` : row.eventStartDate);
       }
-      if (row.itemLocation)  parts.push(row.itemLocation);
+      if (row.itemLocation)    parts.push(row.itemLocation);
       if (row.usagePeriod > 0) parts.push(`${row.usagePeriod}일`);
       break;
     case 'expense':
       if (row.expenseType) parts.push(row.expenseType);
       break;
+    default: break;
   }
   return parts.join(' / ') || '-';
+}
+
+// 번역 Row 서비스별 상세 — 단어수·글자수·페이지수 멀티라인 표시
+function TranslationDetail({ row }: { row: AiDraftRow }) {
+  const src = getLangName(row.sourceLanguage);
+  const tgt = getLangName(row.targetLanguage);
+  return (
+    <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+      {(src || tgt) && (
+        <div style={{ fontWeight: 700, color: '#1e40af' }}>
+          {src && tgt ? `${src}→${tgt}` : src || tgt}
+        </div>
+      )}
+      {row.fileName   && <div style={{ color: '#374151' }}>{row.fileName}</div>}
+      {row.fileFormat && <div style={{ color: '#6b7280', fontSize: 11 }}>{row.fileFormat}</div>}
+      {row.wordCount > 0 && (
+        <div style={{ color: '#374151' }}>
+          <span style={{ fontWeight: 600 }}>{row.wordCount.toLocaleString()}</span>
+          <span style={{ color: '#6b7280' }}> words</span>
+        </div>
+      )}
+      {row.charCount > 0 && (
+        <div style={{ color: '#374151' }}>
+          <span style={{ fontWeight: 600 }}>{row.charCount.toLocaleString()}</span>
+          <span style={{ color: '#6b7280' }}> characters</span>
+        </div>
+      )}
+      {row.quantity > 0 && (
+        <div style={{ color: '#2563eb', fontWeight: 700 }}>
+          {row.quantity.toLocaleString()} pages
+        </div>
+      )}
+      {!src && !tgt && !row.fileName && !row.wordCount && !row.charCount && (
+        <span style={{ color: '#9ca3af' }}>-</span>
+      )}
+    </div>
+  );
 }
 
 function calcSupply(row: AiDraftRow): number {
@@ -551,8 +579,11 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
                                   }}>상품 확인 필요</span>
                                 )}
                               </td>
-                              <td style={{ ...TD(), maxWidth: 240, color: C.textSecondary }}>
-                                {fmtDetail(row)}
+                              <td style={{ ...TD(), maxWidth: 280 }}>
+                                {row.productType === 'translation'
+                                  ? <TranslationDetail row={row} />
+                                  : <span style={{ color: C.textSecondary }}>{fmtDetailText(row)}</span>
+                                }
                               </td>
                               <td style={TD('right')}>{row.quantity.toLocaleString()}</td>
                               <td style={TD('center')}>{row.unit}</td>
