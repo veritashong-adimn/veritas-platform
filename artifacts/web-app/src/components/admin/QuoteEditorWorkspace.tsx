@@ -8,10 +8,10 @@
  */
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api, Product } from '../../lib/constants';
-import { Card, GhostBtn, PrimaryBtn, ClickSelect, NumericInput } from '../ui';
-import { dsInput, dsColH, dsRow, dsAmount, C, TBL } from '../../lib/ds';
+import { Card, DsButton, ClickSelect, NumericInput } from '../ui';
+import { dsInput, dsInputStd, dsColH, dsRow, dsAmount, C, BD, TBL, TYPO, SP, FORM } from '../../lib/ds';
 import {
-  getPolicy, getActivePolicies, validateCounts, calcPagesFromStr,
+  getPolicy, validateCounts, calcPagesFromStr,
   type ValidationResult,
 } from '../../lib/languagePagePolicy';
 
@@ -60,10 +60,10 @@ interface AdminUser { id: number; name?: string | null; email: string }
 // ─── 서비스 유형 설정 ─────────────────────────────────────────────────────────
 
 const SVC_CFG: Record<ServiceType, { label: string; color: string; bg: string; border: string; dot: string }> = {
-  translation:    { label: '번역',   color: '#2563eb', bg: '#eff6ff', border: '#93c5fd', dot: '#3b82f6' },
-  interpretation: { label: '통역',   color: '#059669', bg: '#f0fdf4', border: '#86efac', dot: '#10b981' },
-  equipment:      { label: '장비',   color: '#d97706', bg: '#fffbeb', border: '#fcd34d', dot: '#f59e0b' },
-  expense:        { label: '기타',   color: '#6b7280', bg: '#f9fafb', border: '#d1d5db', dot: '#9ca3af' },
+  translation:    { label: '번역',   color: C.primary, bg: C.primaryBg, border: '#93c5fd', dot: '#3b82f6' },
+  interpretation: { label: '통역',   color: C.successText, bg: C.successBg, border: '#86efac', dot: '#10b981' },
+  equipment:      { label: '장비',   color: C.warning, bg: C.warningBg, border: '#fcd34d', dot: '#f59e0b' },
+  expense:        { label: '기타',   color: C.textMuted, bg: C.g50, border: C.g300, dot: C.g400 },
 };
 const SVC_DEFAULT_UNIT: Record<ServiceType, string> = {
   translation: '페이지', interpretation: '일', equipment: '세트', expense: '건',
@@ -195,25 +195,25 @@ function SearchPopup({ title, items, value, onSelect, onClose }: {
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div style={{ background: '#fff', borderRadius: 14, width: 480, maxHeight: '70vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+      <div style={{ background: C.bgCard, borderRadius: 14, width: 480, maxHeight: '70vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
         <div style={{ padding: '14px 18px 10px', borderBottom: '1px solid #f0f2f5', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 14, fontWeight: 700, color: '#111827' }}>{title}</span>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: '#9ca3af', cursor: 'pointer' }}>×</button>
+          <span style={{ fontSize: 14, fontWeight: 700, color: C.textPrimary }}>{title}</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, color: C.g400, cursor: 'pointer' }}>×</button>
         </div>
         <div style={{ padding: '10px 18px', borderBottom: '1px solid #f0f2f5' }}>
           <input ref={ref} value={q} onChange={e => setQ(e.target.value)} placeholder="검색어를 입력하세요…"
             style={{ width: '100%', boxSizing: 'border-box', padding: '8px 12px', fontSize: 14, border: '1.5px solid #6366f1', borderRadius: 8, outline: 'none' }} />
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
-          {value !== null && <div onClick={() => { onSelect(null); onClose(); }} style={{ padding: '10px 18px', fontSize: 13, color: '#9ca3af', cursor: 'pointer', borderBottom: '1px solid #f8f9fa' }} onMouseEnter={e => (e.currentTarget.style.background = '#f8f9fa')} onMouseLeave={e => (e.currentTarget.style.background = '')}>선택 해제</div>}
-          {filtered.length === 0 && <div style={{ padding: '24px 18px', textAlign: 'center', fontSize: 13, color: '#9ca3af' }}>검색 결과 없습니다.</div>}
+          {value !== null && <div onClick={() => { onSelect(null); onClose(); }} style={{ padding: '10px 18px', fontSize: 13, color: C.g400, cursor: 'pointer', borderBottom: '1px solid #f8f9fa' }} onMouseEnter={e => (e.currentTarget.style.background = C.g50)} onMouseLeave={e => (e.currentTarget.style.background = '')}>선택 해제</div>}
+          {filtered.length === 0 && <div style={{ padding: '24px 18px', textAlign: 'center', fontSize: 13, color: C.g400 }}>검색 결과 없습니다.</div>}
           {filtered.map(item => (
             <div key={item.id} onClick={() => { onSelect(item.id); onClose(); }}
-              style={{ padding: '10px 18px', cursor: 'pointer', background: item.id === value ? '#eff6ff' : undefined, borderBottom: '1px solid #f8f9fa' }}
-              onMouseEnter={e => { if (item.id !== value) (e.currentTarget as HTMLDivElement).style.background = '#f8fafc'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = item.id === value ? '#eff6ff' : ''; }}>
-              <div style={{ fontSize: 14, fontWeight: item.id === value ? 700 : 400, color: '#111827' }}>{item.label}</div>
-              {item.sub && <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }}>{item.sub}</div>}
+              style={{ padding: '10px 18px', cursor: 'pointer', background: item.id === value ? C.primaryBg : undefined, borderBottom: '1px solid #f8f9fa' }}
+              onMouseEnter={e => { if (item.id !== value) (e.currentTarget as HTMLDivElement).style.background = C.bgHover; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = item.id === value ? C.primaryBg : ''; }}>
+              <div style={{ fontSize: 14, fontWeight: item.id === value ? 700 : 400, color: C.textPrimary }}>{item.label}</div>
+              {item.sub && <div style={{ fontSize: 11, color: C.g400, marginTop: 1 }}>{item.sub}</div>}
             </div>
           ))}
         </div>
@@ -224,7 +224,7 @@ function SearchPopup({ title, items, value, onSelect, onClose }: {
 
 // ─── 인라인 검색 필드 ─────────────────────────────────────────────────────────
 
-function InlineSearchField({ items, value, onChange, placeholder = '검색…', popupTitle = '검색', accentColor = '#6366f1', compact = false }: {
+function InlineSearchField({ items, value, onChange, placeholder = '검색…', popupTitle = '검색', accentColor = C.ai, compact = false }: {
   items: { id: number; label: string; sub?: string }[]; value: number | null; onChange: (id: number | null) => void;
   placeholder?: string; popupTitle?: string; accentColor?: string; compact?: boolean;
 }) {
@@ -245,24 +245,24 @@ function InlineSearchField({ items, value, onChange, placeholder = '검색…', 
 
   return (
     <>
-      <div ref={ref} style={{ position: 'relative', display: 'flex', alignItems: 'center', border: `1px solid ${open ? accentColor : '#d1d5db'}`, borderRadius: 7, background: '#fff', minWidth: 0, flex: 1, transition: 'border-color 0.12s' }}>
+      <div ref={ref} style={{ position: 'relative', display: 'flex', alignItems: 'center', border: `1px solid ${open ? accentColor : C.g300}`, borderRadius: 7, background: C.bgCard, minWidth: 0, flex: 1, transition: 'border-color 0.12s' }}>
         <input value={open ? q : (selected?.label ?? '')} onChange={e => { setQ(e.target.value); setOpen(true); }} onFocus={() => { setOpen(true); if (selected) setQ(''); }} placeholder={placeholder}
-          style={{ flex: 1, minWidth: 0, padding: pad, fontSize: fs, border: 'none', outline: 'none', background: 'transparent', color: selected && !open ? '#111827' : undefined }} />
+          style={{ flex: 1, minWidth: 0, padding: pad, fontSize: fs, border: 'none', outline: 'none', background: 'transparent', color: selected && !open ? C.textPrimary : undefined }} />
         <button type="button" title="전체 검색" onClick={() => { setOpen(false); setShowPopup(true); }}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', fontSize: 12, color: '#6366f1', flexShrink: 0 }}>🔍</button>
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', fontSize: 12, color: C.ai, flexShrink: 0 }}>🔍</button>
         {value !== null && <button type="button" title="초기화" onClick={() => { onChange(null); setQ(''); setOpen(false); }}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', fontSize: 12, color: '#9ca3af', flexShrink: 0 }}>🧽</button>}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', fontSize: 12, color: C.g400, flexShrink: 0 }}>🧽</button>}
         {open && (
-          <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0, zIndex: 700, background: '#fff', border: `1px solid ${accentColor}`, borderRadius: 9, boxShadow: '0 6px 20px rgba(0,0,0,0.1)', maxHeight: 200, overflowY: 'auto' }}>
-            {value !== null && <div onClick={() => { onChange(null); setQ(''); setOpen(false); }} style={{ padding: '6px 10px', fontSize: 12, color: '#9ca3af', cursor: 'pointer', borderBottom: '1px solid #f3f4f6' }} onMouseEnter={e => (e.currentTarget.style.background = '#f8f9fa')} onMouseLeave={e => (e.currentTarget.style.background = '')}>선택 해제</div>}
-            {filtered.length === 0 && <div style={{ padding: '8px 10px', fontSize: 12, color: '#9ca3af' }}>결과 없음 — <span style={{ color: accentColor, cursor: 'pointer', fontWeight: 600 }} onClick={() => { setOpen(false); setShowPopup(true); }}>전체 검색 🔍</span></div>}
+          <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0, zIndex: 700, background: C.bgCard, border: `1px solid ${accentColor}`, borderRadius: 9, boxShadow: '0 6px 20px rgba(0,0,0,0.1)', maxHeight: 200, overflowY: 'auto' }}>
+            {value !== null && <div onClick={() => { onChange(null); setQ(''); setOpen(false); }} style={{ padding: '6px 10px', fontSize: 12, color: C.g400, cursor: 'pointer', borderBottom: '1px solid #f3f4f6' }} onMouseEnter={e => (e.currentTarget.style.background = C.g50)} onMouseLeave={e => (e.currentTarget.style.background = '')}>선택 해제</div>}
+            {filtered.length === 0 && <div style={{ padding: '8px 10px', fontSize: 12, color: C.g400 }}>결과 없음 — <span style={{ color: accentColor, cursor: 'pointer', fontWeight: 600 }} onClick={() => { setOpen(false); setShowPopup(true); }}>전체 검색 🔍</span></div>}
             {filtered.map(item => (
               <div key={item.id} onClick={() => { onChange(item.id); setQ(''); setOpen(false); }}
-                style={{ padding: '6px 10px', cursor: 'pointer', background: item.id === value ? '#eff6ff' : undefined }}
-                onMouseEnter={e => { if (item.id !== value) (e.currentTarget as HTMLDivElement).style.background = '#f8fafc'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = item.id === value ? '#eff6ff' : ''; }}>
-                <div style={{ fontSize: 12, fontWeight: item.id === value ? 700 : 400, color: '#111827' }}>{item.label}</div>
-                {item.sub && <div style={{ fontSize: 10, color: '#9ca3af' }}>{item.sub}</div>}
+                style={{ padding: '6px 10px', cursor: 'pointer', background: item.id === value ? C.primaryBg : undefined }}
+                onMouseEnter={e => { if (item.id !== value) (e.currentTarget as HTMLDivElement).style.background = C.bgHover; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = item.id === value ? C.primaryBg : ''; }}>
+                <div style={{ fontSize: 12, fontWeight: item.id === value ? 700 : 400, color: C.textPrimary }}>{item.label}</div>
+                {item.sub && <div style={{ fontSize: 10, color: C.g400 }}>{item.sub}</div>}
               </div>
             ))}
           </div>
@@ -281,22 +281,22 @@ function RowControls({ idx, total, onRemove, onAddBelow, onMoveUp, onMoveDown }:
   onMoveUp: (i: number) => void; onMoveDown: (i: number) => void;
 }) {
   const btn = (dis: boolean): React.CSSProperties => ({
-    background: 'none', border: '1px solid #e5e7eb', borderRadius: 4,
+    background: 'none', border: BD.card, borderRadius: 4,
     cursor: dis ? 'default' : 'pointer', fontSize: 11, lineHeight: 1,
-    padding: '3px 6px', color: dis ? '#d1d5db' : '#6b7280',
+    padding: '3px 6px', color: dis ? C.g300 : C.textMuted,
   });
   const hov = (el: HTMLButtonElement, c: string) => { el.style.background = c; };
   return (
     <div style={{ display: 'flex', gap: 2, alignItems: 'center', justifyContent: 'center' }}>
       <button type="button" title="행 삭제" onClick={() => onRemove(idx)} disabled={total <= 1}
-        style={{ ...btn(total <= 1), color: total > 1 ? '#e11d48' : '#d1d5db', borderColor: total > 1 ? '#fca5a5' : '#e5e7eb' }}
-        onMouseEnter={e => { if (total > 1) hov(e.currentTarget, '#fef2f2'); }} onMouseLeave={e => hov(e.currentTarget, 'none')}>−</button>
-      <button type="button" title="아래 행 추가" onClick={() => onAddBelow(idx)} style={{ ...btn(false), color: '#2563eb', borderColor: '#bfdbfe' }}
-        onMouseEnter={e => hov(e.currentTarget, '#eff6ff')} onMouseLeave={e => hov(e.currentTarget, 'none')}>+</button>
+        style={{ ...btn(total <= 1), color: total > 1 ? C.danger : C.g300, borderColor: total > 1 ? C.dangerBorder : C.border }}
+        onMouseEnter={e => { if (total > 1) hov(e.currentTarget, C.dangerBg); }} onMouseLeave={e => hov(e.currentTarget, 'none')}>−</button>
+      <button type="button" title="아래 행 추가" onClick={() => onAddBelow(idx)} style={{ ...btn(false), color: C.primary, borderColor: C.primaryBorder }}
+        onMouseEnter={e => hov(e.currentTarget, C.primaryBg)} onMouseLeave={e => hov(e.currentTarget, 'none')}>+</button>
       <button type="button" title="위로 이동" onClick={() => onMoveUp(idx)} disabled={idx === 0} style={btn(idx === 0)}
-        onMouseEnter={e => { if (idx > 0) hov(e.currentTarget, '#f3f4f6'); }} onMouseLeave={e => hov(e.currentTarget, 'none')}>▲</button>
+        onMouseEnter={e => { if (idx > 0) hov(e.currentTarget, C.g100); }} onMouseLeave={e => hov(e.currentTarget, 'none')}>▲</button>
       <button type="button" title="아래로 이동" onClick={() => onMoveDown(idx)} disabled={idx === total - 1} style={btn(idx === total - 1)}
-        onMouseEnter={e => { if (idx < total - 1) hov(e.currentTarget, '#f3f4f6'); }} onMouseLeave={e => hov(e.currentTarget, 'none')}>▼</button>
+        onMouseEnter={e => { if (idx < total - 1) hov(e.currentTarget, C.g100); }} onMouseLeave={e => hov(e.currentTarget, 'none')}>▼</button>
     </div>
   );
 }
@@ -319,7 +319,7 @@ function ServiceTypeSelector({ value, onChange }: { value: ServiceType; onChange
         {cfg.label}<span style={{ fontSize: 7, marginLeft: 'auto' }}>▼</span>
       </button>
       {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, zIndex: 800, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 9, boxShadow: '0 4px 20px rgba(0,0,0,0.12)', padding: 4, minWidth: 74 }}>
+        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, zIndex: 800, background: C.bgCard, border: BD.card, borderRadius: 9, boxShadow: '0 4px 20px rgba(0,0,0,0.12)', padding: 4, minWidth: 74 }}>
           {(Object.entries(SVC_CFG) as [ServiceType, typeof SVC_CFG[ServiceType]][]).map(([k, c]) => (
             <button key={k} type="button" onClick={() => { onChange(k); setOpen(false); }}
               style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%', textAlign: 'left', padding: '5px 8px', background: value === k ? c.bg : 'transparent', color: c.color, border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: value === k ? 700 : 400 }}>
@@ -356,17 +356,17 @@ function UnitSelect({ value, onChange, serviceType }: { value: string; onChange:
   return (
     <div ref={ref} style={{ position: 'relative', width: '100%' }}>
       <button type="button" onClick={() => setOpen(v => !v)}
-        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, border: `1px solid ${open ? '#6366f1' : '#d1d5db'}`, borderRadius: 6, padding: '0 6px', fontSize: 13, background: '#fff', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
+        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, border: `1px solid ${open ? C.ai : C.g300}`, borderRadius: 6, padding: '0 6px', fontSize: 13, background: C.bgCard, color: value ? C.textPrimary : C.g400, cursor: 'pointer', outline: 'none' }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value || '단위'}</span>
-        <span style={{ fontSize: 8, color: '#9ca3af', flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
+        <span style={{ fontSize: 8, color: C.g400, flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, zIndex: 900, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 9, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 72, padding: 4 }}>
+        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 9, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 72, padding: 4 }}>
           {opts.map(u => (
             <button key={u} type="button" onClick={() => { onChange(u); setOpen(false); }}
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 13, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === u ? '#eff6ff' : 'none', color: value === u ? '#1d4ed8' : '#111827', fontWeight: value === u ? 700 : 400 }}
-              onMouseEnter={e => { if (value !== u) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === u ? '#eff6ff' : 'none'; }}>
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 13, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === u ? C.primaryBg : 'none', color: value === u ? C.primaryText : C.textPrimary, fontWeight: value === u ? 700 : 400 }}
+              onMouseEnter={e => { if (value !== u) (e.currentTarget as HTMLButtonElement).style.background = C.bgHover; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === u ? C.primaryBg : 'none'; }}>
               {u}
             </button>
           ))}
@@ -403,69 +403,6 @@ function CountInput({ value, onChange, unit, placeholder, style }: {
   );
 }
 
-// ─── 언어 선택 — Popover 기반 커스텀 드롭다운 ──────────────────────────────────
-// native <select>는 blur 이벤트로 즉시 닫혀 캡처·검수 불가.
-// mousedown 기반으로만 닫기 → 스크린샷/포커스 이동 시 목록 유지.
-
-function LangSelect({ value, onChange }: { value: string; onChange: (code: string) => void }) {
-  const [open, setOpen] = useState(false);
-  const ref             = useRef<HTMLDivElement>(null);
-  const active          = getActivePolicies();
-  const selected        = active.find(p => p.languageCode === value);
-
-  useEffect(() => {
-    if (!open) return;
-    // mousedown만 감지 — blur/focusout 은 감지하지 않아 캡처·포커스 이동 시 안 닫힘
-    const onMD = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', onMD);
-    document.addEventListener('keydown',   onKey);
-    return () => {
-      document.removeEventListener('mousedown', onMD);
-      document.removeEventListener('keydown',   onKey);
-    };
-  }, [open]);
-
-  return (
-    <div ref={ref} style={{ position: 'relative', flexShrink: 0, width: 110 }}>
-      {/* 트리거 버튼 */}
-      <button type="button" onClick={() => setOpen(v => !v)}
-        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? '#6366f1' : '#d1d5db'}`, borderRadius: 6, padding: '0 7px', fontSize: 12, background: value ? '#fff' : '#f9fafb', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
-          {selected?.languageName ?? '언어'}
-        </span>
-        <span style={{ fontSize: 8, flexShrink: 0, color: '#9ca3af' }}>{open ? '▲' : '▼'}</span>
-      </button>
-
-      {/* 팝오버 목록 — mousedown 외부 클릭 시만 닫힘 */}
-      {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 180, padding: 4, maxHeight: 300, overflowY: 'auto' }}>
-          {/* 선택 해제 */}
-          {value && (
-            <button type="button" onClick={() => { onChange(''); setOpen(false); }}
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: '#9ca3af', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2, whiteSpace: 'nowrap' }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#f3f4f6')}
-              onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
-              선택 해제
-            </button>
-          )}
-          {active.map(p => (
-            <button key={p.languageCode} type="button"
-              onClick={() => { onChange(p.languageCode); setOpen(false); }}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === p.languageCode ? '#eff6ff' : 'none', color: value === p.languageCode ? '#1d4ed8' : '#111827', fontWeight: value === p.languageCode ? 700 : 400, whiteSpace: 'nowrap' }}
-              onMouseEnter={e => { if (value !== p.languageCode) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === p.languageCode ? '#eff6ff' : 'none'; }}>
-              <span style={{ fontSize: 9, color: '#9ca3af', flexShrink: 0 }}>{p.calcType === 'character' ? '글자' : '단어'}</span>
-              {p.languageName}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ─── 파일형식 선택 ─────────────────────────────────────────────────────────
 // 번역 Row 원문 파일형식 — Popover 기반
@@ -513,35 +450,35 @@ function FileFormatSelect({ value, onChange }: { value: string; onChange: (v: st
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0, width: 104 }}>
       <button type="button" onClick={() => setOpen(v => !v)}
-        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? '#2563eb' : '#d1d5db'}`, borderRadius: 6, padding: '0 7px', fontSize: 12, background: '#fff', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
+        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? C.primary : C.g300}`, borderRadius: 6, padding: '0 7px', fontSize: 12, background: C.bgCard, color: value ? C.textPrimary : C.g400, cursor: 'pointer', outline: 'none' }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
           {btnLabel}
         </span>
-        <span style={{ fontSize: 8, flexShrink: 0, color: '#9ca3af' }}>{open ? '▲' : '▼'}</span>
+        <span style={{ fontSize: 8, flexShrink: 0, color: C.g400 }}>{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 114, padding: 4, maxHeight: 300, overflowY: 'auto' }}>
+        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 114, padding: 4, maxHeight: 300, overflowY: 'auto' }}>
           {value && (
             <button type="button" onClick={() => { onChange(''); setOpen(false); }}
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: '#9ca3af', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2, whiteSpace: 'nowrap' }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#f3f4f6')}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: C.g400, background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2, whiteSpace: 'nowrap' }}
+              onMouseEnter={e => (e.currentTarget.style.background = C.g100)}
               onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
               선택 해제
             </button>
           )}
           {FILE_FORMATS.map(f => (
             <button key={f} type="button" onClick={() => { onChange(f); setOpen(false); }}
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === f ? '#eff6ff' : 'none', color: value === f ? '#1d4ed8' : '#374151', fontWeight: value === f ? 700 : 400, whiteSpace: 'nowrap' }}
-              onMouseEnter={e => { if (value !== f) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === f ? '#eff6ff' : 'none'; }}>
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === f ? C.primaryBg : 'none', color: value === f ? C.primaryText : C.textSecondary, fontWeight: value === f ? 700 : 400, whiteSpace: 'nowrap' }}
+              onMouseEnter={e => { if (value !== f) (e.currentTarget as HTMLButtonElement).style.background = C.bgHover; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === f ? C.primaryBg : 'none'; }}>
               {f}
             </button>
           ))}
-          <div style={{ height: 1, background: '#f0f2f5', margin: '4px 6px' }} />
+          <div style={{ height: 1, background: C.g100, margin: '4px 6px' }} />
           <button type="button" onClick={() => { onChange(FILE_FORMAT_CUSTOM); setOpen(false); }}
-            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: isCustom ? '#eff6ff' : 'none', color: isCustom ? '#2563eb' : '#6b7280', fontWeight: isCustom ? 700 : 400, whiteSpace: 'nowrap' }}
-            onMouseEnter={e => { if (!isCustom) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = isCustom ? '#eff6ff' : 'none'; }}>
+            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: isCustom ? C.primaryBg : 'none', color: isCustom ? C.primary : C.textMuted, fontWeight: isCustom ? 700 : 400, whiteSpace: 'nowrap' }}
+            onMouseEnter={e => { if (!isCustom) (e.currentTarget as HTMLButtonElement).style.background = C.bgHover; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = isCustom ? C.primaryBg : 'none'; }}>
             {FILE_FORMAT_CUSTOM}
           </button>
         </div>
@@ -584,18 +521,18 @@ function ExpenseTypeSelect({ value, onChange }: { value: string; onChange: (v: s
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0, width: 120 }}>
       <button type="button" onClick={() => setOpen(v => !v)}
-        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? '#6b7280' : '#d1d5db'}`, borderRadius: 6, padding: '0 7px', fontSize: 12, background: '#fff', color: value ? '#111827' : '#9ca3af', cursor: 'pointer', outline: 'none' }}>
+        style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, border: `1px solid ${open ? C.textMuted : C.g300}`, borderRadius: 6, padding: '0 7px', fontSize: 12, background: C.bgCard, color: value ? C.textPrimary : C.g400, cursor: 'pointer', outline: 'none' }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textAlign: 'left' }}>
           {btnLabel}
         </span>
-        <span style={{ fontSize: 8, flexShrink: 0, color: '#9ca3af' }}>{open ? '▲' : '▼'}</span>
+        <span style={{ fontSize: 8, flexShrink: 0, color: C.g400 }}>{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 130, padding: 4, maxHeight: 320, overflowY: 'auto' }}>
+        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 130, padding: 4, maxHeight: 320, overflowY: 'auto' }}>
           {value && (
             <button type="button" onClick={() => { onChange(''); setOpen(false); }}
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: '#9ca3af', background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2, whiteSpace: 'nowrap' }}
-              onMouseEnter={e => (e.currentTarget.style.background = '#f3f4f6')}
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: C.g400, background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2, whiteSpace: 'nowrap' }}
+              onMouseEnter={e => (e.currentTarget.style.background = C.g100)}
               onMouseLeave={e => (e.currentTarget.style.background = 'none')}>
               선택 해제
             </button>
@@ -603,19 +540,19 @@ function ExpenseTypeSelect({ value, onChange }: { value: string; onChange: (v: s
           {/* 미리 정의된 서비스 유형 */}
           {EXPENSE_TYPES.map(t => (
             <button key={t} type="button" onClick={() => { onChange(t); setOpen(false); }}
-              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === t ? '#f9fafb' : 'none', color: value === t ? '#111827' : '#374151', fontWeight: value === t ? 700 : 400, whiteSpace: 'nowrap' }}
-              onMouseEnter={e => { if (value !== t) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
-              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === t ? '#f9fafb' : 'none'; }}>
+              style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === t ? C.g50 : 'none', color: value === t ? C.textPrimary : C.textSecondary, fontWeight: value === t ? 700 : 400, whiteSpace: 'nowrap' }}
+              onMouseEnter={e => { if (value !== t) (e.currentTarget as HTMLButtonElement).style.background = C.bgHover; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === t ? C.g50 : 'none'; }}>
               {t}
             </button>
           ))}
           {/* 구분선 */}
-          <div style={{ height: 1, background: '#f0f2f5', margin: '4px 6px' }} />
+          <div style={{ height: 1, background: C.g100, margin: '4px 6px' }} />
           {/* 직접 입력 옵션 */}
           <button type="button" onClick={() => { onChange(EXPENSE_CUSTOM); setOpen(false); }}
-            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: isCustom ? '#f0fdf4' : 'none', color: isCustom ? '#059669' : '#6b7280', fontWeight: isCustom ? 700 : 400, whiteSpace: 'nowrap' }}
-            onMouseEnter={e => { if (!isCustom) (e.currentTarget as HTMLButtonElement).style.background = '#f8fafc'; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = isCustom ? '#f0fdf4' : 'none'; }}>
+            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 12, border: 'none', borderRadius: 6, cursor: 'pointer', background: isCustom ? C.successBg : 'none', color: isCustom ? C.successText : C.textMuted, fontWeight: isCustom ? 700 : 400, whiteSpace: 'nowrap' }}
+            onMouseEnter={e => { if (!isCustom) (e.currentTarget as HTMLButtonElement).style.background = C.bgHover; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = isCustom ? C.successBg : 'none'; }}>
             {EXPENSE_CUSTOM}
           </button>
         </div>
@@ -633,26 +570,9 @@ function ServiceFields({ it, update, products }: {
 }) {
   switch (it.productType) {
     case 'translation': {
+      // 출발언어는 상품 Master에서 자동 설정 (sourceLanguage in QuoteItemForm)
+      // 사용자가 직접 언어를 선택하지 않음 — 상품 Master가 Single Source of Truth
       const policy = getPolicy(it.sourceLanguage);
-
-      // 선택된 상품의 언어 정보 → 있으면 읽기 전용 표시, 없으면 수동 선택
-      const product       = it.productId !== null ? products.find(p => p.id === it.productId) ?? null : null;
-      const langFromProd  = !!product?.sourceLanguage;
-      const langLabel     = getPolicy(it.sourceLanguage)?.languageName ?? it.sourceLanguage;
-
-      // 언어 변경 → 해당 언어 기준으로 수량·단위 자동 재계산
-      const handleLangChange = (code: string) => {
-        const p = getPolicy(code);
-        const upd: Partial<QuoteItemForm> = { sourceLanguage: code };
-        if (p?.active) {
-          const src = p.calcType === 'character' ? it.charCount : it.wordCount;
-          if (src) {
-            const n = calcPagesFromStr(src, p.standardValue);
-            if (n !== null) { upd.quantity = String(n); upd.unit = '페이지'; }
-          }
-        }
-        update(upd);
-      };
 
       // 글자수 변경: char 기준 언어 or 언어 미지정(기본 700글자/페이지) → 수량 갱신
       const handleCharChange = (v: string) => {
@@ -681,18 +601,6 @@ function ServiceFields({ it, update, products }: {
 
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          {/* 언어: 상품에 언어 정보 있으면 읽기 전용 배지 / 없으면 수동 선택 */}
-          {langFromProd ? (
-            <div style={{ flexShrink: 0, width: 110, height: 32, display: 'flex', alignItems: 'center',
-              background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6,
-              padding: '0 8px', fontSize: 12, fontWeight: 600, color: '#1d4ed8',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-              title={`상품에서 자동 설정: ${langLabel}`}>
-              {langLabel}
-            </div>
-          ) : (
-            <LangSelect value={it.sourceLanguage} onChange={handleLangChange} />
-          )}
           {/* 파일명 — 확장자 감지 시 파일형식 자동 설정 */}
           <input value={it.fileName}
             onChange={e => {
@@ -723,7 +631,7 @@ function ServiceFields({ it, update, products }: {
             unit="단어" placeholder="단어수" style={rinp(88)} />
           {/* 글자수 — 천 단위 콤마 + "글자". char 기준 언어 시 수량 자동 갱신 */}
           <CountInput value={it.charCount} onChange={handleCharChange}
-            unit="글자" placeholder="글자수" style={rinp(88, { color: '#374151' })} />
+            unit="글자" placeholder="글자수" style={rinp(88, { color: C.textSecondary })} />
         </div>
       );
     }
@@ -740,7 +648,7 @@ function ServiceFields({ it, update, products }: {
             onChange={e => update({ interpretEndDate: e.target.value })}
             style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="행사 종료일 (기간 행사 시 입력, 당일은 비워두세요)" />
           {/* 날짜 / 시간 구분선 */}
-          <span style={{ ...sep_s, color: '#d1d5db', fontSize: 15, flexShrink: 0 }}>|</span>
+          <span style={{ ...sep_s, color: C.g300, fontSize: 15, flexShrink: 0 }}>|</span>
           {/* 시작시간 */}
           <input value={it.startTime}
             onChange={e => update({ startTime: e.target.value })}
@@ -843,8 +751,8 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
 
   return (
     <>
-      <div style={{ ...tblRow, borderBottom: '1px solid #f0f2f5', minHeight: 42, transition: 'background 0.1s' }}
-        onMouseEnter={e => (e.currentTarget.style.background = '#fafcff')} onMouseLeave={e => (e.currentTarget.style.background = '')}>
+      <div style={{ ...tblRow, borderBottom: `1px solid ${C.g100}`, minHeight: 42, transition: 'background 0.1s' }}
+        onMouseEnter={e => (e.currentTarget.style.background = C.bgHover)} onMouseLeave={e => (e.currentTarget.style.background = '')}>
 
         {/* ① 행 제어 */}
         <div>
@@ -873,15 +781,15 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
         {/* ⑤ AI 교차검증 배지 (번역 전용) */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           {validation?.status === 'ok' && (
-            <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 800, lineHeight: 1 }}
+            <span style={{ color: C.success, fontSize: 12, fontWeight: 800, lineHeight: 1 }}
               title="AI 교차검증 완료 — 글자수·단어수 비율 정상">✓</span>
           )}
           {validation?.status === 'warning' && (
             <button type="button" onClick={() => setShowWarning(v => !v)}
               style={{
-                background: showWarning ? (validation.severity === 'danger' ? '#fee2e2' : '#fef3c7') : 'none',
+                background: showWarning ? (validation.severity === 'danger' ? C.dangerBg : C.warningBg) : 'none',
                 border: 'none', cursor: 'pointer',
-                color: validation.severity === 'danger' ? '#dc2626' : '#d97706',
+                color: validation.severity === 'danger' ? C.danger : C.warning,
                 fontSize: 13, fontWeight: 800, padding: '1px 3px', borderRadius: 4, lineHeight: 1,
               }}
               title={`AI 교차검증: ${validation.message}`}>
@@ -917,7 +825,7 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
         <div style={{ borderLeft: '2px solid #e5e7eb', paddingLeft: 14 }}>
           <input value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
             placeholder="비고 (긴급, 감수 포함, 출장비 별도 등)"
-            style={{ ...rinp('100%'), color: '#6b7280' }}
+            style={{ ...rinp('100%'), color: C.textMuted }}
             title="긴급, 감수 포함, DTP 포함, 출장비 별도, 장비 설치 포함 등" />
         </div>
       </div>
@@ -925,32 +833,32 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
       {/* AI 경고 패널 — ⚠ 클릭 시 토글 */}
       {showWarning && validation?.status === 'warning' && (
         <div style={{
-          background: validation.severity === 'danger' ? '#fff5f5' : '#fffbeb',
-          border: `1px solid ${validation.severity === 'danger' ? '#fca5a5' : '#fde68a'}`,
+          background: validation.severity === 'danger' ? C.dangerBgPanel : C.warningBg,
+          border: `1px solid ${validation.severity === 'danger' ? C.dangerBorder : C.warningBorder}`,
           borderTop: 'none', borderRadius: '0 0 8px 8px', padding: '10px 16px', marginBottom: 2,
         }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
             <div>
-              <div style={{ fontSize: 12, fontWeight: 700, color: validation.severity === 'danger' ? '#991b1b' : '#92400e', marginBottom: 4 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: validation.severity === 'danger' ? C.dangerText : C.warningText, marginBottom: 4 }}>
                 {validation.severity === 'danger' ? '✕ 위험' : '⚠ 주의'} — AI 문서 검증 결과
               </div>
               {validation.detail && (
-                <div style={{ fontSize: 11, color: validation.severity === 'danger' ? '#7f1d1d' : '#78350f', marginBottom: 6 }}>
+                <div style={{ fontSize: 11, color: validation.severity === 'danger' ? C.dangerTextDeep : C.warningTextDeep, marginBottom: 6 }}>
                   {validation.detail.basis === 'character' ? '예상 단어수' : '예상 글자수'}:&nbsp;
                   <strong>{validation.detail.expectedVal.toLocaleString()}</strong>
                   &nbsp;/ 실제: <strong>{validation.detail.actualVal.toLocaleString()}</strong>
                   &nbsp;— 오차 <strong>{validation.detail.deviationPct.toFixed(0)}%</strong>
                 </div>
               )}
-              <div style={{ fontSize: 11, color: validation.severity === 'danger' ? '#991b1b' : '#92400e', lineHeight: 1.6 }}>
+              <div style={{ fontSize: 11, color: validation.severity === 'danger' ? C.dangerText : C.warningText, lineHeight: 1.6 }}>
                 <strong>예상 원인:</strong> {validation.causes?.join(' · ')}
               </div>
-              <div style={{ fontSize: 11, color: validation.severity === 'danger' ? '#7f1d1d' : '#78350f', marginTop: 4 }}>
+              <div style={{ fontSize: 11, color: validation.severity === 'danger' ? C.dangerTextDeep : C.warningTextDeep, marginTop: 4 }}>
                 내용을 확인한 후 견적을 진행해 주세요. PM이 수량을 직접 수정하면 해당 값이 우선 적용됩니다.
               </div>
             </div>
             <button onClick={() => setShowWarning(false)}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: validation.severity === 'danger' ? '#991b1b' : '#92400e', flexShrink: 0, padding: '0 4px' }}>×</button>
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16, color: validation.severity === 'danger' ? C.dangerText : C.warningText, flexShrink: 0, padding: '0 4px' }}>×</button>
           </div>
         </div>
       )}
@@ -964,10 +872,10 @@ function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint }: {
   badge: string; badgeBg: string; badgeColor: string; title: string; hint?: string;
 }) {
   return (
-    <div style={{ fontSize: 12, fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.06em', paddingBottom: 10, borderBottom: '1.5px solid #e5e7eb', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 6 }}>
-      <span style={{ width: 20, height: 20, borderRadius: 6, background: badgeBg, color: badgeColor, fontSize: 11, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{badge}</span>
+    <div style={{ ...TYPO.sectionTitle, paddingBottom: SP[4], borderBottom: BD.grid, marginBottom: SP[6], display: 'flex', alignItems: 'center', gap: SP[3] }}>
+      <span style={{ width: 22, height: 22, borderRadius: BD.radius.md, background: badgeBg, color: badgeColor, fontSize: 12, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{badge}</span>
       {title}
-      {hint && <span style={{ fontSize: 10, fontWeight: 400, color: '#9ca3af', marginLeft: 4 }}>{hint}</span>}
+      {hint && <span style={{ ...TYPO.helper, marginLeft: SP[2] }}>{hint}</span>}
     </div>
   );
 }
@@ -977,7 +885,7 @@ function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint }: {
 const COL_H: React.CSSProperties = dsColH('center');
 
 const SVC_FIELD_HINTS: Record<ServiceType, string> = {
-  translation:    '언어 / 파일명 / 파일형식 / 단어수 / 글자수',
+  translation:    '파일명 / 파일형식 / 단어수 / 글자수',
   interpretation: '시작일 ~ 종료일 / 시작시간 ~ 종료시간 / 장소 / 인원',
   equipment:      '시작일 ~ 종료일 / 사용 장소 / 사용일수',
   expense:        '서비스유형 (공증·속기·녹취·더빙·편집·감수·DTP 등)',
@@ -1100,15 +1008,15 @@ export function QuoteEditorWorkspace({
 
   // ─── 공통 Form 컨텐츠 ─────────────────────────────────────────────────────
 
-  const inpSt: React.CSSProperties = { width: '100%', boxSizing: 'border-box', border: '1px solid #d1d5db', borderRadius: 8, padding: '8px 10px', fontSize: 13, outline: 'none' };
+  const inpSt: React.CSSProperties = dsInputStd();
   const fLbl  = (txt: string, req = false) => (
-    <label style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', display: 'block', marginBottom: 4 }}>
-      {txt}{req && <span style={{ color: '#e11d48', marginLeft: 2 }}>*</span>}
+    <label style={{ ...TYPO.fieldLabel, display: 'block', marginBottom: SP[2] }}>
+      {txt}{req && <span style={{ color: C.danger, marginLeft: 2 }}>*</span>}
     </label>
   );
 
   const formContent = loading ? (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, color: '#9ca3af', fontSize: 14 }}>데이터 불러오는 중…</div>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 200, color: C.g400, fontSize: 14 }}>데이터 불러오는 중…</div>
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
@@ -1119,7 +1027,7 @@ export function QuoteEditorWorkspace({
           <div>
             {fLbl('견적서 유형')}
             <ClickSelect value={quoteType} onChange={v => setQuoteType(v as QuoteType)}
-              triggerStyle={{ fontSize: 13, padding: '8px 10px', borderRadius: 8, border: '1px solid #d1d5db', width: '100%' }}
+              triggerStyle={dsInputStd()}
               options={[{ value: 'b2b_standard', label: '일반 견적서', sub: '일반 B2B 프로젝트' }, { value: 'b2c_prepaid', label: '차감 견적서', sub: '선입금 잔액 차감' }, { value: 'accumulated_batch', label: '누적 견적서', sub: '월별 누적 청구' }]} />
           </div>
           <div>
@@ -1129,14 +1037,14 @@ export function QuoteEditorWorkspace({
           <div>
             {fLbl('부가세')}
             <ClickSelect value={vatType} onChange={v => setVatType(v as VatType)}
-              triggerStyle={{ fontSize: 13, padding: '8px 10px', borderRadius: 8, border: '1px solid #d1d5db', width: '100%' }}
+              triggerStyle={dsInputStd()}
               options={[{ value: 'taxable', label: '부가세 10%' }, { value: 'exempt', label: '면세' }, { value: 'zero_rate', label: '영세율' }]} />
           </div>
           {isStandalone && (
             <div style={{ gridColumn: 'span 3' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 {fLbl('견적서명', true)}
-                {!titleEdited && title && <span style={{ fontSize: 10, color: '#6b7280', fontStyle: 'italic', marginBottom: 4 }}>자동생성됨</span>}
+                {!titleEdited && title && <span style={{ fontSize: 10, color: C.textMuted, fontStyle: 'italic', marginBottom: 4 }}>자동생성됨</span>}
               </div>
               <input value={title} onChange={e => { setTitle(e.target.value); setTitleEdited(true); }} placeholder="예: 삼성전자_한영동시통역_20260715" style={inpSt} />
             </div>
@@ -1165,7 +1073,7 @@ export function QuoteEditorWorkspace({
         <CardSectionHeader badge="B" badgeBg="#f0fdf4" badgeColor="#16a34a" title="상품정보" hint="← 유형 클릭으로 번역/통역/장비/기타 전환" />
 
         {/* 컬럼 헤더 — TABLE_COLS 공유 Grid (Body Row와 완전 동일 구조) */}
-        <div style={{ ...tblRow, padding: '0 8px 7px', borderBottom: '1.5px solid #e5e7eb', marginBottom: 3 }}>
+        <div style={{ ...tblRow, padding: '0 8px 7px', borderBottom: BD.grid, marginBottom: 3 }}>
           <div style={{ ...COL_H }}>행 제어</div>
           <div style={{ ...COL_H }}>유형</div>
           <div style={{ ...COL_H, textAlign: 'left' }}>상품 🔍🧽</div>
@@ -1175,7 +1083,7 @@ export function QuoteEditorWorkspace({
           <div style={{ ...COL_H }}>단위</div>
           <div style={{ ...COL_H, textAlign: 'right' }}>단가</div>
           <div style={{ ...COL_H, textAlign: 'right', paddingRight: 6 }}>공급가액</div>
-          <div style={{ ...COL_H, textAlign: 'left', borderLeft: '2px solid #e5e7eb', paddingLeft: 14 }}>비고</div>
+          <div style={{ ...COL_H, textAlign: 'left', borderLeft: BD.grid, paddingLeft: 14 }}>비고</div>
         </div>
 
         {/* 항목 행 */}
@@ -1214,23 +1122,23 @@ export function QuoteEditorWorkspace({
             const c = SVC_CFG[type];
             return s.supply > 0 ? (
               <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', background: c.bg, border: `1px solid ${c.border}`, borderRadius: 7 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: c.color }}>{c.label}</span>
-                <span style={{ fontSize: 12, color: '#374151', fontWeight: 500 }}>{s.supply.toLocaleString()}원</span>
+                <span style={{ ...TYPO.badge, color: c.color }}>{c.label}</span>
+                <span style={{ ...TYPO.fieldLabel, color: C.textSecondary }}>{s.supply.toLocaleString()}원</span>
               </div>
             ) : null;
           }).filter(Boolean);
           return gs.length > 1 ? <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>{gs}</div> : null;
         })()}
-        <div style={{ display: 'flex', gap: 16, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: SP[6], justifyContent: 'flex-end', flexWrap: 'wrap' }}>
           {[{ label: '공급가액', value: totals.supply }, { label: '부가세', value: totals.tax }].map(r => (
-            <div key={r.label} style={{ textAlign: 'right', padding: '8px 14px', borderRadius: 8, background: '#f8fafc' }}>
-              <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 2 }}>{r.label}</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#374151' }}>{r.value.toLocaleString()}원</div>
+            <div key={r.label} style={{ textAlign: 'right', padding: `${SP[4]}px ${SP[5]}px`, borderRadius: BD.radius.lg, background: C.bgHover }}>
+              <div style={{ ...TYPO.helper, marginBottom: 3 }}>{r.label}</div>
+              <div style={{ ...TYPO.summaryAmount }}>{r.value.toLocaleString()}원</div>
             </div>
           ))}
-          <div style={{ textAlign: 'right', padding: '10px 18px', borderRadius: 10, background: '#eff6ff', border: '1.5px solid #bfdbfe' }}>
-            <div style={{ fontSize: 11, color: '#2563eb', fontWeight: 700, marginBottom: 2 }}>총 견적금액</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: '#1d4ed8' }}>{totals.total.toLocaleString()}원</div>
+          <div style={{ textAlign: 'right', padding: `${SP[5]}px ${SP[7]}px`, borderRadius: BD.radius.xl, background: C.primaryBg, border: `1.5px solid ${C.primaryBorder}` }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.primary, marginBottom: 3 }}>총 견적금액</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: C.primaryText, letterSpacing: '-0.01em' }}>{totals.total.toLocaleString()}원</div>
           </div>
         </div>
       </Card>
@@ -1245,12 +1153,12 @@ export function QuoteEditorWorkspace({
               style={{ ...inpSt, resize: 'vertical', fontFamily: 'inherit' }} />
           </div>
           {projectId !== null && (
-            <div style={{ background: '#fffbeb', borderRadius: 10, padding: '12px 16px', border: '1px solid #fde68a' }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: '#92400e', display: 'block', marginBottom: 6 }}>
-                버전 변경 사유 <span style={{ marginLeft: 4, fontWeight: 400, color: '#b45309' }}>— 저장 시 새 Version으로 기록됩니다</span>
+            <div style={{ background: C.warningBg, borderRadius: BD.radius.xl, padding: `${SP[5]}px ${SP[6]}px`, border: `1px solid ${C.warningBorder}` }}>
+              <label style={{ ...TYPO.fieldLabel, color: C.warningText, display: 'block', marginBottom: SP[3] }}>
+                버전 변경 사유 <span style={{ marginLeft: SP[2], fontWeight: 400, color: C.warning }}>— 저장 시 새 Version으로 기록됩니다</span>
               </label>
               <input value={versionReason} onChange={e => setVersionReason(e.target.value)}
-                placeholder="예: 최초 견적 / 일정 변경 / 금액 수정 / 고객 요청" style={{ ...inpSt, background: '#fff' }} />
+                placeholder="예: 최초 견적 / 일정 변경 / 금액 수정 / 고객 요청" style={{ ...inpSt, background: C.bgCard }} />
             </div>
           )}
         </div>
@@ -1258,10 +1166,10 @@ export function QuoteEditorWorkspace({
 
       {/* ── 하단 저장 버튼 ──────────────────────────────────────────────── */}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, paddingBottom: 8 }}>
-        <GhostBtn onClick={onClose} disabled={saving} style={{ fontSize: 14, padding: '10px 22px' }}>취소</GhostBtn>
-        <PrimaryBtn onClick={handleSave} disabled={saving} style={{ fontSize: 14, padding: '10px 28px' }}>
+        <DsButton variant="outline" size="lg" onClick={onClose} disabled={saving}>취소</DsButton>
+        <DsButton variant="primary" size="lg" onClick={handleSave} disabled={saving}>
           {saving ? '저장 중…' : (isStandalone ? '💾 견적서 저장 (프로젝트 생성)' : '💾 견적 저장')}
-        </PrimaryBtn>
+        </DsButton>
       </div>
     </div>
   );
@@ -1270,31 +1178,31 @@ export function QuoteEditorWorkspace({
 
   const wsHeader = (bg: string, border: string, shadow: string, padH: string) => (
     <div style={{ background: bg, borderBottom: border, padding: `0 ${padH}`, height: 52, display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0, boxShadow: shadow }}>
-      <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, color: '#6b7280', fontSize: 13, padding: '4px 0' }}>
+      <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, color: C.textMuted, fontSize: 13, padding: '4px 0' }}>
         ← 돌아가기
       </button>
-      <div style={{ width: 1, height: 20, background: '#e5e7eb' }} />
+      <div style={{ width: 1, height: 20, background: C.border }} />
       <div>
-        <span style={{ fontSize: 15, fontWeight: 700, color: '#111827' }}>{isStandalone ? '새 견적서 작성' : '견적 작성'}</span>
-        {projectId !== null && <span style={{ fontSize: 12, color: '#6b7280', marginLeft: 8 }}>프로젝트 #{projectId} — Version Engine</span>}
+        <span style={{ ...TYPO.cardTitle }}>{isStandalone ? '새 견적서 작성' : '견적 작성'}</span>
+        {projectId !== null && <span style={{ ...TYPO.helper, marginLeft: SP[4] }}>프로젝트 #{projectId} — Version Engine</span>}
       </div>
       {/* AI 생성 토글 */}
-      <div style={{ marginLeft: 'auto', marginRight: 'auto', display: 'flex', gap: 4, background: '#f1f5f9', borderRadius: 10, padding: 4 }}>
+      <div style={{ marginLeft: 'auto', marginRight: 'auto', display: 'flex', gap: 4, background: C.g100, borderRadius: 10, padding: 4 }}>
         <button type="button" disabled title="AI 견적 생성 (준비 중)"
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'not-allowed', background: creationMode === 'ai' ? '#6366f1' : 'transparent', color: '#9ca3af' }}>
-          🤖 AI 견적 생성 <span style={{ fontSize: 10, fontWeight: 700, background: '#e0e7ff', color: '#6366f1', borderRadius: 4, padding: '1px 5px' }}>준비 중</span>
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'not-allowed', background: creationMode === 'ai' ? C.ai : 'transparent', color: C.g400 }}>
+          🤖 AI 견적 생성 <span style={{ fontSize: 10, fontWeight: 700, background: C.aiBg, color: C.ai, borderRadius: 4, padding: '1px 5px' }}>준비 중</span>
         </button>
         <button type="button" onClick={() => setCreationMode('direct')}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: creationMode === 'direct' ? '#fff' : 'transparent', color: creationMode === 'direct' ? '#111827' : '#6b7280', boxShadow: creationMode === 'direct' ? '0 1px 4px rgba(0,0,0,0.1)' : 'none' }}>
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: creationMode === 'direct' ? C.bgCard : 'transparent', color: creationMode === 'direct' ? C.textPrimary : C.textMuted, boxShadow: creationMode === 'direct' ? '0 1px 4px rgba(0,0,0,0.1)' : 'none' }}>
           ✏ 직접 작성
         </button>
       </div>
       {/* 저장 버튼 */}
       <div style={{ display: 'flex', gap: 8 }}>
-        <GhostBtn onClick={onClose} disabled={saving} style={{ fontSize: 13, padding: '6px 14px' }}>취소</GhostBtn>
-        <PrimaryBtn onClick={handleSave} disabled={saving} style={{ fontSize: 13, padding: '7px 18px' }}>
+        <DsButton variant="outline" size="md" onClick={onClose} disabled={saving}>취소</DsButton>
+        <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving}>
           {saving ? '저장 중…' : '💾 저장'}
-        </PrimaryBtn>
+        </DsButton>
       </div>
     </div>
   );
@@ -1306,32 +1214,32 @@ export function QuoteEditorWorkspace({
 
   if (asPage) {
     return (
-      <div style={{ background: '#f9fafb', minHeight: '100vh' }}>
+      <div style={{ background: C.g50, minHeight: '100vh' }}>
         {/* 인라인 Workspace 헤더 — 스크롤 영역에서 sticky */}
-        <div style={{ position: 'sticky', top: 0, zIndex: 20, background: '#fff', borderBottom: '1px solid #e5e7eb', height: 52, display: 'flex', alignItems: 'center', gap: 16, padding: '0 28px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, color: '#6b7280', fontSize: 13, padding: '4px 0' }}>
+        <div style={{ position: 'sticky', top: 0, zIndex: 20, background: C.bgCard, borderBottom: BD.card, height: 52, display: 'flex', alignItems: 'center', gap: 16, padding: '0 28px', boxShadow: BD.shadow.card }}>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, color: C.textMuted, fontSize: 13, padding: '4px 0' }}>
             ← 돌아가기
           </button>
-          <div style={{ width: 1, height: 20, background: '#e5e7eb' }} />
+          <div style={{ width: 1, height: 20, background: C.border }} />
           <div>
-            <span style={{ fontSize: 15, fontWeight: 700, color: '#111827' }}>{isStandalone ? '새 견적서 작성' : '견적 작성'}</span>
-            {projectId !== null && <span style={{ fontSize: 12, color: '#6b7280', marginLeft: 8 }}>프로젝트 #{projectId} — Version Engine</span>}
+            <span style={{ fontSize: 15, fontWeight: 700, color: C.textPrimary }}>{isStandalone ? '새 견적서 작성' : '견적 작성'}</span>
+            {projectId !== null && <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 8 }}>프로젝트 #{projectId} — Version Engine</span>}
           </div>
-          <div style={{ marginLeft: 'auto', marginRight: 'auto', display: 'flex', gap: 4, background: '#f1f5f9', borderRadius: 10, padding: 4 }}>
+          <div style={{ marginLeft: 'auto', marginRight: 'auto', display: 'flex', gap: 4, background: C.g100, borderRadius: 10, padding: 4 }}>
             <button type="button" disabled title="AI 견적 생성 (준비 중)"
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'not-allowed', background: creationMode === 'ai' ? '#6366f1' : 'transparent', color: '#9ca3af' }}>
-              🤖 AI 견적 생성 <span style={{ fontSize: 10, fontWeight: 700, background: '#e0e7ff', color: '#6366f1', borderRadius: 4, padding: '1px 5px' }}>준비 중</span>
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'not-allowed', background: creationMode === 'ai' ? C.ai : 'transparent', color: C.g400 }}>
+              🤖 AI 견적 생성 <span style={{ fontSize: 10, fontWeight: 700, background: C.aiBg, color: C.ai, borderRadius: 4, padding: '1px 5px' }}>준비 중</span>
             </button>
             <button type="button" onClick={() => setCreationMode('direct')}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: creationMode === 'direct' ? '#fff' : 'transparent', color: creationMode === 'direct' ? '#111827' : '#6b7280', boxShadow: creationMode === 'direct' ? '0 1px 4px rgba(0,0,0,0.1)' : 'none' }}>
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: creationMode === 'direct' ? C.bgCard : 'transparent', color: creationMode === 'direct' ? C.textPrimary : C.textMuted, boxShadow: creationMode === 'direct' ? '0 1px 4px rgba(0,0,0,0.1)' : 'none' }}>
               ✏ 직접 작성
             </button>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <GhostBtn onClick={onClose} disabled={saving} style={{ fontSize: 13, padding: '6px 14px' }}>취소</GhostBtn>
-            <PrimaryBtn onClick={handleSave} disabled={saving} style={{ fontSize: 13, padding: '7px 18px' }}>
+            <DsButton variant="outline" size="md" onClick={onClose} disabled={saving}>취소</DsButton>
+            <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving}>
               {saving ? '저장 중…' : '💾 저장'}
-            </PrimaryBtn>
+            </DsButton>
           </div>
         </div>
 
@@ -1348,8 +1256,8 @@ export function QuoteEditorWorkspace({
   // ─────────────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 800, background: '#f9fafb', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {wsHeader('#fff', '1px solid #e5e7eb', '0 1px 4px rgba(0,0,0,0.06)', '24px')}
+    <div style={{ position: 'fixed', inset: 0, zIndex: 800, background: C.g50, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {wsHeader(C.bgCard, BD.card, BD.shadow.card, '24px')}
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px 64px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>
           {formContent}
