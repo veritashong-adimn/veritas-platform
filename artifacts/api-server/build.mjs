@@ -33,6 +33,7 @@ async function buildAll() {
       "@napi-rs/canvas",
       "pdfjs-dist",
       "pdfjs-dist/*",
+      "kordoc",
       "mammoth",
       "sharp",
       "better-sqlite3",

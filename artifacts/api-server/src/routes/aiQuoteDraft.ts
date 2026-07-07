@@ -35,7 +35,7 @@ function calcPages(st: { wordCount: number; charCountNoSpace: number; detectedLa
 // ─── multer ─────────────────────────────────────────────────────────────────
 
 const REQUEST_EXTS = [".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx", ".txt", ".ppt", ".pptx"];
-const SOURCE_EXTS  = [...REQUEST_EXTS, ".xls", ".xlsx"];
+const SOURCE_EXTS  = [...REQUEST_EXTS, ".xls", ".xlsx", ".hwp", ".hwpx"];
 
 const aiUpload = multer({
   storage: multer.memoryStorage(),
@@ -64,6 +64,7 @@ interface DraftRow {
   fileFormat:       string;
   wordCount:        number;
   charCount:        number;
+  countBasis:       string;   // 분석 기준 레이블 ("Word 공식 통계" 등)
   interpretDate:    string;
   interpretEndDate: string;
   startTime:        string;
@@ -95,8 +96,9 @@ function buildMockRows(
   const rows: DraftRow[] = [];
 
   for (const { name, stats } of sourceFiles) {
-    const ext  = path.extname(name).replace(".", "").toUpperCase();
-    const pages = calcPages(stats, stats.detectedLanguage);
+    const ext   = path.extname(name).replace(".", "").toUpperCase();
+    // 공식 pageCount가 있으면 우선 사용, 없으면 언어 정책으로 계산
+    const pages = stats.pageCount ?? calcPages(stats, stats.detectedLanguage);
     rows.push({
       productId:        null,
       productName:      "번역",
@@ -111,6 +113,7 @@ function buildMockRows(
       fileFormat:       ext,
       wordCount:        stats.wordCount,
       charCount:        stats.charCountNoSpace,
+      countBasis:       stats.countBasis ?? "Text Extraction",
       interpretDate:    "", interpretEndDate: "",
       startTime:        "", endTime: "",
       interpretPlace:   "", interpreterCount: 0,
@@ -135,6 +138,7 @@ function buildMockRows(
       sourceLanguage: "", targetLanguage: "",
       fileName: "", fileFormat: "",
       wordCount: 0, charCount: 0,
+      countBasis: "Text Extraction",
       interpretDate: "", interpretEndDate: "",
       startTime: "", endTime: "",
       interpretPlace: "", interpreterCount: 0,
@@ -281,7 +285,12 @@ router.post(
       const name = decodeName(file);
       console.log(`[AI-DRAFT] extracting: ${name} (${file.size} bytes)`);
       const st = await extractText(file.buffer, name, openaiApiKey, openaiBaseURL);
-      console.log(`[AI-DRAFT] ${name} → words=${st.wordCount} chars=${st.charCountNoSpace} lang=${st.detectedLanguage} via=${st.method}`);
+      const pages = calcPages(st, st.detectedLanguage);
+      console.log(`[AI-DRAFT] ${name}`);
+      console.log(`  countSource: ${st.method}`);
+      console.log(`  wordCount: ${st.wordCount}`);
+      console.log(`  characterCount: ${st.charCountNoSpace}`);
+      console.log(`  pageCount: ${pages}`);
       sourceFileStats.push({ name, stats: st });
       if (st.warning) extractWarnings.push(`${name}: ${st.warning}`);
     }
@@ -331,16 +340,19 @@ router.post(
         }
       }
 
-      // 번역 원문 컨텍스트 (추출된 수치 + 텍스트 샘플)
+      // 번역 원문 컨텍스트 (추출된 수치 + 분석 기준 + 텍스트 샘플)
       const srcCtxParts: string[] = [];
       for (const { name, stats } of sourceFileStats) {
-        const fmt = path.extname(name).replace(".", "").toUpperCase();
+        const fmt   = path.extname(name).replace(".", "").toUpperCase();
+        const pages = stats.pageCount ?? calcPages(stats, stats.detectedLanguage);
         srcCtxParts.push(
           `### ${name}\n` +
           `형식: ${fmt}\n` +
+          `분석 기준: ${stats.countBasis}\n` +
           `단어수(Word Count): ${stats.wordCount.toLocaleString()}\n` +
           `글자수(공백 포함): ${stats.charCountWithSpace.toLocaleString()}\n` +
           `글자수(공백 제외): ${stats.charCountNoSpace.toLocaleString()}\n` +
+          `페이지수: ${pages}\n` +
           `감지된 언어: ${stats.detectedLanguage}\n` +
           (stats.text.length > 0
             ? `텍스트 샘플(첫 500자):\n"""\n${stats.text.slice(0, 500)}\n"""`
@@ -364,19 +376,26 @@ router.post(
       const draftRows = gptResult.draftRows.map((row) => {
         const st = fileStatsMap.get(row.fileName);
 
-        // 추출값으로 항상 보정 — GPT가 틀린 값(공백 포함 등)을 쓸 수 있으므로
+        // 추출값으로 항상 보정 — GPT가 틀린 값을 쓸 수 있으므로
         if (st) {
-          row.wordCount  = st.wordCount;           // 항상 추출값 사용
-          row.charCount  = st.charCountNoSpace;    // 공백 제외 글자수로 통일
+          row.wordCount  = st.wordCount;
+          row.charCount  = st.charCountNoSpace;
+          row.countBasis = st.countBasis ?? "Text Extraction";
           if (!row.sourceLanguage && st.detectedLanguage !== "unknown") {
             row.sourceLanguage = st.detectedLanguage;
           }
+        } else {
+          row.countBasis = row.countBasis ?? "Text Extraction";
         }
 
-        // 페이지 계산 (서버 사이드 덮어쓰기)
+        // 페이지 계산: 공식 pageCount 우선, 없으면 언어 정책 계산
         if (row.productType === "translation") {
-          const ps = st ?? { wordCount: row.wordCount, charCountNoSpace: row.charCount, detectedLanguage: row.sourceLanguage };
-          row.quantity = calcPages(ps as TextStats, row.sourceLanguage);
+          if (st?.pageCount) {
+            row.quantity = st.pageCount;
+          } else {
+            const ps = st ?? { wordCount: row.wordCount, charCountNoSpace: row.charCount, detectedLanguage: row.sourceLanguage };
+            row.quantity = calcPages(ps as TextStats, row.sourceLanguage);
+          }
         }
 
         // 경고 추가

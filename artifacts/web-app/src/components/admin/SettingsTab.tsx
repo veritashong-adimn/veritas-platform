@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../../lib/constants';
 import { Card, ClickSelect } from '../ui';
 
@@ -26,6 +26,7 @@ const STABS = [
   { id: "payment",    label: "💳 결제 설정" },
   { id: "settlement", label: "🧾 정산 설정" },
   { id: "insight",    label: "🤖 자동 게시" },
+  { id: "docx-diag",  label: "🔍 DOCX 진단" },
 ] as const;
 
 type SettingsTabId = typeof STABS[number]["id"];
@@ -328,6 +329,192 @@ export function SettingsTab({ token, onToast }: Props) {
           {saveBtn}
         </Card>
       )}
+
+      {/* ── DOCX 진단 탭 ── */}
+      {settingsTab === "docx-diag" && (
+        <DocxDiagPanel token={token} />
+      )}
     </Section>
+  );
+}
+
+// ─── DOCX 진단 패널 ───────────────────────────────────────────────────────────
+
+interface DiagResult {
+  filename:           string;
+  sha256:             string;
+  fileSize:           number;
+  method:             string;
+  wordCount:          number;
+  charCountNoSpace:   number;
+  charCountWithSpace: number;
+  detectedLanguage:   string;
+  appXml: {
+    words: number | null;
+    chars: number | null;
+    note:  string;
+  };
+  partBreakdown: Record<string, number>;
+  warning: string | null;
+}
+
+function DocxDiagPanel({ token }: { token: string }) {
+  const [file, setFile]         = useState<File | null>(null);
+  const [result, setResult]     = useState<DiagResult | null>(null);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState('');
+  const [wordWord, setWordWord]  = useState('');
+  const inputRef                 = useRef<HTMLInputElement>(null);
+
+  const handleFile = (f: File) => {
+    if (!f.name.endsWith('.docx')) { setError('DOCX 파일만 지원합니다.'); return; }
+    setFile(f); setResult(null); setError('');
+  };
+
+  const handleRun = async () => {
+    if (!file) return;
+    setLoading(true); setError(''); setResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const resp = await fetch('/api/diag/docx', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: fd,
+      });
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `HTTP ${resp.status}`);
+      }
+      setResult(await resp.json());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '분석 실패');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const wordDiff = result && wordWord
+    ? result.wordCount - parseInt(wordWord.replace(/,/g, ''), 10)
+    : null;
+  const wordDiffPct = result && wordWord && parseInt(wordWord.replace(/,/g, ''), 10) > 0
+    ? ((result.wordCount - parseInt(wordWord.replace(/,/g, ''), 10)) / parseInt(wordWord.replace(/,/g, ''), 10) * 100)
+    : null;
+
+  const row = (label: string, value: React.ReactNode) => (
+    <tr key={label}>
+      <td style={{ padding: '7px 12px', fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap', width: 180, borderBottom: '1px solid #f3f4f6', fontWeight: 600 }}>{label}</td>
+      <td style={{ padding: '7px 12px', fontSize: 13, color: '#111827', borderBottom: '1px solid #f3f4f6', fontFamily: 'monospace', wordBreak: 'break-all' }}>{value}</td>
+    </tr>
+  );
+
+  return (
+    <Card>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#111827', marginBottom: 4 }}>DOCX 추출 진단</div>
+        <div style={{ fontSize: 12, color: '#6b7280' }}>
+          DOCX 파일을 업로드하면 SHA-256, 단어수, 글자수, app.xml 캐시값, 파트별 분포를 확인합니다.
+          Word의 &quot;검토 → 단어 개수&quot; 값과 비교하여 정확도를 검증하세요.
+        </div>
+      </div>
+
+      {/* 파일 선택 */}
+      <div
+        onClick={() => inputRef.current?.click()}
+        onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
+        onDragOver={e => e.preventDefault()}
+        style={{
+          border: '2px dashed #d1d5db', borderRadius: 10, padding: '20px 16px',
+          textAlign: 'center', cursor: 'pointer', marginBottom: 12,
+          background: file ? '#f0fdf4' : '#fafafa',
+        }}
+        data-testid="docx-diag-drop"
+      >
+        <input ref={inputRef} type="file" accept=".docx" style={{ display: 'none' }}
+          onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
+        {file
+          ? <div style={{ fontSize: 13, color: '#059669', fontWeight: 600 }}>✓ {file.name} ({(file.size / 1024).toFixed(1)} KB)</div>
+          : <div style={{ fontSize: 13, color: '#9ca3af' }}>DOCX 파일을 드래그하거나 클릭하여 선택</div>
+        }
+      </div>
+
+      {/* Word 단어수 입력 */}
+      <div style={{ marginBottom: 12 }}>
+        <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>
+          Word 단어 개수 (선택) — 검토 → 단어 개수 결과를 입력하면 오차를 계산합니다
+        </label>
+        <input
+          type="text"
+          value={wordWord}
+          onChange={e => setWordWord(e.target.value)}
+          placeholder="예: 9332"
+          style={{ ...inputStyle, width: 200 }}
+          data-testid="docx-diag-word-count"
+        />
+      </div>
+
+      <button
+        onClick={handleRun}
+        disabled={!file || loading}
+        style={{
+          padding: '9px 22px', borderRadius: 8, border: 'none', cursor: file && !loading ? 'pointer' : 'not-allowed',
+          background: file && !loading ? '#2563eb' : '#e5e7eb',
+          color: file && !loading ? '#fff' : '#9ca3af',
+          fontSize: 13, fontWeight: 700, marginBottom: 16,
+        }}
+        data-testid="docx-diag-run"
+      >
+        {loading ? '⏳ 분석 중…' : '🔍 분석 실행'}
+      </button>
+
+      {error && (
+        <div style={{ padding: '10px 14px', borderRadius: 8, background: '#fee2e2', color: '#dc2626', fontSize: 13, marginBottom: 12 }}>
+          {error}
+        </div>
+      )}
+
+      {result && (
+        <div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', border: '1px solid #e5e7eb', borderRadius: 8, overflow: 'hidden' }}>
+            <tbody>
+              {row('파일명', result.filename)}
+              {row('SHA-256', <span style={{ fontSize: 11 }}>{result.sha256}</span>)}
+              {row('파일 크기', `${(result.fileSize / 1024).toFixed(1)} KB`)}
+              {row('추출 방식', result.method)}
+              {row('언어 감지', result.detectedLanguage)}
+              <tr><td colSpan={2} style={{ padding: '6px 12px', background: '#f8fafc', fontSize: 11, fontWeight: 700, color: '#374151', borderBottom: '1px solid #f3f4f6' }}>AI 추출 결과</td></tr>
+              {row('단어수 (AI)', <strong style={{ fontSize: 15, color: '#1d4ed8' }}>{result.wordCount.toLocaleString()}</strong>)}
+              {row('글자수 공백제외 (AI)', result.charCountNoSpace.toLocaleString())}
+              {row('글자수 공백포함 (AI)', result.charCountWithSpace.toLocaleString())}
+              {wordWord && wordDiff !== null && (
+                <>
+                  <tr><td colSpan={2} style={{ padding: '6px 12px', background: '#f8fafc', fontSize: 11, fontWeight: 700, color: '#374151', borderBottom: '1px solid #f3f4f6' }}>Word 비교</td></tr>
+                  {row('Word 단어 개수', <strong>{parseInt(wordWord.replace(/,/g, ''), 10).toLocaleString()}</strong>)}
+                  {row('차이 (AI − Word)', (
+                    <span style={{ color: Math.abs(wordDiff) <= Math.abs(parseInt(wordWord.replace(/,/g, ''), 10) * 0.01) ? '#059669' : '#dc2626', fontWeight: 700 }}>
+                      {wordDiff > 0 ? '+' : ''}{wordDiff.toLocaleString()}
+                      {wordDiffPct !== null && ` (${wordDiffPct > 0 ? '+' : ''}${wordDiffPct.toFixed(2)}%)`}
+                    </span>
+                  ))}
+                </>
+              )}
+              <tr><td colSpan={2} style={{ padding: '6px 12px', background: '#f8fafc', fontSize: 11, fontWeight: 700, color: '#374151', borderBottom: '1px solid #f3f4f6' }}>app.xml 캐시 (Word 저장 당시)</td></tr>
+              {row('Words (app.xml)', result.appXml.words != null ? result.appXml.words.toLocaleString() : '없음')}
+              {row('Characters (app.xml)', result.appXml.chars != null ? result.appXml.chars.toLocaleString() : '없음')}
+              {row('주의', <span style={{ fontSize: 11, color: '#6b7280' }}>{result.appXml.note}</span>)}
+              {Object.keys(result.partBreakdown).length > 0 && (
+                <>
+                  <tr><td colSpan={2} style={{ padding: '6px 12px', background: '#f8fafc', fontSize: 11, fontWeight: 700, color: '#374151', borderBottom: '1px solid #f3f4f6' }}>파트별 단어 분포</td></tr>
+                  {Object.entries(result.partBreakdown).map(([part, wc]) =>
+                    row(part, `${wc.toLocaleString()} words`)
+                  )}
+                </>
+              )}
+              {result.warning && row('경고', <span style={{ color: '#d97706' }}>{result.warning}</span>)}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
   );
 }

@@ -31,6 +31,7 @@ export interface AiDraftRow {
   fileFormat:       string;
   wordCount:        number;
   charCount:        number;
+  countBasis:       string;
   interpretDate:    string;
   interpretEndDate: string;
   startTime:        string;
@@ -110,39 +111,64 @@ function fmtDetailText(row: AiDraftRow): string {
   return parts.join(' / ') || '-';
 }
 
-// 번역 Row 서비스별 상세 — 단어수·글자수·페이지수 멀티라인 표시
+// 번역 Row 서비스별 상세 — 파일명 / 형식 / 분석 기준 / 단어수 / 글자수 / 페이지 표시
 function TranslationDetail({ row }: { row: AiDraftRow }) {
   const src = getLangName(row.sourceLanguage);
   const tgt = getLangName(row.targetLanguage);
+
+  const LBL: React.CSSProperties = { color: '#9ca3af', paddingRight: 8, whiteSpace: 'nowrap', fontSize: 11 };
+  const VAL: React.CSSProperties = { color: '#374151', fontSize: 12 };
+
+  const hasAny = src || tgt || row.fileName || row.wordCount || row.charCount;
+  if (!hasAny) return <span style={{ color: '#9ca3af', fontSize: 12 }}>-</span>;
+
   return (
-    <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+    <div style={{ fontSize: 12, lineHeight: 1.6 }}>
       {(src || tgt) && (
-        <div style={{ fontWeight: 700, color: '#1e40af' }}>
-          {src && tgt ? `${src}→${tgt}` : src || tgt}
+        <div style={{ fontWeight: 700, color: '#1e40af', marginBottom: 4 }}>
+          {src && tgt ? `${src} → ${tgt}` : src || tgt}
         </div>
       )}
-      {row.fileName   && <div style={{ color: '#374151' }}>{row.fileName}</div>}
-      {row.fileFormat && <div style={{ color: '#6b7280', fontSize: 11 }}>{row.fileFormat}</div>}
-      {row.wordCount > 0 && (
-        <div style={{ color: '#374151' }}>
-          <span style={{ fontWeight: 600 }}>{row.wordCount.toLocaleString()}</span>
-          <span style={{ color: '#6b7280' }}> words</span>
-        </div>
-      )}
-      {row.charCount > 0 && (
-        <div style={{ color: '#374151' }}>
-          <span style={{ fontWeight: 600 }}>{row.charCount.toLocaleString()}</span>
-          <span style={{ color: '#6b7280' }}> characters</span>
-        </div>
-      )}
-      {row.quantity > 0 && (
-        <div style={{ color: '#2563eb', fontWeight: 700 }}>
-          {row.quantity.toLocaleString()} pages
-        </div>
-      )}
-      {!src && !tgt && !row.fileName && !row.wordCount && !row.charCount && (
-        <span style={{ color: '#9ca3af' }}>-</span>
-      )}
+      <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+        <tbody>
+          {row.fileName && (
+            <tr>
+              <td style={LBL}>파일명</td>
+              <td style={{ ...VAL, wordBreak: 'break-all' }}>{row.fileName}</td>
+            </tr>
+          )}
+          {row.fileFormat && (
+            <tr>
+              <td style={LBL}>형식</td>
+              <td style={VAL}>{row.fileFormat}</td>
+            </tr>
+          )}
+          {row.countBasis && (
+            <tr>
+              <td style={LBL}>분석 기준</td>
+              <td style={{ ...VAL, fontWeight: 600, color: '#1d4ed8' }}>{row.countBasis}</td>
+            </tr>
+          )}
+          {row.wordCount > 0 && (
+            <tr>
+              <td style={LBL}>단어수</td>
+              <td style={VAL}>{row.wordCount.toLocaleString()}</td>
+            </tr>
+          )}
+          {row.charCount > 0 && (
+            <tr>
+              <td style={LBL}>글자수</td>
+              <td style={VAL}>{row.charCount.toLocaleString()}</td>
+            </tr>
+          )}
+          {row.quantity > 0 && (
+            <tr>
+              <td style={LBL}>페이지</td>
+              <td style={{ ...VAL, fontWeight: 700, color: '#2563eb' }}>{row.quantity.toLocaleString()}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -464,7 +490,7 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
             <FileUploadCard
               label="② 번역 원문"
               description="번역 대상 파일 — 글자수·단어수·페이지수 자동 분석"
-              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.txt,.ppt,.pptx,.xls,.xlsx"
+              accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.txt,.ppt,.pptx,.xls,.xlsx,.hwp,.hwpx"
               files={srcFiles}
               onAdd={addTo(setSrcFiles)}
               onRemove={removeFrom(setSrcFiles)}
