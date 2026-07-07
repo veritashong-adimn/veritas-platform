@@ -51,7 +51,10 @@ export function detectLanguage(text: string): string {
 
 function stats(raw: string, method: string, warning?: string): TextStats {
   const text = raw.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim().slice(0, 50_000);
-  const words = text.split(/\s+/).filter(w => w.length > 0);
+  // Word 호환 단어수: 공백 분리, 순수 특수문자 토큰 제외
+  const words = text.split(/\s+/).filter(w =>
+    w.length > 0 && w.replace(/[^a-zA-Z\d-￿]/g, "").length > 0
+  );
   return {
     text,
     wordCount:          words.length,
@@ -73,13 +76,172 @@ function extractTxt(buf: Buffer): TextStats {
   return stats(buf.toString("utf8"), "txt-buffer");
 }
 
-// ─── DOCX ────────────────────────────────────────────────────────────────────
+// ─── DOCX — 직접 XML 파싱 (Word 기준 정확도 목표) ───────────────────────────
+//
+// Microsoft Word 단어수 기준으로 최대 1% 오차를 목표로 한다.
+//
+// 포함 영역:
+//   word/document.xml   — 본문 + 텍스트 박스(w:txbxContent)
+//   word/header*.xml    — 헤더 (각 섹션별)
+//   word/footer*.xml    — 푸터 (각 섹션별)
+//   word/footnotes.xml  — 각주
+//   word/endnotes.xml   — 미주
+//
+// XML 파서 처리 규칙:
+//   <w:t>              → 텍스트 수집 (공백 보존)
+//   <w:instrText>      → 필드 코드 — 스킵
+//   <w:del>            → 추적 변경 삭제 텍스트 — 스킵
+//   <w:rPrChange>      → 서식 변경 정보 — 스킵
+//   <w:br>, <w:cr>     → 공백(단어 경계)
+//   <w:tab>            → 탭(공백)
+//   </w:p>, </w:tr>    → 단락/행 끝 → 공백(단어 경계)
+//
+// Word 단어수 알고리즘:
+//   - 공백(\s)으로 분리
+//   - 하이픈은 단어 내부 (state-of-the-art = 1단어)
+//   - 특수문자는 단어에 포함 (U.S.A., don't = 각 1단어)
 
+/**
+ * Word XML(OOXML) 시퀀셜 파서.
+ * 단어 경계 주입 + 불필요 요소 스킵으로 Word 카운트와 최대 일치.
+ */
+function parseWordXml(xml: string): string {
+  const buf: string[] = [];
+  let i = 0;
+  const n = xml.length;
+
+  // 이 태그들의 내용은 완전히 스킵 (Word 미카운트 영역)
+  const SKIP_TAGS = new Set([
+    "w:instrText",   // 필드 코드 (PAGE, DATE 등)
+    "w:del",         // 추적 변경 삭제 텍스트
+    "w:rPrChange",   // 서식 변경 메타데이터
+    "w:pPrChange",   // 단락 서식 변경 메타데이터
+    "w:sectPrChange",
+    "w:tblPrChange",
+  ]);
+
+  while (i < n) {
+    // '<' 탐색
+    if (xml[i] !== "<") { i++; continue; }
+
+    // 태그 끝 탐색 (속성 값 내부 '>' 무시)
+    let j = i + 1;
+    let inQ = false, qc = "";
+    while (j < n) {
+      const c = xml[j];
+      if (inQ) { if (c === qc) inQ = false; }
+      else if (c === '"' || c === "'") { inQ = true; qc = c; }
+      else if (c === ">") break;
+      j++;
+    }
+    if (j >= n) break;
+
+    const full   = xml.slice(i, j + 1);  // <...>
+    const inner  = full.slice(1, -1);    // ...
+    const isClose = inner.startsWith("/");
+    const isSelf  = inner.endsWith("/");
+    const tagRaw  = isClose ? inner.slice(1) : inner;
+    const tagName = tagRaw.split(/[\s/]/)[0] ?? "";
+
+    i = j + 1;
+
+    // ─ 스킵 태그 처리 ──────────────────────────────────────────────────────
+    if (!isClose && !isSelf && SKIP_TAGS.has(tagName)) {
+      const closeTag = `</${tagName}>`;
+      const k = xml.indexOf(closeTag, i);
+      if (k !== -1) i = k + closeTag.length;
+      continue;
+    }
+
+    // ─ w:t — 텍스트 수집 ───────────────────────────────────────────────────
+    if (tagName === "w:t" && !isClose && !isSelf) {
+      const closePos = xml.indexOf("</w:t>", i);
+      if (closePos !== -1) {
+        // xml:space="preserve" 유무와 관계없이 원본 텍스트 그대로 수집
+        let text = xml.slice(i, closePos);
+        // XML 엔티티 디코딩
+        text = text
+          .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+          .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+          .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(parseInt(d)))
+          .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+        buf.push(text);
+        i = closePos + 6;
+      }
+      continue;
+    }
+
+    // ─ 단어 경계 주입 ────────────────────────────────────────────────────
+    if (!isClose) {
+      // 줄바꿈/탭 → 공백 (단어 경계 역할)
+      if (tagName === "w:br" || tagName === "w:cr") { buf.push(" "); continue; }
+      if (tagName === "w:tab")                       { buf.push(" "); continue; }
+    } else {
+      // 단락·표 행 끝 → 공백 (단어 경계 역할)
+      if (tagName === "w:p" || tagName === "w:tr") { buf.push(" "); }
+    }
+  }
+
+  return buf.join("");
+}
+
+/**
+ * DOCX 전체 파트 텍스트 추출 + Word 호환 단어수 계산.
+ * mammoth 대비 Header/Footer/Footnote/TextBox 포함으로 정확도 향상.
+ */
 async function extractDocx(buf: Buffer): Promise<TextStats> {
-  const mammoth = await import("mammoth");
-  const result  = await mammoth.extractRawText({ buffer: buf });
-  const warn    = result.messages.length ? result.messages.map(m => m.message).join("; ") : undefined;
-  return stats(result.value, "mammoth-docx", warn);
+  const unzipper = await import("unzipper");
+  const zip = await unzipper.Open.buffer(buf);
+
+  // 처리 순서: 본문 → 헤더 → 푸터 → 각주 → 미주
+  // (Word의 단어수 카운트 순서와 동일)
+  const PART_PATTERNS = [
+    /^word\/document\.xml$/i,
+    /^word\/header\d*\.xml$/i,
+    /^word\/footer\d*\.xml$/i,
+    /^word\/footnotes\.xml$/i,
+    /^word\/endnotes\.xml$/i,
+  ];
+
+  const segments: string[] = [];
+  for (const pat of PART_PATTERNS) {
+    const matched = zip.files
+      .filter(f => pat.test(f.path))
+      .sort((a, b) => a.path.localeCompare(b.path));
+    for (const file of matched) {
+      const xml  = (await file.buffer()).toString("utf8");
+      const text = parseWordXml(xml);
+      if (text.trim()) segments.push(text);
+    }
+  }
+
+  const fullText = segments.join(" ");
+
+  // ─ Word 호환 단어수 계산 ──────────────────────────────────────────────────
+  // 규칙: 공백(\s) 기준 분리, 하이픈은 단어 내부로 처리
+  // "state-of-the-art" → 1단어, "it's" → 1단어, "U.S.A." → 1단어
+  const normalised = fullText.replace(/[\t\r\n]+/g, " ").trim();
+  const wordTokens = normalised.split(/\s+/).filter(w => {
+    // 순수 특수문자만으로 이루어진 토큰 제외 (구두점 단독 토큰)
+    return w.replace(/[^a-zA-Z0-90-鿿Ѐ-ӿ가-힣]/g, "").length > 0;
+  });
+
+  const wordCount         = wordTokens.length;
+  const charCountWithSp   = normalised.length;
+  const charCountNoSp     = normalised.replace(/\s/g, "").length;
+
+  const sources = zip.files.filter(f => PART_PATTERNS.some(p => p.test(f.path))).map(f => f.path);
+  console.log(`[DOCX-XML] parts=${sources.join(",")} words=${wordCount} chars=${charCountNoSp}`);
+
+  return {
+    text:               fullText.slice(0, 50_000),
+    wordCount,
+    charCountWithSpace: charCountWithSp,
+    charCountNoSpace:   charCountNoSp,
+    detectedLanguage:   detectLanguage(fullText),
+    method:             "docx-xml-direct",
+    warning:            segments.length === 0 ? "DOCX에서 텍스트를 찾을 수 없습니다." : undefined,
+  };
 }
 
 // ─── DOC (legacy binary) ─────────────────────────────────────────────────────
