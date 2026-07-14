@@ -431,7 +431,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
                   const nextStatuses = q.status === 'pending'
                     ? [{ value: 'sent', label: '발송' }, { value: 'rejected', label: '거절' }]
                     : q.status === 'sent'
-                    ? [{ value: 'approved', label: '승인' }, { value: 'pending', label: '대기로 되돌리기' }, { value: 'rejected', label: '거절' }]
+                    ? [{ value: 'approved', label: '승인(판매전환)' }, { value: 'rejected', label: '거절' }]
                     : [{ value: 'pending', label: '대기로 되돌리기' }];
 
                   return (
@@ -532,11 +532,13 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
                               onClick={() => handleStatusChange(q.id, ns.value)}
                               disabled={isUpdating}
                               style={{
-                                fontSize: 11, padding: '3px 8px', borderRadius: 5, cursor: 'pointer',
+                                fontSize: 11, padding: '3px 8px', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap',
                                 background: ns.value === 'approved' ? '#dcfce7' : ns.value === 'rejected' ? '#fee2e2' : ns.value === 'sent' ? '#dbeafe' : '#f3f4f6',
                                 color: ns.value === 'approved' ? '#15803d' : ns.value === 'rejected' ? '#dc2626' : ns.value === 'sent' ? '#2563eb' : '#6b7280',
                                 border: 'none', fontWeight: 600, opacity: isUpdating ? 0.5 : 1,
                               }}
+                              data-testid={`btn-quote-status-${ns.value}-${q.id}`}
+                              aria-label={`${q.quoteNumber ?? q.id} ${ns.label}`}
                             >
                               {isUpdating ? '…' : ns.label}
                             </button>
@@ -562,6 +564,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
         onClose={() => setPdfData(null)}
       />
     )}
+
     </>
   );
 }

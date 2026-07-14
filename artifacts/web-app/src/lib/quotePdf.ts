@@ -79,6 +79,8 @@ export interface QuoteDetail {
   validUntil: string | null;
   projectId: number | null;
   companyName: string | null;
+  companyBusinessNumber: string | null;
+  representativeName: string | null;
   contactName: string | null;
   contactDivision: string | null;
   contactPhone: string | null;
@@ -143,6 +145,7 @@ export interface QuotePdfData {
   // 고객
   customer: {
     companyName: string;
+    businessNumber: string;
     representativeName: string;
     contactName: string;
     contactDivision: string;
@@ -231,9 +234,9 @@ function buildDetailText(item: QuoteDetailItem): string {
       const pair = [langName(src), langName(tgt)].filter(Boolean).join(' → ');
       if (pair) lines.push(pair);
     }
-    // 분량 (각 줄 분리)
-    if (fields['단어수']) lines.push(`단어수 ${Number(fields['단어수']).toLocaleString()}`);
-    if (fields['글자수']) lines.push(`글자수 ${Number(fields['글자수']).toLocaleString()}`);
+    // 분량 (라벨 없이 값 + 단위만: "55,700단어" / "70,000글자")
+    if (fields['단어수']) lines.push(`${Number(fields['단어수']).toLocaleString()}단어`);
+    if (fields['글자수']) lines.push(`${Number(fields['글자수']).toLocaleString()}글자`);
   } else if (type === 'interpretation') {
     // 언어방향 (↔)
     if (item.languagePair) {
@@ -392,8 +395,9 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
       email:          s.email          ?? '',
     },
     customer: {
-      companyName:         detail.companyName         ?? '',
-      representativeName:  detail.representativeName  ?? '',
+      companyName:         detail.companyName            ?? '',
+      businessNumber:      detail.companyBusinessNumber  ?? '',
+      representativeName:  detail.representativeName     ?? '',
       contactName:         detail.contactName         ?? '',
       contactDivision:     detail.contactDivision     ?? '',
       contactPhone:        detail.contactPhone        ?? '',

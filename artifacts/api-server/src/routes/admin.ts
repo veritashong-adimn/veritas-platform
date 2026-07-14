@@ -119,9 +119,11 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
       taskCount: taskCountByProject.get(p.id) ?? 0,
     }));
 
-    // ── 판매관리 전용 필터 (견적 단계 제외) ──
+    // ── 판매관리 전용 필터 (승인 전 견적 단계만 제외) ──
+    // created/quoted = 견적 작성·발송 단계(견적관리 소관) → 제외
+    // approved 이상 = 견적 승인으로 생성된 판매건 → 판매관리에 표시
     if (salesOnly === "true" && !status?.trim()) {
-      result = result.filter(p => !["created", "quoted", "approved"].includes(p.status));
+      result = result.filter(p => !["created", "quoted"].includes(p.status));
     }
 
     // ── 기존 필터 ──
@@ -3409,8 +3411,9 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
         companyId:           projectsTable.companyId,
         contactId:           projectsTable.contactId,
         companyName:         sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.companyId})`,
-        representativeName:  sql<string | null>`(SELECT representative_name FROM companies WHERE id = ${projectsTable.companyId})`,
-        contactName:         sql<string | null>`(SELECT name FROM contacts WHERE id = ${projectsTable.contactId})`,
+        representativeName:    sql<string | null>`(SELECT representative_name FROM companies WHERE id = ${projectsTable.companyId})`,
+        companyBusinessNumber: sql<string | null>`(SELECT business_number FROM companies WHERE id = ${projectsTable.companyId})`,
+        contactName:           sql<string | null>`(SELECT name FROM contacts WHERE id = ${projectsTable.contactId})`,
         contactDivision: sql<string | null>`(SELECT department FROM contacts WHERE id = ${projectsTable.contactId})`,
         contactPhone:    sql<string | null>`(SELECT COALESCE(phone, mobile, office_phone) FROM contacts WHERE id = ${projectsTable.contactId})`,
         contactEmail:    sql<string | null>`(SELECT email FROM contacts WHERE id = ${projectsTable.contactId})`,

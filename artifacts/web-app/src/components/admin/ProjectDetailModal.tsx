@@ -4,6 +4,8 @@ import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '..
 import { ReviewMemoPanel } from './ReviewMemoPanel';
 import { DraggableModal } from './DraggableModal';
 import { QuoteEditorWorkspace } from './QuoteEditorWorkspace';
+import TransactionStatementModal from './TransactionStatementModal';
+import { buildQuotePdfData, type QuoteDetail } from '../../lib/quotePdf';
 
 /* ────── SearchableSelect (거래처 검색용 공통 컴포넌트) ────── */
 type SSItem = { id: number; label: string; sub?: string };
@@ -152,6 +154,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [expandedCandidate, setExpandedCandidate] = useState<number | null>(null);
   const [expandedSearchResult, setExpandedSearchResult] = useState<number | null>(null);
   const [expandedQuotes, setExpandedQuotes] = useState<Record<number, boolean>>({});
+  // 거래명세서 (판매 확정 건만 출력)
+  const [stmtData, setStmtData] = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
+  const [stmtLoading, setStmtLoading] = useState<number | null>(null);
   const [translatorSearch, setTranslatorSearch] = useState("");
   const [translatorSearchResults, setTranslatorSearchResults] = useState<any[]>([]);
   const [searchingTranslator, setSearchingTranslator] = useState(false);
@@ -262,6 +267,29 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [creatingSettlement, setCreatingSettlement] = useState(false);
 
   const authH = { Authorization: `Bearer ${token}` };
+
+  // 거래명세서 — 저장된 견적 데이터를 그대로 사용 (레이아웃·계산 무수정, 견적서와 동일 파이프라인)
+  const handleStatement = async (quoteId: number, title: string) => {
+    setStmtLoading(quoteId);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${quoteId}`), { headers: authH });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        onToast(`거래명세서 생성 실패: ${errData.error ?? res.status}`);
+        return;
+      }
+      const qDetail = await res.json() as QuoteDetail;
+      if (!qDetail.items || qDetail.items.length === 0) {
+        onToast('견적 품목이 없습니다.');
+        return;
+      }
+      setStmtData({ data: buildQuotePdfData(qDetail), title });
+    } catch {
+      onToast('거래명세서 생성에 실패했습니다. 다시 시도해 주세요.');
+    } finally {
+      setStmtLoading(null);
+    }
+  };
 
   // ── 커스텀 상품 등록 요청 상태 ───────────────────────────────────────────
   const [registerRequestIdx, setRegisterRequestIdx] = useState<number | null>(null);
@@ -1904,6 +1932,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       const issueDate = (q as any).issueDate ?? null;
                       const items = Array.isArray((q as any).items) ? (q as any).items : [];
                       const expanded = expandedQuotes[q.id] ?? false;
+                      // 견적 승인으로 확정된 판매건(승인 이상)만 거래명세서 출력 가능 — 취소/견적단계 제외
+                      const saleConfirmed = ["approved", "paid", "matched", "in_progress", "completed"].includes(detail.status);
 
                       return (
                         <div key={q.id} style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #e5e7eb", overflow: "hidden" }}>
@@ -1965,6 +1995,26 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               style={{ fontSize: 11, padding: "3px 10px", borderRadius: 5, border: "1px solid #e2e8f0", background: expanded ? "#ede9fe" : "#fff", color: expanded ? "#7c3aed" : "#374151", cursor: "pointer", fontWeight: 600 }}>
                               {expanded ? "▲ 접기" : "▼ 품목 보기"}
                               {items.length > 0 && <span style={{ marginLeft: 4, fontSize: 10, color: "#9ca3af" }}>({items.length}건)</span>}
+                            </button>
+                            {/* 거래명세서 — 판매 확정 건만 출력 가능 */}
+                            <button
+                              type="button"
+                              onClick={() => handleStatement(q.id, quoteTitle ?? quoteNum ?? `견적 #${q.id}`)}
+                              disabled={!saleConfirmed || stmtLoading === q.id}
+                              title={saleConfirmed ? "거래명세서 미리보기 / PDF 출력" : "판매 확정 후 출력할 수 있습니다."}
+                              style={{
+                                fontSize: 11, padding: "3px 10px", borderRadius: 5,
+                                border: `1px solid ${saleConfirmed ? "#bbf7d0" : "#e5e7eb"}`,
+                                background: saleConfirmed ? "#f0fdf4" : "#f9fafb",
+                                color: saleConfirmed ? "#15803d" : "#9ca3af",
+                                cursor: saleConfirmed ? "pointer" : "not-allowed",
+                                fontWeight: 600,
+                                opacity: stmtLoading === q.id ? 0.5 : 1,
+                              }}
+                              data-testid={`btn-statement-${q.id}`}
+                              aria-label={`${quoteNum ?? q.id} 거래명세서`}
+                            >
+                              {stmtLoading === q.id ? "…" : "📋 거래명세서"}
                             </button>
                             <span style={{ flex: 1 }} />
                             <span style={{ fontSize: 10, color: "#d1d5db" }}>견적 #{q.id} · 등록 {new Date(q.createdAt).toLocaleDateString("ko-KR")}</span>
@@ -2984,6 +3034,15 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         }}
         onToast={onToast}
         adminList={adminList}
+      />
+    )}
+
+    {/* 거래명세서 모달 (판매 확정 건) */}
+    {stmtData && (
+      <TransactionStatementModal
+        data={stmtData.data}
+        quoteTitle={stmtData.title}
+        onClose={() => setStmtData(null)}
       />
     )}
     </>
