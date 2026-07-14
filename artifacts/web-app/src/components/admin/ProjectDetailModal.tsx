@@ -197,41 +197,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [completedConfirmAction, setCompletedConfirmAction] = useState<(() => void) | null>(null);
   const [completedEditForce, setCompletedEditForce] = useState(false);
 
-  // 견적 생성
-  const [quoteVersionReason, setQuoteVersionReason] = useState("최초 견적");
-  const [quoteAmount, setQuoteAmount] = useState("");
-  const [quoteNote, setQuoteNote] = useState("");
-  const [quoteTaxDocType, setQuoteTaxDocType] = useState<"tax_invoice" | "zero_tax_invoice" | "bill">("tax_invoice");
-  const [quoteTaxCategory, setQuoteTaxCategory] = useState<"normal" | "zero_rated" | "consignment" | "consignment_zero_rated">("normal");
-  const [quoteVatType, setQuoteVatType] = useState<"taxable" | "exempt" | "zero_rate">("taxable");
-  const [quoteType, setQuoteType] = useState<"b2b_standard" | "b2c_prepaid" | "prepaid_deduction" | "accumulated_batch">("b2b_standard");
-  const [quoteBillingType, setQuoteBillingType] = useState<string>("postpaid_per_project");
-  const [quotePaymentMethod, setQuotePaymentMethod] = useState<string>("card");
-  const changeQuoteType = (val: typeof quoteType) => {
-    setQuoteType(val);
-    // 견적서 유형에 따라 청구 방식 자동 설정
-    if (val === "accumulated_batch") setQuoteBillingType("monthly_billing");
-    else if (val === "b2c_prepaid") setQuoteBillingType("prepaid_wallet");   // 선입금 견적서 → 선입금 차감 고정
-    else if (val === "b2b_standard") setQuoteBillingType("postpaid_per_project"); // 일반 견적서 → 건별 후불 기본
-    // prepaid_deduction은 레거시 타입 — 신규 생성 불가, 기존 데이터 표시용
-  };
-  const [showQuoteForm, setShowQuoteForm] = useState(false);
   const [showQuoteEditorModal, setShowQuoteEditorModal] = useState(false);
-  const [showTaxOptions, setShowTaxOptions] = useState(false);
-  const [showPaySchedule, setShowPaySchedule] = useState(false);
-  type PayScheduleRow = { label: string; amountType: "percent"|"fixed"; amount: string; dueDate: string; invoiceTiming: "after_payment"|"after_final"|"on_date"|"none" };
-  const makeDefaultPayRows = (type: string): PayScheduleRow[] => {
-    if (type === "split2") return [{ label: "선금", amountType: "percent", amount: "50", dueDate: "", invoiceTiming: "after_payment" }, { label: "잔금", amountType: "percent", amount: "50", dueDate: "", invoiceTiming: "after_payment" }];
-    if (type === "split3") return [{ label: "선금", amountType: "percent", amount: "30", dueDate: "", invoiceTiming: "after_payment" }, { label: "중도금", amountType: "percent", amount: "40", dueDate: "", invoiceTiming: "after_payment" }, { label: "잔금", amountType: "percent", amount: "30", dueDate: "", invoiceTiming: "after_payment" }];
-    if (type === "custom") return [{ label: "1차", amountType: "percent", amount: "", dueDate: "", invoiceTiming: "after_payment" }];
-    return [];
-  };
-  const [payScheduleType, setPayScheduleType] = useState<"split2"|"split3"|"custom">("split2");
-  const [payScheduleRows, setPayScheduleRows] = useState<PayScheduleRow[]>(makeDefaultPayRows("split2"));
-  const [revenueType, setRevenueType] = useState<"tax_invoice"|"card"|"cash"|"foreign">("tax_invoice");
-  const [foreignCurrency, setForeignCurrency] = useState<"USD"|"EUR"|"JPY"|"SGD"|"custom">("USD");
-  const [foreignCurrencyInput, setForeignCurrencyInput] = useState("");
-  const [paymentTiming, setPaymentTiming] = useState<"prepay"|"postpay">("postpay");
   const [showBillingCardEdit, setShowBillingCardEdit] = useState(false);
   const [billingCardMode, setBillingCardMode] = useState<"same_as_request"|"other_company"|"other_division">("same_as_request");
   const [billingCardCompanyId, setBillingCardCompanyId] = useState<number|null>(null);
@@ -242,77 +208,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [payerCardDivisionId, setPayerCardDivisionId] = useState<number|null>(null);
   const [payerCardDivisions, setPayerCardDivisions] = useState<{id:number;name:string;type:string|null}[]>([]);
   const [savingBillingCard, setSavingBillingCard] = useState(false);
-  const [creatingQuote, setCreatingQuote] = useState(false);
-  type QuoteItemForm = {
-    productId: number | null;
-    productName: string;
-    languagePair: string;
-    // 번역: 출발/도착 언어
-    sourceLanguage: string;
-    targetLanguage: string;
-    // 통역: 언어A/B + 방향
-    langA: string;
-    langB: string;
-    interpretationDirection: string;  // "양방향" | "A→B" | "B→A"
-    // 장비: 수량단위 + 사용기간
-    quantityUnit: string;   // "개" | "세트" | "부스"
-    usagePeriod: string;    // "반일" | "1일" | "2일" | "3일"
-    unit: string;
-    quantity: string;
-    unitPrice: string;
-    taxType: "taxable" | "exempt" | "zero_rate";
-    productType: string;    // "translation" | "interpretation" | "equipment" | "expense"
-    interpreterCount: string;   // 통역사 수 (명)
-    workQuantity: string;       // 진행 수량
-    workUnit: string;           // 수량단위: "시간"|"일"|"회"|"건"
-    interpretDate: string;
-    interpretPlace: string;
-    interpretType: string;
-    interpretationDuration: string;
-    hasTravelExpense: boolean;
-    hasEquipment: boolean;
-    files: Array<{ name: string; url: string; size?: number; uploading?: boolean }>;
-    memo: string;
-    showDetail: boolean;
-    showDirectInput: boolean;
-    isCustomProduct: boolean;
-    eventStartDate: string;
-    eventEndDate: string;
-    itemLocation: string;
-  };
-  const defaultItem = (): QuoteItemForm => ({
-    productId: null, productName: "", languagePair: "",
-    sourceLanguage: "", targetLanguage: "",
-    langA: "", langB: "", interpretationDirection: "양방향",
-    quantityUnit: "개", usagePeriod: "1일",
-    unit: "페이지", quantity: "1", unitPrice: "", taxType: "taxable", productType: "translation",
-    interpreterCount: "1", workQuantity: "1", workUnit: "일",
-    interpretDate: "", interpretPlace: "", interpretType: "동시통역",
-    interpretationDuration: "", hasTravelExpense: false, hasEquipment: false,
-    files: [], memo: "",
-    showDetail: false, showDirectInput: false, isCustomProduct: false, eventStartDate: "", eventEndDate: "", itemLocation: "",
-  });
-  const [quoteMode, setQuoteMode] = useState<"simple" | "items">("items");
-  const [quoteItemForms, setQuoteItemForms] = useState<QuoteItemForm[]>([defaultItem()]);
-  const calcItemTotal = (it: QuoteItemForm) => {
-    const price = Number(it.unitPrice.replace?.(/,/g, "") || it.unitPrice || 0);
-    const supply = it.productType === "interpretation"
-      ? Math.round(Number(it.interpreterCount || 1) * Number(it.workQuantity || 1) * price)
-      : Math.round(Number(it.quantity || 1) * price);
-    return { supply, tax: 0, total: supply };
-  };
-  const calcGrandTotals = () => {
-    const supply = quoteItemForms.reduce((s, it) => s + calcItemTotal(it).supply, 0);
-    const tax = quoteVatType === "taxable" ? Math.round(supply * 0.1) : 0;
-    return { supply, tax, total: supply + tax };
-  };
-  const quoteItemsGrandTotal = calcGrandTotals().total;
-  // quote_type별 추가 필드
   const _dateDefault = (days: number) => { const d = new Date(); d.setDate(d.getDate() + days); return d.toISOString().split("T")[0]; };
-  const [quoteValidUntil, setQuoteValidUntil] = useState(() => _dateDefault(30));
-  const [quoteIssueDate, setQuoteIssueDate] = useState(() => _dateDefault(0));
   const [quotePaymentDueDate, setQuotePaymentDueDate] = useState(() => _dateDefault(30));
-  const [quotePrepaidUsage, setQuotePrepaidUsage] = useState("");
   // 선입금 차감 - 거래처 계정 원장
   type CompPrepaidAcct = { id: number; initialAmount: number; currentBalance: number; note: string | null; depositDate: string | null; status: string };
   type LedgerEntry = { id: number; accountId?: number; type: string; amount: number; balanceBefore: number | null; balanceAfter: number; description: string | null; projectId: number | null; projectTitle: string | null; transactionDate: string | null; createdAt: string | null; supplyAmount: number | null; taxAmount: number | null };
@@ -337,17 +234,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [showLedgerModal, setShowLedgerModal] = useState(false);
   const [ledgerModalData, setLedgerModalData] = useState<LedgerEntry[]>([]);
   const [ledgerModalLoading, setLedgerModalLoading] = useState(false);
-  const [quoteBatchStart, setQuoteBatchStart] = useState("");
-  const [quoteBatchEnd, setQuoteBatchEnd] = useState("");
-  // 누적 견적 후보 조회 상태
-  type BatchCandidate = {
-    projectId: number; title: string; status: string; createdAt: string;
-    quoteId: number | null; quotePrice: number | null; quoteStatus: string | null; serviceName: string;
-  };
-  const [batchCandidates, setBatchCandidates] = useState<BatchCandidate[]>([]);
-  const [batchSelected, setBatchSelected] = useState<Set<number>>(new Set());
-  const [batchLoading, setBatchLoading] = useState(false);
-  const [batchQueried, setBatchQueried] = useState(false);
 
   // 누적 배치 (건별 누적 방식)
   type ActiveBatchItem = { id: number; projectId: number; projectTitle: string; amount: number; serviceName: string | null; createdAt: string };
@@ -406,27 +292,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       .catch(() => {});
   }, [token]);
 
-  const loadBatchCandidates = async () => {
-    const companyId = detail?.companyId;
-    if (!companyId) { onToast("거래처 정보가 없습니다. 프로젝트에 거래처를 먼저 설정하세요."); return; }
-    if (!quoteBatchStart || !quoteBatchEnd) { onToast("대상기간 시작·종료를 모두 입력하세요."); return; }
-    if (quoteBatchStart > quoteBatchEnd) { onToast("시작일이 종료일보다 늦을 수 없습니다."); return; }
-    setBatchLoading(true);
-    setBatchQueried(false);
-    setBatchCandidates([]);
-    setBatchSelected(new Set());
-    try {
-      const res = await fetch(api(`/api/admin/billing-candidates?companyId=${companyId}&start=${quoteBatchStart}&end=${quoteBatchEnd}`), { headers: authH });
-      const data = await res.json();
-      if (!res.ok) { onToast(`조회 실패: ${data.error}`); return; }
-      setBatchCandidates(data);
-      const autoSelect = new Set<number>((data as { projectId: number; quotePrice: number | null }[])
-        .filter(c => c.quotePrice != null).map(c => c.projectId));
-      setBatchSelected(autoSelect);
-      setBatchQueried(true);
-    } catch { onToast("조회 중 오류가 발생했습니다."); }
-    finally { setBatchLoading(false); }
-  };
 
   // ── 활성 누적 배치 로드 ────────────────────────────────────────────────────
   const loadActiveBatch = async (companyId: number) => {
@@ -502,13 +367,12 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     try {
       const res = await fetch(api(`/api/admin/billing-batches/${batchId}/issue`), {
         method: "POST", headers: { ...authH, "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, issueDate: issueDateBatch, paymentDueDate: paymentDueDateBatch || undefined, taxDocumentType: quoteTaxDocType }),
+        body: JSON.stringify({ projectId, issueDate: issueDateBatch, paymentDueDate: paymentDueDateBatch || undefined, taxDocumentType: "tax_invoice" }),
       });
       const data = await res.json();
       if (!res.ok) { onToast(data.error ?? "발행 실패"); return; }
       onToast("누적 견적서가 발행되었습니다.");
       await loadDetail();
-      setShowQuoteForm(false);
     } finally { setActiveBatchOp(false); }
   };
 
@@ -636,20 +500,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   };
 
   useEffect(() => { if (activeSection === "history") fetchFiles(); }, [activeSection]);
-  useEffect(() => {
-    if (quoteType === "accumulated_batch" && detail?.companyId) {
-      loadActiveBatch(detail.companyId);
-    }
-  }, [quoteType, detail?.companyId]);
-  useEffect(() => {
-    if ((quoteType === "b2c_prepaid" || quoteType === "prepaid_deduction") && detail?.companyId) {
-      setCompPrepaidAccounts([]);
-      setSelectedPrepaidAcctId(null);
-      setAcctLedger([]);
-      loadCompPrepaidAccounts(detail.companyId);
-    }
-  }, [quoteType, detail?.companyId]);
-
   useEffect(() => {
     if (selectedPrepaidAcctId) {
       loadAcctLedger(selectedPrepaidAcctId);
@@ -878,174 +728,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
     finally { setSubmittingCorrection(false); }
   };
 
-  const handleCreateQuote = async () => {
-    setCreatingQuote(true);
-    try {
-      let body: Record<string, unknown>;
-
-      if (quoteType === "accumulated_batch") {
-        onToast("누적 견적서는 배치 발행 버튼을 사용하세요.");
-        setCreatingQuote(false);
-        return;
-      } else if (quoteType === "prepaid_deduction") {
-        const validItems = quoteItemForms.filter(it => it.productName.trim() && Number(it.unitPrice) > 0);
-        if (validItems.length === 0) { onToast("품목명과 단가를 입력하세요."); return; }
-        const usageAmt = validItems.reduce((s, it) => s + calcItemTotal(it).total, 0);
-        if (!selectedPrepaidAcctId) { onToast("차감할 선입금 계정을 선택하세요."); return; }
-        const acct = compPrepaidAccounts.find(a => a.id === selectedPrepaidAcctId);
-        if (!acct || acct.currentBalance < usageAmt) { onToast(`잔액 부족: 현재 잔액 ${acct?.currentBalance.toLocaleString() ?? 0}원`); return; }
-        const composeLangPair = (it: QuoteItemForm) => {
-          if (it.productType === "translation") {
-            const s = it.sourceLanguage.trim(), t = it.targetLanguage.trim();
-            return s || t ? `${s}→${t}` : it.languagePair;
-          }
-          if (it.productType === "interpretation") {
-            const a = it.langA.trim(), b = it.langB.trim();
-            if (!a && !b) return it.languagePair;
-            if (it.interpretationDirection === "A→B") return `${a}→${b}`;
-            if (it.interpretationDirection === "B→A") return `${b}→${a}`;
-            return `${a}↔${b}`;
-          }
-          return "";
-        };
-        body = {
-          items: validItems.map(it => ({
-            productId: it.productId ?? undefined,
-            productName: it.productName.trim(),
-            languagePair: composeLangPair(it) || undefined,
-            unit: it.unit || "건",
-            quantity: it.productType === "interpretation" ? Number(it.interpreterCount) || 1 : Number(it.quantity) || 1,
-            unitPrice: Number(it.unitPrice.replace(/,/g, "")),
-            taxRate: (quoteVatType === "taxable" ? 0.1 : 0) as 0 | 0.1,
-            taxType: quoteVatType,
-            itemType: it.productType,
-            memo: it.memo || undefined,
-            files: it.files.filter(f => !f.uploading).map(f => ({ name: f.name, url: f.url, size: f.size })),
-            interpretDate: it.productType === "interpretation" ? it.interpretDate || undefined : undefined,
-            interpretPlace: it.productType === "interpretation" ? it.interpretPlace || undefined : undefined,
-            interpretType: it.productType === "interpretation" ? it.interpretType || undefined : undefined,
-            interpretDuration: it.productType === "interpretation" ? it.interpretationDuration || undefined : undefined,
-            hasTravelExpense: it.productType === "interpretation" ? it.hasTravelExpense : undefined,
-            hasEquipment: it.productType === "interpretation" ? it.hasEquipment : undefined,
-            interpretationDirection: it.productType === "interpretation" ? it.interpretationDirection || undefined : undefined,
-            quantityUnit: it.productType === "equipment" ? it.quantityUnit || undefined : undefined,
-            usagePeriod: it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
-            eventStartDate: it.productType === "equipment" && it.showDetail ? it.eventStartDate || undefined : undefined,
-            eventEndDate: it.productType === "equipment" && it.showDetail ? it.eventEndDate || undefined : undefined,
-            itemLocation: it.productType === "equipment" && it.showDetail ? it.itemLocation || undefined : undefined,
-            isCustomProduct: it.isCustomProduct || undefined,
-          })),
-          prepaidAccountId: selectedPrepaidAcctId,
-        };
-      } else {
-        const validItems = quoteItemForms.filter(it => it.productName.trim() && Number(it.unitPrice.replace(/,/g, "")) > 0);
-        const isRegenerate = (detail?.quotes?.length ?? 0) > 0;
-        if (!isRegenerate && validItems.length === 0) { onToast("품목명과 단가를 입력하세요."); return; }
-        const composeLangPair2 = (it: QuoteItemForm) => {
-          if (it.productType === "translation") {
-            const s = it.sourceLanguage.trim(), t = it.targetLanguage.trim();
-            return s || t ? `${s}→${t}` : it.languagePair;
-          }
-          if (it.productType === "interpretation") {
-            const a = it.langA.trim(), b = it.langB.trim();
-            if (!a && !b) return it.languagePair;
-            if (it.interpretationDirection === "A→B") return `${a}→${b}`;
-            if (it.interpretationDirection === "B→A") return `${b}→${a}`;
-            return `${a}↔${b}`;
-          }
-          return "";
-        };
-        body = {
-          items: validItems.map(it => ({
-            productId: it.productId ?? undefined,
-            productName: it.productName.trim(),
-            languagePair: composeLangPair2(it) || undefined,
-            unit: it.unit || "건",
-            quantity: it.productType === "interpretation" ? Number(it.interpreterCount) || 1 : Number(it.quantity) || 1,
-            unitPrice: Number(it.unitPrice.replace(/,/g, "")),
-            taxRate: (quoteVatType === "taxable" ? 0.1 : 0) as 0 | 0.1,
-            taxType: quoteVatType,
-            itemType: it.productType,
-            memo: it.memo || undefined,
-            files: it.files.filter(f => !f.uploading).map(f => ({ name: f.name, url: f.url, size: f.size })),
-            interpretDate: it.productType === "interpretation" ? it.interpretDate || undefined : undefined,
-            interpretPlace: it.productType === "interpretation" ? it.interpretPlace || undefined : undefined,
-            interpretType: it.productType === "interpretation" ? it.interpretType || undefined : undefined,
-            interpretDuration: it.productType === "interpretation" ? it.interpretationDuration || undefined : undefined,
-            hasTravelExpense: it.productType === "interpretation" ? it.hasTravelExpense : undefined,
-            hasEquipment: it.productType === "interpretation" ? it.hasEquipment : undefined,
-            interpretationDirection: it.productType === "interpretation" ? it.interpretationDirection || undefined : undefined,
-            quantityUnit: it.productType === "equipment" ? it.quantityUnit || undefined : undefined,
-            usagePeriod: it.productType === "equipment" ? it.usagePeriod || undefined : undefined,
-            eventStartDate: it.productType === "equipment" && it.showDetail ? it.eventStartDate || undefined : undefined,
-            eventEndDate: it.productType === "equipment" && it.showDetail ? it.eventEndDate || undefined : undefined,
-            itemLocation: it.productType === "equipment" && it.showDetail ? it.itemLocation || undefined : undefined,
-            isCustomProduct: it.isCustomProduct || undefined,
-          })),
-        };
-      }
-
-      if (quoteNote.trim()) body.note = quoteNote.trim();
-      body.taxDocumentType = quoteTaxDocType;
-      body.taxCategory = quoteTaxCategory;
-      body.quoteType = quoteType;
-      const _companyBillingType = (detail?.company as any)?.billingType ?? "postpaid_per_project";
-      body.billingType = quoteBillingType || _companyBillingType;
-      if ((quoteBillingType || _companyBillingType) === "prepay_upfront") {
-        body.paymentMethod = quotePaymentMethod;
-      }
-      // 공통 날짜 필드 — validUntil은 견적일+30일 자동 계산
-      if (quoteIssueDate) {
-        body.issueDate = quoteIssueDate;
-        const d = new Date(quoteIssueDate); d.setDate(d.getDate() + 30);
-        body.validUntil = d.toISOString().split("T")[0];
-      } else {
-        body.validUntil = _dateDefault(30);
-      }
-      // 배치 기간 (필요시 본문에 추가)
-      if (quoteBatchStart) body.batchPeriodStart = quoteBatchStart;
-      if (quoteBatchEnd) body.batchPeriodEnd = quoteBatchEnd;
-      if (quoteVersionReason.trim()) body.versionReason = quoteVersionReason.trim();
-      const res = await fetch(api(`/api/admin/projects/${projectId}/quote`), {
-        method: "POST", headers: { ...authH, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      // 선입금 차감 시 원장에 자동 연동 (b2c_prepaid + prepaid_wallet 및 레거시 prepaid_deduction 공통)
-      if ((quoteType === "b2c_prepaid" || quoteType === "prepaid_deduction") && selectedPrepaidAcctId) {
-        const validItems = quoteItemForms.filter(it => it.productName.trim() && Number(it.unitPrice) > 0);
-        const usageAmt = validItems.reduce((s, it) => s + calcItemTotal(it).total, 0);
-        const supplyAmt = validItems.reduce((s, it) => s + calcItemTotal(it).supply, 0);
-        const taxAmt = validItems.reduce((s, it) => s + calcItemTotal(it).tax, 0);
-        const quoteIdFromResp = data?.id ?? null;
-        await fetch(api(`/api/admin/prepaid-accounts/${selectedPrepaidAcctId}/transactions`), {
-          method: "POST", headers: { ...authH, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            type: "deduction", amount: usageAmt,
-            description: `프로젝트: ${detail?.title ?? `#${projectId}`}`,
-            projectId, quoteId: quoteIdFromResp,
-            supplyAmount: supplyAmt > 0 ? supplyAmt : null,
-            taxAmount: taxAmt > 0 ? taxAmt : null,
-            transactionDate: new Date().toISOString().slice(0, 10),
-          }),
-        });
-        // 원장 내역 즉시 갱신
-        await loadAcctLedger(selectedPrepaidAcctId);
-        // 계정 잔액도 갱신
-        await loadCompPrepaidAccounts(detail?.companyId ?? 0);
-      }
-      onToast(`견적 생성 완료`);
-      setQuoteAmount(""); setQuoteNote(""); setQuoteItemForms([defaultItem()]); setShowQuoteForm(false);
-      setQuoteValidUntil(_dateDefault(30)); setQuoteIssueDate(_dateDefault(0));
-      setQuotePrepaidUsage(""); setSelectedPrepaidAcctId(null); setCompPrepaidAccounts([]); setAcctLedger([]);
-      setQuoteBatchStart(""); setQuoteBatchEnd(""); setBatchCandidates([]); setBatchSelected(new Set()); setBatchQueried(false);
-      setQuoteBillingType("postpaid_per_project"); setQuotePaymentMethod("card");
-      setQuoteVersionReason("견적 변경");
-      await loadDetail(); onRefresh();
-    } catch { onToast("오류: 견적 생성 실패"); }
-    finally { setCreatingQuote(false); }
-  };
 
   // 프로젝트 모달 내 선입금 계정 빠른 등록
   const handleQuickRegisterPrepaid = async () => {
@@ -2284,12 +1966,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               {expanded ? "▲ 접기" : "▼ 품목 보기"}
                               {items.length > 0 && <span style={{ marginLeft: 4, fontSize: 10, color: "#9ca3af" }}>({items.length}건)</span>}
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => window.print()}
-                              style={{ fontSize: 11, padding: "3px 10px", borderRadius: 5, border: "1px solid #e2e8f0", background: "#fff", color: "#374151", cursor: "pointer" }}>
-                              🖨️ 인쇄
-                            </button>
                             <span style={{ flex: 1 }} />
                             <span style={{ fontSize: 10, color: "#d1d5db" }}>견적 #{q.id} · 등록 {new Date(q.createdAt).toLocaleDateString("ko-KR")}</span>
                           </div>
@@ -2771,27 +2447,6 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         )}
                       </div>
 
-                      {/* 문서 출력 — 보조 액션 toolbar */}
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8, padding: "5px 10px", background: "transparent", borderRadius: 7, borderTop: "1px solid #eef2f7" }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: "#94a3b8", marginRight: 2 }}>문서 출력</span>
-                        <button
-                          onClick={() => {
-                            const url = api(`/api/admin/projects/${projectId}/pdf/quote?token=${encodeURIComponent(token)}`);
-                            window.open(url, "_blank", "noopener");
-                          }}
-                          style={{ display: "flex", alignItems: "center", gap: 4, background: "transparent", color: "#1d4ed8", border: "1px solid #c7d7f8", borderRadius: 6, padding: "4px 11px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                          🖨 견적서
-                        </button>
-                        <button
-                          onClick={() => {
-                            const url = api(`/api/admin/projects/${projectId}/pdf/statement?token=${encodeURIComponent(token)}`);
-                            window.open(url, "_blank", "noopener");
-                          }}
-                          style={{ display: "flex", alignItems: "center", gap: 4, background: "transparent", color: "#166534", border: "1px solid #bbf7d0", borderRadius: 6, padding: "4px 11px", fontSize: 11, fontWeight: 600, cursor: "pointer" }}>
-                          🖨 거래명세서
-                        </button>
-                        <span style={{ fontSize: 11, color: "#cbd5e1" }}>새 창 → Ctrl+P로 PDF 저장</span>
-                      </div>
                     </>
                   );
                 })()}

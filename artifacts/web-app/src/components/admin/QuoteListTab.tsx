@@ -76,6 +76,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
   const [editInitData, setEditInitData] = useState<{
     items: QuoteItemForm[]; title: string; note: string;
     quoteType: QuoteType; issueDate: string; vatType: VatType;
+    companyId: number | null; contactId: number | null;
   } | null>(null);
 
   const fetchQuotes = useCallback(async () => {
@@ -213,6 +214,8 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
         quoteType: (detail.quoteType as QuoteType) ?? 'b2b_standard',
         issueDate: detail.issueDate ?? '',
         vatType,
+        companyId: (detail as any).companyId ?? null,
+        contactId: (detail as any).contactId ?? null,
       });
       setShowEditor(true);
     } finally { setEditLoading(null); }
@@ -269,6 +272,8 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
           initialQuoteType={editInitData?.quoteType}
           initialIssueDate={editInitData?.issueDate}
           initialVatType={editInitData?.vatType}
+          initialCompanyId={editInitData?.companyId ?? null}
+          initialContactId={editInitData?.contactId ?? null}
         />
       </div>
     );

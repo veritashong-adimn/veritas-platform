@@ -7,10 +7,15 @@
  */
 import React, { useEffect, useRef } from 'react';
 import type { QuotePdfData } from '../../lib/quotePdf';
-import { ITEM_TYPE_LABEL, SERVICE_TYPE_LABEL, QUOTE_NOTES_BY_SERVICE } from '../../lib/quotePdf';
+import { ITEM_TYPE_LABEL, QUOTE_NOTES_BY_SERVICE } from '../../lib/quotePdf';
 
-// ─── 숫자 포맷 ────────────────────────────────────────────────────────────────
+// ─── 숫자 / 날짜 포맷 ────────────────────────────────────────────────────────
 const fmt = (n: number) => n.toLocaleString('ko-KR');
+const fmtDate = (d: string) => d.replace(/-/g, '.');
+const fmtDateRange = (start: string, end: string) => {
+  if (!start) return '';
+  return (!end || end === start) ? fmtDate(start) : `${fmtDate(start)} ~ ${fmtDate(end)}`;
+};
 
 // ─── 색상 ─────────────────────────────────────────────────────────────────────
 const BRAND = '#1e3a5f';
@@ -263,20 +268,16 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
 
               {/* 수신자 정보 */}
               <InfoBox title="수신자 정보">
-                {hasCustomer ? (
-                  <>
-                    {data.customer.companyName      && <InfoRow label="거래처명"   value={data.customer.companyName} />}
-                    {data.customer.contactName      && <InfoRow label="담당자명"   value={data.customer.contactName} />}
-                    {data.customer.contactDivision  && <InfoRow label="부서"       value={data.customer.contactDivision} />}
-                    {data.customer.contactPhone     && <InfoRow label="연락처"     value={data.customer.contactPhone} />}
-                    {data.customer.contactEmail     && <InfoRow label="이메일"     value={data.customer.contactEmail} />}
-                    <InfoRow
-                      label="서비스 유형"
-                      value={SERVICE_TYPE_LABEL[data.serviceType] ?? '복합견적'}
-                    />
-                  </>
+                {!hasCustomer ? (
+                  <p style={{ fontSize: 11, color: '#9ca3af' }}>수신자 정보 미입력</p>
                 ) : (
-                  <p style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>거래처 미입력</p>
+                  <>
+                    <InfoRow label="거래처명" value={data.customer.companyName        || '-'} />
+                    <InfoRow label="대표자명" value={data.customer.representativeName || '-'} />
+                    <InfoRow label="담당자명" value={data.customer.contactName        || '-'} />
+                    <InfoRow label="연락처"   value={data.customer.contactPhone       || '-'} />
+                    <InfoRow label="이메일"   value={data.customer.contactEmail       || '-'} />
+                  </>
                 )}
               </InfoBox>
             </div>
@@ -292,7 +293,6 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '3px 16px' }}>
                 <InfoRow label="견적번호"  value={data.quoteNumber} mono />
                 {data.quoteDate  && <InfoRow label="견적일"    value={data.quoteDate} />}
-                {data.validUntil && <InfoRow label="유효기간"  value={data.validUntil} />}
                 {data.quoteType  && <InfoRow label="견적유형"  value={data.quoteType} />}
                 {data.manager    && <InfoRow label="담당 PM"   value={data.manager} />}
               </div>
@@ -481,6 +481,13 @@ function InfoRow({ label, value, mono }: { label: string; value: string; mono?: 
       </span>
     </div>
   );
+}
+
+// 수신자 정보 내 서비스 구분선 (복합 견적 시 [번역] / [통역] 라벨 포함)
+function SvcDivider({ label }: { label?: string }) {
+  return label
+    ? <div style={{ fontSize: 9, fontWeight: 800, color: BRAND, letterSpacing: 0.3, margin: '6px 0 3px' }}>[{label}]</div>
+    : <div style={{ height: 1, background: '#e5e7eb', margin: '7px 0 4px' }} />;
 }
 
 function SummaryRow({ label, value }: { label: string; value: string }) {

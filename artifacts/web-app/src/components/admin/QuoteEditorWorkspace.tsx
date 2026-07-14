@@ -999,7 +999,9 @@ export function QuoteEditorWorkspace({
       memo:             [d.memo, ...d.warnings].filter(Boolean).join(' / '),
       sourceLanguage:   d.sourceLanguage || 'ko',
       fileName:         d.fileName || '',
-      fileFormat:       d.fileFormat || '',
+      fileFormat:       (FILE_FORMATS as readonly string[]).includes(d.fileFormat)
+                          ? d.fileFormat
+                          : (detectFormatFromExt(d.fileName || '') || ''),
       wordCount:        d.wordCount > 0 ? String(d.wordCount) : '',
       charCount:        d.charCount > 0 ? String(d.charCount) : '',
       interpretDate:    d.interpretDate || '',
@@ -1043,8 +1045,13 @@ export function QuoteEditorWorkspace({
       // 기존 견적 수정 모드
       if (initialQuoteId) {
         const url     = api(`/api/admin/quotes/${initialQuoteId}`);
-        const payload = { ...commonBody, title: title.trim() || undefined };
-        console.log('[QUOTE UPDATE REQUEST]', { method: 'PUT', url, quoteId: initialQuoteId });
+        const payload = {
+          ...commonBody,
+          title:     title.trim() || undefined,
+          companyId: companyId ?? undefined,
+          contactId: contactId ?? undefined,
+        };
+        console.log('[QUOTE UPDATE REQUEST]', { method: 'PUT', url, quoteId: initialQuoteId, companyId, contactId });
         const res  = await fetch(url, {
           method: 'PUT', headers: { ...authH, 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),

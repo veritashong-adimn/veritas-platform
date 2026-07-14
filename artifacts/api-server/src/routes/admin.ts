@@ -1201,336 +1201,6 @@ router.post("/admin/projects/:id/billing-correction", ...adminGuard, async (req,
   }
 });
 
-// ─── 관리자 견적 생성 ──────────────────────────────────────────────────────
-router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
-  const projectId = Number(req.params.id);
-  if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
-
-  type ItemInput = {
-    productName: string; languagePair?: string; unit?: string; quantity?: number;
-    unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string;
-    itemType?: string; taxType?: string;
-    interpretDate?: string; interpretPlace?: string; interpretType?: string;
-    interpretDuration?: string; hasTravelExpense?: boolean; hasEquipment?: boolean;
-    files?: Array<{ name: string; url: string; size?: number }>;
-    interpretationDirection?: string;
-    quantityUnit?: string;
-    usagePeriod?: string;
-    eventStartDate?: string;
-    eventEndDate?: string;
-    itemLocation?: string;
-    isCustomProduct?: boolean;
-  };
-  const {
-    title: quoteTitle,
-    amount, items, note,
-    taxDocumentType, taxCategory,
-    quoteType, billingType, paymentMethod,
-    validUntil, issueDate, invoiceDueDate, paymentDueDate,
-    prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
-    prepaidAccountId,
-    batchPeriodStart, batchPeriodEnd,
-    versionReason,
-  } = req.body as {
-    title?: string;
-    amount?: number; items?: ItemInput[]; note?: string;
-    taxDocumentType?: string; taxCategory?: string;
-    quoteType?: string; billingType?: string; paymentMethod?: string;
-    validUntil?: string; issueDate?: string;
-    invoiceDueDate?: string; paymentDueDate?: string;
-    prepaidBalanceBefore?: number; prepaidUsageAmount?: number; prepaidBalanceAfter?: number;
-    prepaidAccountId?: number;
-    batchPeriodStart?: string; batchPeriodEnd?: string;
-    versionReason?: string;
-  };
-  const selectedProjectIds: number[] = Array.isArray(req.body.selectedProjectIds)
-    ? (req.body.selectedProjectIds as unknown[]).map(Number).filter(n => !isNaN(n) && n > 0)
-    : [];
-
-  const hasItems = Array.isArray(items) && items.length > 0;
-  // 선입금 차감 방식: prepaid_deduction (레거시) 또는 b2c_prepaid + prepaid_wallet
-  const isPrepaidDeduction = quoteType === "prepaid_deduction"
-    || (quoteType === "b2c_prepaid" && billingType === "prepaid_wallet");
-  const isAccumulatedBatch = quoteType === "accumulated_batch";
-  const hasSelectedProjects = selectedProjectIds.length > 0;
-
-  if (!isPrepaidDeduction && !(isAccumulatedBatch && hasSelectedProjects) && !hasItems && (!amount || isNaN(Number(amount)) || Number(amount) <= 0)) {
-    res.status(400).json({ error: "견적 금액 또는 품목 목록이 필요합니다." }); return;
-  }
-  if (isPrepaidDeduction && !hasItems && (!prepaidUsageAmount || Number(prepaidUsageAmount) <= 0)) {
-    res.status(400).json({ error: "선입금 차감 견적서에는 이번 사용 금액 또는 품목 목록이 필요합니다." }); return;
-  }
-
-  try {
-    const stgQ = await getSettings();
-    const [project] = await db.select({ id: projectsTable.id, status: projectsTable.status, companyId: projectsTable.companyId }).from(projectsTable).where(eq(projectsTable.id, projectId));
-    if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
-    // 재생성 여부: "created" 이외 상태면 이미 견적이 존재했던 것으로 판단
-    const isRegeneration = project.status !== "created";
-
-    // 선입금 차감: 잔액 자동 조회 및 검증 (신 방식: prepaid_accounts 우선, 구 방식 fallback)
-    let computedPrepaidBefore: number | null = null;
-    let computedPrepaidAfter: number | null = null;
-    let computedAmount: number | null = null;
-    if (isPrepaidDeduction) {
-      // items가 있으면 items 합계를 사용 금액으로 사용, 없으면 prepaidUsageAmount 사용
-      const usageAmt = hasItems
-        ? items!.reduce((s, it) => {
-            const qty = Number(it.quantity ?? 1);
-            const up = Number(it.unitPrice);
-            const tax = Math.round(Math.round(qty * up) * (it.taxRate ?? 0));
-            return s + Math.round(qty * up) + tax;
-          }, 0)
-        : Number(prepaidUsageAmount);
-      let currentBalance = 0;
-
-      if (prepaidAccountId) {
-        // ── 신 방식: prepaid_accounts 테이블에서 잔액 조회 ─────────────────────
-        const [acct] = await db
-          .select({ currentBalance: prepaidAccountsTable.currentBalance, status: prepaidAccountsTable.status })
-          .from(prepaidAccountsTable)
-          .where(eq(prepaidAccountsTable.id, prepaidAccountId));
-        if (!acct || acct.status !== "active") {
-          res.status(400).json({ error: "유효하지 않은 선입금 계정입니다." }); return;
-        }
-        currentBalance = Number(acct.currentBalance);
-      } else if (project.companyId) {
-        // ── 구 방식 fallback: quotes 테이블의 prepaidBalanceAfter ─────────────
-        const [lastQ] = await db
-          .select({ prepaidBalanceAfter: quotesTable.prepaidBalanceAfter })
-          .from(quotesTable)
-          .innerJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))
-          .where(and(
-            eq(projectsTable.companyId, project.companyId),
-            sql`${quotesTable.quoteType} IN ('prepaid_deduction', 'b2c_prepaid')`,
-            eq(quotesTable.isCurrent, true)
-          ))
-          .orderBy(desc(quotesTable.id))
-          .limit(1);
-        currentBalance = lastQ?.prepaidBalanceAfter != null ? Number(lastQ.prepaidBalanceAfter) : 0;
-      }
-
-      if (usageAmt > currentBalance) {
-        res.status(400).json({
-          error: `잔액 부족: 현재 잔액 ${currentBalance.toLocaleString()}원, 사용 요청 ${usageAmt.toLocaleString()}원`,
-          currentBalance,
-        });
-        return;
-      }
-      computedPrepaidBefore = currentBalance;
-      computedPrepaidAfter = currentBalance - usageAmt;
-      computedAmount = usageAmt;
-    }
-
-    // 누적 견적: 선택된 프로젝트들의 견적에서 품목 자동 생성 (DB 삭제 전에 조회)
-    type BatchProjectItem = { projectId: number; title: string; quoteId: number; quotePrice: number; serviceName: string };
-    let batchProjectItems: BatchProjectItem[] = [];
-    if (isAccumulatedBatch && hasSelectedProjects) {
-      // 현재 프로젝트 자신은 제외 (트랜잭션 내에서 기존 견적이 삭제되어 FK 충돌 방지)
-      const filteredPids = selectedProjectIds.filter(pid => pid !== projectId);
-      const projRows = await db.select({ id: projectsTable.id, title: projectsTable.title })
-        .from(projectsTable).where(inArray(projectsTable.id, filteredPids));
-      const projMap = new Map(projRows.map(p => [p.id, p.title]));
-      for (const pid of filteredPids) {
-        const [q] = await db.select().from(quotesTable).where(eq(quotesTable.projectId, pid)).orderBy(desc(quotesTable.id)).limit(1);
-        if (q) {
-          const qItems = await db.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, q.id));
-          batchProjectItems.push({
-            projectId: pid,
-            title: projMap.get(pid) ?? `프로젝트 #${pid}`,
-            quoteId: q.id,
-            quotePrice: Number(q.price),
-            serviceName: qItems[0]?.productName ?? "",
-          });
-        }
-      }
-    }
-
-    // ── Version Engine: 현재 버전 조회 후 isCurrent=false 처리 ─────────────
-    const [currentQuote] = await db
-      .select({ id: quotesTable.id, version: quotesTable.version })
-      .from(quotesTable)
-      .where(and(eq(quotesTable.projectId, projectId), eq(quotesTable.isCurrent, true)));
-    const nextVersion = currentQuote ? currentQuote.version + 1 : 1;
-    const parentVersionId = currentQuote?.id ?? null;
-    if (currentQuote) {
-      await db.update(quotesTable).set({ isCurrent: false }).where(eq(quotesTable.id, currentQuote.id));
-    }
-
-    // 품목 기반 합계 계산
-    let totalPrice = isPrepaidDeduction ? (computedAmount ?? 0) : Number(amount ?? 0);
-    type CalcItem = ItemInput & { supplyAmount: number; taxAmount: number; totalAmount: number };
-    let calcItems: CalcItem[] = [];
-
-    // 선입금 차감 + items 있을 때도 아이템 처리 허용
-    const shouldProcessItems = hasItems && (!isPrepaidDeduction || hasItems);
-
-    if (isAccumulatedBatch && batchProjectItems.length > 0) {
-      // 누적 견적: 각 선택 프로젝트 → 품목 1건 자동 생성
-      calcItems = batchProjectItems.map(bp => {
-        const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(1, bp.quotePrice, 0);
-        return {
-          productName: bp.title,
-          unit: "건",
-          quantity: 1,
-          unitPrice: bp.quotePrice,
-          supplyAmount,
-          taxAmount,
-          totalAmount,
-          memo: bp.serviceName || null,
-        } as CalcItem;
-      });
-      totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
-    } else if (shouldProcessItems) {
-      calcItems = items!.map(it => {
-        const qty = Number(it.quantity ?? 1);
-        const up = Number(it.unitPrice);
-        const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0);
-        if (it.itemType === 'interpretation') {
-          const iDate = it.interpretDate;
-          const eDate = it.eventEndDate;
-          const serviceDays = (() => {
-            if (!iDate) return 0;
-            if (!eDate || eDate === iDate) return 1;
-            return Math.max(1, Math.round((new Date(eDate).getTime() - new Date(iDate).getTime()) / 86400000) + 1);
-          })();
-          const peopleCount = serviceDays > 0 ? Math.round(qty / serviceDays) : qty;
-          req.log.info({ peopleCount, serviceDays, unitPrice: up, billingQuantity: qty, supplyAmount }, '[INTERPRETATION CALC]');
-        }
-        return { ...it, supplyAmount, taxAmount, totalAmount };
-      });
-      // 선입금 차감은 서버 계산값(computedAmount) 우선, items 합계는 이미 일치함
-      if (!isPrepaidDeduction) {
-        totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
-      }
-    }
-
-    const computedBatchItemCount = isAccumulatedBatch && batchProjectItems.length > 0
-      ? batchProjectItems.length
-      : (calcItems.length > 0 ? calcItems.length : undefined);
-
-    const qNum = await generateQuoteNumber();
-
-    const result = await db.transaction(async tx => {
-      const [quote] = await tx.insert(quotesTable).values({
-        projectId, price: String(totalPrice), status: isRegeneration ? "pending" : "sent",
-        quoteNumber: qNum,
-        title: quoteTitle?.trim() || null,
-        note: note?.trim() || null,
-        taxDocumentType: taxDocumentType || "tax_invoice",
-        taxCategory: taxCategory || "normal",
-        quoteType: quoteType || "b2b_standard",
-        billingType: billingType || stgQ.defaultBillingType,
-        paymentMethod: billingType === "prepay_upfront" ? (paymentMethod || "card") : null,
-        validUntil: validUntil || (() => {
-          const base = issueDate ? new Date(issueDate) : new Date();
-          base.setDate(base.getDate() + stgQ.quoteValidityDays);
-          return base.toISOString().slice(0, 10);
-        })(),
-        issueDate: issueDate || new Date().toISOString().slice(0, 10),
-        invoiceDueDate: invoiceDueDate || null,
-        paymentDueDate: paymentDueDate || (() => {
-          const base = new Date();
-          base.setDate(base.getDate() + stgQ.paymentDueDays);
-          return base.toISOString().slice(0, 10);
-        })(),
-        // 선입금 차감은 서버 계산값 우선, 나머지 유형은 프론트 전달값
-        prepaidBalanceBefore: isPrepaidDeduction
-          ? (computedPrepaidBefore != null ? String(computedPrepaidBefore) : null)
-          : (prepaidBalanceBefore != null ? String(prepaidBalanceBefore) : null),
-        prepaidUsageAmount: isPrepaidDeduction && computedAmount != null ? String(computedAmount) : (prepaidUsageAmount != null ? String(prepaidUsageAmount) : null),
-        prepaidBalanceAfter: isPrepaidDeduction
-          ? (computedPrepaidAfter != null ? String(computedPrepaidAfter) : null)
-          : (prepaidBalanceAfter != null ? String(prepaidBalanceAfter) : null),
-        batchPeriodStart: batchPeriodStart || null,
-        batchPeriodEnd: batchPeriodEnd || null,
-        batchItemCount: computedBatchItemCount ?? null,
-        equipmentCommon: null,
-        version: nextVersion,
-        isCurrent: true,
-        versionReason: versionReason?.trim() || (nextVersion === 1 ? "최초 견적" : "견적 변경"),
-        parentVersionId,
-      }).returning();
-
-      if (calcItems.length > 0) {
-        const insertedItems = await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
-          quoteId: quote.id,
-          productId: (it as any).productId ?? null,
-          productName: it.productName,
-          languagePair: (it as any).languagePair ?? null,
-          unit: it.unit ?? "건",
-          quantity: String(it.quantity ?? 1),
-          unitPrice: String(it.unitPrice),
-          supplyAmount: String(it.supplyAmount),
-          taxAmount: String(it.taxAmount),
-          totalAmount: String(it.totalAmount),
-          memo: (it as any).memo ?? null,
-          itemType: (it as any).itemType ?? "translation",
-          taxType: (it as any).taxType ?? "taxable",
-          interpretDate: (it as any).interpretDate ?? null,
-          interpretPlace: (it as any).interpretPlace ?? null,
-          interpretType: (it as any).interpretType ?? null,
-          interpretDuration: (it as any).interpretDuration ?? null,
-          hasTravelExpense: (it as any).hasTravelExpense ?? false,
-          hasEquipment: (it as any).hasEquipment ?? false,
-          interpretationDirection: (it as any).interpretationDirection ?? null,
-          quantityUnit: (it as any).quantityUnit ?? null,
-          usagePeriod: (it as any).usagePeriod ?? null,
-          eventStartDate: (it as any).eventStartDate ?? null,
-          eventEndDate: (it as any).eventEndDate ?? null,
-          itemLocation: (it as any).itemLocation ?? null,
-          isCustomProduct: (it as any).isCustomProduct ?? false,
-        }))).returning({ id: quoteItemsTable.id });
-
-        // 첨부 파일 기록 (번역 항목)
-        const fileRecords: Array<{ quoteItemId: number; fileName: string; fileUrl: string; fileSize?: number }> = [];
-        calcItems.forEach((it, i) => {
-          const files = (it as any).files as Array<{ name: string; url: string; size?: number }> | undefined;
-          if (files && files.length > 0 && insertedItems[i]) {
-            files.forEach(f => {
-              if (f.url && f.name) {
-                fileRecords.push({ quoteItemId: insertedItems[i].id, fileName: f.name, fileUrl: f.url, fileSize: f.size });
-              }
-            });
-          }
-        });
-        if (fileRecords.length > 0) {
-          await tx.insert(quoteItemFilesTable).values(fileRecords.map(f => ({
-            quoteItemId: f.quoteItemId, fileName: f.fileName, fileUrl: f.fileUrl, fileSize: f.fileSize ?? null,
-          })));
-        }
-      }
-
-      // 누적 견적 배치 레코드 생성 (월말 청구/세금계산서 연계용)
-      if (isAccumulatedBatch && batchProjectItems.length > 0 && project.companyId && batchPeriodStart && batchPeriodEnd) {
-        const [batch] = await tx.insert(billingBatchesTable).values({
-          companyId: project.companyId,
-          periodStart: new Date(batchPeriodStart),
-          periodEnd: new Date(batchPeriodEnd),
-          status: "draft",
-          totalAmount: String(totalPrice),
-          quoteId: quote.id,
-        }).returning();
-        await tx.insert(billingBatchItemsTable).values(batchProjectItems.map(bp => ({
-          batchId: batch.id,
-          projectId: bp.projectId,
-          quoteId: bp.quoteId,
-          amount: String(bp.quotePrice),
-          serviceName: bp.serviceName || null,
-        })));
-      }
-
-      await tx.update(projectsTable).set({ status: "quoted" }).where(eq(projectsTable.id, projectId));
-      return quote;
-    });
-    const logMeta = JSON.stringify({ version: result.version, versionReason: result.versionReason });
-    await logEvent("project", projectId, nextVersion === 1 ? "quote_v1_created" : `quote_v${nextVersion}_created`, req.log, req.user ?? undefined, logMeta);
-    res.status(201).json(result);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to create quote");
-    res.status(500).json({ error: "견적 생성 실패." });
-  }
-});
 
 // ─── 견적번호 생성 헬퍼 (Q000001 ~ Q999999 순번 체계) ─────────────────────────
 async function generateQuoteNumber(): Promise<string> {
@@ -3622,9 +3292,10 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     interpretationDirection?: string; interpretType?: string;
     hasTravelExpense?: boolean; hasEquipment?: boolean; isCustomProduct?: boolean;
   };
-  const { title, items, note, quoteType, issueDate, validUntil } = req.body as {
+  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId } = req.body as {
     title?: string; items?: PutItemInput[]; note?: string;
     quoteType?: string; issueDate?: string; validUntil?: string;
+    companyId?: number | null; contactId?: number | null;
   };
   if (!items || items.length === 0) {
     res.status(400).json({ error: "품목이 없습니다." }); return;
@@ -3649,6 +3320,30 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
   const totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
   try {
     await db.transaction(async tx => {
+      // 거래처/담당자 연결 처리
+      if (companyId !== undefined || contactId !== undefined) {
+        const [existing] = await tx.select({ projectId: quotesTable.projectId })
+          .from(quotesTable).where(eq(quotesTable.id, quoteId));
+        if (existing?.projectId) {
+          // 기존 프로젝트 업데이트
+          const patch: Record<string, unknown> = {};
+          if (companyId !== undefined) patch.companyId = companyId ?? null;
+          if (contactId !== undefined) patch.contactId = contactId ?? null;
+          await tx.update(projectsTable).set(patch).where(eq(projectsTable.id, existing.projectId));
+        } else if (companyId || contactId) {
+          // 프로젝트 없음 → 신규 생성 후 quote 연결
+          const creatorId = ((req as any).user as { id: number }).id;
+          const [proj] = await tx.insert(projectsTable).values({
+            userId:    creatorId,
+            companyId: companyId ?? null,
+            contactId: contactId ?? null,
+            title:     title?.trim() || `견적 #${quoteId}`,
+            status:    'created',
+          }).returning();
+          await tx.update(quotesTable).set({ projectId: proj.id }).where(eq(quotesTable.id, quoteId));
+        }
+      }
+
       await tx.update(quotesTable).set({
         title:      title?.trim() ?? null,
         note:       note?.trim()  ?? null,
@@ -3711,14 +3406,18 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
         issueDate:   quotesTable.issueDate,
         validUntil:  quotesTable.validUntil,
         projectId:   quotesTable.projectId,
-        companyName:      sql<string | null>`(SELECT c.name FROM companies c JOIN projects p ON p.company_id = c.id WHERE p.id = ${quotesTable.projectId})`,
-        contactName:      sql<string | null>`(SELECT ct.name FROM contacts ct JOIN projects p ON p.contact_id = ct.id WHERE p.id = ${quotesTable.projectId})`,
-        contactDivision:  sql<string | null>`(SELECT ct.department FROM contacts ct JOIN projects p ON p.contact_id = ct.id WHERE p.id = ${quotesTable.projectId})`,
-        contactPhone:     sql<string | null>`(SELECT COALESCE(ct.phone, ct.mobile, ct.office_phone) FROM contacts ct JOIN projects p ON p.contact_id = ct.id WHERE p.id = ${quotesTable.projectId})`,
-        contactEmail:     sql<string | null>`(SELECT ct.email FROM contacts ct JOIN projects p ON p.contact_id = ct.id WHERE p.id = ${quotesTable.projectId})`,
-        adminName:        sql<string | null>`(SELECT u.name FROM users u JOIN projects p ON p.admin_id = u.id WHERE p.id = ${quotesTable.projectId})`,
+        companyId:           projectsTable.companyId,
+        contactId:           projectsTable.contactId,
+        companyName:         sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.companyId})`,
+        representativeName:  sql<string | null>`(SELECT representative_name FROM companies WHERE id = ${projectsTable.companyId})`,
+        contactName:         sql<string | null>`(SELECT name FROM contacts WHERE id = ${projectsTable.contactId})`,
+        contactDivision: sql<string | null>`(SELECT department FROM contacts WHERE id = ${projectsTable.contactId})`,
+        contactPhone:    sql<string | null>`(SELECT COALESCE(phone, mobile, office_phone) FROM contacts WHERE id = ${projectsTable.contactId})`,
+        contactEmail:    sql<string | null>`(SELECT email FROM contacts WHERE id = ${projectsTable.contactId})`,
+        adminName:       sql<string | null>`(SELECT name FROM users WHERE id = ${projectsTable.adminId})`,
       })
       .from(quotesTable)
+      .leftJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))
       .where(eq(quotesTable.id, quoteId));
 
     if (!quote) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }

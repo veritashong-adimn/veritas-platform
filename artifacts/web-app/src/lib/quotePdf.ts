@@ -103,6 +103,27 @@ export interface QuotePdfItem {
   memo: string;             // 사용자 비고 (서비스 정보 제외)
 }
 
+// 수신자 영역 서비스별 요약 (buildQuotePdfData가 자동 집계)
+export interface QuoteSummary {
+  translation: {
+    languagePairs: string[];   // ["한국어 → 영어"]
+    fileCount: number;
+    totalWordCount: number;
+    totalCharCount: number;
+  } | null;
+  interpretation: {
+    languagePairs: string[];   // ["광동어 ↔ 한국어"]
+    startDate: string;         // "2026-07-20"
+    endDate: string;           // "2026-07-21"
+    places: string[];
+  } | null;
+  equipment: {
+    startDate: string;
+    endDate: string;
+    places: string[];
+  } | null;
+}
+
 export interface QuotePdfData {
   quoteNumber: string;
   quoteDate: string;
@@ -122,12 +143,15 @@ export interface QuotePdfData {
   // 고객
   customer: {
     companyName: string;
+    representativeName: string;
     contactName: string;
     contactDivision: string;
     contactPhone: string;
     contactEmail: string;
   };
   manager: string;
+  // 수신자 영역 서비스 요약
+  summary: QuoteSummary;
   // 품목
   items: QuotePdfItem[];
   // 금액
@@ -208,8 +232,8 @@ function buildDetailText(item: QuoteDetailItem): string {
       if (pair) lines.push(pair);
     }
     // 분량 (각 줄 분리)
-    if (fields['단어수']) lines.push(`공식단어수 ${Number(fields['단어수']).toLocaleString()}`);
-    if (fields['글자수']) lines.push(`공식글자수 ${Number(fields['글자수']).toLocaleString()}`);
+    if (fields['단어수']) lines.push(`단어수 ${Number(fields['단어수']).toLocaleString()}`);
+    if (fields['글자수']) lines.push(`글자수 ${Number(fields['글자수']).toLocaleString()}`);
   } else if (type === 'interpretation') {
     // 언어방향 (↔)
     if (item.languagePair) {
@@ -223,13 +247,11 @@ function buildDetailText(item: QuoteDetailItem): string {
         ? `${item.interpretDate} ~ ${item.eventEndDate}`
         : item.interpretDate);
     }
-    // 투입인원 × 서비스일수 통합 표시 (구조화 필드에서 유도, 메모 파싱 없음)
+    // 투입인원만 표시 (일수는 수량/단위 컬럼에 이미 표시됨)
     const svcDays  = calcServiceDays(item.interpretDate, item.eventEndDate);
     const qty      = Number(item.quantity) || 0;
     const pplCount = svcDays > 0 ? Math.round(qty / svcDays) : qty;
-    if (pplCount > 0 && svcDays > 0) {
-      lines.push(`통역사 ${pplCount}명 × ${svcDays}일`);
-    } else if (pplCount > 0) {
+    if (pplCount > 0) {
       lines.push(`통역사 ${pplCount}명`);
     }
     // 장소
@@ -303,6 +325,53 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
   const taxTotal    = items.reduce((a, it) => a + it.taxAmount, 0);
   const grandTotal  = supplyTotal + taxTotal;
 
+  // ─── 서비스별 수신자 요약 집계 ────────────────────────────────────────────
+  const trItems = detail.items.filter(it => (it.itemType ?? 'translation') === 'translation');
+  const inItems = detail.items.filter(it => it.itemType === 'interpretation');
+  const eqItems = detail.items.filter(it => it.itemType === 'equipment');
+
+  const uniq = <T,>(arr: (T | null | undefined)[]): T[] =>
+    [...new Set(arr.filter((v): v is T => v != null && v !== ''))];
+
+  let translationSummary: QuoteSummary['translation'] = null;
+  if (trItems.length > 0) {
+    const pairs = uniq(trItems.map(it => {
+      if (!it.languagePair) return null;
+      const [src, tgt] = it.languagePair.split('-');
+      return [langName(src), langName(tgt)].filter(Boolean).join(' → ') || null;
+    }));
+    let totalWord = 0, totalChar = 0;
+    for (const it of trItems) {
+      const { fields } = parseMemoInfo(it.memo);
+      totalWord += Number(fields['단어수'] || 0);
+      totalChar += Number(fields['글자수'] || 0);
+    }
+    translationSummary = { languagePairs: pairs, fileCount: trItems.length, totalWordCount: totalWord, totalCharCount: totalChar };
+  }
+
+  let interpretationSummary: QuoteSummary['interpretation'] = null;
+  if (inItems.length > 0) {
+    const pairs = uniq(inItems.map(it => {
+      if (!it.languagePair) return null;
+      const [src, tgt] = it.languagePair.split('-');
+      return [langName(src), langName(tgt)].filter(Boolean).join(' ↔ ') || null;
+    }));
+    const allDates = [...inItems.map(it => it.interpretDate), ...inItems.map(it => it.eventEndDate ?? it.interpretDate)]
+      .filter((d): d is string => !!d).sort();
+    const places = uniq(inItems.map(it => it.interpretPlace));
+    interpretationSummary = { languagePairs: pairs, startDate: allDates[0] ?? '', endDate: allDates[allDates.length - 1] ?? '', places };
+  }
+
+  let equipmentSummary: QuoteSummary['equipment'] = null;
+  if (eqItems.length > 0) {
+    const allDates = [...eqItems.map(it => it.eventStartDate), ...eqItems.map(it => it.eventEndDate ?? it.eventStartDate)]
+      .filter((d): d is string => !!d).sort();
+    const places = uniq(eqItems.map(it => it.itemLocation));
+    equipmentSummary = { startDate: allDates[0] ?? '', endDate: allDates[allDates.length - 1] ?? '', places };
+  }
+
+  const summary: QuoteSummary = { translation: translationSummary, interpretation: interpretationSummary, equipment: equipmentSummary };
+
   const QUOTE_TYPE_LABEL: Record<string, string> = {
     b2b_standard: '일반 견적서', b2c_prepaid: '차감 견적서', accumulated_batch: '누적 견적서',
   };
@@ -323,13 +392,15 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
       email:          s.email          ?? '',
     },
     customer: {
-      companyName:      detail.companyName      ?? '',
-      contactName:      detail.contactName      ?? '',
-      contactDivision:  detail.contactDivision  ?? '',
-      contactPhone:     detail.contactPhone     ?? '',
-      contactEmail:     detail.contactEmail     ?? '',
+      companyName:         detail.companyName         ?? '',
+      representativeName:  detail.representativeName  ?? '',
+      contactName:         detail.contactName         ?? '',
+      contactDivision:     detail.contactDivision     ?? '',
+      contactPhone:        detail.contactPhone        ?? '',
+      contactEmail:        detail.contactEmail        ?? '',
     },
     manager:      detail.adminName ?? '',
+    summary,
     items,
     supplyTotal,
     taxTotal,
