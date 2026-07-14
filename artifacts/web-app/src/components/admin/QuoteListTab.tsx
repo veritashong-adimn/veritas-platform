@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../../lib/constants';
 import { PrimaryBtn, ClickSelect } from '../ui';
-import { QuoteEditorWorkspace } from './QuoteEditorWorkspace';
+import { QuoteEditorWorkspace, type QuoteItemForm, type VatType, type QuoteType, type ServiceType } from './QuoteEditorWorkspace';
+import QuotePdfPreviewModal from './QuotePdfPreviewModal';
+import { buildQuotePdfData, parseMemoInfo, type QuoteDetail, type QuoteDetailItem } from '../../lib/quotePdf';
 
 // ─── 타입 ──────────────────────────────────────────────────────────────────────
 interface QuoteRow {
@@ -66,6 +68,15 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
   const [dateTo, setDateTo]             = useState('');
   const [showEditor, setShowEditor]     = useState(false);
   const [updatingId, setUpdatingId]     = useState<number | null>(null);
+  const [pdfData,    setPdfData]        = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
+  const [pdfLoading, setPdfLoading]     = useState<number | null>(null);
+  // 편집 모드
+  const [editLoading,  setEditLoading]  = useState<number | null>(null);
+  const [editQuoteId,  setEditQuoteId]  = useState<number | null>(null);
+  const [editInitData, setEditInitData] = useState<{
+    items: QuoteItemForm[]; title: string; note: string;
+    quoteType: QuoteType; issueDate: string; vatType: VatType;
+  } | null>(null);
 
   const fetchQuotes = useCallback(async () => {
     setLoading(true);
@@ -105,6 +116,122 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
     } finally { setUpdatingId(null); }
   };
 
+  // PDF 미리보기 핸들러 — 단건 견적 상세 조회 후 모달 열기
+  const handlePdfPreview = async (quoteId: number, title: string) => {
+    setPdfLoading(quoteId);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${quoteId}`), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        onToast(`PDF 미리보기 실패: ${err.error ?? res.status}`);
+        return;
+      }
+      const detail = await res.json() as QuoteDetail;
+      if (!detail.items || detail.items.length === 0) {
+        onToast('견적 품목이 없습니다. 품목을 먼저 입력해 주세요.');
+        return;
+      }
+      setPdfData({ data: buildQuotePdfData(detail), title });
+    } catch {
+      onToast('PDF 생성에 실패했습니다. 다시 시도해 주세요.');
+    } finally {
+      setPdfLoading(null);
+    }
+  };
+
+  // QuoteDetailItem → QuoteItemForm 변환 (기존 견적 편집 진입 시 폼 초기화용)
+  function convertToFormItem(it: QuoteDetailItem & { productId?: number | null; taxType?: string | null }): QuoteItemForm {
+    const type = (it.itemType ?? 'translation') as ServiceType;
+    const taxType: VatType = (it.taxType === 'taxable' || it.taxType === 'exempt' || it.taxType === 'zero_rate') ? it.taxType : 'taxable';
+    const { fields, userMemo } = parseMemoInfo(it.memo);
+    // 통역 인원 복원:
+    // 1) 비고의 "투입인원: N명" 우선 (Legacy 호환)
+    // 2) 없으면 quantity ÷ serviceDays 역산 (신규 저장 포맷)
+    const sd = (() => {
+      if (type !== 'interpretation' || !it.interpretDate) return 0;
+      const eDate = it.eventEndDate;
+      if (!eDate || eDate === it.interpretDate) return 1;
+      return Math.max(1, Math.round((new Date(eDate).getTime() - new Date(it.interpretDate).getTime()) / 86400000) + 1);
+    })();
+    const qty = Number(it.quantity) || 1;
+    let interpreterCount = '';
+    if (type === 'interpretation') {
+      const memoCount = fields['투입인원'];
+      if (memoCount && Number(memoCount) > 0) {
+        interpreterCount = memoCount;        // Legacy: "투입인원: N명"에서 복원
+      } else if (sd > 0) {
+        interpreterCount = String(Math.round(qty / sd));  // 신규: billingQty ÷ days
+      }
+    }
+    const [startTime = '', endTime = ''] = it.interpretDuration ? it.interpretDuration.split('~') : [];
+    const sourceLanguage = it.languagePair ? it.languagePair.split('-')[0] : 'ko';
+    return {
+      productId:        it.productId ?? null,
+      productName:      it.productName,
+      productType:      type,
+      quantity:         String(qty),
+      unit:             it.unit,
+      unitPrice:        String(Number(it.unitPrice)),
+      taxType,
+      memo:             userMemo,
+      sourceLanguage,
+      fileName:         fields['파일']   ?? '',
+      fileFormat:       fields['형식']   ?? '',
+      wordCount:        fields['단어수'] ?? '',
+      charCount:        fields['글자수'] ?? '',
+      interpretDate:    it.interpretDate     ?? '',
+      interpretEndDate: it.eventEndDate      ?? '',
+      startTime,
+      endTime,
+      interpretPlace:   it.interpretPlace    ?? '',
+      interpreterCount,
+      eventStartDate:   it.eventStartDate    ?? '',
+      eventEndDate:     it.eventEndDate      ?? '',
+      itemLocation:     it.itemLocation      ?? '',
+      usagePeriod:      it.usagePeriod       ?? '',
+      expenseType:      it.interpretType     ?? '',
+    };
+  }
+
+  // 기존 견적 편집 진입
+  const handleEditQuote = useCallback(async (quoteId: number, quoteTitle: string) => {
+    setEditLoading(quoteId);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${quoteId}`), { headers: authH });
+      if (!res.ok) { onToast('견적 조회 실패'); return; }
+      const detail = await res.json() as QuoteDetail & { items: Array<QuoteDetailItem & { productId?: number | null; taxType?: string | null }> };
+      const formItems = detail.items.map(it => convertToFormItem(it));
+      // 부가세 유형: items 중 taxable이 있으면 taxable, 없으면 exempt
+      const vatType: VatType = formItems.some(it => it.taxType === 'taxable') ? 'taxable' : 'exempt';
+      setEditQuoteId(quoteId);
+      setEditInitData({
+        items:     formItems,
+        title:     detail.title ?? quoteTitle,
+        note:      detail.note  ?? '',
+        quoteType: (detail.quoteType as QuoteType) ?? 'b2b_standard',
+        issueDate: detail.issueDate ?? '',
+        vatType,
+      });
+      setShowEditor(true);
+    } finally { setEditLoading(null); }
+  }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 편집 닫기 (state 초기화)
+  const handleEditorClose = useCallback(() => {
+    setShowEditor(false);
+    setEditQuoteId(null);
+    setEditInitData(null);
+  }, []);
+
+  const handleEditorSaved = useCallback(() => {
+    setShowEditor(false);
+    setEditQuoteId(null);
+    setEditInitData(null);
+    fetchQuotes();
+  }, [fetchQuotes]);
+
   // 검색 필터 (견적번호·견적서명·고객사·고객명·담당PM·상품명)
   const filtered = quotes.filter(q => {
     if (!search) return true;
@@ -122,19 +249,26 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
   const fmt = (v: string | null) => v ? Number(v).toLocaleString() : '—';
   const hasAnyFilter = !!(search || dateFrom || dateTo || statusFilter !== 'all' || typeFilter !== 'all');
 
-  // ── 견적서 작성 Workspace: asPage 인라인 렌더링 (사이드바 유지) ──────────────
+  // ── 견적서 작성/편집 Workspace ──────────────────────────────────────────────
   if (showEditor) {
     return (
-      // AdminDashboard 스크롤 컨텐츠 padding(24px 28px)을 상쇄 → 전체 폭 활용
       <div style={{ margin: '-24px -28px' }}>
         <QuoteEditorWorkspace
           asPage
           token={token}
           projectId={null}
-          onClose={() => setShowEditor(false)}
-          onSaved={() => { setShowEditor(false); fetchQuotes(); }}
+          onClose={handleEditorClose}
+          onSaved={handleEditorSaved}
           onToast={onToast}
           adminList={adminUsers}
+          // 편집 모드 데이터 (없으면 신규 작성)
+          initialQuoteId={editQuoteId ?? undefined}
+          initialItems={editInitData?.items}
+          initialTitle={editInitData?.title ?? ''}
+          initialNote={editInitData?.note}
+          initialQuoteType={editInitData?.quoteType}
+          initialIssueDate={editInitData?.issueDate}
+          initialVatType={editInitData?.vatType}
         />
       </div>
     );
@@ -150,6 +284,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
   ];
 
   return (
+    <>
     <div style={{ padding: '0 0 48px' }}>
 
       {/* ── Card 1: 검색 및 필터 ────────────────────────────────────────────────── */}
@@ -279,7 +414,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e5e7eb' }}>
-                  {['견적번호', '발행일', '견적서명', '고객사', '고객명', '금액', '견적유형', '담당PM', '상태', '상태변경'].map(h => (
+                  {['견적번호', '발행일', '견적서명', '고객사', '고객명', '금액', '견적유형', '담당PM', '상태', 'PDF', '상태변경'].map(h => (
                     <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -296,21 +431,41 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
 
                   return (
                     <tr key={q.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      {/* 견적번호 */}
+                      {/* 견적번호 — 클릭 시 편집 */}
                       <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>
-                        <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#374151', fontWeight: 600 }}>
-                          {q.quoteNumber ?? `#${q.id}`}
-                        </span>
+                        <button
+                          onClick={() => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`)}
+                          disabled={editLoading === q.id}
+                          style={{
+                            fontFamily: 'monospace', fontSize: 12, color: '#2563eb', fontWeight: 700,
+                            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                            textDecoration: 'underline', opacity: editLoading === q.id ? 0.5 : 1,
+                          }}
+                          data-testid={`btn-edit-quote-${q.id}`}
+                          aria-label={`${q.quoteNumber ?? q.id} 편집`}
+                        >
+                          {editLoading === q.id ? '…' : (q.quoteNumber ?? `#${q.id}`)}
+                        </button>
                       </td>
                       {/* 발행일 */}
                       <td style={{ padding: '6px 10px', fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap' }}>
                         {q.issueDate ?? '—'}
                       </td>
-                      {/* 견적서명 */}
+                      {/* 견적서명 — 클릭 시 편집 */}
                       <td style={{ padding: '6px 10px', maxWidth: 220 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: '#111827', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <button
+                          onClick={() => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`)}
+                          disabled={editLoading === q.id}
+                          style={{
+                            fontSize: 12, fontWeight: 600, color: '#111827',
+                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            display: 'block', maxWidth: 220,
+                            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                            textAlign: 'left',
+                          }}
+                        >
                           {q.title ?? q.projectTitle ?? '(미입력)'}
-                        </div>
+                        </button>
                       </td>
                       {/* 고객사 */}
                       <td style={{ padding: '6px 10px', maxWidth: 130 }}>
@@ -346,6 +501,23 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
                           {QUOTE_STATUS_LABEL[q.status] ?? q.status}
                         </span>
                       </td>
+                      {/* PDF 미리보기 */}
+                      <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>
+                        <button
+                          onClick={() => handlePdfPreview(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`)}
+                          disabled={pdfLoading === q.id}
+                          style={{
+                            fontSize: 11, padding: '3px 9px', borderRadius: 5, cursor: 'pointer',
+                            background: '#eff6ff', color: '#2563eb',
+                            border: '1px solid #bfdbfe', fontWeight: 600,
+                            opacity: pdfLoading === q.id ? 0.5 : 1,
+                          }}
+                          data-testid={`btn-pdf-preview-${q.id}`}
+                          aria-label={`${q.quoteNumber ?? q.id} PDF 미리보기`}
+                        >
+                          {pdfLoading === q.id ? '…' : '📄 PDF'}
+                        </button>
+                      </td>
                       {/* 상태변경 */}
                       <td style={{ padding: '6px 10px' }}>
                         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -376,5 +548,15 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
       </div>
 
     </div>
+
+    {/* PDF 미리보기 모달 */}
+    {pdfData && (
+      <QuotePdfPreviewModal
+        data={pdfData.data}
+        quoteTitle={pdfData.title}
+        onClose={() => setPdfData(null)}
+      />
+    )}
+    </>
   );
 }

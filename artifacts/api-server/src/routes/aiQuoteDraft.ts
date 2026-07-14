@@ -51,6 +51,7 @@ const aiUpload = multer({
 // ─── 타입 ───────────────────────────────────────────────────────────────────
 
 interface DraftRow {
+  sourceFileId?:    string;   // 서버가 할당한 파일 고유 ID (source-0, source-1, …)
   productId:        number | null;
   productName:      string;
   productType:      string;
@@ -80,6 +81,13 @@ interface DraftRow {
   needsReview:      boolean;
 }
 
+// 파일별 추출 결과 + 서버 할당 ID
+interface SourceFileStat {
+  fileId: string;   // "source-0", "source-1", …
+  name:   string;
+  stats:  TextStats;
+}
+
 // ─── 파일명 UTF-8 복원 ───────────────────────────────────────────────────────
 
 function decodeName(f: Express.Multer.File): string {
@@ -91,15 +99,15 @@ function decodeName(f: Express.Multer.File): string {
 
 function buildMockRows(
   requestText: string,
-  sourceFiles: Array<{ name: string; stats: TextStats }>,
+  sourceFiles: SourceFileStat[],
 ): DraftRow[] {
   const rows: DraftRow[] = [];
 
-  for (const { name, stats } of sourceFiles) {
+  for (const { fileId, name, stats } of sourceFiles) {
     const ext   = path.extname(name).replace(".", "").toUpperCase();
-    // 공식 pageCount가 있으면 우선 사용, 없으면 언어 정책으로 계산
     const pages = stats.pageCount ?? calcPages(stats, stats.detectedLanguage);
     rows.push({
+      sourceFileId:     fileId,
       productId:        null,
       productName:      "번역",
       productType:      "translation",
@@ -180,10 +188,12 @@ async function analyzeWithGPT(params: {
 4. wordCount/charCount는 "번역 원문 분석 결과"의 값을 그대로 사용. 절대 추측 금지.
 5. quantity는 0으로 설정 (서버가 언어 정책으로 자동 계산).
 6. 반드시 유효한 JSON만 반환. 설명 텍스트 없음.
+7. sourceFileId는 "번역 원문 분석 결과"의 [source-N] 식별자를 그대로 복사. 절대 변경 금지.
 
 ## 응답 형식 (JSON)
 {
   "draftRows": [{
+    "sourceFileId": "<분석 결과의 [source-N] 값, 예: source-0>",
     "productId": <number|null>, "productName": "<string>",
     "productType": "<translation|interpretation|equipment|expense>",
     "quantity": 0, "unit": "<string>", "unitPrice": <number>,
@@ -277,28 +287,60 @@ router.post(
     const openaiApiKey  = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
     const openaiBaseURL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
 
-    // ── Step 1: 번역 원문 텍스트 추출 ────────────────────────────────────────
-    const sourceFileStats: Array<{ name: string; stats: TextStats }> = [];
+    // ── Step 1: 번역 원문 텍스트 추출 ─────────────────────────────────────────
+    // 각 파일에 서버 할당 고유 ID(source-0, source-1, …) 부여.
+    // 이 ID는 GPT 컨텍스트에 포함되고 GPT 응답에 그대로 반환되어 파일명 불일치 없이 매핑된다.
+    const sourceFileStats: SourceFileStat[] = [];
     const extractWarnings: string[] = [];
 
+    // 진단용: 업로드된 소스 파일을 /tmp/에 저장 (분석 후 삭제 가능)
     for (const file of sourceFiles) {
-      const name = decodeName(file);
-      console.log(`[AI-DRAFT] extracting: ${name} (${file.size} bytes)`);
-      const st = await extractText(file.buffer, name, openaiApiKey, openaiBaseURL);
+      try {
+        const safeName = decodeName(file).replace(/[^\w.-]/g, "_");
+        const savePath = `/tmp/ai-draft-upload-${safeName}`;
+        await import("node:fs").then(fs => fs.promises.writeFile(savePath, file.buffer));
+        console.log(`[AI-DRAFT] 진단용 파일 저장: ${savePath} (${file.buffer.length} bytes)`);
+      } catch (e) {
+        console.warn("[AI-DRAFT] 진단용 파일 저장 실패:", e);
+      }
+    }
+
+    for (let idx = 0; idx < sourceFiles.length; idx++) {
+      const file   = sourceFiles[idx];
+      const fileId = `source-${idx}`;
+      const name   = decodeName(file);
+      console.log(`[AI-DRAFT] extracting [${fileId}]: ${name} (${file.size} bytes)`);
+      const st    = await extractText(file.buffer, name, openaiApiKey, openaiBaseURL);
       const pages = calcPages(st, st.detectedLanguage);
-      console.log(`[AI-DRAFT] ${name}`);
+      console.log(`[AI-DRAFT] [${fileId}] ${name}`);
       console.log(`  countSource: ${st.method}`);
-      console.log(`  wordCount: ${st.wordCount}`);
-      console.log(`  characterCount: ${st.charCountNoSpace}`);
-      console.log(`  pageCount: ${pages}`);
-      sourceFileStats.push({ name, stats: st });
+      console.log(`  countBasis:  ${st.countBasis}`);
+      console.log(`  wordCount:   ${st.wordCount}`);
+      console.log(`  charCount:   ${st.charCountNoSpace}`);
+      console.log(`  pageCount:   ${pages}`);
+      sourceFileStats.push({ fileId, name, stats: st });
       if (st.warning) extractWarnings.push(`${name}: ${st.warning}`);
     }
+
+    // 추출 완료 — 각 파일의 공식 단어수 소스 명시 출력 (요구사항 7)
+    console.log("[AI-DRAFT] ─── Extraction Results ───");
+    for (const { fileId, name, stats } of sourceFileStats) {
+      console.log(`[AI-DRAFT]   [${fileId}] ${name}`);
+      console.log(`[AI-DRAFT]     stats.wordCount = ${stats.wordCount}  (countBasis: ${stats.countBasis})`);
+      console.log(`[AI-DRAFT]     stats.charCount = ${stats.charCountNoSpace}`);
+      console.log(`[AI-DRAFT]     stats.pageCount = ${stats.pageCount ?? "N/A (text 기반 계산 예정)"}`);
+    }
+    console.log("[AI-DRAFT] ─────────────────────────");
 
     // ── OpenAI 없을 때: Mock (추출 수치는 정확) ──────────────────────────────
     if (!openaiApiKey) {
       console.log("[AI-DRAFT] No OpenAI key — returning mock with extracted stats");
       const mockRows = buildMockRows(requestText, sourceFileStats);
+      console.log("[AI-DRAFT] ═══ FINAL SEND (mock) ═══");
+      for (const row of mockRows) {
+        console.log(`[AI-DRAFT]   [${row.sourceFileId ?? "(no-id)"} / ${row.fileName}] type=${row.productType} wordCount=${row.wordCount} charCount=${row.charCount} countBasis=${row.countBasis} quantity=${row.quantity}`);
+      }
+      console.log("[AI-DRAFT] ════════════════════════");
       res.json({
         draftRows:  mockRows,
         warnings:   ["OpenAI API 키 미설정 — 상품 추천은 비활성화, 수치 데이터는 실제 추출값입니다.", ...extractWarnings],
@@ -340,13 +382,15 @@ router.post(
         }
       }
 
-      // 번역 원문 컨텍스트 (추출된 수치 + 분석 기준 + 텍스트 샘플)
+      // 번역 원문 컨텍스트 (파일 ID + 추출된 수치 + 분석 기준 + 텍스트 샘플)
+      // [source-N] ID는 GPT가 응답 시 sourceFileId 필드에 그대로 복사해야 한다.
       const srcCtxParts: string[] = [];
-      for (const { name, stats } of sourceFileStats) {
+      for (const { fileId, name, stats } of sourceFileStats) {
         const fmt   = path.extname(name).replace(".", "").toUpperCase();
         const pages = stats.pageCount ?? calcPages(stats, stats.detectedLanguage);
         srcCtxParts.push(
-          `### ${name}\n` +
+          `### [${fileId}] 원본 파일명: ${name}\n` +
+          `fileId: ${fileId}\n` +
           `형식: ${fmt}\n` +
           `분석 기준: ${stats.countBasis}\n` +
           `단어수(Word Count): ${stats.wordCount.toLocaleString()}\n` +
@@ -371,12 +415,44 @@ router.post(
       });
 
       // ── Step 3: 서버 사이드 후처리 ────────────────────────────────────────
-      const fileStatsMap = new Map(sourceFileStats.map(f => [f.name, f.stats]));
+      // 조회 맵 (4단계 우선순위)
+      const fileIdMap   = new Map(sourceFileStats.map(f => [f.fileId, f.stats]));
+      const fileNameMap = new Map(sourceFileStats.map(f => [f.name, f.stats]));
+      const lowerMap    = new Map(sourceFileStats.map(f => [f.name.toLowerCase(), f.stats]));
+
+      /**
+       * 공식 통계 우선순위:
+       *   1순위: sourceFileId (서버 할당 ID — 파일명 불일치에도 항상 정확)
+       *   2순위: 정확한 파일명 일치
+       *   3순위: 소문자 정규화 파일명
+       *   4순위: 파일 1개 업로드 시 무조건 적용
+       */
+      function resolveStats(row: DraftRow): TextStats | undefined {
+        if (row.sourceFileId) {
+          const st = fileIdMap.get(row.sourceFileId);
+          if (st) return st;
+        }
+        return fileNameMap.get(row.fileName)
+          ?? lowerMap.get((row.fileName ?? "").toLowerCase())
+          ?? (sourceFileStats.length === 1 ? sourceFileStats[0].stats : undefined);
+      }
+
+      // GPT 응답 진단 로그
+      console.log("[AI-DRAFT] GPT draftRows field-map check:");
+      for (const row of gptResult.draftRows) {
+        console.log(`  sourceFileId="${row.sourceFileId ?? "(none)"}" fileName="${row.fileName}" wordCount=${row.wordCount} countBasis=${row.countBasis ?? "(gpt-none)"}`);
+      }
 
       const draftRows = gptResult.draftRows.map((row) => {
-        const st = fileStatsMap.get(row.fileName);
+        const st  = resolveStats(row);
+        const via = row.sourceFileId && fileIdMap.has(row.sourceFileId)
+          ? `fileId=${row.sourceFileId}`
+          : `fileName="${row.fileName}"`;
 
-        // 추출값으로 항상 보정 — GPT가 틀린 값을 쓸 수 있으므로
+        const gptWordCount   = row.wordCount;
+        const serverWordCount = st?.wordCount ?? null;
+
+        // GPT 응답 wordCount는 무조건 무시 — 서버 추출값만 사용
         if (st) {
           row.wordCount  = st.wordCount;
           row.charCount  = st.charCountNoSpace;
@@ -387,6 +463,20 @@ router.post(
         } else {
           row.countBasis = row.countBasis ?? "Text Extraction";
         }
+
+        // ── 요구사항 7: 단어수 결정 근거 로그 ─────────────────────────────
+        console.log("[AI-DRAFT] ─── Word Count Resolution ───");
+        console.log(`[AI-DRAFT]   sourceFileId            : ${row.sourceFileId ?? "(none)"}`);
+        console.log(`[AI-DRAFT]   sourceFile.name         : ${row.fileName}`);
+        console.log(`[AI-DRAFT]   sourceFile.stats.wordCount : ${serverWordCount ?? "(no match)"}${st ? ` [${st.countBasis}]` : ""}`);
+        console.log(`[AI-DRAFT]   gptRow.wordCount         : ${gptWordCount} (GPT — IGNORED)`);
+        console.log(`[AI-DRAFT]   finalAppliedWordCount    : ${row.wordCount}  (via ${via})`);
+        console.log(`[AI-DRAFT]   finalAppliedCharCount    : ${row.charCount}  (st.charCountNoSpace=${st?.charCountNoSpace ?? "(no match)"})`);
+        console.log(`[AI-DRAFT]   countBasis               : ${row.countBasis}`);
+        if (!st) {
+          console.warn(`[AI-DRAFT]   ⚠ WARNING: sourceFile stats NOT resolved — GPT fallback used`);
+        }
+        console.log("[AI-DRAFT] ─────────────────────────────");
 
         // 페이지 계산: 공식 pageCount 우선, 없으면 언어 정책 계산
         if (row.productType === "translation") {
@@ -407,6 +497,11 @@ router.post(
         return row;
       });
 
+      console.log("[AI-DRAFT] ═══ FINAL SEND (gpt) ═══");
+      for (const row of draftRows) {
+        console.log(`[AI-DRAFT]   [${row.sourceFileId ?? "(no-id)"} / ${row.fileName}] type=${row.productType} wordCount=${row.wordCount} charCount=${row.charCount} countBasis=${row.countBasis} quantity=${row.quantity}`);
+      }
+      console.log("[AI-DRAFT] ═══════════════════════");
       res.json({
         draftRows,
         warnings:   [...gptResult.warnings, ...extractWarnings],
@@ -416,6 +511,11 @@ router.post(
       const reason = err instanceof Error ? err.message : String(err);
       console.error("[AI-DRAFT] GPT failed:", reason);
       const mockRows = buildMockRows(requestText, sourceFileStats);
+      console.log("[AI-DRAFT] ═══ FINAL SEND (error fallback) ═══");
+      for (const row of mockRows) {
+        console.log(`[AI-DRAFT]   [${row.sourceFileId ?? "(no-id)"} / ${row.fileName}] type=${row.productType} wordCount=${row.wordCount} charCount=${row.charCount} countBasis=${row.countBasis} quantity=${row.quantity}`);
+      }
+      console.log("[AI-DRAFT] ═══════════════════════════════════");
       res.json({
         draftRows:  mockRows,
         warnings:   [`AI 분석 오류: ${reason.slice(0, 120)}`, ...extractWarnings],

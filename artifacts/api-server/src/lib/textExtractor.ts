@@ -112,6 +112,25 @@ function decodeXmlEntities(s: string): string {
 }
 
 /**
+ * DrawingML 파서 — 차트/다이어그램 파일 전용 (word/charts/*.xml, word/diagrams/data*.xml).
+ *
+ * <a:t> 요소를 수집한다.
+ * document.xml 에서 mc:Fallback 을 스킵하는 이유(이중카운트)가 이 파일들엔 없으므로
+ * <a:t> 를 그대로 수집한다.
+ */
+function parseDmlXml(xml: string): string {
+  const parts: string[] = [];
+  // <a:t>…</a:t> 직접 추출 — DML 요소는 중첩 태그 없이 순수 텍스트만 포함
+  const re = /<a:t[^>]*>([\s\S]*?)<\/a:t>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml)) !== null) {
+    const text = decodeXmlEntities(m[1]);
+    if (text.trim()) parts.push(text);
+  }
+  return parts.join(" ");
+}
+
+/**
  * Word/OOXML 시퀀셜 파서.
  * w:t 텍스트 수집 + 단어 경계 공백 주입.
  * mc:Fallback 스킵(mc:Choice w:txbxContent에서 이미 수집, 이중 카운트 방지).
@@ -216,10 +235,13 @@ function calcWordCount(text: string): number {
 /**
  * DOCX 전체 파트 텍스트 추출.
  *
- * 단어수 계산 방식: XML 파싱 + 슬래시/대시 구분자 적용
- *   - app.xml cached value는 저장 당시 스냅샷으로 현재 Word 표시값과 불일치 가능 → 사용 안 함
- *   - XML 직접 파싱: w:t 수집, 슬래시(/)·Em/En dash를 단어 구분자로 처리
- *   - 파트별 단어수 로그로 누락 영역 진단 지원
+ * 단어수 계산 방식 (우선순위 순):
+ *   1순위: docProps/app.xml <Words> — Word "검토 → 단어 개수" 대화상자와 동일한 공식값.
+ *          존재하면 이 값을 그대로 사용하고 "Word 공식 통계"로 표시.
+ *   2순위: XML 파싱 (w:t 수집 + 슬래시/Em dash 구분자) — app.xml 공식값 없을 때 폴백.
+ *          "Text Extraction"으로 표시.
+ *
+ * 파트별 단어수 로그로 누락 영역 진단 지원.
  */
 async function extractDocx(buf: Buffer): Promise<TextStats> {
   const unzipper = await import("unzipper");
@@ -227,23 +249,37 @@ async function extractDocx(buf: Buffer): Promise<TextStats> {
 
   // ── 1. docProps/app.xml — Word 공식 통계 (1순위) ─────────────────────────────
   // <Words>/<Characters>/<Pages> = Word "검토 → 단어 개수" 대화상자와 동일한 값.
-  // 편집 후 재저장 없이 업로드된 경우 불일치 가능하나, 실무상 견적 파일은 저장 후 업로드됨.
+  // Words가 존재하면 Text Extraction 없이 이 값을 직접 사용한다.
   let appXmlWords:     number | null = null;
   let appXmlCharsNoSp: number | null = null;
   let appXmlCharsWSp:  number | null = null;
   let appXmlPages:     number | null = null;
-  const appXmlFile = zip.files.find(f => /^docProps\/app\.xml$/i.test(f.path));
+
+  // 경로 변형 허용: docProps/app.xml, ./docProps/app.xml, docProps\app.xml
+  const appXmlFile = zip.files.find(f => /(?:^|[\\/])docprops[\\/]app\.xml$/i.test(f.path));
+
+  // 진단: docProps/ 하위 파일 목록 출력
+  const docPropsEntries = zip.files.filter(f => /docprops/i.test(f.path)).map(f => f.path);
+  console.log(`[DOCX-XML] docProps entries(${docPropsEntries.length}): ${docPropsEntries.join(", ") || "(none)"}`);
+  console.log(`[DOCX-XML] app.xml found: ${appXmlFile ? appXmlFile.path : "NO — fallback to xml-parse"}`);
+
   if (appXmlFile) {
     const appXml = (await appXmlFile.buffer()).toString("utf8");
-    const wm  = appXml.match(/<Words>(\d+)<\/Words>/i);
-    const cm  = appXml.match(/<Characters>(\d+)<\/Characters>/i);
-    const cwm = appXml.match(/<CharactersWithSpaces>(\d+)<\/CharactersWithSpaces>/i);
-    const pm  = appXml.match(/<Pages>(\d+)<\/Pages>/i);
+    // 네임스페이스 접두사 허용: <Words>, <ep:Words>, <app:Words> 등
+    const wm  = appXml.match(/<(?:\w+:)?Words>\s*(\d+)\s*<\/(?:\w+:)?Words>/i);
+    const cm  = appXml.match(/<(?:\w+:)?Characters>\s*(\d+)\s*<\/(?:\w+:)?Characters>/i);
+    const cwm = appXml.match(/<(?:\w+:)?CharactersWithSpaces>\s*(\d+)\s*<\/(?:\w+:)?CharactersWithSpaces>/i);
+    const pm  = appXml.match(/<(?:\w+:)?Pages>\s*(\d+)\s*<\/(?:\w+:)?Pages>/i);
     if (wm)  appXmlWords     = parseInt(wm[1],  10);
     if (cm)  appXmlCharsNoSp = parseInt(cm[1],  10);
     if (cwm) appXmlCharsWSp  = parseInt(cwm[1], 10);
     if (pm)  appXmlPages     = parseInt(pm[1],  10);
-    console.log(`[DOCX-XML] app.xml: words=${appXmlWords} charsNoSp=${appXmlCharsNoSp} charsWSp=${appXmlCharsWSp} pages=${appXmlPages}`);
+    console.log(`[DOCX-XML] app.xml values — Words=${appXmlWords ?? "N/A"} Characters=${appXmlCharsNoSp ?? "N/A"} CharactersWithSpaces=${appXmlCharsWSp ?? "N/A"} Pages=${appXmlPages ?? "N/A"}`);
+    if (appXmlWords === null) {
+      console.warn(`[DOCX-XML] WARNING: app.xml exists but <Words> tag NOT found — falling back to xml-parse`);
+      // 전체 내용을 출력하여 태그 형식 진단 가능하게 함
+      console.log(`[DOCX-XML] app.xml FULL CONTENT:\n${appXml}`);
+    }
   }
 
   // ── 2. XML 파트 파싱 — 텍스트 추출 (AI 분석용) + 파트별 단어수 로그 ────────
@@ -253,13 +289,18 @@ async function extractDocx(buf: Buffer): Promise<TextStats> {
   );
   console.log(`[DOCX-XML] all_word_parts(${wordXmlPaths.length}): ${wordXmlPaths.join(", ")}`);
 
-  const COUNT_PATTERNS: Array<{ pat: RegExp; label: string }> = [
-    { pat: /^word\/document\.xml$/i,             label: "document" },
-    { pat: /^word\/header\d+\.xml$/i,            label: "header"   },
-    { pat: /^word\/footer\d+\.xml$/i,            label: "footer"   },
-    { pat: /^word\/footnotes\.xml$/i,            label: "footnotes"},
-    { pat: /^word\/endnotes\.xml$/i,             label: "endnotes" },
-    { pat: /^word\/drawings\/drawing\d+\.xml$/i, label: "drawing"  },
+  const COUNT_PATTERNS: Array<{ pat: RegExp; label: string; dml?: boolean }> = [
+    { pat: /^word\/document\.xml$/i,                      label: "document"  },
+    { pat: /^word\/header\d+\.xml$/i,                     label: "header"    },
+    { pat: /^word\/footer\d+\.xml$/i,                     label: "footer"    },
+    { pat: /^word\/footnotes\.xml$/i,                     label: "footnotes" },
+    { pat: /^word\/endnotes\.xml$/i,                      label: "endnotes"  },
+    { pat: /^word\/drawings\/drawing\d+\.xml$/i,          label: "drawing"   },
+    // 차트 레이블/제목 (<a:t>) — Word 공식 통계와 일치시키기 위해 포함
+    { pat: /^word\/charts\/chart\d+\.xml$/i,              label: "chart",   dml: true },
+    // SmartArt 노드 텍스트 (<a:t>) — Word 공식 통계와 일치시키기 위해 포함
+    { pat: /^word\/diagrams\/data\d+\.xml$/i,             label: "diagram", dml: true },
+    { pat: /^word\/diagrams\/drawing\d+\.xml$/i,          label: "diagram", dml: true },
   ];
 
   const IGNORE_PAT = [
@@ -278,20 +319,21 @@ async function extractDocx(buf: Buffer): Promise<TextStats> {
   const segments: string[] = [];
   let xmlCalcWords = 0;
 
-  for (const { pat, label } of COUNT_PATTERNS) {
+  for (const { pat, label, dml } of COUNT_PATTERNS) {
     const matched = zip.files
       .filter(f => pat.test(f.path))
       .sort((a, b) => a.path.localeCompare(b.path));
 
     for (const file of matched) {
       const xml  = (await file.buffer()).toString("utf8");
-      const text = parseWordXml(xml);
+      // DML 파일(차트/다이어그램)은 <a:t> 수집, 일반 OOXML 파일은 <w:t> 수집
+      const text = dml ? parseDmlXml(xml) : parseWordXml(xml);
       if (!text.trim()) continue;
 
       const wc = calcWordCount(text);
       xmlCalcWords += wc;
       segments.push(text);
-      console.log(`[DOCX-XML] ${label} ${file.path}: ${wc} words (slash-split)`);
+      console.log(`[DOCX-XML] ${label} ${file.path}: ${wc} words${dml ? " (dml/a:t)" : " (ooxml/w:t)"}`);
     }
   }
 
@@ -310,7 +352,7 @@ async function extractDocx(buf: Buffer): Promise<TextStats> {
   const countBasis = useOfficial ? "Word 공식 통계" : "Text Extraction";
   const countSource = useOfficial ? "app.xml" : "xml-parse(slash-split)";
 
-  console.log(`[DOCX-XML] FINAL countBasis=${countBasis} wordCount=${wordCount} charNoSp=${charNoSp} pages=${appXmlPages ?? "N/A"} (xml-calc=${xmlCalcWords})`);
+  console.log(`[DOCX-XML] FINAL countBasis=${countBasis} wordCount=${wordCount} charNoSp=${charNoSp} charWithSp=${charWithSp} pages=${appXmlPages ?? "N/A"} (xml-calc=${xmlCalcWords})`);
 
   return {
     text:               fullText.slice(0, 50_000),

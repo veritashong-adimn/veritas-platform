@@ -18,6 +18,7 @@ import { getPolicy } from '../../lib/languagePagePolicy';
 type ServiceType = 'translation' | 'interpretation' | 'equipment' | 'expense';
 
 export interface AiDraftRow {
+  sourceFileId?:    string;   // 서버 할당 파일 고유 ID (source-0, source-1, …)
   productId:        number | null;
   productName:      string;
   productType:      ServiceType;
@@ -396,6 +397,17 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
       }
 
       const data = (await resp.json()) as AiDraftResult;
+      console.log("[AI-DRAFT] Client received — rows:", data.draftRows.length, "confidence:", data.confidence);
+      data.draftRows.forEach((r, i) => {
+        console.log(
+          `[AI-DRAFT] Row[${i}] ${r.fileName ?? "(no file)"} (${r.productType}):`,
+          `countBasis=${r.countBasis}`,
+          `wordCount=${r.wordCount}`,
+          `charCount=${r.charCount}`,
+          `quantity=${r.quantity}`,
+          `unit=${r.unit}`,
+        );
+      });
       setResult(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'AI 견적 생성 중 오류가 발생했습니다. 다시 시도해 주세요.');

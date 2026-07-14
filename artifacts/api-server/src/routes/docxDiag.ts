@@ -34,7 +34,7 @@ const diagUpload = multer({
 });
 
 router.post(
-  "/api/diag/docx",
+  "/diag/docx",
   requireAuth,
   requireRole("admin", "staff"),
   diagUpload.single("file"),

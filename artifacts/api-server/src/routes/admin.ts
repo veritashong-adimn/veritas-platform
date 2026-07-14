@@ -1386,6 +1386,17 @@ router.post("/admin/projects/:id/quote", ...adminGuard, requirePermission("quote
         const qty = Number(it.quantity ?? 1);
         const up = Number(it.unitPrice);
         const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0);
+        if (it.itemType === 'interpretation') {
+          const iDate = it.interpretDate;
+          const eDate = it.eventEndDate;
+          const serviceDays = (() => {
+            if (!iDate) return 0;
+            if (!eDate || eDate === iDate) return 1;
+            return Math.max(1, Math.round((new Date(eDate).getTime() - new Date(iDate).getTime()) / 86400000) + 1);
+          })();
+          const peopleCount = serviceDays > 0 ? Math.round(qty / serviceDays) : qty;
+          req.log.info({ peopleCount, serviceDays, unitPrice: up, billingQuantity: qty, supplyAmount }, '[INTERPRETATION CALC]');
+        }
         return { ...it, supplyAmount, taxAmount, totalAmount };
       });
       // 선입금 차감은 서버 계산값(computedAmount) 우선, items 합계는 이미 일치함
@@ -1648,8 +1659,23 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
     const qNum = await generateQuoteNumber();
 
     const result = await db.transaction(async tx => {
+      // 거래처/담당자가 선택된 경우 — 프로젝트를 미리 생성하여 company/contact를 보존
+      let linkedProjectId: number | null = null;
+      if (companyId || contactId) {
+        const creatorId = ((req as any).user as { id: number }).id;
+        const [proj] = await tx.insert(projectsTable).values({
+          userId:    creatorId,
+          adminId:   adminId ?? null,
+          companyId: companyId ?? null,
+          contactId: contactId ?? null,
+          title:     title.trim(),
+          status:    "created",
+        }).returning();
+        linkedProjectId = proj.id;
+      }
+
       const [quote] = await tx.insert(quotesTable).values({
-        projectId: null,
+        projectId: linkedProjectId,
         quoteNumber: qNum,
         title: title.trim(),
         price: String(totalPrice),
@@ -1690,8 +1716,9 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
         });
         await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
           quoteId: quote.id,
-          productId: it.productId ?? null,
+          productId: (it as any).productId ?? null,
           productName: it.productName,
+          languagePair: (it as any).languagePair ?? null,
           unit: it.unit ?? "건",
           quantity: String(it.quantity ?? 1),
           unitPrice: String(it.unitPrice),
@@ -1701,6 +1728,14 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
           memo: it.memo ?? null,
           itemType: it.itemType ?? "translation",
           taxType: it.taxType ?? "taxable",
+          interpretDate: (it as any).interpretDate ?? null,
+          interpretPlace: (it as any).interpretPlace ?? null,
+          interpretType: (it as any).interpretType ?? null,
+          interpretDuration: (it as any).interpretDuration ?? null,
+          usagePeriod: (it as any).usagePeriod ?? null,
+          eventStartDate: (it as any).eventStartDate ?? null,
+          eventEndDate: (it as any).eventEndDate ?? null,
+          itemLocation: (it as any).itemLocation ?? null,
         })));
       }
       return quote;
@@ -3569,6 +3604,153 @@ router.post("/admin/product-registration-requests", ...adminGuard, async (req, r
     }).returning({ id: productRequestsTable.id });
     res.json({ ok: true, id: row.id });
   } catch (e) { res.status(500).json({ error: "등록 요청 실패" }); }
+});
+
+// ─── 견적서 단건 조회 (items + settings 포함) — PDF 출력용 ───────────────────
+// ── 기존 견적 수정 (품목 교체 + 기본 필드 업데이트) ──────────────────────────
+router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 quote id." }); return;
+  }
+  type PutItemInput = {
+    productName: string; unit?: string; quantity?: number; unitPrice: number;
+    taxRate?: 0 | 0.1; taxType?: string; productId?: number; memo?: string;
+    itemType?: string; interpretDate?: string; interpretPlace?: string;
+    interpretDuration?: string; eventEndDate?: string; eventStartDate?: string;
+    itemLocation?: string; usagePeriod?: string; languagePair?: string;
+    interpretationDirection?: string; interpretType?: string;
+    hasTravelExpense?: boolean; hasEquipment?: boolean; isCustomProduct?: boolean;
+  };
+  const { title, items, note, quoteType, issueDate, validUntil } = req.body as {
+    title?: string; items?: PutItemInput[]; note?: string;
+    quoteType?: string; issueDate?: string; validUntil?: string;
+  };
+  if (!items || items.length === 0) {
+    res.status(400).json({ error: "품목이 없습니다." }); return;
+  }
+  const calcItems = items.map(it => {
+    const qty = Number(it.quantity ?? 1);
+    const up  = Number(it.unitPrice);
+    const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0);
+    if (it.itemType === 'interpretation') {
+      const iDate = it.interpretDate;
+      const eDate = it.eventEndDate;
+      const sd = (() => {
+        if (!iDate) return 0;
+        if (!eDate || eDate === iDate) return 1;
+        return Math.max(1, Math.round((new Date(eDate).getTime() - new Date(iDate).getTime()) / 86400000) + 1);
+      })();
+      const pc = sd > 0 ? Math.round(qty / sd) : qty;
+      req.log.info({ peopleCount: pc, serviceDays: sd, unitPrice: up, billingQuantity: qty, supplyAmount }, '[INTERPRETATION CALC]');
+    }
+    return { ...it, supplyAmount, taxAmount, totalAmount };
+  });
+  const totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
+  try {
+    await db.transaction(async tx => {
+      await tx.update(quotesTable).set({
+        title:      title?.trim() ?? null,
+        note:       note?.trim()  ?? null,
+        quoteType:  quoteType ?? 'b2b_standard',
+        issueDate:  issueDate  ?? null,
+        validUntil: validUntil ?? null,
+        price:      String(totalPrice),
+      }).where(eq(quotesTable.id, quoteId));
+      await tx.delete(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId));
+      await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
+        quoteId,
+        productId:               (it as any).productId              ?? null,
+        productName:             it.productName,
+        languagePair:            (it as any).languagePair           ?? null,
+        unit:                    it.unit                            ?? '건',
+        quantity:                String(it.quantity                 ?? 1),
+        unitPrice:               String(it.unitPrice),
+        supplyAmount:            String(it.supplyAmount),
+        taxAmount:               String(it.taxAmount),
+        totalAmount:             String(it.totalAmount),
+        memo:                    it.memo                            ?? null,
+        itemType:                it.itemType                        ?? 'translation',
+        taxType:                 it.taxType                         ?? 'taxable',
+        interpretDate:           it.interpretDate                   ?? null,
+        interpretPlace:          it.interpretPlace                  ?? null,
+        interpretType:           it.interpretType                   ?? null,
+        interpretDuration:       it.interpretDuration               ?? null,
+        hasTravelExpense:        it.hasTravelExpense                ?? false,
+        hasEquipment:            it.hasEquipment                    ?? false,
+        interpretationDirection: (it as any).interpretationDirection ?? null,
+        usagePeriod:             it.usagePeriod                     ?? null,
+        eventStartDate:          it.eventStartDate                  ?? null,
+        eventEndDate:            it.eventEndDate                    ?? null,
+        itemLocation:            it.itemLocation                    ?? null,
+        isCustomProduct:         it.isCustomProduct                 ?? false,
+      })));
+    });
+    res.json({ id: quoteId, price: totalPrice });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to update quote");
+    res.status(500).json({ error: "견적 수정 실패." });
+  }
+});
+
+router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 quote id." }); return;
+  }
+  try {
+    const [quote] = await db
+      .select({
+        id:          quotesTable.id,
+        quoteNumber: quotesTable.quoteNumber,
+        title:       quotesTable.title,
+        price:       quotesTable.price,
+        status:      quotesTable.status,
+        quoteType:   quotesTable.quoteType,
+        note:        quotesTable.note,
+        issueDate:   quotesTable.issueDate,
+        validUntil:  quotesTable.validUntil,
+        projectId:   quotesTable.projectId,
+        companyName:      sql<string | null>`(SELECT c.name FROM companies c JOIN projects p ON p.company_id = c.id WHERE p.id = ${quotesTable.projectId})`,
+        contactName:      sql<string | null>`(SELECT ct.name FROM contacts ct JOIN projects p ON p.contact_id = ct.id WHERE p.id = ${quotesTable.projectId})`,
+        contactDivision:  sql<string | null>`(SELECT ct.department FROM contacts ct JOIN projects p ON p.contact_id = ct.id WHERE p.id = ${quotesTable.projectId})`,
+        contactPhone:     sql<string | null>`(SELECT COALESCE(ct.phone, ct.mobile, ct.office_phone) FROM contacts ct JOIN projects p ON p.contact_id = ct.id WHERE p.id = ${quotesTable.projectId})`,
+        contactEmail:     sql<string | null>`(SELECT ct.email FROM contacts ct JOIN projects p ON p.contact_id = ct.id WHERE p.id = ${quotesTable.projectId})`,
+        adminName:        sql<string | null>`(SELECT u.name FROM users u JOIN projects p ON p.admin_id = u.id WHERE p.id = ${quotesTable.projectId})`,
+      })
+      .from(quotesTable)
+      .where(eq(quotesTable.id, quoteId));
+
+    if (!quote) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }
+
+    const items = await db
+      .select()
+      .from(quoteItemsTable)
+      .where(eq(quoteItemsTable.quoteId, quoteId))
+      .orderBy(quoteItemsTable.id);
+
+    const settingsRows = await db.select().from(settingsTable).limit(1);
+    const s = settingsRows[0] ?? {};
+    const settings = {
+      companyName:       s.companyName       ?? null,
+      businessNumber:    s.businessNumber     ?? null,
+      ceoName:           s.ceoName            ?? null,
+      address:           s.address            ?? null,
+      phone:             s.phone              ?? null,
+      email:             s.email              ?? null,
+      bankName:          s.bankName           ?? null,
+      accountNumber:     s.accountNumber      ?? null,
+      accountHolder:     s.accountHolder      ?? null,
+      signatureImageUrl: s.signatureImageUrl  ?? null,
+      quoteNotes:        s.quoteNotes         ?? null,
+      quoteValidityDays: s.quoteValidityDays  ?? 14,
+    };
+
+    res.json({ ...quote, items, settings });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch quote detail");
+    res.status(500).json({ error: "견적 조회 실패." });
+  }
 });
 
 export default router;

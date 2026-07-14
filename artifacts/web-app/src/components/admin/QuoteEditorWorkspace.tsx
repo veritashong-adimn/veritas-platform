@@ -16,13 +16,14 @@ import {
   type ValidationResult,
 } from '../../lib/languagePagePolicy';
 import AiQuoteModal, { type AiDraftRow } from './AiQuoteModal';
+import { calculateInterpretationAmount } from '../../lib/quotePdf';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
 
-type QuoteType    = 'b2b_standard' | 'b2c_prepaid' | 'accumulated_batch';
-type VatType      = 'taxable' | 'exempt' | 'zero_rate';
+export type QuoteType    = 'b2b_standard' | 'b2c_prepaid' | 'accumulated_batch';
+export type VatType      = 'taxable' | 'exempt' | 'zero_rate';
+export type ServiceType  = 'translation' | 'interpretation' | 'equipment' | 'expense';
 type CreationMode = 'direct' | 'ai';
-type ServiceType  = 'translation' | 'interpretation' | 'equipment' | 'expense';
 
 export interface QuoteItemForm {
   productId:    number | null;
@@ -83,15 +84,28 @@ function getUnitOptions(serviceType: ServiceType, v: string): string[] {
 
 // ─── 계산 ─────────────────────────────────────────────────────────────────────
 
+function calcInterpretDays(start: string, end: string): number {
+  if (!start) return 0;
+  if (!end || end === start) return 1;
+  const s = new Date(start), e = new Date(end);
+  return Math.max(1, Math.round((e.getTime() - s.getTime()) / 86400000) + 1);
+}
+
 function calcItem(it: QuoteItemForm, vat: VatType) {
-  const p   = Number(it.unitPrice.replace?.(/,/g, '') || 0);
-  const q   = Number(it.quantity || 1);
-  // 통역: 투입인원 × 수량 × 단가(1인 기준). 미입력 시 1명
-  const cnt  = it.productType === 'interpretation' ? (Number(it.interpreterCount) || 1) : 1;
-  // 장비: 사용일수 × 수량 × 단가. 미입력 시 1일
-  const days = it.productType === 'equipment'      ? (Number(it.usagePeriod)      || 1) : 1;
-  const s    = Math.round(days * cnt * q * p);
-  return { supply: s, tax: vat === 'taxable' ? Math.round(s * 0.1) : 0, total: s + (vat === 'taxable' ? Math.round(s * 0.1) : 0) };
+  const p = Number(it.unitPrice.replace?.(/,/g, '') || 0);
+  let s: number;
+  if (it.productType === 'interpretation') {
+    const cnt  = Number(it.interpreterCount) || 1;
+    const d    = calcInterpretDays(it.interpretDate, it.interpretEndDate);
+    const days = d > 0 ? d : (Number(it.quantity) || 1);
+    ({ supplyAmount: s } = calculateInterpretationAmount(cnt, days, p));
+  } else if (it.productType === 'equipment') {
+    s = Math.round((Number(it.usagePeriod) || 1) * (Number(it.quantity) || 1) * p);
+  } else {
+    s = Math.round((Number(it.quantity) || 1) * p);
+  }
+  const tax = vat === 'taxable' ? Math.round(s * 0.1) : 0;
+  return { supply: s, tax, total: s + tax };
 }
 function calcTotals(items: QuoteItemForm[], vat: VatType) {
   return items.reduce((a, it) => { const r = calcItem(it, vat); return { supply: a.supply + r.supply, tax: a.tax + r.tax, total: a.total + r.total }; }, { supply: 0, tax: 0, total: 0 });
@@ -135,19 +149,19 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
       return { ...base, memo: [it.memo, ref].filter(Boolean).join(' / ') || undefined };
     }
     case 'interpretation': {
-      const cnt      = Number(it.interpreterCount) || 1;
-      const dur      = [it.startTime, it.endTime].filter(Boolean).join('~');
-      const countTag = it.interpreterCount ? `투입인원: ${it.interpreterCount}명` : '';
-      const memo     = [countTag, it.memo].filter(Boolean).join(' / ');
+      const cnt  = Number(it.interpreterCount) || 1;
+      const dur  = [it.startTime, it.endTime].filter(Boolean).join('~');
+      const d    = calcInterpretDays(it.interpretDate, it.interpretEndDate);
+      const days = d > 0 ? d : (Number(it.quantity) || 1);
+      const { billingQuantity } = calculateInterpretationAmount(cnt, days, 0);
       return {
         ...base,
-        // 서버측 공급가액(quantity × unitPrice) 정합성 유지: 투입인원 × 수량을 quantity로 전송
-        quantity:          cnt * (Number(it.quantity) || 1),
-        interpretDate:     it.interpretDate     || undefined,
-        interpretPlace:    it.interpretPlace    || undefined,
-        interpretDuration: dur                  || undefined,
-        eventEndDate:      it.interpretEndDate  || undefined,
-        memo:              memo                 || undefined,
+        quantity:          billingQuantity,  // peopleCount × serviceDays
+        interpretDate:     it.interpretDate    || undefined,
+        interpretPlace:    it.interpretPlace   || undefined,
+        interpretDuration: dur                 || undefined,
+        eventEndDate:      it.interpretEndDate || undefined,
+        memo:              it.memo             || undefined,
       };
     }
     case 'equipment': {
@@ -649,17 +663,6 @@ function ServiceFields({ it, update, products }: {
           <input type="date" value={it.interpretEndDate}
             onChange={e => update({ interpretEndDate: e.target.value })}
             style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="행사 종료일 (기간 행사 시 입력, 당일은 비워두세요)" />
-          {/* 날짜 / 시간 구분선 */}
-          <span style={{ ...sep_s, color: C.g300, fontSize: 15, flexShrink: 0 }}>|</span>
-          {/* 시작시간 */}
-          <input value={it.startTime}
-            onChange={e => update({ startTime: e.target.value })}
-            placeholder="시작시간" style={{ ...rinp(62), flexShrink: 0 }} title="시작 시간 (예: 09:00)" />
-          <span style={sep_s}>~</span>
-          {/* 종료시간 */}
-          <input value={it.endTime}
-            onChange={e => update({ endTime: e.target.value })}
-            placeholder="종료시간" style={{ ...rinp(62), flexShrink: 0 }} title="종료 시간 (예: 18:00)" />
           {/* 장소 */}
           <input value={it.interpretPlace}
             onChange={e => update({ interpretPlace: e.target.value })}
@@ -907,6 +910,13 @@ export interface QuoteEditorWorkspaceProps {
   adminList?:        AdminUser[];
   /** true: AdminDashboard 스크롤 영역 내 인라인 렌더링 (사이드바 유지) */
   asPage?:           boolean;
+  // 기존 견적 편집 모드
+  initialQuoteId?:   number;
+  initialItems?:     QuoteItemForm[];
+  initialNote?:      string;
+  initialQuoteType?: QuoteType;
+  initialIssueDate?: string;
+  initialVatType?:   VatType;
 }
 
 // ─── 메인 컴포넌트 ────────────────────────────────────────────────────────────
@@ -914,6 +924,7 @@ export interface QuoteEditorWorkspaceProps {
 export function QuoteEditorWorkspace({
   token, projectId, initialCompanyId = null, initialContactId = null, initialTitle = '',
   onClose, onSaved, onToast, adminList = [], asPage = false,
+  initialQuoteId, initialItems, initialNote, initialQuoteType, initialIssueDate, initialVatType,
 }: QuoteEditorWorkspaceProps) {
 
   const authH = { Authorization: `Bearer ${token}` };
@@ -924,12 +935,12 @@ export function QuoteEditorWorkspace({
   const [companyId,      setCompanyId]     = useState<number | null>(initialCompanyId);
   const [contactId,      setContactId]     = useState<number | null>(initialContactId);
   const [adminId,        setAdminId]       = useState<number | null>(null);
-  const [issueDate,      setIssueDate]     = useState(() => dateOffset(0));
-  const [quoteType,      setQuoteType]     = useState<QuoteType>('b2b_standard');
-  const [vatType,        setVatType]       = useState<VatType>('taxable');
-  const [note,           setNote]          = useState('');
+  const [issueDate,      setIssueDate]     = useState(() => initialIssueDate ?? dateOffset(0));
+  const [quoteType,      setQuoteType]     = useState<QuoteType>(initialQuoteType ?? 'b2b_standard');
+  const [vatType,        setVatType]       = useState<VatType>(initialVatType ?? 'taxable');
+  const [note,           setNote]          = useState(initialNote ?? '');
   const [versionReason,  setVersionReason] = useState('');
-  const [items,          setItems]         = useState<QuoteItemForm[]>([defaultItem()]);
+  const [items,          setItems]         = useState<QuoteItemForm[]>(initialItems ?? [defaultItem()]);
   const [companies,      setCompanies]     = useState<Company[]>([]);
   const [contacts,       setContacts]      = useState<Contact[]>([]);
   const [products,       setProducts]      = useState<Product[]>([]);
@@ -1029,6 +1040,25 @@ export function QuoteEditorWorkspace({
     };
     setSaving(true);
     try {
+      // 기존 견적 수정 모드
+      if (initialQuoteId) {
+        const url     = api(`/api/admin/quotes/${initialQuoteId}`);
+        const payload = { ...commonBody, title: title.trim() || undefined };
+        console.log('[QUOTE UPDATE REQUEST]', { method: 'PUT', url, quoteId: initialQuoteId });
+        const res  = await fetch(url, {
+          method: 'PUT', headers: { ...authH, 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        console.log('[QUOTE UPDATE RESPONSE]', { status: res.status, data });
+        if (!res.ok) {
+          const msg = res.status === 404 ? '견적 수정 API를 찾을 수 없습니다. (서버 재시작 필요)'
+                    : res.status === 400 ? `입력값을 확인해 주세요: ${data.error}`
+                    : `서버 오류 (${res.status}): ${data.error ?? data.message ?? ''}`;
+          onToast(`견적 수정 실패: ${msg}`); return;
+        }
+        onToast('견적이 수정되었습니다.'); onSaved({ quoteId: initialQuoteId, projectId: null }); return;
+      }
       if (projectId === null) {
         const t = title.trim();
         if (!t) { onToast('견적서명을 입력하세요.'); return; }
