@@ -4,13 +4,13 @@ import {
   logsTable, quotesTable, settlementsTable, notesTable,
   customersTable, communicationsTable, translatorProfilesTable,
   contactsTable, companiesTable, translatorRatesTable, divisionsTable,
-  quoteItemsTable, quoteItemFilesTable, calcQuoteItemAmounts,
+  quoteItemsTable, calcQuoteItemAmounts,
   billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
   prepaidAccountsTable, prepaidLedgerTable, settingsTable,
-  projectFilesTable, productRequestsTable,
+  productRequestsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
-import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc } from "drizzle-orm";
+import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc, isNull } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import { getSettings, invalidateSettingsCache } from "../lib/getSettings";
@@ -124,6 +124,15 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
     // approved 이상 = 견적 승인으로 생성된 판매건 → 판매관리에 표시
     if (salesOnly === "true" && !status?.trim()) {
       result = result.filter(p => !["created", "quoted"].includes(p.status));
+    }
+
+    // ── 취소된 판매건(cancelled)은 기본 목록에서 제외 ──
+    // 단, status 필터로 cancelled를 명시 요청했거나 includeCancelled=true 인 경우는 포함.
+    const includeCancelled = (req.query.includeCancelled as string) === "true";
+    const statusRequestsCancelled = !!status?.trim()
+      && status.split(",").map(s => s.trim()).includes("cancelled");
+    if (!includeCancelled && !statusRequestsCancelled) {
+      result = result.filter(p => p.status !== "cancelled");
     }
 
     // ── 기존 필터 ──
@@ -887,111 +896,29 @@ router.patch("/admin/projects/:id/cancel", ...adminGuard, requirePermission("pro
   const { reason } = req.body as { reason?: string };
 
   try {
-    const [updated] = await db.update(projectsTable).set({ status: "cancelled" }).where(eq(projectsTable.id, projectId)).returning();
-    const metadata = reason?.trim() ? JSON.stringify({ reason: reason.trim() }) : undefined;
+    // 판매취소 = 하나의 트랜잭션으로 project 비활성화 + 연결된 approved 견적을 견적관리(pending)로 복귀.
+    // quote / quote_items 는 삭제하지 않고 quote.projectId 연결도 유지한다(재판매전환 시 재사용).
+    const result = await db.transaction(async tx => {
+      const [updated] = await tx.update(projectsTable)
+        .set({ status: "cancelled" })
+        .where(eq(projectsTable.id, projectId))
+        .returning();
+
+      const revertedQuotes = await tx.update(quotesTable)
+        .set({ status: "pending" })
+        .where(and(eq(quotesTable.projectId, projectId), eq(quotesTable.status, "approved")))
+        .returning({ id: quotesTable.id });
+
+      return { updated, revertedQuoteIds: revertedQuotes.map(q => q.id) };
+    });
+
+    const metadata = JSON.stringify({ reason: reason?.trim() || undefined, revertedQuoteIds: result.revertedQuoteIds });
     await logEvent("project", projectId, "project_cancelled", req.log, req.user ?? undefined, metadata);
-    res.json(updated);
+    req.log.info({ projectId, revertedQuoteIds: result.revertedQuoteIds }, "Admin: sale cancelled → project cancelled, quotes back to pending");
+    res.json({ ...result.updated, revertedQuoteIds: result.revertedQuoteIds });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to cancel project");
     res.status(500).json({ error: "프로젝트 취소 실패." });
-  }
-});
-
-// ─── 프로젝트 완전 삭제 (admin 전용) ──────────────────────────────────────
-router.delete("/admin/projects/:id", requireAuth, requireRole("admin"), async (req, res) => {
-  const projectId = Number(req.params.id);
-  if (isNaN(projectId) || projectId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 project id." });
-    return;
-  }
-
-  try {
-    // 1) 프로젝트 존재 확인
-    const [project] = await db
-      .select({ id: projectsTable.id, title: projectsTable.title, status: projectsTable.status })
-      .from(projectsTable).where(eq(projectsTable.id, projectId));
-    if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
-
-    // 2) audit 로그 (삭제 전 기록)
-    req.log.info({
-      event: "project_deleted_by_admin",
-      projectId,
-      projectTitle: project.title,
-      projectStatus: project.status,
-      deletedBy: req.user?.id,
-      deletedByEmail: (req.user as any)?.email,
-      deletedAt: new Date().toISOString(),
-    }, "Admin hard-deleted project");
-
-    // 3) FK 순서에 맞춘 트랜잭션 cascade 삭제
-    //
-    // 의존 관계:
-    //   settlements → tasks, payments, projects
-    //   billing_batch_items → projects, quotes
-    //   communications → projects
-    //   quote_item_files → quote_items → quotes → projects
-    //   payments → projects
-    //   tasks → projects
-    //   logs, notes, project_files → projects
-    //
-    // 삭제 순서: 자식 먼저, 부모 나중
-    await db.transaction(async (tx) => {
-      // ① settlements: taskId + paymentId FK 때문에 tasks/payments 보다 먼저
-      await tx.delete(settlementsTable).where(eq(settlementsTable.projectId, projectId));
-
-      // ② billing_batch_items: projectId FK (cascade 없음)
-      await tx.delete(billingBatchItemsTable).where(eq(billingBatchItemsTable.projectId, projectId));
-
-      // ③ communications: projectId FK (cascade 없음)
-      await tx.delete(communicationsTable).where(eq(communicationsTable.projectId, projectId));
-
-      // ④ notes
-      await tx.delete(notesTable).where(and(eq(notesTable.entityType, "project"), eq(notesTable.entityId, projectId)));
-
-      // ⑤ logs (entityType + entityId 방식 — projectId 컬럼 없음)
-      await tx.delete(logsTable).where(and(eq(logsTable.entityType, "project"), eq(logsTable.entityId, projectId)));
-
-      // ⑥ project files (schema에 cascade 있지만 명시적으로 처리)
-      await tx.delete(projectFilesTable).where(eq(projectFilesTable.projectId, projectId));
-
-      // ⑦ quote item files → quote items → quotes
-      const projectQuotes = await tx
-        .select({ id: quotesTable.id })
-        .from(quotesTable)
-        .where(eq(quotesTable.projectId, projectId));
-      if (projectQuotes.length > 0) {
-        const quoteIds = projectQuotes.map(q => q.id);
-        const projectQuoteItems = await tx
-          .select({ id: quoteItemsTable.id })
-          .from(quoteItemsTable)
-          .where(inArray(quoteItemsTable.quoteId, quoteIds));
-        if (projectQuoteItems.length > 0) {
-          const itemIds = projectQuoteItems.map(qi => qi.id);
-          await tx.delete(quoteItemFilesTable).where(inArray(quoteItemFilesTable.quoteItemId, itemIds));
-          await tx.delete(quoteItemsTable).where(inArray(quoteItemsTable.id, itemIds));
-        }
-        await tx.delete(quotesTable).where(inArray(quotesTable.id, quoteIds));
-      }
-
-      // ⑧ payments: projectId FK (cascade 없음)
-      await tx.delete(paymentsTable).where(eq(paymentsTable.projectId, projectId));
-
-      // ⑨ tasks: projectId FK (cascade 없음)
-      await tx.delete(tasksTable).where(eq(tasksTable.projectId, projectId));
-
-      // ⑩ 최종: 프로젝트 본체 삭제
-      await tx.delete(projectsTable).where(eq(projectsTable.id, projectId));
-    });
-
-    res.json({ success: true, deletedProjectId: projectId });
-  } catch (err: any) {
-    console.error("[Admin] 프로젝트 삭제 실패 projectId=%d:", projectId, err);
-    req.log.error({ err }, "Admin: failed to hard-delete project");
-    res.status(500).json({
-      success: false,
-      message: "삭제 실패",
-      error: err?.message ?? String(err),
-    });
   }
 });
 
@@ -1223,6 +1150,8 @@ router.get("/admin/quotes", ...adminGuard, async (req, res) => {
     const offset = (pageNum - 1) * pageSize;
 
     const conditions: ReturnType<typeof eq>[] = [];
+    // Soft Delete: 삭제된 견적은 목록·현황·검색에서 항상 제외
+    conditions.push(isNull(quotesTable.deletedAt) as any);
     if (status && status !== "all") conditions.push(eq(quotesTable.status, status as any));
     if (qtFilter && qtFilter !== "all") conditions.push(eq(quotesTable.quoteType, qtFilter));
     if (dateFrom) conditions.push(gte(quotesTable.issueDate, dateFrom) as any);
@@ -1446,6 +1375,21 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
       const projectTitle = quote.title?.trim() || `견적서 #${quoteId}`;
 
       const result = await db.transaction(async tx => {
+        // 중복 생성 방지: 견적 행을 잠그고(projectId) 재확인.
+        // 동일 견적에 대한 동시/연속 요청은 여기서 직렬화되어 한 건만 프로젝트를 만든다.
+        const [locked] = await tx
+          .select({ id: quotesTable.id, projectId: quotesTable.projectId })
+          .from(quotesTable)
+          .where(eq(quotesTable.id, quoteId))
+          .for("update");
+
+        // 이미 다른 요청이 프로젝트를 생성했다면 재생성하지 않고 기존 프로젝트를 반환
+        if (locked?.projectId) {
+          const [existingQuote] = await tx.select().from(quotesTable).where(eq(quotesTable.id, quoteId));
+          const [existingProject] = await tx.select().from(projectsTable).where(eq(projectsTable.id, locked.projectId));
+          return { quote: existingQuote, project: existingProject, created: false };
+        }
+
         // 프로젝트 생성 (status = "approved" 로 바로 설정)
         const [project] = await tx.insert(projectsTable).values({
           userId: adminUser.id,
@@ -1460,12 +1404,16 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
           .where(eq(quotesTable.id, quoteId))
           .returning();
 
-        return { quote: updatedQuote, project };
+        return { quote: updatedQuote, project, created: true };
       });
 
-      await logEvent("project", result.project.id, "project_created", req.log, req.user ?? undefined);
-      req.log.info({ quoteId, projectId: result.project.id }, "Admin: quote approved → project auto-created");
-      res.json({ quote: result.quote, project: result.project, autoCreatedProject: true });
+      if (result.created) {
+        await logEvent("project", result.project.id, "project_created", req.log, req.user ?? undefined);
+        req.log.info({ quoteId, projectId: result.project.id }, "Admin: quote approved → project auto-created");
+      } else {
+        req.log.info({ quoteId, projectId: result.project?.id }, "Admin: quote already converted — returning existing project (duplicate prevented)");
+      }
+      res.json({ quote: result.quote, project: result.project, autoCreatedProject: result.created });
       return;
     }
 
@@ -3421,7 +3369,7 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
       })
       .from(quotesTable)
       .leftJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))
-      .where(eq(quotesTable.id, quoteId));
+      .where(and(eq(quotesTable.id, quoteId), isNull(quotesTable.deletedAt)));
 
     if (!quote) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }
 

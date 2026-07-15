@@ -26,6 +26,7 @@ import { ProjectDetailModal } from '../components/admin/ProjectDetailModal';
 import { PrepaidLedgerModal } from '../components/admin/PrepaidLedgerModal';
 import { ProductManagementTab } from '../components/admin/ProductManagementTab';
 import { ProjectManagementTab } from '../components/admin/ProjectManagementTab';
+import { SalesDetailPage } from './SalesDetailPage';
 import { QuoteListTab } from '../components/admin/QuoteListTab';
 import { CompanyManagementTab } from '../components/admin/CompanyManagementTab';
 import { DataLayerTab } from '../components/admin/DataLayerTab';
@@ -377,6 +378,39 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   type DetailModalState = { id: number; initialSection?: "info"|"quote"|"progress"|"payment"|"settlement"|"history" };
   const [detailModal, setDetailModal] = useState<DetailModalState | null>(null);
   const openDetail = (id: number, initialSection?: DetailModalState["initialSection"]) => setDetailModal({ id, initialSection });
+
+  // ── 판매 상세 독립 페이지 (URL: /sales/:id) ────────────────────────────────
+  // 판매관리 목록 → 판매건 클릭 시 모달 대신 전체 페이지로 이동.
+  // 관리자는 App.tsx가 모든 경로에서 AdminDashboard를 렌더하므로, 여기서
+  // history.pushState 로 URL 을 동기화하면 사이드바/헤더 유지 + 새로고침 복원이 된다.
+  const parseSalesId = (): number | null => {
+    const m = window.location.pathname.match(/^\/sales\/(\d+)$/);
+    return m ? Number(m[1]) : null;
+  };
+  const [salesDetailId, setSalesDetailId] = useState<number | null>(parseSalesId);
+  const openSalesDetail = (id: number) => {
+    if (window.location.pathname !== `/sales/${id}`) {
+      window.history.pushState({}, "", `/sales/${id}`);
+    }
+    setAdminTab("projects");
+    setSalesDetailId(id);
+  };
+  const closeSalesDetail = () => {
+    if (parseSalesId() !== null) window.history.pushState({}, "", "/");
+    setSalesDetailId(null);
+  };
+  // 사이드바 관리자 메뉴 공통 이동 — 판매 상세(/sales/:id)에 있던 경우 함께 닫는다.
+  // (closeSalesDetail 이 URL(/sales/:id → /)과 salesDetailId 초기화를 담당하므로 중복 없음)
+  const navigateToAdminTab = (tabId: typeof adminTab) => {
+    closeSalesDetail();
+    setAdminTab(tabId);
+  };
+  // 브라우저 뒤로/앞으로 → URL 기준으로 판매 상세 열림/닫힘 동기화
+  useEffect(() => {
+    const onPop = () => setSalesDetailId(parseSalesId());
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -1344,7 +1378,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     return (
                       <button
                         key={item.id}
-                        onClick={() => setAdminTab(item.id as typeof adminTab)}
+                        onClick={() => navigateToAdminTab(item.id as typeof adminTab)}
                         style={{
                           display: "flex", alignItems: "center", gap: 10,
                           width: "100%", padding: "9px 20px 9px 22px", border: "none", cursor: "pointer",
@@ -1417,6 +1451,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
           {/* 스크롤 컨텐츠 */}
           <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px", background: "#f9fafb" }}>
+
+          {salesDetailId !== null ? (
+            <SalesDetailPage
+              saleId={salesDetailId}
+              token={token}
+              adminUsers={adminUsers}
+              onBack={closeSalesDetail}
+            />
+          ) : (<>
 
           {/* 대시보드 탭 */}
           {adminTab === "dashboard" && (() => {
@@ -1697,6 +1740,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           authHeaders={authHeaders}
           adminUsers={adminUsers}
           openDetail={openDetail}
+          onOpenSalesDetail={openSalesDetail}
           onProjectCreated={fetchAll}
         />
       )}
@@ -3198,6 +3242,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         <InsightAnalyticsTab token={token} setToast={setToast} />
       )}
 
+          </>)}
           </div>{/* /스크롤 컨텐츠 */}
         </div>{/* /메인 컨텐츠 */}
       </div>{/* /풀스크린 레이아웃 */}

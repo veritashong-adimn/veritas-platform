@@ -57,8 +57,14 @@ export const quotesTable = pgTable("quotes", {
   parentVersionId: integer("parent_version_id"),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
+
+  // ── Soft Delete ────────────────────────────────────────
+  // 물리 삭제하지 않고 목록·현황·검색에서만 제외한다(레코드는 보존).
+  deletedAt: timestamp("deleted_at"),
+  deletedBy: integer("deleted_by"),          // 삭제 처리 사용자 id
+  deletionReason: text("deletion_reason"),   // 삭제 사유(필수 입력)
 });
 
-export const insertQuoteSchema = createInsertSchema(quotesTable).omit({ id: true, createdAt: true, status: true });
+export const insertQuoteSchema = createInsertSchema(quotesTable).omit({ id: true, createdAt: true, status: true, deletedAt: true, deletedBy: true, deletionReason: true });
 export type InsertQuote = z.infer<typeof insertQuoteSchema>;
 export type Quote = typeof quotesTable.$inferSelect;

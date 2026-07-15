@@ -78,6 +78,10 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
     quoteType: QuoteType; issueDate: string; vatType: VatType;
     companyId: number | null; contactId: number | null;
   } | null>(null);
+  // 삭제(Soft Delete)
+  const [deleteTarget, setDeleteTarget] = useState<QuoteRow | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [deleting, setDeleting]         = useState(false);
 
   const fetchQuotes = useCallback(async () => {
     setLoading(true);
@@ -97,25 +101,52 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
   useEffect(() => { fetchQuotes(); }, [fetchQuotes]);
   useEffect(() => { if (refreshTick) fetchQuotes(); }, [refreshTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 견적 상태 변경
-  const handleStatusChange = async (quoteId: number, newStatus: string) => {
+  // 판매전환 — 기존 승인 API(PATCH .../status {approved}) 재사용, 프로젝트 자동 생성
+  // 확인창 → 요청 중 버튼 disabled(updatingId) 로 중복 클릭 방지
+  const handleConvertToSale = async (quoteId: number) => {
+    if (updatingId != null) return;
+    if (!window.confirm('이 견적을 판매건으로 전환하시겠습니까? 판매관리에서 프로젝트가 생성됩니다.')) return;
     setUpdatingId(quoteId);
     try {
       const res = await fetch(api(`/api/admin/quotes/${quoteId}/status`), {
         method: 'PATCH',
         headers: { ...authH, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify({ status: 'approved' }),
       });
       const data = await res.json();
-      if (!res.ok) { onToast(`상태 변경 실패: ${data.error}`); return; }
-      if (data.autoCreatedProject) {
-        onToast(`승인 완료 — 프로젝트 #${data.project.id}가 자동 생성되었습니다.`);
-      } else {
-        onToast(`상태가 "${QUOTE_STATUS_LABEL[newStatus]}"로 변경되었습니다.`);
-      }
+      if (!res.ok) { onToast(`판매전환 실패: ${data.error ?? res.status}`); return; }
+      const pid = data.project?.id ?? data.quote?.projectId ?? null;
+      onToast(pid != null ? `판매건으로 전환되었습니다. (판매 #${pid})` : '판매건으로 전환되었습니다.');
       fetchQuotes();
+    } catch {
+      onToast('판매전환 중 오류가 발생했습니다. 다시 시도해 주세요.');
     } finally { setUpdatingId(null); }
   };
+
+  // 견적 삭제(Soft Delete) — 삭제 사유 필수. 판매전환 완료 견적은 서버에서도 차단됨.
+  const handleDeleteQuote = async () => {
+    if (!deleteTarget || deleting) return;
+    const reason = deleteReason.trim();
+    if (reason.length < 2) { onToast('삭제 사유를 2자 이상 입력해 주세요.'); return; }
+    setDeleting(true);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${deleteTarget.id}`), {
+        method: 'DELETE',
+        headers: { ...authH, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(`견적 삭제 실패: ${data.error ?? res.status}`); return; }
+      onToast('견적이 삭제되었습니다.');
+      setDeleteTarget(null);
+      setDeleteReason('');
+      fetchQuotes();
+    } catch {
+      onToast('견적 삭제 중 오류가 발생했습니다. 다시 시도해 주세요.');
+    } finally { setDeleting(false); }
+  };
+
+  const DELETE_BLOCKED_MSG = '판매전환된 견적은 삭제할 수 없습니다. 먼저 판매취소를 진행해 주세요.';
 
   // PDF 미리보기 핸들러 — 단건 견적 상세 조회 후 모달 열기
   const handlePdfPreview = async (quoteId: number, title: string) => {
@@ -283,9 +314,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
   const kpiItems = [
     { label: '전체', value: 'all',      count: quotes.length,                                       color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe' },
     { label: '대기', value: 'pending',  count: quotes.filter(q => q.status === 'pending').length,   color: '#6b7280', bg: '#f9fafb', border: '#e5e7eb' },
-    { label: '발송', value: 'sent',     count: quotes.filter(q => q.status === 'sent').length,      color: '#2563eb', bg: '#dbeafe', border: '#93c5fd' },
     { label: '승인', value: 'approved', count: quotes.filter(q => q.status === 'approved').length,  color: '#15803d', bg: '#dcfce7', border: '#86efac' },
-    { label: '거절', value: 'rejected', count: quotes.filter(q => q.status === 'rejected').length,  color: '#dc2626', bg: '#fee2e2', border: '#fca5a5' },
   ];
 
   return (
@@ -318,9 +347,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
               options={[
                 { value: 'all',      label: '전체 상태' },
                 { value: 'pending',  label: '대기' },
-                { value: 'sent',     label: '발송' },
                 { value: 'approved', label: '승인' },
-                { value: 'rejected', label: '거절' },
               ]}
             />
           </div>
@@ -428,11 +455,14 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
                 {filtered.map(q => {
                   const sColor = QUOTE_STATUS_COLOR[q.status] ?? { bg: '#f3f4f6', color: '#6b7280' };
                   const isUpdating = updatingId === q.id;
-                  const nextStatuses = q.status === 'pending'
-                    ? [{ value: 'sent', label: '발송' }, { value: 'rejected', label: '거절' }]
-                    : q.status === 'sent'
-                    ? [{ value: 'approved', label: '승인(판매전환)' }, { value: 'rejected', label: '거절' }]
-                    : [{ value: 'pending', label: '대기로 되돌리기' }];
+                  // 판매전환 완료 판단 = quote.status === "approved" 기준.
+                  // (projectId는 견적 저장 시점에 이미 연결되므로 전환 여부 판단에 사용하지 않는다)
+                  // 상태변경 액션은 "판매전환" 하나만 유지한다(발송·거절 제거).
+                  // 판매전환 이전의 모든 견적은 '대기'로 관리하며, 미체결 견적은 판매전환 안 된 상태로 판단한다.
+                  const isConverted = q.status === 'approved';
+                  // 삭제 가능 = 판매전환 완료가 아닌 견적(미전환 또는 판매취소 후 복귀).
+                  // 판매전환 완료(활성 Project 연결) 견적은 삭제 불가 — 서버에서도 동일 검증.
+                  const canDelete = !isConverted;
 
                   return (
                     <tr key={q.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
@@ -525,24 +555,47 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
                       </td>
                       {/* 상태변경 */}
                       <td style={{ padding: '6px 10px' }}>
-                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                          {nextStatuses.map(ns => (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                          {isConverted ? (
+                            <span
+                              style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, fontWeight: 700, background: '#dcfce7', color: '#15803d', whiteSpace: 'nowrap' }}
+                              data-testid={`badge-quote-converted-${q.id}`}
+                              aria-label={`${q.quoteNumber ?? q.id} 판매전환 완료`}
+                            >
+                              ✓ 판매전환 완료{q.projectId != null ? ` (판매 #${q.projectId})` : ''}
+                            </span>
+                          ) : (
                             <button
-                              key={ns.value}
-                              onClick={() => handleStatusChange(q.id, ns.value)}
+                              onClick={() => handleConvertToSale(q.id)}
                               disabled={isUpdating}
                               style={{
                                 fontSize: 11, padding: '3px 8px', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap',
-                                background: ns.value === 'approved' ? '#dcfce7' : ns.value === 'rejected' ? '#fee2e2' : ns.value === 'sent' ? '#dbeafe' : '#f3f4f6',
-                                color: ns.value === 'approved' ? '#15803d' : ns.value === 'rejected' ? '#dc2626' : ns.value === 'sent' ? '#2563eb' : '#6b7280',
+                                background: '#dcfce7', color: '#15803d',
                                 border: 'none', fontWeight: 600, opacity: isUpdating ? 0.5 : 1,
                               }}
-                              data-testid={`btn-quote-status-${ns.value}-${q.id}`}
-                              aria-label={`${q.quoteNumber ?? q.id} ${ns.label}`}
+                              data-testid={`btn-quote-status-approved-${q.id}`}
+                              aria-label={`${q.quoteNumber ?? q.id} 판매전환`}
                             >
-                              {isUpdating ? '…' : ns.label}
+                              {isUpdating ? '…' : '판매전환'}
                             </button>
-                          ))}
+                          )}
+                          {/* 삭제 — 판매전환 완료 견적은 비활성 스타일 + 안내 (서버에서도 차단) */}
+                          <button
+                            onClick={() => canDelete ? setDeleteTarget(q) : onToast(DELETE_BLOCKED_MSG)}
+                            title={canDelete ? '견적 삭제' : DELETE_BLOCKED_MSG}
+                            aria-disabled={!canDelete}
+                            data-testid={`btn-delete-quote-${q.id}`}
+                            aria-label={`${q.quoteNumber ?? q.id} 삭제`}
+                            style={{
+                              fontSize: 11, padding: '3px 8px', borderRadius: 5, fontWeight: 600, whiteSpace: 'nowrap',
+                              cursor: canDelete ? 'pointer' : 'not-allowed',
+                              background: canDelete ? '#fef2f2' : '#f3f4f6',
+                              color: canDelete ? '#dc2626' : '#9ca3af',
+                              border: `1px solid ${canDelete ? '#fca5a5' : '#e5e7eb'}`,
+                            }}
+                          >
+                            삭제
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -563,6 +616,79 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
         quoteTitle={pdfData.title}
         onClose={() => setPdfData(null)}
       />
+    )}
+
+    {/* 견적 삭제 확인 모달 (Soft Delete) */}
+    {deleteTarget && (
+      <div
+        style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        onClick={() => { if (!deleting) { setDeleteTarget(null); setDeleteReason(''); } }}
+      >
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{ background: '#fff', borderRadius: 14, padding: '26px 30px', width: 460, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}
+          data-testid="modal-quote-delete"
+        >
+          <h2 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 800, color: '#dc2626' }}>견적 삭제</h2>
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: '#374151', lineHeight: 1.6 }}>
+            삭제된 견적은 견적관리 목록에서 제거됩니다.
+          </p>
+
+          {/* 삭제 대상 정보 */}
+          <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '12px 14px', marginBottom: 16 }}>
+            {[
+              ['견적번호', deleteTarget.quoteNumber ?? `#${deleteTarget.id}`],
+              ['견적서명', deleteTarget.title ?? deleteTarget.projectTitle ?? '(미입력)'],
+              ['거래처',   deleteTarget.companyName ?? '—'],
+              ['고객명',   deleteTarget.contactName ?? '—'],
+              ['견적금액', `${fmt(deleteTarget.price)}원`],
+            ].map(([label, value]) => (
+              <div key={label} style={{ display: 'flex', gap: 10, fontSize: 12.5, padding: '3px 0' }}>
+                <span style={{ width: 64, flexShrink: 0, color: '#9ca3af', fontWeight: 600 }}>{label}</span>
+                <span style={{ color: '#111827', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* 삭제 사유 (필수) */}
+          <label style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 6 }}>
+            삭제 사유 <span style={{ color: '#dc2626' }}>*</span>
+          </label>
+          <textarea
+            value={deleteReason}
+            onChange={e => setDeleteReason(e.target.value)}
+            placeholder="예: 중복 견적 생성 / 고객 요청으로 견적 철회 / 잘못 작성된 견적"
+            rows={3}
+            data-testid="input-quote-delete-reason"
+            aria-label="삭제 사유 입력"
+            style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box', outline: 'none', resize: 'vertical', marginBottom: 4, fontFamily: 'inherit' }}
+          />
+          <p style={{ margin: '0 0 18px', fontSize: 11, color: '#9ca3af' }}>최소 2자 이상 입력해 주세요. (공백만 입력 불가)</p>
+
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => { setDeleteTarget(null); setDeleteReason(''); }}
+              disabled={deleting}
+              data-testid="btn-quote-delete-cancel"
+              style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #d1d5db', background: '#f9fafb', fontSize: 13, fontWeight: 600, cursor: deleting ? 'not-allowed' : 'pointer', color: '#374151' }}
+            >
+              취소
+            </button>
+            <button
+              onClick={handleDeleteQuote}
+              disabled={deleteReason.trim().length < 2 || deleting}
+              data-testid="btn-quote-delete-confirm"
+              style={{
+                padding: '9px 20px', borderRadius: 8, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700,
+                background: deleteReason.trim().length >= 2 && !deleting ? '#dc2626' : '#fca5a5',
+                cursor: deleteReason.trim().length >= 2 && !deleting ? 'pointer' : 'not-allowed',
+              }}
+            >
+              {deleting ? '삭제 중…' : '삭제'}
+            </button>
+          </div>
+        </div>
+      </div>
     )}
 
     </>
