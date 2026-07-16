@@ -16,14 +16,13 @@ import {
   type ValidationResult,
 } from '../../lib/languagePagePolicy';
 import AiQuoteModal, { type AiDraftRow } from './AiQuoteModal';
-import { calculateInterpretationAmount } from '../../lib/quotePdf';
+import { calculateInterpretationAmount, displayUnit } from '../../lib/quotePdf';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
 
 export type QuoteType    = 'b2b_standard' | 'b2c_prepaid' | 'accumulated_batch';
 export type VatType      = 'taxable' | 'exempt' | 'zero_rate';
 export type ServiceType  = 'translation' | 'interpretation' | 'equipment' | 'expense';
-type CreationMode = 'direct' | 'ai';
 
 export interface QuoteItemForm {
   productId:    number | null;
@@ -57,7 +56,8 @@ export interface QuoteItemForm {
 }
 
 interface Company   { id: number; name: string; divisionNames?: string[] }
-interface Contact   { id: number; name: string; companyId: number | null }
+interface Division  { id: number; name: string }
+interface Contact   { id: number; name: string; companyId: number | null; divisionId?: number | null; divisionName?: string | null }
 interface AdminUser { id: number; name?: string | null; email: string }
 
 // ─── 서비스 유형 설정 ─────────────────────────────────────────────────────────
@@ -747,7 +747,7 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
       productId: p?.id ?? null,
       productName: p?.name ?? '',
       productType,
-      unit: p?.unit ?? SVC_DEFAULT_UNIT[productType],
+      unit: p ? (displayUnit(p.name, p.unit) || SVC_DEFAULT_UNIT[productType]) : SVC_DEFAULT_UNIT[productType],
       ...(productType === 'translation' && p?.sourceLanguage
         ? { sourceLanguage: p.sourceLanguage }
         : {}),
@@ -903,6 +903,7 @@ export interface QuoteEditorWorkspaceProps {
   projectId:         number | null;
   initialCompanyId?: number | null;
   initialContactId?: number | null;
+  initialDivisionId?: number | null;
   initialTitle?:     string;
   onClose:           () => void;
   onSaved:           (result: { quoteId: number; projectId: number | null }) => void;
@@ -922,17 +923,17 @@ export interface QuoteEditorWorkspaceProps {
 // ─── 메인 컴포넌트 ────────────────────────────────────────────────────────────
 
 export function QuoteEditorWorkspace({
-  token, projectId, initialCompanyId = null, initialContactId = null, initialTitle = '',
+  token, projectId, initialCompanyId = null, initialContactId = null, initialDivisionId = null, initialTitle = '',
   onClose, onSaved, onToast, adminList = [], asPage = false,
   initialQuoteId, initialItems, initialNote, initialQuoteType, initialIssueDate, initialVatType,
 }: QuoteEditorWorkspaceProps) {
 
   const authH = { Authorization: `Bearer ${token}` };
-  const [creationMode,  setCreationMode]  = useState<CreationMode>('direct');
   const [showAiModal,   setShowAiModal]   = useState(false);
   const [title,          setTitle]         = useState(initialTitle);
   const [titleEdited,    setTitleEdited]   = useState(!!initialTitle);
   const [companyId,      setCompanyId]     = useState<number | null>(initialCompanyId);
+  const [divisionId,     setDivisionId]    = useState<number | null>(initialDivisionId);
   const [contactId,      setContactId]     = useState<number | null>(initialContactId);
   const [adminId,        setAdminId]       = useState<number | null>(null);
   const [issueDate,      setIssueDate]     = useState(() => initialIssueDate ?? dateOffset(0));
@@ -942,6 +943,7 @@ export function QuoteEditorWorkspace({
   const [versionReason,  setVersionReason] = useState('');
   const [items,          setItems]         = useState<QuoteItemForm[]>(initialItems ?? [defaultItem()]);
   const [companies,      setCompanies]     = useState<Company[]>([]);
+  const [divisions,      setDivisions]     = useState<Division[]>([]);
   const [contacts,       setContacts]      = useState<Contact[]>([]);
   const [products,       setProducts]      = useState<Product[]>([]);
   const [loading,        setLoading]       = useState(true);
@@ -960,18 +962,46 @@ export function QuoteEditorWorkspace({
     }).finally(() => setLoading(false));
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 거래처 선택 시 해당 거래처의 브랜드(Division) 목록 로드 (기존 API 재사용)
+  useEffect(() => {
+    if (companyId == null) { setDivisions([]); return; }
+    fetch(api(`/api/admin/companies/${companyId}/divisions`), { headers: authH })
+      .then(r => r.ok ? r.json() : [])
+      .then(ds => setDivisions(Array.isArray(ds) ? ds : []))
+      .catch(() => setDivisions([]));
+  }, [companyId, token]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (titleEdited || projectId !== null) return;
     const co = companies.find(c => c.id === companyId);
     const vi = items.filter(it => it.productName.trim());
     if (!co || vi.length === 0) return;
-    setTitle(`${co.name}_${vi[0].productName.trim()}_${issueDate.replace(/-/g, '')}`);
-  }, [companyId, items, issueDate, companies, titleEdited, projectId]);
+    // 견적서명 자동 생성 규칙:
+    //   브랜드 미선택: VERITAS│[거래처명]_[대표상품명]_[YYYYMMDD]
+    //   브랜드 선택:   VERITAS│[거래처명]_[브랜드명]_[대표상품명]_[YYYYMMDD]
+    // VERITAS 뒤 구분자는 '│'(vertical bar), 이후 항목은 '_'로 연결한다.
+    // (최초 기본값일 뿐, 사용자가 수정하면 titleEdited 가드로 덮어쓰지 않음)
+    const brand = divisions.find(d => d.id === divisionId);
+    const brandPart = brand ? `${brand.name}_` : '';
+    setTitle(`VERITAS│${co.name}_${brandPart}${vi[0].productName.trim()}_${issueDate.replace(/-/g, '')}`);
+  }, [companyId, divisionId, divisions, items, issueDate, companies, titleEdited, projectId]);
 
-  const handleCompanyChange = (cid: number | null) => { setCompanyId(cid); setContactId(null); setTitleEdited(false); };
+  const handleCompanyChange  = (cid: number | null) => { setCompanyId(cid); setDivisionId(null); setContactId(null); setTitleEdited(false); };
+  // 브랜드 변경 시 담당자 재선택 유도 + 견적서명 재생성
+  const handleDivisionChange = (did: number | null) => { setDivisionId(did); setContactId(null); setTitleEdited(false); };
   const isStandalone   = projectId === null;
-  const companyOptions = companies.map(c => ({ id: c.id, label: c.name, sub: c.divisionNames?.slice(0, 2).join(' · ') }));
-  const contactOptions = (contactId !== null || companyId === null ? contacts : contacts.filter(c => c.companyId === companyId)).map(c => ({ id: c.id, label: c.name }));
+  // 거래처 보조정보에 연결된 브랜드(divisions) 전체를 표시한다.
+  // (InlineSearchField는 label + sub 를 모두 검색하므로, 전체 브랜드명으로 거래처 검색이 가능해진다)
+  const companyOptions = companies.map(c => ({ id: c.id, label: c.name, sub: c.divisionNames?.join(' · ') }));
+  const divisionOptions = divisions.map(d => ({ id: d.id, label: d.name }));
+  // 담당자: 거래처로 1차 필터, 브랜드 선택 시 해당 브랜드(또는 브랜드 미지정) 담당자만.
+  //   담당자 옵션에는 브랜드명을 회색 서브텍스트로 함께 표시한다.
+  const contactOptions = contacts
+    .filter(c => c.id === contactId || (
+      (companyId === null || c.companyId === companyId) &&
+      (divisionId === null || c.divisionId === divisionId || c.divisionId == null)
+    ))
+    .map(c => ({ id: c.id, label: c.name, sub: c.divisionName ?? undefined }));
   const adminOptions   = adminList.map(u => ({ id: u.id, label: u.name ?? u.email }));
 
   const updateItem   = (idx: number, p: Partial<QuoteItemForm>) => setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...p } : it));
@@ -1050,6 +1080,7 @@ export function QuoteEditorWorkspace({
           title:     title.trim() || undefined,
           companyId: companyId ?? undefined,
           contactId: contactId ?? undefined,
+          divisionId: divisionId ?? null,
         };
         console.log('[QUOTE UPDATE REQUEST]', { method: 'PUT', url, quoteId: initialQuoteId, companyId, contactId });
         const res  = await fetch(url, {
@@ -1071,7 +1102,7 @@ export function QuoteEditorWorkspace({
         if (!t) { onToast('견적서명을 입력하세요.'); return; }
         const res = await fetch(api('/api/admin/quotes'), {
           method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...commonBody, title: t, companyId: companyId ?? undefined, contactId: contactId ?? undefined, adminId: adminId ?? undefined }),
+          body: JSON.stringify({ ...commonBody, title: t, companyId: companyId ?? undefined, contactId: contactId ?? undefined, divisionId: divisionId ?? undefined, adminId: adminId ?? undefined }),
         });
         const data = await res.json();
         if (!res.ok) { onToast(`견적서 저장 실패: ${data.error}`); return; }
@@ -1086,7 +1117,7 @@ export function QuoteEditorWorkspace({
       onToast('견적이 저장되었습니다.'); onSaved({ quoteId: data.id, projectId });
     } catch { onToast('견적 저장 중 오류가 발생했습니다.'); }
     finally { setSaving(false); }
-  }, [items, projectId, title, companyId, contactId, adminId, issueDate, quoteType, vatType, note, versionReason, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [items, projectId, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Excel Export ─────────────────────────────────────────────────────────
 
@@ -1149,13 +1180,20 @@ export function QuoteEditorWorkspace({
                 {fLbl('견적서명', true)}
                 {!titleEdited && title && <span style={{ fontSize: 10, color: C.textMuted, fontStyle: 'italic', marginBottom: 4 }}>자동생성됨</span>}
               </div>
-              <input value={title} onChange={e => { setTitle(e.target.value); setTitleEdited(true); }} placeholder="예: 삼성전자_한영동시통역_20260715" style={inpSt} />
+              <input value={title} onChange={e => { setTitle(e.target.value); setTitleEdited(true); }} placeholder="예: VERITAS│삼성전자_영어↔한국어 동시통역_20260720" style={inpSt} />
             </div>
           )}
           {isStandalone && (
             <div>
               {fLbl('거래처')}
               <InlineSearchField items={companyOptions} value={companyId} onChange={handleCompanyChange} placeholder="거래처 검색…" popupTitle="거래처 검색" />
+            </div>
+          )}
+          {/* 브랜드(Division) — 브랜드가 있는 거래처에서만 표시, 선택사항 */}
+          {isStandalone && divisions.length > 0 && (
+            <div>
+              {fLbl('브랜드')}
+              <InlineSearchField items={divisionOptions} value={divisionId} onChange={handleDivisionChange} placeholder="브랜드 선택 (선택사항)" popupTitle="브랜드 선택" />
             </div>
           )}
           {isStandalone && (
@@ -1266,15 +1304,6 @@ export function QuoteEditorWorkspace({
           )}
         </div>
       </Card>
-
-      {/* ── 하단 버튼 ─────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, paddingBottom: 8 }}>
-        <DsButton variant="secondary" size="lg" onClick={handleExcelExport}>📊 Excel 출력</DsButton>
-        <DsButton variant="outline"   size="lg" onClick={onClose} disabled={saving}>취소</DsButton>
-        <DsButton variant="primary"   size="lg" onClick={handleSave} disabled={saving}>
-          {saving ? '저장 중…' : (isStandalone ? '💾 견적서 저장 (프로젝트 생성)' : '💾 견적 저장')}
-        </DsButton>
-      </div>
     </div>
   );
 
@@ -1282,27 +1311,22 @@ export function QuoteEditorWorkspace({
 
   const wsHeader = (bg: string, border: string, shadow: string, padH: string) => (
     <div style={{ background: bg, borderBottom: border, padding: `0 ${padH}`, height: 52, display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0, boxShadow: shadow }}>
-      <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, color: C.textMuted, fontSize: 13, padding: '4px 0' }}>
-        ← 돌아가기
+      <button onClick={onClose} data-testid="btn-quote-back" aria-label="뒤로가기"
+        style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 8, cursor: 'pointer', color: C.textSecondary, fontSize: 13, fontWeight: 600, padding: '6px 12px' }}>
+        ← 뒤로가기
       </button>
       <div style={{ width: 1, height: 20, background: C.border }} />
+      {/* 페이지 제목 */}
       <div>
         <span style={{ ...TYPO.cardTitle }}>{isStandalone ? '새 견적서 작성' : '견적 작성'}</span>
-        {projectId !== null && <span style={{ ...TYPO.helper, marginLeft: SP[4] }}>프로젝트 #{projectId} — Version Engine</span>}
+        {projectId !== null && <span style={{ ...TYPO.helper, marginLeft: SP[4] }}>Version Engine</span>}
       </div>
-      {/* AI 생성 토글 */}
-      <div style={{ marginLeft: 'auto', marginRight: 'auto', display: 'flex', gap: 4, background: C.g100, borderRadius: 10, padding: 4 }}>
-        <button type="button" onClick={() => setShowAiModal(true)}
+      {/* 우측 액션: AI 견적 생성(기능 버튼) + Excel / 취소 / 저장 */}
+      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button type="button" onClick={() => setShowAiModal(true)} data-testid="btn-ai-quote" aria-label="AI 견적 생성"
           style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: C.ai, color: '#ffffff' }}>
           🤖 AI 견적 생성
         </button>
-        <button type="button" onClick={() => setCreationMode('direct')}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: creationMode === 'direct' ? C.bgCard : 'transparent', color: creationMode === 'direct' ? C.textPrimary : C.textMuted, boxShadow: creationMode === 'direct' ? '0 1px 4px rgba(0,0,0,0.1)' : 'none' }}>
-          ✏ 직접 작성
-        </button>
-      </div>
-      {/* 액션 버튼 */}
-      <div style={{ display: 'flex', gap: 8 }}>
         <DsButton variant="secondary" size="md" onClick={handleExcelExport}>📊 Excel</DsButton>
         <DsButton variant="outline" size="md" onClick={onClose} disabled={saving}>취소</DsButton>
         <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving}>
@@ -1328,25 +1352,22 @@ export function QuoteEditorWorkspace({
         )}
         {/* 인라인 Workspace 헤더 — 스크롤 영역에서 sticky */}
         <div style={{ position: 'sticky', top: 0, zIndex: 20, background: C.bgCard, borderBottom: BD.card, height: 52, display: 'flex', alignItems: 'center', gap: 16, padding: '0 28px', boxShadow: BD.shadow.card }}>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, color: C.textMuted, fontSize: 13, padding: '4px 0' }}>
-            ← 돌아가기
+          <button onClick={onClose} data-testid="btn-quote-back" aria-label="뒤로가기"
+            style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 8, cursor: 'pointer', color: C.textSecondary, fontSize: 13, fontWeight: 600, padding: '6px 12px' }}>
+            ← 뒤로가기
           </button>
           <div style={{ width: 1, height: 20, background: C.border }} />
+          {/* 페이지 제목 */}
           <div>
             <span style={{ fontSize: 15, fontWeight: 700, color: C.textPrimary }}>{isStandalone ? '새 견적서 작성' : '견적 작성'}</span>
-            {projectId !== null && <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 8 }}>프로젝트 #{projectId} — Version Engine</span>}
+            {projectId !== null && <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 8 }}>Version Engine</span>}
           </div>
-          <div style={{ marginLeft: 'auto', marginRight: 'auto', display: 'flex', gap: 4, background: C.g100, borderRadius: 10, padding: 4 }}>
-            <button type="button" onClick={() => setShowAiModal(true)}
+          {/* 우측 액션: AI 견적 생성(기능 버튼) + Excel / 취소 / 저장 */}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button type="button" onClick={() => setShowAiModal(true)} data-testid="btn-ai-quote" aria-label="AI 견적 생성"
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: C.ai, color: '#ffffff' }}>
               🤖 AI 견적 생성
             </button>
-            <button type="button" onClick={() => setCreationMode('direct')}
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: creationMode === 'direct' ? C.bgCard : 'transparent', color: creationMode === 'direct' ? C.textPrimary : C.textMuted, boxShadow: creationMode === 'direct' ? '0 1px 4px rgba(0,0,0,0.1)' : 'none' }}>
-              ✏ 직접 작성
-            </button>
-          </div>
-          <div style={{ display: 'flex', gap: 8 }}>
             <DsButton variant="secondary" size="md" onClick={handleExcelExport}>📊 Excel</DsButton>
             <DsButton variant="outline" size="md" onClick={onClose} disabled={saving}>취소</DsButton>
             <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving}>

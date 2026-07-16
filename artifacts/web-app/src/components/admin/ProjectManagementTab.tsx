@@ -5,6 +5,7 @@ import {
 } from '../../lib/constants';
 import { StatusBadge, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../ui';
 import { DraggableModal } from './DraggableModal';
+import { renderQuoteTitle } from '../../lib/quoteTitle';
 
 // ─── 인라인 스타일 ─────────────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
@@ -368,7 +369,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       const res = await fetch(api(`/api/admin/projects${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) setProjects(Array.isArray(data) ? data : []);
-    } catch { setToast("오류: 프로젝트 조회 실패"); }
+    } catch { setToast("오류: 판매 조회 실패"); }
     finally { setLoading(false); }
   }, [token, projectSearch, projectFilter, dateFrom, dateTo, assignedAdminFilter, projectFinancialFilter, projectQuickFilter, projectBillingTypeFilter, projectPaymentDueDateFrom, projectPaymentDueDateTo, projectCompanyIdFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -477,21 +478,21 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
           });
           const invData = await invRes.json();
           if (invRes.ok) {
-            setToast(invData.mode === "linked" ? `프로젝트 #${data.id} 생성 + 기존 계정 연결됨` : `프로젝트 #${data.id} 생성 + 초대 이메일 발송됨`);
+            setToast(invData.mode === "linked" ? `판매건 생성 + 기존 계정 연결됨` : `판매건 생성 + 초대 이메일 발송됨`);
           } else {
-            setToast(`프로젝트 #${data.id} 생성됨 (초대 실패: ${invData.error})`);
+            setToast(`판매건 생성됨 (초대 실패: ${invData.error})`);
           }
         } catch {
-          setToast(`프로젝트 #${data.id} 생성됨 (초대 발송 오류)`);
+          setToast(`판매건 생성됨 (초대 발송 오류)`);
         }
       } else {
-        setToast(`프로젝트 #${data.id} 생성 완료`);
+        setToast(`판매건 생성 완료`);
       }
       resetCreateModal();
       await fetchProjects();
       openDetail(data.id);
       onProjectCreated?.();
-    } catch { setToast("오류: 프로젝트 생성 실패"); }
+    } catch { setToast("오류: 판매전환 실패"); }
     finally { setCreatingProject(false); }
   };
 
@@ -531,12 +532,12 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
           <div style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 460, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
             <h2 style={{ margin: "0 0 8px", fontSize: 18, fontWeight: 800, color: "#b45309" }}>판매 취소</h2>
             <p style={{ margin: "0 0 16px", fontSize: 13, color: "#374151", lineHeight: 1.6 }}>
-              취소 처리 후에도 프로젝트와 견적 데이터는 보존됩니다.
+              취소 처리 후에도 판매와 견적 데이터는 보존됩니다.
             </p>
             <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "10px 14px", marginBottom: 18 }}>
               <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 700, color: "#92400e" }}>취소 대상</p>
               <p style={{ margin: 0, fontSize: 13, color: "#78350f" }}>
-                #{cancelProject.id} — {cancelProject.title || "(제목 없음)"}
+                {cancelProject.title || "(제목 없음)"}
               </p>
             </div>
             <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
@@ -566,8 +567,8 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       {/* ── 프로젝트 직접 등록 모달 ── */}
       {showCreateProject && (
         <DraggableModal
-          title="프로젝트 직접 등록"
-          subtitle="내부 업무 또는 예외 업무용 — 거래처, 담당자, 의뢰/청구/납부 주체를 지정하여 프로젝트를 직접 등록합니다."
+          title="판매 직접 등록"
+          subtitle="내부 업무 또는 예외 업무용 — 거래처, 담당자, 의뢰/청구/납부 주체를 지정하여 판매건을 직접 등록합니다."
           onClose={resetCreateModal}
           width={520}
           zIndex={400}
@@ -577,7 +578,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
             <div>
               <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 4 }}>제목 *</label>
               <input value={newProjectTitle} onChange={e => setNewProjectTitle(e.target.value)}
-                placeholder="프로젝트 제목" autoFocus
+                placeholder="판매 제목" autoFocus
                 style={{ width: "100%", boxSizing: "border-box", border: "1px solid #d1d5db", borderRadius: 8, padding: "9px 12px", fontSize: 14, outline: "none" }}
                 onKeyDown={e => e.key === "Enter" && handleCreateAdminProject()} />
             </div>
@@ -928,7 +929,6 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                     <thead>
                       <tr style={{ background: "#f8fafc" }}>
                         {[
-                          { label: "ID",           w: 44  },
                           { label: "프로젝트명",    w: 200 },
                           { label: "거래처",        w: 130 },
                           { label: "담당자",        w: 90  },
@@ -972,12 +972,9 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                             onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
                             onMouseLeave={e => (e.currentTarget.style.background = "")}>
 
-                            {/* ID */}
-                            <td style={{ ...tableTd, color: "#c0c8d4", fontSize: 11 }}>#{p.id}</td>
-
                             {/* 프로젝트명 */}
                             <td style={{ ...tableTd, maxWidth: 200 }}>
-                              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 600, color: "#111827" }}>{p.title}</div>
+                              <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13, fontWeight: 600, color: "#111827" }}>{renderQuoteTitle(p.title)}</div>
                               {p.customerEmail && <div style={{ fontSize: 11, color: "#c0c8d4", marginTop: 1 }}>{p.customerEmail}</div>}
                             </td>
 

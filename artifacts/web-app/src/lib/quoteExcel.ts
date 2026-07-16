@@ -13,6 +13,7 @@
 // @ts-ignore
 import XLSX from 'xlsx-js-style';
 import { getPolicy } from './languagePagePolicy';
+import { displayUnit } from './quotePdf';
 import type { Product } from './constants';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
@@ -231,7 +232,7 @@ export function downloadQuoteExcel(data: QuoteExportData): void {
     sc(r, COL.PRODUCT, item.productName || '-',              S.td);
     sc(r, COL.DETAIL,  detail,                               S.tdTxt);
     sc(r, COL.QTY,     Number(item.quantity) || 1,           S.tdNum, 'n');
-    sc(r, COL.UNIT,    item.unit || '-',                     S.tdC);
+    sc(r, COL.UNIT,    displayUnit(item.productName, item.unit) || '-', S.tdC);
     sc(r, COL.PRICE,   fmtN(item.unitPrice),                 S.tdNum, 'n');
     sc(r, COL.SUPPLY,  supply,                               S.tdNum, 'n');
     sc(r, COL.MEMO,    item.memo || '',                      S.tdTxt);

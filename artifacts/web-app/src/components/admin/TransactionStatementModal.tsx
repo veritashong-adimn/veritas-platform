@@ -11,6 +11,7 @@
 import React, { useEffect, useRef } from 'react';
 import type { QuotePdfData } from '../../lib/quotePdf';
 import { ITEM_TYPE_LABEL } from '../../lib/quotePdf';
+import { renderQuoteTitle, buildDocFileName, escapeHtmlTitle } from '../../lib/quoteTitle';
 
 // ─── 숫자 / 날짜 포맷 ────────────────────────────────────────────────────────
 const fmt = (n: number) => n.toLocaleString('ko-KR');
@@ -79,11 +80,16 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
       return;
     }
 
+    // PDF 파일명 = '[견적서명]_거래명세서' (없으면 명세서번호 기반 fallback). 별도 인쇄창이라 메인 제목 복구 불필요.
+    // 호출부가 제목 없을 때 quoteNumber를 넘기므로, 그 경우는 '제목 없음'으로 간주해 fallback을 적용한다.
+    const effectiveTitle = quoteTitle && quoteTitle !== data.quoteNumber ? quoteTitle : '';
+    const fileName = buildDocFileName(effectiveTitle, { suffix: '거래명세서', fallback: `${statementNo}_거래명세서` });
+
     printWin.document.write(`<!DOCTYPE html>
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>${statementNo} 거래명세서</title>
+<title>${escapeHtmlTitle(fileName)}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -155,7 +161,7 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
               거래명세서 미리보기
             </span>
             <span style={{ color: '#94a3b8', fontSize: 12 }}>
-              {statementNo} · {quoteTitle}
+              {statementNo} · {renderQuoteTitle(quoteTitle)}
             </span>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -240,10 +246,11 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
                   <p style={{ fontSize: 11, color: '#9ca3af' }}>수신자 정보 미입력</p>
                 ) : (
                   <>
-                    <InfoRow label="거래처명"   value={data.customer.companyName        || '-'} />
+                    <InfoRow label="상호"       value={data.customer.companyName        || '-'} />
+                    {data.customer.brandName && <InfoRow label="브랜드"     value={data.customer.brandName} />}
                     <InfoRow label="사업자번호" value={data.customer.businessNumber     || '-'} />
-                    <InfoRow label="대표자명"   value={data.customer.representativeName || '-'} />
-                    <InfoRow label="담당자명"   value={data.customer.contactName        || '-'} />
+                    <InfoRow label="대표자"     value={data.customer.representativeName || '-'} />
+                    <InfoRow label="담당자"     value={data.customer.contactName        || '-'} />
                     <InfoRow label="연락처"     value={data.customer.contactPhone       || '-'} />
                     <InfoRow label="이메일"     value={data.customer.contactEmail       || '-'} />
                   </>

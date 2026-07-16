@@ -1218,7 +1218,7 @@ router.get("/admin/quotes", ...adminGuard, async (req, res) => {
 // ─── 독립 견적서 생성 (프로젝트 없이) ────────────────────────────────────────
 router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
   const {
-    title, companyId, contactId, adminId,
+    title, companyId, contactId, divisionId, adminId,
     amount, items, note,
     taxDocumentType, taxCategory,
     quoteType, billingType, paymentMethod,
@@ -1226,7 +1226,7 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
     prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
     batchPeriodStart, batchPeriodEnd,
   } = req.body as {
-    title?: string; companyId?: number; contactId?: number; adminId?: number;
+    title?: string; companyId?: number; contactId?: number; divisionId?: number | null; adminId?: number;
     amount?: number; items?: Array<{
       productName: string; unit?: string; quantity?: number;
       unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string;
@@ -1269,6 +1269,8 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
           adminId:   adminId ?? null,
           companyId: companyId ?? null,
           contactId: contactId ?? null,
+          // 브랜드(Division) — 기존 projects.requestingDivisionId 재사용 (별도 컬럼 없음)
+          requestingDivisionId: divisionId ?? null,
           title:     title.trim(),
           status:    "created",
         }).returning();
@@ -3242,10 +3244,10 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     interpretationDirection?: string; interpretType?: string;
     hasTravelExpense?: boolean; hasEquipment?: boolean; isCustomProduct?: boolean;
   };
-  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId } = req.body as {
+  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId } = req.body as {
     title?: string; items?: PutItemInput[]; note?: string;
     quoteType?: string; issueDate?: string; validUntil?: string;
-    companyId?: number | null; contactId?: number | null;
+    companyId?: number | null; contactId?: number | null; divisionId?: number | null;
   };
   if (!items || items.length === 0) {
     res.status(400).json({ error: "품목이 없습니다." }); return;
@@ -3270,8 +3272,8 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
   const totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
   try {
     await db.transaction(async tx => {
-      // 거래처/담당자 연결 처리
-      if (companyId !== undefined || contactId !== undefined) {
+      // 거래처/브랜드/담당자 연결 처리
+      if (companyId !== undefined || contactId !== undefined || divisionId !== undefined) {
         const [existing] = await tx.select({ projectId: quotesTable.projectId })
           .from(quotesTable).where(eq(quotesTable.id, quoteId));
         if (existing?.projectId) {
@@ -3279,6 +3281,8 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
           const patch: Record<string, unknown> = {};
           if (companyId !== undefined) patch.companyId = companyId ?? null;
           if (contactId !== undefined) patch.contactId = contactId ?? null;
+          // 브랜드(Division) — 기존 projects.requestingDivisionId 재사용
+          if (divisionId !== undefined) patch.requestingDivisionId = divisionId ?? null;
           await tx.update(projectsTable).set(patch).where(eq(projectsTable.id, existing.projectId));
         } else if (companyId || contactId) {
           // 프로젝트 없음 → 신규 생성 후 quote 연결
@@ -3287,6 +3291,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
             userId:    creatorId,
             companyId: companyId ?? null,
             contactId: contactId ?? null,
+            requestingDivisionId: divisionId ?? null,
             title:     title?.trim() || `견적 #${quoteId}`,
             status:    'created',
           }).returning();
@@ -3358,6 +3363,9 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
         projectId:   quotesTable.projectId,
         companyId:           projectsTable.companyId,
         contactId:           projectsTable.contactId,
+        // 브랜드(Division) — projects.requestingDivisionId 재사용
+        divisionId:          projectsTable.requestingDivisionId,
+        divisionName:        sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
         companyName:         sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.companyId})`,
         representativeName:    sql<string | null>`(SELECT representative_name FROM companies WHERE id = ${projectsTable.companyId})`,
         companyBusinessNumber: sql<string | null>`(SELECT business_number FROM companies WHERE id = ${projectsTable.companyId})`,

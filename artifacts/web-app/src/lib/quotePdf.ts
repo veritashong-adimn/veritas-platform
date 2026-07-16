@@ -5,6 +5,22 @@
  * 번역·통역·장비·기타 서비스별 상세 텍스트를 생성하고, 언어 코드를 한국어 이름으로 치환한다.
  */
 
+// ─── FM장비 단위 표시 정규화 ─────────────────────────────────────────────────
+/**
+ * FM장비는 송신기·수신기·이어폰 등 구성품을 묶어 제공하는 장비이므로
+ * 업무상 단위를 '대'가 아니라 '세트'로 사용한다.
+ * 과거에 '대'로 저장된 데이터도 조회·PDF·거래명세서·엑셀 출력 시 '세트'로 표시한다.
+ * (다른 장비 상품 및 '대' 이외의 단위는 원본 유지, 수량·금액 계산에는 영향 없음)
+ */
+export function displayUnit(
+  productName: string | null | undefined,
+  unit: string | null | undefined,
+): string {
+  const u = unit ?? '';
+  if ((productName ?? '').includes('FM장비') && u === '대') return '세트';
+  return u;
+}
+
 // ─── 통역 공급가액 계산 (편집 화면·저장·PDF 공통) ────────────────────────────
 export function calculateInterpretationAmount(
   peopleCount: number, serviceDays: number, unitPrice: number
@@ -81,6 +97,7 @@ export interface QuoteDetail {
   companyName: string | null;
   companyBusinessNumber: string | null;
   representativeName: string | null;
+  divisionName: string | null;   // 브랜드(Division) — projects.requestingDivisionId 기준
   contactName: string | null;
   contactDivision: string | null;
   contactPhone: string | null;
@@ -147,6 +164,7 @@ export interface QuotePdfData {
     companyName: string;
     businessNumber: string;
     representativeName: string;
+    brandName: string;   // 브랜드(Division) — 있을 때만 표시
     contactName: string;
     contactDivision: string;
     contactPhone: string;
@@ -314,7 +332,7 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
       productName:  it.productName,
       detailText:   buildDetailText(it),
       quantity:     it.quantity,
-      unit:         it.unit,
+      unit:         displayUnit(it.productName, it.unit),
       quantityLabel: '',
       unitPrice:    Number(it.unitPrice),
       supplyAmount,
@@ -398,6 +416,7 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
       companyName:         detail.companyName            ?? '',
       businessNumber:      detail.companyBusinessNumber  ?? '',
       representativeName:  detail.representativeName     ?? '',
+      brandName:           detail.divisionName          ?? '',
       contactName:         detail.contactName         ?? '',
       contactDivision:     detail.contactDivision     ?? '',
       contactPhone:        detail.contactPhone        ?? '',

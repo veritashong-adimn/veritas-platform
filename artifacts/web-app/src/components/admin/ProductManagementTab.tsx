@@ -19,6 +19,7 @@ import ImportPreviewPanel, {
   saveReviewSession,
   clearReviewSession,
 } from './ImportPreviewPanel';
+import { displayUnit } from '../../lib/quotePdf';
 
 /** 대분류와 동일한 label을 가진 중분류 옵션 제거 (표시 중복 방지) */
 function filterSubCats<T extends { label: string }>(cats: T[], mainCategoryLabel: string): T[] {
@@ -912,7 +913,7 @@ export function ProductManagementTab({ token, user, hasPerm, setToast, authHeade
                 </span>
               ) : (
                 <span style={{ fontSize: 11, background: p.basePrice != null ? "#f0fdf4" : "#f9fafb", color: p.basePrice != null ? "#059669" : "#9ca3af", borderRadius: 5, padding: "2px 8px", fontWeight: 600 }}>
-                  {p.basePrice != null ? `${Number(p.basePrice).toLocaleString()}원 / ${p.unit}` : `미설정 / ${p.unit}`}
+                  {p.basePrice != null ? `${Number(p.basePrice).toLocaleString()}원 / ${displayUnit(p.name, p.unit)}` : `미설정 / ${displayUnit(p.name, p.unit)}`}
                 </span>
               )}
               {p.interpretationDuration && (

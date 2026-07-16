@@ -893,7 +893,7 @@ export const UNITS_BY_PRODUCT_TYPE: Record<string, string[]> = {
   interpretation: ["1시간", "2시간", "4시간", "6시간", "8시간", "추가시간"],
   combined:       ["어절", "단어", "글자", "페이지", "건", "1시간", "2시간", "4시간", "6시간", "8시간", "추가시간"],
   proofreading:   ["어절", "단어", "글자", "페이지", "건"],
-  equipment:      ["대", "일", "건"],
+  equipment:      ["대", "세트", "일", "건"],
   editing:        ["페이지", "건", "시간"],
   media:          ["분", "초", "건"],
   operations:     ["건", "인"],

@@ -68,7 +68,7 @@ export function CustomerDashboard({ user, token }: { user: User; token: string }
       setToast("프로젝트가 등록되었습니다.");
       setTitle(""); setFile(null);
       await fetchProjects();
-    } catch { setToast("오류: 프로젝트 생성 실패"); }
+    } catch { setToast("오류: 판매전환 실패"); }
     finally { setCreating(false); }
   };
 

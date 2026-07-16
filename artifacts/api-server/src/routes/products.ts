@@ -262,7 +262,7 @@ const UNITS_BY_TYPE: Record<string, string[]> = {
   combined:       ["어절", "단어", "글자", "페이지", "건", "1시간", "반일", "종일"],
   proofreading:   ["어절", "단어", "글자", "페이지", "건"],
   media:          ["분", "초", "건"],
-  equipment:      ["대", "일", "건"],
+  equipment:      ["대", "세트", "일", "건"],
   editing:        ["페이지", "건", "시간"],
   operations:     ["건", "인"],
   project:        ["건", "식"],
@@ -1214,12 +1214,16 @@ router.post("/admin/products", ...adminOnly, async (req, res) => {
     res.status(400).json({ error: "상품명은 필수입니다." }); return;
   }
 
+  // FM장비는 구성품 묶음 단위이므로 기본 단위를 '세트'로 지정한다 (다른 장비는 기존 기본값 유지)
+  const isFmEquipment = pType === "equipment" && (subCat.includes("FM장비") || name.trim().includes("FM장비"));
+  const defaultUnit = isFmEquipment ? "세트" : (UNITS_BY_TYPE[pType]?.[0] ?? "건");
+
   try {
     const goc = await getOrCreateProduct({
       productType: pType, sourceLanguage: srcLang, targetLanguage: tgtLang,
       mainCategory: mainCat, subCategory: subCat,
       name: name.trim(),
-      unit: unit ?? (UNITS_BY_TYPE[pType]?.[0] ?? "건"),
+      unit: unit ?? defaultUnit,
       basePrice: basePrice != null ? basePrice : null,
       description: description?.trim() || null,
       interpretationDuration: interpretationDuration?.trim() || null,

@@ -29,7 +29,7 @@ export function LogModal({ projectId, token, onClose }: { projectId: number; tok
       <Card style={{ width: "100%", maxWidth: 520, margin: "0 16px", maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
           <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>
-            프로젝트 #{projectId} 이벤트 로그
+            판매 이벤트 로그
           </h2>
           <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#9ca3af", lineHeight: 1 }}>×</button>
         </div>

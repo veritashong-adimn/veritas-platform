@@ -4,6 +4,7 @@ import { PrimaryBtn, ClickSelect } from '../ui';
 import { QuoteEditorWorkspace, type QuoteItemForm, type VatType, type QuoteType, type ServiceType } from './QuoteEditorWorkspace';
 import QuotePdfPreviewModal from './QuotePdfPreviewModal';
 import { buildQuotePdfData, parseMemoInfo, type QuoteDetail, type QuoteDetailItem } from '../../lib/quotePdf';
+import { renderQuoteTitle } from '../../lib/quoteTitle';
 
 // ─── 타입 ──────────────────────────────────────────────────────────────────────
 interface QuoteRow {
@@ -76,7 +77,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
   const [editInitData, setEditInitData] = useState<{
     items: QuoteItemForm[]; title: string; note: string;
     quoteType: QuoteType; issueDate: string; vatType: VatType;
-    companyId: number | null; contactId: number | null;
+    companyId: number | null; contactId: number | null; divisionId: number | null;
   } | null>(null);
   // 삭제(Soft Delete)
   const [deleteTarget, setDeleteTarget] = useState<QuoteRow | null>(null);
@@ -105,7 +106,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
   // 확인창 → 요청 중 버튼 disabled(updatingId) 로 중복 클릭 방지
   const handleConvertToSale = async (quoteId: number) => {
     if (updatingId != null) return;
-    if (!window.confirm('이 견적을 판매건으로 전환하시겠습니까? 판매관리에서 프로젝트가 생성됩니다.')) return;
+    if (!window.confirm('이 견적을 판매건으로 전환하시겠습니까?\n\n판매전환 후에는 판매관리에서 배정, 진행, 납품 등의 업무를 계속 관리할 수 있습니다.')) return;
     setUpdatingId(quoteId);
     try {
       const res = await fetch(api(`/api/admin/quotes/${quoteId}/status`), {
@@ -115,8 +116,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
       });
       const data = await res.json();
       if (!res.ok) { onToast(`판매전환 실패: ${data.error ?? res.status}`); return; }
-      const pid = data.project?.id ?? data.quote?.projectId ?? null;
-      onToast(pid != null ? `판매건으로 전환되었습니다. (판매 #${pid})` : '판매건으로 전환되었습니다.');
+      onToast('판매건으로 전환되었습니다.');
       fetchQuotes();
     } catch {
       onToast('판매전환 중 오류가 발생했습니다. 다시 시도해 주세요.');
@@ -247,6 +247,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
         vatType,
         companyId: (detail as any).companyId ?? null,
         contactId: (detail as any).contactId ?? null,
+        divisionId: (detail as any).divisionId ?? null,
       });
       setShowEditor(true);
     } finally { setEditLoading(null); }
@@ -305,6 +306,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
           initialVatType={editInitData?.vatType}
           initialCompanyId={editInitData?.companyId ?? null}
           initialContactId={editInitData?.contactId ?? null}
+          initialDivisionId={editInitData?.divisionId ?? null}
         />
       </div>
     );
@@ -447,7 +449,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
               <thead>
                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e5e7eb' }}>
                   {['견적번호', '발행일', '견적서명', '고객사', '고객명', '금액', '견적유형', '담당PM', '상태', 'PDF', '상태변경'].map(h => (
-                    <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', whiteSpace: 'nowrap' }}>{h}</th>
+                    <th key={h} style={{ padding: '6px 10px', textAlign: 'center', verticalAlign: 'middle', fontSize: 11, fontWeight: 700, color: '#6b7280', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -467,7 +469,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
                   return (
                     <tr key={q.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                       {/* 견적번호 — 클릭 시 편집 */}
-                      <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>
+                      <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         <button
                           onClick={() => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`)}
                           disabled={editLoading === q.id}
@@ -483,61 +485,61 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
                         </button>
                       </td>
                       {/* 발행일 */}
-                      <td style={{ padding: '6px 10px', fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap' }}>
+                      <td style={{ padding: '6px 10px', fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         {q.issueDate ?? '—'}
                       </td>
-                      {/* 견적서명 — 클릭 시 편집 */}
-                      <td style={{ padding: '6px 10px', maxWidth: 220 }}>
+                      {/* 견적서명 — 지정 범위(min 220 ~ max 420, 약 24vw ≈ 테이블 30~34% 이내)에서만 반응형, 좌측 정렬, 클릭 시 편집 */}
+                      <td style={{ padding: '6px 10px', textAlign: 'left' }}>
                         <button
                           onClick={() => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`)}
                           disabled={editLoading === q.id}
                           style={{
                             fontSize: 12, fontWeight: 600, color: '#111827',
-                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                            display: 'block', maxWidth: 220,
+                            display: 'flex', alignItems: 'center', overflow: 'hidden',
+                            width: '24vw', minWidth: 220, maxWidth: 420,
                             background: 'none', border: 'none', padding: 0, cursor: 'pointer',
                             textAlign: 'left',
                           }}
                         >
-                          {q.title ?? q.projectTitle ?? '(미입력)'}
+                          {renderQuoteTitle(q.title ?? q.projectTitle ?? '(미입력)')}
                         </button>
                       </td>
-                      {/* 고객사 */}
-                      <td style={{ padding: '6px 10px', maxWidth: 130 }}>
+                      {/* 고객사 — 좌측 정렬, 약간 확대(min 130 ~ max 200) */}
+                      <td style={{ padding: '6px 10px', minWidth: 130, maxWidth: 200, textAlign: 'left' }}>
                         {q.companyName
                           ? <span style={{ fontSize: 12, color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>{q.companyName}</span>
                           : <span style={{ fontSize: 11, color: '#d1d5db' }}>—</span>}
                       </td>
-                      {/* 고객명 */}
-                      <td style={{ padding: '6px 10px', maxWidth: 100 }}>
+                      {/* 고객명 — 가운데 정렬, 이름 표시 최소폭 확보 */}
+                      <td style={{ padding: '6px 10px', minWidth: 80, maxWidth: 120, textAlign: 'center' }}>
                         {q.contactName
                           ? <span style={{ fontSize: 12, color: '#374151', whiteSpace: 'nowrap' }}>{q.contactName}</span>
                           : <span style={{ fontSize: 11, color: '#d1d5db' }}>—</span>}
                       </td>
-                      {/* 금액 */}
-                      <td style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: '#1e3a5f', fontSize: 13 }}>
+                      {/* 금액 — 우측 정렬, 한 줄 표시 최소폭 확보 */}
+                      <td style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: '#1e3a5f', fontSize: 13, minWidth: 104 }}>
                         {fmt(q.price)}원
                       </td>
-                      {/* 견적유형 */}
-                      <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>
+                      {/* 견적유형 — 가운데 정렬 */}
+                      <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: '#f0f9ff', color: '#0369a1', fontWeight: 600 }}>
                           {QUOTE_TYPE_LABEL[q.quoteType] ?? q.quoteType}
                         </span>
                       </td>
-                      {/* 담당PM */}
-                      <td style={{ padding: '6px 10px', maxWidth: 90 }}>
+                      {/* 담당PM — 가운데 정렬 */}
+                      <td style={{ padding: '6px 10px', minWidth: 72, maxWidth: 110, textAlign: 'center' }}>
                         {q.adminName
                           ? <span style={{ fontSize: 12, color: '#374151', whiteSpace: 'nowrap' }}>{q.adminName}</span>
                           : <span style={{ fontSize: 11, color: '#d1d5db' }}>—</span>}
                       </td>
-                      {/* 상태 */}
-                      <td style={{ padding: '6px 10px' }}>
+                      {/* 상태 — 가운데 정렬 */}
+                      <td style={{ padding: '6px 10px', textAlign: 'center' }}>
                         <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: sColor.bg, color: sColor.color }}>
                           {QUOTE_STATUS_LABEL[q.status] ?? q.status}
                         </span>
                       </td>
-                      {/* PDF 미리보기 */}
-                      <td style={{ padding: '6px 10px', whiteSpace: 'nowrap' }}>
+                      {/* PDF 미리보기 — 가운데 정렬 */}
+                      <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         <button
                           onClick={() => handlePdfPreview(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`)}
                           disabled={pdfLoading === q.id}
@@ -553,16 +555,16 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
                           {pdfLoading === q.id ? '…' : '📄 PDF'}
                         </button>
                       </td>
-                      {/* 상태변경 */}
-                      <td style={{ padding: '6px 10px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                      {/* 상태변경 — 가운데 정렬, 버튼 간격 확보 */}
+                      <td style={{ padding: '6px 10px', minWidth: 176, textAlign: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, whiteSpace: 'nowrap' }}>
                           {isConverted ? (
                             <span
                               style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, fontWeight: 700, background: '#dcfce7', color: '#15803d', whiteSpace: 'nowrap' }}
                               data-testid={`badge-quote-converted-${q.id}`}
                               aria-label={`${q.quoteNumber ?? q.id} 판매전환 완료`}
                             >
-                              ✓ 판매전환 완료{q.projectId != null ? ` (판매 #${q.projectId})` : ''}
+                              ✓ 판매전환 완료
                             </span>
                           ) : (
                             <button

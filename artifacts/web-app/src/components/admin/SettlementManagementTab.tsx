@@ -163,7 +163,7 @@ export function SettlementManagementTab({ settlements, loading, token, onToast, 
       ];
       const rows = filteredSettlements.map(s => [
         esc(s.companyName ?? ""),
-        esc(s.projectTitle ?? `프로젝트 #${s.projectId}`),
+        esc(s.projectTitle ?? "(제목 없음)"),
         esc(s.translatorName || s.translatorEmail || `#${s.translatorId}`),
         Math.round(Number(s.grossAmount ?? s.totalAmount)),
         Math.round(Number(s.withholdingAmount ?? 0)),
@@ -484,7 +484,7 @@ export function SettlementManagementTab({ settlements, loading, token, onToast, 
                       </td>
                       {/* 프로젝트 */}
                       <td style={{ ...tableTd, fontWeight: 600, color: "#111827", maxWidth: 150 }}>
-                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.projectTitle ?? `프로젝트 #${s.projectId}`}</div>
+                        <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.projectTitle ?? "(제목 없음)"}</div>
                         {s.companyName && <div style={{ fontSize: 11, color: "#9ca3af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.companyName}</div>}
                       </td>
                       {/* 통번역사 */}

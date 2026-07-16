@@ -217,7 +217,7 @@ export function TranslatorDashboard({ user, token }: { user: User; token: string
                         #{s.id} · {new Date(s.createdAt).toLocaleDateString("ko-KR")}
                       </p>
                       <p style={{ margin: 0, fontWeight: 700, fontSize: 15, color: "#111827" }}>
-                        {s.projectTitle ?? `프로젝트 #${s.projectId}`}
+                        {s.projectTitle ?? "(제목 없음)"}
                       </p>
                     </div>
                     <div style={{ textAlign: "right" }}>

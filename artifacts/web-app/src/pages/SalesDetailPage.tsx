@@ -14,7 +14,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../lib/constants';
 import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn } from '../components/ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../lib/ds';
-import { buildQuotePdfData, parseMemoInfo, type QuoteDetail } from '../lib/quotePdf';
+import { buildQuotePdfData, displayUnit, parseMemoInfo, type QuoteDetail } from '../lib/quotePdf';
+import { renderQuoteTitle } from '../lib/quoteTitle';
 import QuotePdfPreviewModal from '../components/admin/QuotePdfPreviewModal';
 import TransactionStatementModal from '../components/admin/TransactionStatementModal';
 
@@ -217,8 +218,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, letterSpacing: '0.04em' }}>판매 상세</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontFamily: 'monospace', fontSize: 13, fontWeight: 700, color: '#6d28d9' }}>#{project.id}</span>
-            <span style={{ fontSize: 16, fontWeight: 800, color: C.g900, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 460 }}>{project.title}</span>
+            <span style={{ fontSize: 16, fontWeight: 800, color: C.g900, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 460 }}>{renderQuoteTitle(project.title)}</span>
             <StatusBadge status={project.status} />
             {quote?.quoteNumber && (
               <span style={{ fontFamily: 'monospace', fontSize: 11, color: C.textSecondary, background: '#f5f3ff', borderRadius: 4, padding: '2px 7px' }}>{quote.quoteNumber}</span>
@@ -315,7 +315,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
                         <td style={tdNum}>{fields['단어수'] || '—'}</td>
                         <td style={tdNum}>{fields['글자수'] || '—'}</td>
                         <td style={tdNum}>{fmt(it.quantity)}</td>
-                        <td style={td}>{it.unit || '—'}</td>
+                        <td style={td}>{displayUnit(it.productName, it.unit) || '—'}</td>
                         <td style={tdNum}>{fmt(it.unitPrice)}</td>
                         <td style={tdNum}>{fmt(it.supplyAmount)}</td>
                         <td style={tdNum}>{fmt(it.taxAmount)}</td>

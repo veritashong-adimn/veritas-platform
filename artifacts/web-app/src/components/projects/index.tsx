@@ -123,8 +123,7 @@ export function PaymentModal({
       display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200,
     }}>
       <Card style={{ width: "100%", maxWidth: 420, margin: "0 16px" }}>
-        <h2 style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 700, color: "#111827" }}>결제</h2>
-        <p style={{ margin: "0 0 20px", fontSize: 13, color: "#6b7280" }}>프로젝트 #{panel.projectId}</p>
+        <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700, color: "#111827" }}>결제</h2>
         <div style={{ background: "#f9fafb", borderRadius: 10, padding: "20px", textAlign: "center", marginBottom: 20 }}>
           <p style={{ margin: "0 0 4px", fontSize: 13, color: "#6b7280" }}>결제 금액</p>
           <p style={{ margin: 0, fontSize: 28, fontWeight: 800, color: "#0891b2" }}>
@@ -164,10 +163,10 @@ export function TaskCard({
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div style={{ flex: 1 }}>
           <p style={{ margin: 0, fontSize: 11, color: "#9ca3af", marginBottom: 4 }}>
-            작업 #{task.id} · 프로젝트 #{task.projectId}
+            작업 #{task.id}
           </p>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>
-            {task.projectTitle ?? `프로젝트 #${task.projectId}`}
+            {task.projectTitle ?? "(제목 없음)"}
           </h3>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>

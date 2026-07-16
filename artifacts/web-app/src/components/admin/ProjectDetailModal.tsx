@@ -5,7 +5,8 @@ import { ReviewMemoPanel } from './ReviewMemoPanel';
 import { DraggableModal } from './DraggableModal';
 import { QuoteEditorWorkspace } from './QuoteEditorWorkspace';
 import TransactionStatementModal from './TransactionStatementModal';
-import { buildQuotePdfData, type QuoteDetail } from '../../lib/quotePdf';
+import { buildQuotePdfData, displayUnit, type QuoteDetail } from '../../lib/quotePdf';
+import { renderQuoteTitle } from '../../lib/quoteTitle';
 
 /* ────── SearchableSelect (거래처 검색용 공통 컴포넌트) ────── */
 type SSItem = { id: number; label: string; sub?: string };
@@ -940,7 +941,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   return (
     <>
     <DraggableModal
-      title={`프로젝트 #${projectId} 상세`}
+      title="판매 상세"
       onClose={onClose}
       width={820}
       height="88vh"
@@ -1880,7 +1881,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             {/* 견적서명 */}
                             {quoteTitle && (
                               <span style={{ fontSize: 12, fontWeight: 600, color: "#111827", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                {quoteTitle}
+                                {renderQuoteTitle(quoteTitle)}
                               </span>
                             )}
                             {/* 견적금액 */}
@@ -1970,7 +1971,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     <tr key={ii} style={{ borderBottom: "1px solid #ede9fe" }}>
                                       <td style={{ padding: "5px 8px", color: "#111827", fontWeight: 600 }}>{it.productName}</td>
                                       <td style={{ padding: "5px 8px", color: "#6b7280", fontSize: 11 }}>{it.languagePair ?? "—"}</td>
-                                      <td style={{ padding: "5px 8px", color: "#374151" }}>{it.quantity}{it.unit ? ` ${it.unit}` : ""}</td>
+                                      <td style={{ padding: "5px 8px", color: "#374151" }}>{it.quantity}{displayUnit(it.productName, it.unit) ? ` ${displayUnit(it.productName, it.unit)}` : ""}</td>
                                       <td style={{ padding: "5px 8px", color: "#374151", textAlign: "right" }}>{Number(it.unitPrice).toLocaleString()}</td>
                                       <td style={{ padding: "5px 8px", color: "#374151", textAlign: "right" }}>{Number(it.supplyAmount ?? 0).toLocaleString()}</td>
                                       <td style={{ padding: "5px 8px", color: "#7c3aed", textAlign: "right" }}>{Number(it.taxAmount ?? 0).toLocaleString()}</td>

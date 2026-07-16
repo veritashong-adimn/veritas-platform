@@ -1776,7 +1776,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                         <td style={{ ...tableTd, color: "#9ca3af" }}>#{pm.id}</td>
-                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{pm.projectTitle ?? `프로젝트 #${pm.projectId}`}</td>
+                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{pm.projectTitle ?? "(제목 없음)"}</td>
                         <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2" }}>{Number(pm.amount).toLocaleString()}원</td>
                         <td style={tableTd}><StatusBadge status={pm.status} /></td>
                         <td style={tableTd}>{pm.projectStatus ? <StatusBadge status={pm.projectStatus} /> : "-"}</td>
@@ -1811,7 +1811,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                         <td style={{ ...tableTd, color: "#9ca3af" }}>#{t.id}</td>
-                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{t.projectTitle ?? `프로젝트 #${t.projectId}`}</td>
+                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{t.projectTitle ?? "(제목 없음)"}</td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
                           {(t as any).translatorName || t.translatorEmail || `통번역사 #${t.translatorId}`}
                           {(t as any).translatorName && t.translatorEmail && <span style={{ color: "#9ca3af", fontSize: 11 }}> ({t.translatorEmail})</span>}
@@ -2649,7 +2649,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "20px 22px", boxShadow: "0 1px 3px rgba(0,0,0,.07)" }}>
               <h3 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 800, color: "#111827" }}>🧪 운영 시나리오 자동 실행</h3>
-              <p style={{ margin: "0 0 14px", fontSize: 13, color: "#6b7280" }}>프로젝트 생성 → 견적 → 승인 → 결제 → 통번역사 배정 → 진행 → 완료 → 정산까지 순차 실행합니다.</p>
+              <p style={{ margin: "0 0 14px", fontSize: 13, color: "#6b7280" }}>견적 작성 → 판매전환 → 통번역사 배정 → 진행 → 납품 → 완료까지 순차 실행합니다.</p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
                 <div>
                   <label style={{ fontSize: 11, fontWeight: 600, color: "#374151", display: "block", marginBottom: 3 }}>견적 금액 (원)</label>
@@ -2698,7 +2698,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 </div>
                 {scenarioCompanyId && (
                   <p style={{ margin: "6px 0 0", fontSize: 11, color: "#0369a1" }}>
-                    ✅ 실제 거래처 데이터로 프로젝트가 생성됩니다. 최소 입력 항목: 거래처 선택 완료.
+                    ✅ 실제 거래처 데이터로 판매건이 생성됩니다. 최소 입력 항목: 거래처 선택 완료.
                   </p>
                 )}
               </div>
