@@ -30,6 +30,67 @@ export function calculateInterpretationAmount(
   return { billingQuantity, supplyAmount };
 }
 
+// ─── 통역 행 파생 계산 (편집 화면·저장·요약 단일 기준) ────────────────────────
+/**
+ * 통역 상품의 계산은 항상 아래 원본 입력에서만 파생한다 (파생값을 별도 상태로 저장·참조하지 않음).
+ * 화면 '수량' 입력값 등 오래된 상태는 절대 참조하지 않는다.
+ *
+ *   startDate / endDate → serviceDays  (양끝 포함: 종료일 − 시작일 + 1)
+ *   interpreterCount    → 투입 인원
+ *   unitPrice           → 통역사 1인 × 1일 단가
+ *
+ * 반환:
+ *   serviceDays        통역 일수 (시작일 없으면 당일 1일 / 종료일<시작일이면 0)
+ *   effectiveQuantity  인원 × 일수 (서버 전송 quantity · 화면 '수량' 표시에 공통 사용)
+ *   supplyAmount       effectiveQuantity × 단가
+ *   invalidDateRange   종료일이 시작일보다 빠름 → 계산 보류, 호출측에서 날짜 확인 메시지 표시
+ */
+export interface InterpretationInput {
+  startDate?:        string | null;
+  endDate?:          string | null;
+  interpreterCount?: number | string | null;
+  unitPrice?:        number | string | null;
+}
+export interface InterpretationResult {
+  serviceDays:       number;
+  effectiveQuantity: number;
+  supplyAmount:      number;
+  invalidDateRange:  boolean;
+}
+
+/** 숫자 파싱 — 천단위 콤마 제거, 실패 시 0. */
+function parseNum(v: number | string | null | undefined): number {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  return Number(String(v ?? '').replace(/,/g, '')) || 0;
+}
+
+/**
+ * 통역 일수(양끝 포함) 원시값. 시작일 없으면 당일(1일), 종료일 미입력/동일이면 1일.
+ * 종료일이 시작일보다 빠르면 음수를 반환하여 호출측이 오류로 판정하도록 한다.
+ */
+export function interpretationServiceDays(startDate?: string | null, endDate?: string | null): number {
+  if (!startDate) return 1;                         // 시작일 미입력 → 당일 1일
+  if (!endDate || endDate === startDate) return 1;  // 종료일 미입력/동일 → 1일
+  const s = new Date(startDate).getTime();
+  const e = new Date(endDate).getTime();
+  if (Number.isNaN(s) || Number.isNaN(e)) return 1;
+  return Math.round((e - s) / 86400000) + 1;        // 음수 가능(종료<시작)
+}
+
+/** 통역 행 단일 계산 함수 — 편집 화면·저장·금액 요약이 모두 이 함수를 사용한다. */
+export function calcInterpretation(input: InterpretationInput): InterpretationResult {
+  const rawDays = interpretationServiceDays(input.startDate, input.endDate);
+  if (rawDays < 1) {
+    // 종료일 < 시작일 → 계산하지 않음 (지시문 2절)
+    return { serviceDays: 0, effectiveQuantity: 0, supplyAmount: 0, invalidDateRange: true };
+  }
+  const cntNum      = parseNum(input.interpreterCount);
+  const peopleCount = cntNum > 0 ? Math.round(cntNum) : 1;  // 미입력 시 1명 기준
+  const price       = parseNum(input.unitPrice);
+  const { billingQuantity, supplyAmount } = calculateInterpretationAmount(peopleCount, rawDays, price);
+  return { serviceDays: rawDays, effectiveQuantity: billingQuantity, supplyAmount, invalidDateRange: false };
+}
+
 // ─── 언어 코드 → 한국어 이름 매핑 ────────────────────────────────────────────
 const LANG_NAMES: Record<string, string> = {
   ko: '한국어', en: '영어', ja: '일본어',
@@ -61,11 +122,14 @@ export interface QuoteDetailItem {
   interpretDate: string | null;
   interpretPlace: string | null;
   interpretDuration: string | null;
+  operationHours?: string | null;   // 운영시간(행사 운영시간) — 안내 정보
   eventStartDate: string | null;
   eventEndDate: string | null;
   itemLocation: string | null;
   usagePeriod: string | null;
   interpretType: string | null;
+  // 투입 인원(통역). NULL = 레거시(quantity에 인원×일수 포함 → 역산).
+  interpreterCount?: number | null;
 }
 
 export interface QuoteDetailSettings {
@@ -268,17 +332,23 @@ function buildDetailText(item: QuoteDetailItem): string {
         ? `${item.interpretDate} ~ ${item.eventEndDate}`
         : item.interpretDate);
     }
-    // 투입인원만 표시 (일수는 수량/단위 컬럼에 이미 표시됨)
+    // 운영시간 (행사 운영시간 — 기간 다음. 지시문 6절 순서: 기간→운영시간→통역시간→장소→인원)
+    if (item.operationHours) lines.push(`운영시간 ${item.operationHours}`);
+    // 통역시간 (계약 기준 안내 정보)
+    if (item.interpretDuration) lines.push(`통역시간 ${item.interpretDuration}`);
+    // 장소
+    if (item.interpretPlace) lines.push(item.interpretPlace);
+    // 투입인원 (일수는 수량/단위 컬럼에 이미 표시됨)
+    //  - 신규: interpreterCount 컬럼 사용 (quantity = 진행일수)
+    //  - 레거시: interpreterCount 없음 → quantity(=인원×일수) ÷ 일수 역산
     const svcDays  = calcServiceDays(item.interpretDate, item.eventEndDate);
     const qty      = Number(item.quantity) || 0;
-    const pplCount = svcDays > 0 ? Math.round(qty / svcDays) : qty;
+    const pplCount = item.interpreterCount != null
+      ? Number(item.interpreterCount)
+      : (svcDays > 0 ? Math.round(qty / svcDays) : qty);
     if (pplCount > 0) {
       lines.push(`통역사 ${pplCount}명`);
     }
-    // 장소
-    if (item.interpretPlace) lines.push(item.interpretPlace);
-    // 통역시간
-    if (item.interpretDuration) lines.push(item.interpretDuration);
   } else if (type === 'equipment') {
     // 기간
     if (item.eventStartDate) {

@@ -1132,13 +1132,26 @@ router.post("/admin/projects/:id/billing-correction", ...adminGuard, async (req,
 
 
 // ─── 견적번호 생성 헬퍼 (Q000001 ~ Q999999 순번 체계) ─────────────────────────
+// 순번은 DB 시퀀스(quote_number_seq)에서 발급한다. 행 삭제(휴지통 soft-delete·영구 hard-delete)와
+// 무관하게 값이 증가하므로, 삭제 후에도 견적번호를 재사용하지 않는다. (지시문 11절)
+let quoteSeqReady = false;
 async function generateQuoteNumber(): Promise<string> {
-  const [{ maxSeq }] = await db
-    .select({ maxSeq: sql<number | null>`COALESCE(MAX(CAST(SUBSTRING(${quotesTable.quoteNumber} FROM 2) AS INTEGER)), 0)` })
-    .from(quotesTable)
-    .where(sql`${quotesTable.quoteNumber} ~ '^Q[0-9]{6}$'`);
-  const seq = ((maxSeq ?? 0) + 1).toString().padStart(6, "0");
-  return `Q${seq}`;
+  if (!quoteSeqReady) {
+    // 시퀀스 최초 보장 + 기존 최대 번호로 시드(한 번만). 이미 있으면 아무 것도 하지 않는다.
+    await db.execute(sql`
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relkind = 'S' AND relname = 'quote_number_seq') THEN
+          CREATE SEQUENCE quote_number_seq;
+          PERFORM setval('quote_number_seq', GREATEST(
+            (SELECT COALESCE(MAX(CAST(SUBSTRING(quote_number FROM 2) AS INTEGER)), 0)
+               FROM quotes WHERE quote_number ~ '^Q[0-9]{6}$'), 1), true);
+        END IF;
+      END $$;`);
+    quoteSeqReady = true;
+  }
+  const result = await db.execute<{ seq: string }>(sql`SELECT nextval('quote_number_seq') AS seq`);
+  const seqNum = Number((result.rows[0] as { seq: string | number }).seq);
+  return `Q${String(seqNum).padStart(6, "0")}`;
 }
 
 // ─── 견적서 목록 조회 (전체 — 프로젝트 연결 여부 무관) ────────────────────────
@@ -1230,7 +1243,7 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
     amount?: number; items?: Array<{
       productName: string; unit?: string; quantity?: number;
       unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string;
-      itemType?: string; taxType?: string;
+      itemType?: string; taxType?: string; interpreterCount?: number;
     }>;
     note?: string; taxDocumentType?: string; taxCategory?: string;
     quoteType?: string; billingType?: string; paymentMethod?: string;
@@ -1246,8 +1259,11 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
     ? items!.reduce((s, it) => {
         const qty = Number(it.quantity ?? 1);
         const up = Number(it.unitPrice);
-        const tax = Math.round(Math.round(qty * up) * (it.taxRate ?? 0));
-        return s + Math.round(qty * up) + tax;
+        // 통역: 공급가액 = 진행일수(quantity) × 투입인원 × 단가
+        const mult = it.itemType === 'interpretation' && Number(it.interpreterCount) > 0 ? Number(it.interpreterCount) : 1;
+        const supply = Math.round(qty * up * mult);
+        const tax = Math.round(supply * (it.taxRate ?? 0));
+        return s + supply + tax;
       }, 0)
     : Number(amount ?? 0);
 
@@ -1314,7 +1330,9 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
         const calcItems = items!.map(it => {
           const qty = Number(it.quantity ?? 1);
           const up = Number(it.unitPrice);
-          const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0);
+          // 통역: 진행일수(quantity) × 투입인원 × 단가. 그 외: 수량 × 단가.
+          const mult = it.itemType === 'interpretation' && Number(it.interpreterCount) > 0 ? Number(it.interpreterCount) : 1;
+          const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0, mult);
           return { ...it, supplyAmount, taxAmount, totalAmount };
         });
         await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
@@ -1335,6 +1353,8 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
           interpretPlace: (it as any).interpretPlace ?? null,
           interpretType: (it as any).interpretType ?? null,
           interpretDuration: (it as any).interpretDuration ?? null,
+          operationHours: (it as any).operationHours ?? null,
+          interpreterCount: it.interpreterCount ?? null,
           usagePeriod: (it as any).usagePeriod ?? null,
           eventStartDate: (it as any).eventStartDate ?? null,
           eventEndDate: (it as any).eventEndDate ?? null,
@@ -3239,7 +3259,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     productName: string; unit?: string; quantity?: number; unitPrice: number;
     taxRate?: 0 | 0.1; taxType?: string; productId?: number; memo?: string;
     itemType?: string; interpretDate?: string; interpretPlace?: string;
-    interpretDuration?: string; eventEndDate?: string; eventStartDate?: string;
+    interpretDuration?: string; operationHours?: string; interpreterCount?: number; eventEndDate?: string; eventStartDate?: string;
     itemLocation?: string; usagePeriod?: string; languagePair?: string;
     interpretationDirection?: string; interpretType?: string;
     hasTravelExpense?: boolean; hasEquipment?: boolean; isCustomProduct?: boolean;
@@ -3255,17 +3275,11 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
   const calcItems = items.map(it => {
     const qty = Number(it.quantity ?? 1);
     const up  = Number(it.unitPrice);
-    const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0);
+    // 통역: 공급가액 = 진행일수(quantity) × 투입인원 × 단가. 그 외: 수량 × 단가.
+    const mult = it.itemType === 'interpretation' && Number(it.interpreterCount) > 0 ? Number(it.interpreterCount) : 1;
+    const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0, mult);
     if (it.itemType === 'interpretation') {
-      const iDate = it.interpretDate;
-      const eDate = it.eventEndDate;
-      const sd = (() => {
-        if (!iDate) return 0;
-        if (!eDate || eDate === iDate) return 1;
-        return Math.max(1, Math.round((new Date(eDate).getTime() - new Date(iDate).getTime()) / 86400000) + 1);
-      })();
-      const pc = sd > 0 ? Math.round(qty / sd) : qty;
-      req.log.info({ peopleCount: pc, serviceDays: sd, unitPrice: up, billingQuantity: qty, supplyAmount }, '[INTERPRETATION CALC]');
+      req.log.info({ serviceDays: qty, interpreterCount: mult, unitPrice: up, supplyAmount }, '[INTERPRETATION CALC]');
     }
     return { ...it, supplyAmount, taxAmount, totalAmount };
   });
@@ -3326,6 +3340,8 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         interpretPlace:          it.interpretPlace                  ?? null,
         interpretType:           it.interpretType                   ?? null,
         interpretDuration:       it.interpretDuration               ?? null,
+        operationHours:          it.operationHours                  ?? null,
+        interpreterCount:        it.interpreterCount                ?? null,
         hasTravelExpense:        it.hasTravelExpense                ?? false,
         hasEquipment:            it.hasEquipment                    ?? false,
         interpretationDirection: (it as any).interpretationDirection ?? null,

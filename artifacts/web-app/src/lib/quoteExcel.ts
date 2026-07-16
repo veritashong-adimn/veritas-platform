@@ -13,7 +13,7 @@
 // @ts-ignore
 import XLSX from 'xlsx-js-style';
 import { getPolicy } from './languagePagePolicy';
-import { displayUnit } from './quotePdf';
+import { displayUnit, calcInterpretation } from './quotePdf';
 import type { Product } from './constants';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
@@ -135,11 +135,31 @@ export function formatServiceDetail(item: ExportItem, products: Product[]): stri
 // ─── 공급가액 계산 ────────────────────────────────────────────────────────────
 
 function calcSupply(item: ExportItem): number {
-  const p    = fmtN(item.unitPrice);
+  const p = fmtN(item.unitPrice);
+  if (item.productType === 'interpretation') {
+    // 통역: 진행일수 × 인원 × 단가 (날짜 기반 — 편집 화면·서버와 동일 공통 함수)
+    return calcInterpretation({
+      startDate:        item.interpretDate,
+      endDate:          item.interpretEndDate,
+      interpreterCount: item.interpreterCount,
+      unitPrice:        item.unitPrice,
+    }).supplyAmount;
+  }
   const q    = Number(item.quantity) || 1;
-  const cnt  = item.productType === 'interpretation' ? (Number(item.interpreterCount) || 1) : 1;
-  const days = item.productType === 'equipment'      ? (Number(item.usagePeriod)      || 1) : 1;
-  return Math.round(days * cnt * q * p);
+  const days = item.productType === 'equipment' ? (Number(item.usagePeriod) || 1) : 1;
+  return Math.round(days * q * p);
+}
+
+/** 엑셀 '수량' 열 값 — 통역은 진행일수, 그 외는 quantity. */
+function displayQuantity(item: ExportItem): number {
+  if (item.productType === 'interpretation') {
+    const { serviceDays, invalidDateRange } = calcInterpretation({
+      startDate: item.interpretDate,
+      endDate:   item.interpretEndDate,
+    });
+    return invalidDateRange ? 0 : serviceDays;
+  }
+  return Number(item.quantity) || 1;
 }
 
 // ─── 스타일 ───────────────────────────────────────────────────────────────────
@@ -231,7 +251,7 @@ export function downloadQuoteExcel(data: QuoteExportData): void {
     sc(r, COL.TYPE,    SVC_LABEL[item.productType] ?? item.productType, S.tdC);
     sc(r, COL.PRODUCT, item.productName || '-',              S.td);
     sc(r, COL.DETAIL,  detail,                               S.tdTxt);
-    sc(r, COL.QTY,     Number(item.quantity) || 1,           S.tdNum, 'n');
+    sc(r, COL.QTY,     displayQuantity(item),                S.tdNum, 'n');
     sc(r, COL.UNIT,    displayUnit(item.productName, item.unit) || '-', S.tdC);
     sc(r, COL.PRICE,   fmtN(item.unitPrice),                 S.tdNum, 'n');
     sc(r, COL.SUPPLY,  supply,                               S.tdNum, 'n');

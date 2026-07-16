@@ -9,14 +9,16 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { api, Product } from '../../lib/constants';
 import { Card, DsButton, ClickSelect, NumericInput } from '../ui';
-import { downloadQuoteExcel, type ExportItem } from '../../lib/quoteExcel';
 import { dsInput, dsInputStd, dsColH, dsRow, dsAmount, C, BD, TBL, TYPO, SP, FORM } from '../../lib/ds';
 import {
   getPolicy, validateCounts, calcPagesFromStr,
   type ValidationResult,
 } from '../../lib/languagePagePolicy';
 import AiQuoteModal, { type AiDraftRow } from './AiQuoteModal';
-import { calculateInterpretationAmount, displayUnit } from '../../lib/quotePdf';
+import { calcInterpretation, displayUnit, buildQuotePdfData } from '../../lib/quotePdf';
+import { generateQuoteTitle } from '../../lib/quoteTitle';
+import QuotePdfPreviewModal from './QuotePdfPreviewModal';
+import { PageHeader } from './PageHeader';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
 
@@ -44,6 +46,8 @@ export interface QuoteItemForm {
   interpretEndDate: string;  // 행사 종료일 (기간 행사)
   startTime:        string;
   endTime:          string;
+  interpretHours:   string;  // 통역시간(계약 기준) — 하루 기준 시간 숫자. "N시간/일"로 저장·표시. 계산 미사용
+  operationHours:   string;  // 운영시간(행사 실제 운영시간) — 자유입력 (예: "09:00~18:00"). 계산 미사용
   interpretPlace:   string;
   interpreterCount: string;  // 투입 인원
   // 장비 전용
@@ -84,23 +88,52 @@ function getUnitOptions(serviceType: ServiceType, v: string): string[] {
 
 // ─── 계산 ─────────────────────────────────────────────────────────────────────
 
-function calcInterpretDays(start: string, end: string): number {
+/**
+ * 시작일·종료일에서 일수(양끝 포함) 산출 — 장비 사용일수 자동 계산용.
+ * 시작일 없으면 0(자동입력 안 함), 종료일 미입력/동일이면 1일, 종료일<시작일이면 0(무효).
+ */
+function calcSpanDays(start?: string, end?: string): number {
   if (!start) return 0;
   if (!end || end === start) return 1;
-  const s = new Date(start), e = new Date(end);
-  return Math.max(1, Math.round((e.getTime() - s.getTime()) / 86400000) + 1);
+  const s = new Date(start).getTime(), e = new Date(end).getTime();
+  if (Number.isNaN(s) || Number.isNaN(e)) return 1;
+  const d = Math.round((e - s) / 86400000) + 1;
+  return d >= 1 ? d : 0;
+}
+
+/**
+ * 번역 원본 입력값(단어수/글자수)에서 페이지수(수량)를 산출 — 저장·복원·입력변경 공통 기준.
+ *  - word 기반 언어(en 등): 단어수 ÷ 표준값
+ *  - character 기반 또는 정책 없음(기본 700글자): 글자수 ÷ 표준값
+ * 입력이 없으면 null → 저장값 유지(직접 페이지 입력) 또는 초기화는 호출측이 결정한다.
+ */
+function calcTranslationPages(wordCount: string, charCount: string, sourceLanguage: string): number | null {
+  const policy = getPolicy(sourceLanguage);
+  if (policy?.calcType === 'word') {
+    return wordCount ? calcPagesFromStr(wordCount, policy.standardValue) : null;
+  }
+  const std = policy?.standardValue ?? 700;
+  return charCount ? calcPagesFromStr(charCount, std) : null;
 }
 
 function calcItem(it: QuoteItemForm, vat: VatType) {
   const p = Number(it.unitPrice.replace?.(/,/g, '') || 0);
   let s: number;
   if (it.productType === 'interpretation') {
-    const cnt  = Number(it.interpreterCount) || 1;
-    const d    = calcInterpretDays(it.interpretDate, it.interpretEndDate);
-    const days = d > 0 ? d : (Number(it.quantity) || 1);
-    ({ supplyAmount: s } = calculateInterpretationAmount(cnt, days, p));
+    // 통역 공급가액은 항상 원본 입력(시작일·종료일·인원·단가)에서 파생한다.
+    // 화면 '수량' 입력값(오래된 상태)은 참조하지 않는다. (지시문 5·6절)
+    s = calcInterpretation({
+      startDate:        it.interpretDate,
+      endDate:          it.interpretEndDate,
+      interpreterCount: it.interpreterCount,
+      unitPrice:        it.unitPrice,
+    }).supplyAmount;
   } else if (it.productType === 'equipment') {
     s = Math.round((Number(it.usagePeriod) || 1) * (Number(it.quantity) || 1) * p);
+  } else if (it.productType === 'translation') {
+    // 번역: 수량(페이지)이 비면 공급가액 0 (단어수/글자수 삭제 시 즉시 0 — 지시문 5절)
+    const q = Number(String(it.quantity).replace(/,/g, '') || 0);
+    s = Math.round(q * p);
   } else {
     s = Math.round((Number(it.quantity) || 1) * p);
   }
@@ -121,7 +154,7 @@ function defaultItem(): QuoteItemForm {
     quantity: '1', unit: SVC_DEFAULT_UNIT['translation'], unitPrice: '', taxType: 'taxable', memo: '',
     sourceLanguage: 'ko',
     fileName: '', fileFormat: '', wordCount: '', charCount: '',
-    interpretDate: '', interpretEndDate: '', startTime: '', endTime: '', interpretPlace: '', interpreterCount: '',
+    interpretDate: '', interpretEndDate: '', startTime: '', endTime: '', interpretHours: '', operationHours: '', interpretPlace: '', interpreterCount: '',
     eventStartDate: '', eventEndDate: '', itemLocation: '', usagePeriod: '',
     expenseType: '',
   };
@@ -146,20 +179,35 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
   switch (it.productType) {
     case 'translation': {
       const ref = [it.fileName && `파일: ${it.fileName}`, it.fileFormat && `형식: ${it.fileFormat}`, it.wordCount && `단어수: ${it.wordCount}`, it.charCount && `글자수: ${it.charCount}`].filter(Boolean).join(' | ');
-      return { ...base, memo: [it.memo, ref].filter(Boolean).join(' / ') || undefined };
-    }
-    case 'interpretation': {
-      const cnt  = Number(it.interpreterCount) || 1;
-      const dur  = [it.startTime, it.endTime].filter(Boolean).join('~');
-      const d    = calcInterpretDays(it.interpretDate, it.interpretEndDate);
-      const days = d > 0 ? d : (Number(it.quantity) || 1);
-      const { billingQuantity } = calculateInterpretationAmount(cnt, days, 0);
       return {
         ...base,
-        quantity:          billingQuantity,  // peopleCount × serviceDays
+        // 페이지 산정 정책(sourceLanguage) 복원용 — 재수정 진입 시 단어/글자 계산 기준을 정확히 복구한다.
+        languagePair: it.sourceLanguage || undefined,
+        memo: [it.memo, ref].filter(Boolean).join(' / ') || undefined,
+      };
+    }
+    case 'interpretation': {
+      // 통역시간(안내 정보) — 하루 기준 시간 숫자(소수 허용)를 "N시간/일" 형식으로 interpretDuration 컬럼에 저장. 계산 미사용.
+      const hours = (it.interpretHours ?? '').replace(/[^\d.]/g, '');
+      const dur = hours ? `${hours}시간/일` : '';
+      // 통역 저장 모델: 수량 = 진행일수, 인원 = 별도(interpreterCount).
+      // 서버 공급가액 = 진행일수 × 인원 × 단가 (편집 화면·요약과 동일 기준).
+      const { serviceDays } = calcInterpretation({
+        startDate:        it.interpretDate,
+        endDate:          it.interpretEndDate,
+        interpreterCount: it.interpreterCount,
+        unitPrice:        it.unitPrice,
+      });
+      const peopleCount = Number(it.interpreterCount) > 0 ? Math.round(Number(it.interpreterCount)) : 1;
+      return {
+        ...base,
+        quantity:          serviceDays,   // 진행일수 (종료일 − 시작일 + 1)
+        unit:              '일',           // 통역 단위 고정
+        interpreterCount:  peopleCount,   // 투입 인원 — 서버가 공급가액에 별도로 곱함
         interpretDate:     it.interpretDate    || undefined,
         interpretPlace:    it.interpretPlace   || undefined,
         interpretDuration: dur                 || undefined,
+        operationHours:    it.operationHours?.trim() || undefined,  // 운영시간(안내 정보)
         eventEndDate:      it.interpretEndDate || undefined,
         memo:              it.memo             || undefined,
       };
@@ -395,12 +443,13 @@ function UnitSelect({ value, onChange, serviceType }: { value: string; onChange:
 // ─── 숫자 + 단위 서식 입력 (단어수/글자수 전용) ─────────────────────────────────
 
 /** 포커스 중: 숫자만 편집 / 포커스 해제: "50,000단어" 형식 표시 */
-function CountInput({ value, onChange, unit, placeholder, style }: {
+function CountInput({ value, onChange, unit, placeholder, style, decimal = false }: {
   value:        string;
   onChange:     (raw: string) => void;
   unit:         string;
   placeholder?: string;
   style?:       React.CSSProperties;
+  decimal?:     boolean;   // true: 소수점 허용 (예: 통역시간 6.5). 기본 false(정수만)
 }) {
   const [focused, setFocused] = useState(false);
   const num = Number(value.replace?.(/,/g, '') || 0);
@@ -410,7 +459,7 @@ function CountInput({ value, onChange, unit, placeholder, style }: {
   return (
     <input
       value={displayVal}
-      onChange={e => onChange(e.target.value.replace(/[^\d]/g, ''))}
+      onChange={e => onChange(e.target.value.replace(decimal ? /[^\d.]/g : /[^\d]/g, ''))}
       onFocus={e => { setFocused(true); e.target.select(); }}
       onBlur={() => setFocused(false)}
       placeholder={placeholder}
@@ -577,6 +626,114 @@ function ExpenseTypeSelect({ value, onChange }: { value: string; onChange: (v: s
   );
 }
 
+// ─── 운영시간 Time Range Picker ──────────────────────────────────────────────
+// 클릭 시 아래로 작은 Popover만 열림(전체 모달 아님). 시작/종료를 30분 간격 목록에서 선택.
+// 직접 텍스트 입력도 허용. 저장 형식은 "09:00~13:00". 계산에는 사용하지 않는다.
+
+const TIME_OPTIONS: string[] = (() => {
+  const out: string[] = [];
+  for (let h = 0; h < 24; h++) {
+    const hh = String(h).padStart(2, '0');
+    out.push(`${hh}:00`, `${hh}:30`);
+  }
+  return out; // 00:00 … 23:30 (30분 간격)
+})();
+
+/** "09:00~13:00" → { start:'09:00', end:'13:00' } (형식 불일치 시 빈 값) */
+function parseTimeRange(v: string): { start: string; end: string } {
+  const m = /^\s*(\d{1,2}:\d{2})\s*~\s*(\d{1,2}:\d{2})\s*$/.exec(v || '');
+  return m ? { start: m[1], end: m[2] } : { start: '', end: '' };
+}
+
+/**
+ * 운영시간("HH:MM~HH:MM") → 하루 통역시간(시간, 문자열). 종료 − 시작, 30분 단위 정확 계산.
+ * 예: "09:00~13:00" → "4", "10:00~16:30" → "6.5". 계산 불가/음수면 빈 값.
+ */
+function computeHoursPerDay(range: string): string {
+  const { start, end } = parseTimeRange(range);
+  if (!start || !end) return '';
+  const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+  const diff = toMin(end) - toMin(start);
+  if (diff <= 0) return '';
+  return String(diff / 60);  // 30분 배수 → .0/.5 정확 (예: 390분 → 6.5)
+}
+
+function TimeRangeField({ value, onChange, onConfirm, boxStyle }: {
+  value: string; onChange: (v: string) => void; onConfirm?: (range: string) => void; boxStyle: React.CSSProperties;
+}) {
+  const [open, setOpen]   = useState(false);
+  const [start, setStart] = useState('');
+  const [end, setEnd]     = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+
+  const openPicker = () => { const p = parseTimeRange(value); setStart(p.start); setEnd(p.end); setOpen(true); };
+
+  useEffect(() => {
+    if (!open) return;
+    const onMD  = (e: MouseEvent)    => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onMD);
+    document.addEventListener('keydown',   onKey);
+    return () => { document.removeEventListener('mousedown', onMD); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  // "HH:MM" 0-padding 이므로 문자열 비교 = 시간 순서 비교
+  const pickStart = (t: string) => { setStart(t); if (end && end <= t) setEnd(''); };  // 종료 < 시작 방지
+  const canConfirm = !!start && !!end && end > start;
+  const confirm = () => {
+    if (!canConfirm) return;
+    const range = `${start}~${end}`;
+    onChange(range);
+    onConfirm?.(range);   // 운영시간 선택 완료(확인) 시에만 자동 계산 트리거 (지시문 6절)
+    setOpen(false);
+  };
+
+  const column = (label: string, sel: string, onPick: (t: string) => void, opts: string[]) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <span style={{ fontSize: 10, color: C.textMuted, fontWeight: 700, textAlign: 'center' }}>{label}</span>
+      <div style={{ height: 150, width: 74, overflowY: 'auto', border: BD.card, borderRadius: 6 }}>
+        {opts.map(t => (
+          <button key={t} type="button" onClick={() => onPick(t)}
+            style={{ display: 'block', width: '100%', textAlign: 'center', padding: '4px 0', fontSize: 12, border: 'none',
+              background: sel === t ? C.primaryBg : 'none', color: sel === t ? C.primaryText : C.textPrimary,
+              fontWeight: sel === t ? 700 : 400, cursor: 'pointer' }}
+            onMouseEnter={e => { if (sel !== t) (e.currentTarget as HTMLButtonElement).style.background = C.bgHover; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = sel === t ? C.primaryBg : 'none'; }}>
+            {t}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
+      {/* 입력칸 — 어디를 클릭해도 Popover 열림 + 직접 입력 허용 (기존 입력칸과 동일 크기/디자인) */}
+      <div onClick={() => { if (!open) openPicker(); }}
+        style={{ ...boxStyle, display: 'flex', alignItems: 'center', gap: 2, padding: 0, overflow: 'hidden', cursor: 'pointer' }}>
+        <input value={value} onChange={e => onChange(e.target.value)} placeholder="예: 09:00~13:00"
+          style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, padding: '0 6px', height: '100%', cursor: 'pointer' }}
+          title="운영시간 (클릭하여 선택 또는 직접 입력, 예: 09:00~18:00). 공급가액 계산에는 사용되지 않습니다." />
+        <span aria-hidden style={{ fontSize: 9, color: C.g400, padding: '0 6px', flexShrink: 0, userSelect: 'none' }}>▼</span>
+      </div>
+      {open && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: 10, width: 190 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textPrimary, marginBottom: 6 }}>운영시간</div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+            {column('시작', start, pickStart, TIME_OPTIONS)}
+            {column('종료', end, setEnd, start ? TIME_OPTIONS.filter(t => t > start) : TIME_OPTIONS)}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+            <span style={{ fontSize: 11, color: canConfirm ? C.textSecondary : C.g400 }}>{start && end ? `${start}~${end}` : '시작·종료 선택'}</span>
+            <button type="button" onClick={confirm} disabled={!canConfirm}
+              style={{ border: 'none', borderRadius: 6, padding: '4px 14px', fontSize: 12, fontWeight: 700, cursor: canConfirm ? 'pointer' : 'default', background: canConfirm ? C.primary : C.g300, color: '#fff' }}>확인</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── 서비스 유형별 동적 필드 ─────────────────────────────────────────────────
 
 function ServiceFields({ it, update, products }: {
@@ -590,27 +747,27 @@ function ServiceFields({ it, update, products }: {
       // 사용자가 직접 언어를 선택하지 않음 — 상품 Master가 Single Source of Truth
       const policy = getPolicy(it.sourceLanguage);
 
-      // 글자수 변경: char 기준 언어 or 언어 미지정(기본 700글자/페이지) → 수량 갱신
+      // char 기준 언어(또는 정책 없음) 여부 — 글자수가 수량을 결정하는 경우
+      const charDrivesQty = policy?.calcType === 'character' || !policy;
+
+      // 글자수 변경: char 기준 언어 → 수량 갱신 / 삭제 시 즉시 초기화 (지시문 5절)
       const handleCharChange = (v: string) => {
         const upd: Partial<QuoteItemForm> = { charCount: v };
-        if (v) {
-          const std = (policy?.calcType === 'character' || !policy)
-            ? (policy?.standardValue ?? 700)
-            : null;
-          if (std) {
-            const n = calcPagesFromStr(v, std);
-            if (n !== null) { upd.quantity = String(n); upd.unit = '페이지'; }
-          }
+        if (charDrivesQty) {
+          const pages = calcTranslationPages('', v, it.sourceLanguage);
+          upd.quantity = pages !== null ? String(pages) : '';  // 삭제/무효 → 수량 초기화
+          upd.unit = '페이지';
         }
         update(upd);
       };
 
-      // 단어수 변경: word 기준 언어 → 수량 갱신
+      // 단어수 변경: word 기준 언어 → 수량 갱신 / 삭제 시 즉시 초기화 (지시문 5절)
       const handleWordChange = (v: string) => {
         const upd: Partial<QuoteItemForm> = { wordCount: v };
-        if (v && policy?.calcType === 'word') {
-          const n = calcPagesFromStr(v, policy.standardValue);
-          if (n !== null) { upd.quantity = String(n); upd.unit = '페이지'; }
+        if (policy?.calcType === 'word') {
+          const pages = calcTranslationPages(v, '', it.sourceLanguage);
+          upd.quantity = pages !== null ? String(pages) : '';  // 삭제/무효 → 수량 초기화
+          upd.unit = '페이지';
         }
         update(upd);
       };
@@ -651,44 +808,81 @@ function ServiceFields({ it, update, products }: {
         </div>
       );
     }
-    case 'interpretation':
+    case 'interpretation': {
+      // 날짜 유효성 검증용 파생값 (종료일 < 시작일 경고에만 사용). 계산 로직은 calcItem에서 별도 수행.
+      const interp = calcInterpretation({
+        startDate:        it.interpretDate,
+        endDate:          it.interpretEndDate,
+        interpreterCount: it.interpreterCount,
+        unitPrice:        it.unitPrice,
+      });
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
-          {/* 행사 시작일 */}
-          <input type="date" value={it.interpretDate}
-            onChange={e => update({ interpretDate: e.target.value })}
-            style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="행사 시작일" />
-          <span style={sep_s}>~</span>
-          {/* 행사 종료일 — 기간 행사 시 입력 / 당일은 비워둠 */}
-          <input type="date" value={it.interpretEndDate}
-            onChange={e => update({ interpretEndDate: e.target.value })}
-            style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="행사 종료일 (기간 행사 시 입력, 당일은 비워두세요)" />
-          {/* 장소 */}
-          <input value={it.interpretPlace}
-            onChange={e => update({ interpretPlace: e.target.value })}
-            placeholder="장소" style={{ ...rinp('auto'), flex: 1, minWidth: 50 }} title="행사 장소" />
-          {/* 투입 인원 — "2명" 형태 표시 (CountInput) */}
-          <CountInput value={it.interpreterCount} onChange={v => update({ interpreterCount: v })}
-            unit="명" placeholder="인원" style={{ ...rinp(72), flexShrink: 0 }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
+            {/* 행사 시작일 */}
+            <input type="date" value={it.interpretDate}
+              onChange={e => update({ interpretDate: e.target.value })}
+              style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="행사 시작일" />
+            <span style={sep_s}>~</span>
+            {/* 행사 종료일 — 기간 행사 시 입력 / 당일은 비워둠 */}
+            <input type="date" value={it.interpretEndDate}
+              onChange={e => update({ interpretEndDate: e.target.value })}
+              style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="행사 종료일 (기간 행사 시 입력, 당일은 비워두세요)" />
+            {/* 장소 */}
+            <input value={it.interpretPlace}
+              onChange={e => update({ interpretPlace: e.target.value })}
+              placeholder="장소" style={{ ...rinp('auto'), flex: 1, minWidth: 50 }} title="행사 장소" />
+            {/* 통역시간(계약) — 하루 기준 시간(숫자, 소수 허용), "N시간/일"로 표시. 안내 정보(계산 미사용) */}
+            <CountInput value={it.interpretHours} onChange={v => update({ interpretHours: v })}
+              unit="시간/일" placeholder="통역시간" decimal style={{ ...rinp(104), flexShrink: 0 }} />
+            {/* 운영시간(행사 운영시간) — Time Range Picker(선택) + 직접 입력.
+                확인 시 통역시간을 자동 계산(기본값)해 채우되, 사용자가 언제든 수정 가능 (지시문 5절) */}
+            <TimeRangeField value={it.operationHours}
+              onChange={v => update({ operationHours: v })}
+              onConfirm={range => { const h = computeHoursPerDay(range); if (h) update({ interpretHours: h }); }}
+              boxStyle={{ ...rinp(120), height: 32 }} />
+            {/* 투입 인원 — "2명" 형태 표시 (CountInput) */}
+            <CountInput value={it.interpreterCount} onChange={v => update({ interpreterCount: v })}
+              unit="명" placeholder="인원" style={{ ...rinp(72), flexShrink: 0 }} />
+          </div>
+          {/* 날짜 오류 경고만 유지 (정보성 안내 문구는 제거 — 값이 이미 각 컬럼에 표시됨) */}
+          {interp.invalidDateRange && (
+            <span style={{ fontSize: 10, color: C.danger, fontWeight: 600 }}>
+              ⚠ 종료일이 시작일보다 빠릅니다. 날짜를 확인해 주세요.
+            </span>
+          )}
         </div>
       );
+    }
     case 'equipment':
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
-          {/* 사용 시작일 */}
+          {/* 사용 시작일 — 변경 시 사용일수(usagePeriod) 자동 재계산 */}
           <input type="date" value={it.eventStartDate}
-            onChange={e => update({ eventStartDate: e.target.value })}
+            onChange={e => {
+              const start = e.target.value;
+              const upd: Partial<QuoteItemForm> = { eventStartDate: start };
+              const days = calcSpanDays(start, it.eventEndDate);
+              if (days > 0) upd.usagePeriod = String(days);   // 종료일 − 시작일 + 1
+              update(upd);
+            }}
             style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="사용 시작일" />
           <span style={sep_s}>~</span>
-          {/* 사용 종료일 — 당일 사용이면 비워둠 */}
+          {/* 사용 종료일 — 당일 사용이면 비워둠. 변경 시 사용일수 자동 재계산 */}
           <input type="date" value={it.eventEndDate}
-            onChange={e => update({ eventEndDate: e.target.value })}
+            onChange={e => {
+              const end = e.target.value;
+              const upd: Partial<QuoteItemForm> = { eventEndDate: end };
+              const days = calcSpanDays(it.eventStartDate, end);
+              if (days > 0) upd.usagePeriod = String(days);   // 종료일 − 시작일 + 1
+              update(upd);
+            }}
             style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="사용 종료일 (당일 사용이면 비워두세요)" />
           {/* 사용 장소 */}
           <input value={it.itemLocation}
             onChange={e => update({ itemLocation: e.target.value })}
             placeholder="사용 장소" style={{ ...rinp('auto'), flex: 1, minWidth: 50 }} title="장비 사용 장소" />
-          {/* 사용일수 — 숫자 입력, "일" 자동 표시 (번역 단어수·글자수와 동일 UX) */}
+          {/* 사용일수 — 날짜 입력 시 자동 계산, 직접 수정도 가능 */}
           <CountInput value={it.usagePeriod} onChange={v => update({ usagePeriod: v })}
             unit="일" placeholder="사용일수" style={{ ...rinp(72), flexShrink: 0 }} />
         </div>
@@ -732,6 +926,15 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
   const [showWarning, setShowWarning] = useState(false);
   const supply = calcItem(it, vatType).supply;
   const cfg    = SVC_CFG[it.productType];
+  // 통역 파생 계산수량(인원 × 일수) — 수량 컬럼 읽기전용 표시에 사용
+  const interp = it.productType === 'interpretation'
+    ? calcInterpretation({
+        startDate:        it.interpretDate,
+        endDate:          it.interpretEndDate,
+        interpreterCount: it.interpreterCount,
+        unitPrice:        it.unitPrice,
+      })
+    : null;
 
   // 번역 항목 교차검증 (글자수·단어수 모두 입력된 경우에만)
   const validationPolicy = it.productType === 'translation' ? getPolicy(it.sourceLanguage) : null;
@@ -747,7 +950,10 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
       productId: p?.id ?? null,
       productName: p?.name ?? '',
       productType,
-      unit: p ? (displayUnit(p.name, p.unit) || SVC_DEFAULT_UNIT[productType]) : SVC_DEFAULT_UNIT[productType],
+      // 통역 단위는 항상 '일'로 고정 (상품 마스터의 '시간' 등 단위에 좌우되지 않음)
+      unit: productType === 'interpretation'
+        ? '일'
+        : (p ? (displayUnit(p.name, p.unit) || SVC_DEFAULT_UNIT[productType]) : SVC_DEFAULT_UNIT[productType]),
       ...(productType === 'translation' && p?.sourceLanguage
         ? { sourceLanguage: p.sourceLanguage }
         : {}),
@@ -803,10 +1009,25 @@ function QuoteItemRow({ it, idx, total, vatType, products, updateItem, removeIte
           )}
         </div>
 
-        {/* ⑥ 수량 */}
+        {/* ⑥ 수량 — 통역은 진행일수(읽기전용, 날짜에서 파생), 그 외는 직접 입력 */}
         <div>
-          <NumericInput value={it.quantity} onChange={v => updateItem(idx, { quantity: v })} placeholder="1"
-            style={rinp('100%', { textAlign: 'center' })} />
+          {it.productType === 'interpretation' ? (
+            <div
+              title={interp && !interp.invalidDateRange
+                ? `수량 = 진행일수 ${interp.serviceDays}일 (종료일 − 시작일 + 1). 인원은 별도, 공급가액 = 단가 × 일수 × 인원`
+                : '시작일·종료일을 입력하면 진행일수가 자동 계산됩니다'}
+              style={{
+                ...rinp('100%', { textAlign: 'center' }),
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: C.g50, cursor: 'default',
+                color: interp?.invalidDateRange ? C.danger : C.textPrimary, fontWeight: 700,
+              }}>
+              {interp && !interp.invalidDateRange ? interp.serviceDays.toLocaleString() : '—'}
+            </div>
+          ) : (
+            <NumericInput value={it.quantity} onChange={v => updateItem(idx, { quantity: v })} placeholder="1"
+              style={rinp('100%', { textAlign: 'center' })} />
+          )}
         </div>
 
         {/* ⑦ 단위 */}
@@ -948,6 +1169,10 @@ export function QuoteEditorWorkspace({
   const [products,       setProducts]      = useState<Product[]>([]);
   const [loading,        setLoading]       = useState(true);
   const [saving,         setSaving]        = useState(false);
+  // 견적서 버튼: 신규 견적을 자동 저장하면 이후 저장은 이 id로 업데이트(중복 생성 방지)
+  const [savedQuoteId,   setSavedQuoteId]  = useState<number | null>(initialQuoteId ?? null);
+  // 견적서 미리보기 모달 데이터 (편집 화면 위에 오버레이 → 편집 상태 유지)
+  const [previewData,    setPreviewData]   = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -971,20 +1196,40 @@ export function QuoteEditorWorkspace({
       .catch(() => setDivisions([]));
   }, [companyId, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 수정 화면 최초 진입 시: 번역 수량을 저장된 quantity가 아니라 원본 입력값(단어수/글자수 + 정책)에서
+  // 1회 재계산한다. (지시문 3·6절 — 저장·복원 불일치 방지) 신규 작성은 단어/글자수가 없어 영향 없음.
+  useEffect(() => {
+    setItems(prev => prev.map(it => {
+      if (it.productType !== 'translation') return it;
+      const pages = calcTranslationPages(it.wordCount, it.charCount, it.sourceLanguage);
+      if (pages === null) return it;  // 단어/글자수 없음(직접 페이지 입력) → 저장값 유지
+      return { ...it, quantity: String(pages), unit: '페이지' };
+    }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (titleEdited || projectId !== null) return;
     const co = companies.find(c => c.id === companyId);
     const vi = items.filter(it => it.productName.trim());
     if (!co || vi.length === 0) return;
-    // 견적서명 자동 생성 규칙:
-    //   브랜드 미선택: VERITAS│[거래처명]_[대표상품명]_[YYYYMMDD]
-    //   브랜드 선택:   VERITAS│[거래처명]_[브랜드명]_[대표상품명]_[YYYYMMDD]
-    // VERITAS 뒤 구분자는 '│'(vertical bar), 이후 항목은 '_'로 연결한다.
+    // 견적서명은 공통 함수 generateQuoteTitle()로 생성한다 (대표상품 선정·외 N건·날짜 포함).
+    // 회사/브랜드/상품 추가·삭제/상품명/공급가액/날짜 변경 시 이 effect가 재실행되어 자동 갱신된다.
     // (최초 기본값일 뿐, 사용자가 수정하면 titleEdited 가드로 덮어쓰지 않음)
     const brand = divisions.find(d => d.id === divisionId);
-    const brandPart = brand ? `${brand.name}_` : '';
-    setTitle(`VERITAS│${co.name}_${brandPart}${vi[0].productName.trim()}_${issueDate.replace(/-/g, '')}`);
-  }, [companyId, divisionId, divisions, items, issueDate, companies, titleEdited, projectId]);
+    const nextTitle = generateQuoteTitle({
+      companyName: co.name,
+      brandName: brand?.name ?? null,
+      items: vi.map(it => ({
+        productName: it.productName,
+        productType: it.productType,
+        // 역할(대표/보조) 판정을 위해 선택된 상품의 대분류를 함께 전달 (통역 연장료·할증 = 보조상품)
+        mainCategory: it.productId != null ? (products.find(p => p.id === it.productId)?.mainCategory ?? null) : null,
+        supplyAmount: calcItem(it, vatType).supply,
+      })),
+      issueDate,
+    });
+    if (nextTitle) setTitle(nextTitle);
+  }, [companyId, divisionId, divisions, items, issueDate, vatType, companies, products, titleEdited, projectId]);
 
   const handleCompanyChange  = (cid: number | null) => { setCompanyId(cid); setDivisionId(null); setContactId(null); setTitleEdited(false); };
   // 브랜드 변경 시 담당자 재선택 유도 + 견적서명 재생성
@@ -1038,6 +1283,10 @@ export function QuoteEditorWorkspace({
       interpretEndDate: d.interpretEndDate || '',
       startTime:        d.startTime || '',
       endTime:          d.endTime || '',
+      // 통역시간 — 하루 기준 시간(숫자) 필드. AI 초안은 시각만 제공하므로 비워 두고 사용자가 입력.
+      interpretHours:   '',
+      // 운영시간(행사 운영시간) — AI 초안의 시작~종료 시각이 있으면 그대로 채움
+      operationHours:   [d.startTime, d.endTime].filter(Boolean).join('~'),
       interpretPlace:   d.interpretPlace || '',
       interpreterCount: d.interpreterCount > 0 ? String(d.interpreterCount) : '',
       eventStartDate:   d.eventStartDate || '',
@@ -1060,9 +1309,11 @@ export function QuoteEditorWorkspace({
   const totals = calcTotals(items, vatType);
   const fieldHint = (() => { const t = [...new Set(items.map(it => it.productType))]; return t.length === 1 ? SVC_FIELD_HINTS[t[0]] : '서비스별 상세 입력 필드'; })();
 
-  const handleSave = useCallback(async () => {
+  // 저장 실행부 — 편집 화면을 닫지 않고 저장만 수행하고 { quoteId, projectId }를 반환한다.
+  // 신규 견적은 최초 저장 시 생성하고 savedQuoteId를 기록 → 이후(저장/견적서)엔 동일 견적을 업데이트(중복 생성 방지).
+  const persistQuote = useCallback(async (): Promise<{ quoteId: number; projectId: number | null } | null> => {
     const vi = items.filter(it => it.productName.trim() && Number(it.unitPrice.replace?.(/,/g, '') || 0) > 0);
-    if (vi.length === 0) { onToast('품목명과 단가를 입력하세요.'); return; }
+    if (vi.length === 0) { onToast('품목명과 단가를 입력하세요.'); return null; }
     const itemsBody  = vi.map(it => toApiItem(it, vatType));
     const commonBody = {
       items: itemsBody, quoteType,
@@ -1072,9 +1323,9 @@ export function QuoteEditorWorkspace({
     };
     setSaving(true);
     try {
-      // 기존 견적 수정 모드
-      if (initialQuoteId) {
-        const url     = api(`/api/admin/quotes/${initialQuoteId}`);
+      // 기존 견적 또는 이미 자동 저장된 신규 견적 → 업데이트(PUT)
+      if (savedQuoteId) {
+        const url     = api(`/api/admin/quotes/${savedQuoteId}`);
         const payload = {
           ...commonBody,
           title:     title.trim() || undefined,
@@ -1082,63 +1333,65 @@ export function QuoteEditorWorkspace({
           contactId: contactId ?? undefined,
           divisionId: divisionId ?? null,
         };
-        console.log('[QUOTE UPDATE REQUEST]', { method: 'PUT', url, quoteId: initialQuoteId, companyId, contactId });
         const res  = await fetch(url, {
           method: 'PUT', headers: { ...authH, 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
         const data = await res.json();
-        console.log('[QUOTE UPDATE RESPONSE]', { status: res.status, data });
         if (!res.ok) {
           const msg = res.status === 404 ? '견적 수정 API를 찾을 수 없습니다. (서버 재시작 필요)'
                     : res.status === 400 ? `입력값을 확인해 주세요: ${data.error}`
                     : `서버 오류 (${res.status}): ${data.error ?? data.message ?? ''}`;
-          onToast(`견적 수정 실패: ${msg}`); return;
+          onToast(`견적 수정 실패: ${msg}`); return null;
         }
-        onToast('견적이 수정되었습니다.'); onSaved({ quoteId: initialQuoteId, projectId: null }); return;
+        return { quoteId: savedQuoteId, projectId: null };
       }
+      // 신규 독립 견적 → 생성(POST) 후 id 기록
       if (projectId === null) {
         const t = title.trim();
-        if (!t) { onToast('견적서명을 입력하세요.'); return; }
+        if (!t) { onToast('견적서명을 입력하세요.'); return null; }
         const res = await fetch(api('/api/admin/quotes'), {
           method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...commonBody, title: t, companyId: companyId ?? undefined, contactId: contactId ?? undefined, divisionId: divisionId ?? undefined, adminId: adminId ?? undefined }),
         });
         const data = await res.json();
-        if (!res.ok) { onToast(`견적서 저장 실패: ${data.error}`); return; }
-        onToast('견적서가 저장되었습니다.'); onSaved({ quoteId: data.id, projectId: null }); return;
+        if (!res.ok) { onToast(`견적서 저장 실패: ${data.error}`); return null; }
+        setSavedQuoteId(data.id);   // 이후 저장·견적서는 이 견적을 업데이트
+        return { quoteId: data.id, projectId: null };
       }
+      // 프로젝트 버전 견적 (Version Engine)
       const res = await fetch(api(`/api/admin/projects/${projectId}/quote`), {
         method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...commonBody, title: title.trim() || undefined, versionReason: versionReason.trim() || undefined }),
       });
       const data = await res.json();
-      if (!res.ok) { onToast(`견적 저장 실패: ${data.error}`); return; }
-      onToast('견적이 저장되었습니다.'); onSaved({ quoteId: data.id, projectId });
-    } catch { onToast('견적 저장 중 오류가 발생했습니다.'); }
+      if (!res.ok) { onToast(`견적 저장 실패: ${data.error}`); return null; }
+      return { quoteId: data.id, projectId };
+    } catch { onToast('견적 저장 중 오류가 발생했습니다.'); return null; }
     finally { setSaving(false); }
-  }, [items, projectId, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [items, projectId, savedQuoteId, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Excel Export ─────────────────────────────────────────────────────────
+  const handleSave = useCallback(async () => {
+    const isUpdate = savedQuoteId != null;
+    const r = await persistQuote();
+    if (!r) return;
+    onToast(isUpdate ? '견적이 수정되었습니다.' : '견적서가 저장되었습니다.');
+    onSaved(r);
+  }, [persistQuote, onSaved, onToast, savedQuoteId]);
 
-  const handleExcelExport = () => {
-    const company = companies.find(c => c.id === companyId);
-    const contact = contacts.find(c => c.id === contactId);
-    const admin   = adminList.find(a => a.id === adminId);
-    downloadQuoteExcel({
-      title:       title,
-      quoteType:   quoteType,
-      issueDate:   issueDate,
-      companyName: company?.name ?? '',
-      contactName: contact?.name ?? '',
-      pmName:      admin?.name ?? admin?.email ?? '',
-      vatType:     vatType,
-      note:        note,
-      items:       items as ExportItem[],
-      products:    products,
-      totals,
-    });
-  };
+  // 견적서 버튼 — 현재 편집 내용을 자동 저장(신규=생성/기존=업데이트)한 뒤 최신 견적서를 미리보기로 표시.
+  // 편집 화면은 그대로 유지되어 확인 후 즉시 재수정 가능 (지시문 3~6절).
+  const handleShowQuote = useCallback(async () => {
+    const r = await persistQuote();
+    if (!r) return;
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${r.quoteId}`), { headers: authH });
+      if (!res.ok) { onToast('견적서 생성에 실패했습니다.'); return; }
+      const detail = await res.json();
+      setPreviewData({ data: buildQuotePdfData(detail), title: title.trim() || detail.title || `견적 #${r.quoteId}` });
+    } catch { onToast('견적서 생성 중 오류가 발생했습니다.'); }
+  }, [persistQuote, title, token, onToast]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   // ─── 공통 Form 컨텐츠 ─────────────────────────────────────────────────────
 
@@ -1307,33 +1560,34 @@ export function QuoteEditorWorkspace({
     </div>
   );
 
-  // ─── 공통 Workspace 헤더 ─────────────────────────────────────────────────
+  // ─── 공통 Workspace 헤더 (PageHeader 기반) ────────────────────────────────
+
+  // 페이지 제목은 업무(작성/수정)를 나타낸다 — '새' 등 신규 상태 표현은 쓰지 않는다.
+  // 기존 견적 편집 진입(initialQuoteId) → '견적서 수정', 그 외(신규 작성) → '견적서 작성'.
+  const pageTitle = initialQuoteId != null ? '견적서 수정' : '견적서 작성';
+  // 우측 기능 버튼 그룹 — 두 헤더(오버레이·인라인)가 공유
+  const headerActions = (
+    <>
+      <button type="button" onClick={() => setShowAiModal(true)} data-testid="btn-ai-quote" aria-label="AI 견적 생성"
+        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: C.ai, color: '#ffffff' }}>
+        🤖 AI 견적 생성
+      </button>
+      <DsButton variant="secondary" size="md" onClick={handleShowQuote} disabled={saving}>📄 견적서</DsButton>
+      <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving}>
+        {saving ? '저장 중…' : '💾 저장'}
+      </DsButton>
+    </>
+  );
 
   const wsHeader = (bg: string, border: string, shadow: string, padH: string) => (
-    <div style={{ background: bg, borderBottom: border, padding: `0 ${padH}`, height: 52, display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0, boxShadow: shadow }}>
-      <button onClick={onClose} data-testid="btn-quote-back" aria-label="뒤로가기"
-        style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 8, cursor: 'pointer', color: C.textSecondary, fontSize: 13, fontWeight: 600, padding: '6px 12px' }}>
-        ← 뒤로가기
-      </button>
-      <div style={{ width: 1, height: 20, background: C.border }} />
-      {/* 페이지 제목 */}
-      <div>
-        <span style={{ ...TYPO.cardTitle }}>{isStandalone ? '새 견적서 작성' : '견적 작성'}</span>
-        {projectId !== null && <span style={{ ...TYPO.helper, marginLeft: SP[4] }}>Version Engine</span>}
-      </div>
-      {/* 우측 액션: AI 견적 생성(기능 버튼) + Excel / 취소 / 저장 */}
-      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <button type="button" onClick={() => setShowAiModal(true)} data-testid="btn-ai-quote" aria-label="AI 견적 생성"
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: C.ai, color: '#ffffff' }}>
-          🤖 AI 견적 생성
-        </button>
-        <DsButton variant="secondary" size="md" onClick={handleExcelExport}>📊 Excel</DsButton>
-        <DsButton variant="outline" size="md" onClick={onClose} disabled={saving}>취소</DsButton>
-        <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving}>
-          {saving ? '저장 중…' : '💾 저장'}
-        </DsButton>
-      </div>
-    </div>
+    <PageHeader
+      onBack={onClose}
+      testId="btn-quote-back"
+      title={pageTitle}
+      subtitle={projectId !== null ? 'Version Engine' : undefined}
+      right={headerActions}
+      style={{ background: bg, borderBottom: border, boxShadow: shadow, padding: `0 ${padH}` }}
+    />
   );
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1350,31 +1604,19 @@ export function QuoteEditorWorkspace({
             onClose={() => setShowAiModal(false)}
           />
         )}
-        {/* 인라인 Workspace 헤더 — 스크롤 영역에서 sticky */}
-        <div style={{ position: 'sticky', top: 0, zIndex: 20, background: C.bgCard, borderBottom: BD.card, height: 52, display: 'flex', alignItems: 'center', gap: 16, padding: '0 28px', boxShadow: BD.shadow.card }}>
-          <button onClick={onClose} data-testid="btn-quote-back" aria-label="뒤로가기"
-            style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 8, cursor: 'pointer', color: C.textSecondary, fontSize: 13, fontWeight: 600, padding: '6px 12px' }}>
-            ← 뒤로가기
-          </button>
-          <div style={{ width: 1, height: 20, background: C.border }} />
-          {/* 페이지 제목 */}
-          <div>
-            <span style={{ fontSize: 15, fontWeight: 700, color: C.textPrimary }}>{isStandalone ? '새 견적서 작성' : '견적 작성'}</span>
-            {projectId !== null && <span style={{ fontSize: 12, color: C.textMuted, marginLeft: 8 }}>Version Engine</span>}
-          </div>
-          {/* 우측 액션: AI 견적 생성(기능 버튼) + Excel / 취소 / 저장 */}
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button type="button" onClick={() => setShowAiModal(true)} data-testid="btn-ai-quote" aria-label="AI 견적 생성"
-              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: C.ai, color: '#ffffff' }}>
-              🤖 AI 견적 생성
-            </button>
-            <DsButton variant="secondary" size="md" onClick={handleExcelExport}>📊 Excel</DsButton>
-            <DsButton variant="outline" size="md" onClick={onClose} disabled={saving}>취소</DsButton>
-            <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving}>
-              {saving ? '저장 중…' : '💾 저장'}
-            </DsButton>
-          </div>
-        </div>
+        {/* 견적서 미리보기 — 편집 화면 위 오버레이(zIndex 2000). 닫으면 편집 상태 그대로 유지 */}
+        {previewData && (
+          <QuotePdfPreviewModal data={previewData.data} quoteTitle={previewData.title} onClose={() => setPreviewData(null)} />
+        )}
+        {/* 인라인 Workspace 헤더 — 스크롤 영역에서 sticky (PageHeader 공통 구조) */}
+        <PageHeader
+          onBack={onClose}
+          testId="btn-quote-back"
+          title={pageTitle}
+          subtitle={projectId !== null ? 'Version Engine' : undefined}
+          right={headerActions}
+          style={{ position: 'sticky', top: 0, zIndex: 20, background: C.bgCard, borderBottom: BD.card, padding: '0 28px', boxShadow: BD.shadow.card }}
+        />
 
         {/* 카드 컨텐츠 */}
         <div style={{ padding: '24px 28px 64px' }}>
@@ -1395,6 +1637,10 @@ export function QuoteEditorWorkspace({
           onApply={handleApplyAiRows}
           onClose={() => setShowAiModal(false)}
         />
+      )}
+      {/* 견적서 미리보기 — 편집 화면 위 오버레이(zIndex 2000). 닫으면 편집 상태 그대로 유지 */}
+      {previewData && (
+        <QuotePdfPreviewModal data={previewData.data} quoteTitle={previewData.title} onClose={() => setPreviewData(null)} />
       )}
       {wsHeader(C.bgCard, BD.card, BD.shadow.card, '24px')}
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px 64px' }}>

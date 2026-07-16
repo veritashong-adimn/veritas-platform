@@ -1727,6 +1727,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onToast={setToast}
           adminUsers={adminUsers}
           refreshTick={quoteTick}
+          isAdmin={user.role === "admin"}
         />
       )}
 

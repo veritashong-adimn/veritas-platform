@@ -68,3 +68,15 @@ export const quotesTable = pgTable("quotes", {
 export const insertQuoteSchema = createInsertSchema(quotesTable).omit({ id: true, createdAt: true, status: true, deletedAt: true, deletedBy: true, deletionReason: true });
 export type InsertQuote = z.infer<typeof insertQuoteSchema>;
 export type Quote = typeof quotesTable.$inferSelect;
+
+// ─── 판매전환 여부 판단 (공통 비즈니스 로직) ─────────────────────────────────
+/**
+ * 견적이 '판매전환 완료' 상태인지 판단하는 단일 기준.
+ * 판매전환 완료 = quote.status === 'approved'.
+ *  - projectId 연결은 견적 저장 시점에도 생길 수 있어(전환과 무관) 판단 기준으로 쓰지 않는다.
+ *  - 판매취소 시 status가 'approved' → 'pending'으로 복귀하므로 이 함수만으로 정확히 판단된다.
+ * 목록·삭제·수정·판매전환 등 모든 화면/로직이 이 함수를 공통으로 사용한다.
+ */
+export function isQuoteConverted(status: string | null | undefined): boolean {
+  return status === "approved";
+}

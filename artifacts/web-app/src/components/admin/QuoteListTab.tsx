@@ -3,8 +3,9 @@ import { api } from '../../lib/constants';
 import { PrimaryBtn, ClickSelect } from '../ui';
 import { QuoteEditorWorkspace, type QuoteItemForm, type VatType, type QuoteType, type ServiceType } from './QuoteEditorWorkspace';
 import QuotePdfPreviewModal from './QuotePdfPreviewModal';
+import { QuoteTrashTab } from './QuoteTrashTab';
 import { buildQuotePdfData, parseMemoInfo, type QuoteDetail, type QuoteDetailItem } from '../../lib/quotePdf';
-import { renderQuoteTitle } from '../../lib/quoteTitle';
+import { renderQuoteTitle, formatDocNumber } from '../../lib/quoteTitle';
 
 // ─── 타입 ──────────────────────────────────────────────────────────────────────
 interface QuoteRow {
@@ -55,9 +56,11 @@ interface QuoteListTabProps {
   adminUsers?: Array<{ id: number; name: string | null; email: string }>;
   /** AdminDashboard fetchAll 호출 시 증가 — QuoteListTab 자동 재조회 트리거 */
   refreshTick?: number;
+  /** 관리자 여부 — 휴지통 영구삭제 버튼 노출 제어(서버에서도 별도 검증) */
+  isAdmin?: boolean;
 }
 
-export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: QuoteListTabProps) {
+export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false }: QuoteListTabProps) {
   const authH = { Authorization: `Bearer ${token}` };
 
   const [quotes, setQuotes]             = useState<QuoteRow[]>([]);
@@ -68,6 +71,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
   const [dateFrom, setDateFrom]         = useState('');
   const [dateTo, setDateTo]             = useState('');
   const [showEditor, setShowEditor]     = useState(false);
+  const [showTrash, setShowTrash]       = useState(false);
   const [updatingId, setUpdatingId]     = useState<number | null>(null);
   const [pdfData,    setPdfData]        = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
   const [pdfLoading, setPdfLoading]     = useState<number | null>(null);
@@ -136,8 +140,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
         body: JSON.stringify({ reason }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { onToast(`견적 삭제 실패: ${data.error ?? res.status}`); return; }
-      onToast('견적이 삭제되었습니다.');
+      // 서버 오류 메시지를 그대로 노출한다(내부 처리 방식 '휴지통 이동 실패' 등은 표시하지 않음 — §6)
+      if (!res.ok) { onToast(data.error ?? '견적서 삭제에 실패했습니다.'); return; }
+      onToast('견적서를 삭제했습니다.');
       setDeleteTarget(null);
       setDeleteReason('');
       fetchQuotes();
@@ -157,7 +162,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        onToast(`PDF 미리보기 실패: ${err.error ?? res.status}`);
+        onToast(`견적서 미리보기 실패: ${err.error ?? res.status}`);
         return;
       }
       const detail = await res.json() as QuoteDetail;
@@ -167,7 +172,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
       }
       setPdfData({ data: buildQuotePdfData(detail), title });
     } catch {
-      onToast('PDF 생성에 실패했습니다. 다시 시도해 주세요.');
+      onToast('견적서 생성에 실패했습니다. 다시 시도해 주세요.');
     } finally {
       setPdfLoading(null);
     }
@@ -178,9 +183,10 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
     const type = (it.itemType ?? 'translation') as ServiceType;
     const taxType: VatType = (it.taxType === 'taxable' || it.taxType === 'exempt' || it.taxType === 'zero_rate') ? it.taxType : 'taxable';
     const { fields, userMemo } = parseMemoInfo(it.memo);
-    // 통역 인원 복원:
-    // 1) 비고의 "투입인원: N명" 우선 (Legacy 호환)
-    // 2) 없으면 quantity ÷ serviceDays 역산 (신규 저장 포맷)
+    // 통역 인원 복원 우선순위:
+    // 1) interpreter_count 컬럼 (신규 저장 포맷 — quantity = 진행일수)
+    // 2) 비고의 "투입인원: N명" (Legacy)
+    // 3) quantity ÷ serviceDays 역산 (구 포맷 — quantity = 인원×일수)
     const sd = (() => {
       if (type !== 'interpretation' || !it.interpretDate) return 0;
       const eDate = it.eventEndDate;
@@ -190,20 +196,25 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
     const qty = Number(it.quantity) || 1;
     let interpreterCount = '';
     if (type === 'interpretation') {
+      const col = (it as { interpreterCount?: number | null }).interpreterCount;
       const memoCount = fields['투입인원'];
-      if (memoCount && Number(memoCount) > 0) {
-        interpreterCount = memoCount;        // Legacy: "투입인원: N명"에서 복원
+      if (col != null && Number(col) > 0) {
+        interpreterCount = String(Number(col));            // 신규: interpreter_count 컬럼
+      } else if (memoCount && Number(memoCount) > 0) {
+        interpreterCount = memoCount;                       // Legacy: "투입인원: N명"
       } else if (sd > 0) {
-        interpreterCount = String(Math.round(qty / sd));  // 신규: billingQty ÷ days
+        interpreterCount = String(Math.round(qty / sd));    // 구 포맷: billingQty ÷ days
       }
     }
+    // 통역 폼 수량 = 진행일수 (신규 포맷은 qty가 이미 일수, 구 포맷은 날짜에서 재산출)
+    const formQuantity = type === 'interpretation' && sd > 0 ? String(sd) : String(qty);
     const [startTime = '', endTime = ''] = it.interpretDuration ? it.interpretDuration.split('~') : [];
     const sourceLanguage = it.languagePair ? it.languagePair.split('-')[0] : 'ko';
     return {
       productId:        it.productId ?? null,
       productName:      it.productName,
       productType:      type,
-      quantity:         String(qty),
+      quantity:         formQuantity,
       unit:             it.unit,
       unitPrice:        String(Number(it.unitPrice)),
       taxType,
@@ -217,6 +228,10 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
       interpretEndDate: it.eventEndDate      ?? '',
       startTime,
       endTime,
+      // 통역시간 복원 — "N시간/일" 저장 문자열에서 숫자(소수 포함) 추출 (예: "6.5시간/일" → "6.5")
+      interpretHours:   it.interpretDuration ? (it.interpretDuration.match(/\d+(\.\d+)?/)?.[0] ?? '') : '',
+      // 운영시간 복원 — 저장된 자유입력 문자열 그대로 (지시문 5·7절)
+      operationHours:   (it as { operationHours?: string | null }).operationHours ?? '',
       interpretPlace:   it.interpretPlace    ?? '',
       interpreterCount,
       eventStartDate:   it.eventStartDate    ?? '',
@@ -273,6 +288,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
     const s = search.toLowerCase();
     return (
       (q.quoteNumber ?? '').toLowerCase().includes(s) ||
+      formatDocNumber('Q', q.quoteNumber, q.issueDate).toLowerCase().includes(s) ||  // 새 표시 형식(Q260716-008)으로도 검색
       (q.title ?? '').toLowerCase().includes(s) ||
       (q.companyName ?? '').toLowerCase().includes(s) ||
       (q.contactName ?? '').toLowerCase().includes(s) ||
@@ -312,6 +328,20 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
     );
   }
 
+  // ── 견적 휴지통 페이지 ───────────────────────────────────────────────────────
+  if (showTrash) {
+    return (
+      <div style={{ margin: '-24px -28px' }}>
+        <QuoteTrashTab
+          token={token}
+          isAdmin={isAdmin}
+          onToast={onToast}
+          onBack={() => { setShowTrash(false); fetchQuotes(); }}
+        />
+      </div>
+    );
+  }
+
   // 현황 KPI 데이터
   const kpiItems = [
     { label: '전체', value: 'all',      count: quotes.length,                                       color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe' },
@@ -328,9 +358,19 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
         {/* 카드 헤더 */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', letterSpacing: '0.2px' }}>검색 및 필터</span>
-          <PrimaryBtn onClick={() => setShowEditor(true)} style={{ fontSize: 12, padding: '5px 12px' }}>
-            + 견적서 작성
-          </PrimaryBtn>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <PrimaryBtn onClick={() => setShowEditor(true)} style={{ fontSize: 12, padding: '5px 12px' }}>
+              + 견적서 작성
+            </PrimaryBtn>
+            {/* 휴지통 — 삭제된(휴지통) 견적 전용 페이지로 이동 (사이드바 메뉴 추가 없음) */}
+            <button type="button" onClick={() => setShowTrash(true)}
+              data-testid="btn-quote-trash" aria-label="견적 휴지통"
+              style={{ fontSize: 12, padding: '5px 12px', borderRadius: 6, cursor: 'pointer', background: '#fff', color: '#6b7280', border: '1px solid #d1d5db', fontWeight: 600 }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#f9fafb'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = '#fff'; }}>
+              🗑 휴지통
+            </button>
+          </div>
         </div>
 
         {/* 통합검색 + 드롭다운 */}
@@ -448,7 +488,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e5e7eb' }}>
-                  {['견적번호', '발행일', '견적서명', '고객사', '고객명', '금액', '견적유형', '담당PM', '상태', 'PDF', '상태변경'].map(h => (
+                  {['견적번호', '발행일', '견적서명', '고객사', '고객명', '금액', '견적유형', '담당PM', '상태', '견적서', '상태변경'].map(h => (
                     <th key={h} style={{ padding: '6px 10px', textAlign: 'center', verticalAlign: 'middle', fontSize: 11, fontWeight: 700, color: '#6b7280', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -468,20 +508,22 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
 
                   return (
                     <tr key={q.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      {/* 견적번호 — 클릭 시 편집 */}
+                      {/* 견적번호 — 표시 형식 Q{YYMMDD}-{순번}. 클릭 시 편집(식별자 역할이라 과한 강조 제거) */}
                       <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         <button
                           onClick={() => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`)}
                           disabled={editLoading === q.id}
                           style={{
-                            fontFamily: 'monospace', fontSize: 12, color: '#2563eb', fontWeight: 700,
+                            fontFamily: 'monospace', fontSize: 11, color: '#475569', fontWeight: 400,
                             background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                            textDecoration: 'underline', opacity: editLoading === q.id ? 0.5 : 1,
+                            textDecoration: 'none', opacity: editLoading === q.id ? 0.5 : 1,
                           }}
+                          onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline'; }}
+                          onMouseLeave={e => { e.currentTarget.style.textDecoration = 'none'; }}
                           data-testid={`btn-edit-quote-${q.id}`}
                           aria-label={`${q.quoteNumber ?? q.id} 편집`}
                         >
-                          {editLoading === q.id ? '…' : (q.quoteNumber ?? `#${q.id}`)}
+                          {editLoading === q.id ? '…' : (formatDocNumber('Q', q.quoteNumber, q.issueDate) || `#${q.id}`)}
                         </button>
                       </td>
                       {/* 발행일 */}
@@ -550,38 +592,50 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
                             opacity: pdfLoading === q.id ? 0.5 : 1,
                           }}
                           data-testid={`btn-pdf-preview-${q.id}`}
-                          aria-label={`${q.quoteNumber ?? q.id} PDF 미리보기`}
+                          aria-label={`${q.quoteNumber ?? q.id} 견적서 미리보기`}
                         >
-                          {pdfLoading === q.id ? '…' : '📄 PDF'}
+                          {pdfLoading === q.id ? '…' : '📄 견적서'}
                         </button>
                       </td>
-                      {/* 상태변경 — 가운데 정렬, 버튼 간격 확보 */}
+                      {/* 상태변경 — 판매전환 상태 영역(고정폭) + 삭제 영역(고정폭). 행마다 위치·너비 동일 */}
                       <td style={{ padding: '6px 10px', minWidth: 176, textAlign: 'center' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, whiteSpace: 'nowrap' }}>
+                          {/* ① 판매전환 상태 영역 — 전/완료 동일 고정 너비(96), 텍스트 가운데 정렬 */}
                           {isConverted ? (
+                            // 판매전환 완료 — 진한 녹색 채움 + Bold + 체크. 전환 전보다 시각적 비중 강화(비활성이나 흐리지 않음)
                             <span
-                              style={{ fontSize: 11, padding: '3px 8px', borderRadius: 5, fontWeight: 700, background: '#dcfce7', color: '#15803d', whiteSpace: 'nowrap' }}
+                              style={{
+                                width: 88, boxSizing: 'border-box',
+                                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                fontSize: 11, height: 24, borderRadius: 6, fontWeight: 800,
+                                background: '#16a34a', color: '#ffffff', border: '1px solid #15803d',
+                              }}
                               data-testid={`badge-quote-converted-${q.id}`}
                               aria-label={`${q.quoteNumber ?? q.id} 판매전환 완료`}
                             >
-                              ✓ 판매전환 완료
+                              ✓ 전환완료
                             </span>
                           ) : (
+                            // 판매전환 전 — 연한 녹색 배경 + 녹색 테두리/글자, 일반 굵기, 호버 강조(클릭 가능)
                             <button
                               onClick={() => handleConvertToSale(q.id)}
                               disabled={isUpdating}
                               style={{
-                                fontSize: 11, padding: '3px 8px', borderRadius: 5, cursor: 'pointer', whiteSpace: 'nowrap',
-                                background: '#dcfce7', color: '#15803d',
-                                border: 'none', fontWeight: 600, opacity: isUpdating ? 0.5 : 1,
+                                width: 88, boxSizing: 'border-box',
+                                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                                fontSize: 11, height: 24, borderRadius: 6, cursor: isUpdating ? 'default' : 'pointer',
+                                background: '#f0fdf4', color: '#15803d', border: '1px solid #86efac',
+                                fontWeight: 600, opacity: isUpdating ? 0.5 : 1, transition: 'background 0.12s, border-color 0.12s',
                               }}
+                              onMouseEnter={e => { if (!isUpdating) { e.currentTarget.style.background = '#dcfce7'; e.currentTarget.style.borderColor = '#22c55e'; } }}
+                              onMouseLeave={e => { e.currentTarget.style.background = '#f0fdf4'; e.currentTarget.style.borderColor = '#86efac'; }}
                               data-testid={`btn-quote-status-approved-${q.id}`}
                               aria-label={`${q.quoteNumber ?? q.id} 판매전환`}
                             >
                               {isUpdating ? '…' : '판매전환'}
                             </button>
                           )}
-                          {/* 삭제 — 판매전환 완료 견적은 비활성 스타일 + 안내 (서버에서도 차단) */}
+                          {/* ② 삭제 영역 — 고정 너비(56). 판매전환 완료 견적은 비활성 스타일 + 안내(서버에서도 차단), 너비·위치 동일 유지 */}
                           <button
                             onClick={() => canDelete ? setDeleteTarget(q) : onToast(DELETE_BLOCKED_MSG)}
                             title={canDelete ? '견적 삭제' : DELETE_BLOCKED_MSG}
@@ -589,7 +643,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
                             data-testid={`btn-delete-quote-${q.id}`}
                             aria-label={`${q.quoteNumber ?? q.id} 삭제`}
                             style={{
-                              fontSize: 11, padding: '3px 8px', borderRadius: 5, fontWeight: 600, whiteSpace: 'nowrap',
+                              width: 50, boxSizing: 'border-box',
+                              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: 11, height: 24, borderRadius: 6, fontWeight: 600,
                               cursor: canDelete ? 'pointer' : 'not-allowed',
                               background: canDelete ? '#fef2f2' : '#f3f4f6',
                               color: canDelete ? '#dc2626' : '#9ca3af',
@@ -631,9 +687,10 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick }: Q
           style={{ background: '#fff', borderRadius: 14, padding: '26px 30px', width: 460, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}
           data-testid="modal-quote-delete"
         >
-          <h2 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 800, color: '#dc2626' }}>견적 삭제</h2>
+          <h2 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 800, color: '#dc2626' }}>견적서를 삭제하시겠습니까?</h2>
           <p style={{ margin: '0 0 16px', fontSize: 13, color: '#374151', lineHeight: 1.6 }}>
-            삭제된 견적은 견적관리 목록에서 제거됩니다.
+            삭제된 견적서는 휴지통으로 이동되며, 기본 목록에서 제외됩니다.<br />
+            필요한 경우 휴지통에서 복원할 수 있습니다.
           </p>
 
           {/* 삭제 대상 정보 */}
