@@ -5,7 +5,6 @@ import {
   customersTable, communicationsTable, translatorProfilesTable,
   contactsTable, companiesTable, translatorRatesTable, divisionsTable,
   quoteItemsTable, calcQuoteItemAmounts,
-  quotePriceAdjustmentsTable, calcAdjustmentAmount, applyAdjustments,
   billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
   prepaidAccountsTable, prepaidLedgerTable, settingsTable,
   productRequestsTable,
@@ -1229,42 +1228,49 @@ router.get("/admin/quotes", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── Price Adjustment(Special D.C) 공통 처리 ─────────────────────────────────
-type IncomingAdjustment = { adjustmentType?: string; amountType?: string; inputValue?: number; reason?: string };
-type PreparedAdjustment = { adjustmentType: string; amountType: string; inputValue: number; calculatedAmount: number; reason: string };
-/**
- * 프론트에서 전달된 가격조정 목록을 검증하고, supplyTotal 기준으로 실제 할인액을 계산한다.
- * 프론트 계산값은 신뢰하지 않고 서버에서 재계산한다(지시문 7절).
- */
-function prepareAdjustments(raw: unknown, supplyTotal: number):
-  | { rows: PreparedAdjustment[]; adjustmentTotal: number }
-  | { error: string } {
-  if (raw == null) return { rows: [], adjustmentTotal: 0 };
-  if (!Array.isArray(raw)) return { error: "priceAdjustments 형식이 올바르지 않습니다." };
-  const rows: PreparedAdjustment[] = [];
-  let total = 0;
-  for (const a of raw as IncomingAdjustment[]) {
-    const amountType = a.amountType === "percent" ? "percent" : "amount";
-    const inputValue = Number(a.inputValue);
-    const reason = (a.reason ?? "").trim();
-    if (!Number.isFinite(inputValue) || inputValue <= 0)
-      return { error: "할인 값은 0보다 커야 합니다." };
-    if (amountType === "percent" && (inputValue <= 0 || inputValue > 100))
-      return { error: "할인율은 0 초과 100 이하만 허용됩니다." };
-    if (!reason) return { error: "할인 사유는 필수입니다." };
-    const calculatedAmount = calcAdjustmentAmount(amountType, inputValue, supplyTotal);
-    total += calculatedAmount;
-    rows.push({ adjustmentType: a.adjustmentType?.trim() || "special_dc", amountType, inputValue, calculatedAmount, reason });
-  }
-  if (total > supplyTotal) return { error: "할인액이 상품 공급가액 합계를 초과할 수 없습니다." };
-  return { rows, adjustmentTotal: total };
+// ─── 독립 견적서 생성 (프로젝트 없이) ────────────────────────────────────────
+// ─── 견적 품목 금액 계산(할인 항목 포함) ─────────────────────────────────────
+// 할인은 별도 테이블이 아니라 itemType='discount' 품목 1행으로 처리한다(공급가액 음수).
+//  1) 비할인 품목: 기존 calcQuoteItemAmounts (수량×단가, 통역=일수×인원×단가)
+//  2) 할인 품목: '비할인 공급가 합계' 기준으로 음수 공급가 계산
+//     - amount:  supply = -discountValue
+//     - percent: supply = -round(비할인합계 × discountValue / 100)
+// 반환 품목의 합(totalAmount)이 곧 quotes.price. 기존 VAT(항목별 taxRate)·계산식은 그대로.
+type CalcItemInput = {
+  itemType?: string; quantity?: number | string; unitPrice?: number | string;
+  taxRate?: 0 | 0.1; interpreterCount?: number | string;
+  discountType?: string; discountValue?: number | string;
+};
+function computeQuoteItemAmounts<T extends CalcItemInput>(
+  items: T[],
+): (T & { supplyAmount: number; taxAmount: number; totalAmount: number })[] {
+  // pass 1 — 비할인 품목 금액
+  const pass1 = items.map(it => {
+    if (it.itemType === 'discount') return { it, s: 0, t: 0, isDiscount: true };
+    const qty = Number(it.quantity ?? 1);
+    const up  = Number(it.unitPrice ?? 0);
+    const mult = it.itemType === 'interpretation' && Number(it.interpreterCount) > 0 ? Number(it.interpreterCount) : 1;
+    const { supplyAmount, taxAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0, mult);
+    return { it, s: supplyAmount, t: taxAmount, isDiscount: false };
+  });
+  const nonDiscountSupply = pass1.reduce((a, x) => a + (x.isDiscount ? 0 : x.s), 0);
+  // pass 2 — 할인 품목(음수 공급가)
+  return pass1.map(x => {
+    if (!x.isDiscount) return { ...x.it, supplyAmount: x.s, taxAmount: x.t, totalAmount: x.s + x.t };
+    const dType = x.it.discountType === 'percent' ? 'percent' : 'amount';
+    const dVal  = Number(x.it.discountValue ?? 0);
+    let amount = dType === 'percent' ? Math.round(nonDiscountSupply * dVal / 100) : Math.round(dVal);
+    amount = Math.max(0, Math.min(amount, nonDiscountSupply));   // 0 ~ 비할인합계로 클램프
+    const supply = -amount;
+    const tax = Math.round(supply * (x.it.taxRate ?? 0));        // 음수 → VAT도 음수로 상쇄
+    return { ...x.it, supplyAmount: supply, taxAmount: tax, totalAmount: supply + tax };
+  });
 }
 
-// ─── 독립 견적서 생성 (프로젝트 없이) ────────────────────────────────────────
 router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
   const {
     title, companyId, contactId, divisionId, adminId,
-    amount, items, note, priceAdjustments,
+    amount, items, note,
     taxDocumentType, taxCategory,
     quoteType, billingType, paymentMethod,
     validUntil, issueDate, invoiceDueDate, paymentDueDate,
@@ -1276,9 +1282,9 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
       productName: string; unit?: string; quantity?: number;
       unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string;
       itemType?: string; taxType?: string; interpreterCount?: number;
+      discountType?: string; discountValue?: number; discountReason?: string;
     }>;
-    note?: string; priceAdjustments?: unknown;
-    taxDocumentType?: string; taxCategory?: string;
+    note?: string; taxDocumentType?: string; taxCategory?: string;
     quoteType?: string; billingType?: string; paymentMethod?: string;
     validUntil?: string; issueDate?: string; invoiceDueDate?: string; paymentDueDate?: string;
     prepaidBalanceBefore?: number; prepaidUsageAmount?: number; prepaidBalanceAfter?: number;
@@ -1288,24 +1294,11 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
   if (!title?.trim()) { res.status(400).json({ error: "견적서명은 필수입니다." }); return; }
 
   const hasItems = Array.isArray(items) && items.length > 0;
-  // 상품 공급가/부가세 합계 (조정 전 원본)
-  const baseTotals = hasItems
-    ? items!.reduce((s, it) => {
-        const qty = Number(it.quantity ?? 1);
-        const up = Number(it.unitPrice);
-        // 통역: 공급가액 = 진행일수(quantity) × 투입인원 × 단가
-        const mult = it.itemType === 'interpretation' && Number(it.interpreterCount) > 0 ? Number(it.interpreterCount) : 1;
-        const supply = Math.round(qty * up * mult);
-        const tax = Math.round(supply * (it.taxRate ?? 0));
-        return { supply: s.supply + supply, tax: s.tax + tax };
-      }, { supply: 0, tax: 0 })
-    : { supply: Number(amount ?? 0), tax: 0 };
-
-  // Price Adjustment(Special D.C) 검증 + 할인액 계산
-  const adjPrep = prepareAdjustments(priceAdjustments, baseTotals.supply);
-  if ('error' in adjPrep) { res.status(400).json({ error: adjPrep.error }); return; }
-  // 계산순서: supplyTotal → (−조정) → 조정공급가 → VAT → finalPrice
-  const totalPrice = applyAdjustments(baseTotals.supply, baseTotals.tax, adjPrep.adjustmentTotal).total;
+  // 할인 항목(음수 공급가) 포함 금액 계산
+  const calcItemsAll = hasItems ? computeQuoteItemAmounts(items!) : [];
+  const totalPrice = hasItems
+    ? calcItemsAll.reduce((s, it) => s + it.totalAmount, 0)
+    : Number(amount ?? 0);
 
   if (totalPrice <= 0 && !hasItems) {
     res.status(400).json({ error: "견적 금액 또는 품목 목록이 필요합니다." }); return;
@@ -1367,22 +1360,14 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
       }).returning();
 
       if (hasItems) {
-        const calcItems = items!.map(it => {
-          const qty = Number(it.quantity ?? 1);
-          const up = Number(it.unitPrice);
-          // 통역: 진행일수(quantity) × 투입인원 × 단가. 그 외: 수량 × 단가.
-          const mult = it.itemType === 'interpretation' && Number(it.interpreterCount) > 0 ? Number(it.interpreterCount) : 1;
-          const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0, mult);
-          return { ...it, supplyAmount, taxAmount, totalAmount };
-        });
-        await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
+        await tx.insert(quoteItemsTable).values(calcItemsAll.map(it => ({
           quoteId: quote.id,
           productId: (it as any).productId ?? null,
           productName: it.productName,
           languagePair: (it as any).languagePair ?? null,
           unit: it.unit ?? "건",
           quantity: String(it.quantity ?? 1),
-          unitPrice: String(it.unitPrice),
+          unitPrice: String(it.unitPrice ?? 0),
           supplyAmount: String(it.supplyAmount),
           taxAmount: String(it.taxAmount),
           totalAmount: String(it.totalAmount),
@@ -1399,20 +1384,10 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
           eventStartDate: (it as any).eventStartDate ?? null,
           eventEndDate: (it as any).eventEndDate ?? null,
           itemLocation: (it as any).itemLocation ?? null,
-        })));
-      }
-      // Price Adjustment(Special D.C) 이력 기록
-      if (adjPrep.rows.length > 0) {
-        const uid = ((req as any).user as { id: number }).id;
-        await tx.insert(quotePriceAdjustmentsTable).values(adjPrep.rows.map(a => ({
-          quoteId:          quote.id,
-          adjustmentType:   a.adjustmentType,
-          amountType:       a.amountType,
-          inputValue:       String(a.inputValue),
-          calculatedAmount: String(a.calculatedAmount),
-          reason:           a.reason,
-          status:           "applied",
-          createdBy:        uid,
+          // 할인 항목 전용
+          discountType: (it as any).discountType ?? null,
+          discountValue: (it as any).discountValue != null ? String((it as any).discountValue) : null,
+          discountReason: (it as any).discountReason ?? null,
         })));
       }
       return quote;
@@ -3317,33 +3292,19 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     itemLocation?: string; usagePeriod?: string; languagePair?: string;
     interpretationDirection?: string; interpretType?: string;
     hasTravelExpense?: boolean; hasEquipment?: boolean; isCustomProduct?: boolean;
+    discountType?: string; discountValue?: number; discountReason?: string;
   };
-  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId, priceAdjustments } = req.body as {
+  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId } = req.body as {
     title?: string; items?: PutItemInput[]; note?: string;
     quoteType?: string; issueDate?: string; validUntil?: string;
     companyId?: number | null; contactId?: number | null; divisionId?: number | null;
-    priceAdjustments?: unknown;
   };
   if (!items || items.length === 0) {
     res.status(400).json({ error: "품목이 없습니다." }); return;
   }
-  const calcItems = items.map(it => {
-    const qty = Number(it.quantity ?? 1);
-    const up  = Number(it.unitPrice);
-    // 통역: 공급가액 = 진행일수(quantity) × 투입인원 × 단가. 그 외: 수량 × 단가.
-    const mult = it.itemType === 'interpretation' && Number(it.interpreterCount) > 0 ? Number(it.interpreterCount) : 1;
-    const { supplyAmount, taxAmount, totalAmount } = calcQuoteItemAmounts(qty, up, it.taxRate ?? 0, mult);
-    if (it.itemType === 'interpretation') {
-      req.log.info({ serviceDays: qty, interpreterCount: mult, unitPrice: up, supplyAmount }, '[INTERPRETATION CALC]');
-    }
-    return { ...it, supplyAmount, taxAmount, totalAmount };
-  });
-  // 상품 공급가/부가세 합계(조정 전) → Special D.C 적용 → 최종 price
-  const supplyTotal = calcItems.reduce((s, it) => s + it.supplyAmount, 0);
-  const rawTax      = calcItems.reduce((s, it) => s + it.taxAmount, 0);
-  const adjPrep = prepareAdjustments(priceAdjustments, supplyTotal);
-  if ('error' in adjPrep) { res.status(400).json({ error: adjPrep.error }); return; }
-  const totalPrice = applyAdjustments(supplyTotal, rawTax, adjPrep.adjustmentTotal).total;
+  // 할인 항목(음수 공급가) 포함 금액 계산 (POST와 동일 로직)
+  const calcItems = computeQuoteItemAmounts(items);
+  const totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
   try {
     await db.transaction(async tx => {
       // 거래처/브랜드/담당자 연결 처리
@@ -3410,47 +3371,11 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         eventEndDate:            it.eventEndDate                    ?? null,
         itemLocation:            it.itemLocation                    ?? null,
         isCustomProduct:         it.isCustomProduct                 ?? false,
+        // 할인 항목 전용
+        discountType:            (it as any).discountType           ?? null,
+        discountValue:           (it as any).discountValue != null ? String((it as any).discountValue) : null,
+        discountReason:          (it as any).discountReason         ?? null,
       })));
-
-      // ── Price Adjustment(Special D.C) 동기화 ─────────────────────────────
-      // 활성(applied) 이력을 유형별로 갱신한다: 들어온 유형은 upsert, 빠진 유형은 cancelled(소프트).
-      const existingAdj = await tx.select()
-        .from(quotePriceAdjustmentsTable)
-        .where(and(eq(quotePriceAdjustmentsTable.quoteId, quoteId), eq(quotePriceAdjustmentsTable.status, "applied")));
-      const uid = ((req as any).user as { id: number }).id;
-      const now = new Date();
-      const incomingTypes = new Set(adjPrep.rows.map(a => a.adjustmentType));
-      // 빠진 유형 → 취소 처리(이력 보존)
-      const toCancel = existingAdj.filter(e => !incomingTypes.has(e.adjustmentType));
-      if (toCancel.length > 0) {
-        await tx.update(quotePriceAdjustmentsTable)
-          .set({ status: "cancelled", updatedAt: now })
-          .where(inArray(quotePriceAdjustmentsTable.id, toCancel.map(e => e.id)));
-      }
-      // 들어온 유형 → 기존 활성 있으면 갱신, 없으면 신규 삽입
-      for (const a of adjPrep.rows) {
-        const match = existingAdj.find(e => e.adjustmentType === a.adjustmentType);
-        if (match) {
-          await tx.update(quotePriceAdjustmentsTable).set({
-            amountType:       a.amountType,
-            inputValue:       String(a.inputValue),
-            calculatedAmount: String(a.calculatedAmount),
-            reason:           a.reason,
-            updatedAt:        now,
-          }).where(eq(quotePriceAdjustmentsTable.id, match.id));
-        } else {
-          await tx.insert(quotePriceAdjustmentsTable).values({
-            quoteId,
-            adjustmentType:   a.adjustmentType,
-            amountType:       a.amountType,
-            inputValue:       String(a.inputValue),
-            calculatedAmount: String(a.calculatedAmount),
-            reason:           a.reason,
-            status:           "applied",
-            createdBy:        uid,
-          });
-        }
-      }
     });
     res.json({ id: quoteId, price: totalPrice });
   } catch (err) {
@@ -3503,21 +3428,6 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
       .where(eq(quoteItemsTable.quoteId, quoteId))
       .orderBy(quoteItemsTable.id);
 
-    // Price Adjustment(Special D.C) — 활성(applied) 이력만 복원용으로 반환
-    const priceAdjustments = await db
-      .select({
-        id:               quotePriceAdjustmentsTable.id,
-        adjustmentType:   quotePriceAdjustmentsTable.adjustmentType,
-        amountType:       quotePriceAdjustmentsTable.amountType,
-        inputValue:       quotePriceAdjustmentsTable.inputValue,
-        calculatedAmount: quotePriceAdjustmentsTable.calculatedAmount,
-        reason:           quotePriceAdjustmentsTable.reason,
-        status:           quotePriceAdjustmentsTable.status,
-      })
-      .from(quotePriceAdjustmentsTable)
-      .where(and(eq(quotePriceAdjustmentsTable.quoteId, quoteId), eq(quotePriceAdjustmentsTable.status, "applied")))
-      .orderBy(quotePriceAdjustmentsTable.id);
-
     const settingsRows = await db.select().from(settingsTable).limit(1);
     const s = settingsRows[0] ?? {};
     const settings = {
@@ -3535,7 +3445,7 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
       quoteValidityDays: s.quoteValidityDays  ?? 14,
     };
 
-    res.json({ ...quote, items, priceAdjustments, settings });
+    res.json({ ...quote, items, settings });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch quote detail");
     res.status(500).json({ error: "견적 조회 실패." });

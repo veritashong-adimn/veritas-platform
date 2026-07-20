@@ -130,6 +130,10 @@ export interface QuoteDetailItem {
   interpretType: string | null;
   // 투입 인원(통역). NULL = 레거시(quantity에 인원×일수 포함 → 역산).
   interpreterCount?: number | null;
+  // 할인 항목(itemType='discount') 전용
+  discountType?: string | null;    // 'amount' | 'percent'
+  discountValue?: string | number | null;
+  discountReason?: string | null;
 }
 
 export interface QuoteDetailSettings {
@@ -168,19 +172,7 @@ export interface QuoteDetail {
   contactEmail: string | null;
   adminName: string | null;
   items: QuoteDetailItem[];
-  priceAdjustments?: QuoteDetailAdjustment[];
   settings: QuoteDetailSettings;
-}
-
-// 가격조정(Special D.C) — GET 상세에서 활성(applied) 이력만 내려온다.
-export interface QuoteDetailAdjustment {
-  id: number;
-  adjustmentType: string;               // 'special_dc'
-  amountType: string;                   // 'amount' | 'percent'
-  inputValue: string | number;
-  calculatedAmount: string | number;    // 실제 할인 금액(원)
-  reason: string | null;
-  status: string;
 }
 
 export interface QuotePdfItem {
@@ -251,12 +243,10 @@ export interface QuotePdfData {
   summary: QuoteSummary;
   // 품목
   items: QuotePdfItem[];
-  // 금액 (supplyTotal=상품 공급가 합계 원본, taxTotal·grandTotal=Special D.C 적용 후)
+  // 금액
   supplyTotal: number;
   taxTotal: number;
   grandTotal: number;
-  // Price Adjustment(Special D.C) 총 할인액. 0이면 미사용(기존 PDF와 동일).
-  adjustmentTotal: number;
   // 계좌
   bankAccount: {
     bankName: string;
@@ -319,6 +309,13 @@ function buildDetailText(item: QuoteDetailItem): string {
   const { fields, userMemo: _userMemo } = parseMemoInfo(item.memo);
   const type = item.itemType ?? 'translation';
   const lines: string[] = [];
+
+  // 할인 항목 — 방식만 표기(사유는 내부용, 미출력). 예: "5% 할인" / "금액 할인"
+  if (type === 'discount') {
+    return item.discountType === 'percent'
+      ? `${Number(item.discountValue ?? 0)}% 할인`
+      : '금액 할인';
+  }
 
   if (type === 'translation') {
     // 파일명 먼저
@@ -395,7 +392,7 @@ function extractUserMemo(item: QuoteDetailItem): string {
 
 function detectServiceType(items: QuoteDetailItem[]): string {
   if (items.length === 0) return 'mixed';
-  const types = new Set(items.map(it => it.itemType ?? 'translation').filter(t => t !== 'expense'));
+  const types = new Set(items.map(it => it.itemType ?? 'translation').filter(t => t !== 'expense' && t !== 'discount'));
   if (types.size === 1) {
     const t = [...types][0];
     if (t === 'translation' || t === 'interpretation' || t === 'equipment') return t;
@@ -430,17 +427,8 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
   });
 
   const supplyTotal = items.reduce((a, it) => a + it.supplyAmount, 0);
-  const rawTax      = items.reduce((a, it) => a + it.taxAmount, 0);
-  // Price Adjustment(Special D.C): 활성 조정 할인액 합계 → VAT 전에 적용.
-  const adjustmentTotal = Math.min(
-    (detail.priceAdjustments ?? [])
-      .filter(a => a.status === 'applied')
-      .reduce((a, adj) => a + Number(adj.calculatedAmount || 0), 0),
-    supplyTotal,
-  );
-  const adjustedSupply = supplyTotal - adjustmentTotal;
-  const taxTotal    = supplyTotal > 0 ? Math.round(rawTax * adjustedSupply / supplyTotal) : 0;
-  const grandTotal  = adjustedSupply + taxTotal;
+  const taxTotal    = items.reduce((a, it) => a + it.taxAmount, 0);
+  const grandTotal  = supplyTotal + taxTotal;
 
   // ─── 서비스별 수신자 요약 집계 ────────────────────────────────────────────
   const trItems = detail.items.filter(it => (it.itemType ?? 'translation') === 'translation');
@@ -524,7 +512,6 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
     supplyTotal,
     taxTotal,
     grandTotal,
-    adjustmentTotal,
     bankAccount: {
       bankName:      s.bankName      ?? '',
       accountNumber: s.accountNumber ?? '',
@@ -541,6 +528,7 @@ export const ITEM_TYPE_LABEL: Record<string, string> = {
   interpretation: '통역',
   equipment:      '장비',
   expense:        '기타',
+  discount:       '할인',
 };
 
 export const SERVICE_TYPE_LABEL: Record<string, string> = {

@@ -5,7 +5,6 @@ export * from "./users";
 export * from "./projects";
 export * from "./quotes";
 export * from "./quote_items";
-export * from "./quote_price_adjustments";
 export * from "./quote_item_files";
 export * from "./tasks";
 export * from "./payments";

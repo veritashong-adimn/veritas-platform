@@ -69,6 +69,12 @@ export const quoteItemsTable = pgTable("quote_items", {
   // ── 커스텀 상품 여부 ────────────────────────────────────────────────────
   isCustomProduct: boolean("is_custom_product").default(false),
 
+  // ── 할인 항목(itemType='discount') 전용 필드 ──────────────────────────────
+  // 할인은 별도 테이블이 아니라 하나의 품목 행으로 저장한다(supplyAmount는 음수).
+  discountType: text("discount_type"),                         // "amount" | "percent"
+  discountValue: numeric("discount_value", { precision: 14, scale: 2 }),  // 입력값(금액 또는 %)
+  discountReason: text("discount_reason"),                     // 내부 사유(PDF 미출력)
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

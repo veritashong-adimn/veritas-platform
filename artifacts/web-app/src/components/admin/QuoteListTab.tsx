@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../../lib/constants';
 import { PrimaryBtn, ClickSelect } from '../ui';
-import { QuoteEditorWorkspace, emptySpecialDc, type QuoteItemForm, type VatType, type QuoteType, type ServiceType, type SpecialDcForm } from './QuoteEditorWorkspace';
+import { QuoteEditorWorkspace, type QuoteItemForm, type VatType, type QuoteType, type ServiceType } from './QuoteEditorWorkspace';
 import QuotePdfPreviewModal from './QuotePdfPreviewModal';
 import { QuoteTrashTab } from './QuoteTrashTab';
 import { buildQuotePdfData, parseMemoInfo, type QuoteDetail, type QuoteDetailItem } from '../../lib/quotePdf';
@@ -84,7 +84,6 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     items: QuoteItemForm[]; title: string; note: string;
     quoteType: QuoteType; issueDate: string; vatType: VatType;
     companyId: number | null; contactId: number | null; divisionId: number | null;
-    specialDc: SpecialDcForm;
     status: string;
   } | null>(null);
   // 삭제(Soft Delete)
@@ -213,7 +212,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     // 폼 수량 복원 —
     //  · 통역: 진행일수 (신규 포맷은 qty가 이미 일수, 구 포맷은 날짜에서 재산출)
     //  · 장비: 저장 quantity = 사용일수 × 수량 이므로 사용일수로 나눠 '순수 수량'을 복원한다.
-    //    (나누지 않으면 저장할 때마다 사용일수가 재차 곱해져 수량이 1→2→4→…로 증식하는 버그가 발생)
+    //    (나누지 않으면 저장 시마다 사용일수가 재차 곱해져 수량이 1→2→4→…로 증식하는 버그가 발생)
     const usageDays = type === 'equipment' ? Math.max(1, Number(it.usagePeriod) || 1) : 1;
     const formQuantity =
       type === 'interpretation' && sd > 0 ? String(sd)
@@ -221,6 +220,8 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       : String(qty);
     const [startTime = '', endTime = ''] = it.interpretDuration ? it.interpretDuration.split('~') : [];
     const sourceLanguage = it.languagePair ? it.languagePair.split('-')[0] : 'ko';
+    // 할인 항목 복원 — discount_type/value/reason 컬럼에서
+    const dc = it as { discountType?: string | null; discountValue?: string | number | null; discountReason?: string | null };
     return {
       productId:        it.productId ?? null,
       productName:      it.productName,
@@ -250,6 +251,10 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       itemLocation:     it.itemLocation      ?? '',
       usagePeriod:      it.usagePeriod       ?? '',
       expenseType:      it.interpretType     ?? '',
+      // 할인 전용
+      discountType:     (dc.discountType === 'percent' ? 'percent' : 'amount'),
+      discountValue:    dc.discountValue != null ? String(dc.discountValue) : '',
+      discountReason:   dc.discountReason ?? '',
     };
   }
 
@@ -263,14 +268,6 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       const formItems = detail.items.map(it => convertToFormItem(it));
       // 부가세 유형: items 중 taxable이 있으면 taxable, 없으면 exempt
       const vatType: VatType = formItems.some(it => it.taxType === 'taxable') ? 'taxable' : 'exempt';
-      // Price Adjustment(Special D.C) 복원 — 활성 special_dc 이력이 있으면 적용 완료 상태로 반영
-      const dcRow = (detail.priceAdjustments ?? []).find(a => a.adjustmentType === 'special_dc' && a.status === 'applied');
-      const specialDc: SpecialDcForm = dcRow
-        ? (() => {
-            const vals = { amountType: (dcRow.amountType === 'percent' ? 'percent' : 'amount') as 'amount' | 'percent', inputValue: String(dcRow.inputValue ?? ''), reason: dcRow.reason ?? '' };
-            return { open: true, draft: { ...vals }, applied: { ...vals } };
-          })()
-        : emptySpecialDc();
       setEditQuoteId(quoteId);
       setEditInitData({
         items:     formItems,
@@ -279,7 +276,6 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         quoteType: (detail.quoteType as QuoteType) ?? 'b2b_standard',
         issueDate: detail.issueDate ?? '',
         vatType,
-        specialDc,
         companyId: (detail as any).companyId ?? null,
         contactId: (detail as any).contactId ?? null,
         divisionId: (detail as any).divisionId ?? null,
@@ -342,7 +338,6 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         initialQuoteType={editInitData?.quoteType}
         initialIssueDate={editInitData?.issueDate}
         initialVatType={editInitData?.vatType}
-        initialSpecialDc={editInitData?.specialDc}
         initialCompanyId={editInitData?.companyId ?? null}
         initialContactId={editInitData?.contactId ?? null}
         initialDivisionId={editInitData?.divisionId ?? null}
