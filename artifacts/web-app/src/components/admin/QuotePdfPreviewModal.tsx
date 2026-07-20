@@ -383,6 +383,13 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 20 }}>
               <div style={{ width: 280 }}>
                 <SummaryRow label="공급가액 합계" value={`${fmt(data.supplyTotal)}원`} />
+                {/* Special D.C 적용 시에만 할인·조정 공급가액 표시(미사용 시 기존과 동일) */}
+                {data.adjustmentTotal > 0 && (
+                  <>
+                    <SummaryRow label="Special D.C" value={`-${fmt(data.adjustmentTotal)}원`} />
+                    <SummaryRow label="조정 공급가액" value={`${fmt(data.supplyTotal - data.adjustmentTotal)}원`} />
+                  </>
+                )}
                 <SummaryRow label="부가세 (10%)" value={`${fmt(data.taxTotal)}원`} />
                 <div style={{
                   display: 'flex', justifyContent: 'space-between',

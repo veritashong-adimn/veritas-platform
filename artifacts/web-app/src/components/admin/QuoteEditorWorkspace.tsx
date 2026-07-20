@@ -26,6 +26,31 @@ export type QuoteType    = 'b2b_standard' | 'b2c_prepaid' | 'accumulated_batch';
 export type VatType      = 'taxable' | 'exempt' | 'zero_rate';
 export type ServiceType  = 'translation' | 'interpretation' | 'equipment' | 'expense';
 
+// Price Adjustment(Special D.C) — 견적 전체 최종 가격조정. 1차는 금액/비율 방식만 지원.
+export type AmountType = 'amount' | 'percent';
+// 단일 조정값(할인방식·값·사유). draft(입력중)과 applied(적용됨)를 같은 형태로 관리.
+export interface SpecialDcValues {
+  amountType: AmountType;
+  inputValue: string;   // 사용자 입력(금액 또는 비율)
+  reason: string;       // 내부 할인 사유(필수)
+}
+export interface SpecialDcForm {
+  open: boolean;                    // 패널 펼침 여부(+ Special D.C 추가 클릭 시 true)
+  draft: SpecialDcValues;           // 입력 중 임시값 — '적용' 전에는 금액에 반영하지 않음
+  applied: SpecialDcValues | null;  // 실제 적용된 값(null = 미적용). 금액 요약·저장은 이 값만 사용.
+}
+export function emptySpecialDc(): SpecialDcForm {
+  return { open: false, draft: { amountType: 'amount', inputValue: '', reason: '' }, applied: null };
+}
+// 적용된 값 기준 실제 할인액(원 단위). 미적용(null)이면 0. 백엔드 calcAdjustmentAmount와 동일 공식.
+export function calcDcAmount(v: SpecialDcValues | null, supplyTotal: number): number {
+  if (!v) return 0;
+  const n = Number(String(v.inputValue).replace(/,/g, '') || 0);
+  if (n <= 0) return 0;
+  const raw = v.amountType === 'percent' ? Math.round(supplyTotal * n / 100) : Math.round(n);
+  return Math.min(Math.max(raw, 0), supplyTotal);
+}
+
 export interface QuoteItemForm {
   productId:    number | null;
   productName:  string;
@@ -1411,6 +1436,8 @@ export interface QuoteEditorWorkspaceProps {
   initialQuoteType?: QuoteType;
   initialIssueDate?: string;
   initialVatType?:   VatType;
+  /** 편집 진입 시 복원할 Price Adjustment(Special D.C). 미제공 시 미사용 상태로 시작. */
+  initialSpecialDc?: SpecialDcForm;
   /** 진입 시점의 견적 상태(status). 'approved' 이면 이미 판매전환된 견적 → 전환완료로 표시. */
   initialStatus?:    string;
   /** 판매전환 성공 후 호출 — 목록 등 상위 화면 갱신용(에디터는 유지). */
@@ -1425,7 +1452,7 @@ export function QuoteEditorWorkspace({
   token, projectId, initialCompanyId = null, initialContactId = null, initialDivisionId = null, initialTitle = '',
   onClose, onSaved, onToast, adminList = [], asPage = false,
   initialQuoteId, initialItems, initialNote, initialQuoteType, initialIssueDate, initialVatType,
-  initialStatus, onConverted, onNavigateToSales,
+  initialSpecialDc, initialStatus, onConverted, onNavigateToSales,
 }: QuoteEditorWorkspaceProps) {
 
   const authH = { Authorization: `Bearer ${token}` };
@@ -1440,6 +1467,7 @@ export function QuoteEditorWorkspace({
   const [quoteType,      setQuoteType]     = useState<QuoteType>(initialQuoteType ?? 'b2b_standard');
   const [vatType,        setVatType]       = useState<VatType>(initialVatType ?? 'taxable');
   const [note,           setNote]          = useState(initialNote ?? '');
+  const [specialDc,      setSpecialDc]     = useState<SpecialDcForm>(initialSpecialDc ?? emptySpecialDc());
   const [versionReason,  setVersionReason] = useState('');
   const [items,          setItems]         = useState<QuoteItemForm[]>(initialItems ?? [defaultItem()]);
   const [companies,      setCompanies]     = useState<Company[]>([]);
@@ -1463,8 +1491,9 @@ export function QuoteEditorWorkspace({
   // 최초 로딩 완료(번역 수량 정규화 반영) 시점의 서명을 기준선으로 캡처하므로,
   // 마운트 시 정규화만으로는 dirty가 되지 않는다(이미 저장된 견적은 바로 판매전환).
   const formSig = useMemo(
-    () => JSON.stringify({ items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note }),
-    [items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note],
+    // draft(입력중)은 dirty 판정에서 제외 — 실제 적용된 값(applied)만 저장 대상.
+    () => JSON.stringify({ items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, specialDcApplied: specialDc.applied }),
+    [items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, specialDc.applied],
   );
   const formSigRef     = useRef(formSig);
   formSigRef.current   = formSig;                          // 최신 서명을 ref에 미러링(핸들러 stale 방지)
@@ -1611,6 +1640,39 @@ export function QuoteEditorWorkspace({
   };
 
   const totals = calcTotals(items, vatType);
+  // Price Adjustment(Special D.C) — '적용된 값(applied)' 기준으로만 금액을 계산한다.
+  // 계산순서: 공급가 합계 → (−할인) → 조정 공급가 → 부가세 → 총액. 미적용 시 totals와 동일.
+  const dcAmount        = calcDcAmount(specialDc.applied, totals.supply);
+  const adjustedSupply  = totals.supply - dcAmount;
+  const adjustedTax     = totals.supply > 0 ? Math.round(totals.tax * adjustedSupply / totals.supply) : 0;
+  const adjustedTotal   = adjustedSupply + adjustedTax;
+  const dcApplied       = specialDc.applied != null && dcAmount > 0;
+  // 예상 할인금액 — 입력(draft) 즉시 계산. '적용' 전에는 금액 요약엔 반영하지 않고 미리보기로만 표시.
+  const previewDcAmount = calcDcAmount(specialDc.draft, totals.supply);
+  // 적용 후 draft를 수정했는지(변경사항 미적용) — 재적용 유도.
+  const draftDirty      = specialDc.applied != null && (
+    specialDc.draft.amountType !== specialDc.applied.amountType ||
+    specialDc.draft.inputValue !== specialDc.applied.inputValue ||
+    specialDc.draft.reason     !== specialDc.applied.reason
+  );
+
+  // '적용' — draft 검증 후 applied 로 확정(이때부터 금액 요약에 반영).
+  const applySpecialDc = () => {
+    const d = specialDc.draft;
+    const v = Number(String(d.inputValue).replace(/,/g, '') || 0);
+    if (!(v > 0)) { onToast('할인 값을 입력하세요. (0보다 커야 합니다)'); return; }
+    if (d.amountType === 'percent' && v > 100) { onToast('할인율은 0 초과 100 이하만 허용됩니다.'); return; }
+    if (d.amountType === 'amount' && v > totals.supply) { onToast('할인 금액이 공급가액 합계를 초과할 수 없습니다.'); return; }
+    if (!d.reason.trim()) { onToast('할인 사유를 입력해야 Special D.C를 적용할 수 있습니다.'); return; }
+    setSpecialDc(s => ({ ...s, draft: { ...s.draft, inputValue: String(v), reason: s.draft.reason.trim() }, applied: { amountType: d.amountType, inputValue: String(v), reason: d.reason.trim() } }));
+    onToast('Special D.C가 적용되었습니다.');
+  };
+  // '적용 해제' — 적용값 제거·패널 접기. 금액은 원래대로 복구되고, 저장 시 기존 조정은 취소 처리된다.
+  const releaseSpecialDc = () => {
+    setSpecialDc(emptySpecialDc());
+    onToast('Special D.C 적용이 해제되었습니다.');
+  };
+
   const fieldHint = (() => { const t = [...new Set(items.map(it => it.productType))]; return t.length === 1 ? SVC_FIELD_HINTS[t[0]] : '서비스별 상세 입력 필드'; })();
 
   // 저장 실행부 — 편집 화면을 닫지 않고 저장만 수행하고 { quoteId, projectId }를 반환한다.
@@ -1619,8 +1681,18 @@ export function QuoteEditorWorkspace({
     const vi = items.filter(it => it.productName.trim() && Number(it.unitPrice.replace?.(/,/g, '') || 0) > 0);
     if (vi.length === 0) { onToast('품목명과 단가를 입력하세요.'); return null; }
     const itemsBody  = vi.map(it => toApiItem(it, vatType));
+    // Price Adjustment(Special D.C) — '적용된 값(applied)'만 저장한다(임시 draft는 저장 금지).
+    // 미적용/해제 시엔 빈 배열을 보내 서버가 기존 활성 조정을 취소(정리)하도록 한다.
+    let priceAdjustments: Array<{ adjustmentType: string; amountType: AmountType; inputValue: number; reason: string }> = [];
+    const ap = specialDc.applied;
+    if (ap) {
+      const v = Number(String(ap.inputValue).replace(/,/g, '') || 0);
+      if (v > 0 && ap.reason.trim()) {
+        priceAdjustments = [{ adjustmentType: 'special_dc', amountType: ap.amountType, inputValue: v, reason: ap.reason.trim() }];
+      }
+    }
     const commonBody = {
-      items: itemsBody, quoteType,
+      items: itemsBody, quoteType, priceAdjustments,
       billingType: 'postpaid_per_project', taxDocumentType: 'tax_invoice', taxCategory: 'normal',
       issueDate, validUntil: (() => { const d = new Date(issueDate); d.setDate(d.getDate() + 30); return d.toISOString().split('T')[0]; })(),
       note: note.trim() || undefined,
@@ -1673,7 +1745,7 @@ export function QuoteEditorWorkspace({
       return { quoteId: data.id, projectId };
     } catch { onToast('견적 저장 중 오류가 발생했습니다.'); return null; }
     finally { setSaving(false); }
-  }, [items, projectId, savedQuoteId, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [items, projectId, savedQuoteId, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, specialDc.applied, versionReason, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = useCallback(async () => {
     const isUpdate = savedQuoteId != null;
@@ -1890,16 +1962,160 @@ export function QuoteEditorWorkspace({
           return gs.length > 1 ? <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>{gs}</div> : null;
         })()}
         <div style={{ display: 'flex', gap: SP[6], justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-          {[{ label: '공급가액', value: totals.supply }, { label: '부가세', value: totals.tax }].map(r => (
-            <div key={r.label} style={{ textAlign: 'right', padding: `${SP[4]}px ${SP[5]}px`, borderRadius: BD.radius.lg, background: C.bgHover }}>
-              <div style={{ ...TYPO.helper, marginBottom: 3 }}>{r.label}</div>
-              <div style={{ ...TYPO.summaryAmount }}>{r.value.toLocaleString()}원</div>
+          {[
+            { label: '공급가액', value: totals.supply, neg: false },
+            ...(dcApplied ? [
+              { label: 'Special D.C', value: dcAmount, neg: true },
+              { label: '조정 공급가액', value: adjustedSupply, neg: false },
+            ] : []),
+            { label: '부가세', value: adjustedTax, neg: false },
+          ].map(r => (
+            <div key={r.label} style={{ textAlign: 'right', padding: `${SP[4]}px ${SP[5]}px`, borderRadius: BD.radius.lg, background: r.neg ? C.dangerBg : C.bgHover }}>
+              <div style={{ ...TYPO.helper, marginBottom: 3, color: r.neg ? C.danger : undefined }}>{r.label}</div>
+              <div style={{ ...TYPO.summaryAmount, color: r.neg ? C.danger : undefined }}>{r.neg ? '-' : ''}{r.value.toLocaleString()}원</div>
             </div>
           ))}
           <div style={{ textAlign: 'right', padding: `${SP[5]}px ${SP[7]}px`, borderRadius: BD.radius.xl, background: C.primaryBg, border: `1.5px solid ${C.primaryBorder}` }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.primary, marginBottom: 3 }}>총 견적금액</div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: C.primaryText, letterSpacing: '-0.01em' }}>{totals.total.toLocaleString()}원</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: C.primaryText, letterSpacing: '-0.01em' }}>{adjustedTotal.toLocaleString()}원</div>
           </div>
+        </div>
+
+        {/* ── Price Adjustment (Special D.C) — 기본 접힘, 필요 시 펼침 ─────────── */}
+        {/* draft(입력) → '적용' → applied(반영). 적용 전에는 금액 요약에 반영하지 않는다. */}
+        <div style={{ marginTop: 14, borderTop: `1px dashed ${C.border}`, paddingTop: 14 }}>
+          {!specialDc.open ? (
+            <button
+              type="button"
+              onClick={() => setSpecialDc(d => ({ ...d, open: true }))}
+              data-testid="btn-add-special-dc"
+              aria-label="Special D.C 추가"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', border: `1px dashed ${C.g300}`, borderRadius: 8, background: C.bgCard, color: C.textSecondary, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+            >
+              + Special D.C 추가
+            </button>
+          ) : (
+            <div style={{ border: `1px solid ${C.primaryBorder}`, borderRadius: 10, background: C.primaryBg, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: C.primary, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  Special D.C <span style={{ fontWeight: 500, color: C.textMuted }}>· 견적 전체 최종 가격조정</span>
+                  {/* 상태 배지 */}
+                  {dcApplied && !draftDirty && (
+                    <span data-testid="badge-dc-applied" style={{ fontSize: 11, fontWeight: 700, color: C.successText, background: C.successBg, border: `1px solid #86efac`, borderRadius: 999, padding: '2px 9px' }}>적용 완료</span>
+                  )}
+                  {draftDirty && (
+                    <span data-testid="badge-dc-dirty" style={{ fontSize: 11, fontWeight: 700, color: C.warning, background: C.warningBg, border: `1px solid #fcd34d`, borderRadius: 999, padding: '2px 9px' }}>변경사항 미적용</span>
+                  )}
+                </span>
+                {/* 액션 버튼 — 적용 / 적용 해제 / 닫기 */}
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  {(!specialDc.applied || draftDirty) && (
+                    <button
+                      type="button"
+                      onClick={applySpecialDc}
+                      data-testid="btn-apply-special-dc"
+                      aria-label="Special D.C 적용"
+                      style={{ padding: '7px 16px', borderRadius: 7, border: 'none', background: C.primary, color: '#fff', fontSize: 13, fontWeight: 800, cursor: 'pointer' }}
+                    >
+                      적용
+                    </button>
+                  )}
+                  {specialDc.applied ? (
+                    <button
+                      type="button"
+                      onClick={releaseSpecialDc}
+                      data-testid="btn-remove-special-dc"
+                      aria-label="Special D.C 적용 해제"
+                      style={{ padding: '7px 14px', borderRadius: 7, border: `1px solid ${C.dangerBorder}`, background: C.bgCard, color: C.danger, fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+                    >
+                      적용 해제
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setSpecialDc(emptySpecialDc())}
+                      data-testid="btn-cancel-special-dc"
+                      aria-label="Special D.C 닫기"
+                      style={{ padding: '7px 12px', borderRadius: 7, border: `1px solid ${C.g300}`, background: C.bgCard, color: C.textMuted, fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      닫기
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                {/* 할인 방식 */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ ...TYPO.helper }}>할인 방식</label>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    {(['amount', 'percent'] as AmountType[]).map(t => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setSpecialDc(d => ({ ...d, draft: { ...d.draft, amountType: t } }))}
+                        data-testid={`btn-dc-type-${t}`}
+                        aria-label={t === 'amount' ? '금액 할인' : '비율 할인'}
+                        style={{
+                          padding: '7px 14px', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                          border: `1px solid ${specialDc.draft.amountType === t ? C.primary : C.g300}`,
+                          background: specialDc.draft.amountType === t ? C.primary : C.bgCard,
+                          color: specialDc.draft.amountType === t ? '#fff' : C.textSecondary,
+                        }}
+                      >
+                        {t === 'amount' ? '금액' : '%'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* 할인 값 */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ ...TYPO.helper }}>{specialDc.draft.amountType === 'percent' ? '할인율 (%)' : '할인 금액 (원)'}</label>
+                  <input
+                    value={specialDc.draft.inputValue}
+                    onChange={e => setSpecialDc(d => ({ ...d, draft: { ...d.draft, inputValue: e.target.value.replace(/[^0-9.]/g, '') } }))}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); applySpecialDc(); } }}
+                    inputMode="decimal"
+                    placeholder={specialDc.draft.amountType === 'percent' ? '예: 5' : '예: 500000'}
+                    data-testid="input-dc-value"
+                    aria-label="할인 값"
+                    style={dsInputStd({ width: 150 })}
+                  />
+                </div>
+                {/* 할인 사유 */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 200 }}>
+                  <label style={{ ...TYPO.helper }}>
+                    할인 사유 <span style={{ color: C.danger }}>*</span>{' '}
+                    <span style={{ color: C.textMuted, fontWeight: 400 }}>(내부 이력 · PDF 미출력)</span>
+                  </label>
+                  <input
+                    value={specialDc.draft.reason}
+                    onChange={e => setSpecialDc(d => ({ ...d, draft: { ...d.draft, reason: e.target.value } }))}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); applySpecialDc(); } }}
+                    placeholder="예: 정부기관 예산조정 / 회계부서 요청 / 대표 승인"
+                    data-testid="input-dc-reason"
+                    aria-label="할인 사유"
+                    style={dsInputStd()}
+                  />
+                </div>
+              </div>
+              {/* 예상 할인금액 — 입력 즉시 표시(적용 전에도). 적용 전에는 금액 요약에 미반영. */}
+              <div style={{ fontSize: 12, color: C.textSecondary }} data-testid="dc-preview">
+                {previewDcAmount > 0 ? (
+                  <>예상 할인금액 <b style={{ color: C.danger }}>-{previewDcAmount.toLocaleString()}원</b>
+                    {(!specialDc.applied || draftDirty) && <span style={{ color: C.warning }}> · [적용]을 눌러야 금액 요약에 반영됩니다.</span>}
+                  </>
+                ) : (
+                  <span style={{ color: C.textMuted }}>할인 값을 입력하면 예상 할인금액이 표시됩니다.</span>
+                )}
+              </div>
+              {/* 적용 결과 — applied 기준 실제 반영 금액 */}
+              {dcApplied && !draftDirty && (
+                <div style={{ fontSize: 12, color: C.successText }}>
+                  ✓ 적용됨 → 조정 공급가액 <b>{adjustedSupply.toLocaleString()}원</b> · 부가세 <b>{adjustedTax.toLocaleString()}원</b> · 총 견적금액 <b>{adjustedTotal.toLocaleString()}원</b>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </Card>
 
