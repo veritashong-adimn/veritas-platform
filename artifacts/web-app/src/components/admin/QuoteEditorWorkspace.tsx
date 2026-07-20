@@ -1620,7 +1620,8 @@ export function QuoteEditorWorkspace({
   useEffect(() => {
     if (titleEdited || projectId !== null) return;
     const co = companies.find(c => c.id === companyId);
-    const vi = items.filter(it => it.productName.trim());
+    // 대표상품 선정에서 할인 항목은 제외(견적서명은 실제 상품 기준)
+    const vi = items.filter(it => it.productType !== 'discount' && it.productName.trim());
     if (!co || vi.length === 0) return;
     // 견적서명은 공통 함수 generateQuoteTitle()로 생성한다 (대표상품 선정·외 N건·날짜 포함).
     // 회사/브랜드/상품 추가·삭제/상품명/공급가액/날짜 변경 시 이 effect가 재실행되어 자동 갱신된다.
@@ -1722,7 +1723,13 @@ export function QuoteEditorWorkspace({
   // 저장 실행부 — 편집 화면을 닫지 않고 저장만 수행하고 { quoteId, projectId }를 반환한다.
   // 신규 견적은 최초 저장 시 생성하고 savedQuoteId를 기록 → 이후(저장/견적서)엔 동일 견적을 업데이트(중복 생성 방지).
   const persistQuote = useCallback(async (): Promise<{ quoteId: number; projectId: number | null } | null> => {
-    const vi = items.filter(it => it.productName.trim() && Number(it.unitPrice.replace?.(/,/g, '') || 0) > 0);
+    // 유효 품목: 일반 상품은 품목명+단가(>0), 할인 항목은 할인값(>0) 기준으로 판별.
+    //  (할인 항목은 단가가 0이므로 기존 단가 필터에서 누락되던 버그 수정)
+    const isValidItem = (it: QuoteItemForm) =>
+      it.productType === 'discount'
+        ? Number(String(it.discountValue ?? '').replace(/,/g, '') || 0) > 0
+        : it.productName.trim() && Number(it.unitPrice.replace?.(/,/g, '') || 0) > 0;
+    const vi = items.filter(isValidItem);
     if (vi.length === 0) { onToast('품목명과 단가를 입력하세요.'); return null; }
     const itemsBody  = vi.map(it => toApiItem(it, vatType));
     const commonBody = {
