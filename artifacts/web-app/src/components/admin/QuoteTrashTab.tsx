@@ -8,6 +8,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../../lib/constants';
 import { formatDocNumber } from '../../lib/quoteTitle';
 import { PageHeader } from './PageHeader';
+import { dsStickyPageHeader } from '../../lib/ds';
 
 interface TrashRow {
   id: number;
@@ -111,10 +112,10 @@ export function QuoteTrashTab({ token, isAdmin, onToast, onBack }: {
             data-testid="input-trash-search"
             style={{ width: 260, padding: '7px 12px', fontSize: 13, border: '1px solid #d1d5db', borderRadius: 8, outline: 'none' }} />
         }
-        style={{ position: 'sticky', top: 0, zIndex: 20, background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '0 28px' }}
+        style={dsStickyPageHeader()}
       />
 
-      <div style={{ padding: '20px 28px 64px' }}>
+      <div style={{ padding: '20px 0 64px' }}>
         <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>

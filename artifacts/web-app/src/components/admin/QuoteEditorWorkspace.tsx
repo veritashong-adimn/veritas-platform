@@ -6,10 +6,10 @@
  *
  * Version Engine 및 저장 로직 100% 유지.
  */
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
 import { api, Product } from '../../lib/constants';
 import { Card, DsButton, ClickSelect, NumericInput } from '../ui';
-import { dsInput, dsInputStd, dsColH, dsRow, dsAmount, C, BD, TBL, TYPO, SP, FORM } from '../../lib/ds';
+import { dsInput, dsInputStd, dsField, dsColH, dsRow, dsAmount, dsStickyPageHeader, C, BD, TBL, TYPO, SP, FORM, FIELD, CRM_FIELD_COLS } from '../../lib/ds';
 import {
   getPolicy, validateCounts, calcPagesFromStr,
   type ValidationResult,
@@ -222,6 +222,10 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
         eventEndDate:   it.eventEndDate   || undefined,
         itemLocation:   it.itemLocation   || undefined,
         usagePeriod:    it.usagePeriod    || undefined,
+        // 설치일시(선택) — 사전 설치 일정 관리용 참고정보. 계산·PDF 미반영.
+        // 장비는 operationHours 컬럼을 사용하지 않으므로 이를 재활용해 저장(DB 스키마 무변경).
+        // (expense가 interpretType 컬럼을 재활용하는 것과 동일한 패턴)
+        operationHours: it.operationHours || undefined,
         memo:           it.memo           || undefined,
       };
     }
@@ -239,12 +243,47 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
 // ─── 공통 인풋 스타일 — DS Compact 스케일 ────────────────────────────────────
 // dsInput()의 로컬 alias. 이 파일의 모든 Grid Row 입력칸에 사용.
 const rinp = dsInput;
-const sep_s: React.CSSProperties = { flexShrink: 0, fontSize: 11, color: C.textMuted, userSelect: 'none' };
 
 // ─── 상품정보 Table Grid 정의 — DS TBL 토큰 기반 ─────────────────────────────
-// Header와 모든 Body Row가 동일한 grid-template-columns를 공유 → 컬럼 폭 변경 시 1곳만 수정
-const TABLE_COLS = '82px 60px 170px 1fr 28px 72px 64px 112px 112px minmax(130px, 220px)';
-const tblRow: React.CSSProperties = dsRow(TABLE_COLS);
+// Header와 모든 Body Row가 동일한 grid-template-columns를 공유 → 컬럼 폭 변경 시 1곳만 수정.
+// 폭 배분 원칙(입력 우선순위): 서비스명·장소가 잘리지 않도록 우선 확보한다.
+//   서비스명 200·AI배지 24·수량 64 — 단위 64 / 단가 112 / 공급가액 112 / 비고 minmax(130,220) 고정.
+// ④ 동적필드 셀은 minmax(572px, 1fr): 통역 내부(기간174+운영132+시간86+인원56+장소100+gap16=564)가
+//   절대 겹치지 않는 최소폭을 보장하고(운영시간 132는 "예: 09:00~13:00"가 잘리지 않는 폭),
+//   폭이 남으면 1fr로 확장(장소가 흡수).
+// 행제어 유형 서비스명  동적          AI  수량 단위 단가  공급가액  비고
+const TABLE_COLS = '82px 60px 200px minmax(572px, 1fr) 24px 64px 64px 112px 112px minmax(130px, 220px)';
+// 모든 컬럼 최소폭 합(+colGap 9×5 +padding 16). 브라우저 폭이 이 값 미만이면
+// 상품정보 카드 내부에만 가로 스크롤이 생기고, 행은 항상 한 줄을 유지한다 (지시문 §4~§7).
+const TABLE_MIN_W = 1484;
+const tblRow: React.CSSProperties = dsRow(TABLE_COLS, { minWidth: TABLE_MIN_W });
+
+// ─── 행 내부 드롭다운 앵커 (fixed 포지셔닝) ───────────────────────────────────
+// 상품정보 표는 폭이 좁아지면 카드 내부에서 가로 스크롤(overflow-x)이 걸린다.
+// overflow 컨테이너는 CSS 규격상 세로로도 클리핑하므로, 그 안에서 아래로 열리는
+// 드롭다운을 position:absolute 로 두면 잘린다. position:fixed 는 컨테이닝 블록이
+// 뷰포트라 조상 overflow 에 잘리지 않으므로, 트리거(ref) 위치를 기준으로 fixed 좌표를
+// 계산해 드롭다운을 띄운다. 스크롤/리사이즈 시 재계산하여 트리거에 계속 붙어 있게 한다.
+function useFixedAnchor(ref: React.RefObject<HTMLElement | null>, open: boolean, gap = 3) {
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!open || !ref.current) { setPos(null); return; }
+    const compute = () => {
+      const el = ref.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setPos({ top: r.bottom + gap, left: r.left, width: r.width });
+    };
+    compute();
+    window.addEventListener('scroll', compute, true);   // capture — 내부 스크롤 컨테이너 포함
+    window.addEventListener('resize', compute);
+    return () => {
+      window.removeEventListener('scroll', compute, true);
+      window.removeEventListener('resize', compute);
+    };
+  }, [open, gap, ref]);
+  return pos ?? { top: -9999, left: -9999, width: 0 };
+}
 
 // ─── 검색 팝업 ────────────────────────────────────────────────────────────────
 
@@ -296,6 +335,7 @@ function InlineSearchField({ items, value, onChange, placeholder = '검색…', 
   const [q, setQ]                 = useState('');
   const [showPopup, setShowPopup] = useState(false);
   const ref      = useRef<HTMLDivElement>(null);
+  const anchor   = useFixedAnchor(ref, open, 2);
   const selected = items.find(i => i.id === value);
   const filtered = q.trim() ? items.filter(i => i.label.toLowerCase().includes(q.toLowerCase()) || (i.sub ?? '').toLowerCase().includes(q.toLowerCase())).slice(0, 12) : items.slice(0, 12);
 
@@ -317,7 +357,7 @@ function InlineSearchField({ items, value, onChange, placeholder = '검색…', 
         {value !== null && <button type="button" title="초기화" onClick={() => { onChange(null); setQ(''); setOpen(false); }}
           style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', fontSize: 12, color: C.g400, flexShrink: 0 }}>🧽</button>}
         {open && (
-          <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0, zIndex: 700, background: C.bgCard, border: `1px solid ${accentColor}`, borderRadius: 9, boxShadow: '0 6px 20px rgba(0,0,0,0.1)', maxHeight: 200, overflowY: 'auto' }}>
+          <div style={{ position: 'fixed', top: anchor.top, left: anchor.left, width: anchor.width, zIndex: 700, background: C.bgCard, border: `1px solid ${accentColor}`, borderRadius: 9, boxShadow: '0 6px 20px rgba(0,0,0,0.1)', maxHeight: 200, overflowY: 'auto' }}>
             {value !== null && <div onClick={() => { onChange(null); setQ(''); setOpen(false); }} style={{ padding: '6px 10px', fontSize: 12, color: C.g400, cursor: 'pointer', borderBottom: '1px solid #f3f4f6' }} onMouseEnter={e => (e.currentTarget.style.background = C.g50)} onMouseLeave={e => (e.currentTarget.style.background = '')}>선택 해제</div>}
             {filtered.length === 0 && <div style={{ padding: '8px 10px', fontSize: 12, color: C.g400 }}>결과 없음 — <span style={{ color: accentColor, cursor: 'pointer', fontWeight: 600 }} onClick={() => { setOpen(false); setShowPopup(true); }}>전체 검색 🔍</span></div>}
             {filtered.map(item => (
@@ -370,6 +410,7 @@ function RowControls({ idx, total, onRemove, onAddBelow, onMoveUp, onMoveDown }:
 function ServiceTypeSelector({ value, onChange }: { value: ServiceType; onChange: (t: ServiceType) => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const anchor = useFixedAnchor(ref, open, 2);
   const cfg = SVC_CFG[value];
   useEffect(() => {
     const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
@@ -383,7 +424,7 @@ function ServiceTypeSelector({ value, onChange }: { value: ServiceType; onChange
         {cfg.label}<span style={{ fontSize: 7, marginLeft: 'auto' }}>▼</span>
       </button>
       {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, zIndex: 800, background: C.bgCard, border: BD.card, borderRadius: 9, boxShadow: '0 4px 20px rgba(0,0,0,0.12)', padding: 4, minWidth: 74 }}>
+        <div style={{ position: 'fixed', top: anchor.top, left: anchor.left, zIndex: 800, background: C.bgCard, border: BD.card, borderRadius: 9, boxShadow: '0 4px 20px rgba(0,0,0,0.12)', padding: 4, minWidth: 74 }}>
           {(Object.entries(SVC_CFG) as [ServiceType, typeof SVC_CFG[ServiceType]][]).map(([k, c]) => (
             <button key={k} type="button" onClick={() => { onChange(k); setOpen(false); }}
               style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%', textAlign: 'left', padding: '5px 8px', background: value === k ? c.bg : 'transparent', color: c.color, border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: value === k ? 700 : 400 }}>
@@ -403,6 +444,7 @@ function ServiceTypeSelector({ value, onChange }: { value: ServiceType; onChange
 function UnitSelect({ value, onChange, serviceType }: { value: string; onChange: (v: string) => void; serviceType: ServiceType }) {
   const [open, setOpen] = useState(false);
   const ref  = useRef<HTMLDivElement>(null);
+  const anchor = useFixedAnchor(ref, open, 2);
   const opts = getUnitOptions(serviceType, value);
 
   useEffect(() => {
@@ -425,7 +467,7 @@ function UnitSelect({ value, onChange, serviceType }: { value: string; onChange:
         <span style={{ fontSize: 8, color: C.g400, flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 2px)', left: 0, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 9, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 72, padding: 4 }}>
+        <div style={{ position: 'fixed', top: anchor.top, left: anchor.left, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 9, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 72, padding: 4 }}>
           {opts.map(u => (
             <button key={u} type="button" onClick={() => { onChange(u); setOpen(false); }}
               style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 13, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === u ? C.primaryBg : 'none', color: value === u ? C.primaryText : C.textPrimary, fontWeight: value === u ? 700 : 400 }}
@@ -496,6 +538,7 @@ function detectFormatFromExt(fileName: string): string {
 function FileFormatSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const anchor = useFixedAnchor(ref, open);
 
   const isCustom = value !== '' && !(FILE_FORMATS as readonly string[]).includes(value);
   const btnLabel = isCustom ? FILE_FORMAT_CUSTOM : (value || '파일형식');
@@ -522,7 +565,7 @@ function FileFormatSelect({ value, onChange }: { value: string; onChange: (v: st
         <span style={{ fontSize: 8, flexShrink: 0, color: C.g400 }}>{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 114, padding: 4, maxHeight: 300, overflowY: 'auto' }}>
+        <div style={{ position: 'fixed', top: anchor.top, left: anchor.left, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 114, padding: 4, maxHeight: 300, overflowY: 'auto' }}>
           {value && (
             <button type="button" onClick={() => { onChange(''); setOpen(false); }}
               style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: C.g400, background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2, whiteSpace: 'nowrap' }}
@@ -566,6 +609,7 @@ const EXPENSE_CUSTOM = '기타(직접입력)';
 function ExpenseTypeSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const anchor = useFixedAnchor(ref, open);
 
   // 미리 정의된 목록에 없는 비어 있지 않은 값 = 직접 입력 모드
   const isCustom  = value !== '' && !(EXPENSE_TYPES as readonly string[]).includes(value);
@@ -593,7 +637,7 @@ function ExpenseTypeSelect({ value, onChange }: { value: string; onChange: (v: s
         <span style={{ fontSize: 8, flexShrink: 0, color: C.g400 }}>{open ? '▲' : '▼'}</span>
       </button>
       {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 130, padding: 4, maxHeight: 320, overflowY: 'auto' }}>
+        <div style={{ position: 'fixed', top: anchor.top, left: anchor.left, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 130, padding: 4, maxHeight: 320, overflowY: 'auto' }}>
           {value && (
             <button type="button" onClick={() => { onChange(''); setOpen(false); }}
               style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 11, color: C.g400, background: 'none', border: 'none', borderRadius: 6, cursor: 'pointer', marginBottom: 2, whiteSpace: 'nowrap' }}
@@ -658,13 +702,14 @@ function computeHoursPerDay(range: string): string {
   return String(diff / 60);  // 30분 배수 → .0/.5 정확 (예: 390분 → 6.5)
 }
 
-function TimeRangeField({ value, onChange, onConfirm, boxStyle }: {
-  value: string; onChange: (v: string) => void; onConfirm?: (range: string) => void; boxStyle: React.CSSProperties;
+function TimeRangeField({ value, onChange, onConfirm, onReset, boxStyle }: {
+  value: string; onChange: (v: string) => void; onConfirm?: (range: string) => void; onReset?: () => void; boxStyle: React.CSSProperties;
 }) {
   const [open, setOpen]   = useState(false);
   const [start, setStart] = useState('');
   const [end, setEnd]     = useState('');
   const ref = useRef<HTMLDivElement>(null);
+  const anchor = useFixedAnchor(ref, open);
 
   const openPicker = () => { const p = parseTimeRange(value); setStart(p.start); setEnd(p.end); setOpen(true); };
 
@@ -686,6 +731,14 @@ function TimeRangeField({ value, onChange, onConfirm, boxStyle }: {
     onChange(range);
     onConfirm?.(range);   // 운영시간 선택 완료(확인) 시에만 자동 계산 트리거 (지시문 6절)
     setOpen(false);
+  };
+  // 초기화 — 시작/종료/운영시간 입력값 + 통역시간(부모 onReset)까지 함께 비운다.
+  // 팝업은 닫지 않아 사용자가 바로 다시 선택할 수 있다.
+  const reset = () => {
+    setStart('');
+    setEnd('');
+    onChange('');   // 운영시간(operationHours) 값 삭제
+    onReset?.();    // 통역시간(interpretHours) 등 연동 값 삭제 (부모가 결정)
   };
 
   const column = (label: string, sel: string, onPick: (t: string) => void, opts: string[]) => (
@@ -712,21 +765,247 @@ function TimeRangeField({ value, onChange, onConfirm, boxStyle }: {
       <div onClick={() => { if (!open) openPicker(); }}
         style={{ ...boxStyle, display: 'flex', alignItems: 'center', gap: 2, padding: 0, overflow: 'hidden', cursor: 'pointer' }}>
         <input value={value} onChange={e => onChange(e.target.value)} placeholder="예: 09:00~13:00"
-          style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, padding: '0 6px', height: '100%', cursor: 'pointer' }}
+          style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, padding: '0 5px', height: '100%', cursor: 'pointer' }}
           title="운영시간 (클릭하여 선택 또는 직접 입력, 예: 09:00~18:00). 공급가액 계산에는 사용되지 않습니다." />
-        <span aria-hidden style={{ fontSize: 9, color: C.g400, padding: '0 6px', flexShrink: 0, userSelect: 'none' }}>▼</span>
+        <span aria-hidden style={{ fontSize: 9, color: C.g400, padding: '0 4px', flexShrink: 0, userSelect: 'none' }}>▼</span>
       </div>
       {open && (
-        <div style={{ position: 'absolute', top: 'calc(100% + 3px)', left: 0, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: 10, width: 190 }}>
+        <div style={{ position: 'fixed', top: anchor.top, left: anchor.left, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: 10, width: 190 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.textPrimary, marginBottom: 6 }}>운영시간</div>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
             {column('시작', start, pickStart, TIME_OPTIONS)}
             {column('종료', end, setEnd, start ? TIME_OPTIONS.filter(t => t > start) : TIME_OPTIONS)}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
-            <span style={{ fontSize: 11, color: canConfirm ? C.textSecondary : C.g400 }}>{start && end ? `${start}~${end}` : '시작·종료 선택'}</span>
-            <button type="button" onClick={confirm} disabled={!canConfirm}
+          <div style={{ fontSize: 11, color: canConfirm ? C.textSecondary : C.g400, textAlign: 'center', marginTop: 8, marginBottom: 6 }}>
+            {start && end ? `${start}~${end}` : '시작·종료 선택'}
+          </div>
+          {/* 하단 버튼 — [초기화](보조·회색) ↔ [확인](주 기능, 기존 디자인 유지) */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <button type="button" onClick={reset} aria-label="운영시간 초기화" data-testid="btn-optime-reset"
+              style={{ border: `1px solid ${C.g300}`, borderRadius: 6, padding: '3px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', background: C.g100, color: C.textSecondary }}>초기화</button>
+            <button type="button" onClick={confirm} disabled={!canConfirm} aria-label="운영시간 확인" data-testid="btn-optime-confirm"
               style={{ border: 'none', borderRadius: 6, padding: '4px 14px', fontSize: 12, fontWeight: 700, cursor: canConfirm ? 'pointer' : 'default', background: canConfirm ? C.primary : C.g300, color: '#fff' }}>확인</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 기간(시작일~종료일) Date Range Picker ───────────────────────────────────
+// 통역·장비 공통 입력 UI. 화면에는 "단일 기간 필드"만 표시하고, 클릭 시 팝오버에서
+// 시작일/종료일(native date)을 선택한다. 저장·계산은 기존과 100% 동일하게
+// start/end 2개 값을 그대로 유지한다(DB 구조·로직 불변, 지시문 §1·§3·§9).
+//   · 하루(종료 미입력 또는 시작=종료) → "2026-07-17" 단일 표시, end='' 로 저장(당일 규약)
+//   · 여러 날 → "2026-07-17 ~ 2026-07-22"
+// (calcSpanDays·interpretationServiceDays 모두 end 미입력/동일을 1일로 처리 → 정규화 안전)
+function DateRangeField({ start, end, onChange, boxStyle, title = '기간', startTitle, endTitle }: {
+  start: string; end: string;
+  onChange: (start: string, end: string) => void;
+  boxStyle: React.CSSProperties;
+  title?: string; startTitle?: string; endTitle?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [s, setS]       = useState('');
+  const [e, setE]       = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+  const anchor = useFixedAnchor(ref, open);
+
+  const openPicker = () => { setS(start); setE(end); setOpen(true); };
+
+  useEffect(() => {
+    if (!open) return;
+    const onMD  = (ev: MouseEvent)    => { if (ref.current && !ref.current.contains(ev.target as Node)) setOpen(false); };
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onMD);
+    document.addEventListener('keydown',   onKey);
+    return () => { document.removeEventListener('mousedown', onMD); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  // 표시 전용 축약 — "2026-07-17" → "26-07-17" (내부값·저장·출력물은 YYYY-MM-DD 그대로).
+  const short = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d) ? d.slice(2) : d;
+  // 표시: 없음 → placeholder / 하루(종료 없음·동일) → 시작 / 여러 날 → 시작 ~ 종료
+  const display       = !start ? '' : (!end || end === start) ? short(start) : `${short(start)} ~ ${short(end)}`;
+  const startAfterEnd = !!s && !!e && e < s;   // 종료 < 시작 (수동 입력 방어)
+
+  const confirm = () => {
+    let ne = e;
+    if (ne && s && ne < s) ne = '';   // 잘못된 역전 → 당일 처리
+    if (ne === s) ne = '';            // 시작=종료 → 당일(중복 저장 안 함, end='')
+    onChange(s, ne);
+    setOpen(false);
+  };
+  const reset = () => { setS(''); setE(''); onChange('', ''); };
+
+  return (
+    <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
+      {/* 단일 기간 필드 — 클릭 시 팝오버 오픈 (읽기 표시) */}
+      <div onClick={() => { if (!open) openPicker(); }}
+        data-testid="field-date-range" aria-label={title} title={display || title}
+        style={{ ...boxStyle, display: 'flex', alignItems: 'center', gap: 2, padding: 0, overflow: 'hidden', cursor: 'pointer' }}>
+        <span style={{ flex: 1, minWidth: 0, padding: '0 6px 0 8px', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          color: display ? C.textPrimary : C.g400 }}>{display || '날짜 선택'}</span>
+        {/* 드롭다운 표식 — 우측 내부 여백 축소(0 6px → 0 4px 0 2px). 날짜 텍스트와는 최소 간격 유지 */}
+        <span aria-hidden style={{ fontSize: 9, color: C.g400, padding: '0 4px 0 2px', flexShrink: 0, userSelect: 'none' }}>▼</span>
+      </div>
+      {open && (
+        <div style={{ position: 'fixed', top: anchor.top, left: anchor.left, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: 10, width: 236 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textPrimary, marginBottom: 8 }}>{title}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: C.textMuted, fontWeight: 700 }}>
+              <span style={{ width: 30, flexShrink: 0 }}>시작</span>
+              <input type="date" value={s} onChange={ev => { const v = ev.target.value; setS(v); if (e && e < v) setE(''); }}
+                style={{ ...rinp('100%'), height: 30 }} title={startTitle} data-testid="input-daterange-start" />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: C.textMuted, fontWeight: 700 }}>
+              <span style={{ width: 30, flexShrink: 0 }}>종료</span>
+              <input type="date" value={e} min={s || undefined} onChange={ev => setE(ev.target.value)}
+                style={{ ...rinp('100%'), height: 30 }} title={endTitle} data-testid="input-daterange-end" />
+            </label>
+          </div>
+          <div style={{ fontSize: 10, color: startAfterEnd ? C.danger : C.textMuted, marginTop: 6 }}>
+            {startAfterEnd ? '⚠ 종료일이 시작일보다 빠릅니다' : '당일 일정은 종료일을 비워두세요'}
+          </div>
+          {/* 하단 버튼 — [초기화](보조) ↔ [확인] (TimeRangeField와 동일 규격) */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 }}>
+            <button type="button" onClick={reset} aria-label={`${title} 초기화`} data-testid="btn-daterange-reset"
+              style={{ border: `1px solid ${C.g300}`, borderRadius: 6, padding: '3px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', background: C.g100, color: C.textSecondary }}>초기화</button>
+            <button type="button" onClick={confirm} disabled={!s} aria-label={`${title} 확인`} data-testid="btn-daterange-confirm"
+              style={{ border: 'none', borderRadius: 6, padding: '4px 14px', fontSize: 12, fontWeight: 700, cursor: s ? 'pointer' : 'default', background: s ? C.primary : C.g300, color: '#fff' }}>확인</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── 설치일시(선택) Date+Time Picker — 장비 전용 ─────────────────────────────
+// 네이티브 datetime-local/time picker 의 한계(시스템 placeholder·시간 잘림·OS 팝업 겹침·
+// 즉시 닫힘)를 피하기 위한 완전 커스텀 피커. 화면 표시는 "26-07-20 10:00"(견적 화면 형식 통일).
+// 팝업 내부에서 날짜 + 시·분(5분 단위) 목록으로 선택 → [확인]으로만 확정(바깥 클릭 전까지 유지).
+// 저장은 "YYYY-MM-DD HH:MM" 문자열(operationHours 컬럼 재활용) — 선택 입력, 계산·PDF 미반영.
+const INSTALL_HOURS   = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')); // 00..23 (24시간제)
+const INSTALL_MINUTES = ['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55']; // 5분 단위
+
+function InstallDateTimeField({ value, onChange, boxStyle, prefix }: {
+  value: string; onChange: (v: string) => void; boxStyle: React.CSSProperties; prefix?: string;
+}) {
+  // 저장 문자열 파싱 — "YYYY-MM-DD HH:MM" 및 레거시 datetime-local "YYYY-MM-DDTHH:MM" 모두 허용
+  const parse = (v: string) => {
+    const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/.exec(v || '');
+    return m ? { d: m[1], h: m[2], mi: m[3] } : { d: '', h: '', mi: '' };
+  };
+  const [open, setOpen] = useState(false);
+  const [d, setD]   = useState('');   // 임시 날짜
+  const [h, setH]   = useState('');   // 임시 시
+  const [mi, setMi] = useState('');   // 임시 분
+  const ref = useRef<HTMLDivElement>(null);
+  const hourRef = useRef<HTMLDivElement>(null);
+  const minRef  = useRef<HTMLDivElement>(null);
+  const anchor = useFixedAnchor(ref, open);
+  // 레거시 데이터(5분 배수가 아닌 분)도 선택/표시되도록 저장된 분을 목록에 포함
+  const minuteOpts = (mi && !INSTALL_MINUTES.includes(mi)) ? [...INSTALL_MINUTES, mi].sort() : INSTALL_MINUTES;
+
+  const openPicker = () => { const p = parse(value); setD(p.d); setH(p.h); setMi(p.mi); setOpen(true); };
+
+  // 바깥 클릭/Esc → 임시값 폐기하고 닫기(저장값 유지). 팝업 내부 클릭은 ref.contains 로 유지(§6·§7)
+  useEffect(() => {
+    if (!open) return;
+    const onMD  = (ev: MouseEvent)    => { if (ref.current && !ref.current.contains(ev.target as Node)) setOpen(false); };
+    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onMD);
+    document.addEventListener('keydown',   onKey);
+    return () => { document.removeEventListener('mousedown', onMD); document.removeEventListener('keydown', onKey); };
+  }, [open]);
+
+  // 팝업 열릴 때 시·분 목록을 현재 선택값 위치로 스크롤 (§4 — 저장된 시/분이 맨 위 00에 가려지지 않고 바로 보이도록)
+  useLayoutEffect(() => {
+    if (!open) return;
+    const center = (el: HTMLDivElement | null, idx: number, total: number) => {
+      if (!el || idx < 0 || total <= 0) return;
+      const itemH = el.scrollHeight / total;
+      el.scrollTop = Math.max(0, idx * itemH - (el.clientHeight - itemH) / 2);
+    };
+    center(hourRef.current, INSTALL_HOURS.indexOf(h), INSTALL_HOURS.length);
+    center(minRef.current,  minuteOpts.indexOf(mi),   minuteOpts.length);
+    // open 진입 시 1회만 정렬 (h/mi/minuteOpts 는 openPicker 가 이미 설정) — 사용자 클릭 시 재스크롤 방지
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const parsed  = parse(value);
+  // 표시 — "26-07-20 10:00" (2자리 연도, 분까지). 값이 없으면 placeholder
+  const display = parsed.d ? (parsed.h && parsed.mi ? `${parsed.d.slice(2)} ${parsed.h}:${parsed.mi}` : parsed.d.slice(2)) : '';
+
+  const allSet   = !!d && !!h && !!mi;
+  const allEmpty = !d && !h && !mi;
+  const partial  = !allSet && !allEmpty;   // 일부만 선택 → 저장 차단(§11)
+
+  // 확인 — 모두 선택: 저장 / 모두 비움: 빈 값(삭제) / 일부만: 차단
+  const confirm = () => { if (partial) return; onChange(allSet ? `${d} ${h}:${mi}` : ''); setOpen(false); };
+  const reset   = () => { setD(''); setH(''); setMi(''); };   // 임시값만 비움 → 확인 시 반영(§8)
+
+  // 시·분 목록 — 팝업 내부 인라인(하단 버튼을 가리지 않음), 클릭 선택(빠른 스크롤 없음)(§3·§5)
+  const timeCol = (listRef: React.RefObject<HTMLDivElement | null>, sel: string, onPick: (v: string) => void, opts: string[], testid: string) => (
+    <div ref={listRef} data-testid={testid} style={{ height: 116, width: 56, overflowY: 'auto', border: BD.card, borderRadius: 6 }}>
+      {opts.map(o => (
+        <button key={o} type="button" onClick={() => onPick(o)}
+          style={{ display: 'block', width: '100%', textAlign: 'center', padding: '5px 0', fontSize: 13, border: 'none',
+            background: sel === o ? C.primaryBg : 'none', color: sel === o ? C.primaryText : C.textPrimary,
+            fontWeight: sel === o ? 700 : 400, cursor: 'pointer' }}
+          onMouseEnter={e => { if (sel !== o) (e.currentTarget as HTMLButtonElement).style.background = C.bgHover; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = sel === o ? C.primaryBg : 'none'; }}>
+          {o}
+        </button>
+      ))}
+    </div>
+  );
+
+  return (
+    <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
+      {/* 단일 필드 — 클릭 시 팝오버. 시스템 placeholder 대신 "설치일시(선택)" 표시 */}
+      <div onClick={() => { if (!open) openPicker(); }}
+        data-testid="field-equip-install" aria-label="설치일시(선택)" title={display || '설치일시 (선택)'}
+        style={{ ...boxStyle, display: 'flex', alignItems: 'center', gap: 0, padding: 0, overflow: 'hidden', cursor: 'pointer' }}>
+        {/* Prefix(addon) — 입력창 내부 좌측 라벨. UI 전용(저장값 미포함). 우측 border로 한 컨트롤처럼 분리 */}
+        {prefix && (
+          <span aria-hidden style={{ flexShrink: 0, alignSelf: 'stretch', display: 'flex', alignItems: 'center', padding: '0 5px', fontSize: 11, color: C.textMuted, background: C.g50, borderRight: BD.divider, userSelect: 'none' }}>{prefix}</span>
+        )}
+        <span style={{ flex: 1, minWidth: 0, padding: '0 6px 0 8px', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          color: display ? C.textPrimary : C.g400 }}>{display || '설치일시(선택)'}</span>
+        <span aria-hidden style={{ fontSize: 9, color: C.g400, padding: '0 4px 0 2px', flexShrink: 0, userSelect: 'none' }}>▼</span>
+      </div>
+      {open && (
+        <div style={{ position: 'fixed', top: anchor.top, left: anchor.left, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: 10, width: 236 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textPrimary, marginBottom: 8 }}>설치일시 (선택)</div>
+          {/* 날짜 */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: C.textMuted, fontWeight: 700 }}>
+            <span style={{ width: 30, flexShrink: 0 }}>날짜</span>
+            <input type="date" value={d} onChange={ev => setD(ev.target.value)} style={{ ...rinp('100%'), height: 30 }} data-testid="input-install-date" />
+          </label>
+          {/* 시간 — 커스텀 시·분 목록(브라우저 기본 time picker 미사용). 인라인이라 하단 버튼 안 가림(§1·§2·§5) */}
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 8 }}>
+            <span style={{ width: 30, flexShrink: 0, fontSize: 11, color: C.textMuted, fontWeight: 700, paddingTop: 6 }}>시간</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {timeCol(hourRef, h, setH, INSTALL_HOURS, 'list-install-hour')}
+              <span style={{ fontSize: 14, fontWeight: 800, color: C.textMuted }}>:</span>
+              {timeCol(minRef, mi, setMi, minuteOpts, 'list-install-min')}
+              <span style={{ fontSize: 13, fontWeight: 700, color: h && mi ? C.textPrimary : C.g400, minWidth: 42, paddingLeft: 2 }}>{h && mi ? `${h}:${mi}` : '--:--'}</span>
+            </div>
+          </div>
+          {/* 안내/검증(§11) — 일부만 선택 시 경고 */}
+          <div style={{ fontSize: 10, color: partial ? C.danger : C.textMuted, marginTop: 6 }}>
+            {partial ? '설치 날짜와 시간을 모두 선택해 주세요.' : '전일·야간·새벽 설치 등 참고용 (계산·PDF 미반영)'}
+          </div>
+          {/* 하단 버튼 — 인라인 시간목록이라 항상 접근 가능. [취소]/[확인]으로만 확정(§4·§5·§6) */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginTop: 8 }}>
+            <button type="button" onClick={reset} aria-label="설치일시 초기화" data-testid="btn-install-reset"
+              style={{ border: `1px solid ${C.g300}`, borderRadius: 6, padding: '3px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', background: C.g100, color: C.textSecondary }}>초기화</button>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button type="button" onClick={() => setOpen(false)} aria-label="취소" data-testid="btn-install-cancel"
+                style={{ border: `1px solid ${C.g300}`, borderRadius: 6, padding: '4px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer', background: C.bgCard, color: C.textSecondary }}>취소</button>
+              <button type="button" onClick={confirm} disabled={partial} aria-label="확인" data-testid="btn-install-confirm"
+                style={{ border: 'none', borderRadius: 6, padding: '4px 14px', fontSize: 12, fontWeight: 700, cursor: partial ? 'default' : 'pointer', background: partial ? C.g300 : C.primary, color: '#fff' }}>확인</button>
+            </div>
           </div>
         </div>
       )}
@@ -819,31 +1098,27 @@ function ServiceFields({ it, update, products }: {
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
-            {/* 행사 시작일 */}
-            <input type="date" value={it.interpretDate}
-              onChange={e => update({ interpretDate: e.target.value })}
-              style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="행사 시작일" />
-            <span style={sep_s}>~</span>
-            {/* 행사 종료일 — 기간 행사 시 입력 / 당일은 비워둠 */}
-            <input type="date" value={it.interpretEndDate}
-              onChange={e => update({ interpretEndDate: e.target.value })}
-              style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="행사 종료일 (기간 행사 시 입력, 당일은 비워두세요)" />
-            {/* 장소 */}
-            <input value={it.interpretPlace}
-              onChange={e => update({ interpretPlace: e.target.value })}
-              placeholder="장소" style={{ ...rinp('auto'), flex: 1, minWidth: 50 }} title="행사 장소" />
-            {/* 통역시간(계약) — 하루 기준 시간(숫자, 소수 허용), "N시간/일"로 표시. 안내 정보(계산 미사용) */}
-            <CountInput value={it.interpretHours} onChange={v => update({ interpretHours: v })}
-              unit="시간/일" placeholder="통역시간" decimal style={{ ...rinp(104), flexShrink: 0 }} />
-            {/* 운영시간(행사 운영시간) — Time Range Picker(선택) + 직접 입력.
-                확인 시 통역시간을 자동 계산(기본값)해 채우되, 사용자가 언제든 수정 가능 (지시문 5절) */}
+            {/* ① 기간 — 단일 기간 필드(Date Range Picker). 저장은 start/end 2필드 유지 */}
+            <DateRangeField start={it.interpretDate} end={it.interpretEndDate}
+              onChange={(s, e) => update({ interpretDate: s, interpretEndDate: e })}
+              boxStyle={{ ...rinp(174), height: 32 }}
+              title="행사 기간" startTitle="행사 시작일" endTitle="행사 종료일 (당일은 비워두세요)" />
+            {/* ② 운영시간 — Time Range Picker. 확인 시 통역시간 자동 계산(사용자 수정 가능) */}
             <TimeRangeField value={it.operationHours}
               onChange={v => update({ operationHours: v })}
               onConfirm={range => { const h = computeHoursPerDay(range); if (h) update({ interpretHours: h }); }}
-              boxStyle={{ ...rinp(120), height: 32 }} />
-            {/* 투입 인원 — "2명" 형태 표시 (CountInput) */}
+              onReset={() => update({ operationHours: '', interpretHours: '' })}
+              boxStyle={{ ...rinp(132), height: 32 }} />
+            {/* ③ 시간/일 — 하루 기준 통역시간(안내 정보, 계산 미사용) */}
+            <CountInput value={it.interpretHours} onChange={v => update({ interpretHours: v })}
+              unit="시간/일" placeholder="통역시간" decimal style={{ ...rinp(86, { paddingLeft: 5, paddingRight: 5 }), flexShrink: 0 }} />
+            {/* ④ 인원 — 투입 인원 "2명" 표시 */}
             <CountInput value={it.interpreterCount} onChange={v => update({ interpreterCount: v })}
-              unit="명" placeholder="인원" style={{ ...rinp(72), flexShrink: 0 }} />
+              unit="명" placeholder="인원" style={{ ...rinp(56, { paddingLeft: 5, paddingRight: 5 }), flexShrink: 0 }} />
+            {/* ⑤ 장소 — 시간 그룹 뒤 마지막 배치. 남는 공간 우선 흡수(flex:1) + 최소폭 보장 (§1·§5·§8) */}
+            <input value={it.interpretPlace}
+              onChange={e => update({ interpretPlace: e.target.value })}
+              placeholder="장소" style={{ ...rinp('auto'), flex: 1, minWidth: 100 }} title="행사 장소" />
           </div>
           {/* 날짜 오류 경고만 유지 (정보성 안내 문구는 제거 — 값이 이미 각 컬럼에 표시됨) */}
           {interp.invalidDateRange && (
@@ -857,34 +1132,31 @@ function ServiceFields({ it, update, products }: {
     case 'equipment':
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
-          {/* 사용 시작일 — 변경 시 사용일수(usagePeriod) 자동 재계산 */}
-          <input type="date" value={it.eventStartDate}
-            onChange={e => {
-              const start = e.target.value;
-              const upd: Partial<QuoteItemForm> = { eventStartDate: start };
-              const days = calcSpanDays(start, it.eventEndDate);
+          {/* ① 기간 — 통역과 동일한 단일 기간 필드(Date Range Picker). 확인 시 사용일수 자동 재계산 */}
+          <DateRangeField start={it.eventStartDate} end={it.eventEndDate}
+            onChange={(s, e) => {
+              const upd: Partial<QuoteItemForm> = { eventStartDate: s, eventEndDate: e };
+              const days = calcSpanDays(s, e);
               if (days > 0) upd.usagePeriod = String(days);   // 종료일 − 시작일 + 1
               update(upd);
             }}
-            style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="사용 시작일" />
-          <span style={sep_s}>~</span>
-          {/* 사용 종료일 — 당일 사용이면 비워둠. 변경 시 사용일수 자동 재계산 */}
-          <input type="date" value={it.eventEndDate}
-            onChange={e => {
-              const end = e.target.value;
-              const upd: Partial<QuoteItemForm> = { eventEndDate: end };
-              const days = calcSpanDays(it.eventStartDate, end);
-              if (days > 0) upd.usagePeriod = String(days);   // 종료일 − 시작일 + 1
-              update(upd);
-            }}
-            style={{ ...rinp(122), height: 32, flexShrink: 0 }} title="사용 종료일 (당일 사용이면 비워두세요)" />
-          {/* 사용 장소 */}
-          <input value={it.itemLocation}
-            onChange={e => update({ itemLocation: e.target.value })}
-            placeholder="사용 장소" style={{ ...rinp('auto'), flex: 1, minWidth: 50 }} title="장비 사용 장소" />
-          {/* 사용일수 — 날짜 입력 시 자동 계산, 직접 수정도 가능 */}
+            boxStyle={{ ...rinp(174), height: 32 }}
+            title="사용 기간" startTitle="사용 시작일" endTitle="사용 종료일 (당일은 비워두세요)" />
+          {/* ② 설치일시(선택) — 전일·야간·새벽·대형 장비 등 사전 설치 일정 관리용 참고정보.
+              사용일수·공급가액 계산에 영향 없음, PDF·출력물 미표시. 저장은 operationHours 컬럼
+              재활용(장비 미사용) — DB·API 무변경.
+              "설치"는 입력창 내부 Prefix(UI 전용, 저장값 미포함) — 사용기간과 구분해 하나의 컨트롤로 인식. */}
+          <InstallDateTimeField value={it.operationHours}
+            onChange={v => update({ operationHours: v })}
+            prefix="설치"
+            boxStyle={{ ...rinp(200), height: 32 }} />
+          {/* ③ 사용일수 — 날짜 입력 시 자동 계산, 직접 수정도 가능 (통역과 동일 흐름: 기간→수량→장소) */}
           <CountInput value={it.usagePeriod} onChange={v => update({ usagePeriod: v })}
             unit="일" placeholder="사용일수" style={{ ...rinp(72), flexShrink: 0 }} />
+          {/* ④ 사용 장소 — 마지막 배치. 남는 공간 우선 흡수(flex:1) + 최소폭 보장 (§2·§5) */}
+          <input value={it.itemLocation}
+            onChange={e => update({ itemLocation: e.target.value })}
+            placeholder="사용 장소" style={{ ...rinp('auto'), flex: 1, minWidth: 100 }} title="장비 사용 장소" />
         </div>
       );
     case 'expense': {
@@ -1139,6 +1411,12 @@ export interface QuoteEditorWorkspaceProps {
   initialQuoteType?: QuoteType;
   initialIssueDate?: string;
   initialVatType?:   VatType;
+  /** 진입 시점의 견적 상태(status). 'approved' 이면 이미 판매전환된 견적 → 전환완료로 표시. */
+  initialStatus?:    string;
+  /** 판매전환 성공 후 호출 — 목록 등 상위 화면 갱신용(에디터는 유지). */
+  onConverted?:      () => void;
+  /** '판매관리 보기' 클릭 시 판매관리(프로젝트) 탭으로 이동. 미제공 시 버튼 숨김. */
+  onNavigateToSales?: () => void;
 }
 
 // ─── 메인 컴포넌트 ────────────────────────────────────────────────────────────
@@ -1147,6 +1425,7 @@ export function QuoteEditorWorkspace({
   token, projectId, initialCompanyId = null, initialContactId = null, initialDivisionId = null, initialTitle = '',
   onClose, onSaved, onToast, adminList = [], asPage = false,
   initialQuoteId, initialItems, initialNote, initialQuoteType, initialIssueDate, initialVatType,
+  initialStatus, onConverted, onNavigateToSales,
 }: QuoteEditorWorkspaceProps) {
 
   const authH = { Authorization: `Bearer ${token}` };
@@ -1173,6 +1452,31 @@ export function QuoteEditorWorkspace({
   const [savedQuoteId,   setSavedQuoteId]  = useState<number | null>(initialQuoteId ?? null);
   // 견적서 미리보기 모달 데이터 (편집 화면 위에 오버레이 → 편집 상태 유지)
   const [previewData,    setPreviewData]   = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
+  // 판매전환 상태 — 진입 시 status==='approved' 면 이미 전환됨. 판매취소로 복귀하면 approved가 아니므로 재전환 가능.
+  const [converted,      setConverted]     = useState(initialStatus === 'approved');
+  const [converting,     setConverting]    = useState(false);
+  // 저장되지 않은 변경사항 확인 모달 (판매전환 클릭 시 dirty 상태에서만 표시)
+  const [showConvertConfirm, setShowConvertConfirm] = useState(false);
+
+  // ── 저장되지 않은 변경사항 추적(값 기준) ─────────────────────────────────────
+  // 저장 payload에 반영되는 폼 필드를 직렬화한 "서명"을 기준선과 비교한다.
+  // 최초 로딩 완료(번역 수량 정규화 반영) 시점의 서명을 기준선으로 캡처하므로,
+  // 마운트 시 정규화만으로는 dirty가 되지 않는다(이미 저장된 견적은 바로 판매전환).
+  const formSig = useMemo(
+    () => JSON.stringify({ items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note }),
+    [items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note],
+  );
+  const formSigRef     = useRef(formSig);
+  formSigRef.current   = formSig;                          // 최신 서명을 ref에 미러링(핸들러 stale 방지)
+  const baselineSigRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (baselineSigRef.current === null && !loading) baselineSigRef.current = formSig;
+  }, [formSig, loading]);
+  // 저장 성공 후 기준선 갱신 → 변경사항 없음 상태로 리셋
+  const markClean = useCallback(() => { baselineSigRef.current = formSigRef.current; }, []);
+  // 미저장 견적(savedQuoteId 없음) 또는 기준선과 서명이 다르면 변경사항 있음
+  const hasUnsavedChanges = () =>
+    savedQuoteId == null || baselineSigRef.current === null || formSigRef.current !== baselineSigRef.current;
 
   useEffect(() => {
     setLoading(true);
@@ -1375,29 +1679,67 @@ export function QuoteEditorWorkspace({
     const isUpdate = savedQuoteId != null;
     const r = await persistQuote();
     if (!r) return;
+    markClean();
     onToast(isUpdate ? '견적이 수정되었습니다.' : '견적서가 저장되었습니다.');
     onSaved(r);
-  }, [persistQuote, onSaved, onToast, savedQuoteId]);
+  }, [persistQuote, onSaved, onToast, savedQuoteId, markClean]);
 
   // 견적서 버튼 — 현재 편집 내용을 자동 저장(신규=생성/기존=업데이트)한 뒤 최신 견적서를 미리보기로 표시.
   // 편집 화면은 그대로 유지되어 확인 후 즉시 재수정 가능 (지시문 3~6절).
   const handleShowQuote = useCallback(async () => {
     const r = await persistQuote();
     if (!r) return;
+    markClean();
     try {
       const res = await fetch(api(`/api/admin/quotes/${r.quoteId}`), { headers: authH });
       if (!res.ok) { onToast('견적서 생성에 실패했습니다.'); return; }
       const detail = await res.json();
       setPreviewData({ data: buildQuotePdfData(detail), title: title.trim() || detail.title || `견적 #${r.quoteId}` });
     } catch { onToast('견적서 생성 중 오류가 발생했습니다.'); }
-  }, [persistQuote, title, token, onToast]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [persistQuote, title, token, onToast, markClean]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 판매전환 (견적 상세에서 직접 수행) ───────────────────────────────────────
+  // 목록의 판매전환과 동일 로직: PATCH /status {approved}. 프로젝트 자동 생성·중복 방지는 서버가 담당.
+  const runConvert = useCallback(async (quoteId: number) => {
+    if (converting) return;
+    setConverting(true);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${quoteId}/status`), {
+        method: 'PATCH', headers: { ...authH, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'approved' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(`판매전환 실패: ${data.error ?? res.status}`); return; }
+      setConverted(true);
+      onToast('판매건으로 전환되었습니다.');
+      onConverted?.();
+    } catch {
+      onToast('판매전환 중 오류가 발생했습니다. 다시 시도해 주세요.');
+    } finally { setConverting(false); }
+  }, [converting, onToast, onConverted, token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 판매전환 버튼 클릭 — 변경사항이 있으면 확인 모달, 없으면(이미 저장) 바로 전환.
+  const handleConvertClick = useCallback(() => {
+    if (converted || converting || saving) return;
+    if (hasUnsavedChanges()) { setShowConvertConfirm(true); return; }
+    if (savedQuoteId != null) runConvert(savedQuoteId);
+  }, [converted, converting, saving, savedQuoteId, runConvert]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 모달 [저장 후 판매전환] — 저장 성공 시 기준선 갱신 후 전환. 저장 실패 시 모달 유지.
+  const handleSaveThenConvert = useCallback(async () => {
+    const r = await persistQuote();
+    if (!r) return;
+    markClean();
+    setShowConvertConfirm(false);
+    await runConvert(r.quoteId);
+  }, [persistQuote, markClean, runConvert]);
 
 
   // ─── 공통 Form 컨텐츠 ─────────────────────────────────────────────────────
 
-  const inpSt: React.CSSProperties = dsInputStd();
+  const inpSt: React.CSSProperties = dsField();
   const fLbl  = (txt: string, req = false) => (
-    <label style={{ ...TYPO.fieldLabel, display: 'block', marginBottom: SP[2] }}>
+    <label style={{ ...TYPO.fieldLabel, display: 'block', marginBottom: FIELD.labelGap }}>
       {txt}{req && <span style={{ color: C.danger, marginLeft: 2 }}>*</span>}
     </label>
   );
@@ -1408,57 +1750,74 @@ export function QuoteEditorWorkspace({
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
       {/* ── A. 기본정보 ─────────────────────────────────────────────────── */}
-      <Card>
+      <Card style={{ padding: '14px 22px' }}>
         <CardSectionHeader badge="A" badgeBg="#eff6ff" badgeColor="#2563eb" title="기본정보" />
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px 20px' }}>
-          <div>
-            {fLbl('견적서 유형')}
-            <ClickSelect value={quoteType} onChange={v => setQuoteType(v as QuoteType)}
-              triggerStyle={dsInputStd()}
-              options={[{ value: 'b2b_standard', label: '일반 견적서', sub: '일반 B2B 프로젝트' }, { value: 'b2c_prepaid', label: '차감 견적서', sub: '선입금 잔액 차감' }, { value: 'accumulated_batch', label: '누적 견적서', sub: '월별 누적 청구' }]} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: FIELD.rowGap }}>
+          {/* 1행 — 견적서 유형 / 견적일 / 부가세 */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: `0 20px` }}>
+            <div>
+              {fLbl('견적서 유형')}
+              <ClickSelect value={quoteType} onChange={v => setQuoteType(v as QuoteType)}
+                triggerStyle={dsField()}
+                options={[{ value: 'b2b_standard', label: '일반 견적서', sub: '일반 B2B 프로젝트' }, { value: 'b2c_prepaid', label: '차감 견적서', sub: '선입금 잔액 차감' }, { value: 'accumulated_batch', label: '누적 견적서', sub: '월별 누적 청구' }]} />
+            </div>
+            <div>
+              {fLbl('견적일')}
+              <input type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)} style={inpSt} />
+            </div>
+            <div>
+              {fLbl('부가세')}
+              <ClickSelect value={vatType} onChange={v => setVatType(v as VatType)}
+                triggerStyle={dsField()}
+                options={[{ value: 'taxable', label: '부가세 10%' }, { value: 'exempt', label: '면세' }, { value: 'zero_rate', label: '영세율' }]} />
+            </div>
           </div>
-          <div>
-            {fLbl('견적일')}
-            <input type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)} style={inpSt} />
-          </div>
-          <div>
-            {fLbl('부가세')}
-            <ClickSelect value={vatType} onChange={v => setVatType(v as VatType)}
-              triggerStyle={dsInputStd()}
-              options={[{ value: 'taxable', label: '부가세 10%' }, { value: 'exempt', label: '면세' }, { value: 'zero_rate', label: '영세율' }]} />
-          </div>
+
+          {/* 2행 — 견적서명 (전체 너비) */}
           {isStandalone && (
-            <div style={{ gridColumn: 'span 3' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: FIELD.labelGap }}>
                 {fLbl('견적서명', true)}
-                {!titleEdited && title && <span style={{ fontSize: 10, color: C.textMuted, fontStyle: 'italic', marginBottom: 4 }}>자동생성됨</span>}
+                {!titleEdited && title && <span style={{ fontSize: 10, color: C.textMuted, fontStyle: 'italic' }}>자동생성됨</span>}
               </div>
               <input value={title} onChange={e => { setTitle(e.target.value); setTitleEdited(true); }} placeholder="예: VERITAS│삼성전자_영어↔한국어 동시통역_20260720" style={inpSt} />
             </div>
           )}
-          {isStandalone && (
-            <div>
-              {fLbl('거래처')}
-              <InlineSearchField items={companyOptions} value={companyId} onChange={handleCompanyChange} placeholder="거래처 검색…" popupTitle="거래처 검색" />
-            </div>
-          )}
-          {/* 브랜드(Division) — 브랜드가 있는 거래처에서만 표시, 선택사항 */}
-          {isStandalone && divisions.length > 0 && (
-            <div>
-              {fLbl('브랜드')}
-              <InlineSearchField items={divisionOptions} value={divisionId} onChange={handleDivisionChange} placeholder="브랜드 선택 (선택사항)" popupTitle="브랜드 선택" />
-            </div>
-          )}
-          {isStandalone && (
-            <div>
-              {fLbl('담당자')}
-              <InlineSearchField items={contactOptions} value={contactId} onChange={setContactId} placeholder="담당자 검색…" popupTitle="담당자 검색" />
-            </div>
-          )}
-          <div>
-            {fLbl('담당 PM')}
-            <InlineSearchField items={adminOptions} value={adminId} onChange={setAdminId} placeholder="PM 검색 (선택)" popupTitle="담당 PM 검색" />
-          </div>
+
+          {/* 3행 — 거래처 / 브랜드 / 담당자 / 담당 PM (한 줄) */}
+          {(() => {
+            const hasBrand = isStandalone && divisions.length > 0;
+            const crmCols = !isStandalone
+              ? CRM_FIELD_COLS.pmOnly
+              : hasBrand ? CRM_FIELD_COLS.full : CRM_FIELD_COLS.noBrand;
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: crmCols, gap: '0 20px' }}>
+                {isStandalone && (
+                  <div>
+                    {fLbl('거래처')}
+                    <InlineSearchField items={companyOptions} value={companyId} onChange={handleCompanyChange} placeholder="거래처 검색…" popupTitle="거래처 검색" />
+                  </div>
+                )}
+                {/* 브랜드(Division) — 브랜드가 있는 거래처에서만 표시, 선택사항 */}
+                {hasBrand && (
+                  <div>
+                    {fLbl('브랜드')}
+                    <InlineSearchField items={divisionOptions} value={divisionId} onChange={handleDivisionChange} placeholder="브랜드 선택 (선택사항)" popupTitle="브랜드 선택" />
+                  </div>
+                )}
+                {isStandalone && (
+                  <div>
+                    {fLbl('담당자')}
+                    <InlineSearchField items={contactOptions} value={contactId} onChange={setContactId} placeholder="담당자 검색…" popupTitle="담당자 검색" />
+                  </div>
+                )}
+                <div>
+                  {fLbl('담당 PM')}
+                  <InlineSearchField items={adminOptions} value={adminId} onChange={setAdminId} placeholder="PM 검색 (선택)" popupTitle="담당 PM 검색" />
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </Card>
 
@@ -1466,26 +1825,33 @@ export function QuoteEditorWorkspace({
       <Card>
         <CardSectionHeader badge="B" badgeBg="#f0fdf4" badgeColor="#16a34a" title="상품정보" hint="← 유형 클릭으로 번역/통역/장비/기타 전환" />
 
-        {/* 컬럼 헤더 — TABLE_COLS 공유 Grid (Body Row와 완전 동일 구조) */}
-        <div style={{ ...tblRow, padding: '0 8px 7px', borderBottom: BD.grid, marginBottom: 3 }}>
-          <div style={{ ...COL_H }}>행 제어</div>
-          <div style={{ ...COL_H }}>유형</div>
-          <div style={{ ...COL_H, textAlign: 'left' }}>상품 🔍🧽</div>
-          <div style={{ ...COL_H, textAlign: 'left' }}>{fieldHint}</div>
-          <div style={{ ...COL_H }}>AI</div>
-          <div style={{ ...COL_H }}>수량</div>
-          <div style={{ ...COL_H }}>단위</div>
-          <div style={{ ...COL_H, textAlign: 'right' }}>단가</div>
-          <div style={{ ...COL_H, textAlign: 'right', paddingRight: 6 }}>공급가액</div>
-          <div style={{ ...COL_H, textAlign: 'left', borderLeft: BD.grid, paddingLeft: 14 }}>비고</div>
-        </div>
+        {/* 반응형 — 폭이 부족하면 이 영역(헤더+행)에만 가로 스크롤이 생긴다. 페이지 전체나
+            카드 밖으로 Row가 밀려나지 않고, 각 행은 min-width(TABLE_MIN_W)로 항상 한 줄을
+            유지한다. 행 안의 드롭다운은 position:fixed(useFixedAnchor)라 이 overflow 컨테이너에
+            잘리지 않는다 (지시문 §2~§8).
+            overflow-x:auto → 폭이 충분하면 스크롤바 미표시, 최소폭 미만일 때만 자동 생성. */}
+        <div style={{ overflowX: 'auto', scrollbarWidth: 'thin' }}>
+          {/* 컬럼 헤더 — TABLE_COLS 공유 Grid (Body Row와 완전 동일 구조) */}
+          <div style={{ ...tblRow, padding: '0 8px 7px', borderBottom: BD.grid, marginBottom: 3 }}>
+            <div style={{ ...COL_H }}>행 제어</div>
+            <div style={{ ...COL_H }}>유형</div>
+            <div style={{ ...COL_H, textAlign: 'left' }}>상품 🔍🧽</div>
+            <div style={{ ...COL_H, textAlign: 'left' }}>{fieldHint}</div>
+            <div style={{ ...COL_H }}>AI</div>
+            <div style={{ ...COL_H }}>수량</div>
+            <div style={{ ...COL_H }}>단위</div>
+            <div style={{ ...COL_H, textAlign: 'right' }}>단가</div>
+            <div style={{ ...COL_H, textAlign: 'right', paddingRight: 6 }}>공급가액</div>
+            <div style={{ ...COL_H, textAlign: 'left', borderLeft: BD.grid, paddingLeft: 14 }}>비고</div>
+          </div>
 
-        {/* 항목 행 */}
-        <div>
-          {items.map((it, idx) => (
-            <QuoteItemRow key={idx} it={it} idx={idx} total={items.length} vatType={vatType} products={products}
-              updateItem={updateItem} removeItem={removeItem} addItemBelow={addItemBelow} moveItem={moveItem} />
-          ))}
+          {/* 항목 행 */}
+          <div>
+            {items.map((it, idx) => (
+              <QuoteItemRow key={idx} it={it} idx={idx} total={items.length} vatType={vatType} products={products}
+                updateItem={updateItem} removeItem={removeItem} addItemBelow={addItemBelow} moveItem={moveItem} />
+            ))}
+          </div>
         </div>
 
         {/* 유형별 항목 추가 버튼 */}
@@ -1573,11 +1939,48 @@ export function QuoteEditorWorkspace({
         🤖 AI 견적 생성
       </button>
       <DsButton variant="secondary" size="md" onClick={handleShowQuote} disabled={saving}>📄 견적서</DsButton>
+      {/* 판매전환 — 상세 검토 후 이 화면에서 바로 전환(기본 기능). 목록 버튼은 보조 기능으로 유지.
+          독립 견적(standalone)에서만 노출 — 프로젝트 Version Engine 흐름은 변경하지 않는다. */}
+      {isStandalone && (converted ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span data-testid="badge-quote-converted" aria-label="판매전환 완료"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 32, padding: '0 12px', borderRadius: 7, fontSize: 13, fontWeight: 800, background: C.success, color: '#ffffff', border: `1px solid ${C.successText}` }}>
+            ✓ 전환완료
+          </span>
+          {onNavigateToSales && (
+            <DsButton variant="secondary" size="md" onClick={onNavigateToSales} data-testid="btn-view-sales">📁 판매관리 보기</DsButton>
+          )}
+        </div>
+      ) : (
+        <DsButton variant="secondary" size="md" onClick={handleConvertClick} disabled={saving || converting}
+          data-testid="btn-convert-sale" aria-label="판매전환"
+          style={{ background: C.successBg, color: C.successText, borderColor: C.successBorder }}>
+          {converting ? '전환 중…' : '🔁 판매전환'}
+        </DsButton>
+      ))}
       <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving}>
         {saving ? '저장 중…' : '💾 저장'}
       </DsButton>
     </>
   );
+
+  // 저장되지 않은 변경사항 → 저장 후 판매전환 확인 모달 (두 레이아웃이 공유)
+  const convertConfirmModal = showConvertConfirm ? (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 3000, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      onClick={() => { if (!saving && !converting) setShowConvertConfirm(false); }}>
+      <div onClick={e => e.stopPropagation()} data-testid="modal-convert-confirm"
+        style={{ background: C.bgCard, borderRadius: 14, padding: '26px 28px', width: 420, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}>
+        <h2 style={{ margin: '0 0 10px', fontSize: 17, fontWeight: 800, color: C.textPrimary }}>저장되지 않은 변경사항이 있습니다</h2>
+        <p style={{ margin: '0 0 20px', fontSize: 13.5, color: C.textSecondary, lineHeight: 1.6 }}>저장 후 판매전환하시겠습니까?</p>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <DsButton variant="outline" size="md" onClick={() => setShowConvertConfirm(false)} disabled={saving || converting} data-testid="btn-convert-confirm-cancel">취소</DsButton>
+          <DsButton variant="primary" size="md" onClick={handleSaveThenConvert} disabled={saving || converting} data-testid="btn-convert-confirm-ok">
+            {saving || converting ? '처리 중…' : '저장 후 판매전환'}
+          </DsButton>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   const wsHeader = (bg: string, border: string, shadow: string, padH: string) => (
     <PageHeader
@@ -1608,18 +2011,19 @@ export function QuoteEditorWorkspace({
         {previewData && (
           <QuotePdfPreviewModal data={previewData.data} quoteTitle={previewData.title} onClose={() => setPreviewData(null)} />
         )}
-        {/* 인라인 Workspace 헤더 — 스크롤 영역에서 sticky (PageHeader 공통 구조) */}
+        {convertConfirmModal}
+        {/* 인라인 Workspace 헤더 — 스크롤 영역에서 full-bleed sticky (공통 헤더 토큰) */}
         <PageHeader
           onBack={onClose}
           testId="btn-quote-back"
           title={pageTitle}
           subtitle={projectId !== null ? 'Version Engine' : undefined}
           right={headerActions}
-          style={{ position: 'sticky', top: 0, zIndex: 20, background: C.bgCard, borderBottom: BD.card, padding: '0 28px', boxShadow: BD.shadow.card }}
+          style={dsStickyPageHeader()}
         />
 
-        {/* 카드 컨텐츠 */}
-        <div style={{ padding: '24px 28px 64px' }}>
+        {/* 카드 컨텐츠 — 좌우 여백은 스크롤 컨테이너 패딩이 제공(가로 0) */}
+        <div style={{ padding: '24px 0 64px' }}>
           {formContent}
         </div>
       </div>
@@ -1642,6 +2046,7 @@ export function QuoteEditorWorkspace({
       {previewData && (
         <QuotePdfPreviewModal data={previewData.data} quoteTitle={previewData.title} onClose={() => setPreviewData(null)} />
       )}
+      {convertConfirmModal}
       {wsHeader(C.bgCard, BD.card, BD.shadow.card, '24px')}
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px 64px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>

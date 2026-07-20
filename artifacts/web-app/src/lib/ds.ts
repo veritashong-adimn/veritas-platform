@@ -226,6 +226,34 @@ export const FORM = {
   },
 } as const;
 
+// ─── VERITAS 관리자 표준 입력 필드 ─────────────────────────────────────────────
+// 견적서 작성 화면에서 확립한 공통 입력 높이/여백 기준.
+// 향후 거래처·담당자·판매·프로젝트·정산 등 모든 관리자 입력 화면이 동일 기준을 사용한다.
+// (기존 FORM.standard 는 유지 — 이미 사용 중인 모달/폼에 영향을 주지 않기 위함)
+export const FIELD = {
+  h:        32,   // 입력박스 높이 기준 (거래처 검색박스 높이)
+  paddingY:  7,   // vertical padding
+  paddingX: 10,   // horizontal padding
+  radius:    7,   // border-radius
+  fontSize: 13,
+  labelGap:  3,   // 라벨 → 입력박스 간격
+  rowGap:   12,   // 필드 행 간격
+} as const;
+
+// ─── 기본정보 CRM 행 공통 컬럼 비율 ────────────────────────────────────────────
+// 거래처·브랜드·담당자·담당 PM 입력칸을 한 줄에 균형 배치하는 Grid 컬럼 기준.
+// fr 단위 + minmax(0,…) 로 컬럼 gap(20px)을 제외한 "잔여 폭"에서 비율을 분배한다.
+// → 퍼센트(%) 합계 100% + gap 이 더해져 카드 밖으로 넘치던(가로 스크롤·검색 아이콘
+//   잘림) 문제를 방지한다. 동일 구조(거래처/브랜드/담당자/PM)를 쓰는 화면은 이 값을 공용한다.
+export const CRM_FIELD_COLS = {
+  // 거래처 34 · 브랜드 26 · 담당자 20 · 담당 PM 20
+  full:    'minmax(0, 34fr) minmax(0, 26fr) minmax(0, 20fr) minmax(0, 20fr)',
+  // 브랜드 없음 — 거래처 40 · 담당자 30 · 담당 PM 30
+  noBrand: 'minmax(0, 40fr) minmax(0, 30fr) minmax(0, 30fr)',
+  // 프로젝트 내장 모드 — 담당 PM 단독
+  pmOnly:  'minmax(200px, 25%)',
+} as const;
+
 // ─── Grid / Table Tokens ──────────────────────────────────────────────────────
 
 export const TBL = {
@@ -310,6 +338,63 @@ export function dsInputStd(extra: React.CSSProperties = {}): React.CSSProperties
     color: C.textPrimary,
     background: C.bgInput,
     outline: 'none',
+    ...extra,
+  };
+}
+
+/**
+ * VERITAS 관리자 표준 입력 필드 스타일.
+ * 견적·거래처·담당자·판매·프로젝트·정산 등 모든 관리자 입력 화면 공용.
+ * 높이 기준은 거래처 검색박스와 동일 (font 13px, padding 7/10, radius 7).
+ */
+export function dsField(extra: React.CSSProperties = {}): React.CSSProperties {
+  return {
+    width: '100%',
+    boxSizing: 'border-box',
+    border: BD.input,
+    borderRadius: FIELD.radius,
+    padding: `${FIELD.paddingY}px ${FIELD.paddingX}px`,
+    fontSize: FIELD.fontSize,
+    color: C.textPrimary,
+    background: C.bgInput,
+    outline: 'none',
+    ...extra,
+  };
+}
+
+// ─── 관리자 본문 레이아웃 토큰 ─────────────────────────────────────────────────
+// AdminDashboard 스크롤 컨테이너(pages/AdminDashboard.tsx)의 본문 패딩 기준값.
+// full-bleed sticky 헤더가 이 패딩을 음수 offset 으로 상쇄하는 계산의 "단일 출처".
+// 이 값을 바꾸면 스크롤 패딩·헤더 offset(dsStickyPageHeader)이 함께 따라간다.
+// ⚠ 화면에서 top:-24px 같은 하드코딩 대신 반드시 이 상수를 기준으로 계산할 것.
+export const ADMIN_SCROLL_PADDING_TOP = 24;
+export const ADMIN_SCROLL_PADDING_X   = 28;
+
+/**
+ * VERITAS 관리자 상세(asPage) 화면의 full-bleed sticky 헤더 컨테이너 스타일.
+ *
+ * AdminDashboard 스크롤 컨테이너의 본문 패딩(ADMIN_SCROLL_PADDING_*)을
+ * 음수 margin/top 으로 상쇄하여, 별도의 음수 margin wrapper 없이 헤더 하나만으로
+ *   · 좌우: 스크롤 영역 가장자리까지 확장(full-bleed)
+ *   · 상단: 정지 상태·스크롤 밀착 상태 모두 뷰포트 최상단에 밀착
+ * 을 동시에 보장한다.
+ *
+ * top 오프셋은 스크롤 컨테이너 상단 패딩만큼 음수(-ADMIN_SCROLL_PADDING_TOP)를 준다.
+ * (하드코딩 top:-24px 금지 — 토큰 기준 계산)
+ *
+ * PageHeader 의 style prop 에 그대로 넘겨 공통 헤더로 통일한다:
+ *   <PageHeader ... style={dsStickyPageHeader()} />
+ */
+export function dsStickyPageHeader(extra: React.CSSProperties = {}): React.CSSProperties {
+  return {
+    position: 'sticky',
+    top: -ADMIN_SCROLL_PADDING_TOP,                     // 밀착 시 컨테이너 상단 패딩 상쇄
+    zIndex: 20,
+    margin: `-${ADMIN_SCROLL_PADDING_TOP}px -${ADMIN_SCROLL_PADDING_X}px 0`, // 정지 시 상단 밀착 + 좌우 full-bleed
+    padding: `0 ${ADMIN_SCROLL_PADDING_X}px`,           // 내부 콘텐츠는 표준 좌우 여백 복원
+    background: C.bgCard,
+    borderBottom: BD.card,
+    boxShadow: BD.shadow.card,
     ...extra,
   };
 }

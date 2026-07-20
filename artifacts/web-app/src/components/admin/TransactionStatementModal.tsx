@@ -11,7 +11,7 @@
 import React, { useEffect, useRef } from 'react';
 import type { QuotePdfData } from '../../lib/quotePdf';
 import { ITEM_TYPE_LABEL } from '../../lib/quotePdf';
-import { renderQuoteTitle, buildDocFileName, escapeHtmlTitle } from '../../lib/quoteTitle';
+import { renderQuoteTitle, buildDocFileName, escapeHtmlTitle, formatDocNumber } from '../../lib/quoteTitle';
 
 // ─── 숫자 / 날짜 포맷 ────────────────────────────────────────────────────────
 const fmt = (n: number) => n.toLocaleString('ko-KR');
@@ -22,12 +22,6 @@ function todayStr(): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}.${p(d.getMonth() + 1)}.${p(d.getDate())}`;
-}
-
-// 거래명세서 번호 — 견적번호 기반 파생 (Q000001 → T000001)
-function statementNumberFrom(quoteNumber: string): string {
-  if (!quoteNumber) return '';
-  return /^Q\d+$/.test(quoteNumber) ? quoteNumber.replace(/^Q/, 'T') : `T-${quoteNumber}`;
 }
 
 // ─── 색상 ─────────────────────────────────────────────────────────────────────
@@ -59,7 +53,10 @@ interface TransactionStatementModalProps {
 export default function TransactionStatementModal({ data, quoteTitle, onClose }: TransactionStatementModalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
 
-  const statementNo = statementNumberFrom(data.quoteNumber);
+  // 공식 문서번호 — 견적서와 동일한 formatDocNumber 규칙 사용(표시 전용, 내부 Raw 번호 미노출).
+  // 거래명세서 T260716-008 / 견적번호 Q260716-008. 발행일(quoteDate) 기반 순번 파생.
+  const statementNo = formatDocNumber('T', data.quoteNumber, data.quoteDate);
+  const quoteNo     = formatDocNumber('Q', data.quoteNumber, data.quoteDate);
   const writtenDate = todayStr();
 
   // ESC로 닫기
@@ -269,7 +266,7 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '3px 16px' }}>
                 <InfoRow label="거래명세서 번호" value={statementNo} mono />
                 <InfoRow label="작성일"          value={writtenDate} />
-                <InfoRow label="견적번호"        value={data.quoteNumber} mono />
+                <InfoRow label="견적번호"        value={quoteNo} mono />
               </div>
             </div>
 
@@ -358,23 +355,28 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
               </div>
             </div>
 
-            {/* ── 하단: 입금 계좌 ──────────────────────────────────────── */}
-            {hasBankInfo && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '12px 14px' }}>
-                  <div style={{ fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5, marginBottom: 8 }}>
-                    입금 계좌
+            {/* ── 하단: 입금 계좌(좌) + 직인(우) ───────────────────────────
+                입금계좌 박스와 직인은 서로 독립 영역이다. 직인은 계좌를 인증하는 것이 아니라
+                거래명세서 전체를 ㈜베리타스가 공식 발행했다는 의미이므로, 계좌 박스에 넣지 않고
+                우측에 충분한 간격(space-between)을 두어 시각적으로 분리한다.
+                한 행으로 묶어 직인만 2페이지로 넘어가는 현상을 방지하고 1페이지에서 마무리한다. */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 28, marginBottom: 8 }}>
+              {/* 좌측: 입금 계좌 — 기존 높이 유지(직인 영향 없음). 계좌 정보 없으면 좌측 여백만 확보. */}
+              <div style={{ width: '52%', flexShrink: 0 }}>
+                {hasBankInfo && (
+                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '12px 14px' }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5, marginBottom: 8 }}>
+                      입금 계좌
+                    </div>
+                    {data.bankAccount.bankName      && <InfoRow label="은행"     value={data.bankAccount.bankName} />}
+                    {data.bankAccount.accountNumber && <InfoRow label="계좌번호" value={data.bankAccount.accountNumber} mono />}
+                    {data.bankAccount.accountHolder && <InfoRow label="예금주"   value={data.bankAccount.accountHolder} />}
                   </div>
-                  {data.bankAccount.bankName      && <InfoRow label="은행"     value={data.bankAccount.bankName} />}
-                  {data.bankAccount.accountNumber && <InfoRow label="계좌번호" value={data.bankAccount.accountNumber} mono />}
-                  {data.bankAccount.accountHolder && <InfoRow label="예금주"   value={data.bankAccount.accountHolder} />}
-                </div>
+                )}
               </div>
-            )}
 
-            {/* ── 직인 / 서명 ──────────────────────────────────────────── */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <div style={{ textAlign: 'center' }}>
+              {/* 우측: 직인 — 독립 영역, 우측 하단 정렬. 문서 전체 공식 발행 인증. */}
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', textAlign: 'center' }}>
                 <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 6 }}>
                   {data.supplier.companyName || 'VERITAS'} (인)
                 </div>
@@ -427,7 +429,13 @@ function InfoRow({ label, value, mono }: { label: string; value: string; mono?: 
       </span>
       <span style={{
         fontSize: 11, color: '#111827', fontWeight: 500,
-        wordBreak: 'break-all',
+        // 인쇄 시 주소·숫자 단위(예: "2406호")가 중간에서 끊기지 않도록 견적서 PDF와 동일 처리:
+        // keep-all → 공백 단위로만 줄바꿈(동·호 토큰 유지), break-word → 박스 초과 시에만 예외 처리.
+        // (break-all 금지 — 숫자 중간 분리의 원인) 주소 2줄이어도 전화·이메일은 정상 출력됨.
+        minWidth: 0,
+        whiteSpace: 'normal',
+        wordBreak: 'keep-all',
+        overflowWrap: 'break-word',
         ...(mono ? { fontFamily: 'monospace', fontSize: 10 } : {}),
       }}>
         {value}

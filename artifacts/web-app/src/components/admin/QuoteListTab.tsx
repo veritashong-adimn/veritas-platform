@@ -58,9 +58,11 @@ interface QuoteListTabProps {
   refreshTick?: number;
   /** 관리자 여부 — 휴지통 영구삭제 버튼 노출 제어(서버에서도 별도 검증) */
   isAdmin?: boolean;
+  /** 상세 화면 '판매관리 보기' → 판매관리(프로젝트) 탭으로 이동 */
+  onNavigateToSales?: () => void;
 }
 
-export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false }: QuoteListTabProps) {
+export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales }: QuoteListTabProps) {
   const authH = { Authorization: `Bearer ${token}` };
 
   const [quotes, setQuotes]             = useState<QuoteRow[]>([]);
@@ -82,6 +84,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     items: QuoteItemForm[]; title: string; note: string;
     quoteType: QuoteType; issueDate: string; vatType: VatType;
     companyId: number | null; contactId: number | null; divisionId: number | null;
+    status: string;
   } | null>(null);
   // 삭제(Soft Delete)
   const [deleteTarget, setDeleteTarget] = useState<QuoteRow | null>(null);
@@ -242,8 +245,8 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     };
   }
 
-  // 기존 견적 편집 진입
-  const handleEditQuote = useCallback(async (quoteId: number, quoteTitle: string) => {
+  // 기존 견적 편집 진입 — status는 목록 행 값을 기본으로 하되 상세 응답에 있으면 우선 사용(판매전환 표시용)
+  const handleEditQuote = useCallback(async (quoteId: number, quoteTitle: string, rowStatus?: string) => {
     setEditLoading(quoteId);
     try {
       const res = await fetch(api(`/api/admin/quotes/${quoteId}`), { headers: authH });
@@ -263,6 +266,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         companyId: (detail as any).companyId ?? null,
         contactId: (detail as any).contactId ?? null,
         divisionId: (detail as any).divisionId ?? null,
+        status: (detail as any).status ?? rowStatus ?? 'pending',
       });
       setShowEditor(true);
     } finally { setEditLoading(null); }
@@ -302,43 +306,45 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
 
   // ── 견적서 작성/편집 Workspace ──────────────────────────────────────────────
   if (showEditor) {
+    // full-bleed sticky 헤더는 QuoteEditorWorkspace 내부에서 dsStickyPageHeader()로
+    // 스크롤 패딩을 상쇄하므로, 여기서 별도의 음수 margin wrapper가 필요 없다.
     return (
-      <div style={{ margin: '-24px -28px' }}>
-        <QuoteEditorWorkspace
-          asPage
-          token={token}
-          projectId={null}
-          onClose={handleEditorClose}
-          onSaved={handleEditorSaved}
-          onToast={onToast}
-          adminList={adminUsers}
-          // 편집 모드 데이터 (없으면 신규 작성)
-          initialQuoteId={editQuoteId ?? undefined}
-          initialItems={editInitData?.items}
-          initialTitle={editInitData?.title ?? ''}
-          initialNote={editInitData?.note}
-          initialQuoteType={editInitData?.quoteType}
-          initialIssueDate={editInitData?.issueDate}
-          initialVatType={editInitData?.vatType}
-          initialCompanyId={editInitData?.companyId ?? null}
-          initialContactId={editInitData?.contactId ?? null}
-          initialDivisionId={editInitData?.divisionId ?? null}
-        />
-      </div>
+      <QuoteEditorWorkspace
+        asPage
+        token={token}
+        projectId={null}
+        onClose={handleEditorClose}
+        onSaved={handleEditorSaved}
+        onToast={onToast}
+        adminList={adminUsers}
+        // 편집 모드 데이터 (없으면 신규 작성)
+        initialQuoteId={editQuoteId ?? undefined}
+        initialItems={editInitData?.items}
+        initialTitle={editInitData?.title ?? ''}
+        initialNote={editInitData?.note}
+        initialQuoteType={editInitData?.quoteType}
+        initialIssueDate={editInitData?.issueDate}
+        initialVatType={editInitData?.vatType}
+        initialCompanyId={editInitData?.companyId ?? null}
+        initialContactId={editInitData?.contactId ?? null}
+        initialDivisionId={editInitData?.divisionId ?? null}
+        initialStatus={editInitData?.status}
+        onConverted={fetchQuotes}
+        onNavigateToSales={onNavigateToSales}
+      />
     );
   }
 
   // ── 견적 휴지통 페이지 ───────────────────────────────────────────────────────
+  // QuoteTrashTab 헤더도 dsStickyPageHeader()로 full-bleed 처리 → wrapper 불필요.
   if (showTrash) {
     return (
-      <div style={{ margin: '-24px -28px' }}>
-        <QuoteTrashTab
-          token={token}
-          isAdmin={isAdmin}
-          onToast={onToast}
-          onBack={() => { setShowTrash(false); fetchQuotes(); }}
-        />
-      </div>
+      <QuoteTrashTab
+        token={token}
+        isAdmin={isAdmin}
+        onToast={onToast}
+        onBack={() => { setShowTrash(false); fetchQuotes(); }}
+      />
     );
   }
 
@@ -511,7 +517,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                       {/* 견적번호 — 표시 형식 Q{YYMMDD}-{순번}. 클릭 시 편집(식별자 역할이라 과한 강조 제거) */}
                       <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         <button
-                          onClick={() => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`)}
+                          onClick={() => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status)}
                           disabled={editLoading === q.id}
                           style={{
                             fontFamily: 'monospace', fontSize: 11, color: '#475569', fontWeight: 400,
@@ -533,7 +539,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                       {/* 견적서명 — 지정 범위(min 220 ~ max 420, 약 24vw ≈ 테이블 30~34% 이내)에서만 반응형, 좌측 정렬, 클릭 시 편집 */}
                       <td style={{ padding: '6px 10px', textAlign: 'left' }}>
                         <button
-                          onClick={() => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`)}
+                          onClick={() => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status)}
                           disabled={editLoading === q.id}
                           style={{
                             fontSize: 12, fontWeight: 600, color: '#111827',

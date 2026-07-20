@@ -350,12 +350,15 @@ function buildDetailText(item: QuoteDetailItem): string {
       lines.push(`통역사 ${pplCount}명`);
     }
   } else if (type === 'equipment') {
-    // 기간
+    // 사용기간
     if (item.eventStartDate) {
       lines.push(item.eventEndDate && item.eventEndDate !== item.eventStartDate
         ? `${item.eventStartDate} ~ ${item.eventEndDate}`
         : item.eventStartDate);
     }
+    // 설치일시 (있는 경우) — 사용기간 다음, 장소 앞. operationHours 컬럼 재활용(장비 전용).
+    // 저장 "YYYY-MM-DD HH:MM"/레거시 "…THH:MM" → "설치 : YYYY-MM-DD HH:mm" 형식으로 출력.
+    if (item.operationHours) lines.push(`설치 : ${item.operationHours.replace('T', ' ')}`);
     // 장소
     if (item.itemLocation) lines.push(item.itemLocation);
     // 사용일수

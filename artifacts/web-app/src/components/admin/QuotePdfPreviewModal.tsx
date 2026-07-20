@@ -8,7 +8,7 @@
 import React, { useEffect, useRef } from 'react';
 import type { QuotePdfData } from '../../lib/quotePdf';
 import { ITEM_TYPE_LABEL, QUOTE_NOTES_BY_SERVICE } from '../../lib/quotePdf';
-import { renderQuoteTitle, buildDocFileName, escapeHtmlTitle } from '../../lib/quoteTitle';
+import { renderQuoteTitle, buildDocFileName, escapeHtmlTitle, formatDocNumber } from '../../lib/quoteTitle';
 
 // ─── 숫자 / 날짜 포맷 ────────────────────────────────────────────────────────
 const fmt = (n: number) => n.toLocaleString('ko-KR');
@@ -107,7 +107,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
   .info-box-title { font-size: 10px; font-weight: 800; color: #1e3a5f; letter-spacing: 1px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1.5px solid #e8edf5; }
   .info-row { display: flex; align-items: baseline; margin-bottom: 3px; }
   .info-key { font-size: 10px; color: #6b7280; font-weight: 600; min-width: 76px; flex-shrink: 0; }
-  .info-val { font-size: 11px; color: #111827; font-weight: 500; word-break: break-all; }
+  .info-val { font-size: 11px; color: #111827; font-weight: 500; min-width: 0; white-space: normal; word-break: keep-all; overflow-wrap: break-word; }
   .quote-info-box { border: 1px solid #d1d5db; border-radius: 6px; padding: 10px 14px; margin-bottom: 14px; }
   .quote-info-inner { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 16px; }
   .total-box { background: #e8edf5; border-radius: 6px; padding: 10px 16px; margin-bottom: 20px; display: flex; justify-content: flex-end; align-items: center; }
@@ -193,7 +193,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
               견적서 미리보기
             </span>
             <span style={{ color: '#94a3b8', fontSize: 12 }}>
-              {data.quoteNumber} · {renderQuoteTitle(quoteTitle)}
+              {(formatDocNumber('Q', data.quoteNumber, data.quoteDate) || data.quoteNumber)} · {renderQuoteTitle(quoteTitle)}
             </span>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -246,7 +246,8 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontSize: 26, fontWeight: 900, color: BRAND, letterSpacing: 6 }}>견  적  서</div>
                 <div style={{ fontSize: 11, color: '#6b7280', fontFamily: 'monospace', marginTop: 4 }}>
-                  {data.quoteNumber}
+                  {/* 우측 상단도 견적정보와 동일한 공식 견적번호(formatDocNumber) 사용 — 문서 내 번호 통일 */}
+                  {formatDocNumber('Q', data.quoteNumber, data.quoteDate) || data.quoteNumber}
                 </div>
               </div>
             </div>
@@ -298,7 +299,9 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
                 견적 정보
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '3px 16px' }}>
-                <InfoRow label="견적번호"  value={data.quoteNumber} mono />
+                {/* 견적번호 — 문서 전체(우측 상단·견적정보·미리보기 툴바)가 동일한 플랫폼 공식 문서번호
+                    (formatDocNumber: Q+YYMMDD-순번, 견적목록·휴지통과 동일 체계)로 통일. 생성 로직·DB 불변. */}
+                <InfoRow label="견적번호"  value={formatDocNumber('Q', data.quoteNumber, data.quoteDate) || data.quoteNumber} mono />
                 {data.quoteDate  && <InfoRow label="견적일"    value={data.quoteDate} />}
                 {data.quoteType  && <InfoRow label="견적유형"  value={data.quoteType} />}
                 {data.manager    && <InfoRow label="담당 PM"   value={data.manager} />}
@@ -401,19 +404,9 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
               </div>
             )}
 
-            {/* ── 하단 정보 (견적 조건 + 계좌) ────────────────────────── */}
+            {/* ── 하단 정보 (좌: 입금 계좌 / 우: 견적 조건 + 직인) ─────────── */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
-              {/* 견적 조건 (서비스 유형별) */}
-              <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '12px 14px' }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5, marginBottom: 8 }}>
-                  견적 조건
-                </div>
-                <div style={{ fontSize: 10, color: '#374151', lineHeight: 1.8, whiteSpace: 'pre-line' }}>
-                  {notesText}
-                </div>
-              </div>
-
-              {/* 입금 계좌 */}
+              {/* 입금 계좌 — 좌측 */}
               {hasBankInfo && (
                 <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '12px 14px' }}>
                   <div style={{ fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5, marginBottom: 8 }}>
@@ -424,29 +417,38 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
                   {data.bankAccount.accountHolder && <InfoRow label="예금주"   value={data.bankAccount.accountHolder} />}
                 </div>
               )}
-            </div>
 
-            {/* ── 직인 / 서명 ──────────────────────────────────────────── */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 6 }}>
-                  {data.supplier.companyName || 'VERITAS'} (인)
+              {/* 견적 조건 (서비스 유형별) — 우측. 직인을 박스 내부 우측 하단에 포함(공식 발행 인증) */}
+              <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '12px 14px', display: 'flex', flexDirection: 'column' }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5, marginBottom: 8 }}>
+                  견적 조건
                 </div>
-                {data.signatureImageUrl ? (
-                  <img
-                    src={data.signatureImageUrl}
-                    alt="직인"
-                    style={{ width: 80, height: 80, objectFit: 'contain', border: '1px solid #f0f0f0', borderRadius: 4 }}
-                  />
-                ) : (
-                  <div style={{
-                    width: 80, height: 80, border: '1px dashed #d1d5db',
-                    borderRadius: 4, display: 'flex', alignItems: 'center',
-                    justifyContent: 'center', fontSize: 9, color: '#9ca3af',
-                  }}>
-                    직인
+                <div style={{ fontSize: 10, color: '#374151', lineHeight: 1.8, whiteSpace: 'pre-line' }}>
+                  {notesText}
+                </div>
+                {/* 직인 — 견적 조건 문구 아래 충분한 여백 후 박스 내부 우측 하단. 견적서 전체의 공식 발행을 의미. */}
+                <div style={{ marginTop: 'auto', paddingTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 6 }}>
+                      {data.supplier.companyName || 'VERITAS'} (인)
+                    </div>
+                    {data.signatureImageUrl ? (
+                      <img
+                        src={data.signatureImageUrl}
+                        alt="직인"
+                        style={{ width: 80, height: 80, objectFit: 'contain', border: '1px solid #f0f0f0', borderRadius: 4 }}
+                      />
+                    ) : (
+                      <div style={{
+                        width: 80, height: 80, border: '1px dashed #d1d5db',
+                        borderRadius: 4, display: 'flex', alignItems: 'center',
+                        justifyContent: 'center', fontSize: 9, color: '#9ca3af',
+                      }}>
+                        직인
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
             </div>
 
@@ -481,7 +483,13 @@ function InfoRow({ label, value, mono }: { label: string; value: string; mono?: 
       </span>
       <span style={{
         fontSize: 11, color: '#111827', fontWeight: 500,
-        wordBreak: 'break-all',
+        // 인쇄 시 주소·숫자 단위(예: "2406호")가 중간에서 끊기지 않도록:
+        // keep-all → 공백 단위로만 줄바꿈(동·호 등 토큰 유지), break-word → 박스 초과 시에만 예외 처리.
+        // (break-all 금지 — 숫자 중간 분리의 원인. 지시문 §3·§4)
+        minWidth: 0,
+        whiteSpace: 'normal',
+        wordBreak: 'keep-all',
+        overflowWrap: 'break-word',
         ...(mono ? { fontFamily: 'monospace', fontSize: 10 } : {}),
       }}>
         {value}

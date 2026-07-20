@@ -13,6 +13,7 @@ import {
   VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS,
 } from '../lib/constants';
 import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../components/ui';
+import { ADMIN_SCROLL_PADDING_TOP, ADMIN_SCROLL_PADDING_X } from '../lib/ds';
 import { formatPhoneDisplay } from '../lib/utils';
 import { LogModal } from '../components/admin/LogModal';
 import { DraggableModal } from '../components/admin/DraggableModal';
@@ -1450,7 +1451,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           </div>
 
           {/* 스크롤 컨텐츠 */}
-          <div style={{ flex: 1, overflowY: "auto", padding: "24px 28px", background: "#f9fafb" }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: `${ADMIN_SCROLL_PADDING_TOP}px ${ADMIN_SCROLL_PADDING_X}px`, background: "#f9fafb" }}>
 
           {salesDetailId !== null ? (
             <SalesDetailPage
@@ -1728,6 +1729,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           adminUsers={adminUsers}
           refreshTick={quoteTick}
           isAdmin={user.role === "admin"}
+          onNavigateToSales={() => setAdminTab("projects")}
         />
       )}
 
