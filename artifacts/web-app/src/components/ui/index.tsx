@@ -600,13 +600,16 @@ export function SearchableSelectShared({
 function _fmtNumDisplay(raw: string, allowDecimal: boolean): string {
   if (!raw || raw === "-") return raw;
   const neg = raw.startsWith("-");
-  const abs = neg ? raw.slice(1) : raw;
+  let abs = neg ? raw.slice(1) : raw;
   if (allowDecimal && abs.includes(".")) {
     const dotIdx = abs.indexOf(".");
     const intPart = abs.slice(0, dotIdx).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
     const decPart = abs.slice(dotIdx + 1);
     return (neg ? "-" : "") + intPart + "." + decPart;
   }
+  // 소수 미허용(원화 KRW 등): 저장값이 "400000.00" 처럼 소수부를 가져도 표시에서 제거.
+  // (통화별 정책 훅 — allowDecimal=true 인 통화만 소수 표시. 현재 KRW는 정수로 통일.)
+  if (abs.includes(".")) abs = abs.slice(0, abs.indexOf("."));
   return (neg ? "-" : "") + abs.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 

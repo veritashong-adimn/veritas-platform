@@ -251,9 +251,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       itemLocation:     it.itemLocation      ?? '',
       usagePeriod:      it.usagePeriod       ?? '',
       expenseType:      it.interpretType     ?? '',
-      // 할인 전용
+      // 할인 전용 — 금액은 원화 정수로 정규화(DB numeric의 "400000.00" → "400000")
       discountType:     (dc.discountType === 'percent' ? 'percent' : 'amount'),
-      discountValue:    dc.discountValue != null ? String(dc.discountValue) : '',
+      discountValue:    dc.discountValue != null && dc.discountValue !== '' ? String(Number(dc.discountValue)) : '',
       discountReason:   dc.discountReason ?? '',
     };
   }
