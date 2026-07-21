@@ -10,10 +10,13 @@ import {
   prepaidAccountsTable, prepaidLedgerTable,
   quoteItemsTable, quoteItemFilesTable,
   projectFilesTable, translatorProfilesTable,
+  companyAliasesTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, inArray, sql, desc, ne } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
+import { normalizeCompanyName } from "../lib/normalizeCompany";
+import { buildAliasValues, ensureDefaultAlias } from "../lib/companyAlias";
 import {
   isOcrSupportedExt, buildImageDataUrl, renderPdfFirstPageAsPng,
 } from "../lib/documentOcr";
@@ -25,6 +28,131 @@ const adminGuard = [requireAuth, requireRole("admin", "staff")];
 router.get("/admin/companies", ...adminGuard, async (req, res) => {
   try {
     const { search, companyType, vendorType, customerType } = req.query as { search?: string; companyType?: string; vendorType?: string; customerType?: string };
+
+    // ── opt-in 서버 페이지네이션: page 파라미터가 있을 때만. 없으면 레거시(배열) 응답 유지 ──
+    if (req.query.page !== undefined) {
+      const page = Math.max(1, parseInt(String(req.query.page), 10) || 1);
+      const allowedSizes = [20, 30, 50, 100];
+      let pageSize = parseInt(String(req.query.pageSize ?? "20"), 10) || 20;
+      if (!allowedSizes.includes(pageSize)) pageSize = 20;
+      const offset = (page - 1) * pageSize;
+
+      // 검색 조건(SQL). 보조 매칭(상호이력/담당자명/브랜드명)은 회사 id 집합으로 선계산 후 OR.
+      const s = search?.trim().toLowerCase();
+      let searchCond: ReturnType<typeof or> | undefined;
+      if (s) {
+        const digits = s.replace(/\D/g, "");
+        const ns = normalizeCompanyName(s); // Alias 정규화 매칭용(㈜베리타스↔베리타스)
+        const [historyM, contactM, divM, aliasM] = await Promise.all([
+          db.select({ companyId: companyNameHistoryTable.companyId }).from(companyNameHistoryTable).where(ilike(companyNameHistoryTable.companyName, `%${s}%`)),
+          db.select({ companyId: contactsTable.companyId }).from(contactsTable).where(ilike(contactsTable.name, `%${s}%`)),
+          db.select({ companyId: divisionsTable.companyId }).from(divisionsTable).where(ilike(divisionsTable.name, `%${s}%`)),
+          db.select({ companyId: companyAliasesTable.companyId }).from(companyAliasesTable).where(
+            or(...[ilike(companyAliasesTable.aliasName, `%${s}%`), ns ? ilike(companyAliasesTable.normalizedAlias, `%${ns}%`) : undefined].filter(Boolean) as any),
+          ),
+        ]);
+        const auxIds = [...new Set<number>([
+          ...historyM.map(h => h.companyId),
+          ...(contactM.map(m => m.companyId).filter(Boolean) as number[]),
+          ...divM.map(d => d.companyId),
+          ...aliasM.map(a => a.companyId),
+        ])];
+        const conds = [
+          ilike(companiesTable.name, `%${s}%`),
+          ilike(companiesTable.representativeName, `%${s}%`),
+          ilike(companiesTable.email, `%${s}%`),
+          auxIds.length ? inArray(companiesTable.id, auxIds) : undefined,
+        ];
+        if (digits) {
+          conds.push(sql`regexp_replace(coalesce(${companiesTable.businessNumber},''),'[^0-9]','','g') LIKE ${"%" + digits + "%"}`);
+          conds.push(sql`regexp_replace(coalesce(${companiesTable.phone},''),'[^0-9]','','g') LIKE ${"%" + digits + "%"}`);
+          conds.push(sql`regexp_replace(coalesce(${companiesTable.mobile},''),'[^0-9]','','g') LIKE ${"%" + digits + "%"}`);
+        }
+        searchCond = or(...conds.filter(Boolean) as any);
+      }
+
+      const filterConds = [];
+      if (companyType === "client" || companyType === "vendor") filterConds.push(eq(companiesTable.companyType, companyType));
+      if (vendorType) filterConds.push(eq(companiesTable.vendorType, vendorType));
+      if (customerType === "CORPORATE" || customerType === "PUBLIC" || customerType === "INDIVIDUAL") {
+        filterConds.push(sql`coalesce(${companiesTable.customerType},'CORPORATE') = ${customerType}`);
+      }
+      const whereAll = and(...[searchCond, ...filterConds].filter(Boolean) as any);
+
+      // 전체 매칭 건수(검색+필터)
+      const [{ cnt: total }] = await db
+        .select({ cnt: sql<number>`count(*)::int` })
+        .from(companiesTable)
+        .where(whereAll);
+
+      // 필터탭 배지용 그룹 카운트(검색 반영, 유형/외주/고객분류 필터 제외)
+      const grouped = await db
+        .select({
+          companyType: companiesTable.companyType,
+          customerType: sql<string>`coalesce(${companiesTable.customerType},'CORPORATE')`,
+          cnt: sql<number>`count(*)::int`,
+        })
+        .from(companiesTable)
+        .where(searchCond)
+        .groupBy(companiesTable.companyType, sql`coalesce(${companiesTable.customerType},'CORPORATE')`);
+      const counts = { all: 0, client: 0, vendor: 0, customer: { CORPORATE: 0, PUBLIC: 0, INDIVIDUAL: 0 } as Record<string, number> };
+      for (const g of grouped) {
+        counts.all += g.cnt;
+        if (g.companyType === "client") { counts.client += g.cnt; counts.customer[g.customerType] = (counts.customer[g.customerType] ?? 0) + g.cnt; }
+        else counts.vendor += g.cnt;
+      }
+
+      // 현재 페이지 행(집계 포함)
+      const pageRows = await db
+        .select({
+          id: companiesTable.id,
+          name: companiesTable.name,
+          businessNumber: companiesTable.businessNumber,
+          representativeName: companiesTable.representativeName,
+          email: companiesTable.email,
+          phone: companiesTable.phone,
+          mobile: companiesTable.mobile,
+          industry: companiesTable.industry,
+          businessCategory: companiesTable.businessCategory,
+          address: companiesTable.address,
+          website: companiesTable.website,
+          notes: companiesTable.notes,
+          registeredAt: companiesTable.registeredAt,
+          createdAt: companiesTable.createdAt,
+          companyType: companiesTable.companyType,
+          vendorType: companiesTable.vendorType,
+          customerType: companiesTable.customerType,
+          contactCount: sql<number>`COUNT(DISTINCT ${contactsTable.id})::int`,
+          projectCount: sql<number>`COUNT(DISTINCT ${projectsTable.id})::int`,
+          totalPayment: sql<number>`COALESCE(SUM(${paymentsTable.amount}) FILTER (WHERE ${paymentsTable.status} = 'paid'), 0)::int`,
+        })
+        .from(companiesTable)
+        .leftJoin(contactsTable, eq(contactsTable.companyId, companiesTable.id))
+        .leftJoin(projectsTable, eq(projectsTable.companyId, companiesTable.id))
+        .leftJoin(paymentsTable, eq(paymentsTable.projectId, projectsTable.id))
+        .where(whereAll)
+        .groupBy(companiesTable.id)
+        .orderBy(desc(companiesTable.createdAt), desc(companiesTable.id))
+        .limit(pageSize)
+        .offset(offset);
+
+      // 페이지 회사들의 브랜드/부서명만 조회
+      const pageIds = pageRows.map(r => r.id);
+      const divs = pageIds.length
+        ? await db.select({ companyId: divisionsTable.companyId, name: divisionsTable.name }).from(divisionsTable).where(inArray(divisionsTable.companyId, pageIds))
+        : [];
+      const divMap = new Map<number, string[]>();
+      for (const d of divs) { if (!divMap.has(d.companyId)) divMap.set(d.companyId, []); divMap.get(d.companyId)!.push(d.name); }
+
+      const rowsOut = pageRows.map(c => ({
+        ...c,
+        divisionNames: divMap.get(c.id) ?? [],
+        matchedDivisionName: s ? ((divMap.get(c.id) ?? []).find(n => n.toLowerCase().includes(s)) ?? null) : null,
+      }));
+
+      res.json({ rows: rowsOut, total, page, pageSize, counts });
+      return;
+    }
 
     const rows = await db
       .select({
@@ -91,6 +219,14 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
         .where(ilike(contactsTable.name, `%${s}%`));
       const contactMatchIds = new Set(contactMatches.map(m => m.companyId).filter(Boolean) as number[]);
 
+      // 기업명 Alias 매칭(§9): 원문 부분일치 또는 정규화 일치(㈜베리타스↔베리타스)
+      const ns = normalizeCompanyName(s);
+      const aliasMatches = await db
+        .select({ companyId: companyAliasesTable.companyId })
+        .from(companyAliasesTable)
+        .where(or(...[ilike(companyAliasesTable.aliasName, `%${s}%`), ns ? ilike(companyAliasesTable.normalizedAlias, `%${ns}%`) : undefined].filter(Boolean) as any));
+      const aliasMatchIds = new Set(aliasMatches.map(a => a.companyId));
+
       result = result
         .map(c => {
           const divs = divisionsByCompany.get(c.id) ?? [];
@@ -106,7 +242,8 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
           (c.representativeName ?? "").toLowerCase().includes(s) ||
           c.matchedDivisionName !== null ||
           historyIds.has(c.id) ||
-          contactMatchIds.has(c.id)
+          contactMatchIds.has(c.id) ||
+          aliasMatchIds.has(c.id)
         );
     }
 
@@ -166,6 +303,9 @@ router.post("/admin/companies", ...adminGuard, requirePermission("company.create
       reason: "최초 등록",
     });
 
+    // 공식명 기반 기본 Alias 자동 생성(§8)
+    await ensureDefaultAlias(db, company.id, company.name);
+
     res.status(201).json(company);
   } catch (err) {
     req.log.error({ err }, "Companies: failed to create");
@@ -192,6 +332,7 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
         officePhone: contactsTable.officePhone, notes: contactsTable.notes, memo: contactsTable.memo,
         isPrimary: contactsTable.isPrimary, isQuoteContact: contactsTable.isQuoteContact,
         isBillingContact: contactsTable.isBillingContact, isActive: contactsTable.isActive,
+        registeredAt: contactsTable.registeredAt,
         createdAt: contactsTable.createdAt, updatedAt: contactsTable.updatedAt,
       })
       .from(contactsTable)
@@ -427,7 +568,7 @@ router.get("/admin/people/duplicate-candidates", ...adminGuard, async (req, res)
     allMatches.push({ source: "translator", id: r.id, name: r.name ?? "(이름 없음)", email: r.email, mobile: r.phone ?? undefined, roleLabel: "통번역사", matchReason: reason, priority: PRIORITY[reason] });
 
   try {
-    const nameSql    = (col: Parameters<typeof sql>[0] extends TemplateStringsArray ? never : any) => sql`lower(${col}) = ${normalizedName!.toLowerCase()}`;
+    const nameSql    = (col: any) => sql`lower(${col}) = ${normalizedName!.toLowerCase()}`;
     const mobileSql  = (col: any) => sql`regexp_replace(${col}, '[^0-9]', '', 'g') = ${normalizedMobile}`;
     const emailSql   = (col: any) => sql`lower(${col}) = ${normalizedEmail}`;
 
@@ -825,6 +966,97 @@ router.delete("/admin/divisions/:id", ...adminGuard, async (req, res) => {
   }
 });
 
+// ─── 거래처 기업명 Alias(별칭) CRUD ──────────────────────────────────────────
+// 1:N. 중복판정·검색은 normalizedAlias 기준. 기존 거래처 API 는 변경하지 않는다.
+
+// 목록
+router.get("/admin/companies/:id/aliases", ...adminGuard, async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 company id." }); return; }
+  try {
+    const rows = await db.select().from(companyAliasesTable)
+      .where(eq(companyAliasesTable.companyId, companyId))
+      .orderBy(desc(companyAliasesTable.isPrimary), companyAliasesTable.id);
+    res.json(rows);
+  } catch (err) {
+    req.log.error({ err }, "Aliases: failed to list");
+    res.status(500).json({ error: "별칭 조회 실패." });
+  }
+});
+
+// 등록
+router.post("/admin/companies/:id/aliases", ...adminGuard, requirePermission("company.create"), async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 company id." }); return; }
+  const aliasName = ((req.body as any)?.aliasName ?? "").toString().trim();
+  if (!aliasName) { res.status(400).json({ error: "별칭을 입력해주세요." }); return; }
+  const normalizedAlias = normalizeCompanyName(aliasName);
+  if (!normalizedAlias) { res.status(400).json({ error: "유효한 별칭이 아닙니다." }); return; }
+  try {
+    // 거래처 존재 확인
+    const [company] = await db.select({ id: companiesTable.id }).from(companiesTable).where(eq(companiesTable.id, companyId));
+    if (!company) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+    // 동일 거래처 내 normalizedAlias 중복 방지(§7)
+    const [dup] = await db.select({ id: companyAliasesTable.id }).from(companyAliasesTable)
+      .where(and(eq(companyAliasesTable.companyId, companyId), eq(companyAliasesTable.normalizedAlias, normalizedAlias)));
+    if (dup) { res.status(409).json({ error: "이미 등록된 별칭입니다." }); return; }
+    const [created] = await db.insert(companyAliasesTable)
+      .values(buildAliasValues(companyId, aliasName, false)).returning();
+    res.status(201).json(created);
+  } catch (err) {
+    req.log.error({ err }, "Aliases: failed to create");
+    res.status(500).json({ error: "별칭 등록 실패." });
+  }
+});
+
+// 수정
+router.put("/admin/companies/:id/aliases/:aliasId", ...adminGuard, requirePermission("company.create"), async (req, res) => {
+  const companyId = Number(req.params.id);
+  const aliasId = Number(req.params.aliasId);
+  if (isNaN(companyId) || companyId <= 0 || isNaN(aliasId) || aliasId <= 0) { res.status(400).json({ error: "유효하지 않은 id." }); return; }
+  const aliasName = ((req.body as any)?.aliasName ?? "").toString().trim();
+  if (!aliasName) { res.status(400).json({ error: "별칭을 입력해주세요." }); return; }
+  const normalizedAlias = normalizeCompanyName(aliasName);
+  if (!normalizedAlias) { res.status(400).json({ error: "유효한 별칭이 아닙니다." }); return; }
+  try {
+    const [existing] = await db.select().from(companyAliasesTable)
+      .where(and(eq(companyAliasesTable.id, aliasId), eq(companyAliasesTable.companyId, companyId)));
+    if (!existing) { res.status(404).json({ error: "별칭을 찾을 수 없습니다." }); return; }
+    // 자기 자신을 제외한 동일 거래처 내 중복 방지(§7)
+    const [dup] = await db.select({ id: companyAliasesTable.id }).from(companyAliasesTable)
+      .where(and(
+        eq(companyAliasesTable.companyId, companyId),
+        eq(companyAliasesTable.normalizedAlias, normalizedAlias),
+        ne(companyAliasesTable.id, aliasId),
+      ));
+    if (dup) { res.status(409).json({ error: "이미 등록된 별칭입니다." }); return; }
+    const [updated] = await db.update(companyAliasesTable)
+      .set({ aliasName, normalizedAlias, updatedAt: new Date() })
+      .where(eq(companyAliasesTable.id, aliasId)).returning();
+    res.json(updated);
+  } catch (err) {
+    req.log.error({ err }, "Aliases: failed to update");
+    res.status(500).json({ error: "별칭 수정 실패." });
+  }
+});
+
+// 삭제
+router.delete("/admin/companies/:id/aliases/:aliasId", ...adminGuard, requirePermission("company.create"), async (req, res) => {
+  const companyId = Number(req.params.id);
+  const aliasId = Number(req.params.aliasId);
+  if (isNaN(companyId) || companyId <= 0 || isNaN(aliasId) || aliasId <= 0) { res.status(400).json({ error: "유효하지 않은 id." }); return; }
+  try {
+    const [existing] = await db.select({ id: companyAliasesTable.id }).from(companyAliasesTable)
+      .where(and(eq(companyAliasesTable.id, aliasId), eq(companyAliasesTable.companyId, companyId)));
+    if (!existing) { res.status(404).json({ error: "별칭을 찾을 수 없습니다." }); return; }
+    await db.delete(companyAliasesTable).where(eq(companyAliasesTable.id, aliasId));
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "Aliases: failed to delete");
+    res.status(500).json({ error: "별칭 삭제 실패." });
+  }
+});
+
 // ─── 담당자 목록 (회사별) ────────────────────────────────────────────────────
 router.get("/admin/companies/:id/contacts", ...adminGuard, async (req, res) => {
   const companyId = Number(req.params.id);
@@ -858,6 +1090,66 @@ async function listContacts(req: any, res: any) {
     // 기본: 활성 담당자만 표시. includeInactive=true 시 전체 표시.
     if (includeInactive !== "true") conds.push(eq(contactsTable.isActive, true));
 
+    // ── opt-in 서버 페이지네이션: page 파라미터가 있을 때만. 없으면 레거시(배열) 응답 유지 ──
+    if (req.query.page !== undefined) {
+      const page = Math.max(1, parseInt(String(req.query.page), 10) || 1);
+      const allowedSizes = [20, 30, 50, 100];
+      let pageSize = parseInt(String(req.query.pageSize ?? "20"), 10) || 20;
+      if (!allowedSizes.includes(pageSize)) pageSize = 20;
+      const offset = (page - 1) * pageSize;
+
+      const s = keyword?.trim().toLowerCase();
+      const allConds: any[] = [...conds];
+      if (s) {
+        const digits = s.replace(/\D/g, "");
+        const kc: any[] = [
+          ilike(contactsTable.name, `%${s}%`),
+          ilike(contactsTable.email, `%${s}%`),
+          ilike(contactsTable.mobile, `%${s}%`),
+          ilike(contactsTable.officePhone, `%${s}%`),
+          ilike(contactsTable.phone, `%${s}%`),
+          ilike(companiesTable.name, `%${s}%`),
+        ];
+        if (digits) {
+          kc.push(sql`regexp_replace(coalesce(${contactsTable.mobile},''),'[^0-9]','','g') LIKE ${"%" + digits + "%"}`);
+          kc.push(sql`regexp_replace(coalesce(${contactsTable.officePhone},''),'[^0-9]','','g') LIKE ${"%" + digits + "%"}`);
+          kc.push(sql`regexp_replace(coalesce(${contactsTable.phone},''),'[^0-9]','','g') LIKE ${"%" + digits + "%"}`);
+        }
+        allConds.push(or(...kc));
+      }
+      const whereAll = allConds.length ? and(...allConds) : undefined;
+
+      const [{ cnt: total }] = await db
+        .select({ cnt: sql<number>`count(*)::int` })
+        .from(contactsTable)
+        .leftJoin(companiesTable, eq(contactsTable.companyId, companiesTable.id))
+        .where(whereAll);
+
+      const pageRows = await db
+        .select({
+          id: contactsTable.id, companyId: contactsTable.companyId, divisionId: contactsTable.divisionId,
+          name: contactsTable.name, department: contactsTable.department, position: contactsTable.position,
+          email: contactsTable.email, phone: contactsTable.phone, mobile: contactsTable.mobile,
+          officePhone: contactsTable.officePhone, notes: contactsTable.notes, memo: contactsTable.memo,
+          isPrimary: contactsTable.isPrimary, isQuoteContact: contactsTable.isQuoteContact,
+          isBillingContact: contactsTable.isBillingContact, isActive: contactsTable.isActive,
+          registeredAt: contactsTable.registeredAt,
+          createdAt: contactsTable.createdAt, updatedAt: contactsTable.updatedAt,
+          companyName: companiesTable.name,
+          divisionName: divisionsTable.name,
+        })
+        .from(contactsTable)
+        .leftJoin(companiesTable, eq(contactsTable.companyId, companiesTable.id))
+        .leftJoin(divisionsTable, eq(contactsTable.divisionId, divisionsTable.id))
+        .where(whereAll)
+        .orderBy(desc(contactsTable.isPrimary), contactsTable.name, desc(contactsTable.id))
+        .limit(pageSize)
+        .offset(offset);
+
+      res.json({ rows: pageRows, total, page, pageSize });
+      return;
+    }
+
     const rows = await db
       .select({
         id: contactsTable.id, companyId: contactsTable.companyId, divisionId: contactsTable.divisionId,
@@ -866,6 +1158,7 @@ async function listContacts(req: any, res: any) {
         officePhone: contactsTable.officePhone, notes: contactsTable.notes, memo: contactsTable.memo,
         isPrimary: contactsTable.isPrimary, isQuoteContact: contactsTable.isQuoteContact,
         isBillingContact: contactsTable.isBillingContact, isActive: contactsTable.isActive,
+        registeredAt: contactsTable.registeredAt,
         createdAt: contactsTable.createdAt, updatedAt: contactsTable.updatedAt,
         companyName: companiesTable.name,
         divisionName: divisionsTable.name,
@@ -1091,6 +1384,7 @@ router.get("/admin/contacts/:id", ...adminGuard, async (req, res) => {
         officePhone: contactsTable.officePhone, notes: contactsTable.notes, memo: contactsTable.memo,
         isPrimary: contactsTable.isPrimary, isQuoteContact: contactsTable.isQuoteContact,
         isBillingContact: contactsTable.isBillingContact, isActive: contactsTable.isActive,
+        registeredAt: contactsTable.registeredAt,
         createdAt: contactsTable.createdAt, updatedAt: contactsTable.updatedAt,
         companyName: companiesTable.name,
         divisionName: divisionsTable.name,

@@ -691,7 +691,8 @@ export function NumericInput({
         placeholder={placeholder}
         disabled={disabled}
         inputMode="numeric"
-        style={{ width: "100%", boxSizing: "border-box", ...style, paddingRight: hasSuffix ? 28 : undefined }}
+        // 숫자 입력은 Tabular Numbers 공통 적용 — 단가·수량·할인 등 모든 숫자 폭 일정 (지시문 §3·§8)
+        style={{ width: "100%", boxSizing: "border-box", fontVariantNumeric: "tabular-nums", ...style, paddingRight: hasSuffix ? 28 : undefined }}
       />
       {hasSuffix && (
         <span style={{

@@ -259,6 +259,8 @@ export type Company = {
   id: number; name: string; businessNumber: string | null; industry: string | null;
   address: string | null; website: string | null; notes: string | null;
   representativeName: string | null; email: string | null; phone: string | null; mobile: string | null;
+  /** 홈택스 원본 등록일(사업자 등록일). 플랫폼 생성일(createdAt)과 분리 유지. */
+  registeredAt: string | null;
   createdAt: string; contactCount: number; projectCount: number; totalPayment: number;
   companyType: CompanyType; vendorType: VendorType | null;
   customerType: CustomerType | null;
@@ -277,6 +279,8 @@ export type Contact = {
   email: string | null; phone: string | null; mobile: string | null; officePhone: string | null;
   notes: string | null; memo: string | null;
   isPrimary: boolean; isQuoteContact: boolean; isBillingContact: boolean; isActive: boolean;
+  /** 홈택스 원본 등록일(담당자 등록일). 플랫폼 생성일(createdAt)과 분리 유지. */
+  registeredAt: string | null;
   createdAt: string; updatedAt: string;
 };
 export type AdminContact = {

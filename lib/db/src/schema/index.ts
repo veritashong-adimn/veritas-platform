@@ -29,6 +29,7 @@ export * from "./project_files";
 export * from "./billing_batches";
 export * from "./prepaid_accounts";
 export * from "./company_name_history";
+export * from "./company_aliases";
 export * from "./settings";
 export * from "./user_sessions";
 export * from "./translation_units";

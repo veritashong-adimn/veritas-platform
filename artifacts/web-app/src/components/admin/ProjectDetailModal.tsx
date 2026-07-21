@@ -7,6 +7,7 @@ import { QuoteEditorWorkspace } from './QuoteEditorWorkspace';
 import TransactionStatementModal from './TransactionStatementModal';
 import { buildQuotePdfData, displayUnit, type QuoteDetail } from '../../lib/quotePdf';
 import { renderQuoteTitle } from '../../lib/quoteTitle';
+import { formatPhoneDisplay } from '../../lib/utils';
 
 /* ────── SearchableSelect (거래처 검색용 공통 컴포넌트) ────── */
 type SSItem = { id: number; label: string; sub?: string };
@@ -1197,7 +1198,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           </div>
                           {/* 전화 + 이메일 */}
                           <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>
-                            {c.profile?.phone && <span style={{ marginRight: 8 }}>📞 {c.profile.phone}</span>}
+                            {c.profile?.phone && <span style={{ marginRight: 8 }}>📞 {formatPhoneDisplay(c.profile.phone)}</span>}
                             <span>✉ {c.email}</span>
                           </div>
                           {/* 언어 + 전문분야 + 점수 */}
@@ -1282,7 +1283,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 </div>
                                 {/* 전화 + 이메일 */}
                                 <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 2 }}>
-                                  {t.phone && <span style={{ marginRight: 8 }}>📞 {t.phone}</span>}
+                                  {t.phone && <span style={{ marginRight: 8 }}>📞 {formatPhoneDisplay(t.phone)}</span>}
                                   <span>✉ {t.email}</span>
                                 </div>
                                 {/* 언어 + 전문분야 + 평점 */}
@@ -1713,7 +1714,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           <div style={dl}><span style={dt}>업종</span>{detail.company.industry ? <span style={{ color: "#1f2937" }}>{detail.company.industry}</span> : <Empty />}</div>
                           <div style={dl}><span style={dt}>대표자</span>{detail.company.representativeName ? <span style={{ color: "#1f2937" }}>{detail.company.representativeName}</span> : <Empty />}</div>
                           <div style={dl}><span style={dt}>이메일</span>{detail.company.email ? <span style={{ color: "#1f2937" }}>{detail.company.email}</span> : <Empty />}</div>
-                          <div style={dl}><span style={dt}>전화</span>{detail.company.phone ? <span style={{ color: "#1f2937" }}>{detail.company.phone}</span> : <Empty />}</div>
+                          <div style={dl}><span style={dt}>전화</span>{detail.company.phone ? <span style={{ color: "#1f2937" }}>{formatPhoneDisplay(detail.company.phone)}</span> : <Empty />}</div>
                         </div>
                       ) : (
                         <div style={{ background: "#fffbeb", borderRadius: 7, padding: "10px 12px", border: "1px solid #fde68a", display: "flex", alignItems: "center", gap: 6 }}>
@@ -1731,7 +1732,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           <div style={dl}><span style={dt}>부서</span>{detail.contact.department ? <span style={{ color: "#1f2937" }}>{detail.contact.department}</span> : <Empty />}</div>
                           <div style={dl}><span style={dt}>직책</span>{detail.contact.position ? <span style={{ color: "#1f2937" }}>{detail.contact.position}</span> : <Empty />}</div>
                           <div style={dl}><span style={dt}>이메일</span>{detail.contact.email ? <span style={{ color: "#1f2937" }}>{detail.contact.email}</span> : <Empty />}</div>
-                          <div style={dl}><span style={dt}>전화</span>{detail.contact.phone ? <span style={{ color: "#1f2937" }}>{detail.contact.phone}</span> : <Empty />}</div>
+                          <div style={dl}><span style={dt}>전화</span>{detail.contact.phone ? <span style={{ color: "#1f2937" }}>{formatPhoneDisplay(detail.contact.phone)}</span> : <Empty />}</div>
                         </div>
                       ) : (
                         <div style={{ background: "#fffbeb", borderRadius: 7, padding: "10px 12px", border: "1px solid #fde68a", display: "flex", alignItems: "center", gap: 6 }}>

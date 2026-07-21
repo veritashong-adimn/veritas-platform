@@ -4,8 +4,11 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
+// 기본 포트는 .replit 워크플로우의 `waitForPort` 선언(web-app = 22965)과 반드시 일치해야 한다.
+// 불일치 시 Replit이 22965 에서 dev 서버를 찾지 못해 Preview 가 "artifact crashed" 로 표시된다.
+// (mockup-sandbox=8081, api-server=8080 과 동일하게 각 서비스는 자기 선언 포트를 기본값으로 갖는다.)
 const rawPort = process.env.PORT;
-const port = rawPort ? Number(rawPort) : 3000;
+const port = rawPort ? Number(rawPort) : 22965;
 
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);

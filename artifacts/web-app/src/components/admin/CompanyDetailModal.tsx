@@ -7,6 +7,7 @@ import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { PrepaidLedgerModal } from "./PrepaidLedgerModal";
 import { DraggableModal } from "./DraggableModal";
 import { CompanyDocumentAnalyzePanel, type CompanyOcrDocType } from "./CompanyDocumentAnalyzePanel";
+import { CompanyAliasSection } from "./CompanyAliasSection";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -426,7 +427,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 <div key={i} style={{ marginBottom: i < contactWarningModal.duplicates!.length - 1 ? 8 : 0 }}>
                   <span style={{ fontWeight: 700 }}>{d.name}</span>
                   {d.companyName && <span style={{ color: "#6b7280" }}> · {d.companyName}</span>}
-                  {d.mobile && <span style={{ color: "#6b7280" }}> · {d.mobile}</span>}
+                  {d.mobile && <span style={{ color: "#6b7280" }}> · {formatPhone(d.mobile)}</span>}
                   {d.email && <span style={{ color: "#6b7280" }}> · {d.email}</span>}
                 </div>
               ))}
@@ -684,6 +685,9 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                     </div>
                   );
                 })()}
+
+                {/* 기업명 Alias(별칭) 관리 — 기본정보 아래 */}
+                <CompanyAliasSection companyId={companyId} token={token} onToast={onToast} />
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
@@ -1277,10 +1281,10 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                               {!c.isActive && <span style={{ fontSize: 11, background: "#f3f4f6", color: "#9ca3af", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>비활성</span>}
                             </div>
                             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: c.memo ? 6 : 0 }}>
-                              {c.mobile && <span style={{ fontSize: 12, color: "#374151" }}>📱 {c.mobile}</span>}
+                              {c.mobile && <span style={{ fontSize: 12, color: "#374151" }}>📱 {formatPhone(c.mobile)}</span>}
                               {c.email && <span style={{ fontSize: 12, color: "#2563eb" }}>✉ {c.email}</span>}
-                              {c.officePhone && <span style={{ fontSize: 12, color: "#374151" }}>☎ {c.officePhone}</span>}
-                              {c.phone && !c.mobile && <span style={{ fontSize: 12, color: "#374151" }}>📞 {c.phone}</span>}
+                              {c.officePhone && <span style={{ fontSize: 12, color: "#374151" }}>☎ {formatPhone(c.officePhone)}</span>}
+                              {c.phone && !c.mobile && <span style={{ fontSize: 12, color: "#374151" }}>📞 {formatPhone(c.phone)}</span>}
                             </div>
                             {c.memo && <p style={{ margin: "4px 0 0", fontSize: 12, color: "#6b7280" }}>{c.memo}</p>}
                             <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>

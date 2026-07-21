@@ -142,11 +142,21 @@ export const TYPO = {
   },
 
   // Financial amounts
+  // 금액·숫자는 Tabular Numbers 를 공통 적용 — 값이 바뀌어도 숫자 폭이 일정하게 유지된다.
+  // (font-variant-numeric 은 숫자 글리프에만 영향 — 한글/영문 텍스트에는 무영향)
   amount: {
     fontSize: 13, fontWeight: 600, color: C.amount, whiteSpace: 'nowrap' as const,
+    fontVariantNumeric: 'tabular-nums' as const,
   },
   summaryAmount: {
     fontSize: 15, fontWeight: 700, color: C.amount,
+    fontVariantNumeric: 'tabular-nums' as const,
+  },
+  // 총 견적금액 — 화면 내 최대 강조. amount/summaryAmount 와 같은 Font Family(전역 상속)에서
+  // 크기·굵기만 키워 강조한다(지시문 §5). 숫자는 동일하게 tabular-nums.
+  totalAmount: {
+    fontSize: 20, fontWeight: 800, color: C.primaryText,
+    letterSpacing: '-0.01em', fontVariantNumeric: 'tabular-nums' as const,
   },
 
   // ── Level 5 — Placeholder / Helper Text

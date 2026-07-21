@@ -13,6 +13,7 @@ import {
   VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS,
 } from '../lib/constants';
 import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../components/ui';
+import { Pagination } from '../components/ui/Paginator';
 import { ADMIN_SCROLL_PADDING_TOP, ADMIN_SCROLL_PADDING_X } from '../lib/ds';
 import { formatPhoneDisplay } from '../lib/utils';
 import { LogModal } from '../components/admin/LogModal';
@@ -30,6 +31,7 @@ import { ProjectManagementTab } from '../components/admin/ProjectManagementTab';
 import { SalesDetailPage } from './SalesDetailPage';
 import { QuoteListTab } from '../components/admin/QuoteListTab';
 import { CompanyManagementTab } from '../components/admin/CompanyManagementTab';
+import { BulkImportPage } from '../components/admin/BulkImportPage';
 import { DataLayerTab } from '../components/admin/DataLayerTab';
 import { LanguageServiceDataTab } from '../components/admin/LanguageServiceDataTab';
 import { InsightManagementTab } from '../components/admin/InsightManagementTab';
@@ -307,8 +309,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [contactsLoading, setContactsLoading] = useState(false);
   const [contactSearch, setContactSearch] = useState("");
   const [showInactiveContacts, setShowInactiveContacts] = useState(false);
+  // ── 담당자 서버 페이지네이션 상태 ──
+  const [contactPage, setContactPage] = useState(1);
+  const [contactPageSize, setContactPageSize] = useState(20);
+  const [contactTotal, setContactTotal] = useState(0);
+  const [appliedContactSearch, setAppliedContactSearch] = useState("");   // 조회 반영된 검색어(입력값과 분리)
   const [contactModal, setContactModal] = useState<number | null>(null);
   const [showCreateContactModal, setShowCreateContactModal] = useState(false);
+  const [showContactBulkImport, setShowContactBulkImport] = useState(false);
   const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
   const [deleteConfirmContact, setDeleteConfirmContact] = useState<{ id: number; name: string } | null>(null);
   const [deletingContact, setDeletingContact] = useState<number | null>(null);
@@ -525,17 +533,38 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     setContactsLoading(true);
     try {
       const params = new URLSearchParams();
-      if (contactSearch.trim()) params.set("keyword", contactSearch.trim());
+      params.set("page", String(contactPage));
+      params.set("pageSize", String(contactPageSize));
+      if (appliedContactSearch.trim()) params.set("keyword", appliedContactSearch.trim());
       if (showInactiveContacts) params.set("includeInactive", "true");
-      const res = await fetch(api(`/api/admin/contacts${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      const res = await fetch(api(`/api/admin/contacts?${params.toString()}`), { headers: authHeaders });
       const data = await res.json();
-      if (res.ok) setContacts(Array.isArray(data) ? data : []);
+      if (res.ok) {
+        // 페이지네이션 응답({rows,total})과 레거시 배열 응답을 모두 허용(빌드 버전 불일치 내성)
+        const rows: AdminContact[] = Array.isArray(data?.rows) ? data.rows : Array.isArray(data) ? data : [];
+        const total: number = typeof data?.total === "number" ? data.total : rows.length;
+        setContacts(rows);
+        setContactTotal(total);
+        // 현재 페이지가 비었는데 이전 페이지가 존재하면 자동으로 한 페이지 뒤로(삭제 후 처리)
+        if (rows.length === 0 && total > 0 && contactPage > 1) {
+          setContactPage(p => Math.max(1, p - 1));
+        }
+      } else {
+        // 오류를 빈 목록으로 감추지 않고 명시적으로 표시(§7)
+        setToast(`오류: 담당자 조회 실패 (${res.status})`);
+      }
     } catch { setToast("오류: 담당자 조회 실패"); }
     finally { setContactsLoading(false); }
-  }, [token, contactSearch, showInactiveContacts]);
+  }, [token, contactPage, contactPageSize, appliedContactSearch, showInactiveContacts]);
 
-  // 비활성 필터 토글 시 선택 초기화
-  useEffect(() => { setSelectedContactIds(new Set()); }, [showInactiveContacts]);
+  // 검색 실행: 입력값을 조회에 반영하고 1페이지로
+  const runContactSearch = useCallback(() => {
+    setAppliedContactSearch(contactSearch.trim());
+    setContactPage(1);
+  }, [contactSearch]);
+
+  // 비활성 필터 토글 시 선택 초기화 + 1페이지로
+  useEffect(() => { setSelectedContactIds(new Set()); setContactPage(1); }, [showInactiveContacts]);
 
   const handleDeleteContact = async (contactId: number) => {
     setDeletingContact(contactId);
@@ -1950,7 +1979,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             <div style={{ fontWeight: 600, fontSize: 13, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.companyName}</div>
                             <div style={{ fontSize: 11, color: "#c0c8d4", marginTop: 1 }}>
                               {c.contactName}
-                              {c.phone && <span style={{ marginLeft: 6 }}>{c.phone}</span>}
+                              {c.phone && <span style={{ marginLeft: 6 }}>{formatPhoneDisplay(c.phone)}</span>}
                             </div>
                           </td>
 
@@ -2015,11 +2044,26 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       )}
 
       {/* ── 담당자 탭 ── */}
-      {adminTab === "contacts" && (
-        <Section title={`담당자 관리 (${contacts.length})`} action={
-          <PrimaryBtn onClick={() => setShowCreateContactModal(true)} style={{ fontSize: 13, padding: "7px 14px" }}>
-            + 담당자 등록
-          </PrimaryBtn>
+      {adminTab === "contacts" && showContactBulkImport && (
+        <BulkImportPage
+          entity="contact"
+          token={token}
+          onToast={setToast}
+          onClose={() => setShowContactBulkImport(false)}
+          onDone={() => { void fetchContacts(); }}
+        />
+      )}
+      {adminTab === "contacts" && !showContactBulkImport && (
+        <Section title={`담당자 관리 (${contactTotal.toLocaleString()})`} action={
+          <div style={{ display: "flex", gap: 8 }}>
+            <GhostBtn onClick={() => setShowContactBulkImport(true)} style={{ fontSize: 13, padding: "7px 14px" }}
+              data-testid="contact-bulk-import-btn" aria-label="담당자 대량등록">
+              대량등록
+            </GhostBtn>
+            <PrimaryBtn onClick={() => setShowCreateContactModal(true)} style={{ fontSize: 13, padding: "7px 14px" }}>
+              + 담당자 등록
+            </PrimaryBtn>
+          </div>
         }>
           {/* ── 담당자 등록 모달 ── */}
           {showCreateContactModal && (
@@ -2040,8 +2084,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <input value={contactSearch} onChange={e => setContactSearch(e.target.value)}
               placeholder="이름, 이메일, 휴대폰, 거래처 검색..."
               style={{ ...inputStyle, maxWidth: 340, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
-              onKeyDown={e => e.key === "Enter" && fetchContacts()} />
-            <PrimaryBtn onClick={fetchContacts} disabled={contactsLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
+              data-testid="contact-search-input" aria-label="담당자 검색"
+              onKeyDown={e => e.key === "Enter" && runContactSearch()} />
+            <PrimaryBtn onClick={runContactSearch} disabled={contactsLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
               {contactsLoading ? "검색 중..." : "검색"}
             </PrimaryBtn>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6b7280", cursor: "pointer", userSelect: "none", padding: "6px 0" }}>
@@ -2135,7 +2180,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               {(c as any).isActive !== false ? "활성" : "비활성"}
                             </span>
                           </td>
-                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }} onClick={() => setContactModal(c.id)}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</td>
+                          {/* 등록일 = 홈택스 원본 등록일(registeredAt). 없는 기존 데이터만 플랫폼 생성일(createdAt) fallback. */}
+                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }} onClick={() => setContactModal(c.id)}>{((c as any).registeredAt ?? c.createdAt) ? new Date((c as any).registeredAt ?? c.createdAt).toLocaleDateString("ko-KR") : "-"}</td>
                           <td style={{ ...tableTd }} onClick={e => e.stopPropagation()}>
                             {(c as any).isActive !== false && (
                               <button
@@ -2153,6 +2199,18 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 </table>
               </div>
             </Card>
+          )}
+          {contactTotal > 0 && (
+            <Pagination
+              idPrefix="contact"
+              page={contactPage}
+              pageSize={contactPageSize}
+              total={contactTotal}
+              unit="명"
+              disabled={contactsLoading}
+              onPageChange={setContactPage}
+              onPageSizeChange={s => { setContactPageSize(s); setContactPage(1); }}
+            />
           )}
 
           {/* ── 삭제 확인 모달 ── */}
@@ -2201,7 +2259,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 16px", fontSize: 12, color: "#6b7280" }}>
                           <span>거래처: {c.companyName ?? "-"}</span>
                           <span>부서/직책: {[c.department, c.position].filter(Boolean).join(" / ") || "-"}</span>
-                          <span>휴대폰: {(c as any).mobile ?? c.phone ?? "-"}</span>
+                          <span>휴대폰: {formatPhoneDisplay((c as any).mobile ?? c.phone)}</span>
                           <span>이메일: {c.email ?? "-"}</span>
                           <span>등록일: {new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
                           <span>ID: #{c.id}</span>

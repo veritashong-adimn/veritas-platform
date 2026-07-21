@@ -247,7 +247,8 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
                 <Calendar size={17} color="#6b7280" style={{ flexShrink: 0 }} />
                 <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 600 }}>등록일</span>
                 <span style={{ fontSize: 14, color: "#111827", fontWeight: 600 }}>
-                  {new Date(detail.createdAt).toLocaleDateString("ko-KR")}
+                  {/* 홈택스 원본 등록일(registeredAt) 우선, 없으면 플랫폼 생성일 fallback */}
+                  {((detail as any).registeredAt ?? detail.createdAt) ? new Date((detail as any).registeredAt ?? detail.createdAt).toLocaleDateString("ko-KR") : "-"}
                 </span>
               </div>
             </div>

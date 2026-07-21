@@ -640,7 +640,7 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
                   <div key={d.id} style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", fontSize: 13, padding: "6px 0", borderBottom: "1px solid #fde68a" }}>
                     <span style={{ fontWeight: 700, color: "#92400e" }}>{d.companyName}</span>
                     <span style={{ color: "#374151" }}>/ {d.name}</span>
-                    {d.mobile && <span style={{ color: "#6b7280" }}>{d.mobile}</span>}
+                    {d.mobile && <span style={{ color: "#6b7280" }}>{formatPhone(d.mobile)}</span>}
                     {d.email && <span style={{ color: "#6b7280" }}>{d.email}</span>}
                   </div>
                 ))}

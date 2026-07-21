@@ -4,6 +4,7 @@ import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 import { SensitiveInfoModal, SETTLEMENT_TYPES } from "./SensitiveInfoModal";
 import { TranslatorLangExpSection } from "./TranslatorLangExpSection";
+import { formatPhoneNumber } from "../../lib/utils";
 import {
   ALL_RATE_UNITS as ALL_UNITS,
   getRateUnitLabel as getUnitLabel,
@@ -246,12 +247,7 @@ const OVERSEAS_CITIES: Record<string, readonly string[]> = {
 type EmailEntry = { email: string; isPrimary: boolean; error: string };
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function formatPhoneNumber(value: string): string {
-  const n = value.replace(/\D/g, "");
-  if (n.length <= 3) return n;
-  if (n.length <= 7) return `${n.slice(0, 3)}-${n.slice(3)}`;
-  return `${n.slice(0, 3)}-${n.slice(3, 7)}-${n.slice(7, 11)}`;
-}
+// 전화번호 포맷은 공통 Utility(formatPhoneNumber, ../../lib/utils) 사용
 
 // AI가 반환하는 영문 국가명 → 한국어 매핑 (소문자 키)
 const COUNTRY_EN_TO_KO: Record<string, string> = {

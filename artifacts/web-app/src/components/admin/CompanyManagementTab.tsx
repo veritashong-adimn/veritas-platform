@@ -6,8 +6,10 @@ import {
   CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS, getCustomerTypeBadgeColors,
 } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
+import { Pagination } from '../ui/Paginator';
 import { CompanyDetailModal } from './CompanyDetailModal';
 import { CompanyDocumentAnalyzePanel, type CompanyOcrDocType } from './CompanyDocumentAnalyzePanel';
+import { BulkImportPage } from './BulkImportPage';
 import { formatPhone } from '../../lib/utils';
 
 const inputStyle: React.CSSProperties = {
@@ -28,13 +30,10 @@ const tableTd: React.CSSProperties = {
 };
 
 // ─── Design System: Information Hierarchy Badge Styles ───────────────────────
-// Secondary: 상위 분류 (고객사 / 외주업체)
-const BADGE_SECONDARY_CLIENT: React.CSSProperties = {
-  fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 5,
-  background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe",
-};
+// Secondary: 상위 분류 — 외주업체만 표시(고객사는 기본값이라 목록에서 생략).
+// 회사명이 우선 보이도록 보조정보 수준으로 컴팩트하게 유지한다.
 const BADGE_SECONDARY_VENDOR: React.CSSProperties = {
-  fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 5,
+  fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 4,
   background: "#f5f3ff", color: "#6d28d9", border: "1px solid #ddd6fe",
 };
 // Tertiary: 외주 세부 분류 (통번역업체 등) — purple 계열
@@ -77,6 +76,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
   const [companySearch, setCompanySearch] = useState("");
   const [companyModal, setCompanyModal] = useState<number | null>(null);
   const [showCompanyForm, setShowCompanyForm] = useState(false);
+  const [showBulkImport, setShowBulkImport] = useState(false);
   const [companyForm, setCompanyForm] = useState({
     name: "", businessNumber: "", representativeName: "",
     industry: "", businessCategory: "", address: "",
@@ -101,6 +101,14 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
   const [companyTypeFilter, setCompanyTypeFilter] = useState<"all" | "client" | "vendor">("all");
   const [companyVendorTypeFilter, setCompanyVendorTypeFilter] = useState<string>("all");
   const [companyCustomerTypeFilter, setCompanyCustomerTypeFilter] = useState<string>("all");
+  // ── 서버 페이지네이션 상태 ──
+  const [companyPage, setCompanyPage] = useState(1);
+  const [companyPageSize, setCompanyPageSize] = useState(20);
+  const [companyTotal, setCompanyTotal] = useState(0);
+  const [appliedSearch, setAppliedSearch] = useState("");   // 실제 조회에 반영된 검색어(입력값과 분리)
+  const [companyCounts, setCompanyCounts] = useState<{ all: number; client: number; vendor: number; customer: Record<string, number> }>(
+    { all: 0, client: 0, vendor: 0, customer: {} },
+  );
 
   // AI 문서 자동입력
   const [licenseFile, setLicenseFile] = useState<File | null>(null);
@@ -125,15 +133,41 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
     setCompaniesLoading(true);
     try {
       const params = new URLSearchParams();
-      if (companySearch.trim()) params.set("search", companySearch.trim());
-      const res = await fetch(api(`/api/admin/companies${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      params.set("page", String(companyPage));
+      params.set("pageSize", String(companyPageSize));
+      if (appliedSearch.trim()) params.set("search", appliedSearch.trim());
+      if (companyTypeFilter !== "all") params.set("companyType", companyTypeFilter);
+      if (companyTypeFilter === "vendor" && companyVendorTypeFilter !== "all") params.set("vendorType", companyVendorTypeFilter);
+      if (companyTypeFilter === "client" && companyCustomerTypeFilter !== "all") params.set("customerType", companyCustomerTypeFilter);
+      const res = await fetch(api(`/api/admin/companies?${params.toString()}`), { headers: authHeaders });
       const data = await res.json();
-      if (res.ok) setCompanies(Array.isArray(data) ? data : []);
+      if (res.ok) {
+        // 페이지네이션 응답({rows,total,counts})과 레거시 배열 응답을 모두 허용(빌드 버전 불일치 내성)
+        const rows: Company[] = Array.isArray(data?.rows) ? data.rows : Array.isArray(data) ? data : [];
+        const total: number = typeof data?.total === "number" ? data.total : rows.length;
+        setCompanies(rows);
+        setCompanyTotal(total);
+        setCompanyCounts(data?.counts ?? { all: 0, client: 0, vendor: 0, customer: {} });
+        // 현재 페이지가 비었는데 이전 페이지가 존재하면 자동으로 한 페이지 뒤로(삭제 후 처리)
+        if (rows.length === 0 && total > 0 && companyPage > 1) {
+          setCompanyPage(p => Math.max(1, p - 1));
+        }
+      } else {
+        // 오류를 빈 목록으로 감추지 않고 명시적으로 표시(§7)
+        onToast(`오류: 거래처 조회 실패 (${res.status})`);
+      }
     } catch { onToast("오류: 거래처 조회 실패"); }
     finally { setCompaniesLoading(false); }
-  }, [token, companySearch]);
+  }, [token, companyPage, companyPageSize, appliedSearch, companyTypeFilter, companyVendorTypeFilter, companyCustomerTypeFilter]);
 
-  useEffect(() => { fetchCompanies(); }, []);
+  // 조회 파라미터(페이지·페이지크기·검색·필터) 변경 시 자동 재조회
+  useEffect(() => { fetchCompanies(); }, [fetchCompanies]);
+
+  // 검색 실행: 입력값을 조회에 반영하고 1페이지로
+  const runCompanySearch = useCallback(() => {
+    setAppliedSearch(companySearch.trim());
+    setCompanyPage(1);
+  }, [companySearch]);
 
   const doCreateCompany = async () => {
     setSavingCompany(true);
@@ -285,6 +319,18 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
     }
   };
 
+  if (showBulkImport) {
+    return (
+      <BulkImportPage
+        entity="company"
+        token={token}
+        onToast={onToast}
+        onClose={() => setShowBulkImport(false)}
+        onDone={() => { void fetchCompanies(); }}
+      />
+    );
+  }
+
   return (
     <>
       {/* ── 담당자 중복 경고 확인 모달 (신규 거래처 등록 중) ── */}
@@ -303,7 +349,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                   <div key={i} style={{ marginBottom: i < newContactWarningModal.duplicates!.length - 1 ? 8 : 0 }}>
                     <span style={{ fontWeight: 700 }}>{d.name}</span>
                     {d.companyName && <span style={{ color: "#6b7280" }}> · {d.companyName}</span>}
-                    {d.mobile && <span style={{ color: "#6b7280" }}> · {d.mobile}</span>}
+                    {d.mobile && <span style={{ color: "#6b7280" }}> · {formatPhone(d.mobile)}</span>}
                     {d.email && <span style={{ color: "#6b7280" }}> · {d.email}</span>}
                   </div>
                 ))}
@@ -385,7 +431,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                         <span style={{ color: "#9ca3af", fontWeight: 500 }}>소속</span>
                         <span style={{ color: "#374151" }}>{affiliation}</span>
                         <span style={{ color: "#9ca3af", fontWeight: 500 }}>휴대폰</span>
-                        <span style={{ color: "#374151" }}>{c.mobile || "—"}</span>
+                        <span style={{ color: "#374151" }}>{c.mobile ? formatPhone(c.mobile) : "—"}</span>
                         <span style={{ color: "#9ca3af", fontWeight: 500 }}>이메일</span>
                         <span style={{ color: "#374151", wordBreak: "break-all" }}>{c.email || "—"}</span>
                       </div>
@@ -446,11 +492,17 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
           onApplied={(fields, values) => { handleBankbookOcrApply(fields, values); setOcrPanel(null); }}
         />
       )}
-      <Section title={`거래처 관리 (${companies.length})`} action={
+      <Section title={`거래처 관리 (${companyTotal.toLocaleString()})`} action={
         hasPerm("company.create") ? (
-          <PrimaryBtn onClick={() => { setShowCompanyForm(v => !v); setCreatedCompanyId(null); setCreatedCompanyName(""); }} style={{ fontSize: 13, padding: "7px 14px" }}>
-            {showCompanyForm ? "취소" : "+ 거래처 등록"}
-          </PrimaryBtn>
+          <div style={{ display: "flex", gap: 8 }}>
+            <GhostBtn onClick={() => setShowBulkImport(true)} style={{ fontSize: 13, padding: "7px 14px" }}
+              data-testid="company-bulk-import-btn" aria-label="거래처 대량등록">
+              대량등록
+            </GhostBtn>
+            <PrimaryBtn onClick={() => { setShowCompanyForm(v => !v); setCreatedCompanyId(null); setCreatedCompanyName(""); }} style={{ fontSize: 13, padding: "7px 14px" }}>
+              {showCompanyForm ? "취소" : "+ 거래처 등록"}
+            </PrimaryBtn>
+          </div>
         ) : undefined
       }>
         {showCompanyForm && (
@@ -912,15 +964,9 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
             { value: "PUBLIC",     label: "공공기관" },
             { value: "INDIVIDUAL", label: "개인" },
           ];
-          const filteredCompanies = companies.filter(c => {
-            if (companyTypeFilter !== "all" && c.companyType !== companyTypeFilter) return false;
-            if (companyVendorTypeFilter !== "all" && c.vendorType !== companyVendorTypeFilter) return false;
-            if (companyTypeFilter === "client" && companyCustomerTypeFilter !== "all") {
-              const ct = c.customerType ?? "CORPORATE";
-              if (ct !== companyCustomerTypeFilter) return false;
-            }
-            return true;
-          });
+          // 필터·검색·페이지 변경 시 서버에서 조회한 현재 페이지(companies)를 그대로 렌더.
+          // 필터 변경 시 1페이지부터 다시 조회한다.
+          const typeCount = (v: string) => v === "all" ? companyCounts.all : v === "client" ? companyCounts.client : companyCounts.vendor;
           return (
             <div style={{ marginBottom: 16 }}>
               {/* 1행: 거래처 유형 (1차) */}
@@ -929,7 +975,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                 {TYPE_TABS.map(tab => {
                   const isActive = companyTypeFilter === tab.value;
                   return (
-                    <button key={tab.value} onClick={() => { setCompanyTypeFilter(tab.value as "all" | "client" | "vendor"); setCompanyVendorTypeFilter("all"); setCompanyCustomerTypeFilter("all"); }}
+                    <button key={tab.value} onClick={() => { setCompanyTypeFilter(tab.value as "all" | "client" | "vendor"); setCompanyVendorTypeFilter("all"); setCompanyCustomerTypeFilter("all"); setCompanyPage(1); }}
                       style={{
                         padding: "6px 14px", borderRadius: 20, fontSize: 13, fontWeight: isActive ? 700 : 500,
                         cursor: "pointer", transition: "all 0.12s",
@@ -940,7 +986,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                       }}>
                       {tab.label}
                       <span style={{ marginLeft: 5, fontSize: 11, opacity: 0.75 }}>
-                        ({companies.filter(c => tab.value === "all" ? true : c.companyType === tab.value).length})
+                        ({typeCount(tab.value).toLocaleString()})
                       </span>
                     </button>
                   );
@@ -954,7 +1000,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                     const isActive = companyCustomerTypeFilter === tab.value;
                     const { bg, color, border } = tab.value !== "all" ? getCustomerTypeBadgeColors(tab.value) : { bg: "", color: "", border: "" };
                     return (
-                      <button key={tab.value} onClick={() => setCompanyCustomerTypeFilter(tab.value)}
+                      <button key={tab.value} onClick={() => { setCompanyCustomerTypeFilter(tab.value); setCompanyPage(1); }}
                         style={{
                           padding: "5px 13px", borderRadius: 20, fontSize: 12, fontWeight: isActive ? 700 : 500,
                           cursor: "pointer", transition: "all 0.12s", lineHeight: "1.4",
@@ -965,7 +1011,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                         {tab.label}
                         {tab.value !== "all" && (
                           <span style={{ marginLeft: 4, fontSize: 10, opacity: 0.8 }}>
-                            ({companies.filter(c => c.companyType === "client" && (c.customerType ?? "CORPORATE") === tab.value).length})
+                            ({(companyCounts.customer[tab.value] ?? 0).toLocaleString()})
                           </span>
                         )}
                       </button>
@@ -979,7 +1025,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                   <span style={{ fontSize: 11, fontWeight: 700, color: "#6d28d9", whiteSpace: "nowrap", marginRight: 6, letterSpacing: "-0.01em" }}>외주 분류</span>
                   <ClickSelect
                     value={companyVendorTypeFilter}
-                    onChange={setCompanyVendorTypeFilter}
+                    onChange={v => { setCompanyVendorTypeFilter(v); setCompanyPage(1); }}
                     triggerStyle={{ fontSize: 12, padding: "5px 11px", borderRadius: 20, lineHeight: "1.4" }}
                     options={[
                       { value: "all", label: "전체 외주 분류" },
@@ -993,8 +1039,9 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                 <input value={companySearch} onChange={e => setCompanySearch(e.target.value)}
                   placeholder="회사명, 브랜드명, 사업자번호, 전화, 이메일, 담당자..."
                   style={{ ...inputStyle, maxWidth: 340, flex: "1 1 200px", padding: "8px 12px", fontSize: 13 }}
-                  onKeyDown={e => e.key === "Enter" && fetchCompanies()} />
-                <PrimaryBtn onClick={fetchCompanies} disabled={companiesLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
+                  data-testid="company-search-input" aria-label="거래처 검색"
+                  onKeyDown={e => e.key === "Enter" && runCompanySearch()} />
+                <PrimaryBtn onClick={runCompanySearch} disabled={companiesLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
                   {companiesLoading ? "검색 중..." : "검색"}
                 </PrimaryBtn>
               </div>
@@ -1002,7 +1049,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
               <div style={{ marginTop: 14 }}>
                 {companiesLoading ? (
                   <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
-                ) : filteredCompanies.length === 0 ? (
+                ) : companies.length === 0 ? (
                   <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>해당하는 거래처가 없습니다.</Card>
                 ) : (
                   <Card style={{ padding: 0, overflow: "hidden" }}>
@@ -1012,7 +1059,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                           <tr>{["ID", "거래처명 / 유형", "업종", "담당자", "프로젝트", "총 결제", "등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                         </thead>
                         <tbody>
-                          {filteredCompanies.map(c => (
+                          {companies.map(c => (
                             <tr key={c.id} onClick={() => setCompanyModal(c.id)} style={{ cursor: "pointer" }}
                               onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
                               onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
@@ -1031,10 +1078,10 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                                   </div>
                                 )}
                                 <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
-                                  {/* 1차: 고객사 / 외주업체 */}
-                                  <span style={c.companyType === "vendor" ? BADGE_SECONDARY_VENDOR : BADGE_SECONDARY_CLIENT}>
-                                    {c.companyType === "vendor" ? "외주업체" : "고객사"}
-                                  </span>
+                                  {/* 1차: 외주업체만 표시(고객사는 기본값이므로 목록에서 생략) */}
+                                  {c.companyType === "vendor" && (
+                                    <span style={BADGE_SECONDARY_VENDOR}>외주업체</span>
+                                  )}
                                   {/* 2차: 고객 분류(색상) / 외주 세부 분류(purple) */}
                                   {c.companyType === "client" && (
                                     <span style={getCustomerSubBadgeStyle(c.customerType ?? "CORPORATE")}>
@@ -1056,13 +1103,26 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                                 <span style={{ padding: "2px 8px", borderRadius: 10, background: "#eff6ff", color: "#2563eb", fontSize: 12, fontWeight: 600 }}>{c.projectCount}건</span>
                               </td>
                               <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap" }}>{Number(c.totalPayment).toLocaleString()}원</td>
-                              <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</td>
+                              {/* 등록일 = 홈택스 원본 등록일(registeredAt). 플랫폼 생성일(createdAt)이 아님. */}
+                              <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{c.registeredAt ? new Date(c.registeredAt).toLocaleDateString("ko-KR") : "-"}</td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
                   </Card>
+                )}
+                {companyTotal > 0 && (
+                  <Pagination
+                    idPrefix="company"
+                    page={companyPage}
+                    pageSize={companyPageSize}
+                    total={companyTotal}
+                    unit="건"
+                    disabled={companiesLoading}
+                    onPageChange={setCompanyPage}
+                    onPageSizeChange={s => { setCompanyPageSize(s); setCompanyPage(1); }}
+                  />
                 )}
               </div>
             </div>

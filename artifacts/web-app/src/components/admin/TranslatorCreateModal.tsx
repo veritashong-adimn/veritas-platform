@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { api, normalizeLanguages, LangExpEntry, emptyLangExp } from "../../lib/constants";
+import { formatPhoneNumber } from "../../lib/utils";
 import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 import { PAYMENT_METHODS, SETTLEMENT_TYPES, BankNameSelect } from "./SensitiveInfoModal";
@@ -227,12 +228,7 @@ const grid3: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 
 const GRADES = ["S", "A", "B", "C"];
 const LANG_LEVELS = ["일반", "전문"];
 
-function formatPhoneNumber(value: string): string {
-  const n = value.replace(/\D/g, "");
-  if (n.length <= 3) return n;
-  if (n.length <= 7) return `${n.slice(0, 3)}-${n.slice(3)}`;
-  return `${n.slice(0, 3)}-${n.slice(3, 7)}-${n.slice(7, 11)}`;
-}
+// 전화번호 포맷은 공통 Utility(formatPhoneNumber, ../../lib/utils) 사용
 const FEE_PAYER_OPTIONS = [
   { value: "sender",    label: "송금인 부담 (당사)" },
   { value: "recipient", label: "수취인 부담 (통번역사)" },

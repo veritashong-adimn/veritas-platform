@@ -545,7 +545,8 @@ function CountInput({ value, onChange, unit, placeholder, style, decimal = false
       onFocus={e => { setFocused(true); e.target.select(); }}
       onBlur={() => setFocused(false)}
       placeholder={placeholder}
-      style={style}
+      // 단어수·글자수·통역시간·인원·사용일수 등 숫자 입력은 Tabular Numbers 공통 적용 (지시문 §3·§8)
+      style={{ fontVariantNumeric: 'tabular-nums', ...style }}
     />
   );
 }
@@ -1290,8 +1291,8 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, updateIte
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.g400 }}>—</div>
         {/* ⑧ 단가 (없음) */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', color: C.g400, paddingRight: 6 }}>—</div>
-        {/* ⑨ 공급가액 — 음수(빨강) */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: 6, fontWeight: 800, color: C.danger, fontVariantNumeric: 'tabular-nums' }}
+        {/* ⑨ 공급가액 — 음수(빨강). 폰트·크기·굵기·tabular 는 일반 공급가액과 동일, 색상만 다르게 (지시문 §4·§7) */}
+        <div style={dsAmount(dcAmount > 0, { paddingRight: 6, color: dcAmount > 0 ? C.danger : C.amountEmpty })}
           data-testid="discount-supply">
           {dcAmount > 0 ? `-${dcAmount.toLocaleString()}원` : '—'}
         </div>
@@ -1396,7 +1397,7 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, updateIte
               style={{
                 ...rinp('100%', { textAlign: 'center' }),
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: C.g50, cursor: 'default',
+                background: C.g50, cursor: 'default', fontVariantNumeric: 'tabular-nums',
                 color: interp?.invalidDateRange ? C.danger : C.textPrimary, fontWeight: 700,
               }}>
               {interp && !interp.invalidDateRange ? interp.serviceDays.toLocaleString() : '—'}
@@ -1446,7 +1447,7 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, updateIte
                 {validation.severity === 'danger' ? '✕ 위험' : '⚠ 주의'} — AI 문서 검증 결과
               </div>
               {validation.detail && (
-                <div style={{ fontSize: 11, color: validation.severity === 'danger' ? C.dangerTextDeep : C.warningTextDeep, marginBottom: 6 }}>
+                <div style={{ fontSize: 11, color: validation.severity === 'danger' ? C.dangerTextDeep : C.warningTextDeep, marginBottom: 6, fontVariantNumeric: 'tabular-nums' }}>
                   {validation.detail.basis === 'character' ? '예상 단어수' : '예상 글자수'}:&nbsp;
                   <strong>{validation.detail.expectedVal.toLocaleString()}</strong>
                   &nbsp;/ 실제: <strong>{validation.detail.actualVal.toLocaleString()}</strong>
@@ -1991,9 +1992,10 @@ export function QuoteEditorWorkspace({
       {/* ── C. 금액 요약 ─────────────────────────────────────────────────── */}
       <Card>
         <CardSectionHeader badge="C" badgeBg="#fffbeb" badgeColor="#d97706" title="금액 요약" />
-        {/* 서비스 유형별 소계 (복수 유형 시) */}
+        {/* 유형별 소계 + Special D.C — '상품합계 → 할인 차감 → 공급가액' 계산 흐름을 그대로 노출 */}
         {(() => {
-          const gs = (['translation', 'interpretation', 'equipment', 'expense'] as ServiceType[]).map(type => {
+          // ① 상품 유형별 소계 배지 (번역/통역/장비/기타)
+          const productBadges = (['translation', 'interpretation', 'equipment', 'expense'] as ServiceType[]).map(type => {
             const ti = items.filter(it => it.productType === type);
             if (!ti.length) return null;
             const s = calcTotals(ti, vatType);
@@ -2001,10 +2003,28 @@ export function QuoteEditorWorkspace({
             return s.supply > 0 ? (
               <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', background: c.bg, border: `1px solid ${c.border}`, borderRadius: 7 }}>
                 <span style={{ ...TYPO.badge, color: c.color }}>{c.label}</span>
-                <span style={{ ...TYPO.fieldLabel, color: C.textSecondary }}>{s.supply.toLocaleString()}원</span>
+                <span style={{ ...TYPO.amount, color: C.textSecondary }}>{s.supply.toLocaleString()}원</span>
               </div>
             ) : null;
           }).filter(Boolean);
+          // ② Special D.C(할인) 배지 — 적용된 항목만 빨간색 계열로 표시. 각 할인 항목을 개별 배지로
+          //    노출하여 향후 정부기관/VIP/프로모션 등 Price Adjustment 확장에도 동일 방식으로 대응한다.
+          //    할인액은 비할인 상품 공급가 합계(nonDiscountSupply)를 기준으로 계산(화면·행과 동일 공식).
+          const nonDiscountSupply = items.reduce((a, it) => it.productType === 'discount' ? a : a + calcItem(it, vatType).supply, 0);
+          const dc = SVC_CFG.discount;
+          const discountBadges = items.map((it, i) => {
+            if (it.productType !== 'discount') return null;
+            const amt = calcItem(it, vatType, nonDiscountSupply).supply;   // 음수(할인액). 미적용(0)이면 숨김
+            if (amt >= 0) return null;
+            return (
+              <div key={`dc-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', background: dc.bg, border: `1px solid ${dc.border}`, borderRadius: 7 }}
+                data-testid={`summary-discount-${i}`}>
+                <span style={{ ...TYPO.badge, color: dc.color }}>{it.productName?.trim() || 'Special D.C'}</span>
+                <span style={{ ...TYPO.amount, color: C.danger }}>{amt.toLocaleString()}원</span>
+              </div>
+            );
+          }).filter(Boolean);
+          const gs = [...productBadges, ...discountBadges];
           return gs.length > 1 ? <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>{gs}</div> : null;
         })()}
         <div style={{ display: 'flex', gap: SP[6], justifyContent: 'flex-end', flexWrap: 'wrap' }}>
@@ -2016,7 +2036,7 @@ export function QuoteEditorWorkspace({
           ))}
           <div style={{ textAlign: 'right', padding: `${SP[5]}px ${SP[7]}px`, borderRadius: BD.radius.xl, background: C.primaryBg, border: `1.5px solid ${C.primaryBorder}` }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.primary, marginBottom: 3 }}>총 견적금액</div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: C.primaryText, letterSpacing: '-0.01em' }}>{totals.total.toLocaleString()}원</div>
+            <div style={{ ...TYPO.totalAmount }}>{totals.total.toLocaleString()}원</div>
           </div>
         </div>
       </Card>
@@ -2046,9 +2066,10 @@ export function QuoteEditorWorkspace({
 
   // ─── 공통 Workspace 헤더 (PageHeader 기반) ────────────────────────────────
 
-  // 페이지 제목은 업무(작성/수정)를 나타낸다 — '새' 등 신규 상태 표현은 쓰지 않는다.
-  // 기존 견적 편집 진입(initialQuoteId) → '견적서 수정', 그 외(신규 작성) → '견적서 작성'.
-  const pageTitle = initialQuoteId != null ? '견적서 수정' : '견적서 작성';
+  // 페이지 제목은 화면 성격을 나타낸다.
+  // 기존 견적 진입(initialQuoteId)은 조회·수정·PDF·판매전환 등을 모두 다루는 통합 관리 화면 → '견적 상세'.
+  // 그 외(신규 작성) → '견적서 작성'.
+  const pageTitle = initialQuoteId != null ? '견적 상세' : '견적서 작성';
   // 우측 기능 버튼 그룹 — 두 헤더(오버레이·인라인)가 공유
   const headerActions = (
     <>
