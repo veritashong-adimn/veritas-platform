@@ -31,6 +31,7 @@ import { ProjectManagementTab } from '../components/admin/ProjectManagementTab';
 import { SalesDetailPage } from './SalesDetailPage';
 import { QuoteListTab } from '../components/admin/QuoteListTab';
 import { CompanyManagementTab } from '../components/admin/CompanyManagementTab';
+import { isCompanyPath, companyPaths, navigate as navPath } from '../lib/adminNav';
 import { BulkImportPage } from '../components/admin/BulkImportPage';
 import { DataLayerTab } from '../components/admin/DataLayerTab';
 import { LanguageServiceDataTab } from '../components/admin/LanguageServiceDataTab';
@@ -221,7 +222,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     return permissions.includes(key);
   };
 
-  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics">("dashboard");
+  // 초기 탭 — /admin/companies* 경로로 새로고침·직접진입 시 거래처 탭을 복원한다(URL 라우팅 연동).
+  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics">(
+    isCompanyPath(window.location.pathname) ? "companies" : "dashboard",
+  );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // 섹션 기본 열림/닫힘 정책: customer·project는 기본 열림, 나머지 기본 닫힘
   const SIDEBAR_DEFAULT_OPEN: Record<string, boolean> = {
@@ -412,11 +416,20 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   // (closeSalesDetail 이 URL(/sales/:id → /)과 salesDetailId 초기화를 담당하므로 중복 없음)
   const navigateToAdminTab = (tabId: typeof adminTab) => {
     closeSalesDetail();
+    // 거래처 탭은 URL(/admin/companies)로 라우팅한다. 다른 탭으로 나갈 때 거래처 경로에 있었다면
+    // URL을 루트로 되돌려 URL과 표시 화면이 어긋나지 않게 한다.
+    if (tabId === "companies") navPath(companyPaths.list);
+    else if (isCompanyPath(window.location.pathname)) navPath("/");
     setAdminTab(tabId);
   };
-  // 브라우저 뒤로/앞으로 → URL 기준으로 판매 상세 열림/닫힘 동기화
+  // 브라우저 뒤로/앞으로 → URL 기준으로 판매 상세 및 거래처 탭 동기화
   useEffect(() => {
-    const onPop = () => setSalesDetailId(parseSalesId());
+    const onPop = () => {
+      setSalesDetailId(parseSalesId());
+      // 거래처 경로면 거래처 탭 유지, 거래처에서 루트로 뒤로가기하면 대시보드로 복귀.
+      const onCompany = isCompanyPath(window.location.pathname);
+      setAdminTab(prev => onCompany ? "companies" : (prev === "companies" ? "dashboard" : prev));
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);

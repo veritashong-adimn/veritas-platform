@@ -26,9 +26,11 @@ const secRow = (label: string, extra?: React.ReactNode): React.ReactNode => (
   </div>
 );
 
-export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject, onRefresh, onDeleted }: {
+export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenProject, onEdit, onRefresh, onDeleted }: {
   companyId: number; token: string; onClose: () => void;
   onToast: (msg: string) => void; onOpenProject: (id: number) => void;
+  /** 정보 수정 → 거래처 수정 페이지(/admin/companies/:id/edit)로 이동. 미제공 시 버튼 숨김. */
+  onEdit?: (id: number) => void;
   onRefresh?: () => void;
   onDeleted?: () => void;
 }) {
@@ -49,11 +51,6 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [editContactErrors, setEditContactErrors] = useState<Record<string, string>>({});
   const [savingContact, setSavingContact] = useState(false);
   const [showInactiveContacts, setShowInactiveContacts] = useState(false);
-  const [editMode, setEditMode] = useState(false);
-  const [editForm, setEditForm] = useState({ name: "", businessNumber: "", representativeName: "", industry: "", businessCategory: "", address: "", email: "", mobile: "", notes: "", registeredAt: "", companyType: "client", vendorType: "", customerType: "CORPORATE" });
-  const [originalName, setOriginalName] = useState("");
-  const [nameChangeReason, setNameChangeReason] = useState("");
-  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [compNotes, setCompNotes] = useState<NoteEntry[]>([]);
   const [compNoteText, setCompNoteText] = useState("");
   const [addingCompNote, setAddingCompNote] = useState(false);
@@ -65,11 +62,6 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   const [addingDiv, setAddingDiv] = useState(false);
   const [editDivId, setEditDivId] = useState<number | null>(null);
   const [editDivForm, setEditDivForm] = useState({ name: "", type: "" });
-  const [editVendorTypeCustom, setEditVendorTypeCustom] = useState("");
-  const [editLicenseFile, setEditLicenseFile] = useState<File | null>(null);
-  const [editBankbookFile, setEditBankbookFile] = useState<File | null>(null);
-  const [editOcrPanel, setEditOcrPanel] = useState<CompanyOcrDocType | null>(null);
-  const [editDragOverType, setEditDragOverType] = useState<CompanyOcrDocType | null>(null);
 
   // 담당자 중복 경고 모달
   type ContactWarning = {
@@ -93,24 +85,6 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       const [data, nData] = await Promise.all([dRes.json(), nRes.json()]);
       if (dRes.ok) {
         setDetail(data);
-        setOriginalName(data.name);
-        const resolvedVT = resolveVendorType((data as any).vendorType ?? null);
-        setEditVendorTypeCustom(resolvedVT.vendorTypeCustom);
-        setEditForm({
-          name: data.name,
-          businessNumber: data.businessNumber ?? "",
-          representativeName: data.representativeName ?? "",
-          industry: data.industry ?? "",
-          businessCategory: (data as any).businessCategory ?? "",
-          address: data.address ?? "",
-          email: data.email ?? "",
-          mobile: data.mobile ?? "",
-          notes: data.notes ?? "",
-          registeredAt: (data as any).registeredAt ?? "",
-          companyType: (data as any).companyType ?? "client",
-          vendorType: resolvedVT.vendorType,
-          customerType: (data as any).customerType ?? "CORPORATE",
-        });
       }
       if (nRes.ok) setCompNotes(Array.isArray(nData) ? nData : []);
       // 선입금 계정 로드
@@ -136,79 +110,6 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       onToast("메모가 추가되었습니다.");
     } catch { onToast("오류: 메모 추가 실패"); }
     finally { setAddingCompNote(false); }
-  };
-
-  const handleSaveEdit = async () => {
-    const errs: Record<string, string> = {};
-    if (!editForm.name.trim()) errs.name = "거래처명은 필수입니다.";
-    if (editForm.businessNumber.trim()) {
-      const bn = editForm.businessNumber.replace(/-/g, "");
-      if (!/^\d{10}$/.test(bn)) errs.businessNumber = "사업자등록번호 형식: 000-00-00000";
-    }
-    setFormErrors(errs);
-    if (Object.keys(errs).length > 0) return;
-
-    // 상호 변경 시 사유 필수
-    const isNameChanged = editForm.name.trim() !== originalName;
-    if (isNameChanged && !nameChangeReason.trim()) {
-      errs.nameChangeReason = "상호 변경 시 변경 사유를 입력해주세요.";
-    }
-    setFormErrors(errs);
-    if (Object.keys(errs).length > 0) return;
-
-    try {
-      const body: Record<string, any> = { ...editForm, vendorType: finalVendorType(editForm.vendorType, editVendorTypeCustom) };
-      if (isNameChanged) body.nameChangeReason = nameChangeReason.trim();
-      const res = await fetch(api(`/api/admin/companies/${companyId}`), {
-        method: "PATCH", headers: { ...authH, "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      setDetail(prev => prev ? { ...prev, ...data } : prev);
-      setOriginalName(data.name);
-      setFormErrors({});
-      setNameChangeReason("");
-      setEditMode(false);
-      await load();
-      onRefresh?.();
-      onToast("거래처 정보가 수정되었습니다.");
-    } catch { onToast("오류: 수정 실패"); }
-  };
-
-  const handleEditLicenseOcrApply = (_fields: string[], values: Record<string, string>) => {
-    setEditForm(prev => {
-      const next = { ...prev };
-      if (values.name) next.name = values.name;
-      if (values.businessNumber) next.businessNumber = values.businessNumber;
-      if (values.representativeName) next.representativeName = values.representativeName;
-      if (values.registeredAt) next.registeredAt = values.registeredAt;
-      if (values.industry) next.industry = values.industry;
-      if (values.businessCategory) next.businessCategory = values.businessCategory;
-      if (values.address) next.address = values.address;
-      if (values.vendorType && prev.companyType === "vendor") {
-        const resolved = resolveVendorType(values.vendorType);
-        next.vendorType = resolved.vendorType;
-        setEditVendorTypeCustom(resolved.vendorTypeCustom);
-      }
-      return next;
-    });
-    onToast("사업자등록증 정보가 수정 폼에 자동 반영되었습니다.");
-  };
-
-  const handleEditBankbookOcrApply = (_fields: string[], values: Record<string, string>) => {
-    const parts = [
-      values.bankName && `은행: ${values.bankName}`,
-      values.accountHolder && `예금주: ${values.accountHolder}`,
-      values.bankAccount && `계좌번호: ${values.bankAccount}`,
-    ].filter(Boolean).join(" / ");
-    if (parts) {
-      setEditForm(prev => ({
-        ...prev,
-        notes: prev.notes ? `${prev.notes}\n${parts}` : parts,
-      }));
-      onToast("통장사본 정보가 메모에 추가되었습니다.");
-    }
   };
 
   const validateContactForm = (f: typeof emptyContactForm) => {
@@ -451,16 +352,6 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       </div>
     )}
 
-    {editOcrPanel && (editOcrPanel === "business_license" ? editLicenseFile : editBankbookFile) && (
-      <CompanyDocumentAnalyzePanel
-        docType={editOcrPanel}
-        token={token}
-        file={(editOcrPanel === "business_license" ? editLicenseFile : editBankbookFile)!}
-        onClose={() => setEditOcrPanel(null)}
-        onApplied={editOcrPanel === "business_license" ? handleEditLicenseOcrApply : handleEditBankbookOcrApply}
-        onToast={onToast}
-      />
-    )}
     <DraggableModal title={`거래처 #${companyId} 상세`} onClose={onClose} width={1100} height="90vh" zIndex={300} bodyPadding="24px 36px" resizable
       headerExtra={
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -562,8 +453,8 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
               )}
             </div>
 
-            {secRow("기본 정보", <GhostBtn onClick={() => setEditMode(true)} style={{ fontSize: 12, padding: "4px 12px" }}>정보 수정</GhostBtn>)}
-            {!editMode ? (
+            {secRow("기본 정보", onEdit && <GhostBtn onClick={() => onEdit(companyId)} style={{ fontSize: 12, padding: "4px 12px" }} data-testid="btn-company-edit" aria-label="거래처 정보 수정">정보 수정</GhostBtn>)}
+            {(
               <div style={{ marginBottom: 10 }}>
                 {/* 기본정보 카드 - row/table 형식 */}
                 <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden", marginBottom: 10 }}>
@@ -688,255 +579,6 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
 
                 {/* 기업명 Alias(별칭) 관리 — 기본정보 아래 */}
                 <CompanyAliasSection companyId={companyId} token={token} onToast={onToast} />
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
-                {/* AI 문서 자동입력 */}
-                {(() => {
-                  const ALLOWED_EXTS = [".jpg", ".jpeg", ".png", ".pdf"];
-                  const handleEditDocDrop = (dt: CompanyOcrDocType, rawFile: File) => {
-                    const ext = rawFile.name.slice(rawFile.name.lastIndexOf(".")).toLowerCase();
-                    if (!ALLOWED_EXTS.includes(ext)) { onToast("JPG, PNG, PDF 형식만 업로드할 수 있습니다."); return; }
-                    if (dt === "business_license") setEditLicenseFile(rawFile);
-                    else setEditBankbookFile(rawFile);
-                  };
-                  const docCards: { dt: CompanyOcrDocType; label: string; file: File | null; icon: string }[] = [
-                    { dt: "business_license", label: "사업자등록증", file: editLicenseFile, icon: "📄" },
-                    { dt: "bankbook", label: "통장사본", file: editBankbookFile, icon: "🏦" },
-                  ];
-                  return (
-                    <div style={{ background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10, padding: "12px 14px", marginBottom: 4 }}>
-                      <p style={{ margin: "0 0 10px", fontSize: 12, fontWeight: 700, color: "#0369a1" }}>📎 AI 문서 자동입력 (선택)</p>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                        {docCards.map(({ dt, label, file, icon }) => {
-                          const isDragOver = editDragOverType === dt;
-                          return (
-                            <div key={dt}
-                              onDragOver={e => { e.preventDefault(); e.stopPropagation(); setEditDragOverType(dt); }}
-                              onDragEnter={e => { e.preventDefault(); e.stopPropagation(); setEditDragOverType(dt); }}
-                              onDragLeave={e => { e.stopPropagation(); if (!e.currentTarget.contains(e.relatedTarget as Node)) setEditDragOverType(null); }}
-                              onDrop={e => { e.preventDefault(); e.stopPropagation(); setEditDragOverType(null); const f = e.dataTransfer.files[0]; if (f) handleEditDocDrop(dt, f); }}
-                              style={{
-                                border: `2px dashed ${isDragOver ? "#38bdf8" : "#bae6fd"}`,
-                                borderRadius: 8,
-                                padding: "10px 12px",
-                                background: isDragOver ? "#e0f2fe" : "#fff",
-                                transition: "all 0.15s",
-                                display: "flex",
-                                flexDirection: "column",
-                                gap: 6,
-                              }}
-                            >
-                              <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "#0369a1" }}>{icon} {label}</p>
-                              {file ? (
-                                <p style={{ margin: 0, fontSize: 11, color: "#0284c7", wordBreak: "break-all" }}>
-                                  {isDragOver ? "파일을 놓으면 교체됩니다" : `✓ ${file.name}`}
-                                </p>
-                              ) : (
-                                <p style={{ margin: 0, fontSize: 11, color: "#94a3b8" }}>
-                                  {isDragOver ? "파일을 여기에 놓으세요" : "파일을 드래그하거나 아래에서 선택"}
-                                </p>
-                              )}
-                              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-                                <input type="file" accept=".jpg,.jpeg,.png,.pdf" style={{ display: "none" }}
-                                  onChange={e => { const f = e.target.files?.[0]; if (f) handleEditDocDrop(dt, f); e.target.value = ""; }} />
-                                <span style={{ fontSize: 11, padding: "4px 10px", background: "#e0f2fe", color: "#0369a1", borderRadius: 6, fontWeight: 600, whiteSpace: "nowrap" }}>
-                                  파일 선택
-                                </span>
-                              </label>
-                              {file && (
-                                <button type="button"
-                                  onClick={() => setEditOcrPanel(dt)}
-                                  style={{ fontSize: 11, padding: "5px 10px", background: "#0284c7", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700, width: "100%", textAlign: "center" }}>
-                                  AI 분석
-                                </button>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })()}
-                {/* 1행: 거래처명 */}
-                <div>
-                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>거래처명 <span style={{ color: "#dc2626" }}>*</span></label>
-                  <input value={editForm.name} onChange={e => setEditForm(p => ({ ...p, name: e.target.value }))}
-                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.name ? "#fca5a5" : undefined }} />
-                  {formErrors.name && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.name}</p>}
-                </div>
-                {/* 상호 변경 감지 시 사유 입력란 표시 */}
-                {editForm.name.trim() !== originalName && editForm.name.trim() !== "" && (
-                  <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "10px 12px" }}>
-                    <p style={{ margin: "0 0 6px", fontSize: 12, color: "#92400e", fontWeight: 600 }}>⚠️ 거래처명(상호) 변경이 감지되었습니다</p>
-                    <p style={{ margin: "0 0 8px", fontSize: 11, color: "#78350f" }}>
-                      <strong>{originalName}</strong> → <strong>{editForm.name.trim()}</strong>
-                      <br />이전 상호는 변경 이력으로 자동 저장됩니다.
-                    </p>
-                    <label style={{ fontSize: 12, color: "#92400e", fontWeight: 700, display: "block", marginBottom: 3 }}>변경 사유 <span style={{ color: "#dc2626" }}>*</span></label>
-                    <input value={nameChangeReason} onChange={e => setNameChangeReason(e.target.value)}
-                      placeholder="예: 법인 전환, 합병, 상호 변경 등"
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.nameChangeReason ? "#fca5a5" : "#fcd34d" }} />
-                    {formErrors.nameChangeReason && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.nameChangeReason}</p>}
-                  </div>
-                )}
-                {/* 1.5행: 거래처 유형 (계층형) */}
-                <div style={{ display: "flex", flexDirection: "column", gap: 0, background: "#f9fafb", borderRadius: 10, padding: "12px 14px", border: "1px solid #f3f4f6" }}>
-                  {/* 1차: 거래처 유형 */}
-                  <label style={{ fontSize: 12, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 8 }}>거래처 유형</label>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    {[
-                      { v: "client", label: "고객사", bg: "#eff6ff", color: "#1d4ed8", border: "#93c5fd" },
-                      { v: "vendor", label: "외주업체", bg: "#f5f3ff", color: "#7c3aed", border: "#c4b5fd" },
-                    ].map(opt => (
-                      <button key={opt.v} type="button"
-                        onClick={() => setEditForm(p => ({ ...p, companyType: opt.v, vendorType: opt.v === "client" ? "" : p.vendorType, customerType: opt.v === "vendor" ? "CORPORATE" : p.customerType }))}
-                        style={{
-                          padding: "6px 18px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
-                          background: editForm.companyType === opt.v ? opt.bg : "#fff",
-                          color: editForm.companyType === opt.v ? opt.color : "#9ca3af",
-                          border: `2px solid ${editForm.companyType === opt.v ? opt.border : "#e5e7eb"}`,
-                          transition: "all 0.15s",
-                        }}>
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                  {/* 2차: 고객 분류 */}
-                  {editForm.companyType === "client" && (
-                    <div style={{ marginTop: 8, paddingLeft: 14, borderLeft: "3px solid #93c5fd" }}>
-                      <div style={{ padding: "10px 12px", background: "#f0f9ff", border: "1px solid #bae6fd", borderRadius: 10 }}>
-                        <label style={{ fontSize: 12, color: "#1d4ed8", fontWeight: 700, display: "block", marginBottom: 8, letterSpacing: "-0.01em" }}>고객 분류</label>
-                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                          {CUSTOMER_TYPE_OPTIONS.map(opt => {
-                            const isActive = editForm.customerType === opt.value;
-                            const { bg, color, border } = getCustomerTypeBadgeColors(opt.value);
-                            return (
-                              <button key={opt.value} type="button"
-                                onClick={() => setEditForm(p => ({ ...p, customerType: opt.value }))}
-                                style={{
-                                  padding: "6px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700,
-                                  cursor: "pointer", transition: "all 0.15s", lineHeight: "1.4",
-                                  background: isActive ? bg : "#fff",
-                                  color: isActive ? color : "#9ca3af",
-                                  border: `2px solid ${isActive ? border : "#e5e7eb"}`,
-                                }}>
-                                {opt.label}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  {/* 2차: 외주 분류 */}
-                  {editForm.companyType === "vendor" && (
-                    <div style={{ marginTop: 8, paddingLeft: 14, borderLeft: "3px solid #c4b5fd" }}>
-                      <div style={{ padding: "10px 12px", background: "#faf5ff", border: "1px solid #e9d5ff", borderRadius: 10 }}>
-                      <label style={{ fontSize: 12, color: "#6d28d9", fontWeight: 700, display: "block", marginBottom: 8, letterSpacing: "-0.01em" }}>외주 분류</label>
-                      <ClickSelect
-                        value={editForm.vendorType}
-                        onChange={v => { setEditForm(p => ({ ...p, vendorType: v })); if (v !== "etc") setEditVendorTypeCustom(""); }}
-                        style={{ width: "100%" }}
-                        triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8, borderColor: "#ddd6fe" }}
-                        chips={VENDOR_TYPE_CATEGORY_CHIPS}
-                        options={[{ value: "", label: "— 선택 안 함 —" }, ...VENDOR_TYPE_OPTIONS]}
-                      />
-                      {editForm.vendorType === "etc" && (
-                        <input
-                          value={editVendorTypeCustom}
-                          onChange={e => setEditVendorTypeCustom(e.target.value)}
-                          placeholder="기타 외주유형 직접 입력"
-                          aria-label="기타 외주유형 직접 입력"
-                          style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", marginTop: 6, borderColor: "#ddd6fe", color: "#7c3aed" }}
-                        />
-                      )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* 개인고객: 휴대폰 / 이메일 */}
-                {editForm.companyType === "client" && editForm.customerType === "INDIVIDUAL" && (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>휴대폰</label>
-                      <input value={editForm.mobile} onChange={e => setEditForm(p => ({ ...p, mobile: e.target.value }))}
-                        placeholder="010-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>이메일</label>
-                      <input type="email" value={editForm.email} onChange={e => setEditForm(p => ({ ...p, email: e.target.value }))}
-                        placeholder="name@example.com" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
-                  </div>
-                )}
-
-                {/* 2행: 사업자등록번호 / 대표자명 / 등록일 (기업고객 / 외주업체만) */}
-                {!(editForm.companyType === "client" && editForm.customerType === "INDIVIDUAL") && (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 12px" }}>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>사업자등록번호</label>
-                      <input value={editForm.businessNumber} onChange={e => setEditForm(p => ({ ...p, businessNumber: e.target.value }))}
-                        placeholder="000-00-00000"
-                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", borderColor: formErrors.businessNumber ? "#fca5a5" : undefined }} />
-                      {formErrors.businessNumber && <p style={{ margin: "2px 0 0", fontSize: 11, color: "#dc2626" }}>{formErrors.businessNumber}</p>}
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>대표자명</label>
-                      <input value={editForm.representativeName} onChange={e => setEditForm(p => ({ ...p, representativeName: e.target.value }))}
-                        placeholder="홍길동" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>등록일</label>
-                      <input type="date" value={editForm.registeredAt} onChange={e => setEditForm(p => ({ ...p, registeredAt: e.target.value }))}
-                        style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
-                  </div>
-                )}
-
-                {/* 개인고객: 등록일 (단독 행) */}
-                {editForm.companyType === "client" && editForm.customerType === "INDIVIDUAL" && (
-                  <div>
-                    <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>등록일</label>
-                    <input type="date" value={editForm.registeredAt} onChange={e => setEditForm(p => ({ ...p, registeredAt: e.target.value }))}
-                      style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                  </div>
-                )}
-
-                {/* 3행: 업태 / 종목 (기업고객 / 외주업체만) */}
-                {!(editForm.companyType === "client" && editForm.customerType === "INDIVIDUAL") && (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" }}>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>업태</label>
-                      <input value={editForm.industry} onChange={e => setEditForm(p => ({ ...p, industry: e.target.value }))}
-                        placeholder="제조업, 서비스업 등" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>종목</label>
-                      <input value={editForm.businessCategory} onChange={e => setEditForm(p => ({ ...p, businessCategory: e.target.value }))}
-                        placeholder="통역, 번역, 소프트웨어 등" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                    </div>
-                  </div>
-                )}
-
-                {/* 5행: 주소 */}
-                <div>
-                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>주소</label>
-                  <input value={editForm.address} onChange={e => setEditForm(p => ({ ...p, address: e.target.value }))}
-                    placeholder="서울시 강남구 테헤란로 123" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
-                </div>
-                {/* 6행: 메모 */}
-                <div>
-                  <label style={{ fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 }}>메모</label>
-                  <textarea value={editForm.notes} onChange={e => setEditForm(p => ({ ...p, notes: e.target.value }))}
-                    rows={3} placeholder="거래처 관련 특이사항을 입력하세요."
-                    style={{ ...inputStyle, fontSize: 13, padding: "7px 10px", resize: "vertical" }} />
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <PrimaryBtn onClick={handleSaveEdit} style={{ fontSize: 13, padding: "7px 16px" }}>저장</PrimaryBtn>
-                  <GhostBtn onClick={() => { setEditMode(false); setFormErrors({}); setNameChangeReason(""); setEditLicenseFile(null); setEditBankbookFile(null); setEditOcrPanel(null); setEditVendorTypeCustom(""); }} style={{ fontSize: 13, padding: "7px 16px" }}>취소</GhostBtn>
-                </div>
               </div>
             )}
 
