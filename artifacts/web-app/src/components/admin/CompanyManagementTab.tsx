@@ -10,6 +10,7 @@ import { Pagination } from '../ui/Paginator';
 import { CompanyDetailModal } from './CompanyDetailModal';
 import { CompanyDocumentAnalyzePanel, type CompanyOcrDocType } from './CompanyDocumentAnalyzePanel';
 import { BulkImportPage } from './BulkImportPage';
+import { CompanyTrashTab } from './CompanyTrashTab';
 import { formatPhone } from '../../lib/utils';
 
 const inputStyle: React.CSSProperties = {
@@ -29,22 +30,25 @@ const tableTd: React.CSSProperties = {
   borderBottom: "1px solid #edf0f3", verticalAlign: "middle",
 };
 
-// ─── Design System: Information Hierarchy Badge Styles ───────────────────────
-// Secondary: 상위 분류 — 외주업체만 표시(고객사는 기본값이라 목록에서 생략).
-// 회사명이 우선 보이도록 보조정보 수준으로 컴팩트하게 유지한다.
-const BADGE_SECONDARY_VENDOR: React.CSSProperties = {
-  fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 4,
-  background: "#f5f3ff", color: "#6d28d9", border: "1px solid #ddd6fe",
-};
-// Tertiary: 외주 세부 분류 (통번역업체 등) — purple 계열
-const BADGE_TERTIARY_VENDOR: React.CSSProperties = {
-  fontSize: 9, fontWeight: 600, padding: "1px 6px", borderRadius: 4,
-  background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd6fe",
-};
-// 고객 분류 Badge: customerType에 따라 색상 동적 적용
-function getCustomerSubBadgeStyle(ct: string): React.CSSProperties {
+// ─── Design System: 유형 컬럼 컴팩트 배지 ────────────────────────────────────
+// 목록의 '유형' 컬럼은 거래처 상세의 '거래처 유형'과 동일 데이터(customerType/vendorType)를
+// 사용한다. 거래처명이 우선 보이도록 보조정보 수준의 컴팩트한 배지로 표시한다.
+function getCompanyTypeBadge(
+  c: { companyType: string; customerType?: string | null; vendorType?: string | null }
+): { label: string; style: React.CSSProperties } {
+  const base: React.CSSProperties = {
+    display: "inline-block", fontSize: 11, fontWeight: 600, padding: "1px 7px",
+    borderRadius: 4, lineHeight: 1.4, whiteSpace: "nowrap",
+  };
+  if (c.companyType === "vendor") {
+    // 외주업체: 세부 유형(통번역업체 등)이 있으면 그것을, 없으면 '외주업체'
+    const label = c.vendorType ? (VENDOR_TYPE_LABELS[c.vendorType] ?? c.vendorType) : "외주업체";
+    return { label, style: { ...base, background: "#f5f3ff", color: "#7c3aed", border: "1px solid #ddd6fe" } };
+  }
+  // 고객사: 고객 분류(기업/공공기관/개인) — 색상 동적 적용
+  const ct = c.customerType ?? "CORPORATE";
   const { bg, color, border } = getCustomerTypeBadgeColors(ct);
-  return { fontSize: 9, fontWeight: 600, padding: "1px 6px", borderRadius: 4, background: bg, color, border: `1px solid ${border}` };
+  return { label: CUSTOMER_TYPE_LABELS[ct] ?? "기업", style: { ...base, background: bg, color, border: `1px solid ${border}` } };
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -66,9 +70,11 @@ interface CompanyManagementTabProps {
   onOpenProject: (id: number) => void;
   onOpenTranslator?: (userId: number, email: string) => void;
   hasPerm: (key: string | undefined) => boolean;
+  /** 관리자 여부 — 거래처 삭제/휴지통 영구삭제는 관리자만 가능(서버에서도 재검증) */
+  isAdmin: boolean;
 }
 
-export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTranslator, hasPerm }: CompanyManagementTabProps) {
+export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTranslator, hasPerm, isAdmin }: CompanyManagementTabProps) {
   const authHeaders = { Authorization: `Bearer ${token}` };
 
   const [companies, setCompanies] = useState<Company[]>([]);
@@ -109,6 +115,54 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
   const [companyCounts, setCompanyCounts] = useState<{ all: number; client: number; vendor: number; customer: Record<string, number> }>(
     { all: 0, client: 0, vendor: 0, customer: {} },
   );
+
+  // ── 삭제(휴지통 이동) · 휴지통 상태 ──
+  const [showTrash, setShowTrash] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Company | null>(null);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  // 삭제 확인창용 연결 데이터 카운트 (delete-check 재사용)
+  const [deleteCheck, setDeleteCheck] = useState<{ loading: boolean; reasons: { label: string; count: number }[] }>({ loading: false, reasons: [] });
+
+  const REASON_PRESETS = ["중복 등록", "잘못 등록", "폐업", "거래 종료", "기타"];
+
+  // 삭제 모달 열기 — 연결 데이터 카운트를 미리 조회해 사용자에게 표시한다.
+  const openDeleteModal = useCallback(async (c: Company) => {
+    setDeleteTarget(c);
+    setDeleteReason("");
+    setDeleteCheck({ loading: true, reasons: [] });
+    try {
+      const res = await fetch(api(`/api/admin/companies/${c.id}/delete-check`), { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json().catch(() => ({}));
+      setDeleteCheck({ loading: false, reasons: Array.isArray(data?.reasons) ? data.reasons : [] });
+    } catch {
+      setDeleteCheck({ loading: false, reasons: [] });
+    }
+  }, [token]);
+
+  const handleDeleteCompany = useCallback(async () => {
+    if (!deleteTarget || deleting) return;
+    const reason = deleteReason.trim();
+    if (reason.length < 2) { onToast("삭제 사유를 2자 이상 입력해 주세요."); return; }
+    setDeleting(true);
+    try {
+      const res = await fetch(api(`/api/admin/companies/${deleteTarget.id}`), {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(data.error ?? "거래처 삭제에 실패했습니다."); return; }
+      onToast("거래처를 휴지통으로 이동했습니다.");
+      setDeleteTarget(null);
+      setDeleteReason("");
+      fetchCompanies();
+    } catch {
+      onToast("거래처 삭제 중 오류가 발생했습니다.");
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleteTarget, deleting, deleteReason, token, onToast]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // AI 문서 자동입력
   const [licenseFile, setLicenseFile] = useState<File | null>(null);
@@ -331,8 +385,91 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
     );
   }
 
+  if (showTrash) {
+    return (
+      <CompanyTrashTab
+        token={token}
+        isAdmin={isAdmin}
+        onToast={onToast}
+        onBack={() => { setShowTrash(false); fetchCompanies(); }}
+      />
+    );
+  }
+
   return (
     <>
+      {/* ── 거래처 삭제(휴지통 이동) 확인 모달 (관리자 전용) ── */}
+      {deleteTarget && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 9100, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={() => { if (!deleting) { setDeleteTarget(null); setDeleteReason(""); } }}>
+          <div onClick={e => e.stopPropagation()} data-testid="modal-company-delete"
+            style={{ background: "#fff", borderRadius: 14, padding: "26px 30px", width: 480, maxWidth: "92vw", boxShadow: "0 20px 60px rgba(0,0,0,0.25)", borderTop: "4px solid #dc2626", maxHeight: "88vh", overflowY: "auto" }}>
+            <h2 style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 800, color: "#111827" }}>거래처를 삭제하시겠습니까?</h2>
+            <p style={{ margin: "0 0 14px", fontSize: 13, color: "#6b7280", lineHeight: 1.6 }}>
+              삭제된 거래처는 <strong style={{ color: "#2563eb" }}>휴지통에서 복원할 수 있습니다.</strong> 연결된 데이터(담당자·견적·프로젝트 등)는 그대로 유지됩니다.
+            </p>
+
+            {/* 거래처명 + 연결 데이터 요약 */}
+            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "12px 14px", marginBottom: 16, fontSize: 13 }}>
+              <div style={{ color: "#111827", fontWeight: 700, marginBottom: 8 }}>{deleteTarget.name}</div>
+              {deleteCheck.loading ? (
+                <div style={{ color: "#9ca3af", fontSize: 12 }}>연결 데이터 확인 중…</div>
+              ) : deleteCheck.reasons.length === 0 ? (
+                <div style={{ color: "#6b7280", fontSize: 12 }}>연결된 업무 데이터가 없습니다.</div>
+              ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {deleteCheck.reasons.map(r => (
+                    <span key={r.label} style={{ fontSize: 12, fontWeight: 600, color: "#374151", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6, padding: "2px 8px" }}>
+                      {r.label} <strong style={{ color: "#111827" }}>{r.count.toLocaleString()}</strong>건
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 삭제 사유 (필수, 2자 이상) */}
+            <label style={{ display: "block", fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 6 }}>
+              삭제 사유 <span style={{ color: "#dc2626" }}>*</span>
+            </label>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+              {REASON_PRESETS.map(p => (
+                <button key={p} type="button" onClick={() => setDeleteReason(p === "기타" ? "" : p)}
+                  data-testid={`btn-delete-reason-${p}`}
+                  style={{ fontSize: 12, padding: "4px 10px", borderRadius: 14, cursor: "pointer", fontWeight: 600,
+                    background: deleteReason === p ? "#eff6ff" : "#fff",
+                    color: deleteReason === p ? "#2563eb" : "#6b7280",
+                    border: `1px solid ${deleteReason === p ? "#bfdbfe" : "#e5e7eb"}` }}>
+                  {p}
+                </button>
+              ))}
+            </div>
+            <textarea
+              value={deleteReason}
+              onChange={e => setDeleteReason(e.target.value)}
+              placeholder="예: 중복 등록 / 잘못 등록 / 폐업 / 거래 종료"
+              rows={2}
+              data-testid="input-company-delete-reason"
+              aria-label="삭제 사유 입력"
+              style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, boxSizing: "border-box", outline: "none", resize: "vertical", fontFamily: "inherit" }}
+            />
+            <p style={{ margin: "4px 0 18px", fontSize: 11, color: "#9ca3af" }}>최소 2자 이상 입력해 주세요.</p>
+
+            <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <button onClick={() => { setDeleteTarget(null); setDeleteReason(""); }} disabled={deleting} data-testid="btn-company-delete-cancel"
+                style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: deleting ? "not-allowed" : "pointer", color: "#374151" }}>
+                취소
+              </button>
+              <button onClick={handleDeleteCompany} disabled={deleteReason.trim().length < 2 || deleting} data-testid="btn-company-delete-confirm"
+                style={{ padding: "9px 20px", borderRadius: 8, border: "none", color: "#fff", fontSize: 13, fontWeight: 700,
+                  background: deleteReason.trim().length >= 2 && !deleting ? "#dc2626" : "#fca5a5",
+                  cursor: deleteReason.trim().length >= 2 && !deleting ? "pointer" : "not-allowed" }}>
+                {deleting ? "삭제 중…" : "휴지통으로 이동"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── 담당자 중복 경고 확인 모달 (신규 거래처 등록 중) ── */}
       {newContactWarningModal && (
         <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.35)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -493,17 +630,25 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
         />
       )}
       <Section title={`거래처 관리 (${companyTotal.toLocaleString()})`} action={
-        hasPerm("company.create") ? (
+        (
           <div style={{ display: "flex", gap: 8 }}>
-            <GhostBtn onClick={() => setShowBulkImport(true)} style={{ fontSize: 13, padding: "7px 14px" }}
-              data-testid="company-bulk-import-btn" aria-label="거래처 대량등록">
-              대량등록
+            <GhostBtn onClick={() => setShowTrash(true)} style={{ fontSize: 13, padding: "7px 14px" }}
+              data-testid="company-trash-btn" aria-label="거래처 휴지통">
+              🗑 휴지통
             </GhostBtn>
-            <PrimaryBtn onClick={() => { setShowCompanyForm(v => !v); setCreatedCompanyId(null); setCreatedCompanyName(""); }} style={{ fontSize: 13, padding: "7px 14px" }}>
-              {showCompanyForm ? "취소" : "+ 거래처 등록"}
-            </PrimaryBtn>
+            {hasPerm("company.create") && (
+              <>
+                <GhostBtn onClick={() => setShowBulkImport(true)} style={{ fontSize: 13, padding: "7px 14px" }}
+                  data-testid="company-bulk-import-btn" aria-label="거래처 대량등록">
+                  대량등록
+                </GhostBtn>
+                <PrimaryBtn onClick={() => { setShowCompanyForm(v => !v); setCreatedCompanyId(null); setCreatedCompanyName(""); }} style={{ fontSize: 13, padding: "7px 14px" }}>
+                  {showCompanyForm ? "취소" : "+ 거래처 등록"}
+                </PrimaryBtn>
+              </>
+            )}
           </div>
-        ) : undefined
+        )
       }>
         {showCompanyForm && (
           <Card style={{ marginBottom: 16, padding: "20px 20px", background: "#f8fafc" }}>
@@ -1056,7 +1201,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                     <div style={{ overflowX: "auto" }}>
                       <table style={{ width: "100%", borderCollapse: "collapse" }}>
                         <thead>
-                          <tr>{["ID", "거래처명 / 유형", "업종", "담당자", "프로젝트", "총 결제", "등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                          <tr>{["ID", "거래처명", "유형", "업종", "담당자", "프로젝트", "총 결제", "등록일", "관리"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                         </thead>
                         <tbody>
                           {companies.map(c => (
@@ -1064,36 +1209,23 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                               onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
                               onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                               <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
-                              <td style={{ ...tableTd }}>
-                                {/* Primary: 거래처명 — 가장 강한 존재감 */}
-                                <div style={{ fontSize: 14, fontWeight: 700, color: "#111827", marginBottom: 3 }}>
+                              {/* 거래처명 — 회사명만 표시(유형 배지는 별도 컬럼으로 분리). 가장 강한 존재감. */}
+                              <td style={{ ...tableTd, minWidth: 200 }}>
+                                <div style={{ fontSize: 14, fontWeight: 700, color: "#111827" }}>
                                   {c.name}
                                   {c.matchedDivisionName && (
                                     <span style={{ fontWeight: 600, color: "#7c3aed", marginLeft: 4 }}>({c.matchedDivisionName})</span>
                                   )}
                                 </div>
                                 {!c.matchedDivisionName && (c.divisionNames?.length ?? 0) > 0 && (
-                                  <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 3 }}>
+                                  <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
                                     {c.divisionNames!.slice(0, 3).join(" · ")}{c.divisionNames!.length > 3 ? ` 외 ${c.divisionNames!.length - 3}개` : ""}
                                   </div>
                                 )}
-                                <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
-                                  {/* 1차: 외주업체만 표시(고객사는 기본값이므로 목록에서 생략) */}
-                                  {c.companyType === "vendor" && (
-                                    <span style={BADGE_SECONDARY_VENDOR}>외주업체</span>
-                                  )}
-                                  {/* 2차: 고객 분류(색상) / 외주 세부 분류(purple) */}
-                                  {c.companyType === "client" && (
-                                    <span style={getCustomerSubBadgeStyle(c.customerType ?? "CORPORATE")}>
-                                      {CUSTOMER_TYPE_LABELS[c.customerType ?? "CORPORATE"] ?? "기업"}
-                                    </span>
-                                  )}
-                                  {c.companyType === "vendor" && c.vendorType && (
-                                    <span style={BADGE_TERTIARY_VENDOR}>
-                                      {VENDOR_TYPE_LABELS[c.vendorType] ?? c.vendorType}
-                                    </span>
-                                  )}
-                                </div>
+                              </td>
+                              {/* 유형 — 거래처 상세의 '거래처 유형'과 동일 데이터. 최소 폭 · 보조정보 배지. */}
+                              <td style={{ ...tableTd, width: 1, whiteSpace: "nowrap" }}>
+                                {(() => { const b = getCompanyTypeBadge(c); return <span style={b.style}>{b.label}</span>; })()}
                               </td>
                               <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{c.industry ?? "-"}</td>
                               <td style={{ ...tableTd, textAlign: "center" }}>
@@ -1105,6 +1237,27 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                               <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap" }}>{Number(c.totalPayment).toLocaleString()}원</td>
                               {/* 등록일 = 홈택스 원본 등록일(registeredAt). 플랫폼 생성일(createdAt)이 아님. */}
                               <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{c.registeredAt ? new Date(c.registeredAt).toLocaleDateString("ko-KR") : "-"}</td>
+                              {/* 관리: 삭제(휴지통 이동). 관리자만 활성, 그 외 비활성 + 안내 툴팁. 서버에서도 재검증. */}
+                              <td style={{ ...tableTd, textAlign: "center" }} onClick={e => e.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  onClick={() => { if (isAdmin) openDeleteModal(c); else onToast("거래처 삭제는 관리자만 가능합니다."); }}
+                                  disabled={!isAdmin}
+                                  title={isAdmin ? "거래처 삭제(휴지통 이동)" : "거래처 삭제는 관리자만 가능합니다."}
+                                  aria-disabled={!isAdmin}
+                                  data-testid={`btn-delete-company-${c.id}`}
+                                  aria-label={`${c.name} 삭제`}
+                                  style={{
+                                    fontSize: 11, height: 24, padding: "0 10px", borderRadius: 6, fontWeight: 600,
+                                    cursor: isAdmin ? "pointer" : "not-allowed",
+                                    background: isAdmin ? "#fef2f2" : "#f3f4f6",
+                                    color: isAdmin ? "#dc2626" : "#9ca3af",
+                                    border: `1px solid ${isAdmin ? "#fca5a5" : "#e5e7eb"}`,
+                                  }}
+                                >
+                                  삭제
+                                </button>
+                              </td>
                             </tr>
                           ))}
                         </tbody>

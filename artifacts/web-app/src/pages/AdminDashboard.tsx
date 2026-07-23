@@ -2040,6 +2040,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onOpenProject={(id) => openDetail(id)}
           onOpenTranslator={(userId, email) => { setAdminTab("translators"); setTranslatorDetailModal({ userId, email }); }}
           hasPerm={hasPerm}
+          isAdmin={user.role === "admin"}
         />
       )}
 

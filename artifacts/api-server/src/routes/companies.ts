@@ -12,7 +12,7 @@ import {
   projectFilesTable, translatorProfilesTable,
   companyAliasesTable,
 } from "@workspace/db";
-import { eq, and, ilike, or, inArray, sql, desc, ne } from "drizzle-orm";
+import { eq, and, ilike, or, inArray, sql, desc, ne, isNull, isNotNull } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
@@ -71,7 +71,10 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
         searchCond = or(...conds.filter(Boolean) as any);
       }
 
-      const filterConds = [];
+      // 휴지통(soft delete) 제외 — 일반 목록·검색에는 삭제된 거래처를 표시하지 않는다.
+      const notDeleted = isNull(companiesTable.deletedAt);
+
+      const filterConds = [notDeleted];
       if (companyType === "client" || companyType === "vendor") filterConds.push(eq(companiesTable.companyType, companyType));
       if (vendorType) filterConds.push(eq(companiesTable.vendorType, vendorType));
       if (customerType === "CORPORATE" || customerType === "PUBLIC" || customerType === "INDIVIDUAL") {
@@ -93,7 +96,7 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
           cnt: sql<number>`count(*)::int`,
         })
         .from(companiesTable)
-        .where(searchCond)
+        .where(and(...[searchCond, notDeleted].filter(Boolean) as any))
         .groupBy(companiesTable.companyType, sql`coalesce(${companiesTable.customerType},'CORPORATE')`);
       const counts = { all: 0, client: 0, vendor: 0, customer: { CORPORATE: 0, PUBLIC: 0, INDIVIDUAL: 0 } as Record<string, number> };
       for (const g of grouped) {
@@ -181,6 +184,7 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
       .leftJoin(contactsTable, eq(contactsTable.companyId, companiesTable.id))
       .leftJoin(projectsTable, eq(projectsTable.companyId, companiesTable.id))
       .leftJoin(paymentsTable, eq(paymentsTable.projectId, projectsTable.id))
+      .where(isNull(companiesTable.deletedAt))  // 휴지통 제외
       .groupBy(companiesTable.id)
       .orderBy(desc(companiesTable.createdAt));
 
@@ -686,56 +690,31 @@ router.get("/admin/companies/:id/delete-check", ...adminGuard, async (req, res) 
   }
 });
 
-// ─── 거래처 삭제 ─────────────────────────────────────────────────────────────
-router.delete("/admin/companies/:id", ...adminGuard, async (req, res) => {
+// ─── 거래처 삭제 = 휴지통 이동 (Soft Delete, 관리자 전용) ──────────────────────
+// 물리 삭제하지 않고 deletedAt/By/Reason 만 기록한다. 연결 데이터(담당자·브랜드·
+// 견적·판매·프로젝트·결제·정산·Alias 등)는 모두 보존하며 관계도 유지한다.
+router.delete("/admin/companies/:id", requireAuth, requireRole("admin"), async (req, res) => {
   const companyId = Number(req.params.id);
   if (isNaN(companyId) || companyId <= 0) {
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
+  const { reason } = req.body as { reason?: string };
+  const trimmedReason = (reason ?? "").trim();
 
   try {
-    const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
+    const [existing] = await db
+      .select({ id: companiesTable.id, name: companiesTable.name, deletedAt: companiesTable.deletedAt })
+      .from(companiesTable).where(eq(companiesTable.id, companyId));
     if (!existing) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+    if (existing.deletedAt) { res.status(400).json({ error: "이미 휴지통에 있는 거래처입니다." }); return; }
+    if (trimmedReason.length < 2) { res.status(400).json({ error: "삭제 사유를 2자 이상 입력해 주세요." }); return; }
 
-    // 연결 데이터 검사
-    const projectRows = await db
-      .select({ id: projectsTable.id })
-      .from(projectsTable)
-      .where(or(
-        eq(projectsTable.companyId, companyId),
-        eq(projectsTable.requestingCompanyId, companyId),
-        eq(projectsTable.billingCompanyId, companyId),
-        eq(projectsTable.payerCompanyId, companyId),
-      ));
-    const projectIds = projectRows.map(p => p.id);
-
-    const [[contacts], [prepaidAccounts], [billingCycles]] = await Promise.all([
-      db.select({ count: sql<number>`count(*)::int` }).from(contactsTable)
-        .where(and(eq(contactsTable.companyId, companyId), eq(contactsTable.isActive, true))),
-      db.select({ count: sql<number>`count(*)::int` }).from(prepaidAccountsTable).where(eq(prepaidAccountsTable.companyId, companyId)),
-      db.select({ count: sql<number>`count(*)::int` }).from(billingBatchesTable).where(eq(billingBatchesTable.companyId, companyId)),
-    ]);
-
-    const blockingReasons: string[] = [];
-    if ((contacts?.count ?? 0) > 0) blockingReasons.push(`담당자 ${contacts.count}건 존재`);
-    if (projectIds.length > 0) blockingReasons.push(`프로젝트 ${projectIds.length}건 존재`);
-    if ((prepaidAccounts?.count ?? 0) > 0) blockingReasons.push(`선입금 계정 ${prepaidAccounts.count}건 존재`);
-    if ((billingCycles?.count ?? 0) > 0) blockingReasons.push(`누적 청구 ${billingCycles.count}건 존재`);
-
-    if (blockingReasons.length > 0) {
-      res.status(409).json({
-        error: "삭제할 수 없습니다.",
-        reasons: blockingReasons,
-        canHardDelete: true,
-      });
-      return;
-    }
-
-    // 비활성 담당자, 부서, 상호이력 정리 후 삭제
-    await db.delete(contactsTable).where(eq(contactsTable.companyId, companyId));
-    await db.delete(divisionsTable).where(eq(divisionsTable.companyId, companyId));
-    await db.delete(companyNameHistoryTable).where(eq(companyNameHistoryTable.companyId, companyId));
-    await db.delete(companiesTable).where(eq(companiesTable.id, companyId));
+    // Soft Delete — 경합 방지를 위해 WHERE 절에 deletedAt IS NULL 포함
+    const [updated] = await db.update(companiesTable)
+      .set({ deletedAt: new Date(), deletedBy: req.user?.id ?? null, deletionReason: trimmedReason })
+      .where(and(eq(companiesTable.id, companyId), isNull(companiesTable.deletedAt)))
+      .returning({ id: companiesTable.id });
+    if (!updated) { res.status(400).json({ error: "이미 휴지통에 있는 거래처입니다." }); return; }
 
     await db.insert(logsTable).values({
       entityType: "company",
@@ -743,13 +722,168 @@ router.delete("/admin/companies/:id", ...adminGuard, async (req, res) => {
       action: "deleted",
       performedBy: req.user?.id ?? null,
       performedByEmail: req.user?.email ?? null,
+      metadata: JSON.stringify({ name: existing.name, reason: trimmedReason }),
+    });
+
+    req.log.info({ companyId, name: existing.name, deletedBy: req.user?.id }, "Company: soft-deleted (휴지통 이동)");
+    res.json({ ok: true, deletedCompanyId: companyId });
+  } catch (err) {
+    req.log.error({ err }, "Companies: failed to soft-delete");
+    res.status(500).json({ error: "거래처 삭제 실패." });
+  }
+});
+
+// ─── 휴지통 목록 ─────────────────────────────────────────────────────────────
+router.get("/admin/companies-trash", ...adminGuard, async (req, res) => {
+  try {
+    const s = (req.query.search as string | undefined)?.trim().toLowerCase();
+    const conds = [isNotNull(companiesTable.deletedAt)];
+    if (s) {
+      conds.push(or(
+        ilike(companiesTable.name, `%${s}%`),
+        ilike(companiesTable.representativeName, `%${s}%`),
+        ilike(companiesTable.deletionReason, `%${s}%`),
+      ) as any);
+    }
+    const rows = await db
+      .select({
+        id: companiesTable.id,
+        name: companiesTable.name,
+        companyType: companiesTable.companyType,
+        vendorType: companiesTable.vendorType,
+        customerType: companiesTable.customerType,
+        deletedAt: companiesTable.deletedAt,
+        deletionReason: companiesTable.deletionReason,
+        deletedByName: sql<string | null>`(SELECT name FROM users WHERE id = ${companiesTable.deletedBy})`,
+      })
+      .from(companiesTable)
+      .where(and(...conds))
+      .orderBy(desc(companiesTable.deletedAt));
+    res.json(rows);
+  } catch (err) {
+    req.log.error({ err }, "Companies: failed to list trash");
+    res.status(500).json({ error: "휴지통 조회 실패." });
+  }
+});
+
+// ─── 복원 (휴지통 → 일반 목록, 관리자 전용) ──────────────────────────────────
+router.post("/admin/companies/:id/restore", requireAuth, requireRole("admin"), async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 company id." }); return;
+  }
+  try {
+    const [existing] = await db
+      .select({ id: companiesTable.id, name: companiesTable.name, deletedAt: companiesTable.deletedAt })
+      .from(companiesTable).where(eq(companiesTable.id, companyId));
+    if (!existing) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+    if (!existing.deletedAt) { res.status(400).json({ error: "휴지통에 있는 거래처가 아닙니다." }); return; }
+
+    await db.update(companiesTable)
+      .set({ deletedAt: null, deletedBy: null, deletionReason: null })
+      .where(eq(companiesTable.id, companyId));
+
+    await db.insert(logsTable).values({
+      entityType: "company",
+      entityId: companyId,
+      action: "restored",
+      performedBy: req.user?.id ?? null,
+      performedByEmail: req.user?.email ?? null,
       metadata: JSON.stringify({ name: existing.name }),
     });
 
-    res.json({ ok: true });
+    req.log.info({ companyId, name: existing.name, restoredBy: req.user?.id }, "Company: restored from trash");
+    res.json({ ok: true, restoredCompanyId: companyId });
   } catch (err) {
-    req.log.error({ err }, "Companies: failed to delete");
-    res.status(500).json({ error: "거래처 삭제 실패." });
+    req.log.error({ err }, "Companies: failed to restore");
+    res.status(500).json({ error: "거래처 복원 실패." });
+  }
+});
+
+// ─── 영구삭제 (일반 정책: 연결 데이터가 전혀 없을 때만, 관리자 전용) ───────────
+// 연결 데이터가 하나라도 있으면 차단한다. (강제 삭제는 Phase B: 관리자 강제 영구삭제)
+router.delete("/admin/companies/:id/permanent", requireAuth, requireRole("admin"), async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 company id." }); return;
+  }
+  try {
+    const [existing] = await db
+      .select({ id: companiesTable.id, name: companiesTable.name, deletedAt: companiesTable.deletedAt })
+      .from(companiesTable).where(eq(companiesTable.id, companyId));
+    if (!existing) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+    if (!existing.deletedAt) { res.status(400).json({ error: "휴지통에 있는 거래처만 영구삭제할 수 있습니다." }); return; }
+
+    // 연결 데이터 전수 검사 — 하나라도 있으면 차단
+    const projectRows = await db.select({ id: projectsTable.id }).from(projectsTable).where(or(
+      eq(projectsTable.companyId, companyId),
+      eq(projectsTable.requestingCompanyId, companyId),
+      eq(projectsTable.billingCompanyId, companyId),
+      eq(projectsTable.payerCompanyId, companyId),
+    ));
+    const projectIds = projectRows.map(p => p.id);
+
+    const [[contacts], [divisions], [prepaidAccounts], [billingCycles], [aliases]] = await Promise.all([
+      db.select({ count: sql<number>`count(*)::int` }).from(contactsTable).where(eq(contactsTable.companyId, companyId)),
+      db.select({ count: sql<number>`count(*)::int` }).from(divisionsTable).where(eq(divisionsTable.companyId, companyId)),
+      db.select({ count: sql<number>`count(*)::int` }).from(prepaidAccountsTable).where(eq(prepaidAccountsTable.companyId, companyId)),
+      db.select({ count: sql<number>`count(*)::int` }).from(billingBatchesTable).where(eq(billingBatchesTable.companyId, companyId)),
+      // 자동 생성된 기본 별칭(isPrimary=true)은 시스템 메타데이터로 cascade 삭제되므로 차단 대상에서 제외.
+      // 사용자가 직접 추가한 별칭(isPrimary=false)만 실제 업무 데이터로 간주한다.
+      db.select({ count: sql<number>`count(*)::int` }).from(companyAliasesTable)
+        .where(and(eq(companyAliasesTable.companyId, companyId), eq(companyAliasesTable.isPrimary, false))),
+    ]);
+
+    let quotesCount = 0, paymentsCount = 0, settlementsCount = 0;
+    if (projectIds.length > 0) {
+      const [[qRow], [pmRow], [sRow]] = await Promise.all([
+        db.select({ count: sql<number>`count(*)::int` }).from(quotesTable).where(inArray(quotesTable.projectId, projectIds)),
+        db.select({ count: sql<number>`count(*)::int` }).from(paymentsTable).where(inArray(paymentsTable.projectId, projectIds)),
+        db.select({ count: sql<number>`count(*)::int` }).from(settlementsTable).where(inArray(settlementsTable.projectId, projectIds)),
+      ]);
+      quotesCount = qRow?.count ?? 0; paymentsCount = pmRow?.count ?? 0; settlementsCount = sRow?.count ?? 0;
+    }
+
+    const reasons: { label: string; count: number }[] = [];
+    if ((contacts?.count ?? 0) > 0) reasons.push({ label: "담당자", count: contacts.count });
+    if ((divisions?.count ?? 0) > 0) reasons.push({ label: "브랜드/부서", count: divisions.count });
+    if (projectIds.length > 0) reasons.push({ label: "프로젝트", count: projectIds.length });
+    if (quotesCount > 0) reasons.push({ label: "견적", count: quotesCount });
+    if (paymentsCount > 0) reasons.push({ label: "결제", count: paymentsCount });
+    if (settlementsCount > 0) reasons.push({ label: "정산", count: settlementsCount });
+    if ((prepaidAccounts?.count ?? 0) > 0) reasons.push({ label: "선입금 계정", count: prepaidAccounts.count });
+    if ((billingCycles?.count ?? 0) > 0) reasons.push({ label: "누적 청구", count: billingCycles.count });
+    if ((aliases?.count ?? 0) > 0) reasons.push({ label: "기업명 Alias", count: aliases.count });
+
+    if (reasons.length > 0) {
+      res.status(409).json({
+        error: "연결된 업무 데이터가 존재하여 영구삭제할 수 없습니다.",
+        reasons,
+        canForcePurge: true,  // Phase B(관리자 강제 영구삭제)에서 사용
+      });
+      return;
+    }
+
+    // 연결 데이터 없음 → 물리삭제 (Alias/상호이력은 cascade 이지만 명시적으로 정리)
+    await db.transaction(async (tx) => {
+      await tx.delete(companyAliasesTable).where(eq(companyAliasesTable.companyId, companyId));
+      await tx.delete(companyNameHistoryTable).where(eq(companyNameHistoryTable.companyId, companyId));
+      await tx.delete(companiesTable).where(eq(companiesTable.id, companyId));
+      await tx.insert(logsTable).values({
+        entityType: "company",
+        entityId: companyId,
+        action: "purged",
+        performedBy: req.user?.id ?? null,
+        performedByEmail: req.user?.email ?? null,
+        metadata: JSON.stringify({ name: existing.name }),
+      });
+    });
+
+    req.log.warn({ companyId, name: existing.name, purgedBy: req.user?.id }, "Company: PERMANENTLY deleted (연결 데이터 없음)");
+    res.json({ ok: true, purgedCompanyId: companyId });
+  } catch (err) {
+    req.log.error({ err }, "Companies: failed to permanently delete");
+    res.status(500).json({ error: "거래처 영구삭제 실패." });
   }
 });
 
