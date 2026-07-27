@@ -1199,7 +1199,7 @@ router.get("/admin/companies/:id/contacts", ...adminGuard, async (req, res) => {
   }
   const { isActive } = req.query as { isActive?: string };
   try {
-    const conds = [eq(contactsTable.companyId, companyId)];
+    const conds = [eq(contactsTable.companyId, companyId), isNull(contactsTable.deletedAt)];
     if (isActive === "true") conds.push(eq(contactsTable.isActive, true));
     if (isActive === "false") conds.push(eq(contactsTable.isActive, false));
     const rows = await db.select().from(contactsTable)
@@ -1219,7 +1219,7 @@ async function listContacts(req: any, res: any) {
       keyword?: string; companyId?: string; includeInactive?: string;
     };
 
-    const conds: ReturnType<typeof eq>[] = [];
+    const conds: any[] = [isNull(contactsTable.deletedAt)];  // 휴지통 담당자는 항상 제외(거래처와 동일)
     if (companyIdQ) conds.push(eq(contactsTable.companyId, Number(companyIdQ)));
     // 기본: 활성 담당자만 표시. includeInactive=true 시 전체 표시.
     if (includeInactive !== "true") conds.push(eq(contactsTable.isActive, true));
@@ -1650,20 +1650,87 @@ router.patch("/admin/company-contacts/:id", ...adminGuard, async (req, res) => {
   catch (err) { req.log.error({ err }, "Contacts: failed to update"); res.status(500).json({ error: "담당자 수정 실패." }); }
 });
 
-// ─── 담당자 삭제 (항상 soft delete) ─────────────────────────────────────────
+// ─── 담당자 삭제 = 휴지통 이동 (Soft Delete) ─────────────────────────────────
+// 거래처(companies)와 동일한 패턴. 물리 삭제하지 않고 deletedAt/By/Reason 만 기록한다.
+// 연결 데이터(프로젝트·견적 등)와 관계는 모두 보존한다.
 async function deleteContact(req: any, res: any, contactId: number) {
   const [existing] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId));
   if (!existing) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
+  if (existing.deletedAt) { res.status(400).json({ error: "이미 휴지통에 있는 담당자입니다." }); return; }
 
-  await db.update(contactsTable)
-    .set({ isActive: false, updatedAt: new Date() })
-    .where(eq(contactsTable.id, contactId));
+  const { reason } = (req.body ?? {}) as { reason?: string };
+  const trimmedReason = (reason ?? "").trim();
+  if (trimmedReason.length < 2) { res.status(400).json({ error: "삭제 사유를 2자 이상 입력해 주세요." }); return; }
+
+  // Soft Delete — 경합 방지를 위해 WHERE 절에 deletedAt IS NULL 포함
+  const [updated] = await db.update(contactsTable)
+    .set({ deletedAt: new Date(), deletedBy: (req as any).user?.id ?? null, deletionReason: trimmedReason, updatedAt: new Date() })
+    .where(and(eq(contactsTable.id, contactId), isNull(contactsTable.deletedAt)))
+    .returning({ id: contactsTable.id });
+  if (!updated) { res.status(400).json({ error: "이미 휴지통에 있는 담당자입니다." }); return; }
 
   await logEvent("company", existing.companyId, "company_contact_deleted", undefined, (req as any).user?.id,
-    JSON.stringify({ contactId, name: existing.name, companyId: existing.companyId }));
+    JSON.stringify({ contactId, name: existing.name, companyId: existing.companyId, reason: trimmedReason }));
 
-  res.json({ ok: true, softDeleted: true });
+  res.json({ ok: true, softDeleted: true, deletedContactId: contactId });
 }
+
+// ─── 담당자 휴지통 목록 ──────────────────────────────────────────────────────
+router.get("/admin/contacts-trash", ...adminGuard, async (req, res) => {
+  try {
+    const s = (req.query.search as string | undefined)?.trim().toLowerCase();
+    const conds: any[] = [isNotNull(contactsTable.deletedAt)];
+    if (s) {
+      conds.push(or(
+        ilike(contactsTable.name, `%${s}%`),
+        ilike(contactsTable.deletionReason, `%${s}%`),
+        ilike(companiesTable.name, `%${s}%`),
+      ));
+    }
+    const rows = await db
+      .select({
+        id: contactsTable.id,
+        name: contactsTable.name,
+        companyName: companiesTable.name,
+        department: contactsTable.department,
+        position: contactsTable.position,
+        deletedAt: contactsTable.deletedAt,
+        deletionReason: contactsTable.deletionReason,
+        deletedByName: sql<string | null>`(SELECT name FROM users WHERE id = ${contactsTable.deletedBy})`,
+      })
+      .from(contactsTable)
+      .leftJoin(companiesTable, eq(contactsTable.companyId, companiesTable.id))
+      .where(and(...conds))
+      .orderBy(desc(contactsTable.deletedAt));
+    res.json(rows);
+  } catch (err) {
+    req.log.error({ err }, "Contacts: failed to list trash");
+    res.status(500).json({ error: "담당자 휴지통 조회 실패." });
+  }
+});
+
+// ─── 담당자 복원 (휴지통 → 일반 목록) ────────────────────────────────────────
+router.post("/admin/contacts/:id/restore", ...adminGuard, async (req, res) => {
+  const contactId = Number(req.params.id);
+  if (isNaN(contactId) || contactId <= 0) { res.status(400).json({ error: "유효하지 않은 contact id." }); return; }
+  try {
+    const [existing] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId));
+    if (!existing) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
+    if (!existing.deletedAt) { res.status(400).json({ error: "휴지통에 있는 담당자가 아닙니다." }); return; }
+
+    await db.update(contactsTable)
+      .set({ deletedAt: null, deletedBy: null, deletionReason: null, updatedAt: new Date() })
+      .where(eq(contactsTable.id, contactId));
+
+    await logEvent("company", existing.companyId, "company_contact_restored", undefined, (req as any).user?.id,
+      JSON.stringify({ contactId, name: existing.name, companyId: existing.companyId }));
+
+    res.json({ ok: true, restoredContactId: contactId });
+  } catch (err) {
+    req.log.error({ err }, "Contacts: failed to restore");
+    res.status(500).json({ error: "담당자 복원 실패." });
+  }
+});
 
 // ─── 담당자 완전삭제 (Permanent Delete) ──────────────────────────────────────
 router.delete("/admin/contacts/:id/permanent", ...adminGuard, async (req, res) => {

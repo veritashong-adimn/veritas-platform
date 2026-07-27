@@ -14,6 +14,7 @@ import { TranslatorRateEntryCard, RateEntryData, emptyRateEntry } from "./Transl
 import { ResumeAnalyzePanel, ResumeAnalysisResult } from "./ResumeAnalyzePanel";
 import { TranslatorLangExpSection } from "./TranslatorLangExpSection";
 import { TranslatorEvidenceDocumentsSection } from "./TranslatorEvidenceDocumentsSection";
+import { AliasSection } from "./AliasSection";
 
 // ── 학력 ────────────────────────────────────────────────────────────────
 const EDUCATION_DOMESTIC: { value: string; label: string }[] = [
@@ -490,6 +491,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
     region: "",
   });
   const [langExperiences, setLangExperiences] = useState<LangExpEntry[]>([]);
+  const [aliasDrafts, setAliasDrafts] = useState<string[]>([]);
   const [createdInvite, setCreatedInvite] = useState<{ email: string; inviteToken: string } | null>(null);
   const [sf, setSF] = useState(emptySensitive());
   const backRef = useRef<HTMLInputElement>(null);
@@ -678,6 +680,16 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 
       const userId = data.id;
 
+      // 별칭(Alias) 일괄 저장 — 거래처 CompanyForm 과 동일 패턴. 개별 실패는 등록 성공에 영향 없음.
+      if (aliasDrafts.length > 0) {
+        await Promise.all(aliasDrafts.map(name =>
+          fetch(api(`/api/admin/translators/${userId}/aliases`), {
+            method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+            body: JSON.stringify({ aliasName: name }),
+          }).catch(() => { /* 개별 별칭 실패는 무시 */ })
+        ));
+      }
+
       for (const r of rates) {
         if (!r.workType || !r.unit || !r.rate) continue;
         const src = r.sourceLang === "기타" ? r.sourceCustom.trim() || "기타" : r.sourceLang;
@@ -812,14 +824,21 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       <p style={sH}>기본 정보</p>
       <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
 
-        {/* 이름 · 휴대폰 */}
-        <div style={grid2}>
+        {/* 이름 · 별칭(Alias) · 휴대폰 (약 4:3:3) */}
+        <div style={{ display: "grid", gridTemplateColumns: "4fr 3fr 3fr", gap: "10px 14px", alignItems: "start" }}>
           <div>
             <label style={labelSt}>이름 <span style={{ color: "#dc2626" }}>*</span></label>
             <input type="text" value={form.name} onChange={e => setF("name", e.target.value)}
               placeholder="홍길동"
               style={{ ...inputStyle, borderColor: errors.name ? "#dc2626" : "#d1d5db" }} />
             {errors.name && <span style={errStyle}>{errors.name}</span>}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <label style={labelSt}>별칭(Alias) <span style={{ color: "#9ca3af", fontWeight: 500, fontSize: 12 }}>(선택)</span></label>
+            {/* 거래처 Alias와 동일한 Tag UI(draft 모드). 등록 성공 후 상위에서 일괄 저장. */}
+            <div style={{ paddingTop: 2 }}>
+              <AliasSection token={token} onToast={onToast} value={aliasDrafts} onChange={setAliasDrafts} compact />
+            </div>
           </div>
           <div>
             <label style={labelSt}>휴대폰</label>

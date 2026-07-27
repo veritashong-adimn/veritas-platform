@@ -7,7 +7,7 @@ import {
   quoteItemsTable, calcQuoteItemAmounts,
   billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
   prepaidAccountsTable, prepaidLedgerTable, settingsTable,
-  productRequestsTable,
+  productRequestsTable, performanceAssignmentsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc, isNull } from "drizzle-orm";
@@ -432,9 +432,15 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
       }),
     );
 
+    // 수행정보(원가) — soft-delete 제외, sequence 순. 민감 식별자 원문(암호문)은 응답에서 제외(마스킹값만).
+    const performancesRaw = await db.select().from(performanceAssignmentsTable)
+      .where(and(eq(performanceAssignmentsTable.projectId, projectId), isNull(performanceAssignmentsTable.deletedAt)))
+      .orderBy(performanceAssignmentsTable.sequence, performanceAssignmentsTable.id);
+    const performances = performancesRaw.map(({ identifierSnapshotEnc, ...rest }) => rest);
+
     res.json({
       ...project, quotes, quoteVersions, payments, tasks, settlements, logs, notes, communications,
-      company, contact,
+      company, contact, performances,
     });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch project detail");

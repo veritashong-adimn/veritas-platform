@@ -33,6 +33,7 @@ import { QuoteListTab } from '../components/admin/QuoteListTab';
 import { CompanyManagementTab } from '../components/admin/CompanyManagementTab';
 import { isCompanyPath, companyPaths, navigate as navPath } from '../lib/adminNav';
 import { BulkImportPage } from '../components/admin/BulkImportPage';
+import { ContactTrashTab } from '../components/admin/ContactTrashTab';
 import { DataLayerTab } from '../components/admin/DataLayerTab';
 import { LanguageServiceDataTab } from '../components/admin/LanguageServiceDataTab';
 import { InsightManagementTab } from '../components/admin/InsightManagementTab';
@@ -321,8 +322,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [contactModal, setContactModal] = useState<number | null>(null);
   const [showCreateContactModal, setShowCreateContactModal] = useState(false);
   const [showContactBulkImport, setShowContactBulkImport] = useState(false);
+  const [showContactTrash, setShowContactTrash] = useState(false);
   const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
   const [deleteConfirmContact, setDeleteConfirmContact] = useState<{ id: number; name: string } | null>(null);
+  const [deleteContactReason, setDeleteContactReason] = useState("");
   const [deletingContact, setDeletingContact] = useState<number | null>(null);
   const [showMergeModal, setShowMergeModal] = useState(false);
   const [primaryMergeId, setPrimaryMergeId] = useState<number | null>(null);
@@ -580,17 +583,21 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   useEffect(() => { setSelectedContactIds(new Set()); setContactPage(1); }, [showInactiveContacts]);
 
   const handleDeleteContact = async (contactId: number) => {
+    const reason = deleteContactReason.trim();
+    if (reason.length < 2) { setToast("삭제 사유를 2자 이상 입력해 주세요."); return; }
     setDeletingContact(contactId);
     try {
       const res = await fetch(api(`/api/admin/contacts/${contactId}`), {
-        method: "DELETE", headers: authHeaders,
+        method: "DELETE", headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ reason }),
       });
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
       setDeleteConfirmContact(null);
+      setDeleteContactReason("");
       setSelectedContactIds(prev => { const n = new Set(prev); n.delete(contactId); return n; });
       await fetchContacts();
-      setToast("담당자가 삭제(비활성) 처리되었습니다.");
+      setToast("담당자를 휴지통으로 이동했습니다.");
     } catch { setToast("오류: 담당자 삭제 실패"); }
     finally { setDeletingContact(null); }
   };
@@ -2067,16 +2074,30 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onDone={() => { void fetchContacts(); }}
         />
       )}
-      {adminTab === "contacts" && !showContactBulkImport && (
+      {adminTab === "contacts" && !showContactBulkImport && showContactTrash && (
+        <ContactTrashTab
+          token={token}
+          isAdmin={user.role === "admin"}
+          onToast={setToast}
+          onBack={() => setShowContactTrash(false)}
+          onRestored={() => { void fetchContacts(); }}
+        />
+      )}
+      {adminTab === "contacts" && !showContactBulkImport && !showContactTrash && (
         <Section title={`담당자 관리 (${contactTotal.toLocaleString()})`} action={
           <div style={{ display: "flex", gap: 8 }}>
+            <PrimaryBtn onClick={() => setShowCreateContactModal(true)} style={{ fontSize: 13, padding: "7px 14px" }}
+              data-testid="contact-create-btn" aria-label="담당자 등록">
+              + 담당자 등록
+            </PrimaryBtn>
             <GhostBtn onClick={() => setShowContactBulkImport(true)} style={{ fontSize: 13, padding: "7px 14px" }}
               data-testid="contact-bulk-import-btn" aria-label="담당자 대량등록">
               대량등록
             </GhostBtn>
-            <PrimaryBtn onClick={() => setShowCreateContactModal(true)} style={{ fontSize: 13, padding: "7px 14px" }}>
-              + 담당자 등록
-            </PrimaryBtn>
+            <GhostBtn onClick={() => setShowContactTrash(true)} style={{ fontSize: 13, padding: "7px 14px" }}
+              data-testid="contact-trash-btn" aria-label="담당자 휴지통">
+              🗑 휴지통
+            </GhostBtn>
           </div>
         }>
           {/* ── 담당자 등록 모달 ── */}
@@ -2199,7 +2220,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           <td style={{ ...tableTd }} onClick={e => e.stopPropagation()}>
                             {(c as any).isActive !== false && (
                               <button
-                                onClick={() => setDeleteConfirmContact({ id: c.id, name: c.name })}
+                                onClick={() => { setDeleteContactReason(""); setDeleteConfirmContact({ id: c.id, name: c.name }); }}
                                 disabled={deletingContact === c.id}
                                 style={{ fontSize: 11, padding: "3px 9px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 5, cursor: "pointer", fontWeight: 600 }}>
                                 삭제
@@ -2227,23 +2248,39 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             />
           )}
 
-          {/* ── 삭제 확인 모달 ── */}
+          {/* ── 삭제 확인 모달 (휴지통 이동, 삭제 사유 필수) ── */}
           {deleteConfirmContact && (
-            <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <div style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 400, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
+            <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
+              onClick={() => { if (!deletingContact) { setDeleteConfirmContact(null); setDeleteContactReason(""); } }}>
+              <div onClick={e => e.stopPropagation()} data-testid="modal-contact-delete"
+                style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 440, maxWidth: "92vw", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
                 <h3 style={{ margin: "0 0 10px", fontSize: 16, fontWeight: 800, color: "#111827" }}>담당자 삭제</h3>
                 <p style={{ margin: "0 0 6px", fontSize: 14, color: "#374151" }}>
-                  <strong>{deleteConfirmContact.name}</strong> 담당자를 삭제하시겠습니까?
+                  <strong>{deleteConfirmContact.name}</strong> 담당자를 휴지통으로 이동하시겠습니까?
                 </p>
-                <p style={{ margin: "0 0 20px", fontSize: 12, color: "#9ca3af" }}>삭제된 담당자는 목록에서 숨김 처리됩니다.</p>
+                <p style={{ margin: "0 0 14px", fontSize: 12, color: "#9ca3af" }}>휴지통으로 이동된 담당자는 목록에서 숨겨지며, 휴지통에서 복원할 수 있습니다.</p>
+                <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>삭제 사유 <span style={{ color: "#dc2626" }}>*</span></label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                  {["중복 등록", "잘못 등록", "퇴사", "연락처 변경", "기타"].map(preset => (
+                    <button key={preset} type="button" onClick={() => setDeleteContactReason(preset)}
+                      style={{ fontSize: 12, padding: "4px 10px", borderRadius: 6, border: "1px solid #d1d5db", background: deleteContactReason === preset ? "#eff6ff" : "#fff", color: deleteContactReason === preset ? "#2563eb" : "#6b7280", cursor: "pointer", fontWeight: 600 }}>
+                      {preset}
+                    </button>
+                  ))}
+                </div>
+                <input value={deleteContactReason} onChange={e => setDeleteContactReason(e.target.value)}
+                  placeholder="삭제 사유를 2자 이상 입력해 주세요"
+                  data-testid="contact-delete-reason-input" aria-label="담당자 삭제 사유"
+                  style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", fontSize: 13, border: "1px solid #d1d5db", borderRadius: 8, outline: "none", marginBottom: 20 }} />
                 <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                  <button onClick={() => setDeleteConfirmContact(null)} disabled={!!deletingContact}
+                  <button onClick={() => { setDeleteConfirmContact(null); setDeleteContactReason(""); }} disabled={!!deletingContact}
                     style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
                     취소
                   </button>
-                  <button onClick={() => handleDeleteContact(deleteConfirmContact.id)} disabled={!!deletingContact}
-                    style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: "#dc2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
-                    {deletingContact ? "삭제 중..." : "삭제"}
+                  <button onClick={() => handleDeleteContact(deleteConfirmContact.id)} disabled={!!deletingContact || deleteContactReason.trim().length < 2}
+                    data-testid="contact-delete-confirm-btn"
+                    style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: (!!deletingContact || deleteContactReason.trim().length < 2) ? "#fca5a5" : "#dc2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: (!!deletingContact || deleteContactReason.trim().length < 2) ? "not-allowed" : "pointer" }}>
+                    {deletingContact ? "이동 중..." : "휴지통으로 이동"}
                   </button>
                 </div>
               </div>
@@ -2441,7 +2478,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         }>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
             <input value={translatorSearch} onChange={e => setTranslatorSearch(e.target.value)}
-              placeholder="이름, 이메일, 가능언어, 학력, 지역 검색..."
+              placeholder="이름, 별칭, 이메일, 가능언어, 학력, 지역 검색..."
               style={{ ...inputStyle, maxWidth: 240, flex: "1 1 180px", padding: "8px 12px", fontSize: 13 }}
               onKeyDown={e => e.key === "Enter" && fetchTranslators()} />
             <input value={translatorLangFilter} onChange={e => setTranslatorLangFilter(e.target.value)}

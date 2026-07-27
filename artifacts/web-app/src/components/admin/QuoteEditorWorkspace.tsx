@@ -9,7 +9,8 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
 import { api, Product } from '../../lib/constants';
 import { Card, DsButton, ClickSelect, NumericInput } from '../ui';
-import { dsInput, dsInputStd, dsField, dsColH, dsRow, dsAmount, dsStickyPageHeader, C, BD, TBL, TYPO, SP, FORM, FIELD, CRM_FIELD_COLS } from '../../lib/ds';
+import { dsInput, dsInputStd, dsField, dsAmount, dsStickyPageHeader, C, BD, TBL, TYPO, SP, FORM, FIELD, CRM_FIELD_COLS } from '../../lib/ds';
+import { SVC_CFG, COL_H, SVC_FIELD_HINTS, tblRow } from './quoteItemsShared';
 import {
   getPolicy, validateCounts, calcPagesFromStr,
   type ValidationResult,
@@ -70,15 +71,8 @@ interface Contact   { id: number; name: string; companyId: number | null; divisi
 interface AdminUser { id: number; name?: string | null; email: string }
 
 // ─── 서비스 유형 설정 ─────────────────────────────────────────────────────────
+// SVC_CFG(유형 배지 라벨·색상)는 quoteItemsShared 로 이관되어 판매관리 뷰와 공유한다.
 
-const SVC_CFG: Record<ServiceType, { label: string; color: string; bg: string; border: string; dot: string }> = {
-  translation:    { label: '번역',   color: C.primary, bg: C.primaryBg, border: '#93c5fd', dot: '#3b82f6' },
-  interpretation: { label: '통역',   color: C.successText, bg: C.successBg, border: '#86efac', dot: '#10b981' },
-  equipment:      { label: '장비',   color: C.warning, bg: C.warningBg, border: '#fcd34d', dot: '#f59e0b' },
-  expense:        { label: '기타',   color: C.textMuted, bg: C.g50, border: C.g300, dot: C.g400 },
-  // 할인 — 연한 빨강/분홍 계열 (§8)
-  discount:       { label: '할인',   color: C.danger, bg: C.dangerBg, border: '#fca5a5', dot: '#ef4444' },
-};
 const SVC_DEFAULT_UNIT: Record<ServiceType, string> = {
   translation: '페이지', interpretation: '일', equipment: '세트', expense: '건', discount: '건',
 };
@@ -160,7 +154,8 @@ function calcItem(it: QuoteItemForm, vat: VatType, baseSupply = 0) {
   const tax = vat === 'taxable' ? Math.round(s * 0.1) : 0;  // 할인이면 s<0 → tax도 음수로 상쇄
   return { supply: s, tax, total: s + tax };
 }
-function calcTotals(items: QuoteItemForm[], vat: VatType) {
+// 견적·판매 공용 — 폼 항목 배열의 공급가액/부가세/합계 총합(할인 반영). 판매정보 금액 요약에서도 재사용.
+export function calcTotals(items: QuoteItemForm[], vat: VatType) {
   // 1) 비할인 상품 공급가 합계(할인 % 기준). 2) 할인 항목 포함 전체 합산.
   const nonDiscountSupply = items.reduce((a, it) => it.productType === 'discount' ? a : a + calcItem(it, vat).supply, 0);
   return items.reduce((a, it) => { const r = calcItem(it, vat, nonDiscountSupply); return { supply: a.supply + r.supply, tax: a.tax + r.tax, total: a.total + r.total }; }, { supply: 0, tax: 0, total: 0 });
@@ -283,19 +278,9 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
 // dsInput()의 로컬 alias. 이 파일의 모든 Grid Row 입력칸에 사용.
 const rinp = dsInput;
 
-// ─── 상품정보 Table Grid 정의 — DS TBL 토큰 기반 ─────────────────────────────
-// Header와 모든 Body Row가 동일한 grid-template-columns를 공유 → 컬럼 폭 변경 시 1곳만 수정.
-// 폭 배분 원칙(입력 우선순위): 서비스명·장소가 잘리지 않도록 우선 확보한다.
-//   서비스명 200·AI배지 24·수량 64 — 단위 64 / 단가 112 / 공급가액 112 / 비고 minmax(130,220) 고정.
-// ④ 동적필드 셀은 minmax(572px, 1fr): 통역 내부(기간174+운영132+시간86+인원56+장소100+gap16=564)가
-//   절대 겹치지 않는 최소폭을 보장하고(운영시간 132는 "예: 09:00~13:00"가 잘리지 않는 폭),
-//   폭이 남으면 1fr로 확장(장소가 흡수).
-// 행제어 유형 서비스명  동적          AI  수량 단위 단가  공급가액  비고
-const TABLE_COLS = '82px 60px 200px minmax(572px, 1fr) 24px 64px 64px 112px 112px minmax(130px, 220px)';
-// 모든 컬럼 최소폭 합(+colGap 9×5 +padding 16). 브라우저 폭이 이 값 미만이면
-// 상품정보 카드 내부에만 가로 스크롤이 생기고, 행은 항상 한 줄을 유지한다 (지시문 §4~§7).
-const TABLE_MIN_W = 1484;
-const tblRow: React.CSSProperties = dsRow(TABLE_COLS, { minWidth: TABLE_MIN_W });
+// 상품정보 Grid 레이아웃 상수(TABLE_COLS/TABLE_MIN_W/tblRow)와 유형 배지(SVC_CFG),
+// 컬럼 힌트(SVC_FIELD_HINTS), 헤더 스타일(COL_H)은 판매관리 읽기전용 뷰와 공유하기 위해
+// quoteItemsShared 로 이관되었다. 여기서는 import 하여 그대로 사용한다.
 
 // ─── 행 내부 드롭다운 앵커 (fixed 포지셔닝) ───────────────────────────────────
 // 상품정보 표는 폭이 좁아지면 카드 내부에서 가로 스크롤(overflow-x)이 걸린다.
@@ -1484,17 +1469,82 @@ function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint }: {
   );
 }
 
-// ─── 컬럼 헤더 레이블 스타일 — DS dsColH 기반 ────────────────────────────────
+// COL_H(컬럼 헤더 스타일)·SVC_FIELD_HINTS(④ 동적필드 헤더 힌트)는 quoteItemsShared 로
+// 이관되어 판매관리 읽기전용 뷰와 공유한다. (이 파일 상단에서 import)
 
-const COL_H: React.CSSProperties = dsColH('center');
+// ─── 상품정보 편집 그리드 (공용 편집 컴포넌트) ──────────────────────────────────
+// 견적관리 편집기와 판매관리 수정모드가 동일하게 사용하는 편집 그리드.
+// 헤더행 + 항목 행(QuoteItemRow) + 유형별 추가버튼을 렌더하며, 행 제어(추가/삭제/이동)는
+// onItemsChange 기반으로 파생한다. 상위(카드/섹션 제목)와 상태 소유는 사용하는 화면이 담당한다.
+// (Card·CardSectionHeader 는 포함하지 않는다 — 견적='상품정보' / 판매='판매정보' 로 각자 표기)
+export function QuoteItemsEditor({ items, onItemsChange, vatType, products }: {
+  items: QuoteItemForm[];
+  onItemsChange: (items: QuoteItemForm[]) => void;
+  vatType: VatType;
+  products: Product[];
+}) {
+  const updateItem   = (idx: number, p: Partial<QuoteItemForm>) => onItemsChange(items.map((it, i) => i === idx ? { ...it, ...p } : it));
+  const addItemBelow = (idx: number) => onItemsChange([...items.slice(0, idx + 1), defaultItem(), ...items.slice(idx + 1)]);
+  const removeItem   = (idx: number) => onItemsChange(items.length > 1 ? items.filter((_, i) => i !== idx) : items);
+  const moveItem     = (idx: number, dir: 'up' | 'down') => {
+    const next = [...items]; const swap = dir === 'up' ? idx - 1 : idx + 1;
+    if (swap < 0 || swap >= next.length) return;
+    [next[idx], next[swap]] = [next[swap], next[idx]]; onItemsChange(next);
+  };
+  const fieldHint = (() => { const t = [...new Set(items.map(it => it.productType))]; return t.length === 1 ? SVC_FIELD_HINTS[t[0]] : '서비스별 상세 입력 필드'; })();
+  // 할인 항목(%)의 기준이 되는 비할인 상품 공급가액 합계 — 모든 행에 공통 전달
+  const baseSupply = items.reduce((a, it) => it.productType === 'discount' ? a : a + calcItem(it, vatType).supply, 0);
 
-const SVC_FIELD_HINTS: Record<ServiceType, string> = {
-  translation:    '파일명 / 파일형식 / 단어수 / 글자수',
-  interpretation: '시작일 ~ 종료일 / 시작시간 ~ 종료시간 / 장소 / 인원',
-  equipment:      '시작일 ~ 종료일 / 사용 장소 / 사용일수',
-  expense:        '서비스유형 (공증·속기·녹취·더빙·편집·감수·DTP 등)',
-  discount:       '할인방식 / 할인값 / 할인사유',
-};
+  return (
+    <>
+      {/* 반응형 — 폭이 부족하면 이 영역(헤더+행)에만 가로 스크롤이 생긴다. */}
+      <div style={{ overflowX: 'auto', scrollbarWidth: 'thin' }}>
+        {/* 컬럼 헤더 — TABLE_COLS 공유 Grid (Body Row와 완전 동일 구조) */}
+        <div style={{ ...tblRow, padding: '0 8px 7px', borderBottom: BD.grid, marginBottom: 3 }}>
+          <div style={{ ...COL_H }}>행 제어</div>
+          <div style={{ ...COL_H }}>유형</div>
+          <div style={{ ...COL_H, textAlign: 'left' }}>상품 🔍🧽</div>
+          <div style={{ ...COL_H, textAlign: 'left' }}>{fieldHint}</div>
+          <div style={{ ...COL_H }}>AI</div>
+          <div style={{ ...COL_H }}>수량</div>
+          <div style={{ ...COL_H }}>단위</div>
+          <div style={{ ...COL_H, textAlign: 'right' }}>단가</div>
+          <div style={{ ...COL_H, textAlign: 'right', paddingRight: 6 }}>공급가액</div>
+          <div style={{ ...COL_H, textAlign: 'left', borderLeft: BD.grid, paddingLeft: 14 }}>비고</div>
+        </div>
+
+        {/* 항목 행 */}
+        <div>
+          {items.map((it, idx) => (
+            <QuoteItemRow key={idx} it={it} idx={idx} total={items.length} vatType={vatType} baseSupply={baseSupply} products={products}
+              updateItem={updateItem} removeItem={removeItem} addItemBelow={addItemBelow} moveItem={moveItem} />
+          ))}
+        </div>
+      </div>
+
+      {/* 유형별 항목 추가 버튼 (+ 할인 항목 포함) */}
+      <div style={{ display: 'flex', gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
+        {(['translation', 'interpretation', 'equipment', 'expense', 'discount'] as ServiceType[]).map(type => {
+          const c = SVC_CFG[type];
+          return (
+            <button key={type} type="button"
+              data-testid={`btn-add-item-${type}`} aria-label={`${c.label} 항목 추가`}
+              onClick={() => onItemsChange([...items, { ...defaultItem(), ...defaultItemForType(type) }])}
+              style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: c.color, background: c.bg, border: `1px dashed ${c.border}`, borderRadius: 7, padding: '5px 12px', cursor: 'pointer', fontWeight: 600 }}
+              onMouseEnter={e => (e.currentTarget.style.opacity = '0.75')} onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
+              + {c.label} 항목
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+// 폼 항목(QuoteItemForm[]) → 저장 API body(items) 매핑 — 견적·판매 저장에서 공용 사용.
+export function buildQuoteItemsBody(items: QuoteItemForm[], vat: VatType) {
+  return items.map(it => toApiItem(it, vat));
+}
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -1661,14 +1711,7 @@ export function QuoteEditorWorkspace({
     .map(c => ({ id: c.id, label: c.name, sub: c.divisionName ?? undefined }));
   const adminOptions   = adminList.map(u => ({ id: u.id, label: u.name ?? u.email }));
 
-  const updateItem   = (idx: number, p: Partial<QuoteItemForm>) => setItems(prev => prev.map((it, i) => i === idx ? { ...it, ...p } : it));
-  const addItemBelow = (idx: number) => setItems(prev => [...prev.slice(0, idx + 1), defaultItem(), ...prev.slice(idx + 1)]);
-  const removeItem   = (idx: number) => setItems(prev => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev);
-  const moveItem     = (idx: number, dir: 'up' | 'down') => setItems(prev => {
-    const next = [...prev]; const swap = dir === 'up' ? idx - 1 : idx + 1;
-    if (swap < 0 || swap >= next.length) return prev;
-    [next[idx], next[swap]] = [next[swap], next[idx]]; return next;
-  });
+  // 항목 행 제어(추가/삭제/이동)는 QuoteItemsEditor 내부에서 onItemsChange 기반으로 처리한다.
 
   // AI 초안 → QuoteItemForm 변환 후 기존 Row 아래에 추가
   const handleApplyAiRows = (draftRows: AiDraftRow[]) => {
@@ -1719,7 +1762,6 @@ export function QuoteEditorWorkspace({
   };
 
   const totals = calcTotals(items, vatType);
-  const fieldHint = (() => { const t = [...new Set(items.map(it => it.productType))]; return t.length === 1 ? SVC_FIELD_HINTS[t[0]] : '서비스별 상세 입력 필드'; })();
 
   // 저장 실행부 — 편집 화면을 닫지 않고 저장만 수행하고 { quoteId, projectId }를 반환한다.
   // 신규 견적은 최초 저장 시 생성하고 savedQuoteId를 기록 → 이후(저장/견적서)엔 동일 견적을 업데이트(중복 생성 방지).
@@ -1939,54 +1981,8 @@ export function QuoteEditorWorkspace({
       <Card>
         <CardSectionHeader badge="B" badgeBg="#f0fdf4" badgeColor="#16a34a" title="상품정보" hint="← 유형 클릭으로 번역/통역/장비/기타 전환" />
 
-        {/* 반응형 — 폭이 부족하면 이 영역(헤더+행)에만 가로 스크롤이 생긴다. 페이지 전체나
-            카드 밖으로 Row가 밀려나지 않고, 각 행은 min-width(TABLE_MIN_W)로 항상 한 줄을
-            유지한다. 행 안의 드롭다운은 position:fixed(useFixedAnchor)라 이 overflow 컨테이너에
-            잘리지 않는다 (지시문 §2~§8).
-            overflow-x:auto → 폭이 충분하면 스크롤바 미표시, 최소폭 미만일 때만 자동 생성. */}
-        <div style={{ overflowX: 'auto', scrollbarWidth: 'thin' }}>
-          {/* 컬럼 헤더 — TABLE_COLS 공유 Grid (Body Row와 완전 동일 구조) */}
-          <div style={{ ...tblRow, padding: '0 8px 7px', borderBottom: BD.grid, marginBottom: 3 }}>
-            <div style={{ ...COL_H }}>행 제어</div>
-            <div style={{ ...COL_H }}>유형</div>
-            <div style={{ ...COL_H, textAlign: 'left' }}>상품 🔍🧽</div>
-            <div style={{ ...COL_H, textAlign: 'left' }}>{fieldHint}</div>
-            <div style={{ ...COL_H }}>AI</div>
-            <div style={{ ...COL_H }}>수량</div>
-            <div style={{ ...COL_H }}>단위</div>
-            <div style={{ ...COL_H, textAlign: 'right' }}>단가</div>
-            <div style={{ ...COL_H, textAlign: 'right', paddingRight: 6 }}>공급가액</div>
-            <div style={{ ...COL_H, textAlign: 'left', borderLeft: BD.grid, paddingLeft: 14 }}>비고</div>
-          </div>
-
-          {/* 항목 행 */}
-          <div>
-            {(() => {
-              // 할인 항목(%)의 기준이 되는 비할인 상품 공급가액 합계 — 모든 행에 공통 전달
-              const baseSupply = items.reduce((a, it) => it.productType === 'discount' ? a : a + calcItem(it, vatType).supply, 0);
-              return items.map((it, idx) => (
-                <QuoteItemRow key={idx} it={it} idx={idx} total={items.length} vatType={vatType} baseSupply={baseSupply} products={products}
-                  updateItem={updateItem} removeItem={removeItem} addItemBelow={addItemBelow} moveItem={moveItem} />
-              ));
-            })()}
-          </div>
-        </div>
-
-        {/* 유형별 항목 추가 버튼 (+ 할인 항목 포함) */}
-        <div style={{ display: 'flex', gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
-          {(['translation', 'interpretation', 'equipment', 'expense', 'discount'] as ServiceType[]).map(type => {
-            const c = SVC_CFG[type];
-            return (
-              <button key={type} type="button"
-                data-testid={`btn-add-item-${type}`} aria-label={`${c.label} 항목 추가`}
-                onClick={() => setItems(prev => [...prev, { ...defaultItem(), ...defaultItemForType(type) }])}
-                style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: c.color, background: c.bg, border: `1px dashed ${c.border}`, borderRadius: 7, padding: '5px 12px', cursor: 'pointer', fontWeight: 600 }}
-                onMouseEnter={e => (e.currentTarget.style.opacity = '0.75')} onMouseLeave={e => (e.currentTarget.style.opacity = '1')}>
-                + {c.label} 항목
-              </button>
-            );
-          })}
-        </div>
+        {/* 상품정보 편집 그리드 — 판매관리 수정모드와 공용(QuoteItemsEditor) */}
+        <QuoteItemsEditor items={items} onItemsChange={setItems} vatType={vatType} products={products} />
       </Card>
 
       {/* ── C. 금액 요약 ─────────────────────────────────────────────────── */}

@@ -16,6 +16,7 @@ import { TranslatorRateEntryCard, RateEntryData, emptyRateEntry } from "./Transl
 import { ResumeAnalyzePanel, ResumeAnalysisResult } from "./ResumeAnalyzePanel";
 import { TranslatorEvidenceDocumentsSection } from "./TranslatorEvidenceDocumentsSection";
 import { DocumentPreviewModal } from "./DocumentPreviewModal";
+import { AliasSection } from "./AliasSection";
 
 // ── 이력서 파일 형식 정책 ──────────────────────────────────────────────────────
 const RESUME_ALLOWED_EXTS = [".pdf", ".doc", ".docx", ".txt", ".hwp", ".hwpx"] as const;
@@ -1217,6 +1218,13 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 <label style={{ ...labelSt, fontSize: 11 }}>휴대폰번호</label>
                 <input type="tel" value={form.phone} onChange={e => setForm(p => ({ ...p, phone: formatPhoneNumber(e.target.value) }))}
                   placeholder="010-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+              </div>
+              {/* 별칭(Alias) — 거래처 상세와 동일한 Tag UI(bound 모드: 즉시 서버 반영) */}
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ ...labelSt, fontSize: 11 }}>별칭(Alias) <span style={{ color: "#9ca3af", fontWeight: 400 }}>(영문명·한국명·활동명·약칭 등)</span></label>
+                <div style={{ paddingTop: 2 }}>
+                  <AliasSection basePath={`/api/admin/translators/${userId}`} token={token} onToast={onToast} compact />
+                </div>
               </div>
               {/* 이메일 — 인라인 +/- 버튼, 별도 추가줄 없음 */}
               <div style={{ gridColumn: "1 / -1" }}>

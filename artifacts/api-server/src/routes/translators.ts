@@ -7,9 +7,11 @@ import {
   db, usersTable, translatorProfilesTable, translatorRatesTable,
   translatorProductsTable, productsTable, translatorSensitiveTable,
   tasksTable, settlementsTable, logsTable, translatorEmailsTable,
-  notesTable, invitationsTable, companiesTable,
+  notesTable, invitationsTable, companiesTable, translatorAliasesTable,
 } from "@workspace/db";
-import { eq, and, ilike, or, sql, desc, gte, lte, inArray, isNotNull } from "drizzle-orm";
+import { eq, and, ilike, ne, or, sql, desc, gte, lte, inArray, isNotNull } from "drizzle-orm";
+import { normalizeCompanyName } from "../lib/normalizeCompany";
+import { buildTranslatorAliasValues, ensureDefaultTranslatorAlias } from "../lib/translatorAlias";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { encrypt, decrypt, maskResidentNumber } from "../lib/encrypt";
@@ -448,13 +450,24 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
 
     if (search?.trim()) {
       const s = search.trim().toLowerCase();
+      // Alias 매칭 — 별칭도 이름과 동일한 검색 대상. 원문(aliasName) 부분일치 + 정규화(normalizedAlias) 부분일치.
+      const ns = normalizeCompanyName(s);
+      const aliasRows = await db
+        .select({ translatorId: translatorAliasesTable.translatorId })
+        .from(translatorAliasesTable)
+        .where(or(...[
+          ilike(translatorAliasesTable.aliasName, `%${s}%`),
+          ns ? ilike(translatorAliasesTable.normalizedAlias, `%${ns}%`) : undefined,
+        ].filter(Boolean) as any));
+      const aliasMatchIds = new Set(aliasRows.map(a => a.translatorId));
       result = result.filter(t =>
         t.email.toLowerCase().includes(s) ||
         (t.name ?? "").toLowerCase().includes(s) ||
         (t.phone ?? "").toLowerCase().includes(s) ||
         (t.languagePairs ?? "").toLowerCase().includes(s) ||
         (t.education ?? "").toLowerCase().includes(s) ||
-        (t.region ?? "").toLowerCase().includes(s)
+        (t.region ?? "").toLowerCase().includes(s) ||
+        aliasMatchIds.has(t.id)
       );
     }
     if (languagePair?.trim()) {
@@ -545,6 +558,11 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
     await db.insert(translatorEmailsTable).values({
       translatorId: newUser.id, email: newUser.email, isPrimary: true,
     });
+
+    // 실제 이름 기반 기본 Alias(isPrimary) 시딩 — 실명 검색 일관성 확보(화면에는 숨김).
+    // 실패해도 등록 자체는 성공 처리(거래처 ensureDefaultAlias 와 동일 원칙).
+    try { await ensureDefaultTranslatorAlias(db, newUser.id, newUser.name ?? ""); }
+    catch (e) { req.log.warn({ e, translatorId: newUser.id }, "Translator: default alias seed skipped"); }
 
     // 소속 회사명 조회 (설정된 경우에만)
     const affiliatedCompanyName = profile.affiliatedCompanyId
@@ -3107,6 +3125,95 @@ router.delete("/admin/translators/:id", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Translators: failed to deactivate");
     res.status(500).json({ error: "비활성 처리 중 오류가 발생했습니다. 관리자에게 문의하세요." });
+  }
+});
+
+// ─── 통번역사 이름 Alias(별칭) CRUD ─────────────────────────────────────────
+// 거래처 Alias(/admin/companies/:id/aliases)와 동일한 규약·검증. 화면에는 비-Primary만 노출.
+
+// 목록
+router.get("/admin/translators/:id/aliases", ...adminGuard, async (req, res) => {
+  const translatorId = Number(req.params.id);
+  if (isNaN(translatorId) || translatorId <= 0) { res.status(400).json({ error: "유효하지 않은 translator id." }); return; }
+  try {
+    const rows = await db.select().from(translatorAliasesTable)
+      .where(eq(translatorAliasesTable.translatorId, translatorId))
+      .orderBy(desc(translatorAliasesTable.isPrimary), translatorAliasesTable.id);
+    res.json(rows);
+  } catch (err) {
+    req.log.error({ err }, "TranslatorAliases: failed to list");
+    res.status(500).json({ error: "별칭 조회 실패." });
+  }
+});
+
+// 추가
+router.post("/admin/translators/:id/aliases", ...adminGuard, async (req, res) => {
+  const translatorId = Number(req.params.id);
+  if (isNaN(translatorId) || translatorId <= 0) { res.status(400).json({ error: "유효하지 않은 translator id." }); return; }
+  const aliasName = ((req.body as any)?.aliasName ?? "").toString().trim();
+  if (!aliasName) { res.status(400).json({ error: "별칭을 입력해주세요." }); return; }
+  const normalizedAlias = normalizeCompanyName(aliasName);
+  if (!normalizedAlias) { res.status(400).json({ error: "유효한 별칭이 아닙니다." }); return; }
+  try {
+    const [translator] = await db.select({ id: usersTable.id }).from(usersTable)
+      .where(and(eq(usersTable.id, translatorId), eq(usersTable.role, "translator")));
+    if (!translator) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
+    const [dup] = await db.select({ id: translatorAliasesTable.id }).from(translatorAliasesTable)
+      .where(and(eq(translatorAliasesTable.translatorId, translatorId), eq(translatorAliasesTable.normalizedAlias, normalizedAlias)));
+    if (dup) { res.status(409).json({ error: "이미 등록된 별칭입니다." }); return; }
+    const [created] = await db.insert(translatorAliasesTable)
+      .values(buildTranslatorAliasValues(translatorId, aliasName, false)).returning();
+    res.status(201).json(created);
+  } catch (err) {
+    req.log.error({ err }, "TranslatorAliases: failed to create");
+    res.status(500).json({ error: "별칭 등록 실패." });
+  }
+});
+
+// 수정
+router.put("/admin/translators/:id/aliases/:aliasId", ...adminGuard, async (req, res) => {
+  const translatorId = Number(req.params.id);
+  const aliasId = Number(req.params.aliasId);
+  if (isNaN(translatorId) || translatorId <= 0 || isNaN(aliasId) || aliasId <= 0) { res.status(400).json({ error: "유효하지 않은 id." }); return; }
+  const aliasName = ((req.body as any)?.aliasName ?? "").toString().trim();
+  if (!aliasName) { res.status(400).json({ error: "별칭을 입력해주세요." }); return; }
+  const normalizedAlias = normalizeCompanyName(aliasName);
+  if (!normalizedAlias) { res.status(400).json({ error: "유효한 별칭이 아닙니다." }); return; }
+  try {
+    const [existing] = await db.select().from(translatorAliasesTable)
+      .where(and(eq(translatorAliasesTable.id, aliasId), eq(translatorAliasesTable.translatorId, translatorId)));
+    if (!existing) { res.status(404).json({ error: "별칭을 찾을 수 없습니다." }); return; }
+    const [dup] = await db.select({ id: translatorAliasesTable.id }).from(translatorAliasesTable)
+      .where(and(
+        eq(translatorAliasesTable.translatorId, translatorId),
+        eq(translatorAliasesTable.normalizedAlias, normalizedAlias),
+        ne(translatorAliasesTable.id, aliasId),
+      ));
+    if (dup) { res.status(409).json({ error: "이미 등록된 별칭입니다." }); return; }
+    const [updated] = await db.update(translatorAliasesTable)
+      .set({ aliasName, normalizedAlias, updatedAt: new Date() })
+      .where(eq(translatorAliasesTable.id, aliasId)).returning();
+    res.json(updated);
+  } catch (err) {
+    req.log.error({ err }, "TranslatorAliases: failed to update");
+    res.status(500).json({ error: "별칭 수정 실패." });
+  }
+});
+
+// 삭제
+router.delete("/admin/translators/:id/aliases/:aliasId", ...adminGuard, async (req, res) => {
+  const translatorId = Number(req.params.id);
+  const aliasId = Number(req.params.aliasId);
+  if (isNaN(translatorId) || translatorId <= 0 || isNaN(aliasId) || aliasId <= 0) { res.status(400).json({ error: "유효하지 않은 id." }); return; }
+  try {
+    const [existing] = await db.select({ id: translatorAliasesTable.id }).from(translatorAliasesTable)
+      .where(and(eq(translatorAliasesTable.id, aliasId), eq(translatorAliasesTable.translatorId, translatorId)));
+    if (!existing) { res.status(404).json({ error: "별칭을 찾을 수 없습니다." }); return; }
+    await db.delete(translatorAliasesTable).where(eq(translatorAliasesTable.id, aliasId));
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "TranslatorAliases: failed to delete");
+    res.status(500).json({ error: "별칭 삭제 실패." });
   }
 });
 

@@ -11,13 +11,17 @@
 //        (둘 다 기존 견적관리·판매모달과 동일 파이프라인: buildQuotePdfData)
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useCallback, useEffect, useState } from 'react';
-import { api } from '../lib/constants';
+import { api, type Product } from '../lib/constants';
 import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn } from '../components/ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../lib/ds';
-import { buildQuotePdfData, displayUnit, parseMemoInfo, type QuoteDetail } from '../lib/quotePdf';
+import { buildQuotePdfData, type QuoteDetail } from '../lib/quotePdf';
 import { renderQuoteTitle } from '../lib/quoteTitle';
 import QuotePdfPreviewModal from '../components/admin/QuotePdfPreviewModal';
 import TransactionStatementModal from '../components/admin/TransactionStatementModal';
+import QuoteItemsView, { SaleTotalsRows } from '../components/admin/QuoteItemsView';
+import { QuoteItemsEditor, buildQuoteItemsBody, calcTotals, type QuoteItemForm } from '../components/admin/QuoteEditorWorkspace';
+import { convertToFormItem } from '../lib/quoteItemForm';
+import PerformanceSection from '../components/admin/PerformanceSection';
 
 // ─── 로컬 라벨 맵 (견적관리 상세와 동일 문구) ────────────────────────────────
 const QUOTE_TYPE_LABEL: Record<string, string> = {
@@ -34,14 +38,15 @@ const VAT_LABEL: Record<string, string> = {
 
 // ─── CardSectionHeader — QuoteEditorWorkspace의 동일 컴포넌트 복제 ────────────
 // (원본은 export 되어 있지 않아 디자인 시스템 토큰으로 동일하게 재현)
-function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint }: {
-  badge: string; badgeBg: string; badgeColor: string; title: string; hint?: string;
+function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint, right }: {
+  badge: string; badgeBg: string; badgeColor: string; title: string; hint?: string; right?: React.ReactNode;
 }) {
   return (
     <div style={{ ...TYPO.sectionTitle, paddingBottom: SP[4], borderBottom: BD.grid, marginBottom: SP[6], display: 'flex', alignItems: 'center', gap: SP[3] }}>
       <span style={{ width: 22, height: 22, borderRadius: BD.radius.md, background: badgeBg, color: badgeColor, fontSize: 12, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{badge}</span>
       {title}
       {hint && <span style={{ ...TYPO.helper, marginLeft: SP[2] }}>{hint}</span>}
+      {right && <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 14, flexWrap: 'wrap' }}>{right}</div>}
     </div>
   );
 }
@@ -57,8 +62,6 @@ function ReadField({ label, value }: { label: string; value: React.ReactNode }) 
     </div>
   );
 }
-
-const fmt = (n: unknown) => Number(n ?? 0).toLocaleString();
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 interface AdminUserLite { id: number; name?: string | null | undefined; email: string }
@@ -81,6 +84,12 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   const [pdfLoading,  setPdfLoading]  = useState(false);
   const [stmtLoading, setStmtLoading] = useState(false);
   const [deleting,    setDeleting]    = useState(false);
+
+  // ── 판매정보 수정모드 (기본=조회) ─────────────────────────────────────────
+  const [editMode,  setEditMode]  = useState(false);
+  const [editItems, setEditItems] = useState<QuoteItemForm[]>([]);
+  const [products,  setProducts]  = useState<Product[]>([]);
+  const [saving,    setSaving]    = useState(false);
 
   // ── 판매 상세(=프로젝트 + 원본 견적) 조회 ─────────────────────────────────
   const fetchDetail = useCallback(async () => {
@@ -109,6 +118,71 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   const saleConfirmed = ['approved', 'paid', 'matched', 'in_progress', 'completed'].includes(project?.status);
 
   const quoteDocTitle = quote ? (quote.title ?? quote.quoteNumber ?? `견적 #${quote.id}`) : '';
+
+  // ── 판매정보 수정모드: 진입 / 취소 / 저장 ─────────────────────────────────
+  // 편집 컴포넌트(QuoteItemsEditor)·저장 payload 빌더(buildQuoteItemsBody)는 견적관리와 공용.
+  // 상품 검색용 마스터는 수정모드 진입 시 1회 로드한다.
+  const loadProducts = useCallback(async () => {
+    if (products.length > 0) return;
+    try {
+      const res = await fetch(api('/api/admin/products'), { headers: authH });
+      const data = await res.json().catch(() => []);
+      setProducts(Array.isArray(data) ? data.filter((p: Product) => p.active) : []);
+    } catch { /* 상품 로드 실패 시 검색만 제한 — 편집 자체는 가능 */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [products.length, token]);
+
+  const enterEdit = () => {
+    setEditItems(items.map(convertToFormItem));   // 저장 품목 → 폼 모델(견적 편집 진입과 동일 해석)
+    loadProducts();
+    setEditMode(true);
+  };
+
+  const cancelEdit = () => {
+    setEditItems([]);       // 수정 내용 폐기 → 조회는 원본 items 사용 (수정 전 상태 복원)
+    setEditMode(false);
+  };
+
+  // 저장 = 현재 판매 견적 in-place 갱신(품목만). 원견적/파생견적 엔진은 이번 범위 아님 —
+  // 향후 엔진 도입 시 이 함수 한 곳만 판매적용 엔드포인트로 교체하면 된다.
+  const saveSaleItems = async () => {
+    if (!quote || saving) return;
+    if (editItems.length === 0) { setToast('최소 1개 이상의 품목이 필요합니다.'); return; }
+    setSaving(true);
+    try {
+      const vat = items[0]?.taxType ?? 'taxable';   // 판매 견적의 부가세 유형(품목 기준)
+      const issue = quote.issueDate || undefined;
+      const validUntil = issue
+        ? (d => d.toISOString().split('T')[0])(new Date(new Date(issue).getTime() + 30 * 86400000))
+        : undefined;
+      const res = await fetch(api(`/api/admin/quotes/${quote.id}`), {
+        method: 'PUT',
+        headers: { ...authH, 'Content-Type': 'application/json' },
+        // 품목만 갱신 — 메타데이터(제목/비고/유형/견적일)는 기존값 유지, 프로젝트 CRM 링크는 미전송(불변)
+        body: JSON.stringify({
+          items: buildQuoteItemsBody(editItems, vat),
+          quoteType: quote.quoteType,
+          billingType: 'postpaid_per_project',
+          taxDocumentType: 'tax_invoice',
+          taxCategory: 'normal',
+          issueDate: issue,
+          validUntil,
+          note: quote.note ?? undefined,
+          title: quote.title ?? undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { setToast(`판매정보 저장 실패: ${data.error ?? res.status}`); return; }
+      setEditMode(false);
+      setEditItems([]);
+      await fetchDetail();          // 서버 재계산 금액 반영
+      setToast('판매정보가 저장되었습니다.');
+    } catch {
+      setToast('판매정보 저장 중 오류가 발생했습니다. 다시 시도해 주세요.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // ── 견적서 PDF (기존 견적관리와 동일 파이프라인) ──────────────────────────
   const handleQuotePdf = async () => {
@@ -193,17 +267,9 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   const pmName = pm ? (pm.name ?? pm.email) : null;
   const vatType = items[0]?.taxType ?? 'taxable';
 
-  const totals = items.reduce((acc, it) => {
-    acc.supply += Number(it.supplyAmount ?? 0);
-    acc.tax    += Number(it.taxAmount ?? 0);
-    acc.total  += Number(it.totalAmount ?? 0);
-    return acc;
-  }, { supply: 0, tax: 0, total: 0 });
-
-  // 견적관리 상품 Grid와 동일한 밀도 — Header=gridHeader(12/600), Row=inputValue(13), Row높이 ≈ 42
-  const th: React.CSSProperties = { ...TYPO.gridHeader, padding: '0 8px 8px', textAlign: 'left', borderBottom: BD.grid, whiteSpace: 'nowrap' };
-  const td: React.CSSProperties = { ...TYPO.inputValue, padding: '9px 8px', borderBottom: BD.divider, verticalAlign: 'middle' };
-  const tdNum: React.CSSProperties = { ...td, textAlign: 'right', whiteSpace: 'nowrap' };
+  // 수정모드 판매금액 요약 — 편집 항목의 실시간 계산(편집 그리드와 동일).
+  // 조회모드 요약은 QuoteItemsView 내부에서 저장값으로 표시(테이블의 일부).
+  const editTotals = editMode ? calcTotals(editItems, vatType) : { supply: 0, tax: 0, total: 0 };
 
   return (
     // 견적관리 상세(asPage)와 동일한 폭 정책 — 별도 maxWidth 없이 관리자 본문 가용 폭 사용.
@@ -289,65 +355,47 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             </div>
           </Card>
 
-          {/* ── B. 상품정보 ─────────────────────────────────────────────── */}
+          {/* ── B. 판매정보 ─────────────────────────────────────────────── */}
+          {/* 조회모드: 읽기전용 뷰(QuoteItemsView). 수정모드: 견적관리와 공용 편집 그리드(QuoteItemsEditor).
+              제목에는 수정/저장·취소 버튼만, 판매금액 요약은 테이블 하단 우측에 배치한다(§1·§2).
+              큰 금액요약 박스는 만들지 않는다(§3). 저장은 현재 견적 in-place 갱신(품목만). */}
           <Card>
-            <CardSectionHeader badge="B" badgeBg="#f0fdf4" badgeColor="#16a34a" title="상품정보" />
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 820, tableLayout: 'auto' }}>
-                <thead>
-                  <tr>
-                    {['상품명', '파일명', '형식', '단어수', '글자수', '수량', '단위', '단가', '공급가액', '부가세', '합계'].map((h, i) => (
-                      <th key={h} style={{ ...th, textAlign: i >= 7 ? 'right' : 'left' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((it, idx) => {
-                    const { fields } = parseMemoInfo(it.memo);
-                    return (
-                      <tr key={idx}>
-                        <td style={{ ...td, fontWeight: 600, minWidth: 160 }}>
-                          {it.productName}
-                          {it.languagePair && <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{it.languagePair}</div>}
-                        </td>
-                        <td style={td}>{fields['파일'] || '—'}</td>
-                        <td style={td}>{fields['형식'] || '—'}</td>
-                        <td style={tdNum}>{fields['단어수'] || '—'}</td>
-                        <td style={tdNum}>{fields['글자수'] || '—'}</td>
-                        <td style={tdNum}>{fmt(it.quantity)}</td>
-                        <td style={td}>{displayUnit(it.productName, it.unit) || '—'}</td>
-                        <td style={tdNum}>{fmt(it.unitPrice)}</td>
-                        <td style={tdNum}>{fmt(it.supplyAmount)}</td>
-                        <td style={tdNum}>{fmt(it.taxAmount)}</td>
-                        <td style={{ ...tdNum, fontWeight: 700 }}>{fmt(it.totalAmount)}</td>
-                      </tr>
-                    );
-                  })}
-                  {items.length === 0 && (
-                    <tr><td colSpan={11} style={{ ...td, textAlign: 'center', color: C.g400 }}>등록된 품목이 없습니다.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <CardSectionHeader badge="B" badgeBg="#f0fdf4" badgeColor="#16a34a" title="판매정보"
+              hint={editMode ? '수정 중 — 저장 시 반영됩니다' : undefined}
+              right={editMode ? (
+                <>
+                  <GhostBtn onClick={cancelEdit} disabled={saving} style={{ fontSize: 12, padding: '6px 12px' }}
+                    data-testid="btn-sales-items-cancel" aria-label="수정 취소">취소</GhostBtn>
+                  <PrimaryBtn onClick={saveSaleItems} disabled={saving} style={{ fontSize: 12, padding: '6px 12px' }}
+                    data-testid="btn-sales-items-save" aria-label="판매정보 저장">{saving ? '저장 중…' : '저장'}</PrimaryBtn>
+                </>
+              ) : (
+                <GhostBtn onClick={enterEdit} style={{ fontSize: 12, padding: '6px 12px' }}
+                  data-testid="btn-sales-items-edit" aria-label="판매정보 수정">✏ 판매정보 수정</GhostBtn>
+              )}
+            />
+            {editMode ? (
+              <>
+                <QuoteItemsEditor items={editItems} onItemsChange={setEditItems} vatType={vatType} products={products} />
+                {/* 수정모드 — 편집 그리드와 동일 폭의 overflow 안에 합계 행을 렌더해 공급가액 컬럼과 정렬.
+                    조회모드는 QuoteItemsView 내부에 합계 행이 포함된다. */}
+                <div style={{ overflowX: 'auto', scrollbarWidth: 'thin' }}>
+                  <SaleTotalsRows supply={editTotals.supply} tax={editTotals.tax} total={editTotals.total} />
+                </div>
+              </>
+            ) : (
+              <QuoteItemsView items={items} />
+            )}
           </Card>
 
-          {/* ── C. 금액 요약 ─────────────────────────────────────────────── */}
-          <Card>
-            <CardSectionHeader badge="C" badgeBg="#fffbeb" badgeColor="#d97706" title="금액 요약" />
-            {/* 견적관리 금액 요약과 동일한 박스 레이아웃 (읽기전용) */}
-            <div style={{ display: 'flex', gap: SP[6], justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-              {[{ label: '공급가액', value: totals.supply }, { label: '부가세', value: totals.tax }].map(r => (
-                <div key={r.label} style={{ textAlign: 'right', padding: `${SP[4]}px ${SP[5]}px`, borderRadius: BD.radius.lg, background: C.bgHover }}>
-                  <div style={{ ...TYPO.helper, marginBottom: 3 }}>{r.label}</div>
-                  <div style={{ ...TYPO.summaryAmount }}>{fmt(r.value)}원</div>
-                </div>
-              ))}
-              <div style={{ textAlign: 'right', padding: `${SP[5]}px ${SP[7]}px`, borderRadius: BD.radius.xl, background: C.primaryBg, border: `1.5px solid ${C.primaryBorder}` }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: C.primary, marginBottom: 3 }}>합계금액</div>
-                <div style={{ fontSize: 20, fontWeight: 800, color: C.primaryText, letterSpacing: '-0.01em' }}>{fmt(totals.total || quote.price)}원</div>
-              </div>
-            </div>
-          </Card>
+          {/* ── C. 수행정보 (통번역사·외주업체 배정/지급 — 원가) ───────────── */}
+          <PerformanceSection
+            projectId={saleId}
+            token={token}
+            performances={project.performances ?? []}
+            onChanged={fetchDetail}
+            onToast={setToast}
+          />
 
           {/* ── D. 비고 ─────────────────────────────────────────────────── */}
           <Card>

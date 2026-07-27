@@ -185,13 +185,18 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   };
 
   const handleDeleteContact = async (c: Contact) => {
-    if (!window.confirm(`"${c.name}" 담당자를 비활성 처리하시겠습니까?`)) return;
+    const reason = window.prompt(`"${c.name}" 담당자를 휴지통으로 이동합니다.\n삭제 사유를 2자 이상 입력해 주세요.`, "");
+    if (reason === null) return;              // 취소
+    if (reason.trim().length < 2) { onToast("삭제 사유를 2자 이상 입력해 주세요."); return; }
     try {
-      const res = await fetch(api(`/api/admin/contacts/${c.id}`), { method: "DELETE", headers: authH });
+      const res = await fetch(api(`/api/admin/contacts/${c.id}`), {
+        method: "DELETE", headers: { ...authH, "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       await load();
-      onToast(`"${c.name}" 담당자가 비활성 처리되었습니다.`);
+      onToast(`"${c.name}" 담당자를 휴지통으로 이동했습니다.`);
     } catch { onToast("오류: 담당자 삭제 실패"); }
   };
 
