@@ -15,6 +15,7 @@ import { requireAuth, requireRole, requirePermission } from "../middlewares/auth
 import { logEvent } from "../lib/logEvent";
 import { getSettings, invalidateSettingsCache } from "../lib/getSettings";
 import { tryBuildOnProjectComplete } from "../services/translationUnitService";
+import { loadPerformanceRows } from "./performances";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -432,11 +433,8 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
       }),
     );
 
-    // 수행정보(원가) — soft-delete 제외, sequence 순. 민감 식별자 원문(암호문)은 응답에서 제외(마스킹값만).
-    const performancesRaw = await db.select().from(performanceAssignmentsTable)
-      .where(and(eq(performanceAssignmentsTable.projectId, projectId), isNull(performanceAssignmentsTable.deletedAt)))
-      .orderBy(performanceAssignmentsTable.sequence, performanceAssignmentsTable.id);
-    const performances = performancesRaw.map(({ identifierSnapshotEnc, ...rest }) => rest);
+    // 수행정보(원가) — 추가비용·차감 하위행 포함, soft-delete 제외. 암호문 제외(마스킹값만).
+    const performances = await loadPerformanceRows(projectId);
 
     res.json({
       ...project, quotes, quoteVersions, payments, tasks, settlements, logs, notes, communications,
@@ -635,6 +633,80 @@ router.get("/admin/projects/:id/control-tower", ...adminGuard, async (req, res) 
   } catch (err) {
     req.log.error({ err }, "Admin: control-tower fetch failed");
     res.status(500).json({ error: "컨트롤타워 데이터 조회 실패." });
+  }
+});
+
+// ─── 수행정보 상단 요약(§14) + 프로젝트 손익 요약(§15) ──────────────────────────
+//  · 원가는 performance_assignments.costTotal(원가합계) 기준. 별도 저장값 없이 실시간 집계.
+//  · 판매 공급가액은 현재 견적(quote_items)에서 불러옴 — 판매정보를 재입력/재저장하지 않음(§15).
+//  · 부가세는 손익에서 제외, 공급가액 기준으로 계산(§15).
+router.get("/admin/projects/:id/performance-summary", ...adminGuard, async (req, res) => {
+  const projectId = Number(req.params.id);
+  if (isNaN(projectId) || projectId <= 0) { res.status(400).json({ error: "유효하지 않은 project id." }); return; }
+  try {
+    // 현재 견적의 공급가액 합계(총 판매 공급가액)
+    const [currentQuote] = await db.select().from(quotesTable)
+      .where(and(eq(quotesTable.projectId, projectId), eq(quotesTable.isCurrent, true), isNull(quotesTable.deletedAt)));
+    let saleSupplyAmount = 0;
+    if (currentQuote) {
+      const items = await db.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, currentQuote.id));
+      saleSupplyAmount = items.reduce((s, i) => s + Number(i.supplyAmount ?? 0), 0);
+    }
+
+    // 수행/원가 행 (soft-delete 제외)
+    const rows = await db.select().from(performanceAssignmentsTable)
+      .where(and(eq(performanceAssignmentsTable.projectId, projectId), isNull(performanceAssignmentsTable.deletedAt)));
+
+    const num = (v: unknown) => Number(v ?? 0);
+    const totalCost               = rows.reduce((s, r) => s + num(r.costTotal), 0);
+    const basePerformanceFeeTotal = rows.reduce((s, r) => s + num(r.basePerformanceFee), 0);
+    const expenseTotal            = rows.reduce((s, r) => s + num(r.expenseTotal), 0);
+    const deductionTotal          = rows.reduce((s, r) => s + num(r.deductionTotal), 0);
+    // 확정/지급 기준 실제원가: 정산확정 또는 지급완료 행의 원가합계
+    const confirmedCost = rows.filter(r => r.settlementStatus === "settlement_confirmed")
+      .reduce((s, r) => s + num(r.costTotal), 0);
+    const paidCost = rows.filter(r => r.paymentStatus === "paid")
+      .reduce((s, r) => s + num(r.costTotal), 0);
+    const actualCostBasis = rows
+      .filter(r => r.settlementStatus === "settlement_confirmed" || r.paymentStatus === "paid")
+      .reduce((s, r) => s + num(r.costTotal), 0);
+
+    const estimatedProfit = saleSupplyAmount - totalCost;
+    const actualProfit    = saleSupplyAmount - actualCostBasis;
+    const rate = (profit: number) => (saleSupplyAmount > 0 ? Math.round((profit / saleSupplyAmount) * 1000) / 10 : 0);
+    const r0 = (n: number) => Math.round(n);
+
+    res.json({
+      // §14 상단 요약
+      header: {
+        rowCount: rows.length,
+        individualCount: rows.filter(r => r.performerCategory === "individual").length,
+        vendorCount:     rows.filter(r => r.performerCategory === "vendor").length,
+        expenseCount:    rows.filter(r => r.performerCategory === "expense").length,
+        costTotal: r0(totalCost),
+        settlementWaitingCount: rows.filter(r => r.settlementStatus === "settlement_waiting").length,
+        settlementConfirmedCount: rows.filter(r => r.settlementStatus === "settlement_confirmed").length,
+        paidCount: rows.filter(r => r.paymentStatus === "paid").length,
+        unpaidCount: rows.filter(r => r.paymentStatus === "unpaid").length,
+      },
+      // §15 프로젝트 손익 요약 (부가세 제외, 공급가액 기준)
+      profit: {
+        saleSupplyAmount: r0(saleSupplyAmount),
+        totalCost: r0(totalCost),
+        basePerformanceFeeTotal: r0(basePerformanceFeeTotal),
+        expenseTotal: r0(expenseTotal),
+        deductionTotal: r0(deductionTotal),
+        estimatedProfit: r0(estimatedProfit),
+        estimatedMarginRate: rate(estimatedProfit),
+        confirmedCost: r0(confirmedCost),
+        paidCost: r0(paidCost),
+        actualProfit: r0(actualProfit),
+        actualMarginRate: rate(actualProfit),
+      },
+    });
+  } catch (err) {
+    req.log.error({ err }, "Admin: performance-summary fetch failed");
+    res.status(500).json({ error: "수행정보 요약 조회 실패." });
   }
 });
 

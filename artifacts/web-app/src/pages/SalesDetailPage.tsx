@@ -395,6 +395,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             performances={project.performances ?? []}
             onChanged={fetchDetail}
             onToast={setToast}
+            projectAdminId={project.adminId ?? null}
           />
 
           {/* ── D. 비고 ─────────────────────────────────────────────────── */}

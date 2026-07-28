@@ -11,6 +11,7 @@ import { api, Product } from '../../lib/constants';
 import { Card, DsButton, ClickSelect, NumericInput } from '../ui';
 import { dsInput, dsInputStd, dsField, dsAmount, dsStickyPageHeader, C, BD, TBL, TYPO, SP, FORM, FIELD, CRM_FIELD_COLS } from '../../lib/ds';
 import { SVC_CFG, COL_H, SVC_FIELD_HINTS, tblRow } from './quoteItemsShared';
+import RowControls from './RowControls';
 import {
   getPolicy, validateCounts, calcPagesFromStr,
   type ValidationResult,
@@ -402,32 +403,7 @@ function InlineSearchField({ items, value, onChange, placeholder = '검색…', 
 }
 
 // ─── Row 제어 버튼 ────────────────────────────────────────────────────────────
-
-function RowControls({ idx, total, onRemove, onAddBelow, onMoveUp, onMoveDown }: {
-  idx: number; total: number;
-  onRemove: (i: number) => void; onAddBelow: (i: number) => void;
-  onMoveUp: (i: number) => void; onMoveDown: (i: number) => void;
-}) {
-  const btn = (dis: boolean): React.CSSProperties => ({
-    background: 'none', border: BD.card, borderRadius: 4,
-    cursor: dis ? 'default' : 'pointer', fontSize: 11, lineHeight: 1,
-    padding: '3px 6px', color: dis ? C.g300 : C.textMuted,
-  });
-  const hov = (el: HTMLButtonElement, c: string) => { el.style.background = c; };
-  return (
-    <div style={{ display: 'flex', gap: 2, alignItems: 'center', justifyContent: 'center' }}>
-      <button type="button" title="행 삭제" onClick={() => onRemove(idx)} disabled={total <= 1}
-        style={{ ...btn(total <= 1), color: total > 1 ? C.danger : C.g300, borderColor: total > 1 ? C.dangerBorder : C.border }}
-        onMouseEnter={e => { if (total > 1) hov(e.currentTarget, C.dangerBg); }} onMouseLeave={e => hov(e.currentTarget, 'none')}>−</button>
-      <button type="button" title="아래 행 추가" onClick={() => onAddBelow(idx)} style={{ ...btn(false), color: C.primary, borderColor: C.primaryBorder }}
-        onMouseEnter={e => hov(e.currentTarget, C.primaryBg)} onMouseLeave={e => hov(e.currentTarget, 'none')}>+</button>
-      <button type="button" title="위로 이동" onClick={() => onMoveUp(idx)} disabled={idx === 0} style={btn(idx === 0)}
-        onMouseEnter={e => { if (idx > 0) hov(e.currentTarget, C.g100); }} onMouseLeave={e => hov(e.currentTarget, 'none')}>▲</button>
-      <button type="button" title="아래로 이동" onClick={() => onMoveDown(idx)} disabled={idx === total - 1} style={btn(idx === total - 1)}
-        onMouseEnter={e => { if (idx < total - 1) hov(e.currentTarget, C.g100); }} onMouseLeave={e => hov(e.currentTarget, 'none')}>▼</button>
-    </div>
-  );
-}
+// 공용 컴포넌트로 추출 → './RowControls' (판매·수행정보 공용). 동작·스타일 동일.
 
 // ─── 서비스 유형 선택 ─────────────────────────────────────────────────────────
 
