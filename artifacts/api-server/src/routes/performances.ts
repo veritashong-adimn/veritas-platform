@@ -432,6 +432,10 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
     const items = await db.select().from(quoteItemsTable)
       .where(eq(quoteItemsTable.quoteId, quote.id)).orderBy(quoteItemsTable.id);
 
+    // 지급일 즉시 자동계산(§10) — 납품일 생성 시 직전 영업일 조정된 지급예정일도 함께 채운다.
+    const importHolidaySet = await loadKrHolidaySet();
+    const importIsHoliday = (d: string) => importHolidaySet.has(d);
+
     // 구분 자동분류용 상품 메타(상품유형·canonicalKey) 조회
     const productIds = Array.from(new Set(items.map(it => it.productId).filter((v): v is number => v != null)));
     const products = productIds.length
@@ -495,6 +499,9 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
         languageOrServiceSnapshot: it.languagePair ?? null,
         // 초기 기간·수량·단위·납품일(§10·§12) — 계약단가 미복사
         ...initialFieldsFromSale(it),
+        // 지급일 자동계산(납품일 기준·직전 영업일 §10)
+        expectedPaymentDate: calcPaymentDate(initialFieldsFromSale(it).deliveryDate, importIsHoliday),
+        expectedPaymentDateAuto: calcPaymentDate(initialFieldsFromSale(it).deliveryDate, importIsHoliday),
         createdBy: req.user?.id ?? null,
         updatedBy: req.user?.id ?? null,
       });
@@ -533,6 +540,9 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
         ...initRest,                            // 기간·수량·단위는 재동기화
         // 납품일·확인상태: 미입력 행만 자동 채움(§15). 확인/수동 행은 보존.
         ...(keepDelivery ? {} : { deliveryDate, deliveryDateAuto }),
+        // 지급일은 "최종 납품일"(유지값 or 신규값) 기준으로 즉시 재계산(§10) — 파생값이므로 항상 갱신.
+        expectedPaymentDate: calcPaymentDate(keepDelivery ? (c.prior.deliveryDate as any) : deliveryDate, importIsHoliday),
+        expectedPaymentDateAuto: calcPaymentDate(keepDelivery ? (c.prior.deliveryDate as any) : deliveryDate, importIsHoliday),
         updatedBy: req.user?.id ?? null,
         updatedAt: new Date(),
       }).where(eq(performanceAssignmentsTable.id, c.id));

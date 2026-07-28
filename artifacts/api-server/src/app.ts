@@ -37,6 +37,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// 배포 버전 확인용 — 실행 중 서버가 어떤 빌드인지 식별(구/신 코드 구분). 인증 불필요.
+const BUILD_MARKER = "perf-delivery-autolink-2026-07-28";
 app.get("/api/health", async (_req, res) => {
   let dbStatus = "ok";
   try {
@@ -45,7 +47,10 @@ app.get("/api/health", async (_req, res) => {
   } catch {
     dbStatus = "unavailable";
   }
-  res.json({ status: "ok", db: dbStatus });
+  res.json({ status: "ok", db: dbStatus, build: BUILD_MARKER, commit: process.env.GIT_COMMIT ?? "unknown" });
+});
+app.get("/api/version", (_req, res) => {
+  res.json({ build: BUILD_MARKER, commit: process.env.GIT_COMMIT ?? "unknown" });
 });
 
 // [PRE-ROUTER] 라우터 매칭 전 전역 인터셉터 — 이 로그가 보이지 않으면 요청이 Express에 도달하지 않은 것
