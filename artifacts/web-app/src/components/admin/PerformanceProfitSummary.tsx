@@ -17,13 +17,13 @@ interface Props {
 interface Summary {
   header: {
     rowCount: number; individualCount: number; vendorCount: number; expenseCount: number;
-    costTotal: number; settlementWaitingCount: number; settlementConfirmedCount: number;
+    costTotal: number;
     paidCount: number; unpaidCount: number;
   };
   profit: {
     saleSupplyAmount: number; totalCost: number; basePerformanceFeeTotal: number;
     expenseTotal: number; deductionTotal: number; estimatedProfit: number; estimatedMarginRate: number;
-    confirmedCost: number; paidCost: number; actualProfit: number; actualMarginRate: number;
+    paidCost: number; actualProfit: number; actualMarginRate: number;
   };
 }
 
@@ -73,9 +73,8 @@ export default function PerformanceProfitSummary({ projectId, token, refreshKey 
         {chip('외주업체', `${header.vendorCount}개`)}
         {chip('경비', `${header.expenseCount}건`)}
         {chip('원가 합계', `${won(header.costTotal)}원`)}
-        {chip('정산대기', `${header.settlementWaitingCount}건`)}
-        {chip('정산확정', `${header.settlementConfirmedCount}건`)}
         {chip('지급완료', `${header.paidCount}건`)}
+        {chip('미지급', `${header.unpaidCount}건`)}
       </div>
 
       {/* 프로젝트 손익 요약 (§15) */}
@@ -96,16 +95,15 @@ export default function PerformanceProfitSummary({ projectId, token, refreshKey 
               {profitRow('예상이익률', `${profit.estimatedMarginRate}%`, { color: profitColor(profit.estimatedProfit) })}
             </div>
           </div>
-          {/* 실제(확정/지급 기준) */}
+          {/* 실제(지급완료 기준) */}
           <div>
-            {profitRow('정산확정 원가', `${won(profit.confirmedCost)}원`)}
             {profitRow('지급완료 원가', `${won(profit.paidCost)}원`)}
             <div style={{ borderTop: BD.grid, marginTop: 4, paddingTop: 4 }}>
               {profitRow('실제이익', `${won(profit.actualProfit)}원`, { strong: true, color: profitColor(profit.actualProfit) })}
               {profitRow('실제이익률', `${profit.actualMarginRate}%`, { color: profitColor(profit.actualProfit) })}
             </div>
             <div style={{ ...TYPO.helper, marginTop: SP[3] }}>
-              ※ 실제이익은 정산확정 또는 지급완료된 원가만 반영합니다.
+              ※ 실제이익은 지급완료된 원가만 반영합니다.
             </div>
           </div>
         </div>

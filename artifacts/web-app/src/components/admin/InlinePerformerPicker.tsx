@@ -18,17 +18,34 @@ interface Props {
   onPickTranslator: (i: number, result: any) => void;
   onPickVendor: (i: number, result: any) => void;
   onClear: (i: number) => void;
+  onCancelChange: (i: number) => void;
   patch: (p: Partial<Row>) => void;
 }
+
+// 변경 취소 시 복원할 수행자·업체 식별정보(§변경취소) — 로컬 복원용, 서버 미변경.
+const PERFORMER_FIELDS = [
+  'performerCategory', 'lineCategory', 'individualUserId', 'vendorCompanyId',
+  'performerNameSnapshot', 'identifierSnapshotMasked', 'vendorTypeSnapshot',
+  'residenceCountrySnapshot', 'residencyType', 'withholdingTreatment',
+] as const;
+const snapshotPerformer = (r: Row): Partial<Row> =>
+  Object.fromEntries(PERFORMER_FIELDS.map(k => [k, (r as any)[k] ?? null])) as Partial<Row>;
 
 const inp: React.CSSProperties = { ...dsInputStd(), fontSize: 12, minHeight: 30, padding: '4px 8px', width: '100%' };
 
 export default function InlinePerformerPicker(props: Props) {
-  const { r, i, searchIdx, searchResults, onSearchTranslator, onSearchVendor, onPickTranslator, onPickVendor, onClear, patch } = props;
+  const { r, i, searchIdx, searchResults, onSearchTranslator, onSearchVendor, onPickTranslator, onPickVendor, onClear, onCancelChange, patch } = props;
   const inputRef = useRef<HTMLInputElement>(null);
   const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null);
+  // 변경 전 원본 스냅샷(§변경취소) — 변경 시작 시 1회 캡처, 취소/저장 전까지 유지. null이면 진행 중 변경 없음.
+  const [orig, setOrig] = useState<Partial<Row> | null>(null);
   const cat = r.performerCategory;
   const open = searchIdx === i && searchResults.length > 0;
+
+  // 변경 시작 — 원본을 아직 안 잡았을 때만 캡처(연속 재선택 시 최초 원본 보존) 후 검색모드 진입.
+  const startChange = () => { setOrig(prev => prev ?? snapshotPerformer(r)); onClear(i); };
+  // 변경 취소 — 원본으로 즉시 로컬 복원(서버 미호출), 검색상태 초기화. 확정은 최종 저장에서만.
+  const cancelChange = () => { if (orig) patch(orig); setOrig(null); onCancelChange(i); };
 
   useLayoutEffect(() => {
     if (open && inputRef.current) {
@@ -46,13 +63,20 @@ export default function InlinePerformerPicker(props: Props) {
     );
   }
 
-  // 선택완료 — 성명만 간결 표시
+  // 취소 버튼(§변경취소) — 검색모드/선택직후 모두 노출. 원본 미보관(orig=null)이면 표시 안 함.
+  const cancelBtn = (
+    <button type="button" onClick={cancelChange} title="변경 취소" aria-label="수행자 변경 취소" data-testid={`perf-cancel-change-${i}`}
+      style={{ flexShrink: 0, fontSize: 11, lineHeight: 1, padding: '2px 6px', border: `1px solid ${C.g300}`, borderRadius: 4, background: C.bgCard, color: C.textMuted, cursor: 'pointer', whiteSpace: 'nowrap' }}>취소</button>
+  );
+
+  // 선택완료 — 성명만 간결 표시. 변경 진행 중(orig)에는 취소 버튼도 함께 노출(신규 선택 후 저장 전 복원 §변경취소).
   if (r.performerNameSnapshot) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }} title={r.performerNameSnapshot}>
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, fontWeight: 600 }}>{r.performerNameSnapshot}</span>
-        <button type="button" onClick={() => onClear(i)} title="변경" aria-label="수행자 변경"
+        <button type="button" onClick={startChange} title="변경" aria-label="수행자 변경"
           style={{ flexShrink: 0, fontSize: 11, lineHeight: 1, padding: '2px 6px', border: `1px solid ${C.g300}`, borderRadius: 4, background: C.bgCard, color: C.textMuted, cursor: 'pointer' }}>변경</button>
+        {orig && cancelBtn}
       </div>
     );
   }
@@ -65,9 +89,12 @@ export default function InlinePerformerPicker(props: Props) {
 
   return (
     <>
-      <input ref={inputRef} style={inp} placeholder={placeholder}
-        onChange={e => onSearch(e.target.value)} onFocus={e => onSearch(e.target.value)}
-        data-testid={`perf-inline-search-${i}`} aria-label={placeholder} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <input ref={inputRef} style={inp} placeholder={placeholder}
+          onChange={e => onSearch(e.target.value)} onFocus={e => onSearch(e.target.value)}
+          data-testid={`perf-inline-search-${i}`} aria-label={placeholder} />
+        {orig && cancelBtn}
+      </div>
       {open && rect && createPortal(
         <div style={{ position: 'fixed', left: rect.left, top: rect.top, width: rect.width, zIndex: 9600, background: C.bgCard, border: `1px solid ${C.g200}`, borderRadius: 8, boxShadow: '0 4px 14px rgba(0,0,0,0.12)', maxHeight: 260, overflowY: 'auto' }}>
           {searchResults.map((x: any) => (

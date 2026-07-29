@@ -30,16 +30,7 @@ export const performancePerformerCategoryEnum = pgEnum("performance_performer_ca
   "expense",
 ]);
 
-// 정산상태 (§12-1) — 지급상태와 분리 관리
-export const performanceSettlementStatusEnum = pgEnum("performance_settlement_status", [
-  "unsettled",              // 미정산
-  "settlement_waiting",     // 정산대기
-  "reviewing",              // 검토중
-  "settlement_hold",        // 정산보류
-  "settlement_confirmed",   // 정산확정
-]);
-
-// 지급상태 (§12-2)
+// 지급상태 (§12-2) — 수행정보 상태는 지급상태 하나로 통합 관리(정산상태 제거)
 export const performancePaymentStatusEnum = pgEnum("performance_payment_status", [
   "unpaid",             // 미지급
   "payment_waiting",    // 지급대기
@@ -176,8 +167,7 @@ export const performanceAssignmentsTable = pgTable("performance_assignments", {
   deductionTotal: numeric("deduction_total", { precision: 14, scale: 2 }).notNull().default("0"),
   costTotal: numeric("cost_total", { precision: 14, scale: 2 }).notNull().default("0"),
 
-  // ── 정산·지급·명세서 상태 (§12) — status(수행상태)와 별개로 분리 관리 ─────────
-  settlementStatus: performanceSettlementStatusEnum("settlement_status").notNull().default("unsettled"),
+  // ── 지급·명세서 상태 (§12) — status(수행상태)와 별개로 분리 관리. 상태는 지급상태로 단일화 ─────
   paymentStatus: performancePaymentStatusEnum("payment_status").notNull().default("unpaid"),
   payStatementStatus: performancePayStatementStatusEnum("pay_statement_status").notNull().default("not_created"),
 

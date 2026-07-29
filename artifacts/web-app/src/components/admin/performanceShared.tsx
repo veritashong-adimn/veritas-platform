@@ -61,15 +61,7 @@ export const STATUS_OPTS = [
   { value: 'paid', label: '지급완료' },
   { value: 'cancelled', label: '취소' },
 ];
-// §12-1 정산상태
-export const SETTLEMENT_STATUS_OPTS = [
-  { value: 'unsettled', label: '미정산' },
-  { value: 'settlement_waiting', label: '정산대기' },
-  { value: 'reviewing', label: '검토중' },
-  { value: 'settlement_hold', label: '정산보류' },
-  { value: 'settlement_confirmed', label: '정산확정' },
-];
-// §12-2 지급상태
+// §12-2 지급상태 — 수행정보 상태는 지급상태로 단일화(정산상태 제거)
 export const PAYMENT_STATUS_OPTS = [
   { value: 'unpaid', label: '미지급' },
   { value: 'payment_waiting', label: '지급대기' },
@@ -78,20 +70,24 @@ export const PAYMENT_STATUS_OPTS = [
   { value: 'paid', label: '지급완료' },
   { value: 'payment_hold', label: '지급보류' },
 ];
-// §12-3 지급명세서 상태
-export const PAY_STATEMENT_STATUS_OPTS = [
-  { value: 'not_created', label: '미생성' },
-  { value: 'created', label: '생성완료' },
-  { value: 'sent', label: '발송완료' },
-  { value: 'revised', label: '수정본 발행' },
-];
 // §9-2 단위
 export const UNIT_OPTS = ['일', '시간', '건', '페이지', '단어', '자', '식', '세트', '대', '개', '월', '기타']
   .map(v => ({ value: v, label: v }));
-// §10 추가비용 구분
-export const EXPENSE_TYPE_OPTS = ['교통비', '출장비', '숙박비', '식비', '장비비', '기타비용'].map(v => ({ value: v, label: v }));
-// §10 차감 구분
-export const DEDUCTION_TYPE_OPTS = ['선지급금 차감', '과지급금 회수', '계약상 차감', '기타 조정'].map(v => ({ value: v, label: v }));
+// §10 조정항목 — 추가항목(+) 구분. 기본수행료 외 모든 추가비용. 이후 항목 자유 확장 가능.
+//  · '수가통역료'는 표시명 오타 → '추가통역료'로 수정. value는 데이터 호환을 위해 그대로 유지(라벨만 변경).
+export const EXPENSE_TYPE_OPTS = [
+  { value: '교통비', label: '교통비' },
+  { value: '출장비', label: '출장비' },
+  { value: '숙박비', label: '숙박비' },
+  { value: '식비', label: '식비' },
+  { value: '수가통역료', label: '추가통역료' },
+  { value: '저작권료', label: '저작권료' },
+  { value: '이동일보상', label: '이동일보상' },
+  { value: '취소보상', label: '취소보상' },
+  { value: '기타비용', label: '기타비용' },
+];
+// §10 조정항목 — 차감항목(-) 구분. 기본수행료 외 모든 차감. 이후 항목 자유 확장 가능.
+export const DEDUCTION_TYPE_OPTS = ['선지급 차감', '가불 차감', '패널티', '환수', '기타 차감'].map(v => ({ value: v, label: v }));
 
 export const RESIDENCY_OPTS = [
   { value: 'domestic_resident', label: '국내 거주자' },
@@ -122,9 +118,7 @@ export const FEE_FIELDS: { key: keyof Row; label: string }[] = [
 
 export const CATEGORY_LABEL: Record<string, string> = Object.fromEntries(CATEGORY_OPTS.map(o => [o.value, o.label]));
 export const STATUS_LABEL: Record<string, string> = Object.fromEntries(STATUS_OPTS.map(o => [o.value, o.label]));
-export const SETTLEMENT_STATUS_LABEL: Record<string, string> = Object.fromEntries(SETTLEMENT_STATUS_OPTS.map(o => [o.value, o.label]));
 export const PAYMENT_STATUS_LABEL: Record<string, string> = Object.fromEntries(PAYMENT_STATUS_OPTS.map(o => [o.value, o.label]));
-export const PAY_STATEMENT_STATUS_LABEL: Record<string, string> = Object.fromEntries(PAY_STATEMENT_STATUS_OPTS.map(o => [o.value, o.label]));
 export const SERVICE_LABEL: Record<string, string> = {
   translation: '번역', interpretation: '통역', equipment: '장비', expense: '기타',
   proofreading: '감수', editing: '편집/DTP', media: '미디어', operations: '운영/실비', combined: '통번역',
@@ -138,6 +132,18 @@ export const VENDOR_TYPE_LABEL: Record<string, string> = {
 export const won = (n: unknown) => Math.round(Number(n ?? 0)).toLocaleString();
 export const num = (v: unknown) => Number(v ?? 0) || 0;
 export const round2 = (n: number) => Math.round(n * 100) / 100;
+// 표시용: 수량·분량의 불필요한 소수점 0만 제거(정수→소수점 없음, 1.5·2.25 등 실소수는 유지). 저장값은 숫자 그대로.
+export const trimNum = (v: unknown): number | null => {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+// 금액 표시용: 소수점 없이 천 단위 콤마(입력 중 자동 적용). 콤마 포함 문자열도 정상 처리.
+export const commafy = (v: unknown): string => {
+  if (v == null || v === '') return '';
+  const n = Number(String(v).replace(/,/g, ''));
+  return Number.isFinite(n) ? Math.round(n).toLocaleString() : '';
+};
 export const dateVal = (s?: string | null) => (s ? String(s).slice(0, 10) : '');
 
 // ── 하위행 타입 ───────────────────────────────────────────────────────────────
@@ -193,13 +199,11 @@ export interface Row {
   expenseTotal?: string | number | null;
   deductionTotal?: string | number | null;
   costTotal?: string | number | null;
-  // 정산·지급·명세서 상태 (§12)
-  settlementStatus?: string | null;
+  // 지급 상태 (§12) — 정산상태·지급명세서 상태 제거, 지급상태로 단일화
   paymentStatus?: string | null;
-  payStatementStatus?: string | null;
   actualPaymentAmount?: string | number | null;
   payoutRoundId?: number | null;      // 지급회차(삭제 차단 판정)
-  payStatementId?: number | null;     // 지급명세서(삭제 차단 판정)
+  payStatementId?: number | null;     // 지급명세서 ID(향후 지급관리 모듈) — 수행정보에서 편집하지 않음
   // 개인 통번역사
   individualUserId?: number | null;
   performerNameSnapshot?: string | null;
@@ -250,13 +254,11 @@ export const toRow = (p: any): Row => ({
   expectedPaymentDate: p.expectedPaymentDate, expectedPaymentDateAuto: p.expectedPaymentDateAuto,
   payDateManual: p.payDateManual ?? false,
   payDateChangeReason: p.payDateChangeReason, memo: p.memo,
-  contractUnitPrice: p.contractUnitPrice, quantity: p.quantity, unit: p.unit,
+  contractUnitPrice: p.contractUnitPrice, quantity: trimNum(p.quantity), unit: p.unit,
   isDirectAmount: p.isDirectAmount ?? false, directAmount: p.basePerformanceFee,
   basePerformanceFee: p.basePerformanceFee, expenseTotal: p.expenseTotal,
   deductionTotal: p.deductionTotal, costTotal: p.costTotal,
-  settlementStatus: p.settlementStatus ?? 'unsettled',
   paymentStatus: p.paymentStatus ?? 'unpaid',
-  payStatementStatus: p.payStatementStatus ?? 'not_created',
   actualPaymentAmount: p.actualPaymentAmount,
   payoutRoundId: p.payoutRoundId, payStatementId: p.payStatementId,
   individualUserId: p.individualUserId, performerNameSnapshot: p.performerNameSnapshot,
@@ -380,9 +382,6 @@ const TONE: Record<Tone, { bg: string; fg: string }> = {
   amber: { bg: '#fef3c7', fg: '#b45309' },
   red:   { bg: C.dangerBg, fg: C.dangerText },
 };
-const SETTLEMENT_TONE: Record<string, Tone> = {
-  unsettled: 'gray', settlement_waiting: 'blue', reviewing: 'amber', settlement_hold: 'red', settlement_confirmed: 'green',
-};
 const PAYMENT_TONE: Record<string, Tone> = {
   unpaid: 'gray', payment_waiting: 'blue', payment_scheduled: 'blue', partial: 'amber', paid: 'green', payment_hold: 'red',
 };
@@ -395,7 +394,5 @@ export function Badge({ label, tone }: { label: string; tone: Tone }) {
     </span>
   );
 }
-export const SettlementBadge = ({ value }: { value?: string | null }) =>
-  <Badge label={SETTLEMENT_STATUS_LABEL[value ?? 'unsettled'] ?? '미정산'} tone={SETTLEMENT_TONE[value ?? 'unsettled'] ?? 'gray'} />;
 export const PaymentBadge = ({ value }: { value?: string | null }) =>
   <Badge label={PAYMENT_STATUS_LABEL[value ?? 'unpaid'] ?? '미지급'} tone={PAYMENT_TONE[value ?? 'unpaid'] ?? 'gray'} />;

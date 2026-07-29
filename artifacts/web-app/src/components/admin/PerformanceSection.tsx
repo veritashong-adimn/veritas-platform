@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // 수행정보 (Performance) 섹션 — 판매 상세 C 섹션. ERP형 한줄 입력 구조(2차 개편).
 //  · 수행자·외주업체·경비 = 1행. 상세 펼침(Accordion) 제거 — 모든 필드를 한 줄에서 편집.
-//  · 좌측고정(행제어·구분·수행자·상품) + 우측고정(원가합계·정산·지급·명세서·관리) + 가운데 가로스크롤.
+//  · 좌측고정(행제어·구분·수행자·상품) + 우측고정(원가합계·지급·관리) + 가운데 가로스크롤.
 //  · 추가비용·차감·금액상세는 소형 팝업(performancePopups). 계산 로직은 기존 유지(§15).
 //  · 저장은 PUT /admin/projects/:id/performances — 원가·원천세·부가세 서버 재계산. 판매금액과 분리.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -12,14 +12,14 @@ import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import PerformanceProfitSummary from './PerformanceProfitSummary';
 import RowControls from './RowControls';
 import InlinePerformerPicker from './InlinePerformerPicker';
-import { AmountDetailPopup, SubItemsPopup } from './performancePopups';
+import { AmountDetailPopup, AdjustmentPopup } from './performancePopups';
 import ServiceDetailCell from './performanceServiceDetail';
 import {
-  Row, toRow, won, num, dateVal, calcRowCostPreview, calcPaymentDate,
-  CATEGORY_OPTS, SERVICE_LABEL, TREATMENT_OPTS,
+  Row, toRow, won, num, commafy, dateVal, calcRowCostPreview, calcPaymentDate,
+  CATEGORY_OPTS, TREATMENT_OPTS,
   PERFORMER_TYPE_OPTS, resolvePerformerType, performerTypeLabel, canonicalLineCategory,
-  SETTLEMENT_STATUS_OPTS, PAYMENT_STATUS_OPTS, PAY_STATEMENT_STATUS_OPTS, PAY_STATEMENT_STATUS_LABEL,
-  SettlementBadge, PaymentBadge,
+  PAYMENT_STATUS_OPTS,
+  PaymentBadge,
 } from './performanceShared';
 
 interface Props {
@@ -50,16 +50,16 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const [searchIdx, setSearchIdx] = useState<number | null>(null);
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [summaryKey, setSummaryKey] = useState(0);
-  // 소형 팝업(§8·§9 추가비용·차감 / 금액상세) — 행 인덱스 기준
+  // 소형 팝업(§금액상세 / §조정항목) — 행 인덱스 기준
   const [amountPopup, setAmountPopup] = useState<number | null>(null);
-  const [subPopup, setSubPopup] = useState<{ idx: number; focus: 'expenses' | 'deductions' } | null>(null);
+  const [adjustPopup, setAdjustPopup] = useState<number | null>(null);
+  // 조정항목 상세(조회 전용) 팝업 — 조회모드에서 셀 클릭 시 읽기 전용 표시
+  const [adjustViewPopup, setAdjustViewPopup] = useState<number | null>(null);
   // 필터/정렬 (조회모드)
   const [q, setQ] = useState('');
   const [catFilter, setCatFilter] = useState('');
-  const [setFilter, setSetFilter] = useState('');
   const [payFilter, setPayFilter] = useState('');
   const [onlyUnpaid, setOnlyUnpaid] = useState(false);
-  const [onlyHold, setOnlyHold] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   // 공휴일 집합(지급일 직전 영업일 조정용, §4·§6) — 서버 단일 출처에서 로드, 하드코딩 없음
@@ -84,17 +84,15 @@ export default function PerformanceSection({ projectId, token, performances, onC
 
   const list: any[] = performances ?? [];
 
-  // ── 지급일 잠금(§14) — 정산확정·지급진행·명세서발행·지급회차 확정 행은 날짜 임의수정 불가 ──
+  // ── 지급일 잠금(§14) — 지급진행·지급회차 확정 행은 날짜 임의수정 불가(정산상태·지급명세서 상태 제거) ──
   const isDateLocked = (r: Row): boolean =>
-    (r.settlementStatus === 'settlement_confirmed') ||
     (['payment_scheduled', 'partial', 'paid'].includes(r.paymentStatus ?? '')) ||
-    ((r.payStatementStatus ?? 'not_created') !== 'not_created') ||
     (r.payoutRoundId != null);
 
   // ── 납품일 직접수정 → 수동상태·확인해제(§7) + 지급일 재계산(§10·§11). 수동 지급일이면 확인창(§10-2). ──
   const changeDelivery = (i: number, d: string) => {
     const r = rows[i];
-    if (isDateLocked(r)) { onToast('정산확정·지급 진행 행의 날짜는 수정할 수 없습니다.'); return; }
+    if (isDateLocked(r)) { onToast('지급 진행 행의 날짜는 수정할 수 없습니다.'); return; }
     // 납품일을 사용자가 바꾸면 확인상태 자동 해제(§7)
     const resetConfirm = { deliveryDateManual: true, deliveryConfirmed: false };
     if (!d) { // 납품일 삭제(§13)
@@ -127,7 +125,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
   // ── 지급일 직접수정 → 수동상태로 전환. 비우면 자동모드 복귀(§8·§11). ──
   const changePayDate = (i: number, d: string) => {
     const r = rows[i];
-    if (isDateLocked(r)) { onToast('정산확정·지급 진행 행의 날짜는 수정할 수 없습니다.'); return; }
+    if (isDateLocked(r)) { onToast('지급 진행 행의 날짜는 수정할 수 없습니다.'); return; }
     patchRow(i, { expectedPaymentDate: d || null, payDateManual: !!d });
   };
 
@@ -137,10 +135,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
     const kw = q.trim().toLowerCase();
     if (kw) out = out.filter(r => `${r.performerNameSnapshot ?? ''} ${r.productNameSnapshot ?? ''} ${r.lineCategory ?? ''}`.toLowerCase().includes(kw));
     if (catFilter) out = out.filter(r => r.performerCategory === catFilter);
-    if (setFilter) out = out.filter(r => (r.settlementStatus ?? 'unsettled') === setFilter);
     if (payFilter) out = out.filter(r => (r.paymentStatus ?? 'unpaid') === payFilter);
     if (onlyUnpaid) out = out.filter(r => (r.paymentStatus ?? 'unpaid') === 'unpaid');
-    if (onlyHold) out = out.filter(r => (r.settlementStatus ?? '') === 'settlement_hold');
     if (sortKey) {
       const dir = sortDir === 'asc' ? 1 : -1;
       out = [...out].sort((a, b) => {
@@ -150,17 +146,17 @@ export default function PerformanceSection({ projectId, token, performances, onC
       });
     }
     return out;
-  }, [list, q, catFilter, setFilter, payFilter, onlyUnpaid, onlyHold, sortKey, sortDir]);
+  }, [list, q, catFilter, payFilter, onlyUnpaid, sortKey, sortDir]);
 
   const enterEdit = () => { setRows(list.map(toRow)); setDeletedIds([]); setEditMode(true); };
-  const cancelEdit = () => { setRows([]); setDeletedIds([]); setEditMode(false); setAmountPopup(null); setSubPopup(null); };
+  const cancelEdit = () => { setRows([]); setDeletedIds([]); setEditMode(false); setAmountPopup(null); setAdjustPopup(null); };
   const patchRow = (i: number, p: Partial<Row>) => setRows(prev => prev.map((r, idx) => idx === i ? { ...r, ...p } : r));
   // 상단 버튼: 유형 지정 행을 목록 마지막에 추가(§13)
   const addRow = (performerCategory: string, lineCategory: string) =>
-    setRows(prev => [...prev, { performerCategory, lineCategory, status: 'unassigned', settlementStatus: 'unsettled', paymentStatus: 'unpaid', payStatementStatus: 'not_created', quantity: 1, expenses: [], deductions: [] }]);
+    setRows(prev => [...prev, { performerCategory, lineCategory, status: 'unassigned', paymentStatus: 'unpaid', quantity: 1, expenses: [], deductions: [] }]);
   // 행별 + : 클릭한 행 바로 아래에 빈 신규 행 삽입(§13). 기존 값 복사 안 함.
   const insertBelow = (i: number) => setRows(prev => {
-    const blank: Row = { performerCategory: 'individual', lineCategory: '통번역사', status: 'unassigned', settlementStatus: 'unsettled', paymentStatus: 'unpaid', payStatementStatus: 'not_created', quantity: 1, expenses: [], deductions: [] };
+    const blank: Row = { performerCategory: 'individual', lineCategory: '통번역사', status: 'unassigned', paymentStatus: 'unpaid', quantity: 1, expenses: [], deductions: [] };
     return [...prev.slice(0, i + 1), blank, ...prev.slice(i + 1)];
   });
   // 순서 이동(§13) — 행 객체 전체를 교환하므로 금액·상세·정산정보가 섞이지 않음
@@ -183,27 +179,25 @@ export default function PerformanceSection({ projectId, token, performances, onC
       expenses: (s.expenses ?? []).map(e => ({ ...e, id: undefined })),
       deductions: (s.deductions ?? []).map(d => ({ ...d, id: undefined })),
       // 초기화
-      status: 'unassigned', settlementStatus: 'unsettled', paymentStatus: 'unpaid', payStatementStatus: 'not_created',
+      status: 'unassigned', paymentStatus: 'unpaid',
       performerNameSnapshot: null, individualUserId: null, vendorCompanyId: null,
       identifierSnapshotMasked: null, vendorTypeSnapshot: null,
       payoutRoundId: null, payStatementId: null, actualPaymentAmount: null, actualPaymentDate: null, expectedPaymentDate: null,
     };
     return [...prev.slice(0, i + 1), copy, ...prev.slice(i + 1)];
   });
-  // 삭제 가능 여부(§13) — 정산확정/지급진행/지급회차/명세서/실지급 시 차단
+  // 삭제 가능 여부(§13) — 지급진행/지급회차/실지급 시 차단(정산상태·지급명세서 상태 제거)
   const canDelete = (r: Row): boolean => {
     if (r.status === 'paid') return false;
-    if ((r.settlementStatus ?? 'unsettled') === 'settlement_confirmed') return false;
     if (['payment_waiting', 'payment_scheduled', 'partial', 'paid'].includes(r.paymentStatus ?? 'unpaid')) return false;
     if (r.payoutRoundId != null) return false;
-    if ((r.payStatementStatus ?? 'not_created') !== 'not_created') return false;
     if (num(r.actualPaymentAmount) > 0) return false;
     return true;
   };
   const removeRow = (i: number) => {
     const r = rows[i];
     if (!r) return;
-    if (!canDelete(r)) { onToast('정산 또는 지급이 진행된 수행정보는 삭제할 수 없습니다.'); return; }
+    if (!canDelete(r)) { onToast('지급이 진행된 수행정보는 삭제할 수 없습니다.'); return; }
     if (!window.confirm('이 수행정보 행을 삭제하시겠습니까?')) return;
     setRows(prev => {
       if (prev[i]?.id) setDeletedIds(d => [...d, prev[i].id!]);
@@ -324,8 +318,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
     isDirectAmount: r.performerCategory === 'expense' ? true : !!r.isDirectAmount,
     directAmount: r.directAmount != null && r.directAmount !== '' ? num(r.directAmount) : null,
     payDateManual: !!r.payDateManual, payDateChangeReason: r.payDateChangeReason ?? null,
-    settlementStatus: r.settlementStatus ?? undefined, paymentStatus: r.paymentStatus ?? undefined,
-    payStatementStatus: r.payStatementStatus ?? undefined,
+    paymentStatus: r.paymentStatus ?? undefined,
     actualPaymentAmount: r.actualPaymentAmount != null && r.actualPaymentAmount !== '' ? num(r.actualPaymentAmount) : null,
     individualUserId: r.individualUserId ?? null, residencyType: r.residencyType ?? null, serviceCountry: r.serviceCountry ?? null,
     withholdingTreatment: r.withholdingTreatment ?? null,
@@ -350,10 +343,31 @@ export default function PerformanceSection({ projectId, token, performances, onC
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { onToast(data.error ?? '수행정보 저장 실패'); return; }
       onToast('수행정보가 저장되었습니다.');
-      setEditMode(false); setRows([]); setDeletedIds([]); setAmountPopup(null); setSubPopup(null);
+      setEditMode(false); setRows([]); setDeletedIds([]); setAmountPopup(null); setAdjustPopup(null);
       setSummaryKey(k => k + 1);
       await onChanged();
     } catch { onToast('수행정보 저장 중 오류'); } finally { setBusy(false); }
+  };
+
+  // ── 조회화면 조정항목 즉시 저장(§1·§6) — 편집 없이 해당 1행만 전체 페이로드로 PUT. ──
+  //   다른 필드는 현재 조회값 그대로 전송 → 서버가 동일 입력으로 재계산하므로 지급일·정산상태 등 불변(§7).
+  //   서버가 원가합계를 재계산하고, onChanged() 재조회로 조회화면 금액·원가합계가 즉시 갱신됨.
+  const saveViewAdjustment = async (viewIdx: number, p: Partial<Row>) => {
+    if (busy) return;
+    const target = viewRows[viewIdx];
+    if (!target) return;
+    setBusy(true);
+    try {
+      const merged = { ...target, ...p };
+      const seqIdx = list.findIndex(x => x.id === target.id);   // sequence 보존(정렬/필터 무관하게 원본 순서 유지)
+      const payload = { rows: [buildRowPayload(merged, seqIdx >= 0 ? seqIdx : viewIdx)], deletedIds: [] as number[] };
+      const res = await fetch(api(`/api/admin/projects/${projectId}/performances`), { method: 'PUT', headers: authH, body: JSON.stringify(payload) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(data.error ?? '기타비용 저장 실패'); return; }
+      onToast('기타비용이 저장되었습니다.');
+      setSummaryKey(k => k + 1);
+      await onChanged();
+    } catch { onToast('기타비용 저장 중 오류'); } finally { setBusy(false); }
   };
 
   // ── 스타일 ──
@@ -370,8 +384,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
   // 좌/우 고정 오프셋(§3·§4). 세부구분 삭제분을 수행자·업체/상품·업무에 배분(§11), 구분폭 확대(§12).
   const LW = { control: 116, category: 118, performer: 176, product: 196 };
   const L = { control: 0, category: 116, performer: 234, product: 410 };
-  const R = { cost: 412, settle: 294, pay: 176, stmt: 60, manage: 0 };
-  const RW = { cost: 104, settle: 118, pay: 118, stmt: 116, manage: 60 };
+  const R = { cost: 178, pay: 60, manage: 0 };
+  const RW = { cost: 104, pay: 118, manage: 60 };
   const fzTd = (side: 'left' | 'right', offset: number, extra?: React.CSSProperties): React.CSSProperties =>
     ({ ...tdBase, position: 'sticky', [side]: offset, zIndex: 3, ...extra });
   const fzTh = (side: 'left' | 'right', offset: number, extra?: React.CSSProperties): React.CSSProperties =>
@@ -390,6 +404,12 @@ export default function PerformanceSection({ projectId, token, performances, onC
     <input type="number" min={0} inputMode="numeric" disabled={disabled} data-testid={testid} aria-label={label}
       style={{ ...inp, textAlign: 'right', ...(disabled ? { background: C.g50, color: C.textSecondary } : {}) }}
       value={v == null || v === '' ? '' : String(v)} onChange={e => on(e.target.value)} />
+  );
+  // 계약단가 전용: 소수점 없이 천 단위 콤마 표시. 입력 시 숫자만 저장(콤마 자동), 저장은 숫자형 그대로.
+  const priceCell = (v: unknown, on: (val: string) => void, testid: string, label: string, disabled?: boolean) => (
+    <input type="text" inputMode="numeric" disabled={disabled} data-testid={testid} aria-label={label}
+      style={{ ...inp, textAlign: 'right', ...(disabled ? { background: C.g50, color: C.textSecondary } : {}) }}
+      value={commafy(v)} onChange={e => on(e.target.value.replace(/[^\d]/g, ''))} />
   );
   const muted = <span style={{ color: C.g400 }}>—</span>;
   const amtBtn = (label: React.ReactNode, on: () => void, testid: string, extra?: React.CSSProperties) => (
@@ -419,19 +439,11 @@ export default function PerformanceSection({ projectId, token, performances, onC
       <th style={{ ...thBase, width: 126 }}>{editable ? '지급일' : sortBtn('지급일', 'expectedPaymentDate')}</th>
       <th style={{ ...thBase, width: 108, textAlign: 'right' }}>계약단가</th>
       <th style={{ ...thBase, width: 120, textAlign: 'right' }}>기본수행료</th>
-      <th style={{ ...thBase, width: 98, textAlign: 'right' }}>교통비</th>
-      <th style={{ ...thBase, width: 98, textAlign: 'right' }}>출장비</th>
-      <th style={{ ...thBase, width: 98, textAlign: 'right' }}>저작권료</th>
-      <th style={{ ...thBase, width: 108, textAlign: 'right' }}>이동일보상</th>
-      <th style={{ ...thBase, width: 98, textAlign: 'right' }}>취소보상</th>
-      <th style={{ ...thBase, width: 108, textAlign: 'right' }}>추가비용</th>
-      <th style={{ ...thBase, width: 98, textAlign: 'right' }}>차감</th>
+      <th style={{ ...thBase, width: 120, textAlign: 'right' }}>기타비용</th>
       <th style={{ ...thBase, width: 140 }}>원천징수</th>
       <th style={{ ...thBase, width: 78, textAlign: 'right' }}>세율</th>
       <th style={fzTh('right', R.cost, { width: RW.cost, textAlign: 'right', borderLeft: sep })}>{editable ? '원가합계' : sortBtn('원가합계', 'costTotal')}</th>
-      <th style={fzTh('right', R.settle, { width: RW.settle })}>정산상태</th>
       <th style={fzTh('right', R.pay, { width: RW.pay })}>지급상태</th>
-      <th style={fzTh('right', R.stmt, { width: RW.stmt })}>지급명세서</th>
       <th style={fzTh('right', R.manage, { width: RW.manage, textAlign: 'center' })}>관리</th>
     </tr></thead>
   );
@@ -439,12 +451,13 @@ export default function PerformanceSection({ projectId, token, performances, onC
   // ── ERP 테이블 행 (조회·수정 공통) ──
   const renderRow = (r: Row, i: number, editable: boolean) => {
     const cost = calcRowCostPreview(r);
+    const adjTotal = cost.expenseTotal - cost.deductionTotal;   // 조정합계 = 추가(+) − 차감(-)
     const cat = r.performerCategory;
     const isIndiv = cat === 'individual';
     const unitMode = isIndiv && !r.isDirectAmount;
     const locked = isDateLocked(r);
     const deletable = canDelete(r);
-    const dateTitle = locked ? '정산·지급 진행 행은 수정 불가' : '';
+    const dateTitle = locked ? '지급 진행 행은 수정 불가' : '';
     const payShown = dateVal(r.expectedPaymentDate) || (r.payDateManual ? '' : (calcPaymentDate(r.deliveryDate, isHoliday) ?? ''));
     // 납품확인(§5·§13) — 미확인 붉은색 / 확인완료 본문색+✓
     const dConfirmed = !!r.deliveryConfirmed;
@@ -457,7 +470,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
           {editable
             ? <RowControls idx={i} total={rows.length} onRemove={removeRow} onAddBelow={insertBelow}
                 onMoveUp={x => moveRow(x, 'up')} onMoveDown={x => moveRow(x, 'down')}
-                removeDisabled={!deletable} removeTitle={deletable ? '행 삭제' : '정산·지급 진행 행은 삭제 불가'} />
+                removeDisabled={!deletable} removeTitle={deletable ? '행 삭제' : '지급 진행 행은 삭제 불가'} />
             : <span style={{ ...TYPO.helper, display: 'block', textAlign: 'center' }}>{i + 1}</span>}
         </td>
         <td style={fzTd('left', L.category, { width: LW.category })}>
@@ -469,14 +482,14 @@ export default function PerformanceSection({ projectId, token, performances, onC
           {editable
             ? <InlinePerformerPicker r={r} i={i} searchIdx={searchIdx} searchResults={searchResults}
                 onSearchTranslator={onSearchTranslator} onSearchVendor={onSearchVendor}
-                onPickTranslator={pickTranslator} onPickVendor={pickVendor} onClear={onClearPerformer} patch={(p) => patchRow(i, p)} />
+                onPickTranslator={pickTranslator} onPickVendor={pickVendor} onClear={onClearPerformer}
+                onCancelChange={() => { setSearchIdx(null); setSearchResults([]); }} patch={(p) => patchRow(i, p)} />
             : <span>{r.performerNameSnapshot || muted}</span>}
         </td>
         <td style={fzTd('left', L.product, { width: LW.product, borderRight: sep })}>
           {editable
             ? <input style={inp} value={r.productNameSnapshot ?? ''} onChange={e => patchRow(i, { productNameSnapshot: e.target.value })} placeholder="상품·업무명" data-testid={`perf-name-${i}`} aria-label="상품·업무명" />
-            : <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', maxWidth: LW.product - 12 }} title={r.productNameSnapshot ?? ''}>{r.productNameSnapshot || '—'}
-                <span style={{ fontSize: 11, color: C.textMuted }}>{r.serviceType ? ` · ${SERVICE_LABEL[r.serviceType] ?? r.serviceType}` : ''}</span></span>}
+            : <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', maxWidth: LW.product - 12 }} title={r.productNameSnapshot ?? ''}>{r.productNameSnapshot || '—'}</span>}
         </td>
         {/* 가운데 가로스크롤 — 서비스 유형별 상세정보(§3~§9·§14·§17) */}
         <td style={{ ...tdBase, minWidth: 380 }}>
@@ -505,21 +518,16 @@ export default function PerformanceSection({ projectId, token, performances, onC
             : <span title={r.payDateManual ? '수동변경' : '자동계산'} style={{ color: dateVal(r.expectedPaymentDate) ? undefined : C.g400 }}>{payShown || '—'}</span>}
         </td>
         <td style={tdR}>
-          {unitMode ? (editable ? numCell(r.contractUnitPrice, v => patchRow(i, { contractUnitPrice: v }), `perf-unitprice-${i}`, '계약단가') : (r.contractUnitPrice != null && r.contractUnitPrice !== '' ? `${won(r.contractUnitPrice)}원` : muted)) : muted}
+          {unitMode ? (editable ? priceCell(r.contractUnitPrice, v => patchRow(i, { contractUnitPrice: v }), `perf-unitprice-${i}`, '계약단가') : (r.contractUnitPrice != null && r.contractUnitPrice !== '' ? `${won(r.contractUnitPrice)}원` : muted)) : muted}
         </td>
         <td style={tdR}>
           {editable ? amtBtn(`${won(cost.base)}원`, () => setAmountPopup(i), `perf-amount-${i}`) : `${won(cost.base)}원`}
         </td>
-        <td style={tdR}>{isIndiv ? (editable ? numCell(r.transportationFee, v => patchRow(i, { transportationFee: v }), `perf-trans-${i}`, '교통비') : `${won(r.transportationFee)}원`) : muted}</td>
-        <td style={tdR}>{isIndiv ? (editable ? numCell(r.businessTripFee, v => patchRow(i, { businessTripFee: v }), `perf-trip-${i}`, '출장비') : `${won(r.businessTripFee)}원`) : muted}</td>
-        <td style={tdR}>{isIndiv ? (editable ? numCell(r.copyrightFee, v => patchRow(i, { copyrightFee: v }), `perf-copyright-${i}`, '저작권료') : `${won(r.copyrightFee)}원`) : muted}</td>
-        <td style={tdR}>{isIndiv ? (editable ? numCell(r.travelDayCompensation, v => patchRow(i, { travelDayCompensation: v }), `perf-travel-${i}`, '이동일보상') : `${won(r.travelDayCompensation)}원`) : muted}</td>
-        <td style={tdR}>{isIndiv ? (editable ? numCell(r.cancellationCompensation, v => patchRow(i, { cancellationCompensation: v }), `perf-cancel-${i}`, '취소보상') : `${won(r.cancellationCompensation)}원`) : muted}</td>
+        {/* 조정항목 — 교통비·출장비·저작권료·이동일보상·취소보상·기타비용(+) 및 차감(-) 통합. 클릭 시 공통 편집 팝업(조회·수정 동일). */}
         <td style={tdR}>
-          {editable ? amtBtn(`${won(cost.expenseTotal)}원`, () => setSubPopup({ idx: i, focus: 'expenses' }), `perf-exp-${i}`) : `${won(cost.expenseTotal)}원`}
-        </td>
-        <td style={tdR}>
-          {editable ? amtBtn(cost.deductionTotal ? `−${won(cost.deductionTotal)}원` : '0원', () => setSubPopup({ idx: i, focus: 'deductions' }), `perf-ded-${i}`) : (cost.deductionTotal ? `−${won(cost.deductionTotal)}원` : muted)}
+          {editable
+            ? amtBtn(`${won(adjTotal)}원`, () => setAdjustPopup(i), `perf-adj-${i}`)
+            : amtBtn(`${won(adjTotal)}원`, () => setAdjustViewPopup(i), `perf-adj-view-${i}`)}
         </td>
         <td style={tdBase}>
           {isIndiv ? (editable ? <ClickSelect value={r.withholdingTreatment ?? ''} onChange={(v: string) => patchRow(i, { withholdingTreatment: v })} triggerStyle={catSel} menuStyle={catMenu} options={TREATMENT_OPTS} /> : <span style={{ fontSize: 12 }}>{treatmentLabel(r.withholdingTreatment)}</span>) : muted}
@@ -533,14 +541,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
         </td>
         {/* 우측 고정 */}
         <td style={fzTd('right', R.cost, { ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText, borderLeft: sep })}>{won(cost.costTotal)}원</td>
-        <td style={fzTd('right', R.settle, { width: RW.settle })}>
-          {editable ? <ClickSelect value={r.settlementStatus ?? 'unsettled'} onChange={(v: string) => patchRow(i, { settlementStatus: v })} triggerStyle={inp} options={SETTLEMENT_STATUS_OPTS} /> : <SettlementBadge value={r.settlementStatus} />}
-        </td>
         <td style={fzTd('right', R.pay, { width: RW.pay })}>
           {editable ? <ClickSelect value={r.paymentStatus ?? 'unpaid'} onChange={(v: string) => patchRow(i, { paymentStatus: v })} triggerStyle={inp} options={PAYMENT_STATUS_OPTS} /> : <PaymentBadge value={r.paymentStatus} />}
-        </td>
-        <td style={fzTd('right', R.stmt, { width: RW.stmt })}>
-          {editable ? <ClickSelect value={r.payStatementStatus ?? 'not_created'} onChange={(v: string) => patchRow(i, { payStatementStatus: v })} triggerStyle={inp} options={PAY_STATEMENT_STATUS_OPTS} /> : <span style={{ fontSize: 12 }}>{PAY_STATEMENT_STATUS_LABEL[r.payStatementStatus ?? 'not_created'] ?? '미생성'}</span>}
         </td>
         <td style={fzTd('right', R.manage, { width: RW.manage, textAlign: 'center' })}>
           {editable
@@ -552,10 +554,10 @@ export default function PerformanceSection({ projectId, token, performances, onC
     );
   };
 
-  const COLSPAN = 23;
+  const COLSPAN = 15;
   const erpTable = (data: Row[], editable: boolean, emptyMsg: string) => (
     <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 620, border: `1px solid ${C.g200}`, borderRadius: BD.radius.md }}>
-      <table style={{ borderCollapse: 'collapse', minWidth: 2280, width: 'max-content' }}>
+      <table style={{ borderCollapse: 'collapse', minWidth: 1700, width: 'max-content' }}>
         {renderHeader(editable)}
         <tbody>
           {data.map((r, i) => renderRow(r, i, editable))}
@@ -572,7 +574,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
     <div style={{ ...TYPO.sectionTitle, paddingBottom: SP[4], borderBottom: BD.grid, marginBottom: SP[5], display: 'flex', alignItems: 'center', gap: SP[3], flexWrap: 'wrap' }}>
       <span style={{ width: 22, height: 22, borderRadius: BD.radius.md, background: '#fef3c7', color: '#b45309', fontSize: 12, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>C</span>
       수행정보
-      <span style={{ ...TYPO.helper, marginLeft: SP[2] }}>수행자·외주업체 배정, 원가·정산 관리 (한 줄 입력 · 좌우 스크롤)</span>
+      <span style={{ ...TYPO.helper, marginLeft: SP[2] }}>수행자·외주업체 배정, 원가·지급 관리 (한 줄 입력 · 좌우 스크롤)</span>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {editMode ? (
           <>
@@ -595,23 +597,19 @@ export default function PerformanceSection({ projectId, token, performances, onC
     <div style={{ display: 'flex', gap: SP[3], flexWrap: 'wrap', alignItems: 'center', marginBottom: SP[4] }}>
       <input style={{ ...filterInp, width: 200 }} placeholder="수행자·업체·상품 검색" value={q} onChange={e => setQ(e.target.value)} data-testid="perf-filter-q" aria-label="수행정보 검색" />
       <ClickSelect value={catFilter} onChange={setCatFilter} triggerStyle={{ ...filterInp, minWidth: 110 }} options={[{ value: '', label: '전체 구분' }, ...CATEGORY_OPTS]} />
-      <ClickSelect value={setFilter} onChange={setSetFilter} triggerStyle={{ ...filterInp, minWidth: 120 }} options={[{ value: '', label: '전체 정산상태' }, ...SETTLEMENT_STATUS_OPTS]} />
       <ClickSelect value={payFilter} onChange={setPayFilter} triggerStyle={{ ...filterInp, minWidth: 120 }} options={[{ value: '', label: '전체 지급상태' }, ...PAYMENT_STATUS_OPTS]} />
       <label style={{ display: 'flex', alignItems: 'center', gap: 4, ...TYPO.helper, cursor: 'pointer' }}>
         <input type="checkbox" checked={onlyUnpaid} onChange={e => setOnlyUnpaid(e.target.checked)} aria-label="미지급만" /> 미지급만
       </label>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 4, ...TYPO.helper, cursor: 'pointer' }}>
-        <input type="checkbox" checked={onlyHold} onChange={e => setOnlyHold(e.target.checked)} aria-label="정산보류만" /> 정산보류만
-      </label>
-      {(q || catFilter || setFilter || payFilter || onlyUnpaid || onlyHold || sortKey) && (
-        <button type="button" onClick={() => { setQ(''); setCatFilter(''); setSetFilter(''); setPayFilter(''); setOnlyUnpaid(false); setOnlyHold(false); setSortKey(null); }}
+      {(q || catFilter || payFilter || onlyUnpaid || sortKey) && (
+        <button type="button" onClick={() => { setQ(''); setCatFilter(''); setPayFilter(''); setOnlyUnpaid(false); setSortKey(null); }}
           style={{ ...TYPO.helper, background: 'none', border: 'none', color: C.primaryText, cursor: 'pointer' }}>필터 초기화</button>
       )}
       <span style={{ ...TYPO.helper, marginLeft: 'auto' }}>{viewRows.length} / {list.length}건</span>
     </div>
   );
 
-  const popupRow = amountPopup != null ? rows[amountPopup] : (subPopup ? rows[subPopup.idx] : null);
+  const popupRow = amountPopup != null ? rows[amountPopup] : (adjustPopup != null ? rows[adjustPopup] : null);
 
   return (
     <Card>
@@ -631,7 +629,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <>
           {erpTable(rows, true, '등록된 수행자·외주업체·원가항목이 없습니다. 상단의 「+ 수행자 / 외주업체 / 원가항목」 또는 「판매정보 불러오기」로 추가하세요.')}
           <div style={{ ...TYPO.helper, marginTop: SP[3] }}>
-            ※ 기본수행료·추가비용·차감 셀을 클릭하면 소형 팝업에서 상세 입력합니다. 좌우로 스크롤하여 모든 항목을 한 줄에서 입력하세요. 저장 시 서버가 원가·원천세·부가세를 재계산합니다.
+            ※ 기본수행료·기타비용 셀을 클릭하면 소형 팝업에서 상세 입력합니다. 기타비용은 교통비·출장비 등 추가(+)와 차감(-)을 통합 관리하며, 원가합계 = 기본수행료 + 기타비용 합계로 자동 계산됩니다. 저장 시 서버가 원가·원천세·부가세를 재계산합니다.
           </div>
         </>
       )}
@@ -640,9 +638,13 @@ export default function PerformanceSection({ projectId, token, performances, onC
       {editMode && amountPopup != null && popupRow && (
         <AmountDetailPopup r={popupRow} patch={(p) => patchRow(amountPopup, p)} onClose={() => setAmountPopup(null)} />
       )}
-      {/* 추가비용·차감 팝업(§8·§9) */}
-      {editMode && subPopup && popupRow && (
-        <SubItemsPopup r={popupRow} focus={subPopup.focus} patch={(p) => patchRow(subPopup.idx, p)} onClose={() => setSubPopup(null)} />
+      {/* 조정항목 팝업(§4~§8) — 추가(+)·차감(-) 통합 입력, 확인 시 커밋 */}
+      {editMode && adjustPopup != null && popupRow && (
+        <AdjustmentPopup r={popupRow} patch={(p) => patchRow(adjustPopup, p)} onClose={() => setAdjustPopup(null)} />
+      )}
+      {/* 조정항목(조회화면 즉시 수정, §1·§2·§6) — 수정화면과 동일한 공통 AdjustmentPopup. 확인 시 해당 1행만 즉시 저장 */}
+      {!editMode && adjustViewPopup != null && viewRows[adjustViewPopup] && (
+        <AdjustmentPopup r={viewRows[adjustViewPopup]} patch={(p) => saveViewAdjustment(adjustViewPopup, p)} onClose={() => setAdjustViewPopup(null)} />
       )}
 
       {/* 납품일 변경/삭제 시 수동 지급일 보호 확인창(§10-2·§13) — 3방향 선택 */}

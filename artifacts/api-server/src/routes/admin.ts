@@ -662,14 +662,10 @@ router.get("/admin/projects/:id/performance-summary", ...adminGuard, async (req,
     const basePerformanceFeeTotal = rows.reduce((s, r) => s + num(r.basePerformanceFee), 0);
     const expenseTotal            = rows.reduce((s, r) => s + num(r.expenseTotal), 0);
     const deductionTotal          = rows.reduce((s, r) => s + num(r.deductionTotal), 0);
-    // 확정/지급 기준 실제원가: 정산확정 또는 지급완료 행의 원가합계
-    const confirmedCost = rows.filter(r => r.settlementStatus === "settlement_confirmed")
-      .reduce((s, r) => s + num(r.costTotal), 0);
+    // 실제원가: 지급완료(paid) 행의 원가합계 기준(정산상태 제거 → 지급상태로 단일화 §4·§5)
     const paidCost = rows.filter(r => r.paymentStatus === "paid")
       .reduce((s, r) => s + num(r.costTotal), 0);
-    const actualCostBasis = rows
-      .filter(r => r.settlementStatus === "settlement_confirmed" || r.paymentStatus === "paid")
-      .reduce((s, r) => s + num(r.costTotal), 0);
+    const actualCostBasis = paidCost;
 
     const estimatedProfit = saleSupplyAmount - totalCost;
     const actualProfit    = saleSupplyAmount - actualCostBasis;
@@ -684,8 +680,6 @@ router.get("/admin/projects/:id/performance-summary", ...adminGuard, async (req,
         vendorCount:     rows.filter(r => r.performerCategory === "vendor").length,
         expenseCount:    rows.filter(r => r.performerCategory === "expense").length,
         costTotal: r0(totalCost),
-        settlementWaitingCount: rows.filter(r => r.settlementStatus === "settlement_waiting").length,
-        settlementConfirmedCount: rows.filter(r => r.settlementStatus === "settlement_confirmed").length,
         paidCount: rows.filter(r => r.paymentStatus === "paid").length,
         unpaidCount: rows.filter(r => r.paymentStatus === "unpaid").length,
       },
@@ -698,7 +692,6 @@ router.get("/admin/projects/:id/performance-summary", ...adminGuard, async (req,
         deductionTotal: r0(deductionTotal),
         estimatedProfit: r0(estimatedProfit),
         estimatedMarginRate: rate(estimatedProfit),
-        confirmedCost: r0(confirmedCost),
         paidCost: r0(paidCost),
         actualProfit: r0(actualProfit),
         actualMarginRate: rate(actualProfit),

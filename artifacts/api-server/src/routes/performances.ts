@@ -122,7 +122,6 @@ function isCorrectableRow(e: typeof performanceAssignmentsTable.$inferSelect): b
     e.vendorCompanyId == null &&
     (e.performerNameSnapshot == null || e.performerNameSnapshot === "") &&
     Number(e.costTotal ?? 0) === 0 &&
-    (e.settlementStatus ?? "unsettled") === "unsettled" &&
     (e.paymentStatus ?? "unpaid") === "unpaid" &&
     (e.payStatementStatus ?? "not_created") === "not_created" &&
     e.payoutRoundId == null &&
@@ -194,9 +193,7 @@ const STATUS = ["unassigned", "assigned", "in_progress", "completed", "payout_pe
 const RESIDENCY = ["domestic_resident", "overseas_or_nonresident"] as const;
 const TREATMENT = ["domestic_3_3", "exempt", "nonresident_custom", "treaty_reduction_or_exemption", "tax_review_required"] as const;
 const EVIDENCE = ["tax_invoice", "invoice", "zero_rate_tax_invoice", "other", "none"] as const;
-const SETTLEMENT_STATUS = ["unsettled", "settlement_waiting", "reviewing", "settlement_hold", "settlement_confirmed"] as const;
 const PAYMENT_STATUS = ["unpaid", "payment_waiting", "payment_scheduled", "partial", "paid", "payment_hold"] as const;
-const PAY_STATEMENT_STATUS = ["not_created", "created", "sent", "revised"] as const;
 
 const money = z.coerce.number().min(0).finite();       // 음수 금지(§20)
 const dateStr = z.string().min(1).nullable().optional();
@@ -255,10 +252,8 @@ const rowSchema = z.object({
   // 지급예정일 수동변경(§8-2)
   payDateManual: z.boolean().optional(),
   payDateChangeReason: z.string().nullable().optional(),
-  // 정산·지급·명세서 상태(§12)
-  settlementStatus: z.enum(SETTLEMENT_STATUS).optional(),
+  // 지급 상태(§12) — 상태는 지급상태로 단일화(정산상태·지급명세서 상태 제거, 지급명세서는 향후 지급관리 모듈)
   paymentStatus: z.enum(PAYMENT_STATUS).optional(),
-  payStatementStatus: z.enum(PAY_STATEMENT_STATUS).optional(),
   actualPaymentAmount: money.nullable().optional(),
   // 추가비용·차감 다건(§10) — 제공 시 전체 교체, 생략 시 기존 유지
   expenses: z.array(expenseSchema).optional(),
@@ -666,12 +661,8 @@ router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) =
           values.payDateChangeReason = null;
         }
 
-        // 상태(§12) — 클라이언트 제공값 우선. 미제공 & 납품완료일 있으면 정산대기로 기본 승격
-        //   (기존 사용자 입력을 임의로 덮어쓰지 않도록 provided 값이 있으면 그대로 사용 §12-1)
-        if (r.settlementStatus) values.settlementStatus = r.settlementStatus;
-        else if (resolvedDelivery) values.settlementStatus = "settlement_waiting";
+        // 상태(§12) — 클라이언트 제공값 우선(지급상태로 단일화. 지급명세서 상태는 수행정보에서 관리하지 않음 → 향후 지급관리 모듈).
         if (r.paymentStatus) values.paymentStatus = r.paymentStatus;
-        if (r.payStatementStatus) values.payStatementStatus = r.payStatementStatus;
 
         // upsert → assignmentId 확보
         let assignmentId: number;
