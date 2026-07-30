@@ -20,11 +20,15 @@ export type RowControlsProps = {
   moveDisabled?: boolean;     // ▲▼ 전체 비활성화(필터 적용 등)
   removeTitle?: string;       // 삭제 버튼 tooltip 재정의
   moveTitle?: string;         // ▲▼ 비활성 tooltip
+  onDuplicate?: (i: number) => void;  // 지정 시 ⧉ 복제 버튼 노출(수행정보 전용)
+  duplicateTestId?: string;   // 복제 버튼 data-testid
+  duplicateTitle?: string;    // 복제 버튼 tooltip
 };
 
 export default function RowControls({
   idx, total, onRemove, onAddBelow, onMoveUp, onMoveDown,
   removeDisabled, moveDisabled = false, removeTitle, moveTitle,
+  onDuplicate, duplicateTestId, duplicateTitle,
 }: RowControlsProps) {
   const btn = (dis: boolean): React.CSSProperties => ({
     background: 'none', border: BD.card, borderRadius: 4,
@@ -46,6 +50,11 @@ export default function RowControls({
         onMouseEnter={e => { if (!upOff) hov(e.currentTarget, C.g100); }} onMouseLeave={e => hov(e.currentTarget, 'none')}>▲</button>
       <button type="button" title={downOff ? (moveTitle ?? '아래로 이동') : '아래로 이동'} onClick={() => onMoveDown(idx)} disabled={downOff} style={btn(downOff)}
         onMouseEnter={e => { if (!downOff) hov(e.currentTarget, C.g100); }} onMouseLeave={e => hov(e.currentTarget, 'none')}>▼</button>
+      {onDuplicate && (
+        <button type="button" title={duplicateTitle ?? '행 복제'} aria-label={duplicateTitle ?? '행 복제'} data-testid={duplicateTestId}
+          onClick={() => onDuplicate(idx)} style={{ ...btn(false), color: C.primary, borderColor: C.primaryBorder }}
+          onMouseEnter={e => hov(e.currentTarget, C.primaryBg)} onMouseLeave={e => hov(e.currentTarget, 'none')}>⧉</button>
+      )}
     </div>
   );
 }

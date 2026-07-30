@@ -15,7 +15,7 @@ import InlinePerformerPicker from './InlinePerformerPicker';
 import { AmountDetailPopup, AdjustmentPopup } from './performancePopups';
 import ServiceDetailCell from './performanceServiceDetail';
 import {
-  Row, toRow, won, num, commafy, dateVal, calcRowCostPreview, calcPaymentDate,
+  Row, toRow, won, num, commafy, dateVal, calcRowCostPreview, calcPaymentDate, isEquipmentKind,
   CATEGORY_OPTS, TREATMENT_OPTS,
   PERFORMER_TYPE_OPTS, resolvePerformerType, performerTypeLabel, canonicalLineCategory,
   PAYMENT_STATUS_OPTS,
@@ -86,7 +86,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
 
   // ── 지급일 잠금(§14) — 지급진행·지급회차 확정 행은 날짜 임의수정 불가(정산상태·지급명세서 상태 제거) ──
   const isDateLocked = (r: Row): boolean =>
-    (['payment_scheduled', 'partial', 'paid'].includes(r.paymentStatus ?? '')) ||
+    ((r.paymentStatus ?? '') === 'paid') ||
     (r.payoutRoundId != null);
 
   // ── 납품일 직접수정 → 수동상태·확인해제(§7) + 지급일 재계산(§10·§11). 수동 지급일이면 확인창(§10-2). ──
@@ -189,7 +189,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
   // 삭제 가능 여부(§13) — 지급진행/지급회차/실지급 시 차단(정산상태·지급명세서 상태 제거)
   const canDelete = (r: Row): boolean => {
     if (r.status === 'paid') return false;
-    if (['payment_waiting', 'payment_scheduled', 'partial', 'paid'].includes(r.paymentStatus ?? 'unpaid')) return false;
+    if ((r.paymentStatus ?? 'unpaid') === 'paid') return false;
     if (r.payoutRoundId != null) return false;
     if (num(r.actualPaymentAmount) > 0) return false;
     return true;
@@ -221,50 +221,47 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const onSearchVendor = (i: number, s: string) => { if (!s.trim()) { setSearchIdx(i); setSearchResults([]); return; } runSearch(i, `/api/admin/companies?companyType=vendor&search=${encodeURIComponent(s)}`); };
   const onClearPerformer = (i: number) => { patchRow(i, { performerNameSnapshot: null }); setSearchIdx(i); setSearchResults([]); };
 
-  const selectTranslator = async (i: number, translatorId: number) => {
+  // 인라인 선택(§선택-저장 분리) — 신규·기존 행 모두 "로컬 폼에만" 반영. 즉시 저장·화면전환 없음.
+  //   개인: 3.3%·마스킹식별번호·기본단가 등 자동값은 읽기전용 resolve로 폼에만 채운다(DB 미저장).
+  //   상단 「저장」 클릭 시 일괄 저장되며, 그때 서버가 식별자(암호문)·거주국·업체유형 스냅샷을 재도출한다.
+  const pickTranslator = async (i: number, t: any) => {
     const r = rows[i];
-    if (!r.id) { onToast('먼저 저장한 뒤 통번역사를 선택하세요.'); return; }
-    setBusy(true);
+    patchRow(i, {
+      performerCategory: 'individual', individualUserId: t.id, vendorCompanyId: null,
+      performerNameSnapshot: t.name || t.email, lineCategory: r.lineCategory || '통번역사', vendorTypeSnapshot: null,
+    });
+    setSearchResults([]); setSearchIdx(null);   // 검색 드롭다운만 닫는다(수정화면 유지)
     try {
-      const res = await fetch(api(`/api/admin/performances/${r.id}/select-individual`), { method: 'POST', headers: authH, body: JSON.stringify({ translatorId }) });
+      const res = await fetch(api(`/api/admin/performances/resolve-individual?translatorId=${t.id}`), { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { onToast(data.error ?? '통번역사 선택 실패'); return; }
-      const s = data.row ?? {};
-      patchRow(i, {
-        performerCategory: 'individual', individualUserId: s.individualUserId, lineCategory: r.lineCategory || '통번역사',
-        performerNameSnapshot: s.performerNameSnapshot, identifierSnapshotMasked: s.identifierSnapshotMasked,
-        residenceCountrySnapshot: s.residenceCountrySnapshot, residencyType: s.residencyType, withholdingTreatment: s.withholdingTreatment,
-        ...(s.contractUnitPrice != null ? { contractUnitPrice: s.contractUnitPrice } : {}),
-        ...(s.quantity != null ? { quantity: s.quantity } : {}),
-      });
-      setSearchResults([]); setSearchIdx(null); onToast('통번역사가 선택되었습니다.'); onChanged();
-    } catch { onToast('통번역사 선택 중 오류'); } finally { setBusy(false); }
-  };
-  const selectVendor = async (i: number, companyId: number) => {
-    const r = rows[i];
-    if (!r.id) { onToast('먼저 저장한 뒤 업체를 선택하세요.'); return; }
-    setBusy(true);
-    try {
-      const res = await fetch(api(`/api/admin/performances/${r.id}/select-vendor`), { method: 'POST', headers: authH, body: JSON.stringify({ companyId }) });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { onToast(data.error ?? '업체 선택 실패'); return; }
-      const s = data.row ?? {};
-      patchRow(i, { performerCategory: 'vendor', vendorCompanyId: s.vendorCompanyId, lineCategory: r.lineCategory || '외주업체', performerNameSnapshot: s.performerNameSnapshot, vendorTypeSnapshot: s.vendorTypeSnapshot, identifierSnapshotMasked: s.identifierSnapshotMasked });
-      setSearchResults([]); setSearchIdx(null); onToast('외주업체가 선택되었습니다.'); onChanged();
-    } catch { onToast('업체 선택 중 오류'); } finally { setBusy(false); }
-  };
-
-  // 인라인 선택 — 저장된 행(id)은 select API(스냅샷·세무 기본값 서버설정), 신규행은 로컬 set(저장 시 반영)
-  const pickTranslator = (i: number, t: any) => {
-    const r = rows[i];
-    if (r.id) { selectTranslator(i, t.id); return; }
-    patchRow(i, { performerCategory: 'individual', individualUserId: t.id, vendorCompanyId: null, performerNameSnapshot: t.name || t.email, lineCategory: r.lineCategory || '통번역사' });
-    setSearchResults([]); setSearchIdx(null);
+      if (res.ok && data.snapshot) {
+        const s = data.snapshot;
+        setRows(prev => prev.map((row, idx) => {
+          if (idx !== i || row.individualUserId !== t.id) return row;   // 그 사이 다른 선택이면 무시
+          return {
+            ...row,
+            performerNameSnapshot: s.performerNameSnapshot ?? row.performerNameSnapshot,
+            identifierSnapshotMasked: s.identifierMasked ?? null,
+            residenceCountrySnapshot: s.residenceCountrySnapshot ?? null,
+            residencyType: s.residencyType ?? null,
+            withholdingTreatment: s.withholdingTreatment ?? null,
+            ...((row.contractUnitPrice == null || row.contractUnitPrice === '') && s.baseRate != null
+              ? { contractUnitPrice: String(s.baseRate), quantity: (row.quantity == null || row.quantity === '') ? '1' : row.quantity }
+              : {}),
+          };
+        }));
+      }
+    } catch { /* resolve 실패해도 로컬 선택은 유지 — 저장 시 서버가 스냅샷 재도출 */ }
   };
   const pickVendor = (i: number, c: any) => {
     const r = rows[i];
-    if (r.id) { selectVendor(i, c.id); return; }
-    patchRow(i, { performerCategory: 'vendor', vendorCompanyId: c.id, individualUserId: null, performerNameSnapshot: c.name, vendorTypeSnapshot: c.vendorType, identifierSnapshotMasked: c.businessNumber, lineCategory: r.lineCategory || '외주업체' });
+    // 업체 정보(상호·업체유형·사업자번호)는 검색결과에 포함(비PII) — 로컬 반영만. 저장 시 서버가 스냅샷 재도출.
+    patchRow(i, {
+      performerCategory: 'vendor', vendorCompanyId: c.id, individualUserId: null,
+      performerNameSnapshot: c.name, vendorTypeSnapshot: c.vendorType ?? null,
+      identifierSnapshotMasked: c.businessNumber ?? null, lineCategory: r.lineCategory || '외주업체',
+      residencyType: null, withholdingTreatment: null,
+    });
     setSearchResults([]); setSearchIdx(null);
   };
   // 통합 구분 변경(§4·§6) — 선택값 → 상위유형(category)+세부라벨(lineCategory) 분해 저장.
@@ -363,11 +360,11 @@ export default function PerformanceSection({ projectId, token, performances, onC
       const payload = { rows: [buildRowPayload(merged, seqIdx >= 0 ? seqIdx : viewIdx)], deletedIds: [] as number[] };
       const res = await fetch(api(`/api/admin/projects/${projectId}/performances`), { method: 'PUT', headers: authH, body: JSON.stringify(payload) });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { onToast(data.error ?? '기타비용 저장 실패'); return; }
-      onToast('기타비용이 저장되었습니다.');
+      if (!res.ok) { onToast(data.error ?? '추가비용 저장 실패'); return; }
+      onToast('추가비용이 저장되었습니다.');
       setSummaryKey(k => k + 1);
       await onChanged();
-    } catch { onToast('기타비용 저장 중 오류'); } finally { setBusy(false); }
+    } catch { onToast('추가비용 저장 중 오류'); } finally { setBusy(false); }
   };
 
   // ── 스타일 ──
@@ -384,8 +381,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
   // 좌/우 고정 오프셋(§3·§4). 세부구분 삭제분을 수행자·업체/상품·업무에 배분(§11), 구분폭 확대(§12).
   const LW = { control: 116, category: 118, performer: 176, product: 196 };
   const L = { control: 0, category: 116, performer: 234, product: 410 };
-  const R = { cost: 178, pay: 60, manage: 0 };
-  const RW = { cost: 104, pay: 118, manage: 60 };
+  const R = { cost: 118, pay: 0 };
+  const RW = { cost: 104, pay: 118 };
   const fzTd = (side: 'left' | 'right', offset: number, extra?: React.CSSProperties): React.CSSProperties =>
     ({ ...tdBase, position: 'sticky', [side]: offset, zIndex: 3, ...extra });
   const fzTh = (side: 'left' | 'right', offset: number, extra?: React.CSSProperties): React.CSSProperties =>
@@ -439,12 +436,11 @@ export default function PerformanceSection({ projectId, token, performances, onC
       <th style={{ ...thBase, width: 126 }}>{editable ? '지급일' : sortBtn('지급일', 'expectedPaymentDate')}</th>
       <th style={{ ...thBase, width: 108, textAlign: 'right' }}>계약단가</th>
       <th style={{ ...thBase, width: 120, textAlign: 'right' }}>기본수행료</th>
-      <th style={{ ...thBase, width: 120, textAlign: 'right' }}>기타비용</th>
+      <th style={{ ...thBase, width: 120, textAlign: 'right' }}>추가비용</th>
       <th style={{ ...thBase, width: 140 }}>원천징수</th>
       <th style={{ ...thBase, width: 78, textAlign: 'right' }}>세율</th>
       <th style={fzTh('right', R.cost, { width: RW.cost, textAlign: 'right', borderLeft: sep })}>{editable ? '원가합계' : sortBtn('원가합계', 'costTotal')}</th>
       <th style={fzTh('right', R.pay, { width: RW.pay })}>지급상태</th>
-      <th style={fzTh('right', R.manage, { width: RW.manage, textAlign: 'center' })}>관리</th>
     </tr></thead>
   );
 
@@ -454,15 +450,17 @@ export default function PerformanceSection({ projectId, token, performances, onC
     const adjTotal = cost.expenseTotal - cost.deductionTotal;   // 조정합계 = 추가(+) − 차감(-)
     const cat = r.performerCategory;
     const isIndiv = cat === 'individual';
-    const unitMode = isIndiv && !r.isDirectAmount;
+    // 계약단가 입력 활성화 대상 — 개인(통역·번역) + 장비(외주지만 계약단가×수량으로 원가 산정). 직접금액 모드 제외.
+    const unitMode = (isIndiv || isEquipmentKind(r)) && !r.isDirectAmount;
     const locked = isDateLocked(r);
     const deletable = canDelete(r);
     const dateTitle = locked ? '지급 진행 행은 수정 불가' : '';
     const payShown = dateVal(r.expectedPaymentDate) || (r.payDateManual ? '' : (calcPaymentDate(r.deliveryDate, isHoliday) ?? ''));
-    // 납품확인(§5·§13) — 미확인 붉은색 / 확인완료 본문색+✓
+    // 납품확인(§5·§13) — 확인 전(미입력·미확인 공통)은 붉은색 경고 / 확인완료만 본문색+✓.
+    //   번역은 판매에 종료일이 없어 납품일이 비어 시작하므로, 미입력도 붉은색으로 경고해 입력·확인 누락을 방지한다.
     const dConfirmed = !!r.deliveryConfirmed;
-    const dColor = r.deliveryDate ? (dConfirmed ? C.textPrimary : C.danger) : undefined;
-    const dTitle = !r.deliveryDate ? '납품일 없음' : (dConfirmed ? (r.deliveryConfirmedAt ? `확인완료 · ${dateVal(r.deliveryConfirmedAt)}` : '확인완료') : '담당 PM 납품확인 전');
+    const dColor = dConfirmed ? C.textPrimary : C.danger;
+    const dTitle = !r.deliveryDate ? '납품일 미입력 — 납품일 입력 후 확인 필요' : (dConfirmed ? (r.deliveryConfirmedAt ? `확인완료 · ${dateVal(r.deliveryConfirmedAt)}` : '확인완료') : '담당 PM 납품확인 전');
     return (
       <tr key={rowKey(r, i)}>
         {/* 좌측 고정 */}
@@ -470,6 +468,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
           {editable
             ? <RowControls idx={i} total={rows.length} onRemove={removeRow} onAddBelow={insertBelow}
                 onMoveUp={x => moveRow(x, 'up')} onMoveDown={x => moveRow(x, 'down')}
+                onDuplicate={dupRow} duplicateTestId={`perf-dup-${i}`}
                 removeDisabled={!deletable} removeTitle={deletable ? '행 삭제' : '지급 진행 행은 삭제 불가'} />
             : <span style={{ ...TYPO.helper, display: 'block', textAlign: 'center' }}>{i + 1}</span>}
         </td>
@@ -499,7 +498,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <td style={tdBase}>
           {editable ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
-              <input type="date" style={{ ...inp, width: 122, color: dColor, ...(r.deliveryDate && !dConfirmed ? { borderColor: C.danger } : {}) }}
+              <input type="date" style={{ ...inp, width: 122, color: dColor, ...(!dConfirmed ? { borderColor: C.danger } : {}) }}
                 value={dateVal(r.deliveryDate)} disabled={locked} onChange={e => changeDelivery(i, e.target.value)}
                 data-testid={`perf-delivery-row-${i}`} aria-label="납품일" title={dateTitle || dTitle} />
               <input type="checkbox" checked={dConfirmed} disabled={!canConfirmDelivery || !r.deliveryDate || locked}
@@ -507,7 +506,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
                 style={{ cursor: (!canConfirmDelivery || !r.deliveryDate || locked) ? 'default' : 'pointer' }} />
             </div>
           ) : (
-            <span style={{ color: dColor, whiteSpace: 'nowrap' }} title={dTitle}>{dateVal(r.deliveryDate) || muted}{r.deliveryDate && dConfirmed ? ' ✓' : ''}</span>
+            <span style={{ color: dColor, whiteSpace: 'nowrap' }} title={dTitle}>{r.deliveryDate ? dateVal(r.deliveryDate) : '미입력'}{r.deliveryDate && dConfirmed ? ' ✓' : ''}</span>
           )}
         </td>
         <td style={tdBase}>
@@ -544,20 +543,14 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <td style={fzTd('right', R.pay, { width: RW.pay })}>
           {editable ? <ClickSelect value={r.paymentStatus ?? 'unpaid'} onChange={(v: string) => patchRow(i, { paymentStatus: v })} triggerStyle={inp} options={PAYMENT_STATUS_OPTS} /> : <PaymentBadge value={r.paymentStatus} />}
         </td>
-        <td style={fzTd('right', R.manage, { width: RW.manage, textAlign: 'center' })}>
-          {editable
-            ? <button type="button" onClick={() => dupRow(i)} data-testid={`perf-dup-${i}`} aria-label="행 복제"
-                style={{ fontSize: 11, padding: '4px 8px', border: `1px solid ${C.g300}`, borderRadius: 6, background: C.bgCard, cursor: 'pointer' }}>복제</button>
-            : null}
-        </td>
       </tr>
     );
   };
 
-  const COLSPAN = 15;
+  const COLSPAN = 14;
   const erpTable = (data: Row[], editable: boolean, emptyMsg: string) => (
     <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 620, border: `1px solid ${C.g200}`, borderRadius: BD.radius.md }}>
-      <table style={{ borderCollapse: 'collapse', minWidth: 1700, width: 'max-content' }}>
+      <table style={{ borderCollapse: 'collapse', minWidth: 1640, width: 'max-content' }}>
         {renderHeader(editable)}
         <tbody>
           {data.map((r, i) => renderRow(r, i, editable))}
@@ -629,7 +622,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <>
           {erpTable(rows, true, '등록된 수행자·외주업체·원가항목이 없습니다. 상단의 「+ 수행자 / 외주업체 / 원가항목」 또는 「판매정보 불러오기」로 추가하세요.')}
           <div style={{ ...TYPO.helper, marginTop: SP[3] }}>
-            ※ 기본수행료·기타비용 셀을 클릭하면 소형 팝업에서 상세 입력합니다. 기타비용은 교통비·출장비 등 추가(+)와 차감(-)을 통합 관리하며, 원가합계 = 기본수행료 + 기타비용 합계로 자동 계산됩니다. 저장 시 서버가 원가·원천세·부가세를 재계산합니다.
+            ※ 기본수행료·추가비용 셀을 클릭하면 소형 팝업에서 상세 입력합니다. 추가비용은 교통비·출장비·직접입력 등 추가(+)와 차감(-)을 통합 관리하며, 원가합계 = 기본수행료 + 추가비용 합계로 자동 계산됩니다. 저장 시 서버가 원가·원천세·부가세를 재계산합니다.
           </div>
         </>
       )}

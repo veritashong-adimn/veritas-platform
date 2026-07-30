@@ -31,13 +31,12 @@ export const performancePerformerCategoryEnum = pgEnum("performance_performer_ca
 ]);
 
 // 지급상태 (§12-2) — 수행정보 상태는 지급상태 하나로 통합 관리(정산상태 제거)
+//  · 3단계 표준화(미지급·지급보류·지급완료). 구 값(payment_waiting·payment_scheduled·partial)은
+//    미지급(unpaid)으로 일괄 변환 — scripts/consolidate-payment-status.sql 참조.
 export const performancePaymentStatusEnum = pgEnum("performance_payment_status", [
   "unpaid",             // 미지급
-  "payment_waiting",    // 지급대기
-  "payment_scheduled",  // 지급예정
-  "partial",            // 일부지급
-  "paid",               // 지급완료
   "payment_hold",       // 지급보류
+  "paid",               // 지급완료
 ]);
 
 // 지급명세서 상태 (§12-3)

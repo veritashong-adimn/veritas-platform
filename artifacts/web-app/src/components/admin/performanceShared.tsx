@@ -62,18 +62,16 @@ export const STATUS_OPTS = [
   { value: 'cancelled', label: '취소' },
 ];
 // §12-2 지급상태 — 수행정보 상태는 지급상태로 단일화(정산상태 제거)
+//  · 3단계 표준화(미지급·지급보류·지급완료). 구 값(지급대기·지급예정·일부지급)은 미지급으로 일괄 변환(마이그레이션 참조).
 export const PAYMENT_STATUS_OPTS = [
   { value: 'unpaid', label: '미지급' },
-  { value: 'payment_waiting', label: '지급대기' },
-  { value: 'payment_scheduled', label: '지급예정' },
-  { value: 'partial', label: '일부지급' },
-  { value: 'paid', label: '지급완료' },
   { value: 'payment_hold', label: '지급보류' },
+  { value: 'paid', label: '지급완료' },
 ];
 // §9-2 단위
 export const UNIT_OPTS = ['일', '시간', '건', '페이지', '단어', '자', '식', '세트', '대', '개', '월', '기타']
   .map(v => ({ value: v, label: v }));
-// §10 조정항목 — 추가항목(+) 구분. 기본수행료 외 모든 추가비용. 이후 항목 자유 확장 가능.
+// §10 조정항목(추가비용) — 추가항목(+) 구분. 기본수행료 외 모든 추가비용. 이후 항목 자유 확장 가능.
 //  · '수가통역료'는 표시명 오타 → '추가통역료'로 수정. value는 데이터 호환을 위해 그대로 유지(라벨만 변경).
 export const EXPENSE_TYPE_OPTS = [
   { value: '교통비', label: '교통비' },
@@ -84,8 +82,12 @@ export const EXPENSE_TYPE_OPTS = [
   { value: '저작권료', label: '저작권료' },
   { value: '이동일보상', label: '이동일보상' },
   { value: '취소보상', label: '취소보상' },
-  { value: '기타비용', label: '기타비용' },
 ];
+// 직접입력 센티넬 — 목록에서 선택 시 텍스트 입력창으로 전환(항목명 자유 입력). 실제 저장은 입력한 항목명 문자열이 expenseType에 그대로 들어감(DB 컬럼·계산 로직 불변).
+export const CUSTOM_EXPENSE_VALUE = '__custom__';
+export const EXPENSE_TYPE_SELECT_OPTS = [...EXPENSE_TYPE_OPTS, { value: CUSTOM_EXPENSE_VALUE, label: '직접입력' }];
+// 사전 정의된 추가비용 value 집합 — 이 집합에 없는 expenseType은 '직접입력'(사용자 항목명)으로 간주해 텍스트 입력창으로 표시.
+export const PREDEFINED_EXPENSE_VALUES = new Set(EXPENSE_TYPE_OPTS.map(o => o.value));
 // §10 조정항목 — 차감항목(-) 구분. 기본수행료 외 모든 차감. 이후 항목 자유 확장 가능.
 export const DEDUCTION_TYPE_OPTS = ['선지급 차감', '가불 차감', '패널티', '환수', '기타 차감'].map(v => ({ value: v, label: v }));
 
@@ -254,7 +256,7 @@ export const toRow = (p: any): Row => ({
   expectedPaymentDate: p.expectedPaymentDate, expectedPaymentDateAuto: p.expectedPaymentDateAuto,
   payDateManual: p.payDateManual ?? false,
   payDateChangeReason: p.payDateChangeReason, memo: p.memo,
-  contractUnitPrice: p.contractUnitPrice, quantity: trimNum(p.quantity), unit: p.unit,
+  contractUnitPrice: initialContractUnitPrice(p), quantity: trimNum(p.quantity), unit: p.unit,
   isDirectAmount: p.isDirectAmount ?? false, directAmount: p.basePerformanceFee,
   basePerformanceFee: p.basePerformanceFee, expenseTotal: p.expenseTotal,
   deductionTotal: p.deductionTotal, costTotal: p.costTotal,
@@ -332,13 +334,98 @@ export function calcPaymentDate(deliveryDate?: string | null, isHoliday: (d: str
   return previousBusinessDay(base, isHoliday);
 }
 
-// 기본수행료 = 직접금액 or 계약단가×수량 (구분별). 원가합계 = 기본수행료 + Σ지급대상추가비용 − Σ차감
+// 번역 계열(번역·감수·교정·DTP·영상/자막) 판별 — performanceServiceDetail svcKind 'translation' 과 동일 기준(단일 출처).
+//   번역 수행원가는 페이지수가 아닌 작업량(단어/글자) 기준으로 계산하므로, 그 대상 행을 이 술어로 판정한다.
+export function isTranslationKind(r: Row): boolean {
+  const snap = (r.serviceDetailSnapshot ?? {}) as any;
+  const t = String(r.serviceType || snap.itemType || '').toLowerCase();
+  const ck = String(snap.canonicalKey || '').toLowerCase();
+  const pt = String(snap.productType || '').toLowerCase();
+  return /translat|번역|proofread|감수|교정|dtp|media|영상|미디어|subtitle|자막/.test(t)
+    || ck.startsWith('tr:') || ck.startsWith('dt:') || /translat/.test(pt);
+}
+
+// 통역 계열 판별 — performanceServiceDetail svcKind 'interpretation' 과 동일 기준(단일 출처).
+//   통역 수행원가 = 계약단가 × 수행일수 × 인원 이므로, 그 대상 행을 이 술어로 판정한다.
+export function isInterpretationKind(r: Row): boolean {
+  const snap = (r.serviceDetailSnapshot ?? {}) as any;
+  const t = String(r.serviceType || snap.itemType || '').toLowerCase();
+  const ck = String(snap.canonicalKey || '').toLowerCase();
+  const pt = String(snap.productType || '').toLowerCase();
+  return /interpret|통역/.test(t) || ck.startsWith('in:') || ck.startsWith('co:') || /interpret/.test(pt);
+}
+
+// 장비 계열 판별(§계약단가통일) — 서버 classifyPerformer 장비 토큰과 동일 기준(음향·부스·수신기 등 포함).
+//   장비는 외주(vendor)로 분류되지만, 원가는 계약단가 × 수량으로 산정하므로 이 술어로 대상을 판정한다.
+export function isEquipmentKind(r: Row): boolean {
+  const snap = (r.serviceDetailSnapshot ?? {}) as any;
+  const t = String(r.serviceType || snap.itemType || '').toLowerCase();
+  const ck = String(snap.canonicalKey || '').toLowerCase();
+  const pt = String(snap.productType || '').toLowerCase();
+  return /equip|장비|rental|렌탈|렌털|음향|수신기|송신기|부스|헤드셋|헤드폰|이어폰|마이크|스피커|앰프/.test(t)
+    || ck.startsWith('eq:') || /equip/.test(pt);
+}
+
+// 통역 수행인원(§계약단가통일) — 계약단가는 '통역사 1인 × 1일' 단가이므로 인원을 곱한다. 미지정 시 1명.
+export function interpreterHeadcount(snap: any): number {
+  const n = num(snap?.interpreterCount);
+  return n > 0 ? n : 1;
+}
+
+// §5·§6 계약단가 초기값 — 저장값이 있으면 그대로, 없으면 판매 공급단가(saleUnitPrice)를 초기 표시값으로 사용한다.
+//   번역은 제외: 번역 계약단가는 단어/글자 기준이라 페이지 기준 판매 공급단가와 단위가 달라 초기복사 시 오계산됨.
+export function initialContractUnitPrice(p: any): string | number | null {
+  if (p.contractUnitPrice != null && p.contractUnitPrice !== '') return p.contractUnitPrice;
+  if (isTranslationKind(p as Row)) return p.contractUnitPrice ?? null;
+  const snap = (p.serviceDetailSnapshot ?? {}) as any;
+  return snap.saleUnitPrice != null && snap.saleUnitPrice !== '' ? String(snap.saleUnitPrice) : (p.contractUnitPrice ?? null);
+}
+
+// 번역 원가·정산 작업량(§작업량통일) — wordCount 우선, 없으면 charCount, 둘 다 없으면 null(계산 불가).
+//   페이지수(pageCount·판매 quantity)는 번역 원가에 사용하지 않는다(판매정보 참고값으로만 유지).
+export function translationWorkAmount(snap: any): { amount: number; basis: 'word' | 'char' } | null {
+  if (!snap) return null;
+  const w = num(snap.wordCount);
+  if (w > 0) return { amount: w, basis: 'word' };
+  const c = num(snap.charCount);
+  if (c > 0) return { amount: c, basis: 'char' };
+  return null;
+}
+
+// 기본수행료 = 직접금액 or 계약단가×작업량 (구분별). 원가합계 = 기본수행료 + Σ지급대상추가비용 − Σ차감
+//   · 번역 계열: 계약단가 × 단어수/글자수(§작업량통일). 페이지수는 사용하지 않으며, 작업량이 없으면 자동계산하지 않는다.
+//   · 통역 계열: 계약단가 × 수행일수(quantity) × 인원(interpreterCount). 계약단가는 1인·1일 단가.
+//   · 장비 등: 계약단가 × 수량(기존 로직 유지 — 일수 기준 장비는 quantity에 사용일수가 반영됨).
 export function calcRowCostPreview(r: Row): { base: number; expenseTotal: number; deductionTotal: number; costTotal: number } {
+  const hasUnitPrice = r.contractUnitPrice != null && r.contractUnitPrice !== '';
+  const hasQty = r.quantity != null && r.quantity !== '';
   let base: number;
-  if (r.performerCategory === 'vendor') base = round2(num(r.supplyAmount));
+  if (isEquipmentKind(r)) {
+    // 장비 원가 = 계약단가 × 수량(§계약단가통일). 계약단가가 없으면 기존 공급가액을 유지(자동 재계산 안 함).
+    //   (장비는 외주로 분류되므로 vendor 분기보다 먼저 판정한다. 부가세는 서버에서 공급가액 기준으로 별도 계산 — 불변.)
+    base = (hasUnitPrice && hasQty)
+      ? round2(num(r.contractUnitPrice) * num(r.quantity))
+      : round2(num(r.supplyAmount));
+  }
+  else if (r.performerCategory === 'vendor') base = round2(num(r.supplyAmount));
   else if (r.performerCategory === 'expense') base = round2(num(r.directAmount));
   else if (r.isDirectAmount) base = round2(num(r.directAmount));
-  else if (r.contractUnitPrice != null && r.contractUnitPrice !== '' && r.quantity != null && r.quantity !== '')
+  else if (isTranslationKind(r)) {
+    // 번역 원가 = 계약단가 × 작업량(단어/글자). 페이지수(quantity) 미사용.
+    //   작업량이 없으면 페이지로 자동계산하지 않고 기존 기본수행료를 유지(계산 불가 → 임의 재계산 금지).
+    const work = translationWorkAmount((r.serviceDetailSnapshot ?? {}) as any);
+    base = (hasUnitPrice && work)
+      ? round2(num(r.contractUnitPrice) * work.amount)
+      : round2(num(r.baseFee));
+  }
+  else if (isInterpretationKind(r)) {
+    // 통역 원가 = 계약단가(1인·1일) × 수행일수(quantity) × 인원(interpreterCount, 없으면 1).
+    const persons = interpreterHeadcount((r.serviceDetailSnapshot ?? {}) as any);
+    base = (hasUnitPrice && hasQty)
+      ? round2(num(r.contractUnitPrice) * num(r.quantity) * persons)
+      : round2(num(r.baseFee));
+  }
+  else if (hasUnitPrice && hasQty)
     base = round2(num(r.contractUnitPrice) * num(r.quantity));
   else base = round2(num(r.baseFee));
   const expenseTotal = round2((r.expenses ?? []).filter(e => e.includedInPayout !== false).reduce((s, e) => s + num(e.amount), 0));
@@ -383,7 +470,7 @@ const TONE: Record<Tone, { bg: string; fg: string }> = {
   red:   { bg: C.dangerBg, fg: C.dangerText },
 };
 const PAYMENT_TONE: Record<string, Tone> = {
-  unpaid: 'gray', payment_waiting: 'blue', payment_scheduled: 'blue', partial: 'amber', paid: 'green', payment_hold: 'red',
+  unpaid: 'gray', payment_hold: 'red', paid: 'green',
 };
 
 export function Badge({ label, tone }: { label: string; tone: Tone }) {

@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // 서비스 유형별 상세정보 셀(§3~§9·§14·§17) — 연결된 판매상품 유형에 맞는 필드만 한 줄에 표시.
-//  · 통역: 기간·시간·인원·장소 / 장비: 사용기간·설치일시·사용일수·장소 / 번역: 언어·분량기준·수량·파일·판매단가.
+//  · 통역: 기간·시간·인원·장소 / 장비: 사용기간·설치일시·사용일수·장소 / 번역: 파일명·작업량(수량+단위).
 //  · 편집 가능 필드는 실제 수행 컬럼(performanceStartDate/EndDate·quantity·unit)에 바인딩.
 //  · 판매 참조값(saleUnitPrice 등)은 읽기전용 표시 — 계약단가로 복사하지 않음(§10).
 //  · 존재하지 않는 값(단어수 등)은 만들지 않고, 실제 스냅샷에 있는 값만 표시.
@@ -9,7 +9,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { C, TYPO, dsInputStd } from '../../lib/ds';
 import { ClickSelect } from '../ui';
-import { Row, UNIT_OPTS, dateVal, num, won } from './performanceShared';
+import { Row, UNIT_OPTS, dateVal, num, isTranslationKind, isInterpretationKind } from './performanceShared';
 
 const mini: React.CSSProperties = { ...dsInputStd(), minHeight: 28, padding: '3px 6px', fontSize: 12 };
 const ref: React.CSSProperties = { ...TYPO.helper, color: C.textMuted, whiteSpace: 'nowrap' };
@@ -105,9 +105,9 @@ export function svcKind(r: Row): SvcKind {
   const t = String(r.serviceType || snap.itemType || '').toLowerCase();
   const ck = String(snap.canonicalKey || '').toLowerCase();
   const pt = String(snap.productType || '').toLowerCase();
-  if (/interpret|통역/.test(t) || ck.startsWith('in:') || ck.startsWith('co:') || /interpret/.test(pt)) return 'interpretation';
+  if (isInterpretationKind(r)) return 'interpretation';   // 통역 계열 판정은 performanceShared 단일 출처 사용
   if (/equip|장비/.test(t) || ck.startsWith('eq:') || /equip/.test(pt)) return 'equipment';
-  if (/translat|번역|proofread|감수|교정|dtp|media|영상|미디어|subtitle|자막/.test(t) || ck.startsWith('tr:') || ck.startsWith('dt:') || /translat/.test(pt)) return 'translation';
+  if (isTranslationKind(r)) return 'translation';   // 번역 계열 판정은 performanceShared 단일 출처 사용
   if (r.performerCategory === 'expense') return 'expense';
   return 'generic';
 }
@@ -115,22 +115,49 @@ export function svcKind(r: Row): SvcKind {
 const joinRef = (parts: (string | number | null | undefined)[]) =>
   parts.filter(v => v != null && v !== '').join(' · ');
 
-// 판매 계산식(조회 전용) — "{수량}{단위} × {단가}원 = {공급가액}원".
-//   공급가액은 저장값(saleSupplyAmount)을 그대로 표시(화면 재계산 금지). 저장값 없으면 "= …원" 생략.
-function saleCalc(snap: any): string {
-  const q = snap.saleQuantity, u = snap.saleUnit, p = snap.saleUnitPrice, amt = snap.saleSupplyAmount;
-  if (p == null) return '';
-  const qty = q != null ? `${num(q).toLocaleString()}${u ? u : ''} × ` : '';
-  const eq = amt != null ? ` = ${won(amt)}원` : '';
-  return `${qty}${won(p)}원${eq}`;
+// 번역 파일명 칩 — 업로드 원본 파일명(확장자 포함). 길면 말줄임(…) + 마우스오버 전체표시. 없으면 null.
+function FileNameChip({ name }: { name?: string | null }) {
+  if (!name) return null;
+  return (
+    <span title={name} style={{ display: 'inline-block', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>{name}</span>
+  );
 }
 
-// 번역 상세정보 계산식(조회·수정 공통) — "{파일명} · {수량}{단위} × {단가}원 = {공급가액}원".
-//   판매정보가 없으면 실제 수량만 폴백. 내부값(id·languagePair)·"판매" 문구는 표시하지 않음.
-function translationText(r: Row, snap: any): string {
-  const calc = saleCalc(snap);
-  const qtyOnly = r.quantity != null && r.quantity !== '' ? `${num(r.quantity).toLocaleString()}${r.unit ?? ''}` : '';
-  return joinRef([snap.fileName, calc || qtyOnly]);
+// 번역 작업량 세그먼트 — 파일명 뒤에 작업량(단어수/글자수)만 표시. 페이지수는 표시하지 않는다
+//   (판매정보의 수량/단위 컬럼에서 확인 — 중복표시 금지). pageCount 는 스냅샷에 계속 저장되며 표시만 제외.
+function translationSegments(r: Row, snap: any): string[] {
+  const work = snap.wordCount ? `${num(snap.wordCount).toLocaleString()}단어`
+    : snap.charCount ? `${num(snap.charCount).toLocaleString()}글자` : '';
+  if (work) return [work];
+  // 구 스냅샷 폴백 — 단어/글자 상세필드가 없을 때만 판매 수량·단위 표시. 단, 페이지는 제외(중복표시 금지).
+  const unit = snap.saleUnit ?? r.unit ?? '';
+  if (unit === '페이지') return [];
+  const q = snap.saleQuantity != null ? snap.saleQuantity : (r.quantity != null && r.quantity !== '' ? r.quantity : null);
+  if (q == null || q === '') return [];
+  return [`${num(q).toLocaleString()}${unit}`];
+}
+
+// 번역 표시용 요약(파일명 · 작업량) — 조회·수정 화면 공통 렌더러.
+//   수정화면에서도 이 요약을 그대로 사용해 '사용자가 보는 상세정보'를 조회화면과 동일 기준으로 통일한다.
+//   (편집용 수량/단위 입력필드는 이 요약과 분리해 별도로 유지 — 표시용 요약 ≠ 편집 컨트롤.)
+//   내용이 없으면 null 반환(조회화면은 '—' 폴백, 수정화면은 입력필드만 노출).
+function renderTranslationSummary(r: Row, snap: any): React.ReactElement | null {
+  const fname = snap.fileName ?? '';
+  const segs = translationSegments(r, snap);
+  const parts: React.ReactNode[] = [];
+  if (fname) parts.push(<FileNameChip key="file" name={fname} />);
+  segs.forEach((s, i) => parts.push(<span key={`seg${i}`} style={{ flexShrink: 0 }}>{s}</span>));
+  if (parts.length === 0) return null;
+  return (
+    <span style={{ ...ref, color: C.textSecondary, display: 'inline-flex', alignItems: 'baseline', gap: 4, maxWidth: '100%' }} title={fname || undefined}>
+      {parts.map((node, i) => (
+        <React.Fragment key={i}>
+          {i > 0 ? <span style={{ flexShrink: 0 }}>·</span> : null}
+          {node}
+        </React.Fragment>
+      ))}
+    </span>
+  );
 }
 
 interface Props { r: Row; editable: boolean; patch: (p: Partial<Row>) => void; onEndDateChange?: (v: string) => void; }
@@ -163,21 +190,28 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
 
   // ── 조회모드: 컴팩트 텍스트(§17) ──
   if (!editable) {
+    // 번역: 파일명(말줄임+툴팁) · 작업량(단어수/글자수/페이지수). 계산식·금액은 표시하지 않음(계약단가·기본수행료·원가합계 컬럼에서 확인).
+    if (kind === 'translation') {
+      return renderTranslationSummary(r, snap) ?? <span style={{ ...ref, color: C.textSecondary }}>—</span>;
+    }
     const period = joinRef([dateVal(r.performanceStartDate), dateVal(r.performanceEndDate)].filter(Boolean)).replace(' · ', '~');
     let text = '';
     if (kind === 'interpretation') {
-      // 판매정보의 실제 수량·단위 추가(예: 3일) — 저장값 그대로, 재계산 안 함.
+      // 수행기간(N일간)은 날짜 바로 뒤에 묶어 표시 — 저장된 수량·단위 그대로 사용, 재계산 안 함(예: 3일 → (3일간)).
       const saleQU = snap.saleQuantity != null ? `${num(snap.saleQuantity).toLocaleString()}${snap.saleUnit ?? ''}` : '';
-      text = joinRef([period, snap.operationHours, snap.interpretDuration, snap.interpreterCount ? `${snap.interpreterCount}명` : '', snap.interpretPlace, saleQU]);
+      const periodWithDays = [period, saleQU ? `(${saleQU}간)` : ''].filter(Boolean).join(' ');
+      text = joinRef([periodWithDays, snap.operationHours, snap.interpretDuration, snap.interpreterCount ? `${snap.interpreterCount}명` : '', snap.interpretPlace]);
     } else if (kind === 'equipment') {
       // 장비 저장 quantity = 사용일수 × 세트수(quoteItemForm 규약) → 사용일수로 나눠 순수 세트수 복원(판매정보 표시와 동일).
       //   사용일수(usagePeriod)를 수량으로 오용하지 않는다.
       const usageDays = Math.max(1, num(snap.usagePeriod) || 1);
       const rawQ = snap.saleQuantity != null ? num(snap.saleQuantity) : (r.quantity != null && r.quantity !== '' ? num(r.quantity) : null);
       const setQty = rawQ != null ? `${(rawQ / usageDays).toLocaleString()}${snap.saleUnit ?? r.unit ?? ''}` : '';
-      text = joinRef([period, snap.operationHours ? `설치 ${snap.operationHours}` : '', snap.usagePeriod ? `${snap.usagePeriod}일` : '', snap.itemLocation, setQty]);
-    } else if (kind === 'translation') {
-      text = translationText(r, snap);
+      // 사용기간(N일간)은 날짜 바로 뒤에 묶어 표시 — 저장된 사용일수(usagePeriod) 그대로 사용, 재계산 안 함.
+      const daysLabel = snap.usagePeriod ? `(${num(snap.usagePeriod).toLocaleString()}일간)` : '';
+      const periodWithDays = [period, daysLabel].filter(Boolean).join(' ');
+      // 표시 순서: 날짜(기간) → 수량 → 장소 → 설치일시 (통역과 동일한 정보 구성 원칙).
+      text = joinRef([periodWithDays, setQty, snap.itemLocation, snap.operationHours ? `설치 ${snap.operationHours}` : '']);
     } else if (kind === 'expense') {
       text = joinRef([r.productNameSnapshot, r.quantity != null && r.quantity !== '' ? `${num(r.quantity).toLocaleString()}${r.unit ?? ''}` : '']);
     } else {
@@ -201,18 +235,16 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
       <div style={wrap}>
         <DateRangeField start={r.performanceStartDate} end={r.performanceEndDate} onChange={onRangeChange} label="사용기간" />
         {qtyUnit}
-        <span style={ref}>{joinRef([snap.operationHours ? `설치 ${snap.operationHours}` : '', snap.usagePeriod ? `${snap.usagePeriod}일` : '', snap.itemLocation])}</span>
+        {/* 표시 순서: (날짜=기간필드) → (수량=qtyUnit) → 장소 → 설치일시. 통역 미리보기와 동일 원칙. */}
+        <span style={ref}>{joinRef([snap.itemLocation, snap.operationHours ? `설치 ${snap.operationHours}` : ''])}</span>
       </div>
     );
   }
   if (kind === 'translation') {
-    return (
-      <div style={wrap}>
-        <span style={ref}>분량기준</span>
-        {qtyUnit}
-        <span style={ref}>{translationText(r, snap)}</span>
-      </div>
-    );
+    // §작업량통일: 번역 수행정보는 파일명·단어수/글자수만 표시(조회·수정 동일 렌더러). 페이지 수량/단위 편집 UI는 두지 않는다 —
+    //   페이지수는 판매정보에만 존재하며 수행원가(계약단가×단어/글자)에 사용하지 않는다. 작업량은 판매 스냅샷 고정값.
+    return renderTranslationSummary(r, snap)
+      ?? <span style={{ ...ref, color: C.textMuted }}>작업량 정보 없음</span>;
   }
   if (kind === 'expense') {
     return (

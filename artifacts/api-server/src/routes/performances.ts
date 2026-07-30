@@ -131,11 +131,35 @@ function isCorrectableRow(e: typeof performanceAssignmentsTable.$inferSelect): b
   );
 }
 
+// 번역 상세 memo 파싱(§6) — 판매 저장 규약과 동일 형식:
+//   "[사용자메모] / 파일: … | 형식: … | 단어수: … | 글자수: …" (프론트 parseMemoInfo와 동일 기준).
+//   ' / '·' | ' 로 분리 후 "키: 값" 추출. 형식이 다르거나 값이 누락돼도 안전(키 미존재 → 해당 필드 없음).
+function parseTranslationMemo(memo: string | null | undefined): { fileName?: string; fileFormat?: string; wordCount?: string; charCount?: string } {
+  const out: { fileName?: string; fileFormat?: string; wordCount?: string; charCount?: string } = {};
+  if (!memo) return out;
+  const KEY_MAP: Record<string, keyof typeof out> = { "파일": "fileName", "형식": "fileFormat", "단어수": "wordCount", "글자수": "charCount" };
+  for (const seg of memo.split(" / ")) {
+    for (const p of seg.split(" | ")) {
+      const ci = p.indexOf(": ");
+      if (ci > 0) {
+        const field = KEY_MAP[p.slice(0, ci).trim()];
+        const v = p.slice(ci + 2).trim();
+        if (field && v) out[field] = v;
+      }
+    }
+  }
+  return out;
+}
+
 // ── 판매항목 → 서비스별 상세 스냅샷(§3·§6·§10) ────────────────────────────────
 //  · 서비스 유형별로 필요한 실제 판매 상세값 + 판매 참조값(단위·수량·단가)을 함께 동결.
 //  · 계약단가는 절대 복사하지 않는다(§10) — saleUnitPrice 는 "참고값"으로만 보관.
-//  · 존재하지 않는 필드(단어수·글자수 등)는 만들지 않는다 — 실제 스키마 값만 담는다.
+//  · 번역 상세(파일명·형식·단어수·글자수)는 판매 memo 인코딩값을 파싱해 스냅샷으로 승격 저장(§6).
+//    파일명 우선순위: 직접입력(memo) → 첨부파일명(fileName 인자) → null. 새 DB 컬럼 없이 JSON만 확장.
 function buildDetailSnapshot(it: typeof quoteItemsTable.$inferSelect, prod: any, fileName: string | null) {
+  const mem = parseTranslationMemo(it.memo);
+  // 페이지수 — 판매가 페이지 기준일 때 quantity 가 곧 페이지수(단어/글자→페이지 자동환산 결과). 그 외 null.
+  const pageCount = it.unit === "페이지" && it.quantity != null ? String(it.quantity) : null;
   return {
     itemType: it.itemType ?? null,
     canonicalKey: prod?.canonicalKey ?? null,
@@ -161,9 +185,59 @@ function buildDetailSnapshot(it: typeof quoteItemsTable.$inferSelect, prod: any,
     itemLocation: it.itemLocation ?? null,
     hasEquipment: it.hasEquipment ?? null,
     quantityUnit: it.quantityUnit ?? null,
-    // 번역·DTP·감수 파일(§6·§9) — 첨부가 있으면 파일명
-    fileName: fileName,
+    // 번역·DTP·감수 파일·상세(§6·§9) — 직접입력 파일명(1순위) → 첨부파일명(2순위) → null(3순위)
+    fileName: mem.fileName || fileName || null,
+    fileFormat: mem.fileFormat ?? null,
+    wordCount: mem.wordCount ?? null,
+    charCount: mem.charCount ?? null,
+    pageCount,
   };
+}
+
+// 번역 계열 판별(§작업량통일) — web-app svcKind 'translation' 미러(번역·감수·교정·DTP·영상/자막).
+//   번역 수행원가는 페이지수가 아닌 작업량(단어/글자) 기준으로 계산하므로, 그 대상 행을 이 술어로 판정한다.
+function isTranslationSnap(snap: any, serviceType?: string | null): boolean {
+  const t = String(serviceType || snap?.itemType || "").toLowerCase();
+  const ck = String(snap?.canonicalKey || "").toLowerCase();
+  const pt = String(snap?.productType || "").toLowerCase();
+  return /translat|번역|proofread|감수|교정|dtp|media|영상|미디어|subtitle|자막/.test(t)
+    || ck.startsWith("tr:") || ck.startsWith("dt:") || /translat/.test(pt);
+}
+
+// 통역 계열 판별(§계약단가통일) — web-app svcKind 'interpretation' 미러.
+//   통역 수행원가 = 계약단가(1인·1일) × 수행일수(quantity) × 인원(interpreterCount).
+function isInterpretationSnap(snap: any, serviceType?: string | null): boolean {
+  const t = String(serviceType || snap?.itemType || "").toLowerCase();
+  const ck = String(snap?.canonicalKey || "").toLowerCase();
+  const pt = String(snap?.productType || "").toLowerCase();
+  return /interpret|통역/.test(t) || ck.startsWith("in:") || ck.startsWith("co:") || /interpret/.test(pt);
+}
+
+// 통역 수행인원 — 미지정 시 1명.
+function interpreterHeadcount(snap: any): number {
+  const n = Number(snap?.interpreterCount);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+// 장비 계열 판별(§계약단가통일) — web-app isEquipmentKind 미러(classifyPerformer 장비 토큰과 동일).
+//   장비는 외주(vendor)지만 공급가액을 계약단가 × 수량으로 산정한다(부가세는 그 공급가액 기준으로 별도 계산 — 불변).
+function isEquipmentSnap(snap: any, serviceType?: string | null): boolean {
+  const t = String(serviceType || snap?.itemType || "").toLowerCase();
+  const ck = String(snap?.canonicalKey || "").toLowerCase();
+  const pt = String(snap?.productType || "").toLowerCase();
+  return /equip|장비|rental|렌탈|렌털|음향|수신기|송신기|부스|헤드셋|헤드폰|이어폰|마이크|스피커|앰프/.test(t)
+    || ck.startsWith("eq:") || /equip/.test(pt);
+}
+
+// 번역 원가·정산 작업량(§작업량통일) — wordCount 우선, 없으면 charCount, 둘 다 없으면 null(계산 불가).
+//   페이지수(pageCount·판매 quantity)는 번역 원가에 사용하지 않는다(판매정보 참고값으로만 유지).
+function translationWorkAmount(snap: any): number | null {
+  if (!snap) return null;
+  const w = Number(snap.wordCount);
+  if (Number.isFinite(w) && w > 0) return w;
+  const c = Number(snap.charCount);
+  if (Number.isFinite(c) && c > 0) return c;
+  return null;
 }
 
 // 판매항목 → 수행정보 초기 기간·수량·단위·납품일(§10·§12). 계약단가는 복사하지 않는다.
@@ -193,7 +267,7 @@ const STATUS = ["unassigned", "assigned", "in_progress", "completed", "payout_pe
 const RESIDENCY = ["domestic_resident", "overseas_or_nonresident"] as const;
 const TREATMENT = ["domestic_3_3", "exempt", "nonresident_custom", "treaty_reduction_or_exemption", "tax_review_required"] as const;
 const EVIDENCE = ["tax_invoice", "invoice", "zero_rate_tax_invoice", "other", "none"] as const;
-const PAYMENT_STATUS = ["unpaid", "payment_waiting", "payment_scheduled", "partial", "paid", "payment_hold"] as const;
+const PAYMENT_STATUS = ["unpaid", "payment_hold", "paid"] as const;
 
 const money = z.coerce.number().min(0).finite();       // 음수 금지(§20)
 const dateStr = z.string().min(1).nullable().optional();
@@ -303,8 +377,14 @@ function computeRowValues(r: RowInput) {
     };
   }
   if (category === "vendor") {
+    // 장비(§계약단가통일): 공급가액 = 계약단가 × 수량. 계약단가가 없으면 입력 공급가액 사용(폴백).
+    //   그 외 업체(DTP·미디어)는 기존대로 입력 공급가액. 부가세는 산정된 공급가액 기준으로 동일하게 계산(불변).
+    const snap = (r.serviceDetailSnapshot ?? {}) as any;
+    const supplyInput = (isEquipmentSnap(snap, r.serviceType) && r.contractUnitPrice != null && r.quantity != null)
+      ? Number(r.contractUnitPrice) * Number(r.quantity)
+      : (r.supplyAmount ?? 0);
     const { supply, vat, total } = calcVendorPurchase(
-      r.supplyAmount ?? 0, r.purchaseEvidenceType ?? null, r.vatAmountManual ?? 0,
+      supplyInput, r.purchaseEvidenceType ?? null, r.vatAmountManual ?? 0,
     );
     return {
       performerCategory: "vendor" as const,
@@ -458,6 +538,9 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
     let maxSeq = existing.reduce((m, e) => Math.max(m, e.sequence ?? 0), -1);
     const toInsert: (typeof performanceAssignmentsTable.$inferInsert)[] = [];
     const toCorrect: { id: number; it: typeof items[number]; idx: number; cls: PerfClass; prior: typeof existing[number] }[] = [];
+    // 보호 대상 행(수행자 배정·원가 입력 등): 삭제/재생성 금지. 단, 판매 연결이 유지되면
+    //   서비스별 상세 스냅샷(표시용 판매참조값·번역 상세)만 부분 갱신한다(§16-2).
+    const toRefreshSnapshot: { id: number; it: typeof items[number]; prod: any; fileName: string | null }[] = [];
     let skipped = 0;
 
     items.forEach((it, idx) => {
@@ -476,12 +559,19 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
         if (isCorrectableRow(prior)) {
           toCorrect.push({ id: prior.id, it, idx, cls, prior });
         } else {
+          // 보호 행: 수행·원가·정산·날짜 정보는 보존하고, 서비스별 상세 스냅샷만 최신화 대상에 등록(§16-2).
           skipped++;
+          toRefreshSnapshot.push({ id: prior.id, it, prod, fileName });
         }
         return;
       }
 
       maxSeq += 1;
+      const detailSnap = buildDetailSnapshot(it, prod, fileName);
+      // §5: 판매 공급단가(it.unitPrice)를 계약단가 초기값으로 복사(사용자가 이후 자유 수정). 판매금액은 불변.
+      //   번역은 제외 — 번역 계약단가는 단어/글자 기준이라 페이지 기준 공급단가와 단위가 달라 초기복사 시 오계산.
+      const seedUnitPrice = !isTranslationSnap(detailSnap, it.itemType) && it.unitPrice != null
+        ? String(it.unitPrice) : null;
       toInsert.push({
         projectId, quoteId: quote.id, saleItemId: it.id, saleItemSequence: idx, sequence: maxSeq,
         sourceType: "sale_import", costType: cls.costType,   // 생성 출처·비용 유형(원가분석용)
@@ -490,10 +580,12 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
         serviceType: it.itemType ?? null,
         productNameSnapshot: it.productName ?? null,
         // 서비스 유형별 상세 스냅샷(금액 제외, 판매 참조값 포함 §3·§6·§8·§10)
-        serviceDetailSnapshot: buildDetailSnapshot(it, prod, fileName),
+        serviceDetailSnapshot: detailSnap,
         languageOrServiceSnapshot: it.languagePair ?? null,
-        // 초기 기간·수량·단위·납품일(§10·§12) — 계약단가 미복사
+        // 초기 기간·수량·단위·납품일(§10·§12)
         ...initialFieldsFromSale(it),
+        // §5 계약단가 초기값 = 판매 공급단가(번역 제외). 이후 수행정보에서 자유 수정.
+        ...(seedUnitPrice != null ? { contractUnitPrice: seedUnitPrice } : {}),
         // 지급일 자동계산(납품일 기준·직전 영업일 §10)
         expectedPaymentDate: calcPaymentDate(initialFieldsFromSale(it).deliveryDate, importIsHoliday),
         expectedPaymentDateAuto: calcPaymentDate(initialFieldsFromSale(it).deliveryDate, importIsHoliday),
@@ -547,13 +639,27 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
       ? await db.select().from(performanceAssignmentsTable).where(inArray(performanceAssignmentsTable.id, correctedIds))
       : [];
 
+    // §16-2 보호 행 부분 갱신 — 서비스별 상세 스냅샷(표시용: 파일명·형식·단어수·글자수·페이지수·판매 수량/단위 등)만
+    //   최신 판매정보로 덮어쓴다. 수행자·업체·구분·계약단가·기본수행료·추가비용·원천징수·세율·원가합계·
+    //   지급상태·납품일·지급일 등 사용자 확정값은 절대 변경하지 않는다(set 대상에 미포함).
+    const refreshedIds: number[] = [];
+    for (const rf of toRefreshSnapshot) {
+      await db.update(performanceAssignmentsTable).set({
+        serviceDetailSnapshot: buildDetailSnapshot(rf.it, rf.prod, rf.fileName),
+        updatedBy: req.user?.id ?? null,
+        updatedAt: new Date(),
+      }).where(eq(performanceAssignmentsTable.id, rf.id));
+      refreshedIds.push(rf.id);
+    }
+
     res.json({
       created: created.length,
       corrected: correctedRows.length,
       skipped,
+      refreshed: refreshedIds.length,
       message: `신규 수행정보 ${created.length}건을 추가했습니다.` +
         (correctedRows.length ? ` 기존 ${correctedRows.length}건을 판매정보(구분·서비스 상세) 기준으로 재동기화했습니다.` : "") +
-        (skipped ? ` 이미 확정된 판매항목 ${skipped}건은 제외했습니다.` : ""),
+        (refreshedIds.length ? ` 보호된 ${refreshedIds.length}건은 수행·원가 정보를 보존하고 서비스 상세정보만 최신화했습니다.` : ""),
       rows: created.map(stripEnc),
       correctedRows: correctedRows.map(stripEnc),
     });
@@ -664,6 +770,45 @@ router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) =
         // 상태(§12) — 클라이언트 제공값 우선(지급상태로 단일화. 지급명세서 상태는 수행정보에서 관리하지 않음 → 향후 지급관리 모듈).
         if (r.paymentStatus) values.paymentStatus = r.paymentStatus;
 
+        // 수행자 스냅샷 재도출(§선택-저장 분리) — 인라인 로컬선택은 식별자·거주국·업체유형 스냅샷을 전송하지 않으므로,
+        //   individualUserId/vendorCompanyId 가 "신규 배정·변경"된 경우에만 CRM에서 재도출해 영속(PII 암호문 포함).
+        //   세율·거주구분은 클라이언트 값(사용자 수정 존중)을 유지하고, 미제공 시에만 서버 기본값으로 보정.
+        const priorIndividual = priorRow?.individualUserId ?? null;
+        const priorVendor = priorRow?.vendorCompanyId ?? null;
+        if (category === "individual" && r.individualUserId != null) {
+          if (r.individualUserId !== priorIndividual) {
+            const snap = await deriveIndividualSnapshot(tx as any, r.individualUserId);
+            if (snap) {
+              values.performerNameSnapshot = snap.performerNameSnapshot;
+              values.identifierSnapshotEnc = snap.identifierEnc;
+              values.identifierSnapshotMasked = snap.identifierMasked;
+              values.residenceCountrySnapshot = snap.residenceCountrySnapshot;
+              if (r.residencyType == null) values.residencyType = snap.residencyType as any;
+              if (r.withholdingTreatment == null) values.withholdingTreatment = snap.withholdingTreatment as any;
+              if (r.contractUnitPrice == null && snap.baseRate != null) {
+                values.contractUnitPrice = String(snap.baseRate);
+                if (r.quantity == null) values.quantity = "1";
+              }
+            }
+          }
+        } else if (category === "vendor" && r.vendorCompanyId != null) {
+          if (r.vendorCompanyId !== priorVendor) {
+            const snap = await deriveVendorSnapshot(tx as any, r.vendorCompanyId);
+            if (snap) {
+              values.performerNameSnapshot = snap.performerNameSnapshot;
+              values.vendorTypeSnapshot = snap.vendorTypeSnapshot;
+              values.identifierSnapshotMasked = snap.identifierMasked;
+              values.identifierSnapshotEnc = null;
+            }
+          }
+        } else if (r.individualUserId == null && r.vendorCompanyId == null && category !== "expense") {
+          // 수행자 해제 — 스테일 PII/스냅샷 정리
+          values.identifierSnapshotEnc = null;
+          values.identifierSnapshotMasked = null;
+          values.residenceCountrySnapshot = null;
+          values.vendorTypeSnapshot = null;
+        }
+
         // upsert → assignmentId 확보
         let assignmentId: number;
         if (r.id) {
@@ -705,10 +850,27 @@ router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) =
           tx.select().from(performanceExpensesTable).where(eq(performanceExpensesTable.assignmentId, assignmentId)),
           tx.select().from(performanceDeductionsTable).where(eq(performanceDeductionsTable.assignmentId, assignmentId)),
         ]);
+        // 번역 원가 기준 스냅샷 — 요청값 우선, 없으면 저장된 스냅샷(작업량은 판매 시점 고정값).
+        const snapForCost: any = r.serviceDetailSnapshot ?? priorRow?.serviceDetailSnapshot ?? null;
         let base: number;
         if (category === "vendor") base = Number(computed.supplyAmount) || 0;            // 외주 공급가액
         else if (category === "expense") base = calcBasePerformanceFee(true, r.directAmount ?? 0, null, null);
         else if (r.isDirectAmount) base = calcBasePerformanceFee(true, r.directAmount ?? 0, null, null);
+        else if (isTranslationSnap(snapForCost, r.serviceType)) {
+          // 번역 원가 = 계약단가 × 작업량(단어/글자). 페이지수(quantity) 미사용(§작업량통일).
+          //   작업량이 없으면 페이지로 자동계산하지 않고 기존 기본수행료 유지(계산 불가 → 임의 재계산 금지).
+          const work = translationWorkAmount(snapForCost);
+          base = (r.contractUnitPrice != null && work != null)
+            ? calcBasePerformanceFee(false, null, r.contractUnitPrice, work)
+            : Number(computed.baseFee) || 0;
+        }
+        else if (isInterpretationSnap(snapForCost, r.serviceType)) {
+          // 통역 원가 = 계약단가(1인·1일) × 수행일수(quantity) × 인원(interpreterCount, 없으면 1)(§계약단가통일).
+          const persons = interpreterHeadcount(snapForCost);
+          base = (r.contractUnitPrice != null && r.quantity != null)
+            ? calcBasePerformanceFee(false, null, r.contractUnitPrice, Number(r.quantity) * persons)
+            : Number(computed.baseFee) || 0;
+        }
         else if (r.contractUnitPrice != null && r.quantity != null)
           base = calcBasePerformanceFee(false, null, r.contractUnitPrice, r.quantity);   // 계약단가×수량
         else base = Number(computed.baseFee) || 0;                                       // 폴백: 개인 기본료
@@ -785,11 +947,64 @@ router.delete("/admin/performances/:id", ...adminGuard, async (req, res) => {
   }
 });
 
-// ── 개인 통번역사 선택 — CRM(users+profile+sensitive)에서 스냅샷을 동결하고 세무 기본값을 설정 ─────
-//   · 식별번호는 translator_sensitive 의 암호문을 그대로 스냅샷(identifierSnapshotEnc)하고,
-//     화면 표시는 마스킹값만 저장(§13·§36). 응답에도 암호문은 제외.
-//   · 거주구분/원천징수 처리구분은 paymentMethod 로 "추정 기본값"만 설정 — 해외/비거주는
-//     자동 0% 확정 금지, tax_review_required(세무확인 필요)로 둔다(§17·§19·§40).
+// ── 수행자 스냅샷 도출(공용) — CRM(users+profile+sensitive / companies)에서 표시·세무 기본값을 계산 ──
+//   · 순수 조회+계산만 수행(DB 미변경). resolve 엔드포인트(읽기전용)·배치저장 재도출·select-* 가 공용으로 사용.
+//   · 식별번호는 translator_sensitive 암호문 그대로 스냅샷(enc) + 마스킹표시값 생성(§13·§36).
+//   · 거주구분/원천징수 처리구분은 paymentMethod 로 "추정 기본값"만 — 해외/비거주는 자동 0% 확정 금지,
+//     tax_review_required(세무확인 필요)로 둔다(§17·§19·§40).
+async function deriveIndividualSnapshot(dbx: typeof db, translatorId: number) {
+  const [user] = await dbx.select().from(usersTable).where(eq(usersTable.id, translatorId));
+  if (!user) return null;
+  const [sensitive] = await dbx.select().from(translatorSensitiveTable).where(eq(translatorSensitiveTable.translatorId, translatorId));
+  const [profile] = await dbx.select().from(translatorProfilesTable).where(eq(translatorProfilesTable.userId, translatorId));
+
+  let identifierEnc: string | null = null;
+  let identifierMasked: string | null = null;
+  if (sensitive?.residentNumber) {
+    identifierEnc = sensitive.residentNumber; // 이미 AES 암호문
+    try { identifierMasked = maskResidentNumber(decrypt(sensitive.residentNumber)); } catch { identifierMasked = null; }
+  }
+  const pm = sensitive?.paymentMethod ?? null;
+  let residencyType: string | null = null;
+  let withholdingTreatment: string = "tax_review_required";
+  if (pm === "domestic_withholding") { residencyType = "domestic_resident"; withholdingTreatment = "domestic_3_3"; }
+  else if (pm === "domestic_business") { residencyType = "domestic_resident"; withholdingTreatment = "tax_review_required"; }
+  else if (pm === "overseas_paypal" || pm === "overseas_bank") { residencyType = "overseas_or_nonresident"; withholdingTreatment = "tax_review_required"; }
+  const rate = profile?.unitPrice != null ? Number(profile.unitPrice) : null;
+  return {
+    performerNameSnapshot: user.name ?? user.email ?? null,
+    identifierEnc, identifierMasked,
+    residenceCountrySnapshot: sensitive?.country ?? null,
+    residencyType, withholdingTreatment,
+    baseRate: (rate != null && rate > 0) ? rate : null,   // 프로필 기본단가(있을 때만)
+  };
+}
+async function deriveVendorSnapshot(dbx: typeof db, companyId: number) {
+  const [company] = await dbx.select().from(companiesTable).where(eq(companiesTable.id, companyId));
+  if (!company || company.companyType !== "vendor") return null;
+  return {
+    performerNameSnapshot: company.name ?? null,
+    vendorTypeSnapshot: company.vendorType ?? null,
+    identifierMasked: company.businessNumber ?? null,   // 사업자등록번호(표시)
+  };
+}
+
+// ── 읽기전용 도출(§선택-저장 분리) — 수행자 선택 시 DB 저장 없이 표시·세무 기본값만 반환. 암호문(enc) 제외. ──
+router.get("/admin/performances/resolve-individual", ...adminGuard, async (req, res) => {
+  const translatorId = Number(req.query.translatorId);
+  if (!Number.isInteger(translatorId) || translatorId <= 0) { res.status(400).json({ error: "translatorId 가 필요합니다." }); return; }
+  try {
+    const snap = await deriveIndividualSnapshot(db, translatorId);
+    if (!snap) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
+    const { identifierEnc, ...safe } = snap;   // 암호문은 응답에서 제외(클라이언트는 마스킹값만)
+    res.json({ ok: true, snapshot: safe });
+  } catch (err) {
+    req.log.error({ err }, "통번역사 도출 실패");
+    res.status(500).json({ error: "통번역사 정보를 불러오지 못했습니다." });
+  }
+});
+
+// ── 개인 통번역사 선택(즉시 저장) — 하위호환용. 신규 UX는 로컬선택 + 배치저장을 사용. ─────────────────
 const selectIndividualSchema = z.object({ translatorId: z.number().int().positive() });
 
 router.post("/admin/performances/:id/select-individual", ...adminGuard, async (req, res) => {
@@ -801,52 +1016,20 @@ router.post("/admin/performances/:id/select-individual", ...adminGuard, async (r
   try {
     const [row] = await db.select().from(performanceAssignmentsTable).where(eq(performanceAssignmentsTable.id, id));
     if (!row || row.deletedAt) { res.status(404).json({ error: "수행정보를 찾을 수 없습니다." }); return; }
-
-    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, translatorId));
-    if (!user) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
-    const [sensitive] = await db.select().from(translatorSensitiveTable).where(eq(translatorSensitiveTable.translatorId, translatorId));
-    const [profile] = await db.select().from(translatorProfilesTable).where(eq(translatorProfilesTable.userId, translatorId));
-
-    // 기본 계약단가 자동 불러오기(§9) — 프로필 기본단가를 "초기값으로 1회만" 반영.
-    //   사용자가 이미 계약단가를 입력한 행(contractUnitPrice != null)은 덮어쓰지 않는다.
-    const baseRate = profile?.unitPrice != null ? Number(profile.unitPrice) : null;
-    const applyRate = row.contractUnitPrice == null && baseRate != null && baseRate > 0;
-
-    // 식별번호 스냅샷: 암호문 그대로 보존 + 마스킹값 생성(복호화 실패 시 마스킹 생략)
-    let identifierEnc: string | null = null;
-    let identifierMasked: string | null = null;
-    if (sensitive?.residentNumber) {
-      identifierEnc = sensitive.residentNumber; // 이미 AES 암호문
-      try { identifierMasked = maskResidentNumber(decrypt(sensitive.residentNumber)); } catch { identifierMasked = null; }
-    }
-
-    // paymentMethod → 거주구분/원천징수 처리구분 추정 기본값
-    const pm = sensitive?.paymentMethod ?? null;
-    let residencyType: string | null = null;
-    let withholdingTreatment: string = "tax_review_required";
-    if (pm === "domestic_withholding") { residencyType = "domestic_resident"; withholdingTreatment = "domestic_3_3"; }
-    else if (pm === "domestic_business") { residencyType = "domestic_resident"; withholdingTreatment = "tax_review_required"; }
-    else if (pm === "overseas_paypal" || pm === "overseas_bank") { residencyType = "overseas_or_nonresident"; withholdingTreatment = "tax_review_required"; }
-
+    const snap = await deriveIndividualSnapshot(db, translatorId);
+    if (!snap) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
+    // 계약단가 초기 반영(사용자 미입력 시에만) + 수량 기본 1
+    const applyRate = row.contractUnitPrice == null && snap.baseRate != null;
     const [updated] = await db.update(performanceAssignmentsTable).set({
-      performerCategory: "individual",
-      costType: "individual",
-      payeeType: "individual",
-      individualUserId: translatorId,
-      vendorCompanyId: null,
-      performerNameSnapshot: user.name ?? user.email ?? null,
-      identifierSnapshotEnc: identifierEnc,
-      identifierSnapshotMasked: identifierMasked,
-      residenceCountrySnapshot: sensitive?.country ?? null,
-      // 국적은 CRM 에 명시 컬럼이 없어 사용자가 확인·입력(자동 확정 금지 §17)
-      residencyType: (residencyType as any),
-      withholdingTreatment: (withholdingTreatment as any),
-      // 계약단가 초기 반영(사용자 미입력 시에만) + 수량 기본 1
-      ...(applyRate ? { contractUnitPrice: String(baseRate), quantity: row.quantity ?? "1" } : {}),
-      updatedBy: req.user?.id ?? null,
-      updatedAt: new Date(),
+      performerCategory: "individual", costType: "individual", payeeType: "individual",
+      individualUserId: translatorId, vendorCompanyId: null,
+      performerNameSnapshot: snap.performerNameSnapshot,
+      identifierSnapshotEnc: snap.identifierEnc, identifierSnapshotMasked: snap.identifierMasked,
+      residenceCountrySnapshot: snap.residenceCountrySnapshot,
+      residencyType: (snap.residencyType as any), withholdingTreatment: (snap.withholdingTreatment as any),
+      ...(applyRate ? { contractUnitPrice: String(snap.baseRate), quantity: row.quantity ?? "1" } : {}),
+      updatedBy: req.user?.id ?? null, updatedAt: new Date(),
     }).where(eq(performanceAssignmentsTable.id, id)).returning();
-
     res.json({ ok: true, row: stripEnc(updated) });
   } catch (err) {
     req.log.error({ err }, "개인 통번역사 선택 실패");
@@ -854,8 +1037,7 @@ router.post("/admin/performances/:id/select-individual", ...adminGuard, async (r
   }
 });
 
-// ── 외주업체 선택 — 거래처(companyType='vendor') 스냅샷 동결(§14·§6) ──────────────────────────
-//   상호·사업자등록번호·업체유형을 동결. 사업자번호는 민감 PII(주민번호)와 달리 마스킹표시 필드에 저장.
+// ── 외주업체 선택(즉시 저장) — 하위호환용. 신규 UX는 로컬선택 + 배치저장을 사용. ────────────────────
 const selectVendorSchema = z.object({ companyId: z.number().int().positive() });
 
 router.post("/admin/performances/:id/select-vendor", ...adminGuard, async (req, res) => {
@@ -867,26 +1049,17 @@ router.post("/admin/performances/:id/select-vendor", ...adminGuard, async (req, 
   try {
     const [row] = await db.select().from(performanceAssignmentsTable).where(eq(performanceAssignmentsTable.id, id));
     if (!row || row.deletedAt) { res.status(404).json({ error: "수행정보를 찾을 수 없습니다." }); return; }
-    const [company] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
-    if (!company) { res.status(404).json({ error: "업체를 찾을 수 없습니다." }); return; }
-    if (company.companyType !== "vendor") { res.status(400).json({ error: "외주업체(vendor)만 선택할 수 있습니다." }); return; }
-
+    const snap = await deriveVendorSnapshot(db, companyId);
+    if (!snap) { res.status(400).json({ error: "외주업체(vendor)만 선택할 수 있습니다." }); return; }
     const [updated] = await db.update(performanceAssignmentsTable).set({
-      performerCategory: "vendor",
-      costType: "vendor",
-      payeeType: "vendor",
-      vendorCompanyId: companyId,
-      individualUserId: null,
-      performerNameSnapshot: company.name ?? null,
-      identifierSnapshotEnc: null,                              // 개인 식별자 없음
-      identifierSnapshotMasked: company.businessNumber ?? null, // 사업자등록번호(표시)
-      vendorTypeSnapshot: company.vendorType ?? null,
-      // 개인 세무 필드 정리(§11)
+      performerCategory: "vendor", costType: "vendor", payeeType: "vendor",
+      vendorCompanyId: companyId, individualUserId: null,
+      performerNameSnapshot: snap.performerNameSnapshot,
+      identifierSnapshotEnc: null, identifierSnapshotMasked: snap.identifierMasked,
+      vendorTypeSnapshot: snap.vendorTypeSnapshot,
       residencyType: null, withholdingTreatment: null, withholdingRate: null,
-      updatedBy: req.user?.id ?? null,
-      updatedAt: new Date(),
+      updatedBy: req.user?.id ?? null, updatedAt: new Date(),
     }).where(eq(performanceAssignmentsTable.id, id)).returning();
-
     res.json({ ok: true, row: stripEnc(updated) });
   } catch (err) {
     req.log.error({ err }, "외주업체 선택 실패");

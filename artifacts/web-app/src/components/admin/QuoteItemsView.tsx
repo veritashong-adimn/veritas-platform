@@ -149,7 +149,7 @@ function ReadOnlyRow({ raw }: { raw: SaleItem }) {
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}><TypeBadge type={f.productType} /></div>
       <div style={{ ...TYPO.inputValue, fontWeight: 600, minWidth: 0, overflow: 'hidden' }}>
         <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.productName || DASH}</div>
-        {raw.languagePair && <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2 }}>{raw.languagePair}</div>}
+        {/* 내부 식별값(원문 언어코드 languagePair, 예: 'id')은 사용자 화면에 노출하지 않는다 — 상품명만 표시(§UI). 저장값은 유지. */}
       </div>
       <div style={{ minWidth: 0 }}><ReadOnlyServiceFields f={f} /></div>
       <div />

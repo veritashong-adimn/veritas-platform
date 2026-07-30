@@ -9,7 +9,8 @@ import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import { ClickSelect, GhostBtn, PrimaryBtn } from '../ui';
 import {
   Row, ExpenseRow, DeductionRow, won, num, commafy, dateVal,
-  EXPENSE_TYPE_OPTS, DEDUCTION_TYPE_OPTS, EVIDENCE_OPTS, RESIDENCY_OPTS,
+  EXPENSE_TYPE_SELECT_OPTS, CUSTOM_EXPENSE_VALUE, PREDEFINED_EXPENSE_VALUES,
+  DEDUCTION_TYPE_OPTS, EVIDENCE_OPTS, RESIDENCY_OPTS,
   calcVendorPreview, calcIndivPreview, calcRowCostPreview,
 } from './performanceShared';
 
@@ -104,6 +105,33 @@ const addBtn = (on: () => void, label: string, testid: string) => (
     style={{ fontSize: 12, padding: '6px 10px', border: `1px dashed ${C.g300}`, borderRadius: 6, background: C.bgCard, color: C.textSecondary, cursor: 'pointer', alignSelf: 'flex-start' }}>{label}</button>
 );
 
+// ── 추가비용 항목 선택 (공용) — 목록 선택 + '직접입력' 자유 항목명 입력 ──────────
+//  · value 가 사전 정의값이 아니면(빈값 제외) 직접입력으로 간주해 텍스트 입력창 표시(저장된 사용자 항목명 그대로 노출).
+//  · 목록에서 '직접입력' 선택 시 텍스트 입력창으로 전환, ▾ 버튼으로 목록 선택으로 복귀. 저장·계산 로직은 변경 없음.
+function ExpenseTypeField({ value, onChange, triggerStyle, testid }: { value: string; onChange: (v: string) => void; triggerStyle: React.CSSProperties; testid: string }) {
+  const derivedCustom = !!value && !PREDEFINED_EXPENSE_VALUES.has(value);
+  const [manualCustom, setManualCustom] = React.useState(false);
+  // 값이 사전 정의값으로 바뀌면(예: 행 삭제로 인한 재사용) 수동 직접입력 플래그 해제
+  React.useEffect(() => { if (value && PREDEFINED_EXPENSE_VALUES.has(value)) setManualCustom(false); }, [value]);
+  const custom = derivedCustom || manualCustom;
+  if (custom) {
+    return (
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <input type="text" style={{ ...triggerStyle, flex: 1, minWidth: 0 }} value={value} autoFocus={manualCustom}
+          onChange={e => onChange(e.target.value)} placeholder="항목명 직접입력"
+          data-testid={`${testid}-custom`} aria-label="추가비용 항목명 직접입력" />
+        <button type="button" aria-label="목록에서 선택" title="목록에서 선택"
+          onClick={() => { setManualCustom(false); onChange(''); }}
+          style={{ flexShrink: 0, border: `1px solid ${C.g300}`, borderRadius: 6, background: C.bgCard, color: C.textSecondary, cursor: 'pointer', padding: '4px 7px', fontSize: 11, lineHeight: 1 }}>▾</button>
+      </div>
+    );
+  }
+  return (
+    <ClickSelect value={value} triggerStyle={triggerStyle} options={EXPENSE_TYPE_SELECT_OPTS}
+      onChange={(v: string) => { if (v === CUSTOM_EXPENSE_VALUE) { setManualCustom(true); onChange(''); } else onChange(v); }} />
+  );
+}
+
 // ── 추가비용·차감 다건 팝업(§8·§9) ───────────────────────────────────────────
 export function SubItemsPopup({ r, patch, onClose, focus }: { r: Row; patch: (p: Partial<Row>) => void; onClose: () => void; focus?: 'expenses' | 'deductions' }) {
   const expenses = r.expenses ?? [];
@@ -123,7 +151,7 @@ export function SubItemsPopup({ r, patch, onClose, focus }: { r: Row; patch: (p:
         </div>
         {expenses.map((e, idx) => (
           <div key={idx} style={{ display: 'grid', gridTemplateColumns: '130px 120px 130px 92px 1fr auto', gap: SP[2], alignItems: 'center' }}>
-            <ClickSelect value={e.expenseType} onChange={(v: string) => patchExpense(idx, { expenseType: v })} triggerStyle={inp} options={EXPENSE_TYPE_OPTS} />
+            <ExpenseTypeField value={e.expenseType} onChange={(v: string) => patchExpense(idx, { expenseType: v })} triggerStyle={inp} testid={`pop-exp-type-${idx}`} />
             {numInp(e.amount, v => patchExpense(idx, { amount: v }), `pop-exp-amt-${idx}`, '추가비용 금액')}
             <input type="date" style={inp} value={dateVal(e.incurredDate)} onChange={ev => patchExpense(idx, { incurredDate: ev.target.value })} aria-label="발생일" />
             <label style={{ display: 'flex', alignItems: 'center', gap: 4, ...TYPO.helper, cursor: 'pointer', whiteSpace: 'nowrap' }}>
@@ -175,7 +203,7 @@ export function AdjustmentPopup({ r, patch, onClose }: { r: Row; patch: (p: Part
   // 추가항목은 항상 지급대상 포함(원가 반영). 기존 부가필드(발생일·비고·증빙)는 보존.
   const confirm = () => { patch({ expenses: adds.map(e => ({ ...e, includedInPayout: true })), deductions: subs }); onClose(); };
   return (
-    <Modal title="기타비용" onClose={onClose} width={560} draggable
+    <Modal title="추가비용" onClose={onClose} width={560} draggable
       footer={<>
         <GhostBtn onClick={onClose} style={{ fontSize: 12, padding: '6px 14px' }} aria-label="취소">취소</GhostBtn>
         <PrimaryBtn onClick={confirm} style={{ fontSize: 12, padding: '6px 14px' }} data-testid="adj-confirm" aria-label="확인">확인</PrimaryBtn>
@@ -185,7 +213,7 @@ export function AdjustmentPopup({ r, patch, onClose }: { r: Row; patch: (p: Part
         <div style={subTitle}>추가항목 <span style={TYPO.helper}>(+)</span></div>
         {adds.map((e, idx) => (
           <div key={idx} style={{ display: 'grid', gridTemplateColumns: '160px 140px auto', gap: SP[2], alignItems: 'center' }}>
-            <ClickSelect value={e.expenseType} onChange={(v: string) => patchAdd(idx, { expenseType: v })} triggerStyle={inp} options={EXPENSE_TYPE_OPTS} />
+            <ExpenseTypeField value={e.expenseType} onChange={(v: string) => patchAdd(idx, { expenseType: v })} triggerStyle={inp} testid={`adj-add-type-${idx}`} />
             {moneyInp(e.amount, v => patchAdd(idx, { amount: v }), `adj-add-amt-${idx}`, '추가항목 금액')}
             {smallDelBtn(() => setAdds(adds.filter((_, i) => i !== idx)), '추가항목 삭제', `adj-add-del-${idx}`)}
           </div>
@@ -209,7 +237,7 @@ export function AdjustmentPopup({ r, patch, onClose }: { r: Row; patch: (p: Part
       <div style={{ display: 'flex', gap: SP[6], flexWrap: 'wrap', ...TYPO.inputValue, fontVariantNumeric: 'tabular-nums', padding: `${SP[2]}px ${SP[3]}px`, background: C.primaryBg, borderRadius: 8 }}>
         <span>추가 <b>{won(addSum)}원</b></span>
         <span>차감 <b>{won(subSum)}원</b></span>
-        <span>기타비용 합계 <b style={{ color: C.primaryText }} data-testid="adj-total">{won(net)}원</b></span>
+        <span>추가비용 합계 <b style={{ color: C.primaryText }} data-testid="adj-total">{won(net)}원</b></span>
       </div>
     </Modal>
   );
