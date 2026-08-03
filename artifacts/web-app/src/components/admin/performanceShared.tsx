@@ -88,8 +88,13 @@ export const CUSTOM_EXPENSE_VALUE = '__custom__';
 export const EXPENSE_TYPE_SELECT_OPTS = [...EXPENSE_TYPE_OPTS, { value: CUSTOM_EXPENSE_VALUE, label: '직접입력' }];
 // 사전 정의된 추가비용 value 집합 — 이 집합에 없는 expenseType은 '직접입력'(사용자 항목명)으로 간주해 텍스트 입력창으로 표시.
 export const PREDEFINED_EXPENSE_VALUES = new Set(EXPENSE_TYPE_OPTS.map(o => o.value));
-// §10 조정항목 — 차감항목(-) 구분. 기본수행료 외 모든 차감. 이후 항목 자유 확장 가능.
-export const DEDUCTION_TYPE_OPTS = ['선지급 차감', '가불 차감', '패널티', '환수', '기타 차감'].map(v => ({ value: v, label: v }));
+// §10 조정항목 — 차감항목(-) 구분. 순서 고정: 패널티·환수·선지급 차감·직접입력.
+//  · 추가항목과 동일 UX: '직접입력' 선택 시 첫 칸이 텍스트 입력으로 전환되어 항목명을 deductionType에 그대로 저장(별도 사유칸 없음).
+export const DEDUCTION_TYPE_OPTS = ['패널티', '환수', '선지급 차감'].map(v => ({ value: v, label: v }));
+export const CUSTOM_DEDUCTION_VALUE = '__custom__';
+export const DEDUCTION_TYPE_SELECT_OPTS = [...DEDUCTION_TYPE_OPTS, { value: CUSTOM_DEDUCTION_VALUE, label: '직접입력' }];
+// 사전 정의된 차감 value 집합 — 이 집합에 없는 deductionType은 '직접입력'(사용자 항목명)으로 간주해 텍스트 입력창으로 표시.
+export const PREDEFINED_DEDUCTION_VALUES = new Set(DEDUCTION_TYPE_OPTS.map(o => o.value));
 
 export const RESIDENCY_OPTS = [
   { value: 'domestic_resident', label: '국내 거주자' },

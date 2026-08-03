@@ -377,11 +377,9 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const tdBase: React.CSSProperties = { ...TYPO.inputValue, padding: '9px 8px', borderBottom: BD.divider, verticalAlign: 'middle', whiteSpace: 'nowrap', background: cellBg };
   const thBase: React.CSSProperties = { ...TYPO.gridHeader, padding: '0 8px 9px', borderBottom: BD.grid, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: cellBg, zIndex: 4, textAlign: 'left' };
   const tdR: React.CSSProperties = { ...tdBase, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
-  const sep = `2px solid ${C.g200}`;
-  // 좌/우 고정 오프셋(§3·§4). 세부구분 삭제분을 수행자·업체/상품·업무에 배분(§11), 구분폭 확대(§12).
+  // 컬럼 너비. 행제어만 좌측 틀고정 유지(offset 0), 나머지는 일반 컬럼으로 좌우 스크롤.
   const LW = { control: 116, category: 118, performer: 176, product: 196 };
-  const L = { control: 0, category: 116, performer: 234, product: 410 };
-  const R = { cost: 118, pay: 0 };
+  const L = { control: 0 };
   const RW = { cost: 104, pay: 118 };
   const fzTd = (side: 'left' | 'right', offset: number, extra?: React.CSSProperties): React.CSSProperties =>
     ({ ...tdBase, position: 'sticky', [side]: offset, zIndex: 3, ...extra });
@@ -428,9 +426,9 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const renderHeader = (editable: boolean) => (
     <thead><tr>
       <th style={fzTh('left', L.control, { width: LW.control, textAlign: 'center' })}>행제어</th>
-      <th style={fzTh('left', L.category, { width: LW.category })}>구분</th>
-      <th style={fzTh('left', L.performer, { width: LW.performer })}>수행자·업체</th>
-      <th style={fzTh('left', L.product, { width: LW.product, borderRight: sep })}>상품·업무</th>
+      <th style={{ ...thBase, width: LW.category }}>구분</th>
+      <th style={{ ...thBase, width: LW.performer }}>수행자·업체</th>
+      <th style={{ ...thBase, width: LW.product }}>상품·업무</th>
       <th style={{ ...thBase, width: 380 }}>서비스별 상세정보</th>
       <th style={{ ...thBase, width: 160 }}>{editable ? '납품일 · 확인' : sortBtn('납품일', 'deliveryDate')}</th>
       <th style={{ ...thBase, width: 126 }}>{editable ? '지급일' : sortBtn('지급일', 'expectedPaymentDate')}</th>
@@ -439,8 +437,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
       <th style={{ ...thBase, width: 120, textAlign: 'right' }}>추가비용</th>
       <th style={{ ...thBase, width: 140 }}>원천징수</th>
       <th style={{ ...thBase, width: 78, textAlign: 'right' }}>세율</th>
-      <th style={fzTh('right', R.cost, { width: RW.cost, textAlign: 'right', borderLeft: sep })}>{editable ? '원가합계' : sortBtn('원가합계', 'costTotal')}</th>
-      <th style={fzTh('right', R.pay, { width: RW.pay })}>지급상태</th>
+      <th style={{ ...thBase, width: RW.cost, textAlign: 'right' }}>{editable ? '원가합계' : sortBtn('원가합계', 'costTotal')}</th>
+      <th style={{ ...thBase, width: RW.pay }}>지급상태</th>
     </tr></thead>
   );
 
@@ -463,7 +461,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
     const dTitle = !r.deliveryDate ? '납품일 미입력 — 납품일 입력 후 확인 필요' : (dConfirmed ? (r.deliveryConfirmedAt ? `확인완료 · ${dateVal(r.deliveryConfirmedAt)}` : '확인완료') : '담당 PM 납품확인 전');
     return (
       <tr key={rowKey(r, i)}>
-        {/* 좌측 고정 */}
+        {/* 행제어만 좌측 고정 유지 */}
         <td style={fzTd('left', L.control, { width: LW.control })}>
           {editable
             ? <RowControls idx={i} total={rows.length} onRemove={removeRow} onAddBelow={insertBelow}
@@ -472,12 +470,12 @@ export default function PerformanceSection({ projectId, token, performances, onC
                 removeDisabled={!deletable} removeTitle={deletable ? '행 삭제' : '지급 진행 행은 삭제 불가'} />
             : <span style={{ ...TYPO.helper, display: 'block', textAlign: 'center' }}>{i + 1}</span>}
         </td>
-        <td style={fzTd('left', L.category, { width: LW.category })}>
+        <td style={{ ...tdBase, width: LW.category }}>
           {editable
             ? <ClickSelect value={resolvePerformerType(r)} onChange={(v: string) => changePerformerType(i, v)} triggerStyle={catSel} menuStyle={catMenu} options={PERFORMER_TYPE_OPTS as any} />
             : <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', maxWidth: LW.category - 12 }} title={performerTypeLabel(r)}>{performerTypeLabel(r)}</span>}
         </td>
-        <td style={fzTd('left', L.performer, { width: LW.performer })}>
+        <td style={{ ...tdBase, width: LW.performer }}>
           {editable
             ? <InlinePerformerPicker r={r} i={i} searchIdx={searchIdx} searchResults={searchResults}
                 onSearchTranslator={onSearchTranslator} onSearchVendor={onSearchVendor}
@@ -485,7 +483,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
                 onCancelChange={() => { setSearchIdx(null); setSearchResults([]); }} patch={(p) => patchRow(i, p)} />
             : <span>{r.performerNameSnapshot || muted}</span>}
         </td>
-        <td style={fzTd('left', L.product, { width: LW.product, borderRight: sep })}>
+        <td style={{ ...tdBase, width: LW.product }}>
           {editable
             ? <input style={inp} value={r.productNameSnapshot ?? ''} onChange={e => patchRow(i, { productNameSnapshot: e.target.value })} placeholder="상품·업무명" data-testid={`perf-name-${i}`} aria-label="상품·업무명" />
             : <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', maxWidth: LW.product - 12 }} title={r.productNameSnapshot ?? ''}>{r.productNameSnapshot || '—'}</span>}
@@ -538,9 +536,9 @@ export default function PerformanceSection({ projectId, token, performances, onC
                 : <span style={{ color: C.textSecondary }}>{rateText(r)}</span>)
             : muted}
         </td>
-        {/* 우측 고정 */}
-        <td style={fzTd('right', R.cost, { ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText, borderLeft: sep })}>{won(cost.costTotal)}원</td>
-        <td style={fzTd('right', R.pay, { width: RW.pay })}>
+        {/* 원가합계·지급상태 — 일반 컬럼(좌우 스크롤) */}
+        <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }}>{won(cost.costTotal)}원</td>
+        <td style={{ ...tdBase, width: RW.pay }}>
           {editable ? <ClickSelect value={r.paymentStatus ?? 'unpaid'} onChange={(v: string) => patchRow(i, { paymentStatus: v })} triggerStyle={inp} options={PAYMENT_STATUS_OPTS} /> : <PaymentBadge value={r.paymentStatus} />}
         </td>
       </tr>

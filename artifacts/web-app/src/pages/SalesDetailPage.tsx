@@ -92,20 +92,23 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   const [saving,    setSaving]    = useState(false);
 
   // ── 판매 상세(=프로젝트 + 원본 견적) 조회 ─────────────────────────────────
-  const fetchDetail = useCallback(async () => {
-    setLoading(true);
+  // silent=true: 저장 후 백그라운드 갱신(예: 수행정보 추가비용 저장). 로딩 오버레이로 화면을 비우지 않아
+  //   상세페이지가 언마운트/리마운트되지 않고, 스크롤 위치·수정모드·필터·행 위치가 그대로 유지된다.
+  const fetchDetail = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
+    if (!silent) setLoading(true);
     try {
       const res = await fetch(api(`/api/admin/projects/${saleId}`), { headers: authH });
       if (!res.ok) {
         setToast(`판매건 조회 실패 (${res.status})`);
-        setProject(null);
+        if (!silent) setProject(null);   // 백그라운드 갱신 실패 시 현재 화면 유지(비우지 않음)
         return;
       }
       setProject(await res.json());
     } catch {
       setToast('판매 상세 조회 중 오류가 발생했습니다.');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saleId, token]);
@@ -292,7 +295,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
           </div>
         </div>
         <span style={{ flex: 1 }} />
-        <GhostBtn onClick={fetchDetail} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-sales-refresh" aria-label="새로고침">
+        <GhostBtn onClick={() => fetchDetail()} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-sales-refresh" aria-label="새로고침">
           새로고침
         </GhostBtn>
         <PrimaryBtn onClick={handleQuotePdf} disabled={!quote || pdfLoading} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-sales-quote-pdf" aria-label="견적서 보기">
@@ -393,7 +396,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             projectId={saleId}
             token={token}
             performances={project.performances ?? []}
-            onChanged={fetchDetail}
+            onChanged={() => fetchDetail({ silent: true })}
             onToast={setToast}
             projectAdminId={project.adminId ?? null}
           />

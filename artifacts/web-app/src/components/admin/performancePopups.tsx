@@ -10,7 +10,7 @@ import { ClickSelect, GhostBtn, PrimaryBtn } from '../ui';
 import {
   Row, ExpenseRow, DeductionRow, won, num, commafy, dateVal,
   EXPENSE_TYPE_SELECT_OPTS, CUSTOM_EXPENSE_VALUE, PREDEFINED_EXPENSE_VALUES,
-  DEDUCTION_TYPE_OPTS, EVIDENCE_OPTS, RESIDENCY_OPTS,
+  DEDUCTION_TYPE_OPTS, DEDUCTION_TYPE_SELECT_OPTS, CUSTOM_DEDUCTION_VALUE, PREDEFINED_DEDUCTION_VALUES, EVIDENCE_OPTS, RESIDENCY_OPTS,
   calcVendorPreview, calcIndivPreview, calcRowCostPreview,
 } from './performanceShared';
 
@@ -132,6 +132,32 @@ function ExpenseTypeField({ value, onChange, triggerStyle, testid }: { value: st
   );
 }
 
+// ── 차감항목 선택 (공용) — 추가항목(ExpenseTypeField)과 동일 UX: 목록 선택 + '직접입력' 자유 항목명 입력 ──
+//  · value 가 사전 정의값이 아니면(빈값 제외) 직접입력으로 간주해 텍스트 입력창 표시(저장된 사용자 항목명 그대로 노출).
+//  · '직접입력' 선택 시 첫 칸이 텍스트 입력으로 전환, ▾ 로 목록 복귀. 저장은 deductionType 문자열 그대로(별도 사유칸 없음).
+function DeductionTypeField({ value, onChange, triggerStyle, testid }: { value: string; onChange: (v: string) => void; triggerStyle: React.CSSProperties; testid: string }) {
+  const derivedCustom = !!value && !PREDEFINED_DEDUCTION_VALUES.has(value);
+  const [manualCustom, setManualCustom] = React.useState(false);
+  React.useEffect(() => { if (value && PREDEFINED_DEDUCTION_VALUES.has(value)) setManualCustom(false); }, [value]);
+  const custom = derivedCustom || manualCustom;
+  if (custom) {
+    return (
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <input type="text" style={{ ...triggerStyle, flex: 1, minWidth: 0 }} value={value} autoFocus={manualCustom}
+          onChange={e => onChange(e.target.value)} placeholder="항목명 직접입력"
+          data-testid={`${testid}-custom`} aria-label="차감항목명 직접입력" />
+        <button type="button" aria-label="목록에서 선택" title="목록에서 선택"
+          onClick={() => { setManualCustom(false); onChange(''); }}
+          style={{ flexShrink: 0, border: `1px solid ${C.g300}`, borderRadius: 6, background: C.bgCard, color: C.textSecondary, cursor: 'pointer', padding: '4px 7px', fontSize: 11, lineHeight: 1 }}>▾</button>
+      </div>
+    );
+  }
+  return (
+    <ClickSelect value={value} triggerStyle={triggerStyle} options={DEDUCTION_TYPE_SELECT_OPTS}
+      onChange={(v: string) => { if (v === CUSTOM_DEDUCTION_VALUE) { setManualCustom(true); onChange(''); } else onChange(v); }} />
+  );
+}
+
 // ── 추가비용·차감 다건 팝업(§8·§9) ───────────────────────────────────────────
 export function SubItemsPopup({ r, patch, onClose, focus }: { r: Row; patch: (p: Partial<Row>) => void; onClose: () => void; focus?: 'expenses' | 'deductions' }) {
   const expenses = r.expenses ?? [];
@@ -226,12 +252,12 @@ export function AdjustmentPopup({ r, patch, onClose }: { r: Row; patch: (p: Part
         <div style={subTitle}>차감항목 <span style={TYPO.helper}>(-)</span></div>
         {subs.map((d, idx) => (
           <div key={idx} style={{ display: 'grid', gridTemplateColumns: '160px 140px auto', gap: SP[2], alignItems: 'center' }}>
-            <ClickSelect value={d.deductionType} onChange={(v: string) => patchSub(idx, { deductionType: v })} triggerStyle={inp} options={DEDUCTION_TYPE_OPTS} />
+            <DeductionTypeField value={d.deductionType} onChange={(v: string) => patchSub(idx, { deductionType: v })} triggerStyle={inp} testid={`adj-sub-type-${idx}`} />
             {moneyInp(d.amount, v => patchSub(idx, { amount: v }), `adj-sub-amt-${idx}`, '차감항목 금액')}
             {smallDelBtn(() => setSubs(subs.filter((_, i) => i !== idx)), '차감항목 삭제', `adj-sub-del-${idx}`)}
           </div>
         ))}
-        {addBtn(() => setSubs([...subs, { deductionType: '선지급 차감', amount: '' }]), '+ 차감항목', 'adj-sub')}
+        {addBtn(() => setSubs([...subs, { deductionType: '패널티', amount: '' }]), '+ 차감항목', 'adj-sub')}
       </div>
       {/* 합계 */}
       <div style={{ display: 'flex', gap: SP[6], flexWrap: 'wrap', ...TYPO.inputValue, fontVariantNumeric: 'tabular-nums', padding: `${SP[2]}px ${SP[3]}px`, background: C.primaryBg, borderRadius: 8 }}>
