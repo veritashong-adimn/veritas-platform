@@ -22,6 +22,7 @@ import QuoteItemsView, { SaleTotalsRows } from '../components/admin/QuoteItemsVi
 import { QuoteItemsEditor, buildQuoteItemsBody, calcTotals, type QuoteItemForm } from '../components/admin/QuoteEditorWorkspace';
 import { convertToFormItem } from '../lib/quoteItemForm';
 import PerformanceSection from '../components/admin/PerformanceSection';
+import PaymentInfoSection from '../components/admin/PaymentInfoSection';
 
 // ─── 로컬 라벨 맵 (견적관리 상세와 동일 문구) ────────────────────────────────
 const QUOTE_TYPE_LABEL: Record<string, string> = {
@@ -401,9 +402,20 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             projectAdminId={project.adminId ?? null}
           />
 
-          {/* ── D. 비고 ─────────────────────────────────────────────────── */}
+          {/* ── D. 결제정보 (고객 수금 현황 — 통번역사 지급과 별개) ──────────── */}
+          <PaymentInfoSection
+            projectId={saleId}
+            token={token}
+            paymentRecords={project.paymentRecords ?? []}
+            saleTotal={Number(quote?.price ?? 0)}
+            defaultCompany={project.companyId ? { id: project.companyId, name: companyName ?? '' } : null}
+            onChanged={() => fetchDetail({ silent: true })}
+            onToast={setToast}
+          />
+
+          {/* ── E. 비고 ─────────────────────────────────────────────────── */}
           <Card>
-            <CardSectionHeader badge="D" badgeBg="#f5f3ff" badgeColor="#7c3aed" title="비고" />
+            <CardSectionHeader badge="E" badgeBg="#f5f3ff" badgeColor="#7c3aed" title="비고" />
             {/* 견적관리 비고(2행 textarea)와 동일한 높이의 읽기전용 박스 */}
             <div>
               <label style={{ ...TYPO.fieldLabel, display: 'block', marginBottom: SP[2] }}>견적 비고</label>

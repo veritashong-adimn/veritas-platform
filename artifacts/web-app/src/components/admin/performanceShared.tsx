@@ -100,13 +100,27 @@ export const RESIDENCY_OPTS = [
   { value: 'domestic_resident', label: '국내 거주자' },
   { value: 'overseas_or_nonresident', label: '해외 거주자·비거주자' },
 ];
+// 세금처리(구 '원천징수') 선택지 — 3개 고정. DB enum은 그대로 재사용(스키마 변경 없음), UI 명칭만 매핑.
+//  · 3.3% = domestic_3_3 / 원천징수 예외 = exempt / 세금계산서 = tax_review_required(사업자 지급·원천세 없음).
+//  · 직접입력·세율 입력·별도 입력칸은 없음(드롭다운 하나).
 export const TREATMENT_OPTS = [
-  { value: 'domestic_3_3', label: '국내 거주자 3.3%' },
-  { value: 'exempt', label: '원천징수 제외' },
-  { value: 'nonresident_custom', label: '비거주자 별도 원천징수' },
-  { value: 'treaty_reduction_or_exemption', label: '조세조약 감면·면제' },
-  { value: 'tax_review_required', label: '세무 확인 필요' },
+  { value: 'domestic_3_3', label: '3.3%' },
+  { value: 'exempt', label: '원천징수 예외' },
+  { value: 'tax_review_required', label: '세금계산서' },
 ];
+// 표시·저장용 정규화 — 레거시 값을 신규 3개로 매핑. 저장 enum은 그대로 사용.
+//  · 미사용 레거시(비거주자·조세조약·기타 직접입력 = nonresident_custom/treaty)는 '원천징수 예외'(exempt)로 통합.
+export const normalizeTreatment = (v?: string | null) => {
+  if (v === 'domestic_3_3' || v === 'exempt' || v === 'tax_review_required') return v;
+  if (v === 'nonresident_custom' || v === 'treaty_reduction_or_exemption') return 'exempt';
+  return v ?? '';
+};
+// 세금처리 유효값 — 외주업체(vendor)는 미설정 시 기본 '세금계산서'(tax_review_required). 방안 A: 기록용, 지급액 계산 불변.
+export const effectiveTreatment = (r: { withholdingTreatment?: string | null; performerCategory?: string | null }) => {
+  const t = normalizeTreatment(r.withholdingTreatment);
+  if (!t && r.performerCategory === 'vendor') return 'tax_review_required';
+  return t;
+};
 export const EVIDENCE_OPTS = [
   { value: 'tax_invoice', label: '세금계산서' },
   { value: 'invoice', label: '계산서' },
@@ -454,12 +468,12 @@ export function calcIndivPreview(r: Row): { gross: number; rate: number; tax: nu
   const gross = round2(num(r.baseFee) + num(r.transportationFee) + num(r.businessTripFee) +
     num(r.copyrightFee) + num(r.travelDayCompensation) + num(r.cancellationCompensation));
   let rate = 0, confirmed = true;
-  switch (r.withholdingTreatment) {
+  // 세금처리(구 원천징수) — 3.3%만 원천세 발생, 원천징수 예외·세금계산서는 원천세 0(실지급=지급금액).
+  switch (normalizeTreatment(r.withholdingTreatment)) {
     case 'domestic_3_3': rate = 3.3; break;
     case 'exempt': rate = 0; break;
-    case 'nonresident_custom':
-    case 'treaty_reduction_or_exemption': rate = num(r.withholdingRate); break;
-    default: rate = 0; confirmed = false; break;
+    case 'tax_review_required': rate = 0; break;   // 세금계산서 — 사업자 지급, 원천세 없음
+    default: rate = 0; confirmed = false; break;   // 미선택(빈값)
   }
   const tax = confirmed ? round2(gross * (rate / 100)) : 0;
   return { gross, rate, tax, net: round2(gross - tax), confirmed };

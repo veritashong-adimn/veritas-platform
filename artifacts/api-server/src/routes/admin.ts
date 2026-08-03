@@ -16,6 +16,7 @@ import { logEvent } from "../lib/logEvent";
 import { getSettings, invalidateSettingsCache } from "../lib/getSettings";
 import { tryBuildOnProjectComplete } from "../services/translationUnitService";
 import { loadPerformanceRows } from "./performances";
+import { loadPaymentRecords } from "./projectPayments";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -435,10 +436,12 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
 
     // 수행정보(원가) — 추가비용·차감 하위행 포함, soft-delete 제외. 암호문 제외(마스킹값만).
     const performances = await loadPerformanceRows(projectId);
+    // 결제정보(고객 수금) — 회차 오름차순. 기존 payments(요청/승인 흐름)와는 별개 테이블.
+    const paymentRecords = await loadPaymentRecords(projectId);
 
     res.json({
       ...project, quotes, quoteVersions, payments, tasks, settlements, logs, notes, communications,
-      company, contact, performances,
+      company, contact, performances, paymentRecords,
     });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch project detail");

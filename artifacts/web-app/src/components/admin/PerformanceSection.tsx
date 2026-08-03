@@ -16,7 +16,7 @@ import { AmountDetailPopup, AdjustmentPopup } from './performancePopups';
 import ServiceDetailCell from './performanceServiceDetail';
 import {
   Row, toRow, won, num, commafy, dateVal, calcRowCostPreview, calcPaymentDate, isEquipmentKind,
-  CATEGORY_OPTS, TREATMENT_OPTS,
+  CATEGORY_OPTS, TREATMENT_OPTS, normalizeTreatment, effectiveTreatment,
   PERFORMER_TYPE_OPTS, resolvePerformerType, performerTypeLabel, canonicalLineCategory,
   PAYMENT_STATUS_OPTS,
   PaymentBadge,
@@ -260,7 +260,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
       performerCategory: 'vendor', vendorCompanyId: c.id, individualUserId: null,
       performerNameSnapshot: c.name, vendorTypeSnapshot: c.vendorType ?? null,
       identifierSnapshotMasked: c.businessNumber ?? null, lineCategory: r.lineCategory || '외주업체',
-      residencyType: null, withholdingTreatment: null,
+      residencyType: null, withholdingTreatment: 'tax_review_required',   // 외주업체 기본값: 세금계산서(기록용)
     });
     setSearchResults([]); setSearchIdx(null);
   };
@@ -318,7 +318,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
     paymentStatus: r.paymentStatus ?? undefined,
     actualPaymentAmount: r.actualPaymentAmount != null && r.actualPaymentAmount !== '' ? num(r.actualPaymentAmount) : null,
     individualUserId: r.individualUserId ?? null, residencyType: r.residencyType ?? null, serviceCountry: r.serviceCountry ?? null,
-    withholdingTreatment: r.withholdingTreatment ?? null,
+    // 세금처리 — 레거시 값 정규화 + 외주업체 기본값(세금계산서) 반영해 저장. DB enum·계산 불변. 외주업체는 기록용(원천세 미적용).
+    withholdingTreatment: effectiveTreatment(r) || null,
     withholdingRate: r.withholdingRate != null && r.withholdingRate !== '' ? num(r.withholdingRate) : null,
     baseFee: num(r.baseFee), transportationFee: num(r.transportationFee), businessTripFee: num(r.businessTripFee),
     copyrightFee: num(r.copyrightFee), travelDayCompensation: num(r.travelDayCompensation), cancellationCompensation: num(r.cancellationCompensation),
@@ -386,14 +387,13 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const fzTh = (side: 'left' | 'right', offset: number, extra?: React.CSSProperties): React.CSSProperties =>
     ({ ...thBase, position: 'sticky', [side]: offset, zIndex: 6, ...extra });
 
-  const treatmentLabel = (v?: string | null) => TREATMENT_OPTS.find(o => o.value === (v ?? ''))?.label ?? '—';
-  const rateText = (r: Row) => {
-    const t = r.withholdingTreatment ?? '';
+  // 세금처리 조회 표시 — 3.3% / 원천징수 예외 / 세금계산서. 외주업체는 미설정 시 세금계산서 기본.
+  const withholdingText = (r: Row) => {
+    const t = effectiveTreatment(r);
     if (t === 'domestic_3_3') return '3.3%';
-    if (t === 'exempt') return '0%';
-    if (t === 'nonresident_custom' || t === 'treaty_reduction_or_exemption')
-      return r.withholdingRate != null && r.withholdingRate !== '' ? `${num(r.withholdingRate)}%` : '—';
-    return '미확정';
+    if (t === 'exempt') return '원천징수 예외';
+    if (t === 'tax_review_required') return '세금계산서';
+    return '미선택';
   };
   const numCell = (v: unknown, on: (val: string) => void, testid: string, label: string, disabled?: boolean) => (
     <input type="number" min={0} inputMode="numeric" disabled={disabled} data-testid={testid} aria-label={label}
@@ -435,9 +435,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
       <th style={{ ...thBase, width: 108, textAlign: 'right' }}>계약단가</th>
       <th style={{ ...thBase, width: 120, textAlign: 'right' }}>기본수행료</th>
       <th style={{ ...thBase, width: 120, textAlign: 'right' }}>추가비용</th>
-      <th style={{ ...thBase, width: 140 }}>원천징수</th>
-      <th style={{ ...thBase, width: 78, textAlign: 'right' }}>세율</th>
-      <th style={{ ...thBase, width: RW.cost, textAlign: 'right' }}>{editable ? '원가합계' : sortBtn('원가합계', 'costTotal')}</th>
+      <th style={{ ...thBase, width: RW.cost, textAlign: 'right' }}>{editable ? '지급액' : sortBtn('지급액', 'costTotal')}</th>
+      <th style={{ ...thBase, width: 150 }}>세금처리</th>
       <th style={{ ...thBase, width: RW.pay }}>지급상태</th>
     </tr></thead>
   );
@@ -526,18 +525,16 @@ export default function PerformanceSection({ projectId, token, performances, onC
             ? amtBtn(`${won(adjTotal)}원`, () => setAdjustPopup(i), `perf-adj-${i}`)
             : amtBtn(`${won(adjTotal)}원`, () => setAdjustViewPopup(i), `perf-adj-view-${i}`)}
         </td>
+        {/* 지급액(구 원가합계) — 지급액 → 세금처리 → 지급상태 순서 */}
+        <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }}>{won(cost.costTotal)}원</td>
+        {/* 세금처리 — 통번역사·외주업체 공통 드롭다운(3.3% / 원천징수 예외 / 세금계산서). 외주업체는 기록용(지급액 불변) */}
         <td style={tdBase}>
-          {isIndiv ? (editable ? <ClickSelect value={r.withholdingTreatment ?? ''} onChange={(v: string) => patchRow(i, { withholdingTreatment: v })} triggerStyle={catSel} menuStyle={catMenu} options={TREATMENT_OPTS} /> : <span style={{ fontSize: 12 }}>{treatmentLabel(r.withholdingTreatment)}</span>) : muted}
-        </td>
-        <td style={tdR}>
-          {isIndiv
-            ? ((r.withholdingTreatment === 'nonresident_custom' || r.withholdingTreatment === 'treaty_reduction_or_exemption') && editable
-                ? numCell(r.withholdingRate, v => patchRow(i, { withholdingRate: v }), `perf-rate-${i}`, '세율')
-                : <span style={{ color: C.textSecondary }}>{rateText(r)}</span>)
+          {(isIndiv || cat === 'vendor')
+            ? (editable
+                ? <ClickSelect value={effectiveTreatment(r)} onChange={(v: string) => patchRow(i, { withholdingTreatment: v })} triggerStyle={catSel} menuStyle={catMenu} options={TREATMENT_OPTS} />
+                : <span style={{ fontSize: 12 }}>{withholdingText(r)}</span>)
             : muted}
         </td>
-        {/* 원가합계·지급상태 — 일반 컬럼(좌우 스크롤) */}
-        <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }}>{won(cost.costTotal)}원</td>
         <td style={{ ...tdBase, width: RW.pay }}>
           {editable ? <ClickSelect value={r.paymentStatus ?? 'unpaid'} onChange={(v: string) => patchRow(i, { paymentStatus: v })} triggerStyle={inp} options={PAYMENT_STATUS_OPTS} /> : <PaymentBadge value={r.paymentStatus} />}
         </td>
@@ -545,7 +542,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
     );
   };
 
-  const COLSPAN = 14;
+  const COLSPAN = 13;
   const erpTable = (data: Row[], editable: boolean, emptyMsg: string) => (
     <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 620, border: `1px solid ${C.g200}`, borderRadius: BD.radius.md }}>
       <table style={{ borderCollapse: 'collapse', minWidth: 1640, width: 'max-content' }}>
@@ -620,7 +617,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <>
           {erpTable(rows, true, '등록된 수행자·외주업체·원가항목이 없습니다. 상단의 「+ 수행자 / 외주업체 / 원가항목」 또는 「판매정보 불러오기」로 추가하세요.')}
           <div style={{ ...TYPO.helper, marginTop: SP[3] }}>
-            ※ 기본수행료·추가비용 셀을 클릭하면 소형 팝업에서 상세 입력합니다. 추가비용은 교통비·출장비·직접입력 등 추가(+)와 차감(-)을 통합 관리하며, 원가합계 = 기본수행료 + 추가비용 합계로 자동 계산됩니다. 저장 시 서버가 원가·원천세·부가세를 재계산합니다.
+            ※ 기본수행료·추가비용 셀을 클릭하면 소형 팝업에서 상세 입력합니다. 추가비용은 교통비·출장비·직접입력 등 추가(+)와 차감(-)을 통합 관리하며, 지급액 = 기본수행료 + 추가비용 합계로 자동 계산됩니다. 저장 시 서버가 원가·원천세·부가세를 재계산합니다.
           </div>
         </>
       )}

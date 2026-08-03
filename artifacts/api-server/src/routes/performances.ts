@@ -394,7 +394,9 @@ function computeRowValues(r: RowInput) {
       residencyType: null, serviceCountry: null, serviceLocationType: null,
       baseFee: "0", transportationFee: "0", businessTripFee: "0", copyrightFee: "0",
       travelDayCompensation: "0", cancellationCompensation: "0",
-      grossPayment: "0", withholdingTreatment: null, withholdingRate: null,
+      grossPayment: "0",
+      // 방안 A: 세금처리는 외주업체 '기록용' — 값은 저장하되 원천세는 미적용(지급액 계산 불변). 기본값 세금계산서(tax_review_required).
+      withholdingTreatment: r.withholdingTreatment ?? "tax_review_required", withholdingRate: null,
       withholdingTax: "0", netPayment: "0", taxReviewReason: null,
       taxTreatyApplicable: false, overseasEvidenceExists: false,
       individualUserId: null,

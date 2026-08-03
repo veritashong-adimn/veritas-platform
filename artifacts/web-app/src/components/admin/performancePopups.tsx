@@ -207,7 +207,7 @@ export function SubItemsPopup({ r, patch, onClose, focus }: { r: Row; patch: (p:
         {addBtn(() => setDed([...deductions, { deductionType: '선지급금 차감', amount: '', reason: '' }]), '+ 차감 항목 추가', 'pop-ded-add')}
       </div>
       <div style={{ ...TYPO.inputValue, fontVariantNumeric: 'tabular-nums', padding: `${SP[2]}px ${SP[3]}px`, background: C.primaryBg, borderRadius: 8 }}>
-        기본수행료 <b>{won(cost.base)}원</b> + 추가비용 <b>{won(cost.expenseTotal)}원</b> − 차감 <b>{won(cost.deductionTotal)}원</b> = 원가합계 <b style={{ color: C.primaryText }}>{won(cost.costTotal)}원</b>
+        기본수행료 <b>{won(cost.base)}원</b> + 추가비용 <b>{won(cost.expenseTotal)}원</b> − 차감 <b>{won(cost.deductionTotal)}원</b> = 지급액 <b style={{ color: C.primaryText }}>{won(cost.costTotal)}원</b>
       </div>
     </Modal>
   );
@@ -346,7 +346,7 @@ export function AmountDetailPopup({ r, patch, onClose }: { r: Row; patch: (p: Pa
         <span>세전 <b>{won(preview.gross)}원</b></span>
         <span>원천세 <b style={{ color: preview.confirmed ? C.g900 : C.g400 }}>{preview.confirmed ? won(preview.tax) + '원' : '미확정'}</b></span>
         <span>세후 <b style={{ color: C.primaryText }}>{won(preview.net)}원</b></span>
-        <span style={TYPO.helper}>※ 원천징수 구분·세율은 행에서, 최종은 서버 재계산</span>
+        <span style={TYPO.helper}>※ 세금처리 구분은 행에서 선택, 최종은 서버 재계산</span>
       </div>
     </Modal>
   );
