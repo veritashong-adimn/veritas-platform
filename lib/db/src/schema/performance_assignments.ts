@@ -211,7 +211,8 @@ export const performanceAssignmentsTable = pgTable("performance_assignments", {
   totalPurchaseAmount: numeric("total_purchase_amount", { precision: 14, scale: 2 }).notNull().default("0"),
 
   // ── 공통 ───────────────────────────────────────────────────────────────────
-  memo: text("memo"),
+  memo: text("memo"),                     // 번역 상세정보 인코딩 저장용(파일명·형식·단어수) — 사용자 비고와 별개
+  remark: text("remark"),                 // 비고 — 사용자 자유입력 운영 메모(예: 정산 보류·세금계산서 익월 발행). 계산·정산 로직 미반영
   createdBy: integer("created_by").references(() => usersTable.id),
   updatedBy: integer("updated_by").references(() => usersTable.id),
   createdAt: timestamp("created_at").notNull().defaultNow(),

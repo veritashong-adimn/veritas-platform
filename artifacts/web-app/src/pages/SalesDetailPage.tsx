@@ -15,7 +15,7 @@ import { api, type Product } from '../lib/constants';
 import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn } from '../components/ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../lib/ds';
 import { buildQuotePdfData, type QuoteDetail } from '../lib/quotePdf';
-import { renderQuoteTitle } from '../lib/quoteTitle';
+import { renderQuoteTitle, formatDocNumber } from '../lib/quoteTitle';
 import QuotePdfPreviewModal from '../components/admin/QuotePdfPreviewModal';
 import TransactionStatementModal from '../components/admin/TransactionStatementModal';
 import QuoteItemsView, { SaleTotalsRows } from '../components/admin/QuoteItemsView';
@@ -291,7 +291,10 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             <span style={{ fontSize: 16, fontWeight: 800, color: C.g900, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 460 }}>{renderQuoteTitle(project.title)}</span>
             <StatusBadge status={project.status} />
             {quote?.quoteNumber && (
-              <span style={{ fontFamily: 'monospace', fontSize: 11, color: C.textSecondary, background: '#f5f3ff', borderRadius: 4, padding: '2px 7px' }}>{quote.quoteNumber}</span>
+              // 견적번호 — 견적목록·견적서 PDF와 동일한 공식 표시번호(formatDocNumber: Q+YYMMDD-순번, 예 Q260716-008).
+              //  · 원본 견적 레코드의 quoteNumber+발행일(issueDate)로 파생. 내부 raw 번호(Q000008) 직접 노출 금지.
+              //  · 발행일 없는 레거시 데이터는 formatDocNumber가 원본 quoteNumber를 그대로 반환(fallback).
+              <span style={{ fontFamily: 'monospace', fontSize: 11, color: C.textSecondary, background: '#f5f3ff', borderRadius: 4, padding: '2px 7px' }}>{formatDocNumber('Q', quote.quoteNumber, quote.issueDate) || quote.quoteNumber}</span>
             )}
           </div>
         </div>

@@ -20,6 +20,7 @@ interface PayRow {
   vatAmount?: string | number | null;
   amount?: string | number | null;
   depositStatus?: string | null;
+  depositConfirmed?: boolean | null; // 입금확인 — 체크 시 입금일=입금예정일·상태 입금완료
   paymentCategory?: string | null;   // 결제유형: 일반결제 · 수출바우처
   payer?: string | null;             // 입금주체: 고객사 · 수출바우처 운영기관
   depositItem?: string | null;       // 입금항목: 공급가액 · 부가세 · 전체금액
@@ -76,10 +77,6 @@ const labelOf = (opts: { value: string; label: string }[], v?: string | null) =>
 const num = (v: unknown) => { const n = Number(String(v ?? '').replace(/,/g, '')); return Number.isFinite(n) ? n : 0; };
 const won = (n: number) => Math.round(n).toLocaleString('ko-KR');
 const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
-// 오늘(로컬/KST 기준 YYYY-MM-DD) — 입금예정일 경과(미수) 판정용.
-const todayStr = () => { const d = new Date(); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10); };
-// 미수(경과) 판정 — 입금예정일이 오늘 이전이고 입금일이 비어있으면 true.
-const isOverdue = (expected?: string | null, paid?: string | null) => !!expected && !paid && dateVal(expected) < todayStr();
 const METHOD_TAX = '세금계산서';   // 발행일은 세금계산서일 때만 입력 가능
 // 결제방법별 첫 예정/이벤트 날짜(expectedDate)의 컬럼명 — 카드=카드결제일 · 외화송금=송금예정일 · 그 외(세금계산서·현금·기타)=입금예정일.
 const scheduledLabel = (method?: string | null) => {
@@ -88,8 +85,6 @@ const scheduledLabel = (method?: string | null) => {
   if (m === '외화송금') return '송금예정일';
   return '입금예정일';
 };
-// 경과 시 미수(붉은색) 대상 라벨 — '예정' 성격만. 카드결제일(고객 승인 이벤트일)은 제외.
-const isDueLabel = (label: string) => label !== '카드결제일';
 // 천 단위 콤마 표시(입력은 숫자만 저장). 부가세 = 공급가액 × 10%(원 단위 반올림).
 const commafy = (v: unknown) => { const s = String(v ?? '').replace(/[^\d]/g, ''); return s ? Number(s).toLocaleString('ko-KR') : ''; };
 const vatOf = (supply: unknown) => Math.round(num(supply) * 0.1);
@@ -195,7 +190,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     id: r.id, expectedDate: r.expectedDate ?? null, paidDate: r.paidDate ?? null,
     paymentType: r.paymentType ?? null, paymentMethod: r.paymentMethod ?? null,
     supplyAmount: r.supplyAmount ?? '', vatAmount: r.vatAmount ?? '', amount: r.amount ?? '',
-    depositStatus: r.depositStatus ?? 'scheduled',
+    depositStatus: r.depositStatus ?? 'scheduled', depositConfirmed: r.depositConfirmed ?? false,
     paymentCategory: r.paymentCategory ?? CAT_GENERAL, payer: r.payer ?? null, depositItem: r.depositItem ?? null,
     billingCompanyId: r.billingCompanyId ?? null, billingCompanyName: r.billingCompanyName ?? null,
     billingContactId: r.billingContactId ?? null, billingContactName: r.billingContactName ?? null,
@@ -253,7 +248,22 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   // 결제방법 변경 — 세금계산서가 아니면 발행일 자동 클리어(세금계산서만 발행일 사용).
   const patchMethod = (i: number, v: string) => patchRow(i, { paymentMethod: v, ...(v !== METHOD_TAX ? { issueDate: null } : {}) });
   // 입금일 변경 — 입력 시 입금상태 자동 '입금완료'. 삭제 시 상태는 사용자 선택값 유지(자동 변경 안 함).
+  //  · 입금확인(depositConfirmed) 상태는 그대로 유지 — 사용자가 실제 입금일에 맞게 수정 가능(요구사항 #5).
   const patchPaid = (i: number, v: string) => patchRow(i, { paidDate: v || null, ...(v ? { depositStatus: 'completed' } : {}) });
+  // 입금확인 토글 — 수행정보 납품확인과 동일 개념.
+  //  · 체크 ON: 입금예정일 → 입금일 자동복사 + 입금상태 '입금완료'(→ 붉은색 해제·미수금/입금완료율 자동 재계산).
+  //  · 체크 OFF: 입금일 비움 + 입금상태 '입금예정'(→ 입금예정일 다시 붉은색). 단, 입금일을 직접 수정한 이력(≠예정일)이 있으면 경고 후 처리(요구사항 #4).
+  const toggleDepositConfirm = (i: number) => {
+    const r = rows[i];
+    if (!r.expectedDate) { onToast('입금예정일이 없어 확인할 수 없습니다.'); return; }
+    if (!r.depositConfirmed) {
+      patchRow(i, { depositConfirmed: true, paidDate: r.expectedDate, depositStatus: 'completed' });
+    } else {
+      const manuallyEdited = !!r.paidDate && dateVal(r.paidDate) !== dateVal(r.expectedDate);
+      if (manuallyEdited && !window.confirm('입금일을 직접 수정한 이력이 있습니다.\n입금확인을 해제하면 입력된 입금일이 삭제됩니다. 계속하시겠습니까?')) return;
+      patchRow(i, { depositConfirmed: false, paidDate: null, depositStatus: 'scheduled' });
+    }
+  };
   // 공급가액 입력 → 부가세(10%)·합계 정방향 계산. 빈 값이면 모두 비움.
   const patchSupply = (i: number, digits: string) => {
     setRows(prev => prev.map((r, idx) => {
@@ -296,6 +306,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             paymentType: r.paymentType || null, paymentMethod: r.paymentMethod || null,
             supplyAmount: a.supply, vatAmount: a.vat, amount: a.amount,
             depositStatus: r.depositStatus || 'scheduled',
+            depositConfirmed: !!r.depositConfirmed,
             paymentCategory: category,                                     // 결제유형(섹션 단위 → 전 행 동일)
             payer: r.payer || null, depositItem: r.depositItem || null,
             billingCompanyId: r.billingCompanyId ?? null, billingContactId: r.billingContactId ?? null,
@@ -342,7 +353,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const inp: React.CSSProperties = { ...dsInputStd(), minHeight: 30, padding: '4px 8px', width: '100%' };
   const cellBg = C.bgCard;
   const thBase: React.CSSProperties = { ...TYPO.gridHeader, padding: '0 8px 9px', borderBottom: BD.grid, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: cellBg, zIndex: 2, textAlign: 'left' };
-  const tdBase: React.CSSProperties = { ...TYPO.inputValue, padding: '8px', borderBottom: BD.divider, verticalAlign: 'middle', whiteSpace: 'nowrap', background: cellBg };
+  // overflow hidden + ellipsis — table-layout:fixed에서 콘텐츠가 지정 width를 넘겨 컬럼을 늘리지 못하게 클리핑(폭 정확 적용).
+  //  · ClickSelect 메뉴는 portal이라 클리핑 영향 없음. CompanyPicker(청구업체) 셀만 overflow:visible로 예외 처리.
+  const tdBase: React.CSSProperties = { ...TYPO.inputValue, padding: '8px', borderBottom: BD.divider, verticalAlign: 'middle', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', background: cellBg };
   const tdR: React.CSSProperties = { ...tdBase, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
   // 금액 입력 — 천 단위 콤마 표시, 저장은 숫자만(콤마 제거).
   const priceCell = (v: unknown, on: (digits: string) => void, testid: string, label: string) => (
@@ -365,8 +378,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     const companyLabel = r.billingCompanyName || r.payer || '—';
     const isTaxMethod = normMethod(r.paymentMethod) === METHOD_TAX;   // 발행일 입력 대상 여부
     const schedLabel = scheduledLabel(r.paymentMethod);              // 첫 예정/이벤트 날짜 컬럼명(행별)
-    // 미수(붉은색) — 예정 성격 날짜(입금예정일·송금예정일)가 경과 + 미입금일 때. 카드결제일은 제외.
-    const overdue = isDueLabel(schedLabel) && isOverdue(r.expectedDate, r.paidDate);
+    // 입금 미확인(붉은색) — 예정일이 입력됐지만 입금확인 체크 전(수행정보 미확인 납품일과 동일). 확인 시 검정색.
+    const confirmed = !!r.depositConfirmed;
+    const expUnconfirmed = !!r.expectedDate && !confirmed;
     return (
       <tr key={r.id ?? `new-${i}`}>
         {/* 회차(자동) + 행 삭제(일반결제만) */}
@@ -380,10 +394,11 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
           ) : <span style={{ ...TYPO.helper }}>{i + 1}</span>}
         </td>
         {/* 청구업체 — 일반결제: 거래처 검색 / 수출바우처: 고정(고객사=거래처, 운영기관 라벨) */}
-        <td style={{ ...tdBase, width: 180 }}>
+        {/* overflow: visible — CompanyPicker의 inline absolute 검색 드롭다운이 셀에 잘리지 않도록(ClickSelect와 달리 portal 아님). 읽기 텍스트는 자체 span에서 말줄임 처리. */}
+        <td style={{ ...tdBase, width: 180, overflow: 'visible' }}>
           {editable && !voucher
             ? <CompanyPicker token={token} companyName={r.billingCompanyName} onPick={(c) => pickCompany(i, c)} style={inp} />
-            : companyLabel}
+            : <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis' }} title={companyLabel}>{companyLabel}</span>}
         </td>
         {/* 청구담당자 — 청구업체 선택 시 대표 자동, 변경 가능 */}
         <td style={{ ...tdBase, width: 120 }}>
@@ -401,20 +416,35 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         </td>
         {/* 발행일 — 세금계산서 발행일. 세금계산서 행이 있을 때만 컬럼 존재. 해당 행이 세금계산서면 입력, 아니면 '—' */}
         {showIssueCol && (
-          <td style={{ ...tdBase, width: 138 }}>
+          <td style={{ ...tdBase, width: 160 }}>
             {isTaxMethod
               ? (editable ? dateCell(r.issueDate, v => patchRow(i, { issueDate: v || null }), `pay-issue-${i}`, '발행일') : (dateVal(r.issueDate) || '—'))
               : <span style={{ color: C.g400 }}>—</span>}
           </td>
         )}
-        {/* 첫 예정/이벤트 날짜 — 결제방법별 라벨(입금예정일/카드결제일/송금예정일). 예정 성격이면 경과+미입금 시 붉은색 */}
-        <td style={{ ...tdBase, width: 138 }}>
-          {editable
-            ? dateCell(r.expectedDate, v => patchRow(i, { expectedDate: v || null }), `pay-expected-${i}`, schedLabel, { overdue })
-            : <span style={{ color: overdue ? C.danger : undefined }}>{dateVal(r.expectedDate) || '—'}</span>}
+        {/* 첫 예정/이벤트 날짜 — 결제방법별 라벨(입금예정일/카드결제일/송금예정일). 입력 후 입금확인 전이면 붉은색, 확인 체크 시 검정색.
+            우측 확인 체크박스(수행정보 납품확인과 동일) — 체크 시 입금일 자동복사·입금상태 입금완료. */}
+        <td style={{ ...tdBase, width: 160 }}>
+          {editable ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+              <input type="date" data-testid={`pay-expected-${i}`} aria-label={schedLabel}
+                title={expUnconfirmed ? '입금 미확인 — 확인 체크 시 입금일로 반영' : (confirmed ? '입금확인 완료' : undefined)}
+                style={{ ...inp, width: 122, ...(expUnconfirmed ? { borderColor: C.danger, color: C.danger } : { color: C.textPrimary }) }}
+                value={dateVal(r.expectedDate)} onChange={e => patchRow(i, { expectedDate: e.target.value || null })} />
+              <input type="checkbox" checked={confirmed} disabled={!r.expectedDate}
+                onChange={() => toggleDepositConfirm(i)} data-testid={`pay-expected-confirm-${i}`} aria-label="입금확인"
+                title={!r.expectedDate ? '입금예정일 입력 후 확인 가능' : (confirmed ? '입금확인 완료' : '입금 미확인 — 확인 시 입금완료 처리')}
+                style={{ cursor: !r.expectedDate ? 'default' : 'pointer' }} />
+            </div>
+          ) : (
+            <span style={{ color: expUnconfirmed ? C.danger : undefined, whiteSpace: 'nowrap' }}
+              title={confirmed ? '입금확인 완료' : (expUnconfirmed ? '입금 미확인' : undefined)}>
+              {dateVal(r.expectedDate) || '—'}{r.expectedDate && confirmed ? ' ✓' : ''}
+            </span>
+          )}
         </td>
         {/* 입금일 — 모든 결제방법. 입력 시 입금상태 자동 '입금완료' */}
-        <td style={{ ...tdBase, width: 138 }}>
+        <td style={{ ...tdBase, width: 160 }}>
           {editable
             ? dateCell(r.paidDate, v => patchPaid(i, v), `pay-paid-${i}`, '입금일')
             : (dateVal(r.paidDate) || '—')}
@@ -426,25 +456,25 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
             : labelOf(PAY_TYPE_OPTS, r.paymentType)}
         </td>
         {/* 공급가 — 일반결제: 콤마 입력(→부가세·합계 자동) / 수출바우처: 자동 읽기전용 */}
-        <td style={{ ...tdR, width: 130 }}>
+        <td style={{ ...tdR, width: 128 }}>
           {editable && !voucher ? priceCell(r.supplyAmount, v => patchSupply(i, v), `pay-supply-${i}`, '공급가') : `${won(a.supply)}원`}
         </td>
         {/* 부가세 — 자동 산출(읽기전용) */}
-        <td style={{ ...tdR, width: 120 }} data-testid={`pay-vat-${i}`}>{`${won(a.vat)}원`}</td>
+        <td style={{ ...tdR, width: 128 }} data-testid={`pay-vat-${i}`}>{`${won(a.vat)}원`}</td>
         {/* 합계 — 일반결제: 역산 입력 / 수출바우처: 자동 읽기전용 */}
-        <td style={{ ...tdR, width: 130, fontWeight: 700 }}>
+        <td style={{ ...tdR, width: 128, fontWeight: 700 }}>
           {editable && !voucher ? priceCell(r.amount, v => patchHaap(i, v), `pay-haap-${i}`, '합계') : `${won(a.amount)}원`}
         </td>
         {/* 미수금 = 총판매 − 누적 입금완료액 */}
-        <td style={{ ...tdR, width: 120, color: receivable > 0 ? C.danger : C.textSecondary }}>{`${won(receivable)}원`}</td>
+        <td style={{ ...tdR, width: 128, color: receivable > 0 ? C.danger : C.textSecondary }}>{`${won(receivable)}원`}</td>
         {/* 입금상태 */}
         <td style={{ ...tdBase, width: 110 }}>
           {editable
             ? <ClickSelect value={r.depositStatus ?? 'scheduled'} onChange={(v: string) => patchRow(i, { depositStatus: v })} triggerStyle={inp} options={DEPOSIT_OPTS} />
             : labelOf(DEPOSIT_OPTS, r.depositStatus)}
         </td>
-        {/* 비고 */}
-        <td style={{ ...tdBase, width: 200 }}>
+        {/* 비고 — 가장 넓은 컬럼(메모 입력 고려) */}
+        <td style={{ ...tdBase, width: 240 }}>
           {editable
             ? <input style={inp} value={r.note ?? ''} onChange={e => patchRow(i, { note: e.target.value })} placeholder="비고" data-testid={`pay-note-${i}`} aria-label="비고" />
             : (r.note || '—')}
@@ -455,22 +485,26 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
 
   const table = (editable: boolean) => (
     <div style={{ overflowX: 'auto', border: `1px solid ${C.g200}`, borderRadius: BD.radius.md }}>
-      <table style={{ borderCollapse: 'collapse', minWidth: showIssueCol ? 1740 : 1602, width: 'max-content' }}>
+      {/* table-layout: fixed — 지정한 컬럼 width를 실제 렌더 폭으로 강제(auto는 콘텐츠 기준이라 width가 최소값 취급되어 무시됨).
+          컬럼 폭은 첫 행(thead th)의 width로 확정 → th/td width를 동일하게 유지. width=max-content로 폭 합만큼 렌더 후 컨테이너에서 가로 스크롤. */}
+      <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: showIssueCol ? 1988 : 1828, width: 'max-content' }}>
         <thead><tr>
           <th style={{ ...thBase, width: 96, textAlign: 'center' }}>회차</th>
           <th style={{ ...thBase, width: 180 }}>청구업체</th>
           <th style={{ ...thBase, width: 120 }}>청구담당자</th>
           <th style={{ ...thBase, width: 140 }}>결제방법</th>
-          {showIssueCol && <th style={{ ...thBase, width: 138 }}>발행일</th>}
-          <th style={{ ...thBase, width: 138 }}>{col2Header}</th>
-          <th style={{ ...thBase, width: 138 }}>입금일</th>
+          {/* 날짜 3컬럼 — 동일 폭(160)으로 통일. 입금예정일의 날짜+확인 체크박스가 border-box 콘텐츠 영역에 안전히 들어가는 최소폭 */}
+          {showIssueCol && <th style={{ ...thBase, width: 160 }}>발행일</th>}
+          <th style={{ ...thBase, width: 160 }}>{col2Header}</th>
+          <th style={{ ...thBase, width: 160 }}>입금일</th>
           <th style={{ ...thBase, width: 110 }}>결제구분</th>
-          <th style={{ ...thBase, width: 130, textAlign: 'right' }}>공급가액</th>
-          <th style={{ ...thBase, width: 120, textAlign: 'right' }}>부가세</th>
-          <th style={{ ...thBase, width: 130, textAlign: 'right' }}>합계</th>
-          <th style={{ ...thBase, width: 120, textAlign: 'right' }}>미수금</th>
+          {/* 금액 4컬럼 — 동일 폭(128)으로 균등 배치 */}
+          <th style={{ ...thBase, width: 128, textAlign: 'right' }}>공급가액</th>
+          <th style={{ ...thBase, width: 128, textAlign: 'right' }}>부가세</th>
+          <th style={{ ...thBase, width: 128, textAlign: 'right' }}>합계</th>
+          <th style={{ ...thBase, width: 128, textAlign: 'right' }}>미수금</th>
           <th style={{ ...thBase, width: 110 }}>입금상태</th>
-          <th style={{ ...thBase, width: 200 }}>비고</th>
+          <th style={{ ...thBase, width: 240 }}>비고</th>
         </tr></thead>
         <tbody>
           {data.map((r, i) => renderRow(r, i, editable))}

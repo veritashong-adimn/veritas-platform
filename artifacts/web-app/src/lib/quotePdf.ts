@@ -4,6 +4,7 @@
  * DB에서 불러온 견적 데이터를 PDF 템플릿에 전달하는 구조체로 변환한다.
  * 번역·통역·장비·기타 서비스별 상세 텍스트를 생성하고, 언어 코드를 한국어 이름으로 치환한다.
  */
+import { formatScheduleRange } from './dateFormat';
 
 // ─── FM장비 단위 표시 정규화 ─────────────────────────────────────────────────
 /**
@@ -337,12 +338,8 @@ function buildDetailText(item: QuoteDetailItem): string {
       const pair = [langName(src), langName(tgt)].filter(Boolean).join(' ↔ ');
       if (pair) lines.push(pair);
     }
-    // 행사기간 (날짜 범위)
-    if (item.interpretDate) {
-      lines.push(item.eventEndDate && item.eventEndDate !== item.interpretDate
-        ? `${item.interpretDate} ~ ${item.eventEndDate}`
-        : item.interpretDate);
-    }
+    // 행사기간 (날짜 범위) — 연·월 중복은 종료일에서 생략(공통 규칙)
+    if (item.interpretDate) lines.push(formatScheduleRange(item.interpretDate, item.eventEndDate));
     // 운영시간 (행사 운영시간 — 기간 다음. 지시문 6절 순서: 기간→운영시간→통역시간→장소→인원)
     if (item.operationHours) lines.push(`운영시간 ${item.operationHours}`);
     // 통역시간 (계약 기준 안내 정보)
@@ -361,12 +358,8 @@ function buildDetailText(item: QuoteDetailItem): string {
       lines.push(`통역사 ${pplCount}명`);
     }
   } else if (type === 'equipment') {
-    // 사용기간
-    if (item.eventStartDate) {
-      lines.push(item.eventEndDate && item.eventEndDate !== item.eventStartDate
-        ? `${item.eventStartDate} ~ ${item.eventEndDate}`
-        : item.eventStartDate);
-    }
+    // 사용기간 — 연·월 중복은 종료일에서 생략(공통 규칙)
+    if (item.eventStartDate) lines.push(formatScheduleRange(item.eventStartDate, item.eventEndDate));
     // 설치일시 (있는 경우) — 사용기간 다음, 장소 앞. operationHours 컬럼 재활용(장비 전용).
     // 저장 "YYYY-MM-DD HH:MM"/레거시 "…THH:MM" → "설치 : YYYY-MM-DD HH:mm" 형식으로 출력.
     if (item.operationHours) lines.push(`설치 : ${item.operationHours.replace('T', ' ')}`);

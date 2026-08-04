@@ -12,6 +12,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { api } from '../../lib/constants';
 import { C, BD, TYPO, SP, BTN } from '../../lib/ds';
 import { getPolicy } from '../../lib/languagePagePolicy';
+import { formatScheduleRange } from '../../lib/dateFormat';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
 
@@ -85,10 +86,7 @@ function fmtDetailText(row: AiDraftRow): string {
   const parts: string[] = [];
   switch (row.productType) {
     case 'interpretation':
-      if (row.interpretDate) {
-        parts.push(row.interpretEndDate
-          ? `${row.interpretDate}~${row.interpretEndDate}` : row.interpretDate);
-      }
+      if (row.interpretDate) parts.push(formatScheduleRange(row.interpretDate, row.interpretEndDate));
       {
         const time = [row.startTime, row.endTime].filter(Boolean).join('~');
         if (time) parts.push(time);
@@ -97,10 +95,7 @@ function fmtDetailText(row: AiDraftRow): string {
       if (row.interpreterCount > 0) parts.push(`${row.interpreterCount}명`);
       break;
     case 'equipment':
-      if (row.eventStartDate) {
-        parts.push(row.eventEndDate
-          ? `${row.eventStartDate}~${row.eventEndDate}` : row.eventStartDate);
-      }
+      if (row.eventStartDate) parts.push(formatScheduleRange(row.eventStartDate, row.eventEndDate));
       if (row.itemLocation)    parts.push(row.itemLocation);
       if (row.usagePeriod > 0) parts.push(`${row.usagePeriod}일`);
       break;

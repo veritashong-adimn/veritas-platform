@@ -317,6 +317,7 @@ const rowSchema = z.object({
   expectedPaymentDate: dateStr,
   actualPaymentDate: dateStr,
   memo: z.string().nullable().optional(),
+  remark: z.string().nullable().optional(),   // 비고 — 사용자 자유입력 운영 메모(계산 미반영)
   // 계약단가·수량·직접금액(§7·§9)
   contractUnitPrice: money.nullable().optional(),
   quantity: z.coerce.number().min(0).finite().nullable().optional(),
@@ -471,6 +472,7 @@ function commonFields(r: RowInput) {
     expectedPaymentDate: r.expectedPaymentDate ?? null,
     actualPaymentDate: r.actualPaymentDate ?? null,
     memo: r.memo ?? null,
+    remark: r.remark ?? null,
   };
 }
 

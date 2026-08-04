@@ -14,6 +14,7 @@
 import XLSX from 'xlsx-js-style';
 import { getPolicy } from './languagePagePolicy';
 import { displayUnit, calcInterpretation } from './quotePdf';
+import { formatScheduleRange } from './dateFormat';
 import type { Product } from './constants';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
@@ -101,11 +102,7 @@ export function formatServiceDetail(item: ExportItem, products: Product[]): stri
       break;
     }
     case 'interpretation': {
-      if (item.interpretDate) {
-        parts.push(item.interpretEndDate
-          ? `${item.interpretDate}~${item.interpretEndDate}`
-          : item.interpretDate);
-      }
+      if (item.interpretDate) parts.push(formatScheduleRange(item.interpretDate, item.interpretEndDate));
       const time = [item.startTime, item.endTime].filter(Boolean).join('~');
       if (time) parts.push(time);
       if (item.interpretPlace)  parts.push(item.interpretPlace);
@@ -114,11 +111,7 @@ export function formatServiceDetail(item: ExportItem, products: Product[]): stri
       break;
     }
     case 'equipment': {
-      if (item.eventStartDate) {
-        parts.push(item.eventEndDate
-          ? `${item.eventStartDate}~${item.eventEndDate}`
-          : item.eventStartDate);
-      }
+      if (item.eventStartDate) parts.push(formatScheduleRange(item.eventStartDate, item.eventEndDate));
       if (item.itemLocation) parts.push(item.itemLocation);
       const days = fmtN(item.usagePeriod);
       if (days > 0) parts.push(`${days}일`);

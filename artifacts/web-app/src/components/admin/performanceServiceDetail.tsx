@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom';
 import { C, TYPO, dsInputStd } from '../../lib/ds';
 import { ClickSelect } from '../ui';
 import { Row, UNIT_OPTS, dateVal, num, isTranslationKind, isInterpretationKind } from './performanceShared';
+import { formatScheduleRange } from '../../lib/dateFormat';
 
 const mini: React.CSSProperties = { ...dsInputStd(), minHeight: 28, padding: '3px 6px', fontSize: 12 };
 const ref: React.CSSProperties = { ...TYPO.helper, color: C.textMuted, whiteSpace: 'nowrap' };
@@ -194,7 +195,7 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
     if (kind === 'translation') {
       return renderTranslationSummary(r, snap) ?? <span style={{ ...ref, color: C.textSecondary }}>—</span>;
     }
-    const period = joinRef([dateVal(r.performanceStartDate), dateVal(r.performanceEndDate)].filter(Boolean)).replace(' · ', '~');
+    const period = formatScheduleRange(r.performanceStartDate, r.performanceEndDate);
     let text = '';
     if (kind === 'interpretation') {
       // 수행기간(N일간)은 날짜 바로 뒤에 묶어 표시 — 저장된 수량·단위 그대로 사용, 재계산 안 함(예: 3일 → (3일간)).

@@ -15,6 +15,7 @@ import { displayUnit, type QuoteDetailItem } from '../../lib/quotePdf';
 import { convertToFormItem } from '../../lib/quoteItemForm';
 import type { QuoteItemForm } from './QuoteEditorWorkspace';
 import { tblRow, COL_H, SVC_CFG, SVC_FIELD_HINTS } from './quoteItemsShared';
+import { formatScheduleRange } from '../../lib/dateFormat';
 
 // 판매정보 입력 원본 — 견적 품목(QuoteDetailItem) + 저장 금액 컬럼
 export type SaleItem = QuoteDetailItem & {
@@ -70,9 +71,7 @@ function ReadOnlyServiceFields({ f }: { f: QuoteItemForm }) {
         </div>
       );
     case 'interpretation': {
-      const period = f.interpretDate
-        ? (f.interpretEndDate && f.interpretEndDate !== f.interpretDate ? `${f.interpretDate} ~ ${f.interpretEndDate}` : f.interpretDate)
-        : '';
+      const period = formatScheduleRange(f.interpretDate, f.interpretEndDate);
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <RoCell w={174} value={period} title="행사 기간" />
@@ -84,9 +83,7 @@ function ReadOnlyServiceFields({ f }: { f: QuoteItemForm }) {
       );
     }
     case 'equipment': {
-      const period = f.eventStartDate
-        ? (f.eventEndDate && f.eventEndDate !== f.eventStartDate ? `${f.eventStartDate} ~ ${f.eventEndDate}` : f.eventStartDate)
-        : '';
+      const period = formatScheduleRange(f.eventStartDate, f.eventEndDate);
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <RoCell w={174} value={period} title="사용 기간" />

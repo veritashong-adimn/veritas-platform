@@ -308,7 +308,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
     performanceStartDate: r.performanceStartDate || null, performanceEndDate: r.performanceEndDate || null,
     deliveryDate: r.deliveryDate || null, deliveryDateManual: !!r.deliveryDateManual, deliveryConfirmed: !!r.deliveryConfirmed,
     expectedPaymentDate: r.expectedPaymentDate || null, actualPaymentDate: r.actualPaymentDate || null,
-    memo: r.memo ?? null,
+    memo: r.memo ?? null, remark: r.remark ?? null,
     contractUnitPrice: r.contractUnitPrice != null && r.contractUnitPrice !== '' ? num(r.contractUnitPrice) : null,
     quantity: r.quantity != null && r.quantity !== '' ? num(r.quantity) : null,
     unit: r.unit ?? null,
@@ -379,9 +379,9 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const thBase: React.CSSProperties = { ...TYPO.gridHeader, padding: '0 8px 9px', borderBottom: BD.grid, whiteSpace: 'nowrap', position: 'sticky', top: 0, background: cellBg, zIndex: 4, textAlign: 'left' };
   const tdR: React.CSSProperties = { ...tdBase, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
   // 컬럼 너비. 행제어만 좌측 틀고정 유지(offset 0), 나머지는 일반 컬럼으로 좌우 스크롤.
-  const LW = { control: 116, category: 118, performer: 176, product: 196 };
+  const LW = { control: 116, category: 118, performer: 176, product: 216 };   // 상품·업무 소폭 확대(긴 상품명 가독성)
   const L = { control: 0 };
-  const RW = { cost: 104, pay: 118 };
+  const RW = { cost: 130, pay: 118, remark: 260 };                            // cost=지급액(금액 4컬럼 동일폭) · remark=비고(최대폭 유지)
   const fzTd = (side: 'left' | 'right', offset: number, extra?: React.CSSProperties): React.CSSProperties =>
     ({ ...tdBase, position: 'sticky', [side]: offset, zIndex: 3, ...extra });
   const fzTh = (side: 'left' | 'right', offset: number, extra?: React.CSSProperties): React.CSSProperties =>
@@ -429,15 +429,18 @@ export default function PerformanceSection({ projectId, token, performances, onC
       <th style={{ ...thBase, width: LW.category }}>구분</th>
       <th style={{ ...thBase, width: LW.performer }}>수행자·업체</th>
       <th style={{ ...thBase, width: LW.product }}>상품·업무</th>
-      <th style={{ ...thBase, width: 380 }}>서비스별 상세정보</th>
-      <th style={{ ...thBase, width: 160 }}>{editable ? '납품일 · 확인' : sortBtn('납품일', 'deliveryDate')}</th>
-      <th style={{ ...thBase, width: 126 }}>{editable ? '지급일' : sortBtn('지급일', 'expectedPaymentDate')}</th>
-      <th style={{ ...thBase, width: 108, textAlign: 'right' }}>계약단가</th>
-      <th style={{ ...thBase, width: 120, textAlign: 'right' }}>기본수행료</th>
-      <th style={{ ...thBase, width: 120, textAlign: 'right' }}>추가비용</th>
+      <th style={{ ...thBase, width: 330 }}>서비스별 상세정보</th>
+      <th style={{ ...thBase, width: 136 }}>{editable ? '납품일 · 확인' : sortBtn('납품일', 'deliveryDate')}</th>
+      <th style={{ ...thBase, width: 106 }}>{editable ? '지급일' : sortBtn('지급일', 'expectedPaymentDate')}</th>
+      {/* 금액 4컬럼 — 동일 폭(130)으로 균등 배치 */}
+      <th style={{ ...thBase, width: 130, textAlign: 'right' }}>계약단가</th>
+      <th style={{ ...thBase, width: 130, textAlign: 'right' }}>기본수행료</th>
+      <th style={{ ...thBase, width: 130, textAlign: 'right' }}>추가비용</th>
       <th style={{ ...thBase, width: RW.cost, textAlign: 'right' }}>{editable ? '지급액' : sortBtn('지급액', 'costTotal')}</th>
-      <th style={{ ...thBase, width: 150 }}>세금처리</th>
+      {/* 세금처리 — 4컬럼보다 약간 넓게 + 좌측 여백(paddingLeft)으로 지급액과 명확히 분리 */}
+      <th style={{ ...thBase, width: 156, paddingLeft: 20 }}>세금처리</th>
       <th style={{ ...thBase, width: RW.pay }}>지급상태</th>
+      <th style={{ ...thBase, width: RW.remark }}>비고</th>
     </tr></thead>
   );
 
@@ -488,7 +491,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
             : <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', maxWidth: LW.product - 12 }} title={r.productNameSnapshot ?? ''}>{r.productNameSnapshot || '—'}</span>}
         </td>
         {/* 가운데 가로스크롤 — 서비스 유형별 상세정보(§3~§9·§14·§17) */}
-        <td style={{ ...tdBase, minWidth: 380 }}>
+        <td style={{ ...tdBase, minWidth: 330 }}>
           <ServiceDetailCell r={r} editable={editable} patch={(p) => patchRow(i, p)} onEndDateChange={editable ? (v) => changeServiceEndDate(i, v) : undefined} />
         </td>
         {/* 납품일 + 담당 PM 확인 체크(§4·§5·§13·§16) — 미확인 붉은색, 한 줄 유지 */}
@@ -528,7 +531,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
         {/* 지급액(구 원가합계) — 지급액 → 세금처리 → 지급상태 순서 */}
         <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }}>{won(cost.costTotal)}원</td>
         {/* 세금처리 — 통번역사·외주업체 공통 드롭다운(3.3% / 원천징수 예외 / 세금계산서). 외주업체는 기록용(지급액 불변) */}
-        <td style={tdBase}>
+        {/* paddingLeft 20 — 헤더와 동일. 지급액(우측정렬 금액)과 세금처리 사이 여백 확보(붙어 보임 방지) */}
+        <td style={{ ...tdBase, paddingLeft: 20 }}>
           {(isIndiv || cat === 'vendor')
             ? (editable
                 ? <ClickSelect value={effectiveTreatment(r)} onChange={(v: string) => patchRow(i, { withholdingTreatment: v })} triggerStyle={catSel} menuStyle={catMenu} options={TREATMENT_OPTS} />
@@ -538,14 +542,20 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <td style={{ ...tdBase, width: RW.pay }}>
           {editable ? <ClickSelect value={r.paymentStatus ?? 'unpaid'} onChange={(v: string) => patchRow(i, { paymentStatus: v })} triggerStyle={inp} options={PAYMENT_STATUS_OPTS} /> : <PaymentBadge value={r.paymentStatus} />}
         </td>
+        {/* 비고(§16) — 사용자 자유입력 운영 메모. remark 컬럼 연동 저장·조회. 계산·정산 로직 미반영. */}
+        <td style={{ ...tdBase, width: RW.remark }}>
+          {editable
+            ? <input style={inp} value={r.remark ?? ''} onChange={e => patchRow(i, { remark: e.target.value })} placeholder="비고" data-testid={`perf-remark-${i}`} aria-label="비고" />
+            : <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', maxWidth: RW.remark - 12 }} title={r.remark ?? ''}>{r.remark || muted}</span>}
+        </td>
       </tr>
     );
   };
 
-  const COLSPAN = 13;
+  const COLSPAN = 14;
   const erpTable = (data: Row[], editable: boolean, emptyMsg: string) => (
     <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 620, border: `1px solid ${C.g200}`, borderRadius: BD.radius.md }}>
-      <table style={{ borderCollapse: 'collapse', minWidth: 1640, width: 'max-content' }}>
+      <table style={{ borderCollapse: 'collapse', minWidth: 1920, width: 'max-content' }}>
         {renderHeader(editable)}
         <tbody>
           {data.map((r, i) => renderRow(r, i, editable))}

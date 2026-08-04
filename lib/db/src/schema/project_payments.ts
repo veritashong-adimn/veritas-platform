@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, numeric, timestamp, date, pgEnum, text } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, numeric, timestamp, date, pgEnum, text, boolean } from "drizzle-orm/pg-core";
 import { projectsTable } from "./projects";
 import { usersTable } from "./users";
 import { companiesTable } from "./companies";
@@ -34,6 +34,9 @@ export const projectPaymentsTable = pgTable("project_payments", {
   vatAmount: numeric("vat_amount", { precision: 14, scale: 2 }).notNull().default("0"),        // 부가세
   amount: numeric("amount", { precision: 14, scale: 2 }).notNull().default("0"),               // 결제금액
   depositStatus: projectPaymentDepositStatusEnum("deposit_status").notNull().default("scheduled"), // 입금상태
+  // 입금확인 — 실제 입금 확인 체크(수행정보 납품확인과 동일 개념). 체크 시 입금일=입금예정일·상태 입금완료로 자동 반영.
+  //  · 미확인(false)이면 입금예정일을 붉은색으로 표시(입금 미확인). 확인(true) 시 검정색.
+  depositConfirmed: boolean("deposit_confirmed").notNull().default(false),
   // 복수 지급주체 사업(수출바우처·혁신바우처·정부지원 등) 대응 — 모두 text(자유 확장).
   paymentCategory: text("payment_category").notNull().default("일반결제"), // 결제유형: 일반결제 · 수출바우처
   payer: text("payer"),                                // 입금주체: 고객사 · 수출바우처 운영기관

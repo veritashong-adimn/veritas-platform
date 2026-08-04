@@ -44,6 +44,7 @@ const profitRow = (label: string, value: string, opts?: { strong?: boolean; colo
 export default function PerformanceProfitSummary({ projectId, token, refreshKey }: Props) {
   const [data, setData] = useState<Summary | null>(null);
   const [err, setErr] = useState(false);
+  const [profitOpen, setProfitOpen] = useState(false);   // 프로젝트 손익 요약 아코디언 — 기본 접힘(§15). 화면 상태만, DB 저장 안 함.
 
   useEffect(() => {
     let alive = true;
@@ -77,11 +78,26 @@ export default function PerformanceProfitSummary({ projectId, token, refreshKey 
         {chip('미지급', `${header.unpaidCount}건`)}
       </div>
 
-      {/* 프로젝트 손익 요약 (§15) */}
+      {/* 프로젝트 손익 요약 (§15) — 아코디언(기본 접힘). 접힘/펼침은 화면 상태로만 관리(DB 저장 안 함) → 다시 열면 항상 접힘. */}
       <div style={{ border: `1px solid ${C.g200}`, borderRadius: BD.radius.md, overflow: 'hidden' }}>
-        <div style={{ ...TYPO.fieldLabel, fontWeight: 800, padding: `${SP[3]}px ${SP[5]}px`, background: C.g50, borderBottom: `1px solid ${C.g200}` }}>
+        {/* 제목 = 토글 버튼. ▶ 접힘 / ▼ 펼침. 계산식·데이터 불변, 표시만 접기/펼치기. */}
+        <button type="button" onClick={() => setProfitOpen(o => !o)}
+          aria-expanded={profitOpen} aria-controls="perf-profit-body" data-testid="perf-profit-toggle" aria-label="프로젝트 손익 요약 펼치기/접기"
+          style={{ ...TYPO.fieldLabel, fontWeight: 800, width: '100%', textAlign: 'left', display: 'flex', alignItems: 'center', gap: SP[2],
+            padding: `${SP[3]}px ${SP[5]}px`, background: C.g50, border: 'none', borderBottom: profitOpen ? `1px solid ${C.g200}` : 'none', cursor: 'pointer', color: C.textPrimary }}>
+          <span aria-hidden style={{ fontSize: 10, color: C.textSecondary, display: 'inline-block', width: 12, transition: 'transform 0.2s ease', transform: profitOpen ? 'rotate(90deg)' : 'none' }}>▶</span>
           프로젝트 손익 요약 <span style={TYPO.helper}>(부가세 제외 · 공급가액 기준)</span>
-        </div>
+          {/* 접힘 상태 KPI — 핵심 지표(예상이익·예상이익률)만 우측 요약. 값·색상은 펼친 화면과 동일한 계산·규칙 사용(새 계산식 없음). */}
+          {!profitOpen && (
+            <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'baseline', gap: 4, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+              <span style={TYPO.helper}>예상이익</span>
+              <span style={{ ...TYPO.inputValue, fontWeight: 800, color: profitColor(profit.estimatedProfit) }}>{won(profit.estimatedProfit)}원</span>
+              <span style={{ ...TYPO.helper, color: profitColor(profit.estimatedProfit) }}>({profit.estimatedMarginRate}%)</span>
+            </span>
+          )}
+        </button>
+        {/* 본문 — max-height transition으로 자연스럽게 펼침/접힘(0.25s). 접힘 시 항목 전부 숨김. */}
+        <div id="perf-profit-body" style={{ maxHeight: profitOpen ? 800 : 0, overflow: 'hidden', transition: 'max-height 0.25s ease' }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: SP[6], padding: `${SP[4]}px ${SP[5]}px` }}>
           {/* 예상 */}
           <div>
@@ -106,6 +122,7 @@ export default function PerformanceProfitSummary({ projectId, token, refreshKey 
               ※ 실제이익은 지급완료된 원가만 반영합니다.
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>

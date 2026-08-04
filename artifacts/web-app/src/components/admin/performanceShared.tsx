@@ -209,6 +209,7 @@ export interface Row {
   payDateManual?: boolean;
   payDateChangeReason?: string | null;
   memo?: string | null;
+  remark?: string | null;               // 비고 — 사용자 자유입력 운영 메모(우측 끝 컬럼)
   // 계약단가·수량 (§7·§9)
   contractUnitPrice?: string | number | null;
   quantity?: string | number | null;
@@ -274,7 +275,7 @@ export const toRow = (p: any): Row => ({
   deliveryConfirmedBy: p.deliveryConfirmedBy, deliveryConfirmedAt: p.deliveryConfirmedAt,
   expectedPaymentDate: p.expectedPaymentDate, expectedPaymentDateAuto: p.expectedPaymentDateAuto,
   payDateManual: p.payDateManual ?? false,
-  payDateChangeReason: p.payDateChangeReason, memo: p.memo,
+  payDateChangeReason: p.payDateChangeReason, memo: p.memo, remark: p.remark,
   contractUnitPrice: initialContractUnitPrice(p), quantity: trimNum(p.quantity), unit: p.unit,
   isDirectAmount: p.isDirectAmount ?? false, directAmount: p.basePerformanceFee,
   basePerformanceFee: p.basePerformanceFee, expenseTotal: p.expenseTotal,

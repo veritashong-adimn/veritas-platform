@@ -824,10 +824,9 @@ function DateRangeField({ start, end, onChange, boxStyle, title = '기간', star
     return () => { document.removeEventListener('mousedown', onMD); document.removeEventListener('keydown', onKey); };
   }, [open]);
 
-  // 표시 전용 축약 — "2026-07-17" → "26-07-17" (내부값·저장·출력물은 YYYY-MM-DD 그대로).
-  const short = (d: string) => /^\d{4}-\d{2}-\d{2}$/.test(d) ? d.slice(2) : d;
-  // 표시: 없음 → placeholder / 하루(종료 없음·동일) → 시작 / 여러 날 → 시작 ~ 종료
-  const display       = !start ? '' : (!end || end === start) ? short(start) : `${short(start)} ~ ${short(end)}`;
+  // 표시: 없음 → placeholder / 하루(종료 없음·동일) → 시작 / 여러 날 → 시작 ~ 종료.
+  //  · 편집화면은 입력 정확성 우선 — 연도 축약 없이 전체 YYYY-MM-DD 표시(읽기화면의 간결 formatter와 혼용 금지, 수행정보 편집과 통일).
+  const display       = !start ? '' : (!end || end === start) ? start : `${start} ~ ${end}`;
   const startAfterEnd = !!s && !!e && e < s;   // 종료 < 시작 (수동 입력 방어)
 
   const confirm = () => {
@@ -1103,7 +1102,7 @@ function ServiceFields({ it, update, products }: {
             {/* ① 기간 — 단일 기간 필드(Date Range Picker). 저장은 start/end 2필드 유지 */}
             <DateRangeField start={it.interpretDate} end={it.interpretEndDate}
               onChange={(s, e) => update({ interpretDate: s, interpretEndDate: e })}
-              boxStyle={{ ...rinp(174), height: 32 }}
+              boxStyle={{ ...rinp(200), height: 32 }}
               title="행사 기간" startTitle="행사 시작일" endTitle="행사 종료일 (당일은 비워두세요)" />
             {/* ② 운영시간 — Time Range Picker. 확인 시 통역시간 자동 계산(사용자 수정 가능) */}
             <TimeRangeField value={it.operationHours}
@@ -1142,7 +1141,7 @@ function ServiceFields({ it, update, products }: {
               if (days > 0) upd.usagePeriod = String(days);   // 종료일 − 시작일 + 1
               update(upd);
             }}
-            boxStyle={{ ...rinp(174), height: 32 }}
+            boxStyle={{ ...rinp(200), height: 32 }}
             title="사용 기간" startTitle="사용 시작일" endTitle="사용 종료일 (당일은 비워두세요)" />
           {/* ② 설치일시(선택) — 전일·야간·새벽·대형 장비 등 사전 설치 일정 관리용 참고정보.
               사용일수·공급가액 계산에 영향 없음, PDF·출력물 미표시. 저장은 operationHours 컬럼

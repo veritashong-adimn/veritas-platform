@@ -43,6 +43,7 @@ const rowSchema = z.object({
   vatAmount: z.coerce.number().min(0).nullable().optional(),
   amount: z.coerce.number().min(0).nullable().optional(),
   depositStatus: z.enum(DEPOSIT_STATUS).nullable().optional(),
+  depositConfirmed: z.boolean().nullable().optional(),         // 입금확인 — 체크 시 입금일=입금예정일·상태 입금완료
   paymentCategory: z.string().max(50).nullable().optional(),   // 결제유형: 일반결제 · 수출바우처(자유 확장)
   payer: z.string().max(100).nullable().optional(),            // 입금주체: 고객사 · 수출바우처 운영기관
   depositItem: z.string().max(50).nullable().optional(),       // 입금항목: 공급가액 · 부가세 · 전체금액
@@ -83,6 +84,7 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, async (req, res
           vatAmount: String(r.vatAmount ?? 0),
           amount: String(r.amount ?? 0),
           depositStatus: r.depositStatus ?? "scheduled",
+          depositConfirmed: r.depositConfirmed ?? false,
           paymentCategory: r.paymentCategory ?? "일반결제",
           payer: r.payer ?? null,
           depositItem: r.depositItem ?? null,
