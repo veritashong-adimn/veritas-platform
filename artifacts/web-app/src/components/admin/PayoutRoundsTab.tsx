@@ -1,0 +1,438 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// 지급회차 관리(정산 Phase 1) — 재무→정산 메인 화면.
+//  · 수행정보 미지급 건을 지급일별 회차로 묶어 지급대상(개인/외주)별 자동합산·검토·확정.
+//  · 계산은 서버(payoutRounds API)가 costTotal+세금처리로 산출. 화면은 표시·조작만.
+// ─────────────────────────────────────────────────────────────────────────────
+import React, { useEffect, useState, useCallback } from 'react';
+import { api } from '../../lib/constants';
+import { Card, GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
+import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
+
+const won = (n: unknown) => Math.round(Number(n ?? 0)).toLocaleString('ko-KR');
+const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
+
+const ROUND_STATUS: Record<string, { label: string; color: string; bg: string }> = {
+  draft:     { label: '작성 중',  color: '#6b7280', bg: '#f3f4f6' },
+  reviewing: { label: '검토 중',  color: '#b45309', bg: '#fffbeb' },
+  confirmed: { label: '지급 확정', color: '#047857', bg: '#ecfdf5' },
+  paid:      { label: '지급 완료', color: '#1d4ed8', bg: '#eff6ff' },
+  cancelled: { label: '취소',     color: '#dc2626', bg: '#fef2f2' },
+};
+const TREATMENT_LABEL: Record<string, string> = {
+  domestic_3_3: '3.3%', exempt: '원천징수 예외',
+  nonresident_custom: '비거주자', treaty_reduction_or_exemption: '조세조약', tax_review_required: '세무확인 필요',
+};
+const HOLD_REASONS = ['납품확인 필요', '계좌정보 미확인', '세금처리 확인 필요', '고객 클레임', '금액 재검토', '기타'];
+
+// 지급예정일 → 대상기간 자동 제안(§6). 15일 지급→전월 16~말일 / 말일 지급→당월 1~15. 편집 가능.
+function suggestPeriod(paymentDate: string): { start: string; end: string } {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(paymentDate);
+  if (!m) return { start: '', end: '' };
+  const y = +m[1], mo = +m[2], d = +m[3];
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const lastDay = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  if (d >= lastDay - 1) return { start: `${y}-${p2(mo)}-01`, end: `${y}-${p2(mo)}-15` };
+  let py = y, pm = mo - 1; if (pm < 1) { pm = 12; py -= 1; }
+  const pLast = new Date(Date.UTC(py, pm, 0)).getUTCDate();
+  return { start: `${py}-${p2(pm)}-16`, end: `${py}-${p2(pm)}-${p2(pLast)}` };
+}
+
+interface Props { token: string; onToast: (m: string) => void; }
+
+export default function PayoutRoundsTab({ token, onToast }: Props) {
+  const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  const [rounds, setRounds] = useState<any[]>([]);
+  const [selId, setSelId] = useState<number | null>(null);
+  const [detail, setDetail] = useState<any | null>(null);
+  const [view, setView] = useState<'summary' | 'items'>('summary');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [showCreate, setShowCreate] = useState(false);
+  const [showWarn, setShowWarn] = useState(false);
+  const [holdFor, setHoldFor] = useState<{ id: number; name: string } | null>(null);
+  const [holdReason, setHoldReason] = useState('');
+
+  const inp: React.CSSProperties = { ...dsInputStd(), minHeight: 32, padding: '5px 9px', width: '100%' };
+  const th: React.CSSProperties = { ...TYPO.gridHeader, padding: '8px 10px', borderBottom: BD.grid, whiteSpace: 'nowrap', textAlign: 'left', background: C.g50 };
+  const td: React.CSSProperties = { ...TYPO.inputValue, padding: '8px 10px', borderBottom: BD.divider, whiteSpace: 'nowrap' };
+  const tdR: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
+
+  const loadRounds = useCallback(async () => {
+    try {
+      const res = await fetch(api('/api/admin/payout-rounds'), { headers: authH });
+      const data = await res.json().catch(() => ({}));
+      const rows = data.rows ?? [];
+      setRounds(rows);
+      if (rows.length && selId == null) setSelId(rows[0].id);
+    } catch { onToast('지급회차 목록 조회 실패'); }
+  }, [token]);
+
+  const loadDetail = useCallback(async (id: number) => {
+    try {
+      const res = await fetch(api(`/api/admin/payout-rounds/${id}`), { headers: authH });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(data.error ?? '회차 조회 실패'); return; }
+      setDetail(data);
+    } catch { onToast('회차 조회 중 오류'); }
+  }, [token]);
+
+  useEffect(() => { loadRounds(); }, [loadRounds]);
+  useEffect(() => { if (selId != null) loadDetail(selId); else setDetail(null); }, [selId, loadDetail]);
+
+  const round = detail?.round;
+  const summary: any[] = detail?.summary ?? [];
+  const totals = detail?.totals ?? {};
+  const warnings = detail?.warnings ?? { total: 0, holdAmount: 0, byReason: [] };
+  const collectable: any[] = detail?.collectable ?? [];
+  const locked = round && (round.status === 'confirmed' || round.status === 'paid' || round.status === 'cancelled');
+
+  // 회차 저장(제외/보류/재포함 changes 전송) — 서버가 재계산·재조회 반환
+  const applyChanges = async (changes: any[], okMsg?: string) => {
+    if (!selId || busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/payout-rounds/${selId}`), { method: 'PATCH', headers: authH, body: JSON.stringify({ changes }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(data.error ?? '저장 실패'); return; }
+      setDetail(data);
+      await loadRounds();
+      if (okMsg) onToast(okMsg);
+    } catch { onToast('저장 중 오류'); } finally { setBusy(false); }
+  };
+
+  const excludeItem = (id: number) => applyChanges([{ assignmentId: id, action: 'exclude' }], '이번 회차에서 제외했습니다.');
+  const carryOverItem = (id: number) => applyChanges([{ assignmentId: id, action: 'exclude' }], '다음 회차로 이월했습니다.');
+  const includeItem = (id: number) => applyChanges([{ assignmentId: id, action: 'include' }], '이번 회차에 포함했습니다.');
+  const confirmHold = () => {
+    if (!holdFor) return;
+    if (!holdReason.trim()) { onToast('지급보류 사유를 입력하세요.'); return; }
+    applyChanges([{ assignmentId: holdFor.id, action: 'hold', holdReason: holdReason.trim() }], '지급보류 처리했습니다.');
+    setHoldFor(null); setHoldReason('');
+  };
+
+  const confirmRound = async () => {
+    if (!selId || busy) return;
+    if (!window.confirm('이 회차를 지급확정할까요?\n확정 후에는 관리자만 수정할 수 있습니다.')) return;
+    setBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/payout-rounds/${selId}/confirm`), { method: 'PATCH', headers: authH });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(data.error ?? '지급확정 실패'); return; }
+      setDetail(data); await loadRounds(); onToast('지급확정되었습니다.');
+    } catch { onToast('지급확정 중 오류'); } finally { setBusy(false); }
+  };
+
+  const toggleExpand = (k: string) => setExpanded(prev => { const n = new Set(prev); n.has(k) ? n.delete(k) : n.add(k); return n; });
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP[4] }}>
+      {/* ── 상단: 회차 선택 + 생성 + 확정 ── */}
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP[3], flexWrap: 'wrap' }}>
+          <span style={{ ...TYPO.sectionTitle }}>지급회차</span>
+          <div style={{ width: 260 }}>
+            <ClickSelect value={selId != null ? String(selId) : ''} onChange={(v: string) => setSelId(v ? Number(v) : null)}
+              triggerStyle={inp}
+              options={rounds.map(r => ({ value: String(r.id), label: `${r.batchNumber || dateVal(r.paymentDate)} · ${ROUND_STATUS[r.status]?.label ?? r.status}` }))} />
+          </div>
+          <PrimaryBtn onClick={() => setShowCreate(true)} style={{ fontSize: 12, padding: '7px 14px' }} data-testid="payout-create" aria-label="지급회차 생성">+ 지급회차 생성</PrimaryBtn>
+          {/* §7 지급명세서 출력 — 다음 Phase 구현. 현재는 배치만(준비중·Disabled). */}
+          {round && (
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button type="button" disabled title="다음 단계에서 구현 예정" data-testid="payout-pdf" aria-label="지급명세서 PDF (준비중)"
+                style={{ fontSize: 12, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.g300}`, background: C.g50, color: C.g400, cursor: 'not-allowed' }}>📄 지급명세서 PDF <span style={{ fontSize: 10 }}>(준비중)</span></button>
+              <button type="button" disabled title="다음 단계에서 구현 예정" data-testid="payout-excel" aria-label="지급명세서 Excel (준비중)"
+                style={{ fontSize: 12, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.g300}`, background: C.g50, color: C.g400, cursor: 'not-allowed' }}>📊 지급명세서 Excel <span style={{ fontSize: 10 }}>(준비중)</span></button>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      {!round && <Card style={{ padding: 32, textAlign: 'center', color: C.g400 }}>지급회차를 생성하거나 선택하세요.</Card>}
+
+      {round && (
+        <>
+          {/* ── 요약바(§2·§14) ── */}
+          <Card>
+            <div style={{ display: 'flex', gap: SP[3], alignItems: 'center', flexWrap: 'wrap', marginBottom: SP[3] }}>
+              <b style={{ ...TYPO.inputValue, fontSize: 15 }}>{round.batchNumber || `${dateVal(round.paymentDate)} 지급회차`}</b>
+              <span style={{ ...TYPO.badge, color: ROUND_STATUS[round.status]?.color, background: ROUND_STATUS[round.status]?.bg, padding: '3px 9px', borderRadius: 6, fontWeight: 700 }}>{ROUND_STATUS[round.status]?.label ?? round.status}</span>
+              <span style={{ ...TYPO.helper }}>지급예정일 <b>{dateVal(round.paymentDate)}</b></span>
+              <span style={{ ...TYPO.helper }}>대상기간 <b>{dateVal(round.periodStart)} ~ {dateVal(round.periodEnd)}</b></span>
+              {warnings.total > 0 && (
+                <button type="button" onClick={() => setShowWarn(true)} data-testid="payout-warnings"
+                  style={{ marginLeft: 'auto', ...TYPO.helper, color: C.danger, background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontWeight: 700 }}>
+                  ⚠ 제외·확인 필요 {warnings.total}건
+                </button>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: SP[5], flexWrap: 'wrap', padding: `${SP[3]}px ${SP[4]}px`, background: C.primaryBg, borderRadius: 8, ...TYPO.inputValue, fontVariantNumeric: 'tabular-nums' }}>
+              <span>대상 건수 <b>{totals.assignments ?? 0}건</b></span>
+              <span>지급대상 <b>{totals.payees ?? 0}</b> (개인 {totals.individualCount ?? 0} · 외주 {totals.vendorCount ?? 0})</span>
+              <span>총 세전 <b>{won(totals.grossTotal)}원</b></span>
+              <span>총 공제 <b style={{ color: C.danger }}>{won(totals.withholdingTotal)}원</b></span>
+              <span>총 실지급 <b style={{ color: C.primaryText }}>{won(totals.netTotal)}원</b></span>
+              {warnings.holdAmount > 0 && <span>지급보류 <b style={{ color: '#b45309' }}>{won(warnings.holdAmount)}원</b></span>}
+            </div>
+          </Card>
+
+          {/* ── 보기 전환 ── */}
+          <div style={{ display: 'flex', gap: 6 }}>
+            {(['summary', 'items'] as const).map(v => (
+              <button key={v} type="button" onClick={() => setView(v)} data-testid={`payout-view-${v}`}
+                style={{ fontSize: 12, padding: '6px 14px', borderRadius: 8, cursor: 'pointer', fontWeight: 700, border: `1px solid ${view === v ? C.primaryText : C.g300}`, background: view === v ? C.primaryBg : C.bgCard, color: view === v ? C.primaryText : C.textSecondary }}>
+                {v === 'summary' ? '지급대상별 요약' : '건별 상세내역'}
+              </button>
+            ))}
+          </div>
+
+          {/* ── 지급대상별 요약(§10) ── */}
+          {view === 'summary' && (
+            <Card>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1100 }}>
+                  <thead><tr>
+                    <th style={th}>지급대상</th><th style={th}>구분</th>
+                    <th style={{ ...th, textAlign: 'right' }}>건수</th><th style={{ ...th, textAlign: 'right' }}>번역</th><th style={{ ...th, textAlign: 'right' }}>통역</th><th style={{ ...th, textAlign: 'right' }}>장비·외주</th>
+                    <th style={{ ...th, textAlign: 'right' }}>기본수행료</th><th style={{ ...th, textAlign: 'right' }}>추가비용</th><th style={{ ...th, textAlign: 'right' }}>차감</th>
+                    <th style={{ ...th, textAlign: 'right' }}>세전</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>공제</th><th style={{ ...th, textAlign: 'right' }}>실지급</th><th style={th}>상세</th>
+                  </tr></thead>
+                  <tbody>
+                    {summary.length === 0 && <tr><td colSpan={14} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>수집된 지급대상이 없습니다.</td></tr>}
+                    {summary.map((g) => {
+                      const open = expanded.has(g.payeeKey);
+                      return (
+                        <React.Fragment key={g.payeeKey}>
+                          <tr style={{ background: open ? C.g50 : undefined }}>
+                            <td style={{ ...td, fontWeight: 700 }}>{g.payeeName}</td>
+                            <td style={td}>{g.payeeType === 'individual' ? '개인 통번역사' : '외주업체'}</td>
+                            <td style={tdR}>{g.count}건</td><td style={tdR}>{g.translationCount}</td><td style={tdR}>{g.interpretationCount}</td><td style={tdR}>{g.equipmentEtcCount}</td>
+                            <td style={tdR}>{won(g.baseTotal)}</td><td style={tdR}>{won(g.expenseTotal)}</td><td style={tdR}>{won(g.deductionTotal)}</td>
+                            <td style={{ ...tdR, fontWeight: 700 }}>{won(g.grossTotal)}</td>
+                            <td style={td}>
+                              {g.mixedTreatment
+                                ? <span style={{ color: C.danger, fontWeight: 700 }} title="서로 다른 세금처리 혼재 — 건별 확인 필요">⚠ 혼재</span>
+                                : (g.payeeType === 'vendor' ? '세금계산서' : (TREATMENT_LABEL[g.treatments[0]] ?? '—'))}
+                            </td>
+                            <td style={{ ...tdR, color: C.danger }}>{won(g.withholdingTotal)}</td>
+                            <td style={{ ...tdR, fontWeight: 800, color: C.primaryText }}>{won(g.netTotal)}</td>
+                            <td style={td}><button type="button" onClick={() => toggleExpand(g.payeeKey)} data-testid={`payout-expand-${g.payeeKey}`} style={{ border: `1px solid ${C.g300}`, borderRadius: 6, background: C.bgCard, cursor: 'pointer', padding: '3px 9px', fontSize: 11 }}>{open ? '▲ 접기' : '▼ 상세'}</button></td>
+                          </tr>
+                          {open && g.items.map((it: any) => (
+                            <tr key={it.id} style={{ background: '#fbfcfe' }}>
+                              <td style={{ ...td, paddingLeft: 20, color: C.textSecondary }} colSpan={2}>{it.productName || it.projectTitle || `#${it.projectId}`}<span style={{ ...TYPO.helper, marginLeft: 6 }}>{it.customerName || ''}</span></td>
+                              <td style={td} colSpan={2}>{it.serviceType === 'translation' ? '번역' : it.serviceType === 'interpretation' ? '통역' : it.serviceType === 'equipment' ? '장비' : '기타'}</td>
+                              <td style={td}>{dateVal(it.deliveryDate)}</td>
+                              <td style={tdR}>{won(it.basePerformanceFee)}</td><td style={tdR}>{won(it.expenseTotal)}</td><td style={tdR}>{won(it.deductionTotal)}</td>
+                              <td style={tdR}>{won(it.gross)}</td>
+                              <td style={td}>{it.rateConfirmed ? (TREATMENT_LABEL[it.withholdingTreatment] ?? (it.payeeType === 'vendor' ? '세금계산서' : '—')) : <span style={{ color: C.danger }}>미확정</span>}</td>
+                              <td style={{ ...tdR, color: C.danger }}>{won(it.withholdingTax)}</td>
+                              <td style={{ ...tdR, fontWeight: 700 }}>{won(it.netPayment)}</td>
+                              <td style={td}>
+                                {!locked && (
+                                  <div style={{ display: 'flex', gap: 4 }}>
+                                    <button type="button" onClick={() => excludeItem(it.id)} disabled={busy} title="이번 회차에서 제외" data-testid={`payout-exclude-${it.id}`} style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: C.bgCard, cursor: 'pointer', padding: '2px 6px', fontSize: 10 }}>제외</button>
+                                    <button type="button" onClick={() => carryOverItem(it.id)} disabled={busy} title="다음 회차로 이월" data-testid={`payout-carry-${it.id}`} style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: C.bgCard, cursor: 'pointer', padding: '2px 6px', fontSize: 10 }}>이월</button>
+                                    <button type="button" onClick={() => { setHoldFor({ id: it.id, name: g.payeeName }); setHoldReason(''); }} disabled={busy} title="지급보류" data-testid={`payout-hold-${it.id}`} style={{ border: '1px solid #fcd34d', borderRadius: 5, background: '#fffbeb', color: '#b45309', cursor: 'pointer', padding: '2px 6px', fontSize: 10 }}>보류</button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+
+          {/* ── 건별 상세내역(§12) ── */}
+          {view === 'items' && (
+            <Card>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1200 }}>
+                  <thead><tr>
+                    <th style={th}>지급대상</th><th style={th}>고객사</th><th style={th}>상품·업무</th><th style={th}>구분</th>
+                    <th style={th}>납품일</th><th style={th}>지급예정일</th>
+                    <th style={{ ...th, textAlign: 'right' }}>세전</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>실지급</th><th style={th}>비고</th><th style={th}>조치</th>
+                  </tr></thead>
+                  <tbody>
+                    {summary.flatMap(g => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName }))).map((it: any) => (
+                      <tr key={it.id}>
+                        <td style={{ ...td, fontWeight: 600 }}>{it.payeeName}</td>
+                        <td style={td}>{it.customerName || '—'}</td>
+                        <td style={td}>{it.productName || '—'}</td>
+                        <td style={td}>{it.serviceType === 'translation' ? '번역' : it.serviceType === 'interpretation' ? '통역' : it.serviceType === 'equipment' ? '장비' : '기타'}</td>
+                        <td style={td}>{dateVal(it.deliveryDate)}</td><td style={td}>{dateVal(it.expectedPaymentDate)}</td>
+                        <td style={tdR}>{won(it.gross)}</td>
+                        <td style={td}>{it.rateConfirmed ? (TREATMENT_LABEL[it.withholdingTreatment] ?? (it.payeeType === 'vendor' ? '세금계산서' : '—')) : <span style={{ color: C.danger }}>미확정</span>}</td>
+                        <td style={{ ...tdR, fontWeight: 700, color: C.primaryText }}>{won(it.netPayment)}</td>
+                        <td style={{ ...td, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }} title={it.remark || ''}>{it.remark || '—'}</td>
+                        <td style={td}>
+                          {!locked && (
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <button type="button" onClick={() => excludeItem(it.id)} disabled={busy} style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: C.bgCard, cursor: 'pointer', padding: '2px 6px', fontSize: 10 }}>제외</button>
+                              <button type="button" onClick={() => carryOverItem(it.id)} disabled={busy} style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: C.bgCard, cursor: 'pointer', padding: '2px 6px', fontSize: 10 }}>이월</button>
+                              <button type="button" onClick={() => { setHoldFor({ id: it.id, name: it.payeeName }); setHoldReason(''); }} disabled={busy} style={{ border: '1px solid #fcd34d', borderRadius: 5, background: '#fffbeb', color: '#b45309', cursor: 'pointer', padding: '2px 6px', fontSize: 10 }}>보류</button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+
+          {/* ── 재포함 가능 건(§5 포함) — 제외/이월했거나 새로 조건 충족된 미배정 건 ── */}
+          {!locked && collectable.length > 0 && (
+            <Card>
+              <div style={{ ...TYPO.inputValue, fontWeight: 700, marginBottom: SP[2] }}>재포함 가능 <span style={{ color: C.primaryText }}>{collectable.length}건</span> <span style={{ ...TYPO.helper, fontWeight: 400 }}>— 대상기간 내 조건 충족·미배정 건. 「포함」으로 이 회차에 편입</span></div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
+                {collectable.map((it) => (
+                  <div key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', borderBottom: BD.divider }}>
+                    <span style={{ ...TYPO.inputValue, flex: 1 }}>{it.performerName || '(미지정)'} <span style={{ ...TYPO.helper }}>· {it.productName || it.customerName || `#${it.id}`}</span></span>
+                    <span style={{ ...TYPO.inputValue, fontVariantNumeric: 'tabular-nums' }}>{won(it.gross)}원</span>
+                    <button type="button" onClick={() => includeItem(it.id)} disabled={busy} data-testid={`payout-include-${it.id}`} style={{ border: `1px solid ${C.primaryText}`, borderRadius: 5, background: C.primaryBg, color: C.primaryText, cursor: 'pointer', padding: '3px 10px', fontSize: 11, fontWeight: 700 }}>포함</button>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* ── 회차 총계(§6) + 지급확정(§8 하단 우측) ── */}
+          <Card>
+            <div style={{ ...TYPO.inputValue, fontWeight: 800, marginBottom: SP[3] }}>회차 총계</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: SP[3], fontVariantNumeric: 'tabular-nums' }}>
+              {[
+                ['총 대상자', `${totals.payees ?? 0}명`], ['총 건수', `${totals.assignments ?? 0}건`],
+                ['기본수행료 합계', `${won(totals.baseTotal)}원`], ['추가비용 합계', `${won(totals.expenseTotal)}원`],
+                ['차감 합계', `${won(totals.deductionTotal)}원`], ['공제액 합계', `${won(totals.withholdingTotal)}원`],
+              ].map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}><span style={TYPO.helper}>{k}</span><span style={{ ...TYPO.inputValue, fontWeight: 700 }}>{v}</span></div>
+              ))}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}><span style={TYPO.helper}>실지급액 합계</span><span style={{ ...TYPO.inputValue, fontWeight: 800, fontSize: 17, color: C.primaryText }}>{won(totals.netTotal)}원</span></div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: SP[4], borderTop: BD.grid, paddingTop: SP[3] }}>
+              {locked
+                ? <span style={{ ...TYPO.helper, color: ROUND_STATUS[round.status]?.color, fontWeight: 700 }}>{ROUND_STATUS[round.status]?.label} — {round.status === 'confirmed' ? '관리자만 수정 가능' : '수정 불가'}</span>
+                : <PrimaryBtn onClick={confirmRound} disabled={busy || (totals.assignments ?? 0) === 0} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-confirm" aria-label="지급확정">지급확정</PrimaryBtn>}
+            </div>
+          </Card>
+        </>
+      )}
+
+      {showCreate && <CreateDialog token={token} onToast={onToast} onClose={() => setShowCreate(false)} onCreated={async (d) => { setShowCreate(false); await loadRounds(); setSelId(d.round.id); setDetail(d); }} />}
+      {showWarn && <WarningsModal warnings={warnings} onClose={() => setShowWarn(false)} />}
+      {holdFor && (
+        <Modal title={`지급보류 — ${holdFor.name}`} onClose={() => setHoldFor(null)}>
+          <p style={{ ...TYPO.helper, margin: '0 0 8px' }}>보류 사유를 선택하거나 입력하세요 (필수).</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+            {HOLD_REASONS.map(r => <button key={r} type="button" onClick={() => setHoldReason(r)} style={{ fontSize: 11, padding: '4px 10px', borderRadius: 14, cursor: 'pointer', border: `1px solid ${holdReason === r ? C.primaryText : C.g300}`, background: holdReason === r ? C.primaryBg : C.bgCard }}>{r}</button>)}
+          </div>
+          <input style={inp} value={holdReason} onChange={e => setHoldReason(e.target.value)} placeholder="보류 사유" data-testid="payout-hold-reason" aria-label="지급보류 사유" />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+            <GhostBtn onClick={() => setHoldFor(null)} style={{ fontSize: 12, padding: '6px 12px' }}>취소</GhostBtn>
+            <PrimaryBtn onClick={confirmHold} disabled={busy} style={{ fontSize: 12, padding: '6px 14px' }}>보류 처리</PrimaryBtn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ── 회차 생성 다이얼로그(§5·§6) ──
+function CreateDialog({ token, onToast, onClose, onCreated }: { token: string; onToast: (m: string) => void; onClose: () => void; onCreated: (d: any) => void; }) {
+  const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  const [paymentDate, setPaymentDate] = useState('');
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
+  const [batchNumber, setBatchNumber] = useState('');
+  const [note, setNote] = useState('');
+  const [basis, setBasis] = useState<'expected_payment_date' | 'delivery_date'>('expected_payment_date');
+  const [busy, setBusy] = useState(false);
+  const inp: React.CSSProperties = { ...dsInputStd(), minHeight: 34, padding: '6px 10px', width: '100%' };
+
+  // 지급예정일 선택 → 회차명(자동·읽기전용) + 대상기간(자동, 수정 가능) 동시 생성(§1-①②).
+  const onPayDate = (v: string) => {
+    setPaymentDate(v);
+    const s = suggestPeriod(v);
+    setPeriodStart(s.start); setPeriodEnd(s.end);
+    setBatchNumber(v ? `${v} 지급회차` : '');
+  };
+
+  const create = async () => {
+    if (!paymentDate || !periodStart || !periodEnd) { onToast('지급예정일과 대상기간을 입력하세요.'); return; }
+    setBusy(true);
+    try {
+      const res = await fetch(api('/api/admin/payout-rounds'), { method: 'POST', headers: authH, body: JSON.stringify({ paymentDate, periodStart, periodEnd, collectionBasis: basis, batchNumber: batchNumber || null, note: note || null }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(data.error ?? '회차 생성 실패'); return; }
+      onToast(`지급회차가 생성되었습니다 (${data.totals?.assignments ?? 0}건 수집).`);
+      onCreated(data);
+    } catch { onToast('회차 생성 중 오류'); } finally { setBusy(false); }
+  };
+
+  const field = (label: string, node: React.ReactNode) => (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}><span style={{ ...TYPO.helper, fontWeight: 700 }}>{label}</span>{node}</label>
+  );
+
+  return (
+    <Modal title="새 지급회차 생성" onClose={onClose}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 14px' }}>
+        {field('지급예정일 *', <input type="date" style={inp} value={paymentDate} onChange={e => onPayDate(e.target.value)} data-testid="payout-new-paydate" aria-label="지급예정일" />)}
+        {field('회차명 (자동)', <input style={{ ...inp, background: C.g50, color: C.textSecondary }} value={batchNumber} readOnly data-testid="payout-new-name" aria-label="회차명(자동)" placeholder="지급예정일 선택 시 자동 생성" />)}
+        {field('대상기간 시작 (자동·수정가능)', <input type="date" style={inp} value={periodStart} onChange={e => setPeriodStart(e.target.value)} data-testid="payout-new-start" aria-label="대상기간 시작" />)}
+        {field('대상기간 종료 (자동·수정가능)', <input type="date" style={inp} value={periodEnd} onChange={e => setPeriodEnd(e.target.value)} data-testid="payout-new-end" aria-label="대상기간 종료" />)}
+        {field('수집 기준', <ClickSelect value={basis} onChange={(v: string) => setBasis(v as any)} triggerStyle={inp} options={[{ value: 'expected_payment_date', label: '지급예정일 기준' }, { value: 'delivery_date', label: '납품일 기준' }]} />)}
+        {field('비고', <input style={inp} value={note} onChange={e => setNote(e.target.value)} placeholder="비고" data-testid="payout-new-note" aria-label="비고" />)}
+      </div>
+      <p style={{ ...TYPO.helper, marginTop: 10, color: C.textSecondary }}>지급예정일 선택 시 대상기간이 자동 제안됩니다(수정 가능). 조건을 충족한 미지급·미배정 건이 자동수집됩니다.</p>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
+        <GhostBtn onClick={onClose} style={{ fontSize: 12, padding: '7px 14px' }}>취소</GhostBtn>
+        <PrimaryBtn onClick={create} disabled={busy} style={{ fontSize: 12, padding: '7px 16px' }} data-testid="payout-new-submit">{busy ? '생성 중…' : '생성 + 자동수집'}</PrimaryBtn>
+      </div>
+    </Modal>
+  );
+}
+
+// ── 제외·확인 필요 목록 모달(§8) ──
+function WarningsModal({ warnings, onClose }: { warnings: any; onClose: () => void; }) {
+  return (
+    <Modal title={`제외·확인 필요 ${warnings.total}건`} onClose={onClose}>
+      {warnings.byReason.length === 0 && <p style={{ ...TYPO.helper }}>확인이 필요한 항목이 없습니다.</p>}
+      {warnings.byReason.map((b: any) => (
+        <div key={b.reason} style={{ marginBottom: 12 }}>
+          <div style={{ ...TYPO.inputValue, fontWeight: 700, marginBottom: 4 }}>{b.reason} <span style={{ color: C.danger }}>{b.count}건</span></div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {b.items.slice(0, 20).map((it: any) => (
+              <div key={it.id} style={{ ...TYPO.helper, color: C.textSecondary, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span>{it.performerName || '(미지정)'} · {it.productName || `#${it.projectId}`}</span>
+                <span style={{ fontVariantNumeric: 'tabular-nums' }}>{won(it.costTotal)}원</span>
+              </div>
+            ))}
+            {b.items.length > 20 && <span style={{ ...TYPO.helper }}>…외 {b.items.length - 20}건</span>}
+          </div>
+        </div>
+      ))}
+    </Modal>
+  );
+}
+
+// ── 공용 모달 ──
+function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void; }) {
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.bgCard, borderRadius: 12, boxShadow: '0 12px 40px rgba(0,0,0,0.2)', padding: 22, width: 560, maxWidth: '100%', maxHeight: '86vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <h3 style={{ margin: 0, ...TYPO.sectionTitle }}>{title}</h3>
+          <button type="button" onClick={onClose} aria-label="닫기" style={{ border: 'none', background: 'none', fontSize: 20, cursor: 'pointer', color: C.textSecondary, lineHeight: 1 }}>×</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}

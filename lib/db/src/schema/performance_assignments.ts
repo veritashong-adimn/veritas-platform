@@ -179,8 +179,9 @@ export const performanceAssignmentsTable = pgTable("performance_assignments", {
 
   // ── 정산관리·지급명세서 연계 (§18) — 소프트링크(FK 없음, 향후 테이블 생성 시 연결) ─
   payeeType: text("payee_type"),                 // "individual" | "vendor" | "none"(경비)
-  payoutRoundId: integer("payout_round_id"),      // 지급회차 ID (향후)
-  payStatementId: integer("pay_statement_id"),    // 지급명세서 ID (향후)
+  payoutRoundId: integer("payout_round_id"),      // 지급회차 ID (payout_rounds.id 소프트링크). 배정 시 세팅·삭제잠금
+  payoutHoldReason: text("payout_hold_reason"),   // 지급보류 사유(§13) — paymentStatus=payment_hold 시 필수
+  payStatementId: integer("pay_statement_id"),    // 지급명세서 ID (향후 Phase 2)
   actualPaymentAmount: numeric("actual_payment_amount", { precision: 14, scale: 2 }),
 
   // ── 개인 통번역사 정산 (vendor 인 경우 null) ────────────────────────────────

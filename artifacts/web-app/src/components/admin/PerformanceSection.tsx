@@ -540,7 +540,14 @@ export default function PerformanceSection({ projectId, token, performances, onC
             : muted}
         </td>
         <td style={{ ...tdBase, width: RW.pay }}>
-          {editable ? <ClickSelect value={r.paymentStatus ?? 'unpaid'} onChange={(v: string) => patchRow(i, { paymentStatus: v })} triggerStyle={inp} options={PAYMENT_STATUS_OPTS} /> : <PaymentBadge value={r.paymentStatus} />}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
+            {editable ? <ClickSelect value={r.paymentStatus ?? 'unpaid'} onChange={(v: string) => patchRow(i, { paymentStatus: v })} triggerStyle={inp} options={PAYMENT_STATUS_OPTS} /> : <PaymentBadge value={r.paymentStatus} />}
+            {/* §18 회차 배정 표시(최소) — 지급회차에 포함된 건 표기. 상세는 정산 화면에서 관리. */}
+            {r.payoutRoundId != null && (
+              <span title={`지급회차 배정됨 (#${r.payoutRoundId}) — 정산 화면에서 관리`} aria-label="지급회차 배정됨"
+                style={{ ...TYPO.helper, color: C.primaryText, background: C.primaryBg, borderRadius: 5, padding: '1px 5px', fontSize: 10, fontWeight: 700, flexShrink: 0 }}>회차</span>
+            )}
+          </div>
         </td>
         {/* 비고(§16) — 사용자 자유입력 운영 메모. remark 컬럼 연동 저장·조회. 계산·정산 로직 미반영. */}
         <td style={{ ...tdBase, width: RW.remark }}>

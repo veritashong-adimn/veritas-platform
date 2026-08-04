@@ -13,6 +13,7 @@ export * from "./settlements";
 export * from "./performance_assignments";
 export * from "./performance_expenses";
 export * from "./performance_deductions";
+export * from "./payout_rounds";
 export * from "./holidays";
 export * from "./logs";
 export * from "./notes";

@@ -38,7 +38,7 @@ import { DataLayerTab } from '../components/admin/DataLayerTab';
 import { LanguageServiceDataTab } from '../components/admin/LanguageServiceDataTab';
 import { InsightManagementTab } from '../components/admin/InsightManagementTab';
 import { InsightAnalyticsTab } from '../components/admin/InsightAnalyticsTab';
-import { SettlementManagementTab } from '../components/admin/SettlementManagementTab';
+import { SettlementTabs } from '../components/admin/SettlementTabs';
 import { SettingsTab } from '../components/admin/SettingsTab';
 import { BillingManagementTab } from '../components/admin/BillingManagementTab';
 import { StaffManagementTab } from '../components/admin/StaffManagementTab';
@@ -1881,9 +1881,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         </Section>
       )}
 
-      {/* ── 정산 탭 ── */}
+      {/* ── 정산 탭 (지급회차 관리 + 기존 정산 하위탭) ── */}
       {adminTab === "settlements" && (
-        <SettlementManagementTab
+        <SettlementTabs
           settlements={settlements}
           loading={loading}
           token={token ?? ""}
