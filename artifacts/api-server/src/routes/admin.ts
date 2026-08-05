@@ -966,6 +966,10 @@ router.patch("/admin/projects/:id/cancel", ...adminGuard, requirePermission("pro
   if (!project) { res.status(404).json({ error: "프로젝트를 찾을 수 없습니다." }); return; }
   if (project.status === "cancelled") { res.status(400).json({ error: "이미 취소된 프로젝트입니다." }); return; }
   if (project.status === "completed") { res.status(400).json({ error: "완료된 프로젝트는 취소할 수 없습니다." }); return; }
+  // 배정·진행 단계 이후는 판매취소 불가 (배정완료/진행중/정산). 배정 전(approved/paid)만 허용.
+  if (project.status === "matched" || project.status === "in_progress") {
+    res.status(409).json({ error: "배정·진행 중인 판매는 취소할 수 없습니다. 먼저 배정 해제/진행 중단이 필요합니다." }); return;
+  }
 
   const { reason } = req.body as { reason?: string };
 
@@ -1492,6 +1496,12 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
       .from(quotesTable)
       .where(eq(quotesTable.id, quoteId));
     if (!quote) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }
+
+    // 중복 판매전환 차단: 이미 판매전환(approved)된 견적은 재전환 불가 — 판매건 중복 생성 방지.
+    // (양 콜러 모두 status='approved'만 전송하므로 다른 상태 전환 흐름에는 영향 없음)
+    if (status === "approved" && quote.status === "approved") {
+      res.status(409).json({ error: "이미 판매전환된 견적입니다." }); return;
+    }
 
     const adminUser = (req as any).user as { id: number };
 

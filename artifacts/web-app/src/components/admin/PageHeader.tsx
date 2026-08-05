@@ -11,10 +11,11 @@
  */
 import React from 'react';
 import { C, TYPO, SP } from '../../lib/ds';
+import { BackToListButton } from './BackToListButton';
 
 export function PageHeader({
   onBack, title, subtitle, right,
-  backLabel = '뒤로가기', testId = 'btn-page-back', style,
+  backLabel = '목록으로', testId = 'btn-page-back', style,
 }: {
   onBack:    () => void;
   title:     string;
@@ -26,11 +27,8 @@ export function PageHeader({
 }) {
   return (
     <div style={{ height: 52, display: 'flex', alignItems: 'center', flexShrink: 0, ...style }}>
-      {/* 기능 버튼 — Outline 스타일, 보조 비중 */}
-      <button type="button" onClick={onBack} data-testid={testId} aria-label={backLabel}
-        style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 8, cursor: 'pointer', color: C.textSecondary, fontSize: 13, fontWeight: 600, padding: '6px 12px', flexShrink: 0 }}>
-        ← {backLabel}
-      </button>
+      {/* 목록으로 — 상세화면 공통 네비게이션 버튼(보조 비중, Hover 시 브랜드 강조) */}
+      <BackToListButton onClick={onBack} label={backLabel} testId={testId} />
 
       {/* 페이지 제목 — Bold, 버튼보다 큰 글자(존재감 강조). 뒤로가기와 충분한 간격(구분선 없음) */}
       <h1 style={{ margin: 0, marginLeft: 28, fontSize: 20, fontWeight: 800, color: C.textPrimary, letterSpacing: '-0.01em', whiteSpace: 'nowrap' }}>

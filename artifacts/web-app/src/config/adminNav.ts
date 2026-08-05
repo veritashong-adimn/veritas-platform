@@ -3,6 +3,8 @@ export type NavItem = {
   label: string;
   icon: string;
   perm?: string;
+  /** 하위 메뉴 (1단계 중첩). 부모는 페이지가 아니라 펼침 전용. */
+  children?: NavItem[];
 };
 
 export type NavGroup = {
@@ -73,8 +75,12 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     accentColor: "#f59e0b",
     perm: "menu.translator",
     items: [
-      { id: "translators", label: "통번역사",  icon: "🌐", perm: "menu.translator" },
-      { id: "products",    label: "상품/단가", icon: "🏷️", perm: "menu.product" },
+      { id: "translators", label: "통번역사", icon: "🌐", perm: "menu.translator" },
+      { id: "products-catalog", label: "상품관리", icon: "🏷️", perm: "menu.product", children: [
+        { id: "products",         label: "상품목록", icon: "🏷️", perm: "menu.product" },
+        { id: "product-register", label: "상품등록", icon: "➕",  perm: "menu.product" },
+        { id: "product-trash",    label: "휴지통",   icon: "🗑",  perm: "menu.product" },
+      ] },
     ],
   },
   {
@@ -129,7 +135,9 @@ export const ADMIN_PAGE_TITLE: Record<string, string> = {
   contacts:    "담당자",
   customers:   "고객관리",
   translators: "통번역사",
-  products:    "상품/단가",
+  products:    "상품목록",
+  "product-register": "상품등록",
+  "product-trash":    "휴지통",
   users:       "사용자관리",
   roles:       "역할관리",
   permissions: "권한설정",

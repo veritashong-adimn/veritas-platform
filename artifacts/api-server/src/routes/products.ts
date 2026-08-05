@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, productsTable, productOptionsTable, productRequestsTable, quoteItemsTable, translatorProductsTable } from "@workspace/db";
+import { db, productsTable, productOptionsTable, productRequestsTable, quoteItemsTable, translatorProductsTable, performanceAssignmentsTable, usersTable } from "@workspace/db";
 import { eq, desc, sql, and, or, isNull, isNotNull } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
@@ -1175,10 +1175,64 @@ router.get("/admin/products", ...adminGuard, async (req, res) => {
       options: allOptions.filter(o => o.productId === p.id),
     }));
 
+    // 페이지네이션: page 파라미터가 있을 때만 {items,total,...} 형태로 응답한다.
+    // (하위호환) page 파라미터가 없으면 기존과 동일하게 배열을 반환한다 — 다른 소비자 보호.
+    if (req.query.page !== undefined) {
+      const total = result.length;
+      const sizeRaw = Number(req.query.pageSize ?? 20);
+      const pageSize = [20, 50, 100].includes(sizeRaw) ? sizeRaw : 20;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      let page = Number(req.query.page ?? 1);
+      if (!Number.isFinite(page) || page < 1) page = 1;
+      if (page > totalPages) page = totalPages;
+      const startIdx = (page - 1) * pageSize;
+      const items = result.slice(startIdx, startIdx + pageSize);
+      res.json({ items, total, page, pageSize, totalPages });
+      return;
+    }
+
     res.json(result);
   } catch (err) {
     req.log.error({ err }, "Products: failed to list");
     res.status(500).json({ error: "상품 조회 실패." });
+  }
+});
+
+// ─── 휴지통 목록 (삭제된 상품) ─────────────────────────────────────────────────
+// deletedAt IS NOT NULL 인 상품만. `:id` 라우트보다 먼저 등록해야 함.
+router.get("/admin/products/trash", ...adminGuard, async (req, res) => {
+  try {
+    const { search } = req.query as Record<string, string | undefined>;
+
+    let rows = await db
+      .select({
+        product: productsTable,
+        deletedByName: usersTable.name,
+        deletedByEmail: usersTable.email,
+      })
+      .from(productsTable)
+      .leftJoin(usersTable, eq(productsTable.deletedBy, usersTable.id))
+      .where(isNotNull(productsTable.deletedAt))
+      .orderBy(desc(productsTable.deletedAt));
+
+    if (search?.trim()) {
+      const candidates = normalizeSearchQuery(search.trim());
+      rows = rows.filter(r => {
+        const searchText = buildProductSearchText(r.product, ISO_LABEL);
+        return candidates.some(c => searchText.includes(c));
+      });
+    }
+
+    const result = rows.map(r => ({
+      ...r.product,
+      deletedByName: r.deletedByName ?? null,
+      deletedByEmail: r.deletedByEmail ?? null,
+    }));
+
+    res.json(result);
+  } catch (err) {
+    req.log.error({ err }, "Products: failed to list trash");
+    res.status(500).json({ error: "휴지통 조회 실패." });
   }
 });
 
@@ -1642,13 +1696,37 @@ router.post("/admin/products/import", ...adminOnly, excelUpload.single("file"), 
 router.get("/admin/product-requests", ...adminGuard, async (req, res) => {
   try {
     const { status } = req.query as { status?: string };
-    let rows = await db
+    const allRows = await db
       .select()
       .from(productRequestsTable)
       .orderBy(desc(productRequestsTable.createdAt));
 
+    // 상태별 건수는 status 필터와 무관하게 전체 기준으로 계산한다.
+    const counts = {
+      all: allRows.length,
+      pending: allRows.filter(r => r.status === "pending").length,
+      approved: allRows.filter(r => r.status === "approved").length,
+      rejected: allRows.filter(r => r.status === "rejected").length,
+    };
+
+    let rows = allRows;
     if (status && status !== "all") {
       rows = rows.filter(r => r.status === status);
+    }
+
+    // 페이지네이션: page 파라미터가 있을 때만 {items,...,counts} 형태로 응답 (하위호환: 없으면 배열).
+    if (req.query.page !== undefined) {
+      const total = rows.length;
+      const sizeRaw = Number(req.query.pageSize ?? 20);
+      const pageSize = [20, 50, 100].includes(sizeRaw) ? sizeRaw : 20;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      let page = Number(req.query.page ?? 1);
+      if (!Number.isFinite(page) || page < 1) page = 1;
+      if (page > totalPages) page = totalPages;
+      const startIdx = (page - 1) * pageSize;
+      const items = rows.slice(startIdx, startIdx + pageSize);
+      res.json({ items, total, page, pageSize, totalPages, counts });
+      return;
     }
 
     res.json(rows);
@@ -2097,8 +2175,9 @@ router.patch("/admin/products/:id/toggle", ...adminOnly, async (req, res) => {
   }
 });
 
-// ─── 상품 삭제 (소프트: active=false) ────────────────────────────────────────
-router.delete("/admin/products/:id", ...adminOnly, async (req, res) => {
+// ─── 상품 삭제 (휴지통 이동: deletedAt/deletedBy 설정) ────────────────────────
+// admin+staff(PM) 가능. 실제 DB 삭제가 아니라 휴지통으로 이동 → 복원 가능.
+router.delete("/admin/products/:id", ...adminGuard, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {
     res.status(400).json({ error: "유효하지 않은 product id." }); return;
@@ -2107,23 +2186,54 @@ router.delete("/admin/products/:id", ...adminOnly, async (req, res) => {
   try {
     const [existing] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
     if (!existing) { res.status(404).json({ error: "상품을 찾을 수 없습니다." }); return; }
+    if (existing.deletedAt) { res.status(409).json({ error: "이미 휴지통에 있는 상품입니다." }); return; }
 
+    // active/deactivationReason 은 건드리지 않음 → 복원 시 원래 상태 유지
     const [updated] = await db
       .update(productsTable)
-      .set({ active: false, deactivationReason: "관리자 삭제" })
+      .set({ deletedAt: new Date(), deletedBy: req.user?.id ?? null })
       .where(eq(productsTable.id, productId))
       .returning();
 
-    await logEvent("product", productId, "product_deleted", req.log, req.user as any);
+    await logEvent("product", productId, "product_trashed", req.log, req.user as any,
+      JSON.stringify({ code: existing.code, name: existing.name }));
     res.json(updated);
   } catch (err) {
-    req.log.error({ err }, "Products: failed to delete");
-    res.status(500).json({ error: "상품 삭제 실패." });
+    req.log.error({ err }, "Products: failed to move to trash");
+    res.status(500).json({ error: "상품 휴지통 이동 실패." });
   }
 });
 
-// ─── 상품 완전삭제 (purge) ────────────────────────────────────────────────────
-// 미사용 상품만 가능. deleted_at 기반 soft-delete로 코드 재사용 방지.
+// ─── 상품 복원 (휴지통 → 일반 목록) ───────────────────────────────────────────
+// admin+staff(PM) 가능. 상품코드는 그대로 유지.
+router.post("/admin/products/:id/restore", ...adminGuard, async (req, res) => {
+  const productId = Number(req.params.id);
+  if (isNaN(productId) || productId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 product id." }); return;
+  }
+
+  try {
+    const [existing] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
+    if (!existing) { res.status(404).json({ error: "상품을 찾을 수 없습니다." }); return; }
+    if (!existing.deletedAt) { res.status(400).json({ error: "휴지통에 있는 상품이 아닙니다." }); return; }
+
+    const [updated] = await db
+      .update(productsTable)
+      .set({ deletedAt: null, deletedBy: null })
+      .where(eq(productsTable.id, productId))
+      .returning();
+
+    await logEvent("product", productId, "product_restored", req.log, req.user as any,
+      JSON.stringify({ code: existing.code, name: existing.name }));
+    res.json(updated);
+  } catch (err) {
+    req.log.error({ err }, "Products: failed to restore");
+    res.status(500).json({ error: "상품 복원 실패." });
+  }
+});
+
+// ─── 상품 완전삭제 (purge: 실제 DB 행 삭제) ───────────────────────────────────
+// admin 전용. 업무 데이터에서 사용된 이력이 있으면 차단(무결성 보호).
 router.delete("/admin/products/:id/purge", ...adminOnly, async (req, res) => {
   const productId = Number(req.params.id);
   if (isNaN(productId) || productId <= 0) {
@@ -2133,35 +2243,48 @@ router.delete("/admin/products/:id/purge", ...adminOnly, async (req, res) => {
   try {
     const [existing] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
     if (!existing) { res.status(404).json({ error: "상품을 찾을 수 없습니다." }); return; }
-    if (existing.deletedAt) { res.status(409).json({ error: "이미 삭제된 상품입니다." }); return; }
 
-    // 사용 여부 확인: 견적 아이템에 연결된 경우
-    const usedInQuotes = await db
+    // 사용 이력 확인 — 하나라도 있으면 완전삭제 불가 (휴지통 보관만 가능).
+    //   1) 견적/판매: quote_items.productId
+    //   2) 상품요청 승인: product_requests.approvedProductId
+    //   3) 수행정보: performance_assignments.productNameSnapshot (이름 스냅샷)
+    //   * 청구/정산은 product FK 없이 quotes/tasks 경유 → 위 견적 체크로 커버됨.
+    const [usedInQuotes] = await db
       .select({ id: quoteItemsTable.id })
       .from(quoteItemsTable)
       .where(eq(quoteItemsTable.productId, productId))
       .limit(1);
+    const [usedInRequests] = await db
+      .select({ id: productRequestsTable.id })
+      .from(productRequestsTable)
+      .where(eq(productRequestsTable.approvedProductId, productId))
+      .limit(1);
+    const [usedInPerformance] = await db
+      .select({ id: performanceAssignmentsTable.id })
+      .from(performanceAssignmentsTable)
+      .where(eq(performanceAssignmentsTable.productNameSnapshot, existing.name))
+      .limit(1);
 
-    if (usedInQuotes.length > 0) {
+    const usedReason = usedInQuotes ? "quote_items"
+      : usedInRequests ? "product_requests"
+      : usedInPerformance ? "performance_assignments"
+      : null;
+
+    if (usedReason) {
       res.status(409).json({
-        error: "이미 사용된 상품입니다. 비활성만 가능합니다.",
-        reason: "quote_items",
+        error: "이 상품은 이미 업무 데이터에서 사용된 이력이 있으므로 완전삭제할 수 없습니다. 휴지통 상태로만 보관 가능합니다.",
+        reason: usedReason,
       });
       return;
     }
 
-    // 완전삭제: deleted_at 설정 + translator_products는 cascade로 자동 삭제됨
-    const now = new Date();
-    const [updated] = await db
-      .update(productsTable)
-      .set({ deletedAt: now, active: false, deactivationReason: "완전삭제" })
-      .where(eq(productsTable.id, productId))
-      .returning();
-
+    // 완전삭제 (실제 행 제거) — product_options / translator_products 는 FK CASCADE 로 자동 정리.
     await logEvent("product", productId, "product_purged", req.log, req.user as any,
       JSON.stringify({ code: existing.code, name: existing.name }));
 
-    res.json({ ...updated, purged: true });
+    await db.delete(productsTable).where(eq(productsTable.id, productId));
+
+    res.json({ id: productId, purged: true });
   } catch (err) {
     req.log.error({ err }, "Products: failed to purge");
     res.status(500).json({ error: "상품 완전삭제 실패." });

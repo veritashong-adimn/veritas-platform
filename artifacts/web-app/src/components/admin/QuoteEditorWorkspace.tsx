@@ -1582,13 +1582,6 @@ export function QuoteEditorWorkspace({
   const [saving,         setSaving]        = useState(false);
   // 견적서 버튼: 신규 견적을 자동 저장하면 이후 저장은 이 id로 업데이트(중복 생성 방지)
   const [savedQuoteId,   setSavedQuoteId]  = useState<number | null>(initialQuoteId ?? null);
-  // 견적서 미리보기 모달 데이터 (편집 화면 위에 오버레이 → 편집 상태 유지)
-  const [previewData,    setPreviewData]   = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
-  // 판매전환 상태 — 진입 시 status==='approved' 면 이미 전환됨. 판매취소로 복귀하면 approved가 아니므로 재전환 가능.
-  const [converted,      setConverted]     = useState(initialStatus === 'approved');
-  const [converting,     setConverting]    = useState(false);
-  // 저장되지 않은 변경사항 확인 모달 (판매전환 클릭 시 dirty 상태에서만 표시)
-  const [showConvertConfirm, setShowConvertConfirm] = useState(false);
 
   // ── 저장되지 않은 변경사항 추적(값 기준) ─────────────────────────────────────
   // 저장 payload에 반영되는 폼 필드를 직렬화한 "서명"을 기준선과 비교한다.
@@ -1815,55 +1808,6 @@ export function QuoteEditorWorkspace({
     onSaved(r);
   }, [persistQuote, onSaved, onToast, savedQuoteId, markClean]);
 
-  // 견적서 버튼 — 현재 편집 내용을 자동 저장(신규=생성/기존=업데이트)한 뒤 최신 견적서를 미리보기로 표시.
-  // 편집 화면은 그대로 유지되어 확인 후 즉시 재수정 가능 (지시문 3~6절).
-  const handleShowQuote = useCallback(async () => {
-    const r = await persistQuote();
-    if (!r) return;
-    markClean();
-    try {
-      const res = await fetch(api(`/api/admin/quotes/${r.quoteId}`), { headers: authH });
-      if (!res.ok) { onToast('견적서 생성에 실패했습니다.'); return; }
-      const detail = await res.json();
-      setPreviewData({ data: buildQuotePdfData(detail), title: title.trim() || detail.title || `견적 #${r.quoteId}` });
-    } catch { onToast('견적서 생성 중 오류가 발생했습니다.'); }
-  }, [persistQuote, title, token, onToast, markClean]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── 판매전환 (견적 상세에서 직접 수행) ───────────────────────────────────────
-  // 목록의 판매전환과 동일 로직: PATCH /status {approved}. 프로젝트 자동 생성·중복 방지는 서버가 담당.
-  const runConvert = useCallback(async (quoteId: number) => {
-    if (converting) return;
-    setConverting(true);
-    try {
-      const res = await fetch(api(`/api/admin/quotes/${quoteId}/status`), {
-        method: 'PATCH', headers: { ...authH, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'approved' }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { onToast(`판매전환 실패: ${data.error ?? res.status}`); return; }
-      setConverted(true);
-      onToast('판매건으로 전환되었습니다.');
-      onConverted?.();
-    } catch {
-      onToast('판매전환 중 오류가 발생했습니다. 다시 시도해 주세요.');
-    } finally { setConverting(false); }
-  }, [converting, onToast, onConverted, token]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // 판매전환 버튼 클릭 — 변경사항이 있으면 확인 모달, 없으면(이미 저장) 바로 전환.
-  const handleConvertClick = useCallback(() => {
-    if (converted || converting || saving) return;
-    if (hasUnsavedChanges()) { setShowConvertConfirm(true); return; }
-    if (savedQuoteId != null) runConvert(savedQuoteId);
-  }, [converted, converting, saving, savedQuoteId, runConvert]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // 모달 [저장 후 판매전환] — 저장 성공 시 기준선 갱신 후 전환. 저장 실패 시 모달 유지.
-  const handleSaveThenConvert = useCallback(async () => {
-    const r = await persistQuote();
-    if (!r) return;
-    markClean();
-    setShowConvertConfirm(false);
-    await runConvert(r.quoteId);
-  }, [persistQuote, markClean, runConvert]);
 
 
   // ─── 공통 Form 컨텐츠 ─────────────────────────────────────────────────────
@@ -2048,49 +1992,13 @@ export function QuoteEditorWorkspace({
         style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: C.ai, color: '#ffffff' }}>
         🤖 AI 견적 생성
       </button>
-      <DsButton variant="secondary" size="md" onClick={handleShowQuote} disabled={saving}>📄 견적서</DsButton>
-      {/* 판매전환 — 상세 검토 후 이 화면에서 바로 전환(기본 기능). 목록 버튼은 보조 기능으로 유지.
-          독립 견적(standalone)에서만 노출 — 프로젝트 Version Engine 흐름은 변경하지 않는다. */}
-      {isStandalone && (converted ? (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span data-testid="badge-quote-converted" aria-label="판매전환 완료"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, height: 32, padding: '0 12px', borderRadius: 7, fontSize: 13, fontWeight: 800, background: C.success, color: '#ffffff', border: `1px solid ${C.successText}` }}>
-            ✓ 전환완료
-          </span>
-          {onNavigateToSales && (
-            <DsButton variant="secondary" size="md" onClick={onNavigateToSales} data-testid="btn-view-sales">📁 판매관리 보기</DsButton>
-          )}
-        </div>
-      ) : (
-        <DsButton variant="secondary" size="md" onClick={handleConvertClick} disabled={saving || converting}
-          data-testid="btn-convert-sale" aria-label="판매전환"
-          style={{ background: C.successBg, color: C.successText, borderColor: C.successBorder }}>
-          {converting ? '전환 중…' : '🔁 판매전환'}
-        </DsButton>
-      ))}
+      {/* 견적서(PDF)·판매전환 버튼 제거 — 작성/수정 화면은 작성·저장만 담당.
+          PDF는 저장 후 상세·목록에서, 판매전환은 견적목록 공통 작업영역에서 수행한다. */}
       <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving}>
         {saving ? '저장 중…' : '💾 저장'}
       </DsButton>
     </>
   );
-
-  // 저장되지 않은 변경사항 → 저장 후 판매전환 확인 모달 (두 레이아웃이 공유)
-  const convertConfirmModal = showConvertConfirm ? (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 3000, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-      onClick={() => { if (!saving && !converting) setShowConvertConfirm(false); }}>
-      <div onClick={e => e.stopPropagation()} data-testid="modal-convert-confirm"
-        style={{ background: C.bgCard, borderRadius: 14, padding: '26px 28px', width: 420, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}>
-        <h2 style={{ margin: '0 0 10px', fontSize: 17, fontWeight: 800, color: C.textPrimary }}>저장되지 않은 변경사항이 있습니다</h2>
-        <p style={{ margin: '0 0 20px', fontSize: 13.5, color: C.textSecondary, lineHeight: 1.6 }}>저장 후 판매전환하시겠습니까?</p>
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-          <DsButton variant="outline" size="md" onClick={() => setShowConvertConfirm(false)} disabled={saving || converting} data-testid="btn-convert-confirm-cancel">취소</DsButton>
-          <DsButton variant="primary" size="md" onClick={handleSaveThenConvert} disabled={saving || converting} data-testid="btn-convert-confirm-ok">
-            {saving || converting ? '처리 중…' : '저장 후 판매전환'}
-          </DsButton>
-        </div>
-      </div>
-    </div>
-  ) : null;
 
   const wsHeader = (bg: string, border: string, shadow: string, padH: string) => (
     <PageHeader
@@ -2117,11 +2025,6 @@ export function QuoteEditorWorkspace({
             onClose={() => setShowAiModal(false)}
           />
         )}
-        {/* 견적서 미리보기 — 편집 화면 위 오버레이(zIndex 2000). 닫으면 편집 상태 그대로 유지 */}
-        {previewData && (
-          <QuotePdfPreviewModal data={previewData.data} quoteTitle={previewData.title} onClose={() => setPreviewData(null)} />
-        )}
-        {convertConfirmModal}
         {/* 인라인 Workspace 헤더 — 스크롤 영역에서 full-bleed sticky (공통 헤더 토큰) */}
         <PageHeader
           onBack={onClose}
@@ -2152,11 +2055,6 @@ export function QuoteEditorWorkspace({
           onClose={() => setShowAiModal(false)}
         />
       )}
-      {/* 견적서 미리보기 — 편집 화면 위 오버레이(zIndex 2000). 닫으면 편집 상태 그대로 유지 */}
-      {previewData && (
-        <QuotePdfPreviewModal data={previewData.data} quoteTitle={previewData.title} onClose={() => setPreviewData(null)} />
-      )}
-      {convertConfirmModal}
       {wsHeader(C.bgCard, BD.card, BD.shadow.card, '24px')}
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px 64px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>

@@ -20,13 +20,16 @@ import { LogModal } from '../components/admin/LogModal';
 import { DraggableModal } from '../components/admin/DraggableModal';
 import { ContactDetailModal } from '../components/admin/ContactDetailModal';
 import { ContactFormModal } from '../components/admin/ContactFormModal';
+import { bulkBtnStyle } from '../components/admin/product/productShared';
 import { CustomerDetailModal } from '../components/admin/CustomerDetailModal';
 import { TranslatorProfileModal } from '../components/admin/TranslatorProfileModal';
 import { TranslatorDetailModal } from '../components/admin/TranslatorDetailModal';
 import { TranslatorCreateModal } from '../components/admin/TranslatorCreateModal';
 import { ProjectDetailModal } from '../components/admin/ProjectDetailModal';
 import { PrepaidLedgerModal } from '../components/admin/PrepaidLedgerModal';
-import { ProductManagementTab } from '../components/admin/ProductManagementTab';
+import { ProductListTab } from '../components/admin/product/ProductListTab';
+import { ProductRegisterTab } from '../components/admin/product/ProductRegisterTab';
+import { ProductTrashTab } from '../components/admin/product/ProductTrashTab';
 import { ProjectManagementTab } from '../components/admin/ProjectManagementTab';
 import { SalesDetailPage } from './SalesDetailPage';
 import { QuoteListTab } from '../components/admin/QuoteListTab';
@@ -224,7 +227,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   };
 
   // 초기 탭 — /admin/companies* 경로로 새로고침·직접진입 시 거래처 탭을 복원한다(URL 라우팅 연동).
-  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics">(
+  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"projects"|"payments"|"tasks"|"settlements"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics">(
     isCompanyPath(window.location.pathname) ? "companies" : "dashboard",
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -328,6 +331,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [deleteContactReason, setDeleteContactReason] = useState("");
   const [deletingContact, setDeletingContact] = useState<number | null>(null);
   const [showMergeModal, setShowMergeModal] = useState(false);
+  const [bulkDeleteContactsOpen, setBulkDeleteContactsOpen] = useState(false);
+  const [editContact, setEditContact] = useState<AdminContact | null>(null);
   const [primaryMergeId, setPrimaryMergeId] = useState<number | null>(null);
   const [merging, setMerging] = useState(false);
 
@@ -547,6 +552,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   const fetchContacts = useCallback(async () => {
     setContactsLoading(true);
+    setSelectedContactIds(new Set()); // 페이지/필터/검색/작업 후 재조회 시 선택 초기화
     try {
       const params = new URLSearchParams();
       params.set("page", String(contactPage));
@@ -600,6 +606,39 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       setToast("담당자를 휴지통으로 이동했습니다.");
     } catch { setToast("오류: 담당자 삭제 실패"); }
     finally { setDeletingContact(null); }
+  };
+
+  // 상단 '수정' — 1건 선택 시 담당자 수정 폼(편집 모달) 열기
+  const handleEditSelectedContact = () => {
+    if (selectedContactIds.size !== 1) return;
+    const id = [...selectedContactIds][0];
+    const c = contacts.find(x => x.id === id);
+    if (c) setEditContact(c);
+  };
+
+  // 선택삭제(휴지통 이동) 일괄 처리 — 사유 필수(≥2자). 서버에서도 재검증.
+  const handleBulkDeleteContacts = async () => {
+    const reason = deleteContactReason.trim();
+    if (reason.length < 2) { setToast("삭제 사유를 2자 이상 입력해 주세요."); return; }
+    const ids = [...selectedContactIds];
+    if (ids.length === 0) return;
+    setDeletingContact(-1); // 일괄 처리 중 표시(-1 = busy)
+    try {
+      const results = await Promise.all(ids.map(async id => {
+        try {
+          const res = await fetch(api(`/api/admin/contacts/${id}`), {
+            method: "DELETE", headers: { ...authHeaders, "Content-Type": "application/json" }, body: JSON.stringify({ reason }),
+          });
+          const d = await res.json().catch(() => null);
+          return { id, ok: res.ok, error: d?.error as string | undefined };
+        } catch { return { id, ok: false, error: "네트워크 오류" }; }
+      }));
+      const ok = results.filter(r => r.ok).length;
+      setBulkDeleteContactsOpen(false);
+      setDeleteContactReason("");
+      setToast(`${ok}명을 휴지통으로 이동했습니다.${ok < ids.length ? ` (${ids.length - ok}건 실패)` : ""}`);
+      await fetchContacts();
+    } finally { setDeletingContact(null); }
   };
 
   const handleMergeContacts = async () => {
@@ -791,11 +830,20 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     } catch {}
   }, [openSections]);
 
-  // 현재 탭이 속한 섹션 자동 펼침 (닫혀있어도 항상 강제 열기)
+  // 현재 탭이 속한 섹션 자동 펼침 (닫혀있어도 항상 강제 열기). 중첩 하위메뉴도 함께 펼침.
   useEffect(() => {
-    const activeGroup = ADMIN_NAV_GROUPS.find(g => g.items.some(item => item.id === adminTab));
-    if (activeGroup && !activeGroup.isDashboard) {
-      setOpenSections(prev => ({ ...prev, [activeGroup.key]: true }));
+    for (const g of ADMIN_NAV_GROUPS) {
+      if (g.isDashboard) continue;
+      for (const item of g.items) {
+        if (item.id === adminTab) {
+          setOpenSections(prev => ({ ...prev, [g.key]: true }));
+          return;
+        }
+        if (item.children?.some(c => c.id === adminTab)) {
+          setOpenSections(prev => ({ ...prev, [g.key]: true, [item.id]: true }));
+          return;
+        }
+      }
     }
   }, [adminTab]);
   useEffect(() => {
@@ -921,7 +969,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
   const SIDEBAR_GROUPS = ADMIN_NAV_GROUPS.map(group => ({
     ...group,
-    items: group.items.filter(item => hasPerm(item.perm)),
+    items: group.items
+      .filter(item => hasPerm(item.perm))
+      .map(item => item.children
+        ? { ...item, children: item.children.filter(c => hasPerm(c.perm)) }
+        : item)
+      .filter(item => !item.children || item.children.length > 0),
   })).filter(group => group.items.length > 0);
 
   const PAGE_TITLE = ADMIN_PAGE_TITLE;
@@ -1387,7 +1440,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               const isOpen = group.isDashboard || openSections[group.key] !== false;
               // 필터 전 전체 아이템 기준으로 active 여부 판단 (perm 필터와 무관하게 일관성 보장)
               const rawGroup = ADMIN_NAV_GROUPS.find(g => g.key === group.key);
-              const hasActiveItem = (rawGroup ?? group).items.some(item => item.id === adminTab);
+              const hasActiveItem = (rawGroup ?? group).items.some(item => item.id === adminTab || item.children?.some(c => c.id === adminTab));
               return (
                 <div key={group.key} style={{ marginBottom: group.isDashboard ? 4 : 1 }}>
                   {/* 섹션 헤더 (대시보드 제외) */}
@@ -1424,6 +1477,56 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   )}
                   {/* 메뉴 아이템 (섹션이 열려 있을 때만) */}
                   {isOpen && group.items.map(item => {
+                    // ── 중첩 하위메뉴 부모 (예: 상품관리) — 페이지 아님, 펼침 전용 ──
+                    if (item.children && item.children.length > 0) {
+                      const parentActive = item.children.some(c => c.id === adminTab);
+                      const childOpen = openSections[item.id] !== false; // 기본 펼침
+                      return (
+                        <div key={item.id}>
+                          <button
+                            onClick={() => toggleSection(item.id)}
+                            style={{
+                              display: "flex", alignItems: "center", gap: 10,
+                              width: "100%", padding: "9px 20px 9px 22px", border: "none", cursor: "pointer",
+                              background: "transparent",
+                              color: parentActive ? group.accentColor : "#d7dce4",
+                              fontSize: 13, fontWeight: 700,
+                              textAlign: "left", whiteSpace: "nowrap",
+                              borderRadius: 0, transition: "color 0.12s",
+                            }}
+                            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "#2d3547"; }}
+                            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+                          >
+                            <span style={{ fontSize: 15, lineHeight: 1, flexShrink: 0 }}>{item.icon}</span>
+                            <span style={{ flex: 1 }}>{item.label}</span>
+                            <span style={{ fontSize: 8, color: parentActive ? group.accentColor : "#4a5568", display: "inline-block", transform: childOpen ? "rotate(90deg)" : "rotate(0deg)", transition: "transform 0.18s" }}>▶</span>
+                          </button>
+                          {childOpen && item.children.map(child => {
+                            const childActive = adminTab === child.id;
+                            return (
+                              <button
+                                key={child.id}
+                                onClick={() => navigateToAdminTab(child.id as typeof adminTab)}
+                                style={{
+                                  display: "flex", alignItems: "center", gap: 9,
+                                  width: "100%", padding: "7px 20px 7px 48px", border: "none", cursor: "pointer",
+                                  background: childActive ? group.accentColor : "transparent",
+                                  color: childActive ? "#fff" : "#98a1b0",
+                                  fontSize: 11.5, fontWeight: childActive ? 500 : 400,
+                                  textAlign: "left", whiteSpace: "nowrap",
+                                  borderRadius: 0, transition: "background 0.15s, color 0.12s",
+                                }}
+                                onMouseEnter={e => { if (!childActive) { (e.currentTarget as HTMLButtonElement).style.background = "#2d3547"; } }}
+                                onMouseLeave={e => { if (!childActive) { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; } }}
+                              >
+                                <span style={{ fontSize: 11, lineHeight: 1, flexShrink: 0, opacity: 0.8 }}>{child.icon}</span>
+                                <span>{child.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      );
+                    }
                     const isActive = adminTab === item.id;
                     return (
                       <button
@@ -2111,6 +2214,18 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               onToast={setToast}
             />
           )}
+          {/* 상단 '수정' — 선택 1건 담당자 편집 폼 */}
+          {editContact && (
+            <ContactFormModal
+              mode="edit"
+              token={token}
+              contactId={editContact.id}
+              initialData={editContact as any}
+              onClose={() => setEditContact(null)}
+              onSuccess={async () => { setEditContact(null); await fetchContacts(); }}
+              onToast={setToast}
+            />
+          )}
 
           <p style={{ fontSize: 12, color: "#9ca3af", margin: "0 0 12px" }}>
             하나의 거래처에 여러 명의 담당자를 등록할 수 있습니다. 기본 담당자는 거래처별 1명만 지정됩니다.
@@ -2134,22 +2249,35 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               비활성 포함
             </label>
           </div>
-          {/* 선택 시 통합 툴바 */}
-          {selectedContactIds.size >= 2 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 12, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: "10px 16px", marginBottom: 10 }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: "#1d4ed8" }}>{selectedContactIds.size}명 선택됨</span>
-              <button
-                onClick={() => { setShowMergeModal(true); setPrimaryMergeId(null); }}
-                style={{ fontSize: 13, fontWeight: 700, padding: "7px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }}>
-                선택 담당자 통합
-              </button>
-              <button
-                onClick={() => setSelectedContactIds(new Set())}
-                style={{ fontSize: 12, padding: "6px 12px", background: "transparent", color: "#6b7280", border: "1px solid #d1d5db", borderRadius: 7, cursor: "pointer" }}>
-                선택 해제
-              </button>
-            </div>
-          )}
+          {/* 선택 기반 공통 작업 바 (상품·거래처와 동일 패턴) */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10, padding: "9px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#374151", cursor: "pointer", fontWeight: 600 }}>
+              <input type="checkbox"
+                checked={selectedContactIds.size === contacts.length && contacts.length > 0}
+                onChange={e => setSelectedContactIds(e.target.checked ? new Set(contacts.map(c => c.id)) : new Set())}
+                aria-label="현재 페이지 전체 선택" data-testid="contact-select-all"
+                style={{ width: 15, height: 15, cursor: "pointer" }} />
+              현재 페이지 전체선택
+            </label>
+            <span data-testid="contact-selected-count" style={{ fontSize: 13, fontWeight: 700, color: selectedContactIds.size > 0 ? "#2563eb" : "#9ca3af" }}>
+              선택 {selectedContactIds.size}건
+            </span>
+            <div style={{ flex: 1 }} />
+            <button onClick={handleEditSelectedContact} disabled={selectedContactIds.size !== 1}
+              title={selectedContactIds.size >= 2 ? "수정은 하나의 담당자만 선택 가능합니다." : undefined}
+              data-testid="contact-bulk-edit" style={bulkBtnStyle(selectedContactIds.size === 1, "#2563eb", "#eff6ff", "#bfdbfe", { padding: "6px 14px" })}>
+              수정
+            </button>
+            <button onClick={() => { setShowMergeModal(true); setPrimaryMergeId(null); }} disabled={selectedContactIds.size < 2}
+              title={selectedContactIds.size < 2 ? "통합은 2건 이상 선택해야 합니다." : undefined}
+              data-testid="contact-bulk-merge" style={bulkBtnStyle(selectedContactIds.size >= 2, "#4338ca", "#eef2ff", "#c7d2fe", { padding: "6px 14px" })}>
+              통합
+            </button>
+            <button onClick={() => { setDeleteContactReason(""); setBulkDeleteContactsOpen(true); }} disabled={selectedContactIds.size < 1}
+              data-testid="contact-bulk-delete" style={bulkBtnStyle(selectedContactIds.size >= 1, "#dc2626", "#fef2f2", "#fecaca", { padding: "6px 14px" })}>
+              선택삭제
+            </button>
+          </div>
 
           {contactsLoading ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
@@ -2168,7 +2296,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           title="전체 선택"
                         />
                       </th>
-                      {["ID","거래처","담당자명","부서/직책","휴대폰","이메일","역할","상태","등록일","작업"].map(h => <th key={h} style={tableTh}>{h}</th>)}
+                      {["ID","거래처","담당자명","부서/직책","휴대폰","이메일","역할","상태","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}
                     </tr>
                   </thead>
                   <tbody>
@@ -2217,16 +2345,6 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           </td>
                           {/* 등록일 = 홈택스 원본 등록일(registeredAt). 없는 기존 데이터만 플랫폼 생성일(createdAt) fallback. */}
                           <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }} onClick={() => setContactModal(c.id)}>{((c as any).registeredAt ?? c.createdAt) ? new Date((c as any).registeredAt ?? c.createdAt).toLocaleDateString("ko-KR") : "-"}</td>
-                          <td style={{ ...tableTd }} onClick={e => e.stopPropagation()}>
-                            {(c as any).isActive !== false && (
-                              <button
-                                onClick={() => { setDeleteContactReason(""); setDeleteConfirmContact({ id: c.id, name: c.name }); }}
-                                disabled={deletingContact === c.id}
-                                style={{ fontSize: 11, padding: "3px 9px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 5, cursor: "pointer", fontWeight: 600 }}>
-                                삭제
-                              </button>
-                            )}
-                          </td>
                         </tr>
                       );
                     })}
@@ -2248,15 +2366,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             />
           )}
 
-          {/* ── 삭제 확인 모달 (휴지통 이동, 삭제 사유 필수) ── */}
-          {deleteConfirmContact && (
+          {/* ── 선택삭제 확인 모달 (휴지통 이동, 삭제 사유 필수) ── */}
+          {bulkDeleteContactsOpen && (
             <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}
-              onClick={() => { if (!deletingContact) { setDeleteConfirmContact(null); setDeleteContactReason(""); } }}>
+              onClick={() => { if (!deletingContact) { setBulkDeleteContactsOpen(false); setDeleteContactReason(""); } }}>
               <div onClick={e => e.stopPropagation()} data-testid="modal-contact-delete"
                 style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 440, maxWidth: "92vw", boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
-                <h3 style={{ margin: "0 0 10px", fontSize: 16, fontWeight: 800, color: "#111827" }}>담당자 삭제</h3>
+                <h3 style={{ margin: "0 0 10px", fontSize: 16, fontWeight: 800, color: "#111827" }}>담당자 선택삭제</h3>
                 <p style={{ margin: "0 0 6px", fontSize: 14, color: "#374151" }}>
-                  <strong>{deleteConfirmContact.name}</strong> 담당자를 휴지통으로 이동하시겠습니까?
+                  선택한 <strong>{selectedContactIds.size}명</strong>의 담당자를 휴지통으로 이동하시겠습니까?
                 </p>
                 <p style={{ margin: "0 0 14px", fontSize: 12, color: "#9ca3af" }}>휴지통으로 이동된 담당자는 목록에서 숨겨지며, 휴지통에서 복원할 수 있습니다.</p>
                 <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>삭제 사유 <span style={{ color: "#dc2626" }}>*</span></label>
@@ -2273,11 +2391,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                   data-testid="contact-delete-reason-input" aria-label="담당자 삭제 사유"
                   style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", fontSize: 13, border: "1px solid #d1d5db", borderRadius: 8, outline: "none", marginBottom: 20 }} />
                 <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                  <button onClick={() => { setDeleteConfirmContact(null); setDeleteContactReason(""); }} disabled={!!deletingContact}
+                  <button onClick={() => { setBulkDeleteContactsOpen(false); setDeleteContactReason(""); }} disabled={!!deletingContact}
                     style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
                     취소
                   </button>
-                  <button onClick={() => handleDeleteContact(deleteConfirmContact.id)} disabled={!!deletingContact || deleteContactReason.trim().length < 2}
+                  <button onClick={handleBulkDeleteContacts} disabled={!!deletingContact || deleteContactReason.trim().length < 2}
                     data-testid="contact-delete-confirm-btn"
                     style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: (!!deletingContact || deleteContactReason.trim().length < 2) ? "#fca5a5" : "#dc2626", color: "#fff", fontSize: 13, fontWeight: 700, cursor: (!!deletingContact || deleteContactReason.trim().length < 2) ? "not-allowed" : "pointer" }}>
                     {deletingContact ? "이동 중..." : "휴지통으로 이동"}
@@ -2338,12 +2456,33 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         </Section>
       )}
 
-      {/* ── 상품/단가 탭 ── */}
+      {/* ── 상품관리: 상품목록 ── */}
       {adminTab === "products" && (
-        <ProductManagementTab
+        <ProductListTab
+          token={token}
+          hasPerm={hasPerm}
+          setToast={setToast}
+          authHeaders={authHeaders}
+          onNavigate={navigateToAdminTab}
+        />
+      )}
+
+      {/* ── 상품관리: 상품등록 (+ 등록요청 관리) ── */}
+      {adminTab === "product-register" && (
+        <ProductRegisterTab
           token={token}
           user={user}
           hasPerm={hasPerm}
+          setToast={setToast}
+          authHeaders={authHeaders}
+        />
+      )}
+
+      {/* ── 상품관리: 휴지통 ── */}
+      {adminTab === "product-trash" && (
+        <ProductTrashTab
+          token={token}
+          user={user}
           setToast={setToast}
           authHeaders={authHeaders}
         />

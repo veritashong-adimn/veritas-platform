@@ -4,6 +4,7 @@ import {
   STATUS_LABEL, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE,
 } from '../../lib/constants';
 import { StatusBadge, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../ui';
+import { bulkBtnStyle } from './product/productShared';
 import { DraggableModal } from './DraggableModal';
 import { renderQuoteTitle } from '../../lib/quoteTitle';
 
@@ -24,6 +25,9 @@ const tableTd: React.CSSProperties = {
 };
 
 const PROJECT_PAGE_SIZE = 20;
+
+// 배정 전(취소·배정 가능) 판매 상태 — matched/in_progress/completed/cancelled 은 불가
+const SALE_ACTIONABLE = new Set(["approved", "paid"]);
 
 // ─── 워크플로우 필터 정의 ──────────────────────────────────────────────────────
 type WorkflowFilter =
@@ -220,8 +224,9 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // ── 판매 취소 모달 ─────────────────────────────────────────────────────────
-  const [cancelProject, setCancelProject] = useState<{ id: number; title: string } | null>(null);
+  // ── 선택 기반 일괄 관리 + 판매취소 모달 ────────────────────────────────────
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkCancelOpen, setBulkCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
 
@@ -352,6 +357,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
   // ── 프로젝트 조회 ─────────────────────────────────────────────────────────
   const fetchProjects = useCallback(async () => {
     setLoading(true);
+    setSelectedIds(new Set()); // 재조회(필터/작업 후) 시 선택 초기화
     try {
       const params = new URLSearchParams();
       params.set("salesOnly", "true");
@@ -399,28 +405,32 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     if (fetchTrigger > 0) fetchProjects();
   }, [fetchTrigger]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── 판매 취소 실행 ────────────────────────────────────────────────────────
-  const handleCancelProject = async () => {
-    if (!cancelProject) return;
+  // ── 일괄 판매취소 실행 (선택 = approved/paid 만, 서버에서도 재검증) ────────
+  const handleBulkCancel = async () => {
     if (!cancelReason.trim()) { setToast("취소 사유를 입력하세요."); return; }
+    const targets = projects.filter(p => selectedIds.has(p.id) && SALE_ACTIONABLE.has(p.status));
+    if (targets.length === 0) { setBulkCancelOpen(false); return; }
     setCancelling(true);
     try {
-      const res = await fetch(api(`/api/admin/projects/${cancelProject.id}/cancel`), {
-        method: "PATCH",
-        headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: cancelReason.trim() }),
-      });
-      if (res.ok) {
-        setToast("판매가 취소되어 견적관리로 되돌아갔습니다.");
-        setCancelProject(null);
-        setCancelReason("");
-        fetchProjects();
-      } else {
-        const d = await res.json();
-        setToast(`오류: ${d.error}`);
-      }
-    } catch { setToast("오류: 판매 취소 요청에 실패했습니다."); }
-    finally { setCancelling(false); }
+      const reason = cancelReason.trim();
+      const results = await Promise.all(targets.map(async p => {
+        try {
+          const res = await fetch(api(`/api/admin/projects/${p.id}/cancel`), {
+            method: "PATCH", headers: { ...authHeaders, "Content-Type": "application/json" }, body: JSON.stringify({ reason }),
+          });
+          const d = await res.json().catch(() => null);
+          return { p, ok: res.ok, error: d?.error as string | undefined };
+        } catch { return { p, ok: false, error: "네트워크 오류" }; }
+      }));
+      const ok = results.filter(r => r.ok).length;
+      const fails = results.filter(r => !r.ok);
+      setBulkCancelOpen(false);
+      setCancelReason("");
+      let msg = `${ok}건 판매취소되어 견적관리로 되돌아갔습니다.`;
+      if (fails.length) msg += ` ${fails.length}건 실패 — ` + fails.map(f => `${f.p.title ?? f.p.id}: ${f.error ?? "실패"}`).join(" / ");
+      setToast(msg);
+      fetchProjects();
+    } finally { setCancelling(false); }
   };
 
   // ── CSV 내보내기 ──────────────────────────────────────────────────────────
@@ -523,11 +533,25 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     return u.name ?? u.email.split("@")[0];
   };
 
+  // ── 선택 파생값 & 핸들러 (선택은 현재 페이지 기준 — 페이지 이동 시 초기화) ──
+  const selectedProjects = projects.filter(p => selectedIds.has(p.id));
+  const selectedCount = selectedProjects.length;
+  const canAssignSelected = selectedCount === 1 && SALE_ACTIONABLE.has(selectedProjects[0]?.status ?? "");
+  const canCancelSelected = selectedCount >= 1 && selectedProjects.every(p => SALE_ACTIONABLE.has(p.status));
+  const assignBlockedReason = selectedCount >= 2 ? "배정은 하나의 판매만 선택 가능합니다." : undefined;
+  const toggleSelectProject = (id: number) => setSelectedIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const handleAssignSelected = () => { if (canAssignSelected) goToDetail(selectedProjects[0].id); };
+  useEffect(() => { setSelectedIds(new Set()); }, [projectPage]); // 페이지 이동 시 선택 초기화
+
   // ── JSX ──────────────────────────────────────────────────────────────────
   return (
     <>
-      {/* ── 판매 취소 모달 ── */}
-      {cancelProject && (
+      {/* ── 일괄 판매취소 모달 ── */}
+      {bulkCancelOpen && (
         <div style={{ position: "fixed", inset: 0, zIndex: 9000, background: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div style={{ background: "#fff", borderRadius: 14, padding: "28px 32px", width: 460, boxShadow: "0 20px 60px rgba(0,0,0,0.25)" }}>
             <h2 style={{ margin: "0 0 8px", fontSize: 18, fontWeight: 800, color: "#b45309" }}>판매 취소</h2>
@@ -535,9 +559,8 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
               취소 처리 후에도 판매와 견적 데이터는 보존됩니다.
             </p>
             <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "10px 14px", marginBottom: 18 }}>
-              <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 700, color: "#92400e" }}>취소 대상</p>
-              <p style={{ margin: 0, fontSize: 13, color: "#78350f" }}>
-                {cancelProject.title || "(제목 없음)"}
+              <p style={{ margin: 0, fontSize: 13, color: "#78350f", fontWeight: 700 }}>
+                선택한 {selectedCount}건의 판매를 취소하시겠습니까?
               </p>
             </div>
             <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
@@ -551,11 +574,11 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
               style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 14, boxSizing: "border-box", outline: "none", resize: "vertical", marginBottom: 18, fontFamily: "inherit" }}
             />
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button onClick={() => { setCancelProject(null); setCancelReason(""); }} disabled={cancelling}
+              <button onClick={() => { setBulkCancelOpen(false); setCancelReason(""); }} disabled={cancelling}
                 style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
                 닫기
               </button>
-              <button onClick={handleCancelProject} disabled={!cancelReason.trim() || cancelling}
+              <button onClick={handleBulkCancel} disabled={!cancelReason.trim() || cancelling}
                 style={{ padding: "9px 20px", borderRadius: 8, border: "none", background: cancelReason.trim() ? "#b45309" : "#d97706", color: "#fff", fontSize: 13, fontWeight: 700, cursor: cancelReason.trim() ? "pointer" : "not-allowed", transition: "background 0.15s" }}>
                 {cancelling ? "취소 중..." : "판매 취소 확정"}
               </button>
@@ -913,6 +936,8 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
           const totalPages = Math.ceil(projects.length / PROJECT_PAGE_SIZE);
           const safePage = Math.min(projectPage, totalPages);
           const pagedProjects = projects.slice((safePage - 1) * PROJECT_PAGE_SIZE, safePage * PROJECT_PAGE_SIZE);
+          const allSelected = pagedProjects.length > 0 && pagedProjects.every(p => selectedIds.has(p.id));
+          const toggleSelectAll = () => setSelectedIds(allSelected ? new Set() : new Set(pagedProjects.map(p => p.id)));
 
           const QUOTE_TYPE_LABEL: Record<string, string> = {
             b2b_standard: "B2B",
@@ -923,11 +948,38 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
 
           return (
             <>
+              {/* 선택 기반 공통 작업 바 */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10, padding: "9px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#374151", cursor: "pointer", fontWeight: 600 }}>
+                  <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
+                    aria-label="현재 페이지 전체 선택" style={{ width: 15, height: 15, cursor: "pointer" }} />
+                  현재 페이지 전체선택
+                </label>
+                <span data-testid="sale-selected-count" style={{ fontSize: 13, fontWeight: 700, color: selectedCount > 0 ? "#2563eb" : "#9ca3af" }}>
+                  선택 {selectedCount}건
+                </span>
+                <div style={{ flex: 1 }} />
+                <button onClick={handleAssignSelected} disabled={!canAssignSelected}
+                  title={assignBlockedReason}
+                  data-testid="sale-bulk-assign" style={bulkBtnStyle(canAssignSelected, "#6d28d9", "#f3e8ff", "#ddd6fe", { padding: "6px 14px" })}>
+                  통번역사 배정
+                </button>
+                <button onClick={() => { setCancelReason(""); setBulkCancelOpen(true); }} disabled={!canCancelSelected}
+                  data-testid="sale-bulk-cancel" style={bulkBtnStyle(canCancelSelected, "#b45309", "#fffbeb", "#fcd34d", { padding: "6px 14px" })}>
+                  판매취소
+                </button>
+              </div>
+
               <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden", background: "#fff" }}>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
                       <tr style={{ background: "#f8fafc" }}>
+                        <th style={{ ...tableTh, minWidth: 34, width: 34, textAlign: "center" }}>
+                          <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
+                            aria-label="현재 페이지 전체 선택" data-testid="sale-select-all"
+                            style={{ width: 15, height: 15, cursor: "pointer" }} />
+                        </th>
                         {[
                           { label: "프로젝트명",    w: 200 },
                           { label: "거래처",        w: 130 },
@@ -939,7 +991,6 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                           { label: "담당PM",        w: 80  },
                           { label: "다음 해야 할 일", w: 150 },
                           { label: "등록일",        w: 76  },
-                          { label: "액션",          w: 120 },
                         ].map(h => (
                           <th key={h.label} style={{ ...tableTh, minWidth: h.w }}>{h.label}</th>
                         ))}
@@ -950,27 +1001,21 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                         const pp = p as any;
                         const reqName = pp.requestingCompanyName ?? p.companyName ?? "—";
                         const nextAction = getNextAction(p);
-
-                        // 액션 버튼 매핑
-                        type SectionKey = "info"|"quote"|"progress"|"payment"|"settlement"|"history";
-                        const ACTION_MAP: Record<string, { label: string; section: SectionKey; color: string; bg: string }> = {
-                          created:     { label: "견적 생성",     section: "quote",      color: "#fff",    bg: "#2563eb" },
-                          quoted:      { label: "견적 확인",     section: "quote",      color: "#fff",    bg: "#2563eb" },
-                          approved:    { label: "통번역사 배정", section: "progress",   color: "#fff",    bg: "#7c3aed" },
-                          paid:        { label: "배정 관리",    section: "progress",   color: "#fff",    bg: "#7c3aed" },
-                          matched:     { label: "배정 관리",    section: "progress",   color: "#fff",    bg: "#7c3aed" },
-                          in_progress: { label: "진행 보기",     section: "progress",   color: "#fff",    bg: "#6d28d9" },
-                          completed:   { label: "정산 확인",     section: "settlement", color: "#fff",    bg: "#059669" },
-                          cancelled:   { label: "상세보기",      section: "info",       color: "#6b7280", bg: "#f3f4f6" },
-                        };
-                        const action = ACTION_MAP[p.status] ?? { label: "상세보기", section: "info" as SectionKey, color: "#6b7280", bg: "#f3f4f6" };
+                        const isSelected = selectedIds.has(p.id);
 
                         return (
                           <tr key={p.id}
                             onClick={() => goToDetail(p.id)}
-                            style={{ cursor: "pointer", transition: "background 0.1s" }}
+                            style={{ cursor: "pointer", transition: "background 0.1s", background: isSelected ? "#eff6ff" : undefined }}
                             onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
-                            onMouseLeave={e => (e.currentTarget.style.background = "")}>
+                            onMouseLeave={e => (e.currentTarget.style.background = isSelected ? "#eff6ff" : "")}>
+
+                            {/* 선택 체크박스 — 클릭은 선택만(행 상세 진입과 분리) */}
+                            <td style={{ ...tableTd, textAlign: "center" }} onClick={e => e.stopPropagation()}>
+                              <input type="checkbox" checked={isSelected} onChange={() => toggleSelectProject(p.id)}
+                                aria-label={`판매 선택: ${p.title ?? p.id}`} data-testid={`sale-select-${p.id}`}
+                                style={{ width: 15, height: 15, cursor: "pointer" }} />
+                            </td>
 
                             {/* 프로젝트명 */}
                             <td style={{ ...tableTd, maxWidth: 200 }}>
@@ -1046,24 +1091,6 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                             {/* 등록일 */}
                             <td style={{ ...tableTd, fontSize: 11, color: "#c0c8d4", whiteSpace: "nowrap" }}>
                               {new Date(p.createdAt).toLocaleDateString("ko-KR")}
-                            </td>
-
-                            {/* 액션 */}
-                            <td style={{ ...tableTd }} onClick={e => e.stopPropagation()}>
-                              <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "nowrap" }}>
-                                <button
-                                  onClick={() => goToDetail(p.id)}
-                                  style={{ background: action.bg, color: action.color, border: "none", borderRadius: 6, padding: "4px 9px", fontSize: 10, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
-                                  {action.label}
-                                </button>
-                                {p.status !== "cancelled" && p.status !== "completed" && (
-                                  <button
-                                    onClick={() => { setCancelProject({ id: p.id, title: p.title }); setCancelReason(""); }}
-                                    style={{ background: "transparent", color: "#b45309", border: "1px solid #fcd34d", borderRadius: 6, padding: "4px 7px", fontSize: 10, cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>
-                                    판매취소
-                                  </button>
-                                )}
-                              </div>
                             </td>
                           </tr>
                         );

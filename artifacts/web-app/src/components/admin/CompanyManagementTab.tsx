@@ -12,6 +12,7 @@ import { CompanyTrashTab } from './CompanyTrashTab';
 import { CompanyCreatePage } from './CompanyCreatePage';
 import { CompanyEditPage } from './CompanyEditPage';
 import { usePathname, navigate, parseCompanyRoute, companyPaths } from '../../lib/adminNav';
+import { bulkBtnStyle } from './product/productShared';
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
@@ -101,18 +102,18 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
     { all: 0, client: 0, vendor: 0, customer: {} },
   );
 
-  // ── 삭제(휴지통 이동) · 휴지통 상태 ──
+  // ── 선택 기반 일괄 관리 + 삭제(휴지통 이동) · 휴지통 상태 ──
   const [showTrash, setShowTrash] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<Company | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [deleteReason, setDeleteReason] = useState("");
   const [deleting, setDeleting] = useState(false);
-  // 삭제 확인창용 연결 데이터 카운트 (delete-check 재사용)
-  const [deleteCheck, setDeleteCheck] = useState<{ loading: boolean; reasons: { label: string; count: number }[] }>({ loading: false, reasons: [] });
 
   const REASON_PRESETS = ["중복 등록", "잘못 등록", "폐업", "거래 종료", "기타"];
 
   const fetchCompanies = useCallback(async () => {
     setCompaniesLoading(true);
+    setSelectedIds(new Set()); // 페이지/필터/검색/작업 후 재조회 시 선택 초기화
     try {
       const params = new URLSearchParams();
       params.set("page", String(companyPage));
@@ -151,43 +152,45 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
     setCompanyPage(1);
   }, [companySearch]);
 
-  // 삭제 모달 열기 — 연결 데이터 카운트를 미리 조회해 사용자에게 표시한다.
-  const openDeleteModal = useCallback(async (c: Company) => {
-    setDeleteTarget(c);
-    setDeleteReason("");
-    setDeleteCheck({ loading: true, reasons: [] });
-    try {
-      const res = await fetch(api(`/api/admin/companies/${c.id}/delete-check`), { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json().catch(() => ({}));
-      setDeleteCheck({ loading: false, reasons: Array.isArray(data?.reasons) ? data.reasons : [] });
-    } catch {
-      setDeleteCheck({ loading: false, reasons: [] });
-    }
-  }, [token]);
+  // ── 선택 파생값 & 일괄 핸들러 (선택은 현재 페이지 기준) ──────────────────────
+  const selectedCompanies = companies.filter(c => selectedIds.has(c.id));
+  const selectedCount = selectedCompanies.length;
+  const allSelected = companies.length > 0 && companies.every(c => selectedIds.has(c.id));
+  const canEditSelected = selectedCount === 1;
+  const canDeleteBulk = selectedCount >= 1 && isAdmin;
+  const editBlockedReason = selectedCount >= 2 ? "수정은 하나의 거래처만 선택 가능합니다." : undefined;
+  const toggleSelectCompany = (id: number) => setSelectedIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleSelectAll = () => setSelectedIds(allSelected ? new Set() : new Set(companies.map(c => c.id)));
+  const handleEditSelected = () => { if (canEditSelected) navigate(companyPaths.edit(selectedCompanies[0].id)); };
 
-  const handleDeleteCompany = useCallback(async () => {
-    if (!deleteTarget || deleting) return;
+  // 선택삭제(휴지통 이동) 일괄 처리 — 관리자만, 사유 필수(≥2자). 서버에서도 재검증.
+  const handleBulkDelete = async () => {
     const reason = deleteReason.trim();
     if (reason.length < 2) { onToast("삭제 사유를 2자 이상 입력해 주세요."); return; }
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
     setDeleting(true);
     try {
-      const res = await fetch(api(`/api/admin/companies/${deleteTarget.id}`), {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ reason }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) { onToast(data.error ?? "거래처 삭제에 실패했습니다."); return; }
-      onToast("거래처를 휴지통으로 이동했습니다.");
-      setDeleteTarget(null);
+      const results = await Promise.all(ids.map(async id => {
+        try {
+          const res = await fetch(api(`/api/admin/companies/${id}`), {
+            method: "DELETE", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ reason }),
+          });
+          const d = await res.json().catch(() => null);
+          return { id, ok: res.ok, error: d?.error as string | undefined };
+        } catch { return { id, ok: false, error: "네트워크 오류" }; }
+      }));
+      const ok = results.filter(r => r.ok).length;
+      setBulkDeleteOpen(false);
       setDeleteReason("");
+      onToast(`${ok}건을 휴지통으로 이동했습니다.${ok < ids.length ? ` (${ids.length - ok}건 실패)` : ""}`);
       fetchCompanies();
-    } catch {
-      onToast("거래처 삭제 중 오류가 발생했습니다.");
-    } finally {
-      setDeleting(false);
-    }
-  }, [deleteTarget, deleting, deleteReason, token, onToast]); // eslint-disable-line react-hooks/exhaustive-deps
+    } finally { setDeleting(false); }
+  };
 
   /** 상세 모달 열기 — 목록이 아닌 화면(등록/수정)에서 호출되면 목록으로 이동 후 연다. */
   const openCompanyDetail = useCallback((id: number) => {
@@ -249,33 +252,22 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
   // ── 거래처 관리 (목록) ──
   return (
     <>
-      {/* ── 거래처 삭제(휴지통 이동) 확인 모달 (관리자 전용) ── */}
-      {deleteTarget && (
+      {/* ── 거래처 선택삭제(휴지통 이동) 확인 모달 (관리자 전용) ── */}
+      {bulkDeleteOpen && (
         <div style={{ position: "fixed", inset: 0, zIndex: 9100, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center" }}
-          onClick={() => { if (!deleting) { setDeleteTarget(null); setDeleteReason(""); } }}>
+          onClick={() => { if (!deleting) { setBulkDeleteOpen(false); setDeleteReason(""); } }}>
           <div onClick={e => e.stopPropagation()} data-testid="modal-company-delete"
             style={{ background: "#fff", borderRadius: 14, padding: "26px 30px", width: 480, maxWidth: "92vw", boxShadow: "0 20px 60px rgba(0,0,0,0.25)", borderTop: "4px solid #dc2626", maxHeight: "88vh", overflowY: "auto" }}>
-            <h2 style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 800, color: "#111827" }}>거래처를 삭제하시겠습니까?</h2>
-            <p style={{ margin: "0 0 14px", fontSize: 13, color: "#6b7280", lineHeight: 1.6 }}>
+            <h2 style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 800, color: "#111827" }}>선택한 {selectedCount}건의 거래처를 삭제하시겠습니까?</h2>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "#6b7280", lineHeight: 1.6 }}>
               삭제된 거래처는 <strong style={{ color: "#2563eb" }}>휴지통에서 복원할 수 있습니다.</strong> 연결된 데이터(담당자·견적·프로젝트 등)는 그대로 유지됩니다.
             </p>
 
-            {/* 거래처명 + 연결 데이터 요약 */}
-            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "12px 14px", marginBottom: 16, fontSize: 13 }}>
-              <div style={{ color: "#111827", fontWeight: 700, marginBottom: 8 }}>{deleteTarget.name}</div>
-              {deleteCheck.loading ? (
-                <div style={{ color: "#9ca3af", fontSize: 12 }}>연결 데이터 확인 중…</div>
-              ) : deleteCheck.reasons.length === 0 ? (
-                <div style={{ color: "#6b7280", fontSize: 12 }}>연결된 업무 데이터가 없습니다.</div>
-              ) : (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {deleteCheck.reasons.map(r => (
-                    <span key={r.label} style={{ fontSize: 12, fontWeight: 600, color: "#374151", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 6, padding: "2px 8px" }}>
-                      {r.label} <strong style={{ color: "#111827" }}>{r.count.toLocaleString()}</strong>건
-                    </span>
-                  ))}
-                </div>
-              )}
+            {/* 삭제 대상 요약 */}
+            <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", marginBottom: 16, fontSize: 13 }}>
+              <span style={{ color: "#111827", fontWeight: 700 }}>
+                {selectedCompanies.slice(0, 5).map(c => c.name).join(", ")}{selectedCount > 5 ? ` 외 ${selectedCount - 5}건` : ""}
+              </span>
             </div>
 
             {/* 삭제 사유 (필수, 2자 이상) */}
@@ -306,11 +298,11 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
             <p style={{ margin: "4px 0 18px", fontSize: 11, color: "#9ca3af" }}>최소 2자 이상 입력해 주세요.</p>
 
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-              <button onClick={() => { setDeleteTarget(null); setDeleteReason(""); }} disabled={deleting} data-testid="btn-company-delete-cancel"
+              <button onClick={() => { setBulkDeleteOpen(false); setDeleteReason(""); }} disabled={deleting} data-testid="btn-company-delete-cancel"
                 style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: deleting ? "not-allowed" : "pointer", color: "#374151" }}>
                 취소
               </button>
-              <button onClick={handleDeleteCompany} disabled={deleteReason.trim().length < 2 || deleting} data-testid="btn-company-delete-confirm"
+              <button onClick={handleBulkDelete} disabled={deleteReason.trim().length < 2 || deleting} data-testid="btn-company-delete-confirm"
                 style={{ padding: "9px 20px", borderRadius: 8, border: "none", color: "#fff", fontSize: 13, fontWeight: 700,
                   background: deleteReason.trim().length >= 2 && !deleting ? "#dc2626" : "#fca5a5",
                   cursor: deleteReason.trim().length >= 2 && !deleting ? "pointer" : "not-allowed" }}>
@@ -454,6 +446,29 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
               </div>
               {/* ── 목록 ── */}
               <div style={{ marginTop: 14 }}>
+                {/* 선택 기반 공통 작업 바 */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10, padding: "9px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#374151", cursor: "pointer", fontWeight: 600 }}>
+                    <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
+                      aria-label="현재 페이지 전체 선택" data-testid="company-select-all"
+                      style={{ width: 15, height: 15, cursor: "pointer" }} />
+                    현재 페이지 전체선택
+                  </label>
+                  <span data-testid="company-selected-count" style={{ fontSize: 13, fontWeight: 700, color: selectedCount > 0 ? "#2563eb" : "#9ca3af" }}>
+                    선택 {selectedCount}건
+                  </span>
+                  <div style={{ flex: 1 }} />
+                  <button onClick={handleEditSelected} disabled={!canEditSelected}
+                    title={editBlockedReason}
+                    data-testid="company-bulk-edit" style={bulkBtnStyle(canEditSelected, "#2563eb", "#eff6ff", "#bfdbfe", { padding: "6px 14px" })}>
+                    수정
+                  </button>
+                  <button onClick={() => { setDeleteReason(""); setBulkDeleteOpen(true); }} disabled={!canDeleteBulk}
+                    title={!isAdmin ? "거래처 삭제는 관리자만 가능합니다." : undefined}
+                    data-testid="company-bulk-delete" style={bulkBtnStyle(canDeleteBulk, "#dc2626", "#fef2f2", "#fecaca", { padding: "6px 14px" })}>
+                    선택삭제
+                  </button>
+                </div>
                 {companiesLoading ? (
                   <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
                 ) : companies.length === 0 ? (
@@ -463,13 +478,26 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                     <div style={{ overflowX: "auto" }}>
                       <table style={{ width: "100%", borderCollapse: "collapse" }}>
                         <thead>
-                          <tr>{["ID", "거래처명", "유형", "업종", "담당자", "프로젝트", "총 결제", "등록일", "관리"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
+                          <tr>
+                            <th style={{ ...tableTh, width: 34, textAlign: "center" }}>
+                              <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
+                                aria-label="현재 페이지 전체 선택" style={{ width: 15, height: 15, cursor: "pointer" }} />
+                            </th>
+                            {["ID", "거래처명", "유형", "업종", "담당자", "프로젝트", "총 결제", "등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}
+                          </tr>
                         </thead>
                         <tbody>
                           {companies.map(c => (
-                            <tr key={c.id} onClick={() => setCompanyModal(c.id)} style={{ cursor: "pointer" }}
+                            <tr key={c.id} onClick={() => setCompanyModal(c.id)}
+                              style={{ cursor: "pointer", background: selectedIds.has(c.id) ? "#eff6ff" : undefined }}
                               onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
-                              onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                              onMouseLeave={e => (e.currentTarget.style.background = selectedIds.has(c.id) ? "#eff6ff" : "transparent")}>
+                              {/* 선택 체크박스 — 클릭은 선택만(행 상세 진입과 분리) */}
+                              <td style={{ ...tableTd, textAlign: "center" }} onClick={e => e.stopPropagation()}>
+                                <input type="checkbox" checked={selectedIds.has(c.id)} onChange={() => toggleSelectCompany(c.id)}
+                                  aria-label={`거래처 선택: ${c.name}`} data-testid={`company-select-${c.id}`}
+                                  style={{ width: 15, height: 15, cursor: "pointer" }} />
+                              </td>
                               <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
                               {/* 거래처명 — 회사명만 표시(유형 배지는 별도 컬럼으로 분리). 가장 강한 존재감. */}
                               <td style={{ ...tableTd, minWidth: 200 }}>
@@ -499,27 +527,6 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                               <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap" }}>{Number(c.totalPayment).toLocaleString()}원</td>
                               {/* 등록일 = 홈택스 원본 등록일(registeredAt). 플랫폼 생성일(createdAt)이 아님. */}
                               <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{c.registeredAt ? new Date(c.registeredAt).toLocaleDateString("ko-KR") : "-"}</td>
-                              {/* 관리: 삭제(휴지통 이동). 관리자만 활성, 그 외 비활성 + 안내 툴팁. 서버에서도 재검증. */}
-                              <td style={{ ...tableTd, textAlign: "center" }} onClick={e => e.stopPropagation()}>
-                                <button
-                                  type="button"
-                                  onClick={() => { if (isAdmin) openDeleteModal(c); else onToast("거래처 삭제는 관리자만 가능합니다."); }}
-                                  disabled={!isAdmin}
-                                  title={isAdmin ? "거래처 삭제(휴지통 이동)" : "거래처 삭제는 관리자만 가능합니다."}
-                                  aria-disabled={!isAdmin}
-                                  data-testid={`btn-delete-company-${c.id}`}
-                                  aria-label={`${c.name} 삭제`}
-                                  style={{
-                                    fontSize: 11, height: 24, padding: "0 10px", borderRadius: 6, fontWeight: 600,
-                                    cursor: isAdmin ? "pointer" : "not-allowed",
-                                    background: isAdmin ? "#fef2f2" : "#f3f4f6",
-                                    color: isAdmin ? "#dc2626" : "#9ca3af",
-                                    border: `1px solid ${isAdmin ? "#fca5a5" : "#e5e7eb"}`,
-                                  }}
-                                >
-                                  삭제
-                                </button>
-                              </td>
                             </tr>
                           ))}
                         </tbody>

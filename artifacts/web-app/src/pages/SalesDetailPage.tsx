@@ -17,6 +17,7 @@ import { C, TYPO, SP, BD, dsInputStd } from '../lib/ds';
 import { buildQuotePdfData, type QuoteDetail } from '../lib/quotePdf';
 import { renderQuoteTitle, formatDocNumber } from '../lib/quoteTitle';
 import QuotePdfPreviewModal from '../components/admin/QuotePdfPreviewModal';
+import { BackToListButton } from '../components/admin/BackToListButton';
 import TransactionStatementModal from '../components/admin/TransactionStatementModal';
 import QuoteItemsView, { SaleTotalsRows } from '../components/admin/QuoteItemsView';
 import { QuoteItemsEditor, buildQuoteItemsBody, calcTotals, type QuoteItemForm } from '../components/admin/QuoteEditorWorkspace';
@@ -256,7 +257,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   if (!project) {
     return (
       <div>
-        <GhostBtn onClick={onBack} data-testid="btn-sales-back" aria-label="목록으로 돌아가기">← 목록으로</GhostBtn>
+        <BackToListButton onClick={onBack} testId="btn-sales-back" />
         <Card style={{ marginTop: 16, padding: 40, textAlign: 'center' }}>
           <p style={{ margin: 0, fontSize: 14, color: C.textSecondary }}>판매건을 찾을 수 없습니다.</p>
         </Card>
@@ -282,9 +283,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
 
       {/* ── 상단 헤더 ─────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <GhostBtn onClick={onBack} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-sales-back" aria-label="목록으로 돌아가기">
-          ← 목록으로
-        </GhostBtn>
+        <BackToListButton onClick={onBack} testId="btn-sales-back" />
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, letterSpacing: '0.04em' }}>판매 상세</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -322,20 +321,23 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
           }}>
           {stmtLoading ? '…' : '📋 거래명세서 보기'}
         </button>
-        <button
-          type="button"
-          onClick={handleCancelSale}
-          disabled={deleting}
-          title="판매전환을 취소하고 원본 견적을 견적관리로 되돌립니다."
-          data-testid="btn-sales-cancel"
-          aria-label="판매취소"
-          style={{
-            fontSize: 12, padding: '6px 12px', borderRadius: 8,
-            border: '1px solid #fcd34d', background: '#fffbeb', color: '#b45309',
-            cursor: deleting ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: deleting ? 0.5 : 1,
-          }}>
-          {deleting ? '…' : '판매취소'}
-        </button>
+        {/* 판매취소 = 배정 전(approved/paid)만 가능. 배정완료·진행중·완료·취소 단계에는 노출하지 않음(서버에서도 차단). */}
+        {(project.status === 'approved' || project.status === 'paid') && (
+          <button
+            type="button"
+            onClick={handleCancelSale}
+            disabled={deleting}
+            title="판매전환을 취소하고 원본 견적을 견적관리로 되돌립니다."
+            data-testid="btn-sales-cancel"
+            aria-label="판매취소"
+            style={{
+              fontSize: 12, padding: '6px 12px', borderRadius: 8,
+              border: '1px solid #fcd34d', background: '#fffbeb', color: '#b45309',
+              cursor: deleting ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: deleting ? 0.5 : 1,
+            }}>
+            {deleting ? '…' : '판매취소'}
+          </button>
+        )}
       </div>
 
       {!quote && (

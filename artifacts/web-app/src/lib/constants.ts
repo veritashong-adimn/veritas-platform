@@ -453,6 +453,10 @@ export type Product = {
   quantityUnit: string | null;
   usagePeriod: string | null;
   interpretationDirection: string | null;
+  deletedAt?: string | null;
+  deletedBy?: number | null;
+  deletedByName?: string | null;
+  deletedByEmail?: string | null;
 };
 export type BoardPost = {
   id: number; category: string; title: string; content?: string;

@@ -25,6 +25,7 @@ export const productsTable = pgTable("products", {
   canonicalKey: text("canonical_key"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   deletedAt: timestamp("deleted_at"),
+  deletedBy: integer("deleted_by"),
 });
 
 export type Product = typeof productsTable.$inferSelect;

@@ -7,6 +7,7 @@ import { QuoteTrashTab } from './QuoteTrashTab';
 import { buildQuotePdfData, type QuoteDetail, type QuoteDetailItem } from '../../lib/quotePdf';
 import { convertToFormItem } from '../../lib/quoteItemForm';
 import { renderQuoteTitle, formatDocNumber } from '../../lib/quoteTitle';
+import { bulkBtnStyle } from './product/productShared';
 
 // ─── 타입 ──────────────────────────────────────────────────────────────────────
 interface QuoteRow {
@@ -34,7 +35,7 @@ interface QuoteRow {
 const QUOTE_STATUS_LABEL: Record<string, string> = {
   pending:  '대기',
   sent:     '발송',
-  approved: '승인',
+  approved: '판매',
   rejected: '거절',
 };
 const QUOTE_STATUS_COLOR: Record<string, { bg: string; color: string }> = {
@@ -75,7 +76,6 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
   const [dateTo, setDateTo]             = useState('');
   const [showEditor, setShowEditor]     = useState(false);
   const [showTrash, setShowTrash]       = useState(false);
-  const [updatingId, setUpdatingId]     = useState<number | null>(null);
   const [pdfData,    setPdfData]        = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
   const [pdfLoading, setPdfLoading]     = useState<number | null>(null);
   // 편집 모드
@@ -87,13 +87,17 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     companyId: number | null; contactId: number | null; divisionId: number | null;
     status: string;
   } | null>(null);
-  // 삭제(Soft Delete)
-  const [deleteTarget, setDeleteTarget] = useState<QuoteRow | null>(null);
-  const [deleteReason, setDeleteReason] = useState('');
-  const [deleting, setDeleting]         = useState(false);
+  // 선택 기반 일괄 관리
+  const [selectedIds, setSelectedIds]   = useState<Set<number>>(new Set());
+  const [bulkConvertOpen, setBulkConvertOpen]   = useState(false);
+  const [bulkConverting, setBulkConverting]     = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen]     = useState(false);
+  const [bulkDeleteReason, setBulkDeleteReason] = useState('');
+  const [bulkDeleting, setBulkDeleting]         = useState(false);
 
   const fetchQuotes = useCallback(async () => {
     setLoading(true);
+    setSelectedIds(new Set()); // 재조회(필터/작업 후) 시 선택 초기화
     try {
       const params = new URLSearchParams({ limit: '200' });
       if (statusFilter !== 'all') params.set('status', statusFilter);
@@ -109,53 +113,6 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
 
   useEffect(() => { fetchQuotes(); }, [fetchQuotes]);
   useEffect(() => { if (refreshTick) fetchQuotes(); }, [refreshTick]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // 판매전환 — 기존 승인 API(PATCH .../status {approved}) 재사용, 프로젝트 자동 생성
-  // 확인창 → 요청 중 버튼 disabled(updatingId) 로 중복 클릭 방지
-  const handleConvertToSale = async (quoteId: number) => {
-    if (updatingId != null) return;
-    if (!window.confirm('이 견적을 판매건으로 전환하시겠습니까?\n\n판매전환 후에는 판매관리에서 배정, 진행, 납품 등의 업무를 계속 관리할 수 있습니다.')) return;
-    setUpdatingId(quoteId);
-    try {
-      const res = await fetch(api(`/api/admin/quotes/${quoteId}/status`), {
-        method: 'PATCH',
-        headers: { ...authH, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'approved' }),
-      });
-      const data = await res.json();
-      if (!res.ok) { onToast(`판매전환 실패: ${data.error ?? res.status}`); return; }
-      onToast('판매건으로 전환되었습니다.');
-      fetchQuotes();
-    } catch {
-      onToast('판매전환 중 오류가 발생했습니다. 다시 시도해 주세요.');
-    } finally { setUpdatingId(null); }
-  };
-
-  // 견적 삭제(Soft Delete) — 삭제 사유 필수. 판매전환 완료 견적은 서버에서도 차단됨.
-  const handleDeleteQuote = async () => {
-    if (!deleteTarget || deleting) return;
-    const reason = deleteReason.trim();
-    if (reason.length < 2) { onToast('삭제 사유를 2자 이상 입력해 주세요.'); return; }
-    setDeleting(true);
-    try {
-      const res = await fetch(api(`/api/admin/quotes/${deleteTarget.id}`), {
-        method: 'DELETE',
-        headers: { ...authH, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason }),
-      });
-      const data = await res.json().catch(() => ({}));
-      // 서버 오류 메시지를 그대로 노출한다(내부 처리 방식 '휴지통 이동 실패' 등은 표시하지 않음 — §6)
-      if (!res.ok) { onToast(data.error ?? '견적서 삭제에 실패했습니다.'); return; }
-      onToast('견적서를 삭제했습니다.');
-      setDeleteTarget(null);
-      setDeleteReason('');
-      fetchQuotes();
-    } catch {
-      onToast('견적 삭제 중 오류가 발생했습니다. 다시 시도해 주세요.');
-    } finally { setDeleting(false); }
-  };
-
-  const DELETE_BLOCKED_MSG = '판매전환된 견적은 삭제할 수 없습니다. 먼저 판매취소를 진행해 주세요.';
 
   // PDF 미리보기 핸들러 — 단건 견적 상세 조회 후 모달 열기
   const handlePdfPreview = async (quoteId: number, title: string) => {
@@ -244,6 +201,93 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
   const fmt = (v: string | null) => v ? Number(v).toLocaleString() : '—';
   const hasAnyFilter = !!(search || dateFrom || dateTo || statusFilter !== 'all' || typeFilter !== 'all');
 
+  // ── 선택 기반 일괄 관리 ─────────────────────────────────────────────────────
+  // 검색(클라이언트) 변경 시 선택 초기화 (필터/재조회는 fetchQuotes 에서 초기화)
+  useEffect(() => { setSelectedIds(new Set()); }, [search]);
+
+  const selectedQuotes = filtered.filter(q => selectedIds.has(q.id)); // 현재 표시된 것만
+  const selectedCount = selectedQuotes.length;
+  // 판매전환 가능 = 선택 1건+ 이며 선택 전부가 미전환(대기). 이미 판매전환(approved)된 건이 섞이면 비활성.
+  // (전환 여부 판단은 status 기준 — projectId는 견적 저장 시 거래처 연결용으로 미리 붙을 수 있어 사용하지 않음)
+  const convertBlockedReason = selectedCount === 0
+    ? undefined
+    : selectedQuotes.some(q => q.status === 'approved')
+      ? '이미 판매전환된 견적이 포함되어 있습니다. 판매전환은 대기 상태의 견적만 가능합니다.'
+      : undefined;
+  const canConvert = selectedCount > 0 && !convertBlockedReason;
+  const allSelected = filtered.length > 0 && filtered.every(q => selectedIds.has(q.id));
+  const toggleSelect = (id: number) => setSelectedIds(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleSelectAll = () => setSelectedIds(allSelected ? new Set() : new Set(filtered.map(q => q.id)));
+
+  const editRow = (q: QuoteRow) => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status);
+  const handleDetailSelected = () => { if (selectedCount === 1) editRow(selectedQuotes[0]); };
+
+  // 일괄 판매전환 — 이미 전환된(approved) 건 섞이면 전체 차단
+  const openBulkConvert = () => {
+    if (selectedCount === 0) return;
+    if (selectedQuotes.some(q => q.status === 'approved')) { onToast('선택한 견적 중 이미 판매전환된 건이 포함되어 있습니다.'); return; }
+    setBulkConvertOpen(true);
+  };
+  const handleBulkConvert = async () => {
+    const targets = selectedQuotes.filter(q => q.status !== 'approved');
+    setBulkConverting(true);
+    try {
+      const results = await Promise.all(targets.map(async q => {
+        try {
+          const res = await fetch(api(`/api/admin/quotes/${q.id}/status`), {
+            method: 'PATCH', headers: { ...authH, 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'approved' }),
+          });
+          const d = await res.json().catch(() => null);
+          return { q, ok: res.ok, error: d?.error as string | undefined };
+        } catch { return { q, ok: false, error: '네트워크 오류' }; }
+      }));
+      const ok = results.filter(r => r.ok).length;
+      const fails = results.filter(r => !r.ok);
+      setBulkConvertOpen(false);
+      let msg = `${ok}건 판매전환되었습니다.`;
+      if (fails.length) msg += ` ${fails.length}건 실패 — ` + fails.map(f => `${f.q.quoteNumber ?? f.q.id}: ${f.error ?? '실패'}`).join(' / ');
+      onToast(msg);
+      fetchQuotes();
+    } finally { setBulkConverting(false); }
+  };
+
+  // 일괄 선택삭제 — 판매전환 완료(approved)는 삭제 불가, 섞이면 차단. 삭제사유 필수(≥2자).
+  const openBulkDelete = () => {
+    if (selectedCount === 0) return;
+    if (selectedQuotes.some(q => q.status === 'approved')) { onToast('선택한 견적 중 삭제할 수 없는 상태(판매전환 완료)가 포함되어 있습니다. 먼저 판매취소가 필요합니다.'); return; }
+    setBulkDeleteReason('');
+    setBulkDeleteOpen(true);
+  };
+  const handleBulkDelete = async () => {
+    const reason = bulkDeleteReason.trim();
+    if (reason.length < 2) { onToast('삭제 사유를 2자 이상 입력해 주세요.'); return; }
+    const targets = selectedQuotes.filter(q => q.status !== 'approved');
+    setBulkDeleting(true);
+    try {
+      const results = await Promise.all(targets.map(async q => {
+        try {
+          const res = await fetch(api(`/api/admin/quotes/${q.id}`), {
+            method: 'DELETE', headers: { ...authH, 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }),
+          });
+          const d = await res.json().catch(() => null);
+          return { q, ok: res.ok, error: d?.error as string | undefined };
+        } catch { return { q, ok: false, error: '네트워크 오류' }; }
+      }));
+      const ok = results.filter(r => r.ok).length;
+      const fails = results.filter(r => !r.ok);
+      setBulkDeleteOpen(false);
+      setBulkDeleteReason('');
+      let msg = `${ok}건의 견적을 삭제했습니다.`;
+      if (fails.length) msg += ` ${fails.length}건 실패 — ` + fails.map(f => `${f.q.quoteNumber ?? f.q.id}: ${f.error ?? '실패'}`).join(' / ');
+      onToast(msg);
+      fetchQuotes();
+    } finally { setBulkDeleting(false); }
+  };
+
   // ── 견적서 작성/편집 Workspace ──────────────────────────────────────────────
   if (showEditor) {
     // full-bleed sticky 헤더는 QuoteEditorWorkspace 내부에서 dsStickyPageHeader()로
@@ -292,7 +336,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
   const kpiItems = [
     { label: '전체', value: 'all',      count: quotes.length,                                       color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe' },
     { label: '대기', value: 'pending',  count: quotes.filter(q => q.status === 'pending').length,   color: '#6b7280', bg: '#f9fafb', border: '#e5e7eb' },
-    { label: '승인', value: 'approved', count: quotes.filter(q => q.status === 'approved').length,  color: '#15803d', bg: '#dcfce7', border: '#86efac' },
+    { label: '판매', value: 'approved', count: quotes.filter(q => q.status === 'approved').length,  color: '#15803d', bg: '#dcfce7', border: '#86efac' },
   ];
 
   return (
@@ -335,7 +379,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
               options={[
                 { value: 'all',      label: '전체 상태' },
                 { value: 'pending',  label: '대기' },
-                { value: 'approved', label: '승인' },
+                { value: 'approved', label: '판매' },
               ]}
             />
           </div>
@@ -423,6 +467,34 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
           <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 500, color: '#9ca3af' }}>({filtered.length})</span>
         </div>
 
+        {/* 선택 기반 공통 작업 바 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10, padding: '9px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: '#374151', cursor: 'pointer', fontWeight: 600 }}>
+            <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
+              aria-label="현재 페이지 전체 선택" data-testid="quote-bulk-select-all"
+              style={{ width: 15, height: 15, cursor: 'pointer' }} />
+            현재 페이지 전체선택
+          </label>
+          <span data-testid="quote-selected-count" style={{ fontSize: 12.5, fontWeight: 700, color: selectedCount > 0 ? '#2563eb' : '#9ca3af' }}>
+            선택 {selectedCount}건
+          </span>
+          <div style={{ flex: 1 }} />
+          <button onClick={handleDetailSelected} disabled={selectedCount !== 1}
+            title={selectedCount >= 2 ? '상세보기는 하나의 견적만 선택할 수 있습니다.' : undefined}
+            data-testid="quote-bulk-detail" style={bulkBtnStyle(selectedCount === 1, '#2563eb', '#eff6ff', '#bfdbfe', { padding: '6px 14px' })}>
+            상세보기
+          </button>
+          <button onClick={openBulkConvert} disabled={!canConvert}
+            title={convertBlockedReason}
+            data-testid="quote-bulk-convert" style={bulkBtnStyle(canConvert, '#15803d', '#f0fdf4', '#86efac', { padding: '6px 14px' })}>
+            판매전환
+          </button>
+          <button onClick={openBulkDelete} disabled={selectedCount < 1}
+            data-testid="quote-bulk-delete" style={bulkBtnStyle(selectedCount >= 1, '#dc2626', '#fef2f2', '#fecaca', { padding: '6px 14px' })}>
+            선택삭제
+          </button>
+        </div>
+
         {loading ? (
           <div style={{ padding: '32px 0', textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>조회 중…</div>
         ) : filtered.length === 0 ? (
@@ -434,7 +506,12 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e5e7eb' }}>
-                  {['견적번호', '발행일', '견적서명', '고객사', '고객명', '금액', '견적유형', '담당PM', '상태', '견적서', '상태변경'].map(h => (
+                  <th style={{ padding: '6px 10px', textAlign: 'center', width: 36 }}>
+                    <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
+                      aria-label="현재 페이지 전체 선택" data-testid="quote-select-all"
+                      style={{ width: 15, height: 15, cursor: 'pointer' }} />
+                  </th>
+                  {['견적번호', '발행일', '견적서명', '고객사', '고객명', '금액', '견적유형', '담당PM', '상태', '견적서'].map(h => (
                     <th key={h} style={{ padding: '6px 10px', textAlign: 'center', verticalAlign: 'middle', fontSize: 11, fontWeight: 700, color: '#6b7280', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -442,22 +519,22 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
               <tbody>
                 {filtered.map(q => {
                   const sColor = QUOTE_STATUS_COLOR[q.status] ?? { bg: '#f3f4f6', color: '#6b7280' };
-                  const isUpdating = updatingId === q.id;
-                  // 판매전환 완료 판단 = quote.status === "approved" 기준.
-                  // (projectId는 견적 저장 시점에 이미 연결되므로 전환 여부 판단에 사용하지 않는다)
-                  // 상태변경 액션은 "판매전환" 하나만 유지한다(발송·거절 제거).
-                  // 판매전환 이전의 모든 견적은 '대기'로 관리하며, 미체결 견적은 판매전환 안 된 상태로 판단한다.
-                  const isConverted = q.status === 'approved';
-                  // 삭제 가능 = 판매전환 완료가 아닌 견적(미전환 또는 판매취소 후 복귀).
-                  // 판매전환 완료(활성 Project 연결) 견적은 삭제 불가 — 서버에서도 동일 검증.
-                  const canDelete = !isConverted;
+                  const selected = selectedIds.has(q.id);
 
                   return (
-                    <tr key={q.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <tr key={q.id}
+                      onClick={() => editRow(q)}
+                      style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: selected ? '#eff6ff' : undefined }}>
+                      {/* 선택 체크박스 — 클릭은 선택만(행 상세 진입과 분리) */}
+                      <td onClick={e => e.stopPropagation()} style={{ padding: '6px 10px', textAlign: 'center' }}>
+                        <input type="checkbox" checked={selected} onChange={() => toggleSelect(q.id)}
+                          aria-label={`견적 선택: ${q.quoteNumber ?? q.id}`} data-testid={`quote-select-${q.id}`}
+                          style={{ width: 15, height: 15, cursor: 'pointer' }} />
+                      </td>
                       {/* 견적번호 — 표시 형식 Q{YYMMDD}-{순번}. 클릭 시 편집(식별자 역할이라 과한 강조 제거) */}
                       <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         <button
-                          onClick={() => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status)}
+                          onClick={(e) => { e.stopPropagation(); handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status); }}
                           disabled={editLoading === q.id}
                           style={{
                             fontFamily: 'monospace', fontSize: 11, color: '#475569', fontWeight: 400,
@@ -479,7 +556,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                       {/* 견적서명 — 지정 범위(min 220 ~ max 420, 약 24vw ≈ 테이블 30~34% 이내)에서만 반응형, 좌측 정렬, 클릭 시 편집 */}
                       <td style={{ padding: '6px 10px', textAlign: 'left' }}>
                         <button
-                          onClick={() => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status)}
+                          onClick={(e) => { e.stopPropagation(); handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status); }}
                           disabled={editLoading === q.id}
                           style={{
                             fontSize: 12, fontWeight: 600, color: '#111827',
@@ -529,7 +606,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                       {/* PDF 미리보기 — 가운데 정렬 */}
                       <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         <button
-                          onClick={() => handlePdfPreview(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`)}
+                          onClick={(e) => { e.stopPropagation(); handlePdfPreview(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`); }}
                           disabled={pdfLoading === q.id}
                           style={{
                             fontSize: 11, padding: '3px 9px', borderRadius: 5, cursor: 'pointer',
@@ -542,65 +619,6 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                         >
                           {pdfLoading === q.id ? '…' : '📄 견적서'}
                         </button>
-                      </td>
-                      {/* 상태변경 — 판매전환 상태 영역(고정폭) + 삭제 영역(고정폭). 행마다 위치·너비 동일 */}
-                      <td style={{ padding: '6px 10px', minWidth: 176, textAlign: 'center' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, whiteSpace: 'nowrap' }}>
-                          {/* ① 판매전환 상태 영역 — 전/완료 동일 고정 너비(96), 텍스트 가운데 정렬 */}
-                          {isConverted ? (
-                            // 판매전환 완료 — 진한 녹색 채움 + Bold + 체크. 전환 전보다 시각적 비중 강화(비활성이나 흐리지 않음)
-                            <span
-                              style={{
-                                width: 88, boxSizing: 'border-box',
-                                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                                fontSize: 11, height: 24, borderRadius: 6, fontWeight: 800,
-                                background: '#16a34a', color: '#ffffff', border: '1px solid #15803d',
-                              }}
-                              data-testid={`badge-quote-converted-${q.id}`}
-                              aria-label={`${q.quoteNumber ?? q.id} 판매전환 완료`}
-                            >
-                              ✓ 전환완료
-                            </span>
-                          ) : (
-                            // 판매전환 전 — 연한 녹색 배경 + 녹색 테두리/글자, 일반 굵기, 호버 강조(클릭 가능)
-                            <button
-                              onClick={() => handleConvertToSale(q.id)}
-                              disabled={isUpdating}
-                              style={{
-                                width: 88, boxSizing: 'border-box',
-                                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                                fontSize: 11, height: 24, borderRadius: 6, cursor: isUpdating ? 'default' : 'pointer',
-                                background: '#f0fdf4', color: '#15803d', border: '1px solid #86efac',
-                                fontWeight: 600, opacity: isUpdating ? 0.5 : 1, transition: 'background 0.12s, border-color 0.12s',
-                              }}
-                              onMouseEnter={e => { if (!isUpdating) { e.currentTarget.style.background = '#dcfce7'; e.currentTarget.style.borderColor = '#22c55e'; } }}
-                              onMouseLeave={e => { e.currentTarget.style.background = '#f0fdf4'; e.currentTarget.style.borderColor = '#86efac'; }}
-                              data-testid={`btn-quote-status-approved-${q.id}`}
-                              aria-label={`${q.quoteNumber ?? q.id} 판매전환`}
-                            >
-                              {isUpdating ? '…' : '판매전환'}
-                            </button>
-                          )}
-                          {/* ② 삭제 영역 — 고정 너비(56). 판매전환 완료 견적은 비활성 스타일 + 안내(서버에서도 차단), 너비·위치 동일 유지 */}
-                          <button
-                            onClick={() => canDelete ? setDeleteTarget(q) : onToast(DELETE_BLOCKED_MSG)}
-                            title={canDelete ? '견적 삭제' : DELETE_BLOCKED_MSG}
-                            aria-disabled={!canDelete}
-                            data-testid={`btn-delete-quote-${q.id}`}
-                            aria-label={`${q.quoteNumber ?? q.id} 삭제`}
-                            style={{
-                              width: 50, boxSizing: 'border-box',
-                              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                              fontSize: 11, height: 24, borderRadius: 6, fontWeight: 600,
-                              cursor: canDelete ? 'pointer' : 'not-allowed',
-                              background: canDelete ? '#fef2f2' : '#f3f4f6',
-                              color: canDelete ? '#dc2626' : '#9ca3af',
-                              border: `1px solid ${canDelete ? '#fca5a5' : '#e5e7eb'}`,
-                            }}
-                          >
-                            삭제
-                          </button>
-                        </div>
                       </td>
                     </tr>
                   );
@@ -622,74 +640,58 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       />
     )}
 
-    {/* 견적 삭제 확인 모달 (Soft Delete) */}
-    {deleteTarget && (
-      <div
-        style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        onClick={() => { if (!deleting) { setDeleteTarget(null); setDeleteReason(''); } }}
-      >
-        <div
-          onClick={e => e.stopPropagation()}
-          style={{ background: '#fff', borderRadius: 14, padding: '26px 30px', width: 460, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}
-          data-testid="modal-quote-delete"
-        >
-          <h2 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 800, color: '#dc2626' }}>견적서를 삭제하시겠습니까?</h2>
+    {/* 일괄 판매전환 확인 모달 */}
+    {bulkConvertOpen && (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ background: '#fff', borderRadius: 14, padding: '26px 30px', width: 440, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }} data-testid="modal-bulk-convert">
+          <h2 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 800, color: '#15803d' }}>견적 일괄 판매전환</h2>
+          <p style={{ margin: '0 0 8px', fontSize: 14, color: '#374151' }}>선택한 {selectedCount}건을 판매전환하시겠습니까?</p>
+          <p style={{ margin: '0 0 20px', fontSize: 12, color: '#6b7280', lineHeight: 1.6 }}>판매전환 후 판매관리에서 배정·진행·납품을 계속 관리할 수 있습니다.</p>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <button onClick={() => setBulkConvertOpen(false)} disabled={bulkConverting}
+              style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #d1d5db', background: '#f9fafb', fontSize: 13, fontWeight: 600, cursor: bulkConverting ? 'not-allowed' : 'pointer', color: '#374151' }}>취소</button>
+            <button onClick={handleBulkConvert} disabled={bulkConverting} data-testid="confirm-bulk-convert"
+              style={{ padding: '9px 20px', borderRadius: 8, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, background: bulkConverting ? '#9ca3af' : '#16a34a', cursor: bulkConverting ? 'not-allowed' : 'pointer' }}>
+              {bulkConverting ? '처리 중…' : '판매전환'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* 일괄 선택삭제 확인 모달 (Soft Delete, 사유 필수) */}
+    {bulkDeleteOpen && (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        onClick={() => { if (!bulkDeleting) { setBulkDeleteOpen(false); setBulkDeleteReason(''); } }}>
+        <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: '26px 30px', width: 460, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }} data-testid="modal-bulk-quote-delete">
+          <h2 style={{ margin: '0 0 8px', fontSize: 18, fontWeight: 800, color: '#dc2626' }}>선택한 {selectedCount}건의 견적을 삭제하시겠습니까?</h2>
           <p style={{ margin: '0 0 16px', fontSize: 13, color: '#374151', lineHeight: 1.6 }}>
             삭제된 견적서는 휴지통으로 이동되며, 기본 목록에서 제외됩니다.<br />
             필요한 경우 휴지통에서 복원할 수 있습니다.
           </p>
-
-          {/* 삭제 대상 정보 */}
-          <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 8, padding: '12px 14px', marginBottom: 16 }}>
-            {[
-              ['견적번호', deleteTarget.quoteNumber ?? `#${deleteTarget.id}`],
-              ['견적서명', deleteTarget.title ?? deleteTarget.projectTitle ?? '(미입력)'],
-              ['거래처',   deleteTarget.companyName ?? '—'],
-              ['고객명',   deleteTarget.contactName ?? '—'],
-              ['견적금액', `${fmt(deleteTarget.price)}원`],
-            ].map(([label, value]) => (
-              <div key={label} style={{ display: 'flex', gap: 10, fontSize: 12.5, padding: '3px 0' }}>
-                <span style={{ width: 64, flexShrink: 0, color: '#9ca3af', fontWeight: 600 }}>{label}</span>
-                <span style={{ color: '#111827', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</span>
-              </div>
-            ))}
-          </div>
-
-          {/* 삭제 사유 (필수) */}
           <label style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 6 }}>
             삭제 사유 <span style={{ color: '#dc2626' }}>*</span>
           </label>
           <textarea
-            value={deleteReason}
-            onChange={e => setDeleteReason(e.target.value)}
+            value={bulkDeleteReason}
+            onChange={e => setBulkDeleteReason(e.target.value)}
             placeholder="예: 중복 견적 생성 / 고객 요청으로 견적 철회 / 잘못 작성된 견적"
             rows={3}
-            data-testid="input-quote-delete-reason"
+            data-testid="input-bulk-quote-delete-reason"
             aria-label="삭제 사유 입력"
             style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 13, boxSizing: 'border-box', outline: 'none', resize: 'vertical', marginBottom: 4, fontFamily: 'inherit' }}
           />
-          <p style={{ margin: '0 0 18px', fontSize: 11, color: '#9ca3af' }}>최소 2자 이상 입력해 주세요. (공백만 입력 불가)</p>
-
+          <p style={{ margin: '0 0 18px', fontSize: 11, color: '#9ca3af' }}>선택 전체에 동일 적용됩니다. 최소 2자 이상 입력해 주세요. (공백만 입력 불가)</p>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-            <button
-              onClick={() => { setDeleteTarget(null); setDeleteReason(''); }}
-              disabled={deleting}
-              data-testid="btn-quote-delete-cancel"
-              style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #d1d5db', background: '#f9fafb', fontSize: 13, fontWeight: 600, cursor: deleting ? 'not-allowed' : 'pointer', color: '#374151' }}
-            >
-              취소
-            </button>
-            <button
-              onClick={handleDeleteQuote}
-              disabled={deleteReason.trim().length < 2 || deleting}
-              data-testid="btn-quote-delete-confirm"
+            <button onClick={() => { setBulkDeleteOpen(false); setBulkDeleteReason(''); }} disabled={bulkDeleting}
+              style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #d1d5db', background: '#f9fafb', fontSize: 13, fontWeight: 600, cursor: bulkDeleting ? 'not-allowed' : 'pointer', color: '#374151' }}>취소</button>
+            <button onClick={handleBulkDelete} disabled={bulkDeleteReason.trim().length < 2 || bulkDeleting} data-testid="confirm-bulk-quote-delete"
               style={{
                 padding: '9px 20px', borderRadius: 8, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700,
-                background: deleteReason.trim().length >= 2 && !deleting ? '#dc2626' : '#fca5a5',
-                cursor: deleteReason.trim().length >= 2 && !deleting ? 'pointer' : 'not-allowed',
-              }}
-            >
-              {deleting ? '삭제 중…' : '삭제'}
+                background: bulkDeleteReason.trim().length >= 2 && !bulkDeleting ? '#dc2626' : '#fca5a5',
+                cursor: bulkDeleteReason.trim().length >= 2 && !bulkDeleting ? 'pointer' : 'not-allowed',
+              }}>
+              {bulkDeleting ? '삭제 중…' : '삭제'}
             </button>
           </div>
         </div>
