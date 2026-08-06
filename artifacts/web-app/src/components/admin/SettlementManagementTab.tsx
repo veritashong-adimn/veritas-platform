@@ -3,6 +3,7 @@ import {
   api, AdminSettlement, ALL_SETTLEMENT_STATUSES, STATUS_LABEL,
 } from '../../lib/constants';
 import { Card, GhostBtn, FilterPill, StatusBadge } from '../ui';
+import { stickyBulkBarStyle } from './bulkListShared';
 
 function Section({ title, sub, children, action }: {
   title: string; sub?: string; children: React.ReactNode; action?: React.ReactNode;
@@ -291,46 +292,48 @@ export function SettlementManagementTab({ settlements, loading, token, onToast, 
         </div>
       }
     >
-      {/* ── 선택 액션 바 ── */}
-      {someSelected && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 10, padding: "10px 16px",
-          background: "linear-gradient(135deg, #eff6ff, #dbeafe)",
-          border: "1px solid #93c5fd", borderRadius: 10, marginBottom: 16,
-          flexWrap: "wrap",
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 200 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: "#1d4ed8" }}>
-              {selectedSettlements.size}건 선택됨
-            </span>
-            <span style={{ fontSize: 12, color: "#6b7280" }}>|</span>
-            <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>
-              합계 ₩{selectedTotal.toLocaleString()}
-            </span>
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button type="button" onClick={handlePaymentExport} style={{
-              padding: "7px 14px", fontSize: 12, borderRadius: 8, fontWeight: 600, cursor: "pointer",
-              background: "#fff", border: "1px solid #3b82f6", color: "#2563eb", whiteSpace: "nowrap",
-            }}>
-              ⬇ 지급 파일 다운로드
-            </button>
-            <button type="button" onClick={runBatchPay} disabled={batchPaying} style={{
-              padding: "7px 14px", fontSize: 12, borderRadius: 8, fontWeight: 700,
-              cursor: batchPaying ? "not-allowed" : "pointer",
-              background: batchPaying ? "#86efac" : "#059669", border: "none", color: "#fff", whiteSpace: "nowrap",
-            }}>
-              {batchPaying ? "처리 중..." : "선택 지급 완료"}
-            </button>
-            <button type="button" onClick={() => setSelectedSettlements(new Set())} style={{
-              padding: "7px 12px", fontSize: 12, borderRadius: 8, fontWeight: 600, cursor: "pointer",
-              background: "#f3f4f6", border: "1px solid #e5e7eb", color: "#6b7280", whiteSpace: "nowrap",
-            }}>
-              ✕ 선택 취소
-            </button>
-          </div>
+      {/* ── 선택 액션 바 (항상 표시·Sticky, 선택 0건이면 버튼 비활성) ── */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10, padding: "10px 16px",
+        background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, marginBottom: 16,
+        flexWrap: "wrap", ...stickyBulkBarStyle,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 200 }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: someSelected ? "#1d4ed8" : "#9ca3af" }}>
+            {selectedSettlements.size}건 선택됨
+          </span>
+          <span style={{ fontSize: 12, color: "#6b7280" }}>|</span>
+          <span style={{ fontSize: 13, fontWeight: 600, color: someSelected ? "#111827" : "#9ca3af" }}>
+            합계 ₩{selectedTotal.toLocaleString()}
+          </span>
         </div>
-      )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button type="button" onClick={handlePaymentExport} disabled={!someSelected} style={{
+            padding: "7px 14px", fontSize: 12, borderRadius: 8, fontWeight: 600,
+            cursor: someSelected ? "pointer" : "not-allowed",
+            background: "#fff", border: `1px solid ${someSelected ? "#3b82f6" : "#d1d5db"}`,
+            color: someSelected ? "#2563eb" : "#9ca3af", whiteSpace: "nowrap",
+          }}>
+            ⬇ 지급 파일 다운로드
+          </button>
+          <button type="button" onClick={runBatchPay} disabled={batchPaying || !someSelected} style={{
+            padding: "7px 14px", fontSize: 12, borderRadius: 8, fontWeight: 700,
+            cursor: (batchPaying || !someSelected) ? "not-allowed" : "pointer",
+            background: !someSelected ? "#d1d5db" : (batchPaying ? "#86efac" : "#059669"),
+            border: "none", color: "#fff", whiteSpace: "nowrap",
+          }}>
+            {batchPaying ? "처리 중..." : "선택 지급 완료"}
+          </button>
+          <button type="button" onClick={() => setSelectedSettlements(new Set())} disabled={!someSelected} style={{
+            padding: "7px 12px", fontSize: 12, borderRadius: 8, fontWeight: 600,
+            cursor: someSelected ? "pointer" : "not-allowed",
+            background: "#f3f4f6", border: "1px solid #e5e7eb",
+            color: someSelected ? "#6b7280" : "#b0b4bc", whiteSpace: "nowrap",
+          }}>
+            ✕ 선택 취소
+          </button>
+        </div>
+      </div>
 
       {/* ── 통계 카드 4종 ── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>

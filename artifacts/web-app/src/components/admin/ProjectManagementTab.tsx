@@ -5,6 +5,7 @@ import {
 } from '../../lib/constants';
 import { StatusBadge, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../ui';
 import { bulkBtnStyle } from './product/productShared';
+import { stickyBulkBarStyle } from './bulkListShared';
 import { DraggableModal } from './DraggableModal';
 import { renderQuoteTitle } from '../../lib/quoteTitle';
 
@@ -949,7 +950,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
           return (
             <>
               {/* 선택 기반 공통 작업 바 */}
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10, padding: "9px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10, padding: "9px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, ...stickyBulkBarStyle }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#374151", cursor: "pointer", fontWeight: 600 }}>
                   <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
                     aria-label="현재 페이지 전체 선택" style={{ width: 15, height: 15, cursor: "pointer" }} />

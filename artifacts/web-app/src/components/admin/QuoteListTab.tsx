@@ -8,6 +8,7 @@ import { buildQuotePdfData, type QuoteDetail, type QuoteDetailItem } from '../..
 import { convertToFormItem } from '../../lib/quoteItemForm';
 import { renderQuoteTitle, formatDocNumber } from '../../lib/quoteTitle';
 import { bulkBtnStyle } from './product/productShared';
+import { stickyBulkBarStyle } from './bulkListShared';
 
 // ─── 타입 ──────────────────────────────────────────────────────────────────────
 interface QuoteRow {
@@ -468,7 +469,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         </div>
 
         {/* 선택 기반 공통 작업 바 */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10, padding: '9px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10, padding: '9px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, ...stickyBulkBarStyle }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: '#374151', cursor: 'pointer', fontWeight: 600 }}>
             <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
               aria-label="현재 페이지 전체 선택" data-testid="quote-bulk-select-all"

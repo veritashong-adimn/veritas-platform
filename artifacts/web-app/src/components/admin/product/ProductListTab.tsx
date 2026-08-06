@@ -18,6 +18,7 @@ import {
   Section, emptyProductForm, inputStyle, TYPE_COLORS, DEACTIVATION_REASONS,
   bulkBtnStyle, pageNavBtnStyle,
 } from './productShared';
+import { stickyBulkBarStyle } from '../bulkListShared';
 
 interface Props {
   token: string;
@@ -476,7 +477,7 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
 
         {/* 선택 기반 일괄 관리 바 */}
         {canManage && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12, padding: "10px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12, padding: "10px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, ...stickyBulkBarStyle }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#374151", cursor: "pointer", fontWeight: 600 }}>
               <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
                 aria-label="현재 페이지 전체 선택" data-testid="select-all"

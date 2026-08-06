@@ -7,6 +7,7 @@ import {
   Section, emptyProductForm, inputStyle, TYPE_COLORS, LANG_LABEL, autoName,
   selectedCardStyle, bulkBtnStyle, pageNavBtnStyle,
 } from './productShared';
+import { stickyBulkBarStyle } from '../bulkListShared';
 
 interface Props {
   token: string;
@@ -264,7 +265,7 @@ export function ProductRequestSection({ token, user, setToast, authHeaders, onPr
 
         {/* 선택 기반 일괄 관리 바 (관리자) */}
         {isAdmin && (
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12, padding: "9px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12, padding: "9px 14px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, ...stickyBulkBarStyle }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#374151", cursor: "pointer", fontWeight: 600 }}>
               <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
                 aria-label="현재 페이지 전체 선택" data-testid="req-select-all"

@@ -19,6 +19,7 @@ import { formatPhoneDisplay } from '../lib/utils';
 import { LogModal } from '../components/admin/LogModal';
 import { DraggableModal } from '../components/admin/DraggableModal';
 import { ContactDetailModal } from '../components/admin/ContactDetailModal';
+import { stickyBulkBarStyle } from '../components/admin/bulkListShared';
 import { ContactFormModal } from '../components/admin/ContactFormModal';
 import { bulkBtnStyle } from '../components/admin/product/productShared';
 import { CustomerDetailModal } from '../components/admin/CustomerDetailModal';
@@ -2250,7 +2251,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             </label>
           </div>
           {/* 선택 기반 공통 작업 바 (상품·거래처와 동일 패턴) */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10, padding: "9px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10, padding: "9px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, ...stickyBulkBarStyle }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#374151", cursor: "pointer", fontWeight: 600 }}>
               <input type="checkbox"
                 checked={selectedContactIds.size === contacts.length && contacts.length > 0}
