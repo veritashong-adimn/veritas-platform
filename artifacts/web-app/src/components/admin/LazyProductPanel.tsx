@@ -34,8 +34,7 @@ type LangSubtypeEntry = {
 
 const LANG_SUBTYPES: Record<LangPairType, LangSubtypeEntry[]> = {
   "번역": [
-    { label: "일반번역",  lazyService: "번역",      mainCategory: "일반번역" },
-    { label: "전문번역",  lazyService: "전문번역",  mainCategory: "전문번역" },
+    { label: "번역",      lazyService: "번역",      mainCategory: "번역" },
     { label: "출판번역",  lazyService: "출판번역",  mainCategory: "출판번역" },
     { label: "번역공증",  lazyService: "번역공증",  mainCategory: "번역공증" },
     { label: "영상번역",  lazyService: "영상번역",  mainCategory: "영상번역" },
@@ -49,10 +48,11 @@ const LANG_SUBTYPES: Record<LangPairType, LangSubtypeEntry[]> = {
     { label: "순차통역",    lazyService: "순차통역",    mainCategory: "순차통역" },
     { label: "수행통역",    lazyService: "수행통역",    mainCategory: "수행통역" },
     { label: "상담회통역",  lazyService: "상담회통역",  mainCategory: "미팅통역" },
+    { label: "다국어릴레이", lazyService: "다국어릴레이", mainCategory: "다국어릴레이" },
     { label: "기타통역",    lazyService: null,          mainCategory: "기타통역", isCustom: true },
   ],
   "통번역": [
-    { label: "일반통번역",  lazyService: "통번역",      mainCategory: "일반번역" },
+    { label: "일반통번역",  lazyService: "통번역",      mainCategory: "번역" },
     { label: "출장통번역",  lazyService: "출장통번역",  mainCategory: "출장통번역" },
     { label: "전시회통번역", lazyService: "전시회통번역", mainCategory: "전시회통번역" },
     { label: "상담회통번역", lazyService: "상담회통번역", mainCategory: "상담회통번역" },
@@ -62,6 +62,7 @@ const LANG_SUBTYPES: Record<LangPairType, LangSubtypeEntry[]> = {
   "감수": [
     { label: "일반감수",   lazyService: "감수",      mainCategory: "감수" },
     { label: "원어민감수", lazyService: "원어민감수", mainCategory: "원어민감수" },
+    { label: "원문대조감수", lazyService: "원문대조감수", mainCategory: "원문대조감수" },
     { label: "AI감수",    lazyService: "AI감수",    mainCategory: "AI감수" },
     { label: "기타감수",   lazyService: null,        mainCategory: "기타감수", isCustom: true },
   ],
@@ -69,7 +70,7 @@ const LANG_SUBTYPES: Record<LangPairType, LangSubtypeEntry[]> = {
 
 // 각 언어쌍 타입의 기본 하위유형
 const DEFAULT_LANG_SUBTYPE: Record<LangPairType, string> = {
-  "번역": "일반번역", "통역": "동시통역", "통번역": "일반통번역", "감수": "일반감수",
+  "번역": "번역", "통역": "동시통역", "통번역": "일반통번역", "감수": "일반감수",
 };
 
 // ─── 비언어 타입 항목 설정 ─────────────────────────────────────────────────────
@@ -138,6 +139,9 @@ type QuickCandidate = {
   lazyServiceType?: string;
   sourceLanguage?: string;
   targetLanguage?: string;
+  targetLanguages?: string[]; // 다국어릴레이 대상언어(정렬본)
+  reviewLanguageMode?: "single" | "pair"; // 원어민감수 언어 방식
+  reviewLanguage?: string;                 // 원어민감수 단일언어 감수언어
   unit?: string;
   canonicalKey?: string;
 };
@@ -197,8 +201,12 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
   const [tgtLang, setTgtLang]       = useState("en");
   const [srcLangCustom, setSrcLangCustom] = useState("");
   const [tgtLangCustom, setTgtLangCustom] = useState("");
-  const [langSubtype, setLangSubtype]     = useState<string>("일반번역");
+  const [langSubtype, setLangSubtype]     = useState<string>("번역");
   const [langSubtypeCustom, setLangSubtypeCustom] = useState(""); // 기타* 직접입력
+  const [relayTargets, setRelayTargets]   = useState<string[]>([]); // 다국어릴레이 대상언어(복수)
+  const [reviewMode, setReviewMode]       = useState<"single" | "pair">("single"); // 원어민감수 언어 방식
+  const [reviewLang, setReviewLang]       = useState("en");    // 원어민감수 단일언어 감수언어
+  const [reviewLangCustom, setReviewLangCustom] = useState("");
 
   // ── 비언어 공통 ────────────────────────────────────────────────────────────
   const [nlItem, setNlItem]           = useState("");  // 통역장비/편집/미디어
@@ -225,6 +233,16 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
   const currentSubtypes = isLangPair ? LANG_SUBTYPES[quickType as LangPairType] : [];
   const currentSubtypeCfg = currentSubtypes.find(s => s.label === langSubtype);
 
+  // 다국어 릴레이: 출발언어 → 기준언어(Pivot) → 대상언어(복수) 3단 입력
+  const isRelay = quickType === "통역" && langSubtype === "다국어릴레이";
+
+  // 원어민감수: 단일언어(감수언어 1개) / 언어쌍(출발·도착) 방식 선택
+  const isNativeReview = quickType === "감수" && langSubtype === "원어민감수";
+  const isNativeSingle = isNativeReview && reviewMode === "single";
+  const reviewLabel = reviewLang === "custom"
+    ? (reviewLangCustom.trim() || "기타언어")
+    : (LANG_LABEL[reviewLang] ?? reviewLang);
+
   const resolveLang = (code: string, custom: string) =>
     code === "custom" ? custom.trim() : code;
 
@@ -241,6 +259,8 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
   const handleTypeChange = (qt: QuickType) => {
     resetResult();
     setLangSubtypeCustom("");
+    setRelayTargets([]);
+    setReviewMode("single");
     setNlItemCustom("");
     setNlSubCatCustom("");
     if (LANG_PAIR_SET.has(qt)) {
@@ -280,6 +300,16 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
 
   // ── 미리보기 이름 ──────────────────────────────────────────────────────────
   const previewName = (() => {
+    if (isNativeReview) {
+      return isNativeSingle
+        ? `${reviewLabel} 원어민감수`
+        : `${srcLabel}→${tgtLabel} 원어민감수`;
+    }
+    if (isRelay) {
+      const tgtLabels = relayTargets.map(c => LANG_LABEL[c] ?? c);
+      const tail = tgtLabels.length ? tgtLabels.join("·") : "대상언어";
+      return `${srcLabel} → ${tgtLabel} → ${tail} 다국어릴레이`;
+    }
     if (isLangPair) {
       const subtypeLabel = currentSubtypeCfg?.isCustom
         ? (langSubtypeCustom.trim() || "직접입력")
@@ -297,8 +327,41 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
     return nlItem || "—";
   })();
 
+  // ── 원어민감수 단일언어 조회 (감수언어 1개, 출발/도착 없음) ──────────────────
+  const handleNativeSingleLookup = async () => {
+    const resolvedReview = resolveLang(reviewLang, reviewLangCustom);
+    if (!resolvedReview) { setToast("감수언어를 선택하세요."); return; }
+    setLoading(true); resetResult();
+    try {
+      const res = await fetch(api("/api/admin/products/lazy-lookup"), {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ serviceType: "원어민감수", reviewLanguageMode: "single", reviewLanguage: resolvedReview }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setToast(data.error ?? "조회 실패"); return; }
+      if (data.found) {
+        setResult({ found: true, product: data.product });
+      } else {
+        const c = data.candidate;
+        setResult({ found: false, candidate: {
+          name: c.displayName, productType: c.productType,
+          mainCategory: c.mainCategory, subCategory: "",
+          isLangPair: true, isLazy: true,
+          lazyServiceType: "원어민감수",
+          reviewLanguageMode: "single", reviewLanguage: c.reviewLanguage ?? resolvedReview,
+          canonicalKey: c.canonicalKey, unit: c.unit,
+        }});
+      }
+    } catch { setToast("네트워크 오류"); }
+    finally { setLoading(false); }
+  };
+
   // ── 언어쌍 조회 ────────────────────────────────────────────────────────────
   const handleLangLookup = async () => {
+    // 원어민감수 단일언어는 별도 흐름
+    if (isNativeSingle) { await handleNativeSingleLookup(); return; }
+
     const resolvedSrc = resolveLang(srcLang, srcLangCustom);
     const resolvedTgt = resolveLang(tgtLang, tgtLangCustom);
     if (srcLang === "custom" && !resolvedSrc) { setToast("출발언어 직접 입력값을 입력해주세요."); return; }
@@ -307,6 +370,14 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
     if (resolvedSrc.toLowerCase() === resolvedTgt.toLowerCase()) { setToast("출발언어와 도착언어가 같습니다."); return; }
 
     if (!currentSubtypeCfg) { setToast("하위유형을 선택해주세요."); return; }
+
+    // 다국어 릴레이: 대상언어(복수) 검증
+    if (isRelay) {
+      if (relayTargets.length === 0) { setToast("대상언어를 1개 이상 선택해주세요."); return; }
+      if (relayTargets.some(c => c.toLowerCase() === resolvedTgt.toLowerCase())) {
+        setToast("기준언어와 대상언어가 중복됩니다."); return;
+      }
+    }
 
     // 기타* 직접입력 케이스 → direct POST
     if (currentSubtypeCfg.isCustom) {
@@ -336,14 +407,18 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
       return;
     }
 
-    // 표준 lazy API
+    // 표준 lazy API (릴레이 포함 — 릴레이는 targetLanguages 추가 전송)
     const serviceType = currentSubtypeCfg.lazyService!;
     setLoading(true); resetResult();
     try {
       const res = await fetch(api("/api/admin/products/lazy-lookup"), {
         method: "POST",
         headers: { ...authHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({ serviceType, sourceLanguage: resolvedSrc, targetLanguage: resolvedTgt }),
+        body: JSON.stringify({
+          serviceType, sourceLanguage: resolvedSrc, targetLanguage: resolvedTgt,
+          ...(isRelay ? { targetLanguages: relayTargets } : {}),
+          ...(isNativeReview ? { reviewLanguageMode: "pair" } : {}),
+        }),
       });
       const data = await res.json();
       if (!res.ok) { setToast(data.error ?? "조회 실패"); return; }
@@ -357,6 +432,8 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
           isLangPair: true, isLazy: true,
           lazyServiceType: serviceType,
           sourceLanguage: resolvedSrc, targetLanguage: resolvedTgt,
+          ...(isRelay ? { targetLanguages: c.relayLanguages?.targetLanguages ?? relayTargets } : {}),
+          ...(isNativeReview ? { reviewLanguageMode: "pair" as const } : {}),
           canonicalKey: c.canonicalKey, unit: c.unit,
         }});
       }
@@ -442,6 +519,9 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
             serviceType: c.lazyServiceType,
             sourceLanguage: c.sourceLanguage,
             targetLanguage: c.targetLanguage,
+            ...(c.targetLanguages?.length ? { targetLanguages: c.targetLanguages } : {}),
+            ...(c.reviewLanguageMode ? { reviewLanguageMode: c.reviewLanguageMode } : {}),
+            ...(c.reviewLanguage ? { reviewLanguage: c.reviewLanguage } : {}),
             createdBy: "admin",
           }),
         });
@@ -515,7 +595,7 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
               <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
                 {currentSubtypes.map(s => (
                   <button key={s.label}
-                    onClick={() => { setLangSubtype(s.label); setLangSubtypeCustom(""); resetResult(); }}
+                    onClick={() => { setLangSubtype(s.label); setLangSubtypeCustom(""); setRelayTargets([]); setReviewMode("single"); resetResult(); }}
                     style={chipStyle(langSubtype === s.label, tc)}
                     aria-label={s.label}
                   >
@@ -535,7 +615,46 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
               )}
             </div>
 
-            {/* 언어 선택 */}
+            {/* ─── 원어민감수: 감수 언어 방식 (단일언어/언어쌍) ─── */}
+            {isNativeReview && (
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", marginBottom: 4 }}>감수 언어 방식</div>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                  {([["single", "단일언어"], ["pair", "언어쌍"]] as const).map(([m, label]) => (
+                    <button key={m}
+                      onClick={() => { setReviewMode(m); resetResult(); }}
+                      style={chipStyle(reviewMode === m, tc)}
+                      aria-label={`감수 언어 방식 ${label}`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ─── 원어민감수 단일언어: 감수언어 1개 ─── */}
+            {isNativeSingle && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, maxWidth: 200 }}>
+                <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>감수언어</div>
+                <LanguageSearchSelect
+                  value={reviewLang}
+                  onChange={v => { setReviewLang(v); resetResult(); }}
+                  excludeCodes={langExclude}
+                  customLabel="기타언어"
+                  style={{ minWidth: 130 }}
+                  triggerStyle={{ fontSize: 13, padding: "7px 10px" }}
+                />
+                {reviewLang === "custom" && (
+                  <LangCustomInput value={reviewLangCustom}
+                    onChange={v => { setReviewLangCustom(v); resetResult(); }}
+                    placeholder="예: 카자흐어" label="언어명 직접 입력" />
+                )}
+              </div>
+            )}
+
+            {/* 언어 선택 (출발→도착) — 단일언어 방식이 아닐 때만 */}
+            {!isNativeSingle && (
             <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>출발언어</div>
@@ -557,7 +676,9 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
               <span style={{ fontSize: 16, color: "#9ca3af", paddingTop: 20 }}>→</span>
 
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>도착언어</div>
+                <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>
+                  {isRelay ? "기준언어(중계)" : "도착언어"}
+                </div>
                 <LanguageSearchSelect
                   value={tgtLang}
                   onChange={v => { setTgtLang(v); resetResult(); }}
@@ -572,7 +693,54 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
                     placeholder="예: 카자흐어" label="언어명 직접 입력" />
                 )}
               </div>
+
+              {/* ─── 다국어 릴레이: 대상언어(복수선택) ─── */}
+              {isRelay && (
+                <>
+                  <span style={{ fontSize: 16, color: "#9ca3af", paddingTop: 20 }}>→</span>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 200 }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>
+                      대상언어 <span style={{ fontWeight: 400, color: "#c084fc" }}>(복수선택)</span>
+                    </div>
+                    <LanguageSearchSelect
+                      value=""
+                      onChange={v => {
+                        if (!v || v === "custom") return;
+                        setRelayTargets(prev => prev.includes(v) ? prev : [...prev, v]);
+                        resetResult();
+                      }}
+                      excludeCodes={[...langExclude, ...relayTargets, tgtLang, srcLang]}
+                      placeholder="대상언어 추가..."
+                      style={{ minWidth: 160 }}
+                      triggerStyle={{ fontSize: 13, padding: "7px 10px" }}
+                    />
+                    {relayTargets.length > 0 && (
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 2 }}>
+                        {relayTargets.map(code => (
+                          <span key={code}
+                            style={{
+                              display: "inline-flex", alignItems: "center", gap: 4,
+                              fontSize: 12, fontWeight: 600, padding: "3px 8px", borderRadius: 6,
+                              background: tc.bg, color: tc.color, border: `1px solid ${tc.border}`,
+                            }}
+                          >
+                            {LANG_LABEL[code] ?? code}
+                            <button
+                              onClick={() => { setRelayTargets(prev => prev.filter(c => c !== code)); resetResult(); }}
+                              aria-label={`${LANG_LABEL[code] ?? code} 제거`}
+                              style={{ background: "none", border: "none", cursor: "pointer", color: tc.color, fontSize: 13, lineHeight: 1, padding: 0 }}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
+            )}
           </>
         )}
 

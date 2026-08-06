@@ -12,8 +12,9 @@ import { buildProductSearchText, normalizeSearchQuery } from "../lib/product-par
 import {
   LAZY_SERVICE_TYPES, isLazyServiceType,
   buildCanonicalKey, buildVirtualProduct, buildAuditMetadata,
+  normalizeRelayTargets,
   LAZY_SERVICE_CONFIG,
-  type LazyServiceType,
+  type LazyServiceType, type RelayLanguages, type NativeReviewMode,
 } from "../lib/product-parser/lazyProductGen";
 
 const router: IRouter = Router();
@@ -42,8 +43,7 @@ export const PRODUCT_TYPES: Record<string, { label: string; code: string; hasLan
 // ─── 대분류 정의 (productType → mainCategory 목록) ────────────────────────────
 export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: string }[]> = {
   translation: [
-    { label: "일반번역", code: "GEN" },
-    { label: "전문번역", code: "SPEC" },
+    { label: "번역",     code: "GEN" },
     { label: "출판번역", code: "PUB" },
     { label: "번역공증", code: "CERT" },
     { label: "영상번역", code: "VID" },
@@ -62,6 +62,7 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
     { label: "전시회통역",  code: "EXH" },
     { label: "화상통역",    code: "VDEO" },
     { label: "전화통역",    code: "TEL" },
+    { label: "다국어릴레이", code: "RLY" },
     { label: "기타통역",    code: "ETC" },
   ],
   combined: [
@@ -72,8 +73,7 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
     { label: "IR통번역",   code: "IR"   },
     { label: "기타통번역",  code: "ETC"  },
     // 레거시 (기존 DB 저장값 표시용)
-    { label: "일반번역", code: "GEN_L"  },
-    { label: "전문번역", code: "SPEC_L" },
+    { label: "번역",     code: "GEN_L"  },
     { label: "동시통역", code: "SIM_L"  },
     { label: "순차통역", code: "CON_L"  },
     { label: "기타",     code: "ETC_L"  },
@@ -81,6 +81,7 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
   proofreading: [
     { label: "감수",      code: "PRF" },
     { label: "원어민감수", code: "NAT" },
+    { label: "원문대조감수", code: "CMP" },
     { label: "AI감수",   code: "AI"  },
     { label: "기타감수",  code: "ETC" },
   ],
@@ -116,7 +117,7 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
 
 // ─── 중분류 정의 (mainCategory label → subCategory 목록) ─────────────────────
 export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: string }[]> = {
-  "전문번역": [
+  "번역": [
     { label: "법률",   code: "LAW" },
     { label: "의료",   code: "MED" },
     { label: "기술",   code: "TECH" },
@@ -462,6 +463,13 @@ type GetOrCreateInput = {
   usagePeriod?: string | null;
   interpretationDirection?: string | null;
   creationSource?: string;
+  // 다국어 릴레이: 존재 시 canonicalKey 기반 dedup 으로 전환하고 relay_languages 컬럼에 저장.
+  // sourceLanguage=출발, targetLanguage=기준(Pivot), relayLanguages.targetLanguages=대상언어.
+  relayLanguages?: RelayLanguages | null;
+  canonicalKeyOverride?: string;
+  // 원어민감수: single=감수언어 1개(canonicalKey 기반 dedup), pair=출발/도착(컬럼 기반 dedup, 기존 호환).
+  reviewLanguageMode?: NativeReviewMode | null;
+  reviewLanguage?: string | null;
 };
 
 type GetOrCreateResult = {
@@ -485,26 +493,44 @@ async function getOrCreateProduct(
   const storedSrc = isInterp ? (normalizeLangCodeForInterp(sourceLanguage) || null) : (sourceLanguage || null);
   const storedTgt = isInterp ? (normalizeLangCodeForInterp(targetLanguage) || null) : (targetLanguage || null);
 
+  const isRelay = !!input.relayLanguages;
+  // 원어민감수 단일언어: 출발/도착이 없어 컬럼 기반으론 감수언어를 구분 못하므로 canonicalKey 기반 dedup.
+  // (언어쌍은 기존과 동일한 컬럼 기반 dedup → 기존 데이터와 100% 호환)
+  const isNativeSingle = input.reviewLanguageMode === "single";
+
   // canonicalKey: 신규 생성 시 DB에 저장; partial unique index(deleted_at IS NULL)로 중복 방지
-  const canonicalKey = hasLang && (storedSrc || storedTgt)
-    ? `${pTypeCode}:${mainCategory}:${normalizeLangCode(storedSrc)}:${normalizeLangCode(storedTgt)}`
-    : `${pTypeCode}:::${normalizeProdName(name)}`;
+  // 릴레이/원어민감수: override(예 IN:relay:de:ko:en-ja-zh, PR:native-review:en)를 그대로 사용
+  const canonicalKey = input.canonicalKeyOverride
+    ?? (hasLang && (storedSrc || storedTgt)
+      ? `${pTypeCode}:${mainCategory}:${normalizeLangCode(storedSrc)}:${normalizeLangCode(storedTgt)}`
+      : `${pTypeCode}:::${normalizeProdName(name)}`);
 
-  // 기존 상품 조회 (findDuplicate 재사용) — 정규화된 언어 코드로 조회
-  // 미디어처럼 언어가 optional인 타입에서 언어가 없을 때는 name도 전달 (이름 기반 dedup으로 전환)
-  const noLangOptional = isLangOptionalType(productType) && !storedSrc && !storedTgt;
-  const dupes = await findDuplicate(
-    productType, storedSrc, storedTgt,
-    mainCategory, subCategory, undefined,
-    (noLangOptional || !hasLang) ? name : undefined,
-  );
-
-  if (dupes.length > 0) {
-    // 전체 row가 필요한 호출자를 위해 full select
+  // 릴레이/원어민감수 단일언어: canonicalKey 정확 매칭으로 dedup
+  // (같은 출발·기준이라도 대상 조합/감수언어가 다르면 별개 상품)
+  if (isRelay || isNativeSingle) {
     const [existing] = await db
       .select().from(productsTable)
-      .where(and(eq(productsTable.id, dupes[0].id), isNull(productsTable.deletedAt)));
-    return { product: existing, created: false, reason: "existing_duplicate", canonicalKey };
+      .where(and(eq(productsTable.canonicalKey, canonicalKey), isNull(productsTable.deletedAt)));
+    if (existing) {
+      return { product: existing, created: false, reason: "existing_duplicate", canonicalKey };
+    }
+  } else {
+    // 기존 상품 조회 (findDuplicate 재사용) — 정규화된 언어 코드로 조회
+    // 미디어처럼 언어가 optional인 타입에서 언어가 없을 때는 name도 전달 (이름 기반 dedup으로 전환)
+    const noLangOptional = isLangOptionalType(productType) && !storedSrc && !storedTgt;
+    const dupes = await findDuplicate(
+      productType, storedSrc, storedTgt,
+      mainCategory, subCategory, undefined,
+      (noLangOptional || !hasLang) ? name : undefined,
+    );
+
+    if (dupes.length > 0) {
+      // 전체 row가 필요한 호출자를 위해 full select
+      const [existing] = await db
+        .select().from(productsTable)
+        .where(and(eq(productsTable.id, dupes[0].id), isNull(productsTable.deletedAt)));
+      return { product: existing, created: false, reason: "existing_duplicate", canonicalKey };
+    }
   }
 
   // 신규 생성
@@ -526,6 +552,9 @@ async function getOrCreateProduct(
       usagePeriod: input.usagePeriod?.trim() || null,
       interpretationDirection: input.interpretationDirection?.trim() || null,
       canonicalKey,
+      relayLanguages: input.relayLanguages ?? null,
+      reviewLanguageMode: input.reviewLanguageMode ?? null,
+      reviewLanguage: input.reviewLanguage ?? null,
     })
     .returning();
 
@@ -1322,7 +1351,7 @@ router.get("/admin/products/template", ...adminGuard, (_req, res) => {
   // 10-column Product Catalog Schema (상품코드 = "(자동생성)" in template)
   // cols: 상품코드, 상품유형, 하위유형, 출발언어, 도착언어, 상품명, canonical_key, 상태, 생성방식, 비고
   const sampleRows = [
-    ["(자동생성)", "번역",     "전문번역",   "ko", "en", "한국어-영어 번역",         "", "활성", "", "법률·계약 전문번역"],
+    ["(자동생성)", "번역",     "법률",       "ko", "en", "한국어-영어 번역",         "", "활성", "", "법률·계약 번역"],
     ["(자동생성)", "번역",     "출판번역",   "ko", "ja", "한국어-일본어 번역",       "", "활성", "", "출판번역"],
     ["(자동생성)", "통역",     "동시통역",   "ko", "en", "한국어-영어 동시통역",     "", "활성", "", "컨퍼런스"],
     ["(자동생성)", "통번역",   "출장통번역", "ko", "en", "한국어-영어 출장통번역",   "", "활성", "", ""],
@@ -1921,16 +1950,41 @@ router.delete("/admin/product-requests/:id", ...adminOnly, async (req, res) => {
  * - 없으면: { found: false, candidate: VirtualProduct }
  */
 router.post("/admin/products/lazy-lookup", ...adminGuard, async (req, res) => {
-  const { serviceType, sourceLanguage, targetLanguage } = req.body as {
+  const { serviceType, sourceLanguage, targetLanguage, targetLanguages, reviewLanguageMode, reviewLanguage } = req.body as {
     serviceType?: string;
     sourceLanguage?: string;
     targetLanguage?: string;
+    targetLanguages?: string[];
+    reviewLanguageMode?: string;
+    reviewLanguage?: string;
   };
 
   if (!serviceType || !isLazyServiceType(serviceType)) {
     res.status(400).json({ error: `serviceType은 ${LAZY_SERVICE_TYPES.join(" / ")} 중 하나여야 합니다.` });
     return;
   }
+
+  // ── 원어민감수 단일언어: 출발/도착 없이 감수언어 1개로 조회 ──
+  const isNativeReview = serviceType === "원어민감수";
+  const isNativeSingle = isNativeReview && reviewLanguageMode === "single";
+  if (isNativeSingle) {
+    const rl = (reviewLanguage ?? "").trim().toLowerCase();
+    if (!rl) { res.status(400).json({ error: "감수언어(reviewLanguage)는 필수입니다." }); return; }
+    try {
+      const virtual = buildVirtualProduct(serviceType as LazyServiceType, "", "", ISO_LABEL, undefined, { mode: "single", reviewLanguage: rl });
+      const [existing] = await db
+        .select({ id: productsTable.id, code: productsTable.code, name: productsTable.name, active: productsTable.active })
+        .from(productsTable)
+        .where(and(eq(productsTable.canonicalKey, virtual.canonicalKey), isNull(productsTable.deletedAt)));
+      if (existing) { res.json({ found: true, product: existing }); return; }
+      res.json({ found: false, candidate: virtual });
+    } catch (err) {
+      req.log.error({ err }, "lazy-lookup (native single) failed");
+      res.status(500).json({ error: "조회 실패." });
+    }
+    return;
+  }
+
   if (!sourceLanguage?.trim() || !targetLanguage?.trim()) {
     res.status(400).json({ error: "sourceLanguage, targetLanguage 는 필수입니다." });
     return;
@@ -1940,8 +1994,43 @@ router.post("/admin/products/lazy-lookup", ...adminGuard, async (req, res) => {
   const tgt = targetLanguage.trim().toLowerCase();
   const cfg = LAZY_SERVICE_CONFIG[serviceType as LazyServiceType];
 
+  // 다국어 릴레이: 대상언어(복수) 필수. sourceLanguage=출발, targetLanguage=기준(Pivot).
+  const isRelay = serviceType === "다국어릴레이";
+  const normTargets = isRelay ? normalizeRelayTargets(targetLanguages ?? [], cfg.productType) : [];
+  if (isRelay) {
+    if (normTargets.length === 0) {
+      res.status(400).json({ error: "다국어 릴레이는 대상언어(targetLanguages)가 1개 이상 필요합니다." });
+      return;
+    }
+    if (normTargets.includes(tgt)) {
+      res.status(400).json({ error: "기준언어와 대상언어가 중복됩니다." });
+      return;
+    }
+  }
+  // 원어민감수 언어쌍: 출발≠도착
+  if (isNativeReview && src === tgt) {
+    res.status(400).json({ error: "출발언어와 도착언어가 같습니다." });
+    return;
+  }
+
   try {
-    // canonicalKey 기반 기존 상품 조회 (방향 포함, 중복 방지와 동일한 조건)
+    if (isRelay) {
+      // 릴레이: canonicalKey(대상언어 정렬 포함) 정확 매칭으로 기존 상품 조회
+      const canonicalKey = buildCanonicalKey(serviceType as LazyServiceType, src, tgt, normTargets);
+      const [existing] = await db
+        .select({ id: productsTable.id, code: productsTable.code, name: productsTable.name, active: productsTable.active })
+        .from(productsTable)
+        .where(and(eq(productsTable.canonicalKey, canonicalKey), isNull(productsTable.deletedAt)));
+      if (existing) {
+        res.json({ found: true, product: existing });
+        return;
+      }
+      const candidate = buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL, normTargets);
+      res.json({ found: false, candidate });
+      return;
+    }
+
+    // 기존 상품 조회 — 컬럼 기반 (원어민감수 언어쌍 포함: 기존 데이터와 호환)
     const dupes = await findDuplicate(cfg.productType, src, tgt, cfg.mainCategory, "", undefined);
     if (dupes.length > 0) {
       const product = dupes[0];
@@ -1949,8 +2038,10 @@ router.post("/admin/products/lazy-lookup", ...adminGuard, async (req, res) => {
       return;
     }
 
-    // 없으면 virtual candidate 생성
-    const candidate = buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL);
+    // 없으면 virtual candidate 생성 (원어민감수 언어쌍은 화살표 표기 + PR:native-review 키)
+    const candidate = isNativeReview
+      ? buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL, undefined, { mode: "pair" })
+      : buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL);
     res.json({ found: false, candidate });
   } catch (err) {
     req.log.error({ err }, "lazy-lookup failed");
@@ -1965,10 +2056,13 @@ router.post("/admin/products/lazy-lookup", ...adminGuard, async (req, res) => {
  * - 없으면 신규 생성 + logEvent audit
  */
 router.post("/admin/products/lazy-create", ...adminOnly, async (req, res) => {
-  const { serviceType, sourceLanguage, targetLanguage, createdBy } = req.body as {
+  const { serviceType, sourceLanguage, targetLanguage, targetLanguages, reviewLanguageMode, reviewLanguage, createdBy } = req.body as {
     serviceType?: string;
     sourceLanguage?: string;
     targetLanguage?: string;
+    targetLanguages?: string[];
+    reviewLanguageMode?: string;
+    reviewLanguage?: string;
     createdBy?: string;
   };
 
@@ -1976,24 +2070,73 @@ router.post("/admin/products/lazy-create", ...adminOnly, async (req, res) => {
     res.status(400).json({ error: `serviceType은 ${LAZY_SERVICE_TYPES.join(" / ")} 중 하나여야 합니다.` });
     return;
   }
-  if (!sourceLanguage?.trim() || !targetLanguage?.trim()) {
-    res.status(400).json({ error: "sourceLanguage, targetLanguage 는 필수입니다." });
-    return;
-  }
 
-  const src = sourceLanguage.trim().toLowerCase();
-  const tgt = targetLanguage.trim().toLowerCase();
   const cfg = LAZY_SERVICE_CONFIG[serviceType as LazyServiceType];
-  const virtual = buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL);
-  const audit   = buildAuditMetadata(virtual, createdBy ?? "system");
+  const isNativeReview = serviceType === "원어민감수";
+  const isNativeSingle = isNativeReview && reviewLanguageMode === "single";
 
-  try {
-    const goc = await getOrCreateProduct({
+  // 조회 대상별 virtual + getOrCreate 입력 구성
+  let virtual: ReturnType<typeof buildVirtualProduct>;
+  let gocInput: Parameters<typeof getOrCreateProduct>[0];
+
+  if (isNativeSingle) {
+    // ── 원어민감수 단일언어: 감수언어 1개, 출발/도착 null ──
+    const rl = (reviewLanguage ?? "").trim().toLowerCase();
+    if (!rl) { res.status(400).json({ error: "감수언어(reviewLanguage)는 필수입니다." }); return; }
+    virtual = buildVirtualProduct(serviceType as LazyServiceType, "", "", ISO_LABEL, undefined, { mode: "single", reviewLanguage: rl });
+    gocInput = {
+      productType: cfg.productType, sourceLanguage: null, targetLanguage: null,
+      mainCategory: cfg.mainCategory, subCategory: "",
+      name: virtual.displayName, unit: virtual.unit,
+      creationSource: "lazy_product_generation",
+      canonicalKeyOverride: virtual.canonicalKey,
+      reviewLanguageMode: "single", reviewLanguage: virtual.reviewLanguage ?? rl,
+    };
+  } else {
+    if (!sourceLanguage?.trim() || !targetLanguage?.trim()) {
+      res.status(400).json({ error: "sourceLanguage, targetLanguage 는 필수입니다." });
+      return;
+    }
+    const src = sourceLanguage.trim().toLowerCase();
+    const tgt = targetLanguage.trim().toLowerCase();
+
+    // 다국어 릴레이: 대상언어(복수) 필수 검증
+    const isRelay = serviceType === "다국어릴레이";
+    const normTargets = isRelay ? normalizeRelayTargets(targetLanguages ?? [], cfg.productType) : [];
+    if (isRelay) {
+      if (normTargets.length === 0) {
+        res.status(400).json({ error: "다국어 릴레이는 대상언어(targetLanguages)가 1개 이상 필요합니다." });
+        return;
+      }
+      if (normTargets.includes(tgt)) {
+        res.status(400).json({ error: "기준언어와 대상언어가 중복됩니다." });
+        return;
+      }
+    }
+    if (isNativeReview && src === tgt) {
+      res.status(400).json({ error: "출발언어와 도착언어가 같습니다." });
+      return;
+    }
+
+    virtual = isNativeReview
+      ? buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL, undefined, { mode: "pair" })
+      : buildVirtualProduct(serviceType as LazyServiceType, src, tgt, ISO_LABEL, isRelay ? normTargets : undefined);
+    gocInput = {
       productType: cfg.productType, sourceLanguage: src, targetLanguage: tgt,
       mainCategory: cfg.mainCategory, subCategory: "",
       name: virtual.displayName, unit: virtual.unit,
       creationSource: "lazy_product_generation",
-    }, req.log, req.user as any);
+      relayLanguages: virtual.relayLanguages ?? null,
+      // 원어민감수 언어쌍도 새 키(PR:native-review:ko:en) 저장. 단, dedup은 컬럼 기반(기존 호환).
+      canonicalKeyOverride: (isRelay || isNativeReview) ? virtual.canonicalKey : undefined,
+      ...(isNativeReview ? { reviewLanguageMode: "pair" as NativeReviewMode } : {}),
+    };
+  }
+
+  const audit = buildAuditMetadata(virtual, createdBy ?? "system");
+
+  try {
+    const goc = await getOrCreateProduct(gocInput, req.log, req.user as any);
 
     if (!goc.created) {
       res.json({ created: false, product: goc.product, message: "이미 존재하는 상품입니다." });

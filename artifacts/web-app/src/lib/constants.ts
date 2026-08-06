@@ -683,8 +683,7 @@ export function isLangRequired(productType: string): boolean {
 
 export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: string }[]> = {
   translation: [
-    { label: "일반번역", code: "GEN"  },
-    { label: "전문번역", code: "SPEC" },
+    { label: "번역",     code: "GEN"  },
     { label: "출판번역", code: "PUB"  },
     { label: "번역공증", code: "CERT" },
     { label: "영상번역", code: "VID"  },
@@ -714,8 +713,7 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
     { label: "IR통번역",   code: "IR"    },
     { label: "기타통번역",  code: "ETC"   },
     // 레거시 (기존 DB 저장값 표시용)
-    { label: "일반번역", code: "GEN_L"  },
-    { label: "전문번역", code: "SPEC_L" },
+    { label: "번역",     code: "GEN_L"  },
     { label: "동시통역", code: "SIM_L"  },
     { label: "순차통역", code: "CON_L"  },
     { label: "기타",     code: "ETC_L"  },
@@ -723,6 +721,7 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
   proofreading: [
     { label: "감수",      code: "PRF" },
     { label: "원어민감수", code: "NAT" },
+    { label: "원문대조감수", code: "CMP" },
     { label: "AI감수",   code: "AI"  },
     { label: "기타감수",  code: "ETC" },
   ],
@@ -757,7 +756,7 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
 };
 
 export const SUB_CATEGORIES_BY_MAIN: Record<string, { label: string; code: string; description?: string }[]> = {
-  "전문번역": [
+  "번역": [
     { label: "법률",   code: "LAW"  },
     { label: "의료",   code: "MED"  },
     { label: "기술",   code: "TECH" },
@@ -932,7 +931,7 @@ export const EQUIPMENT_ITEMS: string[] = [
 
 export const PRODUCT_MAIN_CATEGORIES = [
   // translation
-  "일반번역", "전문번역", "출판번역", "번역공증", "영상번역", "자막번역", "SW번역", "기타번역",
+  "번역", "출판번역", "번역공증", "영상번역", "자막번역", "SW번역", "기타번역",
   // interpretation
   "동시통역", "순차통역", "위스퍼링통역", "수행통역", "VIP수행통역", "가이드통역", "미팅통역", "전시회통역", "화상통역", "전화통역", "기타통역",
   // combined
@@ -952,7 +951,7 @@ export const PRODUCT_MAIN_CATEGORIES = [
 export type ProductMainCategory = typeof PRODUCT_MAIN_CATEGORIES[number];
 
 export const PRODUCT_SUB_CATEGORIES: Record<string, string[]> = {
-  "전문번역":   ["법률", "의료", "기술", "금융", "계약서", "논문"],
+  "번역":       ["법률", "의료", "기술", "금융", "계약서", "논문"],
   "감수":       ["원어민감수", "윤문", "원문대조감수"],
   "미디어":     ["자막작업", "더빙", "영상번역", "스크립트작성", "STT", "TTS"],
   "편집/DTP":   ["편집", "DTP", "인쇄", "디자인", "PPT작업"],
