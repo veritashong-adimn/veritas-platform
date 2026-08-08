@@ -68,6 +68,9 @@ export const PAYMENT_STATUS_OPTS = [
   { value: 'payment_hold', label: '지급보류' },
   { value: 'paid', label: '지급완료' },
 ];
+// 수행정보 화면에서 사용자가 직접 선택 가능한 지급상태 — 미지급·지급보류만.
+//  지급완료(paid)는 정산 > 지급회차 [지급완료] 처리로만 자동 변경되며, 여기서 직접 선택할 수 없다.
+export const PAYMENT_STATUS_SELECTABLE_OPTS = PAYMENT_STATUS_OPTS.filter(o => o.value !== 'paid');
 // §9-2 단위
 export const UNIT_OPTS = ['일', '시간', '건', '페이지', '단어', '자', '식', '세트', '대', '개', '월', '기타']
   .map(v => ({ value: v, label: v }));

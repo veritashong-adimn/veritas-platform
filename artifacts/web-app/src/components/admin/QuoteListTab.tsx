@@ -63,9 +63,13 @@ interface QuoteListTabProps {
   isAdmin?: boolean;
   /** 상세 화면 '판매관리 보기' → 판매관리(프로젝트) 탭으로 이동 */
   onNavigateToSales?: () => void;
+  /** 견적 상세 판매전환 성공 시 자동 생성된 판매 상세페이지(/sales/:id)로 이동 */
+  onOpenSalesDetail?: (projectId: number) => void;
+  /** 판매전환 권한 충족 여부(기본 true) — 견적 상세 판매전환 버튼 활성 제어 */
+  canConvert?: boolean;
 }
 
-export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales }: QuoteListTabProps) {
+export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales, onOpenSalesDetail, canConvert: convertPerm = true }: QuoteListTabProps) {
   const authH = { Authorization: `Bearer ${token}` };
 
   const [quotes, setQuotes]             = useState<QuoteRow[]>([]);
@@ -316,6 +320,8 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         initialStatus={editInitData?.status}
         onConverted={fetchQuotes}
         onNavigateToSales={onNavigateToSales}
+        onOpenSalesDetail={onOpenSalesDetail}
+        canConvert={convertPerm}
       />
     );
   }

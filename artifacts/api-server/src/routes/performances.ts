@@ -384,8 +384,19 @@ function computeRowValues(r: RowInput) {
     const supplyInput = (isEquipmentSnap(snap, r.serviceType) && r.contractUnitPrice != null && r.quantity != null)
       ? Number(r.contractUnitPrice) * Number(r.quantity)
       : (r.supplyAmount ?? 0);
+    // §1 외주 세금처리 → 매입증빙유형 자동 연동 (팝업 이중입력 제거).
+    //   · 세금처리=세금계산서(tax_review_required, 외주 기본값) → tax_invoice (VAT 10% 대상)
+    //   · 팝업에서 회계 세분류(계산서·영세율·기타·미발행)를 직접 지정한 경우는 그 값을 존중
+    //     — 세금처리 드롭다운엔 없는 값이므로 덮어쓰지 않는다.
+    //   · 그 외 세금처리(3.3%·원천징수 예외 등)는 증빙유형을 자동 지정하지 않고 기존 값 유지.
+    const vendorTreatment = r.withholdingTreatment ?? "tax_review_required";
+    const clientEvidence = r.purchaseEvidenceType ?? null;
+    const linkedEvidence =
+      (clientEvidence && clientEvidence !== "tax_invoice")
+        ? clientEvidence
+        : (vendorTreatment === "tax_review_required" ? "tax_invoice" : clientEvidence);
     const { supply, vat, total } = calcVendorPurchase(
-      supplyInput, r.purchaseEvidenceType ?? null, r.vatAmountManual ?? 0,
+      supplyInput, linkedEvidence, r.vatAmountManual ?? 0,
     );
     return {
       performerCategory: "vendor" as const,
@@ -403,7 +414,7 @@ function computeRowValues(r: RowInput) {
       individualUserId: null,
       // 업체 매입
       vendorCompanyId: r.vendorCompanyId ?? null,
-      purchaseEvidenceType: r.purchaseEvidenceType ?? null,
+      purchaseEvidenceType: linkedEvidence,           // §1 세금처리에서 자동 연동된 증빙유형 저장
       purchaseInvoiceDate: r.purchaseInvoiceDate ?? null,
       supplyAmount: String(supply), vatAmount: String(vat), totalPurchaseAmount: String(total),
     };
@@ -771,8 +782,19 @@ router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) =
           values.payDateChangeReason = null;
         }
 
-        // 상태(§12) — 클라이언트 제공값 우선(지급상태로 단일화. 지급명세서 상태는 수행정보에서 관리하지 않음 → 향후 지급관리 모듈).
-        if (r.paymentStatus) values.paymentStatus = r.paymentStatus;
+        // 상태(§12) — 지급상태로 단일화. 단, 지급완료(paid)는 수행정보에서 직접 지정·해제할 수 없다.
+        //   · 이미 paid 인 건: 되돌리기 불가 → 항상 paid 유지(클라이언트 값 무시).
+        //   · paid 로의 신규 전환: 거부 → 정산 > 지급회차 [지급완료] 처리로만 변경된다.
+        //   · unpaid ↔ payment_hold 만 사용자 변경 허용.
+        const priorPay = priorRow?.paymentStatus ?? "unpaid";
+        if (priorPay === "paid") {
+          values.paymentStatus = "paid";
+        } else if (r.paymentStatus) {
+          if (r.paymentStatus === "paid") {
+            throw new Error("지급완료는 수행정보에서 직접 지정할 수 없습니다. 정산 > 지급회차 지급완료 처리로만 변경됩니다.");
+          }
+          values.paymentStatus = r.paymentStatus;
+        }
 
         // 수행자 스냅샷 재도출(§선택-저장 분리) — 인라인 로컬선택은 식별자·거주국·업체유형 스냅샷을 전송하지 않으므로,
         //   individualUserId/vendorCompanyId 가 "신규 배정·변경"된 경우에만 CRM에서 재도출해 영속(PII 암호문 포함).

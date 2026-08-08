@@ -1883,6 +1883,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           refreshTick={quoteTick}
           isAdmin={user.role === "admin"}
           onNavigateToSales={() => setAdminTab("projects")}
+          onOpenSalesDetail={openSalesDetail}
+          canConvert={hasPerm("quote.create")}
         />
       )}
 

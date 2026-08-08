@@ -47,27 +47,45 @@ export type PayoutRound = typeof payoutRoundsTable.$inferSelect;
 export type InsertPayoutRound = typeof payoutRoundsTable.$inferInsert;
 
 // ── 지급회차 원천징수/실지급 계산 (§11) ──────────────────────────────────────
-//  · 세전 지급액 = costTotal(기본수행료 + 추가비용 − 차감) — 수행정보 원가와 동일.
-//  · 공제(원천징수) = 세전 × 세율. 세율은 기존 세금처리(withholdingTreatment) 규칙 그대로 재사용.
-//     개인: domestic_3_3=3.3% · exempt=0 · nonresident_custom/treaty=수동세율 · tax_review_required=미확정(공제 0·경고).
-//     외주업체(vendor): 원천징수 없음(기록용) → 공제 0, 실지급 = 세전.
+//  · 세전 지급액(gross) = costTotal(기본수행료 + 추가비용 − 차감) — 수행정보 원가와 동일.
+//    ※ 외주업체는 이 gross 가 곧 "최종 공급가액"이다(추가비용·차감 반영 후 금액).
+//  · 개인 통번역사: 공제(원천징수) = 세전 × 세율. 세율은 기존 세금처리(withholdingTreatment) 규칙 그대로 재사용.
+//     domestic_3_3=3.3% · exempt=0 · nonresident_custom/treaty=수동세율 · tax_review_required=미확정(공제 0·경고).
+//     실지급 = 세전 − 공제. (VAT 없음 — 개인 계산 로직 불변)
+//  · 외주업체(vendor): 원천징수 없음. 증빙유형이 세금계산서(tax_invoice)인 경우에만
+//     VAT(공급가액 × 10%)를 실지급액에 포함한다. 그 외(계산서·영세율·기타·미발행/미선택)는 VAT 미적용.
+//     - tax_invoice           → vat = gross × 10%, 실지급 = gross + vat, isVatIncluded = true
+//     - 그 외 전부(none 포함)  → vat = 0,           실지급 = gross,       isVatIncluded = false
+//     ※ none(미발행·미선택)은 증빙 미확정 상태이므로 VAT를 자동 적용하지 않는다.
 //  · 원 단위 처리(round2)는 서버 계산과 동일.
 function round2(n: number): number {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 export type PayoutTaxResult = {
-  gross: number; rate: number; deduction: number; net: number; rateConfirmed: boolean;
+  gross: number; rate: number; deduction: number; vat: number; net: number;
+  isVatIncluded: boolean; rateConfirmed: boolean;
 };
+// 외주 VAT 적용 판정 — 세금계산서(tax_invoice)인 경우에만 VAT 포함(§9). 화면은 이 판정을 다시 하지 말고
+//  calcPayoutWithholding().isVatIncluded 를 사용해 (VAT별도) 표시 여부를 결정한다.
+export function vendorVatApplies(
+  payeeType: string | null | undefined,
+  purchaseEvidenceType: string | null | undefined,
+): boolean {
+  return payeeType === "vendor" && purchaseEvidenceType === "tax_invoice";
+}
 export function calcPayoutWithholding(
   costTotal: number,
   payeeType: string | null | undefined,          // "individual" | "vendor" | "none"
   withholdingTreatment: string | null | undefined,
   withholdingRate?: number | null,
+  purchaseEvidenceType?: string | null,          // 외주 VAT 판정용(세금계산서 여부)
 ): PayoutTaxResult {
   const gross = round2(costTotal);
-  // 외주업체·경비: 원천징수 미적용(공제 0)
+  // 외주업체·경비: 원천징수 미적용(공제 0). 세금계산서(tax_invoice)만 VAT 포함.
   if (payeeType !== "individual") {
-    return { gross, rate: 0, deduction: 0, net: gross, rateConfirmed: true };
+    const isVatIncluded = vendorVatApplies(payeeType, purchaseEvidenceType);
+    const vat = isVatIncluded ? round2(gross * 0.1) : 0;
+    return { gross, rate: 0, deduction: 0, vat, net: round2(gross + vat), isVatIncluded, rateConfirmed: true };
   }
   let rate = 0;
   let rateConfirmed = true;
@@ -81,5 +99,5 @@ export function calcPayoutWithholding(
   }
   const deduction = rateConfirmed ? round2(gross * (rate / 100)) : 0;
   const net = round2(gross - deduction);
-  return { gross, rate, deduction, net, rateConfirmed };
+  return { gross, rate, deduction, vat: 0, net, isVatIncluded: false, rateConfirmed };
 }

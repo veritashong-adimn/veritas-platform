@@ -18,7 +18,7 @@ import {
   Row, toRow, won, num, commafy, dateVal, calcRowCostPreview, calcPaymentDate, isEquipmentKind,
   CATEGORY_OPTS, TREATMENT_OPTS, normalizeTreatment, effectiveTreatment,
   PERFORMER_TYPE_OPTS, resolvePerformerType, performerTypeLabel, canonicalLineCategory,
-  PAYMENT_STATUS_OPTS,
+  PAYMENT_STATUS_OPTS, PAYMENT_STATUS_SELECTABLE_OPTS,
   PaymentBadge,
 } from './performanceShared';
 
@@ -541,7 +541,10 @@ export default function PerformanceSection({ projectId, token, performances, onC
         </td>
         <td style={{ ...tdBase, width: RW.pay }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
-            {editable ? <ClickSelect value={r.paymentStatus ?? 'unpaid'} onChange={(v: string) => patchRow(i, { paymentStatus: v })} triggerStyle={inp} options={PAYMENT_STATUS_OPTS} /> : <PaymentBadge value={r.paymentStatus} />}
+            {/* 지급완료(paid)는 직접 선택·변경 불가 → 배지로 표시만. 정산 지급회차 처리로만 변경된다. */}
+            {editable && (r.paymentStatus ?? 'unpaid') !== 'paid'
+              ? <ClickSelect value={r.paymentStatus ?? 'unpaid'} onChange={(v: string) => patchRow(i, { paymentStatus: v })} triggerStyle={inp} options={PAYMENT_STATUS_SELECTABLE_OPTS} />
+              : <PaymentBadge value={r.paymentStatus} />}
             {/* §18 회차 배정 표시(최소) — 지급회차에 포함된 건 표기. 상세는 정산 화면에서 관리. */}
             {r.payoutRoundId != null && (
               <span title={`지급회차 배정됨 (#${r.payoutRoundId}) — 정산 화면에서 관리`} aria-label="지급회차 배정됨"
