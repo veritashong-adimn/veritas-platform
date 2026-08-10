@@ -377,11 +377,11 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
           {view === 'items' && (
             <Card>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1720 }}>
+                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1820 }}>
                   <thead><tr>
-                    {/* 16개 컬럼(§1) — 조치(제외/이월/보류)는 회차 편집 모드에서만 후행 표시 */}
+                    {/* 17개 컬럼(§1) — 날짜 흐름 수행일→납품일→지급일. 조치는 회차 편집 모드에서만 후행 표시 */}
                     <th style={th}>지급대상</th><th style={th}>거래처</th><th style={th}>상품·업무</th><th style={th}>구분</th>
-                    <th style={th}>수행일</th><th style={th}>납품일</th>
+                    <th style={th}>수행일</th><th style={th}>납품일</th><th style={th}>지급일</th>
                     <th style={th}>작업량</th><th style={{ ...th, textAlign: 'right' }}>단가</th><th style={{ ...th, textAlign: 'right' }}>기본수행료</th>
                     <th style={th}>추가비용</th><th style={th}>차감</th>
                     <th style={{ ...th, textAlign: 'right' }}>세전금액</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>공제</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
@@ -389,7 +389,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                     {showActions && <th style={th}>조치</th>}
                   </tr></thead>
                   <tbody>
-                    {summary.length === 0 && <tr><td colSpan={16 + (showActions ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
+                    {summary.length === 0 && <tr><td colSpan={17 + (showActions ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
                     {summary.flatMap((g) => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName }))).map((it: any) => (
                       <tr key={it.id}>
                         {/* [1] 지급대상 */}
@@ -402,9 +402,11 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                         <td style={td}>{it.serviceType === 'translation' ? '번역' : it.serviceType === 'interpretation' ? '통역' : it.serviceType === 'equipment' ? '장비' : it.serviceType === 'review' ? '감수' : it.serviceType === 'dtp' ? 'DTP' : it.serviceType === 'media' ? '미디어' : '기타'}</td>
                         {/* [5] 수행일 (§5) */}
                         <td style={td}>{perfDate(it)}</td>
-                        {/* [6] 납품일 (§6) */}
+                        {/* [6] 납품일 */}
                         <td style={td}>{dateVal(it.deliveryDate) || '-'}</td>
-                        {/* [7] 작업량 (§7) */}
+                        {/* [7] 지급일 — 수행정보 expectedPaymentDate 원본 그대로. 미배정도 표시, 없으면 '-'(§3~§6) */}
+                        <td style={td}>{dateVal(it.expectedPaymentDate) || '-'}</td>
+                        {/* [8] 작업량 */}
                         <td style={td}>{workAmount(it)}</td>
                         {/* [8] 단가 (§8, 우측정렬) */}
                         <td style={tdR}>{unitPrice(it)}</td>
