@@ -82,6 +82,13 @@ function selectItems(whereClause: any) {
       productName: performanceAssignmentsTable.productNameSnapshot,
       deliveryDate: performanceAssignmentsTable.deliveryDate,
       expectedPaymentDate: performanceAssignmentsTable.expectedPaymentDate,
+      // 건별 상세 16컬럼 표시용(수행일·작업량·단가) — 원본 필드 조회만 추가(계산 로직 불변).
+      performanceStartDate: performanceAssignmentsTable.performanceStartDate,
+      performanceEndDate: performanceAssignmentsTable.performanceEndDate,
+      quantity: performanceAssignmentsTable.quantity,
+      unit: performanceAssignmentsTable.unit,
+      contractUnitPrice: performanceAssignmentsTable.contractUnitPrice,
+      isDirectAmount: performanceAssignmentsTable.isDirectAmount,
       basePerformanceFee: performanceAssignmentsTable.basePerformanceFee,
       expenseTotal: performanceAssignmentsTable.expenseTotal,
       deductionTotal: performanceAssignmentsTable.deductionTotal,

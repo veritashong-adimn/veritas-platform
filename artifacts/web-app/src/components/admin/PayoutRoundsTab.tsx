@@ -141,6 +141,29 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   const inlineItems = (arr: { type: string; amount: number }[] | undefined) =>
     arr && arr.length ? arr.map(x => `${x.type} ${won(x.amount)}`).join(' · ') : '—';
 
+  // ── 건별 상세 16컬럼 표시 헬퍼 (표시 전용 — 원본 데이터 매핑, 계산 없음) ──
+  // 수행일: 시작~종료(다르면 종료는 MM-DD), 단일이면 하나, 없으면 '-'
+  const perfDate = (it: any) => {
+    const s = dateVal(it.performanceStartDate), e = dateVal(it.performanceEndDate);
+    if (s && e && e !== s) return `${s}~${e.slice(5)}`;
+    return s || e || '-';
+  };
+  // 작업량: 수량+단위(예: 25,000단어 / 2일). 없으면 '-'(0을 임의 생성하지 않음, §7)
+  const workAmount = (it: any) => {
+    const q = it.quantity;
+    if (q == null || Number(q) === 0) return '-';
+    const n = Number(q);
+    const qs = Number.isFinite(n) ? n.toLocaleString('ko-KR') : String(q);
+    return `${qs}${it.unit ?? ''}`;
+  };
+  // 단가: 계약단가(직접입력·단가없음이면 '-', §8)
+  const unitPrice = (it: any) =>
+    it.isDirectAmount || it.contractUnitPrice == null ? '-' : won(it.contractUnitPrice);
+  // 지급회차: 배정된 회차명(없으면 '미배정', §16)
+  const roundLabel = (it: any) => it.payoutRoundId
+    ? (it.roundBatchNumber || dateVal(it.roundPaymentDate) || `#${it.payoutRoundId}`)
+    : null;
+
   // 회차 저장(제외/보류/재포함 changes 전송) — 서버가 재계산·재조회 반환
   const applyChanges = async (changes: any[], okMsg?: string) => {
     if (!selId || busy) return;
@@ -343,39 +366,53 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
           {view === 'items' && (
             <Card>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1200 }}>
+                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1720 }}>
                   <thead><tr>
-                    <th style={th}>지급대상</th><th style={th}>거래처</th><th style={th}>상품·업무</th><th style={th}>구분</th><th style={th}>납품일</th>
-                    <th style={{ ...th, textAlign: 'right' }}>기본수행료</th><th style={th}>추가비용</th><th style={th}>차감</th>
-                    <th style={{ ...th, textAlign: 'right' }}>세전</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>공제</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
-                    {isOverview && <th style={th}>회차</th>}
+                    {/* 16개 컬럼(§1) — 조치(제외/이월/보류)는 회차 편집 모드에서만 후행 표시 */}
+                    <th style={th}>지급대상</th><th style={th}>거래처</th><th style={th}>상품·업무</th><th style={th}>구분</th>
+                    <th style={th}>수행일</th><th style={th}>납품일</th>
+                    <th style={th}>작업량</th><th style={{ ...th, textAlign: 'right' }}>단가</th><th style={{ ...th, textAlign: 'right' }}>기본수행료</th>
+                    <th style={th}>추가비용</th><th style={th}>차감</th>
+                    <th style={{ ...th, textAlign: 'right' }}>세전금액</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>공제</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
+                    <th style={th}>지급회차</th>
                     {showActions && <th style={th}>조치</th>}
                   </tr></thead>
                   <tbody>
-                    {summary.length === 0 && <tr><td colSpan={12 + (isOverview ? 1 : 0) + (showActions ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
+                    {summary.length === 0 && <tr><td colSpan={16 + (showActions ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
                     {summary.flatMap((g) => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName }))).map((it: any) => (
                       <tr key={it.id}>
+                        {/* [1] 지급대상 */}
                         <td style={{ ...td, fontWeight: 600 }}>{it.payeeName}</td>
-                        {/* 거래처 — 별도 컬럼(§1·§2). 연결된 고객사명, 없으면 '-' */}
+                        {/* [2] 거래처 — 별도 컬럼(§2). 없으면 '-' */}
                         <td style={td}>{it.customerName || '-'}</td>
+                        {/* [3] 상품·업무 — 거래처 중복표기 안 함(§3) */}
                         <td style={td}>{it.productName || `#${it.projectId}`}</td>
-                        <td style={td}>{it.serviceType === 'translation' ? '번역' : it.serviceType === 'interpretation' ? '통역' : it.serviceType === 'equipment' ? '장비' : '기타'}</td>
-                        <td style={td}>{dateVal(it.deliveryDate)}</td>
+                        {/* [4] 구분 — 서비스 유형(§4) */}
+                        <td style={td}>{it.serviceType === 'translation' ? '번역' : it.serviceType === 'interpretation' ? '통역' : it.serviceType === 'equipment' ? '장비' : it.serviceType === 'review' ? '감수' : it.serviceType === 'dtp' ? 'DTP' : it.serviceType === 'media' ? '미디어' : '기타'}</td>
+                        {/* [5] 수행일 (§5) */}
+                        <td style={td}>{perfDate(it)}</td>
+                        {/* [6] 납품일 (§6) */}
+                        <td style={td}>{dateVal(it.deliveryDate) || '-'}</td>
+                        {/* [7] 작업량 (§7) */}
+                        <td style={td}>{workAmount(it)}</td>
+                        {/* [8] 단가 (§8, 우측정렬) */}
+                        <td style={tdR}>{unitPrice(it)}</td>
+                        {/* [9] 기본수행료 (§9, 우측정렬) */}
                         <td style={tdR}>{won(it.basePerformanceFee)}</td>
-                        {/* 추가비용 — 항목명+금액 인라인, 합계 미표시(§4) */}
+                        {/* [10] 추가비용 — 항목명+금액 인라인(§10) */}
                         <td style={{ ...td, whiteSpace: 'normal', color: (it.expenses?.length ? C.textSecondary : C.g400) }}>{inlineItems(it.expenses)}</td>
-                        {/* 차감 — 항목명+금액 인라인, 합계 미표시(§5) */}
+                        {/* [11] 차감 — 항목명+금액 인라인(§11) */}
                         <td style={{ ...td, whiteSpace: 'normal', color: (it.deductions?.length ? C.danger : C.g400) }}>{inlineItems(it.deductions)}</td>
+                        {/* [12] 세전금액 — VAT별도 보조표시가 숫자 정렬 안 깨뜨림(§12·§5) */}
                         {grossCell(it.gross, !!it.isVatIncluded, true)}
+                        {/* [13] 세금처리 (§13) */}
                         <td style={td}>{(() => { const lbl = taxTreatmentLabel(it); return lbl === '세무확인 필요' ? <span style={{ color: C.danger }}>{lbl}</span> : lbl; })()}</td>
+                        {/* [14] 공제 (§14, 우측정렬) */}
                         <td style={{ ...tdR, color: C.danger }}>{won(it.withholdingTax)}</td>
+                        {/* [15] 실지급 (§15, 우측정렬·파란 강조) */}
                         <td style={{ ...tdR, fontWeight: 700, color: C.primaryText }}>{won(it.netPayment)}</td>
-                        {/* 회차 컬럼(§3) — 개요 모드에서만. 소속 회차 표시, 없으면 '미배정' */}
-                        {isOverview && (
-                          <td style={td}>{it.payoutRoundId
-                            ? (it.roundBatchNumber || dateVal(it.roundPaymentDate) || `#${it.payoutRoundId}`)
-                            : <span style={{ color: C.textSecondary, fontWeight: 700 }}>미배정</span>}</td>
-                        )}
+                        {/* [16] 지급회차 — 미배정 포함(§16) */}
+                        <td style={td}>{roundLabel(it) ?? <span style={{ color: C.textSecondary, fontWeight: 700 }}>미배정</span>}</td>
                         {showActions && (
                           <td style={td}>
                             <div style={{ display: 'flex', gap: 4 }}>
