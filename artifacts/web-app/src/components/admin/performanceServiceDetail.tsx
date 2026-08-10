@@ -191,9 +191,18 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
 
   // ── 조회모드: 컴팩트 텍스트(§17) ──
   if (!editable) {
-    // 번역: 파일명(말줄임+툴팁) · 작업량(단어수/글자수/페이지수). 계산식·금액은 표시하지 않음(계약단가·기본수행료·원가합계 컬럼에서 확인).
+    // 번역: 작업기간 · 파일명(말줄임+툴팁) · 작업량(단어/글자). 계산식·금액은 표시하지 않음(§7 — 기간+작업량 모두 표시).
     if (kind === 'translation') {
-      return renderTranslationSummary(r, snap) ?? <span style={{ ...ref, color: C.textSecondary }}>—</span>;
+      const tperiod = formatScheduleRange(r.performanceStartDate, r.performanceEndDate);
+      const summary = renderTranslationSummary(r, snap);
+      if (!tperiod && !summary) return <span style={{ ...ref, color: C.textSecondary }}>—</span>;
+      return (
+        <span style={{ ...ref, color: C.textSecondary, display: 'inline-flex', alignItems: 'baseline', gap: 4, maxWidth: '100%' }}>
+          {tperiod && <span style={{ flexShrink: 0 }}>{tperiod}</span>}
+          {tperiod && summary && <span style={{ flexShrink: 0 }}>·</span>}
+          {summary}
+        </span>
+      );
     }
     const period = formatScheduleRange(r.performanceStartDate, r.performanceEndDate);
     let text = '';
@@ -242,10 +251,21 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
     );
   }
   if (kind === 'translation') {
-    // §작업량통일: 번역 수행정보는 파일명·단어수/글자수만 표시(조회·수정 동일 렌더러). 페이지 수량/단위 편집 UI는 두지 않는다 —
-    //   페이지수는 판매정보에만 존재하며 수행원가(계약단가×단어/글자)에 사용하지 않는다. 작업량은 판매 스냅샷 고정값.
-    return renderTranslationSummary(r, snap)
-      ?? <span style={{ ...ref, color: C.textMuted }}>작업량 정보 없음</span>;
+    // 번역 수정모드: 작업기간(편집) + 작업량(단어/글자, 표시). 페이지 수량/단위 편집 UI는 두지 않는다 —
+    //   페이지수는 판매정보에만 존재하며 수행원가(계약단가×단어/글자)에 사용하지 않는다(작업량은 판매 스냅샷 고정값).
+    //   번역은 (a) 수량(quantity) 미변경(작업량=단어/글자, §10) (b) 납품일 자동연동 안 함 — 작업기간과 납품일은 독립(§3·§11).
+    const onTransRange = (start: string, end: string) => {
+      const p: Partial<Row> = {};
+      if (start !== dateVal(r.performanceStartDate)) p.performanceStartDate = start;
+      if (end !== dateVal(r.performanceEndDate)) p.performanceEndDate = end;
+      if (Object.keys(p).length) patch(p);
+    };
+    return (
+      <div style={wrap}>
+        <DateRangeField start={r.performanceStartDate} end={r.performanceEndDate} onChange={onTransRange} label="작업기간" />
+        {renderTranslationSummary(r, snap) ?? <span style={{ ...ref, color: C.textMuted }}>작업량 정보 없음</span>}
+      </div>
+    );
   }
   if (kind === 'expense') {
     return (

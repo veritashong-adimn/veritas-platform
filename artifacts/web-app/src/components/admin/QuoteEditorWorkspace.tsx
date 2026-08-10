@@ -207,6 +207,10 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
         // 페이지 산정 정책(sourceLanguage) 복원용 — 재수정 진입 시 단어/글자 계산 기준을 정확히 복구한다.
         languagePair: it.sourceLanguage || undefined,
         memo: [it.memo, ref].filter(Boolean).join(' / ') || undefined,
+        // 번역 작업기간(§2·§4) — 통역/장비와 동일한 event_start/end_date 컬럼 재사용(스키마 변경 없음).
+        //   수행정보 생성 시 performanceStartDate/End 로 자동 복사됨(initialFieldsFromSale). 납품일과는 독립.
+        eventStartDate: it.eventStartDate || undefined,
+        eventEndDate:   it.eventEndDate   || undefined,
       };
     }
     case 'interpretation': {
@@ -1054,6 +1058,11 @@ function ServiceFields({ it, update, products }: {
 
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {/* 작업기간(§2) — 통역/장비와 동일한 Date Range Picker. 저장은 eventStartDate/eventEndDate(납품일과 독립) */}
+          <DateRangeField start={it.eventStartDate} end={it.eventEndDate}
+            onChange={(s, e) => update({ eventStartDate: s, eventEndDate: e })}
+            boxStyle={{ ...rinp(178), height: 32 }}
+            title="번역 작업기간" startTitle="작업 시작일" endTitle="작업 종료일 (당일은 비워두세요)" />
           {/* 파일명 — 확장자 감지 시 파일형식 자동 설정 */}
           <input value={it.fileName}
             onChange={e => {
