@@ -61,8 +61,15 @@ interface Props { token: string; onToast: (m: string) => void; }
 export default function PayoutRoundsTab({ token, onToast }: Props) {
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const [rounds, setRounds] = useState<any[]>([]);
-  const [selId, setSelId] = useState<number | null>(null);
+  // 선택값(§6): 'all'(전체 지급대상·기본) | 'unassigned'(미배정) | 회차 id 문자열.
+  // selId 는 "실제 회차"가 선택됐을 때만 숫자 — 회차 전용 액션(확정/완료/제외 등)은 이 값으로만 동작.
+  const [sel, setSel] = useState<string>('all');
+  const selId = /^\d+$/.test(sel) ? Number(sel) : null;
   const [detail, setDetail] = useState<any | null>(null);
+  // 조회 상태 명확 구분(§14): loading / error / (empty·data 는 detail 기준 하위 렌더).
+  // 이전 구조는 fetch 실패 시 detail 이 계속 null → 「불러오는 중…」에 영구히 갇히는 결함이 있었다.
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<'summary' | 'items'>('summary');
   const [busy, setBusy] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -80,22 +87,33 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
       const res = await fetch(api('/api/admin/payout-rounds'), { headers: authH });
       const data = await res.json().catch(() => ({}));
       const rows = data.rows ?? [];
-      setRounds(rows);
-      if (rows.length && selId == null) setSelId(rows[0].id);
+      setRounds(rows);   // 기본값은 '전체 지급대상' — 회차를 자동선택하지 않는다(§1·§6).
     } catch { onToast('지급회차 목록 조회 실패'); }
   }, [token]);
 
-  const loadDetail = useCallback(async (id: number) => {
+  // 전체 지급대상(개요) / 미배정 / 특정 회차 — 선택값에 따라 조회 소스 분기(§1·§6).
+  const loadDetail = useCallback(async (s: string) => {
+    const url = s === 'all' ? '/api/admin/payout-rounds/overview'
+      : s === 'unassigned' ? '/api/admin/payout-rounds/overview?scope=unassigned'
+      : `/api/admin/payout-rounds/${s}`;
+    setLoading(true); setError(null);
     try {
-      const res = await fetch(api(`/api/admin/payout-rounds/${id}`), { headers: authH });
+      const res = await fetch(api(url), { headers: authH });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { onToast(data.error ?? '회차 조회 실패'); return; }
+      if (!res.ok) {
+        // 서버 미배포(구버전 → /overview 404)·권한·서버오류 등을 화면에 명시(무한 로딩 방지).
+        const msg = data.error ?? `조회 실패 (HTTP ${res.status})`;
+        setError(msg); setDetail(null); onToast(msg); return;
+      }
       setDetail(data);
-    } catch { onToast('회차 조회 중 오류'); }
+    } catch {
+      setError('조회 중 오류가 발생했습니다. 네트워크 또는 서버 상태를 확인하세요.');
+      setDetail(null); onToast('조회 중 오류');
+    } finally { setLoading(false); }
   }, [token]);
 
   useEffect(() => { loadRounds(); }, [loadRounds]);
-  useEffect(() => { if (selId != null) loadDetail(selId); else setDetail(null); }, [selId, loadDetail]);
+  useEffect(() => { loadDetail(sel); }, [sel, loadDetail]);
 
   const round = detail?.round;
   const summary: any[] = detail?.summary ?? [];
@@ -103,6 +121,10 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   const warnings = detail?.warnings ?? { total: 0, holdAmount: 0, byReason: [] };
   const collectable: any[] = detail?.collectable ?? [];
   const locked = round && (round.status === 'confirmed' || round.status === 'paid' || round.status === 'cancelled');
+  // 전체 지급대상(개요) 모드 — 회차가 선택되지 않았고 데이터가 로드된 상태(§1). 건별 조치는 회차 선택 시만 가능.
+  const isOverview = !!detail && !round;
+  const overviewInfo = detail?.overview ?? null;
+  const showActions = !!round && !locked;   // 제외/이월/보류는 특정 회차(편집가능)에서만
   // (VAT별도) 표시는 서버 공통계산(calcPayoutWithholding)이 내려준 isVatIncluded 값만 사용한다.
   //  · 화면에서 purchaseEvidenceType 을 다시 판정하지 않는다 — 계산·표시 기준을 단일화(§9).
   //  · isVatIncluded=true 는 외주 세금계산서(tax_invoice)로 실지급액에 VAT가 포함된 건. (표시 전용)
@@ -189,10 +211,14 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
       <Card>
         <div style={{ display: 'flex', alignItems: 'center', gap: SP[3], flexWrap: 'wrap' }}>
           <span style={{ ...TYPO.sectionTitle }}>지급회차</span>
-          <div style={{ width: 260 }}>
-            <ClickSelect value={selId != null ? String(selId) : ''} onChange={(v: string) => setSelId(v ? Number(v) : null)}
+          <div style={{ width: 300 }}>
+            <ClickSelect value={sel} onChange={(v: string) => setSel(v || 'all')}
               triggerStyle={inp}
-              options={rounds.map(r => ({ value: String(r.id), label: `${r.batchNumber || dateVal(r.paymentDate)} · ${ROUND_STATUS[r.status]?.label ?? r.status} · ${r.totalAssignments ?? 0}건` }))} />
+              options={[
+                { value: 'all', label: '전체 지급대상' },
+                { value: 'unassigned', label: '미배정' },
+                ...rounds.map(r => ({ value: String(r.id), label: `${r.batchNumber || dateVal(r.paymentDate)} · ${ROUND_STATUS[r.status]?.label ?? r.status} · ${r.totalAssignments ?? 0}건` })),
+              ]} />
           </div>
           <PrimaryBtn onClick={() => setShowCreate(true)} style={{ fontSize: 12, padding: '7px 14px' }} data-testid="payout-create" aria-label="지급회차 생성">+ 지급회차 생성</PrimaryBtn>
           {/* §7 지급명세서 출력 — 다음 Phase 구현. 현재는 배치만(준비중·Disabled). */}
@@ -207,11 +233,30 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
         </div>
       </Card>
 
-      {!round && <Card style={{ padding: 32, textAlign: 'center', color: C.g400 }}>지급회차를 생성하거나 선택하세요.</Card>}
+      {/* 상태 명확 구분(§14): LOADING / ERROR. EMPTY·DATA 는 아래 detail 기준으로 렌더. */}
+      {loading && <Card style={{ padding: 32, textAlign: 'center', color: C.g400 }}>불러오는 중…</Card>}
+      {!loading && error && (
+        <Card style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ color: C.danger, fontWeight: 700, marginBottom: 10 }}>⚠ {error}</div>
+          <GhostBtn onClick={() => loadDetail(sel)} style={{ fontSize: 12, padding: '6px 14px' }} data-testid="payout-retry">다시 시도</GhostBtn>
+        </Card>
+      )}
 
-      {round && (
-        <>
-          {/* ── 요약바(§2·§14) ── */}
+      {/* ── 전체 지급대상 개요 요약바(§13) — 회차 미선택 시. 진입 즉시 지급대상 전체가 보인다(§1·§9). ── */}
+      {!loading && !error && isOverview && (
+        <Card>
+          <div style={{ display: 'flex', gap: SP[5], alignItems: 'center', flexWrap: 'wrap', ...TYPO.inputValue, fontVariantNumeric: 'tabular-nums' }}>
+            <b style={{ fontSize: 15 }}>{sel === 'unassigned' ? '미배정 지급대상' : '전체 지급대상'}</b>
+            <span>총 지급대상 <b>{totals.payees ?? 0}명</b> (개인 {totals.individualCount ?? 0} · 외주 {totals.vendorCount ?? 0})</span>
+            <span>총 수행건 <b>{totals.assignments ?? 0}건</b></span>
+            <span>미배정 <b style={{ color: (overviewInfo?.unassignedCount ?? 0) > 0 ? C.danger : C.textSecondary }}>{overviewInfo?.unassignedCount ?? 0}건</b></span>
+            <span>총 실지급 <b style={{ color: C.primaryText }}>{won(totals.netTotal)}원</b></span>
+          </div>
+        </Card>
+      )}
+
+      {/* ── 회차 요약바(§2·§14) — 특정 회차 선택 시만 표시 ── */}
+      {!loading && !error && round && (
           <Card>
             <div style={{ display: 'flex', gap: SP[3], alignItems: 'center', flexWrap: 'wrap', marginBottom: SP[3] }}>
               <b style={{ ...TYPO.inputValue, fontSize: 15 }}>{round.batchNumber || `${dateVal(round.paymentDate)} 지급회차`}</b>
@@ -243,7 +288,11 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
               {warnings.holdAmount > 0 && <span>지급보류 <b style={{ color: '#b45309' }}>{won(warnings.holdAmount)}원</b></span>}
             </div>
           </Card>
+      )}
 
+      {/* ── 지급대상별 요약 / 건별 상세내역 — 회차·개요 공용, 진입 즉시 표시(§1·§4·§5) ── */}
+      {!loading && !error && detail && (
+        <>
           {/* ── 보기 전환 ── */}
           <div style={{ display: 'flex', gap: 6 }}>
             {(['summary', 'items'] as const).map(v => (
@@ -299,10 +348,11 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                     <th style={th}>지급대상</th><th style={th}>거래처</th><th style={th}>상품·업무</th><th style={th}>구분</th><th style={th}>납품일</th>
                     <th style={{ ...th, textAlign: 'right' }}>기본수행료</th><th style={th}>추가비용</th><th style={th}>차감</th>
                     <th style={{ ...th, textAlign: 'right' }}>세전</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>공제</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
-                    {!locked && <th style={th}>조치</th>}
+                    {isOverview && <th style={th}>회차</th>}
+                    {showActions && <th style={th}>조치</th>}
                   </tr></thead>
                   <tbody>
-                    {summary.length === 0 && <tr><td colSpan={locked ? 12 : 13} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>수집된 지급대상이 없습니다.</td></tr>}
+                    {summary.length === 0 && <tr><td colSpan={12 + (isOverview ? 1 : 0) + (showActions ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
                     {summary.flatMap((g) => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName }))).map((it: any) => (
                       <tr key={it.id}>
                         <td style={{ ...td, fontWeight: 600 }}>{it.payeeName}</td>
@@ -320,7 +370,13 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                         <td style={td}>{(() => { const lbl = taxTreatmentLabel(it); return lbl === '세무확인 필요' ? <span style={{ color: C.danger }}>{lbl}</span> : lbl; })()}</td>
                         <td style={{ ...tdR, color: C.danger }}>{won(it.withholdingTax)}</td>
                         <td style={{ ...tdR, fontWeight: 700, color: C.primaryText }}>{won(it.netPayment)}</td>
-                        {!locked && (
+                        {/* 회차 컬럼(§3) — 개요 모드에서만. 소속 회차 표시, 없으면 '미배정' */}
+                        {isOverview && (
+                          <td style={td}>{it.payoutRoundId
+                            ? (it.roundBatchNumber || dateVal(it.roundPaymentDate) || `#${it.payoutRoundId}`)
+                            : <span style={{ color: C.textSecondary, fontWeight: 700 }}>미배정</span>}</td>
+                        )}
+                        {showActions && (
                           <td style={td}>
                             <div style={{ display: 'flex', gap: 4 }}>
                               <button type="button" onClick={() => excludeItem(it.id)} disabled={busy} title="이번 회차에서 제외" data-testid={`payout-exclude-${it.id}`} style={{ border: `1px solid ${C.g300}`, borderRadius: 5, background: C.bgCard, cursor: 'pointer', padding: '2px 6px', fontSize: 10 }}>제외</button>
@@ -336,7 +392,12 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
               </div>
             </Card>
           )}
+        </>
+      )}
 
+      {/* ── 재포함 + 회차 총계·지급확정/완료 — 특정 회차 선택 시만(§6·§8·§11) ── */}
+      {!loading && !error && round && (
+        <>
           {/* ── 재포함 가능 건(§5 포함) — 제외/이월했거나 새로 조건 충족된 미배정 건 ── */}
           {!locked && collectable.length > 0 && (
             <Card>
@@ -381,7 +442,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
         </>
       )}
 
-      {showCreate && <CreateDialog token={token} onToast={onToast} onClose={() => setShowCreate(false)} onCreated={async (d) => { setShowCreate(false); await loadRounds(); setSelId(d.round.id); setDetail(d); }} />}
+      {showCreate && <CreateDialog token={token} onToast={onToast} onClose={() => setShowCreate(false)} onCreated={async (d) => { setShowCreate(false); await loadRounds(); setSel(String(d.round.id)); setDetail(d); }} />}
       {showWarn && <WarningsModal warnings={warnings} busy={busy} onUnhold={!locked ? unholdItem : undefined} onClose={() => setShowWarn(false)} />}
       {holdFor && (
         <Modal title={`지급보류 — ${holdFor.name}`} onClose={() => setHoldFor(null)}>

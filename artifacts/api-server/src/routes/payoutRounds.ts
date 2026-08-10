@@ -30,11 +30,12 @@ const basisExpr = (basis: string) =>
 // 수집기준도 납품일(delivery_date)로 정합시킨다. (지급예정일 기준은 지급일이 납품창 밖이라 0건 수집되던 문제 해결)
 const DEFAULT_COLLECTION_BASIS = "delivery_date" as const;
 
-// 자동수집 조건(§7) — 지급대상 지정·납품확인·지급액>0·미지급·미배정·세금처리 선택(개인). 대상기간 내.
-const collectWhere = (periodStart: string, periodEnd: string, basis: string) => and(
+// 지급대상 공통 자격조건 — 미삭제·미지급·납품확인·납품일·지급액>0·지급대상 지정(개인은 세금처리 포함).
+//  · 회차 자동수집(collectWhere)과 전체 지급대상 개요(overview)가 이 동일 조건을 공유한다(§2 중복로직 방지).
+//  · 회차/기간 조건(payoutRoundId·basisExpr)은 각 사용처에서만 추가로 붙인다.
+const eligibleConds = () => [
   isNull(performanceAssignmentsTable.deletedAt),
-  isNull(performanceAssignmentsTable.payoutRoundId),
-  eq(performanceAssignmentsTable.paymentStatus, "unpaid"),          // 지급완료·지급보류 제외(§7-6·§8)
+  eq(performanceAssignmentsTable.paymentStatus, "unpaid"),          // 지급완료·지급보류 제외(§7-6·§8·§10)
   sql`${performanceAssignmentsTable.deliveryDate} IS NOT NULL`,     // 납품일 입력(§7-2)
   eq(performanceAssignmentsTable.deliveryConfirmed, true),          // 납품확인(§7-3)
   sql`${performanceAssignmentsTable.costTotal} > 0`,                // 지급액 확정·0원 초과(§7-4·5)
@@ -45,6 +46,18 @@ const collectWhere = (periodStart: string, periodEnd: string, basis: string) => 
     OR (${performanceAssignmentsTable.performerCategory} = 'vendor'
       AND ${performanceAssignmentsTable.vendorCompanyId} IS NOT NULL)
   )`,                                                                // 지급대상 지정·세금처리(개인)(§7-1·§8)
+];
+
+// 전체 지급대상 개요(§1·§2) — 회차·기간 무관 자격충족 미지급 건 전체. scope=unassigned 이면 미배정만.
+const overviewWhere = (unassignedOnly: boolean) =>
+  unassignedOnly
+    ? and(...eligibleConds(), isNull(performanceAssignmentsTable.payoutRoundId))
+    : and(...eligibleConds());
+
+// 자동수집 조건(§7) — 공통 자격조건 + 미배정 + 대상기간 내. (회차 생성·재수집 공용)
+const collectWhere = (periodStart: string, periodEnd: string, basis: string) => and(
+  ...eligibleConds(),
+  isNull(performanceAssignmentsTable.payoutRoundId),
   sql`${basisExpr(basis)} >= ${periodStart}`,
   sql`${basisExpr(basis)} <= ${periodEnd}`,
 );
@@ -78,11 +91,17 @@ function selectItems(whereClause: any) {
       purchaseEvidenceType: performanceAssignmentsTable.purchaseEvidenceType,  // 표시용 — 외주 세금계산서(VAT별도) 라벨 판단
       paymentStatus: performanceAssignmentsTable.paymentStatus,
       remark: performanceAssignmentsTable.remark,
+      // 소속 지급회차 표시용(§3) — 미배정이면 전부 null. 회차 상세 조회에도 무해(자기 회차값).
+      payoutRoundId: performanceAssignmentsTable.payoutRoundId,
+      roundBatchNumber: payoutRoundsTable.batchNumber,
+      roundPaymentDate: payoutRoundsTable.paymentDate,
+      roundStatus: payoutRoundsTable.status,
     })
     .from(performanceAssignmentsTable)
     .leftJoin(projectsTable, eq(performanceAssignmentsTable.projectId, projectsTable.id))
     .leftJoin(companiesTable, eq(projectsTable.companyId, companiesTable.id))
     .leftJoin(quotesTable, eq(performanceAssignmentsTable.quoteId, quotesTable.id))
+    .leftJoin(payoutRoundsTable, eq(performanceAssignmentsTable.payoutRoundId, payoutRoundsTable.id))
     .where(whereClause)
     .orderBy(performanceAssignmentsTable.payeeType, performanceAssignmentsTable.individualUserId, performanceAssignmentsTable.vendorCompanyId, performanceAssignmentsTable.id);
 }
@@ -163,11 +182,9 @@ function aggregate(items: any[]) {
   }));
 }
 
-// 회차 상세 로드 — 지급대상별 요약 + 건별 + 경고(§8) + 총계(§14).
-async function loadRoundDetail(round: any) {
-  const items = await loadRoundItems(round.id);
-  const summary = aggregate(items);
-  const totals = summary.reduce((t, g) => ({
+// 지급대상별 요약 → 회차/개요 총계(§14). 회차 상세와 전체 지급대상 개요가 공용.
+function computeTotals(summary: any[]) {
+  return summary.reduce((t, g) => ({
     assignments: t.assignments + g.count,
     payees: t.payees + 1,
     individualCount: t.individualCount + (g.payeeType === "individual" ? 1 : 0),
@@ -180,6 +197,13 @@ async function loadRoundDetail(round: any) {
     vatTotal: t.vatTotal + g.vatTotal,
     netTotal: t.netTotal + g.netTotal,
   }), { assignments: 0, payees: 0, individualCount: 0, vendorCount: 0, baseTotal: 0, expenseTotal: 0, deductionTotal: 0, grossTotal: 0, withholdingTotal: 0, vatTotal: 0, netTotal: 0 });
+}
+
+// 회차 상세 로드 — 지급대상별 요약 + 건별 + 경고(§8) + 총계(§14).
+async function loadRoundDetail(round: any) {
+  const items = await loadRoundItems(round.id);
+  const summary = aggregate(items);
+  const totals = computeTotals(summary);
 
   const warnings = await loadWarnings(round);
   // 재포함 가능건(§5) — costTotal 기준 세전, 표시용 요약값만 계산해 전달.
@@ -312,6 +336,33 @@ router.post("/admin/payout-rounds", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "지급회차 생성 실패");
     res.status(500).json({ error: "지급회차 생성 중 오류가 발생했습니다." });
+  }
+});
+
+// ── GET 전체 지급대상 개요(§1·§2·§13) — 회차 미선택 기본 화면 ────────────────────
+//   · 회차·기간과 무관하게 자격충족 미지급 지급대상 전체를 지급대상별로 집계(배정+미배정).
+//   · scope=unassigned 이면 미배정(payoutRoundId IS NULL) 건만.
+//   · 지급완료 건은 제외(eligibleConds, §10). 집계·계산은 회차 상세와 동일 함수 재사용(§11 계산 불변).
+//   · 읽기 전용 — payout_round_id·상태·원본 데이터를 일절 변경하지 않는다(§15).
+//   · 반드시 GET /:id 보다 위에 정의(라우팅 충돌 방지: "overview"가 :id로 잡히지 않도록).
+router.get("/admin/payout-rounds/overview", ...adminGuard, async (req, res) => {
+  const unassignedOnly = String(req.query.scope ?? "all") === "unassigned";
+  try {
+    const items = await attachLineItems(await selectItems(overviewWhere(unassignedOnly)));
+    const summary = aggregate(items);
+    const totals = computeTotals(summary);
+    const unassignedCount = items.filter((it: any) => it.payoutRoundId == null).length;
+    // 회차 상세와 동일한 응답 형태(round=null)로 반환해 화면 렌더링을 공용화. 회차 전용 필드는 빈 값.
+    res.json({
+      round: null,
+      overview: { scope: unassignedOnly ? "unassigned" : "all", unassignedCount },
+      summary, totals,
+      warnings: { total: 0, holdAmount: 0, byReason: [] },
+      collectable: [],
+    });
+  } catch (err) {
+    req.log.error({ err }, "전체 지급대상 개요 조회 실패");
+    res.status(500).json({ error: "전체 지급대상 조회 중 오류가 발생했습니다." });
   }
 });
 
