@@ -61,15 +61,19 @@ function RoCell({ w, flex, value, align = 'left', suffix, title }: {
 // ── ④ 유형별 동적필드 (읽기전용) — 편집기 ServiceFields의 텍스트 미러 ──
 function ReadOnlyServiceFields({ f }: { f: QuoteItemForm }) {
   switch (f.productType) {
-    case 'translation':
+    case 'translation': {
+      // 작업기간(§6) — 통역 read와 동일한 날짜 표시. 저장된 event_start/end_date. 단어/글자 정보는 유지.
+      const tperiod = formatScheduleRange(f.eventStartDate, f.eventEndDate);
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {tperiod && <RoCell w={150} value={tperiod} title="번역 작업기간" />}
           <RoCell flex={1} value={f.fileName} title="원본 파일명" />
           <RoCell w={90} value={f.fileFormat} />
           <RoCell w={88} value={f.wordCount ? Number(f.wordCount).toLocaleString() : ''} suffix="단어" align="right" />
           <RoCell w={88} value={f.charCount ? Number(f.charCount).toLocaleString() : ''} suffix="글자" align="right" />
         </div>
       );
+    }
     case 'interpretation': {
       const period = formatScheduleRange(f.interpretDate, f.interpretEndDate);
       return (
