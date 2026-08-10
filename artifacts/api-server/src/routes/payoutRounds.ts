@@ -89,6 +89,10 @@ function selectItems(whereClause: any) {
       unit: performanceAssignmentsTable.unit,
       contractUnitPrice: performanceAssignmentsTable.contractUnitPrice,
       isDirectAmount: performanceAssignmentsTable.isDirectAmount,
+      // 작업량 표시용 유형별 상세(단어/글자수·통역 인원 등). 기존 수행정보 UI와 동일 원본을 재사용(§2·§7).
+      //  · 번역/감수 작업량 = wordCount||charCount(페이지수 미사용), 통역 = 일수×interpreterCount명.
+      //  · saleUnitPrice 등 판매값은 사용하지 않는다(단가는 contractUnitPrice 원가단가, §5).
+      serviceDetail: performanceAssignmentsTable.serviceDetailSnapshot,
       basePerformanceFee: performanceAssignmentsTable.basePerformanceFee,
       expenseTotal: performanceAssignmentsTable.expenseTotal,
       deductionTotal: performanceAssignmentsTable.deductionTotal,

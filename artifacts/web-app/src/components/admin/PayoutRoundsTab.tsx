@@ -142,21 +142,32 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
     arr && arr.length ? arr.map(x => `${x.type} ${won(x.amount)}`).join(' · ') : '—';
 
   // ── 건별 상세 16컬럼 표시 헬퍼 (표시 전용 — 원본 데이터 매핑, 계산 없음) ──
-  // 수행일: 시작~종료(다르면 종료는 MM-DD), 단일이면 하나, 없으면 '-'
+  // 수행일: 시작~종료. 같은 연도면 종료는 MM-DD, 연도 다르면 전체 표시(§3). 단일이면 하나, 없으면 '-'.
+  //  · 납품일을 대신 쓰지 않음 — 번역처럼 수행일 원본이 없으면 '-' 유지(§3·§12).
   const perfDate = (it: any) => {
     const s = dateVal(it.performanceStartDate), e = dateVal(it.performanceEndDate);
-    if (s && e && e !== s) return `${s}~${e.slice(5)}`;
+    if (s && e && e !== s) return s.slice(0, 4) === e.slice(0, 4) ? `${s}~${e.slice(5)}` : `${s}~${e}`;
     return s || e || '-';
   };
-  // 작업량: 수량+단위(예: 25,000단어 / 2일). 없으면 '-'(0을 임의 생성하지 않음, §7)
+  // 작업량: 기존 수행정보 UI(performanceServiceDetail) 표시 원칙을 재사용(§2·§4). 없는 데이터는 '-'(§12).
+  //  · 번역/감수: 실제 정산 작업량 = 단어수(우선)/글자수. 페이지수(quantity)는 판매값이라 미사용.
+  //  · 통역: 수행일수 × 인원(interpreterCount명). basefee=일수×단가, 인원은 설명값.
+  //  · 장비/기타: 수량+단위(수량×단가=기본수행료로 정합).
+  const nfmt = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n.toLocaleString('ko-KR') : String(v); };
   const workAmount = (it: any) => {
-    const q = it.quantity;
-    if (q == null || Number(q) === 0) return '-';
-    const n = Number(q);
-    const qs = Number.isFinite(n) ? n.toLocaleString('ko-KR') : String(q);
-    return `${qs}${it.unit ?? ''}`;
+    const d = it.serviceDetail || {};
+    const svc = it.serviceType;
+    if (svc === 'translation' || svc === 'review') {
+      if (d.wordCount != null && d.wordCount !== '') return `${nfmt(d.wordCount)}단어`;
+      if (d.charCount != null && d.charCount !== '') return `${nfmt(d.charCount)}글자`;
+      return '-';
+    }
+    if (it.quantity == null || Number(it.quantity) === 0) return '-';
+    const base = `${nfmt(it.quantity)}${it.unit ?? ''}`;
+    if (svc === 'interpretation' && d.interpreterCount) return `${base} × ${nfmt(d.interpreterCount)}명`;
+    return base;
   };
-  // 단가: 계약단가(직접입력·단가없음이면 '-', §8)
+  // 단가: 계약단가(원가단가, §5). 판매단가 미사용. 직접입력·단가없음이면 '-'(§8).
   const unitPrice = (it: any) =>
     it.isDirectAmount || it.contractUnitPrice == null ? '-' : won(it.contractUnitPrice);
   // 지급회차: 배정된 회차명(없으면 '미배정', §16)
