@@ -19,6 +19,7 @@ import { z } from "zod";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { decrypt, maskResidentNumber } from "../lib/encrypt";
+import { autoAssignByPaymentDate } from "./payoutRounds";
 
 // 납품확인 권한(§9) — 관리자(super) OR 프로젝트 담당(admin_id) OR project.update 권한 보유자.
 async function canConfirmDelivery(user: { id: number; role?: string; roleId?: number | null } | undefined, projectAdminId: number | null): Promise<boolean> {
@@ -913,6 +914,11 @@ router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) =
         }).where(eq(performanceAssignmentsTable.id, assignmentId));
       }
     });
+
+    // 저장 완료 후 — 지급일이 일치하는 지급확정 전 회차로 미배정 건 자동배정(정산 즉시 반영).
+    //   best-effort: 자동배정 실패가 수행정보 저장 자체를 막지 않도록 예외를 분리 처리.
+    try { await autoAssignByPaymentDate(projectId); }
+    catch (e) { req.log.error({ e, projectId }, "지급회차 자동배정 실패(저장은 정상)"); }
 
     const rowsOut = await loadPerformanceRows(projectId);
     res.json({ ok: true, rows: rowsOut });

@@ -10,7 +10,7 @@
 // PDF   : 견적서 = QuotePdfPreviewModal / 거래명세서 = TransactionStatementModal
 //        (둘 다 기존 견적관리·판매모달과 동일 파이프라인: buildQuotePdfData)
 // ─────────────────────────────────────────────────────────────────────────────
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type Product } from '../lib/constants';
 import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn } from '../components/ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../lib/ds';
@@ -80,6 +80,22 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   const [loading, setLoading] = useState(true);
   const [project, setProject] = useState<any>(null);
   const [toast, setToast] = useState('');
+
+  // ── 우측 하단 플로팅 "목록으로" — 상단 버튼이 뷰포트에서 벗어나면 표시(§2·§7) ──
+  //  · 임의 scrollY 임계값이 아니라 상단 버튼의 실제 가시성(IntersectionObserver)으로 판정 →
+  //    화면 크기·레이아웃 변경에 안정적. 클릭 핸들러는 상단과 동일한 onBack 재사용(§5·§6).
+  const topBackRef = useRef<HTMLDivElement>(null);
+  const [showFloatBack, setShowFloatBack] = useState(false);
+  useEffect(() => {
+    const el = topBackRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      ([entry]) => setShowFloatBack(!entry.isIntersecting),
+      { root: null, threshold: 0 },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [project, loading]);   // 상단 버튼이 마운트된 뒤(로딩 완료·프로젝트 로드) 관찰 시작
 
   const [pdfData,  setPdfData]  = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
   const [stmtData, setStmtData] = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
@@ -283,7 +299,9 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
 
       {/* ── 상단 헤더 ─────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <BackToListButton onClick={onBack} testId="btn-sales-back" />
+        <span ref={topBackRef} style={{ display: 'inline-flex' }}>
+          <BackToListButton onClick={onBack} testId="btn-sales-back" />
+        </span>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, letterSpacing: '0.04em' }}>판매 상세</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -438,6 +456,24 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
       )}
       {stmtData && (
         <TransactionStatementModal data={stmtData.data} quoteTitle={stmtData.title} onClose={() => setStmtData(null)} />
+      )}
+
+      {/* ── 우측 하단 플로팅 "목록으로"(§3·§4) — 상단 버튼이 뷰포트 밖일 때만. position:fixed(뷰포트 기준),
+             페이지 콘텐츠(z 3~20) 위·모달/팝업(z 2000~9700) 아래로 배치해 팝업·알림을 가리지 않는다.
+             · 화면 끝에 붙지 않도록 하단에서 약 88px 위로 올림(우측 24px 유지, 스크롤 무관 고정).
+             · 테두리·그림자는 래퍼에 부여 — 버튼 자체 hover 핸들러가 테두리색을 되돌려도 선명함이 유지된다. */}
+      {showFloatBack && (
+        <div style={{
+          position: 'fixed', right: 24, bottom: 88, zIndex: 40,
+          borderRadius: 10, border: `1.5px solid ${C.primary}`,
+          boxShadow: '0 4px 14px rgba(0,0,0,0.16)', background: '#fff', overflow: 'hidden',
+        }}>
+          <BackToListButton
+            onClick={onBack}
+            testId="btn-sales-back-floating"
+            style={{ background: '#fff', border: 'none', height: 42, padding: '0 20px', fontSize: 15 }}
+          />
+        </div>
       )}
 
       {toast && <Toast msg={toast} onClose={() => setToast('')} />}

@@ -76,6 +76,8 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   const [showWarn, setShowWarn] = useState(false);
   const [holdFor, setHoldFor] = useState<{ id: number; name: string } | null>(null);
   const [holdReason, setHoldReason] = useState('');
+  // 건별(선택) 처리 — 체크한 수행건 id 집합. 회차/상태 변경 시 초기화.
+  const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
 
   const inp: React.CSSProperties = { ...dsInputStd(), minHeight: 32, padding: '5px 9px', width: '100%' };
   const th: React.CSSProperties = { ...TYPO.gridHeader, padding: '8px 10px', borderBottom: BD.grid, whiteSpace: 'nowrap', textAlign: 'left', background: C.g50 };
@@ -114,6 +116,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
 
   useEffect(() => { loadRounds(); }, [loadRounds]);
   useEffect(() => { loadDetail(sel); }, [sel, loadDetail]);
+  useEffect(() => { setSelectedItems(new Set()); }, [sel]);   // 회차 전환 시 선택 초기화
 
   const round = detail?.round;
   const summary: any[] = detail?.summary ?? [];
@@ -125,6 +128,16 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   const isOverview = !!detail && !round;
   const overviewInfo = detail?.overview ?? null;
   const showActions = !!round && !locked;   // 제외/이월/보류는 특정 회차(편집가능)에서만
+  // 건별(선택) 처리 가능 모드 — 지급확정(confirmed) 회차에서만. 부분 지급완료도 status는 confirmed 유지.
+  const perItemMode = !!round && round.status === 'confirmed';
+  const payStats = detail?.payStats ?? { paid: 0, hold: 0, unpaid: 0, total: 0 };
+  // 회차 상태 표시(§6) — 0완료=지급확정 / 일부=일부 지급완료(n/m) / 전체=지급완료(paid는 서버 status).
+  const partialPaid = round?.status === 'confirmed' && payStats.paid > 0;
+  const statusLabel = partialPaid ? `일부 지급완료 (${payStats.paid}/${payStats.total}건)` : (ROUND_STATUS[round?.status]?.label ?? round?.status);
+  const statusColor = partialPaid ? '#b45309' : ROUND_STATUS[round?.status]?.color;
+  const statusBg = partialPaid ? '#fffbeb' : ROUND_STATUS[round?.status]?.bg;
+  const isItemPaid = (it: any) => it.paymentStatus === 'paid';
+  const isItemSelectable = (it: any) => perItemMode && it.paymentStatus === 'unpaid';   // 지급완료·보류 건은 선택 불가(§5)
   // (VAT별도) 표시는 서버 공통계산(calcPayoutWithholding)이 내려준 isVatIncluded 값만 사용한다.
   //  · 화면에서 purchaseEvidenceType 을 다시 판정하지 않는다 — 계산·표시 기준을 단일화(§9).
   //  · isVatIncluded=true 는 외주 세금계산서(tax_invoice)로 실지급액에 VAT가 포함된 건. (표시 전용)
@@ -212,6 +225,44 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
     } catch { onToast('지급확정 중 오류'); } finally { setBusy(false); }
   };
 
+  // 확정취소 — 지급완료 전 확정 회차를 작성중으로 되돌림. 확정 스냅샷 해제 + 같은 지급일 미배정 재편입 + 재계산.
+  const unconfirmRound = async () => {
+    if (!selId || busy) return;
+    if (!window.confirm('이 회차의 지급확정을 취소하고 「작성중」으로 되돌릴까요?\n확정 스냅샷이 해제되고, 같은 지급일의 미배정 건이 다시 편입되며 금액이 재계산됩니다.\n(지급완료된 회차는 취소할 수 없습니다)')) return;
+    setBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/payout-rounds/${selId}/unconfirm`), { method: 'PATCH', headers: authH });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(data.error ?? '확정취소 실패'); return; }
+      setDetail(data); await loadRounds();
+      onToast(`확정취소되었습니다. (미배정 ${data.reassigned?.assigned ?? 0}건 재편입 · 작성중 전환)`);
+    } catch { onToast('확정취소 중 오류'); } finally { setBusy(false); }
+  };
+
+  // 건별(선택) 처리 — 체크한 건만 지급완료/확정취소. selId(특정 회차)에서만 동작.
+  const runItemAction = async (path: string, okMsg: string, failMsg: string) => {
+    if (!selId || busy || selectedItems.size === 0) return;
+    setBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/payout-rounds/${selId}/${path}`), {
+        method: 'PATCH', headers: authH, body: JSON.stringify({ assignmentIds: [...selectedItems] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(data.error ?? failMsg); return; }
+      setDetail(data); await loadRounds(); setSelectedItems(new Set());
+      onToast(okMsg(data));
+    } catch { onToast(failMsg); } finally { setBusy(false); }
+  };
+  const payItemsSelected = () => {
+    if (!window.confirm(`선택한 ${selectedItems.size}건을 지급완료 처리할까요?\n(지급완료된 건은 되돌릴 수 없습니다)`)) return;
+    runItemAction('pay-items', (d) => `선택 ${d.paidNow ?? 0}건 지급완료 처리했습니다.`, '선택 지급완료 실패');
+  };
+  const unconfirmItemsSelected = () => {
+    if (!window.confirm(`선택한 ${selectedItems.size}건을 확정취소(회차에서 제외)할까요?\n제외된 건은 미배정으로 돌아가 다시 처리됩니다.`)) return;
+    runItemAction('unconfirm-items', (d) => `선택 ${d.removed ?? 0}건 확정취소했습니다. (미배정 복귀)`, '선택 확정취소 실패');
+  };
+  const toggleItem = (id: number) => setSelectedItems((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
   // 지급완료 처리 — 확정된 회차의 정상 지급대상(지급보류 제외)을 지급완료(paid)로 전환.
   const payRound = async () => {
     if (!selId || busy) return;
@@ -294,7 +345,14 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
           <Card>
             <div style={{ display: 'flex', gap: SP[3], alignItems: 'center', flexWrap: 'wrap', marginBottom: SP[3] }}>
               <b style={{ ...TYPO.inputValue, fontSize: 15 }}>{round.batchNumber || `${dateVal(round.paymentDate)} 지급회차`}</b>
-              <span style={{ ...TYPO.badge, color: ROUND_STATUS[round.status]?.color, background: ROUND_STATUS[round.status]?.bg, padding: '3px 9px', borderRadius: 6, fontWeight: 700 }}>{ROUND_STATUS[round.status]?.label ?? round.status}</span>
+              <span style={{ ...TYPO.badge, color: statusColor, background: statusBg, padding: '3px 9px', borderRadius: 6, fontWeight: 700 }}>{statusLabel}</span>
+              {/* 정산정보 출처 표기 — 확정 스냅샷(동결) / 레거시(확정 당시 건별값 미보존, 원본 실시간 표시) */}
+              {detail?.snapshotSource === 'snapshot' && (
+                <span title="지급확정 당시 건별 정산정보가 동결되어 표시됩니다. 이후 원본 수행정보 수정과 무관합니다." style={{ ...TYPO.badge, color: '#047857', background: '#ecfdf5', padding: '3px 9px', borderRadius: 6, fontWeight: 700 }}>확정 스냅샷</span>
+              )}
+              {detail?.snapshotSource === 'live_legacy' && (
+                <span title="스냅샷 도입 이전에 확정된 회차입니다. 확정 당시 건별값이 보존되지 않아 원본 수행정보 기준으로 표시됩니다(회차 총계는 확정 당시 값)." style={{ ...TYPO.badge, color: '#b45309', background: '#fffbeb', padding: '3px 9px', borderRadius: 6, fontWeight: 700 }}>⚠ 레거시(미보존)</span>
+              )}
               <span style={{ ...TYPO.helper }}>지급예정일 <b>{dateVal(round.paymentDate)}</b></span>
               <span style={{ ...TYPO.helper }}>대상기간 <b>{dateVal(round.periodStart)} ~ {dateVal(round.periodEnd)}</b></span>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -376,10 +434,30 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
           {/* ── 건별 상세내역(§3·§4·§5) — 지급명세서 원본. 한 건당 한 줄. 추가비용·차감은 항목 인라인(합계 없음). ── */}
           {view === 'items' && (
             <Card>
+              {/* 건별(선택) 처리 툴바 — 지급확정 회차에서만. 체크한 건만 지급완료/확정취소(§건별). */}
+              {perItemMode && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                  <span style={{ ...TYPO.helper, fontWeight: 700 }}>선택 {selectedItems.size}건</span>
+                  <button type="button" onClick={payItemsSelected} disabled={busy || selectedItems.size === 0} data-testid="payout-pay-items" aria-label="선택 지급완료"
+                    style={{ fontSize: 12, padding: '6px 12px', borderRadius: 7, fontWeight: 700, cursor: (busy || selectedItems.size === 0) ? 'not-allowed' : 'pointer', color: '#fff', background: (busy || selectedItems.size === 0) ? C.g300 : C.primary, border: 'none' }}>선택 지급완료</button>
+                  <button type="button" onClick={unconfirmItemsSelected} disabled={busy || selectedItems.size === 0} data-testid="payout-unconfirm-items" aria-label="선택 확정취소"
+                    style={{ fontSize: 12, padding: '6px 12px', borderRadius: 7, fontWeight: 700, cursor: (busy || selectedItems.size === 0) ? 'not-allowed' : 'pointer', color: C.textSecondary, background: C.g50, border: `1px solid ${C.border}` }}>선택 확정취소</button>
+                  <span style={{ ...TYPO.helper, color: C.textSecondary }}>지급완료된 건은 선택할 수 없습니다.</span>
+                </div>
+              )}
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1820 }}>
                   <thead><tr>
                     {/* 17개 컬럼(§1) — 날짜 흐름 수행일→납품일→지급일. 조치는 회차 편집 모드에서만 후행 표시 */}
+                    {perItemMode && (() => {
+                      const selectable = summary.flatMap((g: any) => g.items).filter(isItemSelectable).map((it: any) => it.id);
+                      const allSel = selectable.length > 0 && selectable.every((id: number) => selectedItems.has(id));
+                      return <th style={{ ...th, width: 34, textAlign: 'center' }}>
+                        <input type="checkbox" checked={allSel} disabled={selectable.length === 0}
+                          onChange={() => setSelectedItems(allSel ? new Set() : new Set(selectable))}
+                          data-testid="payout-select-all" aria-label="전체 선택" />
+                      </th>;
+                    })()}
                     <th style={th}>지급대상</th><th style={th}>거래처</th><th style={th}>상품·업무</th><th style={th}>구분</th>
                     <th style={th}>수행일</th><th style={th}>납품일</th><th style={th}>지급일</th>
                     <th style={th}>작업량</th><th style={{ ...th, textAlign: 'right' }}>단가</th><th style={{ ...th, textAlign: 'right' }}>기본수행료</th>
@@ -389,9 +467,18 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                     {showActions && <th style={th}>조치</th>}
                   </tr></thead>
                   <tbody>
-                    {summary.length === 0 && <tr><td colSpan={17 + (showActions ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
+                    {summary.length === 0 && <tr><td colSpan={17 + (showActions ? 1 : 0) + (perItemMode ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
                     {summary.flatMap((g) => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName }))).map((it: any) => (
-                      <tr key={it.id}>
+                      <tr key={it.id} style={isItemPaid(it) ? { background: '#f0fdf4' } : undefined}>
+                        {/* [0] 건별 선택 체크박스(§건별) — 지급확정 회차에서만. 지급완료 건은 '완료' 표시(선택 불가). */}
+                        {perItemMode && (
+                          <td style={{ ...td, textAlign: 'center' }}>
+                            {isItemPaid(it)
+                              ? <span title="지급완료" style={{ fontSize: 11, color: '#047857', fontWeight: 700 }}>완료</span>
+                              : <input type="checkbox" checked={selectedItems.has(it.id)} disabled={!isItemSelectable(it)}
+                                  onChange={() => toggleItem(it.id)} data-testid={`payout-item-check-${it.id}`} aria-label={`${it.payeeName} 건 선택`} />}
+                          </td>
+                        )}
                         {/* [1] 지급대상 */}
                         <td style={{ ...td, fontWeight: 600 }}>{it.payeeName}</td>
                         {/* [2] 거래처 — 별도 컬럼(§2). 없으면 '-' */}
@@ -482,6 +569,11 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
               {round.status === 'confirmed'
                 ? <>
                     <span style={{ ...TYPO.helper, color: ROUND_STATUS.confirmed.color, fontWeight: 700, alignSelf: 'center' }}>지급 확정 — 관리자만 수정 가능</span>
+                    {/* 확정취소 — 지급완료 전에만. 작성중으로 되돌려 재편입·재계산 후 다시 확정. */}
+                    <button type="button" onClick={unconfirmRound} disabled={busy} data-testid="payout-unconfirm" aria-label="확정취소"
+                      style={{ fontSize: 13, padding: '9px 16px', borderRadius: 8, cursor: busy ? 'not-allowed' : 'pointer', background: C.g50, border: `1px solid ${C.border}`, color: C.textSecondary, fontWeight: 700, alignSelf: 'center' }}>
+                      확정취소
+                    </button>
                     <PrimaryBtn onClick={payRound} disabled={busy} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-pay" aria-label="지급완료">지급완료</PrimaryBtn>
                   </>
                 : (round.status === 'paid' || round.status === 'cancelled')

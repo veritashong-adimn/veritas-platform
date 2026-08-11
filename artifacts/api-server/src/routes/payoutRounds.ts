@@ -7,7 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, type IRouter } from "express";
 import {
-  db, payoutRoundsTable, performanceAssignmentsTable, projectsTable, companiesTable, quotesTable,
+  db, payoutRoundsTable, payoutRoundItemsTable, performanceAssignmentsTable, projectsTable, companiesTable, quotesTable,
   performanceExpensesTable, performanceDeductionsTable,
   calcPayoutWithholding, vendorVatApplies,
 } from "@workspace/db";
@@ -211,7 +211,15 @@ function computeTotals(summary: any[]) {
 }
 
 // 회차 상세 로드 — 지급대상별 요약 + 건별 + 경고(§8) + 총계(§14).
+//  · [Source of Truth 분기] 지급확정 전(draft·reviewing): 원본 수행정보 실시간 재계산.
+//    지급확정·지급완료(confirmed·paid): 확정 당시 건별 스냅샷(payout_round_items)을 그대로 표시 — 원본 재계산 금지(§10·§11).
 async function loadRoundDetail(round: any) {
+  if (round.status === "confirmed" || round.status === "paid") {
+    const snap = await loadRoundDetailFromSnapshot(round);
+    if (snap) return snap;
+    // 스냅샷 미보존 레거시 확정 회차 — 확정 당시 건별값을 정확히 복원할 수 없음.
+    //   임의로 현재 원본값을 확정값으로 저장하지 않는다(§7). 실시간 폴백에 'live_legacy' 플래그를 달아 표기.
+  }
   const items = await loadRoundItems(round.id);
   const summary = aggregate(items);
   const totals = computeTotals(summary);
@@ -229,7 +237,107 @@ async function loadRoundDetail(round: any) {
       isVatIncluded: vendorVatApplies(payeeType, it.purchaseEvidenceType),
     };
   });
-  return { round, summary, totals, warnings, collectable };
+  const isLocked = round.status === "confirmed" || round.status === "paid";
+  const payStats = payStatsOf(summary.flatMap((g: any) => g.items.map((it: any) => it.paymentStatus ?? "unpaid")));
+  return { round, summary, totals, warnings, collectable, snapshotSource: isLocked ? "live_legacy" : "live", payStats };
+}
+
+// ── 확정 스냅샷 → 회차 상세(§10·§11) ─────────────────────────────────────────
+//  · 확정 당시 payout_round_items 에 동결된 건별 정산값을 지급대상별로 재집계.
+//    aggregate()/computeTotals() 와 동일한 응답 형태로 구성(프론트 렌더 불변, API shape 보존).
+//  · 원본 performance_assignments 를 다시 읽지 않으므로 확정 후 원본 수정에 영향받지 않는다.
+function snapRowToItem(round: any, r: any, paymentStatus: string) {
+  const isIndiv = r.payeeType === "individual";
+  const unconfirmed = isIndiv && (!r.withholdingTreatment || r.withholdingTreatment === "tax_review_required");
+  return {
+    id: r.performanceAssignmentId,
+    projectId: r.projectId, quoteId: r.quoteId, quoteNumber: r.quoteNumber,
+    customerName: r.customerName, projectTitle: r.projectTitle,
+    performerCategory: r.payeeType, payeeType: r.payeeType,
+    individualUserId: isIndiv ? r.payeeId : null,
+    vendorCompanyId: r.payeeType === "vendor" ? r.payeeId : null,
+    performerName: r.payeeName,
+    serviceType: r.serviceType, productName: r.productName,
+    deliveryDate: r.deliveryDate, expectedPaymentDate: r.paymentDate,
+    performanceStartDate: r.performanceStartDate, performanceEndDate: r.performanceEndDate,
+    quantity: r.quantity, unit: r.unit, contractUnitPrice: r.contractUnitPrice,
+    isDirectAmount: r.isDirectAmount, serviceDetail: r.serviceDetail,
+    basePerformanceFee: r.basePerformanceFee, expenseTotal: r.expenseTotal, deductionTotal: r.deductionTotal,
+    costTotal: r.grossAmount,
+    withholdingTreatment: r.withholdingTreatment, withholdingRate: r.withholdingRate,
+    purchaseEvidenceType: r.purchaseEvidenceType,
+    // 건별 실제 지급상태(원본 performance_assignments 기준) — 부분 지급완료 표시·선택 처리에 사용.
+    paymentStatus,
+    remark: r.remark,
+    payoutRoundId: r.payoutRoundId, roundBatchNumber: round.batchNumber,
+    roundPaymentDate: round.paymentDate, roundStatus: round.status,
+    expenses: Array.isArray(r.expenses) ? r.expenses : [],
+    deductions: Array.isArray(r.deductions) ? r.deductions : [],
+    // 확정 당시 동결 세금·지급액(재계산 없음)
+    gross: num(r.grossAmount), withholdingTax: num(r.withholdingAmount),
+    vat: num(r.vatAmount), netPayment: num(r.netAmount),
+    rate: r.withholdingRate != null ? num(r.withholdingRate) : 0,
+    rateConfirmed: !unconfirmed, isVatIncluded: !!r.vatIncluded,
+  };
+}
+async function loadRoundDetailFromSnapshot(round: any) {
+  const rows = await db.select().from(payoutRoundItemsTable)
+    .where(eq(payoutRoundItemsTable.payoutRoundId, round.id))
+    .orderBy(payoutRoundItemsTable.payeeType, payoutRoundItemsTable.payeeId, payoutRoundItemsTable.performanceAssignmentId);
+  if (!rows.length) return null;   // 스냅샷 미보존(레거시) → 상위에서 폴백 처리
+  // 건별 실제 지급상태 조회(부분 지급완료 표시·선택 처리용). 스냅샷 금액은 그대로 두고 상태만 최신 반영.
+  const ids = rows.map((r) => r.performanceAssignmentId);
+  const payRows = await db.select({ id: performanceAssignmentsTable.id, ps: performanceAssignmentsTable.paymentStatus })
+    .from(performanceAssignmentsTable).where(inArray(performanceAssignmentsTable.id, ids));
+  const payMap = new Map(payRows.map((p) => [p.id, p.ps as string]));
+  const defaultPs = round.status === "paid" ? "paid" : "unpaid";
+  const groups = new Map<string, any>();
+  for (const r of rows) {
+    const isIndiv = r.payeeType === "individual";
+    const key = `${isIndiv ? "i" : "v"}:${r.payeeId ?? "none"}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = {
+        payeeKey: key, payeeType: isIndiv ? "individual" : "vendor", payeeId: r.payeeId ?? null,
+        payeeName: r.payeeName || "(미지정)",
+        count: 0, translationCount: 0, interpretationCount: 0, equipmentEtcCount: 0,
+        baseTotal: 0, expenseTotal: 0, deductionTotal: 0, grossTotal: 0, withholdingTotal: 0, vatTotal: 0, netTotal: 0,
+        treatments: new Set<string>(), rateUnconfirmed: false, allVat: true, items: [] as any[],
+      };
+      groups.set(key, g);
+    }
+    g.count += 1;
+    if (r.serviceType === "translation") g.translationCount += 1;
+    else if (r.serviceType === "interpretation") g.interpretationCount += 1;
+    else g.equipmentEtcCount += 1;
+    g.baseTotal += num(r.basePerformanceFee);
+    g.expenseTotal += num(r.expenseTotal);
+    g.deductionTotal += num(r.deductionTotal);
+    g.grossTotal += num(r.grossAmount);
+    g.withholdingTotal += num(r.withholdingAmount);
+    g.vatTotal += num(r.vatAmount);
+    g.netTotal += num(r.netAmount);
+    if (isIndiv && r.withholdingTreatment) g.treatments.add(r.withholdingTreatment);
+    if (isIndiv && (!r.withholdingTreatment || r.withholdingTreatment === "tax_review_required")) g.rateUnconfirmed = true;
+    if (!r.vatIncluded) g.allVat = false;
+    g.items.push(snapRowToItem(round, r, payMap.get(r.performanceAssignmentId) ?? defaultPs));
+  }
+  const summary = Array.from(groups.values()).map((g) => ({
+    ...g,
+    treatments: Array.from(g.treatments),
+    mixedTreatment: g.treatments.size > 1,
+    isVatIncluded: g.payeeType === "vendor" && g.items.length > 0 && g.allVat,
+  }));
+  const totals = computeTotals(summary);
+  // 확정 회차는 잠금 — 경고/재포함 대상 없음(원본 기준 수집로직 미적용).
+  return { round, summary, totals, warnings: { total: 0, holdAmount: 0, byReason: [] }, collectable: [], snapshotSource: "snapshot", payStats: payStatsOf(rows.map((r) => payMap.get(r.performanceAssignmentId) ?? defaultPs)) };
+}
+
+// 회차 내 건별 지급상태 집계 — 부분 지급완료 표시(§6)·상태 파생용.
+function payStatsOf(statuses: string[]) {
+  let paid = 0, hold = 0;
+  for (const s of statuses) { if (s === "paid") paid++; else if (s === "payment_hold") hold++; }
+  return { paid, hold, unpaid: statuses.length - paid - hold, total: statuses.length };
 }
 
 // 제외·확인 필요 목록(§8) — 대상기간 내 지급대상(개인/외주)이지만 수집조건을 못 채운 건을 사유별 분류.
@@ -286,7 +394,7 @@ async function loadWarnings(round: any) {
   return { total, holdAmount, byReason };
 }
 
-// 스냅샷 총계 저장(§14·§15) — 목록 표시용. 상세는 항상 실시간 재계산.
+// 스냅샷 총계 저장(§14·§15) — 목록 표시용. 상세는 상태에 따라 실시간/스냅샷 조회.
 async function saveSnapshot(round: any) {
   const { totals } = await loadRoundDetail(round);
   await db.update(payoutRoundsTable).set({
@@ -294,6 +402,128 @@ async function saveSnapshot(round: any) {
     grossAmount: String(totals.grossTotal), deductionAmount: String(totals.withholdingTotal), netAmount: String(totals.netTotal),
     updatedAt: new Date(),
   }).where(eq(payoutRoundsTable.id, round.id));
+}
+
+// ── 건별 확정 스냅샷 저장(§10·§11) — 지급확정 시점의 건별 정산정보를 payout_round_items 에 동결 ──
+//   · 지급확정 당시 실시간 집계(aggregate) 결과를 그대로 저장 → 이후 원본 수정과 무관하게 보존.
+//   · 재확정/재호출 시 정합을 위해 해당 회차 기존 스냅샷을 삭제 후 재삽입(멱등).
+function snapshotRowsFromSummary(roundId: number, summary: any[], confirmedAt: Date) {
+  const rows: any[] = [];
+  for (const g of summary) {
+    for (const it of g.items) {
+      rows.push({
+        payoutRoundId: roundId,
+        performanceAssignmentId: it.id,
+        payeeType: g.payeeType, payeeId: g.payeeId ?? null, payeeName: g.payeeName ?? it.performerName ?? null,
+        projectId: it.projectId ?? null, projectTitle: it.projectTitle ?? null,
+        quoteId: it.quoteId ?? null, quoteNumber: it.quoteNumber ?? null, customerName: it.customerName ?? null,
+        serviceType: it.serviceType ?? null, productName: it.productName ?? null,
+        performanceStartDate: it.performanceStartDate ?? null, performanceEndDate: it.performanceEndDate ?? null,
+        deliveryDate: it.deliveryDate ?? null, paymentDate: it.expectedPaymentDate ?? null,
+        quantity: it.quantity != null ? String(it.quantity) : null, unit: it.unit ?? null,
+        contractUnitPrice: it.contractUnitPrice != null ? String(it.contractUnitPrice) : null,
+        isDirectAmount: it.isDirectAmount ?? null,
+        serviceDetail: it.serviceDetail ?? null,
+        basePerformanceFee: String(num(it.basePerformanceFee)),
+        expenseTotal: String(num(it.expenseTotal)),
+        deductionTotal: String(num(it.deductionTotal)),
+        grossAmount: String(num(it.gross)),
+        withholdingTreatment: it.withholdingTreatment ?? null,
+        withholdingRate: it.rateConfirmed ? String(num(it.rate)) : (it.withholdingRate != null ? String(it.withholdingRate) : null),
+        withholdingAmount: String(num(it.withholdingTax)),
+        purchaseEvidenceType: it.purchaseEvidenceType ?? null,
+        vatIncluded: !!it.isVatIncluded, vatAmount: String(num(it.vat)),
+        netAmount: String(num(it.netPayment)),
+        expenses: Array.isArray(it.expenses) ? it.expenses : [],
+        deductions: Array.isArray(it.deductions) ? it.deductions : [],
+        remark: it.remark ?? null,
+        confirmedAt,
+      });
+    }
+  }
+  return rows;
+}
+async function saveItemSnapshots(round: any, confirmedAt: Date) {
+  const items = await loadRoundItems(round.id);   // 확정 시점 원본(실시간) 기준
+  const summary = aggregate(items);
+  const rows = snapshotRowsFromSummary(round.id, summary, confirmedAt);
+  await db.delete(payoutRoundItemsTable).where(eq(payoutRoundItemsTable.payoutRoundId, round.id));
+  if (rows.length) await db.insert(payoutRoundItemsTable).values(rows);
+  return rows.length;
+}
+
+// ── 지급일 기준 미배정 → 기존 지급회차 자동배정 ──────────────────────────────
+//  · 트리거: 수행정보 저장(지급일 입력·변경 포함). 저장 직후 이 프로젝트의 미배정 건을 점검.
+//  · 매칭: 수행건 지급일(expectedPaymentDate) == 지급회차 지급예정일(paymentDate),
+//    그리고 회차가 "지급확정 전(draft·reviewing)" 인 경우에만 배정.
+//  · 대상: 미배정(payoutRoundId IS NULL) + 지급대상 자격충족(eligibleConds) 건만(회차 수집기준과 동일).
+//  · 안전장치:
+//     - 지급확정(confirmed)·지급완료(paid) 회차에는 자동 편입하지 않는다 → 미배정 유지(§5).
+//       (confirmed/paid 회차는 후보 조회에서 제외되므로 스냅샷·지급완료 데이터 불변, §6)
+//     - 이미 다른 회차에 배정된 건은 이동하지 않는다(payoutRoundId IS NULL 조건, §4).
+//  · 배정된 draft 회차의 목록 스냅샷 총계를 갱신해 정산 목록 화면에 즉시 반영(§3). 상세는 항상 실시간.
+export async function autoAssignByPaymentDate(projectId: number) {
+  // 1) 미배정·자격충족·지급일 입력 건(회차 수집기준 eligibleConds 재사용 — 일관성)
+  const candidates = await db
+    .select({ id: performanceAssignmentsTable.id, pay: performanceAssignmentsTable.expectedPaymentDate })
+    .from(performanceAssignmentsTable)
+    .where(and(
+      eq(performanceAssignmentsTable.projectId, projectId),
+      isNull(performanceAssignmentsTable.payoutRoundId),
+      isNotNull(performanceAssignmentsTable.expectedPaymentDate),
+      ...eligibleConds(),
+    ));
+  if (!candidates.length) return { assigned: 0, rounds: [] as number[] };
+
+  // 2) 해당 지급일들과 "지급예정일이 일치"하는 지급확정 전(draft·reviewing) 회차만 후보로.
+  //    confirmed·paid·cancelled 회차는 제외 → 확정 스냅샷/지급완료 데이터 불변(§5·§6).
+  const dates = Array.from(new Set(candidates.map(c => String(c.pay))));
+  const rounds = await db
+    .select({ id: payoutRoundsTable.id, paymentDate: payoutRoundsTable.paymentDate })
+    .from(payoutRoundsTable)
+    .where(and(
+      inArray(payoutRoundsTable.paymentDate, dates),
+      inArray(payoutRoundsTable.status, ["draft", "reviewing"]),
+    ));
+  if (!rounds.length) return { assigned: 0, rounds: [] };
+  const byDate = new Map(rounds.map(r => [String(r.paymentDate), r.id]));
+
+  // 3) 지급일이 일치하는 미배정 건만 배정(이중 안전: payoutRoundId IS NULL 재확인 → 배정 건 이동 금지).
+  const affected = new Set<number>();
+  let assigned = 0;
+  for (const c of candidates) {
+    const rid = byDate.get(String(c.pay));
+    if (!rid) continue;   // 매칭 draft 회차 없음(또는 확정/완료뿐) → 미배정 유지
+    await db.update(performanceAssignmentsTable)
+      .set({ payoutRoundId: rid, updatedAt: new Date() })
+      .where(and(
+        eq(performanceAssignmentsTable.id, c.id),
+        isNull(performanceAssignmentsTable.payoutRoundId),
+      ));
+    assigned++; affected.add(rid);
+  }
+
+  // 4) 배정이 발생한 draft 회차의 목록 스냅샷 총계 갱신(목록 화면 즉시 반영). 상세는 실시간이라 자동 반영.
+  for (const rid of affected) {
+    const [r] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, rid));
+    if (r) await saveSnapshot(r);
+  }
+  return { assigned, rounds: Array.from(affected) };
+}
+
+// ── 특정 회차로 미배정 건 편입 — 확정취소 후 재편입용(§확정취소) ─────────────────
+//  · 이 회차 지급예정일(paymentDate)과 지급일이 일치하는 미배정·자격충족 건을 이 회차에 편입.
+//  · 호출 시점에 회차가 작성중(draft)이어야 함 — 확정/완료 회차엔 사용하지 않는다.
+async function assignUnassignedToRound(round: any) {
+  const res = await db.update(performanceAssignmentsTable)
+    .set({ payoutRoundId: round.id, updatedAt: new Date() })
+    .where(and(
+      ...eligibleConds(),
+      isNull(performanceAssignmentsTable.payoutRoundId),
+      eq(performanceAssignmentsTable.expectedPaymentDate, round.paymentDate),
+    ))
+    .returning({ id: performanceAssignmentsTable.id });
+  return { assigned: res.length };
 }
 
 // ── GET 목록 ─────────────────────────────────────────────────────────────────
@@ -437,6 +667,31 @@ router.patch("/admin/payout-rounds/:id", ...adminGuard, async (req, res) => {
             .where(and(eq(performanceAssignmentsTable.id, c.assignmentId), eq(performanceAssignmentsTable.paymentStatus, "payment_hold")));
         }
       }
+      // 확정·지급완료 회차를 관리자(super-admin)가 직접 수정한 경우(§16) — 건별 스냅샷 정합 유지.
+      //   · 제외/보류로 회차에서 빠진 건은 스냅샷 삭제, 재포함 건은 현재값으로 스냅샷 재동결.
+      //   · 손대지 않은 건의 확정값은 그대로 보존(전체 재스냅샷 금지). 스냅샷 미보존(레거시) 회차는 건드리지 않는다.
+      if (round.status === "confirmed" || round.status === "paid") {
+        const hasSnap = await db.select({ id: payoutRoundItemsTable.id }).from(payoutRoundItemsTable)
+          .where(eq(payoutRoundItemsTable.payoutRoundId, id)).limit(1);
+        if (hasSnap.length) {
+          const confAt = round.completedAt ?? new Date();
+          for (const c of changes) {
+            if (c.action === "exclude" || c.action === "hold") {
+              await db.delete(payoutRoundItemsTable).where(and(
+                eq(payoutRoundItemsTable.payoutRoundId, id), eq(payoutRoundItemsTable.performanceAssignmentId, c.assignmentId)));
+            } else if (c.action === "include") {
+              await db.delete(payoutRoundItemsTable).where(and(
+                eq(payoutRoundItemsTable.payoutRoundId, id), eq(payoutRoundItemsTable.performanceAssignmentId, c.assignmentId)));
+              const one = await attachLineItems(await selectItems(and(
+                eq(performanceAssignmentsTable.id, c.assignmentId),
+                eq(performanceAssignmentsTable.payoutRoundId, id),
+                isNull(performanceAssignmentsTable.deletedAt))));
+              const rows = snapshotRowsFromSummary(id, aggregate(one), confAt);
+              if (rows.length) await db.insert(payoutRoundItemsTable).values(rows);
+            }
+          }
+        }
+      }
     }
     const [updated] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
     await saveSnapshot(updated);
@@ -508,13 +763,49 @@ router.patch("/admin/payout-rounds/:id/confirm", ...adminGuard, async (req, res)
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
   if (round.status === "confirmed" || round.status === "paid") { res.status(400).json({ error: "이미 확정된 회차입니다." }); return; }
   try {
+    const confirmedAt = new Date();
+    // 확정 전(draft/reviewing) 실시간 기준으로 회차 총계 + 건별 스냅샷을 동시에 동결(§10·§11).
     await saveSnapshot(round);
-    await db.update(payoutRoundsTable).set({ status: "confirmed", completedBy: req.user?.id ?? null, completedAt: new Date(), updatedAt: new Date() }).where(eq(payoutRoundsTable.id, id));
+    await saveItemSnapshots(round, confirmedAt);
+    await db.update(payoutRoundsTable).set({ status: "confirmed", completedBy: req.user?.id ?? null, completedAt: confirmedAt, updatedAt: confirmedAt }).where(eq(payoutRoundsTable.id, id));
     const [refreshed] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
     res.json(await loadRoundDetail(refreshed));
   } catch (err) {
     req.log.error({ err }, "지급확정 실패");
     res.status(500).json({ error: "지급확정 중 오류가 발생했습니다." });
+  }
+});
+
+// ── PATCH 확정취소 — 지급확정(confirmed)을 작성중(draft)으로 되돌림(지급완료 전에만) ──
+//  · 지급완료(paid) 회차는 확정취소 불가(회계자료 완전 잠금).
+//  · 확정취소 시에만 건별 확정 스냅샷을 해제(삭제)하고, 같은 지급일의 미배정 건을 재편입한 뒤,
+//    최신 수행정보 기준으로 회차 총계를 재계산한다. 이후 관리자가 다시 지급확정.
+//  · 민감한 회계 상태 전환이므로 super-admin(관리자, roleId 없음)만 허용.
+router.patch("/admin/payout-rounds/:id/unconfirm", ...adminGuard, async (req, res) => {
+  const id = Number(req.params.id);
+  const isSuperAdmin = req.user?.role === "admin" && !req.user?.roleId;
+  if (!isSuperAdmin) { res.status(403).json({ error: "확정취소는 관리자만 할 수 있습니다." }); return; }
+  const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+  if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
+  if (round.status === "paid") { res.status(400).json({ error: "지급완료된 회차는 확정취소할 수 없습니다." }); return; }
+  if (round.status !== "confirmed") { res.status(400).json({ error: "지급확정된 회차만 확정취소할 수 있습니다." }); return; }
+  try {
+    // 1) 작성중으로 되돌리고 확정 메타 해제
+    await db.update(payoutRoundsTable)
+      .set({ status: "draft", completedBy: null, completedAt: null, updatedAt: new Date() })
+      .where(eq(payoutRoundsTable.id, id));
+    // 2) 확정 스냅샷 잠금 해제 — 확정취소 시에만 해제(§확정취소). 이후 상세는 원본 실시간 기준.
+    await db.delete(payoutRoundItemsTable).where(eq(payoutRoundItemsTable.payoutRoundId, id));
+    // 3) 같은 지급일의 미배정 건 재편입(최신 수행정보 기준)
+    const [draftRound] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+    const reassigned = await assignUnassignedToRound(draftRound);
+    // 4) 최신 기준 회차 총계 재계산(목록 표시용). 상세는 실시간.
+    await saveSnapshot(draftRound);
+    const [refreshed] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+    res.json({ ...(await loadRoundDetail(refreshed)), reassigned });
+  } catch (err) {
+    req.log.error({ err }, "확정취소 실패");
+    res.status(500).json({ error: "확정취소 중 오류가 발생했습니다." });
   }
 });
 
@@ -543,6 +834,84 @@ router.patch("/admin/payout-rounds/:id/pay", ...adminGuard, async (req, res) => 
   } catch (err) {
     req.log.error({ err }, "지급완료 처리 실패");
     res.status(500).json({ error: "지급완료 처리 중 오류가 발생했습니다." });
+  }
+});
+
+// ── PATCH 선택(건별) 지급완료 — 체크한 건만 지급완료(§건별) ──────────────────────
+//   · 대상: 이 회차 소속·미지급(unpaid) 건만. 지급완료(paid)·지급보류(hold)는 제외(§5).
+//   · 처리 후 회차 내 미지급이 0이면 회차를 지급완료(paid)로 전환(전체 완료). 아니면 confirmed 유지(부분).
+//   · 기존 전체 [지급완료]와 계산·스냅샷 로직 동일 — 상태 전환 조건만 건별 반영.
+const itemIdsSchema = z.object({ assignmentIds: z.array(z.number().int().positive()).min(1) });
+router.patch("/admin/payout-rounds/:id/pay-items", ...adminGuard, async (req, res) => {
+  const id = Number(req.params.id);
+  const parsed = itemIdsSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: "선택된 건이 없습니다." }); return; }
+  const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+  if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
+  if (round.status === "paid") { res.status(400).json({ error: "이미 지급완료된 회차입니다." }); return; }
+  if (round.status !== "confirmed") { res.status(400).json({ error: "지급확정된 회차만 지급완료 처리할 수 있습니다." }); return; }
+  try {
+    // 선택 건 중 이 회차 소속·미지급(unpaid)만 지급완료. 이미 지급완료·보류는 자동 제외(§5).
+    const done = await db.update(performanceAssignmentsTable)
+      .set({ paymentStatus: "paid", updatedAt: new Date() })
+      .where(and(
+        eq(performanceAssignmentsTable.payoutRoundId, id),
+        inArray(performanceAssignmentsTable.id, parsed.data.assignmentIds),
+        eq(performanceAssignmentsTable.paymentStatus, "unpaid"),
+      ))
+      .returning({ id: performanceAssignmentsTable.id });
+    // 회차 내 미지급(unpaid)이 더 이상 없으면 회차 전체를 지급완료(paid)로 전환(§6 6/6).
+    const remainUnpaid = await db.select({ id: performanceAssignmentsTable.id }).from(performanceAssignmentsTable)
+      .where(and(eq(performanceAssignmentsTable.payoutRoundId, id), eq(performanceAssignmentsTable.paymentStatus, "unpaid")));
+    if (remainUnpaid.length === 0) {
+      await db.update(payoutRoundsTable).set({ status: "paid", updatedAt: new Date() }).where(eq(payoutRoundsTable.id, id));
+    }
+    const [refreshed] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+    res.json({ ...(await loadRoundDetail(refreshed)), paidNow: done.length });
+  } catch (err) {
+    req.log.error({ err }, "선택 지급완료 실패");
+    res.status(500).json({ error: "선택 지급완료 중 오류가 발생했습니다." });
+  }
+});
+
+// ── PATCH 선택(건별) 확정취소 — 체크한 건만 확정회차에서 제외(§건별·§7) ────────────
+//   · 대상: 이 회차 소속·미지급(지급완료 아님) 건만. 지급완료 건은 제외 불가(§5).
+//   · 제외 건: payoutRoundId=NULL(미배정 복귀) + 확정 스냅샷 삭제. 남은 건 스냅샷·금액은 그대로 보존.
+//   · 남은 확정 스냅샷 기준으로 회차 총계만 재계산. 민감 회계전환이므로 super-admin만 허용.
+router.patch("/admin/payout-rounds/:id/unconfirm-items", ...adminGuard, async (req, res) => {
+  const id = Number(req.params.id);
+  const isSuperAdmin = req.user?.role === "admin" && !req.user?.roleId;
+  if (!isSuperAdmin) { res.status(403).json({ error: "확정취소는 관리자만 할 수 있습니다." }); return; }
+  const parsed = itemIdsSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: "선택된 건이 없습니다." }); return; }
+  const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+  if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
+  if (round.status !== "confirmed") { res.status(400).json({ error: "지급확정된 회차의 건만 확정취소할 수 있습니다." }); return; }
+  try {
+    // 선택 건 중 이 회차 소속·지급완료 아닌 건만 회차에서 제외 → 미배정 복귀(§7). 지급완료 건은 자동 제외(§5).
+    const removed = await db.update(performanceAssignmentsTable)
+      .set({ payoutRoundId: null, updatedAt: new Date() })
+      .where(and(
+        eq(performanceAssignmentsTable.payoutRoundId, id),
+        inArray(performanceAssignmentsTable.id, parsed.data.assignmentIds),
+        ne(performanceAssignmentsTable.paymentStatus, "paid"),
+      ))
+      .returning({ id: performanceAssignmentsTable.id });
+    if (removed.length) {
+      // 제외 건의 확정 스냅샷만 삭제(잠금 해제). 남은 건 확정 스냅샷은 그대로 보존(§중요).
+      await db.delete(payoutRoundItemsTable).where(and(
+        eq(payoutRoundItemsTable.payoutRoundId, id),
+        inArray(payoutRoundItemsTable.performanceAssignmentId, removed.map((r) => r.id)),
+      ));
+      // 남은 확정 스냅샷 기준 회차 총계 재계산(제외분 반영). 남은 건 금액은 확정값 그대로.
+      const [r2] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+      await saveSnapshot(r2);
+    }
+    const [refreshed] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+    res.json({ ...(await loadRoundDetail(refreshed)), removed: removed.length });
+  } catch (err) {
+    req.log.error({ err }, "선택 확정취소 실패");
+    res.status(500).json({ error: "선택 확정취소 중 오류가 발생했습니다." });
   }
 });
 
