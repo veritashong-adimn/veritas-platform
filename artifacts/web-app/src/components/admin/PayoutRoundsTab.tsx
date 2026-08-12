@@ -3,13 +3,17 @@
 //  · 수행정보 미지급 건을 지급일별 회차로 묶어 지급대상(개인/외주)별 자동합산·검토·확정.
 //  · 계산은 서버(payoutRounds API)가 costTotal+세금처리로 산출. 화면은 표시·조작만.
 // ─────────────────────────────────────────────────────────────────────────────
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { api } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
+import { Pagination } from '../ui/Paginator';
+import { useClientPagination } from './bulkListShared';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 
 const won = (n: unknown) => Math.round(Number(n ?? 0)).toLocaleString('ko-KR');
 const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
+// 재집계용 안전 수치 변환(NaN·null → 0). 필터 결과 합산은 건별 서버 계산값을 그대로 더할 뿐 계산식은 불변.
+const numOf = (v: unknown) => { const n = Number(v ?? 0); return Number.isFinite(n) ? n : 0; };
 
 const ROUND_STATUS: Record<string, { label: string; color: string; bg: string }> = {
   draft:     { label: '작성 중',  color: '#6b7280', bg: '#f3f4f6' },
@@ -78,11 +82,27 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   const [holdReason, setHoldReason] = useState('');
   // 건별(선택) 처리 — 체크한 수행건 id 집합. 회차/상태 변경 시 초기화.
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
+  // ── 조회 필터(지급회차 sel 과 조합) — 거래처 / 지급대상 검색 / 지급일 기간. 두 탭 동일 조건 적용. ──
+  const [custFilter, setCustFilter] = useState<string>('all');   // 거래처명('all'=전체) — 회차 변경 시 초기화
+  const [payeeQ, setPayeeQ] = useState('');                      // 지급대상(통번역사·외주업체명) 검색어
+  const [dateFrom, setDateFrom] = useState('');                  // 지급일 시작(YYYY-MM-DD)
+  const [dateTo, setDateTo] = useState('');                      // 지급일 종료(YYYY-MM-DD)
 
   const inp: React.CSSProperties = { ...dsInputStd(), minHeight: 32, padding: '5px 9px', width: '100%' };
   const th: React.CSSProperties = { ...TYPO.gridHeader, padding: '8px 10px', borderBottom: BD.grid, whiteSpace: 'nowrap', textAlign: 'left', background: C.g50 };
   const td: React.CSSProperties = { ...TYPO.inputValue, padding: '8px 10px', borderBottom: BD.divider, whiteSpace: 'nowrap' };
   const tdR: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
+
+  // ── 좌측 고정 컬럼(가로 스크롤 시 "누구/어떤 거래처·업무"를 항상 좌측 표시) ──
+  //  · 요약: 지급대상 / 건별: (선택체크)·지급대상·거래처·상품·업무. 폭 고정 → left 오프셋 정합.
+  //  · 고정 셀은 불투명 배경 + 마지막 고정 컬럼 우측에 경계선/그림자로 스크롤 영역과 자연 분리(§4).
+  const STK_W = { chk: 34, payee: 132, cust: 148, prod: 172, sumPayee: 156 };
+  const stickyCol = (left: number, o?: { header?: boolean; last?: boolean; bg?: string; width?: number }): React.CSSProperties => ({
+    position: 'sticky', left, zIndex: o?.header ? 3 : 2,
+    background: o?.bg ?? (o?.header ? C.g50 : C.bgCard),
+    ...(o?.width ? { width: o.width, minWidth: o.width, maxWidth: o.width, overflow: 'hidden', textOverflow: 'ellipsis' } : {}),
+    ...(o?.last ? { boxShadow: `1px 0 0 0 ${C.border}, 6px 0 8px -6px rgba(15,23,42,0.16)` } : {}),
+  });
 
   const loadRounds = useCallback(async () => {
     try {
@@ -116,10 +136,73 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
 
   useEffect(() => { loadRounds(); }, [loadRounds]);
   useEffect(() => { loadDetail(sel); }, [sel, loadDetail]);
-  useEffect(() => { setSelectedItems(new Set()); }, [sel]);   // 회차 전환 시 선택 초기화
+  // 회차 전환 시: 건별 선택 초기화 + 거래처 필터 초기화(회차마다 거래처 목록이 다름) + 두 탭 1페이지(§1).
+  //  · 지급대상 검색·지급일 기간은 회차 독립 개념이라 유지한다.
+  useEffect(() => { setSelectedItems(new Set()); setCustFilter('all'); sumPg.setPage(1); itemPg.setPage(1); }, [sel]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // 필터 변경 시: 두 탭 모두 1페이지부터 재표시(범위 밖 페이지 방지).
+  useEffect(() => { sumPg.setPage(1); itemPg.setPage(1); }, [custFilter, payeeQ, dateFrom, dateTo]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const round = detail?.round;
-  const summary: any[] = detail?.summary ?? [];
+  // 필터 활성 여부(초기화 버튼·안내 표시용).
+  const filterActive = custFilter !== 'all' || payeeQ.trim() !== '' || !!dateFrom || !!dateTo;
+  // 거래처 후보 — 현재 로드된 회차/개요의 실제 거래처만(회차 변경 시 자동 갱신). 별도 조회 없음.
+  const customerOptions = useMemo(() => {
+    const s = new Set<string>();
+    (detail?.summary ?? []).forEach((g: any) => g.items.forEach((it: any) => { if (it.customerName) s.add(it.customerName); }));
+    return [...s].sort((a, b) => a.localeCompare(b, 'ko'));
+  }, [detail]);
+  // ── 필터 적용된 지급대상 그룹 ──
+  //  · 서버 그룹(payeeKey/payeeName/payeeType/treatments 등) 위에 건별만 필터 후 "수치·건수만" 재집계.
+  //  · gross·공제·실지급 등은 서버가 건별로 산출해 내려준 값을 그대로 합산 — 정산 계산식은 건드리지 않는다.
+  //  · isVatIncluded(그룹)는 서버와 동일 규칙: 외주 && 전건 VAT포함.
+  const filteredSummary: any[] = useMemo(() => {
+    const q = payeeQ.trim().toLowerCase();
+    const itemOk = (it: any) => {
+      if (custFilter !== 'all' && (it.customerName || '') !== custFilter) return false;
+      const d = it.expectedPaymentDate ? String(it.expectedPaymentDate).slice(0, 10) : '';
+      if (dateFrom && (!d || d < dateFrom)) return false;   // 지급일 없는 건은 기간 지정 시 제외
+      if (dateTo && (!d || d > dateTo)) return false;
+      return true;
+    };
+    return (detail?.summary ?? [])
+      .filter((g: any) => !q || (g.payeeName || '').toLowerCase().includes(q))
+      .map((g: any) => {
+        const items = g.items.filter(itemOk);
+        let count = 0, tC = 0, iC = 0, eC = 0, base = 0, exp = 0, ded = 0, gross = 0, wh = 0, vat = 0, net = 0, allVat = true;
+        for (const it of items) {
+          count++;
+          if (it.serviceType === 'translation') tC++;
+          else if (it.serviceType === 'interpretation') iC++;
+          else eC++;
+          base += numOf(it.basePerformanceFee); exp += numOf(it.expenseTotal); ded += numOf(it.deductionTotal);
+          gross += numOf(it.gross); wh += numOf(it.withholdingTax); vat += numOf(it.vat); net += numOf(it.netPayment);
+          if (!it.isVatIncluded) allVat = false;
+        }
+        return { ...g, items, count, translationCount: tC, interpretationCount: iC, equipmentEtcCount: eC,
+          baseTotal: base, expenseTotal: exp, deductionTotal: ded, grossTotal: gross, withholdingTotal: wh, vatTotal: vat, netTotal: net,
+          isVatIncluded: g.payeeType === 'vendor' && items.length > 0 && allVat };
+      })
+      .filter((g: any) => g.items.length > 0);
+  }, [detail, custFilter, payeeQ, dateFrom, dateTo]);
+  // 건별(필터 적용) — 두 탭이 동일한 조건. 전체선택·페이지네이션 기준.
+  const itemRows: any[] = useMemo(
+    () => filteredSummary.flatMap((g: any) => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName }))),
+    [filteredSummary],
+  );
+  // 필터 결과 총계(조회 결과 라인·개요바용). 회차 총계/지급확정 영역은 회차 전체값 유지(운영 안전).
+  const filteredTotals = useMemo(() => {
+    let base = 0, exp = 0, ded = 0, gross = 0, wh = 0, net = 0, ind = 0, ven = 0;
+    for (const g of filteredSummary) {
+      base += numOf(g.baseTotal); exp += numOf(g.expenseTotal); ded += numOf(g.deductionTotal);
+      gross += numOf(g.grossTotal); wh += numOf(g.withholdingTotal); net += numOf(g.netTotal);
+      if (g.payeeType === 'individual') ind++; else ven++;
+    }
+    return { assignments: itemRows.length, payees: filteredSummary.length, individualCount: ind, vendorCount: ven,
+      baseTotal: base, expenseTotal: exp, deductionTotal: ded, grossTotal: gross, withholdingTotal: wh, netTotal: net };
+  }, [filteredSummary, itemRows]);
+  // 클라이언트 페이지네이션(기본 20 · 20/50/100) — 요약/건별 각각. 회차·필터 변경 시 1페이지로.
+  const sumPg = useClientPagination(filteredSummary, 20);
+  const itemPg = useClientPagination(itemRows, 20);
   const totals = detail?.totals ?? {};
   const warnings = detail?.warnings ?? { total: 0, holdAmount: 0, byReason: [] };
   const collectable: any[] = detail?.collectable ?? [];
@@ -138,6 +221,10 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   const statusBg = partialPaid ? '#fffbeb' : ROUND_STATUS[round?.status]?.bg;
   const isItemPaid = (it: any) => it.paymentStatus === 'paid';
   const isItemSelectable = (it: any) => perItemMode && it.paymentStatus === 'unpaid';   // 지급완료·보류 건은 선택 불가(§5)
+  // 고정 셀 배경(지급완료 행 강조색과 정합) + 건별 고정 컬럼 left 오프셋(선택체크 유무 반영).
+  const rowBg = (it: any) => (isItemPaid(it) ? '#f0fdf4' : C.bgCard);
+  const stkChkW = perItemMode ? STK_W.chk : 0;
+  const stkLeft = { payee: stkChkW, cust: stkChkW + STK_W.payee, prod: stkChkW + STK_W.payee + STK_W.cust };
   // (VAT별도) 표시는 서버 공통계산(calcPayoutWithholding)이 내려준 isVatIncluded 값만 사용한다.
   //  · 화면에서 purchaseEvidenceType 을 다시 판정하지 않는다 — 계산·표시 기준을 단일화(§9).
   //  · isVatIncluded=true 는 외주 세금계산서(tax_invoice)로 실지급액에 VAT가 포함된 건. (표시 전용)
@@ -318,6 +405,38 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
         </div>
       </Card>
 
+      {/* ── 조회 필터(지급회차 sel 과 조합) — 거래처 · 지급대상 검색 · 지급일 기간. 두 탭 동시 재집계. ── */}
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: SP[4], flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ ...TYPO.helper, fontWeight: 700 }}>거래처</span>
+            <div style={{ width: 220 }}>
+              <ClickSelect value={custFilter} onChange={(v: string) => setCustFilter(v || 'all')} triggerStyle={inp}
+                options={[{ value: 'all', label: '전체 거래처' }, ...customerOptions.map((c) => ({ value: c, label: c }))]} />
+            </div>
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ ...TYPO.helper, fontWeight: 700 }}>지급대상 검색</span>
+            <input style={{ ...inp, width: 200 }} value={payeeQ} onChange={(e) => setPayeeQ(e.target.value)}
+              placeholder="통번역사·외주업체명" data-testid="payout-filter-payee" aria-label="지급대상 검색" />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={{ ...TYPO.helper, fontWeight: 700 }}>지급일</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="date" style={{ ...inp, width: 152 }} value={dateFrom} max={dateTo || undefined}
+                onChange={(e) => setDateFrom(e.target.value)} data-testid="payout-filter-from" aria-label="지급일 시작" />
+              <span style={{ color: C.textSecondary }}>~</span>
+              <input type="date" style={{ ...inp, width: 152 }} value={dateTo} min={dateFrom || undefined}
+                onChange={(e) => setDateTo(e.target.value)} data-testid="payout-filter-to" aria-label="지급일 종료" />
+            </div>
+          </label>
+          {filterActive && (
+            <GhostBtn onClick={() => { setCustFilter('all'); setPayeeQ(''); setDateFrom(''); setDateTo(''); }}
+              style={{ fontSize: 12, padding: '7px 14px' }} data-testid="payout-filter-reset" aria-label="필터 초기화">필터 초기화</GhostBtn>
+          )}
+        </div>
+      </Card>
+
       {/* 상태 명확 구분(§14): LOADING / ERROR. EMPTY·DATA 는 아래 detail 기준으로 렌더. */}
       {loading && <Card style={{ padding: 32, textAlign: 'center', color: C.g400 }}>불러오는 중…</Card>}
       {!loading && error && (
@@ -332,10 +451,12 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
         <Card>
           <div style={{ display: 'flex', gap: SP[5], alignItems: 'center', flexWrap: 'wrap', ...TYPO.inputValue, fontVariantNumeric: 'tabular-nums' }}>
             <b style={{ fontSize: 15 }}>{sel === 'unassigned' ? '미배정 지급대상' : '전체 지급대상'}</b>
-            <span>총 지급대상 <b>{totals.payees ?? 0}명</b> (개인 {totals.individualCount ?? 0} · 외주 {totals.vendorCount ?? 0})</span>
-            <span>총 수행건 <b>{totals.assignments ?? 0}건</b></span>
-            <span>미배정 <b style={{ color: (overviewInfo?.unassignedCount ?? 0) > 0 ? C.danger : C.textSecondary }}>{overviewInfo?.unassignedCount ?? 0}건</b></span>
-            <span>총 실지급 <b style={{ color: C.primaryText }}>{won(totals.netTotal)}원</b></span>
+            {/* 개요바 수치는 현재 필터 기준(§집계). 미배정 건수는 회차 구조값이라 서버 원본 유지. */}
+            <span>{filterActive ? '지급대상' : '총 지급대상'} <b>{filteredTotals.payees}명</b> (개인 {filteredTotals.individualCount} · 외주 {filteredTotals.vendorCount})</span>
+            <span>{filterActive ? '수행건' : '총 수행건'} <b>{filteredTotals.assignments}건</b></span>
+            {!filterActive && <span>미배정 <b style={{ color: (overviewInfo?.unassignedCount ?? 0) > 0 ? C.danger : C.textSecondary }}>{overviewInfo?.unassignedCount ?? 0}건</b></span>}
+            <span>{filterActive ? '실지급' : '총 실지급'} <b style={{ color: C.primaryText }}>{won(filteredTotals.netTotal)}원</b></span>
+            {filterActive && <span style={{ ...TYPO.badge, color: C.primaryText, background: C.primaryBg, padding: '2px 8px', borderRadius: 6, fontWeight: 700 }}>필터 적용 중</span>}
           </div>
         </Card>
       )}
@@ -395,23 +516,34 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
             ))}
           </div>
 
+          {/* ── 조회 결과 요약(현재 필터 기준) — 두 탭 공통. 회차 총계/지급확정 영역은 별도로 회차 전체값 유지. ── */}
+          <div style={{ display: 'flex', gap: SP[4], alignItems: 'center', flexWrap: 'wrap', padding: `${SP[2]}px ${SP[3]}px`, background: C.g50, borderRadius: 8, ...TYPO.inputValue, fontVariantNumeric: 'tabular-nums' }}>
+            <span style={{ ...TYPO.helper, fontWeight: 700 }}>조회 결과</span>
+            <span>지급대상 <b>{filteredTotals.payees}명</b></span>
+            <span>건수 <b>{filteredTotals.assignments}건</b></span>
+            <span>세전 <b>{won(filteredTotals.grossTotal)}원</b></span>
+            <span>공제 <b style={{ color: C.danger }}>{won(filteredTotals.withholdingTotal)}원</b></span>
+            <span>실지급 <b style={{ color: C.primaryText }}>{won(filteredTotals.netTotal)}원</b></span>
+            {filterActive && <span style={{ ...TYPO.badge, color: C.primaryText, background: C.primaryBg, padding: '2px 8px', borderRadius: 6, fontWeight: 700 }}>필터 적용 중</span>}
+          </div>
+
           {/* ── 지급대상별 요약(§10) ── */}
           {view === 'summary' && (
             <Card>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1100 }}>
                   <thead><tr>
-                    <th style={th}>지급대상</th><th style={th}>구분</th>
+                    <th style={{ ...th, ...stickyCol(0, { header: true, last: true, width: STK_W.sumPayee }) }}>지급대상</th><th style={th}>구분</th>
                     <th style={{ ...th, textAlign: 'right' }}>건수</th><th style={{ ...th, textAlign: 'right' }}>번역</th><th style={{ ...th, textAlign: 'right' }}>통역</th><th style={{ ...th, textAlign: 'right' }}>장비·외주</th>
                     <th style={{ ...th, textAlign: 'right' }}>기본수행료</th><th style={{ ...th, textAlign: 'right' }}>추가비용</th><th style={{ ...th, textAlign: 'right' }}>차감</th>
                     <th style={{ ...th, textAlign: 'right' }}>세전</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>공제</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
                   </tr></thead>
                   <tbody>
-                    {summary.length === 0 && <tr><td colSpan={13} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>수집된 지급대상이 없습니다.</td></tr>}
+                    {filteredSummary.length === 0 && <tr><td colSpan={13} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
                     {/* 집계 전용 — 펼침 없음. 건별 근거·세부내역은 '건별 상세내역' 탭에서 확인(§1·§2). */}
-                    {summary.map((g) => (
+                    {sumPg.paged.map((g) => (
                       <tr key={g.payeeKey}>
-                        <td style={{ ...td, fontWeight: 700 }}>{g.payeeName}</td>
+                        <td style={{ ...td, fontWeight: 700, ...stickyCol(0, { last: true, width: STK_W.sumPayee }) }} title={g.payeeName}>{g.payeeName}</td>
                         <td style={td}>{g.payeeType === 'individual' ? '통번역사' : '외주업체'}</td>
                         <td style={tdR}>{g.count}건</td><td style={tdR}>{g.translationCount}</td><td style={tdR}>{g.interpretationCount}</td><td style={tdR}>{g.equipmentEtcCount}</td>
                         <td style={tdR}>{won(g.baseTotal)}</td><td style={tdR}>{won(g.expenseTotal)}</td><td style={tdR}>{won(g.deductionTotal)}</td>
@@ -428,6 +560,11 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                   </tbody>
                 </table>
               </div>
+              {sumPg.total > 0 && (
+                <Pagination page={sumPg.page} pageSize={sumPg.pageSize} total={sumPg.total}
+                  onPageChange={sumPg.setPage} onPageSizeChange={sumPg.setPageSize}
+                  pageSizeOptions={[20, 50, 100]} unit="명" idPrefix="payout-summary" />
+              )}
             </Card>
           )}
 
@@ -450,15 +587,15 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                   <thead><tr>
                     {/* 17개 컬럼(§1) — 날짜 흐름 수행일→납품일→지급일. 조치는 회차 편집 모드에서만 후행 표시 */}
                     {perItemMode && (() => {
-                      const selectable = summary.flatMap((g: any) => g.items).filter(isItemSelectable).map((it: any) => it.id);
+                      const selectable = itemRows.filter(isItemSelectable).map((it: any) => it.id);
                       const allSel = selectable.length > 0 && selectable.every((id: number) => selectedItems.has(id));
-                      return <th style={{ ...th, width: 34, textAlign: 'center' }}>
+                      return <th style={{ ...th, textAlign: 'center', ...stickyCol(0, { header: true, width: STK_W.chk }) }}>
                         <input type="checkbox" checked={allSel} disabled={selectable.length === 0}
                           onChange={() => setSelectedItems(allSel ? new Set() : new Set(selectable))}
                           data-testid="payout-select-all" aria-label="전체 선택" />
                       </th>;
                     })()}
-                    <th style={th}>지급대상</th><th style={th}>거래처</th><th style={th}>상품·업무</th><th style={th}>구분</th>
+                    <th style={{ ...th, ...stickyCol(stkLeft.payee, { header: true, width: STK_W.payee }) }}>지급대상</th><th style={{ ...th, ...stickyCol(stkLeft.cust, { header: true, width: STK_W.cust }) }}>거래처</th><th style={{ ...th, ...stickyCol(stkLeft.prod, { header: true, last: true, width: STK_W.prod }) }}>상품·업무</th><th style={th}>구분</th>
                     <th style={th}>수행일</th><th style={th}>납품일</th><th style={th}>지급일</th>
                     <th style={th}>작업량</th><th style={{ ...th, textAlign: 'right' }}>단가</th><th style={{ ...th, textAlign: 'right' }}>기본수행료</th>
                     <th style={th}>추가비용</th><th style={th}>차감</th>
@@ -467,24 +604,24 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                     {showActions && <th style={th}>조치</th>}
                   </tr></thead>
                   <tbody>
-                    {summary.length === 0 && <tr><td colSpan={17 + (showActions ? 1 : 0) + (perItemMode ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
-                    {summary.flatMap((g) => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName }))).map((it: any) => (
+                    {itemRows.length === 0 && <tr><td colSpan={17 + (showActions ? 1 : 0) + (perItemMode ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급 건이 없습니다.' : (isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.')}</td></tr>}
+                    {itemPg.paged.map((it: any) => (
                       <tr key={it.id} style={isItemPaid(it) ? { background: '#f0fdf4' } : undefined}>
                         {/* [0] 건별 선택 체크박스(§건별) — 지급확정 회차에서만. 지급완료 건은 '완료' 표시(선택 불가). */}
                         {perItemMode && (
-                          <td style={{ ...td, textAlign: 'center' }}>
+                          <td style={{ ...td, textAlign: 'center', ...stickyCol(0, { width: STK_W.chk, bg: rowBg(it) }) }}>
                             {isItemPaid(it)
                               ? <span title="지급완료" style={{ fontSize: 11, color: '#047857', fontWeight: 700 }}>완료</span>
                               : <input type="checkbox" checked={selectedItems.has(it.id)} disabled={!isItemSelectable(it)}
                                   onChange={() => toggleItem(it.id)} data-testid={`payout-item-check-${it.id}`} aria-label={`${it.payeeName} 건 선택`} />}
                           </td>
                         )}
-                        {/* [1] 지급대상 */}
-                        <td style={{ ...td, fontWeight: 600 }}>{it.payeeName}</td>
-                        {/* [2] 거래처 — 별도 컬럼(§2). 없으면 '-' */}
-                        <td style={td}>{it.customerName || '-'}</td>
-                        {/* [3] 상품·업무 — 거래처 중복표기 안 함(§3) */}
-                        <td style={td}>{it.productName || `#${it.projectId}`}</td>
+                        {/* [1] 지급대상 — 좌측 고정 */}
+                        <td style={{ ...td, fontWeight: 600, ...stickyCol(stkLeft.payee, { width: STK_W.payee, bg: rowBg(it) }) }} title={it.payeeName}>{it.payeeName}</td>
+                        {/* [2] 거래처 — 별도 컬럼(§2), 좌측 고정. 없으면 '-' */}
+                        <td style={{ ...td, ...stickyCol(stkLeft.cust, { width: STK_W.cust, bg: rowBg(it) }) }} title={it.customerName || '-'}>{it.customerName || '-'}</td>
+                        {/* [3] 상품·업무 — 거래처 중복표기 안 함(§3), 좌측 고정(마지막 고정 컬럼) */}
+                        <td style={{ ...td, ...stickyCol(stkLeft.prod, { last: true, width: STK_W.prod, bg: rowBg(it) }) }} title={it.productName || `#${it.projectId}`}>{it.productName || `#${it.projectId}`}</td>
                         {/* [4] 구분 — 서비스 유형(§4) */}
                         <td style={td}>{it.serviceType === 'translation' ? '번역' : it.serviceType === 'interpretation' ? '통역' : it.serviceType === 'equipment' ? '장비' : it.serviceType === 'review' ? '감수' : it.serviceType === 'dtp' ? 'DTP' : it.serviceType === 'media' ? '미디어' : '기타'}</td>
                         {/* [5] 수행일 (§5) */}
@@ -527,6 +664,11 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                   </tbody>
                 </table>
               </div>
+              {itemPg.total > 0 && (
+                <Pagination page={itemPg.page} pageSize={itemPg.pageSize} total={itemPg.total}
+                  onPageChange={itemPg.setPage} onPageSizeChange={itemPg.setPageSize}
+                  pageSizeOptions={[20, 50, 100]} unit="건" idPrefix="payout-items" />
+              )}
             </Card>
           )}
         </>
