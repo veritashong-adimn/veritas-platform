@@ -7,7 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, type IRouter } from "express";
 import {
-  db, payoutRoundsTable, payoutRoundItemsTable, performanceAssignmentsTable, projectsTable, companiesTable, quotesTable,
+  db, payoutRoundsTable, payoutRoundItemsTable, performanceAssignmentsTable, projectsTable, companiesTable, quotesTable, usersTable,
   performanceExpensesTable, performanceDeductionsTable,
   calcPayoutWithholding, vendorVatApplies,
 } from "@workspace/db";
@@ -78,6 +78,12 @@ function selectItems(whereClause: any) {
       individualUserId: performanceAssignmentsTable.individualUserId,
       vendorCompanyId: performanceAssignmentsTable.vendorCompanyId,
       performerName: performanceAssignmentsTable.performerNameSnapshot,
+      // 지급대상 이메일(동명이인 식별용 표시정보) — 개인=users.email / 외주=companies.email. 정산 계산과 무관(표시 전용).
+      //  · 서브쿼리로 조회해 기존 조인·행수에 영향 없음. 미등록이면 null → 프론트에서 '-' 표시.
+      payeeEmail: sql<string | null>`COALESCE(
+        (SELECT email FROM users WHERE id = ${performanceAssignmentsTable.individualUserId}),
+        (SELECT email FROM companies WHERE id = ${performanceAssignmentsTable.vendorCompanyId})
+      )`,
       serviceType: performanceAssignmentsTable.serviceType,
       productName: performanceAssignmentsTable.productNameSnapshot,
       deliveryDate: performanceAssignmentsTable.deliveryDate,
@@ -158,6 +164,7 @@ function aggregate(items: any[]) {
       g = {
         payeeKey: key, payeeType: isIndiv ? "individual" : "vendor", payeeId: payeeId ?? null,
         payeeName: it.performerName || it.customerName || "(미지정)",
+        payeeEmail: it.payeeEmail ?? null,   // 동명이인 식별용 표시정보(그룹 대표값 — 같은 지급대상은 동일 이메일)
         count: 0, translationCount: 0, interpretationCount: 0, equipmentEtcCount: 0,
         baseTotal: 0, expenseTotal: 0, deductionTotal: 0, grossTotal: 0, withholdingTotal: 0, vatTotal: 0, netTotal: 0,
         treatments: new Set<string>(), rateUnconfirmed: false, allVat: true, items: [] as any[],
@@ -246,7 +253,7 @@ async function loadRoundDetail(round: any) {
 //  · 확정 당시 payout_round_items 에 동결된 건별 정산값을 지급대상별로 재집계.
 //    aggregate()/computeTotals() 와 동일한 응답 형태로 구성(프론트 렌더 불변, API shape 보존).
 //  · 원본 performance_assignments 를 다시 읽지 않으므로 확정 후 원본 수정에 영향받지 않는다.
-function snapRowToItem(round: any, r: any, paymentStatus: string) {
+function snapRowToItem(round: any, r: any, paymentStatus: string, payeeEmail: string | null = null) {
   const isIndiv = r.payeeType === "individual";
   const unconfirmed = isIndiv && (!r.withholdingTreatment || r.withholdingTreatment === "tax_review_required");
   return {
@@ -257,6 +264,7 @@ function snapRowToItem(round: any, r: any, paymentStatus: string) {
     individualUserId: isIndiv ? r.payeeId : null,
     vendorCompanyId: r.payeeType === "vendor" ? r.payeeId : null,
     performerName: r.payeeName,
+    payeeEmail,   // 동명이인 식별용 표시정보(스냅샷 미보존 → payeeId 기준 실시간 조회값). 정산 계산과 무관.
     serviceType: r.serviceType, productName: r.productName,
     deliveryDate: r.deliveryDate, expectedPaymentDate: r.paymentDate,
     performanceStartDate: r.performanceStartDate, performanceEndDate: r.performanceEndDate,
@@ -291,6 +299,18 @@ async function loadRoundDetailFromSnapshot(round: any) {
     .from(performanceAssignmentsTable).where(inArray(performanceAssignmentsTable.id, ids));
   const payMap = new Map(payRows.map((p) => [p.id, p.ps as string]));
   const defaultPs = round.status === "paid" ? "paid" : "unpaid";
+  // 지급대상 이메일(표시정보) — 스냅샷은 이메일을 동결하지 않으므로 payeeId 기준으로 실시간 조회(개인=users / 외주=companies).
+  //  · 확정 금액·명세 동결값은 그대로 두고 식별용 이메일만 최신값을 붙인다. 미등록·미확인이면 null → '-'.
+  const emailMap = new Map<string, string | null>();
+  const indivIds = [...new Set(rows.filter((r) => r.payeeType === "individual" && r.payeeId != null).map((r) => r.payeeId as number))];
+  const vendorIds = [...new Set(rows.filter((r) => r.payeeType === "vendor" && r.payeeId != null).map((r) => r.payeeId as number))];
+  const [indivRows, vendorRows] = await Promise.all([
+    indivIds.length ? db.select({ id: usersTable.id, email: usersTable.email }).from(usersTable).where(inArray(usersTable.id, indivIds)) : Promise.resolve([]),
+    vendorIds.length ? db.select({ id: companiesTable.id, email: companiesTable.email }).from(companiesTable).where(inArray(companiesTable.id, vendorIds)) : Promise.resolve([]),
+  ]);
+  for (const u of indivRows) emailMap.set(`individual:${u.id}`, u.email ?? null);
+  for (const c of vendorRows) emailMap.set(`vendor:${c.id}`, c.email ?? null);
+  const emailOf = (r: any) => (r.payeeId != null ? emailMap.get(`${r.payeeType}:${r.payeeId}`) ?? null : null);
   const groups = new Map<string, any>();
   for (const r of rows) {
     const isIndiv = r.payeeType === "individual";
@@ -300,6 +320,7 @@ async function loadRoundDetailFromSnapshot(round: any) {
       g = {
         payeeKey: key, payeeType: isIndiv ? "individual" : "vendor", payeeId: r.payeeId ?? null,
         payeeName: r.payeeName || "(미지정)",
+        payeeEmail: emailOf(r),
         count: 0, translationCount: 0, interpretationCount: 0, equipmentEtcCount: 0,
         baseTotal: 0, expenseTotal: 0, deductionTotal: 0, grossTotal: 0, withholdingTotal: 0, vatTotal: 0, netTotal: 0,
         treatments: new Set<string>(), rateUnconfirmed: false, allVat: true, items: [] as any[],
@@ -320,7 +341,7 @@ async function loadRoundDetailFromSnapshot(round: any) {
     if (isIndiv && r.withholdingTreatment) g.treatments.add(r.withholdingTreatment);
     if (isIndiv && (!r.withholdingTreatment || r.withholdingTreatment === "tax_review_required")) g.rateUnconfirmed = true;
     if (!r.vatIncluded) g.allVat = false;
-    g.items.push(snapRowToItem(round, r, payMap.get(r.performanceAssignmentId) ?? defaultPs));
+    g.items.push(snapRowToItem(round, r, payMap.get(r.performanceAssignmentId) ?? defaultPs, emailOf(r)));
   }
   const summary = Array.from(groups.values()).map((g) => ({
     ...g,

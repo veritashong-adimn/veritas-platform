@@ -9,6 +9,8 @@ import { Card, GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
 import { Pagination } from '../ui/Paginator';
 import { useClientPagination } from './bulkListShared';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
+import { downloadTableExcel, todayStamp, type ExcelColumn } from '../../lib/payoutExcel';
+import PayoutStatementModal from './PayoutStatementModal';
 
 const won = (n: unknown) => Math.round(Number(n ?? 0)).toLocaleString('ko-KR');
 const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
@@ -78,6 +80,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   const [busy, setBusy] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [showWarn, setShowWarn] = useState(false);
+  const [showStatement, setShowStatement] = useState(false);   // 지급명세서 모달(조회 전용)
   const [holdFor, setHoldFor] = useState<{ id: number; name: string } | null>(null);
   const [holdReason, setHoldReason] = useState('');
   // 건별(선택) 처리 — 체크한 수행건 id 집합. 회차/상태 변경 시 초기화.
@@ -96,7 +99,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   // ── 좌측 고정 컬럼(가로 스크롤 시 "누구/어떤 거래처·업무"를 항상 좌측 표시) ──
   //  · 요약: 지급대상 / 건별: (선택체크)·지급대상·거래처·상품·업무. 폭 고정 → left 오프셋 정합.
   //  · 고정 셀은 불투명 배경 + 마지막 고정 컬럼 우측에 경계선/그림자로 스크롤 영역과 자연 분리(§4).
-  const STK_W = { chk: 34, payee: 132, cust: 148, prod: 172, sumPayee: 156 };
+  const STK_W = { chk: 34, payee: 132, email: 168, cust: 148, prod: 172, sumPayee: 156 };
   const stickyCol = (left: number, o?: { header?: boolean; last?: boolean; bg?: string; width?: number }): React.CSSProperties => ({
     position: 'sticky', left, zIndex: o?.header ? 3 : 2,
     background: o?.bg ?? (o?.header ? C.g50 : C.bgCard),
@@ -186,7 +189,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   }, [detail, custFilter, payeeQ, dateFrom, dateTo]);
   // 건별(필터 적용) — 두 탭이 동일한 조건. 전체선택·페이지네이션 기준.
   const itemRows: any[] = useMemo(
-    () => filteredSummary.flatMap((g: any) => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName }))),
+    () => filteredSummary.flatMap((g: any) => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName, payeeEmail: g.payeeEmail ?? it.payeeEmail ?? null }))),
     [filteredSummary],
   );
   // 필터 결과 총계(조회 결과 라인·개요바용). 회차 총계/지급확정 영역은 회차 전체값 유지(운영 안전).
@@ -224,7 +227,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   // 고정 셀 배경(지급완료 행 강조색과 정합) + 건별 고정 컬럼 left 오프셋(선택체크 유무 반영).
   const rowBg = (it: any) => (isItemPaid(it) ? '#f0fdf4' : C.bgCard);
   const stkChkW = perItemMode ? STK_W.chk : 0;
-  const stkLeft = { payee: stkChkW, cust: stkChkW + STK_W.payee, prod: stkChkW + STK_W.payee + STK_W.cust };
+  const stkLeft = { payee: stkChkW, email: stkChkW + STK_W.payee, cust: stkChkW + STK_W.payee + STK_W.email, prod: stkChkW + STK_W.payee + STK_W.email + STK_W.cust };
   // (VAT별도) 표시는 서버 공통계산(calcPayoutWithholding)이 내려준 isVatIncluded 값만 사용한다.
   //  · 화면에서 purchaseEvidenceType 을 다시 판정하지 않는다 — 계산·표시 기준을 단일화(§9).
   //  · isVatIncluded=true 는 외주 세금계산서(tax_invoice)로 실지급액에 VAT가 포함된 건. (표시 전용)
@@ -377,6 +380,66 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
     } catch { onToast('다시 수집 중 오류'); } finally { setBusy(false); }
   };
 
+  // ── Excel 다운로드(조회 전용) — 화면 필터가 적용된 전체 조회 결과를 그대로 출력(페이지네이션 무관, §Excel). ──
+  //  · 금액·라벨은 화면과 동일 헬퍼(won 반올림·taxTreatmentLabel 등)를 재사용해 표시값 일치를 보장한다.
+  //  · 정산 계산·회차·확정/완료·스냅샷 로직은 건드리지 않는다(읽기만).
+  const svcLabel = (t: string) => t === 'translation' ? '번역' : t === 'interpretation' ? '통역' : t === 'equipment' ? '장비' : t === 'review' ? '감수' : t === 'dtp' ? 'DTP' : t === 'media' ? '미디어' : '기타';
+
+  const exportSummaryExcel = () => {
+    if (filteredSummary.length === 0) { onToast('내보낼 데이터가 없습니다.'); return; }
+    const columns: ExcelColumn[] = [
+      { header: '지급대상' }, { header: '이메일' }, { header: '구분' },
+      { header: '건수', type: 'number' }, { header: '번역', type: 'number' }, { header: '통역', type: 'number' }, { header: '장비·외주', type: 'number' },
+      { header: '기본수행료', type: 'number' }, { header: '추가비용', type: 'number' }, { header: '차감', type: 'number' },
+      { header: '세전금액', type: 'number' }, { header: '세금처리' }, { header: '공제', type: 'number' }, { header: '실지급', type: 'number' },
+    ];
+    const rows = filteredSummary.map((g) => [
+      g.payeeName,
+      g.payeeEmail || '-',
+      g.payeeType === 'individual' ? '통번역사' : '외주업체',
+      numOf(g.count), numOf(g.translationCount), numOf(g.interpretationCount), numOf(g.equipmentEtcCount),
+      Math.round(numOf(g.baseTotal)), Math.round(numOf(g.expenseTotal)), Math.round(numOf(g.deductionTotal)),
+      Math.round(numOf(g.grossTotal)),
+      groupTaxTreatmentLabel(g) ?? '⚠ 혼재',
+      Math.round(numOf(g.withholdingTotal)), Math.round(numOf(g.netTotal)),
+    ]);
+    downloadTableExcel({ filename: `지급대상별요약_${todayStamp()}.xlsx`, sheetName: '지급대상별요약', columns, rows });
+  };
+
+  const exportItemsExcel = () => {
+    if (itemRows.length === 0) { onToast('내보낼 데이터가 없습니다.'); return; }
+    // 화면 건별 상세내역 컬럼 순서 그대로(체크박스·조치 열은 데이터 아님 → 제외).
+    const columns: ExcelColumn[] = [
+      { header: '지급대상' }, { header: '이메일' }, { header: '거래처' }, { header: '상품·업무' }, { header: '구분' },
+      { header: '수행일' }, { header: '납품일' }, { header: '지급일' }, { header: '작업량' },
+      { header: '단가', type: 'number' }, { header: '기본수행료', type: 'number' },
+      { header: '추가비용' }, { header: '차감' },
+      { header: '세전금액', type: 'number' }, { header: '세금처리' }, { header: '공제', type: 'number' }, { header: '실지급', type: 'number' },
+      { header: '지급회차' },
+    ];
+    const rows = itemRows.map((it) => [
+      it.payeeName,
+      it.payeeEmail || '-',
+      it.customerName || '-',
+      it.productName || `#${it.projectId}`,
+      svcLabel(it.serviceType),
+      perfDate(it),
+      dateVal(it.deliveryDate) || '-',
+      dateVal(it.expectedPaymentDate) || '-',
+      workAmount(it),
+      (it.isDirectAmount || it.contractUnitPrice == null) ? '-' : Math.round(numOf(it.contractUnitPrice)),
+      Math.round(numOf(it.basePerformanceFee)),
+      inlineItems(it.expenses),
+      inlineItems(it.deductions),
+      Math.round(numOf(it.gross)),
+      taxTreatmentLabel(it),
+      Math.round(numOf(it.withholdingTax)),
+      Math.round(numOf(it.netPayment)),
+      roundLabel(it) ?? '미배정',
+    ]);
+    downloadTableExcel({ filename: `건별상세내역_${todayStamp()}.xlsx`, sheetName: '건별상세내역', columns, rows });
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP[4] }}>
       {/* ── 상단: 회차 선택 + 생성 + 확정 ── */}
@@ -393,13 +456,10 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
               ]} />
           </div>
           <PrimaryBtn onClick={() => setShowCreate(true)} style={{ fontSize: 12, padding: '7px 14px' }} data-testid="payout-create" aria-label="지급회차 생성">+ 지급회차 생성</PrimaryBtn>
-          {/* §7 지급명세서 출력 — 다음 Phase 구현. 현재는 배치만(준비중·Disabled). */}
-          {round && (
+          {/* §7 지급명세서 — 현재 조회 범위(전체 지급대상/특정 회차)의 지급대상별 명세서(조회 전용). PDF는 이번 범위 아님. */}
+          {!loading && !error && detail && (
             <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-              <button type="button" disabled title="다음 단계에서 구현 예정" data-testid="payout-pdf" aria-label="지급명세서 PDF (준비중)"
-                style={{ fontSize: 12, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.g300}`, background: C.g50, color: C.g400, cursor: 'not-allowed' }}>📄 지급명세서 PDF <span style={{ fontSize: 10 }}>(준비중)</span></button>
-              <button type="button" disabled title="다음 단계에서 구현 예정" data-testid="payout-excel" aria-label="지급명세서 Excel (준비중)"
-                style={{ fontSize: 12, padding: '7px 12px', borderRadius: 8, border: `1px solid ${C.g300}`, background: C.g50, color: C.g400, cursor: 'not-allowed' }}>📊 지급명세서 Excel <span style={{ fontSize: 10 }}>(준비중)</span></button>
+              <PrimaryBtn onClick={() => setShowStatement(true)} style={{ fontSize: 12, padding: '7px 14px' }} data-testid="payout-statement" aria-label="지급명세서">📄 지급명세서</PrimaryBtn>
             </div>
           )}
         </div>
@@ -530,20 +590,25 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
           {/* ── 지급대상별 요약(§10) ── */}
           {view === 'summary' && (
             <Card>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: SP[2] }}>
+                <GhostBtn onClick={exportSummaryExcel} disabled={filteredSummary.length === 0}
+                  style={{ fontSize: 12, padding: '6px 14px' }} data-testid="payout-summary-excel" aria-label="지급대상별 요약 Excel 다운로드">📊 Excel 다운로드</GhostBtn>
+              </div>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1100 }}>
+                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1260 }}>
                   <thead><tr>
-                    <th style={{ ...th, ...stickyCol(0, { header: true, last: true, width: STK_W.sumPayee }) }}>지급대상</th><th style={th}>구분</th>
+                    <th style={{ ...th, ...stickyCol(0, { header: true, last: true, width: STK_W.sumPayee }) }}>지급대상</th><th style={th}>이메일</th><th style={th}>구분</th>
                     <th style={{ ...th, textAlign: 'right' }}>건수</th><th style={{ ...th, textAlign: 'right' }}>번역</th><th style={{ ...th, textAlign: 'right' }}>통역</th><th style={{ ...th, textAlign: 'right' }}>장비·외주</th>
                     <th style={{ ...th, textAlign: 'right' }}>기본수행료</th><th style={{ ...th, textAlign: 'right' }}>추가비용</th><th style={{ ...th, textAlign: 'right' }}>차감</th>
                     <th style={{ ...th, textAlign: 'right' }}>세전</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>공제</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
                   </tr></thead>
                   <tbody>
-                    {filteredSummary.length === 0 && <tr><td colSpan={13} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
+                    {filteredSummary.length === 0 && <tr><td colSpan={14} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
                     {/* 집계 전용 — 펼침 없음. 건별 근거·세부내역은 '건별 상세내역' 탭에서 확인(§1·§2). */}
                     {sumPg.paged.map((g) => (
                       <tr key={g.payeeKey}>
                         <td style={{ ...td, fontWeight: 700, ...stickyCol(0, { last: true, width: STK_W.sumPayee }) }} title={g.payeeName}>{g.payeeName}</td>
+                        <td style={{ ...td, color: C.textSecondary }} title={g.payeeEmail || '-'}>{g.payeeEmail || '-'}</td>
                         <td style={td}>{g.payeeType === 'individual' ? '통번역사' : '외주업체'}</td>
                         <td style={tdR}>{g.count}건</td><td style={tdR}>{g.translationCount}</td><td style={tdR}>{g.interpretationCount}</td><td style={tdR}>{g.equipmentEtcCount}</td>
                         <td style={tdR}>{won(g.baseTotal)}</td><td style={tdR}>{won(g.expenseTotal)}</td><td style={tdR}>{won(g.deductionTotal)}</td>
@@ -571,21 +636,23 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
           {/* ── 건별 상세내역(§3·§4·§5) — 지급명세서 원본. 한 건당 한 줄. 추가비용·차감은 항목 인라인(합계 없음). ── */}
           {view === 'items' && (
             <Card>
-              {/* 건별(선택) 처리 툴바 — 지급확정 회차에서만. 체크한 건만 지급완료/확정취소(§건별). */}
-              {perItemMode && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+              {/* 건별(선택) 처리 툴바 — 지급확정 회차에서만. 체크한 건만 지급완료/확정취소(§건별). Excel은 항상 우측. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                {perItemMode && (<>
                   <span style={{ ...TYPO.helper, fontWeight: 700 }}>선택 {selectedItems.size}건</span>
                   <button type="button" onClick={payItemsSelected} disabled={busy || selectedItems.size === 0} data-testid="payout-pay-items" aria-label="선택 지급완료"
                     style={{ fontSize: 12, padding: '6px 12px', borderRadius: 7, fontWeight: 700, cursor: (busy || selectedItems.size === 0) ? 'not-allowed' : 'pointer', color: '#fff', background: (busy || selectedItems.size === 0) ? C.g300 : C.primary, border: 'none' }}>선택 지급완료</button>
                   <button type="button" onClick={unconfirmItemsSelected} disabled={busy || selectedItems.size === 0} data-testid="payout-unconfirm-items" aria-label="선택 확정취소"
                     style={{ fontSize: 12, padding: '6px 12px', borderRadius: 7, fontWeight: 700, cursor: (busy || selectedItems.size === 0) ? 'not-allowed' : 'pointer', color: C.textSecondary, background: C.g50, border: `1px solid ${C.border}` }}>선택 확정취소</button>
                   <span style={{ ...TYPO.helper, color: C.textSecondary }}>지급완료된 건은 선택할 수 없습니다.</span>
-                </div>
-              )}
+                </>)}
+                <GhostBtn onClick={exportItemsExcel} disabled={itemRows.length === 0}
+                  style={{ marginLeft: 'auto', fontSize: 12, padding: '6px 14px' }} data-testid="payout-items-excel" aria-label="건별 상세내역 Excel 다운로드">📊 Excel 다운로드</GhostBtn>
+              </div>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1820 }}>
+                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1990 }}>
                   <thead><tr>
-                    {/* 17개 컬럼(§1) — 날짜 흐름 수행일→납품일→지급일. 조치는 회차 편집 모드에서만 후행 표시 */}
+                    {/* 18개 컬럼(§1) — 지급대상→이메일(동명이인 식별)→거래처. 날짜 흐름 수행일→납품일→지급일. 조치는 회차 편집 모드에서만 후행 표시 */}
                     {perItemMode && (() => {
                       const selectable = itemRows.filter(isItemSelectable).map((it: any) => it.id);
                       const allSel = selectable.length > 0 && selectable.every((id: number) => selectedItems.has(id));
@@ -595,7 +662,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                           data-testid="payout-select-all" aria-label="전체 선택" />
                       </th>;
                     })()}
-                    <th style={{ ...th, ...stickyCol(stkLeft.payee, { header: true, width: STK_W.payee }) }}>지급대상</th><th style={{ ...th, ...stickyCol(stkLeft.cust, { header: true, width: STK_W.cust }) }}>거래처</th><th style={{ ...th, ...stickyCol(stkLeft.prod, { header: true, last: true, width: STK_W.prod }) }}>상품·업무</th><th style={th}>구분</th>
+                    <th style={{ ...th, ...stickyCol(stkLeft.payee, { header: true, width: STK_W.payee }) }}>지급대상</th><th style={{ ...th, ...stickyCol(stkLeft.email, { header: true, width: STK_W.email }) }}>이메일</th><th style={{ ...th, ...stickyCol(stkLeft.cust, { header: true, width: STK_W.cust }) }}>거래처</th><th style={{ ...th, ...stickyCol(stkLeft.prod, { header: true, last: true, width: STK_W.prod }) }}>상품·업무</th><th style={th}>구분</th>
                     <th style={th}>수행일</th><th style={th}>납품일</th><th style={th}>지급일</th>
                     <th style={th}>작업량</th><th style={{ ...th, textAlign: 'right' }}>단가</th><th style={{ ...th, textAlign: 'right' }}>기본수행료</th>
                     <th style={th}>추가비용</th><th style={th}>차감</th>
@@ -604,7 +671,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                     {showActions && <th style={th}>조치</th>}
                   </tr></thead>
                   <tbody>
-                    {itemRows.length === 0 && <tr><td colSpan={17 + (showActions ? 1 : 0) + (perItemMode ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급 건이 없습니다.' : (isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.')}</td></tr>}
+                    {itemRows.length === 0 && <tr><td colSpan={18 + (showActions ? 1 : 0) + (perItemMode ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급 건이 없습니다.' : (isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.')}</td></tr>}
                     {itemPg.paged.map((it: any) => (
                       <tr key={it.id} style={isItemPaid(it) ? { background: '#f0fdf4' } : undefined}>
                         {/* [0] 건별 선택 체크박스(§건별) — 지급확정 회차에서만. 지급완료 건은 '완료' 표시(선택 불가). */}
@@ -618,7 +685,9 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                         )}
                         {/* [1] 지급대상 — 좌측 고정 */}
                         <td style={{ ...td, fontWeight: 600, ...stickyCol(stkLeft.payee, { width: STK_W.payee, bg: rowBg(it) }) }} title={it.payeeName}>{it.payeeName}</td>
-                        {/* [2] 거래처 — 별도 컬럼(§2), 좌측 고정. 없으면 '-' */}
+                        {/* [2] 이메일 — 동명이인 식별용 표시정보, 좌측 고정. 미등록이면 '-' */}
+                        <td style={{ ...td, color: C.textSecondary, ...stickyCol(stkLeft.email, { width: STK_W.email, bg: rowBg(it) }) }} title={it.payeeEmail || '-'}>{it.payeeEmail || '-'}</td>
+                        {/* [3] 거래처 — 별도 컬럼(§2), 좌측 고정. 없으면 '-' */}
                         <td style={{ ...td, ...stickyCol(stkLeft.cust, { width: STK_W.cust, bg: rowBg(it) }) }} title={it.customerName || '-'}>{it.customerName || '-'}</td>
                         {/* [3] 상품·업무 — 거래처 중복표기 안 함(§3), 좌측 고정(마지막 고정 컬럼) */}
                         <td style={{ ...td, ...stickyCol(stkLeft.prod, { last: true, width: STK_W.prod, bg: rowBg(it) }) }} title={it.productName || `#${it.projectId}`}>{it.productName || `#${it.projectId}`}</td>
@@ -726,6 +795,13 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
         </>
       )}
 
+      {showStatement && detail && (
+        // 현재 조회 범위 기준: 특정 회차 → 그 회차 지급대상 / 전체·미배정 → 필터 적용된 조회 결과.
+        //  · summary 는 filteredSummary(현재 필터 반영). round 미선택 시 scopeLabel 로 범위 표기.
+        <PayoutStatementModal round={round ?? null} summary={filteredSummary} snapshotSource={detail?.snapshotSource}
+          scopeLabel={round ? undefined : (sel === 'unassigned' ? '미배정 지급대상' : '전체 지급대상')}
+          onToast={onToast} onClose={() => setShowStatement(false)} />
+      )}
       {showCreate && <CreateDialog token={token} onToast={onToast} onClose={() => setShowCreate(false)} onCreated={async (d) => { setShowCreate(false); await loadRounds(); setSel(String(d.round.id)); setDetail(d); }} />}
       {showWarn && <WarningsModal warnings={warnings} busy={busy} onUnhold={!locked ? unholdItem : undefined} onClose={() => setShowWarn(false)} />}
       {holdFor && (
