@@ -15,9 +15,8 @@ import {
 import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../components/ui';
 import { Pagination } from '../components/ui/Paginator';
 import { ADMIN_SCROLL_PADDING_TOP, ADMIN_SCROLL_PADDING_X } from '../lib/ds';
-import { formatPhoneDisplay } from '../lib/utils';
+import { formatPhoneDisplay, formatWon } from "../lib/utils";
 import { LogModal } from '../components/admin/LogModal';
-import { DraggableModal } from '../components/admin/DraggableModal';
 import { ContactDetailModal } from '../components/admin/ContactDetailModal';
 import { stickyBulkBarStyle } from '../components/admin/bulkListShared';
 import { ContactFormModal } from '../components/admin/ContactFormModal';
@@ -28,6 +27,9 @@ import { TranslatorDetailModal } from '../components/admin/TranslatorDetailModal
 import { TranslatorCreateModal } from '../components/admin/TranslatorCreateModal';
 import { ProjectDetailModal } from '../components/admin/ProjectDetailModal';
 import { PrepaidLedgerModal } from '../components/admin/PrepaidLedgerModal';
+import { ResetPasswordModal } from '../components/admin/ResetPasswordModal';
+import { BoardPostDetailModal } from '../components/admin/BoardPostDetailModal';
+import { ContactMergeModal } from '../components/admin/ContactMergeModal';
 import { ProductListTab } from '../components/admin/product/ProductListTab';
 import { ProductRegisterTab } from '../components/admin/product/ProductRegisterTab';
 import { ProductTrashTab } from '../components/admin/product/ProductTrashTab';
@@ -804,7 +806,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         });
         if (res.status === 401) {
           setToast("세션이 만료되었습니다. 다시 로그인해 주세요.");
-          setTimeout(() => onLogout(), 1500);
+          setTimeout(() => onLogout?.(), 1500);
         }
       } catch {}
     };
@@ -1329,54 +1331,21 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         />
       )}
       {boardPostModal !== null && (
-        <DraggableModal
-          title={boardPostModal.title}
-          subtitle={`${boardPostModal.authorEmail} · ${new Date(boardPostModal.createdAt).toLocaleDateString("ko-KR")}`}
+        <BoardPostDetailModal
+          post={boardPostModal}
           onClose={() => setBoardPostModal(null)}
-          width={680}
-          zIndex={300}
-          bodyPadding="20px 28px"
-          headerExtra={
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {boardPostModal.pinned && <span style={{ background: "#fef3c7", color: "#d97706", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>📌 고정</span>}
-              <span style={{ background: "#eff6ff", color: "#2563eb", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>{BOARD_CATEGORY_LABEL[boardPostModal.category] ?? boardPostModal.category}</span>
-              {boardPostModal.visibleToAll && <span style={{ background: "#f0fdf4", color: "#059669", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10 }}>공개</span>}
-            </div>
-          }
-        >
-          <div style={{ background: "#f9fafb", borderRadius: 10, padding: "16px 18px", fontSize: 14, color: "#374151", lineHeight: 1.7, whiteSpace: "pre-wrap", marginBottom: 16, border: "1px solid #e5e7eb" }}>
-            {boardPostModal.content ?? "내용 없음"}
-          </div>
-          <div style={{ display: "flex", justifyContent: "flex-end" }}>
-            <button onClick={() => handleDeleteBoardPost(boardPostModal.id)} style={{ background: "#fee2e2", color: "#dc2626", border: "none", borderRadius: 8, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>삭제</button>
-          </div>
-        </DraggableModal>
+          onDelete={handleDeleteBoardPost}
+        />
       )}
       {resetPwUserId !== null && (
-        <DraggableModal
-          title="비밀번호 재설정"
-          subtitle={`사용자 #${resetPwUserId}의 비밀번호를 재설정합니다.`}
+        <ResetPasswordModal
+          userId={resetPwUserId}
+          value={resetPwInput}
+          loading={resetPwLoading}
+          onChange={setResetPwInput}
+          onSubmit={handleResetPassword}
           onClose={() => { setResetPwUserId(null); setResetPwInput(""); }}
-          width={400}
-          zIndex={400}
-          bodyPadding="20px 28px"
-        >
-          <input
-            type="password"
-            value={resetPwInput}
-            onChange={e => setResetPwInput(e.target.value)}
-            placeholder="새 비밀번호 (최소 6자)"
-            onKeyDown={e => e.key === "Enter" && handleResetPassword()}
-            style={{ ...inputStyle, width: "100%", boxSizing: "border-box", marginBottom: 14 }}
-            autoFocus
-          />
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <GhostBtn onClick={() => { setResetPwUserId(null); setResetPwInput(""); }}>취소</GhostBtn>
-            <PrimaryBtn onClick={handleResetPassword} disabled={resetPwLoading || resetPwInput.length < 6} style={{ padding: "8px 18px" }}>
-              {resetPwLoading ? "처리 중..." : "재설정"}
-            </PrimaryBtn>
-          </div>
-        </DraggableModal>
+        />
       )}
       {detailModal !== null && (
         <ProjectDetailModal
@@ -1658,14 +1627,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               },
               {
                 label: "이번달 매출",
-                value: `${revenueMonth.toLocaleString()}원`,
-                sub: `오늘 ${revenueToday.toLocaleString()}원 / 이번주 ${revenueWeek.toLocaleString()}원`,
+                value: `${formatWon(revenueMonth)}`,
+                sub: `오늘 ${formatWon(revenueToday)} / 이번주 ${formatWon(revenueWeek)}`,
                 color: "#059669", bg: "#f0fdf4",
                 onClick: () => setAdminTab("payments"),
               },
               {
                 label: "미결제 금액",
-                value: `${unpaidTotal.toLocaleString()}원`,
+                value: `${formatWon(unpaidTotal)}`,
                 sub: unpaidPayments.length > 0 ? `${unpaidPayments.length}건 미수금` : "미수금 없음",
                 color: unpaidPayments.length > 0 ? "#d97706" : "#6b7280",
                 bg: unpaidPayments.length > 0 ? "#fffbeb" : "#f9fafb",
@@ -1682,7 +1651,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 border: "#fecaca", bg: "#fef2f2", color: "#dc2626",
               },
               unpaidPayments.length > 0 && {
-                icon: "🟡", label: `미결제 ${unpaidPayments.length}건 · ${unpaidTotal.toLocaleString()}원`,
+                icon: "🟡", label: `미결제 ${unpaidPayments.length}건 · ${formatWon(unpaidTotal)}`,
                 desc: "입금 확인이 필요한 결제 건이 있습니다.",
                 actionLabel: "결제 관리", action: () => setAdminTab("payments"),
                 border: "#fde68a", bg: "#fffbeb", color: "#d97706",
@@ -1820,7 +1789,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         ].map(r => (
                           <div key={r.label} style={{ textAlign: "center", padding: "10px 6px", background: "#f9fafb", borderRadius: 8 }}>
                             <p style={{ margin: "0 0 3px", fontSize: 10, fontWeight: 700, color: "#9ca3af", textTransform: "uppercase" }}>{r.label}</p>
-                            <p style={{ margin: 0, fontSize: 15, fontWeight: 800, color: r.color }}>{r.value.toLocaleString()}원</p>
+                            <p style={{ margin: 0, fontSize: 15, fontWeight: 800, color: r.color }}>{formatWon(r.value)}</p>
                           </div>
                         ))}
                       </div>
@@ -1862,7 +1831,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               )}
                             </div>
                             <span style={{ fontSize: 13, fontWeight: 700, color: isPending ? "#dc2626" : "#111827", flexShrink: 0, marginLeft: 8 }}>
-                              {Number(s.translatorAmount).toLocaleString()}원
+                              {formatWon(Number(s.translatorAmount))}
                             </span>
                           </div>
                         );
@@ -1935,7 +1904,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                         <td style={{ ...tableTd, color: "#9ca3af" }}>#{pm.id}</td>
                         <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{pm.projectTitle ?? "(제목 없음)"}</td>
-                        <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2" }}>{Number(pm.amount).toLocaleString()}원</td>
+                        <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2" }}>{formatWon(Number(pm.amount))}</td>
                         <td style={tableTd}><StatusBadge status={pm.status} /></td>
                         <td style={tableTd}>{pm.projectStatus ? <StatusBadge status={pm.projectStatus} /> : "-"}</td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(pm.createdAt).toLocaleDateString("ko-KR")}</td>
@@ -2128,13 +2097,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
                           {/* 총 매출 */}
                           <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap", fontSize: 12 }}>
-                            {Number(c.totalPayment).toLocaleString()}원
+                            {formatWon(Number(c.totalPayment))}
                           </td>
 
                           {/* 미수금 */}
                           <td style={{ ...tableTd, width: 90 }}>
                             {Number(c.unpaidAmount) > 0
-                              ? <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, lineHeight: "18px", background: "transparent", border: "1px solid #fcd34d", color: "#92400e", whiteSpace: "nowrap" }}>{Number(c.unpaidAmount).toLocaleString()}원</span>
+                              ? <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, lineHeight: "18px", background: "transparent", border: "1px solid #fcd34d", color: "#92400e", whiteSpace: "nowrap" }}>{formatWon(Number(c.unpaidAmount))}</span>
                               : <span style={{ color: "#d1d5db", fontSize: 11 }}>-</span>}
                           </td>
 
@@ -2409,53 +2378,17 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           )}
 
           {/* ── 담당자 통합 모달 ── */}
-          {showMergeModal && (() => {
-            const selectedContacts = contacts.filter(c => selectedContactIds.has(c.id));
-            return (
-              <DraggableModal title="중복 담당자 통합" onClose={() => setShowMergeModal(false)} width={680} zIndex={400} bodyPadding="20px 28px">
-                <p style={{ margin: "0 0 6px", fontSize: 13, color: "#374151" }}>대표 담당자를 선택하세요.</p>
-                <p style={{ margin: "0 0 16px", fontSize: 12, color: "#9ca3af" }}>통합 후 나머지 담당자는 비활성 처리됩니다. 기존 프로젝트 이력은 대표 담당자로 연결됩니다.</p>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
-                  {selectedContacts.map(c => (
-                    <label key={c.id} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "12px 14px", borderRadius: 10, border: `2px solid ${primaryMergeId === c.id ? "#2563eb" : "#e5e7eb"}`, background: primaryMergeId === c.id ? "#eff6ff" : "#fff", cursor: "pointer" }}>
-                      <input type="radio" name="primaryContact" value={c.id}
-                        checked={primaryMergeId === c.id}
-                        onChange={() => setPrimaryMergeId(c.id)}
-                        style={{ marginTop: 2, accentColor: "#2563eb" }} />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
-                          <span style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>{c.name}</span>
-                          {primaryMergeId === c.id && <span style={{ fontSize: 10, background: "#dbeafe", color: "#1d4ed8", borderRadius: 4, padding: "1px 6px", fontWeight: 700 }}>대표</span>}
-                          {(c as any).isPrimary && <span style={{ fontSize: 10, background: "#d1fae5", color: "#065f46", borderRadius: 4, padding: "1px 5px", fontWeight: 600 }}>기본담당자</span>}
-                        </div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 16px", fontSize: 12, color: "#6b7280" }}>
-                          <span>거래처: {c.companyName ?? "-"}</span>
-                          <span>부서/직책: {[c.department, c.position].filter(Boolean).join(" / ") || "-"}</span>
-                          <span>휴대폰: {formatPhoneDisplay((c as any).mobile ?? c.phone)}</span>
-                          <span>이메일: {c.email ?? "-"}</span>
-                          <span>등록일: {new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
-                          <span>ID: #{c.id}</span>
-                        </div>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-                {!primaryMergeId && (
-                  <p style={{ margin: "0 0 12px", fontSize: 12, color: "#dc2626", fontWeight: 600 }}>대표 담당자를 선택해주세요.</p>
-                )}
-                <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                  <button onClick={() => setShowMergeModal(false)}
-                    style={{ padding: "10px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#374151" }}>
-                    취소
-                  </button>
-                  <button onClick={handleMergeContacts} disabled={!primaryMergeId || merging}
-                    style={{ padding: "10px 20px", borderRadius: 8, border: "none", background: primaryMergeId ? "#2563eb" : "#93c5fd", color: "#fff", fontSize: 13, fontWeight: 700, cursor: primaryMergeId ? "pointer" : "not-allowed" }}>
-                    {merging ? "통합 중..." : `${selectedContactIds.size}명 통합`}
-                  </button>
-                </div>
-              </DraggableModal>
-            );
-          })()}
+          {showMergeModal && (
+            <ContactMergeModal
+              contacts={contacts}
+              selectedIds={selectedContactIds}
+              primaryId={primaryMergeId}
+              merging={merging}
+              onSelectPrimary={setPrimaryMergeId}
+              onMerge={handleMergeContacts}
+              onClose={() => setShowMergeModal(false)}
+            />
+          )}
         </Section>
       )}
 
@@ -3191,9 +3124,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 20 }}>
               {[
                 { label: "총 계정 수", value: `${prepaidAccounts.length}개`, color: "#2563eb", bg: "#eff6ff" },
-                { label: "잔액 합계", value: `${prepaidAccounts.reduce((s, a) => s + a.currentBalance, 0).toLocaleString()}원`, color: "#15803d", bg: "#dcfce7" },
+                { label: "잔액 합계", value: `${formatWon(prepaidAccounts.reduce((s, a) => s + a.currentBalance, 0))}`, color: "#15803d", bg: "#dcfce7" },
                 { label: "잔액 있는 계정", value: `${prepaidAccounts.filter(a => a.currentBalance > 0).length}개`, color: "#d97706", bg: "#fef3c7" },
-                { label: "총 입금 누계", value: `${prepaidAccounts.reduce((s, a) => s + a.initialAmount, 0).toLocaleString()}원`, color: "#7c3aed", bg: "#ede9fe" },
+                { label: "총 입금 누계", value: `${formatWon(prepaidAccounts.reduce((s, a) => s + a.initialAmount, 0))}`, color: "#7c3aed", bg: "#ede9fe" },
               ].map(stat => (
                 <div key={stat.label} style={{ background: stat.bg, borderRadius: 10, padding: "14px 20px", minWidth: 155, flex: "1 1 155px" }}>
                   <div style={{ fontSize: 12, color: stat.color, fontWeight: 700, marginBottom: 4 }}>{stat.label}</div>
@@ -3242,11 +3175,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
                       <div style={{ background: "#f0fdf4", borderRadius: 8, padding: "8px 12px" }}>
                         <div style={{ fontSize: 10, color: "#15803d", fontWeight: 600 }}>현재 잔액</div>
-                        <div style={{ fontSize: 17, fontWeight: 800, color: hasBalance ? "#15803d" : "#dc2626" }}>{account.currentBalance.toLocaleString()}원</div>
+                        <div style={{ fontSize: 17, fontWeight: 800, color: hasBalance ? "#15803d" : "#dc2626" }}>{formatWon(account.currentBalance)}</div>
                       </div>
                       <div style={{ background: "#fef2f2", borderRadius: 8, padding: "8px 12px" }}>
                         <div style={{ fontSize: 10, color: "#dc2626", fontWeight: 600 }}>사용 금액</div>
-                        <div style={{ fontSize: 17, fontWeight: 800, color: "#dc2626" }}>{usedAmount.toLocaleString()}원</div>
+                        <div style={{ fontSize: 17, fontWeight: 800, color: "#dc2626" }}>{formatWon(usedAmount)}</div>
                       </div>
                     </div>
                     {/* 사용률 바 */}
@@ -3254,7 +3187,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       <div style={{ height: "100%", width: `${usagePercent}%`, background: usagePercent > 90 ? "#dc2626" : usagePercent > 60 ? "#f59e0b" : "#22c55e", borderRadius: 4, transition: "width 0.3s" }} />
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ fontSize: 11, color: "#9ca3af" }}>최초: {account.initialAmount.toLocaleString()}원 · 사용률 {usagePercent.toFixed(0)}%</div>
+                      <div style={{ fontSize: 11, color: "#9ca3af" }}>최초: {formatWon(account.initialAmount)} · 사용률 {usagePercent.toFixed(0)}%</div>
                       <div style={{ fontSize: 11, color: "#2563eb", fontWeight: 600 }}>원장 보기 →</div>
                     </div>
                   </div>

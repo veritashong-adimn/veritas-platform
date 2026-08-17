@@ -10,7 +10,7 @@ import {
   prepaidAccountsTable, prepaidLedgerTable,
   quoteItemsTable, quoteItemFilesTable,
   projectFilesTable, translatorProfilesTable,
-  companyAliasesTable,
+  companyAliasesTable, projectPaymentsTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, inArray, sql, desc, ne, isNull, isNotNull } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
@@ -1092,6 +1092,23 @@ router.delete("/admin/divisions/:id", ...adminGuard, async (req, res) => {
     res.status(400).json({ error: "유효하지 않은 division id." }); return;
   }
   try {
+    // 삭제 전 참조 검사(§TOP5) — divisionId 계열 컬럼에 FK가 없어 물리삭제 시 orphan이 남을 수 있으므로,
+    // 참조 중인 담당자/프로젝트가 있으면 삭제를 차단한다(자동 null 처리하지 않음 — 연결 관계 임의 훼손 방지).
+    const [contactRef] = await db.select({ id: contactsTable.id }).from(contactsTable)
+      .where(eq(contactsTable.divisionId, divId)).limit(1);
+    const [projectRef] = await db.select({ id: projectsTable.id }).from(projectsTable)
+      .where(or(
+        eq(projectsTable.requestingDivisionId, divId),
+        eq(projectsTable.billingDivisionId, divId),
+        eq(projectsTable.payerDivisionId, divId),
+      )).limit(1);
+    if (contactRef || projectRef) {
+      const parts: string[] = [];
+      if (contactRef) parts.push("담당자");
+      if (projectRef) parts.push("프로젝트");
+      res.status(409).json({ error: `이 부서를 사용하는 ${parts.join(" 또는 ")}가 있어 삭제할 수 없습니다. 연결을 먼저 정리해 주세요.` });
+      return;
+    }
     await db.delete(divisionsTable).where(eq(divisionsTable.id, divId));
     res.json({ ok: true });
   } catch (err) {
@@ -1658,6 +1675,15 @@ async function deleteContact(req: any, res: any, contactId: number) {
   if (!existing) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
   if (existing.deletedAt) { res.status(400).json({ error: "이미 휴지통에 있는 담당자입니다." }); return; }
 
+  // 청구담당자(project_payments.billingContactId)로 사용 중이면 삭제 차단(§TOP5).
+  // 임의 null 처리 대신, 담당자 통합으로 대표 담당자로 정리한 뒤 삭제하도록 유도(연결 무결성 보존).
+  const billingUse = await db.select({ id: projectPaymentsTable.id }).from(projectPaymentsTable)
+    .where(eq(projectPaymentsTable.billingContactId, contactId)).limit(1);
+  if (billingUse.length > 0) {
+    res.status(409).json({ error: "청구 담당자로 사용 중인 담당자는 삭제할 수 없습니다. 담당자 통합으로 대표 담당자로 정리한 후 삭제해 주세요." });
+    return;
+  }
+
   const { reason } = (req.body ?? {}) as { reason?: string };
   const trimmedReason = (reason ?? "").trim();
   if (trimmedReason.length < 2) { res.status(400).json({ error: "삭제 사유를 2자 이상 입력해 주세요." }); return; }
@@ -1812,6 +1838,13 @@ router.post("/admin/contacts/merge", ...adminGuard, requirePermission("contact.u
         await tx.update(projectsTable)
           .set({ contactId: primaryContactId })
           .where(inArray(projectsTable.contactId, mergeContactIds));
+
+        // 청구정보(project_payments.billingContactId) → primaryContactId로 재연결(§TOP5).
+        // ContactMergeModal 의 "기존 프로젝트 이력은 대표 담당자로 연결됩니다" 약속을 청구정보까지 이행 —
+        // 병합 후 청구담당자가 비활성 담당자를 가리키는 dangling 참조를 방지. 동일 트랜잭션 내 원자 처리.
+        await tx.update(projectPaymentsTable)
+          .set({ billingContactId: primaryContactId })
+          .where(inArray(projectPaymentsTable.billingContactId, mergeContactIds));
       }
 
       // 통합 대상 담당자 비활성화

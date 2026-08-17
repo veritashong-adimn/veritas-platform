@@ -245,23 +245,28 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   };
 
   const patchRow = (i: number, p: Partial<PayRow>) => setRows(prev => prev.map((r, idx) => idx === i ? { ...r, ...p } : r));
+  // ── 입금완료 상태 정합(§TOP3) — 세 필드(completed·confirmed·paidDate)는 항상 함께 움직인다(모순 금지) ──
+  //  · 입금완료: depositStatus='completed' + depositConfirmed=true + paidDate(실제/지정 입금일) 동시 세팅.
+  //  · 미입금: depositConfirmed=false + paidDate=null + depositStatus는 completed가 아닌 값(기본 'scheduled').
+  const markPaid = (i: number, paidDate: string) => patchRow(i, { depositStatus: 'completed', depositConfirmed: true, paidDate });
+  const markUnpaid = (i: number, status: string = 'scheduled') => patchRow(i, { depositStatus: status, depositConfirmed: false, paidDate: null });
+  const todayStr = () => new Date().toISOString().slice(0, 10);
   // 결제방법 변경 — 세금계산서가 아니면 발행일 자동 클리어(세금계산서만 발행일 사용).
   const patchMethod = (i: number, v: string) => patchRow(i, { paymentMethod: v, ...(v !== METHOD_TAX ? { issueDate: null } : {}) });
-  // 입금일 변경 — 입력 시 입금상태 자동 '입금완료'. 삭제 시 상태는 사용자 선택값 유지(자동 변경 안 함).
-  //  · 입금확인(depositConfirmed) 상태는 그대로 유지 — 사용자가 실제 입금일에 맞게 수정 가능(요구사항 #5).
-  const patchPaid = (i: number, v: string) => patchRow(i, { paidDate: v || null, ...(v ? { depositStatus: 'completed' } : {}) });
+  // 입금일 변경 — 입력 시 입금완료(3필드 세트), 삭제 시 미입금(3필드 세트)으로 정합. 모순 상태를 만들지 않는다.
+  const patchPaid = (i: number, v: string) => (v ? markPaid(i, v) : markUnpaid(i));
   // 입금확인 토글 — 수행정보 납품확인과 동일 개념.
-  //  · 체크 ON: 입금예정일 → 입금일 자동복사 + 입금상태 '입금완료'(→ 붉은색 해제·미수금/입금완료율 자동 재계산).
-  //  · 체크 OFF: 입금일 비움 + 입금상태 '입금예정'(→ 입금예정일 다시 붉은색). 단, 입금일을 직접 수정한 이력(≠예정일)이 있으면 경고 후 처리(요구사항 #4).
+  //  · 체크 ON: 입금예정일 → 입금일 복사 + 입금완료(3필드 세트). 체크 OFF: 미입금(3필드 세트).
+  //  · 입금일을 직접 수정한 이력(≠예정일)이 있으면 해제 시 경고 후 처리.
   const toggleDepositConfirm = (i: number) => {
     const r = rows[i];
     if (!r.expectedDate) { onToast('입금예정일이 없어 확인할 수 없습니다.'); return; }
     if (!r.depositConfirmed) {
-      patchRow(i, { depositConfirmed: true, paidDate: r.expectedDate, depositStatus: 'completed' });
+      markPaid(i, r.expectedDate);
     } else {
       const manuallyEdited = !!r.paidDate && dateVal(r.paidDate) !== dateVal(r.expectedDate);
       if (manuallyEdited && !window.confirm('입금일을 직접 수정한 이력이 있습니다.\n입금확인을 해제하면 입력된 입금일이 삭제됩니다. 계속하시겠습니까?')) return;
-      patchRow(i, { depositConfirmed: false, paidDate: null, depositStatus: 'scheduled' });
+      markUnpaid(i);
     }
   };
   // 공급가액 입력 → 부가세(10%)·합계 정방향 계산. 빈 값이면 모두 비움.
@@ -336,7 +341,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const col2Labels = Array.from(new Set(data.map(r => scheduledLabel(r.paymentMethod))));
   const col2Header = col2Labels.length ? col2Labels.join('/') : '입금예정일';
   const haap = (r: PayRow) => effAmounts(r, isVoucher).amount;     // 합계/입금액(수출바우처는 자동)
-  const paidOf = (r: PayRow) => (r.depositStatus === 'completed' ? haap(r) : 0);
+  // 입금완료 = 세 필드(completed·confirmed·paidDate) 모두 충족 시에만(§TOP3). 미수금 계산의 단일 기준 — 모순 데이터 방어.
+  const isRowPaid = (r: PayRow) => r.depositStatus === 'completed' && r.depositConfirmed === true && !!r.paidDate;
+  const paidOf = (r: PayRow) => (isRowPaid(r) ? haap(r) : 0);
   const summary = useMemo(() => {
     const totalPaid = data.reduce((s, r) => s + paidOf(r), 0);     // 총 입금액(입금완료 행)
     const receivable = saleTotal - totalPaid;                      // 미수금 = 총판매 − 총입금액
@@ -470,7 +477,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         {/* 입금상태 */}
         <td style={{ ...tdBase, width: 110 }}>
           {editable
-            ? <ClickSelect value={r.depositStatus ?? 'scheduled'} onChange={(v: string) => patchRow(i, { depositStatus: v })} triggerStyle={inp} options={DEPOSIT_OPTS} />
+            ? <ClickSelect value={r.depositStatus ?? 'scheduled'} onChange={(v: string) => (v === 'completed' ? markPaid(i, r.paidDate || r.expectedDate || todayStr()) : markUnpaid(i, v))} triggerStyle={inp} options={DEPOSIT_OPTS} />
             : labelOf(DEPOSIT_OPTS, r.depositStatus)}
         </td>
         {/* 비고 — 가장 넓은 컬럼(메모 입력 고려) */}

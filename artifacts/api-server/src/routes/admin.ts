@@ -9,7 +9,6 @@ import {
   prepaidAccountsTable, prepaidLedgerTable, settingsTable,
   productRequestsTable, performanceAssignmentsTable,
 } from "@workspace/db";
-import bcrypt from "bcryptjs";
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc, isNull } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
@@ -17,9 +16,24 @@ import { getSettings, invalidateSettingsCache } from "../lib/getSettings";
 import { tryBuildOnProjectComplete } from "../services/translationUnitService";
 import { loadPerformanceRows } from "./performances";
 import { loadPaymentRecords } from "./projectPayments";
+import adminUsersRouter from "./admin/users";
+import adminCustomersRouter from "./admin/customers";
+import adminNotesRouter from "./admin/notes";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
+
+// ─── 사용자 관리 sub-router (/admin/users*) ──────────────────────────────
+// admin.ts 비대화 완화를 위해 users 도메인만 별도 파일로 분리. 경로/동작 동일.
+router.use(adminUsersRouter);
+
+// ─── 고객/커뮤니케이션 sub-router (/admin/customers*, /admin/communications) ──
+// 동일 목적의 2차 분리. 경로/메서드/권한/응답 동일.
+router.use(adminCustomersRouter);
+
+// ─── 관리자 메모 sub-router (/admin/notes, /admin/projects/:id/notes) ──────
+// 동일 목적의 3차 분리. 경로/메서드/권한/응답 동일.
+router.use(adminNotesRouter);
 
 // ─── 프로젝트 목록 (검색/필터) ────────────────────────────────────────────
 router.get("/admin/projects", ...adminGuard, async (req, res) => {
@@ -2103,7 +2117,7 @@ router.post("/admin/billing-batches/:batchId/issue", ...adminGuard, async (req, 
     }
 
     let totalAmount = 0;
-    let quoteItemValues: Parameters<typeof db.insert>[0] extends never ? never : { quoteId: number; sortOrder: number; productName: string; unit: string | null; quantity: string; unitPrice: string; supplyAmount: string; taxAmount: string; totalAmount: string; memo: string | null }[] = [];
+    let quoteItemValues: Parameters<typeof db.insert>[0] extends never ? never : { quoteId: number; sortOrder: number; productName: string; unit: string; quantity: string; unitPrice: string; supplyAmount: string; taxAmount: string; totalAmount: string; memo: string | null }[] = [];
 
     if (workItems.length > 0) {
       // 작업 항목 기반 발행
@@ -2147,10 +2161,10 @@ router.post("/admin/billing-batches/:batchId/issue", ...adminGuard, async (req, 
         quoteType: "accumulated_batch" as string,
         billingType: "monthly_billing" as string,
         batchItemCount: workItems.length > 0 ? workItems.length : legacyItems.length,
-        batchPeriodStart: batch.periodStart,
-        batchPeriodEnd: batch.periodEnd,
-        issueDate: issueDate ? new Date(issueDate) : new Date(),
-        paymentDueDate: paymentDueDate ? new Date(paymentDueDate) : null,
+        batchPeriodStart: batch.periodStart as unknown as string,
+        batchPeriodEnd: batch.periodEnd as unknown as string,
+        issueDate: (issueDate ? new Date(issueDate) : new Date()) as unknown as string,
+        paymentDueDate: (paymentDueDate ? new Date(paymentDueDate) : null) as unknown as string | null,
         taxDocumentType: (taxDocumentType ?? "tax_invoice") as string,
       }).returning();
       await tx.insert(quoteItemsTable).values(quoteItemValues.map(v => ({ ...v, quoteId: q.id })));
@@ -2188,7 +2202,7 @@ router.get("/admin/billing-candidates", ...adminGuard, async (req, res) => {
       .from(projectsTable)
       .where(and(
         eq(projectsTable.companyId, cid),
-        inArray(projectsTable.status, billableStatuses as unknown as string[]),
+        inArray(projectsTable.status, billableStatuses),
         gte(projectsTable.createdAt, startDate),
         lte(projectsTable.createdAt, endDate),
       ))
@@ -2435,400 +2449,6 @@ router.patch("/admin/update-email", ...adminGuard, async (req, res) => {
   }
 });
 
-// ─── 사용자 목록 ───────────────────────────────────────────────────────────
-router.get("/admin/users", ...adminGuard, async (req, res) => {
-  try {
-    const { search, roleType, role: roleLegacy } = req.query as { search?: string; roleType?: string; role?: string };
-    // roleType 우선, 하위 호환을 위해 role도 지원
-    const roleFilter = (roleType ?? roleLegacy ?? "").trim();
-
-    const onlineThreshold = new Date(Date.now() - 5 * 60 * 1000);
-
-    const rows = await db
-      .select({
-        id: usersTable.id,
-        email: usersTable.email,
-        name: usersTable.name,
-        role: usersTable.role,
-        roleId: usersTable.roleId,
-        isActive: usersTable.isActive,
-        createdAt: usersTable.createdAt,
-        department: usersTable.department,
-        jobTitle: usersTable.jobTitle,
-        companyId: usersTable.companyId,
-        lastLoginAt: usersTable.lastLoginAt,
-        lastActivityAt: usersTable.lastActivityAt,
-      })
-      .from(usersTable)
-      .orderBy(usersTable.createdAt);
-
-    const enriched = rows.map(u => ({
-      ...u,
-      isOnline: u.lastActivityAt ? u.lastActivityAt >= onlineThreshold : false,
-    }));
-
-    let result = enriched.reverse();
-
-    if (search?.trim()) {
-      const s = search.trim().toLowerCase();
-      result = result.filter(u =>
-        u.email.toLowerCase().includes(s) ||
-        (u.name ?? "").toLowerCase().includes(s) ||
-        (u.department ?? "").toLowerCase().includes(s) ||
-        (u.jobTitle ?? "").toLowerCase().includes(s)
-      );
-    }
-
-    const allRoles = ["customer", "translator", "admin", "staff", "client", "linguist"];
-    if (roleFilter && allRoles.includes(roleFilter)) {
-      if (roleFilter === "client") {
-        result = result.filter(u => u.role === "client" || u.role === "customer");
-      } else if (roleFilter === "linguist") {
-        result = result.filter(u => u.role === "linguist" || u.role === "translator");
-      } else {
-        result = result.filter(u => u.role === roleFilter);
-      }
-    }
-
-    res.json(result);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to fetch users");
-    res.status(500).json({ error: "사용자 조회 실패." });
-  }
-});
-
-// ─── 사용자 역할 변경 ─────────────────────────────────────────────────────
-router.patch("/admin/users/:id/name", ...adminGuard, async (req, res) => {
-  const userId = Number(req.params.id);
-  const { name } = req.body as { name?: string };
-  if (isNaN(userId) || userId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 user id." }); return;
-  }
-  try {
-    const [updated] = await db
-      .update(usersTable)
-      .set({ name: name?.trim() || null })
-      .where(eq(usersTable.id, userId))
-      .returning({ id: usersTable.id, email: usersTable.email, name: usersTable.name, role: usersTable.role });
-    if (!updated) { res.status(404).json({ error: "사용자를 찾을 수 없습니다." }); return; }
-    res.json(updated);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to update user name");
-    res.status(500).json({ error: "이름 변경 실패." });
-  }
-});
-
-router.patch("/admin/users/:id/role", ...adminGuard, requirePermission("user.manage"), async (req, res) => {
-  const userId = Number(req.params.id);
-  const { role } = req.body as { role?: string };
-
-  const allowedRoles = ["admin", "staff", "client", "linguist", "customer", "translator"];
-  if (!role || !allowedRoles.includes(role)) {
-    res.status(400).json({ error: "유효하지 않은 역할입니다. admin/staff/client/linguist 중 하나여야 합니다." });
-    return;
-  }
-
-  if (userId === req.user!.id) {
-    res.status(400).json({ error: "본인의 역할은 변경할 수 없습니다." });
-    return;
-  }
-
-  try {
-    const [target] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-    if (!target) {
-      res.status(404).json({ error: "사용자를 찾을 수 없습니다." });
-      return;
-    }
-
-    // 마지막 admin 계정 보호
-    if ((target.role === "admin") && role !== "admin") {
-      const adminCount = await db
-        .select({ id: usersTable.id })
-        .from(usersTable)
-        .where(and(eq(usersTable.role, "admin"), eq(usersTable.isActive, true)));
-      if (adminCount.length <= 1) {
-        res.status(400).json({ error: "마지막 관리자 계정의 역할은 변경할 수 없습니다." });
-        return;
-      }
-    }
-
-    const [updated] = await db
-      .update(usersTable)
-      .set({ role: role as typeof usersTable.$inferInsert["role"] })
-      .where(eq(usersTable.id, userId))
-      .returning({
-        id: usersTable.id, email: usersTable.email, name: usersTable.name,
-        role: usersTable.role, isActive: usersTable.isActive, createdAt: usersTable.createdAt,
-        department: usersTable.department, jobTitle: usersTable.jobTitle, companyId: usersTable.companyId,
-      });
-
-    res.json(updated);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to update user role");
-    res.status(500).json({ error: "역할 변경 실패." });
-  }
-});
-
-// ─── 내부 사용자 생성 (admin/staff) ──────────────────────────────────────
-router.post("/admin/users/internal", ...adminGuard, requirePermission("user.manage"), async (req, res) => {
-  const { email: rawEmail, password, role, name, department, jobTitle } = req.body as {
-    email?: string; password?: string; role?: string;
-    name?: string; department?: string; jobTitle?: string;
-  };
-
-  if (!rawEmail || !password) {
-    res.status(400).json({ error: "email과 password는 필수입니다." }); return;
-  }
-  const allowedRoles = ["admin", "staff"];
-  if (!role || !allowedRoles.includes(role)) {
-    res.status(400).json({ error: "내부 사용자는 admin 또는 staff 역할만 가능합니다." }); return;
-  }
-  if (password.length < 6) {
-    res.status(400).json({ error: "비밀번호는 최소 6자 이상이어야 합니다." }); return;
-  }
-
-  const email = rawEmail.trim().toLowerCase();
-  const bcrypt = await import("bcryptjs");
-  const hashed = await bcrypt.hash(password, 10);
-
-  try {
-    const [user] = await db
-      .insert(usersTable)
-      .values({
-        email, password: hashed,
-        role: role as "admin" | "staff",
-        name: name?.trim() || null,
-        department: department?.trim() || null,
-        jobTitle: jobTitle?.trim() || null,
-      })
-      .returning({
-        id: usersTable.id, email: usersTable.email, role: usersTable.role,
-        name: usersTable.name, department: usersTable.department, jobTitle: usersTable.jobTitle,
-      });
-    res.status(201).json(user);
-  } catch {
-    res.status(400).json({ error: "이미 사용 중인 이메일입니다." });
-  }
-});
-
-// ─── 사용자 프로필(부서/직책) 수정 ───────────────────────────────────────
-router.patch("/admin/users/:id/profile", ...adminGuard, async (req, res) => {
-  const userId = Number(req.params.id);
-  const { department, jobTitle } = req.body as { department?: string; jobTitle?: string };
-  if (isNaN(userId)) { res.status(400).json({ error: "유효하지 않은 user id." }); return; }
-
-  try {
-    const [updated] = await db
-      .update(usersTable)
-      .set({
-        department: department?.trim() || null,
-        jobTitle: jobTitle?.trim() || null,
-      })
-      .where(eq(usersTable.id, userId))
-      .returning({
-        id: usersTable.id, email: usersTable.email, name: usersTable.name,
-        role: usersTable.role, department: usersTable.department, jobTitle: usersTable.jobTitle,
-      });
-    if (!updated) { res.status(404).json({ error: "사용자를 찾을 수 없습니다." }); return; }
-    res.json(updated);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to update user profile");
-    res.status(500).json({ error: "프로필 수정 실패." });
-  }
-});
-
-// ─── 관리자 비밀번호 재설정 (개발/운영용) ────────────────────────────────
-router.patch("/admin/users/:id/reset-password", ...adminGuard, async (req, res) => {
-  const targetId = Number(req.params.id);
-  const { newPassword } = req.body as { newPassword?: string };
-
-  if (isNaN(targetId) || targetId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 user id." });
-    return;
-  }
-  if (!newPassword || newPassword.length < 6) {
-    res.status(400).json({ error: "새 비밀번호는 최소 6자 이상이어야 합니다." });
-    return;
-  }
-
-  try {
-    const [target] = await db.select({ id: usersTable.id, role: usersTable.role }).from(usersTable).where(eq(usersTable.id, targetId));
-    if (!target) {
-      res.status(404).json({ error: "사용자를 찾을 수 없습니다." });
-      return;
-    }
-    if (target.role === "admin" && target.id !== req.user!.id) {
-      res.status(403).json({ error: "다른 관리자의 비밀번호는 변경할 수 없습니다." });
-      return;
-    }
-
-    const hashed = await bcrypt.hash(newPassword, 10);
-    await db.update(usersTable).set({ password: hashed }).where(eq(usersTable.id, targetId));
-    req.log.info({ adminId: req.user!.id, targetId }, "Admin reset password for user");
-    res.json({ ok: true, message: "비밀번호가 재설정되었습니다." });
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to reset password");
-    res.status(500).json({ error: "비밀번호 재설정 실패." });
-  }
-});
-
-// ─── 사용자 활성화/비활성화 ───────────────────────────────────────────────
-router.patch("/admin/users/:id/deactivate", ...adminGuard, requirePermission("user.manage"), async (req, res) => {
-  const userId = Number(req.params.id);
-
-  if (userId === req.user!.id) {
-    res.status(400).json({ error: "본인 계정은 비활성화할 수 없습니다." });
-    return;
-  }
-
-  try {
-    const [target] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-    if (!target) {
-      res.status(404).json({ error: "사용자를 찾을 수 없습니다." });
-      return;
-    }
-
-    // 마지막 활성 admin 비활성화 방지
-    if (target.role === "admin" && target.isActive) {
-      const activeAdmins = await db
-        .select({ id: usersTable.id })
-        .from(usersTable)
-        .where(and(eq(usersTable.role, "admin"), eq(usersTable.isActive, true)));
-      if (activeAdmins.length <= 1) {
-        res.status(400).json({ error: "마지막 활성 관리자 계정은 비활성화할 수 없습니다." });
-        return;
-      }
-    }
-
-    const newActive = !target.isActive;
-    const [updated] = await db
-      .update(usersTable)
-      .set({ isActive: newActive })
-      .where(eq(usersTable.id, userId))
-      .returning({ id: usersTable.id, email: usersTable.email, role: usersTable.role, isActive: usersTable.isActive, createdAt: usersTable.createdAt });
-
-    res.json(updated);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to toggle user active state");
-    res.status(500).json({ error: "계정 상태 변경 실패." });
-  }
-});
-
-// ─── 관리자 메모 ───────────────────────────────────────────────────────────
-router.get("/admin/projects/:id/notes", ...adminGuard, async (req, res) => {
-  const projectId = Number(req.params.id);
-  if (isNaN(projectId) || projectId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 project id." });
-    return;
-  }
-
-  try {
-    const rows = await db
-      .select({
-        id: notesTable.id,
-        entityType: notesTable.entityType,
-        entityId: notesTable.entityId,
-        content: notesTable.content,
-        createdAt: notesTable.createdAt,
-        adminEmail: usersTable.email,
-      })
-      .from(notesTable)
-      .leftJoin(usersTable, eq(notesTable.adminId, usersTable.id))
-      .where(and(eq(notesTable.entityType, "project"), eq(notesTable.entityId, projectId)))
-      .orderBy(notesTable.createdAt);
-
-    res.json(rows);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to fetch notes");
-    res.status(500).json({ error: "메모 조회 실패." });
-  }
-});
-
-router.post("/admin/projects/:id/notes", ...adminGuard, async (req, res) => {
-  const projectId = Number(req.params.id);
-  if (isNaN(projectId) || projectId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 project id." });
-    return;
-  }
-
-  const { content } = req.body as { content?: string };
-  if (!content?.trim()) {
-    res.status(400).json({ error: "메모 내용을 입력해주세요." });
-    return;
-  }
-
-  try {
-    const [note] = await db
-      .insert(notesTable)
-      .values({ entityType: "project", entityId: projectId, adminId: req.user!.id, content: content.trim() })
-      .returning();
-
-    await logEvent("project", projectId, "note_added", req.log, req.user ?? undefined);
-
-    res.status(201).json({ ...note, adminEmail: req.user!.email });
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to add note");
-    res.status(500).json({ error: "메모 추가 실패." });
-  }
-});
-
-// ─── 범용 메모 API (entityType: project/company/contact/translator) ────────────
-router.get("/admin/notes", ...adminGuard, async (req, res) => {
-  const { entityType, entityId } = req.query as { entityType?: string; entityId?: string };
-  if (!entityType || !entityId) {
-    res.status(400).json({ error: "entityType과 entityId는 필수입니다." }); return;
-  }
-
-  try {
-    const rows = await db
-      .select({
-        id: notesTable.id,
-        entityType: notesTable.entityType,
-        entityId: notesTable.entityId,
-        content: notesTable.content,
-        createdAt: notesTable.createdAt,
-        adminEmail: usersTable.email,
-        adminId: notesTable.adminId,
-      })
-      .from(notesTable)
-      .leftJoin(usersTable, eq(notesTable.adminId, usersTable.id))
-      .where(and(eq(notesTable.entityType, entityType), eq(notesTable.entityId, Number(entityId))))
-      .orderBy(desc(notesTable.createdAt));
-    res.json(rows);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to fetch generic notes");
-    res.status(500).json({ error: "메모 조회 실패." });
-  }
-});
-
-router.post("/admin/notes", ...adminGuard, async (req, res) => {
-  const { entityType, entityId, content } = req.body as {
-    entityType?: string; entityId?: number; content?: string;
-  };
-
-  const validTypes = ["project", "company", "contact", "translator"];
-  if (!entityType || !validTypes.includes(entityType)) {
-    res.status(400).json({ error: `entityType은 ${validTypes.join("/")} 중 하나여야 합니다.` }); return;
-  }
-  if (!entityId || isNaN(entityId)) {
-    res.status(400).json({ error: "entityId는 필수입니다." }); return;
-  }
-  if (!content?.trim()) {
-    res.status(400).json({ error: "메모 내용을 입력해주세요." }); return;
-  }
-
-  try {
-    const [note] = await db
-      .insert(notesTable)
-      .values({ entityType, entityId: Number(entityId), adminId: req.user!.id, content: content.trim() })
-      .returning();
-    res.status(201).json({ ...note, adminEmail: req.user!.email });
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to add generic note");
-    res.status(500).json({ error: "메모 추가 실패." });
-  }
-});
-
 // ─── 담당자 지정 ────────────────────────────────────────────────────────────
 router.patch("/admin/projects/:id/assign", ...adminGuard, async (req, res) => {
   const projectId = Number(req.params.id);
@@ -2860,255 +2480,6 @@ router.patch("/admin/projects/:id/assign", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Admin: failed to assign admin");
     res.status(500).json({ error: "담당자 지정 실패." });
-  }
-});
-
-// ─── 고객 목록 ──────────────────────────────────────────────────────────────
-router.get("/admin/customers", ...adminGuard, async (req, res) => {
-  try {
-    const { search } = req.query as { search?: string };
-
-    const rows = await db
-      .select({
-        id: customersTable.id,
-        companyName: customersTable.companyName,
-        contactName: customersTable.contactName,
-        email: customersTable.email,
-        phone: customersTable.phone,
-        createdAt: customersTable.createdAt,
-        projectCount: sql<number>`COUNT(DISTINCT ${projectsTable.id})::int`,
-        totalPayment: sql<number>`COALESCE(SUM(${paymentsTable.amount}) FILTER (WHERE ${paymentsTable.status} = 'paid'), 0)::int`,
-        unpaidAmount: sql<number>`(
-          SELECT COALESCE(SUM(q.price), 0)::int
-          FROM projects p2
-          JOIN quotes q ON q.project_id = p2.id
-          WHERE p2.customer_id = ${customersTable.id} AND q.status = 'approved'
-        )`,
-        lastTransactionAt: sql<string | null>`(
-          SELECT MAX(pay.created_at)::text
-          FROM projects p2
-          JOIN payments pay ON pay.project_id = p2.id
-          WHERE p2.customer_id = ${customersTable.id} AND pay.status = 'paid'
-        )`,
-        inProgressCount: sql<number>`(
-          SELECT COUNT(p2.id)::int FROM projects p2
-          WHERE p2.customer_id = ${customersTable.id}
-            AND p2.status IN ('in_progress','matched','paid','approved')
-        )`,
-      })
-      .from(customersTable)
-      .leftJoin(projectsTable, eq(projectsTable.customerId, customersTable.id))
-      .leftJoin(paymentsTable, eq(paymentsTable.projectId, projectsTable.id))
-      .groupBy(customersTable.id)
-      .orderBy(desc(customersTable.createdAt));
-
-    let result = rows;
-    if (search?.trim()) {
-      const s = search.trim().toLowerCase();
-      result = result.filter(c =>
-        c.companyName.toLowerCase().includes(s) ||
-        c.contactName.toLowerCase().includes(s) ||
-        c.email.toLowerCase().includes(s)
-      );
-    }
-
-    res.json(result);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to fetch customers");
-    res.status(500).json({ error: "고객 조회 실패." });
-  }
-});
-
-// ─── 고객 생성 ──────────────────────────────────────────────────────────────
-router.post("/admin/customers", ...adminGuard, async (req, res) => {
-  const { companyName, contactName, email, phone } = req.body as {
-    companyName?: string; contactName?: string; email?: string; phone?: string;
-  };
-
-  if (!companyName?.trim() || !contactName?.trim() || !email?.trim()) {
-    res.status(400).json({ error: "회사명, 담당자명, 이메일은 필수입니다." });
-    return;
-  }
-
-  try {
-    const [customer] = await db
-      .insert(customersTable)
-      .values({ companyName: companyName.trim(), contactName: contactName.trim(), email: email.trim(), phone: phone?.trim() })
-      .returning();
-    res.status(201).json(customer);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to create customer");
-    res.status(500).json({ error: "고객 생성 실패." });
-  }
-});
-
-// ─── 고객 상세 ──────────────────────────────────────────────────────────────
-router.get("/admin/customers/:id", ...adminGuard, async (req, res) => {
-  const customerId = Number(req.params.id);
-  if (isNaN(customerId) || customerId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 customer id." });
-    return;
-  }
-
-  try {
-    const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, customerId));
-    if (!customer) { res.status(404).json({ error: "고객을 찾을 수 없습니다." }); return; }
-
-    const projects = await db
-      .select({
-        id: projectsTable.id,
-        title: projectsTable.title,
-        status: projectsTable.status,
-        createdAt: projectsTable.createdAt,
-      })
-      .from(projectsTable)
-      .where(eq(projectsTable.customerId, customerId))
-      .orderBy(desc(projectsTable.createdAt));
-
-    const projectIds = projects.map(p => p.id);
-
-    let totalPayment = 0;
-    let totalSettlement = 0;
-
-    if (projectIds.length > 0) {
-      const [payRow] = await db
-        .select({ total: sql<number>`COALESCE(SUM(${paymentsTable.amount}), 0)::int` })
-        .from(paymentsTable)
-        .where(and(inArray(paymentsTable.projectId, projectIds), eq(paymentsTable.status, "paid")));
-      totalPayment = payRow?.total ?? 0;
-
-      const [setRow] = await db
-        .select({ total: sql<number>`COALESCE(SUM(${settlementsTable.translatorAmount}), 0)::int` })
-        .from(settlementsTable)
-        .where(inArray(settlementsTable.projectId, projectIds));
-      totalSettlement = setRow?.total ?? 0;
-    }
-
-    res.json({ ...customer, projects, totalPayment, totalSettlement });
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to fetch customer detail");
-    res.status(500).json({ error: "고객 상세 조회 실패." });
-  }
-});
-
-// ─── 고객 수정 ──────────────────────────────────────────────────────────────
-router.patch("/admin/customers/:id", ...adminGuard, async (req, res) => {
-  const customerId = Number(req.params.id);
-  if (isNaN(customerId) || customerId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 customer id." }); return;
-  }
-
-  const { companyName, contactName, email, phone } = req.body as {
-    companyName?: string; contactName?: string; email?: string; phone?: string;
-  };
-
-  try {
-    const [existing] = await db.select().from(customersTable).where(eq(customersTable.id, customerId));
-    if (!existing) { res.status(404).json({ error: "고객을 찾을 수 없습니다." }); return; }
-
-    const [updated] = await db
-      .update(customersTable)
-      .set({
-        companyName: companyName?.trim() ?? existing.companyName,
-        contactName: contactName?.trim() ?? existing.contactName,
-        email: email?.trim() ?? existing.email,
-        phone: phone?.trim() ?? existing.phone,
-      })
-      .where(eq(customersTable.id, customerId))
-      .returning();
-
-    res.json(updated);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to update customer");
-    res.status(500).json({ error: "고객 수정 실패." });
-  }
-});
-
-// ─── 커뮤니케이션 생성 ───────────────────────────────────────────────────────
-router.post("/admin/communications", ...adminGuard, async (req, res) => {
-  const { customerId, projectId, type, content } = req.body as {
-    customerId?: number; projectId?: number; type?: string; content?: string;
-  };
-
-  if (!customerId || !content?.trim()) {
-    res.status(400).json({ error: "고객 ID와 내용은 필수입니다." }); return;
-  }
-
-  const validTypes = ["email", "phone", "message"];
-  const commType = validTypes.includes(type ?? "") ? (type as "email" | "phone" | "message") : "message";
-
-  try {
-    const [customer] = await db.select().from(customersTable).where(eq(customersTable.id, customerId));
-    if (!customer) { res.status(404).json({ error: "고객을 찾을 수 없습니다." }); return; }
-
-    const [comm] = await db
-      .insert(communicationsTable)
-      .values({
-        customerId,
-        projectId: projectId ?? null,
-        type: commType,
-        content: content.trim(),
-      })
-      .returning();
-
-    if (projectId) {
-      await logEvent("project", projectId, `communication_added_${commType}`, req.log, req.user ?? undefined);
-    }
-
-    res.status(201).json(comm);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to create communication");
-    res.status(500).json({ error: "커뮤니케이션 기록 실패." });
-  }
-});
-
-// ─── 고객별 커뮤니케이션 목록 ─────────────────────────────────────────────
-router.get("/admin/customers/:id/communications", ...adminGuard, async (req, res) => {
-  const customerId = Number(req.params.id);
-  if (isNaN(customerId) || customerId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 customer id." }); return;
-  }
-
-  try {
-    const rows = await db
-      .select()
-      .from(communicationsTable)
-      .where(eq(communicationsTable.customerId, customerId))
-      .orderBy(desc(communicationsTable.createdAt));
-    res.json(rows);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to fetch customer communications");
-    res.status(500).json({ error: "커뮤니케이션 조회 실패." });
-  }
-});
-
-// ─── 프로젝트별 커뮤니케이션 목록 ───────────────────────────────────────────
-router.get("/admin/projects/:id/communications", ...adminGuard, async (req, res) => {
-  const projectId = Number(req.params.id);
-  if (isNaN(projectId) || projectId <= 0) {
-    res.status(400).json({ error: "유효하지 않은 project id." }); return;
-  }
-
-  try {
-    const rows = await db
-      .select({
-        id: communicationsTable.id,
-        customerId: communicationsTable.customerId,
-        projectId: communicationsTable.projectId,
-        type: communicationsTable.type,
-        content: communicationsTable.content,
-        createdAt: communicationsTable.createdAt,
-        companyName: customersTable.companyName,
-        contactName: customersTable.contactName,
-      })
-      .from(communicationsTable)
-      .leftJoin(customersTable, eq(communicationsTable.customerId, customersTable.id))
-      .where(eq(communicationsTable.projectId, projectId))
-      .orderBy(desc(communicationsTable.createdAt));
-    res.json(rows);
-  } catch (err) {
-    req.log.error({ err }, "Admin: failed to fetch project communications");
-    res.status(500).json({ error: "커뮤니케이션 조회 실패." });
   }
 });
 

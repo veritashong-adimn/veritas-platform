@@ -332,6 +332,10 @@ function generateInviteToken(): string {
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
+// 이메일 정규화(§TOP4) — 중복 판정·저장을 위한 공통 규칙. trim + lowercase 로 통일하여
+// 개별등록·대량등록·프로필수정 경로가 동일 기준(대소문자·공백 무시)으로 동일 인물을 식별한다.
+const normalizeEmail = (e: unknown): string => String(e ?? "").trim().toLowerCase();
+
 // ─── 번역사 목록 (검색/필터) ──────────────────────────────────────────────────
 router.get("/admin/translators", ...adminGuard, async (req, res) => {
   try {
@@ -517,15 +521,17 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
     languageExperiences: langExpsCreate,
   } = req.body;
 
-  if (!email?.trim()) { res.status(400).json({ error: "이메일은 필수입니다." }); return; }
+  const normEmail = normalizeEmail(email);
+  if (!normEmail) { res.status(400).json({ error: "이메일은 필수입니다." }); return; }
 
   try {
-    const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.email, email.trim())).limit(1);
+    // 대소문자·공백 무시 중복검사(§TOP4) — 저장값도 정규화되므로 lower() 비교로 기존 mixed-case 데이터까지 포착.
+    const existing = await db.select({ id: usersTable.id }).from(usersTable).where(sql`lower(${usersTable.email}) = ${normEmail}`).limit(1);
     if (existing.length > 0) { res.status(409).json({ error: "이미 등록된 이메일입니다." }); return; }
 
     const inviteToken = generateInviteToken();
     const [newUser] = await db.insert(usersTable).values({
-      email: email.trim(), password: null,
+      email: normEmail, password: null,
       name: normalizeExtractedName(name?.trim() || null), role: "translator",
       isActive: true, inviteToken,
     }).returning();
@@ -916,10 +922,16 @@ router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) =>
   };
 
   const results: { email: string; status: "created" | "error"; error?: string }[] = [];
+  const seenEmails = new Set<string>();   // 요청 배치 내 중복 방지(정규화 기준)
 
   for (const row of rows) {
-    const email = row.email?.trim().toLowerCase();
+    const email = normalizeEmail(row.email);
     if (!email) { results.push({ email: "?", status: "error", error: "이메일 없음" }); continue; }
+    // 중복 방지(§TOP4) — 개별등록과 동일 기준(대소문자·공백 무시). ① 배치 내 중복 ② 기존 DB 중복.
+    if (seenEmails.has(email)) { results.push({ email, status: "error", error: "중복 이메일(요청 내 중복)" }); continue; }
+    const dupExisting = await db.select({ id: usersTable.id }).from(usersTable).where(sql`lower(${usersTable.email}) = ${email}`).limit(1);
+    if (dupExisting.length > 0) { results.push({ email, status: "error", error: "이미 등록된 이메일입니다." }); continue; }
+    seenEmails.add(email);
     try {
       const tempPw = randomBytes(8).toString("hex");
       const hashed = await bcrypt.hash(tempPw, 10);
@@ -1124,7 +1136,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
     // ⑤ 서버 PATCH 수신 name  ⑥ normalize 후 DB 저장 직전
     console.log(`[NAME-TRACE][5] PATCH received userId=${userId} nameFromReq="${name ?? "null"}" normalizedName="${normalizedName ?? "null"}" currentDbName="${user.name ?? "null"}" willUpdate=${!!(normalizedName && normalizedName !== user.name)}`);
     if (normalizedName && normalizedName !== user.name) {
-      await db.update(usersTable).set({ name: normalizedName, updatedAt: new Date() }).where(eq(usersTable.id, userId));
+      await db.update(usersTable).set({ name: normalizedName, updatedAt: new Date() } as any).where(eq(usersTable.id, userId));
       const [savedUser] = await db.select({ name: usersTable.name }).from(usersTable).where(eq(usersTable.id, userId));
       // ⑦ DB 저장 후 조회
       console.log(`[NAME-TRACE][7] after DB save userId=${userId} savedName="${savedUser?.name ?? "null"}"`);
@@ -1204,10 +1216,11 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
         entries.map(e => ({ translatorId: userId, email: e.email, isPrimary: e.isPrimary }))
       );
 
-      // users.email을 대표 이메일로 동기화 (변경된 경우만)
-      if (newPrimaryEmail !== user.email) {
+      // users.email을 대표 이메일로 동기화 (정규화 기준으로 실제 변경된 경우만 — 대소문자만 다른 자기 이메일은 허용)
+      if (newPrimaryEmail !== normalizeEmail(user.email)) {
+        // 다른 사용자의 이메일과 충돌 차단(대소문자·공백 무시, §TOP4)
         const conflict = await db.select({ id: usersTable.id }).from(usersTable)
-          .where(and(eq(usersTable.email, newPrimaryEmail), sql`${usersTable.id} != ${userId}`)).limit(1);
+          .where(and(sql`lower(${usersTable.email}) = ${newPrimaryEmail}`, sql`${usersTable.id} != ${userId}`)).limit(1);
         if (conflict.length > 0) {
           res.status(409).json({ error: "이미 사용 중인 이메일입니다." }); return;
         }
@@ -2988,7 +3001,7 @@ router.patch("/admin/translators/:id/activate", ...adminGuard, async (req, res) 
     }
 
     await db.update(usersTable)
-      .set({ isActive: true, updatedAt: new Date() })
+      .set({ isActive: true, updatedAt: new Date() } as any)
       .where(eq(usersTable.id, userId));
     await db.update(translatorProfilesTable)
       .set({ availabilityStatus: "available", updatedAt: new Date() })
@@ -3052,8 +3065,8 @@ router.delete("/admin/translators/:id/permanent", ...adminGuard, async (req, res
 
     // 4. 이력서 파일 삭제 (GCS)
     const [profile] = await db.select().from(translatorProfilesTable).where(eq(translatorProfilesTable.userId, userId));
-    if (profile?.resumeFileName) {
-      try { await deleteResumeFromGCS(profile.resumeFileName); } catch { /* 파일 없어도 계속 */ }
+    if (profile?.resumeUrl) {
+      try { await deleteResumeFromGCS(profile.resumeUrl); } catch { /* 파일 없어도 계속 */ }
     }
 
     // 5. 종속 데이터 삭제 (순서 중요: FK 참조 먼저)
@@ -3106,7 +3119,7 @@ router.delete("/admin/translators/:id", ...adminGuard, async (req, res) => {
 
     // Soft delete: 물리 삭제 없이 비활성 처리 (기존 단가/정산/작업 데이터 보존)
     await db.update(usersTable)
-      .set({ isActive: false, updatedAt: new Date() })
+      .set({ isActive: false, updatedAt: new Date() } as any)
       .where(eq(usersTable.id, userId));
     await db.update(translatorProfilesTable)
       .set({ availabilityStatus: "unavailable", updatedAt: new Date() })

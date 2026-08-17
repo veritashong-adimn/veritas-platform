@@ -73,18 +73,28 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, async (req, res
       }
       let seq = 1;
       for (const r of rows) {
+        // ── 입금완료 상태 정합화(§TOP3) — project_payments 를 입금상태의 Source of Truth 로 유지 ──
+        //  · "입금완료"는 세 신호가 모두 있을 때만 성립: depositStatus=completed · depositConfirmed=true · paidDate 존재.
+        //  · 하나라도 없으면 미입금으로 정규화하여, 모순 조합(예: completed+confirmed=false, completed+paidDate=null,
+        //    confirmed=true+status≠completed, paidDate만 존재+미입금)이 DB에 저장되지 않도록 한다.
+        //  · 미입금으로 정규화 시 completed 는 scheduled 로 강등하고, 그 외 상태(scheduled/partial/unpaid)는 유지한다.
+        const paidDateVal = r.paidDate || null;
+        const isPaid = r.depositConfirmed === true && r.depositStatus === "completed" && paidDateVal !== null;
+        const reconciledStatus: (typeof DEPOSIT_STATUS)[number] = isPaid
+          ? "completed"
+          : (r.depositStatus === "completed" ? "scheduled" : (r.depositStatus ?? "scheduled"));
         const values = {
           sequence: seq++,                         // 회차 자동번호(프로젝트별, 순서 기준)
           issueDate: r.issueDate || null,
           expectedDate: r.expectedDate || null,
-          paidDate: r.paidDate || null,
+          paidDate: isPaid ? paidDateVal : null,
           paymentType: r.paymentType ?? null,
           paymentMethod: r.paymentMethod ?? null,
           supplyAmount: String(r.supplyAmount ?? 0),
           vatAmount: String(r.vatAmount ?? 0),
           amount: String(r.amount ?? 0),
-          depositStatus: r.depositStatus ?? "scheduled",
-          depositConfirmed: r.depositConfirmed ?? false,
+          depositStatus: reconciledStatus,
+          depositConfirmed: isPaid,
           paymentCategory: r.paymentCategory ?? "일반결제",
           payer: r.payer ?? null,
           depositItem: r.depositItem ?? null,
