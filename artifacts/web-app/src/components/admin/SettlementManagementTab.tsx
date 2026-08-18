@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { formatWon } from "@/lib/utils";
 import {
   api, AdminSettlement, ALL_SETTLEMENT_STATUSES, STATUS_LABEL,
 } from '../../lib/constants';
@@ -40,11 +41,11 @@ const SETTLEMENT_LABEL: Record<string, string> = {
   pending: "대기", draft: "정보 부족", paid: "지급 완료",
 };
 const STYPE_KO: Record<string, string> = {
-  WITHHOLDING_3_3: "원천세 3.3%", VAT_INVOICE: "세금계산서",
+  WITHHOLDING_3_3: "원천세 3.3%", WITHHOLDING_2_2: "원천세 2.2%", VAT_INVOICE: "세금계산서",
   OVERSEAS_REMITTANCE: "해외송금", OTHER_REVIEW: "기타",
 };
 const STYPE_KO_CSV: Record<string, string> = {
-  WITHHOLDING_3_3: "원천세3.3%", VAT_INVOICE: "세금계산서",
+  WITHHOLDING_3_3: "원천세3.3%", WITHHOLDING_2_2: "원천세2.2%", VAT_INVOICE: "세금계산서",
   OVERSEAS_REMITTANCE: "해외송금", OTHER_REVIEW: "기타검토",
 };
 const SSTATUS_KO: Record<string, string> = {
@@ -57,7 +58,7 @@ interface Props {
   loading: boolean;
   token: string;
   onToast: (msg: string) => void;
-  onRefresh: () => Promise<void>;
+  onRefresh: () => void | Promise<void>;
 }
 
 export function SettlementManagementTab({ settlements, loading, token, onToast, onRefresh }: Props) {
@@ -348,7 +349,7 @@ export function SettlementManagementTab({ settlements, loading, token, onToast, 
           <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #059669, #34d399)" }} />
           <p style={{ margin: "0 0 4px", fontSize: 10, fontWeight: 700, color: "#059669", textTransform: "uppercase", letterSpacing: "0.05em" }}>지급 준비</p>
           <p style={{ margin: "0 0 2px", fontSize: 22, fontWeight: 800, color: "#111827" }}>{settlementStats.unpaidCount}건</p>
-          <p style={{ margin: 0, fontSize: 11, color: "#6b7280" }}>실지급 {Math.round(settlementStats.unpaidTotal).toLocaleString()}원</p>
+          <p style={{ margin: 0, fontSize: 11, color: "#6b7280" }}>실지급 {formatWon(Math.round(settlementStats.unpaidTotal))}</p>
         </div>
         <div style={{ background: "#fff", border: `1px solid ${settlementStats.pendingReviewCount > 0 ? "#fde68a" : "#e5e7eb"}`, borderRadius: 12, padding: "14px 18px", position: "relative", overflow: "hidden" }}>
           <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #f59e0b, #fbbf24)" }} />
@@ -359,8 +360,8 @@ export function SettlementManagementTab({ settlements, loading, token, onToast, 
         <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "14px 18px", position: "relative", overflow: "hidden" }}>
           <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #6b7280, #9ca3af)" }} />
           <p style={{ margin: "0 0 4px", fontSize: 10, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>이번달 지급 예정액</p>
-          <p style={{ margin: "0 0 2px", fontSize: 22, fontWeight: 800, color: "#111827" }}>{Math.round(settlementStats.thisMonthUnpaid).toLocaleString()}원</p>
-          <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>누적 완료 {Math.round(settlementStats.paidTotal).toLocaleString()}원</p>
+          <p style={{ margin: "0 0 2px", fontSize: 22, fontWeight: 800, color: "#111827" }}>{formatWon(Math.round(settlementStats.thisMonthUnpaid))}</p>
+          <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>누적 완료 {formatWon(Math.round(settlementStats.paidTotal))}</p>
         </div>
       </div>
 
@@ -538,24 +539,24 @@ export function SettlementManagementTab({ settlements, loading, token, onToast, 
                       </td>
                       {/* 원금액 */}
                       <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" }}>
-                        {Math.round(gross).toLocaleString()}원
+                        {formatWon(Math.round(gross))}
                       </td>
                       {/* 원천세 */}
                       <td style={{ ...tableTd, fontSize: 12, color: "#b45309", whiteSpace: "nowrap" }}>
                         {withholding > 0
-                          ? <><div>{Math.round(withholding).toLocaleString()}원</div><div style={{ fontSize: 10, color: "#9ca3af" }}>3.3%</div></>
+                          ? <><div>{formatWon(Math.round(withholding))}</div><div style={{ fontSize: 10, color: "#9ca3af" }}>{s?.settlementType === "WITHHOLDING_2_2" ? "2.2%" : "3.3%"}</div></>
                           : <span style={{ color: "#d1d5db" }}>—</span>}
                       </td>
                       {/* 실지급액 */}
                       <td style={{ ...tableTd, fontWeight: 700, color: "#059669", whiteSpace: "nowrap" }}>
-                        {Math.round(net).toLocaleString()}원
+                        {formatWon(Math.round(net))}
                       </td>
                       {/* 정산 유형 */}
                       <td style={{ ...tableTd, fontSize: 12 }}>
                         {s.settlementType
                           ? <span style={{ padding: "2px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600,
-                              background: s.settlementType === "WITHHOLDING_3_3" ? "#ede9fe" : s.settlementType === "VAT_INVOICE" ? "#dbeafe" : s.settlementType === "OVERSEAS_REMITTANCE" ? "#fef3c7" : "#f3f4f6",
-                              color: s.settlementType === "WITHHOLDING_3_3" ? "#7c3aed" : s.settlementType === "VAT_INVOICE" ? "#2563eb" : s.settlementType === "OVERSEAS_REMITTANCE" ? "#b45309" : "#6b7280",
+                              background: (s.settlementType === "WITHHOLDING_3_3" || s.settlementType === "WITHHOLDING_2_2") ? "#ede9fe" : s.settlementType === "VAT_INVOICE" ? "#dbeafe" : s.settlementType === "OVERSEAS_REMITTANCE" ? "#fef3c7" : "#f3f4f6",
+                              color: (s.settlementType === "WITHHOLDING_3_3" || s.settlementType === "WITHHOLDING_2_2") ? "#7c3aed" : s.settlementType === "VAT_INVOICE" ? "#2563eb" : s.settlementType === "OVERSEAS_REMITTANCE" ? "#b45309" : "#6b7280",
                             }}>{STYPE_KO[s.settlementType] ?? s.settlementType}</span>
                           : <span style={{ color: "#d1d5db" }}>—</span>}
                       </td>

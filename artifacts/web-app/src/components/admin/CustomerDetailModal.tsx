@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { formatWon } from "@/lib/utils";
 import { api, CustomerDetail, Communication, COMM_TYPE_LABEL, COMM_TYPE_COLOR } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
@@ -122,8 +123,8 @@ export function CustomerDetailModal({ customerId, token, onClose, onToast, onOpe
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               {[
                 { label: "총 프로젝트", value: `${detail.projectCount}건`, color: "#2563eb", bg: "#eff6ff" },
-                { label: "총 결제 금액", value: `${Number(detail.totalPayment).toLocaleString()}원`, color: "#059669", bg: "#f0fdf4" },
-                { label: "총 정산 금액", value: `${Number(detail.totalSettlement).toLocaleString()}원`, color: "#7c3aed", bg: "#faf5ff" },
+                { label: "총 결제 금액", value: `${formatWon(Number(detail.totalPayment))}`, color: "#059669", bg: "#f0fdf4" },
+                { label: "총 정산 금액", value: `${formatWon(Number(detail.totalSettlement))}`, color: "#7c3aed", bg: "#faf5ff" },
               ].map(s => (
                 <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.color}22`, borderRadius: 10, padding: "12px 18px", flex: "1 1 120px" }}>
                   <p style={{ margin: "0 0 3px", fontSize: 11, fontWeight: 600, color: s.color }}>{s.label}</p>

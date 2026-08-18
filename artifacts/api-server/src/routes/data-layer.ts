@@ -335,17 +335,17 @@ router.post("/admin/language-service-data", ...adminOnly, async (req, res) => {
       quantity: quantity !== undefined ? Number(quantity) : undefined,
       rentalDuration, notes,
     }).returning();
-    res.status(201).json(row);
+    return res.status(201).json(row);
   } catch (err) {
     req.log.error({ err }, "LSD: failed to create");
-    res.status(500).json({ error: "생성 실패" });
+    return res.status(500).json({ error: "생성 실패" });
   }
 });
 
 // PATCH /api/admin/language-service-data/:id
 router.patch("/admin/language-service-data/:id", ...adminOnly, async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const { serviceType, languagePair, domain, industry, useCase, unitPrice, totalPrice,
       turnaroundTime, isPublic, interpretationType, durationHours, numInterpreters,
       locationType, equipmentType, quantity, rentalDuration, notes } = req.body;
@@ -371,17 +371,17 @@ router.patch("/admin/language-service-data/:id", ...adminOnly, async (req, res) 
       ...(notes !== undefined && { notes }),
       updatedAt: new Date(),
     }).where(eq(languageServiceDataTable.id, id)).returning();
-    res.json(updated);
+    return res.json(updated);
   } catch (err) {
     req.log.error({ err }, "LSD: failed to update");
-    res.status(500).json({ error: "수정 실패" });
+    return res.status(500).json({ error: "수정 실패" });
   }
 });
 
 // DELETE /api/admin/language-service-data/:id
 router.delete("/admin/language-service-data/:id", ...adminOnly, async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     await db.delete(languageServiceDataTable).where(eq(languageServiceDataTable.id, id));
     res.json({ ok: true });
   } catch (err) {
@@ -393,7 +393,7 @@ router.delete("/admin/language-service-data/:id", ...adminOnly, async (req, res)
 // GET /api/admin/language-service-data/:id/insights
 router.get("/admin/language-service-data/:id/insights", ...staffPlus, async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     const rows = await db.select().from(contentInsightsTable)
       .where(eq(contentInsightsTable.languageServiceDataId, id))
       .orderBy(desc(contentInsightsTable.createdAt));
@@ -407,7 +407,7 @@ router.get("/admin/language-service-data/:id/insights", ...staffPlus, async (req
 // POST /api/admin/language-service-data/:id/insights
 router.post("/admin/language-service-data/:id/insights", ...adminOnly, async (req, res) => {
   try {
-    const languageServiceDataId = parseInt(req.params.id);
+    const languageServiceDataId = parseInt(req.params.id as string);
     const { question, answer, domain, languagePair, isPublic } = req.body;
     if (!question || !answer) return res.status(400).json({ error: "question, answer 필수" });
     const parent = await db.select().from(languageServiceDataTable).where(eq(languageServiceDataTable.id, languageServiceDataId)).limit(1);
@@ -419,10 +419,10 @@ router.post("/admin/language-service-data/:id/insights", ...adminOnly, async (re
       languagePair: languagePair ?? parent[0].languagePair,
       isPublic: Boolean(isPublic ?? true),
     }).returning();
-    res.status(201).json(row);
+    return res.status(201).json(row);
   } catch (err) {
     req.log.error({ err }, "LSD: failed to create insight");
-    res.status(500).json({ error: "인사이트 생성 실패" });
+    return res.status(500).json({ error: "인사이트 생성 실패" });
   }
 });
 
@@ -459,7 +459,7 @@ function buildSlug(serviceType: string, languagePair: string | null, domain: str
 // PATCH /api/admin/content-insights/:id/status
 router.patch("/admin/content-insights/:id/status", ...adminOnly, async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     if (isNaN(id)) return res.status(400).json({ error: "유효하지 않은 id" });
 
     const { status } = req.body as { status?: string };
@@ -483,17 +483,17 @@ router.patch("/admin/content-insights/:id/status", ...adminOnly, async (req, res
 
     if (!updated) return res.status(404).json({ error: "인사이트를 찾을 수 없습니다." });
     req.log.info({ id, status }, "CI: status updated");
-    res.json(updated);
+    return res.json(updated);
   } catch (err) {
     req.log.error({ err }, "CI: failed to update status");
-    res.status(500).json({ error: "상태 변경 실패" });
+    return res.status(500).json({ error: "상태 변경 실패" });
   }
 });
 
 // PATCH /api/admin/content-insights/:id  (필드 수정)
 router.patch("/admin/content-insights/:id", ...adminOnly, async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     if (isNaN(id)) return res.status(400).json({ error: "유효하지 않은 id" });
 
     const ALLOWED = [
@@ -541,17 +541,17 @@ router.patch("/admin/content-insights/:id", ...adminOnly, async (req, res) => {
     }
 
     req.log.info({ id, status: existing.status }, "CI: insight updated");
-    res.json(updated);
+    return res.json(updated);
   } catch (err) {
     req.log.error({ err }, "CI: failed to update insight");
-    res.status(500).json({ error: "인사이트 수정 실패" });
+    return res.status(500).json({ error: "인사이트 수정 실패" });
   }
 });
 
 // DELETE /api/admin/content-insights/:id
 router.delete("/admin/content-insights/:id", ...adminOnly, async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     await db.delete(contentInsightsTable).where(eq(contentInsightsTable.id, id));
     res.json({ ok: true });
   } catch (err) {
@@ -599,10 +599,10 @@ router.post("/admin/content-insights", ...adminOnly, async (req, res) => {
 
     const [inserted] = await db.insert(contentInsightsTable).values(payload).returning();
     req.log.info({ id: inserted.id }, "CI: manual insight created");
-    res.status(201).json(inserted);
+    return res.status(201).json(inserted);
   } catch (err) {
     req.log.error({ err }, "CI: failed to create manual insight");
-    res.status(500).json({ error: "인사이트 생성 실패" });
+    return res.status(500).json({ error: "인사이트 생성 실패" });
   }
 });
 
@@ -1384,10 +1384,10 @@ router.post("/admin/content-insights/generate", ...adminOnly, async (req, res) =
     }
 
     req.log.info({ insertedCount, updatedCount }, "CI: generate complete");
-    res.status(201).json({ generated: insertedCount, updated: updatedCount, total: insertedCount + updatedCount, ids: resultIds });
+    return res.status(201).json({ generated: insertedCount, updated: updatedCount, total: insertedCount + updatedCount, ids: resultIds });
   } catch (err) {
     req.log.error({ err }, "CI: failed to generate insights");
-    res.status(500).json({ error: "인사이트 자동 생성 실패" });
+    return res.status(500).json({ error: "인사이트 자동 생성 실패" });
   }
 });
 
@@ -1688,21 +1688,21 @@ async function autoApplyAndSetStatus(
 // GET /api/admin/content-insights/:id/suggestions
 router.get("/admin/content-insights/:id/suggestions", ...staffPlus, async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     if (isNaN(id)) return res.status(400).json({ error: "유효하지 않은 id" });
     const rows = await db.select().from(insightAutoSuggestionsTable)
       .where(eq(insightAutoSuggestionsTable.insightId, id))
       .orderBy(desc(insightAutoSuggestionsTable.createdAt));
-    res.json(rows);
+    return res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: "제안 목록 조회 실패" });
+    return res.status(500).json({ error: "제안 목록 조회 실패" });
   }
 });
 
 // POST /api/admin/content-insights/:id/auto-enhance  (단건 자동 보완 실행)
 router.post("/admin/content-insights/:id/auto-enhance", ...adminOnly, async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     if (isNaN(id)) return res.status(400).json({ error: "유효하지 않은 id" });
 
     const [insight] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, id));
@@ -1751,7 +1751,7 @@ router.post("/admin/content-insights/:id/auto-enhance", ...adminOnly, async (req
     const { status: newStatus, appliedCount, insight: finalInsight, autoPublished, dryRun } = await autoApplyAndSetStatus(id, created, req.log);
 
     req.log.info({ id, created: created.length, appliedCount, newStatus, autoPublished }, "CI: auto-enhance complete");
-    res.status(201).json({
+    return res.status(201).json({
       created: created.length,
       appliedCount,
       newStatus,
@@ -1762,7 +1762,7 @@ router.post("/admin/content-insights/:id/auto-enhance", ...adminOnly, async (req
     });
   } catch (err) {
     req.log.error({ err }, "CI: auto-enhance failed");
-    res.status(500).json({ error: "자동 보완 실행 실패" });
+    return res.status(500).json({ error: "자동 보완 실행 실패" });
   }
 });
 
@@ -1800,7 +1800,7 @@ router.post("/admin/content-insights/batch-auto-enhance", ...adminOnly, async (r
 
     let totalCreated = 0;
     let totalApplied = 0;
-    const results: { id: number; created: number; newStatus?: string }[] = [];
+    const results: { id: number; created: number; newStatus?: string; autoPublished?: boolean }[] = [];
 
     for (const insight of targets) {
       try {
@@ -1834,17 +1834,17 @@ router.post("/admin/content-insights/batch-auto-enhance", ...adminOnly, async (r
     const publishReadyCount = results.filter(r => r.newStatus === "publish_ready").length;
     const autoPublishedCount = results.filter(r => (r as any).autoPublished === true).length;
     req.log.info({ processed: targets.length, totalCreated, totalApplied, publishReadyCount, autoPublishedCount }, "CI: batch auto-enhance complete");
-    res.json({ processed: targets.length, created: totalCreated, applied: totalApplied, publishReadyCount, autoPublishedCount, results });
+    return res.json({ processed: targets.length, created: totalCreated, applied: totalApplied, publishReadyCount, autoPublishedCount, results });
   } catch (err) {
     req.log.error({ err }, "CI: batch auto-enhance failed");
-    res.status(500).json({ error: "배치 자동 보완 실패" });
+    return res.status(500).json({ error: "배치 자동 보완 실패" });
   }
 });
 
 // POST /api/admin/suggestions/:sugId/apply  (제안 적용)
 router.post("/admin/suggestions/:sugId/apply", ...adminOnly, async (req, res) => {
   try {
-    const sugId = parseInt(req.params.sugId);
+    const sugId = parseInt(req.params.sugId as string);
     if (isNaN(sugId)) return res.status(400).json({ error: "유효하지 않은 sugId" });
 
     const [sug] = await db.select().from(insightAutoSuggestionsTable)
@@ -1887,17 +1887,17 @@ router.post("/admin/suggestions/:sugId/apply", ...adminOnly, async (req, res) =>
       .where(eq(insightAutoSuggestionsTable.id, sugId));
 
     const updatedWithAeo = { ...updated, ...computeAeoFields(updated) };
-    res.json({ suggestion: { ...sug, status: "applied" }, insight: updatedWithAeo });
+    return res.json({ suggestion: { ...sug, status: "applied" }, insight: updatedWithAeo });
   } catch (err) {
     req.log.error({ err }, "CI: apply suggestion failed");
-    res.status(500).json({ error: "제안 적용 실패" });
+    return res.status(500).json({ error: "제안 적용 실패" });
   }
 });
 
 // POST /api/admin/suggestions/:sugId/reject  (제안 무시)
 router.post("/admin/suggestions/:sugId/reject", ...adminOnly, async (req, res) => {
   try {
-    const sugId = parseInt(req.params.sugId);
+    const sugId = parseInt(req.params.sugId as string);
     if (isNaN(sugId)) return res.status(400).json({ error: "유효하지 않은 sugId" });
 
     const [sug] = await db.select().from(insightAutoSuggestionsTable)
@@ -1908,9 +1908,9 @@ router.post("/admin/suggestions/:sugId/reject", ...adminOnly, async (req, res) =
       .set({ status: "rejected", updatedAt: new Date() })
       .where(eq(insightAutoSuggestionsTable.id, sugId));
 
-    res.json({ id: sugId, status: "rejected" });
+    return res.json({ id: sugId, status: "rejected" });
   } catch (err) {
-    res.status(500).json({ error: "제안 무시 실패" });
+    return res.status(500).json({ error: "제안 무시 실패" });
   }
 });
 
@@ -1982,7 +1982,7 @@ router.get("/admin/insight-analytics", ...staffPlus, async (req, res) => {
 // GET /api/admin/insight-analytics/:id  (단일 인사이트 성과)
 router.get("/admin/insight-analytics/:id", ...staffPlus, async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     if (isNaN(id)) return res.status(400).json({ error: "유효하지 않은 id" });
 
     const result = await db.execute<{ event_type: string; cnt: string }>(sql`
@@ -2001,7 +2001,7 @@ router.get("/admin/insight-analytics/:id", ...staffPlus, async (req, res) => {
     const clicks = stats.click;
     const conversions = stats.conversion;
 
-    res.json({
+    return res.json({
       insightId: id,
       views,
       clicks,
@@ -2011,14 +2011,14 @@ router.get("/admin/insight-analytics/:id", ...staffPlus, async (req, res) => {
       viewConversionRate: views > 0 ? Math.round((conversions / views) * 1000) / 10 : 0,
     });
   } catch (err) {
-    res.status(500).json({ error: "단일 인사이트 성과 조회 실패" });
+    return res.status(500).json({ error: "단일 인사이트 성과 조회 실패" });
   }
 });
 
 // POST /api/admin/content-insights/:id/publish  (게시 대기 → 게시)
 router.post("/admin/content-insights/:id/publish", ...adminOnly, async (req, res) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseInt(req.params.id as string);
     if (isNaN(id)) return res.status(400).json({ error: "유효하지 않은 id" });
 
     const [insight] = await db.select().from(contentInsightsTable).where(eq(contentInsightsTable.id, id));
@@ -2050,10 +2050,10 @@ router.post("/admin/content-insights/:id/publish", ...adminOnly, async (req, res
       .returning();
 
     req.log.info({ id, slug }, "CI: published via publish queue");
-    res.json({ ...updated, ...computeAeoFields(updated) });
+    return res.json({ ...updated, ...computeAeoFields(updated) });
   } catch (err) {
     req.log.error({ err }, "CI: publish failed");
-    res.status(500).json({ error: "게시 실패" });
+    return res.status(500).json({ error: "게시 실패" });
   }
 });
 

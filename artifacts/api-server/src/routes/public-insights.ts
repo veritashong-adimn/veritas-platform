@@ -133,7 +133,7 @@ router.get("/public/insights/:slug", async (req, res) => {
       ? (row.faqJson as { question: string; answer: string }[]).filter(f => f?.question && f?.answer)
       : null;
 
-    res.json({
+    return res.json({
       id: row.id,
       serviceType: row.serviceType,
       question: row.question,
@@ -160,7 +160,7 @@ router.get("/public/insights/:slug", async (req, res) => {
       related,
     });
   } catch (err) {
-    res.status(500).json({ error: "인사이트 상세 조회 실패" });
+    return res.status(500).json({ error: "인사이트 상세 조회 실패" });
   }
 });
 
@@ -214,9 +214,9 @@ router.post("/insight-events", async (req, res) => {
       userId: (req as any).user?.id ?? null,
     });
 
-    res.status(201).json({ recorded: true });
+    return res.status(201).json({ recorded: true });
   } catch (err) {
-    res.status(500).json({ error: "이벤트 기록 실패" });
+    return res.status(500).json({ error: "이벤트 기록 실패" });
   }
 });
 

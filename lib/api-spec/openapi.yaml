@@ -1003,6 +1003,163 @@ components:
       type: string
       enum: [pending, ready, paid]
       description: "pending: 정산 대기, ready: 정산 가능, paid: 지급 완료"
+    AdminProject:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        status:
+          type: string
+        fileUrl:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+        customerEmail:
+          type: string
+          nullable: true
+        customerId:
+          type: integer
+          nullable: true
+        projectCustomerId:
+          type: integer
+          nullable: true
+        adminId:
+          type: integer
+          nullable: true
+        contactId:
+          type: integer
+          nullable: true
+        companyId:
+          type: integer
+          nullable: true
+        contactName:
+          type: string
+          nullable: true
+        companyName:
+          type: string
+          nullable: true
+        financialStatus:
+          type: string
+          nullable: true
+        divisionName:
+          type: string
+          nullable: true
+        billingCompanyName:
+          type: string
+          nullable: true
+        payerCompanyName:
+          type: string
+          nullable: true
+        requestingCompanyName:
+          type: string
+          nullable: true
+        requestingCompanyId:
+          type: integer
+          nullable: true
+        requestingDivisionId:
+          type: integer
+          nullable: true
+        billingCompanyId:
+          type: integer
+          nullable: true
+        payerCompanyId:
+          type: integer
+          nullable: true
+        hasQuote:
+          type: boolean
+        hasPaid:
+          type: boolean
+        taskCount:
+          type: integer
+        quotePrice:
+          nullable: true
+          oneOf:
+            - type: string
+            - type: number
+        quoteStatus:
+          type: string
+          nullable: true
+        quoteType:
+          type: string
+          nullable: true
+        billingType:
+          type: string
+          nullable: true
+      required:
+        - id
+        - title
+        - status
+        - fileUrl
+        - createdAt
+        - customerEmail
+        - customerId
+        - projectCustomerId
+        - adminId
+        - contactId
+        - companyId
+        - contactName
+        - companyName
+    AdminPayment:
+      type: object
+      properties:
+        id:
+          type: integer
+        projectId:
+          type: integer
+        amount:
+          type: number
+        status:
+          type: string
+        createdAt:
+          type: string
+        projectTitle:
+          type: string
+          nullable: true
+        projectStatus:
+          type: string
+          nullable: true
+      required:
+        - id
+        - projectId
+        - amount
+        - status
+        - createdAt
+        - projectTitle
+        - projectStatus
+    AdminTask:
+      type: object
+      properties:
+        id:
+          type: integer
+        projectId:
+          type: integer
+        translatorId:
+          type: integer
+        status:
+          type: string
+        createdAt:
+          type: string
+        projectTitle:
+          type: string
+          nullable: true
+        projectStatus:
+          type: string
+          nullable: true
+        translatorEmail:
+          type: string
+          nullable: true
+      required:
+        - id
+        - projectId
+        - translatorId
+        - status
+        - createdAt
+        - projectTitle
+        - projectStatus
+        - translatorEmail
     AdminSettlement:
       type: object
       properties:

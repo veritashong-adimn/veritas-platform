@@ -10,7 +10,6 @@ import { Pagination } from '../ui/Paginator';
 import { useClientPagination } from './bulkListShared';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import { downloadTableExcel, todayStamp, type ExcelColumn } from '../../lib/payoutExcel';
-import PayoutStatementModal from './PayoutStatementModal';
 
 const won = (n: unknown) => Math.round(Number(n ?? 0)).toLocaleString('ko-KR');
 const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
@@ -25,7 +24,7 @@ const ROUND_STATUS: Record<string, { label: string; color: string; bg: string }>
   cancelled: { label: '취소',     color: '#dc2626', bg: '#fef2f2' },
 };
 const TREATMENT_LABEL: Record<string, string> = {
-  domestic_3_3: '3.3%', exempt: '원천징수 예외',
+  domestic_3_3: '3.3%', domestic_2_2: '2.2%', exempt: '원천징수 예외',
   nonresident_custom: '비거주자', treaty_reduction_or_exemption: '조세조약', tax_review_required: '세무확인 필요',
 };
 // 외주 매입 증빙유형 → 세금처리 표시. 미설정(null)·tax_invoice는 외주 기본 '세금계산서'(§3·§7①).
@@ -80,7 +79,6 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   const [busy, setBusy] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [showWarn, setShowWarn] = useState(false);
-  const [showStatement, setShowStatement] = useState(false);   // 지급명세서 모달(조회 전용)
   const [holdFor, setHoldFor] = useState<{ id: number; name: string } | null>(null);
   const [holdReason, setHoldReason] = useState('');
   // 건별(선택) 처리 — 체크한 수행건 id 집합. 회차/상태 변경 시 초기화.
@@ -330,7 +328,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   };
 
   // 건별(선택) 처리 — 체크한 건만 지급완료/확정취소. selId(특정 회차)에서만 동작.
-  const runItemAction = async (path: string, okMsg: string, failMsg: string) => {
+  const runItemAction = async (path: string, okMsg: (d: any) => string, failMsg: string) => {
     if (!selId || busy || selectedItems.size === 0) return;
     setBusy(true);
     try {
@@ -456,12 +454,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
               ]} />
           </div>
           <PrimaryBtn onClick={() => setShowCreate(true)} style={{ fontSize: 12, padding: '7px 14px' }} data-testid="payout-create" aria-label="지급회차 생성">+ 지급회차 생성</PrimaryBtn>
-          {/* §7 지급명세서 — 현재 조회 범위(전체 지급대상/특정 회차)의 지급대상별 명세서(조회 전용). PDF는 이번 범위 아님. */}
-          {!loading && !error && detail && (
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-              <PrimaryBtn onClick={() => setShowStatement(true)} style={{ fontSize: 12, padding: '7px 14px' }} data-testid="payout-statement" aria-label="지급명세서">📄 지급명세서</PrimaryBtn>
-            </div>
-          )}
+          {/* 지급명세서는 좌측 사이드바 정산→지급명세서 독립 메뉴로 분리(PayoutStatementTab). */}
         </div>
       </Card>
 
@@ -795,13 +788,6 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
         </>
       )}
 
-      {showStatement && detail && (
-        // 현재 조회 범위 기준: 특정 회차 → 그 회차 지급대상 / 전체·미배정 → 필터 적용된 조회 결과.
-        //  · summary 는 filteredSummary(현재 필터 반영). round 미선택 시 scopeLabel 로 범위 표기.
-        <PayoutStatementModal round={round ?? null} summary={filteredSummary} snapshotSource={detail?.snapshotSource}
-          scopeLabel={round ? undefined : (sel === 'unassigned' ? '미배정 지급대상' : '전체 지급대상')}
-          onToast={onToast} onClose={() => setShowStatement(false)} />
-      )}
       {showCreate && <CreateDialog token={token} onToast={onToast} onClose={() => setShowCreate(false)} onCreated={async (d) => { setShowCreate(false); await loadRounds(); setSel(String(d.round.id)); setDetail(d); }} />}
       {showWarn && <WarningsModal warnings={warnings} busy={busy} onUnhold={!locked ? unholdItem : undefined} onClose={() => setShowWarn(false)} />}
       {holdFor && (

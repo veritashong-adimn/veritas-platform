@@ -391,6 +391,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const withholdingText = (r: Row) => {
     const t = effectiveTreatment(r);
     if (t === 'domestic_3_3') return '3.3%';
+    if (t === 'domestic_2_2') return '2.2%';
     if (t === 'exempt') return '원천징수 예외';
     if (t === 'tax_review_required') return '세금계산서';
     return '미선택';

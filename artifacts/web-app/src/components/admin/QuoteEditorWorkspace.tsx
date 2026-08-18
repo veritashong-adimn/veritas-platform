@@ -7,6 +7,7 @@
  * Version Engine 및 저장 로직 100% 유지.
  */
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
+import { formatWon } from "@/lib/utils";
 import { api, Product } from '../../lib/constants';
 import { Card, DsButton, ClickSelect, NumericInput } from '../ui';
 import { dsInput, dsInputStd, dsField, dsAmount, dsStickyPageHeader, C, BD, TBL, TYPO, SP, FORM, FIELD, CRM_FIELD_COLS } from '../../lib/ds';
@@ -1263,7 +1264,7 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, updateIte
         {/* ⑨ 공급가액 — 음수(빨강). 폰트·크기·굵기·tabular 는 일반 공급가액과 동일, 색상만 다르게 (지시문 §4·§7) */}
         <div style={dsAmount(dcAmount > 0, { paddingRight: 6, color: dcAmount > 0 ? C.danger : C.amountEmpty })}
           data-testid="discount-supply">
-          {dcAmount > 0 ? `-${dcAmount.toLocaleString()}원` : '—'}
+          {dcAmount > 0 ? `-${formatWon(dcAmount)}` : '—'}
         </div>
         {/* ⑩ 비고 */}
         <div style={{ borderLeft: '2px solid #e5e7eb', paddingLeft: 14 }}>
@@ -1983,7 +1984,7 @@ export function QuoteEditorWorkspace({
             return s.supply > 0 ? (
               <div key={type} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', background: c.bg, border: `1px solid ${c.border}`, borderRadius: 7 }}>
                 <span style={{ ...TYPO.badge, color: c.color }}>{c.label}</span>
-                <span style={{ ...TYPO.amount, color: C.textSecondary }}>{s.supply.toLocaleString()}원</span>
+                <span style={{ ...TYPO.amount, color: C.textSecondary }}>{formatWon(s.supply)}</span>
               </div>
             ) : null;
           }).filter(Boolean);
@@ -2000,7 +2001,7 @@ export function QuoteEditorWorkspace({
               <div key={`dc-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', background: dc.bg, border: `1px solid ${dc.border}`, borderRadius: 7 }}
                 data-testid={`summary-discount-${i}`}>
                 <span style={{ ...TYPO.badge, color: dc.color }}>{it.productName?.trim() || 'Special D.C'}</span>
-                <span style={{ ...TYPO.amount, color: C.danger }}>{amt.toLocaleString()}원</span>
+                <span style={{ ...TYPO.amount, color: C.danger }}>{formatWon(amt)}</span>
               </div>
             );
           }).filter(Boolean);
@@ -2011,12 +2012,12 @@ export function QuoteEditorWorkspace({
           {[{ label: '공급가액', value: totals.supply }, { label: '부가세', value: totals.tax }].map(r => (
             <div key={r.label} style={{ textAlign: 'right', padding: `${SP[4]}px ${SP[5]}px`, borderRadius: BD.radius.lg, background: C.bgHover }}>
               <div style={{ ...TYPO.helper, marginBottom: 3 }}>{r.label}</div>
-              <div style={{ ...TYPO.summaryAmount }}>{r.value.toLocaleString()}원</div>
+              <div style={{ ...TYPO.summaryAmount }}>{formatWon(r.value)}</div>
             </div>
           ))}
           <div style={{ textAlign: 'right', padding: `${SP[5]}px ${SP[7]}px`, borderRadius: BD.radius.xl, background: C.primaryBg, border: `1.5px solid ${C.primaryBorder}` }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: C.primary, marginBottom: 3 }}>총 견적금액</div>
-            <div style={{ ...TYPO.totalAmount }}>{totals.total.toLocaleString()}원</div>
+            <div style={{ ...TYPO.totalAmount }}>{formatWon(totals.total)}</div>
           </div>
         </div>
       </Card>

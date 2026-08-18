@@ -44,7 +44,7 @@ function dateRange(period: string): { start: Date; end: Date } {
 }
 
 /** GET /api/admin/activity/online  - 현재 온라인 사용자 목록 (5분 이내 활동) */
-router.get("/admin/activity/online", adminOnly, async (req, res) => {
+router.get("/admin/activity/online", ...adminOnly, async (req, res) => {
   const threshold = new Date(Date.now() - ONLINE_THRESHOLD_MS);
 
   const rows = await db
@@ -64,7 +64,7 @@ router.get("/admin/activity/online", adminOnly, async (req, res) => {
 });
 
 /** GET /api/admin/activity/stats?period=today|week|month|year  - 기간별 접속 통계 */
-router.get("/admin/activity/stats", adminOnly, async (req, res) => {
+router.get("/admin/activity/stats", ...adminOnly, async (req, res) => {
   const period = (req.query.period as string) || "today";
   const { start, end } = dateRange(period);
 
@@ -117,7 +117,7 @@ router.get("/admin/activity/stats", adminOnly, async (req, res) => {
 });
 
 /** GET /api/admin/activity/chart?period=today|week|month|year  - 차트용 일별/기간별 로그인 수 */
-router.get("/admin/activity/chart", adminOnly, async (req, res) => {
+router.get("/admin/activity/chart", ...adminOnly, async (req, res) => {
   const period = (req.query.period as string) || "week";
   const { start } = dateRange(period);
 
@@ -136,7 +136,7 @@ router.get("/admin/activity/chart", adminOnly, async (req, res) => {
 });
 
 /** GET /api/admin/activity/user-stats  - 사용자별 누적 로그인 횟수 + 이용시간 (어드민 전용) */
-router.get("/admin/activity/user-stats", adminOnly, async (req, res) => {
+router.get("/admin/activity/user-stats", ...adminOnly, async (req, res) => {
   const limit = parseInt((req.query.limit as string) || "50");
 
   const rows = await db

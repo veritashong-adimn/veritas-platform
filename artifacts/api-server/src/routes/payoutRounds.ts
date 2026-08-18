@@ -8,12 +8,14 @@
 import { Router, type IRouter } from "express";
 import {
   db, payoutRoundsTable, payoutRoundItemsTable, performanceAssignmentsTable, projectsTable, companiesTable, quotesTable, usersTable,
-  performanceExpensesTable, performanceDeductionsTable,
+  performanceExpensesTable, performanceDeductionsTable, translatorSensitiveTable, translatorProfilesTable,
   calcPayoutWithholding, vendorVatApplies,
 } from "@workspace/db";
 import { eq, and, or, isNull, isNotNull, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireRole } from "../middlewares/auth";
+import { getPermissionsForRole } from "../lib/rbac";
+import { decrypt, maskResidentNumber } from "../lib/encrypt";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -958,6 +960,172 @@ router.patch("/admin/payout-rounds/:id/cancel", ...adminGuard, async (req, res) 
   } catch (err) {
     req.log.error({ err }, "지급회차 취소 실패");
     res.status(500).json({ error: "지급회차 취소 중 오류가 발생했습니다." });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 세무자료(세무사 제출용 지급자료) — 조회 전용. 정산 계산은 기존 payout 계산(calcPayoutWithholding)만 재사용.
+//  · 대상: 개인 통번역사 지급건(주민번호 대상). 지급일=실제지급일(없으면 지급예정일).
+//  · 국내 3.3%: 세전/세후 금액 / 해외: '해외 현지 송금건'에 실지급액.
+//  · 주민번호: 기본 마스킹. 전체값은 reveal=1 + translator.sensitive 권한(관리자)일 때만.
+// ─────────────────────────────────────────────────────────────────────────────
+const dstr = (v: unknown) => (v ? String(v).slice(0, 10) : null);
+// ISO 언어코드 → 한글 언어명(세무자료 '언어'는 업무구분이 아닌 실제 수행 언어). 표시 전용 매핑.
+const LANG_KO: Record<string, string> = {
+  ko: "한국어", kr: "한국어", en: "영어", ja: "일본어", jp: "일본어", zh: "중국어", cn: "중국어",
+  "zh-hans": "중국어(간체)", "zh-hant": "중국어(번체)", id: "인도네시아어", es: "스페인어", fr: "프랑스어",
+  de: "독일어", vi: "베트남어", th: "태국어", ru: "러시아어", ar: "아랍어", pt: "포르투갈어", it: "이탈리아어",
+  mn: "몽골어", my: "미얀마어", km: "캄보디아어", ne: "네팔어", tl: "타갈로그어", hi: "힌디어", uz: "우즈베크어",
+  ms: "말레이어", tr: "터키어", nl: "네덜란드어", pl: "폴란드어", sv: "스웨덴어", da: "덴마크어", no: "노르웨이어",
+  fi: "핀란드어", cs: "체코어", hu: "헝가리어", ro: "루마니아어", uk: "우크라이나어", bn: "벵골어", ta: "타밀어",
+  fa: "페르시아어", he: "히브리어", el: "그리스어", si: "싱할라어", lo: "라오어", ka: "조지아어", sw: "스와힐리어",
+};
+// 언어 컬럼에 절대 들어가면 안 되는 업무구분값(원인 차단).
+const SERVICE_WORDS = new Set(["번역", "통역", "감수", "dtp", "미디어", "기타", "장비", "translation", "interpretation", "review"]);
+// 통번역사 '가능언어'(translator_profiles.languagePairs, 예: "EN→KO, KO→EN") → 중복 제거한 한글 언어명 목록.
+//  · 세무자료 언어의 유일한 소스. 여러 개면 '한국어 · 영어'처럼 ' · '로 연결. 없으면 null(→'-').
+function koLanguagesFromPairs(raw: unknown): string | null {
+  if (!raw) return null;
+  const tokens = String(raw).split(/->|<->|=>|[→↔,/~\-\s]+/).map((t) => t.trim()).filter(Boolean);
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const t of tokens) {
+    const key = t.toLowerCase();
+    if (SERVICE_WORDS.has(key)) continue;
+    const name = LANG_KO[key] || (/[가-힣]/.test(t) && /어|語/.test(t) ? t : null);
+    if (name && !seen.has(name)) { seen.add(name); names.push(name); }
+  }
+  return names.length ? names.join(" · ") : null;
+}
+
+router.get("/admin/tax-report", ...adminGuard, async (req, res) => {
+  try {
+    const from = String(req.query.from ?? "").slice(0, 10);
+    const to = String(req.query.to ?? "").slice(0, 10);
+    const q = String(req.query.q ?? "").trim().toLowerCase();
+    const region = String(req.query.region ?? "all");           // all | domestic | overseas
+    const wantReveal = String(req.query.reveal ?? "") === "1";
+
+    // 주민번호 전체노출 권한(translator.sensitive) — 슈퍼관리자(roleId 없음) 또는 권한 보유 시만.
+    const isSuperAdmin = req.user!.role === "admin" && !req.user!.roleId;
+    let canReveal = isSuperAdmin;
+    if (!canReveal && req.user!.roleId) {
+      const perms = await getPermissionsForRole(req.user!.roleId);
+      canReveal = perms.has("translator.sensitive");
+    }
+    const reveal = wantReveal && canReveal;
+
+    // 대상 지급건 — 개인 통번역사 + 유효 지급건 + 지급일(실제 or 예정) 기간. 회차/지급상태 무관(기간 내 지급자료 전체).
+    const dateExpr = sql`COALESCE(${performanceAssignmentsTable.actualPaymentDate}, ${performanceAssignmentsTable.expectedPaymentDate})`;
+    const conds: any[] = [
+      isNull(performanceAssignmentsTable.deletedAt),
+      eq(performanceAssignmentsTable.performerCategory, "individual"),
+      isNotNull(performanceAssignmentsTable.individualUserId),
+      sql`${performanceAssignmentsTable.costTotal} > 0`,
+    ];
+    if (from) conds.push(sql`${dateExpr} >= ${from}`);
+    if (to) conds.push(sql`${dateExpr} <= ${to}`);
+
+    // 기존 정산 계산 재사용 — selectItems+attachLineItems+aggregate(내부 calcPayoutWithholding). 중복 계산 없음.
+    const items = await attachLineItems(await selectItems(and(...conds)));
+    const flat = aggregate(items).flatMap((g: any) => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName, payeeId: g.payeeId })));
+
+    // 보조 조회(selectItems 미포함 필드) — 언어·거주구분·실지급일. id 기준 매핑.
+    const ids = flat.map((it: any) => it.id);
+    const extraMap = new Map<number, any>();
+    if (ids.length) {
+      const extra = await db.select({
+        id: performanceAssignmentsTable.id,
+        residencyType: performanceAssignmentsTable.residencyType,
+        serviceLocationType: performanceAssignmentsTable.serviceLocationType,
+        actualPaymentDate: performanceAssignmentsTable.actualPaymentDate,
+        // 주민번호 확정 스냅샷(수행/정산 당시 동결) — translator_sensitive 미연결 건도 여기서 확보.
+        identifierSnapshotEnc: performanceAssignmentsTable.identifierSnapshotEnc,
+        identifierSnapshotMasked: performanceAssignmentsTable.identifierSnapshotMasked,
+      }).from(performanceAssignmentsTable).where(inArray(performanceAssignmentsTable.id, ids));
+      for (const e of extra) extraMap.set(e.id, e);
+    }
+
+    // 통번역사 민감정보(주민번호·지급방식·통화·메모) — 개인 userId 기준.
+    const userIds = [...new Set(flat.map((it: any) => it.payeeId).filter(Boolean))] as number[];
+    const sensMap = new Map<number, any>();
+    if (userIds.length) {
+      const sens = await db.select({
+        translatorId: translatorSensitiveTable.translatorId,
+        residentNumber: translatorSensitiveTable.residentNumber,
+        paymentMethod: translatorSensitiveTable.paymentMethod,
+        country: translatorSensitiveTable.country,
+        currency: translatorSensitiveTable.currency,
+        remittanceMemo: translatorSensitiveTable.remittanceMemo,
+        settlementMemo: translatorSensitiveTable.settlementMemo,
+      }).from(translatorSensitiveTable).where(inArray(translatorSensitiveTable.translatorId, userIds));
+      for (const s of sens) sensMap.set(s.translatorId, s);
+    }
+
+    // 통번역사 '가능언어'(등록정보) — 수행건 언어가 없을 때의 폴백. userId 기준.
+    const profMap = new Map<number, string | null>();
+    if (userIds.length) {
+      const profs = await db.select({
+        userId: translatorProfilesTable.userId,
+        languagePairs: translatorProfilesTable.languagePairs,
+      }).from(translatorProfilesTable).where(inArray(translatorProfilesTable.userId, userIds));
+      for (const p of profs) profMap.set(p.userId, p.languagePairs ?? null);
+    }
+
+    const rows = flat.map((it: any) => {
+      const ex = extraMap.get(it.id) ?? {};
+      const sn = sensMap.get(it.payeeId) ?? {};
+      const payDate = dstr(ex.actualPaymentDate) ?? dstr(it.expectedPaymentDate);
+      // 국내/해외 판정 — 거주구분·수행지 우선, 없으면 세금처리·지급방식.
+      const overseasTreat = it.withholdingTreatment === "nonresident_custom" || it.withholdingTreatment === "treaty_reduction_or_exemption";
+      const isOverseas = ex.residencyType === "overseas_or_nonresident" || ex.serviceLocationType === "overseas"
+        || overseasTreat || String(sn.paymentMethod ?? "").startsWith("overseas");
+      // 교통비 — 추가비용 중 '교통비' 유형 합계(사용자 입력값 기준).
+      const transport = (it.expenses ?? []).filter((e: any) => String(e.type ?? "").includes("교통비")).reduce((s: number, e: any) => s + num(e.amount), 0);
+      // 주민번호 — 확정 스냅샷(assignment) 우선 → 없으면 통번역사 등록정보(translator_sensitive). 실등록 없으면 null(→'-').
+      //  · 화면: 마스킹값 / Excel(reveal+권한): 전체값. 임의 생성 없음.
+      let residentNumber: string | null = null, residentNumberMasked: string | null = null;
+      const encSrc: string | null = ex.identifierSnapshotEnc || sn.residentNumber || null;
+      if (encSrc) {
+        try {
+          const dec = decrypt(encSrc);
+          residentNumberMasked = maskResidentNumber(dec);
+          if (reveal) residentNumber = dec;
+        } catch {
+          // 복호화 실패 시에도 저장된 마스킹 스냅샷이 있으면 표시(전체값은 미노출).
+          residentNumberMasked = ex.identifierSnapshotMasked || null;
+        }
+      } else if (ex.identifierSnapshotMasked) {
+        residentNumberMasked = ex.identifierSnapshotMasked;   // 암호문 없이 마스킹만 스냅샷된 경우
+      }
+      const gross = num(it.gross), net = num(it.netPayment);
+      const note = isOverseas
+        ? (sn.remittanceMemo || sn.settlementMemo || it.remark || [sn.country, sn.currency].filter(Boolean).join(" ") || "해외 송금")
+        : (it.remark || sn.settlementMemo || "");
+      return {
+        payDate,
+        payeeKey: it.payeeId != null ? `u:${it.payeeId}` : `n:${it.payeeName}`,   // 미등록 인원수 집계용(민감정보 아님)
+        payeeName: it.payeeName,
+        residentNumber,               // 전체값(reveal+권한 시에만), 아니면 null
+        residentNumberMasked,         // 화면 표시용 마스킹
+        // 언어 — 통번역사 관리 '가능언어'(등록정보)만 사용. 판매목록/수행건 언어는 사용하지 않는다(테스트 임의값 혼입 방지).
+        language: koLanguagesFromPairs(profMap.get(it.payeeId) ?? null),
+        transport,
+        pretax: isOverseas ? null : gross,      // 국내 3.3%: 세전
+        posttax: isOverseas ? null : net,       // 국내 3.3%: 세후
+        overseasAmount: isOverseas ? net : null, // 해외: 현지 송금액(실지급액)
+        region: isOverseas ? "overseas" : "domestic",
+        note,
+      };
+    })
+      .filter((r) => region === "all" ? true : r.region === region)
+      .filter((r) => !q || (r.payeeName ?? "").toLowerCase().includes(q))
+      .sort((a, b) => (a.payDate ?? "").localeCompare(b.payDate ?? "") || (a.payeeName ?? "").localeCompare(b.payeeName ?? "", "ko"));
+
+    res.json({ rows, canReveal, revealed: reveal });
+  } catch (err) {
+    req.log.error({ err }, "세무자료 조회 실패");
+    res.status(500).json({ error: "세무자료 조회 중 오류가 발생했습니다." });
   }
 });
 

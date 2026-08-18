@@ -9,6 +9,7 @@ import React, { useState } from 'react';
 import { ModalOverlay, GhostBtn, PrimaryBtn } from '../ui';
 import { C, TYPO, SP, BD } from '../../lib/ds';
 import { downloadStatementExcel, todayStamp, type ExcelColumn, type ExcelCell } from '../../lib/payoutExcel';
+import { printPayoutStatementPdf, type PayoutStatementPdfRow } from '../../lib/payoutStatementPdf';
 
 // ── 표시 헬퍼(PayoutRoundsTab 와 동일 — 순수 포맷/라벨. 계산 없음) ──
 const won = (n: unknown) => Math.round(Number(n ?? 0)).toLocaleString('ko-KR');
@@ -17,7 +18,7 @@ const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
 const nfmt = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n.toLocaleString('ko-KR') : String(v); };
 
 const TREATMENT_LABEL: Record<string, string> = {
-  domestic_3_3: '3.3%', exempt: '원천징수 예외',
+  domestic_3_3: '3.3%', domestic_2_2: '2.2%', exempt: '원천징수 예외',
   nonresident_custom: '비거주자', treaty_reduction_or_exemption: '조세조약', tax_review_required: '세무확인 필요',
 };
 const VENDOR_EVIDENCE_LABEL: Record<string, string> = {
@@ -62,7 +63,17 @@ const unitPrice = (it: any) => (it.isDirectAmount || it.contractUnitPrice == nul
 // 추가비용·차감 세부항목 인라인(항목명 금액). 없으면 '-'.
 const inlineItems = (arr: { type: string; amount: number }[] | undefined) =>
   arr && arr.length ? arr.map(x => `${x.type} ${won(x.amount)}`).join(' · ') : '-';
+// Excel 전용 — 내역 명칭만(금액은 별도 숫자 셀로 분리). 없으면 '-'.
+const itemTypeNames = (arr: { type: string; amount: number }[] | undefined) =>
+  arr && arr.length ? arr.map(x => x.type).join(' · ') : '-';
 const payeeTypeLabel = (t: string) => (t === 'individual' ? '통번역사' : '외주업체');
+// 지급대상자 지급일(상단 요약) — 건별 지급일이 모두 같으면 그 날짜, 여러 개면 "최소 ~ 최대",
+// 실제 지급일 데이터가 전혀 없으면 '-'. 건별(표) 지급일 표시는 각각 그대로 유지한다.
+const payDateSummary = (items: any[]): string => {
+  const ds = [...new Set((items ?? []).map((it) => dateVal(it.expectedPaymentDate)).filter(Boolean))].sort();
+  if (ds.length === 0) return '-';
+  return ds.length === 1 ? ds[0] : `${ds[0]} ~ ${ds[ds.length - 1]}`;
+};
 
 interface Props {
   round?: any;                // detail.round (전체 지급대상 조회 시 null)
@@ -70,7 +81,8 @@ interface Props {
   snapshotSource?: string;    // 'snapshot' | 'live' | 'live_legacy'
   scopeLabel?: string;        // round 미선택(전체/미배정) 시 범위 표기
   onToast: (m: string) => void;
-  onClose: () => void;
+  onClose?: () => void;       // 모달일 때만 사용(닫기). inline(독립 페이지)에서는 미사용.
+  inline?: boolean;           // true면 모달 오버레이 없이 페이지 내부에 그대로 렌더(닫기 버튼 숨김).
 }
 
 // 상태 안내 — 회차 상태·스냅샷 출처에 따른 표시 근거 배지. 회차 미선택(전체 조회)이면 조회 기준 표기.
@@ -81,7 +93,7 @@ function sourceBadge(round: any, snapshotSource?: string): { label: string; colo
   return { label: '미리보기 (작성중 · 실시간)', color: '#6b7280', bg: '#f3f4f6' };
 }
 
-export default function PayoutStatementModal({ round, summary, snapshotSource, scopeLabel, onToast, onClose }: Props) {
+export default function PayoutStatementModal({ round, summary, snapshotSource, scopeLabel, onToast, onClose, inline }: Props) {
   const [sel, setSel] = useState<string | null>(null);
   const badge = sourceBadge(round, snapshotSource);
   // 회차 선택 시: 회차명·지급일. 전체 조회 시: 범위 라벨(전체/미배정), 지급일은 건별 상이 → '-'.
@@ -101,41 +113,62 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
     return (l === null ? '혼재 (건별 상이)' : l) + (g.isVatIncluded ? ' (VAT별도)' : '');
   };
 
-  // ── 명세서 Excel — 화면과 동일 항목·금액. 별도 계산 없음(서버 확정값 그대로). ──
-  //  · 상세는 세전금액까지, 세금처리는 상단 정보, 공제액·실지급액은 하단 합계로(화면과 동일 구조).
+  // 파일명 태그(지급대상명·범위) — 안전 문자만.
+  const fileTag = (g: any) => {
+    const safe = String(g.payeeName || '지급대상').replace(/[\\/:*?"<>|\s]+/g, '_');
+    const scopeTag = String(round?.batchNumber || roundName || payDate || todayStamp()).replace(/[\\/:*?"<>|\s]+/g, '_');
+    return `${safe}_${scopeTag}_${todayStamp()}`;
+  };
+
+  // ── 명세서 Excel — 화면(건별 상세내역)과 동일 항목·금액. 별도 계산 없음(서버 확정값 그대로). ──
+  //  · 상단: 지급대상자 기본정보 / 중단: 건별 상세(거래처…실지급액) / 하단: 전체 정산 합계.
   const exportExcel = (g: any) => {
+    // 추가비용/차감은 내역(명칭)과 금액(숫자 셀)을 분리 — 사람 확인 + Excel 계산·분석 모두 만족.
     const columns: ExcelColumn[] = [
-      { header: '거래처' }, { header: '상품·업무' }, { header: '구분' }, { header: '수행일' }, { header: '작업량' },
-      { header: '단가', type: 'number' }, { header: '기본수행료', type: 'number' }, { header: '추가비용' }, { header: '차감' },
-      { header: '세전금액', type: 'number' },
+      { header: '거래처', width: 18 }, { header: '상품·업무', width: 24 }, { header: '구분', width: 7 }, { header: '수행일', width: 13 }, { header: '납품일', width: 12 }, { header: '지급일', width: 12 }, { header: '작업량', width: 12 },
+      { header: '단가', type: 'number', width: 11 }, { header: '기본수행료', type: 'number', width: 12 },
+      { header: '추가비용 내역', width: 18 }, { header: '추가비용 금액', type: 'number', width: 13 },
+      { header: '차감 내역', width: 16 }, { header: '차감 금액', type: 'number', width: 12 },
+      { header: '세전금액', type: 'number', width: 13 }, { header: '세금처리', width: 12 }, { header: '공제액', type: 'number', width: 12 }, { header: '실지급액', type: 'number', width: 17 },
     ];
     const rows: ExcelCell[][] = (g.items ?? []).map((it: any) => [
       it.customerName || '-',
       it.productName || `#${it.projectId}`,
       svcLabel(it.serviceType),
       perfDate(it),
+      dateVal(it.deliveryDate) || '-',
+      dateVal(it.expectedPaymentDate) || '-',
       workAmount(it),
       (it.isDirectAmount || it.contractUnitPrice == null) ? '-' : Math.round(numOf(it.contractUnitPrice)),
       Math.round(numOf(it.basePerformanceFee)),
-      inlineItems(it.expenses),
-      inlineItems(it.deductions),
+      itemTypeNames(it.expenses),
+      Math.round(numOf(it.expenseTotal)),
+      itemTypeNames(it.deductions),
+      Math.round(numOf(it.deductionTotal)),
       Math.round(numOf(it.gross)),
+      taxTreatmentLabel(it),
+      Math.round(numOf(it.withholdingTax)),
+      Math.round(numOf(it.netPayment)),
     ]);
-    // 컬럼 정렬 합계행(기본수행료·추가비용·차감·세전금액 합계) — 서버 그룹 총계 그대로.
+    // 컬럼 정렬 합계행(기본수행료·추가비용 금액·차감 금액·세전·공제·실지급 합계) — 서버 그룹 총계 그대로.
     const totals: ExcelCell[] = [
-      `합계 (${g.count}건)`, '', '', '', '',
-      '', Math.round(numOf(g.baseTotal)), Math.round(numOf(g.expenseTotal)), Math.round(numOf(g.deductionTotal)),
-      Math.round(numOf(g.grossTotal)),
+      `합계 (${g.count}건)`, '', '', '', '', '', '',
+      '', Math.round(numOf(g.baseTotal)),
+      '', Math.round(numOf(g.expenseTotal)),
+      '', Math.round(numOf(g.deductionTotal)),
+      Math.round(numOf(g.grossTotal)), '', Math.round(numOf(g.withholdingTotal)), Math.round(numOf(g.netTotal)),
     ];
-    // 컬럼이 아닌 합계(공제액·최종 실지급액) — 하단 우측.
+    // 하단 라벨형 합계(전체 정산 합계) — 추가비용/차감/세전/공제/실지급 명확 구분.
     const footerRows: [string, ExcelCell][] = [
+      ['기본수행료 합계', Math.round(numOf(g.baseTotal))],
+      ['추가비용 합계', Math.round(numOf(g.expenseTotal))],
+      ['차감 합계', Math.round(numOf(g.deductionTotal))],
+      ['세전금액 합계', Math.round(numOf(g.grossTotal))],
       ['공제액', Math.round(numOf(g.withholdingTotal))],
       ['최종 실지급액', Math.round(numOf(g.netTotal))],
     ];
-    const safe = String(g.payeeName || '지급대상').replace(/[\\/:*?"<>|\s]+/g, '_');
-    const scopeTag = String(round?.batchNumber || roundName || payDate || todayStamp()).replace(/[\\/:*?"<>|\s]+/g, '_');
     downloadStatementExcel({
-      filename: `지급명세서_${safe}_${scopeTag}_${todayStamp()}.xlsx`,
+      filename: `지급명세서_${fileTag(g)}.xlsx`,
       sheetName: '지급명세서',
       title: 'VERITAS 지급명세서',
       info: [
@@ -143,12 +176,51 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
         ['이메일', g.payeeEmail || '-'],
         ['구분', payeeTypeLabel(g.payeeType)],
         [scopeFieldLabel, roundName],
-        ['지급일', payDate || '-'],
+        ['지급일', payDateSummary(g.items)],
         ['세금처리', groupTaxDisplay(g)],
       ],
       columns, rows, totals, footerRows,
     });
     onToast('지급명세서 Excel을 다운로드했습니다.');
+  };
+
+  // ── 명세서 PDF — 외부 지급대상자 전달용 공식 문서(A4). 화면·Excel과 동일 값(재계산 없음). ──
+  const exportPdf = (g: any) => {
+    const pdfRows: PayoutStatementPdfRow[] = (g.items ?? []).map((it: any) => ({
+      customer: it.customerName || '-',
+      product: it.productName || `#${it.projectId}`,
+      service: svcLabel(it.serviceType),
+      perfDate: perfDate(it),
+      deliveryDate: dateVal(it.deliveryDate) || '-',
+      payDate: dateVal(it.expectedPaymentDate) || '-',
+      workAmount: workAmount(it),
+      unitPrice: unitPrice(it),
+      base: numOf(it.basePerformanceFee),
+      expenses: inlineItems(it.expenses),
+      deductions: inlineItems(it.deductions),
+      gross: numOf(it.gross),
+      vatIncluded: !!it.isVatIncluded,
+    }));
+    const d = new Date();
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    const ok = printPayoutStatementPdf({
+      fileName: `지급명세서_${fileTag(g)}`,
+      issuedDate: `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`,
+      payeeName: String(g.payeeName ?? ''),
+      email: g.payeeEmail || '-',
+      payeeType: payeeTypeLabel(g.payeeType),
+      scopeFieldLabel,
+      scopeValue: roundName,
+      payDate: payDateSummary(g.items),
+      taxDisplay: groupTaxDisplay(g),
+      count: g.count,
+      rows: pdfRows,
+      totals: {
+        base: numOf(g.baseTotal), expense: numOf(g.expenseTotal), deduction: numOf(g.deductionTotal),
+        gross: numOf(g.grossTotal), withholding: numOf(g.withholdingTotal), net: numOf(g.netTotal),
+      },
+    });
+    if (!ok) onToast('팝업 차단을 해제한 후 다시 시도해 주세요. (PDF 인쇄 창)');
   };
 
   // 공통 헤더(제목 + 상태 배지 + 회차정보)
@@ -158,20 +230,19 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
       <span style={{ ...TYPO.badge, color: badge.color, background: badge.bg, padding: '3px 9px', borderRadius: 6, fontWeight: 700 }}>{badge.label}</span>
       <span style={{ ...TYPO.helper }}>{scopeFieldLabel} <b>{roundName}</b></span>
       {round && <span style={{ ...TYPO.helper }}>지급일 <b>{payDate || '-'}</b></span>}
-      <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>{extra}<GhostBtn onClick={onClose} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="payout-statement-close" aria-label="닫기">닫기</GhostBtn></div>
+      <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>{extra}{!inline && <GhostBtn onClick={onClose} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="payout-statement-close" aria-label="닫기">닫기</GhostBtn>}</div>
     </div>
   );
 
   // ── 팝업 레이아웃(표시 전용) — 헤더 고정 + 본문 스크롤로 스크롤 없이도 핵심이 보이게. ──
-  const shell: React.CSSProperties = { display: 'flex', flexDirection: 'column', maxHeight: 'calc(100vh - 120px)', minHeight: 0 };
+  const shell: React.CSSProperties = { display: 'flex', flexDirection: 'column', maxHeight: inline ? 'calc(100vh - 260px)' : 'calc(100vh - 120px)', minHeight: 0 };
   const bodyScroll: React.CSSProperties = { flex: 1, overflow: 'auto', minHeight: 0 };
   const fixedTop: React.CSSProperties = { flexShrink: 0, borderBottom: BD.grid, marginBottom: SP[3] };
   // 목록 [명세서 보기] 항상 노출 — 액션 컬럼 우측 고정(가로 스크롤과 무관하게 보임).
   const thAction: React.CSSProperties = { ...th, position: 'sticky', right: 0, zIndex: 2, background: C.g50 };
   const tdAction: React.CSSProperties = { ...td, position: 'sticky', right: 0, zIndex: 1, background: C.bgCard, boxShadow: '-6px 0 8px -6px rgba(15,23,42,0.14)' };
 
-  return (
-    <ModalOverlay onClose={onClose} maxWidth={sel ? 1180 : 900}>
+  const body = (
       <div style={shell}>
       {!sel ? (
         // ── 명세서 목록(지급대상자별) — 헤더 고정 · 표 스크롤 · [명세서 보기] 우측 고정 ──
@@ -213,7 +284,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
           {header('VERITAS 지급명세서', (
             <>
               <GhostBtn onClick={() => setSel(null)} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="payout-statement-back" aria-label="목록으로">← 목록</GhostBtn>
-              <PrimaryBtn onClick={() => exportExcel(group)} style={{ fontSize: 12, padding: '6px 14px' }} data-testid="payout-statement-excel" aria-label="Excel 다운로드">📊 Excel 다운로드</PrimaryBtn>
+              <PrimaryBtn onClick={() => exportPdf(group)} style={{ fontSize: 12, padding: '6px 14px' }} data-testid="payout-statement-pdf" aria-label="PDF 다운로드">📄 PDF 다운로드</PrimaryBtn>
+              <GhostBtn onClick={() => exportExcel(group)} style={{ fontSize: 12, padding: '6px 14px' }} data-testid="payout-statement-excel" aria-label="Excel 다운로드">📊 Excel 다운로드</GhostBtn>
             </>
           ))}
           {/* 기본정보(상단·고정) — 지급대상 / 이메일 / 구분 / 지급회차 / 지급일 / 세금처리 */}
@@ -223,7 +295,7 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
               ['이메일', group.payeeEmail || '-'],
               ['구분', payeeTypeLabel(group.payeeType)],
               [scopeFieldLabel, roundName],
-              ['지급일', payDate || '-'],
+              ['지급일', payDateSummary(group.items)],
               ['세금처리', groupTaxDisplay(group)],
             ].map(([k, v]) => (
               <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -233,13 +305,13 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
           </div>
           </div>{/* /fixedTop */}
           <div style={bodyScroll}>
-          {/* 상세내역 — 거래처 … 세전금액(세금처리·공제·실지급은 상단/하단으로 이동, 화면=Excel 동일 구조) */}
+          {/* 상세내역 — 지급회차 관리 건별 상세내역과 동일 항목(거래처…실지급액). 서버 확정값 그대로(재계산 없음). */}
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 920 }}>
+            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1360 }}>
               <thead><tr>
-                <th style={th}>거래처</th><th style={th}>상품·업무</th><th style={th}>구분</th><th style={th}>수행일</th><th style={th}>작업량</th>
+                <th style={th}>거래처</th><th style={th}>상품·업무</th><th style={th}>구분</th><th style={th}>수행일</th><th style={th}>납품일</th><th style={th}>지급일</th><th style={th}>작업량</th>
                 <th style={{ ...th, textAlign: 'right' }}>단가</th><th style={{ ...th, textAlign: 'right' }}>기본수행료</th><th style={th}>추가비용</th><th style={th}>차감</th>
-                <th style={{ ...th, textAlign: 'right' }}>세전금액</th>
+                <th style={{ ...th, textAlign: 'right' }}>세전금액</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>공제액</th><th style={{ ...th, textAlign: 'right' }}>실지급액</th>
               </tr></thead>
               <tbody>
                 {(group.items ?? []).map((it: any) => (
@@ -248,24 +320,31 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
                     <td style={td} title={it.productName || `#${it.projectId}`}>{it.productName || `#${it.projectId}`}</td>
                     <td style={td}>{svcLabel(it.serviceType)}</td>
                     <td style={td}>{perfDate(it)}</td>
+                    <td style={td}>{dateVal(it.deliveryDate) || '-'}</td>
+                    <td style={td}>{dateVal(it.expectedPaymentDate) || '-'}</td>
                     <td style={td}>{workAmount(it)}</td>
                     <td style={tdR}>{unitPrice(it)}</td>
                     <td style={tdR}>{won(it.basePerformanceFee)}</td>
                     <td style={{ ...td, whiteSpace: 'normal', color: (it.expenses?.length ? C.textSecondary : C.g400) }}>{inlineItems(it.expenses)}</td>
                     <td style={{ ...td, whiteSpace: 'normal', color: (it.deductions?.length ? C.danger : C.g400) }}>{inlineItems(it.deductions)}</td>
                     <td style={tdR}>{won(it.gross)}{vatTag(!!it.isVatIncluded)}</td>
+                    <td style={td}>{taxTreatmentLabel(it)}</td>
+                    <td style={{ ...tdR, color: C.danger }}>{won(it.withholdingTax)}</td>
+                    <td style={{ ...tdR, fontWeight: 700, color: C.primaryText }}>{won(it.netPayment)}</td>
                   </tr>
                 ))}
               </tbody>
-              {/* 컬럼 정렬 합계행 — 기본수행료·추가비용·차감·세전금액 합계(서버 그룹 총계 · 재계산 없음) */}
+              {/* 컬럼 정렬 합계행 — 기본수행료·추가비용·차감·세전·공제·실지급 합계(서버 그룹 총계 · 재계산 없음) */}
               <tfoot><tr>
-                <td style={{ ...td, fontWeight: 800, background: C.primaryBg }} colSpan={4}>합계 ({group.count}건)</td>
-                <td style={{ ...td, background: C.primaryBg }}></td>
+                <td style={{ ...td, fontWeight: 800, background: C.primaryBg }} colSpan={7}>합계 ({group.count}건)</td>
                 <td style={{ ...tdR, background: C.primaryBg }}></td>
                 <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg }}>{won(group.baseTotal)}</td>
                 <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg }}>{won(group.expenseTotal)}</td>
                 <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg }}>{won(group.deductionTotal)}</td>
                 <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg }}>{won(group.grossTotal)}</td>
+                <td style={{ ...td, background: C.primaryBg }}></td>
+                <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg, color: C.danger }}>{won(group.withholdingTotal)}</td>
+                <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg, color: C.primaryText }}>{won(group.netTotal)}</td>
               </tr></tfoot>
             </table>
           </div>
@@ -295,6 +374,19 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
         <><div style={fixedTop}>{header('VERITAS 지급명세서')}</div><div style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>대상을 찾을 수 없습니다.</div></>
       )}
       </div>
+  );
+
+  // inline(독립 페이지): 오버레이 없이 카드 안에 그대로 렌더. 모달: 기존 오버레이 유지.
+  if (inline) {
+    return (
+      <div style={{ background: C.bgCard, border: BD.grid, borderRadius: 12, padding: 22 }}>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <ModalOverlay onClose={onClose} maxWidth={sel ? 1180 : 900}>
+      {body}
     </ModalOverlay>
   );
 }

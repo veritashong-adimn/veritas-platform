@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Building2, FileBadge, User, BriefcaseBusiness, Tag, MapPinned, BadgeCheck, Calendar } from "lucide-react";
 import { api, CompanyDetail, Contact, Division, NoteEntry, VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS, VENDOR_TYPE_CATEGORY_CHIPS, resolveVendorType, finalVendorType, CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS, getCustomerTypeBadgeColors } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
-import { formatPhone } from "../../lib/utils";
+import { formatPhone, formatWon } from "../../lib/utils";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { PrepaidLedgerModal } from "./PrepaidLedgerModal";
 import { DraggableModal } from "./DraggableModal";
@@ -439,19 +439,19 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                 </span>
                 <span style={{ color: "#94a3b8", fontSize: 13 }}>|</span>
                 <span style={{ fontSize: 13, color: "#059669", fontWeight: 700 }}>
-                  총 결제 {Number(detail.totalPayment).toLocaleString()}원
+                  총 결제 {formatWon(Number(detail.totalPayment))}
                 </span>
               </div>
               {((detail as any).prepaidBalance > 0 || (detail as any).unpaidAmount > 0) && (
                 <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                   {(detail as any).prepaidBalance > 0 && (
                     <span style={{ fontSize: 12, color: "#15803d", fontWeight: 700, background: "#dcfce7", borderRadius: 20, padding: "2px 9px" }}>
-                      선입금 {Number((detail as any).prepaidBalance).toLocaleString()}원
+                      선입금 {formatWon(Number((detail as any).prepaidBalance))}
                     </span>
                   )}
                   {(detail as any).unpaidAmount > 0 && (
                     <span style={{ fontSize: 12, color: "#92400e", fontWeight: 700, background: "#fef3c7", borderRadius: 20, padding: "2px 9px" }}>
-                      미수금 {Number((detail as any).unpaidAmount).toLocaleString()}원
+                      미수금 {formatWon(Number((detail as any).unpaidAmount))}
                     </span>
                   )}
                 </div>
@@ -592,9 +592,9 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
               {[
                 { label: "담당자 수", value: `활성 ${detail.contacts.filter((c: Contact) => c.isActive).length}명 / 비활성 ${detail.contacts.filter((c: Contact) => !c.isActive).length}명`, color: "#6b7280", bg: "#f3f4f6" },
                 { label: "프로젝트 수", value: `${detail.projects.length}건`, color: "#2563eb", bg: "#eff6ff" },
-                { label: "총 견적 금액", value: `${Number(detail.totalQuote).toLocaleString()}원`, color: "#0891b2", bg: "#f0f9ff" },
-                { label: "총 결제 금액", value: `${Number(detail.totalPayment).toLocaleString()}원`, color: "#059669", bg: "#f0fdf4" },
-                { label: "총 정산 금액", value: `${Number(detail.totalSettlement).toLocaleString()}원`, color: "#7c3aed", bg: "#faf5ff" },
+                { label: "총 견적 금액", value: `${formatWon(Number(detail.totalQuote))}`, color: "#0891b2", bg: "#f0f9ff" },
+                { label: "총 결제 금액", value: `${formatWon(Number(detail.totalPayment))}`, color: "#059669", bg: "#f0fdf4" },
+                { label: "총 정산 금액", value: `${formatWon(Number(detail.totalSettlement))}`, color: "#7c3aed", bg: "#faf5ff" },
               ].map(s => (
                 <div key={s.label} style={{ background: s.bg, border: `1px solid ${s.color}33`, borderRadius: 12, padding: "14px 20px", flex: "1 1 120px" }}>
                   <p style={{ margin: "0 0 4px", fontSize: 12, fontWeight: 600, color: s.color }}>{s.label}</p>
@@ -607,13 +607,13 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
               {(detail as any).prepaidBalance != null && (
                 <div style={{ background: (detail as any).prepaidBalance > 0 ? "#f0fdf4" : "#fef2f2", border: "1px solid", borderColor: (detail as any).prepaidBalance > 0 ? "#bbf7d0" : "#fecaca", borderRadius: 10, padding: "10px 16px", flex: "1 1 120px" }}>
                   <p style={{ margin: "0 0 2px", fontSize: 11, fontWeight: 600, color: (detail as any).prepaidBalance > 0 ? "#15803d" : "#dc2626" }}>선입금 잔액</p>
-                  <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: (detail as any).prepaidBalance > 0 ? "#15803d" : "#dc2626" }}>{Number((detail as any).prepaidBalance).toLocaleString()}원</p>
+                  <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: (detail as any).prepaidBalance > 0 ? "#15803d" : "#dc2626" }}>{formatWon(Number((detail as any).prepaidBalance))}</p>
                 </div>
               )}
               {(detail as any).unpaidAmount > 0 && (
                 <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 10, padding: "10px 16px", flex: "1 1 120px" }}>
                   <p style={{ margin: "0 0 2px", fontSize: 11, fontWeight: 600, color: "#92400e" }}>미수금</p>
-                  <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: "#92400e" }}>{Number((detail as any).unpaidAmount).toLocaleString()}원</p>
+                  <p style={{ margin: 0, fontSize: 16, fontWeight: 800, color: "#92400e" }}>{formatWon(Number((detail as any).unpaidAmount))}</p>
                 </div>
               )}
               {(detail as any).activeAccumulatedCount > 0 && (
@@ -639,11 +639,11 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                         <div style={{ fontSize: 14, fontWeight: 800, color: acct.currentBalance > 0 ? "#15803d" : "#6b7280" }}>
-                          {acct.currentBalance.toLocaleString()}원
+                          {formatWon(acct.currentBalance)}
                         </div>
                         <div style={{ fontSize: 10, color: "#9ca3af" }}>원장 보기 →</div>
                       </div>
-                      <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>최초: {acct.initialAmount.toLocaleString()}원</div>
+                      <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>최초: {formatWon(acct.initialAmount)}</div>
                     </div>
                   ))}
                 </div>
@@ -703,7 +703,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                           </div>
                           <div style={{ display: "flex", gap: 12, fontSize: 12, color: "#6b7280" }}>
                             <span>프로젝트 <strong style={{ color: "#2563eb" }}>{d.projectCount ?? 0}건</strong></span>
-                            <span>매출 <strong style={{ color: "#059669" }}>{Number(d.totalPayment ?? 0).toLocaleString()}원</strong></span>
+                            <span>매출 <strong style={{ color: "#059669" }}>{formatWon(Number(d.totalPayment ?? 0))}</strong></span>
                             <span>담당자 <strong>{d.contactCount ?? 0}명</strong></span>
                           </div>
                           <div style={{ display: "flex", gap: 6 }}>

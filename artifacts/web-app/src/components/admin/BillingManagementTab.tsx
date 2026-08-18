@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { formatWon } from "@/lib/utils";
 import { api } from '../../lib/constants';
 import { Card, GhostBtn } from '../ui';
 
@@ -121,7 +122,7 @@ export function BillingManagementTab({ token, onToast, onNavigateToProjects }: P
                         {b.periodEnd ? new Date(b.periodEnd).toLocaleDateString("ko-KR") : "?"}
                       </td>
                       <td style={{ ...tableTd, textAlign: "right" }}>{b.itemCount}건</td>
-                      <td style={{ ...tableTd, fontWeight: 700, textAlign: "right" }}>{b.totalAmount.toLocaleString()}원</td>
+                      <td style={{ ...tableTd, fontWeight: 700, textAlign: "right" }}>{formatWon(b.totalAmount)}</td>
                       <td style={tableTd}>
                         <span style={{ padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600, background: sc.bg, color: sc.color }}>{sc.label}</span>
                       </td>

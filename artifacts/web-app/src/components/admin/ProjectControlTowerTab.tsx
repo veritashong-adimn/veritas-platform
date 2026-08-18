@@ -1,5 +1,6 @@
 // 컨트롤타워 탭 — 상태 기반 UX 자동 제어 (2025-04)
 import React, { useCallback, useEffect, useState } from "react";
+import { formatWon } from "@/lib/utils";
 import { api, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE } from "../../lib/constants";
 import { StatusBadge } from "../ui";
 
@@ -106,7 +107,7 @@ const SETTLE_STATUS_KO: Record<string, string> = {
   pending: "대기", draft: "정보 부족",
 };
 const SETTLEMENT_TYPE_KO: Record<string, string> = {
-  WITHHOLDING_3_3: "원천세 3.3%", VAT_INVOICE: "세금계산서",
+  WITHHOLDING_3_3: "원천세 3.3%", WITHHOLDING_2_2: "원천세 2.2%", VAT_INVOICE: "세금계산서",
   OVERSEAS_REMITTANCE: "해외송금", OTHER_REVIEW: "기타",
 };
 const SETTLEMENT_TYPE_STYLE: Record<string, React.CSSProperties> = {
@@ -391,7 +392,7 @@ export function ProjectControlTowerTab({
                   </div>
                 ) : (
                   <p style={{ fontSize: 12, color: "#9ca3af", margin: 0 }}>
-                    견적 금액: {Number(q.price).toLocaleString()}원 (상세 아이템 없음)
+                    견적 금액: {formatWon(Number(q.price))} (상세 아이템 없음)
                   </p>
                 )}
               </div>
@@ -472,15 +473,15 @@ export function ProjectControlTowerTab({
                         ) : <span style={{ color: "#d1d5db" }}>—</span>}
                       </td>
                       <td style={{ ...TD, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" as const }}>
-                        {s ? `${Math.round(gross).toLocaleString()}원` : <span style={{ color: "#d1d5db" }}>—</span>}
+                        {s ? `${formatWon(Math.round(gross))}` : <span style={{ color: "#d1d5db" }}>—</span>}
                       </td>
                       <td style={{ ...TD, fontSize: 12, color: "#b45309", whiteSpace: "nowrap" as const }}>
                         {withholding > 0
-                          ? <><div>{Math.round(withholding).toLocaleString()}원</div><div style={{ fontSize: 10, color: "#9ca3af" }}>3.3%</div></>
+                          ? <><div>{formatWon(Math.round(withholding))}</div><div style={{ fontSize: 10, color: "#9ca3af" }}>{s?.settlementType === "WITHHOLDING_2_2" ? "2.2%" : "3.3%"}</div></>
                           : <span style={{ color: "#d1d5db" }}>—</span>}
                       </td>
                       <td style={{ ...TD, fontWeight: 700, color: "#059669", whiteSpace: "nowrap" as const }}>
-                        {s ? `${Math.round(net).toLocaleString()}원` : <span style={{ color: "#d1d5db" }}>—</span>}
+                        {s ? `${formatWon(Math.round(net))}` : <span style={{ color: "#d1d5db" }}>—</span>}
                       </td>
                       <td style={TD}>
                         {s?.settlementType
@@ -524,13 +525,13 @@ export function ProjectControlTowerTab({
                   <tr style={{ background: "#f9fafb", borderTop: "2px solid #e5e7eb" }}>
                     <td colSpan={4} style={{ ...TD, fontWeight: 700 }}>합계</td>
                     <td style={{ ...TD, fontWeight: 700, color: "#0891b2", whiteSpace: "nowrap" as const }}>
-                      {translators.reduce((s, t) => s + Number(t.settlement?.grossAmount ?? 0), 0).toLocaleString()}원
+                      {formatWon(translators.reduce((s, t) => s + Number(t.settlement?.grossAmount ?? 0), 0))}
                     </td>
                     <td style={{ ...TD, fontWeight: 700, color: "#b45309", whiteSpace: "nowrap" as const }}>
-                      {translators.reduce((s, t) => s + Number(t.settlement?.withholdingAmount ?? 0), 0).toLocaleString()}원
+                      {formatWon(translators.reduce((s, t) => s + Number(t.settlement?.withholdingAmount ?? 0), 0))}
                     </td>
                     <td style={{ ...TD, fontWeight: 800, color: "#059669", whiteSpace: "nowrap" as const }}>
-                      {translators.reduce((s, t) => s + Number(t.settlement?.netAmount ?? 0), 0).toLocaleString()}원
+                      {formatWon(translators.reduce((s, t) => s + Number(t.settlement?.netAmount ?? 0), 0))}
                     </td>
                     <td colSpan={3} style={TD} />
                   </tr>
@@ -581,7 +582,7 @@ export function ProjectControlTowerTab({
                     <tr key={p.id}>
                       <td style={{ ...TD, whiteSpace: "nowrap" as const }}>{fmtDate(p.createdAt)}</td>
                       <td style={{ ...TD, fontWeight: 700, color: p.status === "paid" ? "#059669" : "#374151" }}>
-                        {Number(p.amount).toLocaleString()}원
+                        {formatWon(Number(p.amount))}
                       </td>
                       <td style={{ ...TD, color: "#6b7280" }}>{p.paymentMethod ?? "—"}</td>
                       <td style={TD}><StatusBadge status={p.status} /></td>
@@ -591,13 +592,13 @@ export function ProjectControlTowerTab({
                 <tfoot>
                   <tr style={{ background: "#f9fafb", borderTop: "1px solid #e5e7eb" }}>
                     <td style={{ ...TD, fontWeight: 700 }}>입금 합계</td>
-                    <td style={{ ...TD, fontWeight: 800, color: "#059669" }}>{summary.paidAmount.toLocaleString()}원</td>
+                    <td style={{ ...TD, fontWeight: 800, color: "#059669" }}>{formatWon(summary.paidAmount)}</td>
                     <td colSpan={2} style={TD} />
                   </tr>
                   {summary.unpaidAmount > 0 && (
                     <tr style={{ background: "#fff7f7" }}>
                       <td style={{ ...TD, fontWeight: 700, color: "#dc2626" }}>미수금</td>
-                      <td style={{ ...TD, fontWeight: 800, color: "#dc2626" }}>{summary.unpaidAmount.toLocaleString()}원</td>
+                      <td style={{ ...TD, fontWeight: 800, color: "#dc2626" }}>{formatWon(summary.unpaidAmount)}</td>
                       <td colSpan={2} style={TD} />
                     </tr>
                   )}
@@ -652,7 +653,7 @@ export function ProjectControlTowerTab({
                           {isOverdue && <span style={{ marginLeft: 4, padding: "1px 4px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "#fee2e2", color: "#dc2626" }}>지연</span>}
                         </td>
                         <td style={{ ...TD, fontWeight: 700, color: "#059669" }}>
-                          {Number(s.netAmount ?? 0).toLocaleString()}원
+                          {formatWon(Number(s.netAmount ?? 0))}
                         </td>
                         <td style={TD}>
                           <span style={{ padding: "2px 7px", borderRadius: 6, fontSize: 11, fontWeight: 700, ...(SETTLE_STATUS_BADGE[s.status] ?? {}) }}>
@@ -678,7 +679,7 @@ export function ProjectControlTowerTab({
                     <td style={{ ...TD, fontWeight: 700 }}>지급 합계</td>
                     <td style={TD} />
                     <td style={{ ...TD, fontWeight: 800, color: "#059669" }}>
-                      {summary.totalPayoutAmount.toLocaleString()}원
+                      {formatWon(summary.totalPayoutAmount)}
                     </td>
                     <td colSpan={2} style={TD} />
                   </tr>

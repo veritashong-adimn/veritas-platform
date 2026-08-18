@@ -22,7 +22,7 @@ const adminGuard = [requireAuth, requireRole("admin", "staff")];
 const adminOnly = [requireAuth, requireRole("admin")];
 
 // ─── 상품유형 정의 ─────────────────────────────────────────────────────────────
-export const PRODUCT_TYPES: Record<string, { label: string; code: string; hasLanguage: boolean }> = {
+export const PRODUCT_TYPES: Record<string, { label: string; code: string; hasLanguage: boolean; languageOptional?: boolean }> = {
   translation:    { label: "번역",      code: "TR", hasLanguage: true },
   interpretation: { label: "통역",      code: "IN", hasLanguage: true },
   combined:       { label: "통번역",    code: "CO", hasLanguage: true },
@@ -1630,9 +1630,9 @@ router.post("/admin/products/import/execute", ...adminOnly, async (req, res) => 
       }
     }
 
-    await logEvent("products", 0, "products_imported", req.log, req.user as any, {
+    await logEvent("product", 0, "products_imported", req.log, req.user as any, JSON.stringify({
       fileName: fileName ?? "unknown", created: result.created, errors: result.errors.length,
-    });
+    }));
 
     res.json(result);
   } catch (err) {
@@ -1809,7 +1809,7 @@ router.post("/admin/product-requests", ...adminGuard, async (req, res) => {
     }).returning();
 
     await logEvent("product_request", request.id, "product_requested", req.log, performer as any,
-      JSON.stringify({ productType: pType, sourceLanguage: srcLang, targetLanguage: tgtLang, mainCategory: mainCategory.trim(), name: name.trim(), ...dupeInfo }));
+      JSON.stringify({ productType: pType, sourceLanguage: srcLang, targetLanguage: tgtLang, mainCategory: mainCategory!.trim(), name: name.trim(), ...dupeInfo }));
 
     res.status(201).json({ ...request, ...dupeInfo });
   } catch (err) {
@@ -2167,7 +2167,7 @@ router.get("/admin/products/check-duplicate", ...adminGuard, async (req, res) =>
       productType,
       sourceLanguage || null,
       targetLanguage || null,
-      mainCategory,
+      mainCategory as string,
       subCategory || "",
       excludeId ? Number(excludeId) : undefined,
       name || undefined,

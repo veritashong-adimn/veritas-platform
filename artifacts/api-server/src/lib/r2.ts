@@ -63,9 +63,10 @@ export async function getPresignedUploadUrl(
   ttlSec = 900,
 ): Promise<string> {
   const client = getR2Client();
+  // @smithy/types 중복 버전으로 인한 Client/Command 타입 불일치 회피 (런타임 정상)
   return getSignedUrl(
-    client,
-    new PutObjectCommand({ Bucket: bucketName, Key: key, ContentType: contentType }),
+    client as any,
+    new PutObjectCommand({ Bucket: bucketName, Key: key, ContentType: contentType }) as any,
     { expiresIn: ttlSec },
   );
 }
@@ -82,9 +83,10 @@ export async function createUploadPresignedUrl(ttlSec = 900): Promise<{ key: str
 /** Presigned GET URL 생성 (비공개 파일용) */
 export async function getPresignedDownloadUrl(key: string, ttlSec = 3600): Promise<string> {
   const client = getR2Client();
+  // @smithy/types 중복 버전으로 인한 Client/Command 타입 불일치 회피 (런타임 정상)
   return getSignedUrl(
-    client,
-    new GetObjectCommand({ Bucket: bucketName, Key: key }),
+    client as any,
+    new GetObjectCommand({ Bucket: bucketName, Key: key }) as any,
     { expiresIn: ttlSec },
   );
 }

@@ -10,6 +10,7 @@
 //  · 금액(공급가액 등)은 견적에 저장된 값(supplyAmount)을 재계산 없이 그대로 표시
 // ─────────────────────────────────────────────────────────────────────────────
 import React from 'react';
+import { formatWon } from "@/lib/utils";
 import { C, TYPO, BD, dsAmount } from '../../lib/ds';
 import { displayUnit, type QuoteDetailItem } from '../../lib/quotePdf';
 import { convertToFormItem } from '../../lib/quoteItemForm';
@@ -134,7 +135,7 @@ function ReadOnlyRow({ raw }: { raw: SaleItem }) {
         <div style={{ textAlign: 'center', color: C.g400 }}>—</div>
         <div style={{ textAlign: 'right', color: C.g400, paddingRight: 6 }}>—</div>
         <div style={dsAmount(dcAbs > 0, { paddingRight: 6, color: dcAbs > 0 ? C.danger : C.amountEmpty })}>
-          {dcAbs > 0 ? `-${dcAbs.toLocaleString()}원` : '—'}
+          {dcAbs > 0 ? `-${formatWon(dcAbs)}` : '—'}
         </div>
         <div style={{ borderLeft: '2px solid #e5e7eb', paddingLeft: 14, ...TYPO.inputValue, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {f.memo || DASH}
@@ -157,7 +158,7 @@ function ReadOnlyRow({ raw }: { raw: SaleItem }) {
       <div style={{ ...TYPO.inputValue, textAlign: 'center' }}>{fmt(f.quantity)}</div>
       <div style={{ ...TYPO.inputValue, textAlign: 'center' }}>{displayUnit(f.productName, f.unit) || DASH}</div>
       <div style={{ ...TYPO.inputValue, textAlign: 'right', paddingRight: 6, fontVariantNumeric: 'tabular-nums' }}>{fmt(f.unitPrice)}원</div>
-      <div style={dsAmount(supply > 0, { paddingRight: 6 })}>{supply > 0 ? `${supply.toLocaleString()}원` : '—'}</div>
+      <div style={dsAmount(supply > 0, { paddingRight: 6 })}>{supply > 0 ? `${formatWon(supply)}` : '—'}</div>
       <div style={{ borderLeft: '2px solid #e5e7eb', paddingLeft: 14, ...TYPO.inputValue, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {f.memo || DASH}
       </div>

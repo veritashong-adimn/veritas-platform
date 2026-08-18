@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { formatWon } from "@/lib/utils";
 import {
   api, Company,
   VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS,
@@ -525,7 +526,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                               <td style={{ ...tableTd, textAlign: "center" }}>
                                 <span style={{ padding: "2px 8px", borderRadius: 10, background: "#eff6ff", color: "#2563eb", fontSize: 12, fontWeight: 600 }}>{c.projectCount}건</span>
                               </td>
-                              <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap" }}>{Number(c.totalPayment).toLocaleString()}원</td>
+                              <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap" }}>{formatWon(Number(c.totalPayment))}</td>
                               {/* 등록일 = 홈택스 원본 등록일(registeredAt). 플랫폼 생성일(createdAt)이 아님. */}
                               <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{c.registeredAt ? new Date(c.registeredAt).toLocaleDateString("ko-KR") : "-"}</td>
                             </tr>

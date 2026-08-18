@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from "react";
+import { formatWon } from "@/lib/utils";
 import { api, User, Project, PaymentPanel } from "../lib/constants";
 import { Card, Toast, PrimaryBtn, GhostBtn } from "../components/ui";
 import { ProjectCard, PaymentModal } from "../components/projects";
@@ -94,7 +95,7 @@ export function CustomerDashboard({ user, token }: { user: User; token: string }
       const data = await res.json();
       if (!res.ok) { setToast(`오류: ${data.error}`); return; }
       setToast(success
-        ? `결제가 완료되었습니다. (${paymentPanel.amount.toLocaleString()}원)`
+        ? `결제가 완료되었습니다. (${formatWon(paymentPanel.amount)})`
         : "결제가 실패 처리되었습니다.");
       setPaymentPanel(null);
       await fetchProjects();

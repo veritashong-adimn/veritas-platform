@@ -35,7 +35,7 @@ router.get("/admin/settlements/summary", ...adminGuard, async (req, res) => {
       if (r.status === "ready") readyCount++;
       if (r.status === "pending_review") pendingReviewCount++;
       if (r.payoutDueDate) {
-        if (r.payoutDueDate <= today && r.status !== "paid") overdueCount++;
+        if (r.payoutDueDate <= today && (r.status as string) !== "paid") overdueCount++;
         if (r.payoutDueDate === today) dueTodayCount++;
       }
     }
@@ -295,7 +295,7 @@ router.post("/admin/settlements/bulk-pay", ...adminGuard, async (req, res) => {
     const now = new Date();
     const updated = await db
       .update(settlementsTable)
-      .set({ status: "paid", paidAt: now, paidDate: now.toISOString().slice(0, 10) })
+      .set({ status: "paid", paidAt: now, paidDate: now.toISOString().slice(0, 10) as unknown as Date })
       .where(inArray(settlementsTable.id, readyIds))
       .returning({ id: settlementsTable.id });
 

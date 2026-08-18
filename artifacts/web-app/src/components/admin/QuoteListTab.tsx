@@ -56,7 +56,7 @@ const QUOTE_TYPE_LABEL: Record<string, string> = {
 interface QuoteListTabProps {
   token: string;
   onToast: (msg: string) => void;
-  adminUsers?: Array<{ id: number; name: string | null; email: string }>;
+  adminUsers?: Array<{ id: number; name?: string | null; email: string }>;
   /** AdminDashboard fetchAll 호출 시 증가 — QuoteListTab 자동 재조회 트리거 */
   refreshTick?: number;
   /** 관리자 여부 — 휴지통 영구삭제 버튼 노출 제어(서버에서도 별도 검증) */

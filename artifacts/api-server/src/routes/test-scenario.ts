@@ -318,7 +318,7 @@ router.post("/admin/test/run-scenario", ...adminGuard, async (req, res) => {
   }
 
   req.log.info({ projectId, summary: runner.summary() }, "Scenario run completed");
-  res.status(200).json(buildResponse(runner, startedAt));
+  return res.status(200).json(buildResponse(runner, startedAt));
 });
 
 function buildResponse(runner: ScenarioRunner, startedAt: Date) {

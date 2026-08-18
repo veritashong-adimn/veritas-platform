@@ -8,7 +8,12 @@ import {
   billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
   prepaidAccountsTable, prepaidLedgerTable, settingsTable,
   productRequestsTable, performanceAssignmentsTable,
+  WITHHOLDING_RATE_BY_TREATMENT, DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT,
 } from "@workspace/db";
+
+// 레거시 프로젝트 정산의 기본 원천징수 세율(%) — 신규 정산 엔진과 동일한 단일 출처(기본 3.3%).
+//  · 향후 기본값을 domestic_2_2 로 바꾸면 레거시 정산도 함께 2.2% 로 반영된다(과거 저장 정산건은 불변).
+const DEFAULT_WITHHOLDING_RATE = WITHHOLDING_RATE_BY_TREATMENT[DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT] ?? 3.3;
 import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc, isNull } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
@@ -942,7 +947,7 @@ router.patch("/admin/projects/:id/status", ...adminGuard, async (req, res) => {
           const stg = await getSettings();
           const total = Number(payment.amount);
           const translatorRaw = Math.round(total * (stg.settlementRatio / 100));
-          const withheld = stg.applyWithholdingTax ? Math.round(translatorRaw * 0.033) : 0;
+          const withheld = stg.applyWithholdingTax ? Math.round(translatorRaw * (DEFAULT_WITHHOLDING_RATE / 100)) : 0;
           const translatorPay = translatorRaw - withheld;
           const fee = total - translatorPay;
           await db.insert(settlementsTable).values({
@@ -2309,7 +2314,7 @@ router.post("/admin/projects/:id/settlement", ...adminGuard, requirePermission("
     const stg = await getSettings();
     const total = Number(payment.amount);
     const translatorRaw = Math.round(total * (stg.settlementRatio / 100));
-    const withheld = stg.applyWithholdingTax ? Math.round(translatorRaw * 0.033) : 0;
+    const withheld = stg.applyWithholdingTax ? Math.round(translatorRaw * (DEFAULT_WITHHOLDING_RATE / 100)) : 0;
     const translatorPay = translatorRaw - withheld;
     const fee = total - translatorPay;
     const [settlement] = await db.insert(settlementsTable).values({

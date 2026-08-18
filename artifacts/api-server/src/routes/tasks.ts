@@ -32,7 +32,9 @@ function calcPayoutDueDate(completedAt: Date): string {
 }
 
 // ── 세금 계산 ─────────────────────────────────────────────────────────────────
-type SettlementType = "WITHHOLDING_3_3" | "VAT_INVOICE" | "OVERSEAS_REMITTANCE" | "OTHER_REVIEW";
+// 레거시 정산유형(settlements.settlement_type enum) — 원천징수 3.3%/2.2% 선택형 지원.
+//  · 신규 정산(performance_withholding_treatment)과 동일 정책. 기본값은 3.3%.
+type SettlementType = "WITHHOLDING_3_3" | "WITHHOLDING_2_2" | "VAT_INVOICE" | "OVERSEAS_REMITTANCE" | "OTHER_REVIEW";
 
 function calcTax(type: SettlementType, gross: number) {
   let withholdingRate = 0;
@@ -40,9 +42,9 @@ function calcTax(type: SettlementType, gross: number) {
   let vatAmount = 0;
   let netAmount = gross;
 
-  if (type === "WITHHOLDING_3_3") {
-    withholdingRate = 3.3;
-    withholdingAmount = Math.round(gross * 0.033 * 100) / 100;
+  if (type === "WITHHOLDING_3_3" || type === "WITHHOLDING_2_2") {
+    withholdingRate = type === "WITHHOLDING_2_2" ? 2.2 : 3.3;
+    withholdingAmount = Math.round(gross * (withholdingRate / 100) * 100) / 100;
     netAmount = Math.round((gross - withholdingAmount) * 100) / 100;
   } else if (type === "VAT_INVOICE") {
     vatAmount = Math.round(gross * 0.1 * 100) / 100;
@@ -64,7 +66,8 @@ function calcTax(type: SettlementType, gross: number) {
 function classifySettlementType(paymentMethod: string | null | undefined): SettlementType {
   if (!paymentMethod) return "OTHER_REVIEW";
   switch (paymentMethod) {
-    case "domestic_withholding": return "WITHHOLDING_3_3";
+    case "domestic_withholding":     return "WITHHOLDING_3_3";   // 국내 원천징수 기본 3.3%
+    case "domestic_withholding_2_2": return "WITHHOLDING_2_2";   // 국내 원천징수 2.2% 선택
     case "domestic_business":   return "VAT_INVOICE";
     case "overseas_paypal":
     case "overseas_bank":       return "OVERSEAS_REMITTANCE";

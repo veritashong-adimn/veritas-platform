@@ -7,7 +7,7 @@ import { QuoteEditorWorkspace } from './QuoteEditorWorkspace';
 import TransactionStatementModal from './TransactionStatementModal';
 import { buildQuotePdfData, displayUnit, type QuoteDetail } from '../../lib/quotePdf';
 import { renderQuoteTitle } from '../../lib/quoteTitle';
-import { formatPhoneDisplay } from '../../lib/utils';
+import { formatPhoneDisplay, formatWon } from "../../lib/utils";
 
 /* ────── SearchableSelect (거래처 검색용 공통 컴포넌트) ────── */
 type SSItem = { id: number; label: string; sub?: string };
@@ -287,7 +287,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       await fetch(api("/api/admin/product-registration-requests"), {
         method: "POST",
         headers: { ...authH, "Content-Type": "application/json" },
-        body: JSON.stringify({ ...registerRequestForm, sourceProjectId: detail?.project?.id ?? null }),
+        body: JSON.stringify({ ...registerRequestForm, sourceProjectId: projectId }),
       });
       setRegisterDoneIdxs(prev => [...prev, registerRequestIdx!]);
       setRegisterRequestIdx(null);
@@ -791,7 +791,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      onToast(`입금 완료: ${rawAmt.toLocaleString()}원`);
+      onToast(`입금 완료: ${formatWon(rawAmt)}`);
       setShowDepositModal(false);
       setDepositAmount(""); setDepositMemo("");
       setDepositDate(new Date().toISOString().slice(0, 10));
@@ -844,7 +844,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
       });
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
-      onToast(`결제 등록 완료 — ${amt.toLocaleString()}원`);
+      onToast(`결제 등록 완료 — ${formatWon(amt)}`);
       setPaymentAmount("");
       setPaymentDate(new Date().toISOString().slice(0, 10));
       setPaymentMethod("");
@@ -1077,7 +1077,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     <span style={{ fontSize: 10, fontWeight: 700, color: "#b0b8c6", letterSpacing: "0.04em", flexShrink: 0 }}>재무</span>
                     {quotePrice != null && (
                       <span style={{ fontSize: 11, color: "#374151" }}>
-                        견적금액 <strong style={{ color: "#1e3a5f" }}>{quotePrice.toLocaleString()}원</strong>
+                        견적금액 <strong style={{ color: "#1e3a5f" }}>{formatWon(quotePrice)}</strong>
                       </span>
                     )}
                     <span style={{ fontSize: 10, color: "#d1d5db" }}>|</span>
@@ -1088,7 +1088,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       <>
                         <span style={{ fontSize: 10, color: "#d1d5db" }}>|</span>
                         <span style={{ fontSize: 11, color: "#dc2626" }}>
-                          미수금 <strong>{unpaid.toLocaleString()}원</strong>
+                          미수금 <strong>{formatWon(unpaid)}</strong>
                         </span>
                       </>
                     )}
@@ -1790,7 +1790,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               <div key={r.id} style={{ display: "flex", gap: 10, fontSize: 12, padding: "5px 10px", background: "#f9fafb", borderRadius: 6 }}>
                                 <span style={{ color: "#374151", fontWeight: 600 }}>{r.serviceType}</span>
                                 <span style={{ color: "#6b7280" }}>{r.languagePair}</span>
-                                <span style={{ color: "#059669", fontWeight: 600, marginLeft: "auto" }}>{Number(r.rate).toLocaleString()}원/{r.unit === "word" || r.unit === "eojeol" ? "어절" : r.unit === "char" ? "글자" : r.unit === "page" ? "페이지" : r.unit === "hour" ? "시간" : r.unit}</span>
+                                <span style={{ color: "#059669", fontWeight: 600, marginLeft: "auto" }}>{formatWon(Number(r.rate))}/{r.unit === "word" || r.unit === "eojeol" ? "어절" : r.unit === "char" ? "글자" : r.unit === "page" ? "페이지" : r.unit === "hour" ? "시간" : r.unit}</span>
                               </div>
                             ))}
                           </div>
@@ -1887,7 +1887,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             )}
                             {/* 견적금액 */}
                             <span style={{ fontWeight: 800, color: "#0891b2", fontSize: 14, marginLeft: quoteTitle ? 0 : 4 }}>
-                              {Number((q as any).price ?? (q as any).amount).toLocaleString()}원
+                              {formatWon(Number((q as any).price ?? (q as any).amount))}
                             </span>
                             {/* 견적상태 */}
                             <StatusBadge status={q.status} />
@@ -2096,7 +2096,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           </div>
                           {detail.quotes.length > 0 && (
                             <p style={{ margin: "0 0 8px", fontSize: 11, color: "#6b7280" }}>
-                              📋 견적 금액: {Number((detail.quotes[0] as any).price ?? (detail.quotes[0] as any).amount).toLocaleString()}원
+                              📋 견적 금액: {formatWon(Number((detail.quotes[0] as any).price ?? (detail.quotes[0] as any).amount))}
                             </p>
                           )}
                           <div style={{ display: "flex", gap: 8 }}>
@@ -2126,7 +2126,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                           <div key={pm.id} style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 14px", marginBottom: 8, fontSize: 13, border: "1px solid #e5e7eb" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                               <span style={{ color: "#9ca3af", fontSize: 11 }}>#{pm.id}</span>
-                              <span style={{ fontWeight: 700, color: "#0891b2", fontSize: 15 }}>{Number(pm.amount).toLocaleString()}원</span>
+                              <span style={{ fontWeight: 700, color: "#0891b2", fontSize: 15 }}>{formatWon(Number(pm.amount))}</span>
                               <StatusBadge status={pm.status} />
                               {pm.paymentMethod && (
                                 <span style={{ fontSize: 11, background: "#e0f2fe", color: "#0369a1", borderRadius: 4, padding: "2px 7px" }}>
@@ -2454,7 +2454,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                       </div>
                       {hasSettlement && detail.settlements.map((s: any) => (
                         <div key={s.id} style={{ fontSize: 12, color: "#374151", display: "flex", gap: 10, flexWrap: "wrap" }}>
-                          <span style={{ color: "#0891b2", fontWeight: 700 }}>총 {Number(s.totalAmount).toLocaleString()}원</span>
+                          <span style={{ color: "#0891b2", fontWeight: 700 }}>총 {formatWon(Number(s.totalAmount))}</span>
                           <StatusBadge status={s.status} />
                         </div>
                       ))}
@@ -2497,9 +2497,9 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         <div key={s.id} style={{ background: "#f9fafb", borderRadius: 8, padding: "10px 14px", marginBottom: 6, fontSize: 13, border: "1px solid #e5e7eb" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                             <span style={{ color: "#9ca3af", fontSize: 11 }}>#{s.id}</span>
-                            <span style={{ color: "#0891b2", fontWeight: 600 }}>총 {Number(s.totalAmount).toLocaleString()}원</span>
-                            <span style={{ color: "#059669", fontWeight: 600 }}>통번역사 {Number(s.translatorAmount).toLocaleString()}원</span>
-                            <span style={{ color: "#6b7280", fontSize: 11 }}>플랫폼 수수료 {Number(s.platformFee).toLocaleString()}원</span>
+                            <span style={{ color: "#0891b2", fontWeight: 600 }}>총 {formatWon(Number(s.totalAmount))}</span>
+                            <span style={{ color: "#059669", fontWeight: 600 }}>통번역사 {formatWon(Number(s.translatorAmount))}</span>
+                            <span style={{ color: "#6b7280", fontSize: 11 }}>플랫폼 수수료 {formatWon(Number(s.platformFee))}</span>
                             <StatusBadge status={s.status} />
                           </div>
                         </div>
@@ -2770,7 +2770,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   style={{ width: "100%", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: 7, fontSize: 12 }}>
                   {compPrepaidAccounts.map(a => (
                     <option key={a.id} value={a.id}>
-                      {a.depositDate ?? "-"}{a.note ? ` · ${a.note}` : ""} — 잔액 {a.currentBalance.toLocaleString()}원
+                      {a.depositDate ?? "-"}{a.note ? ` · ${a.note}` : ""} — 잔액 {formatWon(a.currentBalance)}
                     </option>
                   ))}
                 </select>
@@ -2788,7 +2788,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               />
               {depositAmount && Number(depositAmount.replace(/,/g, "")) > 0 && (
                 <div style={{ fontSize: 11, color: "#15803d", marginTop: 3, fontWeight: 600 }}>
-                  입금 후 잔액: {((compPrepaidAccounts.find(a => a.id === depositTargetAcctId)?.currentBalance ?? 0) + Number(depositAmount.replace(/,/g, ""))).toLocaleString()}원
+                  입금 후 잔액: {formatWon(((compPrepaidAccounts.find(a => a.id === depositTargetAcctId)?.currentBalance ?? 0) + Number(depositAmount.replace(/,/g, ""))))}
                 </div>
               )}
             </div>
@@ -2836,7 +2836,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   <div style={{ fontSize: 16, fontWeight: 800, color: "#7c3aed" }}>선입금 거래 이력</div>
                   <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
                     {compPrepaidAccounts.find(a => a.id === selectedPrepaidAcctId)
-                      ? `잔액: ${compPrepaidAccounts.find(a => a.id === selectedPrepaidAcctId)!.currentBalance.toLocaleString()}원`
+                      ? `잔액: ${formatWon(compPrepaidAccounts.find(a => a.id === selectedPrepaidAcctId)!.currentBalance)}`
                       : "모든 계정의 거래 내역"}
                   </div>
                 </div>
@@ -2889,13 +2889,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             <span style={{ background: typeBg, color: typeColor, fontWeight: 700, fontSize: 10, borderRadius: 4, padding: "2px 7px" }}>{typeLabel}</span>
                           </td>
                           <td style={{ ...tdSt, textAlign: "right", fontWeight: 800, color: typeColor, fontFamily: "monospace" }}>
-                            {amtPrefix}{tx.amount.toLocaleString()}원
+                            {amtPrefix}{formatWon(tx.amount)}
                           </td>
                           <td style={{ ...tdSt, textAlign: "right", color: "#6b7280", fontFamily: "monospace", fontSize: 11 }}>
                             {balBefore != null ? balBefore.toLocaleString() + "원" : "-"}
                           </td>
                           <td style={{ ...tdSt, textAlign: "right", fontWeight: 600, color: "#374151", fontFamily: "monospace", fontSize: 11 }}>
-                            {tx.balanceAfter.toLocaleString()}원
+                            {formatWon(tx.balanceAfter)}
                           </td>
                           <td style={{ ...tdSt, color: "#374151", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {tx.projectTitle ?? <span style={{ color: "#d1d5db" }}>-</span>}
@@ -2917,8 +2917,8 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               const totalDed = ledgerModalData.filter(t => t.type === "deduction").reduce((s, t) => s + t.amount, 0);
               return (
                 <div style={{ padding: "12px 24px", borderTop: "1px solid #f3f4f6", display: "flex", gap: 20, background: "#fafafa", borderRadius: "0 0 14px 14px", flexShrink: 0 }}>
-                  <span style={{ fontSize: 12, color: "#15803d" }}>총 입금: <b>{totalDep.toLocaleString()}원</b></span>
-                  <span style={{ fontSize: 12, color: "#dc2626" }}>총 차감: <b>{totalDed.toLocaleString()}원</b></span>
+                  <span style={{ fontSize: 12, color: "#15803d" }}>총 입금: <b>{formatWon(totalDep)}</b></span>
+                  <span style={{ fontSize: 12, color: "#dc2626" }}>총 차감: <b>{formatWon(totalDed)}</b></span>
                   <span style={{ fontSize: 12, color: "#374151", marginLeft: "auto" }}>{ledgerModalData.length}건</span>
                 </div>
               );

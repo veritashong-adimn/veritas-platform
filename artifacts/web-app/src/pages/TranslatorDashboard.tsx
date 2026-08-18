@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from "react";
+import { formatWon } from "@/lib/utils";
 import { api, User, Task, TranslatorProfile, TranslatorRate, MySettlement, normalizeLanguages } from "../lib/constants";
 import { Card, Toast, PrimaryBtn, GhostBtn, ClickSelect } from "../components/ui";
 import { TaskCard } from "../components/projects";
@@ -226,7 +227,7 @@ export function TranslatorDashboard({ user, token }: { user: User; token: string
                         {Number(s.translatorAmount).toLocaleString()}<span style={{ fontSize: 13, marginLeft: 3 }}>원</span>
                       </p>
                       <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>
-                        총 결제 {Number(s.totalAmount).toLocaleString()}원의 70%
+                        총 결제 {formatWon(Number(s.totalAmount))}의 70%
                       </p>
                     </div>
                     <div style={{ minWidth: 90, textAlign: "right" }}>
@@ -273,8 +274,8 @@ export function TranslatorDashboard({ user, token }: { user: User; token: string
                         ["지역", profile.region ?? "-"],
                         ["가용여부", AVAIL_LABEL[profile.availabilityStatus ?? ""] ?? "-"],
                         ["평점", profile.rating != null ? `⭐ ${Number(profile.rating).toFixed(1)}` : "-"],
-                        ["단어당 단가", profile.ratePerWord != null ? `${Number(profile.ratePerWord).toLocaleString()}원` : "-"],
-                        ["페이지당 단가", profile.ratePerPage != null ? `${Number(profile.ratePerPage).toLocaleString()}원` : "-"],
+                        ["단어당 단가", profile.ratePerWord != null ? `${formatWon(Number(profile.ratePerWord))}` : "-"],
+                        ["페이지당 단가", profile.ratePerPage != null ? `${formatWon(Number(profile.ratePerPage))}` : "-"],
                       ] as [string, string][]).map(([k, v]) => (
                         <div key={k} style={{ display: "flex", gap: 6, fontSize: 13 }}>
                           <span style={{ color: "#9ca3af", minWidth: 80, flexShrink: 0 }}>{k}</span>
@@ -373,7 +374,7 @@ export function TranslatorDashboard({ user, token }: { user: User; token: string
                         <span style={{ fontWeight: 600, color: "#374151", minWidth: 80 }}>{r.serviceType}</span>
                         <span style={{ color: "#2563eb", minWidth: 80 }}>{r.languagePair}</span>
                         <span style={{ color: "#6b7280", minWidth: 50 }}>{r.unit === "word" ? "어절" : r.unit === "page" ? "페이지" : "시간"}</span>
-                        <span style={{ fontWeight: 700, color: "#059669", flex: 1 }}>{r.rate.toLocaleString()}원</span>
+                        <span style={{ fontWeight: 700, color: "#059669", flex: 1 }}>{formatWon(r.rate)}</span>
                         <button
                           onClick={() => deleteRate(r.id)}
                           disabled={deletingRate === r.id}

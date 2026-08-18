@@ -67,6 +67,7 @@ export const performanceResidencyTypeEnum = pgEnum("performance_residency_type",
 // 원천징수 처리구분
 export const performanceWithholdingTreatmentEnum = pgEnum("performance_withholding_treatment", [
   "domestic_3_3",                   // 국내 거주자 3.3%
+  "domestic_2_2",                   // 국내 거주자 2.2%
   "exempt",                         // 원천징수 제외
   "nonresident_custom",             // 비거주자 별도 원천징수 (세율 수동)
   "treaty_reduction_or_exemption",  // 조세조약 감면·면제 (세율 수동, 0% 허용)
@@ -238,8 +239,15 @@ function round2(n: number): number {
 }
 
 export type WithholdingTreatment =
-  | "domestic_3_3" | "exempt" | "nonresident_custom"
+  | "domestic_3_3" | "domestic_2_2" | "exempt" | "nonresident_custom"
   | "treaty_reduction_or_exemption" | "tax_review_required";
+
+// ── 국내 원천징수 세율(단일 출처) ──────────────────────────────────────────────
+//  · 세금처리 코드 → 세율(%). 신규 세율 추가 시 여기 + 각 계산 switch(calcPayoutWithholding/calcIndividualPayout)를 함께 갱신.
+//  · 과거 확정건은 스냅샷(payout_round_items)에 세율·금액이 동결되어 이 값 변경의 영향을 받지 않는다.
+export const WITHHOLDING_RATE_BY_TREATMENT: Record<string, number> = { domestic_3_3: 3.3, domestic_2_2: 2.2 };
+// 신규 등록(국내 원천징수) 기본 세금처리 — 현재 3.3%. 향후 2.2% 적용 확정 시 이 값만 "domestic_2_2" 로 변경.
+export const DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT: WithholdingTreatment = "domestic_3_3";
 
 export interface IndividualFeeInput {
   baseFee?: number;
@@ -254,7 +262,7 @@ export interface IndividualFeeInput {
  * 개인 통번역사 지급액 계산.
  *  · gross(세전) = Σ 지급항목
  *  · 원천징수 대상금액 = 기본 세전 전체(taxableBaseOverride 로 항목별 과세분리 확장 가능)
- *  · treatment 별 세율: domestic_3_3=3.3, exempt=0, nonresident/treaty=수동, tax_review_required=미확정
+ *  · treatment 별 세율: domestic_3_3=3.3, domestic_2_2=2.2, exempt=0, nonresident/treaty=수동, tax_review_required=미확정
  *  · tax_review_required 는 세율 미확정 → 원천세를 임시 0 으로 두되 rateConfirmed=false (확정값 아님)
  */
 export function calcIndividualPayout(
@@ -272,6 +280,7 @@ export function calcIndividualPayout(
   let rateConfirmed = true;
   switch (treatment) {
     case "domestic_3_3": rate = 3.3; break;
+    case "domestic_2_2": rate = 2.2; break;
     case "exempt": rate = 0; break;
     case "nonresident_custom":
     case "treaty_reduction_or_exemption": rate = Number(manualRate) || 0; break;

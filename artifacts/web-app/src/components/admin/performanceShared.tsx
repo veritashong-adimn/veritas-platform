@@ -108,13 +108,14 @@ export const RESIDENCY_OPTS = [
 //  · 직접입력·세율 입력·별도 입력칸은 없음(드롭다운 하나).
 export const TREATMENT_OPTS = [
   { value: 'domestic_3_3', label: '3.3%' },
+  { value: 'domestic_2_2', label: '2.2%' },
   { value: 'exempt', label: '원천징수 예외' },
   { value: 'tax_review_required', label: '세금계산서' },
 ];
-// 표시·저장용 정규화 — 레거시 값을 신규 3개로 매핑. 저장 enum은 그대로 사용.
+// 표시·저장용 정규화 — 레거시 값을 신규 옵션으로 매핑. 저장 enum은 그대로 사용.
 //  · 미사용 레거시(비거주자·조세조약·기타 직접입력 = nonresident_custom/treaty)는 '원천징수 예외'(exempt)로 통합.
 export const normalizeTreatment = (v?: string | null) => {
-  if (v === 'domestic_3_3' || v === 'exempt' || v === 'tax_review_required') return v;
+  if (v === 'domestic_3_3' || v === 'domestic_2_2' || v === 'exempt' || v === 'tax_review_required') return v;
   if (v === 'nonresident_custom' || v === 'treaty_reduction_or_exemption') return 'exempt';
   return v ?? '';
 };
@@ -475,6 +476,7 @@ export function calcIndivPreview(r: Row): { gross: number; rate: number; tax: nu
   // 세금처리(구 원천징수) — 3.3%만 원천세 발생, 원천징수 예외·세금계산서는 원천세 0(실지급=지급금액).
   switch (normalizeTreatment(r.withholdingTreatment)) {
     case 'domestic_3_3': rate = 3.3; break;
+    case 'domestic_2_2': rate = 2.2; break;
     case 'exempt': rate = 0; break;
     case 'tax_review_required': rate = 0; break;   // 세금계산서 — 사업자 지급, 원천세 없음
     default: rate = 0; confirmed = false; break;   // 미선택(빈값)

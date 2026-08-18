@@ -96,7 +96,7 @@ async function main() {
       education: "서울대학교 법학 학사, 통번역대학원 석사",
       region: "서울",
       availabilityStatus: "available",
-      rating: "4.8",
+      rating: 4.8,
       bio: "법률 전문 번역사. 10년 경력. 특허, 계약서, 법원 문서 전문.",
     }).onConflictDoNothing();
     await db.insert(translatorRatesTable).values([
@@ -114,7 +114,7 @@ async function main() {
       education: "한국외국어대학교 일어과 학사",
       region: "경기",
       availabilityStatus: "available",
-      rating: "4.5",
+      rating: 4.5,
       bio: "일본어·한국어 IT 전문 번역사. 소프트웨어 매뉴얼, 기술 문서 전문.",
     }).onConflictDoNothing();
     await db.insert(translatorRatesTable).values([
@@ -131,7 +131,7 @@ async function main() {
       education: "연세대학교 의과대학, 중어중문학 복수전공",
       region: "서울",
       availabilityStatus: "busy",
-      rating: "4.9",
+      rating: 4.9,
       bio: "의학·제약 전문 번역사. 임상시험 문서, 의학 논문, 식약처 서류 전문.",
     }).onConflictDoNothing();
     await db.insert(translatorRatesTable).values([

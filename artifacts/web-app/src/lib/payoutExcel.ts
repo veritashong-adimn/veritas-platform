@@ -94,22 +94,34 @@ export function todayStamp(): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
 }
 
-// ── 지급명세서 전용 서식(제목·기본정보 블록·합계행 추가) ───────────────────────────
-const TITLE_STYLE = { font: { bold: true, sz: 14 }, alignment: { vertical: 'center' } };
+// ── 지급명세서 전용 서식(제목·기본정보 블록·브랜드 헤더·합계·최종 강조) ─────────────────
+const BRAND = '1E3A5F';   // VERITAS 브랜드(진청) — 화면/PDF 톤과 일치
+const TITLE_STYLE = { font: { bold: true, sz: 15, color: { rgb: BRAND } }, alignment: { vertical: 'center' } };
 const INFO_KEY = { font: { bold: true, sz: 10 }, fill: { patternType: 'solid', fgColor: { rgb: 'F3F4F6' } }, alignment: { vertical: 'center' } };
-const INFO_VAL = { font: { sz: 10 }, alignment: { vertical: 'center' } };
-const TH_L = { ...HEADER_STYLE, alignment: { horizontal: 'left', vertical: 'center', wrapText: true } };
-const TH_R = { ...HEADER_STYLE, alignment: { horizontal: 'right', vertical: 'center', wrapText: true } };
+const INFO_VAL = { font: { sz: 10 }, alignment: { vertical: 'center', wrapText: true } };
+// 표 헤더 — 브랜드 배경 + 흰색 굵게(강조).
+const STH_L = { font: { bold: true, sz: 10, color: { rgb: 'FFFFFF' } }, fill: { patternType: 'solid', fgColor: { rgb: BRAND } }, alignment: { horizontal: 'left', vertical: 'center', wrapText: true } };
+const STH_R = { ...STH_L, alignment: { horizontal: 'right', vertical: 'center', wrapText: true } };
+// 데이터 셀 — 텍스트 줄바꿈 허용 / 숫자 우측정렬·천단위.
+const DATA_TEXT = { font: { sz: 10 }, alignment: { vertical: 'center', wrapText: true } };
+const DATA_NUM = { font: { sz: 10 }, numFmt: '#,##0', alignment: { horizontal: 'right', vertical: 'center' } };
+// 합계행(컬럼 정렬).
 const TOT_LBL = { font: { bold: true, sz: 10 }, fill: { patternType: 'solid', fgColor: { rgb: 'EFF6FF' } }, alignment: { horizontal: 'right', vertical: 'center' } };
 const TOT_NUM = { font: { bold: true, sz: 10 }, numFmt: '#,##0', fill: { patternType: 'solid', fgColor: { rgb: 'EFF6FF' } }, alignment: { horizontal: 'right', vertical: 'center' } };
 const TOT_BLANK = { fill: { patternType: 'solid', fgColor: { rgb: 'EFF6FF' } } };
+// 하단 라벨형 합계.
+const FOOT_LBL = { font: { bold: true, sz: 10 }, fill: { patternType: 'solid', fgColor: { rgb: 'F3F4F6' } }, alignment: { horizontal: 'right', vertical: 'center' } };
+const FOOT_NUM = { font: { bold: true, sz: 10 }, numFmt: '#,##0', fill: { patternType: 'solid', fgColor: { rgb: 'F3F4F6' } }, alignment: { horizontal: 'right', vertical: 'center' } };
+// 최종 실지급액 — 브랜드 강조(가장 명확).
+const FINAL_LBL = { font: { bold: true, sz: 12, color: { rgb: 'FFFFFF' } }, fill: { patternType: 'solid', fgColor: { rgb: BRAND } }, alignment: { horizontal: 'right', vertical: 'center' } };
+const FINAL_NUM = { font: { bold: true, sz: 12, color: { rgb: 'FFFFFF' } }, numFmt: '#,##0', fill: { patternType: 'solid', fgColor: { rgb: BRAND } }, alignment: { horizontal: 'right', vertical: 'center' } };
 
 /**
  * 지급명세서(수행자 1인)를 단일 시트 .xlsx 로 생성·다운로드.
  * 화면과 동일한 항목·금액을 그대로 출력(별도 계산 없음). 상세내역 금액은 서버 확정값이다.
  *  · 상단: 제목 + 기본정보(지급대상자/이메일/구분/지급회차/지급일)
- *  · 중단: 상세내역 표(columns/rows)
- *  · 하단: 합계행(totals — columns 정렬에 맞춘 값, 빈칸은 null)
+ *  · 중단: 상세내역 표(columns/rows) — 브랜드 헤더 · 금액 우측정렬 · 텍스트 줄바꿈
+ *  · 하단: 합계행(totals — columns 정렬) + 라벨형 합계(footerRows, 최종 실지급액 강조)
  */
 export function downloadStatementExcel(opts: {
   filename: string;
@@ -128,19 +140,25 @@ export function downloadStatementExcel(opts: {
   const put = (row: number, col: number, v: ExcelCell, s: object, t?: 's' | 'n') => {
     ws[XLSX.utils.encode_cell({ r: row, c: col })] = { v: v == null ? '' : v, s, t: t ?? (typeof v === 'number' ? 'n' : 's') };
   };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rowHeights: any[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const merges: any[] = [];
   let r = 0;
-  put(r, 0, title, TITLE_STYLE); r += 2;
-  for (const [k, v] of info) { put(r, 0, k, INFO_KEY); put(r, 1, v ?? '', INFO_VAL); r++; }
+  put(r, 0, title, TITLE_STYLE); rowHeights[r] = { hpt: 24 }; r += 2;
+  for (const [k, v] of info) { put(r, 0, k, INFO_KEY); put(r, 1, v ?? '', INFO_VAL); rowHeights[r] = { hpt: 17 }; r++; }
   r++; // 빈 행
   const headerRow = r;
-  columns.forEach((c, i) => put(headerRow, i, c.header, c.type === 'number' ? TH_R : TH_L));
+  columns.forEach((c, i) => put(headerRow, i, c.header, c.type === 'number' ? STH_R : STH_L));
+  rowHeights[headerRow] = { hpt: 22 };
   r++;
   for (const row of rows) {
     columns.forEach((c, i) => {
       const raw = row[i];
-      if (c.type === 'number' && typeof raw === 'number' && Number.isFinite(raw)) put(r, i, raw, NUM_STYLE, 'n');
-      else put(r, i, raw == null ? '' : String(raw), TEXT_STYLE, 's');
+      if (c.type === 'number' && typeof raw === 'number' && Number.isFinite(raw)) put(r, i, raw, DATA_NUM, 'n');
+      else put(r, i, raw == null ? '' : String(raw), DATA_TEXT, 's');
     });
+    rowHeights[r] = { hpt: 16 };
     r++;
   }
   // 합계행(컬럼 정렬 — 기본수행료/추가비용/차감/세전 등)
@@ -150,16 +168,26 @@ export function downloadStatementExcel(opts: {
     if (c.type === 'number' && typeof raw === 'number') put(r, i, raw, TOT_NUM, 'n');
     else put(r, i, String(raw), TOT_LBL, 's');
   });
+  rowHeights[r] = { hpt: 18 };
   r++;
-  // 추가 합계행(공제액·최종 실지급액 등) — 우측하단에 라벨:값. 컬럼이 아닌 합계 항목.
-  for (const [label, value] of footerRows) {
-    put(r, ncols - 2, label, TOT_LBL, 's');
-    if (typeof value === 'number') put(r, ncols - 1, value, TOT_NUM, 'n');
-    else put(r, ncols - 1, value == null ? '' : String(value), TOT_LBL, 's');
+  // 추가 합계행(공제액·최종 실지급액 등) — 우측하단에 라벨:값. 마지막 행(최종 실지급액)은 브랜드 강조.
+  //  · 라벨('최종 실지급액' 등 한글)은 단일 열 폭이 부족해 잘리므로 라벨 셀만 좌측 2개 열을 병합해
+  //    폭을 확보한다(우측정렬 → 라벨 오른쪽 끝 위치·값 셀은 그대로). 건별 표/숫자 열 폭은 불변.
+  const lblStart = Math.max(0, ncols - 3);   // 라벨 병합 시작 열(값 왼쪽 2개 열)
+  footerRows.forEach(([label, value], i) => {
+    const isFinal = i === footerRows.length - 1;
+    put(r, lblStart, label, isFinal ? FINAL_LBL : FOOT_LBL, 's');
+    put(r, ncols - 2, '', isFinal ? FINAL_LBL : FOOT_LBL, 's');   // 병합 우측 셀 — 배경 연속(값 아님)
+    merges.push({ s: { r, c: lblStart }, e: { r, c: ncols - 2 } });
+    if (typeof value === 'number') put(r, ncols - 1, value, isFinal ? FINAL_NUM : FOOT_NUM, 'n');
+    else put(r, ncols - 1, value == null ? '' : String(value), isFinal ? FINAL_LBL : FOOT_LBL, 's');
+    rowHeights[r] = { hpt: isFinal ? 22 : 18 };
     r++;
-  }
+  });
 
   ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: r - 1, c: ncols - 1 } });
+  ws['!rows'] = rowHeights;
+  if (merges.length) ws['!merges'] = merges;
   ws['!cols'] = columns.map((col, c) => {
     if (col.width) return { wch: col.width };
     let max = displayWidth(col.header);

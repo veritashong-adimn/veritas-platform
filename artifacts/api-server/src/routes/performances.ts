@@ -11,7 +11,7 @@ import {
   db, performanceAssignmentsTable, performanceExpensesTable, performanceDeductionsTable,
   quotesTable, quoteItemsTable, quoteItemFilesTable, productsTable, holidaysTable, projectsTable,
   translatorSensitiveTable, translatorProfilesTable, usersTable, companiesTable,
-  calcIndividualPayout, calcVendorPurchase,
+  calcIndividualPayout, calcVendorPurchase, DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT,
   calcBasePerformanceFee, calcCostTotal, calcPaymentDate,
 } from "@workspace/db";
 import { eq, and, isNull, inArray } from "drizzle-orm";
@@ -266,7 +266,7 @@ function initialFieldsFromSale(it: typeof quoteItemsTable.$inferSelect) {
 const CATEGORY = ["individual", "vendor", "expense"] as const;
 const STATUS = ["unassigned", "assigned", "in_progress", "completed", "payout_pending", "paid", "cancelled"] as const;
 const RESIDENCY = ["domestic_resident", "overseas_or_nonresident"] as const;
-const TREATMENT = ["domestic_3_3", "exempt", "nonresident_custom", "treaty_reduction_or_exemption", "tax_review_required"] as const;
+const TREATMENT = ["domestic_3_3", "domestic_2_2", "exempt", "nonresident_custom", "treaty_reduction_or_exemption", "tax_review_required"] as const;
 const EVIDENCE = ["tax_invoice", "invoice", "zero_rate_tax_invoice", "other", "none"] as const;
 const PAYMENT_STATUS = ["unpaid", "payment_hold", "paid"] as const;
 
@@ -999,7 +999,7 @@ async function deriveIndividualSnapshot(dbx: typeof db, translatorId: number) {
   const pm = sensitive?.paymentMethod ?? null;
   let residencyType: string | null = null;
   let withholdingTreatment: string = "tax_review_required";
-  if (pm === "domestic_withholding") { residencyType = "domestic_resident"; withholdingTreatment = "domestic_3_3"; }
+  if (pm === "domestic_withholding") { residencyType = "domestic_resident"; withholdingTreatment = DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT; }
   else if (pm === "domestic_business") { residencyType = "domestic_resident"; withholdingTreatment = "tax_review_required"; }
   else if (pm === "overseas_paypal" || pm === "overseas_bank") { residencyType = "overseas_or_nonresident"; withholdingTreatment = "tax_review_required"; }
   const rate = profile?.unitPrice != null ? Number(profile.unitPrice) : null;

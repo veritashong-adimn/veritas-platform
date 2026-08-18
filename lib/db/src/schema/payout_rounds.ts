@@ -50,7 +50,7 @@ export type InsertPayoutRound = typeof payoutRoundsTable.$inferInsert;
 //  · 세전 지급액(gross) = costTotal(기본수행료 + 추가비용 − 차감) — 수행정보 원가와 동일.
 //    ※ 외주업체는 이 gross 가 곧 "최종 공급가액"이다(추가비용·차감 반영 후 금액).
 //  · 개인 통번역사: 공제(원천징수) = 세전 × 세율. 세율은 기존 세금처리(withholdingTreatment) 규칙 그대로 재사용.
-//     domestic_3_3=3.3% · exempt=0 · nonresident_custom/treaty=수동세율 · tax_review_required=미확정(공제 0·경고).
+//     domestic_3_3=3.3% · domestic_2_2=2.2% · exempt=0 · nonresident_custom/treaty=수동세율 · tax_review_required=미확정(공제 0·경고).
 //     실지급 = 세전 − 공제. (VAT 없음 — 개인 계산 로직 불변)
 //  · 외주업체(vendor): 원천징수 없음. 증빙유형이 세금계산서(tax_invoice)인 경우에만
 //     VAT(공급가액 × 10%)를 실지급액에 포함한다. 그 외(계산서·영세율·기타·미발행/미선택)는 VAT 미적용.
@@ -91,6 +91,7 @@ export function calcPayoutWithholding(
   let rateConfirmed = true;
   switch (withholdingTreatment) {
     case "domestic_3_3": rate = 3.3; break;
+    case "domestic_2_2": rate = 2.2; break;
     case "exempt": rate = 0; break;
     case "nonresident_custom":
     case "treaty_reduction_or_exemption": rate = Number(withholdingRate) || 0; break;

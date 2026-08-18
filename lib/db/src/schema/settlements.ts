@@ -19,6 +19,7 @@ export const settlementStatusEnum = pgEnum("settlement_status", [
 // 정산 유형
 export const settlementTypeEnum = pgEnum("settlement_type", [
   "WITHHOLDING_3_3",
+  "WITHHOLDING_2_2",
   "VAT_INVOICE",
   "OVERSEAS_REMITTANCE",
   "OTHER_REVIEW",
