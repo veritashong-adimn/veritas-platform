@@ -10,6 +10,7 @@ import { Pagination } from '../ui/Paginator';
 import { useClientPagination } from './bulkListShared';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import { downloadTableExcel, todayStamp, type ExcelColumn } from '../../lib/payoutExcel';
+import PayoutExecutionModal from './PayoutExecutionModal';
 
 const won = (n: unknown) => Math.round(Number(n ?? 0)).toLocaleString('ko-KR');
 const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
@@ -78,6 +79,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   const [view, setView] = useState<'summary' | 'items'>('summary');
   const [busy, setBusy] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [showExec, setShowExec] = useState(false);   // 지급 실행 화면(§1)
   const [showWarn, setShowWarn] = useState(false);
   const [holdFor, setHoldFor] = useState<{ id: number; name: string } | null>(null);
   const [holdReason, setHoldReason] = useState('');
@@ -530,6 +532,13 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
               <span style={{ ...TYPO.helper }}>지급예정일 <b>{dateVal(round.paymentDate)}</b></span>
               <span style={{ ...TYPO.helper }}>대상기간 <b>{dateVal(round.periodStart)} ~ {dateVal(round.periodEnd)}</b></span>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+                {/* 지급 실행(§1) — confirmed=실행 진입 / paid=지급결과 조회. 회차 헤더 우측 상단에 상시 노출. */}
+                {(round.status === 'confirmed' || round.status === 'paid') && (
+                  <button type="button" onClick={() => setShowExec(true)} disabled={busy} data-testid="payout-execute-top" aria-label="지급 실행"
+                    style={{ ...TYPO.helper, color: round.status === 'confirmed' ? '#fff' : C.primaryText, background: round.status === 'confirmed' ? C.primaryText : C.primaryBg, border: `1px solid ${C.primaryText}`, borderRadius: 6, padding: '5px 14px', cursor: busy ? 'not-allowed' : 'pointer', fontWeight: 800 }}>
+                    💳 {round.status === 'confirmed' ? '지급 실행' : '지급 실행 조회'}
+                  </button>
+                )}
                 {/* 전체 동기화 — Draft 회차에서만. 확정/완료/취소 회차는 숨김(§5). 개별 [포함]과 역할 분리(§6). */}
                 {round.status === 'draft' && (
                   <button type="button" onClick={recollectRound} disabled={busy} data-testid="payout-recollect" aria-label="지급대상 다시 수집"
@@ -778,16 +787,33 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                       style={{ fontSize: 13, padding: '9px 16px', borderRadius: 8, cursor: busy ? 'not-allowed' : 'pointer', background: C.g50, border: `1px solid ${C.border}`, color: C.textSecondary, fontWeight: 700, alignSelf: 'center' }}>
                       확정취소
                     </button>
+                    {/* 지급 실행(§1) — 은행 송금 전 지급대상·계좌 최종 검토. 실제 지급 아님. */}
+                    <button type="button" onClick={() => setShowExec(true)} disabled={busy} data-testid="payout-execute" aria-label="지급 실행"
+                      style={{ fontSize: 13, padding: '9px 18px', borderRadius: 8, cursor: busy ? 'not-allowed' : 'pointer', background: C.primaryBg, border: `1px solid ${C.primaryBorder}`, color: C.primaryText, fontWeight: 700, alignSelf: 'center' }}>
+                      지급 실행
+                    </button>
                     <PrimaryBtn onClick={payRound} disabled={busy} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-pay" aria-label="지급완료">지급완료</PrimaryBtn>
                   </>
-                : (round.status === 'paid' || round.status === 'cancelled')
-                  ? <span style={{ ...TYPO.helper, color: ROUND_STATUS[round.status]?.color, fontWeight: 700 }}>{ROUND_STATUS[round.status]?.label} — 수정 불가</span>
-                  : <PrimaryBtn onClick={confirmRound} disabled={busy || (totals.assignments ?? 0) === 0} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-confirm" aria-label="지급확정">지급확정</PrimaryBtn>}
+                : round.status === 'paid'
+                  ? <>
+                      <span style={{ ...TYPO.helper, color: ROUND_STATUS.paid.color, fontWeight: 700, alignSelf: 'center' }}>{ROUND_STATUS.paid.label} — 수정 불가</span>
+                      {/* paid 회차는 지급결과 조회 성격으로 진입 가능(§1). */}
+                      <button type="button" onClick={() => setShowExec(true)} data-testid="payout-execute-view" aria-label="지급결과 조회"
+                        style={{ fontSize: 13, padding: '9px 18px', borderRadius: 8, cursor: 'pointer', background: C.g50, border: `1px solid ${C.border}`, color: C.textSecondary, fontWeight: 700, alignSelf: 'center' }}>
+                        지급 실행 조회
+                      </button>
+                    </>
+                  : round.status === 'cancelled'
+                    ? <span style={{ ...TYPO.helper, color: ROUND_STATUS.cancelled.color, fontWeight: 700 }}>{ROUND_STATUS.cancelled.label} — 수정 불가</span>
+                    : <PrimaryBtn onClick={confirmRound} disabled={busy || (totals.assignments ?? 0) === 0} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-confirm" aria-label="지급확정">지급확정</PrimaryBtn>}
             </div>
           </Card>
         </>
       )}
 
+      {showExec && round && selId != null && (
+        <PayoutExecutionModal token={token} round={{ id: selId, batchNumber: round.batchNumber, paymentDate: round.paymentDate, status: round.status }} onToast={onToast} onClose={() => setShowExec(false)} />
+      )}
       {showCreate && <CreateDialog token={token} onToast={onToast} onClose={() => setShowCreate(false)} onCreated={async (d) => { setShowCreate(false); await loadRounds(); setSel(String(d.round.id)); setDetail(d); }} />}
       {showWarn && <WarningsModal warnings={warnings} busy={busy} onUnhold={!locked ? unholdItem : undefined} onClose={() => setShowWarn(false)} />}
       {holdFor && (

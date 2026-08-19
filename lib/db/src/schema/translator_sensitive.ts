@@ -15,7 +15,8 @@ export const translatorSensitiveTable = pgTable("translator_sensitive", {
   // ── 국내 3.3% 원천징수 ────────────────────────────────────────────────────
   residentNumber: text("resident_number"),      // AES-256-GCM 암호화
   bankName: text("bank_name"),
-  bankAccount: text("bank_account"),
+  bankAccount: text("bank_account"),             // [레거시] 평문/암호문 혼재 — 변경/일괄전환은 별도 migration 단계에서만
+  bankAccountEnc: text("bank_account_enc"),      // AES-256-GCM 암호화(신규 표준) — 신규/수정 계좌는 여기에 저장
   accountHolder: text("account_holder"),
 
   // ── 국내 사업자(세금계산서) ───────────────────────────────────────────────

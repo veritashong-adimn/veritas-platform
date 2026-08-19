@@ -369,11 +369,16 @@ router.post("/admin/translators/:id/document-apply", ...sensitiveGuard, async (r
       };
 
       const updateFields: Record<string, string> = {};
+      // 내부 전용(DB 기록만, 응답/로그 미노출) — 암호화 계좌번호.
+      const encFields: Record<string, string> = {};
       if (typeof bankName === "string" && bankName.trim()) updateFields.bankName = bankName.trim();
       if (typeof accountHolder === "string" && accountHolder.trim()) updateFields.accountHolder = accountHolder.trim();
       if (typeof bankAccount === "string" && bankAccount.trim()) {
         const normalized = normalizeBankAccount(bankAccount);
-        if (normalized) updateFields.bankAccount = normalized;
+        if (normalized) {
+          updateFields.bankAccount = normalized;              // [레거시 컬럼] 기존 동작 유지(평문)
+          encFields.bankAccountEnc = encrypt(normalized);     // 신규 표준 컬럼에 암호화 저장(응답 미노출)
+        }
       }
 
       if (Object.keys(updateFields).length > 0) {
@@ -382,10 +387,10 @@ router.post("/admin/translators/:id/document-apply", ...sensitiveGuard, async (r
           .from(translatorSensitiveTable)
           .where(eq(translatorSensitiveTable.translatorId, userId));
         if (!existingSensitive) {
-          await db.insert(translatorSensitiveTable).values({ translatorId: userId, ...updateFields });
+          await db.insert(translatorSensitiveTable).values({ translatorId: userId, ...updateFields, ...encFields });
         } else {
           await db.update(translatorSensitiveTable)
-            .set({ ...updateFields, updatedAt: new Date() })
+            .set({ ...updateFields, ...encFields, updatedAt: new Date() })
             .where(eq(translatorSensitiveTable.translatorId, userId));
         }
         for (const [k, v] of Object.entries(updateFields)) {

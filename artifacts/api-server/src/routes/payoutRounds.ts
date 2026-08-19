@@ -7,7 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, type IRouter } from "express";
 import {
-  db, payoutRoundsTable, payoutRoundItemsTable, performanceAssignmentsTable, projectsTable, companiesTable, quotesTable, usersTable,
+  db, payoutRoundsTable, payoutRoundItemsTable, payoutTransfersTable, performanceAssignmentsTable, projectsTable, companiesTable, quotesTable, usersTable,
   performanceExpensesTable, performanceDeductionsTable, translatorSensitiveTable, translatorProfilesTable,
   calcPayoutWithholding, vendorVatApplies,
 } from "@workspace/db";
@@ -15,7 +15,8 @@ import { eq, and, or, isNull, isNotNull, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
-import { decrypt, maskResidentNumber } from "../lib/encrypt";
+import { decrypt, maskResidentNumber, maskBankAccount, readAccountPlain } from "../lib/encrypt";
+import { generatePayoutTransfers, reverifyTransfer, REVERIFIABLE_STATUSES } from "../services/payoutTransfers";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -796,6 +797,183 @@ router.patch("/admin/payout-rounds/:id/confirm", ...adminGuard, async (req, res)
   } catch (err) {
     req.log.error({ err }, "지급확정 실패");
     res.status(500).json({ error: "지급확정 중 오류가 발생했습니다." });
+  }
+});
+
+// ── POST 지급 송금 생성/동기화 — confirmed 회차의 확정 스냅샷 → payout_transfers(1인 1송금) ──
+//  · 확정 스냅샷(payout_round_items)만 집계, 원본 재계산 없음. idempotent(중복 미생성, 기존건 불변).
+//  · 계좌정보는 암호화 snapshot 만 저장, 검증결과(verified/missing/invalid)를 함께 기록(§3·§5·§6).
+//  · Phase 1 범위: 생성/동기화 + 계좌검증까지. 실제 송금·IBK 파일은 Phase 2에서 이 레코드에 연결.
+router.post("/admin/payout-rounds/:id/transfers/generate", ...adminGuard, async (req, res) => {
+  const id = Number(req.params.id);
+  const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+  if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
+  if (round.status !== "confirmed") {
+    res.status(400).json({ error: "지급확정(confirmed)된 회차에서만 송금건을 생성할 수 있습니다." }); return;
+  }
+  try {
+    const result = await generatePayoutTransfers(round, req.log);
+    res.json(result);
+  } catch (err) {
+    req.log.error({ err, payoutRoundId: id }, "payout_transfers 생성 실패");
+    res.status(500).json({ error: "지급 송금건 생성 중 오류가 발생했습니다." });
+  }
+});
+
+// ── 지급 송금 뷰 빌더 — 계좌번호는 마스킹만 노출(§13). 요약·송금파일 생성 가능 여부 계산(§2·§10). ──
+//  · 금액(amount)은 payout_transfers snapshot 그대로 사용 — payout_round_items 재계산 없음(§14).
+function mapTransferRow(t: typeof payoutTransfersTable.$inferSelect) {
+  const plain = t.bankAccountEncSnapshot ? readAccountPlain(t.bankAccountEncSnapshot, null) : null;
+  return {
+    id: t.id,
+    payeeType: t.payeeType, payeeId: t.payeeId, payeeKey: t.payeeKey, payeeName: t.payeeName,
+    bankName: t.bankNameSnapshot,
+    bankAccountMasked: maskBankAccount(plain),   // 전체 계좌번호는 프론트로 전달하지 않음
+    accountHolder: t.accountHolderSnapshot,
+    amount: num(t.amount), assignmentCount: t.assignmentCount,
+    verificationStatus: t.verificationStatus, status: t.status, failureReason: t.failureReason,
+    excludedAt: t.excludedAt, excludedBy: t.excludedBy, exclusionReason: t.exclusionReason,
+    ibkFileGenerated: t.ibkFileGenerated, ibkFileGeneratedAt: t.ibkFileGeneratedAt,
+    paidAt: t.paidAt,
+  };
+}
+
+function buildTransfersView(round: any, rows: (typeof payoutTransfersTable.$inferSelect)[]) {
+  const transfers = rows.map(mapTransferRow);
+  const notResolved = (t: any) => t.status !== "excluded" && t.status !== "cancelled" && t.status !== "paid" && t.status !== "failed";
+  const excludedCount = transfers.filter((t) => t.status === "excluded").length;
+  // 송금파일 생성 가능 판단(§10): 모든 "비제외" 대상이 verified AND ready.
+  const active = transfers.filter((t) => t.status !== "excluded" && t.status !== "cancelled");
+  const missingBlock = active.filter((t) => t.verificationStatus === "missing").length;
+  const invalidBlock = active.filter((t) => t.verificationStatus === "invalid").length;
+  const notReadyBlock = active.filter((t) => t.verificationStatus === "verified" && t.status !== "ready").length;
+  const canGenerateFile = active.length > 0 && (missingBlock + invalidBlock + notReadyBlock) === 0;
+  const summary = {
+    round: { id: round.id, batchNumber: round.batchNumber, paymentDate: round.paymentDate, status: round.status },
+    totalPayees: transfers.length,
+    totalAmount: Math.round(transfers.reduce((s, t) => s + t.amount, 0) * 100) / 100,
+    payable: transfers.filter((t) => t.verificationStatus === "verified" && t.status === "ready").length, // 지급가능
+    missing: transfers.filter((t) => t.verificationStatus === "missing" && notResolved(t)).length,        // 정보누락
+    invalid: transfers.filter((t) => t.verificationStatus === "invalid" && notResolved(t)).length,        // 정보오류
+    excluded: excludedCount,                                                                              // 제외
+    paid: transfers.filter((t) => t.status === "paid").length,                                            // 지급완료
+    failed: transfers.filter((t) => t.status === "failed").length,                                        // 지급실패
+    fileGate: { canGenerateFile, activeCount: active.length, missing: missingBlock, invalid: invalidBlock, notReady: notReadyBlock },
+  };
+  return { summary, transfers };
+}
+
+async function loadTransfersView(id: number) {
+  const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+  if (!round) return null;
+  const rows = await db.select().from(payoutTransfersTable)
+    .where(eq(payoutTransfersTable.payoutRoundId, id))
+    .orderBy(payoutTransfersTable.payeeType, payoutTransfersTable.payeeId);
+  return buildTransfersView(round, rows);
+}
+
+// ── GET 지급 송금 목록 — 지급 실행 화면. 계좌번호는 마스킹만 반환(§13). ──
+router.get("/admin/payout-rounds/:id/transfers", ...adminGuard, async (req, res) => {
+  const id = Number(req.params.id);
+  try {
+    const view = await loadTransfersView(id);
+    if (!view) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
+    res.json(view);
+  } catch (err) {
+    req.log.error({ err, payoutRoundId: id }, "payout_transfers 조회 실패");
+    res.status(500).json({ error: "지급 송금건 조회 중 오류가 발생했습니다." });
+  }
+});
+
+// ── POST 단건 계좌 재검증(§5) — 최신 통번역사 계좌 재조회·검증. paid/excluded/cancelled 금지. ──
+router.post("/admin/payout-rounds/:id/transfers/:transferId/reverify", ...adminGuard, async (req, res) => {
+  const id = Number(req.params.id);
+  const transferId = Number(req.params.transferId);
+  const [t] = await db.select().from(payoutTransfersTable)
+    .where(and(eq(payoutTransfersTable.id, transferId), eq(payoutTransfersTable.payoutRoundId, id)));
+  if (!t) { res.status(404).json({ error: "송금건을 찾을 수 없습니다." }); return; }
+  if (!REVERIFIABLE_STATUSES.includes(t.status as any)) {
+    res.status(400).json({ error: `${t.status === "paid" ? "지급완료" : t.status === "excluded" ? "제외" : "취소"} 상태는 재검증할 수 없습니다.` }); return;
+  }
+  try {
+    const result = await reverifyTransfer(t);
+    const view = await loadTransfersView(id);
+    res.json({ result, ...view });
+  } catch (err) {
+    req.log.error({ err, transferId }, "계좌 재검증 실패");
+    res.status(500).json({ error: "계좌 재검증 중 오류가 발생했습니다." });
+  }
+});
+
+// ── POST 전체 재검증(§6) — pending/ready/failed 대상만 재검증. 확정금액(amount) 불변. ──
+router.post("/admin/payout-rounds/:id/transfers/reverify-all", ...adminGuard, async (req, res) => {
+  const id = Number(req.params.id);
+  const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+  if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
+  try {
+    const rows = await db.select().from(payoutTransfersTable)
+      .where(and(
+        eq(payoutTransfersTable.payoutRoundId, id),
+        inArray(payoutTransfersTable.status, REVERIFIABLE_STATUSES as any),
+      ));
+    let reverified = 0, nowVerified = 0;
+    for (const t of rows) {
+      const r = await reverifyTransfer(t);   // paid/excluded/cancelled 는 위 필터로 제외됨
+      reverified += 1;
+      if (r.verificationStatus === "verified") nowVerified += 1;
+    }
+    const view = await loadTransfersView(id);
+    res.json({ result: { reverified, nowVerified, skipped: "paid/excluded/cancelled 제외" }, ...view });
+  } catch (err) {
+    req.log.error({ err, payoutRoundId: id }, "전체 재검증 실패");
+    res.status(500).json({ error: "전체 재검증 중 오류가 발생했습니다." });
+  }
+});
+
+// ── POST 지급 제외(§7·§8) — 사유 필수. 삭제하지 않고 status=excluded + 사유·주체·시각 기록. ──
+router.post("/admin/payout-rounds/:id/transfers/:transferId/exclude", ...adminGuard, async (req, res) => {
+  const id = Number(req.params.id);
+  const transferId = Number(req.params.transferId);
+  const reason = typeof req.body?.reason === "string" ? req.body.reason.trim() : "";
+  if (!reason) { res.status(400).json({ error: "제외 사유를 입력해야 합니다." }); return; }
+  const [t] = await db.select().from(payoutTransfersTable)
+    .where(and(eq(payoutTransfersTable.id, transferId), eq(payoutTransfersTable.payoutRoundId, id)));
+  if (!t) { res.status(404).json({ error: "송금건을 찾을 수 없습니다." }); return; }
+  if (t.status === "paid") { res.status(400).json({ error: "지급완료된 송금건은 제외할 수 없습니다." }); return; }
+  if (t.status === "excluded") { res.status(400).json({ error: "이미 제외된 송금건입니다." }); return; }
+  try {
+    // amount·검증정보는 보존, 지급대상에서만 제외(§8·§14).
+    await db.update(payoutTransfersTable)
+      .set({ status: "excluded", excludedAt: new Date(), excludedBy: req.user?.id ?? null, exclusionReason: reason, updatedAt: new Date() })
+      .where(eq(payoutTransfersTable.id, transferId));
+    const view = await loadTransfersView(id);
+    res.json(view);
+  } catch (err) {
+    req.log.error({ err, transferId }, "지급 제외 실패");
+    res.status(500).json({ error: "지급 제외 처리 중 오류가 발생했습니다." });
+  }
+});
+
+// ── POST 지급 제외 해제(§9) — 제외 메타 초기화 후 검증결과로 status 복귀. paid 금지. ──
+router.post("/admin/payout-rounds/:id/transfers/:transferId/unexclude", ...adminGuard, async (req, res) => {
+  const id = Number(req.params.id);
+  const transferId = Number(req.params.transferId);
+  const [t] = await db.select().from(payoutTransfersTable)
+    .where(and(eq(payoutTransfersTable.id, transferId), eq(payoutTransfersTable.payoutRoundId, id)));
+  if (!t) { res.status(404).json({ error: "송금건을 찾을 수 없습니다." }); return; }
+  if (t.status === "paid") { res.status(400).json({ error: "지급완료된 송금건은 제외 해제할 수 없습니다." }); return; }
+  if (t.status !== "excluded") { res.status(400).json({ error: "제외 상태인 송금건만 해제할 수 있습니다." }); return; }
+  try {
+    // 검증결과에 따라 복귀(§9): verified → ready, missing/invalid → pending.
+    const nextStatus = t.verificationStatus === "verified" ? "ready" : "pending";
+    await db.update(payoutTransfersTable)
+      .set({ status: nextStatus, excludedAt: null, excludedBy: null, exclusionReason: null, updatedAt: new Date() })
+      .where(eq(payoutTransfersTable.id, transferId));
+    const view = await loadTransfersView(id);
+    res.json(view);
+  } catch (err) {
+    req.log.error({ err, transferId }, "지급 제외 해제 실패");
+    res.status(500).json({ error: "지급 제외 해제 중 오류가 발생했습니다." });
   }
 });
 

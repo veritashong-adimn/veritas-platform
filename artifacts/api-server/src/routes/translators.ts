@@ -979,7 +979,8 @@ router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) =>
           translatorId: newUser.id,
           residentNumber: encRn,
           bankName: row.bankName?.trim() || null,
-          bankAccount: encAcc,
+          bankAccount: encAcc,       // [레거시 컬럼] 벌크임포트는 기존부터 암호문 저장
+          bankAccountEnc: encAcc,    // 신규 표준 컬럼에도 동일 암호문 기록
           accountHolder: row.accountHolder?.trim() || null,
           paymentMethod: "domestic_withholding",
         });
@@ -2899,11 +2900,18 @@ router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission
       ? encrypt(residentNumber.trim().replace(/-/g, ""))
       : (residentNumber === "" ? null : existing?.residentNumber ?? null);
 
+    // 계좌번호: 신규 표준 컬럼(bankAccountEnc)에 암호화 저장. 제공 시 암호화, 명시적 삭제("")면 null,
+    //  미제공이면 기존값 유지. 레거시 bankAccount 컬럼은 기존 동작 그대로 두고(일괄전환은 별도 단계) 병행 기록.
+    const encryptedAcc = bankAccount?.trim()
+      ? encrypt(bankAccount.trim())
+      : (bankAccount === "" ? null : existing?.bankAccountEnc ?? null);
+
     const payload = {
       residentNumber: encryptedRn,
       paymentMethod: paymentMethod?.trim() || null,
       bankName: bankName?.trim() || null,
       bankAccount: bankAccount?.trim() || null,
+      bankAccountEnc: encryptedAcc,
       accountHolder: accountHolder?.trim() || null,
       businessNumber: businessNumber?.trim() || null,
       businessName: businessName?.trim() || null,
