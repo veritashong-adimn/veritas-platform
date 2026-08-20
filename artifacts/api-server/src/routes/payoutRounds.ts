@@ -15,8 +15,10 @@ import { eq, and, or, isNull, isNotNull, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
-import { decrypt, maskResidentNumber, maskBankAccount, readAccountPlain } from "../lib/encrypt";
+import { decrypt, maskResidentNumber, maskBankAccount, readAccountPlain, isValidBankAccountFormat } from "../lib/encrypt";
 import { generatePayoutTransfers, reverifyTransfer, REVERIFIABLE_STATUSES } from "../services/payoutTransfers";
+import { buildIbkTransferWorkbook, ibkFileName, type IbkTransferRow } from "../lib/ibkTransferExcel";
+import { buildPayeePrintName } from "../lib/ibkPrintName";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -974,6 +976,128 @@ router.post("/admin/payout-rounds/:id/transfers/:transferId/unexclude", ...admin
   } catch (err) {
     req.log.error({ err, transferId }, "지급 제외 해제 실패");
     res.status(500).json({ error: "지급 제외 해제 중 오류가 발생했습니다." });
+  }
+});
+
+// ── POST IBK 대량이체 Excel 생성·다운로드(Phase 3) ──────────────────────────────
+//  · 포함 대상(§3): status=ready · verificationStatus=verified · amount>0 (국내 계좌 검증완료건).
+//    제외/취소/지급완료/실패 및 정보누락(missing)/오류(invalid) 는 자동 제외되지 않고 "전체 차단"으로 이어진다.
+//  · fail-safe(§4): 비제외 대상 중 미검증/누락/오류가 하나라도 있으면 파일을 만들지 않는다(§10 fileGate 재확인).
+//  · 확정 snapshot(amount) 재계산 금지. payout_round_items 재집계 금지. status 를 paid 로 바꾸지 않는다(§8).
+//  · 계좌번호 원본은 이 요청 처리 중 서버 메모리에서만 복호화하고, 응답 헤더·JSON·로그에 남기지 않는다(§11).
+//  · 재생성 허용(§9): 동일 snapshot 으로 Excel 만 다시 만들고 ibkFileGeneratedAt 만 갱신한다.
+router.post("/admin/payout-rounds/:id/transfers/ibk-file", ...adminGuard, async (req, res) => {
+  const id = Number(req.params.id);
+  try {
+    const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
+    if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
+    // 지급확정(confirmed)/지급완료(paid) 회차에서만 — 작성중/검토중 회차는 은행 파일 생성 대상 아님.
+    if (round.status !== "confirmed" && round.status !== "paid") {
+      res.status(400).json({ error: "지급확정된 회차에서만 IBK 대량이체 파일을 생성할 수 있습니다." }); return;
+    }
+
+    const rows = await db.select().from(payoutTransfersTable)
+      .where(eq(payoutTransfersTable.payoutRoundId, id))
+      .orderBy(payoutTransfersTable.payeeType, payoutTransfersTable.payeeId);
+
+    // §10 fileGate 재확인(서버 최종 판정) — 비제외 대상이 전원 verified·ready 가 아니면 생성 차단.
+    const view = buildTransfersView(round, rows);
+    const g = view.summary.fileGate;
+    if (!g.canGenerateFile) {
+      const why = [
+        g.missing ? `정보누락 ${g.missing}명` : "",
+        g.invalid ? `정보오류 ${g.invalid}명` : "",
+        g.notReady ? `준비안됨 ${g.notReady}명` : "",
+        g.activeCount === 0 ? "대상 없음" : "",
+      ].filter(Boolean).join(" · ");
+      res.status(409).json({ error: `송금파일 생성 불가 · ${why}` }); return;
+    }
+
+    // 포함 대상(§3) — ready·verified·amount>0. (해외/외주는 verify 단계에서 ready 가 되지 않아 자연 제외됨)
+    const included = rows.filter(
+      (t) => t.status === "ready" && t.verificationStatus === "verified" && num(t.amount) > 0,
+    );
+    if (included.length === 0) { res.status(409).json({ error: "송금파일 생성 불가 · 대상 없음" }); return; }
+
+    // 「내통장인쇄내용」 자동 생성용 원천(통번역사 관리) 조회 — 개인 지급대상만. 판매/수행 데이터는 쓰지 않는다.
+    //  · language_pairs(주언어)·education/major(통대·학교)·payment_method/country(해외·국가) 단일 원천.
+    const indivPayeeIds = [...new Set(
+      included.filter((t) => t.payeeType === "individual" && t.payeeId != null).map((t) => t.payeeId as number),
+    )];
+    const profMap = new Map<number, { languagePairs: string | null; education: string | null; major: string | null }>();
+    const sensMap = new Map<number, { paymentMethod: string | null; country: string | null }>();
+    if (indivPayeeIds.length) {
+      const profs = await db.select({
+        userId: translatorProfilesTable.userId,
+        languagePairs: translatorProfilesTable.languagePairs,
+        education: translatorProfilesTable.education,
+        major: translatorProfilesTable.major,
+      }).from(translatorProfilesTable).where(inArray(translatorProfilesTable.userId, indivPayeeIds));
+      for (const p of profs) profMap.set(p.userId, { languagePairs: p.languagePairs, education: p.education, major: p.major });
+      const senss = await db.select({
+        translatorId: translatorSensitiveTable.translatorId,
+        paymentMethod: translatorSensitiveTable.paymentMethod,
+        country: translatorSensitiveTable.country,
+      }).from(translatorSensitiveTable).where(inArray(translatorSensitiveTable.translatorId, indivPayeeIds));
+      for (const s of senss) sensMap.set(s.translatorId, { paymentMethod: s.paymentMethod, country: s.country });
+    }
+
+    // 파일 데이터 구성 — 계좌번호는 여기서만 복호화(서버 메모리 전용, 로그·응답 금지).
+    const fileRows: IbkTransferRow[] = [];
+    const accountIssues: string[] = [];
+    for (const t of included) {
+      const plain = t.bankAccountEncSnapshot ? readAccountPlain(t.bankAccountEncSnapshot, null) : null;
+      if (!plain || !isValidBankAccountFormat(plain)) { accountIssues.push(t.payeeName ?? `#${t.id}`); continue; }
+      const prof = t.payeeId != null ? profMap.get(t.payeeId) : undefined;
+      const sens = t.payeeId != null ? sensMap.get(t.payeeId) : undefined;
+      const printName = buildPayeePrintName({
+        payeeType: t.payeeType,
+        name: t.payeeName,
+        languagePairs: prof?.languagePairs,
+        education: prof?.education,
+        major: prof?.major,
+        paymentMethod: sens?.paymentMethod,
+        country: sens?.country,
+      });
+      fileRows.push({
+        bankName: t.bankNameSnapshot ?? "",
+        accountNumber: plain,
+        amount: num(t.amount),          // 확정 snapshot 그대로
+        payeePrintName: printName || (t.payeeName ?? ""),  // 자동생성 실패 시에도 최소 이름 보존(§4)
+      });
+    }
+    // fail-safe(§4): verified 인데 계좌 복호화/형식 이상이 있으면 몰래 빼지 않고 전체 차단.
+    if (accountIssues.length) {
+      res.status(409).json({ error: `송금파일 생성 불가 · 계좌정보 확인 필요 ${accountIssues.length}명` }); return;
+    }
+
+    const buf = buildIbkTransferWorkbook(fileRows);
+
+    // 생성 이력 기록(§8) — status 는 ready 유지(절대 paid 로 변경하지 않음). 재생성 시 시각만 갱신(§9).
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    // ASCII 전용 식별자 — 회차 batchNumber 는 한글 자유문구라 HTTP 헤더에 넣지 않는다(round.id 로 식별).
+    const batchRef = `IBK_R${id}_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    await db.update(payoutTransfersTable)
+      .set({ ibkFileGenerated: true, ibkFileGeneratedAt: now, ibkBatchRef: batchRef, updatedAt: now })
+      .where(and(
+        eq(payoutTransfersTable.payoutRoundId, id),
+        inArray(payoutTransfersTable.id, included.map((t) => t.id)),
+      ));
+
+    // 로그에는 계좌번호·금액 상세 금지 — 카운트/식별자만.
+    req.log.info({ payoutRoundId: id, batchRef, includedCount: fileRows.length }, "IBK 대량이체 파일 생성");
+
+    const fileName = ibkFileName(round.paymentDate);
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("X-Ibk-Batch-Ref", batchRef);
+    res.setHeader("X-Ibk-Count", String(fileRows.length));
+    res.send(buf);
+  } catch (err) {
+    // 오류 메시지에 계좌번호 원본을 절대 포함하지 않는다(§11).
+    req.log.error({ err, payoutRoundId: id }, "IBK 대량이체 파일 생성 실패");
+    if (!res.headersSent) res.status(500).json({ error: "IBK 대량이체 파일 생성 중 오류가 발생했습니다." });
   }
 });
 

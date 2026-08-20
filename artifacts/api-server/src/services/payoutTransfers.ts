@@ -1,5 +1,6 @@
 import {
   db, payoutRoundsTable, payoutRoundItemsTable, payoutTransfersTable, translatorSensitiveTable,
+  companySensitiveTable,
   type InsertPayoutTransfer, type PayoutRound,
 } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
@@ -73,20 +74,21 @@ function aggregateByPayee(rows: (typeof payoutRoundItemsTable.$inferSelect)[]): 
   return [...groups.values()];
 }
 
-// 계좌정보 검증(§5). 개인: 은행명·계좌번호·형식·예금주. 외주: 계좌 원천 미연결 → missing.
+// 계좌정보 검증(§8). 원천 분기(§7): 개인=translator_sensitive, 거래처(vendor)=company_sensitive.
+//  · 개인/거래처 모두 동일 필드(은행명·계좌번호·형식·예금주)를 검증한다.
+//  · 거래처가 외주업체인지 고객사인지는 검증 가능 여부의 조건으로 쓰지 않는다(companyId 기준 조회만).
 export function verifyAccount(
   payeeType: string,
   bankName: string | null,
   accountPlain: string | null,
   accountHolder: string | null,
 ): { verificationStatus: Verification; status: TransferStatus; failureReason: string | null } {
-  if (payeeType !== "individual") {
-    // 외주업체는 통번역사 계좌 원천(translator_sensitive)에 대응되지 않는다 → 자동 검증 불가.
-    // fail-safe: 미검증(pending) 상태로 두고, 지급 실행 단계에서 계좌 입력/검증을 연결한다.
+  if (payeeType !== "individual" && payeeType !== "vendor") {
+    // 지급대상 유형이 개인/거래처 어느 쪽에도 매칭되지 않으면 검증 원천이 없다 → fail-safe 미검증.
     return {
       verificationStatus: "missing",
       status: "pending",
-      failureReason: "외주 지급대상 계좌정보 원천 미연결 — 지급 실행 단계에서 계좌 입력·검증 필요",
+      failureReason: "지급대상 유형에 대응하는 계좌정보 원천이 없습니다 — 지급 실행 단계에서 계좌 확인 필요",
     };
   }
   const hasBankName = !!bankName?.trim();
@@ -123,7 +125,7 @@ export async function generatePayoutTransfers(
     .where(eq(payoutRoundItemsTable.payoutRoundId, round.id));
   const aggs = aggregateByPayee(items);
 
-  // 2) 개인 지급대상 계좌정보 조회(translator_sensitive.translatorId = users.id = payeeId).
+  // 2) 계좌정보 원천 조회(§7) — 개인=translator_sensitive(translatorId=users.id), 거래처=company_sensitive(companyId).
   const indivIds = [...new Set(aggs.filter((a) => a.payeeType === "individual" && a.payeeId != null).map((a) => a.payeeId as number))];
   const sensMap = new Map<number, typeof translatorSensitiveTable.$inferSelect>();
   if (indivIds.length) {
@@ -131,16 +133,32 @@ export async function generatePayoutTransfers(
       .where(inArray(translatorSensitiveTable.translatorId, indivIds));
     for (const s of sensRows) sensMap.set(s.translatorId, s);
   }
+  const vendorIds = [...new Set(aggs.filter((a) => a.payeeType === "vendor" && a.payeeId != null).map((a) => a.payeeId as number))];
+  const compMap = new Map<number, typeof companySensitiveTable.$inferSelect>();
+  if (vendorIds.length) {
+    const compRows = await db.select().from(companySensitiveTable)
+      .where(inArray(companySensitiveTable.companyId, vendorIds));
+    for (const c of compRows) compMap.set(c.companyId, c);
+  }
 
   // 3) 삽입 후보 구성 — 계좌정보 snapshot(암호문) + 검증결과.
   const values: InsertPayoutTransfer[] = aggs.map((a) => {
     const sens = a.payeeType === "individual" && a.payeeId != null ? sensMap.get(a.payeeId) : undefined;
-    const bankName = sens?.bankName ?? null;
-    const accountHolder = sens?.accountHolder ?? null;
-    // 암호화 snapshot(평문 저장 금지). 레거시 평문/암호문 모두 안전 처리.
-    const bankAccountEncSnapshot = sens ? toEncryptedAccount(sens.bankAccountEnc, sens.bankAccount) : null;
+    const comp = a.payeeType === "vendor" && a.payeeId != null ? compMap.get(a.payeeId) : undefined;
+    const bankName = sens?.bankName ?? comp?.bankName ?? null;
+    const accountHolder = sens?.accountHolder ?? comp?.accountHolder ?? null;
+    // 암호화 snapshot(평문 저장 금지). 개인은 레거시 평문/암호문 혼재, 거래처는 항상 암호문.
+    const bankAccountEncSnapshot = sens
+      ? toEncryptedAccount(sens.bankAccountEnc, sens.bankAccount)
+      : comp
+        ? toEncryptedAccount(comp.bankAccountEnc, null)
+        : null;
     // 검증은 평문 형식으로 판단(메모리 내부 전용, 저장·로그 금지).
-    const accountPlain = sens ? readAccountPlain(sens.bankAccountEnc, sens.bankAccount) : null;
+    const accountPlain = sens
+      ? readAccountPlain(sens.bankAccountEnc, sens.bankAccount)
+      : comp
+        ? readAccountPlain(comp.bankAccountEnc, null)
+        : null;
     const v = verifyAccount(a.payeeType, bankName, accountPlain, accountHolder);
     return {
       payoutRoundId: round.id,
@@ -217,17 +235,27 @@ export async function reverifyTransfer(
   if (!REVERIFIABLE_STATUSES.includes(transfer.status as TransferStatus)) {
     throw new Error(`재검증할 수 없는 상태입니다(${transfer.status}).`);
   }
-  // 개인: 최신 원천(translator_sensitive) 조회. 외주: 원천 미연결 → verifyAccount 가 missing 처리.
+  // 원천 분기(§7): 개인=translator_sensitive(translatorId), 거래처=company_sensitive(companyId=payeeId).
   let sens: typeof translatorSensitiveTable.$inferSelect | undefined;
+  let comp: typeof companySensitiveTable.$inferSelect | undefined;
   let bankName: string | null = transfer.bankNameSnapshot;
   let accountHolder: string | null = transfer.accountHolderSnapshot;
   let accountPlain: string | null = null;
+  let freshEnc: string | null = transfer.bankAccountEncSnapshot;
   if (transfer.payeeType === "individual" && transfer.payeeId != null) {
     [sens] = await db.select().from(translatorSensitiveTable)
       .where(eq(translatorSensitiveTable.translatorId, transfer.payeeId));
     bankName = sens?.bankName ?? null;
     accountHolder = sens?.accountHolder ?? null;
     accountPlain = sens ? readAccountPlain(sens.bankAccountEnc, sens.bankAccount) : null;
+    freshEnc = sens ? toEncryptedAccount(sens.bankAccountEnc, sens.bankAccount) : transfer.bankAccountEncSnapshot;
+  } else if (transfer.payeeType === "vendor" && transfer.payeeId != null) {
+    [comp] = await db.select().from(companySensitiveTable)
+      .where(eq(companySensitiveTable.companyId, transfer.payeeId));
+    bankName = comp?.bankName ?? null;
+    accountHolder = comp?.accountHolder ?? null;
+    accountPlain = comp ? readAccountPlain(comp.bankAccountEnc, null) : null;
+    freshEnc = comp ? toEncryptedAccount(comp.bankAccountEnc, null) : transfer.bankAccountEncSnapshot;
   }
   const v = verifyAccount(transfer.payeeType ?? "", bankName, accountPlain, accountHolder);
   const patch: Partial<typeof payoutTransfersTable.$inferInsert> = {
@@ -238,9 +266,10 @@ export async function reverifyTransfer(
   };
   const snapshotUpdated = v.verificationStatus === "verified";
   if (snapshotUpdated) {
+    // 검증 성공 시에만 최신 계좌정보로 snapshot 갱신(§9). amount·assignmentCount 는 절대 미변경.
     patch.bankNameSnapshot = bankName;
     patch.accountHolderSnapshot = accountHolder;
-    patch.bankAccountEncSnapshot = sens ? toEncryptedAccount(sens.bankAccountEnc, sens.bankAccount) : transfer.bankAccountEncSnapshot;
+    patch.bankAccountEncSnapshot = freshEnc;
   }
   await db.update(payoutTransfersTable).set(patch).where(eq(payoutTransfersTable.id, transfer.id));
   return { transferId: transfer.id, verificationStatus: v.verificationStatus, status: v.status, failureReason: v.failureReason, snapshotUpdated };

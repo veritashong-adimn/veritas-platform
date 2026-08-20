@@ -153,6 +153,33 @@ export default function PayoutExecutionModal({ token, round, onToast, onClose }:
     } catch { onToast('지급 제외 중 오류'); } finally { setBusy(false); }
   };
 
+  // IBK 대량이체 파일 생성·다운로드 — 서버가 메모리에서 .xlsx 생성 후 스트림 다운로드.
+  //  · 계좌번호 원본은 프론트로 오지 않는다(파일 안에만 존재). 생성 가능 여부는 서버가 최종 판정(fileGate).
+  const [genBusy, setGenBusy] = useState(false);
+  const generateIbkFile = async () => {
+    setGenBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/payout-rounds/${round.id}/transfers/ibk-file`), { method: 'POST', headers: authH });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        onToast(data.error ?? 'IBK 대량이체 파일 생성 실패');
+        return;
+      }
+      const blob = await res.blob();
+      const cd = res.headers.get('Content-Disposition') || '';
+      const m = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      const fname = m ? decodeURIComponent(m[1]) : `IBK_대량이체_${dateVal(round.paymentDate)}_지급회차.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fname;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      const cnt = res.headers.get('X-Ibk-Count');
+      onToast(`IBK 대량이체 파일 생성 완료${cnt ? ` — 지급대상 ${cnt}명` : ''}`);
+      load(); // 생성 이력(ibkFileGeneratedAt) 반영
+    } catch { onToast('IBK 대량이체 파일 생성 중 오류'); } finally { setGenBusy(false); }
+  };
+
   // 지급 제외 해제(§9)
   const unexclude = async (t: Transfer) => {
     setBusy(true);
@@ -220,7 +247,18 @@ export default function PayoutExecutionModal({ token, round, onToast, onClose }:
                 </span>
               )}
             </div>
-            {!isPaid && <GhostBtn onClick={reverifyAll} disabled={busy} data-testid="payout-reverify-all" style={{ fontSize: 12, padding: '7px 14px' }}>전체 재검증</GhostBtn>}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {!isPaid && <GhostBtn onClick={reverifyAll} disabled={busy || genBusy} data-testid="payout-reverify-all" style={{ fontSize: 12, padding: '7px 14px' }}>전체 재검증</GhostBtn>}
+              <PrimaryBtn
+                onClick={generateIbkFile}
+                disabled={!gate?.canGenerateFile || busy || genBusy}
+                data-testid="payout-ibk-file"
+                aria-label="IBK 대량이체 파일 생성"
+                style={{ fontSize: 12, padding: '7px 16px' }}
+              >
+                {genBusy ? '생성 중…' : '📥 IBK 대량이체 파일 생성'}
+              </PrimaryBtn>
+            </div>
           </div>
 
           {/* ── 지급대상 목록(§3) — 1인 1행 ── */}

@@ -8,6 +8,7 @@ import { PrepaidLedgerModal } from "./PrepaidLedgerModal";
 import { DraggableModal } from "./DraggableModal";
 import { CompanyDocumentAnalyzePanel, type CompanyOcrDocType } from "./CompanyDocumentAnalyzePanel";
 import { CompanyAliasSection } from "./CompanyAliasSection";
+import { CompanyPaymentAccountSection } from "./CompanyPaymentAccountSection";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -584,6 +585,9 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
 
                 {/* 기업명 Alias(별칭) 관리 — 기본정보 아래 */}
                 <CompanyAliasSection companyId={companyId} token={token} onToast={onToast} />
+
+                {/* 지급/환급 계좌정보 — 모든 거래처 유형에서 등록 가능(용역대금 지급·오송금 반환 등) */}
+                <CompanyPaymentAccountSection companyId={companyId} token={token} onToast={onToast} />
               </div>
             )}
 

@@ -10,10 +10,11 @@ import {
   prepaidAccountsTable, prepaidLedgerTable,
   quoteItemsTable, quoteItemFilesTable,
   projectFilesTable, translatorProfilesTable,
-  companyAliasesTable, projectPaymentsTable,
+  companyAliasesTable, projectPaymentsTable, companySensitiveTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, inArray, sql, desc, ne, isNull, isNotNull } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
+import { toEncryptedAccount, readAccountPlain, maskBankAccount } from "../lib/encrypt";
 import { logEvent } from "../lib/logEvent";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
 import { buildAliasValues, ensureDefaultAlias } from "../lib/companyAlias";
@@ -539,6 +540,88 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
   } catch (err) {
     req.log.error({ err }, "Companies: failed to update");
     res.status(500).json({ error: "거래처 수정 실패." });
+  }
+});
+
+// ─── 거래처 지급/환급 계좌정보 조회(마스킹) ───────────────────────────────────
+//  · 모든 거래처 유형(고객사/외주업체/행사·운영/기타)에서 조회 가능. 계좌번호는 마스킹만 반환한다.
+//  · 원본 계좌번호(복호화)는 응답에 절대 포함하지 않는다(§5). 미등록이면 hasAccount=false.
+router.get("/admin/companies/:id/payment-account", ...adminGuard, async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 company id." }); return; }
+  try {
+    const [company] = await db.select({ id: companiesTable.id }).from(companiesTable).where(eq(companiesTable.id, companyId));
+    if (!company) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+    const [sens] = await db.select().from(companySensitiveTable).where(eq(companySensitiveTable.companyId, companyId));
+    const plain = sens?.bankAccountEnc ? readAccountPlain(sens.bankAccountEnc, null) : null;
+    res.json({
+      companyId,
+      bankName: sens?.bankName ?? null,
+      bankAccountMasked: maskBankAccount(plain),   // 전체 계좌번호는 전달하지 않음
+      accountHolder: sens?.accountHolder ?? null,
+      hasAccount: !!(sens?.bankName && plain && sens?.accountHolder),
+      updatedAt: sens?.updatedAt ?? null,
+    });
+  } catch (err) {
+    req.log.error({ err, companyId }, "Companies: failed to get payment account");
+    res.status(500).json({ error: "지급/환급 계좌정보 조회 실패." });
+  }
+});
+
+// ─── 거래처 지급/환급 계좌정보 저장(암호화 upsert) ────────────────────────────
+//  · 계좌번호는 AES-256-GCM 암호문(bank_account_enc)으로만 저장(평문 저장 금지, translator 와 동일 유틸).
+//  · companyId UNIQUE 기준 upsert. 기존 companies/메모/기타 데이터는 건드리지 않는다(additive).
+//  · 응답에는 마스킹만 반환. 로그에 원본 계좌번호를 남기지 않는다(§5).
+router.put("/admin/companies/:id/payment-account", ...adminGuard, requirePermission("company.update"), async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 company id." }); return; }
+  const bankName = typeof req.body?.bankName === "string" ? req.body.bankName.trim() : "";
+  const accountHolder = typeof req.body?.accountHolder === "string" ? req.body.accountHolder.trim() : "";
+  const accountRaw = typeof req.body?.bankAccount === "string" ? req.body.bankAccount.trim() : "";
+  try {
+    const [company] = await db.select({ id: companiesTable.id }).from(companiesTable).where(eq(companiesTable.id, companyId));
+    if (!company) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+    const [existing] = await db.select().from(companySensitiveTable).where(eq(companySensitiveTable.companyId, companyId));
+
+    // 계좌번호: 새 값이 마스킹 문자열(*)이 아니고 실제 입력이면 암호화. 빈 값이면 기존 유지(모르고 지우는 것 방지).
+    //  · 완전 삭제를 원하면 명시적으로 "-" 등 별도 처리 없이, 빈 입력은 기존 보존이 안전 기본값.
+    const isMaskedEcho = accountRaw.includes("*");
+    let bankAccountEnc = existing?.bankAccountEnc ?? null;
+    if (accountRaw && !isMaskedEcho) {
+      bankAccountEnc = toEncryptedAccount(null, accountRaw); // 평문 → 암호문
+    }
+
+    const now = new Date();
+    if (existing) {
+      await db.update(companySensitiveTable).set({
+        bankName: bankName || null,
+        accountHolder: accountHolder || null,
+        bankAccountEnc,
+        updatedAt: now,
+      }).where(eq(companySensitiveTable.companyId, companyId));
+    } else {
+      await db.insert(companySensitiveTable).values({
+        companyId,
+        bankName: bankName || null,
+        accountHolder: accountHolder || null,
+        bankAccountEnc,
+      });
+    }
+
+    const plain = bankAccountEnc ? readAccountPlain(bankAccountEnc, null) : null;
+    // 로그: 계좌번호 원본 금지 — 존재 여부만.
+    req.log.info({ companyId, hasAccount: !!plain }, "Companies: payment account saved");
+    res.json({
+      companyId,
+      bankName: bankName || null,
+      bankAccountMasked: maskBankAccount(plain),
+      accountHolder: accountHolder || null,
+      hasAccount: !!(bankName && plain && accountHolder),
+      updatedAt: now,
+    });
+  } catch (err) {
+    req.log.error({ err, companyId }, "Companies: failed to save payment account");
+    res.status(500).json({ error: "지급/환급 계좌정보 저장 실패." });
   }
 });
 
