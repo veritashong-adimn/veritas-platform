@@ -12,6 +12,10 @@ import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import { downloadTableExcel, todayStamp, type ExcelColumn } from '../../lib/payoutExcel';
 import PayoutExecutionModal from './PayoutExecutionModal';
 
+// VERITAS 공통 기본 폰트(App.tsx 와 동일 스택). 드롭다운 옵션은 포털(document.body)로 렌더되어
+// 화면 폰트를 상속받지 못하므로 menuStyle 로 명시 지정해 트리거·라벨·테이블과 통일한다.
+const APP_FONT = "'Pretendard', 'Apple SD Gothic Neo', system-ui, sans-serif";
+
 const won = (n: unknown) => Math.round(Number(n ?? 0)).toLocaleString('ko-KR');
 const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
 // 재집계용 안전 수치 변환(NaN·null → 0). 필터 결과 합산은 건별 서버 계산값을 그대로 더할 뿐 계산식은 불변.
@@ -46,6 +50,22 @@ function groupTaxTreatmentLabel(g: { items?: any[]; payeeType?: string; treatmen
   if (items.length === 0) return taxTreatmentLabel({ payeeType: g.payeeType, withholdingTreatment: g.treatments?.[0] ?? null });
   const labels = new Set(items.map(taxTreatmentLabel));
   return labels.size === 1 ? [...labels][0] : null;
+}
+
+// 지급대상별 요약 「공제」 헤더 세율 표시(§2) — 조회된 "개인" 지급대상의 원천세 처리(withholdingTreatment) 기준.
+//  · 데이터는 서버가 내려준 값 그대로 사용(계산·데이터 불변, §5). 확정/지급완료 회차는 payout_round_items 스냅샷 기준(§3).
+//  · 외주(세금계산서)·면세 등 원천징수 비대상은 제외(§2④·§6). 개인이 단일 세율이면 공제(3.3%)/공제(2.2%), 혼재·판별불가면 공제(§2③).
+const WITHHOLDING_RATE_LABEL: Record<string, string> = { domestic_3_3: '3.3%', domestic_2_2: '2.2%' };
+function deductionHeaderLabel(summary: any[]): string {
+  const rates = new Set<string>();
+  for (const g of summary ?? []) {
+    if ((g.payeeType ?? g.performerCategory) !== 'individual') continue;
+    for (const it of (g.items ?? [])) {
+      const r = WITHHOLDING_RATE_LABEL[it.withholdingTreatment as string];
+      if (r) rates.add(r);
+    }
+  }
+  return rates.size === 1 ? `공제(${[...rates][0]})` : '공제';
 }
 const HOLD_REASONS = ['납품확인 필요', '계좌정보 미확인', '세금처리 확인 필요', '고객 클레임', '금액 재검토', '기타'];
 
@@ -91,7 +111,8 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   const [dateFrom, setDateFrom] = useState('');                  // 지급일 시작(YYYY-MM-DD)
   const [dateTo, setDateTo] = useState('');                      // 지급일 종료(YYYY-MM-DD)
 
-  const inp: React.CSSProperties = { ...dsInputStd(), minHeight: 32, padding: '5px 9px', width: '100%' };
+  // 폼 컨트롤(input/button/select)은 폰트를 상속하지 않으므로 공통 앱 폰트(Pretendard)를 명시 상속 — 라벨·테이블과 통일.
+  const inp: React.CSSProperties = { ...dsInputStd(), fontFamily: 'inherit', minHeight: 32, padding: '5px 9px', width: '100%' };
   const th: React.CSSProperties = { ...TYPO.gridHeader, padding: '8px 10px', borderBottom: BD.grid, whiteSpace: 'nowrap', textAlign: 'left', background: C.g50 };
   const td: React.CSSProperties = { ...TYPO.inputValue, padding: '8px 10px', borderBottom: BD.divider, whiteSpace: 'nowrap' };
   const tdR: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
@@ -99,7 +120,9 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   // ── 좌측 고정 컬럼(가로 스크롤 시 "누구/어떤 거래처·업무"를 항상 좌측 표시) ──
   //  · 요약: 지급대상 / 건별: (선택체크)·지급대상·거래처·상품·업무. 폭 고정 → left 오프셋 정합.
   //  · 고정 셀은 불투명 배경 + 마지막 고정 컬럼 우측에 경계선/그림자로 스크롤 영역과 자연 분리(§4).
-  const STK_W = { chk: 34, payee: 132, email: 168, cust: 148, prod: 172, sumPayee: 156 };
+  // 지급대상(payee/sumPayee) 열은 정산 핵심 식별정보 → 폭 +약 27% 확대(긴 외주업체명 노출↑).
+  //  · 공간 확보를 위해 여유 있던 이메일 열만 소폭 축소, 나머지(거래처·상품업무)는 유지.
+  const STK_W = { chk: 34, payee: 168, email: 152, cust: 148, prod: 172, sumPayee: 200 };
   const stickyCol = (left: number, o?: { header?: boolean; last?: boolean; bg?: string; width?: number }): React.CSSProperties => ({
     position: 'sticky', left, zIndex: o?.header ? 3 : 2,
     background: o?.bg ?? (o?.header ? C.g50 : C.bgCard),
@@ -224,8 +247,14 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   const statusBg = partialPaid ? '#fffbeb' : ROUND_STATUS[round?.status]?.bg;
   const isItemPaid = (it: any) => it.paymentStatus === 'paid';
   const isItemSelectable = (it: any) => perItemMode && it.paymentStatus === 'unpaid';   // 지급완료·보류 건은 선택 불가(§5)
+  // 지급완료 연녹색 — 건별 상세·지급대상별 요약이 완전히 동일한 배경을 공유(단일 상수, 중복 색 생성 금지).
+  const PAID_ROW_BG = '#f0fdf4';
   // 고정 셀 배경(지급완료 행 강조색과 정합) + 건별 고정 컬럼 left 오프셋(선택체크 유무 반영).
-  const rowBg = (it: any) => (isItemPaid(it) ? '#f0fdf4' : C.bgCard);
+  const rowBg = (it: any) => (isItemPaid(it) ? PAID_ROW_BG : C.bgCard);
+  // 지급대상별 요약 행 배경 — 실제 회차 상태값(paid)을 기준으로 판정(표시문구 아님, §4).
+  //  · 현재는 회차 전체가 지급완료면 모든 요약 행에 동일 적용. 향후 지급대상별 개별 상태(g.*) 도입 시 이 함수만 확장(§5).
+  const isSummaryRowPaid = (_g: any) => round?.status === 'paid';
+  const summaryRowBg = (g: any) => (isSummaryRowPaid(g) ? PAID_ROW_BG : undefined);
   const stkChkW = perItemMode ? STK_W.chk : 0;
   const stkLeft = { payee: stkChkW, email: stkChkW + STK_W.payee, cust: stkChkW + STK_W.payee + STK_W.email, prod: stkChkW + STK_W.payee + STK_W.email + STK_W.cust };
   // (VAT별도) 표시는 서버 공통계산(calcPayoutWithholding)이 내려준 isVatIncluded 값만 사용한다.
@@ -444,32 +473,40 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP[4] }}>
       {/* ── 상단: 회차 선택 + 생성 + 확정 ── */}
       <Card>
-        <div style={{ display: 'flex', alignItems: 'center', gap: SP[3], flexWrap: 'wrap' }}>
-          <span style={{ ...TYPO.sectionTitle }}>지급회차</span>
-          <div style={{ width: 300 }}>
-            <ClickSelect value={sel} onChange={(v: string) => setSel(v || 'all')}
-              triggerStyle={inp}
-              options={[
-                { value: 'all', label: '전체 지급대상' },
-                { value: 'unassigned', label: '미배정' },
-                ...rounds.map(r => ({ value: String(r.id), label: `${r.batchNumber || dateVal(r.paymentDate)} · ${ROUND_STATUS[r.status]?.label ?? r.status} · ${r.totalAssignments ?? 0}건` })),
-              ]} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP[3], flexWrap: 'wrap' }}>
+          {/* 좌측 그룹: 핵심 선택 영역(§1) — 라벨 강조(액센트 바)·Select 폭 확대로 선택 회차명이 충분히 보이게. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP[3], flexWrap: 'wrap' }}>
+            <span style={{ ...TYPO.sectionTitle, fontSize: 15, borderLeft: `3px solid ${C.primaryText}`, paddingLeft: 10, lineHeight: 1.4 }}>지급회차 선택</span>
+            <div style={{ width: 440, maxWidth: '100%' }}>
+              <ClickSelect value={sel} onChange={(v: string) => setSel(v || 'all')}
+                triggerStyle={{ ...inp, minHeight: 38, fontWeight: 600 }} menuStyle={{ fontFamily: APP_FONT }}
+                options={[
+                  { value: 'all', label: '전체 지급대상' },
+                  { value: 'unassigned', label: '미배정' },
+                  ...rounds.map(r => ({ value: String(r.id), label: `${r.batchNumber || dateVal(r.paymentDate)} · ${ROUND_STATUS[r.status]?.label ?? r.status} · ${r.totalAssignments ?? 0}건` })),
+                ]} />
+            </div>
           </div>
-          <PrimaryBtn onClick={() => setShowCreate(true)} style={{ fontSize: 12, padding: '7px 14px' }} data-testid="payout-create" aria-label="지급회차 생성">+ 지급회차 생성</PrimaryBtn>
+          {/* 우측 끝: 지급회차 생성 (버튼 디자인·기능·이벤트 불변) */}
+          <PrimaryBtn onClick={() => setShowCreate(true)} style={{ fontSize: 12, padding: '8px 16px' }} data-testid="payout-create" aria-label="지급회차 생성">+ 지급회차 생성</PrimaryBtn>
           {/* 지급명세서는 좌측 사이드바 정산→지급명세서 독립 메뉴로 분리(PayoutStatementTab). */}
         </div>
       </Card>
 
       {/* ── 조회 필터(지급회차 sel 과 조합) — 거래처 · 지급대상 검색 · 지급일 기간. 두 탭 동시 재집계. ── */}
       <Card>
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: SP[4], flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {/* 세 필터를 왼쪽 기준·일정 간격(20px)으로 정렬해 한 검색 조건 그룹처럼 보이게(§목표). columnGap/rowGap 분리로 줄바꿈 시에도 정돈. */}
+        <div style={{ display: 'flex', alignItems: 'flex-end', columnGap: SP[7], rowGap: SP[5], flexWrap: 'wrap' }}>
+          {/* 거래처는 커스텀 버튼 드롭다운(ClickSelect)이므로 <label> 로 감싸지 않는다.
+              <label> 이 내부 트리거 <button> 에 클릭을 재발생시켜 open 상태가 토글/복원되는 문제 방지(§5). */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ ...TYPO.helper, fontWeight: 700 }}>거래처</span>
             <div style={{ width: 220 }}>
-              <ClickSelect value={custFilter} onChange={(v: string) => setCustFilter(v || 'all')} triggerStyle={inp}
+              {/* ClickSelect 루트(inline-block)가 220px 컬럼을 채우도록 width:100% — 축소로 생기던 유령 간격 제거. */}
+              <ClickSelect value={custFilter} onChange={(v: string) => setCustFilter(v || 'all')} triggerStyle={inp} style={{ width: '100%' }} menuStyle={{ fontFamily: APP_FONT }}
                 options={[{ value: 'all', label: '전체 거래처' }, ...customerOptions.map((c) => ({ value: c, label: c }))]} />
             </div>
-          </label>
+          </div>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ ...TYPO.helper, fontWeight: 700 }}>지급대상 검색</span>
             <input style={{ ...inp, width: 200 }} value={payeeQ} onChange={(e) => setPayeeQ(e.target.value)}
@@ -602,20 +639,20 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                     <th style={{ ...th, ...stickyCol(0, { header: true, last: true, width: STK_W.sumPayee }) }}>지급대상</th><th style={th}>이메일</th><th style={th}>구분</th>
                     <th style={{ ...th, textAlign: 'right' }}>건수</th><th style={{ ...th, textAlign: 'right' }}>번역</th><th style={{ ...th, textAlign: 'right' }}>통역</th><th style={{ ...th, textAlign: 'right' }}>장비·외주</th>
                     <th style={{ ...th, textAlign: 'right' }}>기본수행료</th><th style={{ ...th, textAlign: 'right' }}>추가비용</th><th style={{ ...th, textAlign: 'right' }}>차감</th>
-                    <th style={{ ...th, textAlign: 'right' }}>세전</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>공제</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
+                    <th style={{ ...th, textAlign: 'right' }}>세전</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }} title="조회된 개인 지급대상의 원천세율(확정 회차는 확정 당시 스냅샷 기준)">{deductionHeaderLabel(filteredSummary)}</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
                   </tr></thead>
                   <tbody>
                     {filteredSummary.length === 0 && <tr><td colSpan={14} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급대상이 없습니다.' : '수집된 지급대상이 없습니다.'}</td></tr>}
                     {/* 집계 전용 — 펼침 없음. 건별 근거·세부내역은 '건별 상세내역' 탭에서 확인(§1·§2). */}
                     {sumPg.paged.map((g) => (
-                      <tr key={g.payeeKey}>
-                        <td style={{ ...td, fontWeight: 700, ...stickyCol(0, { last: true, width: STK_W.sumPayee }) }} title={g.payeeName}>{g.payeeName}</td>
+                      <tr key={g.payeeKey} style={summaryRowBg(g) ? { background: summaryRowBg(g) } : undefined}>
+                        <td style={{ ...td, fontWeight: 700, ...stickyCol(0, { last: true, width: STK_W.sumPayee, bg: summaryRowBg(g) }) }} title={g.payeeName}>{g.payeeName}</td>
                         <td style={{ ...td, color: C.textSecondary }} title={g.payeeEmail || '-'}>{g.payeeEmail || '-'}</td>
                         <td style={td}>{g.payeeType === 'individual' ? '통번역사' : '외주업체'}</td>
                         <td style={tdR}>{g.count}건</td><td style={tdR}>{g.translationCount}</td><td style={tdR}>{g.interpretationCount}</td><td style={tdR}>{g.equipmentEtcCount}</td>
                         <td style={tdR}>{won(g.baseTotal)}</td><td style={tdR}>{won(g.expenseTotal)}</td><td style={tdR}>{won(g.deductionTotal)}</td>
                         {grossCell(g.grossTotal, !!g.isVatIncluded, true)}
-                        <td style={td}>
+                        <td style={{ ...td, textAlign: 'center' }}>
                           {(() => { const lbl = groupTaxTreatmentLabel(g); return lbl === null
                             ? <span style={{ color: C.danger, fontWeight: 700 }} title="서로 다른 세금처리 혼재 — 건별 확인 필요">⚠ 혼재</span>
                             : lbl; })()}
@@ -668,14 +705,14 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                     <th style={th}>수행일</th><th style={th}>납품일</th><th style={th}>지급일</th>
                     <th style={th}>작업량</th><th style={{ ...th, textAlign: 'right' }}>단가</th><th style={{ ...th, textAlign: 'right' }}>기본수행료</th>
                     <th style={th}>추가비용</th><th style={th}>차감</th>
-                    <th style={{ ...th, textAlign: 'right' }}>세전금액</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>공제</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
+                    <th style={{ ...th, textAlign: 'right' }}>세전금액</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }} title="조회된 개인 지급대상의 원천세율(확정 회차는 확정 당시 스냅샷 기준)">{deductionHeaderLabel(filteredSummary)}</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
                     <th style={th}>지급회차</th>
                     {showActions && <th style={th}>조치</th>}
                   </tr></thead>
                   <tbody>
                     {itemRows.length === 0 && <tr><td colSpan={18 + (showActions ? 1 : 0) + (perItemMode ? 1 : 0)} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급 건이 없습니다.' : (isOverview ? '지급대상이 없습니다.' : '수집된 지급대상이 없습니다.')}</td></tr>}
                     {itemPg.paged.map((it: any) => (
-                      <tr key={it.id} style={isItemPaid(it) ? { background: '#f0fdf4' } : undefined}>
+                      <tr key={it.id} style={isItemPaid(it) ? { background: PAID_ROW_BG } : undefined}>
                         {/* [0] 건별 선택 체크박스(§건별) — 지급확정 회차에서만. 지급완료 건은 '완료' 표시(선택 불가). */}
                         {perItemMode && (
                           <td style={{ ...td, textAlign: 'center', ...stickyCol(0, { width: STK_W.chk, bg: rowBg(it) }) }}>
@@ -714,7 +751,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                         {/* [12] 세전금액 — VAT별도 보조표시가 숫자 정렬 안 깨뜨림(§12·§5) */}
                         {grossCell(it.gross, !!it.isVatIncluded, true)}
                         {/* [13] 세금처리 (§13) */}
-                        <td style={td}>{(() => { const lbl = taxTreatmentLabel(it); return lbl === '세무확인 필요' ? <span style={{ color: C.danger }}>{lbl}</span> : lbl; })()}</td>
+                        <td style={{ ...td, textAlign: 'center' }}>{(() => { const lbl = taxTreatmentLabel(it); return lbl === '세무확인 필요' ? <span style={{ color: C.danger }}>{lbl}</span> : lbl; })()}</td>
                         {/* [14] 공제 (§14, 우측정렬) */}
                         <td style={{ ...tdR, color: C.danger }}>{won(it.withholdingTax)}</td>
                         {/* [15] 실지급 (§15, 우측정렬·파란 강조) */}
@@ -766,7 +803,13 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
 
           {/* ── 회차 총계(§6) + 지급확정(§8 하단 우측) ── */}
           <Card>
-            <div style={{ ...TYPO.inputValue, fontWeight: 800, marginBottom: SP[3] }}>회차 총계</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: SP[3] }}>
+              <span style={{ ...TYPO.inputValue, fontWeight: 800 }}>회차 총계</span>
+              {/* 지급완료 상태 안내 — 제목 우측 인라인, 중성 muted 회색(배지/파란링크 아님). */}
+              {round.status === 'paid' && (
+                <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, lineHeight: 1.4 }}>🔒 지급 완료 · 수정 불가</span>
+              )}
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: SP[3], fontVariantNumeric: 'tabular-nums' }}>
               {[
                 ['총 대상자', `${totals.payees ?? 0}명`], ['총 건수', `${totals.assignments ?? 0}건`],
@@ -777,36 +820,30 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
               ))}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}><span style={TYPO.helper}>실지급액 합계</span><span style={{ ...TYPO.inputValue, fontWeight: 800, fontSize: 17, color: C.primaryText }}>{won(totals.netTotal)}원</span></div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: SP[4], borderTop: BD.grid, paddingTop: SP[3] }}>
-              {/* 상태 흐름: draft → [지급확정](confirmed) → [지급완료](paid). 취소/완료는 라벨만. */}
-              {round.status === 'confirmed'
-                ? <>
-                    <span style={{ ...TYPO.helper, color: ROUND_STATUS.confirmed.color, fontWeight: 700, alignSelf: 'center' }}>지급 확정 — 관리자만 수정 가능</span>
-                    {/* 확정취소 — 지급완료 전에만. 작성중으로 되돌려 재편입·재계산 후 다시 확정. */}
-                    <button type="button" onClick={unconfirmRound} disabled={busy} data-testid="payout-unconfirm" aria-label="확정취소"
-                      style={{ fontSize: 13, padding: '9px 16px', borderRadius: 8, cursor: busy ? 'not-allowed' : 'pointer', background: C.g50, border: `1px solid ${C.border}`, color: C.textSecondary, fontWeight: 700, alignSelf: 'center' }}>
-                      확정취소
-                    </button>
-                    {/* 지급 실행(§1) — 은행 송금 전 지급대상·계좌 최종 검토. 실제 지급 아님. */}
-                    <button type="button" onClick={() => setShowExec(true)} disabled={busy} data-testid="payout-execute" aria-label="지급 실행"
-                      style={{ fontSize: 13, padding: '9px 18px', borderRadius: 8, cursor: busy ? 'not-allowed' : 'pointer', background: C.primaryBg, border: `1px solid ${C.primaryBorder}`, color: C.primaryText, fontWeight: 700, alignSelf: 'center' }}>
-                      지급 실행
-                    </button>
-                    <PrimaryBtn onClick={payRound} disabled={busy} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-pay" aria-label="지급완료">지급완료</PrimaryBtn>
-                  </>
-                : round.status === 'paid'
+            {/* 지급완료(paid) 회차는 상태 안내를 제목 우측으로 이동했으므로 하단 액션 푸터를 렌더하지 않는다. */}
+            {round.status !== 'paid' && (
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: SP[4], borderTop: BD.grid, paddingTop: SP[3] }}>
+                {/* 상태 흐름: draft → [지급확정](confirmed) → [지급완료](paid). 취소는 라벨만. */}
+                {round.status === 'confirmed'
                   ? <>
-                      <span style={{ ...TYPO.helper, color: ROUND_STATUS.paid.color, fontWeight: 700, alignSelf: 'center' }}>{ROUND_STATUS.paid.label} — 수정 불가</span>
-                      {/* paid 회차는 지급결과 조회 성격으로 진입 가능(§1). */}
-                      <button type="button" onClick={() => setShowExec(true)} data-testid="payout-execute-view" aria-label="지급결과 조회"
-                        style={{ fontSize: 13, padding: '9px 18px', borderRadius: 8, cursor: 'pointer', background: C.g50, border: `1px solid ${C.border}`, color: C.textSecondary, fontWeight: 700, alignSelf: 'center' }}>
-                        지급 실행 조회
+                      <span style={{ ...TYPO.helper, color: ROUND_STATUS.confirmed.color, fontWeight: 700, alignSelf: 'center' }}>지급 확정 — 관리자만 수정 가능</span>
+                      {/* 확정취소 — 지급완료 전에만. 작성중으로 되돌려 재편입·재계산 후 다시 확정. */}
+                      <button type="button" onClick={unconfirmRound} disabled={busy} data-testid="payout-unconfirm" aria-label="확정취소"
+                        style={{ fontSize: 13, padding: '9px 16px', borderRadius: 8, cursor: busy ? 'not-allowed' : 'pointer', background: C.g50, border: `1px solid ${C.border}`, color: C.textSecondary, fontWeight: 700, alignSelf: 'center' }}>
+                        확정취소
                       </button>
+                      {/* 지급 실행(§1) — 은행 송금 전 지급대상·계좌 최종 검토. 실제 지급 아님. */}
+                      <button type="button" onClick={() => setShowExec(true)} disabled={busy} data-testid="payout-execute" aria-label="지급 실행"
+                        style={{ fontSize: 13, padding: '9px 18px', borderRadius: 8, cursor: busy ? 'not-allowed' : 'pointer', background: C.primaryBg, border: `1px solid ${C.primaryBorder}`, color: C.primaryText, fontWeight: 700, alignSelf: 'center' }}>
+                        지급 실행
+                      </button>
+                      <PrimaryBtn onClick={payRound} disabled={busy} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-pay" aria-label="지급완료">지급완료</PrimaryBtn>
                     </>
                   : round.status === 'cancelled'
                     ? <span style={{ ...TYPO.helper, color: ROUND_STATUS.cancelled.color, fontWeight: 700 }}>{ROUND_STATUS.cancelled.label} — 수정 불가</span>
                     : <PrimaryBtn onClick={confirmRound} disabled={busy || (totals.assignments ?? 0) === 0} style={{ fontSize: 13, padding: '9px 20px' }} data-testid="payout-confirm" aria-label="지급확정">지급확정</PrimaryBtn>}
-            </div>
+              </div>
+            )}
           </Card>
         </>
       )}
@@ -844,7 +881,7 @@ function CreateDialog({ token, onToast, onClose, onCreated }: { token: string; o
   // 대상기간 자동제안(suggestPeriod)이 납품 기준 기간을 만들므로 수집기준 기본값도 납품일로 정합(§6).
   const [basis, setBasis] = useState<'expected_payment_date' | 'delivery_date'>('delivery_date');
   const [busy, setBusy] = useState(false);
-  const inp: React.CSSProperties = { ...dsInputStd(), minHeight: 34, padding: '6px 10px', width: '100%' };
+  const inp: React.CSSProperties = { ...dsInputStd(), fontFamily: 'inherit', minHeight: 34, padding: '6px 10px', width: '100%' };
 
   // 지급예정일 선택 → 회차명(자동·읽기전용) + 대상기간(자동, 수정 가능) 동시 생성(§1-①②).
   const onPayDate = (v: string) => {
@@ -879,7 +916,7 @@ function CreateDialog({ token, onToast, onClose, onCreated }: { token: string; o
         {field('회차명 (자동)', <input style={{ ...inp, background: C.g50, color: C.textSecondary }} value={batchNumber} readOnly data-testid="payout-new-name" aria-label="회차명(자동)" placeholder="지급예정일 선택 시 자동 생성" />)}
         {field('대상기간 시작 (자동·수정가능)', <input type="date" style={inp} value={periodStart} onChange={e => setPeriodStart(e.target.value)} data-testid="payout-new-start" aria-label="대상기간 시작" />)}
         {field('대상기간 종료 (자동·수정가능)', <input type="date" style={inp} value={periodEnd} onChange={e => setPeriodEnd(e.target.value)} data-testid="payout-new-end" aria-label="대상기간 종료" />)}
-        {field('수집 기준', <ClickSelect value={basis} onChange={(v: string) => setBasis(v as any)} triggerStyle={inp} options={[{ value: 'delivery_date', label: '납품일 기준' }, { value: 'expected_payment_date', label: '지급예정일 기준' }]} />)}
+        {field('수집 기준', <ClickSelect value={basis} onChange={(v: string) => setBasis(v as any)} triggerStyle={inp} menuStyle={{ fontFamily: APP_FONT }} options={[{ value: 'delivery_date', label: '납품일 기준' }, { value: 'expected_payment_date', label: '지급예정일 기준' }]} />)}
         {field('비고', <input style={inp} value={note} onChange={e => setNote(e.target.value)} placeholder="비고" data-testid="payout-new-note" aria-label="비고" />)}
       </div>
       <p style={{ ...TYPO.helper, marginTop: 10, color: C.textSecondary }}>지급예정일 선택 시 대상기간이 자동 제안됩니다(수정 가능). 조건을 충족한 미지급·미배정 건이 자동수집됩니다.</p>

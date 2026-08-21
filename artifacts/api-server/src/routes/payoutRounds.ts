@@ -1145,14 +1145,23 @@ router.patch("/admin/payout-rounds/:id/pay", ...adminGuard, async (req, res) => 
   if (round.status === "paid") { res.status(400).json({ error: "이미 지급완료된 회차입니다." }); return; }
   if (round.status !== "confirmed") { res.status(400).json({ error: "지급확정된 회차만 지급완료 처리할 수 있습니다." }); return; }
   try {
+    const paidAt = new Date();
     await db.update(performanceAssignmentsTable)
-      .set({ paymentStatus: "paid", updatedAt: new Date() })
+      .set({ paymentStatus: "paid", updatedAt: paidAt })
       .where(and(
         eq(performanceAssignmentsTable.payoutRoundId, id),
         ne(performanceAssignmentsTable.paymentStatus, "payment_hold"),
       ));
+    // 지급 실행(payout_transfers) 상태 동기화 — 실제 지급대상(ready)만 paid + paidAt 기록.
+    //   · excluded/cancelled/failed/pending 은 status 조건상 자연 제외(임의 paid 전환 금지). 금액·snapshot 불변.
+    await db.update(payoutTransfersTable)
+      .set({ status: "paid", paidAt, updatedAt: paidAt })
+      .where(and(
+        eq(payoutTransfersTable.payoutRoundId, id),
+        eq(payoutTransfersTable.status, "ready"),
+      ));
     await db.update(payoutRoundsTable)
-      .set({ status: "paid", updatedAt: new Date() })
+      .set({ status: "paid", updatedAt: paidAt })
       .where(eq(payoutRoundsTable.id, id));
     const [refreshed] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
     res.json(await loadRoundDetail(refreshed));
@@ -1189,7 +1198,12 @@ router.patch("/admin/payout-rounds/:id/pay-items", ...adminGuard, async (req, re
     const remainUnpaid = await db.select({ id: performanceAssignmentsTable.id }).from(performanceAssignmentsTable)
       .where(and(eq(performanceAssignmentsTable.payoutRoundId, id), eq(performanceAssignmentsTable.paymentStatus, "unpaid")));
     if (remainUnpaid.length === 0) {
-      await db.update(payoutRoundsTable).set({ status: "paid", updatedAt: new Date() }).where(eq(payoutRoundsTable.id, id));
+      const paidAt = new Date();
+      // 회차 전체 완료 시에만 지급 실행(payout_transfers) 동기화 — ready → paid + paidAt (excluded/cancelled/failed 제외).
+      await db.update(payoutTransfersTable)
+        .set({ status: "paid", paidAt, updatedAt: paidAt })
+        .where(and(eq(payoutTransfersTable.payoutRoundId, id), eq(payoutTransfersTable.status, "ready")));
+      await db.update(payoutRoundsTable).set({ status: "paid", updatedAt: paidAt }).where(eq(payoutRoundsTable.id, id));
     }
     const [refreshed] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
     res.json({ ...(await loadRoundDetail(refreshed)), paidNow: done.length });

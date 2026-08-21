@@ -230,7 +230,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   };
 
   // 초기 탭 — /admin/companies* 경로로 새로고침·직접진입 시 거래처 탭을 복원한다(URL 라우팅 연동).
-  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"settlements-legacy"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics">(
+  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics">(
     isCompanyPath(window.location.pathname) ? "companies" : "dashboard",
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -1956,15 +1956,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         </Section>
       )}
 
-      {/* ── 정산 탭 (사이드바 하위메뉴: 지급회차 관리 · 지급명세서 · 기존 정산) ── */}
-      {(adminTab === "settlements" || adminTab === "settlement-statement" || adminTab === "settlement-tax" || adminTab === "settlements-legacy") && (
+      {/* ── 정산 탭 (사이드바 하위메뉴: 지급회차 관리 · 지급명세서 · 세무자료) ── */}
+      {(adminTab === "settlements" || adminTab === "settlement-statement" || adminTab === "settlement-tax") && (
         <SettlementTabs
-          view={adminTab === "settlement-statement" ? "statement" : adminTab === "settlement-tax" ? "tax" : adminTab === "settlements-legacy" ? "legacy" : "payout"}
-          settlements={settlements}
-          loading={loading}
+          view={adminTab === "settlement-statement" ? "statement" : adminTab === "settlement-tax" ? "tax" : "payout"}
           token={token ?? ""}
           onToast={setToast}
-          onRefresh={fetchAll}
         />
       )}
 

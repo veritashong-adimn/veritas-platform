@@ -17,3 +17,11 @@ button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* 테이블 컬럼 헤더(항목명 = th)는 항상 컬럼 중앙정렬 — 플랫폼 전체 + 신규 화면 자동 적용.
+   · 데이터 셀(td)은 각 화면의 기존 정렬(좌/우/중앙)을 그대로 유지(선택자에 td 미포함).
+   · 개별 th 의 인라인 text-align(우/좌)도 덮어야 하므로 !important 사용.
+   · 모든 <th> 는 컬럼 헤더 용도(세로형 scope="row" 행헤더 미사용) → 부작용 없음. */
+th {
+  text-align: center !important;
+}
