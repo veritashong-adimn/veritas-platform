@@ -2354,6 +2354,8 @@ router.post("/admin/products/:id/restore", ...adminGuard, async (req, res) => {
   if (isNaN(productId) || productId <= 0) {
     res.status(400).json({ error: "유효하지 않은 product id." }); return;
   }
+  // 복원 사유(선택 입력) — logs.metadata.restoreReason 에 기록.
+  const restoreReason = ((req.body?.reason ?? "") as string).trim();
 
   try {
     const [existing] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
@@ -2367,7 +2369,7 @@ router.post("/admin/products/:id/restore", ...adminGuard, async (req, res) => {
       .returning();
 
     await logEvent("product", productId, "product_restored", req.log, req.user as any,
-      JSON.stringify({ code: existing.code, name: existing.name }));
+      JSON.stringify({ code: existing.code, name: existing.name, ...(restoreReason ? { restoreReason } : {}) }));
     res.json(updated);
   } catch (err) {
     req.log.error({ err }, "Products: failed to restore");
@@ -2382,6 +2384,8 @@ router.delete("/admin/products/:id/purge", ...adminOnly, async (req, res) => {
   if (isNaN(productId) || productId <= 0) {
     res.status(400).json({ error: "유효하지 않은 product id." }); return;
   }
+  // 완전삭제 사유(선택 입력) — logs.metadata.purgeReason 에 기록.
+  const purgeReason = ((req.body?.reason ?? "") as string).trim();
 
   try {
     const [existing] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
@@ -2422,8 +2426,9 @@ router.delete("/admin/products/:id/purge", ...adminOnly, async (req, res) => {
     }
 
     // 완전삭제 (실제 행 제거) — product_options / translator_products 는 FK CASCADE 로 자동 정리.
+    // 감사로그를 실제 삭제 "이전"에 먼저 기록.
     await logEvent("product", productId, "product_purged", req.log, req.user as any,
-      JSON.stringify({ code: existing.code, name: existing.name }));
+      JSON.stringify({ code: existing.code, name: existing.name, ...(purgeReason ? { purgeReason } : {}) }));
 
     await db.delete(productsTable).where(eq(productsTable.id, productId));
 

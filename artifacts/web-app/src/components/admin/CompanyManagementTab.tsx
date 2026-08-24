@@ -344,10 +344,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                 </GhostBtn>
               </>
             )}
-            <GhostBtn onClick={() => setShowTrash(true)} style={{ fontSize: 13, padding: "7px 14px" }}
-              data-testid="company-trash-btn" aria-label="거래처 휴지통">
-              🗑 휴지통
-            </GhostBtn>
+            {/* 개별 휴지통 버튼 제거 — 삭제 데이터 관리는 사이드바 하단 「통합 휴지통」으로 일원화. CompanyTrashTab·삭제/복원 API는 유지. */}
           </div>
         )
       }>

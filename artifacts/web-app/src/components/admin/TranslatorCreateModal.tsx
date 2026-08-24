@@ -443,9 +443,10 @@ function OverseasRegionCombobox({ value, onChange, country }: {
   );
 }
 
-export function TranslatorCreateModal({ token, permissions = [], onClose, onCreated, onToast }: {
+export function TranslatorCreateModal({ token, permissions = [], onClose, onCreated, onToast, asPage = false }: {
   token: string; permissions?: string[];
   onClose: () => void; onCreated: (translator: any) => void; onToast: (msg: string) => void;
+  asPage?: boolean;   // true면 모달 대신 전체페이지 ERP 폼으로 렌더(로직 동일 재사용).
 }) {
   const hasPerm = (key: string) => permissions.includes(key) || permissions.includes("*");
 
@@ -474,8 +475,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 
   // 전문 정보 UI 제어
   const [pinnedSubTypes, setPinnedSubTypes] = useState<Set<string>>(new Set());
-  const [showAllSubTypes, setShowAllSubTypes] = useState(false);
-  const [showAllSpecs, setShowAllSpecs] = useState(false);
   const [showOtherSpec, setShowOtherSpec] = useState(false);
 
   const [form, setForm] = useState({
@@ -818,7 +817,14 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
 
   return (
     <>
-    <DraggableModal title="통번역사 등록" subtitle="초대 기반 계정 생성 — 비밀번호는 통번역사가 직접 설정합니다" onClose={onClose} width={820} zIndex={310} bodyPadding="20px 28px" resizable>
+    <DraggableModal title="통번역사 등록" subtitle="초대 기반 계정 생성 — 비밀번호는 통번역사가 직접 설정합니다" onClose={onClose} width={820} zIndex={310} bodyPadding="20px 28px" resizable
+      inline={asPage}
+      headerExtra={asPage ? (
+        <>
+          <GhostBtn onClick={onClose} style={{ fontSize: 14, padding: "10px 20px" }}>취소</GhostBtn>
+          <PrimaryBtn onClick={handleSubmit} disabled={saving} style={{ fontSize: 14, padding: "10px 24px" }}>{saving ? "등록 중..." : "저장"}</PrimaryBtn>
+        </>
+      ) : undefined}>
 
       {/* ── 1. 기본 정보 ── */}
       <p style={sH}>기본 정보</p>
@@ -1070,7 +1076,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                       nextSubTypes = nextSubTypes.filter(st => validSubs.has(st));
                       setPinnedSubTypes(prev => new Set([...prev].filter(st => validSubs.has(st))));
                     }
-                    setShowAllSubTypes(false);
                     setForm(p => ({ ...p, profileWorkTypes: next.join(","), profileSubTypes: nextSubTypes.join(",") }));
                   }}
                   style={{
@@ -1098,11 +1103,8 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
             ...allSubs.filter(s => selectedSubSet.has(s) && !pinnedSubTypes.has(s)),
             ...allSubs.filter(s => !selectedSubSet.has(s)),
           ];
-          const defaultVisible = pinnedSubTypes.size > 0
-            ? sortedSubs.filter(s => pinnedSubTypes.has(s))
-            : sortedSubs.filter(s => selectedSubSet.has(s)).slice(0, 3);
-          const visibleSubs = showAllSubTypes ? sortedSubs : defaultVisible;
-          const hiddenCount = sortedSubs.length - visibleSubs.length;
+          // 전체 세부유형을 항상 표시 (접기/펼치기 없음)
+          const visibleSubs = sortedSubs;
           return (
             <div style={{ marginBottom: 10 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
@@ -1110,12 +1112,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                   세부유형 (프로필)
                   <span style={{ fontSize: 10, color: "#9ca3af", fontWeight: 400, marginLeft: 6 }}>☆ 클릭으로 대표 지정 (최대 2개)</span>
                 </label>
-                {(hiddenCount > 0 || showAllSubTypes) && (
-                  <button type="button" onClick={() => setShowAllSubTypes(prev => !prev)}
-                    style={{ fontSize: 11, color: "#6366f1", background: "none", border: "1px solid #e0e7ff", borderRadius: 6, cursor: "pointer", padding: "2px 8px" }}>
-                    {showAllSubTypes ? "접기" : `추가 ${hiddenCount}개 보기`}
-                  </button>
-                )}
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {visibleSubs.map(st => {
@@ -1158,12 +1154,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                     </span>
                   );
                 })}
-                {!showAllSubTypes && visibleSubs.length === 0 && (
-                  <button type="button" onClick={() => setShowAllSubTypes(true)}
-                    style={{ fontSize: 11, color: "#6366f1", background: "none", border: "1px dashed #c7d2fe", borderRadius: 6, cursor: "pointer", padding: "3px 10px" }}>
-                    + 세부유형 선택
-                  </button>
-                )}
               </div>
             </div>
           );
@@ -1176,10 +1166,9 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           const presetSet = new Set<string>(SPECIALIZATION_PRESETS);
           const customVals = parseList(form.specializations).filter(x => !presetSet.has(x));
           const allPresets = SPECIALIZATION_PRESETS as readonly string[];
-          const SPEC_FIRST_ROW = 6;
           const sortedPresets = [...allPresets.filter(t => selected.has(t)), ...allPresets.filter(t => !selected.has(t))];
-          const visiblePresets = showAllSpecs ? sortedPresets : sortedPresets.slice(0, SPEC_FIRST_ROW);
-          const hiddenCount = (sortedPresets.length - visiblePresets.length) + (showAllSpecs ? 0 : 1);
+          // 전체 전문분야를 항상 표시 (접기/펼치기 없음)
+          const visiblePresets = sortedPresets;
 
           const togglePreset = (tag: string) => {
             const cur = parseList(form.specializations);
@@ -1209,10 +1198,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
             <div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                 <label style={{ ...labelSt, marginBottom: 0 }}>전문분야</label>
-                <button type="button" onClick={() => setShowAllSpecs(prev => !prev)}
-                  style={{ fontSize: 11, color: "#6366f1", background: "none", border: "1px solid #e0e7ff", borderRadius: 6, cursor: "pointer", padding: "2px 8px" }}>
-                  {showAllSpecs ? "접기" : `+${hiddenCount}개 보기`}
-                </button>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
                 {visiblePresets.map(tag => {
@@ -1226,14 +1211,12 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                       )}>{tag}</button>
                   );
                 })}
-                {showAllSpecs && (
-                  <button type="button" onClick={handleOtherToggle}
-                    style={tagStyle(showOtherSpec, { bg: "#7c3aed", bgOff: "#f5f3ff", fg: "#fff", fgOff: "#7c3aed", border: "#7c3aed", borderOff: "#ddd8fe" })}>
-                    기타
-                  </button>
-                )}
+                <button type="button" onClick={handleOtherToggle}
+                  style={tagStyle(showOtherSpec, { bg: "#7c3aed", bgOff: "#f5f3ff", fg: "#fff", fgOff: "#7c3aed", border: "#7c3aed", borderOff: "#ddd8fe" })}>
+                  기타
+                </button>
               </div>
-              {showAllSpecs && showOtherSpec && (
+              {showOtherSpec && (
                 <input type="text" value={customVals.join(", ")} onChange={e => handleCustomChange(e.target.value)}
                   placeholder="예: 게임, 방산전자, 우주항공"
                   style={{ ...inputStyle, marginTop: 6 }} />
@@ -1547,13 +1530,15 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         </>
       )}
 
-      {/* ── 액션 버튼 ── */}
-      <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 20, paddingTop: 16, borderTop: "1px solid #f3f4f6" }}>
-        <GhostBtn onClick={onClose} style={{ fontSize: 14, padding: "10px 20px" }}>취소</GhostBtn>
-        <PrimaryBtn onClick={handleSubmit} disabled={saving} style={{ fontSize: 14, padding: "10px 24px" }}>
-          {saving ? "등록 중..." : "통번역사 등록"}
-        </PrimaryBtn>
-      </div>
+      {/* ── 액션 버튼 (모달 모드 하단. asPage 는 상단 headerExtra 에 노출) ── */}
+      {!asPage && (
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 20, paddingTop: 16, borderTop: "1px solid #f3f4f6" }}>
+          <GhostBtn onClick={onClose} style={{ fontSize: 14, padding: "10px 20px" }}>취소</GhostBtn>
+          <PrimaryBtn onClick={handleSubmit} disabled={saving} style={{ fontSize: 14, padding: "10px 24px" }}>
+            {saving ? "등록 중..." : "통번역사 등록"}
+          </PrimaryBtn>
+        </div>
+      )}
     </DraggableModal>
 
     {/* ── AI 분석 패널 ── */}

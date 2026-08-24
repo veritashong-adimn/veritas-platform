@@ -11,6 +11,8 @@ interface DraggableModalProps {
   headerExtra?: React.ReactNode;
   bodyPadding?: string;
   resizable?: boolean;
+  /** true면 오버레이·드래그 없이 페이지 흐름(ERP 전체페이지)으로 렌더. 헤더 우측에 headerExtra(액션) 노출. */
+  inline?: boolean;
 }
 
 export function DraggableModal({
@@ -24,6 +26,7 @@ export function DraggableModal({
   headerExtra,
   bodyPadding = "20px 24px",
   resizable = false,
+  inline = false,
 }: DraggableModalProps) {
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [maximized, setMaximized] = useState(false);
@@ -155,6 +158,22 @@ export function DraggableModal({
     : pos
     ? { position: "fixed", left: pos.x, top: pos.y, width: "100%", maxWidth: width, height: height, maxHeight: height ?? "90vh", ...sizeStyle }
     : { position: "fixed", left: "50%", top: "50%", transform: "translate(-50%, -50%)", width: "100%", maxWidth: width, height: height, maxHeight: height ?? "90vh", ...sizeStyle };
+
+  // ── inline(ERP 전체페이지) 모드 — 오버레이·드래그·최대화 없이 일반 카드 흐름으로 렌더 ──
+  if (inline) {
+    return (
+      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ padding: "16px 24px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", flexShrink: 0, background: "#fff" }}>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "#111827", lineHeight: 1.2 }}>{title}</div>
+            {subtitle && <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>{subtitle}</div>}
+          </div>
+          {headerExtra && <div style={{ display: "flex", alignItems: "center", gap: 8 }}>{headerExtra}</div>}
+        </div>
+        <div style={{ padding: bodyPadding }}>{children}</div>
+      </div>
+    );
+  }
 
   return (
     <>

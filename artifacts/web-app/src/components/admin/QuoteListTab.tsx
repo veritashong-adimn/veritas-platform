@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../../lib/constants';
-import { PrimaryBtn, ClickSelect } from '../ui';
+import { ClickSelect } from '../ui';
 import { QuoteEditorWorkspace, type QuoteItemForm, type VatType, type QuoteType } from './QuoteEditorWorkspace';
 import QuotePdfPreviewModal from './QuotePdfPreviewModal';
 import { QuoteTrashTab } from './QuoteTrashTab';
@@ -67,9 +67,18 @@ interface QuoteListTabProps {
   onOpenSalesDetail?: (projectId: number) => void;
   /** 판매전환 권한 충족 여부(기본 true) — 견적 상세 판매전환 버튼 활성 제어 */
   canConvert?: boolean;
+  /**
+   * ERP 진입 모드(사이드바 하위메뉴별). 기존 로직 재사용, 진입 화면만 결정.
+   *  - 'list'(기본): 견적서 목록. 행클릭 편집은 인라인 유지.
+   *  - 'register':   견적서 등록(신규 작성 workspace로 바로 진입).
+   *  - 'trash':      휴지통(삭제 견적 조회/복원/완전삭제).
+   */
+  view?: 'list' | 'register' | 'trash';
+  /** register/trash 화면에서 닫기·저장 시 '견적서 목록' 탭으로 복귀 */
+  onExitToList?: () => void;
 }
 
-export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales, onOpenSalesDetail, canConvert: convertPerm = true }: QuoteListTabProps) {
+export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales, onOpenSalesDetail, canConvert: convertPerm = true, view = 'list', onExitToList }: QuoteListTabProps) {
   const authH = { Authorization: `Bearer ${token}` };
 
   const [quotes, setQuotes]             = useState<QuoteRow[]>([]);
@@ -79,8 +88,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
   const [search, setSearch]             = useState('');
   const [dateFrom, setDateFrom]         = useState('');
   const [dateTo, setDateTo]             = useState('');
-  const [showEditor, setShowEditor]     = useState(false);
-  const [showTrash, setShowTrash]       = useState(false);
+  // 진입 모드에 따라 초기 화면 결정 — 신규작성/휴지통은 바로 해당 화면으로.
+  const [showEditor, setShowEditor]     = useState(view === 'register');
+  const [showTrash, setShowTrash]       = useState(view === 'trash');
   const [pdfData,    setPdfData]        = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
   const [pdfLoading, setPdfLoading]     = useState<number | null>(null);
   // 편집 모드
@@ -179,14 +189,17 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     setShowEditor(false);
     setEditQuoteId(null);
     setEditInitData(null);
-  }, []);
+    // 견적서 등록 페이지에서 닫으면 견적서 목록 탭으로 복귀(신규작성은 목록 인라인이 아니므로).
+    if (view === 'register') onExitToList?.();
+  }, [view, onExitToList]);
 
   const handleEditorSaved = useCallback(() => {
     setShowEditor(false);
     setEditQuoteId(null);
     setEditInitData(null);
     fetchQuotes();
-  }, [fetchQuotes]);
+    if (view === 'register') onExitToList?.();
+  }, [fetchQuotes, view, onExitToList]);
 
   // 검색 필터 (견적번호·견적서명·고객사·고객명·담당PM·상품명)
   const filtered = quotes.filter(q => {
@@ -334,7 +347,11 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         token={token}
         isAdmin={isAdmin}
         onToast={onToast}
-        onBack={() => { setShowTrash(false); fetchQuotes(); }}
+        onBack={() => {
+          setShowTrash(false);
+          // 휴지통 전용 탭에서는 목록 탭으로 복귀, 목록 내부 진입 시에는 목록으로 되돌림.
+          if (view === 'trash') onExitToList?.(); else fetchQuotes();
+        }}
       />
     );
   }
@@ -353,21 +370,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       {/* ── Card 1: 검색 및 필터 ────────────────────────────────────────────────── */}
       <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 16px', marginBottom: 8 }}>
         {/* 카드 헤더 */}
+        {/* 견적서 작성/휴지통은 사이드바 하위메뉴(견적서 등록 / 휴지통)로 분리됨 — 상단 버튼 제거(ERP 구조 통일). */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', letterSpacing: '0.2px' }}>검색 및 필터</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <PrimaryBtn onClick={() => setShowEditor(true)} style={{ fontSize: 12, padding: '5px 12px' }}>
-              + 견적서 작성
-            </PrimaryBtn>
-            {/* 휴지통 — 삭제된(휴지통) 견적 전용 페이지로 이동 (사이드바 메뉴 추가 없음) */}
-            <button type="button" onClick={() => setShowTrash(true)}
-              data-testid="btn-quote-trash" aria-label="견적 휴지통"
-              style={{ fontSize: 12, padding: '5px 12px', borderRadius: 6, cursor: 'pointer', background: '#fff', color: '#6b7280', border: '1px solid #d1d5db', fontWeight: 600 }}
-              onMouseEnter={e => { e.currentTarget.style.background = '#f9fafb'; }}
-              onMouseLeave={e => { e.currentTarget.style.background = '#fff'; }}>
-              🗑 휴지통
-            </button>
-          </div>
         </div>
 
         {/* 통합검색 + 드롭다운 */}

@@ -855,6 +855,8 @@ router.post("/admin/companies/:id/restore", requireAuth, requireRole("admin"), a
   if (isNaN(companyId) || companyId <= 0) {
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
+  // 복원 사유(선택 입력) — logs.metadata.restoreReason 에 기록.
+  const restoreReason = ((req.body?.reason ?? "") as string).trim();
   try {
     const [existing] = await db
       .select({ id: companiesTable.id, name: companiesTable.name, deletedAt: companiesTable.deletedAt })
@@ -872,7 +874,7 @@ router.post("/admin/companies/:id/restore", requireAuth, requireRole("admin"), a
       action: "restored",
       performedBy: req.user?.id ?? null,
       performedByEmail: req.user?.email ?? null,
-      metadata: JSON.stringify({ name: existing.name }),
+      metadata: JSON.stringify({ name: existing.name, ...(restoreReason ? { restoreReason } : {}) }),
     });
 
     req.log.info({ companyId, name: existing.name, restoredBy: req.user?.id }, "Company: restored from trash");
@@ -890,6 +892,8 @@ router.delete("/admin/companies/:id/permanent", requireAuth, requireRole("admin"
   if (isNaN(companyId) || companyId <= 0) {
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
+  // 완전삭제 사유(선택 입력) — logs.metadata.purgeReason 에 기록.
+  const purgeReason = ((req.body?.reason ?? "") as string).trim();
   try {
     const [existing] = await db
       .select({ id: companiesTable.id, name: companiesTable.name, deletedAt: companiesTable.deletedAt })
@@ -949,17 +953,18 @@ router.delete("/admin/companies/:id/permanent", requireAuth, requireRole("admin"
 
     // 연결 데이터 없음 → 물리삭제 (Alias/상호이력은 cascade 이지만 명시적으로 정리)
     await db.transaction(async (tx) => {
-      await tx.delete(companyAliasesTable).where(eq(companyAliasesTable.companyId, companyId));
-      await tx.delete(companyNameHistoryTable).where(eq(companyNameHistoryTable.companyId, companyId));
-      await tx.delete(companiesTable).where(eq(companiesTable.id, companyId));
+      // 감사로그를 실제 삭제 "이전"에 먼저 기록(동일 트랜잭션 내 → 삭제 실패 시 함께 롤백).
       await tx.insert(logsTable).values({
         entityType: "company",
         entityId: companyId,
         action: "purged",
         performedBy: req.user?.id ?? null,
         performedByEmail: req.user?.email ?? null,
-        metadata: JSON.stringify({ name: existing.name }),
+        metadata: JSON.stringify({ name: existing.name, ...(purgeReason ? { purgeReason } : {}) }),
       });
+      await tx.delete(companyAliasesTable).where(eq(companyAliasesTable.companyId, companyId));
+      await tx.delete(companyNameHistoryTable).where(eq(companyNameHistoryTable.companyId, companyId));
+      await tx.delete(companiesTable).where(eq(companiesTable.id, companyId));
     });
 
     req.log.warn({ companyId, name: existing.name, purgedBy: req.user?.id }, "Company: PERMANENTLY deleted (연결 데이터 없음)");
@@ -1822,6 +1827,8 @@ router.get("/admin/contacts-trash", ...adminGuard, async (req, res) => {
 router.post("/admin/contacts/:id/restore", ...adminGuard, async (req, res) => {
   const contactId = Number(req.params.id);
   if (isNaN(contactId) || contactId <= 0) { res.status(400).json({ error: "유효하지 않은 contact id." }); return; }
+  // 복원 사유(선택 입력) — logs.metadata.restoreReason 에 기록.
+  const restoreReason = ((req.body?.reason ?? "") as string).trim();
   try {
     const [existing] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId));
     if (!existing) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
@@ -1831,8 +1838,8 @@ router.post("/admin/contacts/:id/restore", ...adminGuard, async (req, res) => {
       .set({ deletedAt: null, deletedBy: null, deletionReason: null, updatedAt: new Date() })
       .where(eq(contactsTable.id, contactId));
 
-    await logEvent("company", existing.companyId, "company_contact_restored", undefined, (req as any).user?.id,
-      JSON.stringify({ contactId, name: existing.name, companyId: existing.companyId }));
+    await logEvent("company", existing.companyId, "company_contact_restored", req.log, req.user ?? undefined,
+      JSON.stringify({ contactId, name: existing.name, companyId: existing.companyId, ...(restoreReason ? { restoreReason } : {}) }));
 
     res.json({ ok: true, restoredContactId: contactId });
   } catch (err) {
@@ -1847,6 +1854,8 @@ router.delete("/admin/contacts/:id/permanent", ...adminGuard, async (req, res) =
   if (isNaN(contactId) || contactId <= 0) {
     res.status(400).json({ error: "유효하지 않은 contact id." }); return;
   }
+  // 완전삭제 사유(선택 입력) — logs.metadata.purgeReason 에 기록.
+  const purgeReason = ((req.body?.reason ?? "") as string).trim();
   try {
     const [existing] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId));
     if (!existing) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
@@ -1864,12 +1873,13 @@ router.delete("/admin/contacts/:id/permanent", ...adminGuard, async (req, res) =
       }); return;
     }
 
+    // 감사로그를 실제 삭제 "이전"에 먼저 기록(행 제거 후에는 참조 불가).
+    await logEvent("company", existing.companyId, "company_contact_permanent_deleted",
+      req.log, req.user ?? undefined,
+      JSON.stringify({ contactId, name: existing.name, companyId: existing.companyId, ...(purgeReason ? { purgeReason } : {}) }));
+
     // 완전삭제 실행
     await db.delete(contactsTable).where(eq(contactsTable.id, contactId));
-
-    await logEvent("company", existing.companyId, "company_contact_permanent_deleted",
-      undefined, (req as any).user?.id,
-      JSON.stringify({ contactId, name: existing.name, companyId: existing.companyId }));
 
     res.json({ ok: true });
   } catch (err) {

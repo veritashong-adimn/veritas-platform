@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api, TranslatorProfile, TranslatorRate, NoteEntry, normalizeLanguages, LangExpEntry, parseLangExperiences } from "../../lib/constants";
+import { registerUnsavedChecker } from "../../lib/unsavedGuard";
 import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 import { SensitiveInfoModal, SETTLEMENT_TYPES } from "./SensitiveInfoModal";
@@ -537,11 +538,12 @@ function OverseasRegionCombobox({ value, onChange, country }: {
   );
 }
 
-export function TranslatorDetailModal({ userId, userEmail, token, permissions = [], onClose, onToast, onDeleted, onSaved }: {
+export function TranslatorDetailModal({ userId, userEmail, token, permissions = [], onClose, onToast, onDeleted, onSaved, asPage = false }: {
   userId: number; userEmail: string; token: string;
   permissions?: string[];
   onClose: () => void; onToast: (msg: string) => void;
   onDeleted?: () => void; onSaved?: () => void;
+  asPage?: boolean;   // true면 모달 대신 ERP 전체페이지(탭 구조)로 렌더. 모달 모드는 기존 동작 그대로.
 }) {
   const hasPerm = (key: string) => permissions.includes(key);
   const [profile, setProfile] = useState<TranslatorProfile | null>(null);
@@ -565,8 +567,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [showSensitive, setShowSensitive] = useState(false);
   const [resumeUploading, setResumeUploading] = useState(false);
   const [resumeDeleting, setResumeDeleting] = useState(false);
-  const [showAllSubTypes, setShowAllSubTypes] = useState(false);
-  const [showAllSpecs, setShowAllSpecs] = useState(false);
   const [regionCountry, setRegionCountry] = useState("대한민국");
   const [regionCity, setRegionCity] = useState("");
   const [regionCountryCustom, setRegionCountryCustom] = useState("");
@@ -582,13 +582,35 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [majorIsCustom, setMajorIsCustom] = useState(false);
   const [majorCustom, setMajorCustom] = useState("");
   const [collapsed, setCollapsed] = useState({
-    resume: true,
-    operational: true,
-    operations: true,
-    rates: true,
+    resume: !asPage,        // 페이지(탭) 모드에서는 각 탭 내용이 곧바로 보이도록 펼침.
+    operational: !asPage,
+    operations: !asPage,
+    rates: !asPage,
   });
   const toggleSection = (key: keyof typeof collapsed) =>
     setCollapsed(p => ({ ...p, [key]: !p[key] }));
+  // ERP 상세 탭(§5) — asPage 에서만 사용. 기본 진입은 기본정보.
+  const DETAIL_TABS = [
+    { key: "basic", label: "기본정보" },
+    { key: "expertise", label: "전문역량" },
+    { key: "language", label: "언어·국제경험" },
+    { key: "docs", label: "이력서·증빙" },
+    { key: "rates", label: "단가관리" },
+    { key: "settlement", label: "정산정보" },
+    { key: "performance", label: "수행이력" },
+    { key: "mgmt", label: "관리정보" },
+  ] as const;
+  const [activeTab, setActiveTab] = useState<string>("basic");
+  // 섹션 표시 여부 — 모달 모드는 항상 표시(원본 보존), 페이지 모드는 활성 탭만.
+  const tabShow = (key: string): React.CSSProperties => ({ display: (!asPage || activeTab === key) ? undefined : "none" });
+  // ── 조회/수정 모드(§ERP) — 상세는 기본 "조회 모드". [수정] 클릭 시 편집. 탭 이동해도 편집 세션 유지. ──
+  const [editMode, setEditMode] = useState(false);
+  // 로고 클릭 새로고침 시 확인창을 위해, 편집 모드(미저장 가능)를 전역 미저장 레지스트리에 등록.
+  const editModeRef = useRef(editMode);
+  editModeRef.current = editMode;
+  useEffect(() => registerUnsavedChecker(() => editModeRef.current), []);
+  // [취소] 시 원복을 위한 편집 진입 시점 스냅샷(마스터 폼 한정. 단가/이력서 등 즉시커밋 독립기능은 대상 아님).
+  const editSnapshot = useRef<null | Record<string, any>>(null);
   const [langExperiences, setLangExperiences] = useState<LangExpEntry[]>([]);
 
   const [form, setForm] = useState({
@@ -744,18 +766,18 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
       if (!emailRegex.test(t)) return { ...e, error: "올바른 이메일 형식이 아닙니다." };
       return { ...e, error: "" };
     });
-    if (validated.some(e => e.error)) { setEmailEntries(validated); return; }
+    if (validated.some(e => e.error)) { setEmailEntries(validated); return false; }
 
     // 중복 검사
     const allNorm = validated.map(e => e.email.trim().toLowerCase());
     if (new Set(allNorm).size !== allNorm.length) {
-      onToast("동일한 이메일이 중복 입력되어 있습니다."); return;
+      onToast("동일한 이메일이 중복 입력되어 있습니다."); return false;
     }
 
     // 대표 이메일 1개 확인
     const primaryCount = validated.filter(e => e.isPrimary).length;
     if (primaryCount !== 1) {
-      onToast("대표 이메일은 반드시 1개여야 합니다."); return;
+      onToast("대표 이메일은 반드시 1개여야 합니다."); return false;
     }
 
     setSaving(true);
@@ -788,7 +810,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         }),
       });
       const data = await res.json();
-      if (!res.ok) { onToast(`오류: ${data.error}`); return; }
+      if (!res.ok) { onToast(`오류: ${data.error}`); return false; }
       // name이 변경된 경우 userInfo 동기화
       if (form.name.trim()) setUserInfo(prev => prev ? { ...prev, name: form.name.trim() } : prev);
       setProfile(data);
@@ -835,8 +857,49 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
       if (newPrimary) setUserInfo(prev => prev ? { ...prev, email: newPrimary } : prev);
       onToast("통번역사 프로필이 저장되었습니다.");
       onSaved?.();
-    } catch { onToast("오류: 저장 실패"); }
+      return true;
+    } catch { onToast("오류: 저장 실패"); return false; }
     finally { setSaving(false); }
+  };
+
+  // ── 조회/수정 모드 전환 핸들러 ──
+  // [수정]: 편집 진입 — 원복용 스냅샷 저장 후 편집 모드로.
+  const enterEditMode = () => {
+    editSnapshot.current = {
+      form: JSON.parse(JSON.stringify(form)),
+      langExperiences: JSON.parse(JSON.stringify(langExperiences)),
+      emailEntries: JSON.parse(JSON.stringify(emailEntries)),
+      pinnedSubTypes: new Set(pinnedSubTypes),
+      regionCountry, regionCity, regionCountryCustom,
+      eduIsCustom, eduCustom, majorIsCustom, majorCustom,
+      showOtherSpec,
+    };
+    setEditMode(true);
+  };
+  // [취소]: 수정 전 값으로 화면 복원 후 조회 모드로.
+  const cancelEditMode = () => {
+    const s = editSnapshot.current;
+    if (s) {
+      setForm(s.form);
+      setLangExperiences(s.langExperiences);
+      setEmailEntries(s.emailEntries);
+      setPinnedSubTypes(new Set(s.pinnedSubTypes));
+      setRegionCountry(s.regionCountry); setRegionCity(s.regionCity); setRegionCountryCustom(s.regionCountryCustom);
+      setEduIsCustom(s.eduIsCustom); setEduCustom(s.eduCustom); setMajorIsCustom(s.majorIsCustom); setMajorCustom(s.majorCustom);
+      setShowOtherSpec(s.showOtherSpec);
+    }
+    editSnapshot.current = null;
+    setEditMode(false);
+  };
+  // [저장]: 기존 프로필 저장 로직 재사용 → 성공 시에만 조회 모드로 복귀.
+  const saveAndExitEdit = async () => {
+    const ok = await handleSave();
+    if (ok) { editSnapshot.current = null; setEditMode(false); }
+  };
+  // 미저장 변경 보호(§9) — 편집 중 이탈 시 확인.
+  const requestClose = () => {
+    if (editMode && !window.confirm("저장하지 않은 변경사항이 있습니다. 이동하시겠습니까?")) return;
+    onClose();
   };
 
   const handleAddRate = async () => {
@@ -915,21 +978,35 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     margin: 0, lineHeight: 1.5,
   };
   const labelSt: React.CSSProperties = { fontSize: 12, color: "#6b7280", display: "block", marginBottom: 3 };
-  const secRow = (label: string, collapseKey?: keyof typeof collapsed, extra?: React.ReactNode): React.ReactNode => (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "18px 0 8px" }}>
-      <p style={sH}>{label}</p>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {extra}
-        {collapseKey && (
-          <button type="button" onClick={() => toggleSection(collapseKey)}
-            style={{ fontSize: 12, color: "#6b7280", background: "none", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer", padding: "2px 10px", display: "flex", alignItems: "center", gap: 4 }}>
-            <span style={{ fontSize: 10 }}>{collapsed[collapseKey] ? "▶" : "▼"}</span>
-            {collapsed[collapseKey] ? "펼치기" : "접기"}
-          </button>
-        )}
-      </div>
-    </div>
+  const collapseToggleBtn = (collapseKey: keyof typeof collapsed): React.ReactNode => (
+    <button type="button" onClick={() => toggleSection(collapseKey)}
+      style={{ fontSize: 12, color: "#6b7280", background: "none", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer", padding: "2px 10px", display: "flex", alignItems: "center", gap: 4 }}>
+      <span style={{ fontSize: 10 }}>{collapsed[collapseKey] ? "▶" : "▼"}</span>
+      {collapsed[collapseKey] ? "펼치기" : "접기"}
+    </button>
   );
+  const secRow = (label: string, collapseKey?: keyof typeof collapsed, extra?: React.ReactNode): React.ReactNode => {
+    // 페이지(탭) 모드: 탭 자체가 대제목이므로 중복 섹션 제목은 제거(§6). 재발급 버튼·접기 토글 등 기능 요소만 유지.
+    if (asPage) {
+      if (!extra && !collapseKey) return null;
+      return (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, margin: "2px 0 10px" }}>
+          {extra}
+          {collapseKey && collapseToggleBtn(collapseKey)}
+        </div>
+      );
+    }
+    // 모달 모드: 기존 섹션 제목 그대로.
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "18px 0 8px" }}>
+        <p style={sH}>{label}</p>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {extra}
+          {collapseKey && collapseToggleBtn(collapseKey)}
+        </div>
+      </div>
+    );
+  };
   const handleReinvite = async () => {
     setReinviting(true);
     try {
@@ -1025,29 +1102,75 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 
   return (
     <>
-    <DraggableModal title="통번역사 상세" onClose={onClose} width={860} height="88vh" zIndex={300} bodyPadding="20px 28px" resizable
+    {/* 조회 모드 읽기전용 표기 — 비활성이라도 글자색은 진하게 유지(§4). 스코프: 비활성 fieldset 내부(=조회 모드)만. */}
+    <style>{`
+      fieldset.trd-fs { border: 0; margin: 0; padding: 0; min-inline-size: auto; }
+      fieldset.trd-fs:disabled input,
+      fieldset.trd-fs:disabled textarea {
+        -webkit-text-fill-color: #111827 !important; opacity: 1 !important;
+        color: #111827 !important; background: #fff !important; cursor: default !important;
+      }
+      fieldset.trd-fs:disabled button { cursor: default !important; opacity: 1 !important; }
+      fieldset.trd-fs:disabled [data-edit-only] { display: none !important; }
+      /* ── 상세정보 대분류 탭 Navigation ── */
+      .trd-tabnav { display: flex; flex-wrap: wrap; gap: 4px; align-items: stretch;
+        background: #f8fafc; border: 1px solid #eef2f6; border-radius: 10px;
+        padding: 8px 10px; margin-bottom: 16px; }
+      .trd-tab { font-size: 14.5px; font-weight: 600; line-height: 1.2;
+        padding: 8px 18px; border: none; background: transparent; cursor: pointer;
+        color: #374151; border-radius: 7px; border-bottom: 3px solid transparent;
+        transition: background-color 0.12s, color 0.12s; white-space: nowrap; }
+      .trd-tab:not(.trd-tab-active):hover { background: #eef2ff; }
+      .trd-tab-active { color: #4f46e5; background: #eef2ff;
+        border-bottom: 3px solid #4f46e5; border-bottom-left-radius: 2px; border-bottom-right-radius: 2px; }
+    `}</style>
+    <DraggableModal title="통번역사 상세" onClose={requestClose} width={860} height="88vh" zIndex={300} bodyPadding="20px 28px" resizable
+      inline={asPage}
       headerExtra={
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <button onClick={handleSave} disabled={saving}
-              style={{ fontSize: 12, padding: "4px 14px", background: saving ? "#a5b4fc" : "#6366f1", color: "#fff", border: "none", borderRadius: 6, cursor: saving ? "not-allowed" : "pointer", fontWeight: 700 }}>
-              {saving ? "저장 중…" : "프로필 저장"}
-            </button>
-            {userInfo?.isActive === false ? (
-              <button onClick={handleActivate} disabled={activating || permanentDeleting}
-                style={{ fontSize: 11, padding: "3px 10px", background: "#d1fae5", color: "#065f46", border: "1px solid #6ee7b7", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>
-                {activating ? "처리 중…" : "활성화"}
-              </button>
-            ) : (
-              <button onClick={() => handleDeleteTranslator()} disabled={deleting || permanentDeleting}
-                style={{ fontSize: 11, padding: "3px 10px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>
-                {deleting ? "처리 중…" : "비활성 처리"}
+            {asPage && (
+              <button onClick={requestClose} data-testid="translator-detail-back"
+                style={{ fontSize: 12, padding: "4px 14px", background: "#fff", color: "#374151", border: "1px solid #d1d5db", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>
+                ← 목록으로
               </button>
             )}
-            <button onClick={handlePermanentDelete} disabled={permanentDeleting || deleting || activating}
-              style={{ fontSize: 11, padding: "3px 10px", background: "#7f1d1d", color: "#fff", border: "1px solid #991b1b", borderRadius: 6, cursor: "pointer", fontWeight: 700, opacity: (permanentDeleting || deleting || activating) ? 0.6 : 1 }}>
-              {permanentDeleting ? "삭제 중…" : "완전삭제"}
-            </button>
+            {!editMode ? (
+              /* ── 조회 모드: [수정] [비활성/활성] [완전삭제] ── */
+              <>
+                <button onClick={enterEditMode} data-testid="translator-detail-edit"
+                  style={{ fontSize: 12, padding: "4px 14px", background: "#6366f1", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>
+                  수정
+                </button>
+                {userInfo?.isActive === false ? (
+                  <button onClick={handleActivate} disabled={activating || permanentDeleting}
+                    style={{ fontSize: 11, padding: "3px 10px", background: "#d1fae5", color: "#065f46", border: "1px solid #6ee7b7", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>
+                    {activating ? "처리 중…" : "활성화"}
+                  </button>
+                ) : (
+                  <button onClick={() => handleDeleteTranslator()} disabled={deleting || permanentDeleting}
+                    style={{ fontSize: 11, padding: "3px 10px", background: "#fee2e2", color: "#dc2626", border: "1px solid #fca5a5", borderRadius: 6, cursor: "pointer", fontWeight: 600 }}>
+                    {deleting ? "처리 중…" : "비활성 처리"}
+                  </button>
+                )}
+                <button onClick={handlePermanentDelete} disabled={permanentDeleting || deleting || activating}
+                  style={{ fontSize: 11, padding: "3px 10px", background: "#7f1d1d", color: "#fff", border: "1px solid #991b1b", borderRadius: 6, cursor: "pointer", fontWeight: 700, opacity: (permanentDeleting || deleting || activating) ? 0.6 : 1 }}>
+                  {permanentDeleting ? "삭제 중…" : "완전삭제"}
+                </button>
+              </>
+            ) : (
+              /* ── 편집 모드: [저장] [취소] — 관리 액션(비활성/완전삭제)은 오조작 방지 위해 숨김(§3) ── */
+              <>
+                <button onClick={saveAndExitEdit} disabled={saving} data-testid="translator-detail-save"
+                  style={{ fontSize: 12, padding: "4px 14px", background: saving ? "#a5b4fc" : "#6366f1", color: "#fff", border: "none", borderRadius: 6, cursor: saving ? "not-allowed" : "pointer", fontWeight: 700 }}>
+                  {saving ? "저장 중…" : "저장"}
+                </button>
+                <button onClick={cancelEditMode} disabled={saving} data-testid="translator-detail-cancel"
+                  style={{ fontSize: 12, padding: "4px 14px", background: "#fff", color: "#374151", border: "1px solid #d1d5db", borderRadius: 6, cursor: saving ? "not-allowed" : "pointer", fontWeight: 700 }}>
+                  취소
+                </button>
+              </>
+            )}
           </div>
           {(deleteError || permanentDeleteError) && (
             <div style={{ fontSize: 11, color: "#dc2626", maxWidth: 300, textAlign: "right", lineHeight: 1.4 }}>
@@ -1190,6 +1313,24 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             )}
           </div>
 
+          {/* ── 상세정보 대분류 탭 Navigation — 페이지 모드에서만. 활성 탭 섹션만 표시. ── */}
+          {asPage && (
+            <div className="trd-tabnav" role="tablist" aria-label="통번역사 상세 대분류">
+              {DETAIL_TABS.map(t => {
+                const active = activeTab === t.key;
+                return (
+                  <button key={t.key} type="button" onClick={() => setActiveTab(t.key)}
+                    className={`trd-tab${active ? " trd-tab-active" : ""}`}
+                    role="tab" data-testid={`translator-detail-tab-${t.key}`} aria-selected={active} aria-pressed={active}>
+                    {t.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* 기본정보 탭 */}
+          <div style={tabShow("basic")}>
           {/* ═══════════════════════════════════════════
               2. 기본 정보
           ═══════════════════════════════════════════ */}
@@ -1206,6 +1347,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "#d1fae5", color: "#065f46", borderRadius: 20, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>✓ 계정 활성</span>
             )
           )}
+          <fieldset className="trd-fs" disabled={!editMode}>
           <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 20px" }}>
               {/* 이름 + 휴대폰 같은 줄 */}
@@ -1243,7 +1385,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                         {entry.isPrimary ? (
                           <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 8px", borderRadius: 6, background: "#dbeafe", color: "#1d4ed8", whiteSpace: "nowrap", border: "1px solid #bfdbfe" }}>★ 대표</span>
                         ) : (
-                          <button onClick={() => setEmailEntries(p => {
+                          <button data-edit-only onClick={() => setEmailEntries(p => {
                               const sel = { ...p[i], isPrimary: true };
                               const rest = p.filter((_, idx) => idx !== i).map(x => ({ ...x, isPrimary: false }));
                               return [sel, ...rest];
@@ -1252,10 +1394,10 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                             대표 지정
                           </button>
                         )}
-                        <button onClick={() => setEmailEntries(p => [...p, { email: "", isPrimary: false, error: "" }])}
+                        <button data-edit-only onClick={() => setEmailEntries(p => [...p, { email: "", isPrimary: false, error: "" }])}
                           style={{ fontSize: 14, fontWeight: 700, padding: "2px 8px", borderRadius: 6, border: "1px solid #d1d5db", background: "#f9fafb", color: "#374151", cursor: "pointer", lineHeight: 1.4 }}
                           title="이메일 추가">+</button>
-                        <button disabled={entry.isPrimary && emailEntries.length === 1}
+                        <button data-edit-only disabled={entry.isPrimary && emailEntries.length === 1}
                           onClick={() => {
                             const next = emailEntries.filter((_, idx) => idx !== i);
                             if (entry.isPrimary && next.length > 0) next[0].isPrimary = true;
@@ -1447,11 +1589,17 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               </div>
             </div>
           </div>
+          </fieldset>
 
+          </div>{/* /기본정보 탭 */}
+
+          {/* 전문역량 탭 */}
+          <div style={tabShow("expertise")}>
           {/* ═══════════════════════════════════════════
               3. 전문 정보
           ═══════════════════════════════════════════ */}
           {secRow("전문 정보")}
+          <fieldset className="trd-fs" disabled={!editMode}>
           <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 16 }}>
             {/* 가능언어 */}
             <div style={{ marginBottom: 10 }}>
@@ -1481,7 +1629,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                           nextSubTypes = nextSubTypes.filter(st => validSubs.has(st));
                           setPinnedSubTypes(prev => new Set([...prev].filter(st => validSubs.has(st))));
                         }
-                        setShowAllSubTypes(false);
                         setForm(p => ({ ...p, profileWorkTypes: next.join(","), profileSubTypes: nextSubTypes.join(",") }));
                       }}
                       style={{
@@ -1510,12 +1657,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 ...allSubs.filter(s => selectedSubSet.has(s) && !pinnedSubTypes.has(s)),
                 ...allSubs.filter(s => !selectedSubSet.has(s)),
               ];
-              // 기본: pinned만 표시. pinned 없으면 selected 최대 3개
-              const defaultVisible = pinnedSubTypes.size > 0
-                ? sortedSubs.filter(s => pinnedSubTypes.has(s))
-                : sortedSubs.filter(s => selectedSubSet.has(s)).slice(0, 3);
-              const visibleSubs = showAllSubTypes ? sortedSubs : defaultVisible;
-              const hiddenCount = sortedSubs.length - visibleSubs.length;
+              // 전체 세부유형을 항상 표시 (접기/펼치기 없음)
+              const visibleSubs = sortedSubs;
               return (
                 <div style={{ marginBottom: 10 }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
@@ -1525,12 +1668,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                         ☆ 클릭으로 대표 지정 (최대 2개)
                       </span>
                     </label>
-                    {(hiddenCount > 0 || showAllSubTypes) && (
-                      <button type="button" onClick={() => setShowAllSubTypes(prev => !prev)}
-                        style={{ fontSize: 11, color: "#6366f1", background: "none", border: "1px solid #e0e7ff", borderRadius: 6, cursor: "pointer", padding: "2px 8px", whiteSpace: "nowrap" }}>
-                        {showAllSubTypes ? "접기" : `추가 ${hiddenCount}개 보기`}
-                      </button>
-                    )}
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                     {visibleSubs.map(st => {
@@ -1573,12 +1710,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                         </span>
                       );
                     })}
-                    {!showAllSubTypes && visibleSubs.length === 0 && (
-                      <button type="button" onClick={() => setShowAllSubTypes(true)}
-                        style={{ fontSize: 11, color: "#6366f1", background: "none", border: "1px dashed #c7d2fe", borderRadius: 6, cursor: "pointer", padding: "3px 10px" }}>
-                        + 세부유형 선택
-                      </button>
-                    )}
                   </div>
                 </div>
               );
@@ -1591,16 +1722,14 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               const customVals = parseList(form.specializations).filter(x => !presetSet.has(x));
 
               const allPresets = SPECIALIZATION_PRESETS as readonly string[];
-              const SPEC_FIRST_ROW = 6;
 
               // 선택된 프리셋 우선 표시, 그 다음 미선택 순서
               const sortedPresets = [
                 ...allPresets.filter(t => selected.has(t)),
                 ...allPresets.filter(t => !selected.has(t)),
               ];
-              const visiblePresets = showAllSpecs ? sortedPresets : sortedPresets.slice(0, SPEC_FIRST_ROW);
-              // 숨겨진 수 = 나머지 프리셋 + 기타 버튼 (접힌 상태에서만)
-              const hiddenCount = (sortedPresets.length - visiblePresets.length) + (showAllSpecs ? 0 : 1);
+              // 전체 전문분야를 항상 표시 (접기/펼치기 없음)
+              const visiblePresets = sortedPresets;
 
               const togglePreset = (tag: string) => {
                 const cur = parseList(form.specializations);
@@ -1636,10 +1765,6 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                 <div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                     <label style={{ ...labelSt, marginBottom: 0 }}>전문분야</label>
-                    <button type="button" onClick={() => setShowAllSpecs(prev => !prev)}
-                      style={{ fontSize: 11, color: "#6366f1", background: "none", border: "1px solid #e0e7ff", borderRadius: 6, cursor: "pointer", padding: "2px 8px", whiteSpace: "nowrap" }}>
-                      {showAllSpecs ? "접기" : `+${hiddenCount}개 보기`}
-                    </button>
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
                     {visiblePresets.map(tag => {
@@ -1653,14 +1778,12 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                           )}>{tag}</button>
                       );
                     })}
-                    {showAllSpecs && (
-                      <button type="button" onClick={handleOtherToggle}
-                        style={tagStyle(showOtherSpec, { bg: "#7c3aed", bgOff: "#f5f3ff", fg: "#fff", fgOff: "#7c3aed", border: "#7c3aed", borderOff: "#ddd8fe" })}>
-                        기타
-                      </button>
-                    )}
+                    <button type="button" onClick={handleOtherToggle}
+                      style={tagStyle(showOtherSpec, { bg: "#7c3aed", bgOff: "#f5f3ff", fg: "#fff", fgOff: "#7c3aed", border: "#7c3aed", borderOff: "#ddd8fe" })}>
+                      기타
+                    </button>
                   </div>
-                  {showAllSpecs && showOtherSpec && (
+                  {showOtherSpec && (
                     <input
                       type="text"
                       value={customVals.join(", ")}
@@ -1673,13 +1796,24 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               );
             })()}
           </div>
+          </fieldset>
 
+          </div>{/* /전문역량 탭 */}
+
+          {/* 언어·국제경험 탭 */}
+          <div style={tabShow("language")}>
           {/* ═══ 4. 언어·국제경험 ═══ */}
           {secRow("언어·국제경험")}
+          <fieldset className="trd-fs" disabled={!editMode}>
           <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 16 }}>
             <TranslatorLangExpSection entries={langExperiences} onChange={setLangExperiences} />
           </div>
+          </fieldset>
 
+          </div>{/* /언어·국제경험 탭 */}
+
+          {/* 이력서·증빙 탭 */}
+          <div style={tabShow("docs")}>
           {/* ═══ 5. 이력서&증빙서류 (기본 접힘) ═══ */}
           {secRow("이력서&증빙서류", "resume")}
           {!collapsed.resume && (
@@ -1776,6 +1910,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                       style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151", whiteSpace: "nowrap" }}>
                       다운로드
                     </button>
+                    {editMode && (
                     <button
                       type="button"
                       disabled={resumeDeleting || resumeUploading}
@@ -1796,6 +1931,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                       style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #fca5a5", background: "#fff5f5", cursor: "pointer", color: "#b91c1c", whiteSpace: "nowrap" }}>
                       {resumeDeleting ? "삭제 중..." : "삭제"}
                     </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setShowAnalyzePanel(true)}
@@ -1807,8 +1943,10 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   </div>
                 </div>
               ) : (
-                <p style={{ fontSize: 12, color: "#9ca3af", margin: "0 0 6px" }}>이력서 없음 — 아래에서 업로드해 주세요.</p>
+                <p style={{ fontSize: 12, color: "#9ca3af", margin: "0 0 6px" }}>{editMode ? "이력서 없음 — 아래에서 업로드해 주세요." : "등록된 이력서가 없습니다."}</p>
               )}
+              {/* 업로드 dropzone — 편집 모드에서만(§4 추가 숨김). 미리보기/다운로드는 조회 모드에서도 유지(§10). */}
+              {editMode && (
               <div
                 onDragOver={e => { e.preventDefault(); setDragOver(true); }}
                 onDragLeave={() => setDragOver(false)}
@@ -1850,6 +1988,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   />
                 </label>
               </div>
+              )}
             </div>
             )} {/* docSubTab === "resume" */}
 
@@ -1885,9 +2024,14 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           </div>
           )} {/* !collapsed.resume */}
 
+          </div>{/* /이력서·증빙 탭 */}
+
+          {/* 관리정보 탭 — 운영 정보(상태·재배정·운영메모 등) */}
+          <div style={tabShow("mgmt")}>
           {/* ═══ 6. 운영 정보 — 통합 섹션 (기본 접힘) ═══ */}
           {secRow("운영 정보", "operational")}
           {!collapsed.operational && (
+            <fieldset className="trd-fs" disabled={!editMode}>
             <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 10 }}>
               {/* 등급 / 평점 / 가용상태 */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px 16px", marginBottom: 12 }}>
@@ -1952,13 +2096,18 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                   style={{ ...inputStyle, fontSize: 13, padding: "8px 10px", resize: "vertical" }} />
               </div>
             </div>
+            </fieldset>
           )}
 
+          </div>{/* /관리정보 탭 */}
+
+          {/* 단가관리 탭 */}
+          <div style={tabShow("rates")}>
           {/* ── 단가 관리 (기본 접힘) ── */}
           {secRow("단가 관리", "rates")}
           {!collapsed.rates && (
-            <>
-              <div style={{ marginBottom: 10 }}>
+            <fieldset className="trd-fs" disabled={!editMode}>
+              <div data-edit-only style={{ marginBottom: 10 }}>
                 <TranslatorRateEntryCard
                   value={rateForm}
                   onChange={patch => setRateForm(p => ({ ...p, ...patch }))}
@@ -1983,23 +2132,45 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                       {r.isActive === false && <span style={{ fontSize: 11, background: "#f3f4f6", color: "#9ca3af", borderRadius: 4, padding: "1px 5px" }}>비활성</span>}
                       {r.memo && <span style={{ color: "#9ca3af", fontSize: 12, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.memo}</span>}
                       {!r.memo && <span style={{ flex: 1 }} />}
-                      <button onClick={() => handleDeleteRate(r.id)} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, cursor: "pointer", padding: "2px 4px" }}>삭제</button>
+                      <button data-edit-only onClick={() => handleDeleteRate(r.id)} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, cursor: "pointer", padding: "2px 4px" }}>삭제</button>
                     </div>
                   ))}
                 </div>
               ) : <p style={{ color: "#9ca3af", fontSize: 13, padding: "6px 0 14px" }}>등록된 단가가 없습니다.</p>}
-            </>
+            </fieldset>
           )}
 
+          </div>{/* /단가관리 탭 */}
+
+          {/* 정산정보 탭 — translator_sensitive(계좌·세금·원천세). 암호화·마스킹·권한 정책 유지, 지급회차 연계 유지. */}
+          <div style={tabShow("settlement")}>
+            {secRow("정산 정보")}
+            <div style={{ padding: "4px 0 8px" }}>
+              {hasPerm("translator.sensitive") ? (
+                <button onClick={() => setShowSensitive(true)}
+                  style={{ display: "flex", alignItems: "center", gap: 6, background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600, color: "#92400e", cursor: "pointer" }}>
+                  🔒 정산 정보 관리
+                </button>
+              ) : (
+                <p style={{ color: "#9ca3af", fontSize: 13 }}>정산 정보 열람 권한이 없습니다.</p>
+              )}
+              <p style={{ fontSize: 12, color: "#9ca3af", marginTop: 8, lineHeight: 1.6 }}>
+                은행·계좌번호·예금주·세금처리·원천세율 등 정산/계좌 정보는 암호화·마스킹·권한 정책에 따라 관리되며, 지급회차 시스템과 연결됩니다.
+              </p>
+            </div>
+          </div>
+
+          {/* 수행이력 탭 — 현재 상세에 전용 조회 API 미연결(§13). 별도 작업 필요. */}
+          <div style={tabShow("performance")}>
+            {secRow("수행 이력")}
+            <p style={{ color: "#9ca3af", fontSize: 13, padding: "8px 0", lineHeight: 1.6 }}>
+              통번역사별 수행이력 전용 조회는 현재 상세 화면에 연결돼 있지 않습니다. 수행이력 데이터/API 연결은 별도 작업으로 진행합니다.
+            </p>
+          </div>
+
           {/* ── 하단 바 ── */}
-          <div style={{ marginTop: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            {hasPerm("translator.sensitive") ? (
-              <button onClick={() => setShowSensitive(true)}
-                style={{ display: "flex", alignItems: "center", gap: 6, background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600, color: "#92400e", cursor: "pointer" }}>
-                🔒 정산 정보 관리
-              </button>
-            ) : <span />}
-            <GhostBtn onClick={onClose} style={{ fontSize: 14, padding: "9px 20px" }}>닫기</GhostBtn>
+          <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", alignItems: "center" }}>
+            <GhostBtn onClick={requestClose} style={{ fontSize: 14, padding: "9px 20px" }}>{asPage ? "목록으로" : "닫기"}</GhostBtn>
           </div>
         </>
       )}

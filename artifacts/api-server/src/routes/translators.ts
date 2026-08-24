@@ -2997,6 +2997,8 @@ router.patch("/admin/translators/:id/activate", ...adminGuard, async (req, res) 
   if (isNaN(userId) || userId <= 0) {
     res.status(400).json({ error: "유효하지 않은 사용자 id." }); return;
   }
+  // 복원(활성화) 사유(선택 입력) — logs.metadata.restoreReason 에 기록.
+  const restoreReason = ((req.body?.reason ?? "") as string).trim();
 
   try {
     const [existing] = await db.select().from(usersTable).where(
@@ -3015,13 +3017,14 @@ router.patch("/admin/translators/:id/activate", ...adminGuard, async (req, res) 
       .set({ availabilityStatus: "available", updatedAt: new Date() })
       .where(eq(translatorProfilesTable.userId, userId));
 
+    // 복원(활성화) 감사로그 — 다른 영역의 restore 와 동일하게 사유를 metadata 에 기록.
     await db.insert(logsTable).values({
       entityType: "translator",
       entityId: userId,
       action: "activated",
       performedBy: req.user?.id ?? null,
       performedByEmail: req.user?.email ?? null,
-      metadata: JSON.stringify({ name: existing.name, email: existing.email }),
+      metadata: JSON.stringify({ name: existing.name, email: existing.email, ...(restoreReason ? { restoreReason } : {}) }),
     });
 
     res.json({ success: true, availabilityStatus: "available" });
@@ -3037,6 +3040,8 @@ router.delete("/admin/translators/:id/permanent", ...adminGuard, async (req, res
   if (isNaN(userId) || userId <= 0) {
     res.status(400).json({ error: "유효하지 않은 사용자 id." }); return;
   }
+  // 완전삭제 사유(선택 입력) — logs.metadata.purgeReason 에 기록.
+  const purgeReason = ((req.body?.reason ?? "") as string).trim();
 
   try {
     // 1. 통번역사 존재 여부 확인
@@ -3071,13 +3076,23 @@ router.delete("/admin/translators/:id/permanent", ...adminGuard, async (req, res
       }); return;
     }
 
-    // 4. 이력서 파일 삭제 (GCS)
+    // 4. 감사 로그를 실제 삭제 "이전"에 먼저 기록(행 제거 후에는 참조 불가).
+    await db.insert(logsTable).values({
+      entityType: "translator",
+      entityId: userId,
+      action: "permanent_deleted",
+      performedBy: req.user?.id ?? null,
+      performedByEmail: req.user?.email ?? null,
+      metadata: JSON.stringify({ name: existing.name, email: existing.email, ...(purgeReason ? { purgeReason } : {}) }),
+    });
+
+    // 5. 이력서 파일 삭제 (GCS)
     const [profile] = await db.select().from(translatorProfilesTable).where(eq(translatorProfilesTable.userId, userId));
     if (profile?.resumeUrl) {
       try { await deleteResumeFromGCS(profile.resumeUrl); } catch { /* 파일 없어도 계속 */ }
     }
 
-    // 5. 종속 데이터 삭제 (순서 중요: FK 참조 먼저)
+    // 6. 종속 데이터 삭제 (순서 중요: FK 참조 먼저)
     await db.delete(translatorRatesTable).where(eq(translatorRatesTable.translatorId, userId));
     await db.delete(translatorEmailsTable).where(eq(translatorEmailsTable.translatorId, userId));
     await db.delete(translatorSensitiveTable).where(eq(translatorSensitiveTable.translatorId, userId));
@@ -3088,18 +3103,8 @@ router.delete("/admin/translators/:id/permanent", ...adminGuard, async (req, res
     );
     await db.delete(invitationsTable).where(eq(invitationsTable.userId, userId));
 
-    // 6. 본 레코드 삭제
+    // 7. 본 레코드 삭제
     await db.delete(usersTable).where(eq(usersTable.id, userId));
-
-    // 7. 감사 로그 (users 삭제 후이므로 참조 없이 기록)
-    await db.insert(logsTable).values({
-      entityType: "translator",
-      entityId: userId,
-      action: "permanent_deleted",
-      performedBy: req.user?.id ?? null,
-      performedByEmail: req.user?.email ?? null,
-      metadata: JSON.stringify({ name: existing.name, email: existing.email }),
-    });
 
     res.json({ success: true });
   } catch (err) {

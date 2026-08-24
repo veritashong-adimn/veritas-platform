@@ -9,6 +9,7 @@
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
 import { formatWon } from "@/lib/utils";
 import { api, Product } from '../../lib/constants';
+import { registerUnsavedChecker } from '../../lib/unsavedGuard';
 import { Card, DsButton, ClickSelect, NumericInput } from '../ui';
 import { dsInput, dsInputStd, dsField, dsAmount, dsStickyPageHeader, C, BD, TBL, TYPO, SP, FORM, FIELD, CRM_FIELD_COLS } from '../../lib/ds';
 import { SVC_CFG, COL_H, SVC_FIELD_HINTS, tblRow } from './quoteItemsShared';
@@ -1623,6 +1624,9 @@ export function QuoteEditorWorkspace({
   // 미저장 견적(savedQuoteId 없음) 또는 기준선과 서명이 다르면 변경사항 있음
   const hasUnsavedChanges = () =>
     savedQuoteId == null || baselineSigRef.current === null || formSigRef.current !== baselineSigRef.current;
+
+  // 로고 클릭 새로고침 시 확인창을 위해 전역 미저장 레지스트리에 dirty checker 등록(언마운트 시 해제).
+  useEffect(() => registerUnsavedChecker(() => hasUnsavedChanges()), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setLoading(true);

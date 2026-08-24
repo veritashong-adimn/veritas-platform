@@ -33,11 +33,13 @@ import { ContactMergeModal } from '../components/admin/ContactMergeModal';
 import { ProductListTab } from '../components/admin/product/ProductListTab';
 import { ProductRegisterTab } from '../components/admin/product/ProductRegisterTab';
 import { ProductTrashTab } from '../components/admin/product/ProductTrashTab';
+import { UnifiedTrashTab } from '../components/admin/UnifiedTrashTab';
 import { ProjectManagementTab } from '../components/admin/ProjectManagementTab';
 import { SalesDetailPage } from './SalesDetailPage';
 import { QuoteListTab } from '../components/admin/QuoteListTab';
 import { CompanyManagementTab } from '../components/admin/CompanyManagementTab';
 import { isCompanyPath, companyPaths, navigate as navPath } from '../lib/adminNav';
+import { hasUnsavedChanges as hasUnsavedEdits } from '../lib/unsavedGuard';
 import { BulkImportPage } from '../components/admin/BulkImportPage';
 import { ContactTrashTab } from '../components/admin/ContactTrashTab';
 import { DataLayerTab } from '../components/admin/DataLayerTab';
@@ -230,9 +232,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   };
 
   // 초기 탭 — /admin/companies* 경로로 새로고침·직접진입 시 거래처 탭을 복원한다(URL 라우팅 연동).
-  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics">(
-    isCompanyPath(window.location.pathname) ? "companies" : "dashboard",
-  );
+  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"quote-register"|"quote-trash"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"translator-register"|"translator-detail"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics"|"trash">(() => {
+    // 로고 클릭 새로고침(§로고): 직전 탭을 세션에 저장해 두었다면 복원(1회 소비) → 메뉴 위치 유지.
+    try {
+      const restore = sessionStorage.getItem("veritasRestoreTab");
+      if (restore) { sessionStorage.removeItem("veritasRestoreTab"); return restore as any; }
+    } catch { /* 세션 사용 불가 시 무시 */ }
+    return isCompanyPath(window.location.pathname) ? "companies" : "dashboard";
+  });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // 섹션 기본 열림/닫힘 정책: customer·project는 기본 열림, 나머지 기본 닫힘
   const SIDEBAR_DEFAULT_OPEN: Record<string, boolean> = {
@@ -351,7 +358,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [showInactiveTranslators, setShowInactiveTranslators] = useState(false);
   const [translatorDetailModal, setTranslatorDetailModal] = useState<{ userId: number; email: string } | null>(null);
   const [expandedSubtypeRows, setExpandedSubtypeRows] = useState<Set<number>>(new Set());
-  const [showTranslatorCreateModal, setShowTranslatorCreateModal] = useState(false);
+  // 통번역사 등록 페이지 방식 — 기본 개별 등록. 'bulk'=엑셀 대량 등록(기존 모달/로직 재사용).
+  const [translatorRegisterMode, setTranslatorRegisterMode] = useState<'single' | 'bulk'>('single');
   // 엑셀 대량 업로드 상태
   const [showExcelModal, setShowExcelModal] = useState(false);
   const [excelParsing, setExcelParsing] = useState(false);
@@ -432,6 +440,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     if (tabId === "companies") navPath(companyPaths.list);
     else if (isCompanyPath(window.location.pathname)) navPath("/");
     setAdminTab(tabId);
+  };
+
+  // 로고 클릭 → 현재 페이지 새로고침(대시보드 이동 아님). URL/메뉴 위치는 그대로 유지.
+  //  · 등록·수정 중 저장하지 않은 변경사항이 있으면(전역 unsavedGuard) 확인창을 먼저 표시, 그 외에는 즉시 새로고침.
+  //  · 현재 탭(state)은 세션에 저장 → 새로고침 후 초기화 로직에서 1회 복원(메뉴 위치 유지).
+  const handleLogoRefresh = () => {
+    if (hasUnsavedEdits() && !window.confirm("저장하지 않은 변경사항이 있습니다.\n새로고침하면 변경사항이 사라집니다. 계속하시겠습니까?")) return;
+    try { sessionStorage.setItem("veritasRestoreTab", adminTab); } catch { /* 세션 사용 불가 시 무시 */ }
+    window.location.reload();
   };
   // 브라우저 뒤로/앞으로 → URL 기준으로 판매 상세 및 거래처 탭 동기화
   useEffect(() => {
@@ -821,6 +838,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   useEffect(() => { if (adminTab === "contacts") { fetchContacts(); if (companies.length === 0) fetchCompanies(); } }, [adminTab, fetchContacts]);
   useEffect(() => { if (adminTab === "board") fetchBoard(); }, [adminTab, fetchBoard]);
   useEffect(() => { if (adminTab === "translators") fetchTranslators(); }, [adminTab, fetchTranslators]);
+  // 등록 페이지 진입 시 항상 기본값(개별 등록)으로 표시(§7).
+  useEffect(() => { if (adminTab === "translator-register") setTranslatorRegisterMode('single'); }, [adminTab]);
   useEffect(() => { if (adminTab === "prepaid") fetchPrepaidAccounts(); }, [adminTab, fetchPrepaidAccounts]);
 
   // ── 환경설정 상태 ─────────────────────────────────────────────────────────
@@ -995,29 +1014,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onRefreshList={fetchContacts}
         />
       )}
-      {translatorDetailModal !== null && (
-        <TranslatorDetailModal
-          userId={translatorDetailModal.userId}
-          userEmail={translatorDetailModal.email}
-          token={token}
-          permissions={permissions}
-          onClose={() => setTranslatorDetailModal(null)}
-          onToast={setToast}
-          onSaved={() => fetchTranslators()}
-          onDeleted={() => { setTranslatorDetailModal(null); fetchTranslators(); }}
-        />
-      )}
-      {showTranslatorCreateModal && (
-        <TranslatorCreateModal
-          token={token}
-          permissions={permissions}
-          onClose={() => setShowTranslatorCreateModal(false)}
-          onCreated={() => {
-            fetchTranslators();
-          }}
-          onToast={setToast}
-        />
-      )}
+      {/* 통번역사 상세는 팝업이 아니라 독립 ERP 페이지(adminTab="translator-detail")로 이동한다. */}
+      {/* 통번역사 등록은 팝업이 아니라 독립 ERP 페이지(adminTab="translator-register")로 이동한다. */}
       {/* ── 엑셀 대량 등록 모달 (드래그·리사이즈 가능) ── */}
       {showExcelModal && (
         <div style={{ position: "fixed", inset: 0, zIndex: 9000, background: "rgba(0,0,0,0.5)" }}>
@@ -1380,9 +1378,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           transition: "width 0.22s ease, min-width 0.22s ease",
           flexShrink: 0,
         }}>
-          {/* 로고 영역 — VERITAS OS */}
+          {/* 로고 영역 — VERITAS OS (클릭 시 현재 페이지 새로고침, 메뉴 위치 유지) */}
           <div style={{ padding: "20px 22px 16px", borderBottom: "1px solid #2d3547", flexShrink: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div
+              onClick={handleLogoRefresh}
+              onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleLogoRefresh(); } }}
+              role="button" tabIndex={0}
+              data-testid="btn-logo-refresh"
+              aria-label="VERITAS OS — 현재 페이지 새로고침"
+              title="현재 페이지 새로고침"
+              style={{ display: "flex", alignItems: "center", gap: 12, cursor: "pointer" }}>
               {/* V Symbol — clean geometric, gradient fill */}
               <svg width="28" height="28" viewBox="0 0 32 32" fill="none" style={{ flexShrink: 0 }}>
                 <defs>
@@ -1843,9 +1848,42 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             );
           })()}
 
-      {/* ── 견적서 탭 ── */}
+      {/* ── 견적관리 ERP: 견적서 목록 ── */}
       {adminTab === "quotes" && (
         <QuoteListTab
+          view="list"
+          token={token}
+          onToast={setToast}
+          adminUsers={adminUsers}
+          refreshTick={quoteTick}
+          isAdmin={user.role === "admin"}
+          onNavigateToSales={() => setAdminTab("projects")}
+          onOpenSalesDetail={openSalesDetail}
+          canConvert={hasPerm("quote.create")}
+        />
+      )}
+
+      {/* ── 견적관리 ERP: 견적서 등록(신규 작성 workspace로 직접 진입) ── */}
+      {adminTab === "quote-register" && (
+        <QuoteListTab
+          view="register"
+          onExitToList={() => setAdminTab("quotes")}
+          token={token}
+          onToast={setToast}
+          adminUsers={adminUsers}
+          refreshTick={quoteTick}
+          isAdmin={user.role === "admin"}
+          onNavigateToSales={() => setAdminTab("projects")}
+          onOpenSalesDetail={openSalesDetail}
+          canConvert={hasPerm("quote.create")}
+        />
+      )}
+
+      {/* ── 견적관리 ERP: 휴지통(삭제 견적 조회/복원/완전삭제) ── */}
+      {adminTab === "quote-trash" && (
+        <QuoteListTab
+          view="trash"
+          onExitToList={() => setAdminTab("quotes")}
           token={token}
           onToast={setToast}
           adminUsers={adminUsers}
@@ -1875,7 +1913,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {/* ── 결제 탭 ── */}
       {adminTab === "payments" && (
         <Section
-          title={`결제 현황 (${filteredPayments.length})`}
+          title={`수금 현황 (${filteredPayments.length})`}
           action={
             <div style={{ display: "flex", gap: 6 }}>
               <FilterPill label="전체" active={paymentFilter === "all"} onClick={() => setPaymentFilter("all")} />
@@ -2131,7 +2169,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           token={token}
           onToast={setToast}
           onOpenProject={(id) => openDetail(id)}
-          onOpenTranslator={(userId, email) => { setAdminTab("translators"); setTranslatorDetailModal({ userId, email }); }}
+          onOpenTranslator={(userId, email) => { setTranslatorDetailModal({ userId, email }); navigateToAdminTab("translator-detail"); }}
           hasPerm={hasPerm}
           isAdmin={user.role === "admin"}
         />
@@ -2167,10 +2205,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               data-testid="contact-bulk-import-btn" aria-label="담당자 대량등록">
               대량등록
             </GhostBtn>
-            <GhostBtn onClick={() => setShowContactTrash(true)} style={{ fontSize: 13, padding: "7px 14px" }}
-              data-testid="contact-trash-btn" aria-label="담당자 휴지통">
-              🗑 휴지통
-            </GhostBtn>
+            {/* 개별 휴지통 버튼 제거 — 삭제 데이터 관리는 사이드바 하단 「통합 휴지통」으로 일원화. ContactTrashTab·삭제/복원 API는 유지. */}
           </div>
         }>
           {/* ── 담당자 등록 모달 ── */}
@@ -2422,6 +2457,92 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         />
       )}
 
+      {/* ── 통합 휴지통(사이드바 하단 독립 메뉴) — 5개 영역 개별 휴지통 API 집계. 개별 휴지통은 병행 유지 ── */}
+      {adminTab === "trash" && (
+        <UnifiedTrashTab
+          token={token}
+          isAdmin={user.role === "admin"}
+          onToast={setToast}
+        />
+      )}
+
+      {/* ── 통번역사 등록 (독립 ERP 페이지) — 개별 등록 / 엑셀 대량 등록 선택(§3·§7). 기존 로직·API 재사용. ── */}
+      {adminTab === "translator-register" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {/* 등록 방식 segmented control — 기본 개별 등록(§7) */}
+          <div style={{ display: "inline-flex", alignSelf: "flex-start", gap: 2, background: "#f1f5f9", border: "1px solid #e2e8f0", borderRadius: 10, padding: 3 }}>
+            {([['single', '개별 등록'], ['bulk', '엑셀 대량 등록']] as const).map(([mode, label]) => {
+              const active = translatorRegisterMode === mode;
+              return (
+                <button key={mode} type="button" onClick={() => setTranslatorRegisterMode(mode)}
+                  data-testid={`translator-register-mode-${mode}`} aria-pressed={active}
+                  style={{ padding: "8px 20px", fontSize: 13, fontWeight: 700, borderRadius: 8, border: "none", cursor: "pointer",
+                    background: active ? "#fff" : "transparent", color: active ? "#1d4ed8" : "#64748b",
+                    boxShadow: active ? "0 1px 3px rgba(0,0,0,0.08)" : "none" }}>
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
+          {translatorRegisterMode === 'single' ? (
+            <TranslatorCreateModal
+              asPage
+              token={token}
+              permissions={permissions}
+              onClose={() => navigateToAdminTab("translators")}
+              onCreated={(data) => {
+                fetchTranslators();
+                // 등록 완료 → 방금 등록한 통번역사 상세페이지로 이동(§16). 초대 링크는 상세의 [링크 재발급]으로 재획득 가능.
+                if (data?.id) { setTranslatorDetailModal({ userId: data.id, email: data.email }); navigateToAdminTab("translator-detail"); }
+              }}
+              onToast={setToast}
+            />
+          ) : (
+            // 엑셀 대량 등록 — 샘플 다운로드 + 업로드(기존 모달/파싱/검증/업로드 로직 그대로 재사용, §5·§6·§8)
+            <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, padding: "22px 26px" }} data-testid="translator-bulk-register">
+              <h2 style={{ fontSize: 18, fontWeight: 800, color: "#111827", margin: 0 }}>엑셀 대량 등록</h2>
+              <p style={{ fontSize: 13, color: "#6b7280", margin: "6px 0 18px", lineHeight: 1.6 }}>
+                여러 명의 통번역사를 Excel 파일로 한 번에 등록할 수 있습니다. 먼저 샘플 양식을 내려받아 작성한 뒤 업로드하세요.
+                정상 행만 등록되며, 중복가능성·오류 행은 업로드 화면에서 자동 제외·표시됩니다.
+              </p>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button onClick={async () => {
+                  const res = await fetch(api("/api/admin/translators/sample-excel"), { headers: authHeaders });
+                  if (!res.ok) { setToast("샘플 다운로드 실패"); return; }
+                  const blob = await res.blob();
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement("a"); a.href = url; a.download = "translators_sample.xlsx"; a.click(); URL.revokeObjectURL(url);
+                }} data-testid="btn-translator-sample-download"
+                  style={{ padding: "9px 16px", fontSize: 13, borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", color: "#374151", cursor: "pointer", fontWeight: 600 }}>
+                  ⬇ 샘플 다운로드
+                </button>
+                <button onClick={() => { setShowExcelModal(true); setExcelPreview(null); setExcelBulkResult(null); }}
+                  data-testid="btn-translator-bulk-upload"
+                  style={{ padding: "9px 18px", fontSize: 13, borderRadius: 8, border: "1px solid #10b981", background: "#ecfdf5", color: "#065f46", cursor: "pointer", fontWeight: 700 }}>
+                  📥 엑셀 파일 업로드
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── 통번역사 상세 (독립 ERP 탭 페이지) — 목록/등록에서 진입. 팝업 아님. ── */}
+      {adminTab === "translator-detail" && translatorDetailModal !== null && (
+        <TranslatorDetailModal
+          asPage
+          userId={translatorDetailModal.userId}
+          userEmail={translatorDetailModal.email}
+          token={token}
+          permissions={permissions}
+          onClose={() => navigateToAdminTab("translators")}
+          onToast={setToast}
+          onSaved={() => fetchTranslators()}
+          onDeleted={() => { navigateToAdminTab("translators"); fetchTranslators(); }}
+        />
+      )}
+
       {/* ── 게시판 탭 ── */}
       {adminTab === "board" && (
         <Section title={`게시판 (${boardPosts.length})`} action={
@@ -2529,26 +2650,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
       {/* ── 통번역사 탭 ── */}
       {adminTab === "translators" && (
-        <Section title={`통번역사 관리 (${translatorList.length})`} action={
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={async () => {
-              const res = await fetch(api("/api/admin/translators/sample-excel"), { headers: authHeaders });
-              if (!res.ok) { setToast("샘플 다운로드 실패"); return; }
-              const blob = await res.blob();
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement("a"); a.href = url; a.download = "translators_sample.xlsx"; a.click(); URL.revokeObjectURL(url);
-            }} style={{ padding: "8px 14px", fontSize: 12, borderRadius: 8, border: "1px solid #d1d5db", background: "#fff", color: "#374151", cursor: "pointer", fontWeight: 600 }}>
-              샘플 다운로드
-            </button>
-            <button onClick={() => { setShowExcelModal(true); setExcelPreview(null); setExcelBulkResult(null); }}
-              style={{ padding: "8px 14px", fontSize: 12, borderRadius: 8, border: "1px solid #10b981", background: "#ecfdf5", color: "#065f46", cursor: "pointer", fontWeight: 600 }}>
-              📥 엑셀 대량 등록
-            </button>
-            <PrimaryBtn onClick={() => setShowTranslatorCreateModal(true)} style={{ padding: "8px 16px", fontSize: 13 }}>
-              + 통번역사 등록
-            </PrimaryBtn>
-          </div>
-        }>
+        // 목록은 얇게 — 조회/검색/필터/선택/상세만. 등록·대량등록·샘플다운로드는 [통번역사 등록] 페이지로 이동(§1·§2).
+        <Section title={`통번역사 목록 (${translatorList.length})`}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
             <input value={translatorSearch} onChange={e => setTranslatorSearch(e.target.value)}
               placeholder="이름, 별칭, 이메일, 가능언어, 학력, 지역 검색..."
@@ -2602,7 +2705,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           ) : translatorList.length === 0 ? (
             <Card style={{ textAlign: "center", padding: "40px 32px" }}>
               <div style={{ color: "#9ca3af", fontSize: 14, marginBottom: 12 }}>등록된 통번역사가 없습니다.</div>
-              <PrimaryBtn onClick={() => setShowTranslatorCreateModal(true)} style={{ fontSize: 13, padding: "8px 20px" }}>
+              <PrimaryBtn onClick={() => navigateToAdminTab("translator-register")} style={{ fontSize: 13, padding: "8px 20px" }}>
                 + 첫 통번역사 등록
               </PrimaryBtn>
             </Card>
@@ -2644,7 +2747,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       const statusColor = inactive ? "#9ca3af" : t.availabilityStatus === "available" ? "#059669" : t.availabilityStatus === "busy" ? "#d97706" : "#dc2626";
                       const statusBg = inactive ? "#f3f4f6" : t.availabilityStatus === "available" ? "#f0fdf4" : t.availabilityStatus === "busy" ? "#fffbeb" : "#fef2f2";
                       return (
-                        <tr key={t.id} onClick={() => setTranslatorDetailModal({ userId: t.id, email: t.email })} style={{ cursor: "pointer", opacity: inactive ? 0.6 : 1 }}
+                        <tr key={t.id} onClick={() => { setTranslatorDetailModal({ userId: t.id, email: t.email }); navigateToAdminTab("translator-detail"); }} style={{ cursor: "pointer", opacity: inactive ? 0.6 : 1 }}
                           onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
                           onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                           {/* 이름 / 이메일 / 휴대폰 */}

@@ -99,6 +99,8 @@ router.get("/admin/quotes-trash", ...adminGuard, async (_req, res) => {
 router.post("/admin/quotes/:id/restore", ...adminGuard, requirePermission("quote.update"), async (req, res) => {
   const quoteId = Number(req.params.id);
   if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 견적 id." }); return; }
+  // 복원 사유(선택 입력) — logs.metadata.restoreReason 에 기록.
+  const restoreReason = ((req.body?.reason ?? "") as string).trim();
   try {
     const [quote] = await db
       .select({ id: quotesTable.id, deletedAt: quotesTable.deletedAt, quoteNumber: quotesTable.quoteNumber })
@@ -110,7 +112,8 @@ router.post("/admin/quotes/:id/restore", ...adminGuard, requirePermission("quote
       .set({ deletedAt: null, deletedBy: null, deletionReason: null })
       .where(eq(quotesTable.id, quoteId));
 
-    await logEvent("quote", quoteId, "quote_restored", req.log, req.user ?? undefined, JSON.stringify({ quoteNumber: quote.quoteNumber }));
+    await logEvent("quote", quoteId, "quote_restored", req.log, req.user ?? undefined,
+      JSON.stringify({ quoteNumber: quote.quoteNumber, ...(restoreReason ? { restoreReason } : {}) }));
     req.log.info({ quoteId, quoteNumber: quote.quoteNumber, restoredBy: req.user?.id }, "Admin: quote restored from trash");
     res.json({ success: true, restoredQuoteId: quoteId });
   } catch (err) {
@@ -125,6 +128,8 @@ router.post("/admin/quotes/:id/restore", ...adminGuard, requirePermission("quote
 router.delete("/admin/quotes/:id/permanent", requireAuth, requireRole("admin"), async (req, res) => {
   const quoteId = Number(req.params.id);
   if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 견적 id." }); return; }
+  // 완전삭제 사유(선택 입력) — logs.metadata.purgeReason 에 기록.
+  const purgeReason = ((req.body?.reason ?? "") as string).trim();
   try {
     const [quote] = await db
       .select({ id: quotesTable.id, deletedAt: quotesTable.deletedAt, quoteNumber: quotesTable.quoteNumber })
@@ -133,12 +138,15 @@ router.delete("/admin/quotes/:id/permanent", requireAuth, requireRole("admin"), 
     // 안전장치: 휴지통에 있는(soft-delete 된) 견적만 영구삭제 허용
     if (!quote.deletedAt) { res.status(400).json({ error: "휴지통에 있는 견적만 영구삭제할 수 있습니다." }); return; }
 
+    // 감사로그를 실제 삭제 "이전"에 먼저 기록(행 제거 후에는 참조 불가).
+    await logEvent("quote", quoteId, "quote_purged", req.log, req.user ?? undefined,
+      JSON.stringify({ quoteNumber: quote.quoteNumber, ...(purgeReason ? { purgeReason } : {}) }));
+
     await db.transaction(async tx => {
       // quote_items / quote_item_files 는 FK CASCADE 로 함께 삭제됨 → 고아 데이터 없음
       await tx.delete(quotesTable).where(eq(quotesTable.id, quoteId));
     });
 
-    await logEvent("quote", quoteId, "quote_purged", req.log, req.user ?? undefined, JSON.stringify({ quoteNumber: quote.quoteNumber }));
     req.log.warn({ quoteId, quoteNumber: quote.quoteNumber, purgedBy: req.user?.id }, "Admin: quote PERMANENTLY deleted");
     res.json({ success: true, purgedQuoteId: quoteId });
   } catch (err) {
