@@ -34,6 +34,9 @@ import { ProductListTab } from '../components/admin/product/ProductListTab';
 import { ProductRegisterTab } from '../components/admin/product/ProductRegisterTab';
 import { ProductTrashTab } from '../components/admin/product/ProductTrashTab';
 import { UnifiedTrashTab } from '../components/admin/UnifiedTrashTab';
+import { InquiryListTab } from '../components/admin/InquiryListTab';
+import { InquiryRegisterTab } from '../components/admin/InquiryRegisterTab';
+import { InquiryDetailTab } from '../components/admin/InquiryDetailTab';
 import { ProjectManagementTab } from '../components/admin/ProjectManagementTab';
 import { SalesDetailPage } from './SalesDetailPage';
 import { QuoteListTab } from '../components/admin/QuoteListTab';
@@ -232,7 +235,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   };
 
   // 초기 탭 — /admin/companies* 경로로 새로고침·직접진입 시 거래처 탭을 복원한다(URL 라우팅 연동).
-  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"quote-register"|"quote-trash"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"translator-register"|"translator-detail"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics"|"trash">(() => {
+  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"quote-register"|"quote-trash"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"translator-register"|"translator-detail"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics"|"trash"|"inquiries"|"inquiry-register"|"inquiry-detail">(() => {
     // 로고 클릭 새로고침(§로고): 직전 탭을 세션에 저장해 두었다면 복원(1회 소비) → 메뉴 위치 유지.
     try {
       const restore = sessionStorage.getItem("veritasRestoreTab");
@@ -336,6 +339,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [showCreateContactModal, setShowCreateContactModal] = useState(false);
   const [showContactBulkImport, setShowContactBulkImport] = useState(false);
   const [showContactTrash, setShowContactTrash] = useState(false);
+  // 의뢰건 접수 — 선택된 상세 id + 목록 새로고침 트리거
+  const [selectedInquiryId, setSelectedInquiryId] = useState<number | null>(null);
+  const [inquiryTick, setInquiryTick] = useState(0);
   const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
   const [deleteConfirmContact, setDeleteConfirmContact] = useState<{ id: number; name: string } | null>(null);
   const [deleteContactReason, setDeleteContactReason] = useState("");
@@ -1860,6 +1866,36 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onNavigateToSales={() => setAdminTab("projects")}
           onOpenSalesDetail={openSalesDetail}
           canConvert={hasPerm("quote.create")}
+        />
+      )}
+
+      {/* ── 의뢰건 접수(pre-sales): 목록 / 등록 / 상세 ── */}
+      {adminTab === "inquiries" && (
+        <InquiryListTab
+          token={token}
+          refreshTick={inquiryTick}
+          onOpenDetail={(id) => { setSelectedInquiryId(id); setAdminTab("inquiry-detail"); }}
+          onOpenQuote={() => setAdminTab("quotes")}
+          onRegister={() => setAdminTab("inquiry-register")}
+        />
+      )}
+      {adminTab === "inquiry-register" && (
+        <InquiryRegisterTab
+          token={token}
+          onToast={setToast}
+          adminUsers={adminUsers}
+          onDone={() => { setInquiryTick(t => t + 1); setAdminTab("inquiries"); }}
+        />
+      )}
+      {adminTab === "inquiry-detail" && selectedInquiryId != null && (
+        <InquiryDetailTab
+          token={token}
+          inquiryId={selectedInquiryId}
+          adminUsers={adminUsers}
+          onToast={setToast}
+          onBack={() => { setInquiryTick(t => t + 1); setAdminTab("inquiries"); }}
+          onNavigateQuoteRegister={() => setAdminTab("quote-register")}
+          onOpenQuote={() => setAdminTab("quotes")}
         />
       )}
 

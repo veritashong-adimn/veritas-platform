@@ -10,6 +10,7 @@ import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMe
 import { formatWon } from "@/lib/utils";
 import { api, Product } from '../../lib/constants';
 import { registerUnsavedChecker } from '../../lib/unsavedGuard';
+import { readQuoteHandoff, clearQuoteHandoff } from '../../lib/inquiryHandoff';
 import { Card, DsButton, ClickSelect, NumericInput } from '../ui';
 import { dsInput, dsInputStd, dsField, dsAmount, dsStickyPageHeader, C, BD, TBL, TYPO, SP, FORM, FIELD, CRM_FIELD_COLS } from '../../lib/ds';
 import { SVC_CFG, COL_H, SVC_FIELD_HINTS, tblRow } from './quoteItemsShared';
@@ -1582,20 +1583,27 @@ export function QuoteEditorWorkspace({
   // convertDone: 성공 안내 오버레이 표시(약 1초 후 판매 상세로 이동).
   const [convertConfirm, setConvertConfirm] = useState(false);
   const [converting,     setConverting]     = useState(false);
+  // 의뢰건 → 견적서 작성 프리필(신규 견적 진입 시에만 1회 적용). 기존 견적 편집/전환에는 영향 없음.
+  const inqPrefill = useRef(initialQuoteId ? null : readQuoteHandoff()).current;
   const [converted,      setConverted]      = useState(initialStatus === 'approved');
   const [convertDone,    setConvertDone]    = useState(false);
-  const [title,          setTitle]         = useState(initialTitle);
-  const [titleEdited,    setTitleEdited]   = useState(!!initialTitle);
-  const [companyId,      setCompanyId]     = useState<number | null>(initialCompanyId);
-  const [divisionId,     setDivisionId]    = useState<number | null>(initialDivisionId);
-  const [contactId,      setContactId]     = useState<number | null>(initialContactId);
+  const [title,          setTitle]         = useState(inqPrefill?.title || initialTitle);
+  const [titleEdited,    setTitleEdited]   = useState(!!(inqPrefill?.title || initialTitle));
+  const [companyId,      setCompanyId]     = useState<number | null>(inqPrefill?.companyId ?? initialCompanyId);
+  const [divisionId,     setDivisionId]    = useState<number | null>(inqPrefill?.divisionId ?? initialDivisionId);
+  const [contactId,      setContactId]     = useState<number | null>(inqPrefill?.contactId ?? initialContactId);
   const [adminId,        setAdminId]       = useState<number | null>(null);
   const [issueDate,      setIssueDate]     = useState(() => initialIssueDate ?? dateOffset(0));
   const [quoteType,      setQuoteType]     = useState<QuoteType>(initialQuoteType ?? 'b2b_standard');
   const [vatType,        setVatType]       = useState<VatType>(initialVatType ?? 'taxable');
-  const [note,           setNote]          = useState(initialNote ?? '');
+  const [note,           setNote]          = useState(inqPrefill?.note ?? initialNote ?? '');
   const [versionReason,  setVersionReason] = useState('');
-  const [items,          setItems]         = useState<QuoteItemForm[]>(initialItems ?? [defaultItem()]);
+  // 의뢰건 handoff items 가 있으면 견적 항목으로 시드(각 항목을 defaultItem 위에 병합). 없으면 기존 로직 유지.
+  const [items,          setItems]         = useState<QuoteItemForm[]>(
+    inqPrefill?.items?.length
+      ? inqPrefill.items.map((hi) => ({ ...defaultItem(), ...hi } as QuoteItemForm))
+      : (initialItems ?? [defaultItem()]),
+  );
   const [companies,      setCompanies]     = useState<Company[]>([]);
   const [divisions,      setDivisions]     = useState<Division[]>([]);
   const [contacts,       setContacts]      = useState<Contact[]>([]);
@@ -1604,6 +1612,18 @@ export function QuoteEditorWorkspace({
   const [saving,         setSaving]        = useState(false);
   // 견적서 버튼: 신규 견적을 자동 저장하면 이후 저장은 이 id로 업데이트(중복 생성 방지)
   const [savedQuoteId,   setSavedQuoteId]  = useState<number | null>(initialQuoteId ?? null);
+
+  // 의뢰건 프리필로 진입한 경우: 견적 최초 저장(savedQuoteId 생성) 시 의뢰건에 quoteId 역연결 후 handoff 소비.
+  const inqLinkedRef = useRef(false);
+  useEffect(() => {
+    if (savedQuoteId == null || inqLinkedRef.current || !inqPrefill?.inquiryId) return;
+    inqLinkedRef.current = true;
+    fetch(api(`/api/admin/inquiries/${inqPrefill.inquiryId}/link-quote`), {
+      method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quoteId: savedQuoteId }),
+    }).catch(() => { /* 연결 실패는 무시(견적 저장 자체는 성공) */ });
+    clearQuoteHandoff();
+  }, [savedQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 저장되지 않은 변경사항 추적(값 기준) ─────────────────────────────────────
   // 저장 payload에 반영되는 폼 필드를 직렬화한 "서명"을 기준선과 비교한다.

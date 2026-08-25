@@ -49,3 +49,4 @@ export * from "./content_insights";
 export * from "./insight_auto_suggestions";
 export * from "./insight_events";
 export * from "./invitations";
+export * from "./inquiries";

@@ -65,6 +65,11 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     accentColor: "#3b82f6",
     perm: "menu.project",
     items: [
+      // 의뢰건 접수(pre-sales): 견적 이전 단계. 견적관리보다 위에 배치.
+      { id: "inquiry-catalog", label: "의뢰건 접수", icon: "📥", perm: "menu.project", children: [
+        { id: "inquiries",        label: "의뢰건 목록", icon: "📥", perm: "menu.project" },
+        { id: "inquiry-register", label: "의뢰건 등록", icon: "➕", perm: "menu.project" },
+      ] },
       // 견적 ERP 마스터: 목록 / 등록. 부모는 펼침 전용.
       //  · 개별 휴지통 메뉴는 사이드바 하단 「통합 휴지통」으로 일원화(진입점 제거). 내부 view='trash'·API는 유지.
       { id: "quotes-catalog", label: "견적관리", icon: "📄", perm: "menu.project", children: [
@@ -154,6 +159,9 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
 
 export const ADMIN_PAGE_TITLE: Record<string, string> = {
   dashboard:   "대시보드",
+  inquiries:        "의뢰건 목록",
+  "inquiry-register": "의뢰건 등록",
+  "inquiry-detail":   "의뢰건 상세",
   quotes:      "견적서 목록",
   "quote-register": "견적서 등록",
   "quote-trash":    "휴지통",

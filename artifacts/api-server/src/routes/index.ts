@@ -34,6 +34,7 @@ import customerRouter from "./customer";
 import prepaidRouter from "./prepaid";
 import aiQuoteDraftRouter from "./aiQuoteDraft";
 import docxDiagRouter from "./docxDiag";
+import inquiriesRouter from "./inquiries";
 
 const router: IRouter = Router();
 
@@ -44,6 +45,7 @@ router.use(projectsRouter);
 router.use(aiQuoteDraftRouter);
 router.use(docxDiagRouter);
 router.use(quotesRouter);
+router.use(inquiriesRouter);
 router.use(tasksRouter);
 router.use(uploadRouter);
 router.use(paymentsRouter);
