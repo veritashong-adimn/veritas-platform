@@ -9,12 +9,12 @@
  * 폼 상태(InquiryFormState) + 장비행(EquipmentRow[]) 은 부모가 소유하고, 저장 payload 는
  * buildInquiryPayload() 로 생성한다. 등록/수정 모두 동일 컴포넌트를 사용해 중복을 없앤다.
  */
-import React from 'react';
+import React, { useRef, useState } from 'react';
 import {
   INQUIRY_CHANNELS, INQUIRY_SERVICE_TYPES, INTERPRET_TYPES, DOCUMENT_TYPES,
   EQUIPMENT_KINDS, EQUIPMENT_UNITS, EquipmentRow, emptyEquipmentRow,
 } from '../../lib/inquiryMeta';
-import { ClickSelect } from '../ui';
+import { CustomerLinkPicker } from './CustomerLinkPicker';
 
 const label: React.CSSProperties = { display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 5 };
 const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', padding: '8px 10px', fontSize: 13, border: '1px solid #d1d5db', borderRadius: 8, outline: 'none' };
@@ -25,6 +25,9 @@ const row: React.CSSProperties = { display: 'flex', gap: 12, flexWrap: 'wrap' };
 // ── 폼 상태 ────────────────────────────────────────────────────────────────────
 export interface InquiryFormState {
   receivedAt: string; channel: string; assignedPmId: string;
+  // 고객 연결 — 기존 거래처/담당자 마스터 연결(선택). 신규 고객은 빈 값(원문 snapshot만 보존).
+  customerMode: string;                 // 'existing' | 'new' (기본 existing)
+  companyId: string; contactId: string; divisionId: string;
   customerCompanyName: string; department: string; contactName: string; contactPosition: string;
   contactPhone: string; contactMobile: string; contactEmail: string;
   serviceType: string;
@@ -59,6 +62,7 @@ function isoToDateInput(iso: string | null | undefined): string {
 export function emptyInquiryForm(): InquiryFormState {
   return {
     receivedAt: nowLocalInput(), channel: 'phone', assignedPmId: '',
+    customerMode: 'existing', companyId: '', contactId: '', divisionId: '',
     customerCompanyName: '', department: '', contactName: '', contactPosition: '', contactPhone: '', contactMobile: '', contactEmail: '',
     serviceType: '', languageFrom: '', languageTo: '', quoteDueDate: '',
     interpretType: '', scheduleFrom: '', scheduleTo: '', interpretDuration: '', place: '',
@@ -71,6 +75,8 @@ export function emptyInquiryForm(): InquiryFormState {
 export function inquiryFormFromDetail(d: any, equipmentRows: EquipmentRow[]): InquiryFormState {
   return {
     receivedAt: isoToLocalInput(d.receivedAt), channel: d.channel ?? 'phone', assignedPmId: d.assignedPmId != null ? String(d.assignedPmId) : '',
+    customerMode: d.companyId != null ? 'existing' : 'new',
+    companyId: d.companyId != null ? String(d.companyId) : '', contactId: d.contactId != null ? String(d.contactId) : '', divisionId: d.divisionId != null ? String(d.divisionId) : '',
     customerCompanyName: d.customerCompanyName ?? '', department: d.department ?? '', contactName: d.contactName ?? '', contactPosition: d.contactPosition ?? '',
     contactPhone: d.contactPhone ?? '', contactMobile: d.contactMobile ?? '', contactEmail: d.contactEmail ?? '',
     serviceType: d.serviceType ?? '', languageFrom: d.languageFrom ?? '', languageTo: d.languageTo ?? '',
@@ -98,6 +104,10 @@ export function buildInquiryPayload(f: InquiryFormState, equipment: EquipmentRow
     receivedAt: f.receivedAt ? new Date(f.receivedAt).toISOString() : undefined,
     channel: f.channel,
     assignedPmId: f.assignedPmId ? Number(f.assignedPmId) : null,
+    // 마스터 연결(선택). 신규 고객은 null. 원문 고객정보(아래 snapshot 필드)는 연결 여부와 무관하게 항상 보존.
+    companyId: f.companyId ? Number(f.companyId) : null,
+    contactId: f.contactId ? Number(f.contactId) : null,
+    divisionId: f.divisionId ? Number(f.divisionId) : null,
     customerCompanyName: f.customerCompanyName, department: f.department, contactName: f.contactName,
     contactPosition: f.contactPosition, contactPhone: f.contactPhone, contactMobile: f.contactMobile, contactEmail: f.contactEmail,
     serviceType: f.serviceType || null,
@@ -156,8 +166,82 @@ function EquipmentRows({ rows, setRows }: { rows: EquipmentRow[]; setRows: (r: E
   );
 }
 
+// ── 서비스 유형 탭 (상단 배치) ─────────────────────────────────────────────────
+// 네이티브 select 대신 4개 탭(통역/번역/장비/기타)으로 노출. 선택값은 기존 serviceType 에 그대로 저장.
+// 실비(expense)는 신규 선택지에서 제외(legacy 표시/저장 로직은 유지). 버튼 요소라 키보드 접근성 기본 제공.
+function ServiceTabs({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div role="tablist" aria-label="서비스 유형" data-testid="inq-service-tabs" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      {INQUIRY_SERVICE_TYPES.map(s => {
+        const active = value === s.value;
+        return (
+          <button
+            key={s.value} type="button" role="tab" aria-selected={active}
+            aria-label={`서비스 유형 ${s.label}`} data-testid={`inq-service-tab-${s.value}`}
+            onClick={() => onChange(s.value)}
+            style={{
+              padding: '9px 24px', fontSize: 13, fontWeight: 700, borderRadius: 8, cursor: 'pointer',
+              border: active ? '1px solid #2563eb' : '1px solid #d1d5db',
+              background: active ? '#2563eb' : '#fff',
+              color: active ? '#fff' : '#374151',
+              boxShadow: active ? '0 1px 2px rgba(37,99,235,0.25)' : 'none',
+              transition: 'background .12s, color .12s, border-color .12s',
+            }}>
+            {s.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── 첨부파일 드롭존 ────────────────────────────────────────────────────────────
+// 기존 /api/upload(R2) 로직은 그대로 재사용. UI만 넓은 클릭/드래그영역으로 개선(향후 AI 자동접수 입력영역).
+function AttachmentDropzone({ attachments, onUpload, onRemoveAttachment, uploading }: {
+  attachments: Array<{ name: string; url: string }>;
+  onUpload: (files: FileList | null) => void;
+  onRemoveAttachment: (i: number) => void;
+  uploading: boolean;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [drag, setDrag] = useState(false);
+  const openPicker = () => inputRef.current?.click();
+  return (
+    <div>
+      <div style={sectionTitle}>첨부파일</div>
+      <div
+        data-testid="inq-attach-dropzone"
+        role="button" tabIndex={0} aria-label="첨부파일 선택 또는 끌어다 놓기"
+        onClick={openPicker}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); } }}
+        onDragOver={e => { e.preventDefault(); if (!drag) setDrag(true); }}
+        onDragLeave={e => { e.preventDefault(); setDrag(false); }}
+        onDrop={e => { e.preventDefault(); setDrag(false); onUpload(e.dataTransfer.files); }}
+        style={{
+          border: `1.5px dashed ${drag ? '#2563eb' : '#cbd5e1'}`,
+          background: drag ? '#eff6ff' : '#f9fafb',
+          borderRadius: 10, padding: '22px 18px', textAlign: 'center', cursor: 'pointer',
+          transition: 'border-color .12s, background .12s',
+        }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: drag ? '#2563eb' : '#374151' }}>파일을 선택하거나 여기에 끌어다 놓으세요</div>
+        <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>PDF · Word · 한글 · Excel · 이미지 등</div>
+        {uploading && <div style={{ fontSize: 12, color: '#2563eb', marginTop: 6 }}>업로드 중…</div>}
+      </div>
+      <input
+        ref={inputRef} type="file" multiple disabled={uploading} data-testid="inq-attach"
+        onChange={e => { onUpload(e.target.files); e.target.value = ''; }}
+        style={{ display: 'none' }} />
+      {attachments.length > 0 && (
+        <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 12, color: '#374151' }}>
+          {attachments.map((a, i) => <li key={i}>{a.name} <button type="button" onClick={() => onRemoveAttachment(i)} style={{ marginLeft: 6, fontSize: 11, color: '#dc2626', border: 'none', background: 'none', cursor: 'pointer' }}>삭제</button></li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // ── 본문 컴포넌트 ──────────────────────────────────────────────────────────────
-export function InquiryFormFields({ f, set, equipment, setEquipment, adminUsers = [], attachments, onUpload, onRemoveAttachment, uploading = false }: {
+export function InquiryFormFields({ f, set, equipment, setEquipment, adminUsers = [], attachments, onUpload, onRemoveAttachment, uploading = false, token, showCustomerPicker = false }: {
   f: InquiryFormState;
   set: (k: keyof InquiryFormState, v: string | boolean) => void;
   equipment: EquipmentRow[];
@@ -167,6 +251,8 @@ export function InquiryFormFields({ f, set, equipment, setEquipment, adminUsers 
   onUpload: (files: FileList | null) => void;
   onRemoveAttachment: (i: number) => void;
   uploading?: boolean;
+  token?: string;                       // 고객 picker 검색용(showCustomerPicker=true 일 때 필요)
+  showCustomerPicker?: boolean;         // true → 기존 거래처/담당자 연결 picker, false(기본) → 기존 원문 직접입력(상세 수정 호환)
 }) {
   const isInterp = f.serviceType === 'interpretation';
   const isTrans = f.serviceType === 'translation';
@@ -175,6 +261,10 @@ export function InquiryFormFields({ f, set, equipment, setEquipment, adminUsers 
 
   return (
     <div>
+      {/* ── 서비스 유형 (상단 탭) ── */}
+      <div style={{ ...sectionTitle, marginTop: 2 }}>서비스 유형</div>
+      <ServiceTabs value={f.serviceType} onChange={(v) => set('serviceType', v)} />
+
       <div style={sectionTitle}>접수 정보</div>
       <div style={row}>
         <div style={field('200px')}><label style={label}>접수일시</label>
@@ -188,35 +278,31 @@ export function InquiryFormFields({ f, set, equipment, setEquipment, adminUsers 
             <option value="">미지정</option>
             {adminUsers.map(u => <option key={u.id} value={u.id}>{u.name ?? u.email}</option>)}
           </select></div>
+        <div style={field('200px')}><label style={label}>견적서 수령 희망일 <span style={{ color: '#9ca3af', fontWeight: 400 }}>(선택)</span></label>
+          <input type="date" value={f.quoteDueDate} onChange={e => set('quoteDueDate', e.target.value)} data-testid="inq-quoteDue" style={input} /></div>
       </div>
 
-      <div style={sectionTitle}>고객 정보 (원문)</div>
-      <div style={row}>
-        <div style={field()}><label style={label}>회사명</label><input value={f.customerCompanyName} onChange={e => set('customerCompanyName', e.target.value)} data-testid="inq-company" style={input} placeholder="예: ABC 주식회사" /></div>
-        <div style={field()}><label style={label}>부서</label><input value={f.department} onChange={e => set('department', e.target.value)} data-testid="inq-dept" style={input} /></div>
-        <div style={field()}><label style={label}>담당자</label><input value={f.contactName} onChange={e => set('contactName', e.target.value)} data-testid="inq-contact" style={input} placeholder="예: 김철수" /></div>
-        <div style={field('140px')}><label style={label}>직함</label><input value={f.contactPosition} onChange={e => set('contactPosition', e.target.value)} data-testid="inq-position" style={input} placeholder="예: 팀장" /></div>
-      </div>
-      <div style={{ ...row, marginTop: 12 }}>
-        <div style={field()}><label style={label}>전화번호</label><input value={f.contactPhone} onChange={e => set('contactPhone', e.target.value)} data-testid="inq-phone" style={input} /></div>
-        <div style={field()}><label style={label}>휴대폰</label><input value={f.contactMobile} onChange={e => set('contactMobile', e.target.value)} data-testid="inq-mobile" style={input} /></div>
-        <div style={field()}><label style={label}>이메일</label><input value={f.contactEmail} onChange={e => set('contactEmail', e.target.value)} data-testid="inq-email" style={input} /></div>
-      </div>
+      {/* 고객 정보 — 등록: 기존 거래처/담당자 연결 picker / 상세 수정: 기존 원문 직접입력(호환 유지) */}
+      {showCustomerPicker && token ? (
+        <CustomerLinkPicker token={token} f={f} set={set as (k: keyof InquiryFormState, v: string) => void} />
+      ) : (
+        <>
+          <div style={sectionTitle}>고객 정보 (원문)</div>
+          <div style={row}>
+            <div style={field()}><label style={label}>회사명</label><input value={f.customerCompanyName} onChange={e => set('customerCompanyName', e.target.value)} data-testid="inq-company" style={input} placeholder="예: ABC 주식회사" /></div>
+            <div style={field()}><label style={label}>부서</label><input value={f.department} onChange={e => set('department', e.target.value)} data-testid="inq-dept" style={input} /></div>
+            <div style={field()}><label style={label}>담당자</label><input value={f.contactName} onChange={e => set('contactName', e.target.value)} data-testid="inq-contact" style={input} placeholder="예: 김철수" /></div>
+            <div style={field('140px')}><label style={label}>직함</label><input value={f.contactPosition} onChange={e => set('contactPosition', e.target.value)} data-testid="inq-position" style={input} placeholder="예: 팀장" /></div>
+          </div>
+          <div style={{ ...row, marginTop: 12 }}>
+            <div style={field()}><label style={label}>전화번호</label><input value={f.contactPhone} onChange={e => set('contactPhone', e.target.value)} data-testid="inq-phone" style={input} /></div>
+            <div style={field()}><label style={label}>휴대폰</label><input value={f.contactMobile} onChange={e => set('contactMobile', e.target.value)} data-testid="inq-mobile" style={input} /></div>
+            <div style={field()}><label style={label}>이메일</label><input value={f.contactEmail} onChange={e => set('contactEmail', e.target.value)} data-testid="inq-email" style={input} /></div>
+          </div>
+        </>
+      )}
 
       <div style={sectionTitle}>의뢰 내용</div>
-      <div style={row}>
-        <div style={field('180px')} data-testid="inq-service"><label style={label}>서비스 유형</label>
-          {/* 네이티브 select → 플랫폼 표준 커스텀 드롭다운(ClickSelect). 포커스 이동/캡처 시에도 유지. */}
-          <ClickSelect
-            value={f.serviceType}
-            onChange={(v) => set('serviceType', v)}
-            placeholder="선택"
-            options={INQUIRY_SERVICE_TYPES.map(s => ({ value: s.value, label: s.label }))}
-            style={{ display: 'block', width: '100%' }}
-            triggerStyle={{ width: '100%', padding: '8px 10px', borderRadius: 8, fontSize: 13, boxSizing: 'border-box', fontWeight: 400 }}
-          /></div>
-        <div style={field('200px')}><label style={label}>견적서 수령 희망일 <span style={{ color: '#9ca3af', fontWeight: 400 }}>(선택)</span></label><input type="date" value={f.quoteDueDate} onChange={e => set('quoteDueDate', e.target.value)} data-testid="inq-quoteDue" style={input} /></div>
-      </div>
 
       {/* ── 통역 ── */}
       {isInterp && (
@@ -296,21 +382,15 @@ export function InquiryFormFields({ f, set, equipment, setEquipment, adminUsers 
 
       {/* ── 미선택 안내 ── */}
       {!isInterp && !isTrans && !isEquip && !isOther && (
-        <div style={{ marginTop: 12, padding: '14px 16px', background: '#f9fafb', border: '1px dashed #d1d5db', borderRadius: 8, fontSize: 13, color: '#6b7280' }}>
-          서비스 유형을 선택하면 유형별 입력 항목이 표시됩니다.
+        <div data-testid="inq-service-guide" style={{ marginTop: 4, padding: '14px 16px', background: '#f9fafb', border: '1px dashed #d1d5db', borderRadius: 8, fontSize: 13, color: '#6b7280' }}>
+          서비스 유형을 선택하면 의뢰 내용을 입력할 수 있습니다.
         </div>
       )}
 
+      {/* ── 요구사항 (모든 서비스 유형 공통) ── */}
       <div style={{ marginTop: 12 }}><label style={label}>요구사항</label><textarea value={f.requirements} onChange={e => set('requirements', e.target.value)} data-testid="inq-requirements" rows={3} style={{ ...input, resize: 'vertical' }} /></div>
 
-      <div style={sectionTitle}>첨부파일</div>
-      <input type="file" multiple onChange={e => onUpload(e.target.files)} disabled={uploading} data-testid="inq-attach" style={{ fontSize: 12 }} />
-      {uploading && <span style={{ fontSize: 12, color: '#9ca3af', marginLeft: 8 }}>업로드 중…</span>}
-      {attachments.length > 0 && (
-        <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 12, color: '#374151' }}>
-          {attachments.map((a, i) => <li key={i}>{a.name} <button type="button" onClick={() => onRemoveAttachment(i)} style={{ marginLeft: 6, fontSize: 11, color: '#dc2626', border: 'none', background: 'none', cursor: 'pointer' }}>삭제</button></li>)}
-        </ul>
-      )}
+      <AttachmentDropzone attachments={attachments} onUpload={onUpload} onRemoveAttachment={onRemoveAttachment} uploading={uploading} />
     </div>
   );
 }
