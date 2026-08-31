@@ -174,6 +174,20 @@ export interface QuoteDetail {
   adminName: string | null;
   items: QuoteDetailItem[];
   settings: QuoteDetailSettings;
+  // ── 차감 견적서(b2c_prepaid/prepaid_deduction) 스냅샷 — 발행 당시 기록 ──
+  //  · 실시간 잔액 재계산이 아니라 저장 시점 값. 없으면(일반/누적) undefined.
+  prepaidBalanceBefore?: string | number | null;   // 이전 가용잔액
+  prepaidUsageAmount?: string | number | null;      // 이번 차감 적용액
+  prepaidBalanceAfter?: string | number | null;     // 차감 후 예상잔액
+  prepaidLines?: Array<{
+    type: string;              // deposit | carryover | deduction
+    status: string;            // reserved | confirmed | released
+    amount: number;
+    supplyAmount: number | null;
+    taxAmount: number | null;
+    description: string | null;
+    transactionDate: string | null;
+  }>;
 }
 
 export interface QuotePdfItem {
@@ -181,13 +195,14 @@ export interface QuotePdfItem {
   productType: string;
   productName: string;
   detailText: string;       // 서비스 상세 — 여러 줄 가능
+  serviceDate: string;      // 서비스 진행일자(범위) — 상품행의 실제 업무 날짜(견적일 아님). 없으면 ''
   quantity: string;
   unit: string;
   quantityLabel: string;    // PDF 표시용 "수량 × 인원" 등 설명
   unitPrice: number;
   supplyAmount: number;
   taxAmount: number;
-  totalAmount: number;
+  totalAmount: number;      // 공급가액+VAT = 해당 행 VAT 포함 차감 대상금액
   memo: string;             // 사용자 비고 (서비스 정보 제외)
 }
 
@@ -256,6 +271,50 @@ export interface QuotePdfData {
   };
   signatureImageUrl: string;
   quoteNotes: string;
+  // ── 차감 견적서 전용 영역 (차감 견적서일 때만 채워짐) ──
+  //  선입/이월 원천 내역 + 차감/잔액 요약(스냅샷 기준). 일반/누적 견적서는 undefined.
+  prepaid?: {
+    lines: Array<{ typeLabel: string; date: string; source: string; note: string; amount: number }>;
+    dateLabel: string;           // 선입/이월 표 날짜 컬럼 헤더(선입일자 | 이월일자 | 선입/이월일자)
+    previousAvailable: number;   // 이전 가용잔액
+    incoming: number;            // 이번 선입/이월액
+    totalAvailable: number;      // 총 가용잔액
+    quoteTotal: number;          // 이번 견적금액(= grandTotal)
+    appliedDeduction: number;    // 이번 총 차감액
+    additionalCharge: number;    // 추가 청구액
+    remainingAfter: number;      // 차감 후 예상잔액
+  };
+}
+
+// 선입/이월 원장 description을 원천정보/비고로 분해.
+//  형식: "선입(예약) · 원천: <src> · <note>" (라벨·원천·비고는 각각 선택적).
+//  원천/비고가 없으면 빈 문자열(불필요한 null·라벨 노출 방지).
+export function parsePrepaidDesc(description: string | null | undefined): { source: string; note: string } {
+  if (!description) return { source: '', note: '' };
+  const parts = description.split(' · ').map(p => p.trim()).filter(Boolean);
+  const rest = parts.slice(1); // parts[0] = 라벨(선입(예약)/이월(예약))
+  let source = '';
+  const noteParts: string[] = [];
+  for (const p of rest) {
+    if (p.startsWith('원천:')) source = p.slice('원천:'.length).trim();
+    else noteParts.push(p);
+  }
+  return { source, note: noteParts.join(' · ') };
+}
+
+// 상품행의 서비스 진행일자(범위) — itemType별 실제 날짜 컬럼을 사용(견적일 미사용).
+//  · 통역:  interpretDate(시작) ~ eventEndDate(종료)
+//  · 그 외(번역/장비/기타): eventStartDate(시작, 없으면 interpretDate) ~ eventEndDate(종료)
+//  시작만 있으면 단일 날짜, 시작~종료가 다르면 범위로 표시. 날짜가 없으면 ''(견적일 대체 없음).
+export function serviceDateDisplay(item: QuoteDetailItem): string {
+  const type = item.itemType ?? 'translation';
+  const start = type === 'interpretation'
+    ? (item.interpretDate ?? item.eventStartDate ?? null)
+    : (item.eventStartDate ?? item.interpretDate ?? null);
+  const end = item.eventEndDate ?? null;
+  if (!start) return '';
+  if (end && end !== start) return `${start} ~ ${end}`;
+  return start;
 }
 
 // ─── 통역 서비스일수 계산 ────────────────────────────────────────────────────
@@ -408,6 +467,7 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
       productType:  it.itemType ?? 'translation',
       productName:  it.productName,
       detailText:   buildDetailText(it),
+      serviceDate:  serviceDateDisplay(it),
       quantity:     it.quantity,
       unit:         displayUnit(it.productName, it.unit),
       quantityLabel: '',
@@ -471,8 +531,51 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
   const summary: QuoteSummary = { translation: translationSummary, interpretation: interpretationSummary, equipment: equipmentSummary };
 
   const QUOTE_TYPE_LABEL: Record<string, string> = {
-    b2b_standard: '일반 견적서', b2c_prepaid: '차감 견적서', accumulated_batch: '누적 견적서',
+    b2b_standard: '일반 견적서', b2c_prepaid: '차감 견적서', prepaid_deduction: '차감 견적서', accumulated_batch: '누적 견적서',
   };
+
+  // ── 차감 견적서: 선입/이월 내역 + 차감/잔액 요약(스냅샷 기준) ──────────────
+  //  선입금은 매출(공급가/부가세/총 견적금액)에 절대 합산하지 않는다.
+  //  before/usage/after 는 발행 당시 저장된 스냅샷 값을 우선 사용(실시간 재계산 금지).
+  const isPrepaidType = detail.quoteType === 'b2c_prepaid' || detail.quoteType === 'prepaid_deduction';
+  const toNum = (v: string | number | null | undefined): number => (v == null ? 0 : Number(v)) || 0;
+  let prepaid: QuotePdfData['prepaid'] = undefined;
+  if (isPrepaidType && (detail.prepaidLines?.length || detail.prepaidBalanceAfter != null)) {
+    const inflow = (detail.prepaidLines ?? []).filter(l => l.type === 'deposit' || l.type === 'carryover');
+    const lines = inflow.map(l => {
+      const { source, note } = parsePrepaidDesc(l.description);
+      return {
+        typeLabel: l.type === 'carryover' ? '기존 진행건 잔액 이월' : '선입금',
+        date:      l.transactionDate ?? '',
+        source,
+        note,
+        amount:    Number(l.amount),
+      };
+    });
+    // 선입/이월 표 날짜 컬럼 헤더 — 통합 명칭(원천정보 제거와 함께 유형별 명칭 대신 단일 헤더 사용)
+    const dateLabel = '선입/이월일자';
+
+    const incoming = inflow.reduce((a, l) => a + Number(l.amount), 0);
+    const previousAvailable = toNum(detail.prepaidBalanceBefore);              // 스냅샷
+    const totalAvailable = previousAvailable + incoming;
+    const appliedDeduction = detail.prepaidUsageAmount != null                  // 스냅샷 우선
+      ? toNum(detail.prepaidUsageAmount)
+      : Math.min(totalAvailable, grandTotal);
+    const remainingAfter = detail.prepaidBalanceAfter != null                   // 스냅샷 우선
+      ? toNum(detail.prepaidBalanceAfter)
+      : Math.max(0, totalAvailable - appliedDeduction);
+    prepaid = {
+      lines,
+      dateLabel,
+      previousAvailable,
+      incoming,
+      totalAvailable,
+      quoteTotal: grandTotal,          // 이번 견적금액 = 서비스 사용내역 합(선입 미포함)
+      appliedDeduction,
+      additionalCharge: Math.max(0, grandTotal - appliedDeduction),
+      remainingAfter,
+    };
+  }
 
   return {
     quoteNumber:   detail.quoteNumber ?? `#${detail.id}`,
@@ -512,6 +615,7 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
     },
     signatureImageUrl: s.signatureImageUrl ?? '',
     quoteNotes:        s.quoteNotes        ?? '',
+    prepaid,
   };
 }
 

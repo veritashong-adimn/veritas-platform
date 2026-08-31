@@ -2,9 +2,26 @@ import { Router } from "express";
 import { db, prepaidAccountsTable, prepaidLedgerTable, projectsTable } from "@workspace/db";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
+import { getCompanyPrepaidState } from "../services/prepaidDeductionQuote";
 
 const router = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
+
+// ─── 거래처 가용잔액 (차감 견적 작성용) ──────────────────────────────────────
+// GET /api/prepaid/available/:companyId?excludeQuoteId=123
+// available = 확정잔액 − 다른 차감 견적의 차감예정액(중복 사용 방지)
+router.get("/prepaid/available/:companyId", ...adminGuard, async (req, res) => {
+  const companyId = Number(req.params.companyId);
+  const excludeQuoteId = req.query.excludeQuoteId ? Number(req.query.excludeQuoteId) : null;
+  if (!companyId) { res.status(400).json({ error: "companyId가 필요합니다." }); return; }
+  try {
+    const state = await getCompanyPrepaidState(db, companyId, excludeQuoteId);
+    res.json({ companyId, ...state });
+  } catch (err) {
+    req.log.error({ err }, "Failed to get prepaid available balance");
+    res.status(500).json({ error: "가용잔액 조회 실패" });
+  }
+});
 
 // ─── 거래처별 선입금 잔액 집계 ──────────────────────────────────────────────
 // GET /api/prepaid/balance/:companyId
@@ -90,7 +107,11 @@ router.get("/prepaid/transactions", ...adminGuard, async (req, res) => {
       })
       .from(prepaidLedgerTable)
       .leftJoin(projectsTable, eq(prepaidLedgerTable.projectId, projectsTable.id))
-      .where(sql`${prepaidLedgerTable.accountId} = ANY(ARRAY[${sql.join(accountIds.map(id => sql`${id}`), sql`, `)}]::integer[])`)
+      // 확정(confirmed) 내역만 노출 — 차감 견적의 예약(reserved)/해제(released)는 원장 화면에서 제외
+      .where(and(
+        sql`${prepaidLedgerTable.accountId} = ANY(ARRAY[${sql.join(accountIds.map(id => sql`${id}`), sql`, `)}]::integer[])`,
+        eq(prepaidLedgerTable.status, "confirmed"),
+      ))
       .orderBy(desc(prepaidLedgerTable.createdAt), desc(prepaidLedgerTable.id))
       .limit(limit);
 

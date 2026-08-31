@@ -24,6 +24,16 @@ import { loadPaymentRecords } from "./projectPayments";
 import adminUsersRouter from "./admin/users";
 import adminCustomersRouter from "./admin/customers";
 import adminNotesRouter from "./admin/notes";
+import {
+  isPrepaidDeductionQuoteType,
+  syncQuoteReservations,
+  confirmQuoteReservations,
+  revertQuoteReservationsToReserved,
+  releaseQuoteReservations,
+  getCompanyPrepaidState,
+  getQuotePrepaidLines,
+  type PrepaidLineInput,
+} from "../services/prepaidDeductionQuote";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -1006,6 +1016,9 @@ router.patch("/admin/projects/:id/cancel", ...adminGuard, requirePermission("pro
         .where(and(eq(quotesTable.projectId, projectId), eq(quotesTable.status, "approved")))
         .returning({ id: quotesTable.id });
 
+      // 차감 견적서: 확정된 잔액 반영을 되돌리고 reserved 로 복귀(재판매전환 대비)
+      await revertQuoteReservationsToReserved(tx, revertedQuotes.map(q => q.id));
+
       return { updated, revertedQuoteIds: revertedQuotes.map(q => q.id) };
     });
 
@@ -1280,6 +1293,7 @@ router.get("/admin/quotes", ...adminGuard, async (req, res) => {
         issueDate: quotesTable.issueDate,
         validUntil: quotesTable.validUntil,
         createdAt: quotesTable.createdAt,
+        batchClosedAt: quotesTable.batchClosedAt,   // 누적 마감 상태(목록 배지용)
         projectTitle: projectsTable.title,
         projectStatus: projectsTable.status,
         projectCompanyId: projectsTable.companyId,
@@ -1372,6 +1386,7 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
     quoteType, billingType, paymentMethod,
     validUntil, issueDate, invoiceDueDate, paymentDueDate,
     prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
+    prepaidLines,
     batchPeriodStart, batchPeriodEnd,
   } = req.body as {
     title?: string; companyId?: number; contactId?: number; divisionId?: number | null; adminId?: number;
@@ -1385,6 +1400,7 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
     quoteType?: string; billingType?: string; paymentMethod?: string;
     validUntil?: string; issueDate?: string; invoiceDueDate?: string; paymentDueDate?: string;
     prepaidBalanceBefore?: number; prepaidUsageAmount?: number; prepaidBalanceAfter?: number;
+    prepaidLines?: PrepaidLineInput[];
     batchPeriodStart?: string; batchPeriodEnd?: string;
   };
 
@@ -1487,6 +1503,29 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
           discountReason: (it as any).discountReason ?? null,
         })));
       }
+
+      // ── 차감 견적서: 선입/이월 + 차감액을 예약(reserved)으로 기록 ──────────────
+      if (isPrepaidDeductionQuoteType(quoteType || "b2b_standard")) {
+        const supplyTotal = calcItemsAll.reduce((s, it) => s + it.supplyAmount, 0);
+        const taxTotal    = calcItemsAll.reduce((s, it) => s + it.taxAmount, 0);
+        const snap = await syncQuoteReservations(tx, {
+          quoteId: quote.id,
+          companyId: companyId ?? null,
+          projectId: linkedProjectId,
+          prepaidLines: Array.isArray(prepaidLines) ? prepaidLines : [],
+          quoteTotal: totalPrice,
+          quoteSupply: supplyTotal,
+          quoteTax: taxTotal,
+          transactionDate: issueDate || null,
+        });
+        if (snap) {
+          await tx.update(quotesTable).set({
+            prepaidBalanceBefore: String(snap.previousAvailable),
+            prepaidUsageAmount:   String(snap.summary.appliedDeduction),
+            prepaidBalanceAfter:  String(snap.summary.remainingAfter),
+          }).where(eq(quotesTable.id, quote.id));
+        }
+      }
       return quote;
     });
 
@@ -1558,6 +1597,21 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
           .where(eq(quotesTable.id, quoteId))
           .returning();
 
+        // 차감 견적서: 새 프로젝트를 예약 라인에도 연결 후 확정(reserved→confirmed, 실제 잔액 반영)
+        if (isPrepaidDeductionQuoteType(updatedQuote.quoteType)) {
+          await tx.update(prepaidLedgerTable)
+            .set({ projectId: project.id })
+            .where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "reserved")));
+          const snap = await confirmQuoteReservations(tx, quoteId);
+          if (snap) {
+            await tx.update(quotesTable).set({
+              prepaidBalanceBefore: String(snap.balanceBefore),
+              prepaidUsageAmount:   String(snap.usageAmount),
+              prepaidBalanceAfter:  String(snap.balanceAfter),
+            }).where(eq(quotesTable.id, quoteId));
+          }
+        }
+
         return { quote: updatedQuote, project, created: true };
       });
 
@@ -1572,16 +1626,36 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
     }
 
     // 일반 상태 변경 (프로젝트가 이미 연결된 경우 project status도 동기화)
-    const [updatedQuote] = await db.update(quotesTable)
-      .set({ status: status as any })
-      .where(eq(quotesTable.id, quoteId))
-      .returning();
+    const isPrepaidQ = isPrepaidDeductionQuoteType(quote.quoteType);
+    const updatedQuote = await db.transaction(async tx => {
+      const [uq] = await tx.update(quotesTable)
+        .set({ status: status as any })
+        .where(eq(quotesTable.id, quoteId))
+        .returning();
 
-    if (quote.projectId && status === "approved") {
-      await db.update(projectsTable)
-        .set({ status: "approved" })
-        .where(eq(projectsTable.id, quote.projectId));
-    }
+      if (quote.projectId && status === "approved") {
+        await tx.update(projectsTable)
+          .set({ status: "approved" })
+          .where(eq(projectsTable.id, quote.projectId));
+      }
+
+      // 차감 견적서 잔액 파이프라인
+      if (isPrepaidQ && status === "approved") {
+        // 예약(reserved) → 확정(confirmed): 실제 잔액 반영
+        const snap = await confirmQuoteReservations(tx, quoteId);
+        if (snap) {
+          await tx.update(quotesTable).set({
+            prepaidBalanceBefore: String(snap.balanceBefore),
+            prepaidUsageAmount:   String(snap.usageAmount),
+            prepaidBalanceAfter:  String(snap.balanceAfter),
+          }).where(eq(quotesTable.id, quoteId));
+        }
+      } else if (isPrepaidQ && status === "rejected") {
+        // 거절(미체결): 확정분 반전 후 예약/확정 모두 해제
+        await releaseQuoteReservations(tx, [quoteId]);
+      }
+      return uq;
+    });
 
     res.json({ quote: updatedQuote, autoCreatedProject: false });
   } catch (err) {
@@ -1725,7 +1799,8 @@ router.get("/admin/prepaid-accounts/:id", ...adminGuard, async (req, res) => {
     if (!account) { res.status(404).json({ error: "계정을 찾을 수 없습니다." }); return; }
 
     const ledger = await db.select().from(prepaidLedgerTable)
-      .where(eq(prepaidLedgerTable.accountId, accountId))
+      // 확정 내역만 노출 — 차감 견적 예약(reserved)/해제(released)는 계정 상세에서 제외
+      .where(and(eq(prepaidLedgerTable.accountId, accountId), eq(prepaidLedgerTable.status, "confirmed")))
       .orderBy(prepaidLedgerTable.transactionDate, prepaidLedgerTable.createdAt);
 
     const pids = ledger.filter(e => e.projectId).map(e => e.projectId as number);
@@ -1861,9 +1936,9 @@ router.delete("/admin/prepaid-ledger/:entryId", ...adminGuard, async (req, res) 
 
     await db.transaction(async tx => {
       await tx.delete(prepaidLedgerTable).where(eq(prepaidLedgerTable.id, entryId));
-      // 잔액 재계산: 모든 남은 항목 기반
+      // 잔액 재계산: 확정(confirmed) 항목만 기반 (예약/해제는 잔액에 영향 없음)
       const remaining = await tx.select().from(prepaidLedgerTable)
-        .where(eq(prepaidLedgerTable.accountId, entry.accountId))
+        .where(and(eq(prepaidLedgerTable.accountId, entry.accountId), eq(prepaidLedgerTable.status, "confirmed")))
         .orderBy(prepaidLedgerTable.transactionDate, prepaidLedgerTable.createdAt);
       let bal = 0;
       for (const e of remaining) {
@@ -2737,6 +2812,29 @@ router.post("/admin/product-registration-requests", ...adminGuard, async (req, r
   } catch (e) { res.status(500).json({ error: "등록 요청 실패" }); }
 });
 
+// ─── 누적 견적서 마감(누적중 → 마감완료) ────────────────────────────────────
+//  accumulated_batch 전용. batch_closed_at 에 마감일시 기록 → 이후 수정 차단(판매건 최종 확정).
+//  판매전환과 별개 동작. 이미 마감된 경우 409.
+router.post("/admin/quotes/:id/batch-close", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 quote id." }); return; }
+  try {
+    const [q] = await db.select({ id: quotesTable.id, quoteType: quotesTable.quoteType, batchClosedAt: quotesTable.batchClosedAt })
+      .from(quotesTable).where(eq(quotesTable.id, quoteId));
+    if (!q) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }
+    if (q.quoteType !== "accumulated_batch") { res.status(400).json({ error: "누적 견적서만 마감할 수 있습니다." }); return; }
+    if (q.batchClosedAt != null) { res.status(409).json({ error: "이미 마감완료된 누적 견적서입니다." }); return; }
+    const [updated] = await db.update(quotesTable)
+      .set({ batchClosedAt: new Date() })
+      .where(eq(quotesTable.id, quoteId))
+      .returning({ id: quotesTable.id, batchClosedAt: quotesTable.batchClosedAt });
+    res.json({ id: updated.id, batchClosedAt: updated.batchClosedAt, batchStatus: "closed" });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to close batch quote");
+    res.status(500).json({ error: "누적 마감 처리 실패." });
+  }
+});
+
 // ─── 견적서 단건 조회 (items + settings 포함) — PDF 출력용 ───────────────────
 // ── 기존 견적 수정 (품목 교체 + 기본 필드 업데이트) ──────────────────────────
 router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
@@ -2754,13 +2852,23 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     hasTravelExpense?: boolean; hasEquipment?: boolean; isCustomProduct?: boolean;
     discountType?: string; discountValue?: number; discountReason?: string;
   };
-  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId } = req.body as {
+  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId, prepaidLines } = req.body as {
     title?: string; items?: PutItemInput[]; note?: string;
     quoteType?: string; issueDate?: string; validUntil?: string;
     companyId?: number | null; contactId?: number | null; divisionId?: number | null;
+    prepaidLines?: PrepaidLineInput[];
   };
   if (!items || items.length === 0) {
     res.status(400).json({ error: "품목이 없습니다." }); return;
+  }
+  // 누적 마감 가드: 마감완료된 누적 견적서는 상품/금액 수정 불가(연결 판매건 최종 확정 유지).
+  //  UI 뿐 아니라 API 레벨에서 차단한다(직접 호출 방어). 조회/PDF는 별도 GET이라 영향 없음.
+  {
+    const [q] = await db.select({ quoteType: quotesTable.quoteType, batchClosedAt: quotesTable.batchClosedAt })
+      .from(quotesTable).where(eq(quotesTable.id, quoteId));
+    if (q && q.quoteType === "accumulated_batch" && q.batchClosedAt != null) {
+      res.status(409).json({ error: "마감완료된 누적 견적서는 수정할 수 없습니다." }); return;
+    }
   }
   // 할인 항목(음수 공급가) 포함 금액 계산 (POST와 동일 로직)
   const calcItems = computeQuoteItemAmounts(items);
@@ -2836,6 +2944,37 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         discountValue:           (it as any).discountValue != null ? String((it as any).discountValue) : null,
         discountReason:          (it as any).discountReason         ?? null,
       })));
+
+      // ── 차감 견적서: 선입/이월 + 차감 예약 재동기화 ───────────────────────────
+      if (isPrepaidDeductionQuoteType(quoteType ?? "b2b_standard")) {
+        const [q] = await tx.select({ projectId: quotesTable.projectId }).from(quotesTable).where(eq(quotesTable.id, quoteId));
+        let resolvedCompanyId: number | null = companyId ?? null;
+        const resolvedProjectId: number | null = q?.projectId ?? null;
+        if (resolvedCompanyId == null && resolvedProjectId != null) {
+          const [p] = await tx.select({ companyId: projectsTable.companyId }).from(projectsTable).where(eq(projectsTable.id, resolvedProjectId));
+          resolvedCompanyId = p?.companyId ?? null;
+        }
+        const supplyTotal = calcItems.reduce((s, it) => s + it.supplyAmount, 0);
+        const taxTotal    = calcItems.reduce((s, it) => s + it.taxAmount, 0);
+        const snap = await syncQuoteReservations(tx, {
+          quoteId,
+          companyId: resolvedCompanyId,
+          projectId: resolvedProjectId,
+          prepaidLines: Array.isArray(prepaidLines) ? prepaidLines : [],
+          quoteTotal: totalPrice,
+          quoteSupply: supplyTotal,
+          quoteTax: taxTotal,
+          transactionDate: issueDate || null,
+        });
+        await tx.update(quotesTable).set({
+          prepaidBalanceBefore: snap ? String(snap.previousAvailable) : null,
+          prepaidUsageAmount:   snap ? String(snap.summary.appliedDeduction) : null,
+          prepaidBalanceAfter:  snap ? String(snap.summary.remainingAfter) : null,
+        }).where(eq(quotesTable.id, quoteId));
+      } else {
+        // 유형이 차감이 아니게 변경된 경우: 남은 예약 라인 해제(잔액 원복)
+        await releaseQuoteReservations(tx, [quoteId]);
+      }
     });
     res.json({ id: quoteId, price: totalPrice });
   } catch (err) {
@@ -2862,6 +3001,12 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
         issueDate:   quotesTable.issueDate,
         validUntil:  quotesTable.validUntil,
         projectId:   quotesTable.projectId,
+        // 차감 견적서 PDF 스냅샷(발행 당시 기록) — 실시간 재계산 대신 이 값 우선 사용
+        prepaidBalanceBefore: quotesTable.prepaidBalanceBefore,
+        prepaidUsageAmount:   quotesTable.prepaidUsageAmount,
+        prepaidBalanceAfter:  quotesTable.prepaidBalanceAfter,
+        // 누적 견적서 마감 상태(NULL=누적중 / 값=마감완료)
+        batchClosedAt:        quotesTable.batchClosedAt,
         companyId:           projectsTable.companyId,
         contactId:           projectsTable.contactId,
         // 브랜드(Division) — projects.requestingDivisionId 재사용
@@ -2905,7 +3050,18 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
       quoteValidityDays: s.quoteValidityDays  ?? 14,
     };
 
-    res.json({ ...quote, items, settings });
+    // 차감 견적서: 선입/이월·차감 예약 라인 + 거래처 가용잔액 스냅샷
+    let prepaidLines: Awaited<ReturnType<typeof getQuotePrepaidLines>> = [];
+    let prepaidState: Awaited<ReturnType<typeof getCompanyPrepaidState>> | null = null;
+    if (isPrepaidDeductionQuoteType(quote.quoteType)) {
+      prepaidLines = await getQuotePrepaidLines(db, quoteId);
+      if (quote.companyId != null) {
+        // 이 견적 자신의 reserved 차감은 제외해 '이전 가용잔액' 기준으로 반환
+        prepaidState = await getCompanyPrepaidState(db, quote.companyId, quoteId);
+      }
+    }
+
+    res.json({ ...quote, items, settings, prepaidLines, prepaidState });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch quote detail");
     res.status(500).json({ error: "견적 조회 실패." });

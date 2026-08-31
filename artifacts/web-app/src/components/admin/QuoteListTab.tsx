@@ -19,6 +19,7 @@ interface QuoteRow {
   price: string;
   status: 'pending' | 'sent' | 'approved' | 'rejected';
   quoteType: string;
+  batchClosedAt?: string | null;   // 누적 견적서 마감 상태(값 존재=마감완료)
   billingType: string;
   issueDate: string | null;
   validUntil: string | null;
@@ -101,6 +102,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     quoteType: QuoteType; issueDate: string; vatType: VatType;
     companyId: number | null; contactId: number | null; divisionId: number | null;
     status: string;
+    batchClosedAt: string | null;
   } | null>(null);
   // 선택 기반 일괄 관리
   const [selectedIds, setSelectedIds]   = useState<Set<number>>(new Set());
@@ -179,6 +181,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         contactId: (detail as any).contactId ?? null,
         divisionId: (detail as any).divisionId ?? null,
         status: (detail as any).status ?? rowStatus ?? 'pending',
+        batchClosedAt: (detail as any).batchClosedAt ?? null,
       });
       setShowEditor(true);
     } finally { setEditLoading(null); }
@@ -331,6 +334,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         initialContactId={editInitData?.contactId ?? null}
         initialDivisionId={editInitData?.divisionId ?? null}
         initialStatus={editInitData?.status}
+        initialBatchClosedAt={editInitData?.batchClosedAt ?? null}
         onConverted={fetchQuotes}
         onNavigateToSales={onNavigateToSales}
         onOpenSalesDetail={onOpenSalesDetail}
@@ -597,11 +601,16 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                       <td style={{ padding: '6px 10px', textAlign: 'right', whiteSpace: 'nowrap', fontWeight: 700, color: '#1e3a5f', fontSize: 13, minWidth: 104 }}>
                         {fmt(q.price)}원
                       </td>
-                      {/* 견적유형 — 가운데 정렬 */}
+                      {/* 견적유형 — 가운데 정렬 (누적 견적서는 누적상태 배지 추가) */}
                       <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
                         <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: '#f0f9ff', color: '#0369a1', fontWeight: 600 }}>
                           {QUOTE_TYPE_LABEL[q.quoteType] ?? q.quoteType}
                         </span>
+                        {q.quoteType === 'accumulated_batch' && (
+                          q.batchClosedAt
+                            ? <span style={{ display: 'inline-block', marginLeft: 4, fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#f3f4f6', color: '#6b7280', fontWeight: 700 }}>마감완료</span>
+                            : <span style={{ display: 'inline-block', marginLeft: 4, fontSize: 10, padding: '2px 6px', borderRadius: 4, background: '#fffbeb', color: '#b45309', fontWeight: 700 }}>누적중</span>
+                        )}
                       </td>
                       {/* 담당PM — 가운데 정렬 */}
                       <td style={{ padding: '6px 10px', minWidth: 72, maxWidth: 110, textAlign: 'center' }}>

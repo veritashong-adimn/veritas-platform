@@ -171,15 +171,25 @@ export function generateQuoteTitle(params: {
   brandName?: string | null;
   items: QuoteTitleItem[];
   issueDate: string; // 'YYYY-MM-DD' 등 (구분자 제거 후 앞 8자리 사용)
+  // true면 상품이 없어도 확보된 정보(회사[_브랜드]_날짜)만으로 생성한다([자동생성] 버튼 수동 클릭용).
+  // 기본(false)은 기존 동작 유지 — 상품 0개면 '' 반환(자동입력 effect가 조기 생성하지 않도록).
+  allowEmpty?: boolean;
 }): string {
   const companyName = (params.companyName ?? '').trim();
   const valid = params.items.filter(it => it.productName.trim());
-  if (!companyName || valid.length === 0) return '';
+  if (!companyName) return '';
+  if (valid.length === 0 && !params.allowEmpty) return '';
+
+  const brandPart = params.brandName && params.brandName.trim() ? `${params.brandName.trim()}_` : '';
+  const dateStr = (params.issueDate ?? '').replace(/[^0-9]/g, '').slice(0, 8);
+
+  // 상품 정보가 아직 없으면 서비스 구간 생략(빈 '_' 없이 회사[_브랜드]_날짜)
+  if (valid.length === 0) {
+    return `VERITAS│${companyName}_${brandPart}${dateStr}`;
+  }
 
   const rep = pickRepresentativeProduct(valid);
   const extra = valid.length > 1 ? ` 외 ${valid.length - 1}건` : '';
-  const brandPart = params.brandName && params.brandName.trim() ? `${params.brandName.trim()}_` : '';
-  const dateStr = (params.issueDate ?? '').replace(/[^0-9]/g, '').slice(0, 8);
   return `VERITAS│${companyName}_${brandPart}${rep}${extra}_${dateStr}`;
 }
 

@@ -46,6 +46,9 @@ export const quotesTable = pgTable("quotes", {
   batchPeriodStart: date("batch_period_start"),
   batchPeriodEnd: date("batch_period_end"),
   batchItemCount: integer("batch_item_count"),
+  // 누적 마감: NULL = 누적중(accumulating), 값 존재 = 마감완료(closed) + 마감일자.
+  //  accumulated_batch 견적서에만 사용. 마감 후 상품/금액 수정 차단(연결 판매건도 최종 확정 유지).
+  batchClosedAt: timestamp("batch_closed_at"),
 
   // ── 장비 공통 설정 (JSON string) ────────────────────────
   equipmentCommon: text("equipment_common"),

@@ -321,7 +321,8 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
               </div>
             </div>
 
-            {/* ── 품목 테이블 ──────────────────────────────────────────── */}
+            {/* ── 품목 테이블 + 금액 합계 (일반/누적 견적서 전용) ─────────── */}
+            {!data.prepaid && (<>
             {hasItems ? (
               <table style={{
                 width: '100%', borderCollapse: 'collapse', marginBottom: 14,
@@ -395,6 +396,117 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
                 </div>
               </div>
             </div>
+
+            </>)}
+
+            {/* ── 차감 견적서 전용: 선입금/이월 → 진행 및 차감내역 → 차감 잔액 ── */}
+            {data.prepaid && (() => {
+              const p = data.prepaid;
+              const hdrStyle: React.CSSProperties = {
+                fontSize: 12, fontWeight: 800, color: BRAND, letterSpacing: 0.5,
+                marginBottom: 8, paddingBottom: 5, borderBottom: `1.5px solid ${BRAND_LIGHT}`,
+              };
+              const th = (h: string, align: 'left' | 'center' | 'right', last: boolean): React.CSSProperties => ({
+                padding: '7px 6px', color: '#fff', fontSize: 10, fontWeight: 700,
+                textAlign: align, whiteSpace: 'nowrap', borderRight: last ? 'none' : '1px solid rgba(255,255,255,0.15)',
+              });
+              const bd = '1px solid #f1f5f9';
+              return (
+                <>
+                  {/* [선입금 / 이월 내역] — 언제 얼마를 선입/이월했는지 */}
+                  <div style={hdrStyle}>선입금 / 이월 내역</div>
+                  {p.lines.length > 0 ? (
+                    <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 18, fontSize: 11 }}>
+                      <thead>
+                        <tr style={{ background: BRAND }}>
+                          <th style={th(p.dateLabel, 'center', false)}>{p.dateLabel}</th>
+                          <th style={th('구분', 'center', false)}>구분</th>
+                          <th style={th('금액', 'right', false)}>금액</th>
+                          <th style={th('비고', 'left', true)}>비고</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {p.lines.map((l, idx) => (
+                          <tr key={idx} style={{ background: idx % 2 === 1 ? '#f9fafb' : '#fff' }}>
+                            <td style={{ padding: '6px', textAlign: 'center', fontSize: 10, borderBottom: bd, whiteSpace: 'nowrap' }}>{l.date || '-'}</td>
+                            <td style={{ padding: '6px', textAlign: 'center', fontSize: 10, borderBottom: bd, whiteSpace: 'nowrap', fontWeight: 600 }}>{l.typeLabel}</td>
+                            <td style={{ padding: '6px', textAlign: 'right', fontSize: 10, fontWeight: 700, borderBottom: bd, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', color: BRAND }}>{fmt(l.amount)}원</td>
+                            <td style={{ padding: '6px', fontSize: 10, borderBottom: bd, color: '#6b7280', wordBreak: 'break-word' }}>{l.note || '-'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div style={{ padding: '16px', textAlign: 'center', color: '#9ca3af', fontSize: 11, border: '1px dashed #e5e7eb', borderRadius: 6, marginBottom: 18 }}>선입/이월 내역이 없습니다.</div>
+                  )}
+
+                  {/* [진행 및 차감내역] — 언제 어떤 업무를 진행했고 얼마가 차감되는지 */}
+                  <div style={hdrStyle}>진행 및 차감내역</div>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 18, fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ background: BRAND }}>
+                        <th style={th('일자', 'center', false)}>일자</th>
+                        <th style={th('유형', 'center', false)}>유형</th>
+                        <th style={th('상품명', 'left', false)}>상품명</th>
+                        <th style={th('서비스 상세', 'left', false)}>서비스 상세</th>
+                        <th style={th('수량', 'center', false)}>수량</th>
+                        <th style={th('단위', 'center', false)}>단위</th>
+                        <th style={th('단가', 'right', false)}>단가</th>
+                        <th style={th('공급가액', 'right', false)}>공급가액</th>
+                        <th style={th('차감액', 'right', true)}>차감액</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.items.map((item, idx) => (
+                        <tr key={idx} style={{ background: idx % 2 === 1 ? '#f9fafb' : '#fff' }}>
+                          <td style={{ padding: '6px', textAlign: 'center', fontSize: 9, borderBottom: bd, whiteSpace: 'normal', wordBreak: 'keep-all', color: '#374151', minWidth: 62, maxWidth: 74 }}>{item.serviceDate || '-'}</td>
+                          <td style={{ padding: '6px', textAlign: 'center', fontSize: 10, borderBottom: bd, whiteSpace: 'nowrap' }}><ItemTypeBadge type={item.productType} /></td>
+                          <td style={{ padding: '6px', borderBottom: bd, fontWeight: 600, fontSize: 10, wordBreak: 'break-word', maxWidth: 96, minWidth: 70 }}>{item.productName}</td>
+                          <td style={{ padding: '6px', borderBottom: bd, fontSize: 10, whiteSpace: 'pre-line', wordBreak: 'break-word', maxWidth: 170, minWidth: 90, color: '#374151' }}>{item.detailText || '—'}</td>
+                          <td style={{ padding: '6px', textAlign: 'center', borderBottom: bd, fontSize: 10, whiteSpace: 'nowrap' }}>{Number(item.quantity).toLocaleString()}</td>
+                          <td style={{ padding: '6px', textAlign: 'center', borderBottom: bd, fontSize: 10, whiteSpace: 'nowrap' }}>{item.unit}</td>
+                          <td style={{ padding: '6px', textAlign: 'right', borderBottom: bd, fontSize: 10, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmt(item.unitPrice)}</td>
+                          <td style={{ padding: '6px', textAlign: 'right', borderBottom: bd, fontSize: 10, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', color: '#374151' }}>{fmt(item.supplyAmount)}</td>
+                          <td style={{ padding: '6px', textAlign: 'right', borderBottom: bd, fontSize: 10, fontWeight: 700, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', color: BRAND }}>{fmt(item.totalAmount)}원</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ background: BRAND_LIGHT }}>
+                        <td colSpan={7} style={{ padding: '7px 6px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: BRAND }}>합계</td>
+                        <td style={{ padding: '7px 6px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: '#374151', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmt(data.supplyTotal)}</td>
+                        <td style={{ padding: '7px 6px', textAlign: 'right', fontSize: 11, fontWeight: 900, color: BRAND, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{fmt(data.grandTotal)}원</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+
+                  {/* [차감 잔액] — 최종적으로 얼마가 남았는지 */}
+                  <div style={hdrStyle}>차감 잔액</div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', pageBreakInside: 'avoid', marginBottom: 20 }}>
+                    <div style={{ width: 300 }}>
+                      <PrepaidSummaryRow label="이전 가용잔액"     value={`${fmt(p.previousAvailable)}원`} />
+                      <PrepaidSummaryRow label="이번 선입/이월액"   value={`${fmt(p.incoming)}원`} />
+                      {/* 총 가용잔액: 이전 가용잔액과 이번 선입/이월이 모두 있을 때만 표시(재선입 사례) */}
+                      {p.previousAvailable > 0 && p.incoming > 0 && (
+                        <PrepaidSummaryRow label="총 가용잔액"       value={`${fmt(p.totalAvailable)}원`} strong />
+                      )}
+                      <PrepaidSummaryRow label="이번 총 차감액"     value={`-${fmt(p.appliedDeduction)}원`} accent="#dc2626" />
+                      <PrepaidSummaryRow label="추가 청구액"       value={`${fmt(p.additionalCharge)}원`} accent={p.additionalCharge > 0 ? '#dc2626' : undefined} />
+                      <div style={{
+                        display: 'flex', justifyContent: 'space-between',
+                        padding: '9px 12px', background: BRAND, borderRadius: 6, marginTop: 6,
+                      }}>
+                        <span style={{ color: '#bfdbfe', fontSize: 11, fontWeight: 700 }}>차감 후 예상잔액</span>
+                        <span style={{ color: '#fff', fontSize: 15, fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>₩{fmt(p.remainingAfter)}</span>
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 9, color: '#9ca3af', textAlign: 'right' }}>
+                        ※ 발행 당시 기준 예상잔액입니다. (판매전환 확정 시 실제 잔액에 반영)
+                      </div>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
 
             {/* ── 비고 ─────────────────────────────────────────────────── */}
             {data.note && (
@@ -510,6 +622,16 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 11, borderBottom: '1px solid #f1f5f9' }}>
       <span style={{ color: '#6b7280', fontWeight: 600 }}>{label}</span>
       <span style={{ color: '#111827', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
+    </div>
+  );
+}
+
+// 차감 요약 행 — 강조(strong)/색상(accent) 옵션. 과한 강조 없이 문서 톤 유지.
+function PrepaidSummaryRow({ label, value, accent, strong }: { label: string; value: string; accent?: string; strong?: boolean }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 11, borderBottom: '1px solid #f1f5f9' }}>
+      <span style={{ color: '#6b7280', fontWeight: strong ? 700 : 600 }}>{label}</span>
+      <span style={{ color: accent ?? '#111827', fontWeight: strong ? 800 : 600, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
     </div>
   );
 }

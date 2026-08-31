@@ -20,6 +20,7 @@ import {
   type ValidationResult,
 } from '../../lib/languagePagePolicy';
 import AiQuoteModal, { type AiDraftRow } from './AiQuoteModal';
+import { PrepaidLinesSection, PrepaidSummarySection, prepaidLinesToApi, makeEmptyPrepaidLine, sumPrepaidLines, type PrepaidLine } from './PrepaidDeductionSection';
 import { calcInterpretation, displayUnit, buildQuotePdfData } from '../../lib/quotePdf';
 import { generateQuoteTitle } from '../../lib/quoteTitle';
 import QuotePdfPreviewModal from './QuotePdfPreviewModal';
@@ -80,6 +81,15 @@ interface AdminUser { id: number; name?: string | null; email: string }
 const SVC_DEFAULT_UNIT: Record<ServiceType, string> = {
   translation: '페이지', interpretation: '일', equipment: '세트', expense: '건', discount: '건',
 };
+
+// 상품 마스터 product_type 은 카탈로그 확장 유형(project·proofreading·operations·combined 등)을 포함할 수 있다.
+// 견적 상품행이 지원하는 서비스 유형(번역/통역/장비/기타) 외의 값은 '기타(expense)'로 정규화한다.
+//  (감수·프로젝트 등 = 기타 서비스로 취급 — SVC_FIELD_HINTS 기타 항목에 '감수·DTP 등' 명시)
+//  → SVC_CFG[productType] 미존재로 인한 렌더 크래시(undefined.border) 방지, 데이터는 변경하지 않음.
+const PRODUCT_SERVICE_TYPES: readonly ServiceType[] = ['translation', 'interpretation', 'equipment', 'expense'];
+function normalizeServiceType(pt: string | null | undefined): ServiceType {
+  return pt && (PRODUCT_SERVICE_TYPES as readonly string[]).includes(pt) ? (pt as ServiceType) : 'expense';
+}
 const SVC_UNITS: Record<ServiceType, string[]> = {
   translation:    ['페이지', '단어', '글자', '건', '개'],
   interpretation: ['일', '시간', '회', '건'],
@@ -88,7 +98,7 @@ const SVC_UNITS: Record<ServiceType, string[]> = {
   discount:       ['건'],
 };
 function getUnitOptions(serviceType: ServiceType, v: string): string[] {
-  const list = SVC_UNITS[serviceType];
+  const list = SVC_UNITS[serviceType] ?? SVC_UNITS.expense;   // 미지원 유형 방어(undefined.includes 크래시 방지)
   return list.includes(v) || !v ? list : [v, ...list];
 }
 
@@ -168,6 +178,22 @@ function dateOffset(d: number) {
   const dt = new Date(); dt.setDate(dt.getDate() + d);
   return dt.toISOString().split('T')[0];
 }
+
+// 견적서명 불러오기: 제목이 명확한 _YYYYMMDD(유효 날짜)로 끝나면 현재 견적일의 YYYYMMDD로 교체.
+//  마지막이 날짜인지 확실치 않으면(형식/범위 불일치) 원본 그대로 둔다.
+function replaceTrailingDate(title: string, issueDate: string): string {
+  const m = title.match(/(^|[^\d])(\d{8})$/);
+  if (!m) return title;
+  const d = m[2];
+  const y = +d.slice(0, 4), mo = +d.slice(4, 6), da = +d.slice(6, 8);
+  if (y < 2000 || y > 2999 || mo < 1 || mo > 12 || da < 1 || da > 31) return title;
+  const cur = (issueDate || '').replace(/-/g, '');
+  return cur.length === 8 ? title.slice(0, title.length - 8) + cur : title;
+}
+
+const QUOTE_TYPE_SHORT: Record<string, string> = {
+  b2b_standard: '일반', b2c_prepaid: '차감', prepaid_deduction: '차감', accumulated_batch: '누적',
+};
 
 function defaultItem(): QuoteItemForm {
   return {
@@ -418,7 +444,7 @@ function ServiceTypeSelector({ value, onChange }: { value: ServiceType; onChange
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const anchor = useFixedAnchor(ref, open, 2);
-  const cfg = SVC_CFG[value];
+  const cfg = SVC_CFG[value] ?? SVC_CFG.expense;   // 미지원 유형 방어(배지 undefined 크래시 방지)
   useEffect(() => {
     const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
     document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h);
@@ -824,11 +850,12 @@ function DateRangeField({ start, end, onChange, boxStyle, title = '기간', star
 
   useEffect(() => {
     if (!open) return;
-    const onMD  = (ev: MouseEvent)    => { if (ref.current && !ref.current.contains(ev.target as Node)) setOpen(false); };
+    // 바깥 클릭 자동닫기 비활성화(지시문 §8): 네이티브 날짜 피커는 문서 외부 오버레이로 뜨는데,
+    // 그 클릭(달력 날짜 선택)이나 캡처/마우스 이동이 '바깥 클릭'으로 잡혀 팝업이 실수로 닫히던 문제 방지.
+    // 닫힘은 [확인](confirm) 또는 ESC 로만. (시작/종료 선택·초기화로는 닫지 않는다.)
     const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', onMD);
-    document.addEventListener('keydown',   onKey);
-    return () => { document.removeEventListener('mousedown', onMD); document.removeEventListener('keydown', onKey); };
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('keydown', onKey); };
   }, [open]);
 
   // 표시: 없음 → placeholder / 하루(종료 없음·동일) → 시작 / 여러 날 → 시작 ~ 종료.
@@ -873,6 +900,10 @@ function DateRangeField({ start, end, onChange, boxStyle, title = '기간', star
           </div>
           <div style={{ fontSize: 10, color: startAfterEnd ? C.danger : C.textMuted, marginTop: 6 }}>
             {startAfterEnd ? '⚠ 종료일이 시작일보다 빠릅니다' : '당일 일정은 종료일을 비워두세요'}
+          </div>
+          {/* 월 이동 안내 — 브라우저 native 달력 사용법 보조문구(작고 자연스럽게, 기존 안내문구 스타일 재사용) */}
+          <div style={{ fontSize: 10, color: C.textMuted, marginTop: 4 }}>
+            월 이동: ▲ 이전 달 · ▼ 다음 달
           </div>
           {/* 하단 버튼 — [초기화](보조) ↔ [확인] (TimeRangeField와 동일 규격) */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 }}>
@@ -1061,10 +1092,12 @@ function ServiceFields({ it, update, products }: {
 
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          {/* 작업기간(§2) — 통역/장비와 동일한 Date Range Picker. 저장은 eventStartDate/eventEndDate(납품일과 독립) */}
+          {/* 작업기간(§2) — 통역/장비와 동일한 Date Range Picker.
+              날짜 박스 폭은 통역/장비와 동일하게 200px 로 통일(시작~종료 YYYY-MM-DD 전체가 잘리지 않도록).
+              저장은 eventStartDate/eventEndDate(납품일과 독립) */}
           <DateRangeField start={it.eventStartDate} end={it.eventEndDate}
             onChange={(s, e) => update({ eventStartDate: s, eventEndDate: e })}
-            boxStyle={{ ...rinp(178), height: 32 }}
+            boxStyle={{ ...rinp(200), height: 32 }}
             title="번역 작업기간" startTitle="작업 시작일" endTitle="작업 종료일 (당일은 비워두세요)" />
           {/* 파일명 — 확장자 감지 시 파일형식 자동 설정 */}
           <input value={it.fileName}
@@ -1117,9 +1150,12 @@ function ServiceFields({ it, update, products }: {
               boxStyle={{ ...rinp(200), height: 32 }}
               title="행사 기간" startTitle="행사 시작일" endTitle="행사 종료일 (당일은 비워두세요)" />
             {/* ② 운영시간 — Time Range Picker. 확인 시 통역시간 자동 계산(사용자 수정 가능) */}
+            {/* 확정 시 operationHours(표시값)와 interpretHours(계산값)를 '한 번의 update'로 함께 반영한다.
+                두 값을 각각 update 하면 updateItem 이 같은 items 스냅샷을 map 하여 뒤 update 가 앞을 덮어써
+                operationHours(선택 시간대)가 사라진다(계산값만 남던 버그). */}
             <TimeRangeField value={it.operationHours}
               onChange={v => update({ operationHours: v })}
-              onConfirm={range => { const h = computeHoursPerDay(range); if (h) update({ interpretHours: h }); }}
+              onConfirm={range => { const h = computeHoursPerDay(range); update(h ? { operationHours: range, interpretHours: h } : { operationHours: range }); }}
               onReset={() => update({ operationHours: '', interpretHours: '' })}
               boxStyle={{ ...rinp(132), height: 32 }} />
             {/* ③ 시간/일 — 하루 기준 통역시간(안내 정보, 계산 미사용) */}
@@ -1210,7 +1246,8 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, updateIte
 }) {
   const [showWarning, setShowWarning] = useState(false);
   const supply = calcItem(it, vatType, baseSupply).supply;
-  const cfg    = SVC_CFG[it.productType];
+  // 미지원 유형(저장된 레거시/카탈로그 확장)이라도 배지 설정이 없어 크래시하지 않도록 기타로 폴백.
+  const cfg    = SVC_CFG[it.productType] ?? SVC_CFG.expense;
 
   // ── 할인 항목 전용 행 (일반 상품 그리드와 다른 입력 필드) ──────────────────
   if (it.productType === 'discount') {
@@ -1295,7 +1332,9 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, updateIte
   // 상품 선택 시 productType, unit, sourceLanguage 자동 적용
   const selectProduct = (pid: number | null) => {
     const p = pid != null ? products.find(pr => pr.id === pid) : null;
-    const productType = (p?.productType as ServiceType) ?? it.productType;
+    // 상품 선택 시: 지원 유형은 그대로, 미지원 카탈로그 유형(project/proofreading 등)은 기타로 정규화.
+    // 상품 해제(pid=null)면 현재 행 유형 유지.
+    const productType: ServiceType = p ? normalizeServiceType(p.productType) : it.productType;
     updateItem(idx, {
       productId: p?.id ?? null,
       productName: p?.name ?? '',
@@ -1557,6 +1596,8 @@ export interface QuoteEditorWorkspaceProps {
   initialVatType?:   VatType;
   /** 진입 시점의 견적 상태(status). 'approved' 이면 이미 판매전환된 견적 → 전환완료로 표시. */
   initialStatus?:    string;
+  /** 누적 견적서 마감일시(있으면 마감완료). accumulated_batch 전용 — 마감 후 편집/저장 차단. */
+  initialBatchClosedAt?: string | null;
   /** 판매전환 성공 후 호출 — 목록 등 상위 화면 갱신용(에디터는 유지). */
   onConverted?:      () => void;
   /** '판매관리 보기' 클릭 시 판매관리(프로젝트) 탭으로 이동. 미제공 시 버튼 숨김. */
@@ -1573,11 +1614,22 @@ export function QuoteEditorWorkspace({
   token, projectId, initialCompanyId = null, initialContactId = null, initialDivisionId = null, initialTitle = '',
   onClose, onSaved, onToast, adminList = [], asPage = false,
   initialQuoteId, initialItems, initialNote, initialQuoteType, initialIssueDate, initialVatType,
-  initialStatus, onConverted, onNavigateToSales, onOpenSalesDetail, canConvert = true,
+  initialStatus, initialBatchClosedAt = null, onConverted, onNavigateToSales, onOpenSalesDetail, canConvert = true,
 }: QuoteEditorWorkspaceProps) {
 
   const authH = { Authorization: `Bearer ${token}` };
   const [showAiModal,   setShowAiModal]   = useState(false);
+  // ── 누적 견적서 마감 상태 (accumulated_batch 전용) ───────────────────────────
+  const [batchClosed,       setBatchClosed]       = useState<boolean>(!!initialBatchClosedAt);
+  const [batchCloseConfirm, setBatchCloseConfirm] = useState(false);
+  const [batchClosing,      setBatchClosing]      = useState(false);
+  // ── 견적서 보기(PDF 미리보기) — 목록 화면과 동일한 로직 재사용 ────────────────
+  const [pdfData,       setPdfData]       = useState<{ data: ReturnType<typeof buildQuotePdfData>; title: string } | null>(null);
+  const [pdfLoading,    setPdfLoading]    = useState(false);
+  // ── 견적서명 불러오기(과거 견적서명 조회) ────────────────────────────────────
+  const [titlePickerOpen, setTitlePickerOpen] = useState(false);
+  const [titleOptions,    setTitleOptions]    = useState<Array<{ id: number; title: string; issueDate: string | null; quoteType: string }>>([]);
+  const [titleLoading,    setTitleLoading]    = useState(false);
   // ── 판매전환 상태 ──────────────────────────────────────────────────────────
   // convertConfirm: 확인창 표시, converting: 전환 처리 중, converted: 이미 전환 완료(대기→판매),
   // convertDone: 성공 안내 오버레이 표시(약 1초 후 판매 상세로 이동).
@@ -1612,6 +1664,12 @@ export function QuoteEditorWorkspace({
   const [saving,         setSaving]        = useState(false);
   // 견적서 버튼: 신규 견적을 자동 저장하면 이후 저장은 이 id로 업데이트(중복 생성 방지)
   const [savedQuoteId,   setSavedQuoteId]  = useState<number | null>(initialQuoteId ?? null);
+  // ── 차감 견적서(b2c_prepaid) 전용: 선입/이월 라인 + 이전 가용잔액 ─────────────
+  // 기본 1개 행 표시(사용자가 '+ 선입 항목'으로 복수 행 추가). 금액 0 행은 저장 시 무시된다.
+  const [prepaidLines,   setPrepaidLines]  = useState<PrepaidLine[]>([makeEmptyPrepaidLine()]);
+  const [prevAvailable,  setPrevAvailable] = useState(0);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const isPrepaidQuote = quoteType === 'b2c_prepaid';
 
   // 의뢰건 프리필로 진입한 경우: 견적 최초 저장(savedQuoteId 생성) 시 의뢰건에 quoteId 역연결 후 handoff 소비.
   const inqLinkedRef = useRef(false);
@@ -1630,8 +1688,8 @@ export function QuoteEditorWorkspace({
   // 최초 로딩 완료(번역 수량 정규화 반영) 시점의 서명을 기준선으로 캡처하므로,
   // 마운트 시 정규화만으로는 dirty가 되지 않는다(이미 저장된 견적은 바로 판매전환).
   const formSig = useMemo(
-    () => JSON.stringify({ items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note }),
-    [items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note],
+    () => JSON.stringify({ items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, prepaidLines }),
+    [items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, prepaidLines],
   );
   const formSigRef     = useRef(formSig);
   formSigRef.current   = formSig;                          // 최신 서명을 ref에 미러링(핸들러 stale 방지)
@@ -1670,6 +1728,38 @@ export function QuoteEditorWorkspace({
       .catch(() => setDivisions([]));
   }, [companyId, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 차감 견적서: 기존 견적 진입 시 저장된 선입/이월(reserved/confirmed) 라인을 폼으로 복원(1회).
+  useEffect(() => {
+    if (initialQuoteId == null || (initialQuoteType ?? 'b2b_standard') !== 'b2c_prepaid') return;
+    fetch(api(`/api/admin/quotes/${initialQuoteId}`), { headers: authH })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d || !Array.isArray(d.prepaidLines)) return;
+        const inflow = d.prepaidLines.filter((l: any) => l.type !== 'deduction');
+        const parsed: PrepaidLine[] = inflow.map((l: any) => ({
+          type: (l.type === 'carryover' ? 'carryover' : 'deposit') as PrepaidLine['type'],
+          amount: String(l.amount ?? ''),
+          transactionDate: l.transactionDate ?? new Date().toISOString().slice(0, 10),
+          sourceRef: '',
+          note: (l.description ?? '').replace(/^[^·]*·?\s*/, ''),
+        }));
+        if (parsed.length) setPrepaidLines(parsed);
+      })
+      .catch(() => { /* 복원 실패는 무시 */ });
+  }, [initialQuoteId, initialQuoteType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 차감 견적서: 거래처의 '이전 가용잔액'(확정잔액 − 다른 차감견적 예약분) 조회
+  useEffect(() => {
+    if (!isPrepaidQuote || companyId == null) { setPrevAvailable(0); return; }
+    setBalanceLoading(true);
+    const qs = savedQuoteId ? `?excludeQuoteId=${savedQuoteId}` : '';
+    fetch(api(`/api/prepaid/available/${companyId}${qs}`), { headers: authH })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setPrevAvailable(d && typeof d.available === 'number' ? d.available : 0))
+      .catch(() => setPrevAvailable(0))
+      .finally(() => setBalanceLoading(false));
+  }, [isPrepaidQuote, companyId, savedQuoteId, token]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // 수정 화면 최초 진입 시: 번역 수량을 저장된 quantity가 아니라 원본 입력값(단어수/글자수 + 정책)에서
   // 1회 재계산한다. (지시문 3·6절 — 저장·복원 불일치 방지) 신규 작성은 단어/글자수가 없어 영향 없음.
   useEffect(() => {
@@ -1681,17 +1771,18 @@ export function QuoteEditorWorkspace({
     }));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (titleEdited || projectId !== null) return;
+  // 견적서명 자동생성 규칙(공통) — 버튼[자동생성]과 신규 자동입력 effect가 함께 사용.
+  //  VERITAS | 거래처명_브랜드명_대표서비스_YYYYMMDD (빈 구분자 없음은 generateQuoteTitle이 처리).
+  //  정보가 부족하면 '' 반환(자동입력/버튼 모두 no-op 처리).
+  //  allowEmpty=true(수동 [자동생성] 버튼): 상품이 없어도 회사[_브랜드]_날짜만으로 생성.
+  //  allowEmpty=false(자동입력 effect): 기존대로 상품이 있어야 생성(조기 자동 채움 방지).
+  const computeAutoTitle = useCallback((allowEmpty = false): string => {
     const co = companies.find(c => c.id === companyId);
-    // 대표상품 선정에서 할인 항목은 제외(견적서명은 실제 상품 기준)
+    if (!co) return '';
     const vi = items.filter(it => it.productType !== 'discount' && it.productName.trim());
-    if (!co || vi.length === 0) return;
-    // 견적서명은 공통 함수 generateQuoteTitle()로 생성한다 (대표상품 선정·외 N건·날짜 포함).
-    // 회사/브랜드/상품 추가·삭제/상품명/공급가액/날짜 변경 시 이 effect가 재실행되어 자동 갱신된다.
-    // (최초 기본값일 뿐, 사용자가 수정하면 titleEdited 가드로 덮어쓰지 않음)
+    if (vi.length === 0 && !allowEmpty) return '';
     const brand = divisions.find(d => d.id === divisionId);
-    const nextTitle = generateQuoteTitle({
+    return generateQuoteTitle({
       companyName: co.name,
       brandName: brand?.name ?? null,
       items: vi.map(it => ({
@@ -1702,9 +1793,59 @@ export function QuoteEditorWorkspace({
         supplyAmount: calcItem(it, vatType).supply,
       })),
       issueDate,
-    });
-    if (nextTitle) setTitle(nextTitle);
-  }, [companyId, divisionId, divisions, items, issueDate, vatType, companies, products, titleEdited, projectId]);
+      allowEmpty,
+    }) || '';
+  }, [companies, companyId, items, divisions, divisionId, products, vatType, issueDate]);
+
+  // 신규 견적 자동입력 — 사용자가 직접 수정(titleEdited)하기 전까지만, 신규(projectId=null)에서만.
+  //  (저장된 상세·버튼 재생성과 무관. 사용자가 수정하면 titleEdited 가드로 이후 자동 갱신 중단)
+  useEffect(() => {
+    if (titleEdited || projectId !== null) return;
+    const t = computeAutoTitle();
+    if (t) setTitle(t);
+  }, [computeAutoTitle, titleEdited, projectId]);
+
+  // [자동생성] 버튼 — 버튼을 직접 누른 경우에만 기존 견적서명을 덮어쓴다.
+  //  이후 다른 필드 변경으로는 자동으로 다시 덮어쓰지 않도록 titleEdited=true 로 확정.
+  const handleAutoTitle = useCallback(() => {
+    const t = computeAutoTitle(true);   // 수동 클릭 — 상품이 없어도 확보된 정보로 생성, 현재 값과 무관하게 덮어씀
+    if (!t) { onToast('거래처를 먼저 선택해주세요.'); return; }
+    setTitle(t); setTitleEdited(true);
+  }, [computeAutoTitle, onToast]);
+
+  // [불러오기] 버튼 — 현재 거래처의 과거 견적서명을 조회(최신순). 제목만 복사한다.
+  const handleLoadTitles = useCallback(() => {
+    if (companyId == null) { onToast('거래처를 먼저 선택해주세요.'); return; }
+    setTitlePickerOpen(true);
+    setTitleLoading(true);
+    fetch(api(`/api/admin/quotes?companyId=${companyId}&limit=200`), { headers: authH })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        const list: any[] = Array.isArray(data) ? data : (data?.quotes ?? []);
+        setTitleOptions(
+          list.filter(q => q?.title && String(q.title).trim())
+            .map(q => ({ id: q.id, title: String(q.title), issueDate: q.issueDate ?? null, quoteType: q.quoteType ?? 'b2b_standard' })),
+        );
+      })
+      .catch(() => setTitleOptions([]))
+      .finally(() => setTitleLoading(false));
+  }, [companyId, onToast]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 과거 견적서명 선택 — '제목 텍스트만' 복사(+끝 날짜는 현재 견적일로 교체). 다른 데이터는 복사 안 함.
+  const handlePickTitle = useCallback((t: { title: string }) => {
+    setTitle(replaceTrailingDate(t.title, issueDate));
+    setTitleEdited(true);
+    setTitlePickerOpen(false);
+  }, [issueDate]);
+
+  // 불러오기 팝업 바깥 클릭 시 닫기
+  const titlePickerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!titlePickerOpen) return;
+    const onMD = (ev: MouseEvent) => { if (titlePickerRef.current && !titlePickerRef.current.contains(ev.target as Node)) setTitlePickerOpen(false); };
+    document.addEventListener('mousedown', onMD);
+    return () => document.removeEventListener('mousedown', onMD);
+  }, [titlePickerOpen]);
 
   const handleCompanyChange  = (cid: number | null) => { setCompanyId(cid); setDivisionId(null); setContactId(null); setTitleEdited(false); };
   // 브랜드 변경 시 담당자 재선택 유도 + 견적서명 재생성
@@ -1793,6 +1934,8 @@ export function QuoteEditorWorkspace({
       billingType: 'postpaid_per_project', taxDocumentType: 'tax_invoice', taxCategory: 'normal',
       issueDate, validUntil: (() => { const d = new Date(issueDate); d.setDate(d.getDate() + 30); return d.toISOString().split('T')[0]; })(),
       note: note.trim() || undefined,
+      // 차감 견적서: 선입/이월 라인(잔액 충전) — 서버가 reserved 예약으로 기록
+      ...(isPrepaidQuote ? { prepaidLines: prepaidLinesToApi(prepaidLines) } : {}),
     };
     setSaving(true);
     try {
@@ -1842,16 +1985,59 @@ export function QuoteEditorWorkspace({
       return { quoteId: data.id, projectId };
     } catch { onToast('견적 저장 중 오류가 발생했습니다.'); return null; }
     finally { setSaving(false); }
-  }, [items, projectId, savedQuoteId, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [items, projectId, savedQuoteId, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, token, prepaidLines, isPrepaidQuote]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = useCallback(async () => {
+    if (batchClosed) { onToast('마감완료된 누적 견적서는 수정할 수 없습니다.'); return; }
     const isUpdate = savedQuoteId != null;
     const r = await persistQuote();
     if (!r) return;
     markClean();
     onToast(isUpdate ? '견적이 수정되었습니다.' : '견적서가 저장되었습니다.');
     onSaved(r);
-  }, [persistQuote, onSaved, onToast, savedQuoteId, markClean]);
+  }, [persistQuote, onSaved, onToast, savedQuoteId, markClean, batchClosed]);
+
+  // ─── 누적 마감(누적중 → 마감완료) ────────────────────────────────────────────
+  // 판매전환과 별개. 확인 후 POST → 이후 상품/금액 수정 차단(API에서도 차단). 연결 판매건은 최종 확정 유지.
+  const handleBatchClose = useCallback(async () => {
+    if (savedQuoteId == null) { onToast('먼저 견적을 저장해 주세요.'); return; }
+    setBatchClosing(true);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${savedQuoteId}/batch-close`), {
+        method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(`누적 마감 실패: ${data.error ?? res.status}`); return; }
+      setBatchClosed(true);
+      setBatchCloseConfirm(false);
+      onToast('누적 견적서가 마감완료 처리되었습니다.');
+      onConverted?.();   // 목록 배지 갱신
+    } catch {
+      onToast('누적 마감 처리 중 오류가 발생했습니다.');
+    } finally {
+      setBatchClosing(false);
+    }
+  }, [savedQuoteId, onToast, onConverted]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── 견적서 보기(PDF 미리보기) ──────────────────────────────────────────────
+  // 목록 화면과 동일하게 GET /admin/quotes/:id → buildQuotePdfData → QuotePdfPreviewModal 재사용.
+  // 저장 스냅샷 기준으로 표시하므로 미저장 수정사항은 반영되지 않는다(dirty면 안내).
+  const handleViewPdf = useCallback(async () => {
+    if (savedQuoteId == null) return;                       // 저장 전에는 비활성(버튼 disabled)
+    if (hasUnsavedChanges()) onToast('저장되지 않은 수정사항은 견적서에 반영되지 않습니다. 먼저 저장해 주세요.');
+    setPdfLoading(true);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${savedQuoteId}`), { headers: authH });
+      if (!res.ok) { onToast('견적서 미리보기에 실패했습니다.'); return; }
+      const detail = await res.json();
+      if (!detail.items || detail.items.length === 0) { onToast('견적 품목이 없습니다. 품목을 먼저 입력해 주세요.'); return; }
+      setPdfData({ data: buildQuotePdfData(detail), title: title.trim() || detail.title || String(detail.quoteNumber ?? '') });
+    } catch {
+      onToast('견적서 생성 중 오류가 발생했습니다.');
+    } finally {
+      setPdfLoading(false);
+    }
+  }, [savedQuoteId, title, onToast]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── 판매전환 실행 ────────────────────────────────────────────────────────
   // 확인창 [판매전환] 클릭 시 호출. 순서: ① 미저장 변경사항 자동 저장 → ② 저장 성공 확인
@@ -1945,7 +2131,36 @@ export function QuoteEditorWorkspace({
                 {fLbl('견적서명', true)}
                 {!titleEdited && title && <span style={{ fontSize: 10, color: C.textMuted, fontStyle: 'italic' }}>자동생성됨</span>}
               </div>
-              <input value={title} onChange={e => { setTitle(e.target.value); setTitleEdited(true); }} placeholder="예: VERITAS│삼성전자_영어↔한국어 동시통역_20260720" style={inpSt} />
+              {/* 입력창 + [자동생성] + [불러오기] — 입력창은 flex:1 로 폭 확보, 버튼은 우측 고정 */}
+              <div style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
+                <input value={title} onChange={e => { setTitle(e.target.value); setTitleEdited(true); }}
+                  placeholder="예: VERITAS│삼성전자_영어↔한국어 동시통역_20260720" style={{ ...inpSt, flex: 1, minWidth: 0 }}
+                  data-testid="input-quote-title" aria-label="견적서명" />
+                <DsButton variant="secondary" size="md" onClick={handleAutoTitle} data-testid="btn-title-auto" aria-label="견적서명 자동생성">자동생성</DsButton>
+                <div ref={titlePickerRef} style={{ position: 'relative', flexShrink: 0 }}>
+                  <DsButton variant="secondary" size="md" data-testid="btn-title-load" aria-label="기존 견적서명 불러오기"
+                    onClick={() => { if (titlePickerOpen) setTitlePickerOpen(false); else handleLoadTitles(); }}>불러오기</DsButton>
+                  {titlePickerOpen && (
+                    <div style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 50, width: 'min(440px, 80vw)', maxHeight: 320, overflowY: 'auto',
+                      background: C.bgCard, border: BD.card, borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.16)' }}>
+                      <div style={{ padding: '8px 12px', borderBottom: `1px solid ${C.border}`, fontSize: 11, fontWeight: 700, color: C.textSecondary, position: 'sticky', top: 0, background: C.bgCard }}>
+                        기존 견적서명 불러오기 (제목만 복사)
+                      </div>
+                      {titleLoading ? (
+                        <div style={{ padding: 16, textAlign: 'center', color: C.textMuted, fontSize: 13 }}>불러오는 중…</div>
+                      ) : titleOptions.length === 0 ? (
+                        <div style={{ padding: 16, textAlign: 'center', color: C.textMuted, fontSize: 13 }}>이 거래처의 기존 견적서명이 없습니다.</div>
+                      ) : titleOptions.map(o => (
+                        <button key={o.id} type="button" onClick={() => handlePickTitle(o)} data-testid={`title-option-${o.id}`}
+                          style={{ display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', border: 'none', borderBottom: `1px solid ${C.g100}`, background: 'transparent', cursor: 'pointer' }}>
+                          <div style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.title}</div>
+                          <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{o.issueDate ?? '-'} · {QUOTE_TYPE_SHORT[o.quoteType] ?? o.quoteType} 견적서</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
@@ -1986,13 +2201,41 @@ export function QuoteEditorWorkspace({
         </div>
       </Card>
 
+      {/* ── B-0. 차감 견적서 전용: 선입/이월 (차감 사용내역 위) ───────────────── */}
+      {isPrepaidQuote && (
+        <PrepaidLinesSection
+          lines={prepaidLines}
+          onLinesChange={setPrepaidLines}
+          hasCompany={companyId != null}
+        />
+      )}
+
       {/* ── B. 상품정보 ─────────────────────────────────────────────────── */}
       <Card>
-        <CardSectionHeader badge="B" badgeBg="#f0fdf4" badgeColor="#16a34a" title="상품정보" hint="← 유형 클릭으로 번역/통역/장비/기타 전환" />
+        <CardSectionHeader badge="B" badgeBg="#f0fdf4" badgeColor="#16a34a" title={isPrepaidQuote ? '차감 사용내역' : '상품정보'} hint="← 유형 클릭으로 번역/통역/장비/기타 전환" />
 
-        {/* 상품정보 편집 그리드 — 판매관리 수정모드와 공용(QuoteItemsEditor) */}
-        <QuoteItemsEditor items={items} onItemsChange={setItems} vatType={vatType} products={products} />
+        {/* 마감완료 누적 견적서: 편집 차단 안내 배너(상품/금액 확정) */}
+        {batchClosed && (
+          <div style={{ marginBottom: 10, padding: '9px 14px', background: '#f3f4f6', border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, color: C.textSecondary, fontWeight: 600 }}>
+            🔒 마감완료된 누적 견적서입니다. 상품·금액을 수정할 수 없습니다. (조회·PDF는 가능)
+          </div>
+        )}
+        {/* 상품정보 편집 그리드 — 판매관리 수정모드와 공용(QuoteItemsEditor).
+            누적 마감 시 편집 차단(pointer-events 무효화 + 흐리게). API에서도 수정 차단됨. */}
+        <div style={batchClosed ? { pointerEvents: 'none', opacity: 0.6 } : undefined} aria-disabled={batchClosed}>
+          <QuoteItemsEditor items={items} onItemsChange={setItems} vatType={vatType} products={products} />
+        </div>
       </Card>
+
+      {/* ── B-1. 차감 견적서 전용: 차감 잔액 요약 (차감 사용내역 아래) ───────────── */}
+      {isPrepaidQuote && (
+        <PrepaidSummarySection
+          previousAvailable={prevAvailable}
+          incomingPrepaid={sumPrepaidLines(prepaidLines)}
+          quoteTotal={totals.total}
+          loadingBalance={balanceLoading}
+        />
+      )}
 
       {/* ── C. 금액 요약 ─────────────────────────────────────────────────── */}
       <Card>
@@ -2076,8 +2319,18 @@ export function QuoteEditorWorkspace({
   // 그 외(신규 작성) → '견적서 작성'.
   const pageTitle = initialQuoteId != null ? '견적 상세' : '견적서 작성';
   // 우측 기능 버튼 그룹 — 두 헤더(오버레이·인라인)가 공유
+  // 견적서 보기 — 저장 전(quoteId 없음)에는 비활성. 저장 성공 시 savedQuoteId가 생기며 즉시 활성화된다.
+  const pdfDisabled = savedQuoteId == null || pdfLoading;
   const headerActions = (
     <>
+      <button type="button" onClick={handleViewPdf} disabled={pdfDisabled}
+        data-testid="btn-view-quote-pdf" aria-label="견적서 보기"
+        title={savedQuoteId == null ? '견적을 먼저 저장하면 견적서를 볼 수 있습니다.' : undefined}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600,
+          border: `1px solid ${C.border}`, background: '#ffffff', color: pdfDisabled ? C.textMuted : C.textSecondary,
+          cursor: pdfDisabled ? 'not-allowed' : 'pointer', opacity: pdfDisabled ? 0.55 : 1 }}>
+        📄 {pdfLoading ? '여는 중…' : '견적서 보기'}
+      </button>
       <button type="button" onClick={() => setShowAiModal(true)} data-testid="btn-ai-quote" aria-label="AI 견적 생성"
         style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: C.ai, color: '#ffffff' }}>
         🤖 AI 견적 생성
@@ -2087,11 +2340,21 @@ export function QuoteEditorWorkspace({
           이미 전환(approved)·권한 없음·처리 중이면 비활성(숨기지 않음). PDF/일괄전환은 목록에서 유지. */}
       {(() => {
         const convertDisabled = converted || converting || saving || !canConvert;
-        const convertLabel = converted ? '전환완료' : converting ? '전환 중…' : '판매전환';
+        // 누적 견적서: 전환 후에도 견적을 계속 누적·저장하면 '연결된 판매건 1건'에 자동 반영되므로,
+        // 완료 상태를 '판매 연결됨'으로 표기해 판매건이 이미 연결돼 있음을 명확히 안내한다(요구 §7).
+        const isAccumulated = quoteType === 'accumulated_batch';
+        const convertLabel = converted
+          ? (isAccumulated ? '판매 연결됨' : '전환완료')
+          : converting ? '전환 중…' : '판매전환';
+        const convertTitle = !canConvert ? '판매전환 권한이 없습니다.'
+          : converted ? (isAccumulated
+              ? '판매건이 연결되어 있습니다. 견적을 저장하면 같은 판매건에 자동 반영됩니다.'
+              : '이미 판매전환된 견적입니다.')
+          : undefined;
         return (
           <button type="button" onClick={() => setConvertConfirm(true)} disabled={convertDisabled}
             data-testid="btn-quote-convert" aria-label="판매전환"
-            title={!canConvert ? '판매전환 권한이 없습니다.' : converted ? '이미 판매전환된 견적입니다.' : undefined}
+            title={convertTitle}
             style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700, border: 'none',
               background: convertDisabled ? '#9ca3af' : C.success, color: '#ffffff',
               cursor: convertDisabled ? 'not-allowed' : 'pointer', opacity: convertDisabled ? 0.6 : 1 }}>
@@ -2099,10 +2362,28 @@ export function QuoteEditorWorkspace({
           </button>
         );
       })()}
-      <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving}>
-        {saving ? '저장 중…' : '💾 저장'}
+      {/* 누적 마감 — accumulated_batch 전용, 저장된 견적에서만. 판매전환과 별개 동작. */}
+      {quoteType === 'accumulated_batch' && savedQuoteId != null && (
+        <button type="button"
+          onClick={() => { if (!batchClosed) setBatchCloseConfirm(true); }}
+          disabled={batchClosed || batchClosing}
+          data-testid="btn-batch-close" aria-label={batchClosed ? '마감완료' : '누적 마감'}
+          title={batchClosed ? '이 누적 견적서는 마감완료되었습니다(수정 불가).' : '누적 기간을 마감합니다(마감 후 수정 불가).'}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700, border: 'none',
+            background: batchClosed ? '#6b7280' : (batchClosing ? '#9ca3af' : C.warning), color: '#ffffff',
+            cursor: (batchClosed || batchClosing) ? 'not-allowed' : 'pointer', opacity: (batchClosed || batchClosing) ? 0.7 : 1 }}>
+          {batchClosed ? '🔒 마감완료' : batchClosing ? '마감 중…' : '📦 누적 마감'}
+        </button>
+      )}
+      <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving || batchClosed}>
+        {batchClosed ? '🔒 마감됨' : saving ? '저장 중…' : '💾 저장'}
       </DsButton>
     </>
+  );
+
+  // 견적서 PDF 미리보기 모달 — 두 렌더 분기(인라인/오버레이)가 공유. 닫으면 상세 화면 상태 유지.
+  const pdfModal = pdfData && (
+    <QuotePdfPreviewModal data={pdfData.data} quoteTitle={pdfData.title} onClose={() => setPdfData(null)} />
   );
 
   const wsHeader = (bg: string, border: string, shadow: string, padH: string) => (
@@ -2147,6 +2428,23 @@ export function QuoteEditorWorkspace({
           </div>
         </div>
       )}
+      {/* 3) 누적 마감 확인창 — [마감완료]만 실제 마감 처리 */}
+      {batchCloseConfirm && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => setBatchCloseConfirm(false)}>
+          <div onClick={e => e.stopPropagation()} data-testid="modal-batch-close"
+            style={{ background: '#fff', borderRadius: 14, padding: '26px 30px', width: 460, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}>
+            <h2 style={{ margin: '0 0 10px', fontSize: 18, fontWeight: 800, color: C.textPrimary }}>누적 견적서를 마감하시겠습니까?</h2>
+            <p style={{ margin: '0 0 20px', fontSize: 13, color: '#374151', lineHeight: 1.6 }}>마감 후에는 상품 및 금액을 수정할 수 없습니다. (연결된 판매건도 최종 금액으로 확정됩니다.)</p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button onClick={() => setBatchCloseConfirm(false)} data-testid="cancel-batch-close"
+                style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #d1d5db', background: '#f9fafb', fontSize: 13, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>취소</button>
+              <button onClick={handleBatchClose} disabled={batchClosing} data-testid="confirm-batch-close"
+                style={{ padding: '9px 20px', borderRadius: 8, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, background: C.warning, cursor: batchClosing ? 'not-allowed' : 'pointer', opacity: batchClosing ? 0.7 : 1 }}>마감완료</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 
@@ -2165,6 +2463,7 @@ export function QuoteEditorWorkspace({
           />
         )}
         {convertOverlays}
+        {pdfModal}
         {/* 인라인 Workspace 헤더 — 스크롤 영역에서 full-bleed sticky (공통 헤더 토큰) */}
         <PageHeader
           onBack={onClose}
@@ -2196,6 +2495,7 @@ export function QuoteEditorWorkspace({
         />
       )}
       {convertOverlays}
+      {pdfModal}
       {wsHeader(C.bgCard, BD.card, BD.shadow.card, '24px')}
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px 64px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>
