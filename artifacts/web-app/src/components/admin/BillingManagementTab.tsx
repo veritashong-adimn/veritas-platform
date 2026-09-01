@@ -25,18 +25,26 @@ const tableTd: React.CSSProperties = {
 };
 
 type BillingBatch = {
-  id: number; companyId: number; companyName: string | null;
+  id: number | null; companyId: number; companyName: string | null;
   periodStart: string | null; periodEnd: string | null;
   status: string; totalAmount: number;
   quoteId: number | null; quoteStatus: string | null;
   itemCount: number; createdAt: string;
+  // 1차 연결: 판매전환된 누적견적 '가상 누적청구 행' 식별(실제 billing_batch 아님)
+  sourceType?: "billing_batch" | "accumulated_quote";
+  key?: string; quoteNumber?: string | null; batchClosedAt?: string | null; projectId?: number | null;
 };
 
 const STATUS_COLOR: Record<string, { bg: string; color: string; label: string }> = {
-  draft:    { bg: "#f3f4f6", color: "#374151", label: "초안" },
-  sent:     { bg: "#eff6ff", color: "#1d4ed8", label: "발송" },
-  approved: { bg: "#fef3c7", color: "#92400e", label: "승인" },
-  paid:     { bg: "#dcfce7", color: "#15803d", label: "완료" },
+  draft:        { bg: "#f3f4f6", color: "#374151", label: "초안" },
+  sent:         { bg: "#eff6ff", color: "#1d4ed8", label: "발송" },
+  approved:     { bg: "#fef3c7", color: "#92400e", label: "승인" },
+  paid:         { bg: "#dcfce7", color: "#15803d", label: "완료" },
+  // 누적견적 가상행 전용 상태(실제 billing_batch workflow 아님)
+  accumulating: { bg: "#fef9c3", color: "#854d0e", label: "누적중" },
+  closed:       { bg: "#e0e7ff", color: "#3730a3", label: "마감완료" },
+  // 누적마감으로 생성된 실제 billing_batch 최초 상태 — 청구 진행 가능(발송/승인/완료는 기존 workflow)
+  billable:     { bg: "#dbeafe", color: "#1e40af", label: "청구가능" },
 };
 
 interface Props {
@@ -110,16 +118,18 @@ export function BillingManagementTab({ token, onToast, onNavigateToProjects }: P
                   const sc = STATUS_COLOR[b.status] ?? { bg: "#f3f4f6", color: "#374151", label: b.status };
                   const qsc = b.quoteStatus ? (STATUS_COLOR[b.quoteStatus] ?? { bg: "#f3f4f6", color: "#374151", label: b.quoteStatus }) : null;
                   return (
-                    <tr key={b.id}
+                    <tr key={b.key ?? b.id}
                       onClick={onNavigateToProjects}
                       style={{ cursor: "pointer" }}
                       onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
                       onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                      <td style={{ ...tableTd, color: "#9ca3af" }}>#{b.id}</td>
+                      {/* 가상행(누적견적)은 DB billing_batch id가 없으므로 견적번호를 표시 */}
+                      <td style={{ ...tableTd, color: "#9ca3af" }}>{b.sourceType === "accumulated_quote" ? (b.quoteNumber ?? "-") : `#${b.id}`}</td>
                       <td style={{ ...tableTd, fontWeight: 700, color: "#2563eb" }}>{b.companyName ?? "-"}</td>
                       <td style={{ ...tableTd, fontSize: 12 }}>
-                        {b.periodStart ? new Date(b.periodStart).toLocaleDateString("ko-KR") : "?"} ~{" "}
-                        {b.periodEnd ? new Date(b.periodEnd).toLocaleDateString("ko-KR") : "?"}
+                        {!b.periodStart && !b.periodEnd
+                          ? "—"
+                          : `${b.periodStart ? new Date(b.periodStart).toLocaleDateString("ko-KR") : "?"} ~ ${b.periodEnd ? new Date(b.periodEnd).toLocaleDateString("ko-KR") : "?"}`}
                       </td>
                       <td style={{ ...tableTd, textAlign: "right" }}>{b.itemCount}건</td>
                       <td style={{ ...tableTd, fontWeight: 700, textAlign: "right" }}>{formatWon(b.totalAmount)}</td>

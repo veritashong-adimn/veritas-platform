@@ -432,6 +432,11 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             paymentRecords={project.paymentRecords ?? []}
             saleTotal={Number(quote?.price ?? 0)}
             defaultCompany={project.companyId ? { id: project.companyId, name: companyName ?? '' } : null}
+            /* 차감견적을 판매전환한 판매건에서만 '이번 서비스 사용액/총 선입금액/사용가능잔액' 요약 적용.
+               일반·누적 견적 판매건은 isPrepaidSale=false → 기존 미수금/입금완료율 요약 그대로. */
+            isPrepaidSale={quote?.quoteType === 'b2c_prepaid' || quote?.quoteType === 'prepaid_deduction'}
+            prepaidDeposited={project.prepaidAccount ? Number(project.prepaidAccount.totalDeposited) : null}
+            prepaidAvailable={project.prepaidAccount ? Number(project.prepaidAccount.available) : null}
             onChanged={() => fetchDetail({ silent: true })}
             onToast={setToast}
           />

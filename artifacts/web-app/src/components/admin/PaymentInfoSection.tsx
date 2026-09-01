@@ -37,6 +37,11 @@ interface Props {
   paymentRecords: any[];
   saleTotal: number;                 // 총 판매금액(견적 total = 공급가+부가세)
   defaultCompany?: { id: number; name: string } | null;   // 판매정보 거래처(일반청구 기본 청구업체)
+  // 차감견적을 판매전환한 판매건 전용 — 하단 요약을 '이번 서비스 사용액/총 선입금액/사용가능잔액'으로 대체.
+  //  (일반/누적 견적 판매건은 isPrepaidSale=false → 기존 미수금/입금완료율 요약 그대로 유지)
+  isPrepaidSale?: boolean;
+  prepaidDeposited?: number | null;  // 총 선입금액 = Σ prepaid_accounts.initial_amount(원장 소스)
+  prepaidAvailable?: number | null;  // 사용가능잔액 = Σ prepaid_accounts.current_balance(원장 소스)
   onChanged: () => void | Promise<void>;
   onToast: (msg: string) => void;
 }
@@ -152,7 +157,7 @@ function CompanyPicker({ token, companyName, onPick, style }: {
   );
 }
 
-export default function PaymentInfoSection({ projectId, token, paymentRecords, saleTotal, defaultCompany, onChanged, onToast }: Props) {
+export default function PaymentInfoSection({ projectId, token, paymentRecords, saleTotal, defaultCompany, isPrepaidSale = false, prepaidDeposited = null, prepaidAvailable = null, onChanged, onToast }: Props) {
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   const [editMode, setEditMode] = useState(false);
   const [rows, setRows] = useState<PayRow[]>([]);
@@ -375,13 +380,17 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
       style={{ ...inp, width: 124, ...(opts?.disabled ? { background: C.g50, color: C.g400 } : {}), ...(opts?.overdue ? { borderColor: C.danger, color: C.danger } : {}) }}
       value={dateVal(v)} onChange={e => on(e.target.value)} />
   );
-  // 미수금(행) = 총 판매금액 − 누적 입금완료액(회차순 그 행까지). 요약 미수금과 일치.
+  // 미수금(행): 일반/누적 = 총 판매금액 − 누적 입금완료액(요약과 일치) / 차감견적 = 청구금액 − 행 입금액(음수 금지). 상세는 아래.
   const renderRow = (r: PayRow, i: number, editable: boolean) => {
-    const cumulativePaid = data.slice(0, i + 1).reduce((s, x) => s + paidOf(x), 0);
-    const receivable = saleTotal - cumulativePaid;
     // 수출바우처 행은 금액이 자동(시스템 관리) — 편집·삭제 불가. 청구업체는 payer 기준 고정 표시.
     const voucher = editable ? category === CAT_VOUCHER : r.paymentCategory === CAT_VOUCHER;
     const a = effAmounts(r, voucher);
+    // 미수금(행):
+    //  · 일반/누적 견적 판매건 = 총 판매금액 − 누적 입금완료액(회차순, 하단 요약과 일치) — 기존 로직 유지.
+    //  · 차감견적 판매건 = '청구금액(합계) − 해당 행 실제 입금액'. 판매금액과 비교하지 않으며 음수가 되지 않는다.
+    //    (선입금 청구는 매출 초과입금이 아니므로 -미수금이 나오면 안 됨. max(…,0)로 과입금도 0 처리)
+    const cumulativePaid = data.slice(0, i + 1).reduce((s, x) => s + paidOf(x), 0);
+    const receivable = isPrepaidSale ? Math.max(a.amount - paidOf(r), 0) : saleTotal - cumulativePaid;
     const companyLabel = r.billingCompanyName || r.payer || '—';
     const isTaxMethod = normMethod(r.paymentMethod) === METHOD_TAX;   // 발행일 입력 대상 여부
     const schedLabel = scheduledLabel(r.paymentMethod);              // 첫 예정/이벤트 날짜 컬럼명(행별)
@@ -525,7 +534,16 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     </div>
   );
 
-  const summaryBox = (
+  // 차감견적 판매건: 선입금은 매출대금 초과입금이 아니라 예치금이므로 미수금/입금완료율 개념을 쓰지 않는다.
+  //  하단 요약을 '이번 서비스 사용액 / 총 선입금액 / 사용가능잔액'(원장 소스)으로 대체한다.
+  //  청구정보 테이블(청구·입금 이력)과 세금계산서/VAT 정책은 그대로 유지한다.
+  const summaryBox = isPrepaidSale ? (
+    <div style={{ display: 'flex', gap: SP[6], flexWrap: 'wrap', ...TYPO.inputValue, fontVariantNumeric: 'tabular-nums', padding: `${SP[3]}px ${SP[4]}px`, background: C.primaryBg, borderRadius: 8, marginTop: SP[3] }}>
+      <span>이번 서비스 사용액 <b>{won(saleTotal)}원</b></span>
+      <span>총 선입금액 <b style={{ color: C.primaryText }}>{won(prepaidDeposited ?? 0)}원</b></span>
+      <span>사용가능잔액 <b style={{ color: C.primaryText }}>{won(prepaidAvailable ?? 0)}원</b></span>
+    </div>
+  ) : (
     <>
       {/* #6 분할청구 검증 — 청구 합계가 판매금액과 불일치 시 경고 */}
       {editMode && !summary.matched && (

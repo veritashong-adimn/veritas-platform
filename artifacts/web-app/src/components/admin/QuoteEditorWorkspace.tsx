@@ -2238,6 +2238,9 @@ export function QuoteEditorWorkspace({
       )}
 
       {/* ── C. 금액 요약 ─────────────────────────────────────────────────── */}
+      {/* 차감 견적서(b2c_prepaid)는 위 '차감 잔액 요약'에 금액 정보가 이미 노출되므로 C 금액 요약을 화면에서 숨긴다.
+          (계산값·저장 payload·PDF/Excel은 그대로 유지 — 표시만 조건부) */}
+      {!isPrepaidQuote && (
       <Card>
         <CardSectionHeader badge="C" badgeBg="#fffbeb" badgeColor="#d97706" title="금액 요약" />
         {/* 유형별 소계 + Special D.C — '상품합계 → 할인 차감 → 공급가액' 계산 흐름을 그대로 노출 */}
@@ -2288,6 +2291,7 @@ export function QuoteEditorWorkspace({
           </div>
         </div>
       </Card>
+      )}
 
       {/* ── D. 비고 / 버전 사유 ─────────────────────────────────────────── */}
       <Card>

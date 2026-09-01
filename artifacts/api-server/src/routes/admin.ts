@@ -34,6 +34,7 @@ import {
   getQuotePrepaidLines,
   type PrepaidLineInput,
 } from "../services/prepaidDeductionQuote";
+import { closeAccumulatedBatchQuote } from "../services/accumulatedBatch";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -442,6 +443,25 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
         company = { ...c, prepaidBalance, prepaidTotalDeposited, prepaidTotalUsed };
       }
     }
+
+    // 차감견적 판매건 표시용: 실제 선입금 원장(prepaid_accounts) 기준 총 선입/사용가능잔액.
+    //  · 수금관리 > 선입금 관리와 '동일한 원장 소스'를 사용해 화면 간 불일치를 원천 차단한다.
+    //  · totalDeposited = Σ initial_amount(확정 선입 누계), available = Σ current_balance(=Σ확정입금−Σ확정차감).
+    //  · 차감견적이 아닌 판매건에서는 프론트가 이 값을 사용하지 않으므로 기존 로직에 영향 없음.
+    let prepaidAccount: { totalDeposited: number; available: number } | null = null;
+    if (project.companyId) {
+      const accs = await db
+        .select({ initial: prepaidAccountsTable.initialAmount, current: prepaidAccountsTable.currentBalance })
+        .from(prepaidAccountsTable)
+        .where(and(eq(prepaidAccountsTable.companyId, project.companyId), eq(prepaidAccountsTable.status, "active")));
+      if (accs.length > 0) {
+        prepaidAccount = {
+          totalDeposited: accs.reduce((s, a) => s + Number(a.initial), 0),
+          available: accs.reduce((s, a) => s + Number(a.current), 0),
+        };
+      }
+    }
+
     if (project.contactId) {
       const [ct] = await db.select().from(contactsTable).where(eq(contactsTable.id, project.contactId));
       contact = ct ?? null;
@@ -470,7 +490,7 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
 
     res.json({
       ...project, quotes, quoteVersions, payments, tasks, settlements, logs, notes, communications,
-      company, contact, performances, paymentRecords,
+      company, contact, performances, paymentRecords, prepaidAccount,
     });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch project detail");
@@ -1997,12 +2017,75 @@ router.get("/admin/billing-batches", ...adminGuard, async (req, res) => {
       quoteStatusMap = new Map(qRows.map(q => [q.id, q.status]));
     }
 
-    res.json(result.map(b => ({
+    const realRows = result.map(b => ({
+      sourceType: "billing_batch" as const,
+      key: `billing-batch-${b.id}`,
       ...b,
+      quoteNumber: null as string | null,
+      batchClosedAt: null as string | null,
+      projectId: null as number | null,
       totalAmount: Number(b.totalAmount),
       itemCount: itemCountMap.get(b.id) ?? 0,
       quoteStatus: b.quoteId ? (quoteStatusMap.get(b.quoteId) ?? null) : null,
-    })));
+    }));
+
+    // ── 1차 연결: 판매전환된 누적견적(accumulated_batch) '가상 누적청구 행' 병합 ─────────
+    //  · billing_batches 레코드를 만들지 않고, quote↔project 를 그대로 읽어 표시만 한다(SSOT=quote.price).
+    //  · 조건: accumulated_batch · is_current · 미삭제 · 견적/프로젝트 모두 approved(유효 판매건) · 해당 quote로
+    //    생성된 실제 billing_batch 가 아직 없음(NOT EXISTS). → 실제행과 가상행은 상호배타(중복 표시 방지).
+    //  · 상태필터: 가상행은 '누적중'만 존재하므로 전체('all')·'accumulating' 에서만 노출, 실제상태 필터엔 미포함.
+    let virtualRows: typeof realRows = [];
+    const showVirtual = !statusFilter?.trim() || statusFilter === "all" || statusFilter === "accumulating";
+    if (showVirtual) {
+      const cid = companyIdFilter?.trim() ? Number(companyIdFilter) : null;
+      const conds = [
+        eq(quotesTable.quoteType, "accumulated_batch"),
+        eq(quotesTable.isCurrent, true),
+        isNull(quotesTable.deletedAt),
+        eq(quotesTable.status, "approved"),
+        eq(projectsTable.status, "approved"),
+        isNull(billingBatchesTable.id),
+      ];
+      if (cid != null && !isNaN(cid)) conds.push(eq(projectsTable.companyId, cid));
+      const vRows = await db.select({
+        quoteId: quotesTable.id,
+        quoteNumber: quotesTable.quoteNumber,
+        quoteStatus: quotesTable.status,
+        price: quotesTable.price,
+        batchItemCount: quotesTable.batchItemCount,
+        batchClosedAt: quotesTable.batchClosedAt,
+        projectId: quotesTable.projectId,
+        companyId: projectsTable.companyId,
+        companyName: companiesTable.name,
+        createdAt: quotesTable.createdAt,
+      }).from(quotesTable)
+        .innerJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))
+        .leftJoin(companiesTable, eq(projectsTable.companyId, companiesTable.id))
+        .leftJoin(billingBatchesTable, eq(billingBatchesTable.quoteId, quotesTable.id))
+        .where(and(...conds))
+        .orderBy(desc(quotesTable.id));
+      virtualRows = vRows.map(v => ({
+        sourceType: "accumulated_quote" as const,
+        key: `accumulated-quote-${v.quoteId}`,
+        id: null as unknown as number,   // DB billing_batch id 아님 — 가상행 식별은 sourceType/key 로만.
+        companyId: v.companyId as number,
+        companyName: v.companyName ?? null,
+        periodStart: null as string | null,
+        periodEnd: null as string | null,
+        status: v.batchClosedAt ? "closed" : "accumulating",   // 누적중(NULL) / 마감완료
+        quoteNumber: v.quoteNumber,
+        batchClosedAt: v.batchClosedAt,
+        projectId: v.projectId,
+        totalAmount: Number(v.price),                          // SSOT: 견적 최신 금액
+        quoteId: v.quoteId,
+        itemCount: Number(v.batchItemCount ?? 0),
+        quoteStatus: v.quoteStatus,
+        createdAt: v.createdAt,
+      })) as unknown as typeof realRows;
+    }
+
+    // 가상행(누적중)을 상단에, 실제 billing_batch 를 그 아래에 노출.
+    res.json([...virtualRows, ...realRows]);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch billing batches");
     res.status(500).json({ error: "누적 청구 목록 조회 실패." });
@@ -2819,16 +2902,10 @@ router.post("/admin/quotes/:id/batch-close", ...adminGuard, requirePermission("q
   const quoteId = Number(req.params.id);
   if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 quote id." }); return; }
   try {
-    const [q] = await db.select({ id: quotesTable.id, quoteType: quotesTable.quoteType, batchClosedAt: quotesTable.batchClosedAt })
-      .from(quotesTable).where(eq(quotesTable.id, quoteId));
-    if (!q) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }
-    if (q.quoteType !== "accumulated_batch") { res.status(400).json({ error: "누적 견적서만 마감할 수 있습니다." }); return; }
-    if (q.batchClosedAt != null) { res.status(409).json({ error: "이미 마감완료된 누적 견적서입니다." }); return; }
-    const [updated] = await db.update(quotesTable)
-      .set({ batchClosedAt: new Date() })
-      .where(eq(quotesTable.id, quoteId))
-      .returning({ id: quotesTable.id, batchClosedAt: quotesTable.batchClosedAt });
-    res.json({ id: updated.id, batchClosedAt: updated.batchClosedAt, batchStatus: "closed" });
+    // 2차: 누적마감 = batch_closed_at 기록 + 실제 billing_batch 1건 생성(청구가능)을 하나의 트랜잭션으로.
+    //  핵심 로직은 서비스로 분리(closeAccumulatedBatchQuote) — 라우트/테스트가 동일 코드를 공유한다.
+    const out = await db.transaction(async (tx) => closeAccumulatedBatchQuote(tx, quoteId));
+    res.status(out.http).json(out.body);
   } catch (err) {
     req.log.error({ err }, "Admin: failed to close batch quote");
     res.status(500).json({ error: "누적 마감 처리 실패." });

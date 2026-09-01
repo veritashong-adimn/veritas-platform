@@ -106,11 +106,33 @@ export async function getCompanyPrepaidState(
     .where(and(...conds));
   const reservedDeduction = Number(total ?? 0);
 
+  // ── 자기 자신(excludeQuoteId) 확정분 제외 ─────────────────────────────────────
+  //  current_balance(confirmedBalance) 에는 이미 이 견적의 '확정 선입(+)·확정 차감(-)'이
+  //  반영돼 있다. 상세화면이 '이전 가용잔액'으로 이 값을 쓰면서 같은 견적의 선입/차감을
+  //  다시 더하면 이중계산이 된다. 여기서 이 견적의 확정 순효과(selfConfirmedNet)를 되돌려
+  //  '이 견적 반영 전의 진짜 이전 잔액'을 돌려준다.
+  //   selfConfirmedNet = Σ(확정 선입/이월) − Σ(확정 차감)   (이 견적 한정)
+  let selfConfirmedNet = 0;
+  if (excludeQuoteId != null) {
+    const selfRows = await dbh
+      .select({ type: prepaidLedgerTable.type, amount: prepaidLedgerTable.amount })
+      .from(prepaidLedgerTable)
+      .where(and(
+        inArray(prepaidLedgerTable.accountId, accountIds),
+        eq(prepaidLedgerTable.quoteId, excludeQuoteId),
+        eq(prepaidLedgerTable.status, "confirmed"),
+      ));
+    selfConfirmedNet = selfRows.reduce(
+      (s: number, r: any) => s + (isInflowType(r.type) ? Number(r.amount) : -Number(r.amount)),
+      0,
+    );
+  }
+
   return {
     accountId: accounts[0]?.id ?? null,
     confirmedBalance,
     reservedDeduction,
-    available: confirmedBalance - reservedDeduction,
+    available: confirmedBalance - selfConfirmedNet - reservedDeduction,
   };
 }
 
@@ -150,15 +172,25 @@ export async function syncQuoteReservations(
 ): Promise<{ previousAvailable: number; incomingPrepaid: number; summary: ReturnType<typeof computeDeductionSummary> } | null> {
   const { quoteId, companyId, projectId, prepaidLines, quoteTotal, quoteSupply, quoteTax } = args;
 
-  // 멱등성: 이미 판매전환(confirmed)된 견적은 재예약하지 않는다.
-  //  판매전환 후 '수정 저장(PUT)'이 다시 들어와도 confirmed 이력 위에 reserved 를 중복 생성하지 않게 skip.
-  //  (확정 차감은 원장의 확정 기록으로 유지된다. 재차감이 필요하면 판매취소로 reserved 복귀 후 처리)
+  // 판매전환(confirmed) 이후 수정: 확정 차감을 현재 견적금액에 맞춰 재동기화한다.
+  //  reserved 를 중복 생성하지 않고, 같은 견적의 '확정 차감 1건'을 in-place 로 조정한다.
+  //  → 동일 견적을 여러 번 저장해도 사용액이 중복 누적되지 않는다(멱등).
   const confirmed = await tx
     .select({ id: prepaidLedgerTable.id })
     .from(prepaidLedgerTable)
     .where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "confirmed")))
     .limit(1);
-  if (confirmed.length > 0) return null;
+  if (confirmed.length > 0) {
+    return await resyncConfirmedDeduction(tx, {
+      quoteId,
+      companyId,
+      projectId,
+      quoteTotal,
+      quoteSupply,
+      quoteTax,
+      transactionDate: args.transactionDate ?? null,
+    });
+  }
 
   // 이전 reserved 라인 정리(이 견적 한정) — confirmed/released 는 제외.
   await tx.delete(prepaidLedgerTable).where(
@@ -228,6 +260,109 @@ export async function syncQuoteReservations(
   }
 
   return { previousAvailable: state.available, incomingPrepaid, summary };
+}
+
+// ─── 판매전환 이후 수정: 확정 차감을 현재 견적금액에 맞춰 재동기화 ────────────
+// 설계
+//  · 확정 선입/이월(실제 입금 이력)은 절대 건드리지 않는다.
+//  · 이 견적의 '확정 차감 1건'만 현재 견적금액 기준으로 다시 계산해 in-place 갱신한다.
+//    (없으면 필요 시 1건 생성 — 중복 라인은 만들지 않는다.)
+//  · 계정 current_balance 는 '차감 변화분(old−new)'만 반영해 재계산한다(입금누계 불변).
+//  · 불변식: current_balance = Σ확정입금 − Σ확정차감. 여러 번 저장해도 사용액이 누적되지 않는다.
+async function resyncConfirmedDeduction(
+  tx: Db,
+  args: {
+    quoteId: number;
+    companyId: number | null;
+    projectId: number | null;
+    quoteTotal: number;
+    quoteSupply: number;
+    quoteTax: number;
+    transactionDate?: string | null;
+  },
+): Promise<{ previousAvailable: number; incomingPrepaid: number; summary: ReturnType<typeof computeDeductionSummary> } | null> {
+  const { quoteId, quoteTotal, quoteSupply } = args;
+
+  // 이 견적의 확정 라인 로드
+  const confirmedRows = await tx
+    .select()
+    .from(prepaidLedgerTable)
+    .where(and(eq(prepaidLedgerTable.quoteId, quoteId), eq(prepaidLedgerTable.status, "confirmed")))
+    .orderBy(prepaidLedgerTable.id);
+  if (confirmedRows.length === 0) return null;
+
+  const accountId: number = confirmedRows[0].accountId;
+  // 계정 잠금(동시 전환/수정 직렬화) + 회사/잔액 확보
+  const [locked] = await tx
+    .select({ id: prepaidAccountsTable.id, companyId: prepaidAccountsTable.companyId, currentBalance: prepaidAccountsTable.currentBalance })
+    .from(prepaidAccountsTable)
+    .where(eq(prepaidAccountsTable.id, accountId))
+    .for("update");
+  const balance = Number(locked?.currentBalance ?? 0);
+  const companyId = args.companyId ?? locked?.companyId ?? null;
+
+  const inflowSum = confirmedRows
+    .filter((r: any) => isInflowType(r.type))
+    .reduce((s: number, r: any) => s + Number(r.amount), 0);
+  const deductionRow = confirmedRows.find((r: any) => r.type === "deduction");
+  const oldDeduction = deductionRow ? Number(deductionRow.amount) : 0;
+
+  // 이전 가용잔액(자기 자신 확정분 제외) — 확정 차감을 바꾸기 전에 계산해야 한다.
+  const state = companyId != null
+    ? await getCompanyPrepaidState(tx, companyId, quoteId)
+    : { available: 0, accountId, confirmedBalance: 0, reservedDeduction: 0 };
+  const summary = computeDeductionSummary({
+    previousAvailable: state.available,
+    incomingPrepaid: inflowSum,
+    quoteTotal,
+  });
+  const newDeduction = summary.appliedDeduction;
+
+  if (newDeduction !== oldDeduction || deductionRow == null) {
+    const ratio = quoteTotal > 0 ? newDeduction / quoteTotal : 0;
+    const supply = Math.round(quoteSupply * ratio);
+    const tax = newDeduction - supply;
+    const balBefore = summary.totalAvailable;      // = 이전 가용잔액 + 이번 선입/이월
+    const balAfter = summary.remainingAfter;       // = balBefore − newDeduction
+
+    if (deductionRow) {
+      await tx.update(prepaidLedgerTable)
+        .set({
+          amount: String(newDeduction),
+          supplyAmount: newDeduction > 0 ? String(supply) : "0",
+          taxAmount: newDeduction > 0 ? String(tax) : "0",
+          balanceBefore: String(balBefore),
+          balanceAfter: String(newDeduction > 0 ? balAfter : balBefore),
+          description: "서비스 차감",
+          transactionDate: deductionRow.transactionDate || args.transactionDate || today(),
+        })
+        .where(eq(prepaidLedgerTable.id, deductionRow.id));
+    } else if (newDeduction > 0) {
+      // 최초 차감이 0이었다가 수정으로 차감이 생긴 경우: 확정 차감 1건 생성(중복 아님)
+      await tx.insert(prepaidLedgerTable).values({
+        accountId,
+        projectId: args.projectId ?? confirmedRows[0].projectId ?? null,
+        quoteId,
+        type: "deduction",
+        status: "confirmed",
+        amount: String(newDeduction),
+        supplyAmount: String(supply),
+        taxAmount: String(tax),
+        balanceBefore: String(balBefore),
+        balanceAfter: String(balAfter),
+        description: "서비스 차감",
+        transactionDate: args.transactionDate || today(),
+      });
+    }
+
+    // 계정 잔액: 차감 변화분만 반영(입금누계 initialAmount 불변)
+    const newBalance = balance + (oldDeduction - newDeduction);
+    await tx.update(prepaidAccountsTable)
+      .set({ currentBalance: String(newBalance) })
+      .where(eq(prepaidAccountsTable.id, accountId));
+  }
+
+  return { previousAvailable: state.available, incomingPrepaid: inflowSum, summary };
 }
 
 // ─── 판매전환 시 예약 확정 (reserved → confirmed, 실제 잔액 반영) ────────────
