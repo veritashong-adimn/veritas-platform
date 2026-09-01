@@ -90,7 +90,7 @@ function getStatusTransitionBlock(
 const STATUS_NEXT_HINT: Record<string, { text: string; color: string; bg: string }> = {
   created:     { text: "좌측 '견적서' 메뉴에서 견적을 작성·승인하면 이 프로젝트와 자동으로 연결됩니다.",  color: "#2563eb", bg: "#eff6ff" },
   quoted:      { text: "견적이 발송되었습니다. 고객 회신을 대기 중입니다.",              color: "#7c3aed", bg: "#faf5ff" },
-  approved:    { text: "의뢰가 미확정 상태입니다. '진행' 탭에서 통번역사를 배정하세요.", color: "#9333ea", bg: "#fdf4ff" },
+  approved:    { text: "판매가 확정되었습니다. '진행' 탭에서 통번역사를 배정하세요.", color: "#9333ea", bg: "#fdf4ff" },
   paid:        { text: "결제가 확정되었습니다. '진행' 탭에서 통번역사를 배정하세요.",      color: "#0369a1", bg: "#eff6ff" },
   matched:     { text: "통번역사가 배정되었습니다. '진행' 탭에서 작업 현황을 관리하세요.", color: "#0891b2", bg: "#ecfeff" },
   in_progress: { text: "진행 중인 의뢰입니다. '진행' 탭에서 작업 현황을 확인하세요.",     color: "#059669", bg: "#f0fdf4" },
@@ -968,14 +968,13 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             <div style={{ background: "#f9fafb", borderRadius: 10, padding: "10px 12px", marginBottom: 14, border: "1px solid #e5e7eb" }}>
               {/* ── Progress Step Bar ──────────────────────────────────────────────── */}
               {/* 아래 STEPS 배열만 수정하면 단계 추가/변경/제거가 가능합니다.          */}
-              {/* 향후 목표 단계: 접수 → 견적 → 미확정 → 확정 → 배정 → 진행 → 납품 → 완료 */}
+              {/* 업무단계: 접수 → 견적 → 확정(approved) → 배정(matched) → 진행 → 완료. (legacy paid 스텝 제거 — approved=확정 SSOT) */}
               {(() => {
                 // ── 단계 정의 (추가/변경 시 이 배열만 수정) ──────────────────────
                 const STEPS: Array<{ key: string; label: string; assignStep?: boolean }> = [
                   { key: "created",     label: "접수" },
                   { key: "quoted",      label: "견적" },
-                  { key: "approved",    label: "미확정" },
-                  { key: "paid",        label: "확정" },
+                  { key: "approved",    label: "확정" },
                   { key: "matched",     label: "배정", assignStep: true },
                   { key: "in_progress", label: "진행" },
                   { key: "completed",   label: "완료" },

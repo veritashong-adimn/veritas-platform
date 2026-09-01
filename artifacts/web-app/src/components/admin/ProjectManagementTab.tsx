@@ -37,7 +37,7 @@ type WorkflowFilter =
 
 const WORKFLOW_FILTERS: WorkflowFilter[] = [
   { type: "status", value: "all",                  label: "전체" },
-  { type: "status", value: "paid",                 label: "확정" },
+  { type: "status", value: "approved",             label: "확정" },
   { type: "quick",  value: "needs_assignment",     label: "배정필요" },
   { type: "status", value: "in_progress,matched",  label: "진행중" },
   { type: "quick",  value: "delivered",            label: "납품" },

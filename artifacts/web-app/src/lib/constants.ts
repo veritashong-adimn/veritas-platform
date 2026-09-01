@@ -521,9 +521,11 @@ export function getDefaultPage(role: Role): NavPage {
 }
 
 export const STATUS_LABEL: Record<string, string> = {
-  // 프로젝트 업무 상태 (워크플로우 기준 라벨)
-  created: "접수", quoted: "견적중", approved: "미확정",
-  paid: "확정", matched: "배정완료", in_progress: "진행중",
+  // 프로젝트 업무 상태 (워크플로우 기준 라벨) — project.status SSOT.
+  //  · approved = 판매 '확정'(판매전환 완료 상태). 입금완료 여부와 무관(금융은 financial_status/payment_transactions가 SSOT).
+  //  · paid 는 레거시 값(현재 판매전환/워크플로우에서 사용 안 함). 업무상 '확정' 의미로 쓰지 않는다 — 표시만 레거시로 강등.
+  created: "접수", quoted: "견적중", approved: "확정",
+  paid: "확정(레거시)", matched: "배정완료", in_progress: "진행중",
   completed: "완료", cancelled: "취소",
   // 작업 상태
   waiting: "대기", assigned: "배정됨", working: "작업 중", done: "완료",

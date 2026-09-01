@@ -242,7 +242,9 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
 
     // ── 빠른 필터 ──
     if (quickFilter === "needs_assignment") {
-      result = result.filter(p => p.status === "paid" && (taskCountByProject.get(p.id) ?? 0) === 0);
+      // 배정필요 — 판매 확정(approved) 상태에서 아직 수행자 task가 생성되지 않은 건. (legacy paid 의존 제거)
+      //  · 업무상태 SSOT: approved=확정. 배정 완료 시 approved→matched 로 전이되어 이 목록에서 빠진다.
+      result = result.filter(p => p.status === "approved" && (taskCountByProject.get(p.id) ?? 0) === 0);
     } else if (quickFilter === "delivered") {
       result = result.filter(p => {
         const total = taskCountByProject.get(p.id) ?? 0;
