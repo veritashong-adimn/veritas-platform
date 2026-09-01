@@ -6,6 +6,7 @@ import {
 import { eq, and, inArray, sql, desc } from "drizzle-orm";
 import { requireAuth, requireRole } from "../../middlewares/auth";
 import { logEvent } from "../../lib/logEvent";
+import { EFFECTIVE_REVENUE_SQL } from "../../services/quoteRelation";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -25,11 +26,13 @@ router.get("/admin/customers", ...adminGuard, async (req, res) => {
         createdAt: customersTable.createdAt,
         projectCount: sql<number>`COUNT(DISTINCT ${projectsTable.id})::int`,
         totalPayment: sql<number>`COALESCE(SUM(${paymentsTable.amount}) FILTER (WHERE ${paymentsTable.status} = 'paid'), 0)::int`,
+        // 견적 엔진 SSOT: 유효 견적만 합산(is_current·미삭제·파생 아님·approved).
+        //  revision 이전본/파생 이중집계 방지. 현행 데이터(relation NULL·전부 is_current)는 동작 불변.
         unpaidAmount: sql<number>`(
           SELECT COALESCE(SUM(q.price), 0)::int
           FROM projects p2
           JOIN quotes q ON q.project_id = p2.id
-          WHERE p2.customer_id = ${customersTable.id} AND q.status = 'approved'
+          WHERE p2.customer_id = ${customersTable.id} AND ${EFFECTIVE_REVENUE_SQL}
         )`,
         lastTransactionAt: sql<string | null>`(
           SELECT MAX(pay.created_at)::text

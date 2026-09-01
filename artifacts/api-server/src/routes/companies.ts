@@ -21,6 +21,7 @@ import { buildAliasValues, ensureDefaultAlias } from "../lib/companyAlias";
 import {
   isOcrSupportedExt, buildImageDataUrl, renderPdfFirstPageAsPng,
 } from "../lib/documentOcr";
+import { effectiveRevenueConditions } from "../services/quoteRelation";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -363,17 +364,20 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
       .where(eq(projectsTable.companyId, companyId))
       .orderBy(desc(projectsTable.createdAt));
 
-    const projectIds = projects.map(p => p.id);
+    const projectIds = projects.map((p: { id: number }) => p.id);
     let totalQuote = 0, totalPayment = 0, totalSettlement = 0;
     let prepaidBalance: number | null = null;
     let activeAccumulatedCount = 0;
     let lastPaymentDate: string | null = null;
 
     if (projectIds.length > 0) {
+      // 매출 SSOT — 현재유효(is_current)·미삭제·파생(derived) 제외·승인 견적만 합산.
+      //  파생견적은 계약금액을 청구주체별로 '배분'하는 것이므로 신규 매출로 더하지 않는다(§17/§18).
+      //  (기존엔 status='approved' 만 필터해 대체된 과거 revision 까지 이중 합산되던 것도 함께 교정됨.)
       const [qRow] = await db
         .select({ total: sql<number>`COALESCE(SUM(${quotesTable.price}), 0)::int` })
         .from(quotesTable)
-        .where(and(inArray(quotesTable.projectId, projectIds), eq(quotesTable.status, "approved")));
+        .where(and(inArray(quotesTable.projectId, projectIds), ...effectiveRevenueConditions()));
       totalQuote = qRow?.total ?? 0;
 
       const [pmRow] = await db

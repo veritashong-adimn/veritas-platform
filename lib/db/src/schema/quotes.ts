@@ -1,7 +1,9 @@
-import { pgTable, serial, integer, numeric, timestamp, pgEnum, text, varchar, date, boolean } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, numeric, timestamp, pgEnum, text, varchar, date, boolean, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { projectsTable } from "./projects";
+import { companiesTable } from "./companies";
+import { contactsTable } from "./contacts";
 
 export const quoteStatusEnum = pgEnum("quote_status", ["pending", "sent", "approved", "rejected"]);
 
@@ -12,7 +14,8 @@ export const quotesTable = pgTable("quotes", {
     .references(() => projectsTable.id),
 
   // ── 견적서 기본 정보 ────────────────────────────────────
-  quoteNumber: varchar("quote_number", { length: 30 }),   // Q20260703-001
+  // UNIQUE — 관계견적 번호(-R1/-A1/-01) 중복 최종 방어선. NULL 다중 허용(Postgres) → 미발급 견적 무영향.
+  quoteNumber: varchar("quote_number", { length: 30 }).unique(),   // Q000012 / Q000012-R1
   title: varchar("title", { length: 255 }),               // 견적서명
 
   price: numeric("price", { precision: 12, scale: 2 }).notNull(),
@@ -57,7 +60,22 @@ export const quotesTable = pgTable("quotes", {
   version: integer("version").notNull().default(1),
   isCurrent: boolean("is_current").notNull().default(true),
   versionReason: text("version_reason"),
-  parentVersionId: integer("parent_version_id"),
+  parentVersionId: integer("parent_version_id"),   // 직전/직접 부모 견적 id (관계 엔진에서 재사용)
+
+  // ── Relation Engine (견적 엔진 STEP 1) ──────────────────
+  //  · rootQuoteId: 최초 원견적(family root) id. NULL = 이 견적 자신이 원견적(자기 자신을 backfill 하지 않음).
+  //    family 조회는 COALESCE(root_quote_id, id) = root 기준. self-FK 로 고아 관계(root 삭제) 방지.
+  //  · relationType: NULL=원견적 | 'revision'(변경) | 'additional'(추가) | 'derived'(파생/분리).
+  //    현행 데이터는 모두 NULL(원견적)로 완전 호환. 일반견적(b2b_standard)만 적용 대상.
+  rootQuoteId: integer("root_quote_id").references((): AnyPgColumn => quotesTable.id),
+  relationType: varchar("relation_type", { length: 20 }),
+
+  // ── 파생견적(견적서 분할 발행) 전용 — relation_type='derived' 에서만 사용 ──────────
+  //  파생견적은 별도 project 를 만들지 않고 quote family 안에서만 관리된다. 대신 이 두 필드가
+  //  '이 분할 견적서를 발행할 대상 회사/담당자'이자 '판매전환 시 청구정보(project_payments)에 자동 반영할 기본 청구처'다.
+  //  둘 다 nullable — 일반/변경/누적/차감 견적에는 사용하지 않는다(기존 company/project 구조 무변경).
+  derivedCompanyId: integer("derived_company_id").references(() => companiesTable.id),
+  derivedContactId: integer("derived_contact_id").references(() => contactsTable.id),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
 

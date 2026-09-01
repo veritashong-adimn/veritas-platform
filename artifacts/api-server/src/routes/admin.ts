@@ -35,6 +35,9 @@ import {
   type PrepaidLineInput,
 } from "../services/prepaidDeductionQuote";
 import { closeAccumulatedBatchQuote } from "../services/accumulatedBatch";
+import { effectiveQuoteConditions } from "../services/quoteRelation";
+import { createRevision, approveRevision, rejectRevision } from "../services/quoteRevision";
+import { createDerivedSplit, approveDerived, rejectDerived, calculateAllocation, generateDerivedBillingRows, type DerivedSplitInput } from "../services/quoteDerived";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -104,14 +107,15 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
       .leftJoin(companyAlias, eq(projectsTable.companyId, companyAlias.id))
       .orderBy(projectsTable.createdAt);
 
-    // 프로젝트별 최신 견적 매핑
+    // 프로젝트별 '유효 대표 견적' 매핑 — 견적 엔진 SSOT: is_current=true·미삭제·파생 아님만 후보.
+    //  (revision 도입 시 과거본/삭제본이 대표 견적으로 오표시되지 않도록 함. 현행 데이터는 전부 통과 → 동작 불변)
     const quoteRows = await db
       .select({
         projectId: quotesTable.projectId, id: quotesTable.id,
         quoteType: quotesTable.quoteType, billingType: quotesTable.billingType,
         paymentDueDate: quotesTable.paymentDueDate, price: quotesTable.price, status: quotesTable.status,
       })
-      .from(quotesTable).orderBy(desc(quotesTable.id));
+      .from(quotesTable).where(and(...effectiveQuoteConditions())).orderBy(desc(quotesTable.id));
     const latestQuoteByProject = new Map<number, typeof quoteRows[0]>();
     for (const q of quoteRows) {
       if (q.projectId != null && !latestQuoteByProject.has(q.projectId)) {
@@ -566,8 +570,8 @@ router.get("/admin/projects/:id/control-tower", ...adminGuard, async (req, res) 
     // ── 2. 병렬 조회 ─────────────────────────────────────────────────────────
     const [rawQuotes, payments, translatorRows, rawSettlements, company, contact] =
       await Promise.all([
-        // 견적 + 아이템
-        db.select().from(quotesTable).where(eq(quotesTable.projectId, projectId)).then(qs =>
+        // 견적 + 아이템 — 유효 견적만(is_current·미삭제·파생 아님) 합산해 revision 이중집계 방지(SSOT).
+        db.select().from(quotesTable).where(and(eq(quotesTable.projectId, projectId), ...effectiveQuoteConditions())).then(qs =>
           Promise.all(qs.map(async q => {
             const items = await db.select().from(quoteItemsTable)
               .where(eq(quoteItemsTable.quoteId, q.id)).orderBy(quoteItemsTable.id);
@@ -1314,11 +1318,17 @@ router.get("/admin/quotes", ...adminGuard, async (req, res) => {
         validUntil: quotesTable.validUntil,
         createdAt: quotesTable.createdAt,
         batchClosedAt: quotesTable.batchClosedAt,   // 누적 마감 상태(목록 배지용)
+        // 견적 엔진: family 계층 표시용(관계 필드). schema 변경 없음 — 기존 컬럼 노출만.
+        rootQuoteId: quotesTable.rootQuoteId,
+        relationType: quotesTable.relationType,
+        isCurrent: quotesTable.isCurrent,
+        version: quotesTable.version,
         projectTitle: projectsTable.title,
         projectStatus: projectsTable.status,
         projectCompanyId: projectsTable.companyId,
-        companyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.companyId})`,
-        contactName: sql<string | null>`(SELECT name FROM contacts WHERE id = ${projectsTable.contactId})`,
+        // 분할견적(derived, project 없음)은 고객사/고객명을 derived_* 에서 표시(COALESCE). 그 외는 기존 project 기준(변경 없음).
+        companyName: sql<string | null>`(SELECT name FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId}))`,
+        contactName: sql<string | null>`(SELECT name FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,
         adminName:   sql<string | null>`(SELECT name FROM users WHERE id = ${projectsTable.adminId})`,
       })
       .from(quotesTable)
@@ -1580,6 +1590,11 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
     if (status === "approved" && quote.status === "approved") {
       res.status(409).json({ error: "이미 판매전환된 견적입니다." }); return;
     }
+    // 견적 엔진: 현재 유효본이 아닌 견적(과거본/미확정 변경견적)은 이 경로로 판매전환 불가(§17/§28).
+    //  변경견적 승인은 전용 엔드포인트(POST /admin/quotes/:id/approve-revision)를 사용한다.
+    if (status === "approved" && quote.isCurrent === false) {
+      res.status(409).json({ error: "현재 유효견적이 아닙니다. 변경견적은 '변경견적 승인'을 사용하세요." }); return;
+    }
 
     const adminUser = (req as any).user as { id: number };
 
@@ -1632,6 +1647,10 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
           }
         }
 
+        // 파생견적(견적서 분할) 청구정보 자동생성 — 승인된 파생이 있으면 이 판매건 1개에 청구행 생성(§9).
+        //  승인 파생 합계가 현재유효 금액과 불일치하면 throw → 트랜잭션 롤백(판매전환 차단, §8).
+        await generateDerivedBillingRows(tx, project.id, updatedQuote, adminUser.id);
+
         return { quote: updatedQuote, project, created: true };
       });
 
@@ -1657,6 +1676,8 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
         await tx.update(projectsTable)
           .set({ status: "approved" })
           .where(eq(projectsTable.id, quote.projectId));
+        // 파생견적 청구정보 자동생성 — 기존 판매건 재사용 경로에서도 동일 적용(§9, 멱등).
+        await generateDerivedBillingRows(tx, quote.projectId, quote, adminUser.id);
       }
 
       // 차감 견적서 잔액 파이프라인
@@ -1678,9 +1699,153 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
     });
 
     res.json({ quote: updatedQuote, autoCreatedProject: false });
+    return;
   } catch (err) {
+    // 파생 배분 불일치(§8) → 판매전환 차단(409, 롤백됨). 그 외는 500.
+    const httpBody = (err as any)?.httpBody;
+    if (httpBody) { res.status(409).json(httpBody); return; }
     req.log.error({ err }, "Admin: failed to update quote status");
     res.status(500).json({ error: "견적 상태 변경 실패." });
+  }
+});
+
+// ─── 변경견적(Revision) 생성 — 일반견적(b2b_standard) 전용 ───────────────────────
+//  원견적을 보존하고 새 quote(relation_type='revision', pending, is_current=false)를 생성한다.
+router.post("/admin/quotes/:id/create-revision", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 quote id." }); return; }
+  const { versionReason } = req.body as { versionReason?: string };
+  const userId = (req as any).user?.id as number;
+  try {
+    const out = await db.transaction(async (tx) => createRevision(tx, quoteId, { versionReason: versionReason?.trim() || null, userId }));
+    if (out.http === 200) {
+      await logEvent("quote", (out.body as any).id, "quote_revision_created", req.log, req.user ?? undefined);
+      req.log.info({ sourceQuoteId: quoteId, revisionId: (out.body as any).id }, "Admin: revision quote created");
+    }
+    res.status(out.http).json(out.body);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to create revision");
+    res.status(500).json({ error: "변경견적 생성 실패." });
+  }
+});
+
+// ─── 변경견적 승인 (유효본 전환 + 기존 판매건 재사용/판매전환) ─────────────────────
+router.post("/admin/quotes/:id/approve-revision", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 quote id." }); return; }
+  const userId = (req as any).user?.id as number;
+  try {
+    const out = await db.transaction(async (tx) => approveRevision(tx, quoteId, userId));
+    if (out.http === 200 && !(out.body as any).alreadyProcessed) {
+      await logEvent("quote", quoteId, "quote_revision_approved", req.log, req.user ?? undefined);
+    }
+    res.status(out.http).json(out.body);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to approve revision");
+    res.status(500).json({ error: "변경견적 승인 실패." });
+  }
+});
+
+// ─── 변경견적 거절 (이전 유효본 유지) ────────────────────────────────────────────
+router.post("/admin/quotes/:id/reject-revision", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 quote id." }); return; }
+  try {
+    const out = await db.transaction(async (tx) => rejectRevision(tx, quoteId));
+    if (out.http === 200 && !(out.body as any).alreadyProcessed) {
+      await logEvent("quote", quoteId, "quote_revision_rejected", req.log, req.user ?? undefined);
+    }
+    res.status(out.http).json(out.body);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to reject revision");
+    res.status(500).json({ error: "변경견적 거절 실패." });
+  }
+});
+
+// ─── 파생견적(Derived) 생성 — 일반견적(b2b_standard) 현재유효 견적 전용 ─────────────
+//  현재유효 견적의 일부 품목/금액을 별도 견적서로 분리(relation_type='derived', pending, is_current=false).
+//  전용 '파생 청구 project'(status='created')를 만들어 거래처/청구회사/담당자를 독립 보관한다.
+router.post("/admin/quotes/:id/create-derived", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 quote id." }); return; }
+  const userId = (req as any).user?.id as number;
+  const b = req.body as { reason?: string; splits?: DerivedSplitInput[] };
+  const splits: DerivedSplitInput[] = Array.isArray(b.splits) ? b.splits.map((s) => ({
+    companyId: Number(s.companyId),
+    contactId: s.contactId != null ? Number(s.contactId) : null,
+    mode: s.mode === "amount" ? "amount" : "items",
+    itemIds: Array.isArray(s.itemIds) ? s.itemIds.map(Number) : undefined,
+    amount: s.amount != null ? Number(s.amount) : undefined,
+    label: s.label ?? null, taxType: s.taxType ?? null,
+  })) : [];
+  try {
+    const out = await db.transaction(async (tx) => createDerivedSplit(tx, quoteId, { splits, reason: b.reason?.trim() || null, userId }));
+    if (out.http === 200) {
+      for (const c of ((out.body as any).created ?? [])) await logEvent("quote", c.id, "quote_derived_created", req.log, req.user ?? undefined);
+      req.log.info({ sourceQuoteId: quoteId, count: (out.body as any).count }, "Admin: derived split quotes created");
+    }
+    res.status(out.http).json(out.body);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to create derived quotes");
+    res.status(500).json({ error: "파생견적 생성 실패." });
+  }
+});
+
+// ─── 파생견적 승인 (배분 확정 + 과배분 방지, is_current 불변) ────────────────────
+router.post("/admin/quotes/:id/approve-derived", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 quote id." }); return; }
+  try {
+    const out = await db.transaction(async (tx) => approveDerived(tx, quoteId));
+    if (out.http === 200 && !(out.body as any).alreadyProcessed) {
+      await logEvent("quote", quoteId, "quote_derived_approved", req.log, req.user ?? undefined);
+    }
+    res.status(out.http).json(out.body);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to approve derived quote");
+    res.status(500).json({ error: "파생견적 승인 실패." });
+  }
+});
+
+// ─── 파생견적 거절 (배분 합계 제외, 현재유효/기존 승인 파생 무영향) ─────────────────
+router.post("/admin/quotes/:id/reject-derived", ...adminGuard, requirePermission("quote.create"), async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 quote id." }); return; }
+  try {
+    const out = await db.transaction(async (tx) => rejectDerived(tx, quoteId));
+    if (out.http === 200 && !(out.body as any).alreadyProcessed) {
+      await logEvent("quote", quoteId, "quote_derived_rejected", req.log, req.user ?? undefined);
+    }
+    res.status(out.http).json(out.body);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to reject derived quote");
+    res.status(500).json({ error: "파생견적 거절 실패." });
+  }
+});
+
+// ─── 관련 견적(family) 조회 — 원견적/변경/파생 관계 + 배분현황 표시용 ────────────────
+router.get("/admin/quotes/:id/family", ...adminGuard, async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 quote id." }); return; }
+  try {
+    const [q] = await db.select({ id: quotesTable.id, rootQuoteId: quotesTable.rootQuoteId }).from(quotesTable).where(eq(quotesTable.id, quoteId));
+    if (!q) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }
+    const rootId = q.rootQuoteId ?? q.id;
+    const rows = await db.select({
+      id: quotesTable.id, quoteNumber: quotesTable.quoteNumber, relationType: quotesTable.relationType,
+      status: quotesTable.status, isCurrent: quotesTable.isCurrent, price: quotesTable.price,
+      version: quotesTable.version, projectId: quotesTable.projectId,
+      parentVersionId: quotesTable.parentVersionId, deletedAt: quotesTable.deletedAt, createdAt: quotesTable.createdAt,
+    }).from(quotesTable)
+      .where(sql`COALESCE(${quotesTable.rootQuoteId}, ${quotesTable.id}) = ${rootId} AND ${quotesTable.deletedAt} IS NULL`)
+      .orderBy(quotesTable.version, quotesTable.id);
+    const members = rows.map(r => ({ ...r, price: Number(r.price) }));
+    // 파생 배분현황(§12/§28) — 항상 live 재계산(누적 카운터 미사용). derived 미존재 시에도 안전(0).
+    const allocation = calculateAllocation(members);
+    res.json({ rootQuoteId: rootId, members, allocation });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to fetch quote family");
+    res.status(500).json({ error: "관련 견적 조회 실패." });
   }
 });
 
@@ -2929,10 +3094,11 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     hasTravelExpense?: boolean; hasEquipment?: boolean; isCustomProduct?: boolean;
     discountType?: string; discountValue?: number; discountReason?: string;
   };
-  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId, prepaidLines } = req.body as {
+  const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId, adminId, versionReason, prepaidLines } = req.body as {
     title?: string; items?: PutItemInput[]; note?: string;
     quoteType?: string; issueDate?: string; validUntil?: string;
     companyId?: number | null; contactId?: number | null; divisionId?: number | null;
+    adminId?: number | null; versionReason?: string;
     prepaidLines?: PrepaidLineInput[];
   };
   if (!items || items.length === 0) {
@@ -2941,10 +3107,14 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
   // 누적 마감 가드: 마감완료된 누적 견적서는 상품/금액 수정 불가(연결 판매건 최종 확정 유지).
   //  UI 뿐 아니라 API 레벨에서 차단한다(직접 호출 방어). 조회/PDF는 별도 GET이라 영향 없음.
   {
-    const [q] = await db.select({ quoteType: quotesTable.quoteType, batchClosedAt: quotesTable.batchClosedAt })
+    const [q] = await db.select({ quoteType: quotesTable.quoteType, batchClosedAt: quotesTable.batchClosedAt, status: quotesTable.status, isCurrent: quotesTable.isCurrent })
       .from(quotesTable).where(eq(quotesTable.id, quoteId));
     if (q && q.quoteType === "accumulated_batch" && q.batchClosedAt != null) {
       res.status(409).json({ error: "마감완료된 누적 견적서는 수정할 수 없습니다." }); return;
+    }
+    // 견적 엔진: 이미 대체된(과거) 판매 견적은 수정 불가(§28). 미확정 변경견적(pending)은 수정 허용(§24).
+    if (q && q.status === "approved" && q.isCurrent === false) {
+      res.status(409).json({ error: "과거(대체된) 견적은 수정할 수 없습니다." }); return;
     }
   }
   // 할인 항목(음수 공급가) 포함 금액 계산 (POST와 동일 로직)
@@ -2952,8 +3122,10 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
   const totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
   try {
     await db.transaction(async tx => {
-      // 거래처/브랜드/담당자 연결 처리
-      if (companyId !== undefined || contactId !== undefined || divisionId !== undefined) {
+      // 거래처/브랜드/담당자/담당PM 연결 처리
+      //  담당 PM(adminId)은 이 견적이 연결된 project(변경견적은 자신의 전용 project)에만 반영된다.
+      //  → 변경견적에서 PM을 바꿔도 원견적 project 는 영향받지 않는다(family 독립성 유지).
+      if (companyId !== undefined || contactId !== undefined || divisionId !== undefined || adminId !== undefined) {
         const [existing] = await tx.select({ projectId: quotesTable.projectId })
           .from(quotesTable).where(eq(quotesTable.id, quoteId));
         if (existing?.projectId) {
@@ -2963,8 +3135,9 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
           if (contactId !== undefined) patch.contactId = contactId ?? null;
           // 브랜드(Division) — 기존 projects.requestingDivisionId 재사용
           if (divisionId !== undefined) patch.requestingDivisionId = divisionId ?? null;
+          if (adminId !== undefined) patch.adminId = adminId ?? null;   // 담당 PM
           await tx.update(projectsTable).set(patch).where(eq(projectsTable.id, existing.projectId));
-        } else if (companyId || contactId) {
+        } else if (companyId || contactId || adminId) {
           // 프로젝트 없음 → 신규 생성 후 quote 연결
           const creatorId = ((req as any).user as { id: number }).id;
           const [proj] = await tx.insert(projectsTable).values({
@@ -2972,6 +3145,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
             companyId: companyId ?? null,
             contactId: contactId ?? null,
             requestingDivisionId: divisionId ?? null,
+            adminId:   adminId ?? null,   // 담당 PM
             title:     title?.trim() || `견적 #${quoteId}`,
             status:    'created',
           }).returning();
@@ -2986,6 +3160,8 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         issueDate:  issueDate  ?? null,
         validUntil: validUntil ?? null,
         price:      String(totalPrice),
+        // 변경사유(version_reason) — 전달된 경우에만 갱신(미전달 시 기존값 보존)
+        ...(versionReason !== undefined ? { versionReason: versionReason.trim() || null } : {}),
       }).where(eq(quotesTable.id, quoteId));
       await tx.delete(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId));
       await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
@@ -3084,19 +3260,28 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
         prepaidBalanceAfter:  quotesTable.prepaidBalanceAfter,
         // 누적 견적서 마감 상태(NULL=누적중 / 값=마감완료)
         batchClosedAt:        quotesTable.batchClosedAt,
-        companyId:           projectsTable.companyId,
-        contactId:           projectsTable.contactId,
+        // 변경견적 사유(version_reason) — 상세에서 저장된 변경사유 재확인/수정용
+        versionReason:       quotesTable.versionReason,
+        // 파생견적(project 없음) 발행/청구 대상 — 파생 전용 필드
+        derivedCompanyId:    quotesTable.derivedCompanyId,
+        derivedContactId:    quotesTable.derivedContactId,
+        // 회사/담당자 — 파생견적은 derived_* 우선, 그 외는 project 값(COALESCE). PDF/상세 공통.
+        companyId:           sql<number | null>`COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId})`,
+        contactId:           sql<number | null>`COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId})`,
+        // 담당 PM — 분할견적(project 없음)은 기준견적(parent_version_id) 의 project 에서 승계 표시(COALESCE).
+        //  일반/변경견적은 parent 서브쿼리가 NULL 또는 자기 project.admin_id 우선이라 기존과 동일(무변경).
+        adminId:             sql<number | null>`COALESCE(${projectsTable.adminId}, (SELECT p2.admin_id FROM projects p2 JOIN quotes q2 ON q2.project_id = p2.id WHERE q2.id = ${quotesTable.parentVersionId}))`,
         // 브랜드(Division) — projects.requestingDivisionId 재사용
         divisionId:          projectsTable.requestingDivisionId,
         divisionName:        sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
-        companyName:         sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.companyId})`,
-        representativeName:    sql<string | null>`(SELECT representative_name FROM companies WHERE id = ${projectsTable.companyId})`,
-        companyBusinessNumber: sql<string | null>`(SELECT business_number FROM companies WHERE id = ${projectsTable.companyId})`,
-        contactName:           sql<string | null>`(SELECT name FROM contacts WHERE id = ${projectsTable.contactId})`,
-        contactDivision: sql<string | null>`(SELECT department FROM contacts WHERE id = ${projectsTable.contactId})`,
-        contactPhone:    sql<string | null>`(SELECT COALESCE(phone, mobile, office_phone) FROM contacts WHERE id = ${projectsTable.contactId})`,
-        contactEmail:    sql<string | null>`(SELECT email FROM contacts WHERE id = ${projectsTable.contactId})`,
-        adminName:       sql<string | null>`(SELECT name FROM users WHERE id = ${projectsTable.adminId})`,
+        companyName:         sql<string | null>`(SELECT name FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId}))`,
+        representativeName:    sql<string | null>`(SELECT representative_name FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId}))`,
+        companyBusinessNumber: sql<string | null>`(SELECT business_number FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId}))`,
+        contactName:           sql<string | null>`(SELECT name FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,
+        contactDivision: sql<string | null>`(SELECT department FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,
+        contactPhone:    sql<string | null>`(SELECT COALESCE(phone, mobile, office_phone) FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,
+        contactEmail:    sql<string | null>`(SELECT email FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,
+        adminName:       sql<string | null>`(SELECT name FROM users WHERE id = COALESCE(${projectsTable.adminId}, (SELECT p2.admin_id FROM projects p2 JOIN quotes q2 ON q2.project_id = p2.id WHERE q2.id = ${quotesTable.parentVersionId})))`,
       })
       .from(quotesTable)
       .leftJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))

@@ -6,17 +6,17 @@
 //  · 미수금은 저장하지 않고 화면에서 계산(총 판매금액 − 총 입금액).
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, type IRouter } from "express";
-import { db, projectPaymentsTable, companiesTable, contactsTable } from "@workspace/db";
-import { eq, and, inArray, getTableColumns } from "drizzle-orm";
+import { db, projectPaymentsTable, paymentTransactionsTable, companiesTable, contactsTable } from "@workspace/db";
+import { eq, and, inArray, asc, getTableColumns } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireRole } from "../middlewares/auth";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
-// 프로젝트 상세 응답에 포함 — 회차 오름차순. 청구업체·담당자 이름 조인(표시용).
+// 프로젝트 상세 응답에 포함 — 회차 오름차순. 청구업체·담당자 이름 조인 + 청구행별 수금거래(transactions[]) 첨부.
 export async function loadPaymentRecords(projectId: number) {
-  return db
+  const records = await db
     .select({
       ...getTableColumns(projectPaymentsTable),
       billingCompanyName: companiesTable.name,
@@ -27,6 +27,17 @@ export async function loadPaymentRecords(projectId: number) {
     .leftJoin(contactsTable, eq(projectPaymentsTable.billingContactId, contactsTable.id))
     .where(eq(projectPaymentsTable.projectId, projectId))
     .orderBy(projectPaymentsTable.sequence);
+
+  // 청구행별 수금거래 첨부 — 기존 응답 shape 확장(transactions[] 추가만). 기존 소비자는 무영향.
+  const ids = records.map((r) => r.id);
+  const txns = ids.length
+    ? await db.select().from(paymentTransactionsTable)
+        .where(inArray(paymentTransactionsTable.projectPaymentId, ids))
+        .orderBy(asc(paymentTransactionsTable.paidDate), asc(paymentTransactionsTable.id))
+    : [];
+  const byPayment = new Map<number, typeof txns>();
+  for (const t of txns) { const arr = byPayment.get(t.projectPaymentId) ?? []; arr.push(t); byPayment.set(t.projectPaymentId, arr); }
+  return records.map((r) => ({ ...r, transactions: byPayment.get(r.id) ?? [] }));
 }
 
 const PAYMENT_TYPE = ["advance", "interim", "balance", "lump_sum", "other"] as const;
@@ -116,6 +127,100 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, async (req, res
   } catch (err) {
     req.log.error({ err }, "결제정보 저장 실패");
     res.status(500).json({ error: "결제정보 저장 중 오류가 발생했습니다." });
+  }
+});
+
+// ── 수금거래(payment_transactions) 배치 저장 — 청구행 1건에 대한 입금/결제 내역 N건 ──
+//  · 청구행(project_payments) 1 : 수금거래 N. 청구행 복제 없이 부분입금(1차/2차…)을 거래 row 로 관리.
+//  · 금액 3개념 분리(§E): customer_paid_amount(고객결제) 만 미수금 계산에 사용, settled/fee 는 회계용.
+// 빈 문자열·콤마 포함 숫자를 안전하게 number|null 로 정규화(§13 — 유효 입력이 검증 실패하지 않도록).
+const money = z.preprocess((v) => {
+  if (v == null || v === '') return null;
+  if (typeof v === 'string') { const n = Number(v.replace(/,/g, '')); return Number.isFinite(n) ? n : null; }
+  return v;
+}, z.number().nullable().optional());
+const txnRowSchema = z.object({
+  id: z.number().int().optional(),
+  paidDate: z.string().nullable().optional(),
+  method: z.string().max(50).nullable().optional(),
+  customerPaidAmount: money,
+  settledAmount: money,
+  feeAmount: money,
+  currency: z.string().max(3).nullable().optional(),
+  fxRate: money,
+  foreignAmount: money,
+  krwAmount: money,
+  bankAccount: z.string().nullable().optional(),
+  payerName: z.string().nullable().optional(),
+  approvalNo: z.string().nullable().optional(),
+  cardPgType: z.string().nullable().optional(),
+  note: z.string().nullable().optional(),
+}).superRefine((r, ctx) => {
+  // 필수/조건부 필수(§3/§4) — 결제방법별로 성립 조건이 다르다:
+  //  · 외화송금: 통화 + 외화입금액(>0) 이 필수. 원화 고객결제액(customerPaidAmount)은 환산 확정 전이면 0/미확정 허용.
+  //    (외화 원장 정보만으로 거래를 저장하되, 원화 미수금은 감소시키지 않는다 — §18 미수금은 customer_paid 기준.)
+  //  · 그 외(국내이체·세금계산서·카드·현금·기타): 고객결제금액은 필수(>0).
+  if (r.method === '외화송금') {
+    if (!r.currency) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['currency'], message: '외화송금은 통화가 필요합니다.' });
+    if (!(typeof r.foreignAmount === 'number' && r.foreignAmount > 0)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['foreignAmount'], message: '외화송금은 외화입금액이 필요합니다.' });
+  } else if (!(typeof r.customerPaidAmount === 'number' && r.customerPaidAmount > 0)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['customerPaidAmount'], message: '고객결제금액은 0보다 커야 합니다.' });
+  }
+});
+const txnBatchSchema = z.object({ rows: z.array(txnRowSchema), deletedIds: z.array(z.number().int()).default([]) });
+
+router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, async (req, res) => {
+  const paymentId = Number(req.params.paymentId);
+  if (!Number.isInteger(paymentId) || paymentId <= 0) { res.status(400).json({ error: "잘못된 청구행 ID" }); return; }
+  const parsed = txnBatchSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: "유효성 검증 실패", detail: parsed.error.flatten() }); return; }
+  const { rows, deletedIds } = parsed.data;
+  const userId = req.user?.id ?? null;
+
+  // 청구행 존재 확인 + projectId 확보(수금거래 denormalized projectId 세팅용).
+  const [pay] = await db.select({ id: projectPaymentsTable.id, projectId: projectPaymentsTable.projectId })
+    .from(projectPaymentsTable).where(eq(projectPaymentsTable.id, paymentId));
+  if (!pay) { res.status(404).json({ error: "청구행을 찾을 수 없습니다." }); return; }
+
+  try {
+    await db.transaction(async (tx) => {
+      if (deletedIds.length) {
+        await tx.delete(paymentTransactionsTable)
+          .where(and(eq(paymentTransactionsTable.projectPaymentId, paymentId), inArray(paymentTransactionsTable.id, deletedIds)));
+      }
+      for (const r of rows) {
+        const num = (v: number | null | undefined) => (v == null ? null : String(v));
+        const values = {
+          paidDate: r.paidDate || null,
+          method: r.method ?? null,
+          customerPaidAmount: String(r.customerPaidAmount ?? 0),
+          settledAmount: num(r.settledAmount),
+          feeAmount: num(r.feeAmount),
+          currency: r.currency || "KRW",
+          fxRate: num(r.fxRate),
+          foreignAmount: num(r.foreignAmount),
+          krwAmount: num(r.krwAmount),
+          bankAccount: r.bankAccount ?? null,
+          payerName: r.payerName ?? null,
+          approvalNo: r.approvalNo ?? null,
+          cardPgType: r.cardPgType ?? null,
+          note: r.note ?? null,
+          updatedBy: userId,
+          updatedAt: new Date(),
+        };
+        if (r.id) {
+          await tx.update(paymentTransactionsTable).set(values)
+            .where(and(eq(paymentTransactionsTable.id, r.id), eq(paymentTransactionsTable.projectPaymentId, paymentId)));
+        } else {
+          await tx.insert(paymentTransactionsTable).values({ projectPaymentId: paymentId, projectId: pay.projectId, createdBy: userId, ...values });
+        }
+      }
+    });
+    // 갱신된 프로젝트 전체 청구정보(청구행 + 거래) 반환 → 화면이 미수금/입금상태를 재계산.
+    res.json({ rows: await loadPaymentRecords(pay.projectId) });
+  } catch (err) {
+    req.log.error({ err }, "수금거래 저장 실패");
+    res.status(500).json({ error: "수금거래 저장 중 오류가 발생했습니다." });
   }
 });
 

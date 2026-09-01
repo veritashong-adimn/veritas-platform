@@ -1580,6 +1580,10 @@ export interface QuoteEditorWorkspaceProps {
   initialCompanyId?: number | null;
   initialContactId?: number | null;
   initialDivisionId?: number | null;
+  /** 담당 PM(project.adminId) — 기존 견적 편집 진입 시 PM 필드 복원용 */
+  initialAdminId?:   number | null;
+  /** 변경사유(version_reason) — 변경견적 상세 진입 시 저장된 사유 복원/표시용 */
+  initialVersionReason?: string;
   initialTitle?:     string;
   onClose:           () => void;
   onSaved:           (result: { quoteId: number; projectId: number | null }) => void;
@@ -1606,15 +1610,18 @@ export interface QuoteEditorWorkspaceProps {
   onOpenSalesDetail?: (projectId: number) => void;
   /** 판매전환 권한 충족 여부(기본 true). false면 판매전환 버튼을 비활성(숨기지 않음)한다. */
   canConvert?:       boolean;
+  /** 다른 견적(변경견적/원견적)으로 이동. 미제공 시 목록 갱신 후 닫기로 폴백. */
+  onOpenQuote?:      (quoteId: number) => void;
 }
 
 // ─── 메인 컴포넌트 ────────────────────────────────────────────────────────────
 
 export function QuoteEditorWorkspace({
-  token, projectId, initialCompanyId = null, initialContactId = null, initialDivisionId = null, initialTitle = '',
+  token, projectId, initialCompanyId = null, initialContactId = null, initialDivisionId = null,
+  initialAdminId = null, initialVersionReason = '', initialTitle = '',
   onClose, onSaved, onToast, adminList = [], asPage = false,
   initialQuoteId, initialItems, initialNote, initialQuoteType, initialIssueDate, initialVatType,
-  initialStatus, initialBatchClosedAt = null, onConverted, onNavigateToSales, onOpenSalesDetail, canConvert = true,
+  initialStatus, initialBatchClosedAt = null, onConverted, onNavigateToSales, onOpenSalesDetail, canConvert = true, onOpenQuote,
 }: QuoteEditorWorkspaceProps) {
 
   const authH = { Authorization: `Bearer ${token}` };
@@ -1644,12 +1651,12 @@ export function QuoteEditorWorkspace({
   const [companyId,      setCompanyId]     = useState<number | null>(inqPrefill?.companyId ?? initialCompanyId);
   const [divisionId,     setDivisionId]    = useState<number | null>(inqPrefill?.divisionId ?? initialDivisionId);
   const [contactId,      setContactId]     = useState<number | null>(inqPrefill?.contactId ?? initialContactId);
-  const [adminId,        setAdminId]       = useState<number | null>(null);
+  const [adminId,        setAdminId]       = useState<number | null>(initialAdminId ?? null);
   const [issueDate,      setIssueDate]     = useState(() => initialIssueDate ?? dateOffset(0));
   const [quoteType,      setQuoteType]     = useState<QuoteType>(initialQuoteType ?? 'b2b_standard');
   const [vatType,        setVatType]       = useState<VatType>(initialVatType ?? 'taxable');
   const [note,           setNote]          = useState(inqPrefill?.note ?? initialNote ?? '');
-  const [versionReason,  setVersionReason] = useState('');
+  const [versionReason,  setVersionReason] = useState(initialVersionReason ?? '');
   // 의뢰건 handoff items 가 있으면 견적 항목으로 시드(각 항목을 defaultItem 위에 병합). 없으면 기존 로직 유지.
   const [items,          setItems]         = useState<QuoteItemForm[]>(
     inqPrefill?.items?.length
@@ -1688,8 +1695,8 @@ export function QuoteEditorWorkspace({
   // 최초 로딩 완료(번역 수량 정규화 반영) 시점의 서명을 기준선으로 캡처하므로,
   // 마운트 시 정규화만으로는 dirty가 되지 않는다(이미 저장된 견적은 바로 판매전환).
   const formSig = useMemo(
-    () => JSON.stringify({ items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, prepaidLines }),
-    [items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, prepaidLines],
+    () => JSON.stringify({ items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, prepaidLines }),
+    [items, title, companyId, contactId, divisionId, adminId, issueDate, quoteType, vatType, note, versionReason, prepaidLines],
   );
   const formSigRef     = useRef(formSig);
   formSigRef.current   = formSig;                          // 최신 서명을 ref에 미러링(핸들러 stale 방지)
@@ -1917,6 +1924,10 @@ export function QuoteEditorWorkspace({
 
   const totals = calcTotals(items, vatType);
 
+  // 변경견적 여부 최신값(family는 아래에서 파생) — persistQuote 저장 시점에 안전하게 읽기 위한 ref.
+  const isRevisionRef = useRef(false);
+  const isDerivedRef = useRef(false);   // 파생견적 저장 시 분리사유(versionReason) 전달 판단용
+
   // 저장 실행부 — 편집 화면을 닫지 않고 저장만 수행하고 { quoteId, projectId }를 반환한다.
   // 신규 견적은 최초 저장 시 생성하고 savedQuoteId를 기록 → 이후(저장/견적서)엔 동일 견적을 업데이트(중복 생성 방지).
   const persistQuote = useCallback(async (): Promise<{ quoteId: number; projectId: number | null } | null> => {
@@ -1948,6 +1959,11 @@ export function QuoteEditorWorkspace({
           companyId: companyId ?? undefined,
           contactId: contactId ?? undefined,
           divisionId: divisionId ?? null,
+          // 담당 PM — 견적관리(독립 견적, projectId=null) 흐름에서만 전달.
+          //  판매관리(projectId≠null)의 버전견적 저장은 기존 POST 경로를 사용하며 PM은 프로젝트에서 관리 → 여기서 건드리지 않음.
+          ...(projectId === null ? { adminId: adminId ?? null } : {}),
+          // 변경사유/분리사유 — 변경견적·파생견적에서만 전달(일반/버전견적 저장 동작은 기존과 동일하게 유지)
+          ...(isRevisionRef.current || isDerivedRef.current ? { versionReason } : {}),
         };
         const res  = await fetch(url, {
           method: 'PUT', headers: { ...authH, 'Content-Type': 'application/json' },
@@ -2018,6 +2034,172 @@ export function QuoteEditorWorkspace({
       setBatchClosing(false);
     }
   }, [savedQuoteId, onToast, onConverted]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── 견적 엔진 STEP2/STEP3: 관계(family) 조회 + 변경견적/파생견적 workflow ──────────
+  type FamilyMember = { id: number; quoteNumber: string | null; relationType: string | null; status: string; isCurrent: boolean; price: number; version: number; projectId: number | null; parentVersionId?: number | null };
+  type Allocation = { currentEffectiveAmount: number; approvedDerivedTotal: number; pendingDerivedTotal: number; remaining: number; derivedCount: number };
+  const [family, setFamily] = useState<FamilyMember[]>([]);
+  const [allocation, setAllocation] = useState<Allocation | null>(null);
+  const [showRevisionModal, setShowRevisionModal] = useState(false);
+  const [revisionReason, setRevisionReason] = useState('');
+  const [revBusy, setRevBusy] = useState(false);
+  // ── 파생견적(STEP3) 생성 모달 상태 ──
+  const [showDerivedModal, setShowDerivedModal] = useState(false);
+  const [derivedBusy, setDerivedBusy] = useState(false);
+  // 파생 = "견적서 분할 발행": N개 업체로 분할. 각 행 = 업체 + 담당자 + (품목 or 금액).
+  type SplitRow = { companyId: number | null; contactId: number | null; mode: 'items' | 'amount'; itemIds: Set<number>; amount: string; label: string; taxType: VatType };
+  const emptySplit = (): SplitRow => ({ companyId: null, contactId: null, mode: 'amount', itemIds: new Set(), amount: '', label: '', taxType: 'taxable' });
+  const [derivedSplits, setDerivedSplits] = useState<SplitRow[]>([]);
+  const [derivedReason, setDerivedReason] = useState('');
+  const [dSourceItems, setDSourceItems]   = useState<Array<{ id: number; productName: string; totalAmount: number }>>([]);
+  const updateSplit = (i: number, patch: Partial<SplitRow>) => setDerivedSplits(prev => prev.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+
+  const fetchFamily = useCallback(async () => {
+    if (savedQuoteId == null) { setFamily([]); setAllocation(null); return; }
+    try {
+      const r = await fetch(api(`/api/admin/quotes/${savedQuoteId}/family`), { headers: authH });
+      if (!r.ok) return;
+      const d = await r.json();
+      setFamily(Array.isArray(d.members) ? d.members : []);
+      setAllocation(d.allocation ?? null);
+    } catch { /* 무시 */ }
+  }, [savedQuoteId, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchFamily(); }, [fetchFamily]);
+
+  const meMember       = family.find(m => m.id === savedQuoteId) ?? null;
+  const isRevision     = meMember?.relationType === 'revision';
+  // persistQuote(위에서 선언)에서 저장 시점의 최신 isRevision 을 안전하게 참조하기 위한 ref.
+  isRevisionRef.current = isRevision;
+  const rootMember     = family.find(m => m.relationType == null) ?? null;   // 원견적
+  const currentMember  = family.find(m => m.isCurrent) ?? null;              // 현재 유효본
+  const isPendingRevision = isRevision && meMember?.status === 'pending';
+  // 파생견적(STEP3) — is_current 는 항상 false. 과거견적(isSuperseded)로 오분류되지 않도록 별도 처리.
+  const isDerived      = meMember?.relationType === 'derived';
+  isDerivedRef.current = isDerived;
+  const isPendingDerived = isDerived && meMember?.status === 'pending';
+  const derivedBaseMember = isDerived && meMember?.parentVersionId != null
+    ? (family.find(m => m.id === meMember.parentVersionId) ?? null) : null;   // 기준견적(§26)
+  const isSuperseded   = meMember != null && meMember.isCurrent === false && !isPendingRevision && !isDerived;
+  const hasRevisionChildren = family.some(m => m.relationType === 'revision');
+  // 변경견적 생성 가능: 저장된 b2b 일반견적 + 현재 유효본 + 미확정 변경견적 없음 (파생 자신 제외)
+  const canCreateRevision = quoteType === 'b2b_standard' && savedQuoteId != null && !isDerived && (meMember?.isCurrent ?? true)
+    && !family.some(m => m.relationType === 'revision' && m.status === 'pending');
+  // 파생견적 생성 가능: b2b 일반견적 + 현재유효 견적(원견적/변경 현재본)에서만(§5/§37/§38). 파생 자신에서는 불가.
+  const canCreateDerived = quoteType === 'b2b_standard' && savedQuoteId != null && !isDerived && (meMember?.isCurrent ?? true);
+
+  const handleCreateRevision = useCallback(async () => {
+    if (savedQuoteId == null) return;
+    setRevBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${savedQuoteId}/create-revision`), {
+        method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ versionReason: revisionReason.trim() || null }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(`변경견적 생성 실패: ${d.error ?? res.status}`); return; }
+      setShowRevisionModal(false); setRevisionReason('');
+      onToast(`변경견적 ${d.quoteNumber ?? ''} 이(가) 생성되었습니다. 원견적은 그대로 보존됩니다.`);
+      onConverted?.();
+      if (onOpenQuote && d.id) onOpenQuote(d.id); else onClose?.();
+    } catch { onToast('변경견적 생성 중 오류가 발생했습니다.'); }
+    finally { setRevBusy(false); }
+  }, [savedQuoteId, revisionReason, token, onToast, onConverted, onOpenQuote, onClose]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleApproveRevision = useCallback(async () => {
+    if (savedQuoteId == null) return;
+    setRevBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${savedQuoteId}/approve-revision`), { method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' } });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(`변경견적 승인 실패: ${d.error ?? res.status}`); return; }
+      onToast('변경견적이 승인되어 현재 유효견적으로 전환되었습니다.');
+      onConverted?.(); fetchFamily();
+    } catch { onToast('변경견적 승인 중 오류가 발생했습니다.'); }
+    finally { setRevBusy(false); }
+  }, [savedQuoteId, token, onToast, onConverted, fetchFamily]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRejectRevision = useCallback(async () => {
+    if (savedQuoteId == null) return;
+    setRevBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${savedQuoteId}/reject-revision`), { method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' } });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(`변경견적 거절 실패: ${d.error ?? res.status}`); return; }
+      onToast('변경견적이 거절되었습니다. 기존 유효견적이 유지됩니다.');
+      onConverted?.(); fetchFamily();
+    } catch { onToast('변경견적 거절 중 오류가 발생했습니다.'); }
+    finally { setRevBusy(false); }
+  }, [savedQuoteId, token, onToast, onConverted, fetchFamily]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── 파생견적(STEP3) = 견적서 분할 발행 ─────────────────────────────────────
+  // 모달 열기 — 현재유효 견적의 실제 품목(id 포함)을 조회하고, 기본 2개 업체 행으로 시작한다.
+  const openDerivedModal = useCallback(async () => {
+    if (savedQuoteId == null) return;
+    if (hasUnsavedChanges()) { onToast('저장 후 분할견적을 생성할 수 있습니다.'); return; }
+    setDerivedReason('');
+    setDerivedSplits([emptySplit(), emptySplit()]);   // 기본 2개 업체 분할
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${savedQuoteId}`), { headers: authH });
+      const d = await res.json().catch(() => null);
+      const its = Array.isArray(d?.items) ? d.items.map((it: any) => ({ id: it.id as number, productName: String(it.productName ?? ''), totalAmount: Number(it.totalAmount ?? 0) })) : [];
+      setDSourceItems(its);
+    } catch { setDSourceItems([]); }
+    setShowDerivedModal(true);
+  }, [savedQuoteId, token, onToast]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleCreateDerived = useCallback(async () => {
+    if (savedQuoteId == null) return;
+    if (derivedSplits.length < 2) { onToast('2개 이상 업체로 분할해 주세요.'); return; }
+    const splits = derivedSplits.map(r => ({
+      companyId: r.companyId,
+      contactId: r.contactId ?? undefined,
+      mode: r.mode,
+      itemIds: r.mode === 'items' ? [...r.itemIds] : undefined,
+      amount: r.mode === 'amount' ? Number(r.amount.replace(/,/g, '')) : undefined,
+      label: r.label.trim() || null,
+      taxType: r.taxType,
+    }));
+    if (splits.some(s => !s.companyId)) { onToast('모든 분할 업체를 선택해 주세요.'); return; }
+    setDerivedBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${savedQuoteId}/create-derived`), {
+        method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: derivedReason.trim() || null, splits }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(`분할견적 생성 실패: ${d.error ?? res.status}`); return; }
+      setShowDerivedModal(false);
+      onToast(`분할견적 ${d.count ?? ''}건이 생성되었습니다. 현재유효 견적은 그대로 유지됩니다.`);
+      onConverted?.(); fetchFamily();
+    } catch { onToast('분할견적 생성 중 오류가 발생했습니다.'); }
+    finally { setDerivedBusy(false); }
+  }, [savedQuoteId, derivedSplits, derivedReason, token, onToast, onConverted, fetchFamily]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleApproveDerived = useCallback(async () => {
+    if (savedQuoteId == null) return;
+    setRevBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${savedQuoteId}/approve-derived`), { method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' } });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(`분할 승인 실패: ${d.error ?? res.status}`); return; }
+      onToast('분할견적이 승인되어 배분이 확정되었습니다.');
+      onConverted?.(); fetchFamily();
+    } catch { onToast('분할 승인 중 오류가 발생했습니다.'); }
+    finally { setRevBusy(false); }
+  }, [savedQuoteId, token, onToast, onConverted, fetchFamily]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRejectDerived = useCallback(async () => {
+    if (savedQuoteId == null) return;
+    setRevBusy(true);
+    try {
+      const res = await fetch(api(`/api/admin/quotes/${savedQuoteId}/reject-derived`), { method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' } });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { onToast(`분할 거절 실패: ${d.error ?? res.status}`); return; }
+      onToast('분할견적이 거절되었습니다. 현재유효 견적과 기존 배분에는 영향이 없습니다.');
+      onConverted?.(); fetchFamily();
+    } catch { onToast('분할 거절 중 오류가 발생했습니다.'); }
+    finally { setRevBusy(false); }
+  }, [savedQuoteId, token, onToast, onConverted, fetchFamily]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── 견적서 보기(PDF 미리보기) ──────────────────────────────────────────────
   // 목록 화면과 동일하게 GET /admin/quotes/:id → buildQuotePdfData → QuotePdfPreviewModal 재사용.
@@ -2108,9 +2290,14 @@ export function QuoteEditorWorkspace({
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: `0 20px` }}>
             <div>
               {fLbl('견적서 유형')}
-              <ClickSelect value={quoteType} onChange={v => setQuoteType(v as QuoteType)}
-                triggerStyle={dsField()}
-                options={[{ value: 'b2b_standard', label: '일반 견적서', sub: '일반 B2B 프로젝트' }, { value: 'b2c_prepaid', label: '차감 견적서', sub: '선입금 잔액 차감' }, { value: 'accumulated_batch', label: '누적 견적서', sub: '월별 누적 청구' }]} />
+              {isDerived ? (
+                // 분할견적: quote_type(내부)은 일반견적 기반 유지, 화면 표시만 '분할 견적서'로 override.
+                <div data-testid="quote-type-derived" style={{ ...dsField(), display: 'flex', alignItems: 'center', color: '#92400e', fontWeight: 700 }}>🌱 분할 견적서</div>
+              ) : (
+                <ClickSelect value={quoteType} onChange={v => setQuoteType(v as QuoteType)}
+                  triggerStyle={dsField()}
+                  options={[{ value: 'b2b_standard', label: '일반 견적서', sub: '일반 B2B 프로젝트' }, { value: 'b2c_prepaid', label: '차감 견적서', sub: '선입금 잔액 차감' }, { value: 'accumulated_batch', label: '누적 견적서', sub: '월별 누적 청구' }]} />
+              )}
             </div>
             <div>
               {fLbl('견적일')}
@@ -2302,13 +2489,19 @@ export function QuoteEditorWorkspace({
             <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="견적 관련 메모 또는 안내 사항" rows={2}
               style={{ ...inpSt, resize: 'vertical', fontFamily: 'inherit' }} />
           </div>
-          {projectId !== null && (
+          {(projectId !== null || isRevision || isDerived) && (
             <div style={{ background: C.warningBg, borderRadius: BD.radius.xl, padding: `${SP[5]}px ${SP[6]}px`, border: `1px solid ${C.warningBorder}` }}>
               <label style={{ ...TYPO.fieldLabel, color: C.warningText, display: 'block', marginBottom: SP[3] }}>
-                버전 변경 사유 <span style={{ marginLeft: SP[2], fontWeight: 400, color: C.warning }}>— 저장 시 새 Version으로 기록됩니다</span>
+                {isDerived ? '분할 사유' : isRevision ? '변경 사유' : '버전 변경 사유'}
+                <span style={{ marginLeft: SP[2], fontWeight: 400, color: C.warning }}>
+                  {isDerived ? '— 이 분할견적의 분할사유입니다(저장 시 반영, 현재유효 견적에는 영향 없음)'
+                    : isRevision ? '— 이 변경견적의 변경사유입니다(저장 시 반영, 원견적에는 영향 없음)'
+                    : '— 저장 시 새 Version으로 기록됩니다'}
+                </span>
               </label>
               <input value={versionReason} onChange={e => setVersionReason(e.target.value)}
-                placeholder="예: 최초 견적 / 일정 변경 / 금액 수정 / 고객 요청" style={{ ...inpSt, background: C.bgCard }} />
+                data-testid="input-version-reason" aria-label={isDerived ? '분할 사유' : isRevision ? '변경 사유' : '버전 변경 사유'}
+                placeholder="예: 고객 요청에 따른 조건 변경 / 회사별 청구 분리 / 금액 수정" style={{ ...inpSt, background: C.bgCard }} />
             </div>
           )}
         </div>
@@ -2322,6 +2515,82 @@ export function QuoteEditorWorkspace({
   // 기존 견적 진입(initialQuoteId)은 조회·수정·PDF·판매전환 등을 모두 다루는 통합 관리 화면 → '견적 상세'.
   // 그 외(신규 작성) → '견적서 작성'.
   const pageTitle = initialQuoteId != null ? '견적 상세' : '견적서 작성';
+
+  // ── 신분(관계/상태) 정보 — Action 버튼과 분리해 제목 옆(subtitle)에 표시(§3~§7) ──
+  //  Action 영역에는 실행 기능만 남기고, "변경견적 Rn / 원견적 Qxxxxx / 현재 상태"는 여기서 신분정보로 노출한다.
+  const revStatusLabel = (s?: string) =>
+    s === 'approved' ? '승인' : s === 'rejected' ? '거절' : s === 'pending' ? '승인대기' : s === 'sent' ? '발송' : (s ?? '');
+  const relBadge = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 7, fontSize: 12, fontWeight: 700 } as const;
+  const relLinkBtn = (color: string) => ({ border: 'none', background: 'transparent', color, textDecoration: 'underline', cursor: onOpenQuote ? 'pointer' : 'default', fontSize: 12, fontWeight: 600, padding: 0 } as const);
+  const derivedSuffix = (n?: string | null) => (n ? n.split('-').pop() : '') ?? '';
+  const statusChip = (s?: string) => (
+    <span style={{ ...relBadge, background: s === 'rejected' ? '#fef2f2' : s === 'approved' ? '#ecfdf5' : '#fffbeb', color: s === 'rejected' ? '#b91c1c' : s === 'approved' ? '#047857' : '#b45309' }}>
+      {revStatusLabel(s)}
+    </span>
+  );
+  const showDerivedSummary = !isDerived && (allocation?.derivedCount ?? 0) > 0;
+  const headerSubtitle: React.ReactNode = (isRevision || isDerived || isSuperseded || hasRevisionChildren || showDerivedSummary) ? (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+      {isRevision && (
+        <>
+          <span data-testid="badge-revision" style={{ ...relBadge, background: '#eef2ff', color: '#4338ca' }}>
+            🔁 변경견적{meMember?.quoteNumber ? ` ${derivedSuffix(meMember.quoteNumber)}` : ''}
+          </span>
+          {rootMember?.quoteNumber && (
+            <button type="button" data-testid="link-root-quote" onClick={() => rootMember && onOpenQuote?.(rootMember.id)}
+              title="원견적으로 이동" style={relLinkBtn('#4338ca')}>
+              원견적: {rootMember.quoteNumber}
+            </button>
+          )}
+          {meMember?.status && statusChip(meMember.status)}
+        </>
+      )}
+      {isDerived && (
+        <>
+          <span data-testid="badge-derived" style={{ ...relBadge, background: '#fef3c7', color: '#92400e' }}>
+            🌱 분할견적{meMember?.quoteNumber ? ` ${derivedSuffix(meMember.quoteNumber)}` : ''}
+          </span>
+          {rootMember?.quoteNumber && (
+            <button type="button" data-testid="link-root-quote" onClick={() => rootMember && onOpenQuote?.(rootMember.id)}
+              title="원견적으로 이동" style={relLinkBtn('#92400e')}>
+              원견적: {rootMember.quoteNumber}
+            </button>
+          )}
+          {derivedBaseMember?.quoteNumber && (
+            <button type="button" data-testid="link-base-quote" onClick={() => derivedBaseMember && onOpenQuote?.(derivedBaseMember.id)}
+              title="기준 견적으로 이동" style={relLinkBtn('#6b7280')}>
+              기준견적: {derivedBaseMember.quoteNumber}
+            </button>
+          )}
+          {meMember?.status && statusChip(meMember.status)}
+        </>
+      )}
+      {isSuperseded && (
+        <span data-testid="badge-superseded" style={{ ...relBadge, background: '#f3f4f6', color: '#6b7280' }}>
+          🗂 과거 견적
+          {currentMember?.quoteNumber && currentMember.id !== savedQuoteId && (
+            <button type="button" onClick={() => currentMember && onOpenQuote?.(currentMember.id)}
+              title="현재 유효견적으로 이동" style={relLinkBtn('#2563eb')}>
+              현재 유효견적: {currentMember.quoteNumber}
+            </button>
+          )}
+        </span>
+      )}
+      {!isRevision && !isDerived && !isSuperseded && hasRevisionChildren && (
+        <span data-testid="badge-has-revision" style={{ ...relBadge, background: '#fef9c3', color: '#854d0e', fontWeight: 600 }}>
+          🔁 변경견적 존재
+        </span>
+      )}
+      {/* 파생 배분현황(§28) — 현재유효 견적에서만, 파생이 1건 이상일 때 간단 표시(과도 확장 금지) */}
+      {showDerivedSummary && allocation && (
+        <span data-testid="derived-allocation-summary" style={{ ...relBadge, background: '#fffbeb', color: '#92400e', fontWeight: 600 }}
+          title={`계약금액 ${formatWon(allocation.currentEffectiveAmount)} · 분할확정 ${formatWon(allocation.approvedDerivedTotal)} · 잔여 ${formatWon(allocation.remaining)}`}>
+          🌱 분할 {allocation.derivedCount}건 · 잔여 {formatWon(allocation.remaining)}
+        </span>
+      )}
+    </span>
+  ) : (projectId !== null ? 'Version Engine' : undefined);
+
   // 우측 기능 버튼 그룹 — 두 헤더(오버레이·인라인)가 공유
   // 견적서 보기 — 저장 전(quoteId 없음)에는 비활성. 저장 성공 시 savedQuoteId가 생기며 즉시 활성화된다.
   const pdfDisabled = savedQuoteId == null || pdfLoading;
@@ -2343,7 +2612,10 @@ export function QuoteEditorWorkspace({
           미저장 변경사항은 확인창의 [판매전환] 선택 후 자동 저장→전환된다.
           이미 전환(approved)·권한 없음·처리 중이면 비활성(숨기지 않음). PDF/일괄전환은 목록에서 유지. */}
       {(() => {
-        const convertDisabled = converted || converting || saving || !canConvert;
+        // 견적 엔진: 미확정 변경견적/과거(대체)견적/파생견적은 판매전환 불가(§18/§19). 승인된 현재 유효견적만 전환 대상.
+        //  파생견적은 '판매전환'이 아니라 [파생 승인]으로 배분 확정된다(별도 project/청구 단위).
+        const revisionBlocked = isPendingRevision || isSuperseded || isDerived;
+        const convertDisabled = converted || converting || saving || !canConvert || revisionBlocked;
         // 누적 견적서: 전환 후에도 견적을 계속 누적·저장하면 '연결된 판매건 1건'에 자동 반영되므로,
         // 완료 상태를 '판매 연결됨'으로 표기해 판매건이 이미 연결돼 있음을 명확히 안내한다(요구 §7).
         const isAccumulated = quoteType === 'accumulated_batch';
@@ -2351,6 +2623,9 @@ export function QuoteEditorWorkspace({
           ? (isAccumulated ? '판매 연결됨' : '전환완료')
           : converting ? '전환 중…' : '판매전환';
         const convertTitle = !canConvert ? '판매전환 권한이 없습니다.'
+          : isDerived ? '분할견적은 판매전환 대신 [분할 승인]으로 배분 확정됩니다(원 계약금액을 청구주체별로 배분).'
+          : isPendingRevision ? '변경견적은 [변경견적 승인]으로 확정됩니다(승인 시 현재 유효견적으로 전환).'
+          : isSuperseded ? '과거(대체된) 견적입니다. 현재 유효견적을 사용하세요.'
           : converted ? (isAccumulated
               ? '판매건이 연결되어 있습니다. 견적을 저장하면 같은 판매건에 자동 반영됩니다.'
               : '이미 판매전환된 견적입니다.')
@@ -2366,6 +2641,59 @@ export function QuoteEditorWorkspace({
           </button>
         );
       })()}
+      {/* 관계/신분 배지(변경견적·원견적·과거견적)는 Action 영역에서 제거하고 제목 옆 신분정보(headerSubtitle)로 이동(§3~§5) */}
+
+      {/* 견적 작업: 변경견적 생성 — 일반견적(b2b) 유효본에서만. 원견적은 보존됨. */}
+      {canCreateRevision && (
+        <button type="button" onClick={() => { if (hasUnsavedChanges()) { onToast('저장 후 변경견적을 생성할 수 있습니다.'); return; } setShowRevisionModal(true); }} disabled={revBusy}
+          data-testid="btn-create-revision" aria-label="변경견적 생성"
+          title="현재 견적을 기준으로 변경견적을 생성합니다(원견적 보존)."
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700, border: `1px solid ${C.primary}`,
+            background: '#fff', color: C.primary, cursor: revBusy ? 'not-allowed' : 'pointer', opacity: revBusy ? 0.6 : 1 }}>
+          🔀 변경견적 생성
+        </button>
+      )}
+      {/* 견적 작업: 파생견적 생성 — 현재유효 일반견적에서만. 원 계약금액을 청구주체별로 분리(현재유효 견적 유지). */}
+      {canCreateDerived && (
+        <button type="button" onClick={openDerivedModal} disabled={derivedBusy}
+          data-testid="btn-create-derived" aria-label="분할견적 생성"
+          title="현재유효 견적금액을 여러 회사로 나누어 견적서를 분할 발행합니다(현재유효 견적은 유지)."
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700, border: `1px solid ${C.warning}`,
+            background: '#fff', color: '#92400e', cursor: derivedBusy ? 'not-allowed' : 'pointer', opacity: derivedBusy ? 0.6 : 1 }}>
+          🌱 분할견적 생성
+        </button>
+      )}
+      {/* 미확정 변경견적 상세: 승인 / 거절 */}
+      {isPendingRevision && (
+        <>
+          <button type="button" onClick={handleApproveRevision} disabled={revBusy}
+            data-testid="btn-approve-revision" aria-label="변경견적 승인" title="이 변경견적을 현재 유효견적으로 확정하고 판매건에 반영합니다."
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700, border: 'none', background: C.success, color: '#fff', cursor: revBusy ? 'not-allowed' : 'pointer', opacity: revBusy ? 0.6 : 1 }}>
+            ✅ 변경견적 승인
+          </button>
+          <button type="button" onClick={handleRejectRevision} disabled={revBusy}
+            data-testid="btn-reject-revision" aria-label="변경견적 거절" title="이 변경견적을 거절합니다(기존 유효견적 유지)."
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700, border: `1px solid ${C.danger}`, background: '#fff', color: C.danger, cursor: revBusy ? 'not-allowed' : 'pointer', opacity: revBusy ? 0.6 : 1 }}>
+            ✖ 거절
+          </button>
+        </>
+      )}
+      {/* 미확정 파생견적 상세: 파생 승인 / 파생 거절 (승인 시 과배분 검증) */}
+      {isPendingDerived && (
+        <>
+          <button type="button" onClick={handleApproveDerived} disabled={revBusy}
+            data-testid="btn-approve-derived" aria-label="분할견적 승인" title="이 분할견적의 배분을 확정합니다(과배분 시 차단). 현재유효 견적은 유지됩니다."
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700, border: 'none', background: C.success, color: '#fff', cursor: revBusy ? 'not-allowed' : 'pointer', opacity: revBusy ? 0.6 : 1 }}>
+            ✅ 분할 승인
+          </button>
+          <button type="button" onClick={handleRejectDerived} disabled={revBusy}
+            data-testid="btn-reject-derived" aria-label="분할견적 거절" title="이 분할견적을 거절합니다(현재유효/기존 배분 무영향)."
+            style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700, border: `1px solid ${C.danger}`, background: '#fff', color: C.danger, cursor: revBusy ? 'not-allowed' : 'pointer', opacity: revBusy ? 0.6 : 1 }}>
+            ✖ 거절
+          </button>
+        </>
+      )}
+
       {/* 누적 마감 — accumulated_batch 전용, 저장된 견적에서만. 판매전환과 별개 동작. */}
       {quoteType === 'accumulated_batch' && savedQuoteId != null && (
         <button type="button"
@@ -2395,7 +2723,7 @@ export function QuoteEditorWorkspace({
       onBack={onClose}
       testId="btn-quote-back"
       title={pageTitle}
-      subtitle={projectId !== null ? 'Version Engine' : undefined}
+      subtitle={headerSubtitle}
       right={headerActions}
       style={{ background: bg, borderBottom: border, boxShadow: shadow, padding: `0 ${padH}` }}
     />
@@ -2449,6 +2777,158 @@ export function QuoteEditorWorkspace({
           </div>
         </div>
       )}
+
+      {/* 변경견적 생성 확인 모달 (§4) — 변경사유(version_reason) 입력 */}
+      {showRevisionModal && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => { if (!revBusy) setShowRevisionModal(false); }}>
+          <div onClick={e => e.stopPropagation()} data-testid="modal-create-revision"
+            style={{ background: '#fff', borderRadius: 14, padding: '26px 30px', width: 480, maxWidth: '92vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}>
+            <h2 style={{ margin: '0 0 10px', fontSize: 18, fontWeight: 800, color: C.textPrimary }}>변경견적을 생성하시겠습니까?</h2>
+            <p style={{ margin: '0 0 16px', fontSize: 13, color: '#374151', lineHeight: 1.6 }}>
+              현재 견적을 기준으로 변경견적을 생성합니다. <b>원견적은 그대로 보존</b>되며, 변경견적이 승인되기 전까지는 기존 견적이 계속 유효합니다.
+            </p>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#6b7280', marginBottom: 6 }}>변경 사유 (선택)</label>
+            <textarea value={revisionReason} onChange={e => setRevisionReason(e.target.value)} data-testid="input-revision-reason"
+              placeholder="예: 고객 요청에 따른 통역 일수 추가 / 단가 재협의"
+              style={{ width: '100%', minHeight: 72, boxSizing: 'border-box', padding: '9px 11px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 13, resize: 'vertical', marginBottom: 20 }} />
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button onClick={() => setShowRevisionModal(false)} disabled={revBusy} data-testid="cancel-create-revision"
+                style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #d1d5db', background: '#f9fafb', fontSize: 13, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>취소</button>
+              <button onClick={handleCreateRevision} disabled={revBusy} data-testid="confirm-create-revision"
+                style={{ padding: '9px 20px', borderRadius: 8, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, background: C.primary, cursor: revBusy ? 'not-allowed' : 'pointer', opacity: revBusy ? 0.7 : 1 }}>{revBusy ? '생성 중…' : '변경견적 생성'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 파생견적 생성 모달 (STEP3 — 견적서 분할 발행) — N개 업체로 100% 분할 */}
+      {showDerivedModal && (() => {
+        const companyOptions = companies.map(c => ({ id: c.id, label: c.name }));
+        const base = allocation?.currentEffectiveAmount ?? 0;
+        const rowAmount = (r: SplitRow) => r.mode === 'items'
+          ? dSourceItems.filter(it => r.itemIds.has(it.id)).reduce((s, it) => s + it.totalAmount, 0)
+          : (Number(r.amount.replace(/,/g, '')) || 0);
+        const takenByOthers = (idx: number) => {
+          const s = new Set<number>();
+          derivedSplits.forEach((r, i) => { if (i !== idx && r.mode === 'items') r.itemIds.forEach(id => s.add(id)); });
+          return s;
+        };
+        const splitTotal = derivedSplits.reduce((s, r) => s + rowAmount(r), 0);
+        const remaining = base - splitTotal;
+        const allCompanies = derivedSplits.every(r => r.companyId != null);
+        const canSubmit = derivedSplits.length >= 2 && allCompanies && remaining === 0 && !derivedBusy;
+        const fLbl2 = (t: string) => <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#6b7280', marginBottom: 5 }}>{t}</label>;
+        const inp = { width: '100%', boxSizing: 'border-box' as const, padding: '9px 11px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 13 };
+        return (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+            onClick={() => { if (!derivedBusy) setShowDerivedModal(false); }}>
+            <div onClick={e => e.stopPropagation()} data-testid="modal-create-derived"
+              style={{ background: '#fff', borderRadius: 14, padding: '24px 28px', width: 680, maxWidth: '95vw', maxHeight: '92vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}>
+              <h2 style={{ margin: '0 0 6px', fontSize: 18, fontWeight: 800, color: C.textPrimary }}>🌱 견적서 분할 발행</h2>
+              <p style={{ margin: '0 0 14px', fontSize: 13, color: '#374151', lineHeight: 1.6 }}>
+                현재유효 견적금액 <b>{formatWon(base)}</b>을 2개 이상 업체로 나누어 견적서를 각각 발행합니다. <b>계약/판매는 1건</b>이며, 분할합계는 반드시 계약금액과 일치해야 합니다(100% 분할).
+              </p>
+
+              {/* 분할 개수 컨트롤 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#6b7280' }}>분할 업체 수</span>
+                {[2, 3].map(n => (
+                  <button key={n} type="button" onClick={() => setDerivedSplits(prev => {
+                    const next = prev.slice(0, n); while (next.length < n) next.push(emptySplit()); return next;
+                  })} data-testid={`derived-count-${n}`}
+                    style={{ padding: '5px 12px', borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                      border: `1px solid ${derivedSplits.length === n ? C.warning : '#d1d5db'}`, background: derivedSplits.length === n ? '#fffbeb' : '#fff', color: derivedSplits.length === n ? '#92400e' : '#6b7280' }}>{n}</button>
+                ))}
+                <button type="button" onClick={() => setDerivedSplits(prev => prev.length >= 6 ? prev : [...prev, emptySplit()])} data-testid="derived-add-company"
+                  style={{ padding: '5px 12px', borderRadius: 7, fontSize: 13, fontWeight: 700, cursor: 'pointer', border: `1px dashed ${C.warning}`, background: '#fff', color: '#92400e' }}>+ 업체 추가</button>
+              </div>
+
+              {/* 업체별 분할 행 */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 12 }}>
+                {derivedSplits.map((row, idx) => {
+                  const contactOptions = contacts.filter(c => row.companyId == null || c.companyId === row.companyId).map(c => ({ id: c.id, label: c.name, sub: c.divisionName ?? undefined }));
+                  const taken = takenByOthers(idx);
+                  return (
+                    <div key={idx} data-testid={`derived-split-${idx}`} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12, background: '#fcfcfd' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: '#92400e' }}>업체 {idx + 1}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <span style={{ fontSize: 12, color: '#111827', fontWeight: 700 }}>{formatWon(rowAmount(row))}</span>
+                          {derivedSplits.length > 2 && (
+                            <button type="button" onClick={() => setDerivedSplits(prev => prev.filter((_, i) => i !== idx))} data-testid={`derived-remove-${idx}`}
+                              style={{ border: 'none', background: 'transparent', color: C.danger, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>✕ 제거</button>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 8 }}>
+                        <div>{fLbl2('회사')}<InlineSearchField items={companyOptions} value={row.companyId} onChange={(id) => updateSplit(idx, { companyId: id, contactId: null })} placeholder="회사 검색" popupTitle="분할 대상 회사" /></div>
+                        <div>{fLbl2('담당자')}<InlineSearchField items={contactOptions} value={row.contactId} onChange={(id) => updateSplit(idx, { contactId: id })} placeholder="담당자 검색 (선택)" popupTitle="담당자 검색" /></div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                        {(['amount', 'items'] as const).map(m => (
+                          <button key={m} type="button" onClick={() => updateSplit(idx, { mode: m })} data-testid={`derived-mode-${idx}-${m}`}
+                            style={{ flex: 1, padding: '6px 8px', borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                              border: `1px solid ${row.mode === m ? C.warning : '#d1d5db'}`, background: row.mode === m ? '#fffbeb' : '#fff', color: row.mode === m ? '#92400e' : '#6b7280' }}>
+                            {m === 'amount' ? '금액 분할' : '품목 분할'}
+                          </button>
+                        ))}
+                      </div>
+                      {row.mode === 'amount' ? (
+                        <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 0.9fr 1.3fr', gap: 8 }}>
+                          <input value={row.amount} onChange={e => updateSplit(idx, { amount: e.target.value })} data-testid={`derived-amount-${idx}`} inputMode="numeric" placeholder="금액(총액)" style={inp} />
+                          <select value={row.taxType} onChange={e => updateSplit(idx, { taxType: e.target.value as VatType })} data-testid={`derived-tax-${idx}`} style={{ ...inp, background: '#fff' }}>
+                            <option value="taxable">과세(10%)</option>
+                            <option value="exempt">면세</option>
+                          </select>
+                          <input value={row.label} onChange={e => updateSplit(idx, { label: e.target.value })} data-testid={`derived-label-${idx}`} placeholder="항목명(선택)" style={inp} />
+                        </div>
+                      ) : (
+                        <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 6, maxHeight: 150, overflowY: 'auto', background: '#fff' }}>
+                          {dSourceItems.length === 0 ? <div style={{ fontSize: 12, color: '#9ca3af', padding: 6 }}>분할 가능한 품목이 없습니다.</div>
+                            : dSourceItems.map(it => {
+                              const disabled = taken.has(it.id) && !row.itemIds.has(it.id);
+                              return (
+                                <label key={it.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 4px', fontSize: 12, opacity: disabled ? 0.4 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }}>
+                                  <input type="checkbox" disabled={disabled} checked={row.itemIds.has(it.id)} onChange={(e) => updateSplit(idx, {
+                                    itemIds: (() => { const n = new Set(row.itemIds); if (e.target.checked) n.add(it.id); else n.delete(it.id); return n; })(),
+                                  })} />
+                                  <span style={{ flex: 1, color: '#374151' }}>{it.productName || '(품목)'}{disabled ? ' · 다른 업체에 배정됨' : ''}</span>
+                                  <span style={{ color: '#111827', fontWeight: 600 }}>{formatWon(it.totalAmount)}</span>
+                                </label>
+                              );
+                            })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 100% 분할 미리보기 */}
+              <div style={{ background: '#f9fafb', borderRadius: 8, padding: '10px 12px', marginBottom: 12, fontSize: 12, color: '#374151', display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+                <span>분할 합계 <b style={{ color: '#111827' }}>{formatWon(splitTotal)}</b></span>
+                <span>계약금액 <b>{formatWon(base)}</b></span>
+                <span style={{ color: remaining === 0 ? '#047857' : C.danger, fontWeight: 700 }}>
+                  {remaining === 0 ? '✓ 100% 분할' : `차이 ${formatWon(remaining)} (100% 분할 필요)`}
+                </span>
+              </div>
+
+              {fLbl2('분할 사유 (선택)')}
+              <textarea value={derivedReason} onChange={e => setDerivedReason(e.target.value)} data-testid="input-derived-reason"
+                placeholder="예: 고객 요청에 따른 회사별 청구 분리"
+                style={{ width: '100%', minHeight: 56, boxSizing: 'border-box', padding: '9px 11px', borderRadius: 8, border: '1px solid #d1d5db', fontSize: 13, resize: 'vertical', marginBottom: 18 }} />
+
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                <button onClick={() => setShowDerivedModal(false)} disabled={derivedBusy} data-testid="cancel-create-derived"
+                  style={{ padding: '9px 20px', borderRadius: 8, border: '1px solid #d1d5db', background: '#f9fafb', fontSize: 13, fontWeight: 600, cursor: 'pointer', color: '#374151' }}>취소</button>
+                <button onClick={handleCreateDerived} disabled={!canSubmit} data-testid="confirm-create-derived"
+                  style={{ padding: '9px 20px', borderRadius: 8, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, background: canSubmit ? C.warning : '#9ca3af', cursor: canSubmit ? 'pointer' : 'not-allowed', opacity: canSubmit ? 1 : 0.7 }}>{derivedBusy ? '생성 중…' : '분할 견적서 생성'}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </>
   );
 
@@ -2473,7 +2953,7 @@ export function QuoteEditorWorkspace({
           onBack={onClose}
           testId="btn-quote-back"
           title={pageTitle}
-          subtitle={projectId !== null ? 'Version Engine' : undefined}
+          subtitle={headerSubtitle}
           right={headerActions}
           style={dsStickyPageHeader()}
         />

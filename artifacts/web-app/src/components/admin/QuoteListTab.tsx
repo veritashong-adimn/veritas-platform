@@ -31,6 +31,11 @@ interface QuoteRow {
   companyName: string | null;
   contactName: string | null;
   adminName: string | null;
+  // 견적 엔진 family 계층 표시용
+  rootQuoteId: number | null;
+  relationType: string | null;   // null=원견적 | 'revision' | 'additional' | 'derived'
+  isCurrent: boolean;
+  version: number;
 }
 
 // ─── 상수 ──────────────────────────────────────────────────────────────────────
@@ -101,11 +106,13 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     items: QuoteItemForm[]; title: string; note: string;
     quoteType: QuoteType; issueDate: string; vatType: VatType;
     companyId: number | null; contactId: number | null; divisionId: number | null;
+    adminId: number | null; versionReason: string;
     status: string;
     batchClosedAt: string | null;
   } | null>(null);
   // 선택 기반 일괄 관리
   const [selectedIds, setSelectedIds]   = useState<Set<number>>(new Set());
+  const [expandedRoots, setExpandedRoots] = useState<Set<number>>(new Set());  // 수동 펼침 family(root id)
   const [bulkConvertOpen, setBulkConvertOpen]   = useState(false);
   const [bulkConverting, setBulkConverting]     = useState(false);
   const [bulkDeleteOpen, setBulkDeleteOpen]     = useState(false);
@@ -116,9 +123,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     setLoading(true);
     setSelectedIds(new Set()); // 재조회(필터/작업 후) 시 선택 초기화
     try {
+      // 상태/유형/검색은 클라이언트에서 family 단위로 적용한다(관계견적 부모가 필터에서 빠져 자식이 고아가 되지 않도록).
+      //  서버에는 발행일 범위만 전달(같은 family는 발행일을 공유하므로 family를 쪼개지 않음).
       const params = new URLSearchParams({ limit: '200' });
-      if (statusFilter !== 'all') params.set('status', statusFilter);
-      if (typeFilter !== 'all')   params.set('quoteType', typeFilter);
       if (dateFrom)               params.set('dateFrom', dateFrom);
       if (dateTo)                 params.set('dateTo', dateTo);
       const res = await fetch(api(`/api/admin/quotes?${params}`), { headers: authH });
@@ -126,7 +133,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       const data = await res.json();
       setQuotes(Array.isArray(data.quotes) ? data.quotes : []);
     } finally { setLoading(false); }
-  }, [token, statusFilter, typeFilter, dateFrom, dateTo]);
+  }, [token, dateFrom, dateTo]);
 
   useEffect(() => { fetchQuotes(); }, [fetchQuotes]);
   useEffect(() => { if (refreshTick) fetchQuotes(); }, [refreshTick]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -180,6 +187,8 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         companyId: (detail as any).companyId ?? null,
         contactId: (detail as any).contactId ?? null,
         divisionId: (detail as any).divisionId ?? null,
+        adminId: (detail as any).adminId ?? null,
+        versionReason: (detail as any).versionReason ?? '',
         status: (detail as any).status ?? rowStatus ?? 'pending',
         batchClosedAt: (detail as any).batchClosedAt ?? null,
       });
@@ -204,29 +213,78 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     if (view === 'register') onExitToList?.();
   }, [fetchQuotes, view, onExitToList]);
 
-  // 검색 필터 (견적번호·견적서명·고객사·고객명·담당PM·상품명)
-  const filtered = quotes.filter(q => {
-    if (!search) return true;
-    const s = search.toLowerCase();
-    return (
-      (q.quoteNumber ?? '').toLowerCase().includes(s) ||
-      formatDocNumber('Q', q.quoteNumber, q.issueDate).toLowerCase().includes(s) ||  // 새 표시 형식(Q260716-008)으로도 검색
-      (q.title ?? '').toLowerCase().includes(s) ||
-      (q.companyName ?? '').toLowerCase().includes(s) ||
-      (q.contactName ?? '').toLowerCase().includes(s) ||
-      (q.adminName ?? '').toLowerCase().includes(s) ||
-      (q.firstProductName ?? '').toLowerCase().includes(s)
-    );
+  // ── 개별 견적이 상태/유형/검색 필터에 매칭되는지 (client-side, family 인지) ──────
+  const matchesQuote = useCallback((q: QuoteRow): boolean => {
+    if (statusFilter !== 'all' && q.status !== statusFilter) return false;
+    if (typeFilter !== 'all' && q.quoteType !== typeFilter) return false;
+    if (search) {
+      const s = search.toLowerCase();
+      const hit =
+        (q.quoteNumber ?? '').toLowerCase().includes(s) ||
+        formatDocNumber('Q', q.quoteNumber, q.issueDate).toLowerCase().includes(s) ||
+        (q.title ?? '').toLowerCase().includes(s) ||
+        (q.companyName ?? '').toLowerCase().includes(s) ||
+        (q.contactName ?? '').toLowerCase().includes(s) ||
+        (q.adminName ?? '').toLowerCase().includes(s) ||
+        (q.firstProductName ?? '').toLowerCase().includes(s);
+      if (!hit) return false;
+    }
+    return true;
+  }, [statusFilter, typeFilter, search]);
+
+  // ── family 구성: 원견적(부모, relation_type=null) 아래 관계견적(자식) 그룹핑 ──────
+  const REL_ORDER: Record<string, number> = { revision: 0, additional: 1, derived: 2 };
+  const childrenByRoot = new Map<number, QuoteRow[]>();
+  for (const q of quotes) {
+    if (q.relationType != null && q.rootQuoteId != null) {
+      const arr = childrenByRoot.get(q.rootQuoteId) ?? [];
+      arr.push(q); childrenByRoot.set(q.rootQuoteId, arr);
+    }
+  }
+  for (const arr of childrenByRoot.values()) {
+    // 관계유형 → version → id 로 안정 정렬(R2 < R10 방지: 숫자 version 사용)
+    arr.sort((a, b) => (REL_ORDER[a.relationType ?? ''] ?? 9) - (REL_ORDER[b.relationType ?? ''] ?? 9) || a.version - b.version || a.id - b.id);
+  }
+  const roots = quotes.filter(q => q.relationType == null);  // 원견적만 최상위. 정렬은 서버 desc(id) 유지.
+
+  const filtersActive = !!(search || statusFilter !== 'all' || typeFilter !== 'all');
+  // 표시 대상 root: 부모가 매칭되거나 자식 중 매칭이 있으면 표시. 자식 매칭이 있으면 자동 펼침(§11/§12).
+  type RenderRow = { q: QuoteRow; depth: 0 | 1; isParent: boolean; childCount: number; expanded: boolean };
+  const visibleRows: RenderRow[] = [];
+  for (const root of roots) {
+    const kids = childrenByRoot.get(root.id) ?? [];
+    const rootMatch = matchesQuote(root);
+    const matchedKids = kids.filter(matchesQuote);
+    if (!rootMatch && matchedKids.length === 0) continue;  // family 전체가 필터에 안 맞으면 숨김
+    const autoExpand = filtersActive && matchedKids.length > 0;   // 자식 매칭 → 자동 펼침
+    const expanded = kids.length > 0 && (expandedRoots.has(root.id) || autoExpand);
+    visibleRows.push({ q: root, depth: 0, isParent: true, childCount: kids.length, expanded });
+    if (expanded) for (const k of kids) visibleRows.push({ q: k, depth: 1, isParent: false, childCount: 0, expanded: false });
+  }
+  const visibleQuotes = visibleRows.map(r => r.q);
+
+  const toggleExpand = (rootId: number) => setExpandedRoots(prev => {
+    const next = new Set(prev);
+    if (next.has(rootId)) next.delete(rootId); else next.add(rootId);
+    return next;
   });
 
   const fmt = (v: string | null) => v ? Number(v).toLocaleString() : '—';
   const hasAnyFilter = !!(search || dateFrom || dateTo || statusFilter !== 'all' || typeFilter !== 'all');
+  // 관계유형 배지(§7) — 향후 additional/derived 재사용
+  const relationBadge = (q: QuoteRow): { label: string; bg: string; color: string } | null => {
+    const suffix = q.quoteNumber?.split('-').pop() ?? '';
+    if (q.relationType === 'revision')   return { label: `변경 ${suffix}`, bg: '#eef2ff', color: '#4338ca' };
+    if (q.relationType === 'additional') return { label: `추가 ${suffix}`, bg: '#ecfeff', color: '#0e7490' };
+    if (q.relationType === 'derived')    return { label: `분할 ${suffix}`, bg: '#fef3c7', color: '#92400e' };
+    return null;
+  };
 
   // ── 선택 기반 일괄 관리 ─────────────────────────────────────────────────────
   // 검색(클라이언트) 변경 시 선택 초기화 (필터/재조회는 fetchQuotes 에서 초기화)
-  useEffect(() => { setSelectedIds(new Set()); }, [search]);
+  useEffect(() => { setSelectedIds(new Set()); }, [search, statusFilter, typeFilter]);
 
-  const selectedQuotes = filtered.filter(q => selectedIds.has(q.id)); // 현재 표시된 것만
+  const selectedQuotes = visibleQuotes.filter(q => selectedIds.has(q.id)); // 현재 표시된 것만
   const selectedCount = selectedQuotes.length;
   // 판매전환 가능 = 선택 1건+ 이며 선택 전부가 미전환(대기). 이미 판매전환(approved)된 건이 섞이면 비활성.
   // (전환 여부 판단은 status 기준 — projectId는 견적 저장 시 거래처 연결용으로 미리 붙을 수 있어 사용하지 않음)
@@ -236,13 +294,13 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       ? '이미 판매전환된 견적이 포함되어 있습니다. 판매전환은 대기 상태의 견적만 가능합니다.'
       : undefined;
   const canConvert = selectedCount > 0 && !convertBlockedReason;
-  const allSelected = filtered.length > 0 && filtered.every(q => selectedIds.has(q.id));
+  const allSelected = visibleQuotes.length > 0 && visibleQuotes.every(q => selectedIds.has(q.id));
   const toggleSelect = (id: number) => setSelectedIds(prev => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
-  const toggleSelectAll = () => setSelectedIds(allSelected ? new Set() : new Set(filtered.map(q => q.id)));
+  const toggleSelectAll = () => setSelectedIds(allSelected ? new Set() : new Set(visibleQuotes.map(q => q.id)));
 
   const editRow = (q: QuoteRow) => handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status);
   const handleDetailSelected = () => { if (selectedCount === 1) editRow(selectedQuotes[0]); };
@@ -333,12 +391,15 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         initialCompanyId={editInitData?.companyId ?? null}
         initialContactId={editInitData?.contactId ?? null}
         initialDivisionId={editInitData?.divisionId ?? null}
+        initialAdminId={editInitData?.adminId ?? null}
+        initialVersionReason={editInitData?.versionReason ?? ''}
         initialStatus={editInitData?.status}
         initialBatchClosedAt={editInitData?.batchClosedAt ?? null}
         onConverted={fetchQuotes}
         onNavigateToSales={onNavigateToSales}
         onOpenSalesDetail={onOpenSalesDetail}
         canConvert={convertPerm}
+        onOpenQuote={(id) => handleEditQuote(id, '견적', 'pending')}
       />
     );
   }
@@ -360,11 +421,12 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
     );
   }
 
-  // 현황 KPI 데이터
+  // 현황 KPI 데이터 — 원견적(root, relation_type=null) 기준. 관계견적(R1 등)이 생겨도 업무 건수가 부풀지 않음(§13).
+  const relatedCount = quotes.length - roots.length;
   const kpiItems = [
-    { label: '전체', value: 'all',      count: quotes.length,                                       color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe' },
-    { label: '대기', value: 'pending',  count: quotes.filter(q => q.status === 'pending').length,   color: '#6b7280', bg: '#f9fafb', border: '#e5e7eb' },
-    { label: '판매', value: 'approved', count: quotes.filter(q => q.status === 'approved').length,  color: '#15803d', bg: '#dcfce7', border: '#86efac' },
+    { label: '전체', value: 'all',      count: roots.length,                                       color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe' },
+    { label: '대기', value: 'pending',  count: roots.filter(q => q.status === 'pending').length,   color: '#6b7280', bg: '#f9fafb', border: '#e5e7eb' },
+    { label: '판매', value: 'approved', count: roots.filter(q => q.status === 'approved').length,  color: '#15803d', bg: '#dcfce7', border: '#86efac' },
   ];
 
   return (
@@ -480,7 +542,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: '12px 16px' }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', marginBottom: 10 }}>
           견적 목록
-          <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 500, color: '#9ca3af' }}>({filtered.length})</span>
+          <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 500, color: '#9ca3af' }}>
+            (원견적 {roots.length}{relatedCount > 0 ? ` · 관련견적 ${relatedCount}` : ''})
+          </span>
         </div>
 
         {/* 선택 기반 공통 작업 바 */}
@@ -513,7 +577,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
 
         {loading ? (
           <div style={{ padding: '32px 0', textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>조회 중…</div>
-        ) : filtered.length === 0 ? (
+        ) : visibleRows.length === 0 ? (
           <div style={{ padding: '32px 0', textAlign: 'center', color: '#9ca3af', fontSize: 13 }}>
             {quotes.length === 0 ? '등록된 견적서가 없습니다.' : '검색 결과가 없습니다.'}
           </div>
@@ -533,37 +597,60 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(q => {
+                {visibleRows.map(({ q, depth, isParent, childCount, expanded }) => {
                   const sColor = QUOTE_STATUS_COLOR[q.status] ?? { bg: '#f3f4f6', color: '#6b7280' };
                   const selected = selectedIds.has(q.id);
+                  const relBadge = relationBadge(q);
+                  const hasKids = isParent && childCount > 0;
 
                   return (
                     <tr key={q.id}
                       onClick={() => editRow(q)}
-                      style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: selected ? '#eff6ff' : undefined }}>
-                      {/* 선택 체크박스 — 클릭은 선택만(행 상세 진입과 분리) */}
+                      data-testid={`quote-row-${q.id}`} data-depth={depth}
+                      style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: selected ? '#eff6ff' : (depth === 1 ? '#fbfcfe' : undefined) }}>
+                      {/* 선택 체크박스 — 각 견적 독립(§15). 클릭은 선택만(행 상세 진입과 분리) */}
                       <td onClick={e => e.stopPropagation()} style={{ padding: '6px 10px', textAlign: 'center' }}>
                         <input type="checkbox" checked={selected} onChange={() => toggleSelect(q.id)}
                           aria-label={`견적 선택: ${q.quoteNumber ?? q.id}`} data-testid={`quote-select-${q.id}`}
                           style={{ width: 15, height: 15, cursor: 'pointer' }} />
                       </td>
-                      {/* 견적번호 — 표시 형식 Q{YYMMDD}-{순번}. 클릭 시 편집(식별자 역할이라 과한 강조 제거) */}
-                      <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status); }}
-                          disabled={editLoading === q.id}
-                          style={{
-                            fontFamily: 'monospace', fontSize: 11, color: '#475569', fontWeight: 400,
-                            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                            textDecoration: 'none', opacity: editLoading === q.id ? 0.5 : 1,
-                          }}
-                          onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline'; }}
-                          onMouseLeave={e => { e.currentTarget.style.textDecoration = 'none'; }}
-                          data-testid={`btn-edit-quote-${q.id}`}
-                          aria-label={`${q.quoteNumber ?? q.id} 편집`}
-                        >
-                          {editLoading === q.id ? '…' : (formatDocNumber('Q', q.quoteNumber, q.issueDate) || `#${q.id}`)}
-                        </button>
+                      {/* 견적번호 — family 계층: 부모는 펼침 토글, 자식은 들여쓰기 + 관계 배지 */}
+                      <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'left' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, paddingLeft: depth === 1 ? 20 : 0 }}>
+                          {hasKids ? (
+                            <button type="button" onClick={e => { e.stopPropagation(); toggleExpand(q.id); }}
+                              data-testid={`quote-expand-${q.id}`} aria-label={expanded ? '관련견적 접기' : '관련견적 펼치기'}
+                              title={`관련견적 ${childCount}건`}
+                              style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#6b7280', fontSize: 11, width: 16, padding: 0, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                              {expanded ? '▼' : '▶'}<span style={{ fontSize: 10, color: '#9ca3af' }}>{childCount}</span>
+                            </button>
+                          ) : (depth === 1 ? <span style={{ color: '#cbd5e1', fontSize: 11 }}>└</span> : <span style={{ width: 16, display: 'inline-block' }} />)}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleEditQuote(q.id, q.title ?? q.quoteNumber ?? `견적 #${q.id}`, q.status); }}
+                            disabled={editLoading === q.id}
+                            style={{
+                              fontFamily: 'monospace', fontSize: 11, color: '#475569', fontWeight: depth === 0 ? 600 : 400,
+                              background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                              textDecoration: 'none', opacity: editLoading === q.id ? 0.5 : 1,
+                            }}
+                            onMouseEnter={e => { e.currentTarget.style.textDecoration = 'underline'; }}
+                            onMouseLeave={e => { e.currentTarget.style.textDecoration = 'none'; }}
+                            data-testid={`btn-edit-quote-${q.id}`}
+                            aria-label={`${q.quoteNumber ?? q.id} 편집`}
+                          >
+                            {editLoading === q.id ? '…' : (q.quoteNumber ?? (formatDocNumber('Q', q.quoteNumber, q.issueDate) || `#${q.id}`))}
+                          </button>
+                          {relBadge && (
+                            <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: relBadge.bg, color: relBadge.color }}>{relBadge.label}</span>
+                          )}
+                          {/* 현재 유효견적 배지(§8) — family에 관계견적이 있을 때만 표시(과잉 방지) */}
+                          {(hasKids || depth === 1) && q.isCurrent && (
+                            <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: '#dcfce7', color: '#15803d' }}>현재유효</span>
+                          )}
+                          {depth === 1 && (q.relationType === 'revision' || q.relationType === 'derived') && q.status === 'pending' && (
+                            <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: '#fef9c3', color: '#854d0e' }}>승인대기</span>
+                          )}
+                        </div>
                       </td>
                       {/* 발행일 */}
                       <td style={{ padding: '6px 10px', fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap', textAlign: 'center' }}>
@@ -603,8 +690,9 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                       </td>
                       {/* 견적유형 — 가운데 정렬 (누적 견적서는 누적상태 배지 추가) */}
                       <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
-                        <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: '#f0f9ff', color: '#0369a1', fontWeight: 600 }}>
-                          {QUOTE_TYPE_LABEL[q.quoteType] ?? q.quoteType}
+                        <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: q.relationType === 'derived' ? '#fffbeb' : '#f0f9ff', color: q.relationType === 'derived' ? '#92400e' : '#0369a1', fontWeight: 600 }}>
+                          {/* 분할견적(derived): quote_type(내부)은 유지, 표시만 '분할 견적서'로 override */}
+                          {q.relationType === 'derived' ? '분할 견적서' : (QUOTE_TYPE_LABEL[q.quoteType] ?? q.quoteType)}
                         </span>
                         {q.quoteType === 'accumulated_batch' && (
                           q.batchClosedAt
@@ -618,11 +706,15 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                           ? <span style={{ fontSize: 12, color: '#374151', whiteSpace: 'nowrap' }}>{q.adminName}</span>
                           : <span style={{ fontSize: 11, color: '#d1d5db' }}>—</span>}
                       </td>
-                      {/* 상태 — 가운데 정렬 */}
+                      {/* 상태 — 가운데 정렬. 분할견적(derived)이 승인되면 '판매'가 아니라 '분할확정'으로 표시(표시만, DB status 불변). */}
                       <td style={{ padding: '6px 10px', textAlign: 'center' }}>
-                        <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: sColor.bg, color: sColor.color }}>
-                          {QUOTE_STATUS_LABEL[q.status] ?? q.status}
-                        </span>
+                        {q.relationType === 'derived' && q.status === 'approved' ? (
+                          <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: '#fef3c7', color: '#92400e' }}>분할확정</span>
+                        ) : (
+                          <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 5, fontWeight: 700, background: sColor.bg, color: sColor.color }}>
+                            {QUOTE_STATUS_LABEL[q.status] ?? q.status}
+                          </span>
+                        )}
                       </td>
                       {/* PDF 미리보기 — 가운데 정렬 */}
                       <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>

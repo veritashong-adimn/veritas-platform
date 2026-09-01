@@ -9,6 +9,7 @@ export * from "./quote_item_files";
 export * from "./tasks";
 export * from "./payments";
 export * from "./project_payments";
+export * from "./payment_transactions";
 export * from "./settlements";
 export * from "./performance_assignments";
 export * from "./performance_expenses";
