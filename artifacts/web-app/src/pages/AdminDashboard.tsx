@@ -52,6 +52,7 @@ import { InsightAnalyticsTab } from '../components/admin/InsightAnalyticsTab';
 import { SettlementTabs } from '../components/admin/SettlementTabs';
 import { SettingsTab } from '../components/admin/SettingsTab';
 import { BillingManagementTab } from '../components/admin/BillingManagementTab';
+import { CollectionsTab } from '../components/admin/CollectionsTab';
 import { StaffManagementTab } from '../components/admin/StaffManagementTab';
 
 const inputStyle: React.CSSProperties = {
@@ -1946,50 +1947,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         />
       )}
 
-      {/* ── 결제 탭 ── */}
+      {/* ── 수금 현황 탭 — project_payments + payment_transactions SSOT 통합 조회(레거시 payments 미사용) ── */}
       {adminTab === "payments" && (
-        <Section
-          title={`수금 현황 (${filteredPayments.length})`}
-          action={
-            <div style={{ display: "flex", gap: 6 }}>
-              <FilterPill label="전체" active={paymentFilter === "all"} onClick={() => setPaymentFilter("all")} />
-              {ALL_PAYMENT_STATUSES.map(s => (
-                <FilterPill key={s} label={STATUS_LABEL[s] ?? s}
-                  active={paymentFilter === s} onClick={() => setPaymentFilter(s)} />
-              ))}
-            </div>
-          }
-        >
-          {loading ? (
-            <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
-          ) : filteredPayments.length === 0 ? (
-            <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>결제 내역이 없습니다.</Card>
-          ) : (
-            <Card style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                  <thead>
-                    <tr>{["ID","프로젝트","결제 금액","결제 상태","프로젝트 상태","생성일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {filteredPayments.map(pm => (
-                      <tr key={pm.id}
-                        onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
-                        <td style={{ ...tableTd, color: "#9ca3af" }}>#{pm.id}</td>
-                        <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{pm.projectTitle ?? "(제목 없음)"}</td>
-                        <td style={{ ...tableTd, fontWeight: 700, color: "#0891b2" }}>{formatWon(Number(pm.amount))}</td>
-                        <td style={tableTd}><StatusBadge status={pm.status} /></td>
-                        <td style={tableTd}>{pm.projectStatus ? <StatusBadge status={pm.projectStatus} /> : "-"}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(pm.createdAt).toLocaleDateString("ko-KR")}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )}
-        </Section>
+        <CollectionsTab
+          token={token}
+          onToast={setToast}
+          onOpenSalesDetail={openSalesDetail}
+        />
       )}
 
       {/* ── 작업 탭 ── */}
