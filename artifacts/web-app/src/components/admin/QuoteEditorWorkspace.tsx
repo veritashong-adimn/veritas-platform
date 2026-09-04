@@ -197,8 +197,11 @@ const QUOTE_TYPE_SHORT: Record<string, string> = {
 
 function defaultItem(): QuoteItemForm {
   return {
-    productId: null, productName: '', productType: 'translation',
-    quantity: '1', unit: SVC_DEFAULT_UNIT['translation'], unitPrice: '', taxType: 'taxable', memo: '',
+    // 신규 기본 상품 행은 '통역'을 기본 유형으로 한다(지시문 §3·§4). 세부유형은 통역 상품의
+    // 기존 정상 기본값을 그대로 사용한다 — 통역 견적행에는 별도 순차/동시 구분 필드가 없고(카탈로그
+    // 상품 선택으로 세부유형이 정해짐), 필드를 신설하면 저장 구조가 바뀌므로(§7) 현 구조를 유지한다.
+    productId: null, productName: '', productType: 'interpretation',
+    quantity: '1', unit: SVC_DEFAULT_UNIT['interpretation'], unitPrice: '', taxType: 'taxable', memo: '',
     sourceLanguage: 'ko',
     fileName: '', fileFormat: '', wordCount: '', charCount: '',
     interpretDate: '', interpretEndDate: '', startTime: '', endTime: '', interpretHours: '', operationHours: '', interpretPlace: '', interpreterCount: '',
@@ -850,12 +853,21 @@ function DateRangeField({ start, end, onChange, boxStyle, title = '기간', star
 
   useEffect(() => {
     if (!open) return;
-    // 바깥 클릭 자동닫기 비활성화(지시문 §8): 네이티브 날짜 피커는 문서 외부 오버레이로 뜨는데,
-    // 그 클릭(달력 날짜 선택)이나 캡처/마우스 이동이 '바깥 클릭'으로 잡혀 팝업이 실수로 닫히던 문제 방지.
-    // 닫힘은 [확인](confirm) 또는 ESC 로만. (시작/종료 선택·초기화로는 닫지 않는다.)
-    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setOpen(false); };
+    // 일반적인 팝오버 UX: 바깥 클릭·ESC 로 닫는다(지시문 §1). listener 는 open 동안에만 등록하고
+    // cleanup 에서 정확히 해제한다 → 중복 누적/누수 방지(§2).
+    //   · 팝오버 내부 클릭(달력 필드·[확인]·[초기화])은 ref 안이므로 닫지 않는다(§1-⑤).
+    //   · 다른 행의 날짜 버튼 클릭 = 이 팝오버 기준 '바깥' → 이 팝오버가 먼저 닫히고, 그 버튼의
+    //     onClick 이 새 팝오버를 연다 → 여러 팝오버 동시 오픈 방지(§1-④, §2).
+    //   · 네이티브 date 달력은 페이지 밖 OS 팝업이라 그 클릭이 document 로 전파되지 않으므로,
+    //     시작/종료 날짜 선택으로 팝오버가 닫히지 않는다(§1-⑥).
+    const onKey  = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setOpen(false); };
+    const onDown = (ev: MouseEvent)    => { if (ref.current && !ref.current.contains(ev.target as Node)) setOpen(false); };
     document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('keydown', onKey); };
+    document.addEventListener('mousedown', onDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDown);
+    };
   }, [open]);
 
   // 표시: 없음 → placeholder / 하루(종료 없음·동일) → 시작 / 여러 날 → 시작 ~ 종료.
@@ -875,7 +887,7 @@ function DateRangeField({ start, end, onChange, boxStyle, title = '기간', star
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       {/* 단일 기간 필드 — 클릭 시 팝오버 오픈 (읽기 표시) */}
-      <div onClick={() => { if (!open) openPicker(); }}
+      <div onClick={() => { if (open) setOpen(false); else openPicker(); }}
         data-testid="field-date-range" aria-label={title} title={display || title}
         style={{ ...boxStyle, display: 'flex', alignItems: 'center', gap: 2, padding: 0, overflow: 'hidden', cursor: 'pointer' }}>
         <span style={{ flex: 1, minWidth: 0, padding: '0 6px 0 8px', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
@@ -1557,7 +1569,8 @@ export function QuoteItemsEditor({ items, onItemsChange, vatType, products }: {
 
       {/* 유형별 항목 추가 버튼 (+ 할인 항목 포함) */}
       <div style={{ display: 'flex', gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
-        {(['translation', 'interpretation', 'equipment', 'expense', 'discount'] as ServiceType[]).map(type => {
+        {/* 통역 우선 노출 — 기본 유형(통역) 정책과 버튼 순서를 일치시킨다(순서만 변경, 기능 동일) */}
+        {(['interpretation', 'translation', 'equipment', 'expense', 'discount'] as ServiceType[]).map(type => {
           const c = SVC_CFG[type];
           return (
             <button key={type} type="button"
