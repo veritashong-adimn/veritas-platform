@@ -946,6 +946,14 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
             prepaid_deduction: "차감 견적",
             accumulated_batch: "누적",
           };
+          // 유형별 배지 색상 — 표시 전용(로직/DB 값 무관). 견적목록과 동일 계열 색상 사용.
+          const QUOTE_TYPE_COLOR: Record<string, { bg: string; color: string }> = {
+            b2b_standard:      { bg: "#f0f9ff", color: "#0369a1" }, // 일반/B2B — 파랑
+            b2c_prepaid:       { bg: "#f5f3ff", color: "#7c3aed" }, // 차감 — 보라
+            prepaid_deduction: { bg: "#f5f3ff", color: "#7c3aed" }, // 차감 — 보라
+            accumulated_batch: { bg: "#fffbeb", color: "#b45309" }, // 누적 — 주황/앰버
+          };
+          const QUOTE_TYPE_COLOR_DEFAULT = { bg: "#f1f5f9", color: "#475569" };
 
           return (
             <>
@@ -1046,7 +1054,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                             {/* 유형 (quoteType) */}
                             <td style={{ ...tableTd }}>
                               {p.quoteType ? (
-                                <span style={{ fontSize: 10, fontWeight: 700, background: "#f1f5f9", color: "#475569", borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap" }}>
+                                <span style={{ fontSize: 10, fontWeight: 700, background: (QUOTE_TYPE_COLOR[p.quoteType] ?? QUOTE_TYPE_COLOR_DEFAULT).bg, color: (QUOTE_TYPE_COLOR[p.quoteType] ?? QUOTE_TYPE_COLOR_DEFAULT).color, borderRadius: 5, padding: "2px 6px", whiteSpace: "nowrap" }}>
                                   {QUOTE_TYPE_LABEL[p.quoteType] ?? p.quoteType}
                                 </span>
                               ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>—</span>}

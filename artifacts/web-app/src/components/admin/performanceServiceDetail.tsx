@@ -127,9 +127,11 @@ function FileNameChip({ name }: { name?: string | null }) {
 // 번역 작업량 세그먼트 — 파일명 뒤에 작업량(단어수/글자수)만 표시. 페이지수는 표시하지 않는다
 //   (판매정보의 수량/단위 컬럼에서 확인 — 중복표시 금지). pageCount 는 스냅샷에 계속 저장되며 표시만 제외.
 function translationSegments(r: Row, snap: any): string[] {
-  const work = snap.wordCount ? `${num(snap.wordCount).toLocaleString()}단어`
-    : snap.charCount ? `${num(snap.charCount).toLocaleString()}글자` : '';
-  if (work) return [work];
+  // 판매정보 원본 작업량 보존(§2·§3·§7) — 단어수·글자수가 있으면 둘 다(순서: 단어→글자), 없는 항목은 표시 안 함.
+  const segs: string[] = [];
+  if (snap.wordCount && num(snap.wordCount) > 0) segs.push(`${num(snap.wordCount).toLocaleString()}단어`);
+  if (snap.charCount && num(snap.charCount) > 0) segs.push(`${num(snap.charCount).toLocaleString()}글자`);
+  if (segs.length) return segs;
   // 구 스냅샷 폴백 — 단어/글자 상세필드가 없을 때만 판매 수량·단위 표시. 단, 페이지는 제외(중복표시 금지).
   const unit = snap.saleUnit ?? r.unit ?? '';
   if (unit === '페이지') return [];
@@ -153,7 +155,7 @@ function renderTranslationSummary(r: Row, snap: any): React.ReactElement | null 
     <span style={{ ...ref, color: C.textSecondary, display: 'inline-flex', alignItems: 'baseline', gap: 4, maxWidth: '100%' }} title={fname || undefined}>
       {parts.map((node, i) => (
         <React.Fragment key={i}>
-          {i > 0 ? <span style={{ flexShrink: 0 }}>·</span> : null}
+          {i > 0 ? <span style={{ flexShrink: 0, color: C.textMuted }}>/</span> : null}
           {node}
         </React.Fragment>
       ))}
@@ -210,7 +212,9 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
       // 수행기간(N일간)은 날짜 바로 뒤에 묶어 표시 — 저장된 수량·단위 그대로 사용, 재계산 안 함(예: 3일 → (3일간)).
       const saleQU = snap.saleQuantity != null ? `${num(snap.saleQuantity).toLocaleString()}${snap.saleUnit ?? ''}` : '';
       const periodWithDays = [period, saleQU ? `(${saleQU}간)` : ''].filter(Boolean).join(' ');
-      text = joinRef([periodWithDays, snap.operationHours, snap.interpretDuration, snap.interpreterCount ? `${snap.interpreterCount}명` : '', snap.interpretPlace]);
+      // 인원수(interpreterCount)는 판매상품 전체 인원이므로 개별 수행정보(통역사 1명 단위)에는 표시하지 않는다.
+      //   원본 스냅샷 데이터는 보존 — 표시에서만 제외(§10-2).
+      text = joinRef([periodWithDays, snap.operationHours, snap.interpretDuration, snap.interpretPlace]);
     } else if (kind === 'equipment') {
       // 장비 저장 quantity = 사용일수 × 세트수(quoteItemForm 규약) → 사용일수로 나눠 순수 세트수 복원(판매정보 표시와 동일).
       //   사용일수(usagePeriod)를 수량으로 오용하지 않는다.
@@ -236,7 +240,8 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
       <div style={wrap}>
         <DateRangeField start={r.performanceStartDate} end={r.performanceEndDate} onChange={onRangeChange} label="수행기간" />
         {qtyUnit}
-        <span style={ref}>{joinRef([snap.operationHours, snap.interpretDuration, snap.interpreterCount ? `${snap.interpreterCount}명` : '', snap.interpretPlace])}</span>
+        {/* 인원수는 개별 수행정보(통역사 1명 단위)에 표시하지 않음 — 스냅샷 데이터는 보존, 표시만 제외. */}
+        <span style={ref}>{joinRef([snap.operationHours, snap.interpretDuration, snap.interpretPlace])}</span>
       </div>
     );
   }

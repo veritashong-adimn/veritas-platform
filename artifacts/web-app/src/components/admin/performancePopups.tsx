@@ -12,6 +12,7 @@ import {
   EXPENSE_TYPE_SELECT_OPTS, CUSTOM_EXPENSE_VALUE, PREDEFINED_EXPENSE_VALUES,
   DEDUCTION_TYPE_OPTS, DEDUCTION_TYPE_SELECT_OPTS, CUSTOM_DEDUCTION_VALUE, PREDEFINED_DEDUCTION_VALUES, EVIDENCE_OPTS, RESIDENCY_OPTS,
   calcVendorPreview, calcIndivPreview, calcRowCostPreview,
+  defaultPayoutRate,
 } from './performanceShared';
 
 const inp: React.CSSProperties = { ...dsInputStd(), minHeight: 32, padding: '4px 8px', width: '100%' };
@@ -95,6 +96,55 @@ export function Modal({ title, onClose, width = 460, children, footer, draggable
   );
 }
 
+// ── 비용항목 지급률 팝업(§비용지급률·§9) — 기준금액 × 지급률(%) = 실제 지급액. 셀 클릭 시 오픈. ──
+//   실제 지급액(actual)만 amount로 저장되고(정산 기준), 기준금액·지급률은 함께 저장돼 재조회 시 복원된다.
+export function RatePopup({ label, expenseType, base, rate, fixed100, onConfirm, onClose }: {
+  label: string; expenseType: string; base: number | null; rate: number | null; fixed100?: boolean;
+  onConfirm: (base: string, rate: number) => void; onClose: () => void;
+}) {
+  const [b, setB] = React.useState<string>(base == null ? '' : String(base));
+  // 실비성(교통비·숙박비·식비)은 100% 고정 — 지급률 편집 불가(§5). 그 외는 저장값/기본율에서 시작.
+  const [r, setR] = React.useState<string>(fixed100 ? '100' : String(rate ?? defaultPayoutRate(expenseType)));
+  const actual = Math.round((Number(b) || 0) * (fixed100 ? 100 : (Number(r) || 0)) / 100);
+  const rateBtn = (v: number) => (
+    <button key={v} type="button" onClick={() => setR(String(v))}
+      style={{ fontSize: 11, padding: '3px 9px', border: `1px solid ${C.g300}`, borderRadius: 6, cursor: 'pointer',
+        background: String(v) === r ? C.primaryBg : C.bgCard, color: String(v) === r ? C.primaryText : C.textSecondary }}>{v}%</button>
+  );
+  return (
+    <Modal title={`${label} · 지급률`} onClose={onClose} width={340}
+      footer={<>
+        <GhostBtn onClick={onClose} style={{ fontSize: 12, padding: '6px 14px' }} aria-label="취소">취소</GhostBtn>
+        <PrimaryBtn onClick={() => { onConfirm(b, Number(r) || 0); onClose(); }} style={{ fontSize: 12, padding: '6px 14px' }} data-testid="rate-confirm" aria-label="확인">확인</PrimaryBtn>
+      </>}>
+      <div style={{ display: 'grid', gap: SP[3] }}>
+        <div>
+          <span style={lbl}>기준금액</span>
+          <input style={{ ...inp, textAlign: 'right' }} inputMode="numeric" value={b}
+            onChange={e => setB(e.target.value.replace(/[^\d.]/g, ''))} data-testid="rate-base" aria-label="기준금액" placeholder="0" />
+        </div>
+        {/* 지급률 편집 — 실비성(교통비·숙박비·식비)은 100% 고정이라 UI 미표시(§5). 그 외만 편집 가능. */}
+        {fixed100
+          ? <div style={{ ...TYPO.helper, color: C.textMuted }}>실비성 비용 — 100% 전액 지급(지급률 고정)</div>
+          : (
+            <div>
+              <span style={lbl}>지급률(%)</span>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input style={{ ...inp, textAlign: 'right', width: 80 }} inputMode="numeric" value={r}
+                  onChange={e => setR(e.target.value.replace(/[^\d.]/g, ''))} data-testid="rate-pct" aria-label="지급률" />
+                {rateBtn(85)}{rateBtn(100)}
+              </div>
+            </div>
+          )}
+        <div style={{ borderTop: BD.grid, paddingTop: SP[2], display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <span style={{ ...lbl, marginBottom: 0 }}>실제 지급액</span>
+          <span style={{ fontWeight: 800, fontSize: 15, color: C.primaryText }} data-testid="rate-actual">{won(actual)}원</span>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // 삭제 버튼 — 텍스트 대신 X 아이콘만(폭 최소화). 높이는 유지, justifySelf로 그리드 셀 늘어남 방지. aria-label은 유지(접근성).
 const smallDelBtn = (on: () => void, label: string, testid: string) => (
   <button type="button" onClick={on} aria-label={label} data-testid={testid}
@@ -108,9 +158,16 @@ const addBtn = (on: () => void, label: string, testid: string) => (
 // ── 추가비용 항목 선택 (공용) — 목록 선택 + '직접입력' 자유 항목명 입력 ──────────
 //  · value 가 사전 정의값이 아니면(빈값 제외) 직접입력으로 간주해 텍스트 입력창 표시(저장된 사용자 항목명 그대로 노출).
 //  · 목록에서 '직접입력' 선택 시 텍스트 입력창으로 전환, ▾ 버튼으로 목록 선택으로 복귀. 저장·계산 로직은 변경 없음.
-function ExpenseTypeField({ value, onChange, triggerStyle, testid }: { value: string; onChange: (v: string) => void; triggerStyle: React.CSSProperties; testid: string }) {
+function ExpenseTypeField({ value, onChange, triggerStyle, testid, hideTypes }: { value: string; onChange: (v: string) => void; triggerStyle: React.CSSProperties; testid: string; hideTypes?: string[] }) {
   const derivedCustom = !!value && !PREDEFINED_EXPENSE_VALUES.has(value);
   const [manualCustom, setManualCustom] = React.useState(false);
+  // 신규 선택에서 숨길 항목(전용 컬럼으로 관리되는 교통비·출장비·추가통역료) 제외한 선택지.
+  //   기존 데이터 보호(§5): 현재값이 숨김대상이어도 그 항목은 유지해 정상 표시·재선택 가능. '직접입력' 센티넬은 항상 유지.
+  const options = React.useMemo(() => {
+    if (!hideTypes || hideTypes.length === 0) return EXPENSE_TYPE_SELECT_OPTS;
+    const hide = new Set(hideTypes);
+    return EXPENSE_TYPE_SELECT_OPTS.filter(o => o.value === CUSTOM_EXPENSE_VALUE || o.value === value || !hide.has(o.value));
+  }, [hideTypes, value]);
   // 값이 사전 정의값으로 바뀌면(예: 행 삭제로 인한 재사용) 수동 직접입력 플래그 해제
   React.useEffect(() => { if (value && PREDEFINED_EXPENSE_VALUES.has(value)) setManualCustom(false); }, [value]);
   const custom = derivedCustom || manualCustom;
@@ -127,7 +184,7 @@ function ExpenseTypeField({ value, onChange, triggerStyle, testid }: { value: st
     );
   }
   return (
-    <ClickSelect value={value} triggerStyle={triggerStyle} options={EXPENSE_TYPE_SELECT_OPTS}
+    <ClickSelect value={value} triggerStyle={triggerStyle} options={options}
       onChange={(v: string) => { if (v === CUSTOM_EXPENSE_VALUE) { setManualCustom(true); onChange(''); } else onChange(v); }} />
   );
 }
@@ -218,18 +275,24 @@ export function SubItemsPopup({ r, patch, onClose, focus }: { r: Row; patch: (p:
 //  · 추가항목은 expenses[](지급대상 포함)로, 차감항목은 deductions[]로 저장 — 기존 DB·원가계산 그대로.
 //  · 로컬 초안을 두고 [확인]에서만 커밋, [취소]는 폐기. 제목 영역 드래그로 이동 가능(표 가림 방지).
 //  · 표시 규칙: 저장된 항목 중 금액 0원은 노출하지 않음(§0원 숨김) — 신규 입력 행은 그대로 편집 가능.
-export function AdjustmentPopup({ r, patch, onClose }: { r: Row; patch: (p: Partial<Row>) => void; onClose: () => void }) {
-  const [adds, setAdds] = React.useState<ExpenseRow[]>(() => (r.expenses ?? []).filter(e => Math.round(num(e.amount)) !== 0).map(e => ({ ...e })));
+export function AdjustmentPopup({ r, patch, onClose, excludeTypes, addDefaultType, title, hideSelectTypes }: { r: Row; patch: (p: Partial<Row>) => void; onClose: () => void; excludeTypes?: string[]; addDefaultType?: string; title?: string; hideSelectTypes?: string[] }) {
+  // excludeTypes: 별도 컬럼(추가통역료·출장비·교통비)으로 관리되는 expenseType은 이 팝업에서 편집하지 않고 보존한다.
+  const exSet = React.useMemo(() => new Set(excludeTypes ?? []), [excludeTypes]);
+  const [adds, setAdds] = React.useState<ExpenseRow[]>(() => (r.expenses ?? []).filter(e => !exSet.has(e.expenseType) && Math.round(num(e.amount)) !== 0).map(e => ({ ...e })));
   const [subs, setSubs] = React.useState<DeductionRow[]>(() => (r.deductions ?? []).filter(d => Math.round(num(d.amount)) !== 0).map(d => ({ ...d })));
   const addSum = Math.round(adds.reduce((s, e) => s + num(e.amount), 0));
   const subSum = Math.round(subs.reduce((s, d) => s + num(d.amount), 0));
   const net = addSum - subSum;
   const patchAdd = (i: number, p: Partial<ExpenseRow>) => setAdds(prev => prev.map((e, idx) => idx === i ? { ...e, ...p } : e));
   const patchSub = (i: number, p: Partial<DeductionRow>) => setSubs(prev => prev.map((d, idx) => idx === i ? { ...d, ...p } : d));
-  // 추가항목은 항상 지급대상 포함(원가 반영). 기존 부가필드(발생일·비고·증빙)는 보존.
-  const confirm = () => { patch({ expenses: adds.map(e => ({ ...e, includedInPayout: true })), deductions: subs }); onClose(); };
+  // 추가항목은 항상 지급대상 포함(원가 반영). 기존 부가필드(발생일·비고·증빙)는 보존. 전용 컬럼 항목(excludeTypes)은 그대로 유지.
+  const confirm = () => {
+    const preserved = (r.expenses ?? []).filter(e => exSet.has(e.expenseType));
+    patch({ expenses: [...preserved, ...adds.map(e => ({ ...e, includedInPayout: true }))], deductions: subs });
+    onClose();
+  };
   return (
-    <Modal title="추가비용" onClose={onClose} width={560} draggable
+    <Modal title={title ?? '추가비용'} onClose={onClose} width={560} draggable
       footer={<>
         <GhostBtn onClick={onClose} style={{ fontSize: 12, padding: '6px 14px' }} aria-label="취소">취소</GhostBtn>
         <PrimaryBtn onClick={confirm} style={{ fontSize: 12, padding: '6px 14px' }} data-testid="adj-confirm" aria-label="확인">확인</PrimaryBtn>
@@ -239,12 +302,12 @@ export function AdjustmentPopup({ r, patch, onClose }: { r: Row; patch: (p: Part
         <div style={subTitle}>추가항목 <span style={TYPO.helper}>(+)</span></div>
         {adds.map((e, idx) => (
           <div key={idx} style={{ display: 'grid', gridTemplateColumns: '160px 140px auto', gap: SP[2], alignItems: 'center' }}>
-            <ExpenseTypeField value={e.expenseType} onChange={(v: string) => patchAdd(idx, { expenseType: v })} triggerStyle={inp} testid={`adj-add-type-${idx}`} />
+            <ExpenseTypeField value={e.expenseType} onChange={(v: string) => patchAdd(idx, { expenseType: v })} triggerStyle={inp} testid={`adj-add-type-${idx}`} hideTypes={hideSelectTypes} />
             {moneyInp(e.amount, v => patchAdd(idx, { amount: v }), `adj-add-amt-${idx}`, '추가항목 금액')}
             {smallDelBtn(() => setAdds(adds.filter((_, i) => i !== idx)), '추가항목 삭제', `adj-add-del-${idx}`)}
           </div>
         ))}
-        {addBtn(() => setAdds([...adds, { expenseType: '교통비', amount: '', includedInPayout: true }]), '+ 추가항목', 'adj-add')}
+        {addBtn(() => setAdds([...adds, { expenseType: addDefaultType ?? '교통비', amount: '', includedInPayout: true }]), '+ 추가항목', 'adj-add')}
       </div>
       <div style={{ borderTop: BD.grid, margin: `${SP[2]}px 0` }} />
       {/* 차감항목(-) */}

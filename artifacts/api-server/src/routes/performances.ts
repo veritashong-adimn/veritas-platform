@@ -10,11 +10,12 @@ import { Router, type IRouter } from "express";
 import {
   db, performanceAssignmentsTable, performanceExpensesTable, performanceDeductionsTable,
   quotesTable, quoteItemsTable, quoteItemFilesTable, productsTable, holidaysTable, projectsTable,
-  translatorSensitiveTable, translatorProfilesTable, usersTable, companiesTable,
+  translatorSensitiveTable, translatorProfilesTable, translatorRatesTable, usersTable, companiesTable,
   calcIndividualPayout, calcVendorPurchase, DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT,
   calcBasePerformanceFee, calcCostTotal, calcPaymentDate,
 } from "@workspace/db";
-import { eq, and, isNull, inArray } from "drizzle-orm";
+import { LANGUAGE_CODES } from "./products";
+import { eq, and, isNull, inArray, ne, desc, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
@@ -277,7 +278,9 @@ const dateStr = z.string().min(1).nullable().optional();
 const expenseSchema = z.object({
   id: z.number().int().positive().optional(),
   expenseType: z.string().min(1),
-  amount: money.default(0),
+  amount: money.default(0),                                 // 실제 지급액(지급률 적용 후)
+  baseAmount: money.nullable().optional(),                  // 기준금액(§비용지급률). null=amount와 동일 취급
+  payoutRate: z.coerce.number().min(0).max(100).nullable().optional(),  // 지급률(%) 0~100. null=100% 취급
   incurredDate: dateStr,
   includedInPayout: z.boolean().optional(),
   evidenceUrl: z.string().nullable().optional(),
@@ -582,12 +585,13 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
         return;
       }
 
-      maxSeq += 1;
       const detailSnap = buildDetailSnapshot(it, prod, fileName);
-      // §5: 판매 공급단가(it.unitPrice)를 계약단가 초기값으로 복사(사용자가 이후 자유 수정). 판매금액은 불변.
-      //   번역은 제외 — 번역 계약단가는 단어/글자 기준이라 페이지 기준 공급단가와 단위가 달라 초기복사 시 오계산.
-      const seedUnitPrice = !isTranslationSnap(detailSnap, it.itemType) && it.unitPrice != null
-        ? String(it.unitPrice) : null;
+      const baseFields = initialFieldsFromSale(it);
+      // 판매정보 1행 → 수행정보 1행(§1). 번역의 단어수/글자수는 서비스별 상세정보(스냅샷)로 보존하며, 수행행을 분리하지 않는다.
+      //   번역은 수량/단위를 판매정보에서 자동입력하지 않고 공란(§4·§5·§8) — 사용자가 실제 지급기준으로 직접 입력한다.
+      const isTrans = isTranslationSnap(detailSnap, it.itemType);
+      maxSeq += 1;
+      // 계약단가·요금(100%) 등 지급금액은 판매정보에서 자동복사하지 않는다(§8) — 신규 수행행은 공란(NULL)으로 시작.
       toInsert.push({
         projectId, quoteId: quote.id, saleItemId: it.id, saleItemSequence: idx, sequence: maxSeq,
         sourceType: "sale_import", costType: cls.costType,   // 생성 출처·비용 유형(원가분석용)
@@ -595,16 +599,15 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
         payeeType: payeeTypeOf(cls.category), status: "unassigned",
         serviceType: it.itemType ?? null,
         productNameSnapshot: it.productName ?? null,
-        // 서비스 유형별 상세 스냅샷(금액 제외, 판매 참조값 포함 §3·§6·§8·§10)
+        // 서비스 유형별 상세 스냅샷(금액 제외, 판매 참조값·단어수/글자수 포함 §2·§3·§6·§10)
         serviceDetailSnapshot: detailSnap,
         languageOrServiceSnapshot: it.languagePair ?? null,
-        // 초기 기간·수량·단위·납품일(§10·§12)
-        ...initialFieldsFromSale(it),
-        // §5 계약단가 초기값 = 판매 공급단가(번역 제외). 이후 수행정보에서 자유 수정.
-        ...(seedUnitPrice != null ? { contractUnitPrice: seedUnitPrice } : {}),
+        // 초기 기간·수량·단위·납품일(§10·§12) — 비금액 정보만. 단, 번역 수량/단위는 공란(자동입력 금지 §4·§5·§8).
+        ...baseFields,
+        ...(isTrans ? { quantity: null, unit: null } : {}),
         // 지급일 자동계산(납품일 기준·직전 영업일 §10)
-        expectedPaymentDate: calcPaymentDate(initialFieldsFromSale(it).deliveryDate, importIsHoliday),
-        expectedPaymentDateAuto: calcPaymentDate(initialFieldsFromSale(it).deliveryDate, importIsHoliday),
+        expectedPaymentDate: calcPaymentDate(baseFields.deliveryDate, importIsHoliday),
+        expectedPaymentDateAuto: calcPaymentDate(baseFields.deliveryDate, importIsHoliday),
         createdBy: req.user?.id ?? null,
         updatedBy: req.user?.id ?? null,
       });
@@ -621,6 +624,9 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
       const prod = c.it.productId != null ? prodMap.get(c.it.productId) : undefined;
       const fileName = fileByItem.get(c.it.id) ?? null;
       const init = initialFieldsFromSale(c.it);
+      // 번역 교정: 단어/글자 행이 페이지로 붕괴되지 않도록 기존 수량/단위를 보존한다(§단어글자원본반영·§8).
+      const correctSnap = buildDetailSnapshot(c.it, prod, fileName);
+      const isTransCorrect = isTranslationSnap(correctSnap, c.it.itemType);
       // §15: 이미 납품일이 입력됐거나 수동/확인완료 행은 납품일·확인상태를 덮어쓰지 않는다.
       const keepDelivery = c.prior.deliveryConfirmed || c.prior.deliveryDateManual || c.prior.deliveryDate != null;
       const {
@@ -639,8 +645,10 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
         serviceType: c.it.itemType ?? null,
         productNameSnapshot: c.it.productName ?? null,
         languageOrServiceSnapshot: c.it.languagePair ?? null,
-        serviceDetailSnapshot: buildDetailSnapshot(c.it, prod, fileName),
+        serviceDetailSnapshot: correctSnap,
         ...initRest,                            // 기간·수량·단위는 재동기화
+        // 번역은 수량/단위를 재동기화하지 않고 기존값 보존(단어/글자 행 유지). 비번역은 위 initRest 그대로.
+        ...(isTransCorrect ? { quantity: c.prior.quantity, unit: c.prior.unit } : {}),
         // 납품일·확인상태: 미입력 행만 자동 채움(§15). 확인/수동 행은 보존.
         ...(keepDelivery ? {} : { deliveryDate, deliveryDateAuto }),
         // 지급일은 "최종 납품일"(유지값 or 신규값) 기준으로 즉시 재계산(§10) — 파생값이므로 항상 갱신.
@@ -812,7 +820,9 @@ router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) =
               values.residenceCountrySnapshot = snap.residenceCountrySnapshot;
               if (r.residencyType == null) values.residencyType = snap.residencyType as any;
               if (r.withholdingTreatment == null) values.withholdingTreatment = snap.withholdingTreatment as any;
-              if (r.contractUnitPrice == null && snap.baseRate != null) {
+              // 계약단가 초기값 = 프로필 기본단가(방향·단위 무관 단일값). 단, 번역행은 제외(§14):
+              //   번역은 방향·단위별 등록단가(translator_rates) 자동매칭만 사용하며, 미매칭 시 임의 기본단가를 넣지 않고 공란 유지.
+              if (r.contractUnitPrice == null && snap.baseRate != null && !isTranslationSnap(r.serviceDetailSnapshot, r.serviceType)) {
                 values.contractUnitPrice = String(snap.baseRate);
                 if (r.quantity == null) values.quantity = "1";
               }
@@ -855,6 +865,9 @@ router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) =
           if (r.expenses.length) {
             await tx.insert(performanceExpensesTable).values(r.expenses.map(e => ({
               assignmentId, expenseType: e.expenseType, amount: String(e.amount ?? 0),
+              // 지급률 구조(§비용지급률) — 기준금액·지급률을 함께 저장(있을 때만). amount는 실제 지급액이라 정산은 불변.
+              baseAmount: e.baseAmount != null ? String(e.baseAmount) : null,
+              payoutRate: e.payoutRate != null ? String(e.payoutRate) : null,
               incurredDate: e.incurredDate ?? null, includedInPayout: e.includedInPayout ?? true,
               evidenceUrl: e.evidenceUrl ?? null, evidenceFileName: e.evidenceFileName ?? null,
               memo: e.memo ?? null, createdBy: userId,
@@ -882,14 +895,23 @@ router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) =
         let base: number;
         if (category === "vendor") base = Number(computed.supplyAmount) || 0;            // 외주 공급가액
         else if (category === "expense") base = calcBasePerformanceFee(true, r.directAmount ?? 0, null, null);
-        else if (r.isDirectAmount) base = calcBasePerformanceFee(true, r.directAmount ?? 0, null, null);
+        else if (r.isDirectAmount) {
+          // 직접금액(base) — 통역 통역료(85%)=directAmount 는 ×0.85(§통역료85), 번역 요금(100%)은 그대로.
+          //   프론트 calcRowCostPreview(INTERP_FEE_RATE)와 동일 규칙 — 저장/재조회/정산 일관(§10).
+          const directBase = Number(r.directAmount ?? 0) * (isInterpretationSnap(snapForCost, r.serviceType) ? 0.85 : 1);
+          base = calcBasePerformanceFee(true, directBase, null, null);
+        }
         else if (isTranslationSnap(snapForCost, r.serviceType)) {
-          // 번역 원가 = 계약단가 × 작업량(단어/글자). 페이지수(quantity) 미사용(§작업량통일).
-          //   작업량이 없으면 페이지로 자동계산하지 않고 기존 기본수행료 유지(계산 불가 → 임의 재계산 금지).
-          const work = translationWorkAmount(snapForCost);
-          base = (r.contractUnitPrice != null && work != null)
-            ? calcBasePerformanceFee(false, null, r.contractUnitPrice, work)
-            : Number(computed.baseFee) || 0;
+          // 번역 지급액 = 수량 × 단가 — 단위 종류(단어/글자/페이지/회/분/시간/일)와 무관(§단위확장). 프론트 calcRowCostPreview와 동일 기준.
+          //   §14 호환: 기존 저장행은 계약단가(contractUnitPrice)가 없어 이 분기를 타지 않고 작업량/기본수행료를 그대로 유지 → 값 불변.
+          if (r.contractUnitPrice != null && r.quantity != null) {
+            base = calcBasePerformanceFee(false, null, r.contractUnitPrice, r.quantity);
+          } else {
+            const work = translationWorkAmount(snapForCost);
+            base = (r.contractUnitPrice != null && work != null)
+              ? calcBasePerformanceFee(false, null, r.contractUnitPrice, work)
+              : Number(computed.baseFee) || 0;
+          }
         }
         else if (isInterpretationSnap(snapForCost, r.serviceType)) {
           // 통역 원가 = 계약단가(1인·1일) × 수행일수(quantity) × 인원(interpreterCount, 없으면 1)(§계약단가통일).
@@ -907,6 +929,9 @@ router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) =
           ded.map(d => ({ amount: Number(d.amount) })),
         );
         await tx.update(performanceAssignmentsTable).set({
+          // directAmount(기준금액 입력값)를 basePerformanceFee(확정 base)와 분리 저장(§통역료85) — 재조회 시 입력값 복원.
+          //   통역료(85%)는 directAmount×0.85 = basePerformanceFee 이므로 두 값이 다르다. 그 외(번역 요금100·경비)는 동일.
+          directAmount: r.directAmount != null ? String(r.directAmount) : null,
           basePerformanceFee: String(totals.basePerformanceFee),
           expenseTotal: String(totals.expenseTotal),
           deductionTotal: String(totals.deductionTotal),
@@ -1036,6 +1061,185 @@ router.get("/admin/performances/resolve-individual", ...adminGuard, async (req, 
   }
 });
 
+// ── 통번역사 최근 수행이력(읽기전용) — 상세 미리보기용. 기존 performance_assignments 를 individualUserId 로 조회. ──
+//   새 테이블/컬럼 없이 최근 2~3건(상품·업무명 · 수행월 · 상태)만 반환한다. 민감정보(주민번호·계좌·주소 등)는 포함하지 않는다.
+router.get("/admin/performances/recent-by-translator", ...adminGuard, async (req, res) => {
+  const translatorId = Number(req.query.translatorId);
+  if (!Number.isInteger(translatorId) || translatorId <= 0) { res.status(400).json({ error: "translatorId 가 필요합니다." }); return; }
+  try {
+    const rows = await db
+      .select({
+        title: performanceAssignmentsTable.productNameSnapshot,
+        serviceType: performanceAssignmentsTable.serviceType,
+        deliveryDate: performanceAssignmentsTable.deliveryDate,
+        endDate: performanceAssignmentsTable.performanceEndDate,
+        startDate: performanceAssignmentsTable.performanceStartDate,
+        status: performanceAssignmentsTable.status,
+        projectTitle: projectsTable.title,
+      })
+      .from(performanceAssignmentsTable)
+      .leftJoin(projectsTable, eq(projectsTable.id, performanceAssignmentsTable.projectId))
+      .where(and(
+        eq(performanceAssignmentsTable.individualUserId, translatorId),
+        isNull(performanceAssignmentsTable.deletedAt),
+        ne(performanceAssignmentsTable.status, "cancelled"),
+      ))
+      // 최근순 — 납품일 우선, 없으면 수행종료/시작, 최후 생성일. NULL 은 뒤로.
+      .orderBy(desc(sql`COALESCE(${performanceAssignmentsTable.deliveryDate}, ${performanceAssignmentsTable.performanceEndDate}, ${performanceAssignmentsTable.performanceStartDate}, ${performanceAssignmentsTable.createdAt})`))
+      .limit(3);
+    const out = rows.map(r => {
+      const d = (r.deliveryDate || r.endDate || r.startDate) as string | null;
+      return { title: r.title || r.projectTitle || r.serviceType || "수행건", month: d ? String(d).slice(0, 7) : null, status: r.status };
+    });
+    res.json({ ok: true, rows: out });
+  } catch (err) {
+    req.log.error({ err }, "통번역사 최근 수행이력 조회 실패");
+    res.status(500).json({ error: "최근 수행이력을 불러오지 못했습니다." });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 번역 단가 자동매칭(읽기전용) — 수행정보에서 번역사 선택 시, 선택된 번역사의 등록 단가(translator_rates)와
+//   판매정보의 작업량(단어수/글자수/페이지수)을 조합해 수량·단위·단가를 자동 도출한다. DB 미변경(§21).
+//
+//   원칙(지시문 §5~§16):
+//   · 방향은 구조화 값 우선 — 판매는 product.source/targetLanguage(코드), 단가는 language/languagePair(라벨).
+//     양쪽을 언어코드로 정규화해 비교(라벨 표기차 무관). 화면 문자열 재파싱 안 함(§7·§19).
+//   · 단위는 번역사 단가의 기준단위(word/char/page)에 맞는 판매 작업량 하나만 선택(§8). 단어↔글자 환산 금지(§13).
+//   · 일치 단가 없음/모호(복수) → 자동입력 안 함(공란 유지). 판매단가·타방향·타번역사·비활성 단가 fallback 금지(§14·§15).
+//   · 이름이 아닌 번역사 고유 ID + 판매 서비스와 동일한 serviceType + isActive 단가만 사용(§6).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 언어 라벨/코드 → 표준 언어코드(소문자). 매칭은 코드 기준으로만 수행(products·web-app 라벨 표기차 흡수).
+const LANG_LABEL_TO_CODE: Record<string, string> = (() => {
+  const m: Record<string, string> = {};
+  for (const { code, label } of LANGUAGE_CODES) { m[label] = code; m[code] = code; }
+  // web-app LANGUAGE_CODES 와 products LANGUAGE_CODES 의 라벨 표기가 다른 언어 별칭 보강(코드 통일).
+  Object.assign(m, {
+    "터키어": "tr", "튀르키예어": "tr", "힌디어": "hi", "인도어": "hi",
+    "캄보디아어": "km", "크메르어": "km", "라오어": "lo", "라오스어": "lo",
+    "벵골어": "bn", "방글라데시어": "bn", "우즈베크어": "uz", "우즈베키스탄어": "uz",
+    "타밀어": "ta", "스리랑카어": "si",
+  });
+  return m;
+})();
+function toLangCode(v: string | null | undefined): string | null {
+  if (!v) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  return LANG_LABEL_TO_CODE[s.toLowerCase()] ?? LANG_LABEL_TO_CODE[s] ?? null;
+}
+
+// 방향 문자열 화살표(양방향 포함).
+const DIR_ARROW = /→|↔|⟷|<->|->/;
+// 번역사 단가 1건 → (출발코드, 도착코드, 양방향여부). 여러 저장형식 대응:
+//   · 실사용 UI(TranslatorDetailModal): language=출발라벨, languagePair=도착라벨(화살표 없음).
+//   · 구(seed) 형식: languagePair="EN→KO"/"EN↔KO"(코드·라벨 + 화살표, language 없음).
+function resolveRateDirection(rate: { language: string | null; languagePair: string | null }): { src: string; tgt: string; bidir: boolean } | null {
+  const lp = (rate.languagePair ?? "").trim();
+  if (lp && DIR_ARROW.test(lp)) {
+    const bidir = /↔|⟷|<->/.test(lp);
+    const parts = lp.split(DIR_ARROW).map(x => x.trim()).filter(Boolean);
+    if (parts.length === 2) {
+      const src = toLangCode(parts[0]); const tgt = toLangCode(parts[1]);
+      if (src && tgt) return { src, tgt, bidir };
+    }
+    return null;
+  }
+  // 실사용 형식: language(출발) + languagePair(도착).
+  const src = toLangCode(rate.language); const tgt = toLangCode(lp || null);
+  return src && tgt ? { src, tgt, bidir: false } : null;
+}
+function directionMatches(sale: { src: string; tgt: string }, rate: { src: string; tgt: string; bidir: boolean }): boolean {
+  if (rate.src === sale.src && rate.tgt === sale.tgt) return true;
+  return rate.bidir && rate.src === sale.tgt && rate.tgt === sale.src;
+}
+
+// 단가 기준단위(canonical english) → { 판매작업량 키, 수행정보 표시 한글단위 }. 측정 가능한 3종만.
+const RATE_UNIT_MAP: Record<string, { amountKey: "wordCount" | "charCount" | "pageCount"; label: string }> = {
+  word: { amountKey: "wordCount", label: "단어" },
+  char: { amountKey: "charCount", label: "글자" },
+  page: { amountKey: "pageCount", label: "페이지" },
+};
+
+// 판매 항목이 번역 계열인지 판별 + 단가 serviceType 매칭용 세부 서비스타입 도출(없으면 null).
+function saleTranslationServiceType(it: typeof quoteItemsTable.$inferSelect, prod: any): string | null {
+  const snap = { itemType: it.itemType, canonicalKey: prod?.canonicalKey, productType: prod?.productType };
+  if (!isTranslationSnap(snap, it.itemType)) return null;
+  const t = `${it.itemType ?? ""} ${prod?.canonicalKey ?? ""} ${prod?.productType ?? ""}`.toLowerCase();
+  if (/감수|proofread|교정|윤문/.test(t)) return "감수";
+  if (/dtp/.test(t)) return "DTP";
+  if (/media|영상|미디어|자막|subtitle|더빙/.test(t)) return "미디어";
+  if (/편집|리라이팅|rewrit/.test(t)) return "편집";
+  return "번역";
+}
+
+router.get("/admin/performances/resolve-translation-rate", ...adminGuard, async (req, res) => {
+  const translatorId = Number(req.query.translatorId);
+  const saleItemId = Number(req.query.saleItemId);
+  if (!Number.isInteger(translatorId) || translatorId <= 0) { res.status(400).json({ error: "translatorId 가 필요합니다." }); return; }
+  // 판매항목이 없는(수동 추가) 행은 판매 작업량·방향이 없으므로 자동매칭 대상 아님 — 조용히 미매칭.
+  if (!Number.isInteger(saleItemId) || saleItemId <= 0) { res.json({ ok: true, matched: false, reason: "no_sale_item" }); return; }
+  try {
+    const [it] = await db.select().from(quoteItemsTable).where(eq(quoteItemsTable.id, saleItemId));
+    if (!it) { res.json({ ok: true, matched: false, reason: "sale_item_not_found" }); return; }
+    const prod = it.productId != null ? (await db.select().from(productsTable).where(eq(productsTable.id, it.productId)))[0] : undefined;
+
+    // 1) 판매 서비스가 번역 계열인지 + 세부 서비스타입(단가 serviceType 매칭용).
+    const saleSvc = saleTranslationServiceType(it, prod);
+    if (!saleSvc) { res.json({ ok: true, matched: false, reason: "not_translation" }); return; }
+
+    // 2) 판매 방향(구조화 코드 우선, §7) — product.source/targetLanguage. 출발은 quote_item.languagePair(출발코드)로 보완.
+    const saleSrc = toLangCode(prod?.sourceLanguage) ?? toLangCode(it.languagePair);
+    const saleTgt = toLangCode(prod?.targetLanguage);
+    if (!saleSrc || !saleTgt) { res.json({ ok: true, matched: false, reason: "direction_unresolved" }); return; }
+
+    // 3) 판매 작업량(단어/글자/페이지) — 기존 스냅샷 빌더 재사용(문자열 재파싱 아님, §19).
+    const snap = buildDetailSnapshot(it, prod, null);
+    const saleAmount = {
+      wordCount: Number(snap.wordCount) || 0,
+      charCount: Number(snap.charCount) || 0,
+      pageCount: Number(snap.pageCount) || 0,
+    };
+
+    // 4) 번역사 활성 단가 조회 — 번역사 고유 ID + 동일 serviceType + isActive(§6·§14).
+    const rates = await db.select().from(translatorRatesTable).where(and(
+      eq(translatorRatesTable.translatorId, translatorId),
+      eq(translatorRatesTable.serviceType, saleSvc),
+      eq(translatorRatesTable.isActive, true),
+    ));
+
+    // 5) 방향 일치 + 단위에 대응하는 판매 작업량(>0) 존재 + 통화 KRW(또는 무통화) + 단가>0 후보만.
+    type Cand = { rate: number; label: string; qty: number; isDefault: boolean };
+    const cands: Cand[] = [];
+    for (const r of rates) {
+      const dir = resolveRateDirection({ language: r.language, languagePair: r.languagePair });
+      if (!dir || !directionMatches({ src: saleSrc, tgt: saleTgt }, dir)) continue;
+      const u = RATE_UNIT_MAP[String(r.unit ?? "").trim().toLowerCase()];
+      if (!u) continue;                                  // 측정 불가 단위(item/day/시간 등) — 자동입력 대상 아님(§13).
+      const qty = saleAmount[u.amountKey];
+      if (!(qty > 0)) continue;                          // 해당 단위의 판매 작업량 없음 → 임의 환산 금지(§13).
+      const cur = String(r.currency ?? "KRW").trim().toUpperCase();
+      if (cur && cur !== "KRW") continue;                // 원화 외 통화는 자동입력 제외(§16: 지급액=수량×단가=KRW).
+      if (!(Number(r.rate) > 0)) continue;
+      cands.push({ rate: Number(r.rate), label: u.label, qty, isDefault: !!r.isDefault });
+    }
+
+    // 6) 선택(§15): isDefault 우선 → 정확히 1개만 확정. 0개 또는 복수모호 → 자동입력 안 함(임의선택 금지).
+    const defs = cands.filter(c => c.isDefault);
+    const pool = defs.length > 0 ? defs : cands;
+    if (pool.length !== 1) {
+      res.json({ ok: true, matched: false, reason: cands.length === 0 ? "no_matching_rate" : "ambiguous", candidateCount: cands.length });
+      return;
+    }
+    const win = pool[0];
+    res.json({ ok: true, matched: true, quantity: win.qty, unit: win.label, unitPrice: win.rate });
+  } catch (err) {
+    req.log.error({ err }, "번역 단가 자동매칭 실패");
+    res.status(500).json({ error: "번역 단가 자동매칭에 실패했습니다." });
+  }
+});
+
 // ── 개인 통번역사 선택(즉시 저장) — 하위호환용. 신규 UX는 로컬선택 + 배치저장을 사용. ─────────────────
 const selectIndividualSchema = z.object({ translatorId: z.number().int().positive() });
 
@@ -1050,8 +1254,8 @@ router.post("/admin/performances/:id/select-individual", ...adminGuard, async (r
     if (!row || row.deletedAt) { res.status(404).json({ error: "수행정보를 찾을 수 없습니다." }); return; }
     const snap = await deriveIndividualSnapshot(db, translatorId);
     if (!snap) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
-    // 계약단가 초기 반영(사용자 미입력 시에만) + 수량 기본 1
-    const applyRate = row.contractUnitPrice == null && snap.baseRate != null;
+    // 계약단가 초기 반영(사용자 미입력 시에만) + 수량 기본 1. 번역행은 제외(§14): 프로필 기본단가 자동복사 안 함.
+    const applyRate = row.contractUnitPrice == null && snap.baseRate != null && !isTranslationSnap(row.serviceDetailSnapshot, row.serviceType);
     const [updated] = await db.update(performanceAssignmentsTable).set({
       performerCategory: "individual", costType: "individual", payeeType: "individual",
       individualUserId: translatorId, vendorCompanyId: null,

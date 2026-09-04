@@ -1237,12 +1237,13 @@ function ServiceFields({ it, update, products }: {
 
 // ─── 견적 항목 Row ────────────────────────────────────────────────────────────
 
-function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, updateItem, removeItem, addItemBelow, moveItem }: {
+function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, updateItem, removeItem, addItemBelow, moveItem, duplicateItem }: {
   it: QuoteItemForm; idx: number; total: number; vatType: VatType; baseSupply: number; products: Product[];
   updateItem: (idx: number, p: Partial<QuoteItemForm>) => void;
   removeItem: (idx: number) => void;
   addItemBelow: (idx: number) => void;
   moveItem: (idx: number, dir: 'up' | 'down') => void;
+  duplicateItem: (idx: number) => void;
 }) {
   const [showWarning, setShowWarning] = useState(false);
   const supply = calcItem(it, vatType, baseSupply).supply;
@@ -1257,7 +1258,8 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, updateIte
         {/* ① 행 제어 */}
         <div>
           <RowControls idx={idx} total={total} onRemove={removeItem} onAddBelow={addItemBelow}
-            onMoveUp={i => moveItem(i, 'up')} onMoveDown={i => moveItem(i, 'down')} />
+            onMoveUp={i => moveItem(i, 'up')} onMoveDown={i => moveItem(i, 'down')}
+            onDuplicate={duplicateItem} duplicateTitle="행 복사" duplicateTestId={`quote-item-dup-${idx}`} />
         </div>
         {/* ② 유형 배지(할인) */}
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
@@ -1357,7 +1359,8 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, updateIte
         {/* ① 행 제어 */}
         <div>
           <RowControls idx={idx} total={total} onRemove={removeItem} onAddBelow={addItemBelow}
-            onMoveUp={i => moveItem(i, 'up')} onMoveDown={i => moveItem(i, 'down')} />
+            onMoveUp={i => moveItem(i, 'up')} onMoveDown={i => moveItem(i, 'down')}
+            onDuplicate={duplicateItem} duplicateTitle="행 복사" duplicateTestId={`quote-item-dup-${idx}`} />
         </div>
 
         {/* ② 유형 */}
@@ -1517,6 +1520,10 @@ export function QuoteItemsEditor({ items, onItemsChange, vatType, products }: {
     if (swap < 0 || swap >= next.length) return;
     [next[idx], next[swap]] = [next[swap], next[idx]]; onItemsChange(next);
   };
+  // 행 복사 — 원본 quote item 사용자 입력값을 그대로 복제해 바로 아래에 삽입한다(수행정보 복사와 동일 UX).
+  //   QuoteItemForm 은 평면 구조(PK·생성시각·첨부/판매/정산 연결값 없음)이므로 얕은 복사만으로 완전 독립 행이 되며,
+  //   저장 시 id 없는 신규 quote_item 으로 INSERT 된다(원본은 UPDATE 되지 않음). 금액은 새 행 기준으로 기존 로직이 재계산.
+  const duplicateItem = (idx: number) => onItemsChange([...items.slice(0, idx + 1), { ...items[idx] }, ...items.slice(idx + 1)]);
   const fieldHint = (() => { const t = [...new Set(items.map(it => it.productType))]; return t.length === 1 ? SVC_FIELD_HINTS[t[0]] : '서비스별 상세 입력 필드'; })();
   // 할인 항목(%)의 기준이 되는 비할인 상품 공급가액 합계 — 모든 행에 공통 전달
   const baseSupply = items.reduce((a, it) => it.productType === 'discount' ? a : a + calcItem(it, vatType).supply, 0);
@@ -1543,7 +1550,7 @@ export function QuoteItemsEditor({ items, onItemsChange, vatType, products }: {
         <div>
           {items.map((it, idx) => (
             <QuoteItemRow key={idx} it={it} idx={idx} total={items.length} vatType={vatType} baseSupply={baseSupply} products={products}
-              updateItem={updateItem} removeItem={removeItem} addItemBelow={addItemBelow} moveItem={moveItem} />
+              updateItem={updateItem} removeItem={removeItem} addItemBelow={addItemBelow} moveItem={moveItem} duplicateItem={duplicateItem} />
           ))}
         </div>
       </div>

@@ -162,6 +162,10 @@ export const performanceAssignmentsTable = pgTable("performance_assignments", {
   quantity: numeric("quantity", { precision: 12, scale: 2 }),
   unit: text("unit"),
   isDirectAmount: boolean("is_direct_amount").notNull().default(false),
+  // 직접입력 기준금액(§통역료85) — 요금(100%)/통역료(85%) 등 사용자가 입력한 '기준금액' 원본.
+  //   통역료(85%)는 이 값 × 0.85 = basePerformanceFee(확정 base). basePerformanceFee 와 분리 저장해 재조회 시 입력값 복원.
+  //   nullable: 기존 행은 null → directAmount 를 basePerformanceFee 로 fallback(무변경).
+  directAmount: numeric("direct_amount", { precision: 14, scale: 2 }),
   basePerformanceFee: numeric("base_performance_fee", { precision: 14, scale: 2 }).notNull().default("0"),
   expenseTotal: numeric("expense_total", { precision: 14, scale: 2 }).notNull().default("0"),
   deductionTotal: numeric("deduction_total", { precision: 14, scale: 2 }).notNull().default("0"),

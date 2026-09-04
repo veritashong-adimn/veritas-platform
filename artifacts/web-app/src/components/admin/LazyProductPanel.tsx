@@ -50,6 +50,8 @@ const LANG_SUBTYPES: Record<LangPairType, LangSubtypeEntry[]> = {
     { label: "상담회통역",  lazyService: "상담회통역",  mainCategory: "미팅통역" },
     { label: "다국어릴레이", lazyService: "다국어릴레이", mainCategory: "다국어릴레이" },
     { label: "기타통역",    lazyService: null,          mainCategory: "기타통역", isCustom: true },
+    // 기타비용 — 통역 수행에 직접 연결되는 부대비용 상품(언어쌍 없음). 상품명=비용 항목명 자유입력.
+    { label: "기타비용",    lazyService: null,          mainCategory: "기타비용", isCustom: true },
   ],
   "통번역": [
     { label: "일반통번역",  lazyService: "통번역",      mainCategory: "번역" },
@@ -233,6 +235,9 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
   const currentSubtypes = isLangPair ? LANG_SUBTYPES[quickType as LangPairType] : [];
   const currentSubtypeCfg = currentSubtypes.find(s => s.label === langSubtype);
 
+  // 기타비용: 통역 부대비용 상품(언어쌍 없음). 언어선택 UI를 숨기고 비용 항목명만 자유입력받는다.
+  const isCostItem = quickType === "통역" && langSubtype === "기타비용";
+
   // 다국어 릴레이: 출발언어 → 기준언어(Pivot) → 대상언어(복수) 3단 입력
   const isRelay = quickType === "통역" && langSubtype === "다국어릴레이";
 
@@ -300,6 +305,7 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
 
   // ── 미리보기 이름 ──────────────────────────────────────────────────────────
   const previewName = (() => {
+    if (isCostItem) return langSubtypeCustom.trim() || "비용 항목명";
     if (isNativeReview) {
       return isNativeSingle
         ? `${reviewLabel} 원어민감수`
@@ -361,6 +367,33 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
   const handleLangLookup = async () => {
     // 원어민감수 단일언어는 별도 흐름
     if (isNativeSingle) { await handleNativeSingleLookup(); return; }
+
+    // 기타비용: 언어쌍 없이 비용 항목명(자유입력)으로 조회·생성. productType=interpretation 유지.
+    //   중복판정은 이름 기준 — 이미 동일 비용명이 있으면 기존 상품을 보여주고, 없으면 신규 생성 후보로 제시.
+    if (isCostItem) {
+      const costName = langSubtypeCustom.trim();
+      if (!costName) { setToast("비용 항목명을 입력해주세요."); return; }
+      setLoading(true); resetResult();
+      try {
+        const params = new URLSearchParams({ productType, mainCategory: "기타비용" });
+        const res = await fetch(api(`/api/admin/products?${params}`), { headers: authHeaders });
+        if (!res.ok) { setToast("조회 실패"); return; }
+        const products = await res.json();
+        const match = products.find((p: any) => (p.name ?? "").toLowerCase() === costName.toLowerCase());
+        if (match) {
+          setResult({ found: true, product: match });
+        } else {
+          // 유형=통역(interpretation) / 세부분류=기타비용 / 이름=비용명(중복판정 키는 subCategory=비용명). 언어 없음.
+          setResult({ found: false, candidate: {
+            name: costName, productType,
+            mainCategory: "기타비용", subCategory: costName,
+            isLangPair: false, isLazy: false,
+          }});
+        }
+      } catch { setToast("네트워크 오류"); }
+      finally { setLoading(false); }
+      return;
+    }
 
     const resolvedSrc = resolveLang(srcLang, srcLangCustom);
     const resolvedTgt = resolveLang(tgtLang, tgtLangCustom);
@@ -603,15 +636,28 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
                   </button>
                 ))}
               </div>
-              {/* 기타* 직접입력 */}
+              {/* 기타* 직접입력 / 기타비용 항목명 입력 */}
               {currentSubtypeCfg?.isCustom && (
-                <input
-                  value={langSubtypeCustom}
-                  onChange={e => { setLangSubtypeCustom(e.target.value); resetResult(); }}
-                  placeholder={`예: IR${quickType}, VIP${quickType}`}
-                  style={{ ...inlineInput(""), marginTop: 6, width: 220 }}
-                  aria-label="하위유형 직접 입력"
-                />
+                isCostItem ? (
+                  <div style={{ marginTop: 6 }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", marginBottom: 4 }}>비용 항목명</div>
+                    <input
+                      value={langSubtypeCustom}
+                      onChange={e => { setLangSubtypeCustom(e.target.value); resetResult(); }}
+                      placeholder="예: 통역사 교통비, 통역사 출장비"
+                      style={{ ...inlineInput(""), width: 260 }}
+                      aria-label="비용 항목명"
+                    />
+                  </div>
+                ) : (
+                  <input
+                    value={langSubtypeCustom}
+                    onChange={e => { setLangSubtypeCustom(e.target.value); resetResult(); }}
+                    placeholder={`예: IR${quickType}, VIP${quickType}`}
+                    style={{ ...inlineInput(""), marginTop: 6, width: 220 }}
+                    aria-label="하위유형 직접 입력"
+                  />
+                )
               )}
             </div>
 
@@ -653,8 +699,8 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
               </div>
             )}
 
-            {/* 언어 선택 (출발→도착) — 단일언어 방식이 아닐 때만 */}
-            {!isNativeSingle && (
+            {/* 언어 선택 (출발→도착) — 단일언어 방식/기타비용이 아닐 때만 (기타비용은 언어쌍 없음) */}
+            {!isNativeSingle && !isCostItem && (
             <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af" }}>출발언어</div>

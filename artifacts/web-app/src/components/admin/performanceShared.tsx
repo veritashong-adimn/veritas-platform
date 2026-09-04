@@ -83,9 +83,76 @@ export const EXPENSE_TYPE_OPTS = [
   { value: '식비', label: '식비' },
   { value: '수가통역료', label: '추가통역료' },
   { value: '저작권료', label: '저작권료' },
-  { value: '이동일보상', label: '이동일보상' },
-  { value: '취소보상', label: '취소보상' },
+  { value: '이동일보상', label: '이동일 보상비' },
+  { value: '취소보상', label: '취소보상비' },
 ];
+// 통역 부대비용 전용 컬럼(추가통역료·출장비·교통비) — expenses[]의 특정 expenseType 행에 바인딩한다.
+//   원가 SSOT는 그대로 expenses[] → expenseTotal → costTotal(= 통역료85 + Σ부대비용). 별도 컬럼·공식 추가 없음.
+//   '추가통역료'는 데이터 호환을 위해 저장값 '수가통역료' 유지(라벨만 '추가통역료').
+export const INTERP_ADD_FEE_TYPE = '수가통역료';
+export const INTERP_BIZTRIP_TYPE = '출장비';
+export const INTERP_TRANSPORT_TYPE = '교통비';
+export const INTERP_DEDICATED_EXPENSE_TYPES = [INTERP_ADD_FEE_TYPE, INTERP_BIZTRIP_TYPE, INTERP_TRANSPORT_TYPE];
+// 기타비용(통역) 팝업 신규 추가 시 기본 항목 — 전용 3종을 제외한 나머지(저작권료 등).
+export const INTERP_ETC_DEFAULT_TYPE = '저작권료';
+// ── 동적 기타비용 컬럼(§기타비용동적) — 전용3종(추가통역료·출장비·교통비) 외 기타비용을 개별 테이블 컬럼으로 표시. ──
+//   저장구조 재사용: 각 컬럼 = expenses[] 의 특정 expenseType. 신규 DB 필드·스키마 변경 없음(§10).
+//   선택기 옵션 — 전용3종 제외. label 은 EXPENSE_TYPE_OPTS 와 동일(저장값=value).
+export const ETC_SELECTABLE_TYPES = EXPENSE_TYPE_OPTS.filter(o => !INTERP_DEDICATED_EXPENSE_TYPES.includes(o.value));
+// 알려진 기타비용 컬럼의 고정 표시순서(저장값 기준). 데이터 유래 컬럼(재조회) 정렬에 사용 — 행마다 순서 동일(§5).
+export const ETC_KNOWN_ORDER = ETC_SELECTABLE_TYPES.map(o => o.value);
+// expenseType(저장값) → 표시 라벨. 커스텀(직접입력) 항목은 항목명 그대로.
+export function etcColLabel(type: string): string {
+  return EXPENSE_TYPE_OPTS.find(o => o.value === type)?.label ?? type;
+}
+// 데이터셋 전 행의 동적 기타비용 컬럼 합집합(§5) — 전용3종 제외. pinned(사용자 선택 빈컬럼, 삽입순)를 앞에, 데이터 유래는 고정순서 뒤에.
+export function computeEtcCols(data: Row[], pinned: string[] = []): string[] {
+  const dedicated = new Set(INTERP_DEDICATED_EXPENSE_TYPES as string[]);
+  const result: string[] = [];
+  const push = (t?: string | null) => { if (t && !dedicated.has(t) && !result.includes(t)) result.push(t); };
+  for (const t of pinned) push(t);                                   // 사용자 선택(삽입 순서 유지 §3)
+  const dataTypes = new Set<string>();
+  for (const r of data) for (const e of (r.expenses ?? [])) if (e.expenseType && !dedicated.has(e.expenseType)) dataTypes.add(e.expenseType);
+  const rest = [...dataTypes].filter(t => !result.includes(t));
+  for (const t of ETC_KNOWN_ORDER) if (rest.includes(t)) push(t);   // 알려진 항목 고정 순서
+  for (const t of rest.filter(t => !ETC_KNOWN_ORDER.includes(t)).sort()) push(t);  // 커스텀 알파벳
+  return result;
+}
+// 특정 동적 컬럼(type)을 실제 사용(항목 존재)하는 행이 하나도 없으면 true → 컬럼 완전 제거 가능(§8).
+export function etcColIsEmpty(data: Row[], type: string): boolean {
+  return !data.some(r => (r.expenses ?? []).some(e => e.expenseType === type));
+}
+
+// ── 비용항목 지급률(§비용지급률) — 기준금액 × 지급률(%) = 실제 지급액(amount). 정산·계산은 amount 그대로 사용. ──
+// 항목별 기본 지급률(%) — 신규 입력 시 기본값. 사용자가 수정 가능(강제 아님 §3·§6).
+//   85% 기본: 추가통역료(수가통역료)·출장비·저작권료·이동일보상·취소보상. 그 외(교통비·숙박비·식비·직접입력) = 100%(§7·§8).
+const DEFAULT_85_TYPES = new Set(['수가통역료', '출장비', '저작권료', '이동일보상', '취소보상']);
+export function defaultPayoutRate(expenseType: string): number {
+  return DEFAULT_85_TYPES.has(expenseType) ? 85 : 100;
+}
+// 저장된 지급률(없으면 100%). 값이 있으면 그대로.
+export function effectivePayoutRate(e: { payoutRate?: string | number | null }): number {
+  return e.payoutRate == null || e.payoutRate === '' ? 100 : num(e.payoutRate);
+}
+// 표시용 기준금액 — baseAmount 우선, 없으면 amount(실제=기준으로 간주, 기존 데이터 호환).
+export function expenseBase(e: { baseAmount?: string | number | null; amount?: string | number | null }): number {
+  return e.baseAmount != null && e.baseAmount !== '' ? num(e.baseAmount) : num(e.amount);
+}
+// 실제 지급액 = round(기준금액 × 지급률/100).
+export function actualPayout(base: number, ratePct: number): number {
+  return round2(base * ratePct / 100);
+}
+// 실비성 비용 — 항상 100% 지급, 지급률 변경 불가(§4·§5). 팝업에 지급률 UI를 숨기고 100% 고정 처리.
+export const FIXED_100_TYPES = new Set(['교통비', '숙박비', '식비']);
+export function isFixed100Type(expenseType: string): boolean {
+  return FIXED_100_TYPES.has(expenseType);
+}
+// 화면 표시용 지급률(%) — 실비성은 항상 100, 그 외는 저장값(없으면 100 §11). 셀 배지·팝업에서 공용.
+export function displayPayoutRate(expenseType: string, e?: { payoutRate?: string | number | null }): number {
+  if (isFixed100Type(expenseType)) return 100;
+  return e && e.payoutRate != null && e.payoutRate !== '' ? num(e.payoutRate) : 100;
+}
+
 // 직접입력 센티넬 — 목록에서 선택 시 텍스트 입력창으로 전환(항목명 자유 입력). 실제 저장은 입력한 항목명 문자열이 expenseType에 그대로 들어감(DB 컬럼·계산 로직 불변).
 export const CUSTOM_EXPENSE_VALUE = '__custom__';
 export const EXPENSE_TYPE_SELECT_OPTS = [...EXPENSE_TYPE_OPTS, { value: CUSTOM_EXPENSE_VALUE, label: '직접입력' }];
@@ -175,7 +242,9 @@ export const dateVal = (s?: string | null) => (s ? String(s).slice(0, 10) : '');
 export interface ExpenseRow {
   id?: number;
   expenseType: string;
-  amount?: string | number | null;
+  amount?: string | number | null;          // 실제 지급액(지급률 적용 후) — 정산·계산 기준
+  baseAmount?: string | number | null;       // 기준금액(§비용지급률). null=amount와 동일 취급
+  payoutRate?: string | number | null;       // 지급률(%) 예: 85 / 100. null=100% 취급
   incurredDate?: string | null;
   includedInPayout?: boolean;
   evidenceUrl?: string | null;
@@ -218,6 +287,9 @@ export interface Row {
   contractUnitPrice?: string | number | null;
   quantity?: string | number | null;
   unit?: string | null;
+  // 번역 자동매칭 dirty 마커(§11·§12) — 직전 자동입력된 수량/단위/단가 서명. 클라이언트 전용(저장 payload 미포함).
+  //   현재값이 이 서명과 같으면 "사용자 미수정"으로 보고 재매칭을 허용, 다르면 사용자 수정으로 보고 보존한다.
+  _autoRateSig?: string;
   isDirectAmount?: boolean;
   directAmount?: string | number | null;
   // 원가 합계 (서버 계산값, 표시)
@@ -281,7 +353,8 @@ export const toRow = (p: any): Row => ({
   payDateManual: p.payDateManual ?? false,
   payDateChangeReason: p.payDateChangeReason, memo: p.memo, remark: p.remark,
   contractUnitPrice: initialContractUnitPrice(p), quantity: trimNum(p.quantity), unit: p.unit,
-  isDirectAmount: p.isDirectAmount ?? false, directAmount: p.basePerformanceFee,
+  // directAmount(기준금액 입력값) — 신규는 별도 저장된 directAmount 사용, 기존행(null)은 basePerformanceFee로 fallback(§통역료85 재조회 복원).
+  isDirectAmount: p.isDirectAmount ?? false, directAmount: p.directAmount ?? p.basePerformanceFee,
   basePerformanceFee: p.basePerformanceFee, expenseTotal: p.expenseTotal,
   deductionTotal: p.deductionTotal, costTotal: p.costTotal,
   paymentStatus: p.paymentStatus ?? 'unpaid',
@@ -298,7 +371,7 @@ export const toRow = (p: any): Row => ({
   grossPayment: p.grossPayment, withholdingTax: p.withholdingTax, netPayment: p.netPayment,
   supplyAmount: p.supplyAmount, vatAmount: p.vatAmount, totalPurchaseAmount: p.totalPurchaseAmount,
   expenses: Array.isArray(p.expenses) ? p.expenses.map((e: any) => ({
-    id: e.id, expenseType: e.expenseType, amount: e.amount, incurredDate: e.incurredDate,
+    id: e.id, expenseType: e.expenseType, amount: e.amount, baseAmount: e.baseAmount, payoutRate: e.payoutRate, incurredDate: e.incurredDate,
     includedInPayout: e.includedInPayout ?? true, evidenceUrl: e.evidenceUrl, evidenceFileName: e.evidenceFileName, memo: e.memo,
   })) : [],
   deductions: Array.isArray(p.deductions) ? p.deductions.map((d: any) => ({
@@ -396,13 +469,20 @@ export function interpreterHeadcount(snap: any): number {
   return n > 0 ? n : 1;
 }
 
-// §5·§6 계약단가 초기값 — 저장값이 있으면 그대로, 없으면 판매 공급단가(saleUnitPrice)를 초기 표시값으로 사용한다.
-//   번역은 제외: 번역 계약단가는 단어/글자 기준이라 페이지 기준 판매 공급단가와 단위가 달라 초기복사 시 오계산됨.
+// 1인분 정규화 — 수행정보 1행 = 통번역사 1명 원칙. 통역 상세 스냅샷의 인원수(interpreterCount)를 1로 정규화한다.
+//   판매 공급가액 = 수행일수 × 인원수 × 계약단가(quote_items 규약)이므로, 인원=1이면
+//   기본수행료 = 계약단가 × 수행일수 = 공급가액 / 인원수 = 1인분 기본수행료가 된다.
+//   불러오기·복사에서 동일하게 사용하는 단일 로직. 원본 판매정보(quote_items)·기타 스냅샷 필드(공급가액·수량 등)는 보존한다.
+export function perPersonSnapshot(snap: any): any {
+  if (!snap || typeof snap !== 'object') return snap;
+  return snap.interpreterCount != null ? { ...snap, interpreterCount: 1 } : snap;
+}
+
+// 계약단가 초기값 — 저장값이 있으면 그대로, 없으면 공란(null)으로 시작한다.
+//   판매 공급단가(saleUnitPrice)를 초기값/폴백으로 사용하지 않는다: 판매금액과 통번역사 지급금액은
+//   별개 재무 데이터이므로 판매단가를 계약단가 기본값으로 복사하지 않는다('미입력'과 '0원'은 구분).
 export function initialContractUnitPrice(p: any): string | number | null {
-  if (p.contractUnitPrice != null && p.contractUnitPrice !== '') return p.contractUnitPrice;
-  if (isTranslationKind(p as Row)) return p.contractUnitPrice ?? null;
-  const snap = (p.serviceDetailSnapshot ?? {}) as any;
-  return snap.saleUnitPrice != null && snap.saleUnitPrice !== '' ? String(snap.saleUnitPrice) : (p.contractUnitPrice ?? null);
+  return (p.contractUnitPrice != null && p.contractUnitPrice !== '') ? p.contractUnitPrice : null;
 }
 
 // 번역 원가·정산 작업량(§작업량통일) — wordCount 우선, 없으면 charCount, 둘 다 없으면 null(계산 불가).
@@ -415,6 +495,31 @@ export function translationWorkAmount(snap: any): { amount: number; basis: 'word
   if (c > 0) return { amount: c, basis: 'char' };
   return null;
 }
+
+// 번역 자동매칭 dirty 보호(§11·§12) ─────────────────────────────────────────────
+// 자동입력 서명 — 수량/단위/단가 3필드의 정규화 문자열. 사용자 직접수정 감지에 사용한다.
+export function autoRateSig(r: Row): string {
+  const q = r.quantity == null || r.quantity === '' ? '' : String(num(r.quantity));
+  const u = r.unit ?? '';
+  const p = r.contractUnitPrice == null || r.contractUnitPrice === '' ? '' : String(num(r.contractUnitPrice));
+  return `${q}|${u}|${p}`;
+}
+// 자동입력 덮어쓰기 허용 여부(§11·§12) — 자동입력 이력이 없으면 3필드가 모두 공란일 때만(최초 매칭),
+//   이력이 있으면 현재값이 직전 자동입력 서명과 동일할 때만(사용자 미수정) true. 하나라도 사용자가 수정했으면 false.
+//   → 번역사 변경 시에도 사용자가 손댄 값은 자동 덮어쓰지 않는다.
+export function isAutoRateOverwritable(r: Row): boolean {
+  if (r._autoRateSig == null) {
+    const emptyQ = r.quantity == null || r.quantity === '';
+    const emptyU = !r.unit;
+    const emptyP = r.contractUnitPrice == null || r.contractUnitPrice === '';
+    return emptyQ && emptyU && emptyP;
+  }
+  return autoRateSig(r) === r._autoRateSig;
+}
+
+// 통역료(85%) 지급률(§통역료85) — 통역료(85%) 입력금액은 85% 적용 전 '기준금액'. 실제 세전 반영액 = 입력금액 × 0.85.
+//   화면 셀은 입력값(기준금액) 그대로 표시하고, 지급액(세전) 계산에서만 0.85를 곱한다(§1·§8). 번역 요금(100%)·경비에는 적용하지 않는다(§5).
+export const INTERP_FEE_RATE = 0.85;
 
 // 기본수행료 = 직접금액 or 계약단가×작업량 (구분별). 원가합계 = 기본수행료 + Σ지급대상추가비용 − Σ차감
 //   · 번역 계열: 계약단가 × 단어수/글자수(§작업량통일). 페이지수는 사용하지 않으며, 작업량이 없으면 자동계산하지 않는다.
@@ -433,14 +538,20 @@ export function calcRowCostPreview(r: Row): { base: number; expenseTotal: number
   }
   else if (r.performerCategory === 'vendor') base = round2(num(r.supplyAmount));
   else if (r.performerCategory === 'expense') base = round2(num(r.directAmount));
-  else if (r.isDirectAmount) base = round2(num(r.directAmount));
+  // 직접금액(base) — 번역 요금(100%)=directAmount는 그대로, 통역 통역료(85%)=directAmount는 ×0.85 적용(§1·§2·§5).
+  else if (r.isDirectAmount) base = round2(num(r.directAmount) * (isInterpretationKind(r) ? INTERP_FEE_RATE : 1));
   else if (isTranslationKind(r)) {
-    // 번역 원가 = 계약단가 × 작업량(단어/글자). 페이지수(quantity) 미사용.
-    //   작업량이 없으면 페이지로 자동계산하지 않고 기존 기본수행료를 유지(계산 불가 → 임의 재계산 금지).
-    const work = translationWorkAmount((r.serviceDetailSnapshot ?? {}) as any);
-    base = (hasUnitPrice && work)
-      ? round2(num(r.contractUnitPrice) * work.amount)
-      : round2(num(r.baseFee));
+    // 번역 지급액 = 수량 × 단가 — 단위 종류(단어/글자/페이지/회/분/시간/일)와 무관(§단위확장). 사용자가 수량·단가 입력 시 적용.
+    //   §14 호환: 기존 저장행은 계약단가(contractUnitPrice)가 없어(판매단가 자동복사 안 함) 이 분기를 타지 않고,
+    //   기존 작업량(단어/글자 스냅샷)/기본수행료를 그대로 유지 → 값 불변. (unit은 라벨/기록용, 계산에 사용하지 않음)
+    if (hasUnitPrice && hasQty) {
+      base = round2(num(r.contractUnitPrice) * num(r.quantity));
+    } else {
+      const work = translationWorkAmount((r.serviceDetailSnapshot ?? {}) as any);
+      base = (hasUnitPrice && work)
+        ? round2(num(r.contractUnitPrice) * work.amount)
+        : round2(num(r.baseFee));
+    }
   }
   else if (isInterpretationKind(r)) {
     // 통역 원가 = 계약단가(1인·1일) × 수행일수(quantity) × 인원(interpreterCount, 없으면 1).
@@ -483,6 +594,33 @@ export function calcIndivPreview(r: Row): { gross: number; rate: number; tax: nu
   }
   const tax = confirmed ? round2(gross * (rate / 100)) : 0;
   return { gross, rate, tax, net: round2(gross - tax), confirmed };
+}
+
+// ── 지급액 세전/세후 + 수익률(§지급액분리·§수익률) ────────────────────────────────
+// 소수 1자리 반올림(수익률 표시용).
+export const round1 = (n: number) => Math.round(n * 10) / 10;
+
+// 원천세율(%) — 세금처리(withholdingTreatment) SSOT. 세전 지급액에 적용할 세율.
+//   3.3%/2.2%/원천징수 예외(0)/세금계산서(0). 미선택은 0으로 간주(임의 3.3% 강제 안 함 §2).
+//   effectiveTreatment 재사용 — 외주업체 미설정 시 세금계산서(0) 기본.
+export function withholdingRatePct(r: { withholdingTreatment?: string | null; performerCategory?: string | null }): number {
+  switch (normalizeTreatment(effectiveTreatment(r))) {
+    case 'domestic_3_3': return 3.3;
+    case 'domestic_2_2': return 2.2;
+    default: return 0;   // exempt·세금계산서·미선택 — 원천세 0(미공제)
+  }
+}
+// 지급액(세후) — 세전 × (1 − 세율/100). 세율 0(미선택·예외·세금계산서)이면 세전과 동일.
+export function afterTaxPayout(before: number, r: { withholdingTreatment?: string | null; performerCategory?: string | null }): number {
+  return round2(before * (1 - withholdingRatePct(r) / 100));
+}
+
+// 수행행 수익률(%) — 판매 공급가액 대비 세전 수행원가 마진율(§수익률). 세후 사용 금지(§6, 세전만).
+//   saleSupply: 판매상품 공급가액(구조화 SSOT). sumCostBefore: 같은 판매상품에 연결된 수행행들의 세전 지급액 합계(§8).
+//   반환 null = 계산불가(공급가액 NULL/0 — 0으로 나누지 않음 §10). 음수 허용(§12).
+export function profitRatePct(saleSupply: number, sumCostBefore: number): number | null {
+  if (!(saleSupply > 0)) return null;
+  return round1((saleSupply - sumCostBefore) / saleSupply * 100);
 }
 
 // ── 상태 배지 (기존 시스템과 동일 인라인 배지 스타일 §19) ────────────────────────

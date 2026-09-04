@@ -57,6 +57,14 @@ const QUOTE_TYPE_LABEL: Record<string, string> = {
   prepaid_deduction: '차감 견적서',
   accumulated_batch: '누적 견적서',
 };
+// 견적유형별 배지 색상 — 표시 전용(비즈니스 로직/DB 값과 무관). 판매관리와 동일 계열 색상 사용.
+const QUOTE_TYPE_COLOR: Record<string, { bg: string; color: string }> = {
+  b2b_standard:      { bg: '#f0f9ff', color: '#0369a1' }, // 일반 — 파랑
+  b2c_prepaid:       { bg: '#f5f3ff', color: '#7c3aed' }, // 차감 — 보라
+  prepaid_deduction: { bg: '#f5f3ff', color: '#7c3aed' }, // 차감 — 보라
+  accumulated_batch: { bg: '#fffbeb', color: '#b45309' }, // 누적 — 주황/앰버
+};
+const QUOTE_TYPE_COLOR_DEFAULT = { bg: '#f0f9ff', color: '#0369a1' };
 
 // ─── 컴포넌트 ──────────────────────────────────────────────────────────────────
 interface QuoteListTabProps {
@@ -690,7 +698,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                       </td>
                       {/* 견적유형 — 가운데 정렬 (누적 견적서는 누적상태 배지 추가) */}
                       <td style={{ padding: '6px 10px', whiteSpace: 'nowrap', textAlign: 'center' }}>
-                        <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: q.relationType === 'derived' ? '#fffbeb' : '#f0f9ff', color: q.relationType === 'derived' ? '#92400e' : '#0369a1', fontWeight: 600 }}>
+                        <span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: q.relationType === 'derived' ? '#fffbeb' : (QUOTE_TYPE_COLOR[q.quoteType] ?? QUOTE_TYPE_COLOR_DEFAULT).bg, color: q.relationType === 'derived' ? '#92400e' : (QUOTE_TYPE_COLOR[q.quoteType] ?? QUOTE_TYPE_COLOR_DEFAULT).color, fontWeight: 600 }}>
                           {/* 분할견적(derived): quote_type(내부)은 유지, 표시만 '분할 견적서'로 override */}
                           {q.relationType === 'derived' ? '분할 견적서' : (QUOTE_TYPE_LABEL[q.quoteType] ?? q.quoteType)}
                         </span>

@@ -12,10 +12,14 @@ import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import PerformanceProfitSummary from './PerformanceProfitSummary';
 import RowControls from './RowControls';
 import InlinePerformerPicker from './InlinePerformerPicker';
-import { AmountDetailPopup, AdjustmentPopup } from './performancePopups';
+import { AmountDetailPopup, AdjustmentPopup, RatePopup } from './performancePopups';
 import ServiceDetailCell from './performanceServiceDetail';
 import {
-  Row, toRow, won, num, commafy, dateVal, calcRowCostPreview, calcPaymentDate, isEquipmentKind,
+  Row, ExpenseRow, toRow, won, num, round2, commafy, dateVal, calcRowCostPreview, calcPaymentDate, isEquipmentKind, isInterpretationKind, isTranslationKind, perPersonSnapshot,
+  autoRateSig, isAutoRateOverwritable, afterTaxPayout, profitRatePct,
+  INTERP_ADD_FEE_TYPE, INTERP_BIZTRIP_TYPE, INTERP_TRANSPORT_TYPE, INTERP_DEDICATED_EXPENSE_TYPES, INTERP_ETC_DEFAULT_TYPE,
+  ETC_SELECTABLE_TYPES, computeEtcCols, etcColLabel, etcColIsEmpty, CUSTOM_EXPENSE_VALUE,
+  defaultPayoutRate, effectivePayoutRate, expenseBase, actualPayout, displayPayoutRate, isFixed100Type,
   CATEGORY_OPTS, TREATMENT_OPTS, normalizeTreatment, effectiveTreatment,
   PERFORMER_TYPE_OPTS, resolvePerformerType, performerTypeLabel, canonicalLineCategory,
   PAYMENT_STATUS_OPTS, PAYMENT_STATUS_SELECTABLE_OPTS,
@@ -53,6 +57,11 @@ export default function PerformanceSection({ projectId, token, performances, onC
   // 소형 팝업(§금액상세 / §조정항목) — 행 인덱스 기준
   const [amountPopup, setAmountPopup] = useState<number | null>(null);
   const [adjustPopup, setAdjustPopup] = useState<number | null>(null);
+  // 비용항목 지급률 팝업(§비용지급률·§9) — 셀 클릭 시 {행 index, expenseType} 지정. 기준금액×지급률=실제지급액 편집.
+  const [ratePopup, setRatePopup] = useState<{ i: number; type: string; label: string } | null>(null);
+  // 사용자가 기타비용 선택기로 추가한 '빈' 동적 컬럼(§3·§7) — 데이터가 아직 없어도 컬럼 노출. 편집 세션 한정(삽입 순서 유지).
+  //   데이터 유래 컬럼은 computeEtcCols 가 별도로 합산하므로 여기엔 넣지 않는다. enterEdit/cancelEdit 시 초기화.
+  const [pinnedEtcCols, setPinnedEtcCols] = useState<string[]>([]);
   // 조정항목 상세(조회 전용) 팝업 — 조회모드에서 셀 클릭 시 읽기 전용 표시
   const [adjustViewPopup, setAdjustViewPopup] = useState<number | null>(null);
   // 필터/정렬 (조회모드)
@@ -148,9 +157,84 @@ export default function PerformanceSection({ projectId, token, performances, onC
     return out;
   }, [list, q, catFilter, payFilter, onlyUnpaid, sortKey, sortDir]);
 
-  const enterEdit = () => { setRows(list.map(toRow)); setDeletedIds([]); setEditMode(true); };
-  const cancelEdit = () => { setRows([]); setDeletedIds([]); setEditMode(false); setAmountPopup(null); setAdjustPopup(null); };
+  const enterEdit = () => { setRows(list.map(toRow)); setDeletedIds([]); setPinnedEtcCols([]); setEditMode(true); };
+  const cancelEdit = () => { setRows([]); setDeletedIds([]); setPinnedEtcCols([]); setEditMode(false); setAmountPopup(null); setAdjustPopup(null); };
+  // 기타비용 선택기(§1~§4) — 항목 선택 시 동적 컬럼 추가(pin). 직접입력은 항목명 입력(빈이름·중복·전용3종 금지 §6·§11).
+  const addEtcCol = (type: string) => setPinnedEtcCols(prev => prev.includes(type) ? prev : [...prev, type]);
+  const addCustomEtcCol = (dataTypes: string[]) => {
+    const raw = window.prompt('기타비용 항목명을 입력하세요 (예: 주차비, 택배비)');
+    const name = (raw ?? '').trim();
+    if (!name) return;                                                       // 빈 이름 금지(§6)
+    if ((INTERP_DEDICATED_EXPENSE_TYPES as string[]).includes(name)) { onToast('추가통역료·출장비·교통비는 전용 컬럼입니다.'); return; }  // §11
+    if (dataTypes.includes(name) || pinnedEtcCols.includes(name)) { onToast('이미 있는 항목입니다.'); return; }  // 중복 방지(§6·§11)
+    setPinnedEtcCols(prev => [...prev, name]);
+  };
+  // 동적 컬럼 제거(§8) — pin 해제만. 데이터가 있는 행이 하나라도 있으면 computeEtcCols가 다시 포함하므로 컬럼은 유지(데이터 손실 없음).
+  const removeEtcCol = (type: string) => setPinnedEtcCols(prev => prev.filter(t => t !== type));
   const patchRow = (i: number, p: Partial<Row>) => setRows(prev => prev.map((r, idx) => idx === i ? { ...r, ...p } : r));
+  // 통역 요금(100%) — 독립 입력 필드. 통역료(85%)를 자동계산하지 않는다(요금×0.85 자동연동 제거). '85%'는 요율 구분 명칭일 뿐.
+  //   요금(100%)=contractUnitPrice는 참조값(계산 미사용). 통역 지급 base는 통역료(85%)=directAmount 이므로 isDirectAmount=true만 유지.
+  //   → 요금(100%) 입력이 통역료(85%) 값을 변경하지 않는다(각 필드 독립).
+  const setInterpFee100 = (i: number, v: string) => {
+    patchRow(i, { contractUnitPrice: v, isDirectAmount: true });
+  };
+  // 번역 요금(100%) — 협의 총액(§3·§4A). 입력 시 base가 되도록 isDirectAmount=true+directAmount 설정 → 지급액=요금100+기타비용.
+  //   공란이면 isDirectAmount=false로 되돌려 수량×단가(§4B) 방식으로 계산(요금100 우선, 이중합산 방지). 판매단가 자동복사 없음(§7).
+  const setTransFee100 = (i: number, v: string) => {
+    const has = v != null && v !== '';
+    patchRow(i, { directAmount: v, isDirectAmount: has });
+  };
+  // 번역 수행 단위 — 글자/단어(§10). 신규 구조는 지급액=수량×단가를 이 단위 기준으로 계산.
+  // 번역 수행 단위 — 7종(§단위확장). 저장값은 기존 canonical(한글 문자열, UNIT_OPTS와 동일 값) 재사용 — 신규 enum 없음.
+  //   지급액=수량×단가는 단위 종류와 무관(라벨/기록용). '단어/글자'는 기존값 유지, '페이지/회/분/시간/일' 추가.
+  const TRANS_UNIT_OPTS = [
+    { value: '단어', label: '단어' },
+    { value: '글자', label: '글자' },
+    { value: '페이지', label: '페이지' },
+    { value: '회', label: '회' },
+    { value: '분', label: '분' },
+    { value: '시간', label: '시간' },
+    { value: '일', label: '일' },
+  ];
+  // 통역 부대비용 전용 컬럼(추가통역료·출장비·교통비) — expenses[]의 특정 항목에 바인딩(원가 SSOT = expenseTotal 유지).
+  const expAmtOf = (r: Row, type: string): string | number => {
+    const e = (r.expenses ?? []).find(x => x.expenseType === type);
+    return e && e.amount != null ? e.amount : '';
+  };
+  // 특정 expenseType 금액 upsert/삭제 — 다른 expenses·deductions는 보존. 공란이면 해당 항목 제거.
+  const setExpAmt = (i: number, r: Row, type: string, v: string) => {
+    const list: ExpenseRow[] = [...(r.expenses ?? [])];
+    const idx = list.findIndex(x => x.expenseType === type);
+    const empty = v == null || v === '';
+    if (idx >= 0) {
+      if (empty) list.splice(idx, 1);
+      else list[idx] = { ...list[idx], amount: v, includedInPayout: true };
+    } else if (!empty) {
+      list.push({ expenseType: type, amount: v, includedInPayout: true });
+    }
+    patchRow(i, { expenses: list });
+  };
+  // 지급률 반영 upsert(§비용지급률) — 기준금액×지급률=실제지급액(amount)로 저장. 기준금액·지급률도 함께 보존(재조회 복원).
+  //   공란/0 기준금액이면 항목 제거. 다른 expenses·deductions·부가필드(발생일·증빙·메모)는 보존.
+  const setExpFull = (i: number, r: Row, type: string, baseStr: string, ratePct: number) => {
+    const list: ExpenseRow[] = [...(r.expenses ?? [])];
+    const idx = list.findIndex(x => x.expenseType === type);
+    const empty = baseStr == null || baseStr === '';
+    if (empty) {
+      if (idx >= 0) list.splice(idx, 1);
+    } else {
+      const base = num(baseStr);
+      const actual = actualPayout(base, ratePct);   // 실제 지급액 = 기준금액 × 지급률/100
+      const patch = { expenseType: type, amount: actual, baseAmount: base, payoutRate: ratePct, includedInPayout: true };
+      if (idx >= 0) list[idx] = { ...list[idx], ...patch };
+      else list.push(patch);
+    }
+    patchRow(i, { expenses: list });
+  };
+  // 기타비용(통역) 합계 — 전용 3종(추가통역료·출장비·교통비)을 제외한 지급대상 추가비용 합.
+  const etcExpenseTotal = (r: Row) => round2((r.expenses ?? [])
+    .filter(e => !INTERP_DEDICATED_EXPENSE_TYPES.includes(e.expenseType) && e.includedInPayout !== false)
+    .reduce((s, e) => s + num(e.amount), 0));
   // 상단 버튼: 유형 지정 행을 목록 마지막에 추가(§13)
   const addRow = (performerCategory: string, lineCategory: string) =>
     setRows(prev => [...prev, { performerCategory, lineCategory, status: 'unassigned', paymentStatus: 'unpaid', quantity: 1, expenses: [], deductions: [] }]);
@@ -167,18 +251,30 @@ export default function PerformanceSection({ projectId, token, performances, onC
     [next[i], next[swap]] = [next[swap], next[i]];
     return next;
   });
-  // 복제(§13) — 수행조건 복사, 수행자·정산·지급 완료정보 초기화. 원본 바로 아래 생성.
+  // 복제(§13) — 서비스 수행조건(구조화 필드)을 완전 복사, 수행자·정산·지급 완료정보만 초기화. 원본 바로 아래 생성.
+  //   서비스별 상세정보는 문자열이 아닌 원본 스냅샷(serviceDetailSnapshot)을 복사해, 동일 formatter로 원본과 동일하게 표시된다
+  //   (시간·수행시간·장소·언어·세부옵션 유지). 단, 인원수(interpreterCount)는 각 행 = 통역사 1명 원칙에 따라 1로 정규화 —
+  //   원가(계약단가×수행일수×인원)가 전체 인원으로 중복 산정되지 않도록 함. 원본 행과 기존 저장 데이터는 변경하지 않는다.
   const dupRow = (i: number) => setRows(prev => {
     const s = prev[i];
+    // 1인분 정규화(불러오기와 동일 로직) — 인원수를 1로 정규화해 원본과 동일한 1인분 기본수행료가 산정되도록 한다.
+    const snapCopy = perPersonSnapshot(s.serviceDetailSnapshot);
     const copy: Row = {
       performerCategory: s.performerCategory, lineCategory: s.lineCategory, saleItemId: s.saleItemId,
       serviceType: s.serviceType, productNameSnapshot: s.productNameSnapshot, languageOrServiceSnapshot: s.languageOrServiceSnapshot,
+      // 서비스별 상세 스냅샷 — 원본 구조 전체 복사(시간·장소·수행시간·판매수량/단위·언어·세부옵션 등 표시·계산 원본값 유지)
+      serviceDetailSnapshot: snapCopy,
       performanceStartDate: s.performanceStartDate, performanceEndDate: s.performanceEndDate, deliveryDate: s.deliveryDate,
       quantity: s.quantity, unit: s.unit, contractUnitPrice: s.contractUnitPrice, isDirectAmount: s.isDirectAmount, directAmount: s.directAmount,
+      // 기본수행료·추가비용(조정) 기본값 복사 — 원가/지급액 산정 기준·지급일 산정정보 유지
+      baseFee: s.baseFee, transportationFee: s.transportationFee, businessTripFee: s.businessTripFee,
+      copyrightFee: s.copyrightFee, travelDayCompensation: s.travelDayCompensation, cancellationCompensation: s.cancellationCompensation,
+      supplyAmount: s.supplyAmount, vatAmount: s.vatAmount, purchaseEvidenceType: s.purchaseEvidenceType,
+      serviceCountry: s.serviceCountry,
       memo: s.memo,
       expenses: (s.expenses ?? []).map(e => ({ ...e, id: undefined })),
       deductions: (s.deductions ?? []).map(d => ({ ...d, id: undefined })),
-      // 초기화
+      // 초기화 — 통번역사 배정·식별정보·정산·지급 완료정보(세금처리·거주구분은 수행자 선택 시 재도출되므로 미복사)
       status: 'unassigned', paymentStatus: 'unpaid',
       performerNameSnapshot: null, individualUserId: null, vendorCompanyId: null,
       identifierSnapshotMasked: null, vendorTypeSnapshot: null,
@@ -221,11 +317,21 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const onSearchVendor = (i: number, s: string) => { if (!s.trim()) { setSearchIdx(i); setSearchResults([]); return; } runSearch(i, `/api/admin/companies?companyType=vendor&search=${encodeURIComponent(s)}`); };
   const onClearPerformer = (i: number) => { patchRow(i, { performerNameSnapshot: null }); setSearchIdx(i); setSearchResults([]); };
 
+  // 통번역사 최근 수행이력 조회(§2·§3) — 상세 미리보기에서 지연 호출. 실패해도 빈 배열(미리보기 유지).
+  const fetchRecentPerformances = React.useCallback(async (translatorId: number) => {
+    try {
+      const res = await fetch(api(`/api/admin/performances/recent-by-translator?translatorId=${translatorId}`), { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json().catch(() => ({}));
+      return res.ok && Array.isArray(data.rows) ? data.rows : [];
+    } catch { return []; }
+  }, [token]);
+
   // 인라인 선택(§선택-저장 분리) — 신규·기존 행 모두 "로컬 폼에만" 반영. 즉시 저장·화면전환 없음.
   //   개인: 3.3%·마스킹식별번호·기본단가 등 자동값은 읽기전용 resolve로 폼에만 채운다(DB 미저장).
   //   상단 「저장」 클릭 시 일괄 저장되며, 그때 서버가 식별자(암호문)·거주국·업체유형 스냅샷을 재도출한다.
   const pickTranslator = async (i: number, t: any) => {
     const r = rows[i];
+    const isTrans = isTranslationKind(r);   // 번역행 여부(§5·§22) — 자동매칭/기본단가 처리 분기
     patchRow(i, {
       performerCategory: 'individual', individualUserId: t.id, vendorCompanyId: null,
       performerNameSnapshot: t.name || t.email, lineCategory: r.lineCategory || '통번역사', vendorTypeSnapshot: null,
@@ -245,13 +351,35 @@ export default function PerformanceSection({ projectId, token, performances, onC
             residenceCountrySnapshot: s.residenceCountrySnapshot ?? null,
             residencyType: s.residencyType ?? null,
             withholdingTreatment: s.withholdingTreatment ?? null,
-            ...((row.contractUnitPrice == null || row.contractUnitPrice === '') && s.baseRate != null
+            // 통역 등 비번역: 프로필 기본단가(방향·단위 무관 단일값)를 계약단가 초기값으로(기존 동작 유지·§22).
+            //   번역은 여기서 복사하지 않는다 — 방향·단위별 등록단가 자동매칭만 사용(§7·§14). 아래 autoMatchTranslationRate 처리.
+            ...(!isTrans && (row.contractUnitPrice == null || row.contractUnitPrice === '') && s.baseRate != null
               ? { contractUnitPrice: String(s.baseRate), quantity: (row.quantity == null || row.quantity === '') ? '1' : row.quantity }
               : {}),
           };
         }));
       }
     } catch { /* resolve 실패해도 로컬 선택은 유지 — 저장 시 서버가 스냅샷 재도출 */ }
+    // 번역행 자동매칭(§5~§16) — 선택된 번역사의 방향·단위별 등록단가 × 판매 작업량으로 수량/단위/단가 자동입력.
+    if (isTrans) await autoMatchTranslationRate(i, t.id, r.saleItemId ?? null);
+  };
+  // 번역 단가 자동매칭(§5~§16) — 서버 읽기전용 조회 결과를 dirty 보호 하에 로컬 폼에만 반영. DB 미변경.
+  //   미매칭/모호(복수·isDefault 미확정)는 공란 유지(§14·§15). 사용자가 직접 수정한 값은 덮어쓰지 않는다(§11·§12).
+  const autoMatchTranslationRate = async (i: number, translatorId: number, saleItemId: number | null) => {
+    if (saleItemId == null) return;   // 판매 미연결(수동 추가) 행은 작업량·방향이 없어 매칭 대상 아님
+    try {
+      const res = await fetch(api(`/api/admin/performances/resolve-translation-rate?translatorId=${translatorId}&saleItemId=${saleItemId}`), { headers: { Authorization: `Bearer ${token}` } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.matched) return;   // 미매칭 → 공란 유지(§6·§14). 판매단가·타방향 fallback 없음.
+      const qty = String(data.quantity); const unit = String(data.unit); const price = String(data.unitPrice);
+      setRows(prev => prev.map((row, idx) => {
+        if (idx !== i || row.individualUserId !== translatorId) return row;   // 그 사이 다른 선택이면 무시
+        if (!isAutoRateOverwritable(row)) return row;                          // 사용자 직접수정 보호(§11·§12)
+        const next: Row = { ...row, quantity: qty, unit, contractUnitPrice: price };
+        next._autoRateSig = autoRateSig(next);   // 이번 자동입력값 서명 기록(다음 재매칭 시 미수정 판정)
+        return next;
+      }));
+    } catch { /* 자동매칭 실패해도 로컬 선택은 유지 */ }
   };
   const pickVendor = (i: number, c: any) => {
     const r = rows[i];
@@ -288,12 +416,32 @@ export default function PerformanceSection({ projectId, token, performances, onC
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { onToast(data.error ?? '판매정보 불러오기 실패'); return; }
       onToast(data.message ?? '불러오기 완료');
+      // 불러온 행을 1인분 기준으로 정규화(§10-2) — 수행정보 1행 = 통번역사 1명 원칙에 따라 인원수를 1로 정규화한다.
+      //   판매 공급가액 = 수행일수 × 인원수 × 계약단가이므로, 인원=1이면 기본수행료 = 공급가액/인원수(1인분)로 산정된다.
+      //   복사(dupRow)와 동일한 perPersonSnapshot 로직을 사용하며, 원본 판매정보는 변경하지 않는다(저장 시 서버가 재계산).
+      const toPerPerson = (p: any): Row => { const row = toRow(p); return { ...row, serviceDetailSnapshot: perPersonSnapshot(row.serviceDetailSnapshot) }; };
       // 교정된 기존 행(§8·§9)은 id로 로컬 상태에 병합, 신규 행은 목록 끝에 추가.
-      const corrected = new Map(((data.correctedRows ?? []) as any[]).map(r => [r.id, toRow(r)]));
+      const corrected = new Map(((data.correctedRows ?? []) as any[]).map(r => [r.id, toPerPerson(r)]));
       setRows(prev => [
         ...prev.map(r => (r.id != null && corrected.has(r.id) ? corrected.get(r.id)! : r)),
-        ...((data.rows ?? []) as any[]).map(toRow),
+        ...((data.rows ?? []) as any[]).map(toPerPerson),
       ]);
+      // §7 판매 비용상품 감지 → 해당 동적 기타비용 컬럼 자동 노출(빈 컬럼 pin). 판매금액은 지급비용으로 자동복사하지 않는다(금액 미복사).
+      //   교통비·출장비는 전용 컬럼이므로 pin 대상 아님. 감지 실패해도 무해(사용자가 선택기로 직접 추가 가능).
+      const detectEtc = (arr: any[]): string[] => {
+        const found = new Set<string>();
+        for (const p of arr) {
+          const s = `${p?.productNameSnapshot ?? ''} ${p?.serviceType ?? ''} ${p?.languageOrServiceSnapshot ?? ''}`;
+          if (/숙박/.test(s)) found.add('숙박비');
+          if (/식비|식대/.test(s)) found.add('식비');
+          if (/저작권/.test(s)) found.add('저작권료');
+          if (/이동일/.test(s)) found.add('이동일보상');
+          if (/취소\s*보상/.test(s)) found.add('취소보상');
+        }
+        return [...found];
+      };
+      const detected = detectEtc([...((data.rows ?? []) as any[]), ...((data.correctedRows ?? []) as any[])]);
+      if (detected.length) setPinnedEtcCols(prev => Array.from(new Set([...prev, ...detected])));
       await onChanged();
     } catch { onToast('판매정보 불러오기 중 오류'); } finally { setBusy(false); }
   };
@@ -327,6 +475,9 @@ export default function PerformanceSection({ projectId, token, performances, onC
     purchaseInvoiceDate: r.purchaseInvoiceDate || null, supplyAmount: num(r.supplyAmount), vatAmountManual: num(r.vatAmount),
     expenses: (r.expenses ?? []).map(e => ({
       id: e.id, expenseType: e.expenseType, amount: num(e.amount), incurredDate: e.incurredDate || null,
+      // 지급률 구조(§비용지급률) — 기준금액·지급률 동반 저장(있을 때만). amount=실제 지급액이라 정산 불변.
+      baseAmount: e.baseAmount != null && e.baseAmount !== '' ? num(e.baseAmount) : null,
+      payoutRate: e.payoutRate != null && e.payoutRate !== '' ? num(e.payoutRate) : null,
       includedInPayout: e.includedInPayout !== false, evidenceUrl: e.evidenceUrl ?? null, evidenceFileName: e.evidenceFileName ?? null, memo: e.memo ?? null,
     })),
     deductions: (r.deductions ?? []).map(d => ({ id: d.id, deductionType: d.deductionType, amount: num(d.amount), reason: d.reason ?? null })),
@@ -414,6 +565,25 @@ export default function PerformanceSection({ projectId, token, performances, onC
       {label}<span style={{ color: C.primaryText, fontSize: 10 }}>✎</span>
     </button>
   );
+  // 지급률 배지(§1·§2·§10) — 셀 금액 옆에 실제 적용 지급률 표시. 85%(협의) 강조(amber), 100%(실비·기본) 흐리게(gray).
+  const rateBadge = (rate: number, type: string, i: number) => (
+    <span data-testid={`perf-rate-badge-${type}-${i}`}
+      style={{ fontSize: 9, fontWeight: 700, lineHeight: 1.4, padding: '0 4px', borderRadius: 4, flexShrink: 0,
+        background: rate === 100 ? C.g100 : '#fef3c7', color: rate === 100 ? C.g400 : '#b45309' }}>{rate}%</span>
+  );
+  // 비용 셀(§비용지급률·§9·§1) — 실제 지급액(amount) + 지급률 배지. 편집: 클릭 시 지급률 팝업. 조회: 텍스트+배지.
+  const costCell = (r: Row, i: number, type: string, label: string, editable: boolean) => {
+    const e = (r.expenses ?? []).find(x => x.expenseType === type);
+    const amt = expAmtOf(r, type);   // 실제 지급액
+    const has = amt !== '' && amt != null;
+    const rate = displayPayoutRate(type, e);
+    const shown = has
+      ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>{won(amt)}원 {rateBadge(rate, type, i)}</span>
+      : null;
+    return editable
+      ? amtBtn(shown ?? <span style={{ color: C.g400 }}>입력</span>, () => setRatePopup({ i, type, label }), `perf-cost-${type}-${i}`)
+      : (has ? shown : muted);
+  };
 
   const sortMark = (key: Exclude<SortKey, null>) => (sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
   const sortBtn = (label: string, key: Exclude<SortKey, null>) => (
@@ -424,35 +594,73 @@ export default function PerformanceSection({ projectId, token, performances, onC
   );
 
   // ── ERP 테이블 헤더 (조회·수정 공통 §16) ──
-  const renderHeader = (editable: boolean) => (
+  const renderHeader = (editable: boolean, etcCols: string[] = [], emptyCols: Set<string> = new Set()) => (
     <thead><tr>
       <th style={fzTh('left', L.control, { width: LW.control, textAlign: 'center' })}>행제어</th>
-      <th style={{ ...thBase, width: LW.category }}>구분</th>
+      {/* '구분' 컬럼 제거(§2) — 수행자·업체 선택으로 유형이 이미 식별되므로 화면 표시 불필요. 내부 performerCategory 값은 유지. */}
       <th style={{ ...thBase, width: LW.performer }}>수행자·업체</th>
       <th style={{ ...thBase, width: LW.product }}>상품·업무</th>
       <th style={{ ...thBase, width: 330 }}>서비스별 상세정보</th>
       <th style={{ ...thBase, width: 136 }}>{editable ? '납품일 · 확인' : sortBtn('납품일', 'deliveryDate')}</th>
       <th style={{ ...thBase, width: 106 }}>{editable ? '지급일' : sortBtn('지급일', 'expectedPaymentDate')}</th>
-      {/* 금액 4컬럼 — 동일 폭(130)으로 균등 배치 */}
-      <th style={{ ...thBase, width: 130, textAlign: 'right' }}>계약단가</th>
-      <th style={{ ...thBase, width: 130, textAlign: 'right' }}>기본수행료</th>
-      <th style={{ ...thBase, width: 130, textAlign: 'right' }}>추가비용</th>
-      <th style={{ ...thBase, width: RW.cost, textAlign: 'right' }}>{editable ? '지급액' : sortBtn('지급액', 'costTotal')}</th>
+      {/* 통역 전용 금액 컬럼(§1) — 요금(100%)·통역료(85%)·추가통역료·출장비·교통비·기타비용 */}
+      <th style={{ ...thBase, width: 112, textAlign: 'right' }}>요금(100%)</th>
+      <th style={{ ...thBase, width: 112, textAlign: 'right' }}>통역료(85%)</th>
+      <th style={{ ...thBase, width: 112, textAlign: 'right' }}>추가통역료</th>
+      <th style={{ ...thBase, width: 100, textAlign: 'right' }}>출장비</th>
+      <th style={{ ...thBase, width: 100, textAlign: 'right' }}>교통비</th>
+      {/* 동적 기타비용 컬럼(§1·§3·§5) — 전 행 합집합, 고정 컬럼과 기타비용 선택기 사이. 편집모드에서 미사용(데이터 없는) 컬럼은 ✕로 제거(§8). */}
+      {etcCols.map(type => (
+        <th key={`etc-h-${type}`} style={{ ...thBase, width: 96, textAlign: 'right' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, justifyContent: 'flex-end' }}>
+            {etcColLabel(type)}
+            {editable && emptyCols.has(type) && (
+              <button type="button" onClick={() => removeEtcCol(type)} aria-label={`${etcColLabel(type)} 컬럼 제거`} title="컬럼 제거(사용 중인 행 없음)"
+                data-testid={`etc-col-remove-${type}`}
+                style={{ border: 'none', background: 'none', color: C.g400, cursor: 'pointer', fontSize: 11, lineHeight: 1, padding: 0 }}>✕</button>
+            )}
+          </span>
+        </th>
+      ))}
+      {/* 기타비용 선택기 컬럼(§1·§4) — 항상 마지막 위치(동적 컬럼들의 오른쪽). */}
+      <th style={{ ...thBase, width: 116, textAlign: 'center' }}>기타비용</th>
+      {/* 번역 전용 금액 컬럼(§1) — 수량·단위·단가 */}
+      <th style={{ ...thBase, width: 86, textAlign: 'right' }}>수량</th>
+      <th style={{ ...thBase, width: 80, textAlign: 'center' }}>단위</th>
+      <th style={{ ...thBase, width: 112, textAlign: 'right' }}>단가</th>
+      {/* 지급액 세전/세후 분리(§1) — 세전=수행원가(정산·수익률 기준), 세후=원천세 공제 후 실송금액 */}
+      <th style={{ ...thBase, width: RW.cost, textAlign: 'right' }}>{editable ? '지급액(세전)' : sortBtn('지급액(세전)', 'costTotal')}</th>
+      <th style={{ ...thBase, width: RW.cost, textAlign: 'right' }}>지급액(세후)</th>
       {/* 세금처리 — 4컬럼보다 약간 넓게 + 좌측 여백(paddingLeft)으로 지급액과 명확히 분리 */}
       <th style={{ ...thBase, width: 156, paddingLeft: 20 }}>세금처리</th>
       <th style={{ ...thBase, width: RW.pay }}>지급상태</th>
+      {/* 수익률%(§4) — 지급상태 오른쪽. 판매 공급가액 대비 세전 수행원가 마진율 */}
+      <th style={{ ...thBase, width: 92, textAlign: 'right' }}>수익률%</th>
       <th style={{ ...thBase, width: RW.remark }}>비고</th>
     </tr></thead>
   );
 
   // ── ERP 테이블 행 (조회·수정 공통) ──
-  const renderRow = (r: Row, i: number, editable: boolean) => {
+  const renderRow = (r: Row, i: number, editable: boolean, bySale?: Map<number, { cost: number; assigned: boolean }>, etcCols: string[] = []) => {
     const cost = calcRowCostPreview(r);
     const adjTotal = cost.expenseTotal - cost.deductionTotal;   // 조정합계 = 추가(+) − 차감(-)
+    // 지급액 세전/세후(§1·§2) — 세전=수행원가(costTotal), 세후=세전×(1−원천세율). 미선택 시 세율 0 → 세후=세전.
+    const before = cost.costTotal;
+    const after = afterTaxPayout(before, r);
+    // 수익률(§5·§8) — 같은 판매상품(saleItemId) 연결행들의 세전 합계를 원가로 사용. 공급가액은 판매 스냅샷 구조화 필드(§7).
+    const saleSupply = num((r.serviceDetailSnapshot ?? {}).saleSupplyAmount);
+    const agg = r.saleItemId != null ? bySale?.get(r.saleItemId) : undefined;
+    const groupCost = agg ? agg.cost : before;
+    const assigned = agg ? agg.assigned : (r.individualUserId != null || r.vendorCompanyId != null);
+    // 미배정+원가 0원은 '미입력'으로 보고 수익률 미표시(§11). 공급가액 없음/0도 미표시(§10). 그 외(음수 포함) 표시(§12).
+    const profit = (assigned || groupCost > 0) ? profitRatePct(saleSupply, groupCost) : null;
     const cat = r.performerCategory;
     const isIndiv = cat === 'individual';
-    // 계약단가 입력 활성화 대상 — 개인(통역·번역) + 장비(외주지만 계약단가×수량으로 원가 산정). 직접금액 모드 제외.
-    const unitMode = (isIndiv || isEquipmentKind(r)) && !r.isDirectAmount;
+    // 유형별 금액 컬럼 분기(§2·§9·§11) — 개인 통역/번역만 신규 구조 적용. 외주·경비·장비는 기존 표시 유지.
+    const isInterp = isIndiv && isInterpretationKind(r);
+    const isTrans = isIndiv && isTranslationKind(r);
+    const isEquip = isEquipmentKind(r);                         // 장비: 단가×수량(번역 단가/수량 컬럼 재사용)
+    const isOtherAmt = !isInterp && !isTrans && !isEquip;       // 외주·경비·일반개인: 요금(100%) 컬럼에 금액상세 팝업 폴백
     const locked = isDateLocked(r);
     const deletable = canDelete(r);
     const dateTitle = locked ? '지급 진행 행은 수정 불가' : '';
@@ -473,17 +681,14 @@ export default function PerformanceSection({ projectId, token, performances, onC
                 removeDisabled={!deletable} removeTitle={deletable ? '행 삭제' : '지급 진행 행은 삭제 불가'} />
             : <span style={{ ...TYPO.helper, display: 'block', textAlign: 'center' }}>{i + 1}</span>}
         </td>
-        <td style={{ ...tdBase, width: LW.category }}>
-          {editable
-            ? <ClickSelect value={resolvePerformerType(r)} onChange={(v: string) => changePerformerType(i, v)} triggerStyle={catSel} menuStyle={catMenu} options={PERFORMER_TYPE_OPTS as any} />
-            : <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', display: 'inline-block', maxWidth: LW.category - 12 }} title={performerTypeLabel(r)}>{performerTypeLabel(r)}</span>}
-        </td>
+        {/* '구분' 셀 제거(§2·§3) — 수행자·업체 선택 시 대상 자체로 내부 유형 판별. 사용자 별도 선택 단계 없음. */}
         <td style={{ ...tdBase, width: LW.performer }}>
           {editable
             ? <InlinePerformerPicker r={r} i={i} searchIdx={searchIdx} searchResults={searchResults}
                 onSearchTranslator={onSearchTranslator} onSearchVendor={onSearchVendor}
                 onPickTranslator={pickTranslator} onPickVendor={pickVendor} onClear={onClearPerformer}
-                onCancelChange={() => { setSearchIdx(null); setSearchResults([]); }} patch={(p) => patchRow(i, p)} />
+                onCancelChange={() => { setSearchIdx(null); setSearchResults([]); }} patch={(p) => patchRow(i, p)}
+                fetchRecentPerformances={fetchRecentPerformances} />
             : <span>{r.performerNameSnapshot || muted}</span>}
         </td>
         <td style={{ ...tdBase, width: LW.product }}>
@@ -517,20 +722,87 @@ export default function PerformanceSection({ projectId, token, performances, onC
                 title={locked ? dateTitle : (r.payDateManual ? '수동변경' : '자동계산(납품일 기준·직전 영업일)')} />
             : <span title={r.payDateManual ? '수동변경' : '자동계산'} style={{ color: dateVal(r.expectedPaymentDate) ? undefined : C.g400 }}>{payShown || '—'}</span>}
         </td>
+        {/* ⑧ 요금(100%) — 통역: 독립 입력(통역료 자동계산 없음). 번역: 협의 총액(§3·§4A, base=directAmount). 외주·경비·일반개인: 금액상세 팝업. 장비: '-'. */}
         <td style={tdR}>
-          {unitMode ? (editable ? priceCell(r.contractUnitPrice, v => patchRow(i, { contractUnitPrice: v }), `perf-unitprice-${i}`, '계약단가') : (r.contractUnitPrice != null && r.contractUnitPrice !== '' ? `${won(r.contractUnitPrice)}원` : muted)) : muted}
+          {isInterp
+            ? (editable ? priceCell(r.contractUnitPrice, v => setInterpFee100(i, v), `perf-fee100-${i}`, '요금(100%)') : (r.contractUnitPrice != null && r.contractUnitPrice !== '' ? `${won(r.contractUnitPrice)}원` : muted))
+            : isTrans
+              ? (editable ? priceCell(r.directAmount, v => setTransFee100(i, v), `perf-fee100-${i}`, '요금(100%)') : (r.isDirectAmount && r.directAmount != null && r.directAmount !== '' ? `${won(r.directAmount)}원` : muted))
+              : isOtherAmt
+                ? (editable ? amtBtn(`${won(cost.base)}원`, () => setAmountPopup(i), `perf-amount-${i}`) : `${won(cost.base)}원`)
+                : muted}
         </td>
+        {/* ⑨ 통역료(85%) — 독립 입력(자동계산 없음, 요금과 역산 안 함). 셀은 입력한 '기준금액' 그대로 표시(§8). 지급액 세전은 이 값×0.85(cost.base). 통역 전용. */}
         <td style={tdR}>
-          {editable ? amtBtn(`${won(cost.base)}원`, () => setAmountPopup(i), `perf-amount-${i}`) : `${won(cost.base)}원`}
+          {isInterp ? (editable ? priceCell(r.directAmount, v => patchRow(i, { directAmount: v, isDirectAmount: true }), `perf-fee85-${i}`, '통역료(85%)') : (r.directAmount != null && r.directAmount !== '' ? `${won(r.directAmount)}원` : muted)) : muted}
         </td>
-        {/* 조정항목 — 교통비·출장비·저작권료·이동일보상·취소보상·기타비용(+) 및 차감(-) 통합. 클릭 시 공통 편집 팝업(조회·수정 동일). */}
+        {/* ⑩ 추가통역료 — expenses['수가통역료']. 셀 클릭→지급률 팝업(기본 85%). 실제 지급액 표시. 통역 전용. */}
+        <td style={tdR}>{isInterp ? costCell(r, i, INTERP_ADD_FEE_TYPE, '추가통역료', editable) : muted}</td>
+        {/* ⑪ 출장비 — expenses['출장비']. 지급률 기본 85%. 통역 전용. */}
+        <td style={tdR}>{isInterp ? costCell(r, i, INTERP_BIZTRIP_TYPE, '출장비', editable) : muted}</td>
+        {/* ⑫ 교통비 — expenses['교통비']. 지급률 기본 100%(실비, §8). 통역 전용. */}
+        <td style={tdR}>{isInterp ? costCell(r, i, INTERP_TRANSPORT_TYPE, '교통비', editable) : muted}</td>
+        {/* ⑬ 동적 기타비용 컬럼(§3·§5) — 각 컬럼 = expenses[]의 특정 expenseType. 개인은 지급률 팝업(실제 지급액 표시), 그 외 읽기전용. */}
+        {etcCols.map(type => {
+          const amt = expAmtOf(r, type);
+          return (
+            <td key={`etc-c-${type}-${i}`} style={tdR}>
+              {isIndiv
+                ? costCell(r, i, type, etcColLabel(type), editable)
+                : (amt !== '' ? `${won(amt)}원` : muted)}
+            </td>
+          );
+        })}
+        {/* ⑭ 기타비용 선택기(§1·§4) — 항상 마지막. 개인: 항목 선택→동적 컬럼 추가 / 직접입력 / 차감·상세 팝업. 외주·장비·일반개인: 기존 추가비용(+/-) 팝업 유지. */}
+        <td style={{ ...tdBase, textAlign: 'center' }}>
+          {isIndiv
+            ? (editable
+                ? <span data-testid={`perf-etc-select-${i}`}>
+                    <ClickSelect value="" placeholder="기타비용" triggerStyle={{ ...inp, minWidth: 96 }}
+                      options={[
+                        ...ETC_SELECTABLE_TYPES.filter(o => !etcCols.includes(o.value)),
+                        { value: CUSTOM_EXPENSE_VALUE, label: '직접입력' },
+                        { value: '__detail__', label: '차감 · 상세…' },
+                      ]}
+                      onChange={(v: string) => {
+                        if (v === CUSTOM_EXPENSE_VALUE) addCustomEtcCol(etcCols);
+                        else if (v === '__detail__') setAdjustPopup(i);
+                        else addEtcCol(v);
+                      }} />
+                  </span>
+                : amtBtn('상세', () => setAdjustViewPopup(i), `perf-etc-view-${i}`))
+            : (isOtherAmt || isEquip)
+                ? (adjTotal === 0 ? muted : (editable ? amtBtn(`${won(adjTotal)}원`, () => setAdjustPopup(i), `perf-adj-${i}`) : amtBtn(`${won(adjTotal)}원`, () => setAdjustViewPopup(i), `perf-adj-view-${i}`)))
+                : muted}
+        </td>
+        {/* ⑭ 수량 — 번역/장비 전용. */}
         <td style={tdR}>
-          {editable
-            ? amtBtn(`${won(adjTotal)}원`, () => setAdjustPopup(i), `perf-adj-${i}`)
-            : amtBtn(`${won(adjTotal)}원`, () => setAdjustViewPopup(i), `perf-adj-view-${i}`)}
+          {(isTrans || isEquip)
+            ? (editable
+                ? <input type="number" min={0} inputMode="numeric" data-testid={`perf-qty-${i}`} aria-label="수량"
+                    style={{ ...inp, textAlign: 'right' }}
+                    value={r.quantity == null || r.quantity === '' ? '' : String(r.quantity)} onChange={e => patchRow(i, { quantity: e.target.value })} />
+                : <span>{r.quantity != null && r.quantity !== '' ? won(r.quantity) : muted}</span>)
+            : muted}
         </td>
-        {/* 지급액(구 원가합계) — 지급액 → 세금처리 → 지급상태 순서 */}
-        <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }}>{won(cost.costTotal)}원</td>
+        {/* ⑮ 단위 — 번역: 글자/단어 선택. 장비: 저장 단위 표시(읽기전용). */}
+        <td style={{ ...tdBase, textAlign: 'center' }}>
+          {isTrans
+            ? (editable
+                ? <ClickSelect value={TRANS_UNIT_OPTS.some(o => o.value === r.unit) ? (r.unit as string) : ''} onChange={(v: string) => patchRow(i, { unit: v })} triggerStyle={{ ...inp, minWidth: 64 }} options={TRANS_UNIT_OPTS} />
+                : <span>{r.unit || muted}</span>)
+            : isEquip ? <span>{r.unit || muted}</span> : muted}
+        </td>
+        {/* ⑯ 단가 — 번역/장비 전용(계약단가). */}
+        <td style={tdR}>
+          {(isTrans || isEquip)
+            ? (editable ? priceCell(r.contractUnitPrice, v => patchRow(i, { contractUnitPrice: v }), `perf-unitprice-${i}`, '단가') : (r.contractUnitPrice != null && r.contractUnitPrice !== '' ? `${won(r.contractUnitPrice)}원` : muted))
+            : muted}
+        </td>
+        {/* 지급액(세전) — 수행원가(정산·수익률 기준 §3·§6). 기존 지급액값 그대로. */}
+        <td style={{ ...tdR, width: RW.cost, fontWeight: 700, color: C.primaryText }}>{won(before)}원</td>
+        {/* 지급액(세후) — 세전 × (1−원천세율). 실제 송금 기준(§3). 세율 0이면 세전과 동일. */}
+        <td style={{ ...tdR, width: RW.cost }} title="세전 × (1 − 원천세율)">{won(after)}원</td>
         {/* 세금처리 — 통번역사·외주업체 공통 드롭다운(3.3% / 원천징수 예외 / 세금계산서). 외주업체는 기록용(지급액 불변) */}
         {/* paddingLeft 20 — 헤더와 동일. 지급액(우측정렬 금액)과 세금처리 사이 여백 확보(붙어 보임 방지) */}
         <td style={{ ...tdBase, paddingLeft: 20 }}>
@@ -553,6 +825,12 @@ export default function PerformanceSection({ projectId, token, performances, onC
             )}
           </div>
         </td>
+        {/* 수익률%(§4·§5) — (공급가액 − 세전원가합계) ÷ 공급가액 × 100. 계산불가/미입력은 '—'. 적자(음수)만 붉은색(과도한 강조 없음 §13). */}
+        <td style={{ ...tdR, width: 92 }} title={profit == null ? '판매 공급가액 없음 또는 원가 미입력 — 계산불가' : '(판매 공급가액 − 세전 수행원가 합계) ÷ 판매 공급가액'}>
+          {profit == null
+            ? muted
+            : <span style={{ fontWeight: 600, color: profit < 0 ? C.danger : C.textPrimary }}>{profit.toFixed(1)}%</span>}
+        </td>
         {/* 비고(§16) — 사용자 자유입력 운영 메모. remark 컬럼 연동 저장·조회. 계산·정산 로직 미반영. */}
         <td style={{ ...tdBase, width: RW.remark }}>
           {editable
@@ -563,20 +841,37 @@ export default function PerformanceSection({ projectId, token, performances, onC
     );
   };
 
-  const COLSPAN = 14;
-  const erpTable = (data: Row[], editable: boolean, emptyMsg: string) => (
+  const BASE_COLSPAN = 21;
+  const erpTable = (data: Row[], editable: boolean, emptyMsg: string) => {
+    // 판매상품(saleItemId)별 세전 지급액 합계 + 배정여부(§8) — 복수 수행자 시 상품 수익률 계산 기준.
+    //   같은 판매상품에 연결된 모든 수행행의 세전(costTotal)을 합산하고, 하나라도 수행자 배정이면 assigned=true.
+    const bySale = new Map<number, { cost: number; assigned: boolean }>();
+    for (const r of data) {
+      if (r.saleItemId == null) continue;
+      const prev = bySale.get(r.saleItemId) ?? { cost: 0, assigned: false };
+      prev.cost = round2(prev.cost + calcRowCostPreview(r).costTotal);
+      if (r.individualUserId != null || r.vendorCompanyId != null) prev.assigned = true;
+      bySale.set(r.saleItemId, prev);
+    }
+    // 동적 기타비용 컬럼(§5) — 전 행 합집합(+ 편집모드는 사용자 pin). 미사용(데이터 없는) 컬럼은 편집모드에서 ✕ 제거 가능(§8).
+    const etcCols = computeEtcCols(data, editable ? pinnedEtcCols : []);
+    const emptyCols = new Set(etcCols.filter(t => etcColIsEmpty(data, t)));
+    const COLSPAN = BASE_COLSPAN + etcCols.length;
+    const minW = 2894 + etcCols.length * 96;   // 동적 컬럼당 최소폭 96(§12 compact 유지)
+    return (
     <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 620, border: `1px solid ${C.g200}`, borderRadius: BD.radius.md }}>
-      <table style={{ borderCollapse: 'collapse', minWidth: 1920, width: 'max-content' }}>
-        {renderHeader(editable)}
+      <table style={{ borderCollapse: 'collapse', minWidth: minW, width: 'max-content' }}>
+        {renderHeader(editable, etcCols, emptyCols)}
         <tbody>
-          {data.map((r, i) => renderRow(r, i, editable))}
+          {data.map((r, i) => renderRow(r, i, editable, bySale, etcCols))}
           {data.length === 0 && (
             <tr><td colSpan={COLSPAN} style={{ ...tdBase, textAlign: 'center', color: C.g400, padding: '20px 8px' }}>{emptyMsg}</td></tr>
           )}
         </tbody>
       </table>
     </div>
-  );
+    );
+  };
 
   // ── 헤더 ──
   const header = (
@@ -647,14 +942,36 @@ export default function PerformanceSection({ projectId, token, performances, onC
       {editMode && amountPopup != null && popupRow && (
         <AmountDetailPopup r={popupRow} patch={(p) => patchRow(amountPopup, p)} onClose={() => setAmountPopup(null)} />
       )}
+      {/* 비용항목 지급률 팝업(§비용지급률·§9) — 기준금액×지급률=실제지급액. 기존 데이터(지급률 null)는 100%로 취급(§11), 신규는 항목별 기본율. */}
+      {editMode && ratePopup != null && rows[ratePopup.i] && (() => {
+        const r = rows[ratePopup.i];
+        const e = (r.expenses ?? []).find(x => x.expenseType === ratePopup.type);
+        const fixed100 = isFixed100Type(ratePopup.type);   // 교통비·숙박비·식비 = 100% 고정(§4·§5)
+        const base = e ? expenseBase(e) : null;
+        const rate = fixed100 ? 100 : (e ? (e.payoutRate != null && e.payoutRate !== '' ? num(e.payoutRate) : 100) : defaultPayoutRate(ratePopup.type));
+        return <RatePopup label={ratePopup.label} expenseType={ratePopup.type} base={base} rate={rate} fixed100={fixed100}
+          onConfirm={(b, rt) => setExpFull(ratePopup.i, r, ratePopup.type, b, fixed100 ? 100 : rt)}
+          onClose={() => setRatePopup(null)} />;
+      })()}
       {/* 조정항목 팝업(§4~§8) — 추가(+)·차감(-) 통합 입력, 확인 시 커밋 */}
-      {editMode && adjustPopup != null && popupRow && (
-        <AdjustmentPopup r={popupRow} patch={(p) => patchRow(adjustPopup, p)} onClose={() => setAdjustPopup(null)} />
-      )}
+      {editMode && adjustPopup != null && popupRow && (() => {
+        const indiv = popupRow.performerCategory === 'individual';
+        const interp = indiv && isInterpretationKind(popupRow);          // 통역: 전용3종 제외
+        const etcMode = interp || (indiv && isTranslationKind(popupRow)); // 통역·번역: 기타비용 팝업(저작권료 등)
+        return <AdjustmentPopup r={popupRow} patch={(p) => patchRow(adjustPopup, p)} onClose={() => setAdjustPopup(null)}
+          excludeTypes={interp ? INTERP_DEDICATED_EXPENSE_TYPES : undefined} addDefaultType={etcMode ? INTERP_ETC_DEFAULT_TYPE : undefined} title={etcMode ? '기타비용' : undefined}
+          hideSelectTypes={etcMode ? INTERP_DEDICATED_EXPENSE_TYPES : undefined} />;
+      })()}
       {/* 조정항목(조회화면 즉시 수정, §1·§2·§6) — 수정화면과 동일한 공통 AdjustmentPopup. 확인 시 해당 1행만 즉시 저장 */}
-      {!editMode && adjustViewPopup != null && viewRows[adjustViewPopup] && (
-        <AdjustmentPopup r={viewRows[adjustViewPopup]} patch={(p) => saveViewAdjustment(adjustViewPopup, p)} onClose={() => setAdjustViewPopup(null)} />
-      )}
+      {!editMode && adjustViewPopup != null && viewRows[adjustViewPopup] && (() => {
+        const vr = viewRows[adjustViewPopup];
+        const indiv = vr.performerCategory === 'individual';
+        const interp = indiv && isInterpretationKind(vr);
+        const etcMode = interp || (indiv && isTranslationKind(vr));
+        return <AdjustmentPopup r={vr} patch={(p) => saveViewAdjustment(adjustViewPopup, p)} onClose={() => setAdjustViewPopup(null)}
+          excludeTypes={interp ? INTERP_DEDICATED_EXPENSE_TYPES : undefined} addDefaultType={etcMode ? INTERP_ETC_DEFAULT_TYPE : undefined} title={etcMode ? '기타비용' : undefined}
+          hideSelectTypes={etcMode ? INTERP_DEDICATED_EXPENSE_TYPES : undefined} />;
+      })()}
 
       {/* 납품일 변경/삭제 시 수동 지급일 보호 확인창(§10-2·§13) — 3방향 선택 */}
       {dateConfirm && (() => {

@@ -29,10 +29,11 @@ export const SVC_CFG: Record<ServiceType, { label: string; color: string; bg: st
 // ④ 동적필드 셀은 minmax(572px, 1fr): 통역 내부(기간174+운영132+시간86+인원56+장소100+gap16=564)가
 //   절대 겹치지 않는 최소폭을 보장하고, 폭이 남으면 1fr로 확장(장소가 흡수).
 // 행제어 유형 서비스명  동적          AI  수량 단위 단가  공급가액  비고
-export const TABLE_COLS = '82px 60px 200px minmax(572px, 1fr) 24px 64px 64px 112px 112px minmax(130px, 220px)';
+// 행제어: 삭제/추가/위/아래/복사 5개 버튼이 한 줄에 모두 보이도록 112px(기존 82px, 복사 버튼 추가분 확보).
+export const TABLE_COLS = '112px 60px 200px minmax(572px, 1fr) 24px 64px 64px 112px 112px minmax(130px, 220px)';
 // 모든 컬럼 최소폭 합(+colGap 9×5 +padding 16). 브라우저 폭이 이 값 미만이면
 // 상품정보 카드 내부에만 가로 스크롤이 생기고, 행은 항상 한 줄을 유지한다.
-export const TABLE_MIN_W = 1484;
+export const TABLE_MIN_W = 1514;
 export const tblRow: React.CSSProperties = dsRow(TABLE_COLS, { minWidth: TABLE_MIN_W });
 
 // ─── 컬럼 헤더 레이블 스타일 — DS dsColH 기반 ────────────────────────────────

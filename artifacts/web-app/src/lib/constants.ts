@@ -706,6 +706,7 @@ export const MAIN_CATEGORIES_BY_TYPE: Record<string, { label: string; code: stri
     { label: "화상통역",    code: "VDEO" },
     { label: "전화통역",    code: "TEL"  },
     { label: "기타통역",    code: "ETC"  },
+    { label: "기타비용",    code: "MISC" },
   ],
   combined: [
     { label: "일반통번역",  code: "GEN"   },

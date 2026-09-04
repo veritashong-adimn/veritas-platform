@@ -1040,18 +1040,38 @@ router.patch("/admin/projects/:id/cancel", ...adminGuard, requirePermission("pro
       const revertedQuotes = await tx.update(quotesTable)
         .set({ status: "pending" })
         .where(and(eq(quotesTable.projectId, projectId), eq(quotesTable.status, "approved")))
-        .returning({ id: quotesTable.id });
+        .returning({ id: quotesTable.id, quoteType: quotesTable.quoteType, batchClosedAt: quotesTable.batchClosedAt });
 
       // 차감 견적서: 확정된 잔액 반영을 되돌리고 reserved 로 복귀(재판매전환 대비)
       await revertQuoteReservationsToReserved(tx, revertedQuotes.map(q => q.id));
 
-      return { updated, revertedQuoteIds: revertedQuotes.map(q => q.id) };
+      // 누적 견적서(accumulated_batch) 마감 해제 — 판매취소로 이 견적의 유효 판매건이 사라지면 batch_closed_at 을 해제해
+      //   상품·금액 수정과 재판매전환을 다시 허용한다. 견적/상품/금액/거래처 등 데이터는 그대로 유지하고 상태·편집잠금만 복구한다.
+      //   [중요] 무조건 해제하지 않는다 — 취소 대상(projectId) 외 다른 '유효(취소 아님) 판매건'이 하나도 남지 않은 경우에만 해제.
+      //   현재 구조는 견적↔판매 1:1(quote.projectId)이라 이 project 취소로 유효 판매건이 사라지지만, 향후 다건 연결 대비 방어적으로 확인한다.
+      const reopenedQuoteIds: number[] = [];
+      for (const q of revertedQuotes) {
+        if (q.quoteType !== "accumulated_batch" || q.batchClosedAt == null) continue;
+        const [otherValidSale] = await tx.select({ id: projectsTable.id })
+          .from(projectsTable)
+          .innerJoin(quotesTable, eq(quotesTable.projectId, projectsTable.id))
+          .where(and(
+            eq(quotesTable.id, q.id),
+            ne(projectsTable.id, projectId),
+            ne(projectsTable.status, "cancelled"),
+          )).limit(1);
+        if (otherValidSale) continue;   // 다른 유효 판매건이 남아있으면 마감 유지(재오픈하지 않음)
+        await tx.update(quotesTable).set({ batchClosedAt: null }).where(eq(quotesTable.id, q.id));
+        reopenedQuoteIds.push(q.id);
+      }
+
+      return { updated, revertedQuoteIds: revertedQuotes.map(q => q.id), reopenedQuoteIds };
     });
 
-    const metadata = JSON.stringify({ reason: reason?.trim() || undefined, revertedQuoteIds: result.revertedQuoteIds });
+    const metadata = JSON.stringify({ reason: reason?.trim() || undefined, revertedQuoteIds: result.revertedQuoteIds, reopenedQuoteIds: result.reopenedQuoteIds });
     await logEvent("project", projectId, "project_cancelled", req.log, req.user ?? undefined, metadata);
-    req.log.info({ projectId, revertedQuoteIds: result.revertedQuoteIds }, "Admin: sale cancelled → project cancelled, quotes back to pending");
-    res.json({ ...result.updated, revertedQuoteIds: result.revertedQuoteIds });
+    req.log.info({ projectId, revertedQuoteIds: result.revertedQuoteIds, reopenedQuoteIds: result.reopenedQuoteIds }, "Admin: sale cancelled → project cancelled, quotes back to pending, accumulated-batch quotes reopened");
+    res.json({ ...result.updated, revertedQuoteIds: result.revertedQuoteIds, reopenedQuoteIds: result.reopenedQuoteIds });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to cancel project");
     res.status(500).json({ error: "프로젝트 취소 실패." });
