@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import './readTableView.css';
 import { api } from "../../lib/constants";
 
 interface AnalyticsRow {
@@ -94,7 +95,7 @@ export function InsightAnalyticsTab({ token, setToast }: Props) {
   const avgCtr = totalViews > 0 ? Math.round((totalClicks / totalViews) * 1000) / 10 : 0;
 
   const SortTh = ({ col, label }: { col: typeof sortBy; label: string }) => (
-    <th style={{ ...thS, color: sortBy === col ? "#2563eb" : "#6b7280" }} onClick={() => handleSort(col)}>
+    <th style={{ ...thS, textAlign: "center", color: sortBy === col ? "#2563eb" : "#6b7280" }} onClick={() => handleSort(col)}>
       {label}{sortBy === col ? " ▼" : ""}
     </th>
   );
@@ -172,7 +173,7 @@ export function InsightAnalyticsTab({ token, setToast }: Props) {
           <EmptyState />
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr>
                   <th style={{ ...thS, minWidth: 260 }}>인사이트</th>
@@ -180,9 +181,9 @@ export function InsightAnalyticsTab({ token, setToast }: Props) {
                   <SortTh col="clicks" label="클릭수" />
                   <SortTh col="conversions" label="전환수" />
                   <SortTh col="ctr" label="CTR (%)" />
-                  <th style={thS}>전환율 (%)</th>
-                  <th style={thS}>뷰전환 (%)</th>
-                  <th style={thS}>진단</th>
+                  <th style={{ ...thS, textAlign: "center" }}>전환율 (%)</th>
+                  <th style={{ ...thS, textAlign: "center" }}>뷰전환 (%)</th>
+                  <th style={{ ...thS, textAlign: "center" }}>진단</th>
                 </tr>
               </thead>
               <tbody>

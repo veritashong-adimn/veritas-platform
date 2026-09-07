@@ -12,7 +12,8 @@ import ImportPreviewPanel, {
   clearReviewSession,
 } from '../ImportPreviewPanel';
 import { ProductForm } from './ProductForm';
-import { ProductCard } from './ProductCard';
+import { ProductRow } from './ProductRow';
+import '../readTableView.css';
 import {
   type ProductFormType,
   Section, emptyProductForm, inputStyle, TYPE_COLORS, DEACTIVATION_REASONS,
@@ -526,12 +527,35 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
         ) : products.length === 0 ? (
           <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 상품이 없습니다.</Card>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {products.map(p => (
-              <ProductCard key={p.id} p={p} selectable={canManage}
-                selected={selectedIds.has(p.id)} onToggleSelect={toggleSelect} onOpen={openEdit} />
-            ))}
-          </div>
+          <Card style={{ padding: 0, overflow: "hidden" }}>
+            <div style={{ overflowX: "auto" }}>
+              {/* 공통 read-table 규격(veritas-read-table) — 헤더/zebra/hover 전역 규격 재사용. 상품목록 전용 스타일 없음. */}
+              <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    {canManage && (
+                      <th style={{ textAlign: "center", width: 34 }}>
+                        <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
+                          aria-label="현재 페이지 전체 선택" data-testid="product-select-all"
+                          style={{ width: 15, height: 15, cursor: "pointer" }} />
+                      </th>
+                    )}
+                    <th style={{ textAlign: "left" }}>상품코드</th>
+                    <th style={{ textAlign: "left" }}>상품명</th>
+                    <th style={{ textAlign: "center" }}>유형</th>
+                    <th style={{ textAlign: "left" }}>상품정보</th>
+                    <th style={{ textAlign: "center" }}>상태</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {products.map(p => (
+                    <ProductRow key={p.id} p={p} selectable={canManage}
+                      selected={selectedIds.has(p.id)} onToggleSelect={toggleSelect} onOpen={openEdit} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         )}
 
         {/* 페이지네이션 */}

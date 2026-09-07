@@ -8,6 +8,8 @@
  * 연결 데이터가 존재하면 서버가 409로 차단한다.
  */
 import React, { useState, useEffect, useCallback } from 'react';
+import { formatDisplayDate } from '../../lib/dateFormat';
+import './readTableView.css';
 import { api } from '../../lib/constants';
 import { PageHeader } from './PageHeader';
 import { dsStickyPageHeader } from '../../lib/ds';
@@ -110,7 +112,7 @@ export function ContactTrashTab({ token, isAdmin, onToast, onBack, onRestored }:
 
       <div style={{ padding: '20px 0 64px' }}>
         <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: '#f9fafb' }}>
                 {['담당자명', '거래처', '부서/직책', '삭제일', '삭제자', '삭제 사유', '관리'].map(h => (
@@ -128,7 +130,7 @@ export function ContactTrashTab({ token, isAdmin, onToast, onBack, onRestored }:
                   <td style={{ ...td, color: '#111827', fontWeight: 700, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</td>
                   <td style={{ ...td, color: '#6b7280', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.companyName ?? '—'}</td>
                   <td style={{ ...td, color: '#6b7280' }}>{[r.department, r.position].filter(Boolean).join(' / ') || '—'}</td>
-                  <td style={td}>{r.deletedAt ? new Date(r.deletedAt).toLocaleDateString('ko-KR') : '—'}</td>
+                  <td style={td}>{r.deletedAt ? formatDisplayDate(r.deletedAt) : '—'}</td>
                   <td style={td}>{r.deletedByName ?? '—'}</td>
                   <td style={{ ...td, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', color: '#6b7280' }} title={r.deletionReason ?? ''}>{r.deletionReason ?? '—'}</td>
                   <td style={{ ...td }}>

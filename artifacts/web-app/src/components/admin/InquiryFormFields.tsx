@@ -15,6 +15,7 @@ import {
   EQUIPMENT_KINDS, EQUIPMENT_UNITS, EquipmentRow, emptyEquipmentRow,
 } from '../../lib/inquiryMeta';
 import { CustomerLinkPicker } from './CustomerLinkPicker';
+import { DateField } from './DatePickerShared';
 
 const label: React.CSSProperties = { display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 5 };
 const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', padding: '8px 10px', fontSize: 13, border: '1px solid #d1d5db', borderRadius: 8, outline: 'none' };
@@ -279,7 +280,7 @@ export function InquiryFormFields({ f, set, equipment, setEquipment, adminUsers 
             {adminUsers.map(u => <option key={u.id} value={u.id}>{u.name ?? u.email}</option>)}
           </select></div>
         <div style={field('200px')}><label style={label}>견적서 수령 희망일 <span style={{ color: '#9ca3af', fontWeight: 400 }}>(선택)</span></label>
-          <input type="date" value={f.quoteDueDate} onChange={e => set('quoteDueDate', e.target.value)} data-testid="inq-quoteDue" style={input} /></div>
+          <DateField value={f.quoteDueDate} onChange={v => set('quoteDueDate', v)} testid="inq-quoteDue" ariaLabel="견적서 수령 희망일" style={input} /></div>
       </div>
 
       {/* 고객 정보 — 등록: 기존 거래처/담당자 연결 picker / 상세 수정: 기존 원문 직접입력(호환 유지) */}
@@ -349,7 +350,7 @@ export function InquiryFormFields({ f, set, equipment, setEquipment, adminUsers 
           <div style={{ ...row, marginTop: 12 }}>
             <div style={field()}><label style={label}>번역 분량</label><input value={f.volume} onChange={e => set('volume', e.target.value)} data-testid="inq-volume" style={input} placeholder="예: A4 20페이지, 5,000단어, 10,000자" /></div>
             <div style={field()}><label style={label}>문서 사용처</label><input value={f.documentUsage} onChange={e => set('documentUsage', e.target.value)} data-testid="inq-docUsage" style={input} placeholder="예: 계약서 제출용, 내부 검토용" /></div>
-            <div style={field('200px')}><label style={label}>번역 완료 희망일</label><input type="date" value={f.desiredCompletionDate} onChange={e => set('desiredCompletionDate', e.target.value)} data-testid="inq-completeDate" style={input} /></div>
+            <div style={field('200px')}><label style={label}>번역 완료 희망일</label><DateField value={f.desiredCompletionDate} onChange={v => set('desiredCompletionDate', v)} testid="inq-completeDate" ariaLabel="번역 완료 희망일" style={input} /></div>
           </div>
           <div style={{ marginTop: 12 }}><label style={label}>번역 내용/주제</label><input value={f.subject} onChange={e => set('subject', e.target.value)} data-testid="inq-subject" style={input} /></div>
         </div>

@@ -25,6 +25,7 @@ import { calcInterpretation, displayUnit, buildQuotePdfData } from '../../lib/qu
 import { generateQuoteTitle } from '../../lib/quoteTitle';
 import QuotePdfPreviewModal from './QuotePdfPreviewModal';
 import { PageHeader } from './PageHeader';
+import { DateField } from './DatePickerShared';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
 
@@ -901,21 +902,17 @@ function DateRangeField({ start, end, onChange, boxStyle, title = '기간', star
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: C.textMuted, fontWeight: 700 }}>
               <span style={{ width: 30, flexShrink: 0 }}>시작</span>
-              <input type="date" value={s} onChange={ev => { const v = ev.target.value; setS(v); if (e && e < v) setE(''); }}
-                style={{ ...rinp('100%'), height: 30 }} title={startTitle} data-testid="input-daterange-start" />
+              <DateField value={s} onChange={v => { setS(v); if (e && v && e < v) setE(''); }}
+                style={{ ...rinp('100%'), height: 30 }} title={startTitle} ariaLabel={startTitle || '시작일'} testid="input-daterange-start" />
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: C.textMuted, fontWeight: 700 }}>
               <span style={{ width: 30, flexShrink: 0 }}>종료</span>
-              <input type="date" value={e} min={s || undefined} onChange={ev => setE(ev.target.value)}
-                style={{ ...rinp('100%'), height: 30 }} title={endTitle} data-testid="input-daterange-end" />
+              <DateField value={e} min={s || undefined} onChange={v => setE(v)}
+                style={{ ...rinp('100%'), height: 30 }} title={endTitle} ariaLabel={endTitle || '종료일'} testid="input-daterange-end" />
             </label>
           </div>
           <div style={{ fontSize: 10, color: startAfterEnd ? C.danger : C.textMuted, marginTop: 6 }}>
             {startAfterEnd ? '⚠ 종료일이 시작일보다 빠릅니다' : '당일 일정은 종료일을 비워두세요'}
-          </div>
-          {/* 월 이동 안내 — 브라우저 native 달력 사용법 보조문구(작고 자연스럽게, 기존 안내문구 스타일 재사용) */}
-          <div style={{ fontSize: 10, color: C.textMuted, marginTop: 4 }}>
-            월 이동: ▲ 이전 달 · ▼ 다음 달
           </div>
           {/* 하단 버튼 — [초기화](보조) ↔ [확인] (TimeRangeField와 동일 규격) */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 }}>
@@ -1031,7 +1028,7 @@ function InstallDateTimeField({ value, onChange, boxStyle, prefix }: {
           {/* 날짜 */}
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: C.textMuted, fontWeight: 700 }}>
             <span style={{ width: 30, flexShrink: 0 }}>날짜</span>
-            <input type="date" value={d} onChange={ev => setD(ev.target.value)} style={{ ...rinp('100%'), height: 30 }} data-testid="input-install-date" />
+            <DateField value={d} onChange={v => setD(v)} style={{ ...rinp('100%'), height: 30 }} ariaLabel="설치일" testid="input-install-date" />
           </label>
           {/* 시간 — 커스텀 시·분 목록(브라우저 기본 time picker 미사용). 인라인이라 하단 버튼 안 가림(§1·§2·§5) */}
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 8 }}>
@@ -2321,7 +2318,7 @@ export function QuoteEditorWorkspace({
             </div>
             <div>
               {fLbl('견적일')}
-              <input type="date" value={issueDate} onChange={e => setIssueDate(e.target.value)} style={inpSt} />
+              <DateField value={issueDate} onChange={v => setIssueDate(v)} style={inpSt} ariaLabel="견적일" testid="input-issue-date" />
             </div>
             <div>
               {fLbl('부가세')}

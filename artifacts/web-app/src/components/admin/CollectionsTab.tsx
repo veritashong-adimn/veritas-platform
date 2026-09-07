@@ -8,6 +8,8 @@ import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { formatWon } from "@/lib/utils";
 import { api } from '../../lib/constants';
 import { Card, FilterPill } from '../ui';
+import './readTableView.css';
+import { formatDisplayDate } from '../../lib/dateFormat';
 
 type CollectionRow = {
   id: number;
@@ -74,7 +76,7 @@ const td: React.CSSProperties = {
 const tdNum: React.CSSProperties = { ...td, textAlign: "right", whiteSpace: "nowrap" };
 
 function fmtDate(s: string | null): string {
-  return s ? s.slice(0, 10) : "-";
+  return s ? formatDisplayDate(s.slice(0, 10)) : "-";
 }
 
 interface Props {
@@ -177,11 +179,27 @@ export function CollectionsTab({ token, onToast, onOpenSalesDetail }: Props) {
       ) : (
         <Card style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  {["판매번호","프로젝트명","청구업체","결제방법","발행일","입금예정일","최근입금일","청구금액","누적입금액","미수금","입금상태","입금은행","외화","담당PM","비고"]
-                    .map((h) => <th key={h} style={th}>{h}</th>)}
+                  {/* 헤더 정렬 = 본문 정렬(금액 3열만 right, 나머지 left) */}
+                  {([
+                    { label: "판매번호", align: "left" as const },
+                    { label: "프로젝트명", align: "left" as const },
+                    { label: "청구업체", align: "left" as const },
+                    { label: "결제방법", align: "left" as const },
+                    { label: "발행일", align: "left" as const },
+                    { label: "입금예정일", align: "left" as const },
+                    { label: "최근입금일", align: "left" as const },
+                    { label: "청구금액", align: "right" as const },
+                    { label: "누적입금액", align: "right" as const },
+                    { label: "미수금", align: "right" as const },
+                    { label: "입금상태", align: "left" as const },
+                    { label: "입금은행", align: "left" as const },
+                    { label: "외화", align: "left" as const },
+                    { label: "담당PM", align: "left" as const },
+                    { label: "비고", align: "left" as const },
+                  ]).map((h) => <th key={h.label} style={{ ...th, textAlign: h.align }}>{h.label}</th>)}
                 </tr>
               </thead>
               <tbody>
@@ -193,8 +211,6 @@ export function CollectionsTab({ token, onToast, onOpenSalesDetail }: Props) {
                       data-testid={`collection-row-${r.id}`}
                       onClick={() => onOpenSalesDetail?.(r.projectId)}
                       style={{ cursor: onOpenSalesDetail ? "pointer" : "default" }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "#f9fafb")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                     >
                       <td style={{ ...td, fontWeight: 600, color: "#2563eb", whiteSpace: "nowrap" }}>
                         {r.quoteNumber ?? "-"}

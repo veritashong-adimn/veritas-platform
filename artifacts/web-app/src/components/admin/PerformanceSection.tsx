@@ -6,6 +6,7 @@
 //  · 저장은 PUT /admin/projects/:id/performances — 원가·원천세·부가세 서버 재계산. 판매금액과 분리.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useMemo, useState, useEffect } from 'react';
+import { formatDisplayDate } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
@@ -14,6 +15,7 @@ import RowControls from './RowControls';
 import InlinePerformerPicker from './InlinePerformerPicker';
 import { AmountDetailPopup, AdjustmentPopup, RatePopup } from './performancePopups';
 import ServiceDetailCell from './performanceServiceDetail';
+import './readTableView.css';
 import {
   Row, ExpenseRow, toRow, won, num, round2, commafy, dateVal, calcRowCostPreview, calcPaymentDate, isEquipmentKind, isInterpretationKind, isTranslationKind, perPersonSnapshot,
   autoRateSig, isAutoRateOverwritable, afterTaxPayout, profitRatePct,
@@ -25,6 +27,7 @@ import {
   PAYMENT_STATUS_OPTS, PAYMENT_STATUS_SELECTABLE_OPTS,
   PaymentBadge,
 } from './performanceShared';
+import { DateField } from './DatePickerShared';
 
 interface Props {
   projectId: number;
@@ -669,7 +672,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
     //   번역은 판매에 종료일이 없어 납품일이 비어 시작하므로, 미입력도 붉은색으로 경고해 입력·확인 누락을 방지한다.
     const dConfirmed = !!r.deliveryConfirmed;
     const dColor = dConfirmed ? C.textPrimary : C.danger;
-    const dTitle = !r.deliveryDate ? '납품일 미입력 — 납품일 입력 후 확인 필요' : (dConfirmed ? (r.deliveryConfirmedAt ? `확인완료 · ${dateVal(r.deliveryConfirmedAt)}` : '확인완료') : '담당 PM 납품확인 전');
+    const dTitle = !r.deliveryDate ? '납품일 미입력 — 납품일 입력 후 확인 필요' : (dConfirmed ? (r.deliveryConfirmedAt ? `확인완료 · ${formatDisplayDate(r.deliveryConfirmedAt)}` : '확인완료') : '담당 PM 납품확인 전');
     return (
       <tr key={rowKey(r, i)}>
         {/* 행제어만 좌측 고정 유지 */}
@@ -704,23 +707,23 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <td style={tdBase}>
           {editable ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
-              <input type="date" style={{ ...inp, width: 122, color: dColor, ...(!dConfirmed ? { borderColor: C.danger } : {}) }}
-                value={dateVal(r.deliveryDate)} disabled={locked} onChange={e => changeDelivery(i, e.target.value)}
-                data-testid={`perf-delivery-row-${i}`} aria-label="납품일" title={dateTitle || dTitle} />
+              <DateField style={{ ...inp, width: 122, color: dColor, ...(!dConfirmed ? { borderColor: C.danger } : {}) }}
+                value={dateVal(r.deliveryDate)} disabled={locked} onChange={v => changeDelivery(i, v)}
+                testid={`perf-delivery-row-${i}`} ariaLabel="납품일" title={dateTitle || dTitle} />
               <input type="checkbox" checked={dConfirmed} disabled={!canConfirmDelivery || !r.deliveryDate || locked}
                 onChange={() => toggleDeliveryConfirm(i)} data-testid={`perf-delivery-confirm-${i}`} aria-label="담당 PM 납품확인" title={dTitle}
                 style={{ cursor: (!canConfirmDelivery || !r.deliveryDate || locked) ? 'default' : 'pointer' }} />
             </div>
           ) : (
-            <span style={{ color: dColor, whiteSpace: 'nowrap' }} title={dTitle}>{r.deliveryDate ? dateVal(r.deliveryDate) : '미입력'}{r.deliveryDate && dConfirmed ? ' ✓' : ''}</span>
+            <span style={{ color: dColor, whiteSpace: 'nowrap' }} title={dTitle}>{r.deliveryDate ? formatDisplayDate(r.deliveryDate) : '미입력'}{r.deliveryDate && dConfirmed ? ' ✓' : ''}</span>
           )}
         </td>
         <td style={tdBase}>
           {editable
-            ? <input type="date" style={{ ...inp, ...(r.payDateManual ? {} : { background: C.g50 }) }} disabled={locked} value={payShown}
-                onChange={e => changePayDate(i, e.target.value)} data-testid={`perf-paydate-row-${i}`} aria-label="지급일"
+            ? <DateField style={{ ...inp, ...(r.payDateManual ? {} : { background: C.g50 }) }} disabled={locked} value={payShown}
+                onChange={v => changePayDate(i, v)} testid={`perf-paydate-row-${i}`} ariaLabel="지급일"
                 title={locked ? dateTitle : (r.payDateManual ? '수동변경' : '자동계산(납품일 기준·직전 영업일)')} />
-            : <span title={r.payDateManual ? '수동변경' : '자동계산'} style={{ color: dateVal(r.expectedPaymentDate) ? undefined : C.g400 }}>{payShown || '—'}</span>}
+            : <span title={r.payDateManual ? '수동변경' : '자동계산'} style={{ color: dateVal(r.expectedPaymentDate) ? undefined : C.g400 }}>{payShown ? formatDisplayDate(payShown) : '—'}</span>}
         </td>
         {/* ⑧ 요금(100%) — 통역: 독립 입력(통역료 자동계산 없음). 번역: 협의 총액(§3·§4A, base=directAmount). 외주·경비·일반개인: 금액상세 팝업. 장비: '-'. */}
         <td style={tdR}>
@@ -860,7 +863,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
     const minW = 2894 + etcCols.length * 96;   // 동적 컬럼당 최소폭 96(§12 compact 유지)
     return (
     <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 620, border: `1px solid ${C.g200}`, borderRadius: BD.radius.md }}>
-      <table style={{ borderCollapse: 'collapse', minWidth: minW, width: 'max-content' }}>
+      {/* 조회모드에만 zebra+hover 부여(§8: 편집모드는 입력칸 테두리 유지 위해 미적용). 의미색은 셀 텍스트라 배경과 무관하게 유지(§7). */}
+      <table className={editable ? 'veritas-thead' : 'vz-table'} style={{ borderCollapse: 'collapse', minWidth: minW, width: 'max-content' }}>
         {renderHeader(editable, etcCols, emptyCols)}
         <tbody>
           {data.map((r, i) => renderRow(r, i, editable, bySale, etcCols))}
@@ -878,7 +882,6 @@ export default function PerformanceSection({ projectId, token, performances, onC
     <div style={{ ...TYPO.sectionTitle, paddingBottom: SP[4], borderBottom: BD.grid, marginBottom: SP[5], display: 'flex', alignItems: 'center', gap: SP[3], flexWrap: 'wrap' }}>
       <span style={{ width: 22, height: 22, borderRadius: BD.radius.md, background: '#fef3c7', color: '#b45309', fontSize: 12, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>C</span>
       수행정보
-      <span style={{ ...TYPO.helper, marginLeft: SP[2] }}>수행자·외주업체 배정, 원가·지급 관리 (한 줄 입력 · 좌우 스크롤)</span>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         {editMode ? (
           <>

@@ -5,6 +5,7 @@ import React from 'react';
 import { formatWon } from '@/lib/utils';
 import { Card, DsButton, ClickSelect, NumericInput } from '../ui';
 import { C, TYPO, dsField } from '../../lib/ds';
+import { DateField } from './DatePickerShared';
 
 // 선입/이월 입력 라인 (클라이언트 폼 상태)
 //  - deposit  : 선입금 (같은 고객이 여러 번 선입해도 각 행의 발생/입금일로 구분 → 별도 '추가 선입금' 유형 불필요)
@@ -103,7 +104,7 @@ export function PrepaidLinesSection({
             <React.Fragment key={i}>
               <ClickSelect value={l.type} onChange={v => update(i, { type: v as PrepaidLine['type'] })} triggerStyle={dsField()} options={LINE_TYPE_OPTS} />
               <NumericInput value={l.amount} onChange={raw => update(i, { amount: raw })} suffix="원" style={dsField()} />
-              <input type="date" value={l.transactionDate} onChange={e => update(i, { transactionDate: e.target.value })} style={dsField()} />
+              <DateField value={l.transactionDate} onChange={v => update(i, { transactionDate: v })} ariaLabel="거래 날짜" style={dsField()} />
               <input
                 value={l.note}
                 onChange={e => update(i, { note: e.target.value })}

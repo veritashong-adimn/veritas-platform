@@ -9,14 +9,12 @@ import React, { useEffect, useRef } from 'react';
 import type { QuotePdfData } from '../../lib/quotePdf';
 import { ITEM_TYPE_LABEL, QUOTE_NOTES_BY_SERVICE } from '../../lib/quotePdf';
 import { renderQuoteTitle, buildDocFileName, escapeHtmlTitle, formatDocNumber } from '../../lib/quoteTitle';
+import { formatDisplayDate, formatScheduleRange } from '../../lib/dateFormat';
 
 // ─── 숫자 / 날짜 포맷 ────────────────────────────────────────────────────────
 const fmt = (n: number) => n.toLocaleString('ko-KR');
-const fmtDate = (d: string) => d.replace(/-/g, '.');
-const fmtDateRange = (start: string, end: string) => {
-  if (!start) return '';
-  return (!end || end === start) ? fmtDate(start) : `${fmtDate(start)} ~ ${fmtDate(end)}`;
-};
+const fmtDate = (d: string) => formatDisplayDate(d);
+const fmtDateRange = (start: string, end: string) => formatScheduleRange(start, end);
 
 // ─── 색상 ─────────────────────────────────────────────────────────────────────
 const BRAND = '#1e3a5f';
@@ -302,7 +300,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
                 {/* 견적번호 — 문서 전체(우측 상단·견적정보·미리보기 툴바)가 동일한 플랫폼 공식 문서번호
                     (formatDocNumber: Q+YYMMDD-순번, 견적목록·휴지통과 동일 체계)로 통일. 생성 로직·DB 불변. */}
                 <InfoRow label="견적번호"  value={formatDocNumber('Q', data.quoteNumber, data.quoteDate) || data.quoteNumber} mono />
-                {data.quoteDate  && <InfoRow label="견적일"    value={data.quoteDate} />}
+                {data.quoteDate  && <InfoRow label="견적일"    value={fmtDate(data.quoteDate)} />}
                 {data.quoteType  && <InfoRow label="견적유형"  value={data.quoteType} />}
                 {data.manager    && <InfoRow label="담당 PM"   value={data.manager} />}
               </div>

@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { formatDisplayDate } from '../lib/dateFormat';
 import { ADMIN_NAV_GROUPS, ADMIN_PAGE_TITLE, STAFF_DEFAULT_PERMS } from '../config/adminNav';
 import {
   api, User, AdminProject, AdminPayment, AdminTask, AdminSettlement, AdminUser,
@@ -26,6 +27,8 @@ import { TranslatorProfileModal } from '../components/admin/TranslatorProfileMod
 import { TranslatorDetailModal } from '../components/admin/TranslatorDetailModal';
 import { TranslatorCreateModal } from '../components/admin/TranslatorCreateModal';
 import { ProjectDetailModal } from '../components/admin/ProjectDetailModal';
+import { DateField } from '../components/admin/DatePickerShared';
+import '../components/admin/readTableView.css';
 import { PrepaidLedgerModal } from '../components/admin/PrepaidLedgerModal';
 import { ResetPasswordModal } from '../components/admin/ResetPasswordModal';
 import { BoardPostDetailModal } from '../components/admin/BoardPostDetailModal';
@@ -1187,7 +1190,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
                   {/* 행 테이블 (전체) */}
                   <div style={{ overflowX: "auto", maxHeight: 360, border: "1px solid #e5e7eb", borderRadius: 8, marginBottom: 14 }}>
-                    <table style={{ width: "100%", minWidth: 1156, borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
+                    <table className="veritas-read-table" style={{ width: "100%", minWidth: 1156, borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
                       {/* ── 컬럼 폭 정의 ──
                           좁음: 행(36) 상태(72) 주민번호(114) 지역(58)
                           중간: 이름(84) 휴대폰(108) 학력(96) 가능언어(112)
@@ -1210,7 +1213,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       <thead style={{ background: "#f9fafb", position: "sticky", top: 0, zIndex: 1 }}>
                         <tr>
                           {["행","상태","이름","주민번호","이메일","휴대폰","학력","가능언어","상세정보","지역","비고"].map(h => (
-                            <th key={h} style={{ padding: "6px 8px", textAlign: "left", fontWeight: 600, color: "#374151", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h}</th>
+                            <th key={h} style={{ padding: "6px 8px", textAlign: h === "행" ? "right" : "left", fontWeight: 600, color: "#374151", borderBottom: "1px solid #e5e7eb", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
@@ -1300,7 +1303,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 </div>
                 {excelBulkResult.failed > 0 && (
                   <div style={{ overflowX: "auto", maxHeight: 200, border: "1px solid #fecaca", borderRadius: 8, background: "#fef2f2", marginBottom: 14 }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                       <thead>
                         <tr>{["이메일","오류"].map(h => (<th key={h} style={{ padding: "6px 10px", textAlign: "left", fontWeight: 600, color: "#991b1b", borderBottom: "1px solid #fecaca" }}>{h}</th>))}</tr>
                       </thead>
@@ -1966,15 +1969,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>{["ID","프로젝트","통번역사","작업 상태","프로젝트 상태","생성일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {tasks.map(t => (
-                      <tr key={t.id}
-                        onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                      <tr key={t.id}>
                         <td style={{ ...tableTd, color: "#9ca3af" }}>#{t.id}</td>
                         <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{t.projectTitle ?? "(제목 없음)"}</td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
@@ -1983,7 +1984,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         </td>
                         <td style={tableTd}><StatusBadge status={t.status} /></td>
                         <td style={tableTd}>{t.projectStatus ? <StatusBadge status={t.projectStatus} /> : "-"}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{formatDisplayDate(t.createdAt)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -2077,7 +2078,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ background: "#f8fafc" }}>
                       {["ID","고객사","등급","프로젝트 현황","총 매출","미수금","최근 거래","등록일"].map(h => (
@@ -2093,14 +2094,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           ? { label: "VIP", bg: "#fdf4ff", color: "#9333ea", border: "#d8b4fe" }
                           : { label: "일반", bg: "#f8fafc", color: "#64748b", border: "#cbd5e1" };
                       const lastDate = c.lastTransactionAt
-                        ? new Date(c.lastTransactionAt).toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" }).replace(/\. /g, ".").replace(/\.$/, "")
+                        ? formatDisplayDate(c.lastTransactionAt)
                         : null;
                       return (
                         <tr key={c.id}
                           onClick={() => setCustomerModal(c.id)}
-                          style={{ cursor: "pointer", transition: "background 0.1s" }}
-                          onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
-                          onMouseLeave={e => (e.currentTarget.style.background = "")}>
+                          style={{ cursor: "pointer", transition: "background 0.1s" }}>
 
                           {/* ID */}
                           <td style={{ ...tableTd, color: "#d1d5db", fontSize: 11, width: 40 }}>#{c.id}</td>
@@ -2150,7 +2149,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
 
                           {/* 등록일 */}
                           <td style={{ ...tableTd, fontSize: 11, color: "#c0c8d4", whiteSpace: "nowrap" }}>
-                            {new Date(c.createdAt).toLocaleDateString("ko-KR")}
+                            {formatDisplayDate(c.createdAt)}
                           </td>
                         </tr>
                       );
@@ -2291,10 +2290,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
-                      <th style={{ ...tableTh, width: 36 }}>
+                      <th style={{ ...tableTh, width: 36, textAlign: "center" }}>
                         <input type="checkbox"
                           checked={selectedContactIds.size === contacts.length && contacts.length > 0}
                           onChange={e => setSelectedContactIds(e.target.checked ? new Set(contacts.map(c => c.id)) : new Set())}
@@ -2309,9 +2308,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       const isSelected = selectedContactIds.has(c.id);
                       return (
                         <tr key={c.id}
-                          style={{ cursor: "pointer", opacity: (c as any).isActive !== false ? 1 : 0.6, background: isSelected ? "#eff6ff" : undefined }}
-                          onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = "#f9fafb"; }}
-                          onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = "transparent"; }}>
+                          style={{ cursor: "pointer", opacity: (c as any).isActive !== false ? 1 : 0.6, background: isSelected ? "#eff6ff" : undefined }}>
                           <td style={{ ...tableTd, textAlign: "center" }} onClick={e => e.stopPropagation()}>
                             <input type="checkbox"
                               checked={isSelected}
@@ -2349,7 +2346,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             </span>
                           </td>
                           {/* 등록일 = 홈택스 원본 등록일(registeredAt). 없는 기존 데이터만 플랫폼 생성일(createdAt) fallback. */}
-                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }} onClick={() => setContactModal(c.id)}>{((c as any).registeredAt ?? c.createdAt) ? new Date((c as any).registeredAt ?? c.createdAt).toLocaleDateString("ko-KR") : "-"}</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }} onClick={() => setContactModal(c.id)}>{((c as any).registeredAt ?? c.createdAt) ? formatDisplayDate((c as any).registeredAt ?? c.createdAt) : "-"}</td>
                         </tr>
                       );
                     })}
@@ -2615,15 +2612,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>{["","분류","제목","작성자","등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}</tr>
                   </thead>
                   <tbody>
                     {boardPosts.map(post => (
-                      <tr key={post.id} onClick={() => setBoardPostModal(post)} style={{ cursor: "pointer" }}
-                        onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                      <tr key={post.id} onClick={() => setBoardPostModal(post)} style={{ cursor: "pointer" }}>
                         <td style={{ ...tableTd, width: 30 }}>
                           {post.pinned && <span style={{ fontSize: 14 }}>📌</span>}
                         </td>
@@ -2637,7 +2632,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                         </td>
                         <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>{post.title}</td>
                         <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{post.authorEmail ?? "-"}</td>
-                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{new Date(post.createdAt).toLocaleDateString("ko-KR")}</td>
+                        <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{formatDisplayDate(post.createdAt)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -2712,7 +2707,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
               <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", minWidth: 1180 }}>
+                <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", minWidth: 1180 }}>
                   <colgroup>
                     {/* 이름(12%) 주민번호(6%) 가능언어(8%) 학력(8%) 업무유형(6%) 세부유형(8%) 전문분야(8%) 상세정보(13%) 평점(5%) 지역(8%·말줄임) 가용상태(6%·고정) 운영상태(7%·고정) 등록일(5%) */}
                     <col style={{ width: "12%" }} />
@@ -2747,9 +2742,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       const statusColor = inactive ? "#9ca3af" : t.availabilityStatus === "available" ? "#059669" : t.availabilityStatus === "busy" ? "#d97706" : "#dc2626";
                       const statusBg = inactive ? "#f3f4f6" : t.availabilityStatus === "available" ? "#f0fdf4" : t.availabilityStatus === "busy" ? "#fffbeb" : "#fef2f2";
                       return (
-                        <tr key={t.id} onClick={() => { setTranslatorDetailModal({ userId: t.id, email: t.email }); navigateToAdminTab("translator-detail"); }} style={{ cursor: "pointer", opacity: inactive ? 0.6 : 1 }}
-                          onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
-                          onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                        <tr key={t.id} onClick={() => { setTranslatorDetailModal({ userId: t.id, email: t.email }); navigateToAdminTab("translator-detail"); }} style={{ cursor: "pointer", opacity: inactive ? 0.6 : 1 }}>
                           {/* 이름 / 이메일 / 휴대폰 */}
                           <td style={{ ...tableTd }}>
                             <div>
@@ -2912,7 +2905,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             })()}
                           </td>
                           {/* 등록일 */}
-                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap", overflow: "hidden", textAlign: "center" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</td>
+                          <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap", overflow: "hidden", textAlign: "center" }}>{formatDisplayDate(t.createdAt)}</td>
                         </tr>
                       );
                     })}
@@ -3067,7 +3060,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       <span style={{ color: "#111827", fontWeight: 600 }}>#{h.id} {h.title.replace("[테스트] 시나리오 ", "")}</span>
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <span style={{ color: "#6b7280", fontSize: 11 }}>{h.status}</span>
-                        <span style={{ color: "#9ca3af", fontSize: 11 }}>{new Date(h.createdAt).toLocaleDateString("ko-KR")}</span>
+                        <span style={{ color: "#9ca3af", fontSize: 11 }}>{formatDisplayDate(h.createdAt)}</span>
                       </div>
                     </div>
                   ))}
@@ -3201,8 +3194,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 </div>
                 <div>
                   <label style={labelStyle}>입금일</label>
-                  <input type="date" value={createPrepaidForm.depositDate} onChange={e => setCreatePrepaidForm(p => ({ ...p, depositDate: e.target.value }))}
-                    style={{ ...inputStyle, background: "#fff" }} />
+                  <DateField value={createPrepaidForm.depositDate} onChange={v => setCreatePrepaidForm(p => ({ ...p, depositDate: v }))}
+                    ariaLabel="입금일" testid="input-prepaid-deposit-date" style={{ ...inputStyle, background: "#fff" }} />
                 </div>
                 <div>
                   <label style={labelStyle}>메모 (선택)</label>
@@ -3266,7 +3259,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
                       <div>
                         <div style={{ fontWeight: 800, fontSize: 15, color: "#1e40af" }}>{account.companyName}</div>
-                        {account.depositDate && <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>입금일: {account.depositDate}</div>}
+                        {account.depositDate && <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>입금일: {formatDisplayDate(account.depositDate)}</div>}
                         {account.note && <div style={{ fontSize: 11, color: "#6b7280", marginTop: 1 }}>{account.note}</div>}
                       </div>
                       <span style={{ background: hasBalance ? "#dcfce7" : "#f3f4f6", color: hasBalance ? "#15803d" : "#6b7280", borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>

@@ -1,6 +1,8 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { formatDisplayDate } from '../../lib/dateFormat';
 import { api, AdminUser, User } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, RoleBadge, ClickSelect } from '../ui';
+import './readTableView.css';
 
 function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -384,19 +386,20 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
       ) : (
         <Card style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  {["ID","이메일/이름","유형","부서/직책","상태","접속","마지막 로그인","마지막 활동","가입일","시스템 권한(RBAC)","역할 변경","계정 상태","비밀번호","프로필"].map(h => (
-                    <th key={h} style={tableTh}>{h}</th>
+                  {/* 헤더 정렬 = 본문 정렬(접속만 center, 나머지 left) */}
+                  {([
+                    "ID","이메일/이름","유형","부서/직책","상태","접속","마지막 로그인","마지막 활동","가입일","시스템 권한(RBAC)","역할 변경","계정 상태","비밀번호","프로필",
+                  ]).map(h => (
+                    <th key={h} style={{ ...tableTh, textAlign: h === "접속" ? "center" : "left" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {users.map(u => (
-                  <tr key={u.id}
-                    onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                  <tr key={u.id}>
                     <td style={{ ...tableTd, color: "#9ca3af" }}>#{u.id}</td>
                     <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>
                       {u.name && <div style={{ fontWeight: 700, marginBottom: 2 }}>{u.name}</div>}
@@ -456,7 +459,7 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
                       })() : <span style={{ color: "#d1d5db" }}>—</span>}
                     </td>
                     <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>
-                      {new Date(u.createdAt).toLocaleDateString("ko-KR")}
+                      {formatDisplayDate(u.createdAt)}
                     </td>
                     <td style={tableTd}>
                       {(u.role === "admin" || u.role === "staff") ? (

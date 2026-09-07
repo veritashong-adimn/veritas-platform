@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import './readTableView.css';
 import { api, LANGUAGE_CODES } from '../../lib/constants';
 import { Card, GhostBtn } from '../ui';
 import { ReviewFixConsoleModal, ReviewFixItem, ReparseSavePayload } from './ReviewFixConsoleModal';
@@ -879,7 +880,7 @@ export default function ImportPreviewPanel({
           {filtered.length === 0 ? (
             <div style={{ textAlign: "center", padding: "24px 0", fontSize: 13, color: "#9ca3af" }}>해당 항목 없음</div>
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1400 }}>
+            <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, minWidth: 1400 }}>
               <thead>
                 <tr>
                   {/* 체크박스 헤더 */}
@@ -900,7 +901,7 @@ export default function ImportPreviewPanel({
                       "언어쌍":             200,
                       "방향":               150,
                     };
-                    return <th key={h} style={{ ...thStyle, minWidth: minW[h] }}>{h}</th>;
+                    return <th key={h} style={{ ...thStyle, minWidth: minW[h], textAlign: h === "단가" ? "right" : "left" }}>{h}</th>;
                   })}
                 </tr>
               </thead>

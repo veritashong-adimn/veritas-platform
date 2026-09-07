@@ -7,6 +7,7 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import { ClickSelect, GhostBtn, PrimaryBtn } from '../ui';
+import { DateField } from './DatePickerShared';
 import {
   Row, ExpenseRow, DeductionRow, won, num, commafy, dateVal,
   EXPENSE_TYPE_SELECT_OPTS, CUSTOM_EXPENSE_VALUE, PREDEFINED_EXPENSE_VALUES,
@@ -236,7 +237,7 @@ export function SubItemsPopup({ r, patch, onClose, focus }: { r: Row; patch: (p:
           <div key={idx} style={{ display: 'grid', gridTemplateColumns: '130px 120px 130px 92px 1fr auto', gap: SP[2], alignItems: 'center' }}>
             <ExpenseTypeField value={e.expenseType} onChange={(v: string) => patchExpense(idx, { expenseType: v })} triggerStyle={inp} testid={`pop-exp-type-${idx}`} />
             {numInp(e.amount, v => patchExpense(idx, { amount: v }), `pop-exp-amt-${idx}`, '추가비용 금액')}
-            <input type="date" style={inp} value={dateVal(e.incurredDate)} onChange={ev => patchExpense(idx, { incurredDate: ev.target.value })} aria-label="발생일" />
+            <DateField style={inp} value={dateVal(e.incurredDate)} onChange={v => patchExpense(idx, { incurredDate: v })} ariaLabel="발생일" />
             <label style={{ display: 'flex', alignItems: 'center', gap: 4, ...TYPO.helper, cursor: 'pointer', whiteSpace: 'nowrap' }}>
               <input type="checkbox" checked={e.includedInPayout !== false} onChange={ev => patchExpense(idx, { includedInPayout: ev.target.checked })} aria-label="지급대상 포함" /> 지급대상
             </label>
@@ -347,7 +348,7 @@ export function AmountDetailPopup({ r, patch, onClose }: { r: Row; patch: (p: Pa
           </div>
           <div>
             <label style={lbl}>발행일</label>
-            <input type="date" style={inp} value={dateVal(r.purchaseInvoiceDate)} onChange={e => patch({ purchaseInvoiceDate: e.target.value })} aria-label="매입세금계산서 발행일" />
+            <DateField style={inp} value={dateVal(r.purchaseInvoiceDate)} onChange={v => patch({ purchaseInvoiceDate: v })} ariaLabel="매입세금계산서 발행일" />
           </div>
           <div>
             <label style={lbl}>공급가액</label>

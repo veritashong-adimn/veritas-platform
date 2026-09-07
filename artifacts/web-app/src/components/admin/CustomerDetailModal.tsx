@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { formatDisplayDate } from '../../lib/dateFormat';
 import { formatWon } from "@/lib/utils";
 import { api, CustomerDetail, Communication, COMM_TYPE_LABEL, COMM_TYPE_COLOR } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
@@ -93,7 +94,7 @@ export function CustomerDetailModal({ customerId, token, onClose, onToast, onOpe
             <p style={sH}>고객 정보</p>
             {!editing ? (
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 24px" }}>
-                {[["회사명", detail.companyName], ["담당자", detail.contactName], ["이메일", detail.email], ["전화", detail.phone ?? "-"], ["등록일", new Date(detail.createdAt).toLocaleDateString("ko-KR")]].map(([label, val]) => (
+                {[["회사명", detail.companyName], ["담당자", detail.contactName], ["이메일", detail.email], ["전화", detail.phone ?? "-"], ["등록일", formatDisplayDate(detail.createdAt)]].map(([label, val]) => (
                   <div key={label} style={{ display: "flex", gap: 4, fontSize: 13, marginBottom: 6 }}>
                     <span style={{ color: "#9ca3af", minWidth: 72 }}>{label}</span>
                     <span style={{ color: "#374151", fontWeight: label === "회사명" ? 700 : 400 }}>{val}</span>
@@ -146,7 +147,7 @@ export function CustomerDetailModal({ customerId, token, onClose, onToast, onOpe
                     <span style={{ color: "#9ca3af", minWidth: 36 }}>#{p.id}</span>
                     <span style={{ fontWeight: 600, color: "#111827", flex: 1 }}>{p.title}</span>
                     <StatusBadge status={p.status} />
-                    <span style={{ color: "#9ca3af", fontSize: 12, whiteSpace: "nowrap" }}>{new Date(p.createdAt).toLocaleDateString("ko-KR")}</span>
+                    <span style={{ color: "#9ca3af", fontSize: 12, whiteSpace: "nowrap" }}>{formatDisplayDate(p.createdAt)}</span>
                   </div>
                 ))}
               </div>

@@ -6,10 +6,12 @@
 //  · 지급대상 목록·명세서 보기·Excel 등은 PayoutStatementModal(inline)을 그대로 재사용한다.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { formatDisplayDate, formatLabelDates } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
 import { Card, GhostBtn, ClickSelect } from '../ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import PayoutStatementModal from './PayoutStatementModal';
+import { DateField } from './DatePickerShared';
 
 const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
 // 재집계용 안전 수치 변환(NaN·null → 0). 건별 서버 계산값을 그대로 합산할 뿐 계산식은 불변.
@@ -127,7 +129,7 @@ export default function PayoutStatementTab({ token, onToast }: Props) {
                 options={[
                   { value: 'all', label: '전체 지급회차' },
                   { value: 'unassigned', label: '미배정' },
-                  ...rounds.map(r => ({ value: String(r.id), label: `${r.batchNumber || dateVal(r.paymentDate)} · ${ROUND_STATUS_LABEL[r.status] ?? r.status} · ${r.totalAssignments ?? 0}건` })),
+                  ...rounds.map(r => ({ value: String(r.id), label: `${formatLabelDates(r.batchNumber) || formatDisplayDate(r.paymentDate)} · ${ROUND_STATUS_LABEL[r.status] ?? r.status} · ${r.totalAssignments ?? 0}건` })),
                 ]} data-testid="statement-round-filter" aria-label="지급회차 선택" />
             </div>
           </label>
@@ -157,11 +159,11 @@ export default function PayoutStatementTab({ token, onToast }: Props) {
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ ...TYPO.helper, fontWeight: 700 }}>지급일</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="date" style={{ ...inp, width: 152 }} value={dateFrom} max={dateTo || undefined}
-                onChange={(e) => setDateFrom(e.target.value)} data-testid="statement-filter-from" aria-label="지급일 시작" />
+              <DateField style={{ ...inp, width: 152 }} value={dateFrom} max={dateTo || undefined}
+                onChange={(v) => setDateFrom(v)} testid="statement-filter-from" ariaLabel="지급일 시작" />
               <span style={{ color: C.textSecondary }}>~</span>
-              <input type="date" style={{ ...inp, width: 152 }} value={dateTo} min={dateFrom || undefined}
-                onChange={(e) => setDateTo(e.target.value)} data-testid="statement-filter-to" aria-label="지급일 종료" />
+              <DateField style={{ ...inp, width: 152 }} value={dateTo} min={dateFrom || undefined}
+                onChange={(v) => setDateTo(v)} testid="statement-filter-to" ariaLabel="지급일 종료" />
             </div>
           </label>
           {filterActive && (

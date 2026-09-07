@@ -9,6 +9,8 @@
  * (연결 데이터가 있는 거래처의 강제 정리는 Phase B: 관리자 강제 영구삭제에서 제공 예정)
  */
 import React, { useState, useEffect, useCallback } from 'react';
+import { formatDisplayDate } from '../../lib/dateFormat';
+import './readTableView.css';
 import { api, CUSTOMER_TYPE_LABELS, VENDOR_TYPE_LABELS, getCustomerTypeBadgeColors } from '../../lib/constants';
 import { PageHeader } from './PageHeader';
 import { dsStickyPageHeader } from '../../lib/ds';
@@ -123,7 +125,7 @@ export function CompanyTrashTab({ token, isAdmin, onToast, onBack }: {
 
       <div style={{ padding: '20px 0 64px' }}>
         <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: '#f9fafb' }}>
                 {['거래처명', '유형', '삭제일', '삭제자', '삭제 사유', '관리'].map(h => (
@@ -142,7 +144,7 @@ export function CompanyTrashTab({ token, isAdmin, onToast, onBack }: {
                   <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                     <td style={{ ...td, color: '#111827', fontWeight: 700, maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</td>
                     <td style={td}><span style={b.style}>{b.label}</span></td>
-                    <td style={td}>{r.deletedAt ? new Date(r.deletedAt).toLocaleDateString('ko-KR') : '—'}</td>
+                    <td style={td}>{r.deletedAt ? formatDisplayDate(r.deletedAt) : '—'}</td>
                     <td style={td}>{r.deletedByName ?? '—'}</td>
                     <td style={{ ...td, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', color: '#6b7280' }} title={r.deletionReason ?? ''}>{r.deletionReason ?? '—'}</td>
                     <td style={{ ...td }}>

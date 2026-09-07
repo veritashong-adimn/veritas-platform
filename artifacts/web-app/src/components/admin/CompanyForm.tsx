@@ -19,6 +19,7 @@ import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { formatPhone } from "../../lib/utils";
 import { CompanyDocumentAnalyzePanel, type CompanyOcrDocType } from "./CompanyDocumentAnalyzePanel";
 import { CompanyAliasSection } from "./CompanyAliasSection";
+import { DateField } from "./DatePickerShared";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -608,7 +609,7 @@ export function CompanyForm({
                 </div>
                 <div>
                   <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>등록일</label>
-                  <input type="date" value={form.registeredAt} onChange={e => setForm(p => ({ ...p, registeredAt: e.target.value }))}
+                  <DateField value={form.registeredAt} onChange={v => setForm(p => ({ ...p, registeredAt: v }))} ariaLabel="등록일"
                     style={inputStyle} />
                 </div>
               </div>
@@ -618,7 +619,7 @@ export function CompanyForm({
             {isIndividual && (
               <div>
                 <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>등록일</label>
-                <input type="date" value={form.registeredAt} onChange={e => setForm(p => ({ ...p, registeredAt: e.target.value }))}
+                <DateField value={form.registeredAt} onChange={v => setForm(p => ({ ...p, registeredAt: v }))} ariaLabel="등록일"
                   style={inputStyle} />
               </div>
             )}

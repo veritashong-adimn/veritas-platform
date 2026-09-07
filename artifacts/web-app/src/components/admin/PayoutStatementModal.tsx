@@ -6,6 +6,7 @@
 //  · 표시·라벨·서식은 지급회차 화면(PayoutRoundsTab)과 동일 기준을 그대로 복제(세금처리 표기 일치).
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useState } from 'react';
+import { formatDisplayDate, formatScheduleRange, formatLabelDates } from '../../lib/dateFormat';
 import { ModalOverlay, GhostBtn, PrimaryBtn } from '../ui';
 import { C, TYPO, SP, BD } from '../../lib/ds';
 import { downloadStatementExcel, todayStamp, type ExcelColumn, type ExcelCell } from '../../lib/payoutExcel';
@@ -38,12 +39,8 @@ function groupTaxTreatmentLabel(g: { items?: any[]; payeeType?: string; treatmen
   return labels.size === 1 ? [...labels][0] : null;
 }
 const svcLabel = (t: string) => t === 'translation' ? '번역' : t === 'interpretation' ? '통역' : t === 'equipment' ? '장비' : t === 'review' ? '감수' : t === 'dtp' ? 'DTP' : t === 'media' ? '미디어' : '기타';
-// 수행일: 시작~종료(같은 연도면 종료는 MM-DD). 단일이면 하나, 없으면 '-'.
-const perfDate = (it: any) => {
-  const s = dateVal(it.performanceStartDate), e = dateVal(it.performanceEndDate);
-  if (s && e && e !== s) return s.slice(0, 4) === e.slice(0, 4) ? `${s}~${e.slice(5)}` : `${s}~${e}`;
-  return s || e || '-';
-};
+// 수행일: 공통 표준(YYYY.MM.DD, 같은 연도면 종료는 MM.DD, "~" 앞뒤 공백). 없으면 '-'.
+const perfDate = (it: any) => formatScheduleRange(it.performanceStartDate, it.performanceEndDate) || '-';
 // 작업량: 번역/감수=단어(우선)/글자수, 통역=수량단위×인원, 그 외=수량단위. 없으면 '-'.
 const workAmount = (it: any) => {
   const d = it.serviceDetail || {};
@@ -72,7 +69,7 @@ const payeeTypeLabel = (t: string) => (t === 'individual' ? '통번역사' : '�
 const payDateSummary = (items: any[]): string => {
   const ds = [...new Set((items ?? []).map((it) => dateVal(it.expectedPaymentDate)).filter(Boolean))].sort();
   if (ds.length === 0) return '-';
-  return ds.length === 1 ? ds[0] : `${ds[0]} ~ ${ds[ds.length - 1]}`;
+  return ds.length === 1 ? formatDisplayDate(ds[0]) : formatScheduleRange(ds[0], ds[ds.length - 1]);
 };
 
 interface Props {
@@ -97,8 +94,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
   const [sel, setSel] = useState<string | null>(null);
   const badge = sourceBadge(round, snapshotSource);
   // 회차 선택 시: 회차명·지급일. 전체 조회 시: 범위 라벨(전체/미배정), 지급일은 건별 상이 → '-'.
-  const roundName = round ? (round.batchNumber || `${dateVal(round.paymentDate)} 지급회차`) : (scopeLabel || '전체 지급대상');
-  const payDate = round ? dateVal(round.paymentDate) : '';
+  const roundName = round ? (formatLabelDates(round.batchNumber) || `${formatDisplayDate(round.paymentDate)} 지급회차`) : (scopeLabel || '전체 지급대상');
+  const payDate = round ? formatDisplayDate(round.paymentDate) : '';
   const scopeFieldLabel = round ? '지급회차' : '조회 범위';   // 회차/전체 조회에 따른 필드명
   const group = sel ? summary.find((g) => g.payeeKey === sel) : null;
 
@@ -126,8 +123,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
     // 추가비용/차감은 내역(명칭)과 금액(숫자 셀)을 분리 — 사람 확인 + Excel 계산·분석 모두 만족.
     const columns: ExcelColumn[] = [
       { header: '거래처', width: 18 }, { header: '상품·업무', width: 24 }, { header: '구분', width: 7 }, { header: '수행일', width: 13 }, { header: '납품일', width: 12 }, { header: '지급일', width: 12 }, { header: '작업량', width: 12 },
-      { header: '단가', type: 'number', width: 11 }, { header: '기본수행료', type: 'number', width: 12 },
-      { header: '추가비용 내역', width: 18 }, { header: '추가비용 금액', type: 'number', width: 13 },
+      { header: '단가', type: 'number', width: 11 }, { header: '통번역료', type: 'number', width: 12 },
+      { header: '기타비용 내역', width: 18 }, { header: '기타비용 금액', type: 'number', width: 13 },
       { header: '차감 내역', width: 16 }, { header: '차감 금액', type: 'number', width: 12 },
       { header: '세전금액', type: 'number', width: 13 }, { header: '세금처리', width: 12 }, { header: '공제액', type: 'number', width: 12 }, { header: '실지급액', type: 'number', width: 17 },
     ];
@@ -136,8 +133,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
       it.productName || `#${it.projectId}`,
       svcLabel(it.serviceType),
       perfDate(it),
-      dateVal(it.deliveryDate) || '-',
-      dateVal(it.expectedPaymentDate) || '-',
+      formatDisplayDate(it.deliveryDate) || '-',
+      formatDisplayDate(it.expectedPaymentDate) || '-',
       workAmount(it),
       (it.isDirectAmount || it.contractUnitPrice == null) ? '-' : Math.round(numOf(it.contractUnitPrice)),
       Math.round(numOf(it.basePerformanceFee)),
@@ -160,8 +157,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
     ];
     // 하단 라벨형 합계(전체 정산 합계) — 추가비용/차감/세전/공제/실지급 명확 구분.
     const footerRows: [string, ExcelCell][] = [
-      ['기본수행료 합계', Math.round(numOf(g.baseTotal))],
-      ['추가비용 합계', Math.round(numOf(g.expenseTotal))],
+      ['통번역료 합계', Math.round(numOf(g.baseTotal))],
+      ['기타비용 합계', Math.round(numOf(g.expenseTotal))],
       ['차감 합계', Math.round(numOf(g.deductionTotal))],
       ['세전금액 합계', Math.round(numOf(g.grossTotal))],
       ['공제액', Math.round(numOf(g.withholdingTotal))],
@@ -191,8 +188,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
       product: it.productName || `#${it.projectId}`,
       service: svcLabel(it.serviceType),
       perfDate: perfDate(it),
-      deliveryDate: dateVal(it.deliveryDate) || '-',
-      payDate: dateVal(it.expectedPaymentDate) || '-',
+      deliveryDate: formatDisplayDate(it.deliveryDate) || '-',
+      payDate: formatDisplayDate(it.expectedPaymentDate) || '-',
       workAmount: workAmount(it),
       unitPrice: unitPrice(it),
       base: numOf(it.basePerformanceFee),
@@ -310,7 +307,7 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
             <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1360 }}>
               <thead><tr>
                 <th style={th}>거래처</th><th style={th}>상품·업무</th><th style={th}>구분</th><th style={th}>수행일</th><th style={th}>납품일</th><th style={th}>지급일</th><th style={th}>작업량</th>
-                <th style={{ ...th, textAlign: 'right' }}>단가</th><th style={{ ...th, textAlign: 'right' }}>기본수행료</th><th style={th}>추가비용</th><th style={th}>차감</th>
+                <th style={{ ...th, textAlign: 'right' }}>단가</th><th style={{ ...th, textAlign: 'right' }}>통번역료</th><th style={th}>기타비용 내역</th><th style={th}>차감</th>
                 <th style={{ ...th, textAlign: 'right' }}>세전금액</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>공제액</th><th style={{ ...th, textAlign: 'right' }}>실지급액</th>
               </tr></thead>
               <tbody>
@@ -320,8 +317,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
                     <td style={td} title={it.productName || `#${it.projectId}`}>{it.productName || `#${it.projectId}`}</td>
                     <td style={td}>{svcLabel(it.serviceType)}</td>
                     <td style={td}>{perfDate(it)}</td>
-                    <td style={td}>{dateVal(it.deliveryDate) || '-'}</td>
-                    <td style={td}>{dateVal(it.expectedPaymentDate) || '-'}</td>
+                    <td style={td}>{formatDisplayDate(it.deliveryDate) || '-'}</td>
+                    <td style={td}>{formatDisplayDate(it.expectedPaymentDate) || '-'}</td>
                     <td style={td}>{workAmount(it)}</td>
                     <td style={tdR}>{unitPrice(it)}</td>
                     <td style={tdR}>{won(it.basePerformanceFee)}</td>
@@ -352,8 +349,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: SP[3] }}>
             <div style={{ minWidth: 300, display: 'flex', flexDirection: 'column', gap: 4, padding: `${SP[3]}px ${SP[4]}px`, background: C.g50, borderRadius: 8, ...TYPO.inputValue, fontVariantNumeric: 'tabular-nums' }}>
               {[
-                ['기본수행료 합계', won(group.baseTotal)],
-                ['추가비용 합계', won(group.expenseTotal)],
+                ['통번역료 합계', won(group.baseTotal)],
+                ['기타비용 합계', won(group.expenseTotal)],
                 ['차감 합계', won(group.deductionTotal)],
                 ['세전금액 합계', won(group.grossTotal)],
                 ['공제액', won(group.withholdingTotal), C.danger],

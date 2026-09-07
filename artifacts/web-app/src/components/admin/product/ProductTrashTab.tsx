@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import '../readTableView.css';
 import { api, Product, PRODUCT_TYPES_META } from '../../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn } from '../../ui';
 import { Section, inputStyle } from './productShared';
@@ -128,7 +129,7 @@ export function ProductTrashTab({ token, user, setToast, authHeaders }: Props) {
           <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>휴지통이 비어 있습니다.</Card>
         ) : (
           <Card style={{ padding: 0, overflow: "hidden" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: "#f9fafb", color: "#6b7280", textAlign: "left" }}>
                   <th style={{ padding: "10px 14px", fontWeight: 600, width: 44 }}>
@@ -136,11 +137,11 @@ export function ProductTrashTab({ token, user, setToast, authHeaders }: Props) {
                       aria-label="현재 페이지 전체 선택" data-testid="select-all-head"
                       style={{ width: 16, height: 16, cursor: "pointer" }} />
                   </th>
-                  <th style={{ padding: "10px 14px", fontWeight: 600 }}>상품코드</th>
-                  <th style={{ padding: "10px 14px", fontWeight: 600 }}>상품명</th>
-                  <th style={{ padding: "10px 14px", fontWeight: 600 }}>유형</th>
-                  <th style={{ padding: "10px 14px", fontWeight: 600 }}>삭제일</th>
-                  <th style={{ padding: "10px 14px", fontWeight: 600 }}>삭제자</th>
+                  <th style={{ padding: "10px 14px", fontWeight: 600, textAlign: "left" }}>상품코드</th>
+                  <th style={{ padding: "10px 14px", fontWeight: 600, textAlign: "left" }}>상품명</th>
+                  <th style={{ padding: "10px 14px", fontWeight: 600, textAlign: "left" }}>유형</th>
+                  <th style={{ padding: "10px 14px", fontWeight: 600, textAlign: "left" }}>삭제일</th>
+                  <th style={{ padding: "10px 14px", fontWeight: 600, textAlign: "left" }}>삭제자</th>
                 </tr>
               </thead>
               <tbody>

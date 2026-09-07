@@ -4,13 +4,16 @@
 //  · 계산은 서버(payoutRounds API)가 costTotal+세금처리로 산출. 화면은 표시·조작만.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { formatDisplayDate, formatScheduleRange, formatLabelDates } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
 import { Pagination } from '../ui/Paginator';
 import { useClientPagination } from './bulkListShared';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
+import './readTableView.css';
 import { downloadTableExcel, todayStamp, type ExcelColumn } from '../../lib/payoutExcel';
 import PayoutExecutionModal from './PayoutExecutionModal';
+import { DateField } from './DatePickerShared';
 
 // VERITAS 공통 기본 폰트(App.tsx 와 동일 스택). 드롭다운 옵션은 포털(document.body)로 렌더되어
 // 화면 폰트를 상속받지 못하므로 menuStyle 로 명시 지정해 트리거·라벨·테이블과 통일한다.
@@ -274,13 +277,9 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
     arr && arr.length ? arr.map(x => `${x.type} ${won(x.amount)}`).join(' · ') : '—';
 
   // ── 건별 상세 16컬럼 표시 헬퍼 (표시 전용 — 원본 데이터 매핑, 계산 없음) ──
-  // 수행일: 시작~종료. 같은 연도면 종료는 MM-DD, 연도 다르면 전체 표시(§3). 단일이면 하나, 없으면 '-'.
+  // 수행일: 공통 표준(YYYY.MM.DD, 같은 연도면 종료 MM.DD, "~" 앞뒤 공백). 없으면 '-'.
   //  · 납품일을 대신 쓰지 않음 — 번역처럼 수행일 원본이 없으면 '-' 유지(§3·§12).
-  const perfDate = (it: any) => {
-    const s = dateVal(it.performanceStartDate), e = dateVal(it.performanceEndDate);
-    if (s && e && e !== s) return s.slice(0, 4) === e.slice(0, 4) ? `${s}~${e.slice(5)}` : `${s}~${e}`;
-    return s || e || '-';
-  };
+  const perfDate = (it: any) => formatScheduleRange(it.performanceStartDate, it.performanceEndDate) || '-';
   // 작업량: 기존 수행정보 UI(performanceServiceDetail) 표시 원칙을 재사용(§2·§4). 없는 데이터는 '-'(§12).
   //  · 번역/감수: 실제 정산 작업량 = 단어수(우선)/글자수. 페이지수(quantity)는 판매값이라 미사용.
   //  · 통역: 수행일수 × 인원(interpreterCount명). basefee=일수×단가, 인원은 설명값.
@@ -304,7 +303,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
     it.isDirectAmount || it.contractUnitPrice == null ? '-' : won(it.contractUnitPrice);
   // 지급회차: 배정된 회차명(없으면 '미배정', §16)
   const roundLabel = (it: any) => it.payoutRoundId
-    ? (it.roundBatchNumber || dateVal(it.roundPaymentDate) || `#${it.payoutRoundId}`)
+    ? (formatLabelDates(it.roundBatchNumber) || formatDisplayDate(it.roundPaymentDate) || `#${it.payoutRoundId}`)
     : null;
 
   // 회차 저장(제외/보류/재포함 changes 전송) — 서버가 재계산·재조회 반환
@@ -419,7 +418,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
     const columns: ExcelColumn[] = [
       { header: '지급대상' }, { header: '이메일' }, { header: '구분' },
       { header: '건수', type: 'number' }, { header: '번역', type: 'number' }, { header: '통역', type: 'number' }, { header: '장비·외주', type: 'number' },
-      { header: '기본수행료', type: 'number' }, { header: '추가비용', type: 'number' }, { header: '차감', type: 'number' },
+      { header: '통번역료', type: 'number' }, { header: '기타비용', type: 'number' }, { header: '차감', type: 'number' },
       { header: '세전금액', type: 'number' }, { header: '세금처리' }, { header: '공제', type: 'number' }, { header: '실지급', type: 'number' },
     ];
     const rows = filteredSummary.map((g) => [
@@ -441,8 +440,8 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
     const columns: ExcelColumn[] = [
       { header: '지급대상' }, { header: '이메일' }, { header: '거래처' }, { header: '상품·업무' }, { header: '구분' },
       { header: '수행일' }, { header: '납품일' }, { header: '지급일' }, { header: '작업량' },
-      { header: '단가', type: 'number' }, { header: '기본수행료', type: 'number' },
-      { header: '추가비용' }, { header: '차감' },
+      { header: '단가', type: 'number' }, { header: '통번역료', type: 'number' },
+      { header: '기타비용 내역' }, { header: '차감' },
       { header: '세전금액', type: 'number' }, { header: '세금처리' }, { header: '공제', type: 'number' }, { header: '실지급', type: 'number' },
       { header: '지급회차' },
     ];
@@ -453,8 +452,8 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
       it.productName || `#${it.projectId}`,
       svcLabel(it.serviceType),
       perfDate(it),
-      dateVal(it.deliveryDate) || '-',
-      dateVal(it.expectedPaymentDate) || '-',
+      formatDisplayDate(it.deliveryDate) || '-',
+      formatDisplayDate(it.expectedPaymentDate) || '-',
       workAmount(it),
       (it.isDirectAmount || it.contractUnitPrice == null) ? '-' : Math.round(numOf(it.contractUnitPrice)),
       Math.round(numOf(it.basePerformanceFee)),
@@ -483,7 +482,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                 options={[
                   { value: 'all', label: '전체 지급대상' },
                   { value: 'unassigned', label: '미배정' },
-                  ...rounds.map(r => ({ value: String(r.id), label: `${r.batchNumber || dateVal(r.paymentDate)} · ${ROUND_STATUS[r.status]?.label ?? r.status} · ${r.totalAssignments ?? 0}건` })),
+                  ...rounds.map(r => ({ value: String(r.id), label: `${formatLabelDates(r.batchNumber) || formatDisplayDate(r.paymentDate)} · ${ROUND_STATUS[r.status]?.label ?? r.status} · ${r.totalAssignments ?? 0}건` })),
                 ]} />
             </div>
           </div>
@@ -515,11 +514,11 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ ...TYPO.helper, fontWeight: 700 }}>지급일</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="date" style={{ ...inp, width: 152 }} value={dateFrom} max={dateTo || undefined}
-                onChange={(e) => setDateFrom(e.target.value)} data-testid="payout-filter-from" aria-label="지급일 시작" />
+              <DateField style={{ ...inp, width: 152 }} value={dateFrom} max={dateTo || undefined}
+                onChange={(v) => setDateFrom(v)} testid="payout-filter-from" ariaLabel="지급일 시작" />
               <span style={{ color: C.textSecondary }}>~</span>
-              <input type="date" style={{ ...inp, width: 152 }} value={dateTo} min={dateFrom || undefined}
-                onChange={(e) => setDateTo(e.target.value)} data-testid="payout-filter-to" aria-label="지급일 종료" />
+              <DateField style={{ ...inp, width: 152 }} value={dateTo} min={dateFrom || undefined}
+                onChange={(v) => setDateTo(v)} testid="payout-filter-to" ariaLabel="지급일 종료" />
             </div>
           </label>
           {filterActive && (
@@ -557,7 +556,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
       {!loading && !error && round && (
           <Card>
             <div style={{ display: 'flex', gap: SP[3], alignItems: 'center', flexWrap: 'wrap', marginBottom: SP[3] }}>
-              <b style={{ ...TYPO.inputValue, fontSize: 15 }}>{round.batchNumber || `${dateVal(round.paymentDate)} 지급회차`}</b>
+              <b style={{ ...TYPO.inputValue, fontSize: 15 }}>{formatLabelDates(round.batchNumber) || `${formatDisplayDate(round.paymentDate)} 지급회차`}</b>
               <span style={{ ...TYPO.badge, color: statusColor, background: statusBg, padding: '3px 9px', borderRadius: 6, fontWeight: 700 }}>{statusLabel}</span>
               {/* 정산정보 출처 표기 — 확정 스냅샷(동결) / 레거시(확정 당시 건별값 미보존, 원본 실시간 표시) */}
               {detail?.snapshotSource === 'snapshot' && (
@@ -566,8 +565,8 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
               {detail?.snapshotSource === 'live_legacy' && (
                 <span title="스냅샷 도입 이전에 확정된 회차입니다. 확정 당시 건별값이 보존되지 않아 원본 수행정보 기준으로 표시됩니다(회차 총계는 확정 당시 값)." style={{ ...TYPO.badge, color: '#b45309', background: '#fffbeb', padding: '3px 9px', borderRadius: 6, fontWeight: 700 }}>⚠ 레거시(미보존)</span>
               )}
-              <span style={{ ...TYPO.helper }}>지급예정일 <b>{dateVal(round.paymentDate)}</b></span>
-              <span style={{ ...TYPO.helper }}>대상기간 <b>{dateVal(round.periodStart)} ~ {dateVal(round.periodEnd)}</b></span>
+              <span style={{ ...TYPO.helper }}>지급예정일 <b>{formatDisplayDate(round.paymentDate)}</b></span>
+              <span style={{ ...TYPO.helper }}>대상기간 <b>{formatScheduleRange(round.periodStart, round.periodEnd)}</b></span>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
                 {/* 지급 실행(§1) — confirmed=실행 진입 / paid=지급결과 조회. 회차 헤더 우측 상단에 상시 노출. */}
                 {(round.status === 'confirmed' || round.status === 'paid') && (
@@ -634,11 +633,11 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                   style={{ fontSize: 12, padding: '6px 14px' }} data-testid="payout-summary-excel" aria-label="지급대상별 요약 Excel 다운로드">📊 Excel 다운로드</GhostBtn>
               </div>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1260 }}>
+                <table className="veritas-thead" style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1260 }}>
                   <thead><tr>
                     <th style={{ ...th, ...stickyCol(0, { header: true, last: true, width: STK_W.sumPayee }) }}>지급대상</th><th style={th}>이메일</th><th style={th}>구분</th>
                     <th style={{ ...th, textAlign: 'right' }}>건수</th><th style={{ ...th, textAlign: 'right' }}>번역</th><th style={{ ...th, textAlign: 'right' }}>통역</th><th style={{ ...th, textAlign: 'right' }}>장비·외주</th>
-                    <th style={{ ...th, textAlign: 'right' }}>기본수행료</th><th style={{ ...th, textAlign: 'right' }}>추가비용</th><th style={{ ...th, textAlign: 'right' }}>차감</th>
+                    <th style={{ ...th, textAlign: 'right' }}>통번역료</th><th style={{ ...th, textAlign: 'right' }}>기타비용</th><th style={{ ...th, textAlign: 'right' }}>차감</th>
                     <th style={{ ...th, textAlign: 'right' }}>세전</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }} title="조회된 개인 지급대상의 원천세율(확정 회차는 확정 당시 스냅샷 기준)">{deductionHeaderLabel(filteredSummary)}</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
                   </tr></thead>
                   <tbody>
@@ -689,7 +688,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                   style={{ marginLeft: 'auto', fontSize: 12, padding: '6px 14px' }} data-testid="payout-items-excel" aria-label="건별 상세내역 Excel 다운로드">📊 Excel 다운로드</GhostBtn>
               </div>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1990 }}>
+                <table className="veritas-thead" style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1990 }}>
                   <thead><tr>
                     {/* 18개 컬럼(§1) — 지급대상→이메일(동명이인 식별)→거래처. 날짜 흐름 수행일→납품일→지급일. 조치는 회차 편집 모드에서만 후행 표시 */}
                     {perItemMode && (() => {
@@ -703,8 +702,8 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                     })()}
                     <th style={{ ...th, ...stickyCol(stkLeft.payee, { header: true, width: STK_W.payee }) }}>지급대상</th><th style={{ ...th, ...stickyCol(stkLeft.email, { header: true, width: STK_W.email }) }}>이메일</th><th style={{ ...th, ...stickyCol(stkLeft.cust, { header: true, width: STK_W.cust }) }}>거래처</th><th style={{ ...th, ...stickyCol(stkLeft.prod, { header: true, last: true, width: STK_W.prod }) }}>상품·업무</th><th style={th}>구분</th>
                     <th style={th}>수행일</th><th style={th}>납품일</th><th style={th}>지급일</th>
-                    <th style={th}>작업량</th><th style={{ ...th, textAlign: 'right' }}>단가</th><th style={{ ...th, textAlign: 'right' }}>기본수행료</th>
-                    <th style={th}>추가비용</th><th style={th}>차감</th>
+                    <th style={th}>작업량</th><th style={{ ...th, textAlign: 'right' }}>단가</th><th style={{ ...th, textAlign: 'right' }}>통번역료</th>
+                    <th style={th}>기타비용 내역</th><th style={th}>차감</th>
                     <th style={{ ...th, textAlign: 'right' }}>세전금액</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }} title="조회된 개인 지급대상의 원천세율(확정 회차는 확정 당시 스냅샷 기준)">{deductionHeaderLabel(filteredSummary)}</th><th style={{ ...th, textAlign: 'right' }}>실지급</th>
                     <th style={th}>지급회차</th>
                     {showActions && <th style={th}>조치</th>}
@@ -735,9 +734,9 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
                         {/* [5] 수행일 (§5) */}
                         <td style={td}>{perfDate(it)}</td>
                         {/* [6] 납품일 */}
-                        <td style={td}>{dateVal(it.deliveryDate) || '-'}</td>
+                        <td style={td}>{formatDisplayDate(it.deliveryDate) || '-'}</td>
                         {/* [7] 지급일 — 수행정보 expectedPaymentDate 원본 그대로. 미배정도 표시, 없으면 '-'(§3~§6) */}
-                        <td style={td}>{dateVal(it.expectedPaymentDate) || '-'}</td>
+                        <td style={td}>{formatDisplayDate(it.expectedPaymentDate) || '-'}</td>
                         {/* [8] 작업량 */}
                         <td style={td}>{workAmount(it)}</td>
                         {/* [8] 단가 (§8, 우측정렬) */}
@@ -813,7 +812,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: SP[3], fontVariantNumeric: 'tabular-nums' }}>
               {[
                 ['총 대상자', `${totals.payees ?? 0}명`], ['총 건수', `${totals.assignments ?? 0}건`],
-                ['기본수행료 합계', `${won(totals.baseTotal)}원`], ['추가비용 합계', `${won(totals.expenseTotal)}원`],
+                ['통번역료 합계', `${won(totals.baseTotal)}원`], ['기타비용 합계', `${won(totals.expenseTotal)}원`],
                 ['차감 합계', `${won(totals.deductionTotal)}원`], ['공제액 합계', `${won(totals.withholdingTotal)}원`],
               ].map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}><span style={TYPO.helper}>{k}</span><span style={{ ...TYPO.inputValue, fontWeight: 700 }}>{v}</span></div>
@@ -912,10 +911,10 @@ function CreateDialog({ token, onToast, onClose, onCreated }: { token: string; o
   return (
     <Modal title="새 지급회차 생성" onClose={onClose}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 14px' }}>
-        {field('지급예정일 *', <input type="date" style={inp} value={paymentDate} onChange={e => onPayDate(e.target.value)} data-testid="payout-new-paydate" aria-label="지급예정일" />)}
+        {field('지급예정일 *', <DateField style={inp} value={paymentDate} onChange={v => onPayDate(v)} testid="payout-new-paydate" ariaLabel="지급예정일" />)}
         {field('회차명 (자동)', <input style={{ ...inp, background: C.g50, color: C.textSecondary }} value={batchNumber} readOnly data-testid="payout-new-name" aria-label="회차명(자동)" placeholder="지급예정일 선택 시 자동 생성" />)}
-        {field('대상기간 시작 (자동·수정가능)', <input type="date" style={inp} value={periodStart} onChange={e => setPeriodStart(e.target.value)} data-testid="payout-new-start" aria-label="대상기간 시작" />)}
-        {field('대상기간 종료 (자동·수정가능)', <input type="date" style={inp} value={periodEnd} onChange={e => setPeriodEnd(e.target.value)} data-testid="payout-new-end" aria-label="대상기간 종료" />)}
+        {field('대상기간 시작 (자동·수정가능)', <DateField style={inp} value={periodStart} onChange={v => setPeriodStart(v)} testid="payout-new-start" ariaLabel="대상기간 시작" />)}
+        {field('대상기간 종료 (자동·수정가능)', <DateField style={inp} value={periodEnd} onChange={v => setPeriodEnd(v)} testid="payout-new-end" ariaLabel="대상기간 종료" />)}
         {field('수집 기준', <ClickSelect value={basis} onChange={(v: string) => setBasis(v as any)} triggerStyle={inp} menuStyle={{ fontFamily: APP_FONT }} options={[{ value: 'delivery_date', label: '납품일 기준' }, { value: 'expected_payment_date', label: '지급예정일 기준' }]} />)}
         {field('비고', <input style={inp} value={note} onChange={e => setNote(e.target.value)} placeholder="비고" data-testid="payout-new-note" aria-label="비고" />)}
       </div>

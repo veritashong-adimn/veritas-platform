@@ -12,10 +12,11 @@ import React, { useEffect, useRef } from 'react';
 import type { QuotePdfData } from '../../lib/quotePdf';
 import { ITEM_TYPE_LABEL } from '../../lib/quotePdf';
 import { renderQuoteTitle, buildDocFileName, escapeHtmlTitle, formatDocNumber } from '../../lib/quoteTitle';
+import { formatDisplayDate } from '../../lib/dateFormat';
 
 // ─── 숫자 / 날짜 포맷 ────────────────────────────────────────────────────────
 const fmt = (n: number) => n.toLocaleString('ko-KR');
-const fmtDate = (d: string) => d.replace(/-/g, '.');
+const fmtDate = (d: string) => formatDisplayDate(d);
 
 // 오늘 날짜 (YYYY.MM.DD) — 거래명세서 작성일(출력일)
 function todayStr(): string {

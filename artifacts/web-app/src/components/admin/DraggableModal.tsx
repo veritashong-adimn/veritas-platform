@@ -9,6 +9,8 @@ interface DraggableModalProps {
   height?: string;
   zIndex?: number;
   headerExtra?: React.ReactNode;
+  /** 헤더 좌측(제목 앞) 슬롯 — 전역 규칙상 '뒤로가기' 등 navigation 버튼을 여기(좌측)에 배치. */
+  headerLeft?: React.ReactNode;
   bodyPadding?: string;
   resizable?: boolean;
   /** true면 오버레이·드래그 없이 페이지 흐름(ERP 전체페이지)으로 렌더. 헤더 우측에 headerExtra(액션) 노출. */
@@ -24,6 +26,7 @@ export function DraggableModal({
   height,
   zIndex = 300,
   headerExtra,
+  headerLeft,
   bodyPadding = "20px 24px",
   resizable = false,
   inline = false,
@@ -164,9 +167,13 @@ export function DraggableModal({
     return (
       <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <div style={{ padding: "16px 24px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", flexShrink: 0, background: "#fff" }}>
-          <div>
-            <div style={{ fontSize: 20, fontWeight: 800, color: "#111827", lineHeight: 1.2 }}>{title}</div>
-            {subtitle && <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>{subtitle}</div>}
+          {/* 좌측: navigation(뒤로가기) + 제목 / 우측: action(headerExtra) — 전역 위치 규칙 */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+            {headerLeft}
+            <div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: "#111827", lineHeight: 1.2 }}>{title}</div>
+              {subtitle && <div style={{ fontSize: 12, color: "#9ca3af", marginTop: 4 }}>{subtitle}</div>}
+            </div>
           </div>
           {headerExtra && <div style={{ display: "flex", alignItems: "center", gap: 8 }}>{headerExtra}</div>}
         </div>

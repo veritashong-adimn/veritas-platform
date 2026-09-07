@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import './readTableView.css';
 import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, ALL_FINANCIAL_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, AdminUser, BOARD_CATEGORY_LABEL, Product } from '../../lib/constants';
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 import { ReviewMemoPanel } from './ReviewMemoPanel';
@@ -8,6 +9,8 @@ import TransactionStatementModal from './TransactionStatementModal';
 import { buildQuotePdfData, displayUnit, type QuoteDetail } from '../../lib/quotePdf';
 import { renderQuoteTitle } from '../../lib/quoteTitle';
 import { formatPhoneDisplay, formatWon } from "../../lib/utils";
+import { formatDisplayDate } from "../../lib/dateFormat";
+import { DateField } from './DatePickerShared';
 
 /* ────── SearchableSelect (거래처 검색용 공통 컴포넌트) ────── */
 type SSItem = { id: number; label: string; sub?: string };
@@ -1767,7 +1770,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         <span style={{ fontSize: 13, fontWeight: 700, color: "#111827" }}>{t.translatorEmail ?? `#${t.translatorId}`}</span>
                         <StatusBadge status={t.status} />
                         <span style={{ fontSize: 11, fontWeight: 600, color: avStyle.color }}>가용: {avStyle.label}</span>
-                        <span style={{ fontSize: 11, color: "#9ca3af", marginLeft: "auto" }}>{new Date(t.createdAt).toLocaleDateString("ko-KR")}</span>
+                        <span style={{ fontSize: 11, color: "#9ca3af", marginLeft: "auto" }}>{formatDisplayDate(t.createdAt)}</span>
                       </div>
                       {t.translatorProfile && (
                         <div style={{ padding: "10px 12px", background: "#f9fafb", borderRadius: 8, marginBottom: 8, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "5px 20px" }}>
@@ -1904,7 +1907,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             </span>
                             {/* 발행일 */}
                             <span style={{ fontSize: 11, color: "#9ca3af", marginLeft: "auto", whiteSpace: "nowrap" }}>
-                              {issueDate ?? new Date(q.createdAt).toLocaleDateString("ko-KR")}
+                              {issueDate ?? formatDisplayDate(q.createdAt)}
                             </span>
                           </div>
 
@@ -1952,17 +1955,18 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                               {stmtLoading === q.id ? "…" : "📋 거래명세서"}
                             </button>
                             <span style={{ flex: 1 }} />
-                            <span style={{ fontSize: 10, color: "#d1d5db" }}>견적 #{q.id} · 등록 {new Date(q.createdAt).toLocaleDateString("ko-KR")}</span>
+                            <span style={{ fontSize: 10, color: "#d1d5db" }}>견적 #{q.id} · 등록 {formatDisplayDate(q.createdAt)}</span>
                           </div>
 
                           {/* ── 품목 목록 (토글) ── */}
                           {expanded && items.length > 0 && (
                             <div style={{ padding: "10px 14px 12px", borderTop: "1px solid #ede9fe", background: "#fdf8ff" }}>
-                              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                              <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                                 <thead>
                                   <tr style={{ background: "#f5f3ff" }}>
+                                    {/* 헤더 정렬 = 본문 정렬(단가·공급가·세액·합계 right, 나머지 left) */}
                                     {["상품명", "언어", "수량", "단가", "공급가", "세액", "합계"].map(h => (
-                                      <th key={h} style={{ padding: "5px 8px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#6d28d9", borderBottom: "1px solid #d8b4fe", whiteSpace: "nowrap" }}>{h}</th>
+                                      <th key={h} style={{ padding: "5px 8px", textAlign: ["단가", "공급가", "세액", "합계"].includes(h) ? "right" : "left", fontSize: 10, fontWeight: 700, color: "#6d28d9", borderBottom: "1px solid #d8b4fe", whiteSpace: "nowrap" }}>{h}</th>
                                     ))}
                                   </tr>
                                 </thead>
@@ -2058,14 +2062,14 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             </div>
                             <div>
                               <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 3 }}>결제일 *</label>
-                              <input type="date" value={paymentDate}
-                                onChange={e => setPaymentDate(e.target.value)}
+                              <DateField value={paymentDate}
+                                onChange={v => setPaymentDate(v)} ariaLabel="결제일" testid="input-payment-date"
                                 style={{ ...inputStyle, width: "100%", fontSize: 13, padding: "7px 10px", boxSizing: "border-box" }} />
                             </div>
                             <div>
                               <label style={{ fontSize: 11, color: "#6b7280", fontWeight: 600, display: "block", marginBottom: 3 }}>입금예정일 (선택)</label>
-                              <input type="date" value={quotePaymentDueDate}
-                                onChange={e => setQuotePaymentDueDate(e.target.value)}
+                              <DateField value={quotePaymentDueDate}
+                                onChange={v => setQuotePaymentDueDate(v)} ariaLabel="입금예정일" testid="input-quote-payment-due"
                                 style={{ ...inputStyle, width: "100%", fontSize: 13, padding: "7px 10px", boxSizing: "border-box" }} />
                             </div>
                           </div>
@@ -2133,7 +2137,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 </span>
                               )}
                               <span style={{ color: "#9ca3af", fontSize: 11, marginLeft: "auto" }}>
-                                {pm.paymentDate ? new Date(pm.paymentDate).toLocaleDateString("ko-KR") : new Date(pm.createdAt).toLocaleDateString("ko-KR")}
+                                {pm.paymentDate ? formatDisplayDate(pm.paymentDate) : formatDisplayDate(pm.createdAt)}
                               </span>
                             </div>
                             {pm.paymentNote && (
@@ -2194,7 +2198,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {Number(v.price).toLocaleString("ko-KR")}원
                                 {v.quoteNumber && <span style={{ marginLeft: 6 }}>{v.quoteNumber}</span>}
                                 <span style={{ marginLeft: 6 }}>
-                                  {new Date(v.createdAt).toLocaleDateString("ko-KR")}
+                                  {formatDisplayDate(v.createdAt)}
                                 </span>
                               </div>
                             </div>
@@ -2224,7 +2228,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   const btLabelMap: Record<string, string> = { postpaid_per_project: "건별 후불", monthly_billing: "누적 청구", prepaid_wallet: "선입금 차감", prepay_upfront: "선결제" };
                   const tdt = q0?.taxDocumentType;
                   const bt = q0?.billingType ?? (detail.company as any)?.billingType;
-                  const fmtDate = (v: string | null | undefined) => v ? new Date(v).toLocaleDateString("ko-KR") : "-";
+                  const fmtDate = (v: string | null | undefined) => v ? formatDisplayDate(v) : "-";
 
                   const loadBillingDivisions = async (cid: number) => {
                     try {
@@ -2561,7 +2565,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                     <p style={{ fontSize: 13, margin: 0 }}>등록된 파일이 없습니다.</p>
                   </div>
                 ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
                       <tr>
                         {["유형", "파일명", "크기", "업로드자", "업로드일", ""].map(h => (
@@ -2589,7 +2593,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             <td style={{ padding: "10px 10px", fontSize: 12, color: "#6b7280", whiteSpace: "nowrap", verticalAlign: "middle" }}>{sizeStr}</td>
                             <td style={{ padding: "10px 10px", fontSize: 12, color: "#374151", verticalAlign: "middle" }}>{f.uploaderName ?? f.uploaderEmail ?? "-"}</td>
                             <td style={{ padding: "10px 10px", fontSize: 12, color: "#6b7280", whiteSpace: "nowrap", verticalAlign: "middle" }}>
-                              {new Date(f.createdAt).toLocaleDateString("ko-KR")}
+                              {formatDisplayDate(f.createdAt)}
                             </td>
                             <td style={{ padding: "10px 10px", verticalAlign: "middle" }}>
                               <div style={{ display: "flex", gap: 6 }}>
@@ -2769,7 +2773,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                   style={{ width: "100%", padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: 7, fontSize: 12 }}>
                   {compPrepaidAccounts.map(a => (
                     <option key={a.id} value={a.id}>
-                      {a.depositDate ?? "-"}{a.note ? ` · ${a.note}` : ""} — 잔액 {formatWon(a.currentBalance)}
+                      {a.depositDate ? formatDisplayDate(a.depositDate) : "-"}{a.note ? ` · ${a.note}` : ""} — 잔액 {formatWon(a.currentBalance)}
                     </option>
                   ))}
                 </select>
@@ -2795,7 +2799,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
             {/* 입금일 */}
             <div style={{ marginBottom: 14 }}>
               <label style={{ fontSize: 11, fontWeight: 700, color: "#374151", display: "block", marginBottom: 4 }}>입금일 *</label>
-              <input type="date" value={depositDate} onChange={e => setDepositDate(e.target.value)}
+              <DateField value={depositDate} onChange={v => setDepositDate(v)} ariaLabel="입금일" testid="input-deposit-date"
                 style={{ width: "100%", padding: "8px 12px", border: "1px solid #d1d5db", borderRadius: 7, fontSize: 13, boxSizing: "border-box" }} />
             </div>
 
@@ -2851,7 +2855,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
               ) : ledgerModalData.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af", fontSize: 13 }}>거래 내역이 없습니다.</div>
               ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead style={{ position: "sticky", top: 0, background: "#f5f3ff", zIndex: 1 }}>
                     <tr>
                       {[

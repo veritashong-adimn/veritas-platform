@@ -6,6 +6,7 @@
 //  · 계좌번호는 서버가 마스킹한 값만 수신(전체 계좌번호 미수신, §3·§13).
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { formatDisplayDate, formatLabelDates } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
 import { PrimaryBtn, GhostBtn } from '../ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
@@ -206,7 +207,7 @@ export default function PayoutExecutionModal({ token, round, onToast, onClose }:
         {/* ── 헤더(드래그 핸들) — 제목 영역을 눌러 팝업 이동. 내부 버튼/닫기에서는 드래그 안 함. ── */}
         <div onMouseDown={onDragStart} data-testid="payout-execution-drag-handle" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, cursor: 'move', userSelect: 'none' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <h3 style={{ margin: 0, ...TYPO.sectionTitle }}>지급 실행 — {round.batchNumber || dateVal(round.paymentDate)}</h3>
+            <h3 style={{ margin: 0, ...TYPO.sectionTitle }}>지급 실행 — {formatLabelDates(round.batchNumber) || formatDisplayDate(round.paymentDate)}</h3>
             {isPaid && <span style={{ ...TYPO.helper, fontWeight: 700, color: STATUS.paid.color, background: STATUS.paid.bg, padding: '3px 9px', borderRadius: 6 }}>지급결과 조회</span>}
           </div>
           <button type="button" onClick={onClose} aria-label="닫기" style={{ border: 'none', background: 'none', fontSize: 20, cursor: 'pointer', color: C.textSecondary, lineHeight: 1 }}>×</button>
@@ -219,7 +220,7 @@ export default function PayoutExecutionModal({ token, round, onToast, onClose }:
           {/* ── 상단 요약(§2) ── */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP[4], padding: `${SP[3]}px ${SP[4]}px`, background: C.g50, borderRadius: 10, marginBottom: 12 }}>
             {[
-              ['지급예정일', dateVal(round.paymentDate)],
+              ['지급예정일', formatDisplayDate(round.paymentDate)],
               ['지급대상', `${summary.totalPayees}명`],
               ['총 실지급액', `${won(summary.totalAmount)}원`],
               ['지급가능', `${summary.payable}명`],

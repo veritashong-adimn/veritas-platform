@@ -5,9 +5,12 @@
 //  · 미수금은 저장하지 않고 화면 계산(총 판매금액 − 총 입금액). 향후 세금계산서·카드매출·자동매칭·채권관리 연계 대비.
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useMemo, useState, useEffect } from 'react';
+import { formatDisplayDate } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
+import { DateField } from './DatePickerShared';
+import './readTableView.css';
 
 export interface PayTxn {
   id?: number;
@@ -445,7 +448,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   const txnPaid = (r: PayRow) => (r.transactions ?? []).reduce((s, t) => s + num(t.customerPaidAmount), 0);
   const paidOf = (r: PayRow) => (hasTxn(r) ? txnPaid(r) : (isRowPaid(r) ? haap(r) : 0));
   const lastTxn = (r: PayRow): PayTxn | null => { const ts = r.transactions ?? []; return ts.length ? ts[ts.length - 1] : null; };  // 최근(마지막) 입금거래
-  const dispPaidDate = (r: PayRow): string => { const t = lastTxn(r); return (t?.paidDate ? dateVal(t.paidDate) : (dateVal(r.paidDate) || '—')); };  // §11 입금일: 최종 입금일
+  const dispPaidDate = (r: PayRow): string => { const t = lastTxn(r); return (t?.paidDate ? formatDisplayDate(t.paidDate) : (formatDisplayDate(r.paidDate) || '—')); };  // §11 입금일: 최종 입금일
   const dispBank = (r: PayRow): string => { const t = lastTxn(r); return t?.bankAccount || '—'; };  // §3 입금은행: 최근 거래 은행
   // §7/§12 조회 compact 외화 표시 — 최근 거래가 외화송금이면 "USD 4,000" 처럼 결제방법 셀 아래 한 줄로. 없으면 빈 문자열.
   const dispForeign = (r: PayRow): string => { const t = lastTxn(r); return (t && isOverseas(t.method) && num(t.foreignAmount) > 0) ? `${t.currency || 'FX'} ${won(num(t.foreignAmount))}` : ''; };
@@ -486,9 +489,9 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   );
   // 날짜 입력 셀 — 수행정보와 동일한 네이티브 date UI(고정폭). overdue=미수 시 붉은 테두리. disabled=발행일 비대상.
   const dateCell = (v: string | null | undefined, on: (val: string) => void, testid: string, label: string, opts?: { disabled?: boolean; overdue?: boolean }) => (
-    <input type="date" data-testid={testid} aria-label={label} disabled={opts?.disabled}
+    <DateField testid={testid} ariaLabel={label} disabled={opts?.disabled}
       style={{ ...inp, width: 124, ...(opts?.disabled ? { background: C.g50, color: C.g400 } : {}), ...(opts?.overdue ? { borderColor: C.danger, color: C.danger } : {}) }}
-      value={dateVal(v)} onChange={e => on(e.target.value)} />
+      value={dateVal(v)} onChange={val => on(val)} />
   );
   // 하위 입금행 상세 텍스트 — 결제방법별 핵심만 한 줄로(외화송금=통화/외화/환율, 카드=승인/수수료/정산).
   const txnDetail = (t: PayTxn): string => isOverseas(t.method)
@@ -557,7 +560,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
       <div style={{ paddingLeft: 28, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ fontWeight: 700, color: C.primaryText, fontSize: 12 }}>└ 입금 추가</span>
         <ClickSelect value={m} onChange={(v: string) => setAF({ method: v, bankAccount: isOverseas(v) ? '기업은행외화' : (addForm.bankAccount || '기업은행'), currency: isOverseas(v) ? (addForm.currency || 'USD') : undefined })} triggerStyle={{ ...tinp, width: 110 }} options={TXN_METHOD_OPTS} />
-        <input type="date" style={{ ...tinp, width: 128 }} value={addForm.paidDate ?? ''} onChange={e => setAF({ paidDate: e.target.value || null })} data-testid="txn-add-date" />
+        <DateField style={{ ...tinp, width: 128 }} value={addForm.paidDate ?? ''} onChange={v => setAF({ paidDate: v || null })} testid="txn-add-date" ariaLabel="입금 추가 날짜" />
         <ClickSelect value={addForm.bankAccount ?? ''} onChange={(v: string) => setAF({ bankAccount: v })} triggerStyle={{ ...tinp, width: 110 }} options={BANK_OPTS.map(b => ({ value: b, label: b }))} />
         {overseas && <>
           <ClickSelect value={addForm.currency ?? ''} onChange={(v: string) => setAF({ currency: v })} triggerStyle={{ ...tinp, width: 78 }} options={CURRENCY_OPTS} />
@@ -654,7 +657,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         {/* 발행일(§1) — 항상 표시. 세금계산서 행이면 입력, 아니면 '—' */}
         <td style={{ ...tdBase, width: 150 }}>
           {isTaxMethod
-            ? (editable ? dateCell(r.issueDate, v => patchRow(i, { issueDate: v || null }), `pay-issue-${i}`, '발행일') : (dateVal(r.issueDate) || '—'))
+            ? (editable ? dateCell(r.issueDate, v => patchRow(i, { issueDate: v || null }), `pay-issue-${i}`, '발행일') : (formatDisplayDate(r.issueDate) || '—'))
             : <span style={{ color: C.g400 }}>—</span>}
         </td>
         {/* 첫 예정/이벤트 날짜 — 결제방법별 라벨(입금예정일/카드결제일/송금예정일). 입력 후 입금확인 전이면 붉은색, 확인 체크 시 검정색.
@@ -662,10 +665,10 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         <td style={{ ...tdBase, width: 160 }}>
           {editable ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}>
-              <input type="date" data-testid={`pay-expected-${i}`} aria-label={schedLabel}
+              <DateField testid={`pay-expected-${i}`} ariaLabel={schedLabel}
                 title={expUnconfirmed ? '입금 미확인 — 확인 체크 시 입금일로 반영' : (confirmed ? '입금확인 완료' : undefined)}
                 style={{ ...inp, width: 122, ...(expUnconfirmed ? { borderColor: C.danger, color: C.danger } : { color: C.textPrimary }) }}
-                value={dateVal(r.expectedDate)} onChange={e => patchRow(i, { expectedDate: e.target.value || null })} />
+                value={dateVal(r.expectedDate)} onChange={v => patchRow(i, { expectedDate: v || null })} />
               <input type="checkbox" checked={confirmed} disabled={!r.expectedDate}
                 onChange={() => toggleDepositConfirm(i)} data-testid={`pay-expected-confirm-${i}`} aria-label="입금확인"
                 title={!r.expectedDate ? '입금예정일 입력 후 확인 가능' : (confirmed ? '입금확인 완료' : '입금 미확인 — 확인 시 입금완료 처리')}
@@ -674,7 +677,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
           ) : (
             <span style={{ color: expUnconfirmed ? C.danger : undefined, whiteSpace: 'nowrap' }}
               title={confirmed ? '입금확인 완료' : (expUnconfirmed ? '입금 미확인' : undefined)}>
-              {dateVal(r.expectedDate) || '—'}{r.expectedDate && confirmed ? ' ✓' : ''}
+              {formatDisplayDate(r.expectedDate) || '—'}{r.expectedDate && confirmed ? ' ✓' : ''}
             </span>
           )}
         </td>
@@ -682,7 +685,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
         <td style={{ ...tdBase, width: 150 }}>
           {hasTxn(r)
             ? dispPaidDate(r)
-            : (editable ? dateCell(r.paidDate, v => patchPaid(i, v), `pay-paid-${i}`, '입금일') : (dateVal(r.paidDate) || '—'))}
+            : (editable ? dateCell(r.paidDate, v => patchPaid(i, v), `pay-paid-${i}`, '입금일') : (formatDisplayDate(r.paidDate) || '—'))}
         </td>
         {/* 결제구분 */}
         <td style={{ ...tdBase, width: 110 }}>
@@ -771,7 +774,7 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
     <div style={{ overflowX: 'auto', border: `1px solid ${C.g200}`, borderRadius: BD.radius.md }}>
       {/* table-layout: fixed — 지정한 컬럼 width를 실제 렌더 폭으로 강제(auto는 콘텐츠 기준이라 width가 최소값 취급되어 무시됨).
           컬럼 폭은 첫 행(thead th)의 width로 확정 → th/td width를 동일하게 유지. width=max-content로 폭 합만큼 렌더 후 컨테이너에서 가로 스크롤. */}
-      <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 1900, width: 'max-content' }}>
+      <table className={editable ? 'veritas-thead' : 'veritas-read-table'} style={{ borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 1900, width: 'max-content' }}>
         <thead><tr>
           <th style={{ ...thBase, width: 96, textAlign: 'center' }}>회차</th>
           <th style={{ ...thBase, width: 180 }}>청구업체</th>
@@ -830,7 +833,6 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
       <div style={{ ...TYPO.sectionTitle, paddingBottom: SP[4], borderBottom: BD.grid, marginBottom: SP[5], display: 'flex', alignItems: 'center', gap: SP[3], flexWrap: 'wrap' }}>
         <span style={{ width: 22, height: 22, borderRadius: BD.radius.md, background: '#ecfdf5', color: '#047857', fontSize: 12, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>D</span>
         청구정보
-        <span style={{ ...TYPO.helper, marginLeft: SP[2] }}>업체별 청구·입금 관리 (청구 = 입금 관리 단위 · 좌우 스크롤)</span>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {/* 결제유형 — 수출바우처 선택 시 고객사·운영기관 청구 2건 자동 생성 */}
           <span style={{ ...TYPO.helper }}>결제유형</span>

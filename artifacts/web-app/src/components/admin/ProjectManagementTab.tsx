@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { formatDisplayDate } from '../../lib/dateFormat';
 import {
   api, User, AdminProject, AdminUser, AdminCustomer, Company, Contact,
   STATUS_LABEL, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE,
@@ -8,6 +9,8 @@ import { bulkBtnStyle } from './product/productShared';
 import { stickyBulkBarStyle } from './bulkListShared';
 import { DraggableModal } from './DraggableModal';
 import { renderQuoteTitle } from '../../lib/quoteTitle';
+import { DateField } from './DatePickerShared';
+import './readTableView.css';
 
 // ─── 인라인 스타일 ─────────────────────────────────────────────────────────────
 const inputStyle: React.CSSProperties = {
@@ -888,20 +891,20 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                 <div>
                   <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 5 }}>등록일</div>
                   <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                    <input type="date" value={draftDateFrom} onChange={e => setDraftDateFrom(e.target.value)}
+                    <DateField value={draftDateFrom} onChange={v => setDraftDateFrom(v)} ariaLabel="등록일 시작"
                       style={{ ...inputStyle, flex: 1, padding: "5px 7px", fontSize: 12 }} />
                     <span style={{ color: "#d1d5db", fontSize: 11 }}>~</span>
-                    <input type="date" value={draftDateTo} onChange={e => setDraftDateTo(e.target.value)}
+                    <DateField value={draftDateTo} onChange={v => setDraftDateTo(v)} ariaLabel="등록일 종료"
                       style={{ ...inputStyle, flex: 1, padding: "5px 7px", fontSize: 12 }} />
                   </div>
                 </div>
                 <div>
                   <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", marginBottom: 5 }}>입금 예정일</div>
                   <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                    <input type="date" value={draftPaymentFrom} onChange={e => setDraftPaymentFrom(e.target.value)}
+                    <DateField value={draftPaymentFrom} onChange={v => setDraftPaymentFrom(v)} ariaLabel="입금 예정일 시작"
                       style={{ ...inputStyle, flex: 1, padding: "5px 7px", fontSize: 12 }} />
                     <span style={{ color: "#d1d5db", fontSize: 11 }}>~</span>
-                    <input type="date" value={draftPaymentTo} onChange={e => setDraftPaymentTo(e.target.value)}
+                    <DateField value={draftPaymentTo} onChange={v => setDraftPaymentTo(v)} ariaLabel="입금 예정일 종료"
                       style={{ ...inputStyle, flex: 1, padding: "5px 7px", fontSize: 12 }} />
                   </div>
                 </div>
@@ -981,7 +984,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
 
               <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden", background: "#fff" }}>
                 <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
                       <tr style={{ background: "#f8fafc" }}>
                         <th style={{ ...tableTh, minWidth: 34, width: 34, textAlign: "center" }}>
@@ -1015,9 +1018,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                         return (
                           <tr key={p.id}
                             onClick={() => goToDetail(p.id)}
-                            style={{ cursor: "pointer", transition: "background 0.1s", background: isSelected ? "#eff6ff" : undefined }}
-                            onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
-                            onMouseLeave={e => (e.currentTarget.style.background = isSelected ? "#eff6ff" : "")}>
+                            style={{ cursor: "pointer", transition: "background 0.1s", background: isSelected ? "#eff6ff" : undefined }}>
 
                             {/* 선택 체크박스 — 클릭은 선택만(행 상세 진입과 분리) */}
                             <td style={{ ...tableTd, textAlign: "center" }} onClick={e => e.stopPropagation()}>
@@ -1099,7 +1100,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
 
                             {/* 등록일 */}
                             <td style={{ ...tableTd, fontSize: 11, color: "#c0c8d4", whiteSpace: "nowrap" }}>
-                              {new Date(p.createdAt).toLocaleDateString("ko-KR")}
+                              {formatDisplayDate(p.createdAt)}
                             </td>
                           </tr>
                         );

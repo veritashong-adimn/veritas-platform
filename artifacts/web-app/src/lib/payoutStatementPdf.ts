@@ -75,8 +75,8 @@ export function printPayoutStatementPdf(data: PayoutStatementPdfData): boolean {
     </tr>`).join('');
 
   const summaryRows: [string, string, boolean?][] = [
-    ['기본수행료 합계', won(data.totals.base)],
-    ['추가비용 합계', won(data.totals.expense)],
+    ['통번역료 합계', won(data.totals.base)],
+    ['기타비용 합계', won(data.totals.expense)],
     ['차감 합계', won(data.totals.deduction)],
     ['세전금액 합계', won(data.totals.gross)],
     ['공제액', won(data.totals.withholding), true],
@@ -153,8 +153,8 @@ export function printPayoutStatementPdf(data: PayoutStatementPdfData): boolean {
     <thead><tr>
       <th>거래처</th><th>상품·업무</th><th>구분</th>
       <th>수행일</th><th>납품일</th><th>지급일</th>
-      <th>작업량</th><th>단가</th><th>기본수행료</th>
-      <th>추가비용</th><th>차감</th><th>세전금액</th>
+      <th>작업량</th><th>단가</th><th>통번역료</th>
+      <th>기타비용 내역</th><th>차감</th><th>세전금액</th>
     </tr></thead>
     <tbody>${detailRows || '<tr><td colspan="12" class="center" style="padding:16px;color:#9ca3af">상세내역이 없습니다.</td></tr>'}</tbody>
     <tfoot><tr>
@@ -169,7 +169,7 @@ export function printPayoutStatementPdf(data: PayoutStatementPdfData): boolean {
     ${summaryRows.map(([k, v, deduct]) => `<div class="summary-row${deduct ? ' deduct' : ''}"><span class="sk">${esc(k)}</span><span class="sv">${esc(v)}</span></div>`).join('')}
     <div class="summary-total"><span class="sk">최종 실지급액</span><span class="sv">${won(data.totals.net)}</span></div>
   </div>
-  <div class="note">본 지급명세서는 VERITAS 정산 확정 데이터를 기준으로 발행되었습니다. 기재된 금액은 세전금액 = 기본수행료 + 추가비용 − 차감이며, 최종 실지급액 = 세전금액 − 공제액입니다.</div>
+  <div class="note">본 지급명세서는 VERITAS 정산 확정 데이터를 기준으로 발행되었습니다. 기재된 금액은 세전금액 = 통번역료 + 기타비용 − 차감이며, 최종 실지급액 = 세전금액 − 공제액입니다.</div>
 </div>
   <script>window.onload = function () { window.print(); };<\/script>
 </body>

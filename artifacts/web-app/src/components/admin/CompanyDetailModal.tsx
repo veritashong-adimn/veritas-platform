@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { formatDisplayDate, formatScheduleRange } from '../../lib/dateFormat';
 import { Building2, FileBadge, User, BriefcaseBusiness, Tag, MapPinned, BadgeCheck, Calendar } from "lucide-react";
 import { api, CompanyDetail, Contact, Division, NoteEntry, VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS, VENDOR_TYPE_CATEGORY_CHIPS, resolveVendorType, finalVendorType, CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS, getCustomerTypeBadgeColors } from "../../lib/constants";
 import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
@@ -570,7 +571,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                               <span style={{ color: "#374151", fontWeight: 600 }}>{h.companyName}</span>
                               {h.validFrom && (
                                 <span style={{ color: "#9ca3af", marginLeft: 6 }}>
-                                  {h.validFrom}{h.validTo ? ` ~ ${h.validTo}` : ""}
+                                  {formatScheduleRange(h.validFrom, h.validTo)}
                                 </span>
                               )}
                               {h.reason && <span style={{ color: "#9ca3af", marginLeft: 6 }}>· {h.reason}</span>}
@@ -639,7 +640,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                       onMouseEnter={e => (e.currentTarget.style.boxShadow = "0 2px 10px rgba(37,99,235,0.12)")}
                       onMouseLeave={e => (e.currentTarget.style.boxShadow = "none")}>
                       <div style={{ fontSize: 10, color: "#6b7280", marginBottom: 2 }}>
-                        {acct.depositDate ?? "-"}{acct.note ? ` · ${acct.note}` : ""}
+                        {acct.depositDate ? formatDisplayDate(acct.depositDate) : "-"}{acct.note ? ` · ${acct.note}` : ""}
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                         <div style={{ fontSize: 14, fontWeight: 800, color: acct.currentBalance > 0 ? "#15803d" : "#6b7280" }}>
@@ -978,7 +979,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                       {(p as any).requestingDivisionId && (() => { const div = detail.divisions.find((d: any) => d.id === (p as any).requestingDivisionId); return div ? <span style={{ marginLeft: 6, fontSize: 11, background: "#ede9fe", color: "#7c3aed", borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>{div.name}</span> : null; })()}
                     </div>
                     <StatusBadge status={p.status} />
-                    <span style={{ color: "#9ca3af", fontSize: 12 }}>{new Date(p.createdAt).toLocaleDateString("ko-KR")}</span>
+                    <span style={{ color: "#9ca3af", fontSize: 12 }}>{formatDisplayDate(p.createdAt)}</span>
                   </div>
                 ))}
               </div>

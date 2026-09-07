@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { formatDisplayDate } from '../lib/dateFormat';
 import { api } from "../lib/constants";
 
 interface FaqItem {
@@ -582,7 +583,7 @@ export function InsightDetailPage({ slug }: { slug: string }) {
               </div>
 
               <div style={{ fontSize: 12, color: "#d1d5db", textAlign: "right", marginTop: 32 }}>
-                최종 업데이트: {new Date(insight.updatedAt).toLocaleDateString("ko-KR")}
+                최종 업데이트: {formatDisplayDate(insight.updatedAt)}
               </div>
             </>
           );

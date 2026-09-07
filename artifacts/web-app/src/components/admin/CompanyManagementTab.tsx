@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { formatDisplayDate } from '../../lib/dateFormat';
 import { formatWon } from "@/lib/utils";
 import {
   api, Company,
@@ -15,6 +16,7 @@ import { CompanyEditPage } from './CompanyEditPage';
 import { usePathname, navigate, parseCompanyRoute, companyPaths } from '../../lib/adminNav';
 import { stickyBulkBarStyle } from './bulkListShared';
 import { bulkBtnStyle } from './product/productShared';
+import './readTableView.css';
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
@@ -475,22 +477,30 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                 ) : (
                   <Card style={{ padding: 0, overflow: "hidden" }}>
                     <div style={{ overflowX: "auto" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                      <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                         <thead>
                           <tr>
                             <th style={{ ...tableTh, width: 34, textAlign: "center" }}>
                               <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
                                 aria-label="현재 페이지 전체 선택" style={{ width: 15, height: 15, cursor: "pointer" }} />
                             </th>
-                            {["ID", "거래처명", "유형", "업종", "담당자", "프로젝트", "총 결제", "등록일"].map(h => <th key={h} style={tableTh}>{h}</th>)}
+                            {/* 헤더 정렬 = 각 컬럼 본문 정렬(담당자·프로젝트 배지만 center, 나머지 left) */}
+                            {([
+                              { label: "ID", align: "left" as const },
+                              { label: "거래처명", align: "left" as const },
+                              { label: "유형", align: "left" as const },
+                              { label: "업종", align: "left" as const },
+                              { label: "담당자", align: "center" as const },
+                              { label: "프로젝트", align: "center" as const },
+                              { label: "총 결제", align: "left" as const },
+                              { label: "등록일", align: "left" as const },
+                            ]).map(h => <th key={h.label} style={{ ...tableTh, textAlign: h.align }}>{h.label}</th>)}
                           </tr>
                         </thead>
                         <tbody>
                           {companies.map(c => (
                             <tr key={c.id} onClick={() => setCompanyModal(c.id)}
-                              style={{ cursor: "pointer", background: selectedIds.has(c.id) ? "#eff6ff" : undefined }}
-                              onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
-                              onMouseLeave={e => (e.currentTarget.style.background = selectedIds.has(c.id) ? "#eff6ff" : "transparent")}>
+                              style={{ cursor: "pointer", background: selectedIds.has(c.id) ? "#eff6ff" : undefined }}>
                               {/* 선택 체크박스 — 클릭은 선택만(행 상세 진입과 분리) */}
                               <td style={{ ...tableTd, textAlign: "center" }} onClick={e => e.stopPropagation()}>
                                 <input type="checkbox" checked={selectedIds.has(c.id)} onChange={() => toggleSelectCompany(c.id)}
@@ -525,7 +535,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                               </td>
                               <td style={{ ...tableTd, fontWeight: 600, color: "#059669", whiteSpace: "nowrap" }}>{formatWon(Number(c.totalPayment))}</td>
                               {/* 등록일 = 홈택스 원본 등록일(registeredAt). 플랫폼 생성일(createdAt)이 아님. */}
-                              <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{c.registeredAt ? new Date(c.registeredAt).toLocaleDateString("ko-KR") : "-"}</td>
+                              <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af", whiteSpace: "nowrap" }}>{c.registeredAt ? formatDisplayDate(c.registeredAt) : "-"}</td>
                             </tr>
                           ))}
                         </tbody>

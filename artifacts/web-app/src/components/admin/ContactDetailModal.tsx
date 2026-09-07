@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { formatDisplayDate } from '../../lib/dateFormat';
 import {
   User, Building2, Building, BriefcaseBusiness, Mail, Smartphone,
   Phone, BadgeCheck, CircleCheck, Calendar,
@@ -248,7 +249,7 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
                 <span style={{ fontSize: 13, color: "#6b7280", fontWeight: 600 }}>등록일</span>
                 <span style={{ fontSize: 14, color: "#111827", fontWeight: 600 }}>
                   {/* 홈택스 원본 등록일(registeredAt) 우선, 없으면 플랫폼 생성일 fallback */}
-                  {((detail as any).registeredAt ?? detail.createdAt) ? new Date((detail as any).registeredAt ?? detail.createdAt).toLocaleDateString("ko-KR") : "-"}
+                  {((detail as any).registeredAt ?? detail.createdAt) ? formatDisplayDate((detail as any).registeredAt ?? detail.createdAt) : "-"}
                 </span>
               </div>
             </div>
@@ -267,7 +268,7 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
                     <span style={{ color: "#9ca3af", minWidth: 36 }}>#{p.id}</span>
                     <span style={{ fontWeight: 600, color: "#111827", flex: 1 }}>{p.title}</span>
                     <StatusBadge status={p.status} />
-                    <span style={{ color: "#9ca3af", fontSize: 12 }}>{new Date(p.createdAt).toLocaleDateString("ko-KR")}</span>
+                    <span style={{ color: "#9ca3af", fontSize: 12 }}>{formatDisplayDate(p.createdAt)}</span>
                   </div>
                 ))}
               </div>
@@ -282,7 +283,7 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
                     <div key={c.id} style={{ padding: "10px 14px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                         <span style={{ fontSize: 12, fontWeight: 600, color: "#6b7280" }}>{c.type}</span>
-                        <span style={{ fontSize: 12, color: "#9ca3af" }}>{new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
+                        <span style={{ fontSize: 12, color: "#9ca3af" }}>{formatDisplayDate(c.createdAt)}</span>
                       </div>
                       <p style={{ margin: 0, fontSize: 13, color: "#374151" }}>{c.content}</p>
                     </div>

@@ -17,6 +17,7 @@ import { convertToFormItem } from '../../lib/quoteItemForm';
 import type { QuoteItemForm } from './QuoteEditorWorkspace';
 import { tblRow, COL_H, SVC_CFG, SVC_FIELD_HINTS } from './quoteItemsShared';
 import { formatScheduleRange } from '../../lib/dateFormat';
+import './readTableView.css';
 
 // 판매정보 입력 원본 — 견적 품목(QuoteDetailItem) + 저장 금액 컬럼
 export type SaleItem = QuoteDetailItem & {
@@ -110,9 +111,11 @@ function ReadOnlyServiceFields({ f }: { f: QuoteItemForm }) {
 }
 
 // ── 항목 행 (읽기전용) ─────────────────────────────────────────────────────────
-function ReadOnlyRow({ raw }: { raw: SaleItem }) {
+function ReadOnlyRow({ raw, idx }: { raw: SaleItem; idx: number }) {
   const f = convertToFormItem(raw);
   const supply = Number(raw.supplyAmount ?? 0);
+  // Zebra — 1행 연회색 / 2행 흰색 교차. 0-based 짝수 idx(=1·3행)=C.g50, 홀수(=2·4행)=흰색.
+  const zebra = idx % 2 === 0 ? C.g50 : C.bgCard;
 
   // 할인 행 — 편집기 할인 Row와 동일(공급가액 음수·빨강)
   if (f.productType === 'discount') {
@@ -144,9 +147,9 @@ function ReadOnlyRow({ raw }: { raw: SaleItem }) {
     );
   }
 
-  // 일반 행 (번역/통역/장비/기타)
+  // 일반 행 (번역/통역/장비/기타) — zebra 교차 배경 + hover(vz-grid-row). 의미색(공급가액 등)은 텍스트라 유지(§7).
   return (
-    <div style={{ ...tblRow, borderBottom: `1px solid ${C.g100}`, minHeight: 42 }}>
+    <div className="vz-grid-row" style={{ ...tblRow, borderBottom: `1px solid ${C.g100}`, minHeight: 42, background: zebra }}>
       <div />
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}><TypeBadge type={f.productType} /></div>
       <div style={{ ...TYPO.inputValue, fontWeight: 600, minWidth: 0, overflow: 'hidden' }}>
@@ -225,8 +228,8 @@ export default function QuoteItemsView({ items }: { items: SaleItem[] }) {
   return (
     <div>
       <div style={{ overflowX: 'auto', scrollbarWidth: 'thin' }}>
-        {/* 컬럼 헤더 — 편집기와 동일 TABLE_COLS 그리드. 편집 전용(행 제어·AI)은 읽기전용이라 빈 헤더 */}
-        <div style={{ ...tblRow, padding: '0 8px 7px', borderBottom: BD.grid, marginBottom: 3 }}>
+        {/* 컬럼 헤더 — 편집기와 동일 TABLE_COLS 그리드. 공통 조회 헤더 규격에 맞춰 고정 연회색 배경(C.g100)+경계선 부여. */}
+        <div style={{ ...tblRow, padding: '9px 8px', background: C.g100, borderBottom: BD.grid, marginBottom: 3 }}>
           <div style={{ ...COL_H }} />
           <div style={{ ...COL_H }}>유형</div>
           <div style={{ ...COL_H, textAlign: 'left' }}>상품</div>
@@ -241,7 +244,7 @@ export default function QuoteItemsView({ items }: { items: SaleItem[] }) {
 
         {/* 항목 행 */}
         <div>
-          {items.map((it, idx) => <ReadOnlyRow key={idx} raw={it} />)}
+          {items.map((it, idx) => <ReadOnlyRow key={idx} raw={it} idx={idx} />)}
           {items.length === 0 && (
             <div style={{ ...tblRow, padding: '18px 8px', justifyContent: 'center' }}>
               <div style={{ ...TYPO.inputValue, gridColumn: '1 / -1', textAlign: 'center', color: C.g400 }}>

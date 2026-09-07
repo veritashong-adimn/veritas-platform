@@ -1,4 +1,5 @@
 import React from "react";
+import { formatDisplayDate } from '../../lib/dateFormat';
 import { Project, Task, PaymentPanel, PROJECT_STEPS, PROJECT_STEP_KEYS } from "../../lib/constants";
 import { Card, StatusBadge, PrimaryBtn, GhostBtn } from "../ui";
 
@@ -61,7 +62,7 @@ export function ProjectCard({
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
         <div style={{ flex: 1 }}>
           <p style={{ margin: 0, fontSize: 11, color: "#9ca3af", marginBottom: 4 }}>
-            #{project.id} · {new Date(project.createdAt).toLocaleDateString("ko-KR")}
+            #{project.id} · {formatDisplayDate(project.createdAt)}
           </p>
           <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>{project.title}</h3>
         </div>

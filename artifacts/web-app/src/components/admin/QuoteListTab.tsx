@@ -7,8 +7,11 @@ import { QuoteTrashTab } from './QuoteTrashTab';
 import { buildQuotePdfData, type QuoteDetail, type QuoteDetailItem } from '../../lib/quotePdf';
 import { convertToFormItem } from '../../lib/quoteItemForm';
 import { renderQuoteTitle, formatDocNumber } from '../../lib/quoteTitle';
+import { formatDisplayDate } from '../../lib/dateFormat';
 import { bulkBtnStyle } from './product/productShared';
 import { stickyBulkBarStyle } from './bulkListShared';
+import { DateField } from './DatePickerShared';
+import './readTableView.css';
 
 // ─── 타입 ──────────────────────────────────────────────────────────────────────
 interface QuoteRow {
@@ -495,13 +498,13 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         {/* 발행일 기간 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 11, color: '#6b7280', fontWeight: 600, whiteSpace: 'nowrap' }}>발행일</span>
-          <input
-            type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+          <DateField
+            value={dateFrom} onChange={v => setDateFrom(v)} ariaLabel="발행일 시작"
             style={{ padding: '4px 7px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 5, outline: 'none', color: dateFrom ? '#111827' : '#9ca3af' }}
           />
           <span style={{ fontSize: 11, color: '#d1d5db' }}>~</span>
-          <input
-            type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+          <DateField
+            value={dateTo} onChange={v => setDateTo(v)} ariaLabel="발행일 종료"
             style={{ padding: '4px 7px', fontSize: 12, border: '1px solid #d1d5db', borderRadius: 5, outline: 'none', color: dateTo ? '#111827' : '#9ca3af' }}
           />
           {(dateFrom || dateTo) && (
@@ -591,7 +594,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e5e7eb' }}>
                   <th style={{ padding: '6px 10px', textAlign: 'center', width: 36 }}>
@@ -599,8 +602,20 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                       aria-label="현재 페이지 전체 선택" data-testid="quote-select-all"
                       style={{ width: 15, height: 15, cursor: 'pointer' }} />
                   </th>
-                  {['견적번호', '발행일', '견적서명', '고객사', '고객명', '금액', '견적유형', '담당PM', '상태', '견적서'].map(h => (
-                    <th key={h} style={{ padding: '6px 10px', textAlign: 'center', verticalAlign: 'middle', fontSize: 11, fontWeight: 700, color: '#6b7280', whiteSpace: 'nowrap' }}>{h}</th>
+                  {/* 헤더 정렬 = 각 컬럼 본문 정렬(§3): 텍스트=left, 날짜/유형/상태/액션=center, 금액=right */}
+                  {([
+                    { label: '견적번호', align: 'left' },
+                    { label: '발행일', align: 'center' },
+                    { label: '견적서명', align: 'left' },
+                    { label: '고객사', align: 'left' },
+                    { label: '고객명', align: 'left' },
+                    { label: '금액', align: 'right' },
+                    { label: '견적유형', align: 'center' },
+                    { label: '담당PM', align: 'center' },
+                    { label: '상태', align: 'center' },
+                    { label: '견적서', align: 'center' },
+                  ] as const).map(h => (
+                    <th key={h.label} style={{ padding: '6px 10px', textAlign: h.align, verticalAlign: 'middle', fontSize: 11, fontWeight: 700, color: '#6b7280', whiteSpace: 'nowrap' }}>{h.label}</th>
                   ))}
                 </tr>
               </thead>
@@ -662,7 +677,7 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                       </td>
                       {/* 발행일 */}
                       <td style={{ padding: '6px 10px', fontSize: 12, color: '#6b7280', whiteSpace: 'nowrap', textAlign: 'center' }}>
-                        {q.issueDate ?? '—'}
+                        {q.issueDate ? formatDisplayDate(q.issueDate) : '—'}
                       </td>
                       {/* 견적서명 — 지정 범위(min 220 ~ max 420, 약 24vw ≈ 테이블 30~34% 이내)에서만 반응형, 좌측 정렬, 클릭 시 편집 */}
                       <td style={{ padding: '6px 10px', textAlign: 'left' }}>

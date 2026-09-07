@@ -9,6 +9,7 @@ import { api } from '../../lib/constants';
 import { CHANNEL_LABEL, SERVICE_LABEL, PROCESSING_META, QUOTE_PROGRESS_META, INQUIRY_CLOSE_REASONS, CLOSE_REASON_LABEL, EquipmentRow } from '../../lib/inquiryMeta';
 import { setQuoteHandoff, buildHandoffItems, parseEquipmentJson } from '../../lib/inquiryHandoff';
 import { InquiryFormFields, InquiryFormState, inquiryFormFromDetail, buildInquiryPayload } from './InquiryFormFields';
+import { BackToListButton } from './BackToListButton';
 
 const th: React.CSSProperties = { padding: '7px 10px', textAlign: 'left', fontSize: 12, color: '#6b7280', fontWeight: 600, width: 130, verticalAlign: 'top', whiteSpace: 'nowrap' };
 const tdv: React.CSSProperties = { padding: '7px 10px', fontSize: 13, color: '#111827' };
@@ -197,7 +198,7 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
   return (
     <div data-testid="inquiry-detail-tab" style={{ maxWidth: 920 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
-        <button type="button" onClick={onBack} data-testid="inq-detail-back" style={{ ...btn('#f9fafb', '#374151', '1px solid #d1d5db') }}>← 목록</button>
+        <BackToListButton onClick={onBack} variant="subtle" label="뒤로가기" testId="inq-detail-back" />
         <h1 style={{ fontSize: 20, fontWeight: 800, color: '#111827', margin: 0 }}>{d.inquiryNumber ?? `의뢰건 #${d.id}`}</h1>
         <span style={badge(pm)}>{pm.label}</span>
         <span style={badge(qm)}>{qm.label}</span>

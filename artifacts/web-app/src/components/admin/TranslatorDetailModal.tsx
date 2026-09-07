@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { api, TranslatorProfile, TranslatorRate, NoteEntry, normalizeLanguages, LangExpEntry, parseLangExperiences } from "../../lib/constants";
 import { registerUnsavedChecker } from "../../lib/unsavedGuard";
 import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
+import { BackToListButton } from "./BackToListButton";
 import { DraggableModal } from "./DraggableModal";
 import { SensitiveInfoModal, SETTLEMENT_TYPES } from "./SensitiveInfoModal";
 import { TranslatorLangExpSection } from "./TranslatorLangExpSection";
@@ -1126,15 +1127,10 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     `}</style>
     <DraggableModal title="통번역사 상세" onClose={requestClose} width={860} height="88vh" zIndex={300} bodyPadding="20px 28px" resizable
       inline={asPage}
+      headerLeft={asPage ? <BackToListButton onClick={requestClose} variant="subtle" label="뒤로가기" testId="translator-detail-back" /> : undefined}
       headerExtra={
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            {asPage && (
-              <button onClick={requestClose} data-testid="translator-detail-back"
-                style={{ fontSize: 12, padding: "4px 14px", background: "#fff", color: "#374151", border: "1px solid #d1d5db", borderRadius: 6, cursor: "pointer", fontWeight: 700 }}>
-                ← 목록으로
-              </button>
-            )}
             {!editMode ? (
               /* ── 조회 모드: [수정] [비활성/활성] [완전삭제] ── */
               <>
@@ -2170,7 +2166,9 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 
           {/* ── 하단 바 ── */}
           <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", alignItems: "center" }}>
-            <GhostBtn onClick={requestClose} style={{ fontSize: 14, padding: "9px 20px" }}>{asPage ? "목록으로" : "닫기"}</GhostBtn>
+            {asPage
+              ? <BackToListButton onClick={requestClose} variant="subtle" label="뒤로가기" testId="translator-detail-back-bottom" />
+              : <GhostBtn onClick={requestClose} style={{ fontSize: 14, padding: "9px 20px" }}>닫기</GhostBtn>}
           </div>
         </>
       )}

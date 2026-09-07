@@ -1,4 +1,5 @@
 import React from "react";
+import { formatDisplayDate } from '../../lib/dateFormat';
 import { AdminContact } from "../../lib/constants";
 import { formatPhoneDisplay } from "../../lib/utils";
 import { DraggableModal } from "./DraggableModal";
@@ -37,7 +38,7 @@ export function ContactMergeModal({ contacts, selectedIds, primaryId, merging, o
                 <span>부서/직책: {[c.department, c.position].filter(Boolean).join(" / ") || "-"}</span>
                 <span>휴대폰: {formatPhoneDisplay((c as any).mobile ?? c.phone)}</span>
                 <span>이메일: {c.email ?? "-"}</span>
-                <span>등록일: {new Date(c.createdAt).toLocaleDateString("ko-KR")}</span>
+                <span>등록일: {formatDisplayDate(c.createdAt)}</span>
                 <span>ID: #{c.id}</span>
               </div>
             </div>

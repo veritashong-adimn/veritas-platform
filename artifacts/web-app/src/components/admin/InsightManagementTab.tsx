@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { formatDisplayDate } from '../../lib/dateFormat';
+import './readTableView.css';
 import { NumericInput } from "../ui";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1621,11 +1623,30 @@ export function InsightManagementTab({ token, setToast }: Props) {
             </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
-                    {["ID", "유형", "질문", "요약 답변", "건수", "평균 단가", "신뢰도", "품질점수", "판정", "AEO 상태", "FAQ", "관련", "AEO 점수", "상태", "공개", "생성일", "액션"].map(h => (
-                      <th key={h} style={thStyle}>{h}</th>
+                    {/* 헤더 정렬 = 각 컬럼 본문 정렬 */}
+                    {([
+                      { label: "ID", align: "left" as const },
+                      { label: "유형", align: "left" as const },
+                      { label: "질문", align: "left" as const },
+                      { label: "요약 답변", align: "left" as const },
+                      { label: "건수", align: "center" as const },
+                      { label: "평균 단가", align: "right" as const },
+                      { label: "신뢰도", align: "center" as const },
+                      { label: "품질점수", align: "center" as const },
+                      { label: "판정", align: "center" as const },
+                      { label: "AEO 상태", align: "center" as const },
+                      { label: "FAQ", align: "center" as const },
+                      { label: "관련", align: "center" as const },
+                      { label: "AEO 점수", align: "center" as const },
+                      { label: "상태", align: "left" as const },
+                      { label: "공개", align: "left" as const },
+                      { label: "생성일", align: "left" as const },
+                      { label: "액션", align: "left" as const },
+                    ]).map(h => (
+                      <th key={h.label} style={{ ...thStyle, textAlign: h.align }}>{h.label}</th>
                     ))}
                   </tr>
                 </thead>
@@ -1719,7 +1740,7 @@ export function InsightManagementTab({ token, setToast }: Props) {
                           </span>
                         </td>
                         <td style={{ ...tdStyle, whiteSpace: "nowrap", color: "#6b7280" }}>
-                          {new Date(r.createdAt).toLocaleDateString("ko-KR")}
+                          {formatDisplayDate(r.createdAt)}
                         </td>
                         {/* 액션 버튼 */}
                         <td style={{ ...tdStyle, whiteSpace: "nowrap" }} onClick={e => e.stopPropagation()}>
@@ -1928,7 +1949,7 @@ export function InsightManagementTab({ token, setToast }: Props) {
                   />
                   {selected.publishedAt && (
                     <span style={{ fontSize: 11, color: "#9ca3af", alignSelf: "center" }}>
-                      게시일: {new Date(selected.publishedAt).toLocaleDateString("ko-KR")}
+                      게시일: {formatDisplayDate(selected.publishedAt)}
                     </span>
                   )}
                 </div>

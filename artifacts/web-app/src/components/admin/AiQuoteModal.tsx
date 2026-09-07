@@ -9,6 +9,7 @@
  * 관리자가 Preview 검토 후 "견적에 반영"을 눌렀을 때만 Workspace Row에 추가된다.
  */
 import React, { useState, useRef, useEffect } from 'react';
+import './readTableView.css';
 import { api } from '../../lib/constants';
 import { C, BD, TYPO, SP, BTN } from '../../lib/ds';
 import { getPolicy } from '../../lib/languagePagePolicy';
@@ -573,7 +574,7 @@ export default function AiQuoteModal({ onApply, onClose }: Props) {
               ) : (
                 <div style={{ border: BD.card, borderRadius: BD.radius.lg, overflow: 'hidden' }}>
                   <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <table className="veritas-thead" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                       <thead>
                         <tr>
                           <th style={THEAD_CELL('center')}>#</th>

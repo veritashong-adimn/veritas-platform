@@ -1,7 +1,9 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { formatDisplayDate, formatScheduleRange } from '../../lib/dateFormat';
 import { formatWon } from "@/lib/utils";
 import { api } from '../../lib/constants';
 import { Card, GhostBtn } from '../ui';
+import './readTableView.css';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -105,11 +107,21 @@ export function BillingManagementTab({ token, onToast, onNavigateToProjects }: P
       ) : (
         <Card style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  {["ID","거래처","청구 기간","건수","합계금액","배치상태","견적상태","생성일"].map(h => (
-                    <th key={h} style={tableTh}>{h}</th>
+                  {/* 헤더 정렬 = 본문 정렬(건수·합계금액만 right, 나머지 left) */}
+                  {([
+                    { label: "ID", align: "left" as const },
+                    { label: "거래처", align: "left" as const },
+                    { label: "청구 기간", align: "left" as const },
+                    { label: "건수", align: "right" as const },
+                    { label: "합계금액", align: "right" as const },
+                    { label: "배치상태", align: "left" as const },
+                    { label: "견적상태", align: "left" as const },
+                    { label: "생성일", align: "left" as const },
+                  ]).map(h => (
+                    <th key={h.label} style={{ ...tableTh, textAlign: h.align }}>{h.label}</th>
                   ))}
                 </tr>
               </thead>
@@ -120,16 +132,14 @@ export function BillingManagementTab({ token, onToast, onNavigateToProjects }: P
                   return (
                     <tr key={b.key ?? b.id}
                       onClick={onNavigateToProjects}
-                      style={{ cursor: "pointer" }}
-                      onMouseEnter={e => (e.currentTarget.style.background = "#f9fafb")}
-                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                      style={{ cursor: "pointer" }}>
                       {/* 가상행(누적견적)은 DB billing_batch id가 없으므로 견적번호를 표시 */}
                       <td style={{ ...tableTd, color: "#9ca3af" }}>{b.sourceType === "accumulated_quote" ? (b.quoteNumber ?? "-") : `#${b.id}`}</td>
                       <td style={{ ...tableTd, fontWeight: 700, color: "#2563eb" }}>{b.companyName ?? "-"}</td>
                       <td style={{ ...tableTd, fontSize: 12 }}>
                         {!b.periodStart && !b.periodEnd
                           ? "—"
-                          : `${b.periodStart ? new Date(b.periodStart).toLocaleDateString("ko-KR") : "?"} ~ ${b.periodEnd ? new Date(b.periodEnd).toLocaleDateString("ko-KR") : "?"}`}
+                          : formatScheduleRange(b.periodStart, b.periodEnd)}
                       </td>
                       <td style={{ ...tableTd, textAlign: "right" }}>{b.itemCount}건</td>
                       <td style={{ ...tableTd, fontWeight: 700, textAlign: "right" }}>{formatWon(b.totalAmount)}</td>
@@ -142,7 +152,7 @@ export function BillingManagementTab({ token, onToast, onNavigateToProjects }: P
                         ) : <span style={{ color: "#d1d5db", fontSize: 11 }}>미발행</span>}
                       </td>
                       <td style={{ ...tableTd, fontSize: 12, color: "#9ca3af" }}>
-                        {new Date(b.createdAt).toLocaleDateString("ko-KR")}
+                        {formatDisplayDate(b.createdAt)}
                       </td>
                     </tr>
                   );

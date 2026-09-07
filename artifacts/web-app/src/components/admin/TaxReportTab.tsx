@@ -9,6 +9,9 @@ import { api } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import { downloadTaxReportExcel, todayStamp, type TaxReportRow } from '../../lib/taxReportExcel';
+import { DateField } from './DatePickerShared';
+import { formatDisplayDate } from '../../lib/dateFormat';
+import './readTableView.css';
 
 const won = (n: unknown) => Math.round(Number(n ?? 0)).toLocaleString('ko-KR');
 const amt = (n: number | null | undefined) => (n == null ? '-' : won(n));
@@ -110,11 +113,11 @@ export default function TaxReportTab({ token, onToast }: Props) {
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ ...TYPO.helper, fontWeight: 700 }}>지급기간</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <input type="date" style={{ ...inp, width: 152 }} value={dateFrom} max={dateTo || undefined}
-                onChange={(e) => setDateFrom(e.target.value)} data-testid="tax-filter-from" aria-label="지급기간 시작" />
+              <DateField style={{ ...inp, width: 152 }} value={dateFrom} max={dateTo || undefined}
+                onChange={(v) => setDateFrom(v)} testid="tax-filter-from" ariaLabel="지급기간 시작" />
               <span style={{ color: C.textSecondary }}>~</span>
-              <input type="date" style={{ ...inp, width: 152 }} value={dateTo} min={dateFrom || undefined}
-                onChange={(e) => setDateTo(e.target.value)} data-testid="tax-filter-to" aria-label="지급기간 종료" />
+              <DateField style={{ ...inp, width: 152 }} value={dateTo} min={dateFrom || undefined}
+                onChange={(v) => setDateTo(v)} testid="tax-filter-to" ariaLabel="지급기간 종료" />
             </div>
           </label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -169,7 +172,7 @@ export default function TaxReportTab({ token, onToast }: Props) {
       {!loading && !error && (
         <Card>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1100 }}>
+            <table className="veritas-read-table" style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1100 }}>
               <thead><tr>
                 <th style={th}>지급일</th><th style={th}>통역사명</th><th style={th}>주민번호</th><th style={th}>언어</th>
                 <th style={{ ...th, textAlign: 'right' }}>지급액(세전)</th><th style={{ ...th, textAlign: 'right' }}>지급액(세후)</th>
@@ -179,7 +182,7 @@ export default function TaxReportTab({ token, onToast }: Props) {
                 {filtered.length === 0 && <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: C.g400, padding: 20 }}>{filterActive ? '조건에 맞는 지급자료가 없습니다.' : '조회된 지급자료가 없습니다.'}</td></tr>}
                 {filtered.map((r, i) => (
                   <tr key={i}>
-                    <td style={td}>{r.payDate || '-'}</td>
+                    <td style={td}>{formatDisplayDate(r.payDate) || '-'}</td>
                     <td style={{ ...td, fontWeight: 700 }}>{r.payeeName}</td>
                     <td style={{ ...td, color: C.textSecondary, fontVariantNumeric: 'tabular-nums' }}>{r.residentNumberMasked || '-'}</td>
                     <td style={td}>{r.language || '-'}</td>

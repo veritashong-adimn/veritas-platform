@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { formatDisplayDate } from '../../lib/dateFormat';
+import './readTableView.css';
 import { api } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn, NumericInput } from "../ui";
 import { DraggableModal } from "./DraggableModal";
+import { DateField } from "./DatePickerShared";
 
 interface LedgerEntry {
   id: number;
@@ -134,7 +137,7 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
           {/* 잔액 summary */}
           <div style={{ display: "flex", gap: 16, marginTop: 20, flexWrap: "wrap" }}>
             {[
-              { label: "최초 입금액", value: `${fmt(account.initialAmount)}원`, sub: account.depositDate ? `입금일: ${account.depositDate}` : undefined },
+              { label: "최초 입금액", value: `${fmt(account.initialAmount)}원`, sub: account.depositDate ? `입금일: ${formatDisplayDate(account.depositDate)}` : undefined },
               { label: "사용 금액", value: `${fmt(account.initialAmount - account.currentBalance)}원`, sub: "누적 차감" },
               { label: "현재 잔액", value: `${fmt(account.currentBalance)}원`, highlight: true },
             ].map(s => (
@@ -172,7 +175,7 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
                 </div>
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 }}>거래 날짜</label>
-                  <input type="date" value={txDate} onChange={e => setTxDate(e.target.value)}
+                  <DateField value={txDate} onChange={v => setTxDate(v)} ariaLabel="거래 날짜"
                     style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 14, outline: "none" }} />
                 </div>
                 <div>
@@ -203,7 +206,7 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
             <div style={{ textAlign: "center", padding: 32, color: "#9ca3af", fontSize: 14, background: "#f9fafb", borderRadius: 10 }}>거래 내역이 없습니다.</div>
           ) : (
             <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr style={{ background: "#f8fafc" }}>
                     {[
@@ -231,7 +234,7 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
                     const tdBase: React.CSSProperties = { padding: "10px 14px", borderBottom: "1px solid #f3f4f6", whiteSpace: "nowrap" };
                     return (
                       <tr key={e.id} style={{ background: bgRow }}>
-                        <td style={{ ...tdBase, fontSize: 13, color: "#374151" }}>{e.transactionDate}</td>
+                        <td style={{ ...tdBase, fontSize: 13, color: "#374151" }}>{formatDisplayDate(e.transactionDate)}</td>
                         <td style={{ ...tdBase }}>
                           <span style={{ background: tc.bg, color: tc.color, borderRadius: 6, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>
                             {typeLabel[e.type] ?? e.type}

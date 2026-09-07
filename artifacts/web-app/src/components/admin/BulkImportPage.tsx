@@ -1,6 +1,8 @@
 import React, { useState, useCallback, useRef } from 'react';
+import './readTableView.css';
 import { api } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn } from '../ui';
+import { BackToListButton } from './BackToListButton';
 
 // ─── 안전 유틸 ────────────────────────────────────────────────────────────────
 // 서버 응답의 형태가 예상과 다르거나(구버전 배포·enum 불일치) 일부 필드가 비어도
@@ -270,9 +272,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
     <div>
       {/* ── 헤더 ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-        <GhostBtn onClick={onClose} style={{ fontSize: 13, padding: '7px 14px' }} data-testid="bulk-import-back" aria-label="목록으로 돌아가기">
-          ← 목록으로
-        </GhostBtn>
+        <BackToListButton onClick={onClose} variant="subtle" label="뒤로가기" testId="bulk-import-back" />
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#111827' }}>{cfg.title}</h2>
       </div>
 
@@ -401,7 +401,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
               </div>
 
               <div style={{ overflowX: 'auto', maxHeight: 460, overflowY: 'auto', border: '1px solid #eef2f7', borderRadius: 10 }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+                <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
                     <tr>
                       <th style={tableTh}>상태</th>
@@ -480,8 +480,7 @@ class BulkImportErrorBoundary extends React.Component<BoundaryProps, BoundarySta
       return (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-            <GhostBtn onClick={this.props.onClose} style={{ fontSize: 13, padding: '7px 14px' }}
-              data-testid="bulk-import-error-back" aria-label="목록으로 돌아가기">← 목록으로</GhostBtn>
+            <BackToListButton onClick={this.props.onClose} variant="subtle" label="뒤로가기" testId="bulk-import-error-back" />
             <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#111827' }}>{this.props.title}</h2>
           </div>
           <Card style={{ padding: 24 }}>
@@ -496,7 +495,7 @@ class BulkImportErrorBoundary extends React.Component<BoundaryProps, BoundarySta
             </details>
             <div style={{ display: 'flex', gap: 10 }}>
               <PrimaryBtn onClick={() => this.setState({ error: null })} data-testid="bulk-import-error-retry" aria-label="다시 시도">다시 시도</PrimaryBtn>
-              <GhostBtn onClick={this.props.onClose} data-testid="bulk-import-error-close" aria-label="목록으로">목록으로</GhostBtn>
+              <BackToListButton onClick={this.props.onClose} variant="subtle" label="뒤로가기" testId="bulk-import-error-close" />
             </div>
           </Card>
         </div>

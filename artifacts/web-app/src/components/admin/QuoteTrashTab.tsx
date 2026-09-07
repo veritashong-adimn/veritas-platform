@@ -5,6 +5,8 @@
  * 30일 보관기간은 표시 기준일 뿐 자동삭제하지 않는다(경과해도 데이터 유지). 서버가 권한을 재검증한다.
  */
 import React, { useState, useEffect, useCallback } from 'react';
+import { formatDisplayDate } from '../../lib/dateFormat';
+import './readTableView.css';
 import { api } from '../../lib/constants';
 import { formatDocNumber } from '../../lib/quoteTitle';
 import { PageHeader } from './PageHeader';
@@ -117,11 +119,12 @@ export function QuoteTrashTab({ token, isAdmin, onToast, onBack }: {
 
       <div style={{ padding: '20px 0 64px' }}>
         <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: '#f9fafb' }}>
+                {/* 헤더 정렬 = 본문 정렬(금액만 right, 나머지 left) */}
                 {['견적번호', '견적서명', '고객사', '견적일', '금액', '삭제일', '삭제자', '삭제 사유', '보관상태', '관리'].map(h => (
-                  <th key={h} style={th}>{h}</th>
+                  <th key={h} style={{ ...th, textAlign: h === '금액' ? 'right' : 'left' }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -137,9 +140,9 @@ export function QuoteTrashTab({ token, isAdmin, onToast, onBack }: {
                     <td style={{ ...td, fontFamily: 'monospace', color: '#475569' }}>{formatDocNumber('Q', r.quoteNumber, r.issueDate) || `#${r.id}`}</td>
                     <td style={{ ...td, color: '#111827', fontWeight: 600, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.title ?? '(미입력)'}</td>
                     <td style={td}>{r.companyName ?? '—'}</td>
-                    <td style={td}>{r.issueDate ?? '—'}</td>
+                    <td style={td}>{r.issueDate ? formatDisplayDate(r.issueDate) : '—'}</td>
                     <td style={{ ...td, textAlign: 'right' }}>{fmt(r.price)}원</td>
-                    <td style={td}>{r.deletedAt ? new Date(r.deletedAt).toLocaleDateString('ko-KR') : '—'}</td>
+                    <td style={td}>{r.deletedAt ? formatDisplayDate(r.deletedAt) : '—'}</td>
                     <td style={td}>{r.deletedByName ?? '—'}</td>
                     <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', color: '#6b7280' }} title={r.deletionReason ?? ''}>{r.deletionReason ?? '—'}</td>
                     <td style={{ ...td, color: ret.expired ? '#b45309' : '#15803d', fontWeight: 600 }}>{ret.text}</td>

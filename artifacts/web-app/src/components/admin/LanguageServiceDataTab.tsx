@@ -1,4 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { formatDisplayDate } from '../../lib/dateFormat';
+import './readTableView.css';
 import { api } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
 
@@ -396,7 +398,7 @@ export function LanguageServiceDataTab({ token, setToast }: { token: string; set
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
         {/* 테이블 */}
         <Card style={{ flex: 1, overflowX: "auto", padding: 0 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ background: "#f3f4f6" }}>
                 {["ID","유형","언어쌍","도메인","사용목적","단가","납기","공개","생성일","액션"].map(h => (
@@ -437,7 +439,7 @@ export function LanguageServiceDataTab({ token, setToast }: { token: string; set
                       <span style={{ fontSize: 11, color: item.isPublic ? "#059669" : "#9ca3af" }}>{item.isPublic ? "공개" : "비공개"}</span>
                     </td>
                     <td style={{ padding: "7px 10px", color: "#9ca3af", whiteSpace: "nowrap" }}>
-                      {new Date(item.createdAt).toLocaleDateString("ko-KR")}
+                      {formatDisplayDate(item.createdAt)}
                     </td>
                     <td style={{ padding: "7px 10px" }}>
                       <div style={{ display: "flex", gap: 4 }}>

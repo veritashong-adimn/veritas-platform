@@ -1,4 +1,5 @@
 import React from "react";
+import { formatDisplayDate } from '../../lib/dateFormat';
 import { BoardPost, BOARD_CATEGORY_LABEL } from "../../lib/constants";
 import { DraggableModal } from "./DraggableModal";
 
@@ -12,7 +13,7 @@ export function BoardPostDetailModal({ post, onClose, onDelete }: BoardPostDetai
   return (
     <DraggableModal
       title={post.title}
-      subtitle={`${post.authorEmail} · ${new Date(post.createdAt).toLocaleDateString("ko-KR")}`}
+      subtitle={`${post.authorEmail} · ${formatDisplayDate(post.createdAt)}`}
       onClose={onClose}
       width={680}
       zIndex={300}

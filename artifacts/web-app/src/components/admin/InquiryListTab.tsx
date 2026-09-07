@@ -6,8 +6,11 @@
  * 행 클릭 → 상세, 체크박스 → 선택(동작 분리). 기존 ERP 목록 디자인 패턴을 따른다.
  */
 import React, { useState, useEffect, useCallback } from 'react';
+import { formatDisplayDate } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
 import { CHANNEL_LABEL, SERVICE_LABEL, PROCESSING_META, QUOTE_PROGRESS_META, kstTodayStr } from '../../lib/inquiryMeta';
+import { DateField } from './DatePickerShared';
+import './readTableView.css';
 
 interface InquiryRow {
   id: number;
@@ -94,7 +97,7 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <button type="button" onClick={() => setDate(kstTodayStr())} data-testid="btn-inquiry-today"
             style={{ padding: '8px 12px', fontSize: 13, fontWeight: 600, borderRadius: 8, border: '1px solid #d1d5db', background: '#f9fafb', color: '#374151', cursor: 'pointer' }}>오늘</button>
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} data-testid="input-inquiry-date"
+          <DateField value={date} onChange={v => setDate(v)} testid="input-inquiry-date" ariaLabel="조회 날짜"
             style={{ padding: '7px 10px', fontSize: 13, border: '1px solid #d1d5db', borderRadius: 8, outline: 'none' }} />
           {onRegister && (
             <button type="button" onClick={onRegister} data-testid="btn-inquiry-register-nav"
@@ -121,7 +124,7 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
 
       {/* 목록 */}
       <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1180 }}>
+        <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1180 }}>
           <thead>
             <tr style={{ background: '#f9fafb' }}>
               <th style={{ ...th, width: 40 }}></th>
@@ -139,9 +142,7 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
               return (
                 <tr key={r.id} onClick={() => onOpenDetail(r.id)}
                   data-testid={`inquiry-row-${r.id}`}
-                  style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: r.isCarryover ? '#fff7ed' : undefined }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLTableRowElement).style.background = r.isCarryover ? '#ffedd5' : '#f9fafb'; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLTableRowElement).style.background = r.isCarryover ? '#fff7ed' : ''; }}>
+                  style={{ borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: r.isCarryover ? '#fff7ed' : undefined }}>
                   <td style={td} onClick={e => e.stopPropagation()}>
                     <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)}
                       aria-label={`${r.inquiryNumber ?? r.id} 선택`} data-testid={`inquiry-select-${r.id}`}
@@ -168,7 +169,7 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
                       ? <span style={{ fontFamily: 'monospace', color: '#2563eb', fontWeight: 700, textDecoration: onOpenQuote ? 'underline' : 'none' }}>{r.quoteNumber}</span>
                       : '—'}
                   </td>
-                  <td style={td}>{r.quoteProgress === 'sent' ? (r.quoteIssueDate ?? '—') : '—'}</td>
+                  <td style={td}>{r.quoteProgress === 'sent' ? (r.quoteIssueDate ? formatDisplayDate(r.quoteIssueDate) : '—') : '—'}</td>
                   <td style={td}>{r.processingStatus === 'closed_no_quote' ? <span style={badge(PROCESSING_META.closed_no_quote)}>종결</span> : '—'}</td>
                 </tr>
               );

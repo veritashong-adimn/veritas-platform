@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from "react";
+import { formatDisplayDate } from '../lib/dateFormat';
 import { formatWon } from "@/lib/utils";
 import { api, User, Task, TranslatorProfile, TranslatorRate, MySettlement, normalizeLanguages } from "../lib/constants";
 import { Card, Toast, PrimaryBtn, GhostBtn, ClickSelect } from "../components/ui";
@@ -215,7 +216,7 @@ export function TranslatorDashboard({ user, token }: { user: User; token: string
                   <Card key={s.id} style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
                     <div style={{ flex: 1, minWidth: 160 }}>
                       <p style={{ margin: "0 0 3px", fontSize: 11, color: "#9ca3af" }}>
-                        #{s.id} · {new Date(s.createdAt).toLocaleDateString("ko-KR")}
+                        #{s.id} · {formatDisplayDate(s.createdAt)}
                       </p>
                       <p style={{ margin: 0, fontWeight: 700, fontSize: 15, color: "#111827" }}>
                         {s.projectTitle ?? "(제목 없음)"}

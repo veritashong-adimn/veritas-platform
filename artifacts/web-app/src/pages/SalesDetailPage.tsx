@@ -15,7 +15,7 @@ import { api, type Product } from '../lib/constants';
 import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn } from '../components/ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../lib/ds';
 import { buildQuotePdfData, type QuoteDetail } from '../lib/quotePdf';
-import { renderQuoteTitle, formatDocNumber } from '../lib/quoteTitle';
+import { formatDocNumber } from '../lib/quoteTitle';
 import QuotePdfPreviewModal from '../components/admin/QuotePdfPreviewModal';
 import { BackToListButton } from '../components/admin/BackToListButton';
 import TransactionStatementModal from '../components/admin/TransactionStatementModal';
@@ -273,7 +273,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   if (!project) {
     return (
       <div>
-        <BackToListButton onClick={onBack} testId="btn-sales-back" />
+        <BackToListButton onClick={onBack} testId="btn-sales-back" variant="subtle" label="뒤로가기" />
         <Card style={{ marginTop: 16, padding: 40, textAlign: 'center' }}>
           <p style={{ margin: 0, fontSize: 14, color: C.textSecondary }}>판매건을 찾을 수 없습니다.</p>
         </Card>
@@ -300,22 +300,10 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
       {/* ── 상단 헤더 ─────────────────────────────────────────────────────── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <span ref={topBackRef} style={{ display: 'inline-flex' }}>
-          <BackToListButton onClick={onBack} testId="btn-sales-back" />
+          <BackToListButton onClick={onBack} testId="btn-sales-back" variant="subtle" label="뒤로가기" />
         </span>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, letterSpacing: '0.04em' }}>판매 상세</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 16, fontWeight: 800, color: C.g900, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 460 }}>{renderQuoteTitle(project.title)}</span>
-            <StatusBadge status={project.status} />
-            {quote?.quoteNumber && (
-              // 견적번호 — 견적목록·견적서 PDF와 동일한 공식 표시번호(formatDocNumber: Q+YYMMDD-순번, 예 Q260716-008).
-              //  · 원본 견적 레코드의 quoteNumber+발행일(issueDate)로 파생. 내부 raw 번호(Q000008) 직접 노출 금지.
-              //  · 발행일 없는 레거시 데이터는 formatDocNumber가 원본 quoteNumber를 그대로 반환(fallback).
-              <span style={{ fontFamily: 'monospace', fontSize: 11, color: C.textSecondary, background: '#f5f3ff', borderRadius: 4, padding: '2px 7px' }}>{formatDocNumber('Q', quote.quoteNumber, quote.issueDate) || quote.quoteNumber}</span>
-            )}
-          </div>
-        </div>
-        <span style={{ flex: 1 }} />
+        {/* 페이지 제목만 — 견적상세와 동일 위계(Navigation + Page Title + Actions). 실제 업무 데이터(견적서명·상태·견적번호)는 A.기본정보에서 표시(§5·§8). */}
+        <h1 style={{ margin: 0, marginLeft: 16, flex: '1 1 auto', minWidth: 0, fontSize: 20, fontWeight: 800, color: C.textPrimary, letterSpacing: '-0.01em', whiteSpace: 'nowrap' }}>판매 상세</h1>
         <GhostBtn onClick={() => fetchDetail()} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-sales-refresh" aria-label="새로고침">
           새로고침
         </GhostBtn>
@@ -368,7 +356,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
         <>
           {/* ── A. 기본정보 ─────────────────────────────────────────────── */}
           <Card>
-            <CardSectionHeader badge="A" badgeBg="#eff6ff" badgeColor="#2563eb" title="기본정보" hint="원본 견적 정보 (읽기전용)" />
+            <CardSectionHeader badge="A" badgeBg="#eff6ff" badgeColor="#2563eb" title="기본정보" />
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px 20px' }}>
               <ReadField label="견적서 유형" value={QUOTE_TYPE_LABEL[quote.quoteType] ?? quote.quoteType} />
               <ReadField label="견적일" value={quote.issueDate} />
@@ -379,6 +367,9 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
               <ReadField label="거래처" value={companyName} />
               <ReadField label="담당자" value={contactName} />
               <ReadField label="담당 PM" value={pmName} />
+              {/* 상단 헤더에서 이관한 식별정보 — 번호는 실제로 '견적번호'(formatDocNumber 'Q' 접두)이며 판매/프로젝트 번호가 아님. 상태는 판매 상태. */}
+              <ReadField label="견적번호" value={quote.quoteNumber ? (formatDocNumber('Q', quote.quoteNumber, quote.issueDate) || quote.quoteNumber) : undefined} />
+              <ReadField label="상태" value={<StatusBadge status={project.status} />} />
             </div>
           </Card>
 
@@ -470,13 +461,14 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
       {showFloatBack && (
         <div style={{
           position: 'fixed', right: 24, bottom: 88, zIndex: 40,
-          borderRadius: 10, border: `1.5px solid ${C.primary}`,
-          boxShadow: '0 4px 14px rgba(0,0,0,0.16)', background: '#fff', overflow: 'hidden',
+          borderRadius: 8, boxShadow: '0 4px 14px rgba(0,0,0,0.16)', background: '#fff', overflow: 'hidden',
         }}>
+          {/* 상단 버튼과 동일한 subtle "‹ 판매목록" 스타일 사용. 플로팅 가시성은 래퍼 그림자로만 확보(파란 강조 없음). */}
           <BackToListButton
             onClick={onBack}
             testId="btn-sales-back-floating"
-            style={{ background: '#fff', border: 'none', height: 42, padding: '0 20px', fontSize: 15 }}
+            variant="subtle"
+            label="뒤로가기"
           />
         </div>
       )}

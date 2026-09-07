@@ -1,8 +1,10 @@
 // 컨트롤타워 탭 — 상태 기반 UX 자동 제어 (2025-04)
 import React, { useCallback, useEffect, useState } from "react";
+import './readTableView.css';
 import { formatWon } from "@/lib/utils";
 import { api, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE } from "../../lib/constants";
 import { StatusBadge } from "../ui";
+import { formatDisplayDate } from "../../lib/dateFormat";
 
 // ── 타입 ─────────────────────────────────────────────────────────────────────
 interface ControlTowerData {
@@ -61,7 +63,7 @@ interface Props {
 
 // ── 포맷 헬퍼 ────────────────────────────────────────────────────────────────
 const fmtWon  = (n: number) => `₩${Math.round(n).toLocaleString()}`;
-const fmtDate = (d?: string | null) => d ? d.slice(0, 10) : "—";
+const fmtDate = (d?: string | null) => d ? formatDisplayDate(d.slice(0, 10)) : "—";
 const fmtMD   = (d?: string | null) => d ? d.slice(5, 10).replace("-", ".") : "—";
 
 // ── 공통 스타일 상수 ──────────────────────────────────────────────────────────
@@ -352,16 +354,17 @@ export function ProjectControlTowerTab({
                   <span style={{ padding: "2px 7px", borderRadius: 5, fontSize: 10, fontWeight: 600, background: "#f0f9ff", color: "#0369a1" }}>
                     {QUOTE_TYPE_KO[q.quoteType] ?? q.quoteType}
                   </span>
-                  {q.issueDate      && <span style={{ fontSize: 11, color: "#9ca3af" }}>발행일: {q.issueDate}</span>}
-                  {q.invoiceDueDate && <span style={{ fontSize: 11, color: "#9ca3af" }}>청구일: {q.invoiceDueDate}</span>}
-                  {q.paymentDueDate && <span style={{ fontSize: 11, color: "#9ca3af" }}>입금예정: {q.paymentDueDate}</span>}
+                  {q.issueDate      && <span style={{ fontSize: 11, color: "#9ca3af" }}>발행일: {formatDisplayDate(q.issueDate)}</span>}
+                  {q.invoiceDueDate && <span style={{ fontSize: 11, color: "#9ca3af" }}>청구일: {fmtDate(q.invoiceDueDate)}</span>}
+                  {q.paymentDueDate && <span style={{ fontSize: 11, color: "#9ca3af" }}>입금예정: {fmtDate(q.paymentDueDate)}</span>}
                 </div>
                 {q.items.length > 0 ? (
                   <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                       <thead>
+                        {/* 헤더 정렬 = 본문 정렬(수량·단가·공급가액·부가세·합계 right, 나머지 left) */}
                         <tr>{["상품/서비스","언어쌍","단위","수량","단가","공급가액","부가세","합계","비고"].map(h =>
-                          <th key={h} style={TH}>{h}</th>
+                          <th key={h} style={{ ...TH, textAlign: ["수량","단가","공급가액","부가세","합계"].includes(h) ? "right" : "left" }}>{h}</th>
                         )}</tr>
                       </thead>
                       <tbody>
@@ -419,7 +422,7 @@ export function ProjectControlTowerTab({
           <EmptyCTA icon="👤" text="배정된 통번역사가 없습니다." btnLabel="통번역사 배정하기" onClick={onOpenAssignPanel} />
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>{["통번역사","태스크 상태","납품일","지급예정일","원금액","원천세","실지급액","정산 유형","정산 상태","액션"].map(h =>
                   <th key={h} style={TH}>{h}</th>
@@ -465,7 +468,7 @@ export function ProjectControlTowerTab({
                         {s?.payoutDueDate ? (
                           <div>
                             <span style={{ fontWeight: 600, color: isOverdue ? "#dc2626" : isDueToday ? "#d97706" : "#111827" }}>
-                              {s.payoutDueDate}
+                              {fmtDate(s.payoutDueDate)}
                             </span>
                             {isOverdue && <div style={{ marginTop: 2 }}><span style={{ padding: "1px 5px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "#fee2e2", color: "#dc2626" }}>지연</span></div>}
                             {isDueToday && <div style={{ marginTop: 2 }}><span style={{ padding: "1px 5px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "#fef3c7", color: "#d97706" }}>오늘</span></div>}
@@ -573,7 +576,7 @@ export function ProjectControlTowerTab({
             <EmptyCTA icon="💳" text="결제 내역이 없습니다." btnLabel="결제 등록하기" onClick={onOpenPaymentForm} />
           ) : (
             <>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>{["결제일","금액","방법","상태"].map(h => <th key={h} style={TH}>{h}</th>)}</tr>
                 </thead>
@@ -634,7 +637,7 @@ export function ProjectControlTowerTab({
             </div>
           ) : (
             <>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>{["번역사","지급예정일","실지급액","상태","액션"].map(h => <th key={h} style={TH}>{h}</th>)}</tr>
                 </thead>
@@ -648,7 +651,7 @@ export function ProjectControlTowerTab({
                         <td style={{ ...TD, fontWeight: 600 }}>{t.name || t.email || "—"}</td>
                         <td style={{ ...TD, whiteSpace: "nowrap" as const }}>
                           <span style={{ fontWeight: 600, color: isOverdue ? "#dc2626" : "#111827" }}>
-                            {s.payoutDueDate ?? "—"}
+                            {fmtDate(s.payoutDueDate)}
                           </span>
                           {isOverdue && <span style={{ marginLeft: 4, padding: "1px 4px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: "#fee2e2", color: "#dc2626" }}>지연</span>}
                         </td>

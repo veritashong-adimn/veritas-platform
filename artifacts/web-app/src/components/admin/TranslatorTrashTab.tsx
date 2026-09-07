@@ -9,9 +9,10 @@
  * 권한은 서버가 재검증한다. 완전삭제 버튼은 관리자에게만 노출한다.
  */
 import React, { useState, useEffect, useCallback } from 'react';
+import './readTableView.css';
 import { api } from '../../lib/constants';
 
-const th: React.CSSProperties = { padding: '8px 10px', fontSize: 11, fontWeight: 700, color: '#6b7280', borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap' };
+const th: React.CSSProperties = { padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap' };
 const td: React.CSSProperties = { padding: '8px 10px', fontSize: 12, color: '#374151', whiteSpace: 'nowrap' };
 const tdEllip: React.CSSProperties = { ...td, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' };
 
@@ -91,7 +92,7 @@ export function TranslatorTrashTab({ token, isAdmin, onToast, onRestored }: {
       </div>
 
       <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: '#f9fafb' }}>
               {['이름', '이메일', '가능언어', '등급', '관리'].map(h => <th key={h} style={th}>{h}</th>)}

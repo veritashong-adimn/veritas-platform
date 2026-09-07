@@ -1,4 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { formatDisplayDate } from '../../lib/dateFormat';
+import './readTableView.css';
 import { api } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
 
@@ -211,7 +213,7 @@ export function DataLayerTab({ token, setToast }: { token: string; setToast: (ms
 
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
         <Card style={{ flex: 1, overflowX: "auto", padding: 0 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+          <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
             <thead>
               <tr style={{ background: "#f3f4f6" }}>
                 {["ID","프로젝트","순번","원문","번역문","언어쌍","도메인","품질","보안등급","익명화","상태","생성일"].map(h => (
@@ -268,7 +270,7 @@ export function DataLayerTab({ token, setToast }: { token: string; setToast: (ms
                       </span>
                     </td>
                     <td style={{ padding: "7px 10px", color: "#9ca3af", whiteSpace: "nowrap" }}>
-                      {new Date(u.createdAt).toLocaleDateString("ko-KR")}
+                      {formatDisplayDate(u.createdAt)}
                     </td>
                   </tr>
                 );

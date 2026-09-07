@@ -10,6 +10,8 @@
  * 개별 휴지통(견적/상품 사이드바, 거래처/담당자 토글)은 병행 유지한다. 안정화 후 별도 단계에서 정리.
  */
 import React, { useState, useEffect, useCallback } from 'react';
+import { formatDisplayDate } from '../../lib/dateFormat';
+import './readTableView.css';
 import { api } from '../../lib/constants';
 import { formatDocNumber } from '../../lib/quoteTitle';
 import {
@@ -387,7 +389,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
 
       {/* 목록 */}
       <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: '#f9fafb' }}>
               <th style={{ ...th, width: 44 }}>
@@ -428,7 +430,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
                     <div style={{ color: '#111827', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.title}</div>
                     {it.subtitle && <div style={{ color: '#9ca3af', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.subtitle}</div>}
                   </td>
-                  <td style={td}>{it.deletedAt ? new Date(it.deletedAt).toLocaleDateString('ko-KR') : DASH}</td>
+                  <td style={td}>{it.deletedAt ? formatDisplayDate(it.deletedAt) : DASH}</td>
                   <td style={td}>{it.deletedByName ?? DASH}</td>
                   <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', color: '#6b7280' }} title={it.deletionReason ?? ''}>{it.deletionReason ?? DASH}</td>
                   <td style={{ ...td, color: '#6b7280' }}>{meta.areaLabel}</td>

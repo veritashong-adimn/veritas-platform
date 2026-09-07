@@ -11,6 +11,7 @@ import { C, TYPO, dsInputStd } from '../../lib/ds';
 import { ClickSelect } from '../ui';
 import { Row, UNIT_OPTS, dateVal, num, isTranslationKind, isInterpretationKind } from './performanceShared';
 import { formatScheduleRange } from '../../lib/dateFormat';
+import { DateField } from './DatePickerShared';
 
 const mini: React.CSSProperties = { ...dsInputStd(), minHeight: 28, padding: '3px 6px', fontSize: 12 };
 const ref: React.CSSProperties = { ...TYPO.helper, color: C.textMuted, whiteSpace: 'nowrap' };
@@ -80,12 +81,12 @@ function DateRangeField({ start, end, onChange, label, placeholder = '기간 선
         <div ref={panelRef} role="dialog" aria-label={`${label} 선택`}
           style={{ position: 'fixed', left: pos.left, top: pos.top, zIndex: 9500, background: C.bgCard, border: `1px solid ${C.g200}`, borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.15)', padding: 12, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 230 }}>
           <label style={fieldLbl}>시작일
-            <input type="date" style={{ ...mini, width: 150 }} value={s} max={e || undefined}
-              onChange={ev => onChange(ev.target.value, e)} aria-label={`${label} 시작일`} data-testid="perf-daterange-start" />
+            <DateField value={s} max={e || undefined} style={{ ...mini, width: 150 }}
+              onChange={v => onChange(v, e)} ariaLabel={`${label} 시작일`} testid="perf-daterange-start" />
           </label>
           <label style={fieldLbl}>종료일
-            <input type="date" style={{ ...mini, width: 150 }} value={e} min={s || undefined}
-              onChange={ev => onChange(s, ev.target.value)} aria-label={`${label} 종료일`} data-testid="perf-daterange-end" />
+            <DateField value={e} min={s || undefined} style={{ ...mini, width: 150 }}
+              onChange={v => onChange(s, v)} ariaLabel={`${label} 종료일`} testid="perf-daterange-end" />
           </label>
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button type="button" onClick={() => setOpen(false)} aria-label="기간 선택 완료" data-testid="perf-daterange-done"

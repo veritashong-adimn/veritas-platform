@@ -27,8 +27,9 @@ export function PageHeader({
 }) {
   return (
     <div style={{ height: 52, display: 'flex', alignItems: 'center', flexShrink: 0, ...style }}>
-      {/* 목록으로 — 상세화면 공통 네비게이션 버튼(보조 비중, Hover 시 브랜드 강조) */}
-      <BackToListButton onClick={onBack} label={backLabel} testId={testId} />
+      {/* 뒤로가기 — 상세화면 공통 네비게이션 버튼(ChevronLeft + "뒤로가기" 전역 통일).
+          backLabel prop 은 하위호환 위해 유지하되 표시는 통일 문구를 사용한다(이동 경로는 onBack 그대로). */}
+      <BackToListButton onClick={onBack} variant="subtle" label="뒤로가기" testId={testId} />
 
       {/* 페이지 제목 — Bold, 버튼보다 큰 글자(존재감 강조). 뒤로가기와 충분한 간격(구분선 없음) */}
       <h1 style={{ margin: 0, marginLeft: 28, fontSize: 20, fontWeight: 800, color: C.textPrimary, letterSpacing: '-0.01em', whiteSpace: 'nowrap' }}>

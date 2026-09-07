@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, type CSSProperties } from 'react';
+import { formatDisplayDate } from '../../../lib/dateFormat';
 import { api, PRODUCT_TYPES_META } from '../../../lib/constants';
 import { Card, GhostBtn } from '../../ui';
 import { ProductForm } from './ProductForm';
@@ -331,7 +332,7 @@ export function ProductRequestSection({ token, user, setToast, authHeaders, onPr
                         </span>
                       </div>
                       <p style={{ margin: 0, fontSize: 11, color: "#6b7280" }}>
-                        요청자: {req.requestedByEmail ?? "-"} · {new Date(req.createdAt).toLocaleDateString("ko-KR")}
+                        요청자: {req.requestedByEmail ?? "-"} · {formatDisplayDate(req.createdAt)}
                         {req.description && ` · ${req.description}`}
                       </p>
                       {req.status === "rejected" && req.rejectionReason && (
