@@ -37,7 +37,7 @@ export default function PayoutStatementTab({ token, onToast }: Props) {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
 
-  const inp: React.CSSProperties = { ...dsInputStd(), minHeight: 32, padding: '5px 9px', width: '100%' };
+  const inp: React.CSSProperties = { ...dsInputStd(), fontFamily: 'inherit', minHeight: 32, padding: '5px 9px', width: '100%' };
 
   const loadRounds = useCallback(async () => {
     try {
@@ -119,38 +119,37 @@ export default function PayoutStatementTab({ token, onToast }: Props) {
       {/* ── 조회 기준: 지급회차 선택 ── */}
       {/*  · 특정 회차 선택 시 서버가 확정 회차는 snapshot(payout_round_items) 기준으로 반환 → 재계산 없음. */}
       <Card>
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: SP[4], flexWrap: 'wrap' }}>
-          <span style={{ ...TYPO.sectionTitle, alignSelf: 'center' }}>지급명세서</span>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ ...TYPO.helper, fontWeight: 700 }}>지급회차</span>
-            <div style={{ width: 340 }}>
-              <ClickSelect value={sel} onChange={(v: string) => setSel(v || 'all')}
-                triggerStyle={inp}
-                options={[
-                  { value: 'all', label: '전체 지급회차' },
-                  { value: 'unassigned', label: '미배정' },
-                  ...rounds.map(r => ({ value: String(r.id), label: `${formatLabelDates(r.batchNumber) || formatDisplayDate(r.paymentDate)} · ${ROUND_STATUS_LABEL[r.status] ?? r.status} · ${r.totalAssignments ?? 0}건` })),
-                ]} data-testid="statement-round-filter" aria-label="지급회차 선택" />
-            </div>
-          </label>
+        {/* 지급회차 관리와 동일한 compact 한 줄 선택 영역(액센트 바 + 인라인 Select). hit area = 트리거 버튼만(§5). */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP[3], flexWrap: 'wrap' }}>
+          <span style={{ ...TYPO.sectionTitle, fontSize: 15, borderLeft: `3px solid ${C.primaryText}`, paddingLeft: 10, lineHeight: 1.4 }}>지급회차 선택</span>
+          <div style={{ width: 440, maxWidth: '100%' }}>
+            <ClickSelect value={sel} onChange={(v: string) => setSel(v || 'all')}
+              triggerStyle={{ ...inp, minHeight: 38, fontWeight: 600 }} style={{ width: '100%' }}
+              options={[
+                { value: 'all', label: '전체 지급회차' },
+                { value: 'unassigned', label: '미배정' },
+                ...rounds.map(r => ({ value: String(r.id), label: `${formatLabelDates(r.batchNumber) || formatDisplayDate(r.paymentDate)} · ${ROUND_STATUS_LABEL[r.status] ?? r.status} · ${r.totalAssignments ?? 0}건` })),
+              ]} data-testid="statement-round-filter" aria-label="지급회차 선택" />
+          </div>
           {round && (
-            <span style={{ ...TYPO.helper, color: C.textSecondary, alignSelf: 'center' }}>
+            <span style={{ ...TYPO.helper, color: C.textSecondary }}>
               {detail?.snapshotSource === 'snapshot' ? '확정 스냅샷 기준' : detail?.snapshotSource === 'live_legacy' ? '레거시(확정 당시 미보존) — 원본 기준' : '작성중 · 실시간'}
             </span>
           )}
         </div>
       </Card>
 
-      {/* ── 조회 필터 — 거래처 · 지급대상 검색 · 지급일 기간(지급회차 화면과 동일). ── */}
+      {/* ── 조회 필터 — 거래처 · 지급대상 검색 · 지급일 기간(지급회차 관리와 동일 layout·간격). ── */}
       <Card>
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: SP[4], flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', columnGap: SP[7], rowGap: SP[5], flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ ...TYPO.helper, fontWeight: 700 }}>거래처</span>
             <div style={{ width: 220 }}>
-              <ClickSelect value={custFilter} onChange={(v: string) => setCustFilter(v || 'all')} triggerStyle={inp}
-                options={[{ value: 'all', label: '전체 거래처' }, ...customerOptions.map((c) => ({ value: c, label: c }))]} />
+              <ClickSelect value={custFilter} onChange={(v: string) => setCustFilter(v || 'all')} triggerStyle={inp} style={{ width: '100%' }}
+                options={[{ value: 'all', label: '전체 거래처' }, ...customerOptions.map((c) => ({ value: c, label: c }))]}
+                data-testid="statement-cust-filter" aria-label="거래처 선택" />
             </div>
-          </label>
+          </div>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ ...TYPO.helper, fontWeight: 700 }}>지급대상 검색</span>
             <input style={{ ...inp, width: 200 }} value={payeeQ} onChange={(e) => setPayeeQ(e.target.value)}

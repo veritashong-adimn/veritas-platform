@@ -220,6 +220,7 @@ export type ClickSelectOption = {
 export function ClickSelect({
   options, value, onChange, placeholder, disabled,
   style, triggerStyle, menuStyle, openUp = false, searchable = false, chips,
+  "aria-label": ariaLabel, "data-testid": dataTestId,
 }: {
   options: ClickSelectOption[];
   value: string;
@@ -232,6 +233,9 @@ export function ClickSelect({
   openUp?: boolean;
   searchable?: boolean;
   chips?: { value: string; label: string }[];
+  // 접근성/테스트 식별자 — 트리거 <button>에 그대로 전달(과거엔 무시되어 드롭됨).
+  "aria-label"?: string;
+  "data-testid"?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(-1);
@@ -427,6 +431,10 @@ export function ClickSelect({
         ref={triggerRef}
         type="button"
         disabled={disabled}
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        data-testid={dataTestId}
         onClick={() => { if (!disabled) { setOpen(o => !o); setHighlightIdx(-1); } }}
         onKeyDown={onKeyDown}
         style={{

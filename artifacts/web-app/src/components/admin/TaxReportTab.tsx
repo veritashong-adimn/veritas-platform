@@ -31,7 +31,7 @@ export default function TaxReportTab({ token, onToast }: Props) {
   const [region, setRegion] = useState<'all' | 'domestic' | 'overseas'>('all');
   const [downloading, setDownloading] = useState(false);
 
-  const inp: React.CSSProperties = { ...dsInputStd(), minHeight: 32, padding: '5px 9px', width: '100%' };
+  const inp: React.CSSProperties = { ...dsInputStd(), fontFamily: 'inherit', minHeight: 32, padding: '5px 9px', width: '100%' };
   const th: React.CSSProperties = { ...TYPO.gridHeader, padding: '8px 10px', borderBottom: BD.grid, whiteSpace: 'nowrap', textAlign: 'left', background: C.g50 };
   const td: React.CSSProperties = { ...TYPO.inputValue, padding: '8px 10px', borderBottom: BD.divider, whiteSpace: 'nowrap' };
   const tdR: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
@@ -106,10 +106,9 @@ export default function TaxReportTab({ token, onToast }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP[4] }}>
-      {/* ── 조회조건 ── */}
+      {/* ── 조회조건 — 지급회차 관리와 동일 layout·간격. 상단 페이지 제목이 있어 카드 내부 제목은 반복하지 않음(§6). ── */}
       <Card>
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: SP[4], flexWrap: 'wrap' }}>
-          <span style={{ ...TYPO.sectionTitle, alignSelf: 'center' }}>세무자료</span>
+        <div style={{ display: 'flex', alignItems: 'flex-end', columnGap: SP[7], rowGap: SP[5], flexWrap: 'wrap' }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ ...TYPO.helper, fontWeight: 700 }}>지급기간</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -125,13 +124,15 @@ export default function TaxReportTab({ token, onToast }: Props) {
             <input style={{ ...inp, width: 200 }} value={q} onChange={(e) => setQ(e.target.value)}
               placeholder="통역사명" data-testid="tax-filter-q" aria-label="지급대상 검색" />
           </label>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {/* hit area = 보이는 트리거 버튼만 — <label> 래퍼는 클릭을 내부 <button>으로 전달하므로 사용하지 않음. */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ ...TYPO.helper, fontWeight: 700 }}>국내/해외 구분</span>
             <div style={{ width: 150 }}>
-              <ClickSelect value={region} onChange={(v: string) => setRegion((v || 'all') as any)} triggerStyle={inp}
-                options={[{ value: 'all', label: '전체' }, { value: 'domestic', label: '국내(원천징수)' }, { value: 'overseas', label: '해외' }]} />
+              <ClickSelect value={region} onChange={(v: string) => setRegion((v || 'all') as any)} triggerStyle={inp} style={{ width: '100%' }}
+                options={[{ value: 'all', label: '전체' }, { value: 'domestic', label: '국내(원천징수)' }, { value: 'overseas', label: '해외' }]}
+                data-testid="tax-region-filter" aria-label="국내/해외 구분 선택" />
             </div>
-          </label>
+          </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
             {filterActive && (
               <GhostBtn onClick={() => { setDateFrom(''); setDateTo(''); setQ(''); setRegion('all'); }}
@@ -156,7 +157,7 @@ export default function TaxReportTab({ token, onToast }: Props) {
           <span>세전 <b>{won(totals.pretax)}원</b></span>
           <span>세후 <b style={{ color: C.primaryText }}>{won(totals.posttax)}원</b></span>
           <span>해외송금 <b>{won(totals.overseas)}원</b></span>
-          <span style={{ marginLeft: 'auto' }}>주민번호 미등록 <b style={{ color: missingRrn > 0 ? C.danger : C.textSecondary }}>{missingRrn}명</b></span>
+          <span>주민번호 미등록 <b style={{ color: missingRrn > 0 ? C.danger : C.textSecondary }}>{missingRrn}명</b></span>
         </div>
       )}
 
@@ -168,9 +169,12 @@ export default function TaxReportTab({ token, onToast }: Props) {
         </Card>
       )}
 
-      {/* ── 목록 ── */}
+      {/* ── 목록 — 지급명세서 "지급대상자 목록 (N)"과 동일한 목록 제목 형식(§8). ── */}
       {!loading && !error && (
         <Card>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: SP[3] }}>
+            <h3 style={{ margin: 0, ...TYPO.sectionTitle }}>세무자료 목록 ({filtered.length})</h3>
+          </div>
           <div style={{ overflowX: 'auto' }}>
             <table className="veritas-read-table" style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1100 }}>
               <thead><tr>

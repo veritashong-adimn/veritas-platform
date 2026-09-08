@@ -1,7 +1,8 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import { api, AdminUser, User } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, RoleBadge, ClickSelect } from '../ui';
+import { useBulkSelection, useClientPagination, BulkSelectBar, bulkActionBtn, Pagination as ListPagination, trashRowStyle } from './bulkListShared';
 import './readTableView.css';
 
 function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
@@ -78,19 +79,26 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
   const [userStats, setUserStats] = useState<UserStat[]>([]);
   const [roleChanging, setRoleChanging] = useState<number | null>(null);
   const [toggling, setToggling] = useState<number | null>(null);
+  // 추가 필터(계정상태 / 시스템 권한) — 실제 데이터(isActive / roleId) 기준. 새로운 권한 개념을 만들지 않는다(§4·§23).
+  const [accountStatusFilter, setAccountStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [systemRoleFilter, setSystemRoleFilter] = useState<string>("all"); // "all" | roleId
+  // 삭제(휴지통) 상태 — 삭제 실행은 상단 "선택 삭제"로 통일(행별 삭제 버튼 없음).
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const bulk = useBulkSelection<number>();
 
+  // 삭제 사용자는 서버에서 이미 제외되므로 전체(비필터) 조회 후 화면에서 필터·페이지네이션한다(§3 안전한 방식·§21).
   const fetchUsers = useCallback(async () => {
     setUsersLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (userSearch.trim()) params.set("search", userSearch.trim());
-      if (userRoleFilter !== "all") params.set("roleType", userRoleFilter);
-      const res = await fetch(api(`/api/admin/users${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      const res = await fetch(api(`/api/admin/users`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) setUsers(Array.isArray(data) ? data : []);
     } catch { onToast("오류: 사용자 조회 실패"); }
     finally { setUsersLoading(false); }
-  }, [token, userSearch, userRoleFilter]);
+  }, [token]);
 
   const fetchActivityStats = useCallback(async (period: string = "today") => {
     try {
@@ -165,6 +173,84 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
     finally { setToggling(null); }
   };
 
+  // ── 화면 필터(검색·유형·계정상태·시스템권한) → 클라이언트 페이지네이션 ──
+  const filtered = useMemo(() => {
+    const s = userSearch.trim().toLowerCase();
+    return users.filter(u => {
+      if (s && !(
+        u.email.toLowerCase().includes(s) ||
+        (u.name ?? "").toLowerCase().includes(s) ||
+        (u.department ?? "").toLowerCase().includes(s) ||
+        (u.jobTitle ?? "").toLowerCase().includes(s)
+      )) return false;
+      if (userRoleFilter === "client") { if (!(u.role === "client" || u.role === "customer")) return false; }
+      else if (userRoleFilter === "linguist") { if (!(u.role === "linguist" || u.role === "translator")) return false; }
+      else if (userRoleFilter !== "all" && u.role !== userRoleFilter) return false;
+      if (accountStatusFilter === "active" && !u.isActive) return false;
+      if (accountStatusFilter === "inactive" && u.isActive) return false;
+      if (systemRoleFilter !== "all" && String(u.roleId ?? "") !== systemRoleFilter) return false;
+      return true;
+    });
+  }, [users, userSearch, userRoleFilter, accountStatusFilter, systemRoleFilter]);
+
+  const { paged, page, setPage, pageSize, setPageSize, total, totalPages, rangeStart, rangeEnd } = useClientPagination(filtered, 20);
+  const pageIds = paged.map(u => u.id);
+
+  // 검색/필터 변경 시 1페이지로 초기화(§2). 목록에서 사라진 항목은 선택에서 제거.
+  useEffect(() => { setPage(1); }, [userSearch, userRoleFilter, accountStatusFilter, systemRoleFilter, setPage]);
+  useEffect(() => { bulk.pruneTo(users.map(u => u.id)); }, [users]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 선택 활성화/비활성화 — deactivate 는 토글이므로 변경이 필요한 항목만 호출. 본인 제외(§16).
+  const handleBulkSetActive = async (target: boolean) => {
+    const ids = [...bulk.selectedIds].filter(id => id !== currentUser.id);
+    const toChange = users.filter(u => ids.includes(u.id) && u.isActive !== target);
+    if (toChange.length === 0) { onToast(target ? "활성화할 대상이 없습니다." : "비활성화할 대상이 없습니다."); return; }
+    setBulkBusy(true);
+    try {
+      let ok = 0, fail = 0; const msgs: string[] = [];
+      for (const u of toChange) {
+        try {
+          const res = await fetch(api(`/api/admin/users/${u.id}/deactivate`), { method: "PATCH", headers: { ...authHeaders, "Content-Type": "application/json" } });
+          const d = await res.json().catch(() => null);
+          if (res.ok) ok++; else { fail++; if (d?.error) msgs.push(d.error); }
+        } catch { fail++; }
+      }
+      onToast(`${ok}건 ${target ? "활성화" : "비활성화"} 완료${fail ? ` (${fail}건 실패${msgs[0] ? `: ${msgs[0]}` : ""})` : ""}`);
+      bulk.clear();
+      await fetchUsers();
+    } finally { setBulkBusy(false); }
+  };
+
+  // 삭제(휴지통 이동) — 본인 계정은 제외, 마지막 관리자는 서버가 차단(§8·§9).
+  const doDelete = async (ids: number[], reason: string) => {
+    let ok = 0, fail = 0; const msgs: string[] = [];
+    for (const id of ids) {
+      if (id === currentUser.id) { fail++; msgs.push("현재 로그인 중인 계정은 삭제할 수 없습니다."); continue; }
+      try {
+        const res = await fetch(api(`/api/admin/users/${id}`), {
+          method: "DELETE", headers: { ...authHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify(reason ? { reason } : {}),
+        });
+        const d = await res.json().catch(() => null);
+        if (res.ok) ok++; else { fail++; if (d?.error) msgs.push(d.error); }
+      } catch { fail++; }
+    }
+    return { ok, fail, msgs };
+  };
+
+  const handleBulkDeleteConfirm = async () => {
+    const ids = [...bulk.selectedIds];
+    setDeleting(true);
+    try {
+      const { ok, fail, msgs } = await doDelete(ids, deleteReason.trim());
+      onToast(`${ok}건을 휴지통으로 이동했습니다.${fail ? ` (${fail}건 실패${msgs[0] ? `: ${msgs[0]}` : ""})` : ""}`);
+      setBulkDeleteOpen(false); setDeleteReason(""); bulk.clear();
+      await fetchUsers();
+    } finally { setDeleting(false); }
+  };
+
+  const selectableCount = [...bulk.selectedIds].filter(id => id !== currentUser.id).length;
+
   const ROLE_TABS = [
     { value: "all",      label: "전체",    activeBg: "#1d4ed8" },
     { value: "admin",    label: "관리자",  activeBg: "#7c3aed" },
@@ -173,7 +259,9 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
     { value: "linguist", label: "통번역사", activeBg: "#d97706" },
   ];
 
-  const sectionTitle = `사용자 관리 (${users.length}명${userRoleFilter !== "all" ? ` · ${ROLE_NAMES[userRoleFilter] ?? userRoleFilter}` : ""})`;
+  // 삭제(휴지통) 사용자는 서버에서 제외되므로 users 는 활성 목록 기준. 필터 적용 시 필터 결과 수를 표시(§20).
+  const anyFilter = userSearch.trim() !== "" || userRoleFilter !== "all" || accountStatusFilter !== "all" || systemRoleFilter !== "all";
+  const sectionTitle = `사용자 관리 (${anyFilter ? `${total} / ${users.length}` : users.length}명${userRoleFilter !== "all" ? ` · ${ROLE_NAMES[userRoleFilter] ?? userRoleFilter}` : ""})`;
 
   return (
     <Section title={sectionTitle} action={
@@ -363,14 +451,31 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
           <input
             value={userSearch} onChange={e => setUserSearch(e.target.value)}
             placeholder="이름·이메일·부서·직책 검색..."
-            onKeyDown={e => e.key === "Enter" && fetchUsers()}
+            data-testid="user-search"
             style={{ flex: "1 1 200px", maxWidth: 300, padding: "8px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, color: "#111827", outline: "none", boxSizing: "border-box", background: "#fff" }}
           />
-          <PrimaryBtn onClick={fetchUsers} disabled={usersLoading} style={{ padding: "8px 18px", fontSize: 13 }}>
-            {usersLoading ? "검색 중..." : "검색"}
-          </PrimaryBtn>
-          {(userSearch.trim() || userRoleFilter !== "all") && (
-            <button onClick={() => { setUserSearch(""); setUserRoleFilter("all"); }}
+          {/* 계정상태 필터 — 실제 isActive 기준(§4) */}
+          <div style={{ width: 130 }}>
+            <ClickSelect value={accountStatusFilter} onChange={v => setAccountStatusFilter((v || "all") as any)} style={{ width: "100%" }}
+              triggerStyle={{ width: "100%", fontSize: 13, padding: "8px 10px", borderRadius: 8 }}
+              data-testid="user-status-filter" aria-label="계정 상태 필터"
+              options={[{ value: "all", label: "상태: 전체" }, { value: "active", label: "활성" }, { value: "inactive", label: "비활성" }]} />
+          </div>
+          {/* 시스템 권한(RBAC roleId) 필터 — 실제 RBAC 역할 기준(§4·§23). 새 권한 개념 없음. */}
+          {rbacRoles.length > 0 && (
+            <div style={{ width: 160 }}>
+              <ClickSelect value={systemRoleFilter} onChange={v => setSystemRoleFilter(v || "all")} style={{ width: "100%" }}
+                triggerStyle={{ width: "100%", fontSize: 13, padding: "8px 10px", borderRadius: 8 }}
+                data-testid="user-rbac-filter" aria-label="시스템 권한 필터"
+                options={[{ value: "all", label: "권한: 전체" }, ...rbacRoles.map(r => ({ value: String(r.id), label: r.name }))]} />
+            </div>
+          )}
+          <GhostBtn onClick={fetchUsers} disabled={usersLoading} style={{ padding: "8px 14px", fontSize: 13 }}>
+            {usersLoading ? "불러오는 중..." : "새로고침"}
+          </GhostBtn>
+          {(userSearch.trim() || userRoleFilter !== "all" || accountStatusFilter !== "all" || systemRoleFilter !== "all") && (
+            <button onClick={() => { setUserSearch(""); setUserRoleFilter("all"); setAccountStatusFilter("all"); setSystemRoleFilter("all"); }}
+              data-testid="user-filter-reset"
               style={{ background: "none", border: "1px solid #d1d5db", borderRadius: 8, padding: "7px 12px", fontSize: 12, color: "#6b7280", cursor: "pointer" }}>
               초기화
             </button>
@@ -378,17 +483,34 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
         </div>
       </div>
 
+      {/* 선택 기반 일괄 관리 바 — 공용 컴포넌트 재사용(§16·§22). 본인/마지막 관리자는 서버·클라이언트 이중 보호. */}
+      {!usersLoading && filtered.length > 0 && (
+        <BulkSelectBar
+          allSelected={pageIds.length > 0 && bulk.allSelected(pageIds)}
+          onToggleAll={() => bulk.togglePage(pageIds)}
+          selectedCount={bulk.selectedCount}
+        >
+          <button data-testid="user-bulk-activate" disabled={selectableCount === 0 || bulkBusy}
+            onClick={() => handleBulkSetActive(true)} style={bulkActionBtn(selectableCount > 0 && !bulkBusy, "#059669", "#f0fdf4", "#86efac")}>선택 활성화</button>
+          <button data-testid="user-bulk-deactivate" disabled={selectableCount === 0 || bulkBusy}
+            onClick={() => handleBulkSetActive(false)} style={bulkActionBtn(selectableCount > 0 && !bulkBusy, "#b45309", "#fffbeb", "#fde68a")}>선택 비활성화</button>
+          <button data-testid="user-bulk-delete" disabled={selectableCount === 0 || bulkBusy}
+            onClick={() => { setDeleteReason(""); setBulkDeleteOpen(true); }} style={bulkActionBtn(selectableCount > 0 && !bulkBusy, "#dc2626", "#fef2f2", "#fca5a5")}>선택 삭제</button>
+        </BulkSelectBar>
+      )}
+
       {/* 사용자 목록 */}
       {usersLoading ? (
         <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
-      ) : users.length === 0 ? (
-        <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>사용자가 없습니다.</Card>
+      ) : filtered.length === 0 ? (
+        <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>{users.length === 0 ? "사용자가 없습니다." : "조건에 맞는 사용자가 없습니다."}</Card>
       ) : (
         <Card style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ overflowX: "auto" }}>
             <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
+                  <th style={{ ...tableTh, width: 36, textAlign: "center" }} aria-label="선택" />
                   {/* 헤더 정렬 = 본문 정렬(접속만 center, 나머지 left) */}
                   {([
                     "ID","이메일/이름","유형","부서/직책","상태","접속","마지막 로그인","마지막 활동","가입일","시스템 권한(RBAC)","역할 변경","계정 상태","비밀번호","프로필",
@@ -398,8 +520,13 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
                 </tr>
               </thead>
               <tbody>
-                {users.map(u => (
-                  <tr key={u.id}>
+                {paged.map(u => (
+                  <tr key={u.id} style={trashRowStyle(bulk.isSelected(u.id), false)}>
+                    <td style={{ ...tableTd, textAlign: "center" }} onClick={e => e.stopPropagation()}>
+                      <input type="checkbox" checked={bulk.isSelected(u.id)} onChange={() => bulk.toggle(u.id)}
+                        aria-label={`사용자 선택: ${u.name ?? u.email}`} data-testid={`user-select-${u.id}`}
+                        style={{ width: 15, height: 15, cursor: "pointer" }} />
+                    </td>
                     <td style={{ ...tableTd, color: "#9ca3af" }}>#{u.id}</td>
                     <td style={{ ...tableTd, fontWeight: 600, color: "#111827" }}>
                       {u.name && <div style={{ fontWeight: 700, marginBottom: 2 }}>{u.name}</div>}
@@ -539,6 +666,66 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
           </div>
         </Card>
       )}
+
+      {/* 페이지네이션 — 공용 컴포넌트(상품·거래처 목록과 동일 UX) */}
+      {!usersLoading && filtered.length > 0 && (
+        <ListPagination
+          total={total} totalPages={totalPages} page={page} pageSize={pageSize}
+          rangeStart={rangeStart} rangeEnd={rangeEnd} setPage={setPage} setPageSize={setPageSize}
+        />
+      )}
+
+      {/* 선택 삭제 확인 모달 */}
+      {bulkDeleteOpen && (
+        <DeleteConfirm
+          heading={`선택한 ${selectableCount}명의 사용자를 삭제하시겠습니까?`}
+          target={[...bulk.selectedIds].filter(id => id !== currentUser.id).map(id => users.find(u => u.id === id)?.name ?? users.find(u => u.id === id)?.email).filter(Boolean).slice(0, 5).join(", ") + (selectableCount > 5 ? ` 외 ${selectableCount - 5}명` : "")}
+          reason={deleteReason} setReason={setDeleteReason} busy={deleting}
+          onCancel={() => { setBulkDeleteOpen(false); setDeleteReason(""); }}
+          onConfirm={handleBulkDeleteConfirm}
+          testidPrefix="user-bulk-delete"
+        />
+      )}
     </Section>
+  );
+}
+
+// ─── 사용자 삭제 확인 모달 (거래처 삭제 모달과 동일 스타일: 빨간 상단 보더 · 취소/삭제) ──
+function DeleteConfirm({ heading, target, reason, setReason, busy, onCancel, onConfirm, testidPrefix }: {
+  heading: string; target: string; reason: string; setReason: (v: string) => void; busy: boolean;
+  onCancel: () => void; onConfirm: () => void; testidPrefix: string;
+}) {
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 9100, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center" }}
+      onClick={() => { if (!busy) onCancel(); }}>
+      <div onClick={e => e.stopPropagation()} data-testid={`modal-${testidPrefix}`}
+        style={{ background: "#fff", borderRadius: 14, padding: "26px 30px", width: 500, maxWidth: "92vw", boxShadow: "0 20px 60px rgba(0,0,0,0.25)", borderTop: "4px solid #dc2626", maxHeight: "88vh", overflowY: "auto" }}>
+        <h2 style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 800, color: "#111827" }}>{heading}</h2>
+        <p style={{ margin: "0 0 14px", fontSize: 13, color: "#6b7280", lineHeight: 1.6 }}>
+          이 사용자를 삭제하면 사용자관리 목록에서 제외되고 <strong style={{ color: "#2563eb" }}>사용자 휴지통으로 이동</strong>합니다.
+          기존 업무 이력(견적·프로젝트·정산·로그 등)은 삭제되지 않습니다.
+        </p>
+        {target && (
+          <div style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#111827", fontWeight: 700 }}>
+            {target}
+          </div>
+        )}
+        <label style={{ display: "block", fontSize: 13, fontWeight: 700, color: "#374151", marginBottom: 6 }}>삭제 사유 <span style={{ color: "#9ca3af", fontWeight: 500 }}>(선택)</span></label>
+        <textarea value={reason} onChange={e => setReason(e.target.value)} rows={2}
+          placeholder="예: 퇴사 / 중복 계정 / 권한 회수"
+          data-testid={`input-${testidPrefix}-reason`} aria-label="삭제 사유"
+          style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13, boxSizing: "border-box", outline: "none", resize: "vertical", fontFamily: "inherit" }} />
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 18 }}>
+          <button onClick={onCancel} disabled={busy} data-testid={`btn-${testidPrefix}-cancel`}
+            style={{ padding: "9px 20px", borderRadius: 8, border: "1px solid #d1d5db", background: "#f9fafb", fontSize: 13, fontWeight: 600, cursor: busy ? "not-allowed" : "pointer", color: "#374151" }}>
+            취소
+          </button>
+          <button onClick={onConfirm} disabled={busy} data-testid={`btn-${testidPrefix}-confirm`}
+            style={{ padding: "9px 20px", borderRadius: 8, border: "none", color: "#fff", fontSize: 13, fontWeight: 700, background: busy ? "#fca5a5" : "#dc2626", cursor: busy ? "not-allowed" : "pointer" }}>
+            {busy ? "처리 중…" : "휴지통으로 이동"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

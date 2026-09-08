@@ -99,6 +99,13 @@ router.post("/auth/login", async (req, res) => {
     return;
   }
 
+  // 삭제(휴지통) 계정 로그인 차단 — 비활성(isActive)과 독립. 복구 전까지 인증 불가(§10).
+  if (user.deletedAt) {
+    req.log.warn({ email, userId: user.id }, "Login failed: account deleted (in trash)");
+    res.status(403).json({ error: "삭제된 계정입니다. 관리자에게 문의하세요." });
+    return;
+  }
+
   if (!user.password) {
     req.log.warn({ email }, "Login failed: password not set (invite pending)");
     res.status(403).json({ error: "비밀번호가 설정되지 않은 계정입니다. 초대 이메일의 링크를 통해 비밀번호를 설정해 주세요.", code: "INVITE_PENDING" });

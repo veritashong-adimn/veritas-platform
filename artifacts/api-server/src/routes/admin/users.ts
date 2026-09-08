@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, usersTable } from "@workspace/db";
 import bcrypt from "bcryptjs";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, desc, sql } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../../middlewares/auth";
 
 const router: IRouter = Router();
@@ -31,6 +31,8 @@ router.get("/admin/users", ...adminGuard, async (req, res) => {
         lastActivityAt: usersTable.lastActivityAt,
       })
       .from(usersTable)
+      // 기본 목록은 삭제(휴지통) 사용자를 제외한다(§21). 휴지통은 별도 엔드포인트에서만 조회.
+      .where(isNull(usersTable.deletedAt))
       .orderBy(usersTable.createdAt);
 
     const enriched = rows.map(u => ({
@@ -116,7 +118,7 @@ router.patch("/admin/users/:id/role", ...adminGuard, requirePermission("user.man
       const adminCount = await db
         .select({ id: usersTable.id })
         .from(usersTable)
-        .where(and(eq(usersTable.role, "admin"), eq(usersTable.isActive, true)));
+        .where(and(eq(usersTable.role, "admin"), eq(usersTable.isActive, true), isNull(usersTable.deletedAt)));
       if (adminCount.length <= 1) {
         res.status(400).json({ error: "마지막 관리자 계정의 역할은 변경할 수 없습니다." });
         return;
@@ -264,7 +266,7 @@ router.patch("/admin/users/:id/deactivate", ...adminGuard, requirePermission("us
       const activeAdmins = await db
         .select({ id: usersTable.id })
         .from(usersTable)
-        .where(and(eq(usersTable.role, "admin"), eq(usersTable.isActive, true)));
+        .where(and(eq(usersTable.role, "admin"), eq(usersTable.isActive, true), isNull(usersTable.deletedAt)));
       if (activeAdmins.length <= 1) {
         res.status(400).json({ error: "마지막 활성 관리자 계정은 비활성화할 수 없습니다." });
         return;
@@ -282,6 +284,106 @@ router.patch("/admin/users/:id/deactivate", ...adminGuard, requirePermission("us
   } catch (err) {
     req.log.error({ err }, "Admin: failed to toggle user active state");
     res.status(500).json({ error: "계정 상태 변경 실패." });
+  }
+});
+
+// ─── 사용자 삭제 (Soft Delete · 휴지통 이동) ───────────────────────────────
+//  · 물리삭제 금지 — deletedAt/deletedBy/deletionReason 만 기록(업무 FK 이력 전부 보존).
+//  · 본인 계정 삭제 차단 + 마지막 유효 관리자 삭제 차단(서버측 재검증, §8·§9).
+//  · isActive 는 건드리지 않는다(활성/비활성 상태는 삭제와 독립, §14).
+router.delete("/admin/users/:id", ...adminGuard, requirePermission("user.manage"), async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) { res.status(400).json({ error: "유효하지 않은 user id." }); return; }
+
+  if (userId === req.user!.id) {
+    res.status(400).json({ error: "현재 로그인 중인 계정은 삭제할 수 없습니다." });
+    return;
+  }
+
+  const reason = ((req.body?.reason ?? "") as string).trim();
+
+  try {
+    const [target] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!target) { res.status(404).json({ error: "사용자를 찾을 수 없습니다." }); return; }
+    if (target.deletedAt) { res.status(409).json({ error: "이미 휴지통에 있는 사용자입니다." }); return; }
+
+    // 마지막 유효 관리자 삭제 방지 — 삭제되지 않은 활성 admin 이 본인 1명뿐이면 차단.
+    if (target.role === "admin") {
+      const validAdmins = await db
+        .select({ id: usersTable.id })
+        .from(usersTable)
+        .where(and(eq(usersTable.role, "admin"), eq(usersTable.isActive, true), isNull(usersTable.deletedAt)));
+      if (validAdmins.length <= 1 && validAdmins.some(a => a.id === userId)) {
+        res.status(400).json({ error: "마지막 관리자 계정은 삭제할 수 없습니다." });
+        return;
+      }
+    }
+
+    // 경합 방지: WHERE 에 deletedAt IS NULL 포함.
+    const [updated] = await db
+      .update(usersTable)
+      .set({ deletedAt: new Date(), deletedBy: req.user?.id ?? null, deletionReason: reason || null })
+      .where(and(eq(usersTable.id, userId), isNull(usersTable.deletedAt)))
+      .returning({ id: usersTable.id });
+    if (!updated) { res.status(409).json({ error: "이미 휴지통에 있는 사용자입니다." }); return; }
+
+    // 감사 기록은 기존 사용자 엔드포인트와 동일하게 구조화 로거(pino)로 남긴다(logs 테이블 enum 미변경).
+    req.log.info({ userId, email: target.email, role: target.role, deletedBy: req.user?.id, reason: reason || undefined }, "Admin: user soft-deleted (휴지통 이동)");
+    res.json({ ok: true, deletedUserId: userId });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to soft-delete user");
+    res.status(500).json({ error: "사용자 삭제 실패." });
+  }
+});
+
+// ─── 사용자 복구 (휴지통 → 사용자관리) ─────────────────────────────────────
+//  · deletedAt/deletedBy/deletionReason 만 NULL 로 초기화. id·email·역할·프로필·업무이력 전부 유지.
+//  · isActive 는 복원하지 않는다 — 삭제 전 비활성 계정은 복구 후에도 비활성 유지(§13·§14).
+router.post("/admin/users/:id/restore", ...adminGuard, requirePermission("user.manage"), async (req, res) => {
+  const userId = Number(req.params.id);
+  if (isNaN(userId) || userId <= 0) { res.status(400).json({ error: "유효하지 않은 user id." }); return; }
+  const restoreReason = ((req.body?.reason ?? "") as string).trim();
+
+  try {
+    const [target] = await db.select().from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (!target) { res.status(404).json({ error: "사용자를 찾을 수 없습니다." }); return; }
+    if (!target.deletedAt) { res.status(400).json({ error: "휴지통에 있는 사용자가 아닙니다." }); return; }
+
+    await db.update(usersTable)
+      .set({ deletedAt: null, deletedBy: null, deletionReason: null })
+      .where(eq(usersTable.id, userId));
+
+    req.log.info({ userId, email: target.email, restoredBy: req.user?.id, restoreReason: restoreReason || undefined }, "Admin: user restored from trash");
+    res.json({ ok: true, restoredUserId: userId });
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to restore user");
+    res.status(500).json({ error: "사용자 복구 실패." });
+  }
+});
+
+// ─── 사용자 휴지통 목록 ────────────────────────────────────────────────────
+router.get("/admin/users-trash", ...adminGuard, async (req, res) => {
+  try {
+    const rows = await db
+      .select({
+        id: usersTable.id,
+        name: usersTable.name,
+        email: usersTable.email,
+        role: usersTable.role,
+        department: usersTable.department,
+        jobTitle: usersTable.jobTitle,
+        isActive: usersTable.isActive,
+        deletedAt: usersTable.deletedAt,
+        deletionReason: usersTable.deletionReason,
+        deletedByName: sql<string | null>`(SELECT name FROM users WHERE id = ${usersTable.deletedBy})`,
+      })
+      .from(usersTable)
+      .where(isNotNull(usersTable.deletedAt))
+      .orderBy(desc(usersTable.deletedAt));
+    res.json(rows);
+  } catch (err) {
+    req.log.error({ err }, "Admin: failed to list user trash");
+    res.status(500).json({ error: "사용자 휴지통 조회 실패." });
   }
 });
 

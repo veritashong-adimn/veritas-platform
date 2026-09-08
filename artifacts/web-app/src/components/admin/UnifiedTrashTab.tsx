@@ -19,7 +19,7 @@ import {
 } from './bulkListShared';
 
 /** 통합 대상 영역 키 */
-type TrashDomain = 'quote' | 'company' | 'contact' | 'product' | 'translator';
+type TrashDomain = 'quote' | 'company' | 'contact' | 'product' | 'translator' | 'user';
 
 /** 각 영역 원본 행을 공통 형태로 정규화한 항목 */
 interface TrashItem {
@@ -47,8 +47,8 @@ interface DomainMeta {
   normalize: (raw: any) => TrashItem;
   /** 복원 요청 (reason: 선택 입력 → 서버가 logs.metadata.restoreReason 에 기록) */
   restore: (id: number, authH: Record<string, string>, reason?: string) => Promise<Response>;
-  /** 완전삭제 요청 (reason: 선택 입력 → 서버가 logs.metadata.purgeReason 에 기록) */
-  purge: (id: number, authH: Record<string, string>, reason?: string) => Promise<Response>;
+  /** 완전삭제 요청. 미정의 영역(예: 사용자)은 복구만 지원하고 영구삭제를 제공하지 않는다(§15). */
+  purge?: (id: number, authH: Record<string, string>, reason?: string) => Promise<Response>;
   /** 완전삭제 실패(409) 시 사유 문자열 (연결 데이터 안내) */
   purgeDetail?: (data: any) => string;
 }
@@ -188,11 +188,37 @@ const DOMAINS: Record<TrashDomain, DomainMeta> = {
     purge: (id, authH, reason) => trashFetch(`/api/admin/translators/${id}/permanent`, 'DELETE', authH, reason),
     purgeDetail: (data) => (typeof data?.count === 'number' && data.count > 0 ? ` (연결 이력 ${data.count})` : ''),
   },
+  user: {
+    key: 'user',
+    typeLabel: '사용자',
+    areaLabel: '관리자 · 사용자',
+    badge: { bg: '#fef3c7', color: '#a16207', border: '#fcd34d' },
+    fetchList: async (authH) => {
+      const res = await fetch(api('/api/admin/users-trash'), { headers: authH });
+      const data = await res.json().catch(() => []);
+      if (!res.ok) throw new Error(data?.error ?? String(res.status));
+      return Array.isArray(data) ? data : [];
+    },
+    // 표시: 이름/이메일 · 유형·부서/직책·계정상태. 삭제일/삭제자/삭제사유 지원.
+    normalize: (r) => {
+      const roleLabel = ({ admin: '관리자', staff: '직원', client: '고객', customer: '고객', linguist: '통번역사', translator: '통번역사' } as Record<string, string>)[r.role] ?? r.role;
+      const statusLabel = r.isActive ? '활성' : '비활성';
+      return {
+        domain: 'user', id: r.id,
+        title: s(r.name) ?? s(r.email) ?? DASH,
+        subtitle: [s(r.email), roleLabel, [s(r.department), s(r.jobTitle)].filter(Boolean).join('/') || null, statusLabel].filter(Boolean).join(' · ') || null,
+        deletedAt: s(r.deletedAt), deletedByName: s(r.deletedByName), deletionReason: s(r.deletionReason),
+        raw: r,
+      };
+    },
+    restore: (id, authH, reason) => trashFetch(`/api/admin/users/${id}/restore`, 'POST', authH, reason),
+    // 사용자는 복구만 제공 — 영구삭제 없음(FK·업무이력 안전, §15). purge 미정의.
+  },
 };
 
-const TAB_ORDER: (TrashDomain | 'all')[] = ['all', 'quote', 'company', 'contact', 'product', 'translator'];
+const TAB_ORDER: (TrashDomain | 'all')[] = ['all', 'quote', 'company', 'contact', 'product', 'translator', 'user'];
 const TAB_LABEL: Record<TrashDomain | 'all', string> = {
-  all: '전체', quote: '견적서', company: '거래처', contact: '담당자', product: '상품', translator: '통번역사',
+  all: '전체', quote: '견적서', company: '거래처', contact: '담당자', product: '상품', translator: '통번역사', user: '사용자',
 };
 
 const th: React.CSSProperties = { padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap' };
@@ -214,7 +240,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
   const authH = { Authorization: `Bearer ${token}` };
   const [tab, setTab] = useState<TrashDomain | 'all'>('all');
   const [search, setSearch] = useState('');
-  const [data, setData] = useState<Record<TrashDomain, TrashItem[]>>({ quote: [], company: [], contact: [], product: [], translator: [] });
+  const [data, setData] = useState<Record<TrashDomain, TrashItem[]>>({ quote: [], company: [], contact: [], product: [], translator: [], user: [] });
   const [errored, setErrored] = useState<TrashDomain[]>([]);
   const [loading, setLoading] = useState(false);
   const [bulkBusy, setBulkBusy] = useState<'restore' | 'purge' | null>(null);
@@ -232,7 +258,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
     setErrored([]);
     const keys = Object.keys(DOMAINS) as TrashDomain[];
     const results = await Promise.allSettled(keys.map(k => DOMAINS[k].fetchList(authH)));
-    const next: Record<TrashDomain, TrashItem[]> = { quote: [], company: [], contact: [], product: [], translator: [] };
+    const next: Record<TrashDomain, TrashItem[]> = { quote: [], company: [], contact: [], product: [], translator: [], user: [] };
     const failed: TrashDomain[] = [];
     results.forEach((res, i) => {
       const k = keys[i];
@@ -301,15 +327,22 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
 
   // ── 선택 완전삭제 — 유형별 기존 permanent/purge API를 병렬 호출(권한·FK 안전장치는 서버가 재검증). 사유(선택)를 함께 전달 ──
   const handleBulkPurge = async () => {
-    const items = selectedItems();
-    if (items.length === 0) return;
+    const all = selectedItems();
+    // 복구전용 영역(사용자)은 purge 미정의 → 완전삭제 대상에서 제외(§15).
+    const items = all.filter(it => typeof DOMAINS[it.domain].purge === 'function');
+    const excluded = all.length - items.length;
+    if (items.length === 0) {
+      onToast(excluded > 0 ? '사용자는 영구삭제를 지원하지 않습니다. (복구만 가능)' : '완전삭제할 항목이 없습니다.');
+      setPurgeConfirmOpen(false);
+      return;
+    }
     const reason = purgeReason;
     setBulkBusy('purge');
     try {
       const results = await Promise.allSettled(
-        items.map(it => DOMAINS[it.domain].purge(it.id, authH, reason).then(r => r.ok).catch(() => false)));
+        items.map(it => DOMAINS[it.domain].purge!(it.id, authH, reason).then(r => r.ok).catch(() => false)));
       const ok = results.filter(r => r.status === 'fulfilled' && r.value).length;
-      onToast(`${ok}건을 완전삭제했습니다.${ok < items.length ? ` (${items.length - ok}건 실패 — 연결 데이터/권한)` : ''}`);
+      onToast(`${ok}건을 완전삭제했습니다.${ok < items.length ? ` (${items.length - ok}건 실패 — 연결 데이터/권한)` : ''}${excluded > 0 ? ` · 사용자 ${excluded}건 제외(복구만 가능)` : ''}`);
       setPurgeConfirmOpen(false);
       setPurgeReason('');
       sel.clear();
@@ -324,7 +357,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 800, color: '#111827', margin: 0 }}>통합 휴지통</h1>
           <p style={{ fontSize: 12, color: '#9ca3af', margin: '4px 0 0' }}>
-            {loading ? '불러오는 중…' : `전체 ${totalCount}건 · 견적서 ${counts.quote} · 거래처 ${counts.company} · 담당자 ${counts.contact} · 상품 ${counts.product} · 통번역사 ${counts.translator}`}
+            {loading ? '불러오는 중…' : `전체 ${totalCount}건 · 견적서 ${counts.quote} · 거래처 ${counts.company} · 담당자 ${counts.contact} · 상품 ${counts.product} · 통번역사 ${counts.translator} · 사용자 ${counts.user}`}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>

@@ -54,7 +54,6 @@ const LANG_SUBTYPES: Record<LangPairType, LangSubtypeEntry[]> = {
     { label: "기타비용",    lazyService: null,          mainCategory: "기타비용", isCustom: true },
   ],
   "통번역": [
-    { label: "일반통번역",  lazyService: "통번역",      mainCategory: "번역" },
     { label: "출장통번역",  lazyService: "출장통번역",  mainCategory: "출장통번역" },
     { label: "전시회통번역", lazyService: "전시회통번역", mainCategory: "전시회통번역" },
     { label: "상담회통번역", lazyService: "상담회통번역", mainCategory: "상담회통번역" },
@@ -72,7 +71,7 @@ const LANG_SUBTYPES: Record<LangPairType, LangSubtypeEntry[]> = {
 
 // 각 언어쌍 타입의 기본 하위유형
 const DEFAULT_LANG_SUBTYPE: Record<LangPairType, string> = {
-  "번역": "번역", "통역": "동시통역", "통번역": "일반통번역", "감수": "일반감수",
+  "번역": "번역", "통역": "동시통역", "통번역": "출장통번역", "감수": "일반감수",
 };
 
 // ─── 비언어 타입 항목 설정 ─────────────────────────────────────────────────────

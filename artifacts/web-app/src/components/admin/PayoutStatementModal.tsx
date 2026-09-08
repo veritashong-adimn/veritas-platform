@@ -11,6 +11,7 @@ import { ModalOverlay, GhostBtn, PrimaryBtn } from '../ui';
 import { C, TYPO, SP, BD } from '../../lib/ds';
 import { downloadStatementExcel, todayStamp, type ExcelColumn, type ExcelCell } from '../../lib/payoutExcel';
 import { printPayoutStatementPdf, type PayoutStatementPdfRow } from '../../lib/payoutStatementPdf';
+import './readTableView.css';   // 목록 테이블 헤더를 플랫폼 공통 read-table 규격(.veritas-thead)으로 통일
 
 // ── 표시 헬퍼(PayoutRoundsTab 와 동일 — 순수 포맷/라벨. 계산 없음) ──
 const won = (n: unknown) => Math.round(Number(n ?? 0)).toLocaleString('ko-KR');
@@ -244,9 +245,13 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
       {!sel ? (
         // ── 명세서 목록(지급대상자별) — 헤더 고정 · 표 스크롤 · [명세서 보기] 우측 고정 ──
         <>
-          <div style={fixedTop}>{header('지급명세서 — 지급대상자 목록')}</div>
+          <div style={fixedTop}>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: SP[3] }}>
+              <h3 style={{ margin: 0, ...TYPO.sectionTitle }}>지급대상자 목록 ({summary.length})</h3>
+            </div>
+          </div>
           <div style={{ ...bodyScroll, overflowX: 'auto' }}>
-            <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 820 }}>
+            <table className="veritas-thead" style={{ borderCollapse: 'collapse', width: '100%', minWidth: 820 }}>
               <thead><tr>
                 <th style={th}>지급대상</th><th style={th}>이메일</th><th style={th}>구분</th>
                 <th style={{ ...th, textAlign: 'right' }}>건수</th><th style={{ ...th, textAlign: 'right' }}>세전금액</th>
