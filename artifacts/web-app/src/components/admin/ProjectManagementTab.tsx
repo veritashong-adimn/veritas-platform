@@ -9,6 +9,7 @@ import { bulkBtnStyle } from './product/productShared';
 import { stickyBulkBarStyle } from './bulkListShared';
 import { DraggableModal } from './DraggableModal';
 import { renderQuoteTitle } from '../../lib/quoteTitle';
+import { exportSales } from '../../lib/salesExcel';
 import { DateField } from './DatePickerShared';
 import './readTableView.css';
 
@@ -454,6 +455,37 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
     } catch { setToast("오류: CSV 내보내기 실패"); }
   };
 
+  // ── 판매 Excel 다운로드(공통 엔진) ─────────────────────────────────────────
+  // 현재 검색/필터에 매칭되는 전체 판매를 export(§18: 현재 page 가 아닌 전체 matching rows).
+  // 필터 param 은 fetchProjects 와 동일하게 구성해 화면 조건과 100% 일치시킨다.
+  const [excelExporting, setExcelExporting] = useState(false);
+  const handleExportSalesExcel = async () => {
+    setExcelExporting(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("salesOnly", "true");
+      if (projectSearch.trim()) params.set("search", projectSearch.trim());
+      if (projectFilter !== "all") params.set("status", projectFilter);
+      if (dateFrom) params.set("dateFrom", dateFrom);
+      if (dateTo) params.set("dateTo", dateTo);
+      if (assignedAdminFilter !== "all") params.set("assignedAdminId", assignedAdminFilter);
+      if (projectFinancialFilter !== "all") params.set("financialStatus", projectFinancialFilter);
+      if (projectQuickFilter !== "all") params.set("quickFilter", projectQuickFilter);
+      if (projectBillingTypeFilter !== "all") params.set("billingType", projectBillingTypeFilter);
+      if (projectPaymentDueDateFrom) params.set("paymentDueDateFrom", projectPaymentDueDateFrom);
+      if (projectPaymentDueDateTo) params.set("paymentDueDateTo", projectPaymentDueDateTo);
+      if (projectCompanyIdFilter) params.set("companyId", projectCompanyIdFilter);
+      const res = await fetch(api(`/api/admin/projects/export?${params.toString()}`), { headers: authHeaders });
+      const data = await res.json();
+      if (!res.ok) { setToast(`오류: ${data?.error ?? "Excel 데이터 조회 실패"}`); return; }
+      const rows = Array.isArray(data.rows) ? data.rows : [];
+      if (rows.length === 0) { setToast("내보낼 판매 데이터가 없습니다."); return; }
+      exportSales(rows);
+      setToast(`판매 ${rows.length.toLocaleString()}건을 Excel로 내보냈습니다.`);
+    } catch { setToast("오류: Excel 다운로드 실패"); }
+    finally { setExcelExporting(false); }
+  };
+
   // ── 프로젝트 직접 등록 ────────────────────────────────────────────────────
   const handleCreateAdminProject = async () => {
     if (!newProjectTitle.trim()) { setToast("프로젝트 제목을 입력하세요."); return; }
@@ -787,6 +819,11 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
       <Section title={`전체 판매건 (${projects.length})`} action={
         <div style={{ display: "flex", gap: 8 }}>
           <GhostBtn onClick={handleExportProjects} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
+          <GhostBtn onClick={handleExportSalesExcel} disabled={excelExporting}
+            data-testid="sales-excel-export-btn" aria-label="판매 Excel 다운로드"
+            style={{ fontSize: 13, padding: "7px 14px" }}>
+            {excelExporting ? "내보내는 중…" : "⬇ Excel 다운로드"}
+          </GhostBtn>
         </div>
       }>
         {/* 필터 영역 (sticky) */}

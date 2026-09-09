@@ -414,6 +414,12 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             onChanged={() => fetchDetail({ silent: true })}
             onToast={setToast}
             projectAdminId={project.adminId ?? null}
+            saleMeta={{
+              quoteNumber: quote?.quoteNumber ?? '',
+              companyName: companyName ?? '',
+              projectTitle: project.title ?? '',
+              pmName: pm?.name ?? '',
+            }}
           />
 
           {/* ── D. 결제정보 (고객 수금 현황 — 통번역사 지급과 별개) ──────────── */}

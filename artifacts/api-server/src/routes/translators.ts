@@ -624,6 +624,8 @@ const excelUpload = multer({
 });
 
 // ─── 샘플 엑셀 다운로드 ─────────────────────────────────────────────────────
+// [DEPRECATED] 구식 통번역사 엑셀 경로. UI 접근은 제거됨(공통 Excel Engine /admin/translators/bulk-import 로 일원화).
+//   남은 호출부 없음(2026-09 기준). 백엔드 라우트는 안전을 위해 즉시 삭제하지 않고 미참조 상태로 유지한다.
 router.get("/admin/translators/sample-excel", ...adminGuard, (_req, res) => {
   // ■ 최신 표준 컬럼 순서 (21열)
   const headers = [
@@ -714,6 +716,8 @@ const EXCEL_COL_MAP: Record<string, string> = {
   "등급(1~5)": "grade",
 };
 
+// [DEPRECATED] 구식 통번역사 엑셀 경로. UI 접근은 제거됨(공통 Excel Engine /admin/translators/bulk-import 로 일원화).
+//   남은 호출부 없음(2026-09 기준). 백엔드 라우트는 안전을 위해 즉시 삭제하지 않고 미참조 상태로 유지한다.
 router.post("/admin/translators/upload-excel", ...adminGuard, excelUpload.single("file"), async (req, res) => {
   if (!req.file) { res.status(400).json({ error: "파일이 없습니다." }); return; }
   try {
@@ -893,6 +897,8 @@ router.post("/admin/translators/upload-excel", ...adminGuard, excelUpload.single
 });
 
 // ─── 엑셀 대량 등록 ──────────────────────────────────────────────────────────
+// [DEPRECATED] 구식 통번역사 엑셀 경로. UI 접근은 제거됨(공통 Excel Engine /admin/translators/bulk-import 로 일원화).
+//   남은 호출부 없음(2026-09 기준). 백엔드 라우트는 안전을 위해 즉시 삭제하지 않고 미참조 상태로 유지한다.
 router.post("/admin/translators/bulk-create", ...adminGuard, async (req, res) => {
   type BulkRow = {
     email: string; name?: string; phone?: string;

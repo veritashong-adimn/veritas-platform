@@ -6,6 +6,7 @@ import QuotePdfPreviewModal from './QuotePdfPreviewModal';
 import { QuoteTrashTab } from './QuoteTrashTab';
 import { buildQuotePdfData, type QuoteDetail, type QuoteDetailItem } from '../../lib/quotePdf';
 import { convertToFormItem } from '../../lib/quoteItemForm';
+import { exportQuotes } from '../../lib/quoteExcel';
 import { renderQuoteTitle, formatDocNumber } from '../../lib/quoteTitle';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import { bulkBtnStyle } from './product/productShared';
@@ -93,9 +94,11 @@ interface QuoteListTabProps {
   view?: 'list' | 'register' | 'trash';
   /** register/trash 화면에서 닫기·저장 시 '견적서 목록' 탭으로 복귀 */
   onExitToList?: () => void;
+  /** 목록 상단 [대량등록] 클릭 — 공통 Excel Import 화면으로 진입(4차) */
+  onOpenBulkImport?: () => void;
 }
 
-export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales, onOpenSalesDetail, canConvert: convertPerm = true, view = 'list', onExitToList }: QuoteListTabProps) {
+export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales, onOpenSalesDetail, canConvert: convertPerm = true, view = 'list', onExitToList, onOpenBulkImport }: QuoteListTabProps) {
   const authH = { Authorization: `Bearer ${token}` };
 
   const [quotes, setQuotes]             = useState<QuoteRow[]>([]);
@@ -145,6 +148,27 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
       setQuotes(Array.isArray(data.quotes) ? data.quotes : []);
     } finally { setLoading(false); }
   }, [token, dateFrom, dateTo]);
+
+  // 견적 Excel 다운로드(견적목록 + 품목상세 2시트). 상태/유형/발행일 필터 반영(전체 매칭 rows, §2).
+  const [exporting, setExporting] = useState(false);
+  const handleExportQuotes = useCallback(async () => {
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      if (typeFilter !== 'all')   params.set('quoteType', typeFilter);
+      if (dateFrom)               params.set('dateFrom', dateFrom);
+      if (dateTo)                 params.set('dateTo', dateTo);
+      const res = await fetch(api(`/api/admin/quotes/bulk-import/export?${params}`), { headers: authH });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data?.error ?? '다운로드 데이터 조회 실패'}`); return; }
+      const quotesArr = Array.isArray(data.quotes) ? data.quotes : [];
+      if (quotesArr.length === 0) { onToast('다운로드할 견적이 없습니다.'); return; }
+      exportQuotes({ quotes: quotesArr, items: Array.isArray(data.items) ? data.items : [] });
+      onToast(`견적 ${quotesArr.length.toLocaleString()}건을 Excel로 내보냈습니다.`);
+    } catch { onToast('오류: Excel 다운로드 실패'); }
+    finally { setExporting(false); }
+  }, [statusFilter, typeFilter, dateFrom, dateTo, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchQuotes(); }, [fetchQuotes]);
   useEffect(() => { if (refreshTick) fetchQuotes(); }, [refreshTick]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -450,6 +474,20 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         {/* 견적서 작성/휴지통은 사이드바 하위메뉴(견적서 등록 / 휴지통)로 분리됨 — 상단 버튼 제거(ERP 구조 통일). */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', letterSpacing: '0.2px' }}>검색 및 필터</span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={handleExportQuotes} disabled={exporting}
+              data-testid="quote-excel-export-btn" aria-label="견적 Excel 다운로드"
+              style={{ fontSize: 12, padding: '6px 12px', borderRadius: 6, border: '1px solid #d1d5db', background: '#fff', color: '#374151', cursor: 'pointer', fontWeight: 600 }}>
+              {exporting ? '내보내는 중…' : 'Excel 다운로드'}
+            </button>
+            {onOpenBulkImport && (
+              <button onClick={onOpenBulkImport}
+                data-testid="quote-bulk-import-btn" aria-label="견적 대량등록"
+                style={{ fontSize: 12, padding: '6px 12px', borderRadius: 6, border: '1px solid #0284c7', background: '#e0f2fe', color: '#0369a1', cursor: 'pointer', fontWeight: 700 }}>
+                대량등록
+              </button>
+            )}
+          </div>
         </div>
 
         {/* 통합검색 + 드롭다운 */}

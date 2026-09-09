@@ -14,6 +14,7 @@ import { CompanyTrashTab } from './CompanyTrashTab';
 import { CompanyCreatePage } from './CompanyCreatePage';
 import { CompanyEditPage } from './CompanyEditPage';
 import { usePathname, navigate, parseCompanyRoute, companyPaths } from '../../lib/adminNav';
+import { exportCompanies } from '../../lib/companyExcel';
 import { stickyBulkBarStyle } from './bulkListShared';
 import { bulkBtnStyle } from './product/productShared';
 import './readTableView.css';
@@ -155,6 +156,28 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
     setAppliedSearch(companySearch.trim());
     setCompanyPage(1);
   }, [companySearch]);
+
+  // ── Excel 다운로드: 현재 검색/필터가 적용된 "전체 매칭 rows"를 내보낸다(현재 페이지만 X). ──
+  const [exporting, setExporting] = useState(false);
+  const handleExportExcel = useCallback(async () => {
+    setExporting(true);
+    try {
+      // page 파라미터를 보내지 않으면 목록 API 는 페이지네이션 없이 전체 매칭 배열을 반환한다.
+      const params = new URLSearchParams();
+      if (appliedSearch.trim()) params.set("search", appliedSearch.trim());
+      if (companyTypeFilter !== "all") params.set("companyType", companyTypeFilter);
+      if (companyTypeFilter === "vendor" && companyVendorTypeFilter !== "all") params.set("vendorType", companyVendorTypeFilter);
+      if (companyTypeFilter === "client" && companyCustomerTypeFilter !== "all") params.set("customerType", companyCustomerTypeFilter);
+      const res = await fetch(api(`/api/admin/companies?${params.toString()}`), { headers: authHeaders });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: 거래처 조회 실패 (${res.status})`); return; }
+      const rows: Company[] = Array.isArray(data) ? data : Array.isArray(data?.rows) ? data.rows : [];
+      if (rows.length === 0) { onToast("다운로드할 거래처가 없습니다."); return; }
+      exportCompanies(rows as any);
+      onToast(`${rows.length.toLocaleString()}건을 Excel로 내보냈습니다.`);
+    } catch { onToast("오류: Excel 다운로드 실패"); }
+    finally { setExporting(false); }
+  }, [appliedSearch, companyTypeFilter, companyVendorTypeFilter, companyCustomerTypeFilter, token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 선택 파생값 & 일괄 핸들러 (선택은 현재 페이지 기준) ──────────────────────
   const selectedCompanies = companies.filter(c => selectedIds.has(c.id));
@@ -334,6 +357,11 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
       <Section title={`거래처 관리 (${companyTotal.toLocaleString()})`} action={
         (
           <div style={{ display: "flex", gap: 8 }}>
+            {/* Excel 다운로드 — 목록 조회 권한(현재 화면 진입 권한)으로 충분. 전체 매칭 rows 내보내기. */}
+            <GhostBtn onClick={handleExportExcel} disabled={exporting} style={{ fontSize: 13, padding: "7px 14px" }}
+              data-testid="company-excel-export-btn" aria-label="거래처 Excel 다운로드">
+              {exporting ? "내보내는 중…" : "Excel 다운로드"}
+            </GhostBtn>
             {hasPerm("company.create") && (
               <>
                 <PrimaryBtn onClick={() => navigate(companyPaths.new)} style={{ fontSize: 13, padding: "7px 14px" }}
@@ -342,7 +370,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                 </PrimaryBtn>
                 <GhostBtn onClick={() => setShowBulkImport(true)} style={{ fontSize: 13, padding: "7px 14px" }}
                   data-testid="company-bulk-import-btn" aria-label="거래처 대량등록">
-                  대량등록
+                  Excel 등록
                 </GhostBtn>
               </>
             )}

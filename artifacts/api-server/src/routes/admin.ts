@@ -55,14 +55,15 @@ router.use(adminCustomersRouter);
 router.use(adminNotesRouter);
 
 // ─── 프로젝트 목록 (검색/필터) ────────────────────────────────────────────
-router.get("/admin/projects", ...adminGuard, async (req, res) => {
-  try {
+// 필터 로직 공유 헬퍼 — GET /admin/projects 와 GET /admin/projects/export 가 동일 필터를 쓰도록 추출.
+//  (§18: Excel export 는 화면과 동일한 검색/필터 조건 전체를 반영해야 한다. 로직 복제 대신 단일 SSOT.)
+async function buildFilteredSalesProjectList(query: Record<string, string | undefined>) {
     const {
       search, status, financialStatus: financialStatusFilter, dateFrom, dateTo, assignedAdminId, companyName, contactName,
       companyId: companyIdFilter, contactId: contactIdFilter,
       quoteType: quoteTypeFilter, billingType: billingTypeFilter,
       paymentDueDateFrom, paymentDueDateTo, quickFilter, salesOnly,
-    } = req.query as {
+    } = query as {
       search?: string; status?: string; financialStatus?: string; dateFrom?: string; dateTo?: string;
       assignedAdminId?: string; companyName?: string; contactName?: string;
       companyId?: string; contactId?: string;
@@ -164,7 +165,7 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
 
     // ── 취소된 판매건(cancelled)은 기본 목록에서 제외 ──
     // 단, status 필터로 cancelled를 명시 요청했거나 includeCancelled=true 인 경우는 포함.
-    const includeCancelled = (req.query.includeCancelled as string) === "true";
+    const includeCancelled = (query.includeCancelled as string) === "true";
     const statusRequestsCancelled = !!status?.trim()
       && status.split(",").map(s => s.trim()).includes("cancelled");
     if (!includeCancelled && !statusRequestsCancelled) {
@@ -277,10 +278,136 @@ router.get("/admin/projects", ...adminGuard, async (req, res) => {
       result = result.filter(p => p.companyId != null && (compBalanceMap.get(p.companyId!) ?? 0) > 0);
     }
 
-    res.json(result);
+    return result;
+}
+
+router.get("/admin/projects", ...adminGuard, async (req, res) => {
+  try {
+    res.json(await buildFilteredSalesProjectList(req.query as Record<string, string | undefined>));
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch projects");
     res.status(500).json({ error: "프로젝트 조회 실패." });
+  }
+});
+
+// ─── 판매목록 Excel Export 데이터 (read-only, 스키마 무변경) ─────────────────────
+//  · /:id 라우트보다 먼저 등록 — 'export' 가 :id 로 잡히지 않도록 순서 중요.
+//  · 판매금액 SSOT: 유효견적(effectiveQuoteConditions: is_current·미삭제·derived 제외) quote_items 합산(control-tower 동일).
+//    품목 없으면 유효견적 price 합 → 그래도 없으면 대표견적 price fallback.
+//  · 청구/입금/미수금: collections 로직을 project 단위로 집계(선입/차감 견적 제외, N+1 없음). billing/payment SSOT 실시간 계산.
+//  · 관계견적 중복 방지: effectiveQuoteConditions 로 derived 제외 → 판매행 중복 없음(§7). 누적/차감도 project 1건=판매 1행.
+router.get("/admin/projects/export", ...adminGuard, async (req, res) => {
+  try {
+    const base = await buildFilteredSalesProjectList(req.query as Record<string, string | undefined>);
+    const projectIds = base.map((p) => p.id);
+    if (projectIds.length === 0) { res.json({ rows: [] }); return; }
+
+    // 1) 유효 견적 — 판매금액 합산 대상 + 대표 견적번호 + 세금유형
+    const eqRows = await db.select({
+      projectId: quotesTable.projectId, id: quotesTable.id, quoteNumber: quotesTable.quoteNumber,
+      relationType: quotesTable.relationType, taxDocumentType: quotesTable.taxDocumentType, price: quotesTable.price,
+    }).from(quotesTable)
+      .where(and(inArray(quotesTable.projectId, projectIds), ...effectiveQuoteConditions()))
+      .orderBy(desc(quotesTable.id));
+
+    const repByProject = new Map<number, { quoteNumber: string; taxDocumentType: string | null }>();
+    const quoteIdsByProject = new Map<number, number[]>();
+    const priceSumByProject = new Map<number, number>();
+    for (const q of eqRows) {
+      if (q.projectId == null) continue;
+      const arr = quoteIdsByProject.get(q.projectId) ?? [];
+      arr.push(q.id); quoteIdsByProject.set(q.projectId, arr);
+      priceSumByProject.set(q.projectId, (priceSumByProject.get(q.projectId) ?? 0) + Number(q.price ?? 0));
+      const cur = repByProject.get(q.projectId);
+      // 대표 견적번호: 원견적(relationType=null) 우선, 없으면 최신(desc id 첫 항목).
+      if (!cur || q.relationType == null) {
+        repByProject.set(q.projectId, { quoteNumber: q.quoteNumber ?? "", taxDocumentType: q.taxDocumentType ?? null });
+      }
+    }
+
+    // 2) 유효견적 quote_items 합산 → 판매금액/공급가/부가세 + 대표 서비스유형
+    const allQuoteIds = Array.from(quoteIdsByProject.values()).flat();
+    const quoteToProject = new Map<number, number>();
+    for (const [pid, qids] of quoteIdsByProject) for (const qid of qids) quoteToProject.set(qid, pid);
+    const itemRows = allQuoteIds.length ? await db.select({
+      quoteId: quoteItemsTable.quoteId, itemType: quoteItemsTable.itemType,
+      supplyAmount: quoteItemsTable.supplyAmount, taxAmount: quoteItemsTable.taxAmount, totalAmount: quoteItemsTable.totalAmount,
+    }).from(quoteItemsTable).where(inArray(quoteItemsTable.quoteId, allQuoteIds)).orderBy(quoteItemsTable.quoteId, quoteItemsTable.id) : [];
+    const saleByProject = new Map<number, { supply: number; tax: number; total: number; firstService: string }>();
+    for (const it of itemRows) {
+      const pid = quoteToProject.get(it.quoteId); if (pid == null) continue;
+      const a = saleByProject.get(pid) ?? { supply: 0, tax: 0, total: 0, firstService: "" };
+      a.supply += Number(it.supplyAmount ?? 0); a.tax += Number(it.taxAmount ?? 0); a.total += Number(it.totalAmount ?? 0);
+      if (!a.firstService && it.itemType) a.firstService = it.itemType;
+      saleByProject.set(pid, a);
+    }
+
+    // 3) 청구/입금/미수금 — collections SSOT 를 project 단위로 집계(청구행별 계산 후 합산). 선입/차감 제외.
+    const payAgg = await db.execute<{ project_id: number; billed: string; paid: string; receivable: string }>(sql`
+      SELECT r.project_id,
+             COALESCE(SUM(r.amount), 0)                          AS billed,
+             COALESCE(SUM(r.paid_row), 0)                        AS paid,
+             COALESCE(SUM(GREATEST(r.amount - r.paid_row, 0)), 0) AS receivable
+      FROM (
+        SELECT pp.project_id, pp.amount,
+          CASE WHEN COALESCE(tx.tx_cnt, 0) > 0 THEN COALESCE(tx.tx_paid, 0)
+               WHEN pp.deposit_status = 'completed' THEN pp.amount ELSE 0 END AS paid_row
+        FROM project_payments pp
+        LEFT JOIN (
+          SELECT project_payment_id, COUNT(*) AS tx_cnt, COALESCE(SUM(customer_paid_amount), 0) AS tx_paid
+          FROM payment_transactions GROUP BY project_payment_id
+        ) tx ON tx.project_payment_id = pp.id
+        WHERE pp.project_id IN (${sql.join(projectIds.map((id) => sql`${id}`), sql`, `)})
+          AND NOT EXISTS (
+            SELECT 1 FROM quotes q2 WHERE q2.project_id = pp.project_id
+              AND q2.is_current = true AND q2.deleted_at IS NULL
+              AND q2.quote_type IN ('b2c_prepaid', 'prepaid_deduction')
+          )
+      ) r
+      GROUP BY r.project_id
+    `);
+    const billByProject = new Map<number, { billed: number; paid: number; receivable: number }>();
+    for (const r of payAgg.rows) billByProject.set(Number(r.project_id), { billed: Number(r.billed), paid: Number(r.paid), receivable: Number(r.receivable) });
+
+    // 4) 사업자등록번호 + 담당PM명 — batch(N+1 회피)
+    const companyIds = Array.from(new Set(base.map((p) => p.companyId).filter((x): x is number => x != null)));
+    const bizRows = companyIds.length ? await db.select({ id: companiesTable.id, businessNumber: companiesTable.businessNumber }).from(companiesTable).where(inArray(companiesTable.id, companyIds)) : [];
+    const bizById = new Map(bizRows.map((r) => [r.id, r.businessNumber]));
+    const adminIds = Array.from(new Set(base.map((p) => p.adminId).filter((x): x is number => x != null)));
+    const pmRows = adminIds.length ? await db.select({ id: usersTable.id, name: usersTable.name }).from(usersTable).where(inArray(usersTable.id, adminIds)) : [];
+    const pmById = new Map(pmRows.map((r) => [r.id, r.name]));
+
+    const rows = base.map((p) => {
+      const sale = saleByProject.get(p.id);
+      const rep = repByProject.get(p.id);
+      const bill = billByProject.get(p.id);
+      const saleTotal = sale && sale.total > 0 ? sale.total : (priceSumByProject.get(p.id) ?? Number(p.quotePrice ?? 0));
+      return {
+        quoteNumber: rep?.quoteNumber ?? "",
+        title: p.title ?? "",
+        quoteType: p.quoteType ?? "",
+        requestingCompanyName: p.requestingCompanyName ?? p.companyName ?? "",
+        businessNumber: (p.companyId != null ? bizById.get(p.companyId) : null) ?? "",
+        contactName: p.contactName ?? "",
+        pmName: (p.adminId != null ? pmById.get(p.adminId) : null) ?? "",
+        serviceType: sale?.firstService ?? "",
+        saleAmount: saleTotal,
+        supplyAmount: sale ? sale.supply : null,
+        taxAmount: sale ? sale.tax : null,
+        projectStatus: p.status,
+        totalBilled: bill ? bill.billed : null,
+        taxDocumentType: rep?.taxDocumentType ?? "",
+        paidAmount: bill ? bill.paid : null,
+        receivable: bill ? bill.receivable : null,
+        depositStatus: bill ? (bill.billed <= 0 ? "" : bill.paid <= 0 ? "scheduled" : bill.paid < bill.billed ? "partial" : "completed") : "",
+        createdAt: p.createdAt,
+        note: "",
+      };
+    });
+    res.json({ rows });
+  } catch (err) {
+    req.log.error({ err }, "Admin: sales export data failed");
+    res.status(500).json({ error: "판매 다운로드 데이터 조회 실패." });
   }
 });
 
@@ -1291,7 +1418,7 @@ router.post("/admin/projects/:id/billing-correction", ...adminGuard, async (req,
 // 순번은 DB 시퀀스(quote_number_seq)에서 발급한다. 행 삭제(휴지통 soft-delete·영구 hard-delete)와
 // 무관하게 값이 증가하므로, 삭제 후에도 견적번호를 재사용하지 않는다. (지시문 11절)
 let quoteSeqReady = false;
-async function generateQuoteNumber(): Promise<string> {
+export async function generateQuoteNumber(): Promise<string> {
   if (!quoteSeqReady) {
     // 시퀀스 최초 보장 + 기존 최대 번호로 시드(한 번만). 이미 있으면 아무 것도 하지 않는다.
     await db.execute(sql`
@@ -1404,7 +1531,7 @@ type CalcItemInput = {
   taxRate?: 0 | 0.1; interpreterCount?: number | string;
   discountType?: string; discountValue?: number | string;
 };
-function computeQuoteItemAmounts<T extends CalcItemInput>(
+export function computeQuoteItemAmounts<T extends CalcItemInput>(
   items: T[],
 ): (T & { supplyAmount: number; taxAmount: number; totalAmount: number })[] {
   // pass 1 — 비할인 품목 금액

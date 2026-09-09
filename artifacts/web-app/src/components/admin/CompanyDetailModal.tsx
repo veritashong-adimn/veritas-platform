@@ -584,6 +584,42 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                   );
                 })()}
 
+                {/* 주요정보 변경 이력(§12) — 최신순. 상호(name)는 위 "상호 변경 이력"에서 관리한다. */}
+                {(() => {
+                  const changes = (detail as any).changeHistory ?? [];
+                  if (!Array.isArray(changes) || changes.length === 0) return null;
+                  const FIELD_LABELS: Record<string, string> = {
+                    businessNumber: "사업자등록번호", representativeName: "대표자명", address: "주소",
+                    industry: "업태", businessCategory: "업종", phone: "대표전화", email: "대표이메일", website: "홈페이지",
+                  };
+                  const SOURCE_LABELS: Record<string, string> = {
+                    MANUAL: "직접수정", NATIVE_IMPORT: "엑셀 업데이트", LEGACY_MIGRATION: "레거시 이관", HOMETAX_RECONCILIATION: "홈택스 대조",
+                  };
+                  const fmtDateTime = (v: string) => { try { return new Date(v).toLocaleString("ko-KR"); } catch { return v; } };
+                  return (
+                    <div style={{ marginTop: 10, background: "#f9fafb", borderRadius: 8, padding: "10px 12px", border: "1px solid #f3f4f6" }}>
+                      <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.05em" }}>정보 변경 이력</p>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }} data-testid="company-change-history">
+                        {changes.map((h: any) => (
+                          <div key={h.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12 }}>
+                            <span style={{ color: "#9ca3af", whiteSpace: "nowrap", marginTop: 1, minWidth: 128 }}>{fmtDateTime(h.changedAt)}</span>
+                            <div style={{ flex: 1 }}>
+                              <span style={{ background: "#e5e7eb", borderRadius: 4, padding: "1px 6px", color: "#374151", fontWeight: 600, whiteSpace: "nowrap" }}>
+                                {FIELD_LABELS[h.fieldName] ?? h.fieldName}
+                              </span>
+                              <span style={{ marginLeft: 8, color: "#9ca3af", textDecoration: "line-through" }}>{h.oldValue || "(없음)"}</span>
+                              <span style={{ margin: "0 6px", color: "#9ca3af" }}>→</span>
+                              <span style={{ color: "#111827", fontWeight: 600 }}>{h.newValue || "(없음)"}</span>
+                              {(h.changedByEmail || h.changedBy) && <span style={{ color: "#9ca3af", marginLeft: 8 }}>수정자: {h.changedByEmail ?? h.changedBy}</span>}
+                              <span style={{ color: "#9ca3af", marginLeft: 8 }}>· 출처: {SOURCE_LABELS[h.sourceType] ?? h.sourceType}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* 기업명 Alias(별칭) 관리 — 기본정보 아래 */}
                 <CompanyAliasSection companyId={companyId} token={token} onToast={onToast} />
 

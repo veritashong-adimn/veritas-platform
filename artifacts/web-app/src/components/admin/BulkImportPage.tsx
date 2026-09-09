@@ -3,6 +3,10 @@ import './readTableView.css';
 import { api } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn } from '../ui';
 import { BackToListButton } from './BackToListButton';
+import { downloadCompanyTemplate } from '../../lib/companyExcel';
+import { downloadContactTemplate } from '../../lib/contactExcel';
+import { downloadTranslatorTemplate } from '../../lib/translatorExcel';
+import { downloadQuoteTemplate } from '../../lib/quoteExcel';
 
 // ─── 안전 유틸 ────────────────────────────────────────────────────────────────
 // 서버 응답의 형태가 예상과 다르거나(구버전 배포·enum 불일치) 일부 필드가 비어도
@@ -20,9 +24,9 @@ function safeNum(v: unknown): number {
 //   new_only(기본) → 신규만 등록. 기존 데이터는 변경하지 않음.
 //   update         → 신규 등록 + 사업자번호/담당자키 기준 기존 데이터 업데이트.
 
-export type BulkImportEntity = 'company' | 'contact';
+export type BulkImportEntity = 'company' | 'contact' | 'translator' | 'quote';
 
-type RowStatus = 'new' | 'identical' | 'update' | 'duplicate_file' | 'error';
+type RowStatus = 'new' | 'identical' | 'update' | 'needs_review' | 'duplicate_file' | 'error';
 type ImportMode = 'new_only' | 'update';
 
 interface FieldChange { old: string; new: string; }
@@ -31,12 +35,13 @@ interface AnalyzedRow {
   rowNumber: number;
   status: RowStatus;
   reason?: string;
+  warning?: string;   // 경고(저장 가능하나 확인 필요) — status 와 독립(§9)
   existingId?: number | null;
   changes?: Record<string, FieldChange>;
   [key: string]: unknown;
 }
 
-interface Summary { total: number; new: number; identical: number; update: number; duplicateFile: number; error: number; }
+interface Summary { total: number; new: number; identical: number; update: number; needsReview?: number; duplicateFile: number; error: number; warning?: number; }
 
 interface AnalyzeResponse {
   fileName: string;
@@ -72,14 +77,17 @@ const COMPANY_CONFIG: EntityConfig = {
   executeUrl: '/api/admin/companies/bulk-import/execute',
   columns: [
     { key: 'name', label: '거래처명' },
+    { key: 'customerType', label: '거래처구분' },
     { key: 'businessNumber', label: '사업자등록번호' },
     { key: 'representativeName', label: '대표자명' },
-    { key: 'registeredAt', label: '등록일' },
+    { key: 'phone', label: '대표전화' },
+    { key: 'email', label: '대표이메일' },
     { key: 'industry', label: '업태' },
     { key: 'businessCategory', label: '종목' },
     { key: 'address', label: '주소' },
+    { key: 'registeredAt', label: '등록일' },
   ],
-  defaultsNote: '거래처 유형: 고객사 · 고객 분류: 기업 (등록 후 개별 수정 가능)',
+  defaultsNote: '거래처 유형: 고객사 (등록 후 개별 수정 가능)',
   resultLabels: { new: '신규 거래처 등록', unit: '건' },
 };
 
@@ -88,17 +96,55 @@ const CONTACT_CONFIG: EntityConfig = {
   analyzeUrl: '/api/admin/contacts/bulk-import/analyze',
   executeUrl: '/api/admin/contacts/bulk-import/execute',
   columns: [
-    { key: 'matchedCompanyName', label: '연결 거래처명' },
+    { key: 'companyName', label: '거래처명(파일)' },
+    { key: 'matchedCompanyName', label: '연결 거래처' },
     { key: 'businessNumber', label: '사업자등록번호' },
     { key: 'name', label: '담당자명' },
-    { key: 'registeredAt', label: '등록일' },
     { key: 'department', label: '부서' },
+    { key: 'position', label: '직책' },
     { key: 'mobile', label: '휴대폰' },
     { key: 'email', label: '이메일' },
-    { key: 'officePhone', label: '직장전화' },
+    { key: 'officePhone', label: '회사전화' },
   ],
-  defaultsNote: '활성 · 기본/견적/청구 담당자 모두 해제 (역할은 등록 후 직접 지정). 사업자등록번호로 기존 거래처에 연결됩니다.',
+  defaultsNote: '활성 · 기본/견적/청구 담당자 모두 해제 (역할은 등록 후 직접 지정). 사업자등록번호 또는 거래처명으로 기존 거래처에 연결됩니다. 이번 단계는 신규 담당자만 등록합니다.',
   resultLabels: { new: '신규 담당자 등록', unit: '명', missingCompany: true },
+};
+
+const TRANSLATOR_CONFIG: EntityConfig = {
+  title: '통번역사 대량등록',
+  analyzeUrl: '/api/admin/translators/bulk-import/analyze',
+  executeUrl: '/api/admin/translators/bulk-import/execute',
+  columns: [
+    { key: 'name', label: '성명' },
+    { key: 'email', label: '이메일' },
+    { key: 'phone', label: '휴대폰' },
+    { key: 'languages', label: '언어' },
+    { key: 'services', label: '가능서비스' },
+    { key: 'specializations', label: '전문분야' },
+    { key: 'grade', label: '인력등급' },
+    { key: 'region', label: '활동지역' },
+  ],
+  defaultsNote: '활동상태 활성으로 신규 등록됩니다. 민감정보(주민번호·계좌 등)는 이 일반 대량등록에 포함되지 않습니다. 이번 단계는 신규 통번역사만 등록합니다.',
+  resultLabels: { new: '신규 통번역사 등록', unit: '명' },
+};
+
+const QUOTE_CONFIG: EntityConfig = {
+  title: '견적 대량등록',
+  analyzeUrl: '/api/admin/quotes/bulk-import/analyze',
+  executeUrl: '/api/admin/quotes/bulk-import/execute',
+  columns: [
+    { key: 'tempKey', label: '임시키' },
+    { key: 'title', label: '견적서명' },
+    { key: 'matchedCompanyName', label: '연결 거래처' },
+    { key: 'contactName', label: '담당자' },
+    { key: 'pm', label: '담당PM' },
+    { key: 'itemCount', label: '품목수' },
+    { key: 'supplyAmount', label: '공급가액' },
+    { key: 'taxAmount', label: '부가세' },
+    { key: 'totalAmount', label: '총금액' },
+  ],
+  defaultsNote: '일반견적만 신규 등록됩니다. 금액은 품목 기준 시스템 계산이며, 판매/프로젝트(판매)/청구/지급/정산은 생성되지 않습니다. (견적 컨테이너 project(status=created)만 생성)',
+  resultLabels: { new: '신규 견적 등록', unit: '건' },
 };
 
 type StatusMeta = { label: string; bg: string; color: string; border: string };
@@ -106,6 +152,7 @@ const STATUS_META: Record<RowStatus, StatusMeta> = {
   new: { label: '신규 등록 예정', bg: '#ecfdf5', color: '#047857', border: '#a7f3d0' },
   identical: { label: '기존 데이터 동일', bg: '#f3f4f6', color: '#6b7280', border: '#e5e7eb' },
   update: { label: '기존 데이터 변경 예정', bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe' },
+  needs_review: { label: '중복 검토 필요(제외)', bg: '#fffbeb', color: '#b45309', border: '#fde68a' },
   duplicate_file: { label: '파일 내 중복(제외)', bg: '#fff7ed', color: '#c2410c', border: '#fed7aa' },
   error: { label: '오류(제외)', bg: '#fef2f2', color: '#b91c1c', border: '#fecaca' },
 };
@@ -179,14 +226,14 @@ interface BulkImportPageProps {
 }
 
 function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkImportPageProps) {
-  const cfg = entity === 'company' ? COMPANY_CONFIG : CONTACT_CONFIG;
+  const cfg = entity === 'company' ? COMPANY_CONFIG : entity === 'translator' ? TRANSLATOR_CONFIG : entity === 'quote' ? QUOTE_CONFIG : CONTACT_CONFIG;
   const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
   const [result, setResult] = useState<ExecuteResponse | null>(null);
-  const [filter, setFilter] = useState<'all' | RowStatus>('all');
+  const [filter, setFilter] = useState<'all' | RowStatus | 'warning'>('all');
   const [mode, setMode] = useState<ImportMode>('new_only');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -258,7 +305,11 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
   }, [file, analysis, mode, cfg.executeUrl, cfg.resultLabels.unit, token, onToast, onDone]);
 
   const allRows = Array.isArray(analysis?.rows) ? analysis!.rows : [];
-  const filteredRows = filter === 'all' ? allRows : allRows.filter(r => r.status === filter);
+  const filteredRows = filter === 'all'
+    ? allRows
+    : filter === 'warning'
+      ? allRows.filter(r => !!r.warning)
+      : allRows.filter(r => r.status === filter);
   const shownRows = filteredRows.slice(0, MAX_PREVIEW_ROWS);
 
   const newCount = safeNum(analysis?.summary?.new);
@@ -283,7 +334,9 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
             <SummaryCard label={cfg.resultLabels.new} value={result.inserted} tone="green" />
             <SummaryCard label="기존 데이터 업데이트" value={result.updated} tone="blue" />
+            <SummaryCard label="경고" value={result.summary?.warning} tone="amber" />
             <SummaryCard label="기존 데이터 동일" value={result.summary?.identical} tone="gray" />
+            <SummaryCard label="중복 검토 필요" value={result.summary?.needsReview} tone="amber" />
             <SummaryCard label="파일 내부 중복" value={result.summary?.duplicateFile} tone="amber" />
             <SummaryCard label="오류" value={result.summary?.error} tone="red" />
           </div>
@@ -297,9 +350,22 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
         <>
           {/* ── 단계 1: 파일 업로드 ── */}
           <Card style={{ padding: 20, marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 4 }}>1. 파일 업로드</div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>1. 파일 업로드</div>
+              <GhostBtn onClick={() => { (entity === 'company' ? downloadCompanyTemplate : entity === 'translator' ? downloadTranslatorTemplate : entity === 'quote' ? downloadQuoteTemplate : downloadContactTemplate)(); onToast('대량등록 템플릿을 다운로드했습니다.'); }}
+                style={{ fontSize: 12, padding: '6px 12px' }}
+                data-testid="bulk-import-template-download" aria-label="대량등록 템플릿 다운로드">
+                ⬇ 템플릿 다운로드
+              </GhostBtn>
+            </div>
             <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 12px' }}>
-              홈택스에서 내려받은 거래처목록 엑셀 파일(.xls, .xlsx)을 업로드하세요. {cfg.defaultsNote}
+              {entity === 'company'
+                ? '템플릿을 내려받아 작성하거나, 홈택스 거래처목록 등 기존 엑셀 파일(.xls, .xlsx)을 그대로 업로드하세요.'
+                : entity === 'translator'
+                  ? '템플릿을 내려받아 작성한 뒤 엑셀 파일(.xls, .xlsx)을 업로드하세요.'
+                  : entity === 'quote'
+                    ? '템플릿(견적등록 + 견적품목 2시트)을 내려받아 작성한 뒤 업로드하세요.'
+                    : '홈택스에서 내려받은 거래처목록 엑셀 파일(.xls, .xlsx)을 업로드하세요.'} {cfg.defaultsNote}
             </p>
             <div
               onDragOver={e => { e.preventDefault(); setDragOver(true); }}
@@ -348,13 +414,16 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
                 <SummaryCard label="전체 행" value={analysis.summary?.total} tone="default" />
                 <SummaryCard label="신규 등록 예정" value={analysis.summary?.new} tone="green" />
+                <SummaryCard label="경고" value={analysis.summary?.warning} tone="amber" />
                 <SummaryCard label="변경 예정" value={analysis.summary?.update} tone="blue" />
                 <SummaryCard label="기존 데이터 동일" value={analysis.summary?.identical} tone="gray" />
+                <SummaryCard label="중복 검토 필요" value={analysis.summary?.needsReview} tone="amber" />
                 <SummaryCard label="파일 내 중복" value={analysis.summary?.duplicateFile} tone="amber" />
                 <SummaryCard label="오류" value={analysis.summary?.error} tone="red" />
               </div>
 
-              {/* ── 등록 방식 선택 ── */}
+              {/* ── 등록 방식 선택 (거래처만: 담당자는 이번 단계에서 신규등록만 지원, §17) ── */}
+              {entity === 'company' && (
               <div style={{ background: '#f8fafc', border: '1px solid #eef2f7', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>등록 방식</div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -383,12 +452,13 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                   })}
                 </div>
               </div>
+              )}
 
               <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 8 }}>3. 미리보기</div>
               {/* 상태 필터 */}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-                {([['all', '전체'], ['new', '신규 등록 예정'], ['update', '변경 예정'], ['identical', '기존 동일'], ['duplicate_file', '파일 내 중복'], ['error', '오류']] as const).map(([k, label]) => (
-                  <button key={k} onClick={() => setFilter(k as 'all' | RowStatus)}
+                {([['all', '전체'], ['new', '신규 등록 예정'], ['warning', '경고'], ['update', '변경 예정'], ['identical', '기존 동일'], ['needs_review', '중복 검토'], ['duplicate_file', '파일 내 중복'], ['error', '오류']] as const).map(([k, label]) => (
+                  <button key={k} onClick={() => setFilter(k as 'all' | RowStatus | 'warning')}
                     data-testid={`bulk-import-filter-${k}`} aria-label={`${label} 필터`}
                     style={{
                       fontSize: 11, padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
@@ -424,7 +494,11 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                               <CellValue row={row} colKey={c.key} />
                             </td>
                           ))}
-                          <td style={{ ...tableTd, color: row.status === 'error' ? '#b91c1c' : '#9ca3af', whiteSpace: 'normal' }}>{row.reason ?? '-'}</td>
+                          <td style={{ ...tableTd, color: row.status === 'error' ? '#b91c1c' : '#9ca3af', whiteSpace: 'normal' }}>
+                            {row.warning
+                              ? <span style={{ color: '#b45309', fontWeight: 600 }}>⚠ {row.warning}</span>
+                              : (row.reason ?? '-')}
+                          </td>
                         </tr>
                       );
                     })}
@@ -506,7 +580,7 @@ class BulkImportErrorBoundary extends React.Component<BoundaryProps, BoundarySta
 }
 
 export function BulkImportPage(props: BulkImportPageProps) {
-  const title = props.entity === 'company' ? COMPANY_CONFIG.title : CONTACT_CONFIG.title;
+  const title = props.entity === 'company' ? COMPANY_CONFIG.title : props.entity === 'translator' ? TRANSLATOR_CONFIG.title : props.entity === 'quote' ? QUOTE_CONFIG.title : CONTACT_CONFIG.title;
   return (
     <BulkImportErrorBoundary title={title} onClose={props.onClose}>
       <BulkImportPageInner {...props} />

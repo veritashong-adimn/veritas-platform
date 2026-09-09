@@ -6,7 +6,7 @@ import {
   db, companiesTable, contactsTable, projectsTable,
   paymentsTable, settlementsTable, quotesTable, communicationsTable, usersTable,
   billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
-  divisionsTable, companyNameHistoryTable, logsTable,
+  divisionsTable, companyNameHistoryTable, companyChangeHistoryTable, logsTable,
   prepaidAccountsTable, prepaidLedgerTable,
   quoteItemsTable, quoteItemFilesTable,
   projectFilesTable, translatorProfilesTable,
@@ -25,6 +25,42 @@ import { effectiveRevenueConditions } from "../services/quoteRelation";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
+
+// ─── 거래처 주요정보 변경이력(§5) 추적 대상 ───────────────────────────────────
+// 상호(name)는 기존 company_name_history 가 수명주기까지 관리하므로 재사용하고 여기서는 제외한다(§1).
+// 현재 companies 에 실제 존재하는 컬럼만 추적한다(영문명·기업규모·산업군·거래처등급·거래상태 등은 스키마에 없어 제외 — 값 지어내지 않음, §5).
+// key = company_change_history.field_name(= companies 컬럼 key). 표시 라벨은 프론트에서 매핑한다.
+const COMPANY_TRACKED_FIELDS = [
+  "businessNumber", "representativeName", "address",
+  "industry", "businessCategory", "phone", "email", "website",
+] as const;
+
+// 변경 출처(§7). 현재 실제 경로는 관리자 직접수정(MANUAL)만. NATIVE_IMPORT/LEGACY_MIGRATION/HOMETAX_RECONCILIATION 는 향후 확장.
+type CompanyChangeSource = "MANUAL" | "NATIVE_IMPORT" | "LEGACY_MIGRATION" | "HOMETAX_RECONCILIATION";
+
+/** null/공백/trim 을 동일 취급해 "실제로 바뀐" 주요필드만 change-history insert 값으로 만든다(§6). */
+function buildCompanyChangeRows(
+  companyId: number,
+  existing: Record<string, unknown>,
+  resolved: Record<string, unknown>,
+  performer: { id: number; email: string } | undefined,
+  source: CompanyChangeSource,
+  sourceBatchId: number | null = null,
+) {
+  const norm = (v: unknown) => (v == null ? "" : String(v).trim());
+  return COMPANY_TRACKED_FIELDS
+    .filter((key) => norm(resolved[key]) !== norm(existing[key]))
+    .map((key) => ({
+      companyId,
+      fieldName: key,
+      oldValue: existing[key] != null ? String(existing[key]) : null,
+      newValue: resolved[key] != null ? String(resolved[key]) : null,
+      changedBy: performer?.id ?? null,
+      changedByEmail: performer?.email ?? null,
+      sourceType: source,
+      sourceBatchId,
+    }));
+}
 
 // ─── 거래처 목록 ─────────────────────────────────────────────────────────────
 router.get("/admin/companies", ...adminGuard, async (req, res) => {
@@ -429,6 +465,13 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
       .where(eq(companyNameHistoryTable.companyId, companyId))
       .orderBy(desc(companyNameHistoryTable.changedAt));
 
+    // 주요정보 변경 이력(§12) — 최신순
+    const changeHistory = await db
+      .select()
+      .from(companyChangeHistoryTable)
+      .where(eq(companyChangeHistoryTable.companyId, companyId))
+      .orderBy(desc(companyChangeHistoryTable.changedAt), desc(companyChangeHistoryTable.id));
+
     const lastProjectDate = projects.length > 0 ? projects[0].createdAt : null;
     const unpaidAmount = Math.max(0, totalQuote - totalPayment);
 
@@ -461,7 +504,7 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
       contactCount: contacts.filter(c => c.divisionId === d.id).length,
     }));
 
-    res.json({ ...company, contacts, divisions: divisionsWithStats, projects, totalQuote, totalPayment, totalSettlement, prepaidBalance, activeAccumulatedCount, unpaidAmount, lastProjectDate, lastPaymentDate, nameHistory });
+    res.json({ ...company, contacts, divisions: divisionsWithStats, projects, totalQuote, totalPayment, totalSettlement, prepaidBalance, activeAccumulatedCount, unpaidAmount, lastProjectDate, lastPaymentDate, nameHistory, changeHistory });
   } catch (err) {
     req.log.error({ err }, "Companies: failed to get detail");
     res.status(500).json({ error: "거래처 상세 조회 실패." });
@@ -475,7 +518,8 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
 
-  const { name, businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, registeredAt, nameChangeReason, companyType, vendorType, customerType } = req.body;
+  // 등록일(registeredAt)·createdAt 은 최초등록일로 불변(§10). 프론트가 값을 보내더라도 일반 수정에서는 무시한다.
+  const { name, businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, nameChangeReason, companyType, vendorType, customerType } = req.body;
 
   try {
     const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
@@ -483,6 +527,7 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
 
     const newName = name?.trim() ?? existing.name;
     const today = new Date().toISOString().slice(0, 10);
+    const now = new Date();
     const performer = (req as any).user as { id: number; email: string } | undefined;
 
     const resolvedCompanyType = companyType === "vendor" ? "vendor" : companyType === "client" ? "client" : existing.companyType;
@@ -491,51 +536,66 @@ router.patch("/admin/companies/:id", ...adminGuard, requirePermission("company.u
       ? (customerType !== undefined ? (customerType === "INDIVIDUAL" ? "INDIVIDUAL" : customerType === "PUBLIC" ? "PUBLIC" : "CORPORATE") : (existing.customerType ?? "CORPORATE"))
       : null;
 
-    const [updated] = await db
-      .update(companiesTable)
-      .set({
-        name: newName,
-        businessNumber: businessNumber !== undefined ? (businessNumber || null) : existing.businessNumber,
-        representativeName: representativeName !== undefined ? (representativeName || null) : existing.representativeName,
-        email: email !== undefined ? (email || null) : existing.email,
-        phone: phone !== undefined ? (phone || null) : existing.phone,
-        mobile: mobile !== undefined ? (mobile || null) : existing.mobile,
-        industry: industry !== undefined ? (industry || null) : existing.industry,
-        businessCategory: businessCategory !== undefined ? (businessCategory || null) : existing.businessCategory,
-        address: address !== undefined ? (address || null) : existing.address,
-        website: website !== undefined ? (website || null) : existing.website,
-        notes: notes !== undefined ? (notes || null) : existing.notes,
-        registeredAt: registeredAt !== undefined ? (registeredAt || null) : existing.registeredAt,
-        companyType: resolvedCompanyType,
-        vendorType: resolvedVendorType,
-        customerType: resolvedCustomerType,
-      })
-      .where(eq(companiesTable.id, companyId))
-      .returning();
+    // 저장될 최종값. registeredAt/createdAt 은 포함하지 않아 기존값이 그대로 보존된다(§10).
+    const resolved = {
+      name: newName,
+      businessNumber: businessNumber !== undefined ? (businessNumber || null) : existing.businessNumber,
+      representativeName: representativeName !== undefined ? (representativeName || null) : existing.representativeName,
+      email: email !== undefined ? (email || null) : existing.email,
+      phone: phone !== undefined ? (phone || null) : existing.phone,
+      mobile: mobile !== undefined ? (mobile || null) : existing.mobile,
+      industry: industry !== undefined ? (industry || null) : existing.industry,
+      businessCategory: businessCategory !== undefined ? (businessCategory || null) : existing.businessCategory,
+      address: address !== undefined ? (address || null) : existing.address,
+      website: website !== undefined ? (website || null) : existing.website,
+      notes: notes !== undefined ? (notes || null) : existing.notes,
+      companyType: resolvedCompanyType,
+      vendorType: resolvedVendorType,
+      customerType: resolvedCustomerType,
+    };
 
-    // 상호 변경 이력 기록
-    if (newName !== existing.name) {
-      // 이전 상호: 기존 current 레코드의 valid_to 종료 처리
-      await db
-        .update(companyNameHistoryTable)
-        .set({ validTo: today, nameType: "previous" })
-        .where(and(
-          eq(companyNameHistoryTable.companyId, companyId),
-          eq(companyNameHistoryTable.nameType, "current"),
-        ));
+    // 실제로 바뀐 주요필드만 변경이력으로 남긴다(§6). 상호(name)는 아래 company_name_history 로 별도 기록(§1).
+    const changeRows = buildCompanyChangeRows(companyId, existing, resolved, performer, "MANUAL");
+    const nameChanged = newName !== existing.name;
 
-      // 새 상호: current 이력 추가
-      await db.insert(companyNameHistoryTable).values({
-        companyId,
-        companyName: newName,
-        nameType: "current",
-        validFrom: today,
-        changedBy: performer?.id ?? null,
-        changedByEmail: performer?.email ?? null,
-        reason: nameChangeReason?.trim() || "상호 변경",
-      });
+    // 회사정보 UPDATE + 변경이력 INSERT 를 한 트랜잭션으로(§9). 어느 하나라도 실패하면 전부 롤백된다.
+    const updated = await db.transaction(async (tx) => {
+      const [u] = await tx
+        .update(companiesTable)
+        .set({ ...resolved, updatedAt: now })
+        .where(eq(companiesTable.id, companyId))
+        .returning();
 
-      // logEvent 기록
+      if (changeRows.length > 0) {
+        await tx.insert(companyChangeHistoryTable).values(changeRows);
+      }
+
+      if (nameChanged) {
+        // 이전 상호: 기존 current 레코드의 valid_to 종료 처리
+        await tx
+          .update(companyNameHistoryTable)
+          .set({ validTo: today, nameType: "previous" })
+          .where(and(
+            eq(companyNameHistoryTable.companyId, companyId),
+            eq(companyNameHistoryTable.nameType, "current"),
+          ));
+        // 새 상호: current 이력 추가
+        await tx.insert(companyNameHistoryTable).values({
+          companyId,
+          companyName: newName,
+          nameType: "current",
+          validFrom: today,
+          changedBy: performer?.id ?? null,
+          changedByEmail: performer?.email ?? null,
+          reason: nameChangeReason?.trim() || "상호 변경",
+        });
+      }
+
+      return u;
+    });
+
+    // 커밋 성공 후 이벤트 로그(롤백 시엔 남기지 않음). logs 는 트랜잭션 밖 audit 성격.
+    if (nameChanged) {
       await logEvent("company", companyId, "company_name_changed", req.log, performer,
         JSON.stringify({ from: existing.name, to: newName, reason: nameChangeReason?.trim() || "상호 변경" }));
     }
@@ -1379,6 +1439,7 @@ async function listContacts(req: any, res: any) {
           registeredAt: contactsTable.registeredAt,
           createdAt: contactsTable.createdAt, updatedAt: contactsTable.updatedAt,
           companyName: companiesTable.name,
+          companyBusinessNumber: companiesTable.businessNumber,
           divisionName: divisionsTable.name,
         })
         .from(contactsTable)
@@ -1404,6 +1465,7 @@ async function listContacts(req: any, res: any) {
         registeredAt: contactsTable.registeredAt,
         createdAt: contactsTable.createdAt, updatedAt: contactsTable.updatedAt,
         companyName: companiesTable.name,
+        companyBusinessNumber: companiesTable.businessNumber,
         divisionName: divisionsTable.name,
       })
       .from(contactsTable)

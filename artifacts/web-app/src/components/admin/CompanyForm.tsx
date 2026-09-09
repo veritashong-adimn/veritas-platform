@@ -27,6 +27,19 @@ const inputStyle: React.CSSProperties = {
   outline: "none", boxSizing: "border-box", background: "#fff",
 };
 
+/** 수정 화면의 등록일 = 최초등록일(변경 불가, §10). 읽기전용으로만 표시한다. */
+function ReadOnlyRegisteredAt({ value }: { value: string }) {
+  return (
+    <div>
+      <div style={{ ...inputStyle, background: "#f9fafb", color: "#6b7280", cursor: "not-allowed", display: "flex", alignItems: "center" }}
+        aria-label="등록일(최초등록일, 변경 불가)" title="최초등록일은 변경할 수 없습니다" data-testid="company-registered-at-readonly">
+        {value || "-"}
+      </div>
+      <p style={{ margin: "3px 0 0", fontSize: 11, color: "#9ca3af" }}>최초등록일은 변경할 수 없습니다</p>
+    </div>
+  );
+}
+
 /** 거래처 폼 값 — 등록/수정 공통 */
 export interface CompanyFormValues {
   name: string;
@@ -226,6 +239,8 @@ export function CompanyForm({
     try {
       const body: Record<string, any> = { ...form, vendorType: finalVendorType(form.vendorType, vendorTypeCustom) };
       if (mode === "edit") {
+        // 등록일(최초등록일)은 수정 시 서버에서 무시하지만, 오해 방지를 위해 전송 자체를 하지 않는다(§10).
+        delete body.registeredAt;
         if (nameChanged) body.nameChangeReason = nameChangeReason.trim();
         const res = await fetch(api(`/api/admin/companies/${companyId}`), {
           method: "PATCH", headers: { ...authHeaders, "Content-Type": "application/json" },
@@ -609,8 +624,9 @@ export function CompanyForm({
                 </div>
                 <div>
                   <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>등록일</label>
-                  <DateField value={form.registeredAt} onChange={v => setForm(p => ({ ...p, registeredAt: v }))} ariaLabel="등록일"
-                    style={inputStyle} />
+                  {mode === "edit"
+                    ? <ReadOnlyRegisteredAt value={form.registeredAt} />
+                    : <DateField value={form.registeredAt} onChange={v => setForm(p => ({ ...p, registeredAt: v }))} ariaLabel="등록일" style={inputStyle} />}
                 </div>
               </div>
             )}
@@ -619,8 +635,9 @@ export function CompanyForm({
             {isIndividual && (
               <div>
                 <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", display: "block", marginBottom: 6 }}>등록일</label>
-                <DateField value={form.registeredAt} onChange={v => setForm(p => ({ ...p, registeredAt: v }))} ariaLabel="등록일"
-                  style={inputStyle} />
+                {mode === "edit"
+                  ? <ReadOnlyRegisteredAt value={form.registeredAt} />
+                  : <DateField value={form.registeredAt} onChange={v => setForm(p => ({ ...p, registeredAt: v }))} ariaLabel="등록일" style={inputStyle} />}
               </div>
             )}
 

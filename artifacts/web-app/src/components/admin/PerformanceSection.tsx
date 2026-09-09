@@ -28,6 +28,7 @@ import {
   PaymentBadge,
 } from './performanceShared';
 import { DateField } from './DatePickerShared';
+import { exportPerformances, type PerformanceExportMeta } from '../../lib/performanceExcel';
 
 interface Props {
   projectId: number;
@@ -36,11 +37,12 @@ interface Props {
   onChanged: () => void | Promise<void>;
   onToast: (msg: string) => void;
   projectAdminId?: number | null;   // 프로젝트 담당 PM(납품확인 권한 §9)
+  saleMeta?: PerformanceExportMeta; // Excel Export 용 판매 메타(견적번호·거래처·프로젝트명·담당PM). read-only.
 }
 
 type SortKey = 'deliveryDate' | 'expectedPaymentDate' | 'costTotal' | null;
 
-export default function PerformanceSection({ projectId, token, performances, onChanged, onToast, projectAdminId }: Props) {
+export default function PerformanceSection({ projectId, token, performances, onChanged, onToast, projectAdminId, saleMeta }: Props) {
   const authH = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   // 현재 사용자(납품확인 권한 판정 §9) — JWT payload 디코드(id·role). 서버가 최종 강제.
   const currentUser = useMemo(() => {
@@ -50,6 +52,16 @@ export default function PerformanceSection({ projectId, token, performances, onC
     } catch { return null; }
   }, [token]);
   const canConfirmDelivery = !!currentUser && (currentUser.role === 'admin' || (projectAdminId != null && currentUser.id === projectAdminId));
+
+  // ── 수행/배정 Excel 다운로드(공통 엔진, project 단위) ─────────────────────────
+  // 저장된 서버 데이터(performances prop)를 그대로 내보낸다 — 미저장 편집값 미반영, read-only(§25·§27).
+  const handleExportExcel = () => {
+    if (!performances || performances.length === 0) { onToast('내보낼 수행정보가 없습니다.'); return; }
+    try {
+      exportPerformances(saleMeta ?? {}, performances as any[]);
+      onToast(`수행/배정 ${performances.length.toLocaleString()}건을 Excel로 내보냈습니다.`);
+    } catch { onToast('오류: Excel 다운로드 실패'); }
+  };
   const [editMode, setEditMode] = useState(false);
   const [rows, setRows] = useState<Row[]>([]);
   const [deletedIds, setDeletedIds] = useState<number[]>([]);
@@ -893,7 +905,10 @@ export default function PerformanceSection({ projectId, token, performances, onC
             <PrimaryBtn onClick={save} disabled={busy} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-save" aria-label="수행정보 저장">{busy ? '저장 중…' : '저장'}</PrimaryBtn>
           </>
         ) : (
-          <GhostBtn onClick={enterEdit} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-edit" aria-label="수행정보 수정">✏ 수행정보 수정</GhostBtn>
+          <>
+            <GhostBtn onClick={handleExportExcel} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-excel" aria-label="수행정보 Excel 다운로드">⬇ Excel 다운로드</GhostBtn>
+            <GhostBtn onClick={enterEdit} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-edit" aria-label="수행정보 수정">✏ 수행정보 수정</GhostBtn>
+          </>
         )}
       </div>
     </div>

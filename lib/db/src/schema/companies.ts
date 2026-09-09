@@ -23,6 +23,9 @@ export const companiesTable = pgTable("companies", {
   // client 전용: CORPORATE | PUBLIC | INDIVIDUAL (NULL = vendor 또는 레거시 client → CORPORATE 처리)
   customerType: varchar("customer_type", { length: 20 }).default("CORPORATE"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  // 최종 수정일시. nullable — 기존 거래처는 이 기능 도입 시점에 임의 backfill 하지 않고 null 로 둔다(§16).
+  // 신규 생성 및 수정 API 에서만 값이 채워진다. 등록일(registeredAt)·createdAt 과 혼용하지 않는다(§2).
+  updatedAt: timestamp("updated_at"),
 
   // ── Soft Delete (휴지통) ────────────────────────────────
   // 물리 삭제하지 않고 목록·검색에서만 제외한다(레코드·연결관계는 모두 보존).

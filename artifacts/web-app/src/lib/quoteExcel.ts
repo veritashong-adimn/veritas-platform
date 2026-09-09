@@ -298,3 +298,137 @@ export function downloadQuoteExcel(data: QuoteExportData): void {
   const safeName = (data.title || '견적').replace(/[\\/:*?"<>|\s]+/g, '_');
   XLSX.writeFile(wb, `VERITAS_견적관리_${safeName}_${data.issueDate}.xlsx`);
 }
+
+// ─── 견적 목록 Excel 다운로드(공통 Engine) + 대량등록 템플릿 ───────────────────
+// 목록/품목상세 다운로드와 Native 대량등록 템플릿은 거래처/담당자/통번역사와 동일한 공통 excelExport 엔진을 재사용한다.
+import {
+  exportWorkbook, downloadTemplate, todayStamp,
+  type ExcelColumn, type TemplateColumn,
+} from './excelExport';
+
+// 서버 /admin/quotes/bulk-export 응답 행 형태(느슨히 선언).
+export interface QuoteListRow {
+  quoteNumber?: string; title?: string; quoteType?: string;
+  companyName?: string; businessNumber?: string; contactName?: string; adminName?: string;
+  issueDate?: string; validUntil?: string; firstService?: string;
+  itemCount?: number; supplyAmount?: number; taxAmount?: number; totalAmount?: number;
+  statusLabel?: string; approvalLabel?: string; convertedLabel?: string;
+  accumulatedLabel?: string; relationLabel?: string; rootQuoteNumber?: string;
+  createdAt?: string | null; note?: string;
+}
+export interface QuoteItemRow {
+  quoteNumber?: string; title?: string; productName?: string; itemType?: string; languagePair?: string;
+  interpretDate?: string; interpretPlace?: string; eventStartDate?: string; eventEndDate?: string;
+  quantity?: number; unit?: string; unitPrice?: number; supplyAmount?: number; taxAmount?: number; totalAmount?: number; memo?: string;
+}
+
+const QUOTE_TYPE_LABEL_EXPORT: Record<string, string> = {
+  b2b_standard: '일반', b2c_prepaid: '선입금', prepaid_deduction: '차감', accumulated_batch: '누적',
+};
+const ITEM_TYPE_LABEL: Record<string, string> = {
+  translation: '번역', interpretation: '통역', equipment: '장비', expense: '경비', discount: '할인',
+};
+
+const QUOTE_LIST_COLUMNS: ExcelColumn<QuoteListRow>[] = [
+  { header: '견적번호', value: 'quoteNumber' },
+  { header: '견적서명', value: 'title' },
+  { header: '견적유형', value: (r) => QUOTE_TYPE_LABEL_EXPORT[r.quoteType ?? ''] ?? r.quoteType ?? '' },
+  { header: '거래처명', value: 'companyName' },
+  { header: '사업자등록번호', value: 'businessNumber' },
+  { header: '담당자명', value: 'contactName' },
+  { header: '담당PM', value: 'adminName' },
+  { header: '견적일', value: 'issueDate', type: 'date' },
+  { header: '유효기간', value: 'validUntil', type: 'date' },
+  { header: '대표서비스', value: 'firstService' },
+  { header: '품목수', value: (r) => (typeof r.itemCount === 'number' ? r.itemCount : ''), type: 'number' },
+  { header: '공급가액', value: (r) => (typeof r.supplyAmount === 'number' ? r.supplyAmount : ''), type: 'number' },
+  { header: '부가세', value: (r) => (typeof r.taxAmount === 'number' ? r.taxAmount : ''), type: 'number' },
+  { header: '총금액', value: (r) => (typeof r.totalAmount === 'number' ? r.totalAmount : ''), type: 'number' },
+  { header: '견적상태', value: 'statusLabel' },
+  { header: '승인상태', value: 'approvalLabel' },
+  { header: '판매전환여부', value: 'convertedLabel' },
+  { header: '판매번호', value: () => '' },        // 별도 sale 번호 체계 없음 — 빈칸(§3)
+  { header: '누적상태', value: 'accumulatedLabel' },
+  { header: '관계구분', value: 'relationLabel' },
+  { header: '원견적번호', value: 'rootQuoteNumber' },
+  { header: '등록일', value: (r) => r.createdAt || '', type: 'date' },
+  { header: '메모', value: 'note' },
+];
+
+const QUOTE_ITEM_COLUMNS: ExcelColumn<QuoteItemRow>[] = [
+  { header: '견적번호', value: 'quoteNumber' },
+  { header: '견적서명', value: 'title' },
+  { header: '서비스대분류', value: (r) => ITEM_TYPE_LABEL[r.itemType ?? ''] ?? r.itemType ?? '' },
+  { header: '상품명', value: 'productName' },
+  { header: '언어', value: 'languagePair' },
+  { header: '수행시작일', value: (r) => r.interpretDate || r.eventStartDate || '', type: 'date' },
+  { header: '수행종료일', value: (r) => r.eventEndDate || '', type: 'date' },
+  { header: '장소', value: 'interpretPlace' },
+  { header: '수량', value: (r) => (typeof r.quantity === 'number' ? r.quantity : ''), type: 'number' },
+  { header: '단위', value: 'unit' },
+  { header: '단가', value: (r) => (typeof r.unitPrice === 'number' ? r.unitPrice : ''), type: 'number' },
+  { header: '공급가액', value: (r) => (typeof r.supplyAmount === 'number' ? r.supplyAmount : ''), type: 'number' },
+  { header: '부가세', value: (r) => (typeof r.taxAmount === 'number' ? r.taxAmount : ''), type: 'number' },
+  { header: '금액', value: (r) => (typeof r.totalAmount === 'number' ? r.totalAmount : ''), type: 'number' },
+  { header: '비고', value: 'memo' },
+];
+
+/** 견적 목록(견적목록 + 품목상세 2시트) .xlsx 다운로드. 현재 검색/필터 전체 결과를 넘길 것. */
+export function exportQuotes(data: { quotes: QuoteListRow[]; items: QuoteItemRow[] }): void {
+  exportWorkbook({
+    filename: `VERITAS_견적_${todayStamp()}.xlsx`,
+    sheets: [
+      { sheetName: '견적목록', columns: QUOTE_LIST_COLUMNS, rows: data.quotes },
+      { sheetName: '품목상세', columns: QUOTE_ITEM_COLUMNS, rows: data.items },
+    ],
+  });
+}
+
+// ── 대량등록 템플릿(3시트: 견적등록 + 견적품목 + 입력안내) ──
+// 실제 견적번호는 시스템 생성 → 입력 대상 아님. Excel 내부 연결은 임시키(TEMP-001…) 사용(§6).
+const QUOTE_HEADER_TEMPLATE: TemplateColumn[] = [
+  { header: '임시키', required: true, example: 'TEMP-001', note: '필수. 견적품목 시트와 연결하는 임시 키(실제 견적번호 아님, 시스템 자동발번)' },
+  { header: '견적서명', required: true, example: '2026 상반기 통역 견적', note: '필수' },
+  { header: '견적유형', example: '일반', allowed: ['일반'], note: '이번 단계는 일반견적만 등록(누적/선입금/관계견적 미지원)' },
+  { header: '부가세', example: '부가세 10%', allowed: ['부가세 10%', '면세', '영세율'], note: '개별 견적등록과 동일. 미입력 시 부가세 10%. 견적 전체(모든 품목)에 적용' },
+  { header: '거래처코드', example: '', note: '(현재 미사용) 사업자등록번호 또는 거래처명으로 연결' },
+  { header: '사업자등록번호', example: '123-45-67890', note: '거래처 연결 1순위' },
+  { header: '거래처명', example: '(주)베리타스', note: '거래처 연결 2순위(동일명 여러 개면 확인필요)' },
+  { header: '담당자명', example: '홍길동', note: '해당 거래처 소속 담당자만(동명이인이면 확인필요)' },
+  { header: '담당PM', example: 'pm@veritas.co.kr', note: '이름 또는 이메일. 동명이인이면 이메일로 지정' },
+  { header: '견적일', example: '2026-09-09', note: '미입력 시 오늘' },
+  { header: '유효기간', example: '2026-10-09', note: '미입력 시 설정 기본값' },
+  { header: '메모', example: '' },
+];
+const QUOTE_ITEM_TEMPLATE: TemplateColumn[] = [
+  { header: '임시키', required: true, example: 'TEMP-001', note: '견적등록 시트의 임시키와 일치' },
+  { header: '품목순번', required: true, example: '1', note: '동일 견적 내 순번(중복 불가)' },
+  { header: '서비스대분류', example: '통역', allowed: ['번역', '통역', '장비', '경비'], note: '금액 계산 유형' },
+  { header: '서비스유형', example: '순차통역' },
+  { header: '상품코드', example: '', note: '있으면 상품 마스터 정확일치 연결(없는 코드는 확인필요)' },
+  { header: '상품명', required: true, example: '순차통역(한↔영)', note: '필수. 상품코드 없으면 상품명으로 연결/커스텀' },
+  { header: '출발언어', example: '한국어' },
+  { header: '도착언어', example: '영어' },
+  { header: '수행시작일', example: '2026-09-20' },
+  { header: '수행종료일', example: '2026-09-21' },
+  { header: '시작시간', example: '09:00' },
+  { header: '종료시간', example: '18:00' },
+  { header: '장소', example: '서울 코엑스' },
+  { header: '인원', example: '2', note: '통역: 공급가액 = 수량(일수) × 인원 × 단가' },
+  { header: '수량', example: '2', note: '통역은 진행일수' },
+  { header: '단위', example: '일' },
+  { header: '단가', example: '500000', note: '숫자만' },
+  { header: '비고', example: '' },
+];
+
+/** 견적 대량등록 빈 템플릿 다운로드(견적등록 + 견적품목 + 입력안내). */
+export function downloadQuoteTemplate(): void {
+  // 공통 downloadTemplate 은 단일 입력시트 기반이라, 2개 입력시트는 각각 안내가 필요하다.
+  // 여기서는 대표로 '견적등록' 템플릿(입력안내 포함)을 생성하고, 품목 컬럼 안내는 견적등록 입력안내 하단에 통합한다.
+  downloadTemplate({
+    filename: 'VERITAS_견적_대량등록_템플릿.xlsx',
+    sheetName: '견적등록',
+    columns: QUOTE_HEADER_TEMPLATE,
+    extraSheets: [{ sheetName: '견적품목', columns: QUOTE_ITEM_TEMPLATE }],
+  });
+}
