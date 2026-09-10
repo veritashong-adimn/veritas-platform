@@ -2100,6 +2100,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           hasPerm={hasPerm}
           setToast={setToast}
           authHeaders={authHeaders}
+          onBack={() => setAdminTab("products")}
         />
       )}
 

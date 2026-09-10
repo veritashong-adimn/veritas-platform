@@ -326,39 +326,37 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
 
   const navBtn = pageNavBtnStyle;
 
+  // 검수 리포트(상품 표준화/품질검수) — 일반 운영 UI 비노출, 코드는 유지(§4). 개발/검수 시에만 노출.
+  const SHOW_REVIEW_REPORT = false;
+
   return (
     <>
       <Section title={`상품목록 (${total})`} action={
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
-          <button onClick={() => handleProductExcelDownload("template")}
-            style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, border: "1px solid #d1d5db", background: "#f9fafb", color: "#374151", cursor: "pointer", fontWeight: 600 }}>
-            📋 템플릿
-          </button>
+          {/* 엑셀 다운로드 — 현재 검색/필터 결과 전체 다운로드(§2). Export 로직 무변경. */}
           <button onClick={() => handleProductExcelDownload("export")}
+            data-testid="product-excel-download"
             style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, border: "1px solid #bbf7d0", background: "#f0fdf4", color: "#059669", cursor: "pointer", fontWeight: 600 }}>
-            ⬇ 엑셀 내보내기
+            ⬇ 엑셀 다운로드
           </button>
-          <label style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#2563eb", cursor: productImporting ? "not-allowed" : "pointer", fontWeight: 600, opacity: productImporting ? 0.6 : 1 }}>
-            {productImporting ? "분석 중..." : "⬆ Import 미리보기"}
+          {/* 대량등록 — 기존 Import 진입점(파일 업로드 → 분석 → 미리보기 → 확정, §3·§6). 템플릿 다운로드는 이 흐름 내부로 이동 예정(§1·8번 작업). */}
+          <label data-testid="product-bulk-import"
+            style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, border: "1px solid #bfdbfe", background: "#eff6ff", color: "#2563eb", cursor: productImporting ? "not-allowed" : "pointer", fontWeight: 600, opacity: productImporting ? 0.6 : 1 }}>
+            {productImporting ? "분석 중..." : "⬆ 대량등록"}
             <input ref={productImportRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }}
               onChange={e => { const f = e.target.files?.[0]; if (f) handleProductImport(f); }} />
           </label>
-          <button
-            onClick={() => setShowReviewPanel(v => !v)}
-            style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, fontWeight: 600, cursor: "pointer",
-              border: `1px solid ${showReviewPanel ? "#a5b4fc" : "#e5e7eb"}`,
-              background: showReviewPanel ? "#eef2ff" : "#fff",
-              color: showReviewPanel ? "#4338ca" : "#6b7280" }}>
-            🔍 검수 리포트
-          </button>
-          <button
-            onClick={() => onNavigate("product-trash")}
-            aria-label="휴지통"
-            data-testid="product-trash-nav"
-            style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, fontWeight: 600, cursor: "pointer",
-              border: "1px solid #e5e7eb", background: "#fff", color: "#6b7280" }}>
-            🗑 휴지통
-          </button>
+          {/* 검수 리포트 — 상품 표준화/품질검수용(로컬 UI 상태만, DB 무변경). 일반 운영 UI 비노출, 코드 유지(§4). */}
+          {SHOW_REVIEW_REPORT && (
+            <button
+              onClick={() => setShowReviewPanel(v => !v)}
+              style={{ fontSize: 12, padding: "6px 12px", borderRadius: 7, fontWeight: 600, cursor: "pointer",
+                border: `1px solid ${showReviewPanel ? "#a5b4fc" : "#e5e7eb"}`,
+                background: showReviewPanel ? "#eef2ff" : "#fff",
+                color: showReviewPanel ? "#4338ca" : "#6b7280" }}>
+              🔍 검수 리포트
+            </button>
+          )}
           {canManage && (
             <PrimaryBtn onClick={() => onNavigate("product-register")} style={{ fontSize: 13, padding: "7px 14px" }}>
               + 상품 등록

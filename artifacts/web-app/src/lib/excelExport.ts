@@ -26,6 +26,7 @@ export interface ExcelColumn<Row = Record<string, unknown>> {
   value: keyof Row | ((row: Row) => unknown);
   type?: ExcelCellType; // 기본 'text'
   width?: number;       // wch(생략 시 내용 기준 자동)
+  numFmt?: string;      // type:'number' 셀 표시형식 오버라이드(생략 시 '#,##0'). 예: '0.0'(원천세율)
 }
 
 const HEADER_STYLE = {
@@ -88,7 +89,9 @@ function buildStyledSheet<Row>(columns: ExcelColumn<Row>[], rows: Row[]): Record
         return;
       }
       if (col.type === 'number' && typeof raw === 'number' && Number.isFinite(raw)) {
-        ws[addr] = { v: raw, t: 'n', s: NUM_STYLE };
+        // 기본 #,##0. 컬럼이 numFmt 를 지정하면 그 형식으로만 오버라이드(예: 원천세율 '0.0').
+        const numStyle = col.numFmt ? { ...NUM_STYLE, numFmt: col.numFmt } : NUM_STYLE;
+        ws[addr] = { v: raw, t: 'n', s: numStyle };
       } else if (col.type === 'date') {
         const d = toDate(raw);
         // 날짜는 실제 date 셀(t:'d')로 유지하되, 표시 형식은 SheetJS 표준 속성 z 로 지정한다.
@@ -188,7 +191,16 @@ export function downloadTemplate(opts: {
     return ws;
   };
 
-  // 입력안내 시트(모든 입력시트 컬럼을 시트명 그룹으로 나열)
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, buildInputSheet(columns), sheetName);
+  for (const es of extraSheets) XLSX.utils.book_append_sheet(wb, buildInputSheet(es.columns), es.sheetName);
+  XLSX.utils.book_append_sheet(wb, buildGuideSheet([{ sheetName, columns }, ...extraSheets]), '입력안내');
+  XLSX.writeFile(wb, filename);
+}
+
+/** '입력안내' 시트 — 시트명 그룹별 컬럼/필수/허용값 안내표. downloadTemplate·exportTemplateWorkbook 공용. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildGuideSheet(groups: { sheetName: string; columns: TemplateColumn[] }[]): Record<string, any> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const guide: Record<string, any> = {};
   const gHdr = HEADER_STYLE; const gCell = TEXT_STYLE;
@@ -197,7 +209,7 @@ export function downloadTemplate(opts: {
   guide[XLSX.utils.encode_cell({ r: 0, c: 2 })] = { v: '필수/선택', t: 's', s: gHdr };
   guide[XLSX.utils.encode_cell({ r: 0, c: 3 })] = { v: '허용값 / 안내', t: 's', s: gHdr };
   let gr = 1;
-  for (const grp of [{ sheetName, columns }, ...extraSheets]) {
+  for (const grp of groups) {
     for (const col of grp.columns) {
       guide[XLSX.utils.encode_cell({ r: gr, c: 0 })] = { v: grp.sheetName, t: 's', s: gCell };
       guide[XLSX.utils.encode_cell({ r: gr, c: 1 })] = { v: col.header, t: 's', s: gCell };
@@ -208,12 +220,23 @@ export function downloadTemplate(opts: {
   }
   guide['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(gr - 1, 0), c: 3 } });
   guide['!cols'] = [{ wch: 14 }, { wch: 20 }, { wch: 10 }, { wch: 50 }];
+  return guide;
+}
 
+/**
+ * 사전채움(pre-filled) 대량등록 템플릿 — 데이터 시트(스타일·autofilter·freeze 적용, 값 미리 채움 가능)
+ * + '입력안내' 안내표를 하나의 .xlsx 로 생성·다운로드. 수행정보 대량등록처럼 판매품목을 미리 채운
+ * 템플릿에 사용한다. guideColumns 는 각 시트의 컬럼 필수/허용값 안내를 '입력안내' 시트로 만든다.
+ */
+export function exportTemplateWorkbook(opts: {
+  filename: string;
+  dataSheets: WorkbookSheet[];
+  guideColumns: { sheetName: string; columns: TemplateColumn[] }[];
+}): void {
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, buildInputSheet(columns), sheetName);
-  for (const es of extraSheets) XLSX.utils.book_append_sheet(wb, buildInputSheet(es.columns), es.sheetName);
-  XLSX.utils.book_append_sheet(wb, guide, '입력안내');
-  XLSX.writeFile(wb, filename);
+  for (const s of opts.dataSheets) XLSX.utils.book_append_sheet(wb, buildStyledSheet(s.columns, s.rows), s.sheetName);
+  XLSX.utils.book_append_sheet(wb, buildGuideSheet(opts.guideColumns), '입력안내');
+  XLSX.writeFile(wb, opts.filename);
 }
 
 // 파일명용 오늘 날짜 YYYYMMDD (로컬/KST 표시 기준).

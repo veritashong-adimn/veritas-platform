@@ -37,7 +37,7 @@ const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
 // ── 공휴일 조회 헬퍼 — 지급일 "직전 영업일" 판정용(§4·§6). 활성 KR 공휴일 날짜 집합. ─────────
-async function loadKrHolidaySet(): Promise<Set<string>> {
+export async function loadKrHolidaySet(): Promise<Set<string>> {
   const rows = await db.select({ d: holidaysTable.holidayDate })
     .from(holidaysTable)
     .where(and(eq(holidaysTable.countryCode, "KR"), eq(holidaysTable.active, true)));
@@ -158,7 +158,7 @@ function parseTranslationMemo(memo: string | null | undefined): { fileName?: str
 //  · 계약단가는 절대 복사하지 않는다(§10) — saleUnitPrice 는 "참고값"으로만 보관.
 //  · 번역 상세(파일명·형식·단어수·글자수)는 판매 memo 인코딩값을 파싱해 스냅샷으로 승격 저장(§6).
 //    파일명 우선순위: 직접입력(memo) → 첨부파일명(fileName 인자) → null. 새 DB 컬럼 없이 JSON만 확장.
-function buildDetailSnapshot(it: typeof quoteItemsTable.$inferSelect, prod: any, fileName: string | null) {
+export function buildDetailSnapshot(it: typeof quoteItemsTable.$inferSelect, prod: any, fileName: string | null) {
   const mem = parseTranslationMemo(it.memo);
   // 페이지수 — 판매가 페이지 기준일 때 quantity 가 곧 페이지수(단어/글자→페이지 자동환산 결과). 그 외 null.
   const pageCount = it.unit === "페이지" && it.quantity != null ? String(it.quantity) : null;
@@ -198,7 +198,7 @@ function buildDetailSnapshot(it: typeof quoteItemsTable.$inferSelect, prod: any,
 
 // 번역 계열 판별(§작업량통일) — web-app svcKind 'translation' 미러(번역·감수·교정·DTP·영상/자막).
 //   번역 수행원가는 페이지수가 아닌 작업량(단어/글자) 기준으로 계산하므로, 그 대상 행을 이 술어로 판정한다.
-function isTranslationSnap(snap: any, serviceType?: string | null): boolean {
+export function isTranslationSnap(snap: any, serviceType?: string | null): boolean {
   const t = String(serviceType || snap?.itemType || "").toLowerCase();
   const ck = String(snap?.canonicalKey || "").toLowerCase();
   const pt = String(snap?.productType || "").toLowerCase();
@@ -208,7 +208,7 @@ function isTranslationSnap(snap: any, serviceType?: string | null): boolean {
 
 // 통역 계열 판별(§계약단가통일) — web-app svcKind 'interpretation' 미러.
 //   통역 수행원가 = 계약단가(1인·1일) × 수행일수(quantity) × 인원(interpreterCount).
-function isInterpretationSnap(snap: any, serviceType?: string | null): boolean {
+export function isInterpretationSnap(snap: any, serviceType?: string | null): boolean {
   const t = String(serviceType || snap?.itemType || "").toLowerCase();
   const ck = String(snap?.canonicalKey || "").toLowerCase();
   const pt = String(snap?.productType || "").toLowerCase();
@@ -295,7 +295,7 @@ const deductionSchema = z.object({
   reason: z.string().nullable().optional(),
 });
 
-const rowSchema = z.object({
+export const rowSchema = z.object({
   id: z.number().int().positive().optional(),          // 있으면 수정, 없으면 신규
   saleItemId: z.number().int().nullable().optional(),
   saleItemSequence: z.number().int().nullable().optional(),
@@ -359,10 +359,10 @@ const rowSchema = z.object({
   vatAmountManual: money.optional(),                   // 기타·미발행 시 수동 부가세
 });
 
-type RowInput = z.infer<typeof rowSchema>;
+export type RowInput = z.infer<typeof rowSchema>;
 
 // 서버 재계산 — performerCategory 에 따라 개인/업체/경비 금액을 산출하고 반대편 필드는 정리(§11·§31)
-function computeRowValues(r: RowInput) {
+export function computeRowValues(r: RowInput) {
   const category = r.performerCategory ?? "individual";
   if (category === "expense") {
     // 경비 — 지급대상자 없는 직접원가. 개인/업체 정산필드는 모두 초기화.
@@ -693,6 +693,243 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
   }
 });
 
+// ── 기본수행료(base) 산출 SSOT — 구분·직접금액·번역/통역/장비 기준을 단일 함수로(§통역료85·§계약단가통일). ──
+//   저장(applyPerformanceRow)과 Import 미리보기(§28)가 동일 규칙을 공유한다. 추가비용·차감은 별도(calcCostTotal).
+//   · vendor → 공급가액(computed.supplyAmount)
+//   · expense → directAmount(100%)
+//   · isDirectAmount → 통역 통역료(85%)=directAmount×0.85, 그 외(번역 요금100)=directAmount×1
+//   · 번역 → 계약단가×수량(없으면 작업량), 통역 → 계약단가×수행일수×인원, 폴백 계약단가×수량 → 개인 기본료
+export function computePerformanceBaseFee(
+  r: RowInput,
+  computed: ReturnType<typeof computeRowValues>,
+  snapForCost: any,
+): number {
+  const category = r.performerCategory ?? "individual";
+  const c = computed as any;
+  if (category === "vendor") return Number(c.supplyAmount) || 0;
+  if (category === "expense") return calcBasePerformanceFee(true, r.directAmount ?? 0, null, null);
+  if (r.isDirectAmount) {
+    // 통역 통역료(85%)=directAmount 는 ×0.85(§통역료85), 번역 요금(100%)은 그대로. 저장/재조회/정산 일관(§10).
+    const directBase = Number(r.directAmount ?? 0) * (isInterpretationSnap(snapForCost, r.serviceType) ? 0.85 : 1);
+    return calcBasePerformanceFee(true, directBase, null, null);
+  }
+  if (isTranslationSnap(snapForCost, r.serviceType)) {
+    if (r.contractUnitPrice != null && r.quantity != null) {
+      return calcBasePerformanceFee(false, null, r.contractUnitPrice, r.quantity);
+    }
+    const work = translationWorkAmount(snapForCost);
+    return (r.contractUnitPrice != null && work != null)
+      ? calcBasePerformanceFee(false, null, r.contractUnitPrice, work)
+      : Number(c.baseFee) || 0;
+  }
+  if (isInterpretationSnap(snapForCost, r.serviceType)) {
+    const persons = interpreterHeadcount(snapForCost);
+    return (r.contractUnitPrice != null && r.quantity != null)
+      ? calcBasePerformanceFee(false, null, r.contractUnitPrice, Number(r.quantity) * persons)
+      : Number(c.baseFee) || 0;
+  }
+  if (r.contractUnitPrice != null && r.quantity != null)
+    return calcBasePerformanceFee(false, null, r.contractUnitPrice, r.quantity);
+  return Number(c.baseFee) || 0;
+}
+
+// 한 수행자 행 저장(upsert + 추가비용·차감 + 원가합계 재계산)의 단일 진실원본(SSOT §33).
+//   배치저장(PUT)과 Excel 대량등록(Import)이 동일 함수를 공유 → 금액/납품일/지급일/원천세 계산이 항상 일치.
+//   반드시 호출자의 트랜잭션(tx) 안에서 실행한다(§30). 반환값은 upsert된 assignmentId.
+export type ApplyRowCtx = {
+  userId: number | null;
+  isHoliday: (d: string) => boolean;
+  mayConfirm: boolean;                                               // 납품확인 전환 권한(§9)
+  priorById: Map<number, typeof performanceAssignmentsTable.$inferSelect>;
+};
+
+export async function applyPerformanceRow(
+  tx: any,
+  projectId: number,
+  r: RowInput,
+  ctx: ApplyRowCtx,
+): Promise<number> {
+  const { userId, isHoliday, mayConfirm, priorById } = ctx;
+  const category = r.performerCategory ?? "individual";
+  const computed = computeRowValues(r);
+  const values: Record<string, any> = {
+    ...commonFields(r),
+    ...computed,
+    lineCategory: r.lineCategory ?? null,
+    contractUnitPrice: r.contractUnitPrice != null ? String(r.contractUnitPrice) : null,
+    quantity: r.quantity != null ? String(r.quantity) : null,
+    unit: r.unit ?? null,
+    isDirectAmount: category === "expense" ? true : (r.isDirectAmount ?? false),
+    actualPaymentAmount: r.actualPaymentAmount != null ? String(r.actualPaymentAmount) : null,
+    updatedBy: userId,
+    updatedAt: new Date(),
+  };
+
+  // 납품일 = 서비스 종료일(performanceEndDate) 자동값(§2) or 사용자 수동값. 확인상태 처리(§6·§7·§9).
+  const autoDelivery = r.performanceEndDate ?? null;
+  values.deliveryDateAuto = autoDelivery;
+  let resolvedDelivery: string | null;
+  if (r.deliveryDateManual && r.deliveryDate) {
+    resolvedDelivery = r.deliveryDate; values.deliveryDateManual = true;
+  } else {
+    resolvedDelivery = autoDelivery ?? r.deliveryDate ?? null; values.deliveryDateManual = false;
+  }
+  values.deliveryDate = resolvedDelivery;
+  const priorRow = r.id ? priorById.get(r.id) : undefined;
+  const priorDelivery = priorRow?.deliveryDate != null ? String(priorRow.deliveryDate).slice(0, 10) : null;
+  const newDelivery = resolvedDelivery ? String(resolvedDelivery).slice(0, 10) : null;
+  let confirmed = !!r.deliveryConfirmed;
+  if (priorDelivery !== newDelivery) confirmed = false;   // §7 납품일 변경 시 확인 자동 해제
+  if (confirmed && !priorRow?.deliveryConfirmed) {
+    // 미확인 → 확인 전환: 담당 PM·관리자만 가능(§9). 권한 없으면 확인 안 됨.
+    if (mayConfirm) { values.deliveryConfirmed = true; values.deliveryConfirmedBy = userId; values.deliveryConfirmedAt = new Date(); }
+    else { values.deliveryConfirmed = false; values.deliveryConfirmedBy = null; values.deliveryConfirmedAt = null; }
+  } else if (confirmed) {
+    values.deliveryConfirmed = true;                        // 유지 — 확인이력 보존
+    values.deliveryConfirmedBy = priorRow?.deliveryConfirmedBy ?? null;
+    values.deliveryConfirmedAt = priorRow?.deliveryConfirmedAt ?? null;
+  } else {
+    values.deliveryConfirmed = false; values.deliveryConfirmedBy = null; values.deliveryConfirmedAt = null;
+  }
+
+  // 지급일 자동계산(납품일 기준 월말/익월15 → 직전 영업일) + 수동변경 이력(§4·§8-2·§9·§11)
+  const autoDate = calcPaymentDate(resolvedDelivery, isHoliday);
+  values.expectedPaymentDateAuto = autoDate;
+  if (r.payDateManual && r.expectedPaymentDate) {
+    // 사용자가 지급일을 직접 지정한 경우: 자동값으로 덮어쓰지 않는다(§8·§10-2).
+    values.payDateManual = true;
+    values.expectedPaymentDate = r.expectedPaymentDate;
+    if (autoDate && r.expectedPaymentDate !== autoDate) {
+      values.payDateChangeReason = r.payDateChangeReason ?? null;
+      values.payDateChangedBy = userId;
+      values.payDateChangedAt = new Date();
+    }
+  } else {
+    // 자동 모드: 항상 납품일 기준 재계산값을 적용.
+    values.payDateManual = false;
+    values.expectedPaymentDate = autoDate ?? r.expectedPaymentDate ?? null;
+    values.payDateChangeReason = null;
+  }
+
+  // 상태(§12) — 지급상태로 단일화. 단, 지급완료(paid)는 수행정보에서 직접 지정·해제할 수 없다.
+  //   · 이미 paid 인 건: 되돌리기 불가 → 항상 paid 유지(클라이언트 값 무시).
+  //   · paid 로의 신규 전환: 거부 → 정산 > 지급회차 [지급완료] 처리로만 변경된다.
+  //   · unpaid ↔ payment_hold 만 사용자 변경 허용.
+  const priorPay = priorRow?.paymentStatus ?? "unpaid";
+  if (priorPay === "paid") {
+    values.paymentStatus = "paid";
+  } else if (r.paymentStatus) {
+    if (r.paymentStatus === "paid") {
+      throw new Error("지급완료는 수행정보에서 직접 지정할 수 없습니다. 정산 > 지급회차 지급완료 처리로만 변경됩니다.");
+    }
+    values.paymentStatus = r.paymentStatus;
+  }
+
+  // 수행자 스냅샷 재도출(§선택-저장 분리) — 인라인 로컬선택은 식별자·거주국·업체유형 스냅샷을 전송하지 않으므로,
+  //   individualUserId/vendorCompanyId 가 "신규 배정·변경"된 경우에만 CRM에서 재도출해 영속(PII 암호문 포함).
+  //   세율·거주구분은 클라이언트 값(사용자 수정 존중)을 유지하고, 미제공 시에만 서버 기본값으로 보정.
+  const priorIndividual = priorRow?.individualUserId ?? null;
+  const priorVendor = priorRow?.vendorCompanyId ?? null;
+  if (category === "individual" && r.individualUserId != null) {
+    if (r.individualUserId !== priorIndividual) {
+      const snap = await deriveIndividualSnapshot(tx as any, r.individualUserId);
+      if (snap) {
+        values.performerNameSnapshot = snap.performerNameSnapshot;
+        values.identifierSnapshotEnc = snap.identifierEnc;
+        values.identifierSnapshotMasked = snap.identifierMasked;
+        values.residenceCountrySnapshot = snap.residenceCountrySnapshot;
+        if (r.residencyType == null) values.residencyType = snap.residencyType as any;
+        if (r.withholdingTreatment == null) values.withholdingTreatment = snap.withholdingTreatment as any;
+        // 계약단가 초기값 = 프로필 기본단가(방향·단위 무관 단일값). 단, 번역행은 제외(§14):
+        //   번역은 방향·단위별 등록단가(translator_rates) 자동매칭만 사용하며, 미매칭 시 임의 기본단가를 넣지 않고 공란 유지.
+        if (r.contractUnitPrice == null && snap.baseRate != null && !isTranslationSnap(r.serviceDetailSnapshot, r.serviceType)) {
+          values.contractUnitPrice = String(snap.baseRate);
+          if (r.quantity == null) values.quantity = "1";
+        }
+      }
+    }
+  } else if (category === "vendor" && r.vendorCompanyId != null) {
+    if (r.vendorCompanyId !== priorVendor) {
+      const snap = await deriveVendorSnapshot(tx as any, r.vendorCompanyId);
+      if (snap) {
+        values.performerNameSnapshot = snap.performerNameSnapshot;
+        values.vendorTypeSnapshot = snap.vendorTypeSnapshot;
+        values.identifierSnapshotMasked = snap.identifierMasked;
+        values.identifierSnapshotEnc = null;
+      }
+    }
+  } else if (r.individualUserId == null && r.vendorCompanyId == null && category !== "expense") {
+    // 수행자 해제 — 스테일 PII/스냅샷 정리
+    values.identifierSnapshotEnc = null;
+    values.identifierSnapshotMasked = null;
+    values.residenceCountrySnapshot = null;
+    values.vendorTypeSnapshot = null;
+  }
+
+  // upsert → assignmentId 확보
+  let assignmentId: number;
+  if (r.id) {
+    await tx.update(performanceAssignmentsTable).set(values)
+      .where(and(eq(performanceAssignmentsTable.id, r.id), eq(performanceAssignmentsTable.projectId, projectId)));
+    assignmentId = r.id;
+  } else {
+    const [ins] = await tx.insert(performanceAssignmentsTable)
+      .values({ projectId, createdBy: userId, ...values })
+      .returning({ id: performanceAssignmentsTable.id });
+    assignmentId = ins.id;
+  }
+
+  // 추가비용 하위행 — 제공된 경우만 전체 교체(생략 시 기존 유지)
+  if (r.expenses !== undefined) {
+    await tx.delete(performanceExpensesTable).where(eq(performanceExpensesTable.assignmentId, assignmentId));
+    if (r.expenses.length) {
+      await tx.insert(performanceExpensesTable).values(r.expenses.map(e => ({
+        assignmentId, expenseType: e.expenseType, amount: String(e.amount ?? 0),
+        // 지급률 구조(§비용지급률) — 기준금액·지급률을 함께 저장(있을 때만). amount는 실제 지급액이라 정산은 불변.
+        baseAmount: e.baseAmount != null ? String(e.baseAmount) : null,
+        payoutRate: e.payoutRate != null ? String(e.payoutRate) : null,
+        incurredDate: e.incurredDate ?? null, includedInPayout: e.includedInPayout ?? true,
+        evidenceUrl: e.evidenceUrl ?? null, evidenceFileName: e.evidenceFileName ?? null,
+        memo: e.memo ?? null, createdBy: userId,
+      })));
+    }
+  }
+  // 차감 하위행 — 제공된 경우만 전체 교체
+  if (r.deductions !== undefined) {
+    await tx.delete(performanceDeductionsTable).where(eq(performanceDeductionsTable.assignmentId, assignmentId));
+    if (r.deductions.length) {
+      await tx.insert(performanceDeductionsTable).values(r.deductions.map(d => ({
+        assignmentId, deductionType: d.deductionType, amount: String(d.amount ?? 0),
+        reason: d.reason ?? null, createdBy: userId,
+      })));
+    }
+  }
+
+  // 원가합계 재계산 — 유효 하위행 기준(§9·§10). 기본수행료 산출 기준은 구분별로 상이(computePerformanceBaseFee SSOT).
+  const [exp, ded] = await Promise.all([
+    tx.select().from(performanceExpensesTable).where(eq(performanceExpensesTable.assignmentId, assignmentId)),
+    tx.select().from(performanceDeductionsTable).where(eq(performanceDeductionsTable.assignmentId, assignmentId)),
+  ]);
+  // 번역 원가 기준 스냅샷 — 요청값 우선, 없으면 저장된 스냅샷(작업량은 판매 시점 고정값).
+  const snapForCost: any = r.serviceDetailSnapshot ?? priorRow?.serviceDetailSnapshot ?? null;
+  const base = computePerformanceBaseFee(r, computed, snapForCost);
+  const totals = calcCostTotal(
+    base,
+    exp.map((e: any) => ({ amount: Number(e.amount), includedInPayout: e.includedInPayout })),
+    ded.map((d: any) => ({ amount: Number(d.amount) })),
+  );
+  await tx.update(performanceAssignmentsTable).set({
+    // directAmount(기준금액 입력값)를 basePerformanceFee(확정 base)와 분리 저장(§통역료85) — 재조회 시 입력값 복원.
+    //   통역료(85%)는 directAmount×0.85 = basePerformanceFee 이므로 두 값이 다르다. 그 외(번역 요금100·경비)는 동일.
+    directAmount: r.directAmount != null ? String(r.directAmount) : null,
+    basePerformanceFee: String(totals.basePerformanceFee),
+    expenseTotal: String(totals.expenseTotal),
+    deductionTotal: String(totals.deductionTotal),
+    costTotal: String(totals.costTotal),
+  }).where(eq(performanceAssignmentsTable.id, assignmentId));
+  return assignmentId;
+}
+
 // ── 배치 저장 — 신규/수정 + 삭제를 하나의 트랜잭션으로 처리(§30). 금액 서버 재계산(§31). ───────
 const batchSchema = z.object({
   rows: z.array(rowSchema).default([]),
@@ -729,214 +966,9 @@ router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) =
       const priorRows = await tx.select().from(performanceAssignmentsTable)
         .where(and(eq(performanceAssignmentsTable.projectId, projectId), isNull(performanceAssignmentsTable.deletedAt)));
       const priorById = new Map(priorRows.map(p => [p.id, p]));
+      const ctx: ApplyRowCtx = { userId, isHoliday, mayConfirm, priorById };
       for (const r of rows) {
-        const category = r.performerCategory ?? "individual";
-        const computed = computeRowValues(r);
-        const values: Record<string, any> = {
-          ...commonFields(r),
-          ...computed,
-          lineCategory: r.lineCategory ?? null,
-          contractUnitPrice: r.contractUnitPrice != null ? String(r.contractUnitPrice) : null,
-          quantity: r.quantity != null ? String(r.quantity) : null,
-          unit: r.unit ?? null,
-          isDirectAmount: category === "expense" ? true : (r.isDirectAmount ?? false),
-          actualPaymentAmount: r.actualPaymentAmount != null ? String(r.actualPaymentAmount) : null,
-          updatedBy: userId,
-          updatedAt: new Date(),
-        };
-
-        // 납품일 = 서비스 종료일(performanceEndDate) 자동값(§2) or 사용자 수동값. 확인상태 처리(§6·§7·§9).
-        const autoDelivery = r.performanceEndDate ?? null;
-        values.deliveryDateAuto = autoDelivery;
-        let resolvedDelivery: string | null;
-        if (r.deliveryDateManual && r.deliveryDate) {
-          resolvedDelivery = r.deliveryDate; values.deliveryDateManual = true;
-        } else {
-          resolvedDelivery = autoDelivery ?? r.deliveryDate ?? null; values.deliveryDateManual = false;
-        }
-        values.deliveryDate = resolvedDelivery;
-        const priorRow = r.id ? priorById.get(r.id) : undefined;
-        const priorDelivery = priorRow?.deliveryDate != null ? String(priorRow.deliveryDate).slice(0, 10) : null;
-        const newDelivery = resolvedDelivery ? String(resolvedDelivery).slice(0, 10) : null;
-        let confirmed = !!r.deliveryConfirmed;
-        if (priorDelivery !== newDelivery) confirmed = false;   // §7 납품일 변경 시 확인 자동 해제
-        if (confirmed && !priorRow?.deliveryConfirmed) {
-          // 미확인 → 확인 전환: 담당 PM·관리자만 가능(§9). 권한 없으면 확인 안 됨.
-          if (mayConfirm) { values.deliveryConfirmed = true; values.deliveryConfirmedBy = userId; values.deliveryConfirmedAt = new Date(); }
-          else { values.deliveryConfirmed = false; values.deliveryConfirmedBy = null; values.deliveryConfirmedAt = null; }
-        } else if (confirmed) {
-          values.deliveryConfirmed = true;                        // 유지 — 확인이력 보존
-          values.deliveryConfirmedBy = priorRow?.deliveryConfirmedBy ?? null;
-          values.deliveryConfirmedAt = priorRow?.deliveryConfirmedAt ?? null;
-        } else {
-          values.deliveryConfirmed = false; values.deliveryConfirmedBy = null; values.deliveryConfirmedAt = null;
-        }
-
-        // 지급일 자동계산(납품일 기준 월말/익월15 → 직전 영업일) + 수동변경 이력(§4·§8-2·§9·§11)
-        const autoDate = calcPaymentDate(resolvedDelivery, isHoliday);
-        values.expectedPaymentDateAuto = autoDate;
-        if (r.payDateManual && r.expectedPaymentDate) {
-          // 사용자가 지급일을 직접 지정한 경우: 자동값으로 덮어쓰지 않는다(§8·§10-2).
-          values.payDateManual = true;
-          values.expectedPaymentDate = r.expectedPaymentDate;
-          if (autoDate && r.expectedPaymentDate !== autoDate) {
-            values.payDateChangeReason = r.payDateChangeReason ?? null;
-            values.payDateChangedBy = userId;
-            values.payDateChangedAt = new Date();
-          }
-        } else {
-          // 자동 모드: 항상 납품일 기준 재계산값을 적용.
-          values.payDateManual = false;
-          values.expectedPaymentDate = autoDate ?? r.expectedPaymentDate ?? null;
-          values.payDateChangeReason = null;
-        }
-
-        // 상태(§12) — 지급상태로 단일화. 단, 지급완료(paid)는 수행정보에서 직접 지정·해제할 수 없다.
-        //   · 이미 paid 인 건: 되돌리기 불가 → 항상 paid 유지(클라이언트 값 무시).
-        //   · paid 로의 신규 전환: 거부 → 정산 > 지급회차 [지급완료] 처리로만 변경된다.
-        //   · unpaid ↔ payment_hold 만 사용자 변경 허용.
-        const priorPay = priorRow?.paymentStatus ?? "unpaid";
-        if (priorPay === "paid") {
-          values.paymentStatus = "paid";
-        } else if (r.paymentStatus) {
-          if (r.paymentStatus === "paid") {
-            throw new Error("지급완료는 수행정보에서 직접 지정할 수 없습니다. 정산 > 지급회차 지급완료 처리로만 변경됩니다.");
-          }
-          values.paymentStatus = r.paymentStatus;
-        }
-
-        // 수행자 스냅샷 재도출(§선택-저장 분리) — 인라인 로컬선택은 식별자·거주국·업체유형 스냅샷을 전송하지 않으므로,
-        //   individualUserId/vendorCompanyId 가 "신규 배정·변경"된 경우에만 CRM에서 재도출해 영속(PII 암호문 포함).
-        //   세율·거주구분은 클라이언트 값(사용자 수정 존중)을 유지하고, 미제공 시에만 서버 기본값으로 보정.
-        const priorIndividual = priorRow?.individualUserId ?? null;
-        const priorVendor = priorRow?.vendorCompanyId ?? null;
-        if (category === "individual" && r.individualUserId != null) {
-          if (r.individualUserId !== priorIndividual) {
-            const snap = await deriveIndividualSnapshot(tx as any, r.individualUserId);
-            if (snap) {
-              values.performerNameSnapshot = snap.performerNameSnapshot;
-              values.identifierSnapshotEnc = snap.identifierEnc;
-              values.identifierSnapshotMasked = snap.identifierMasked;
-              values.residenceCountrySnapshot = snap.residenceCountrySnapshot;
-              if (r.residencyType == null) values.residencyType = snap.residencyType as any;
-              if (r.withholdingTreatment == null) values.withholdingTreatment = snap.withholdingTreatment as any;
-              // 계약단가 초기값 = 프로필 기본단가(방향·단위 무관 단일값). 단, 번역행은 제외(§14):
-              //   번역은 방향·단위별 등록단가(translator_rates) 자동매칭만 사용하며, 미매칭 시 임의 기본단가를 넣지 않고 공란 유지.
-              if (r.contractUnitPrice == null && snap.baseRate != null && !isTranslationSnap(r.serviceDetailSnapshot, r.serviceType)) {
-                values.contractUnitPrice = String(snap.baseRate);
-                if (r.quantity == null) values.quantity = "1";
-              }
-            }
-          }
-        } else if (category === "vendor" && r.vendorCompanyId != null) {
-          if (r.vendorCompanyId !== priorVendor) {
-            const snap = await deriveVendorSnapshot(tx as any, r.vendorCompanyId);
-            if (snap) {
-              values.performerNameSnapshot = snap.performerNameSnapshot;
-              values.vendorTypeSnapshot = snap.vendorTypeSnapshot;
-              values.identifierSnapshotMasked = snap.identifierMasked;
-              values.identifierSnapshotEnc = null;
-            }
-          }
-        } else if (r.individualUserId == null && r.vendorCompanyId == null && category !== "expense") {
-          // 수행자 해제 — 스테일 PII/스냅샷 정리
-          values.identifierSnapshotEnc = null;
-          values.identifierSnapshotMasked = null;
-          values.residenceCountrySnapshot = null;
-          values.vendorTypeSnapshot = null;
-        }
-
-        // upsert → assignmentId 확보
-        let assignmentId: number;
-        if (r.id) {
-          await tx.update(performanceAssignmentsTable).set(values)
-            .where(and(eq(performanceAssignmentsTable.id, r.id), eq(performanceAssignmentsTable.projectId, projectId)));
-          assignmentId = r.id;
-        } else {
-          const [ins] = await tx.insert(performanceAssignmentsTable)
-            .values({ projectId, createdBy: userId, ...values })
-            .returning({ id: performanceAssignmentsTable.id });
-          assignmentId = ins.id;
-        }
-
-        // 추가비용 하위행 — 제공된 경우만 전체 교체(생략 시 기존 유지)
-        if (r.expenses !== undefined) {
-          await tx.delete(performanceExpensesTable).where(eq(performanceExpensesTable.assignmentId, assignmentId));
-          if (r.expenses.length) {
-            await tx.insert(performanceExpensesTable).values(r.expenses.map(e => ({
-              assignmentId, expenseType: e.expenseType, amount: String(e.amount ?? 0),
-              // 지급률 구조(§비용지급률) — 기준금액·지급률을 함께 저장(있을 때만). amount는 실제 지급액이라 정산은 불변.
-              baseAmount: e.baseAmount != null ? String(e.baseAmount) : null,
-              payoutRate: e.payoutRate != null ? String(e.payoutRate) : null,
-              incurredDate: e.incurredDate ?? null, includedInPayout: e.includedInPayout ?? true,
-              evidenceUrl: e.evidenceUrl ?? null, evidenceFileName: e.evidenceFileName ?? null,
-              memo: e.memo ?? null, createdBy: userId,
-            })));
-          }
-        }
-        // 차감 하위행 — 제공된 경우만 전체 교체
-        if (r.deductions !== undefined) {
-          await tx.delete(performanceDeductionsTable).where(eq(performanceDeductionsTable.assignmentId, assignmentId));
-          if (r.deductions.length) {
-            await tx.insert(performanceDeductionsTable).values(r.deductions.map(d => ({
-              assignmentId, deductionType: d.deductionType, amount: String(d.amount ?? 0),
-              reason: d.reason ?? null, createdBy: userId,
-            })));
-          }
-        }
-
-        // 원가합계 재계산 — 유효 하위행 기준(§9·§10). 기본수행료 산출 기준은 구분별로 상이.
-        const [exp, ded] = await Promise.all([
-          tx.select().from(performanceExpensesTable).where(eq(performanceExpensesTable.assignmentId, assignmentId)),
-          tx.select().from(performanceDeductionsTable).where(eq(performanceDeductionsTable.assignmentId, assignmentId)),
-        ]);
-        // 번역 원가 기준 스냅샷 — 요청값 우선, 없으면 저장된 스냅샷(작업량은 판매 시점 고정값).
-        const snapForCost: any = r.serviceDetailSnapshot ?? priorRow?.serviceDetailSnapshot ?? null;
-        let base: number;
-        if (category === "vendor") base = Number(computed.supplyAmount) || 0;            // 외주 공급가액
-        else if (category === "expense") base = calcBasePerformanceFee(true, r.directAmount ?? 0, null, null);
-        else if (r.isDirectAmount) {
-          // 직접금액(base) — 통역 통역료(85%)=directAmount 는 ×0.85(§통역료85), 번역 요금(100%)은 그대로.
-          //   프론트 calcRowCostPreview(INTERP_FEE_RATE)와 동일 규칙 — 저장/재조회/정산 일관(§10).
-          const directBase = Number(r.directAmount ?? 0) * (isInterpretationSnap(snapForCost, r.serviceType) ? 0.85 : 1);
-          base = calcBasePerformanceFee(true, directBase, null, null);
-        }
-        else if (isTranslationSnap(snapForCost, r.serviceType)) {
-          // 번역 지급액 = 수량 × 단가 — 단위 종류(단어/글자/페이지/회/분/시간/일)와 무관(§단위확장). 프론트 calcRowCostPreview와 동일 기준.
-          //   §14 호환: 기존 저장행은 계약단가(contractUnitPrice)가 없어 이 분기를 타지 않고 작업량/기본수행료를 그대로 유지 → 값 불변.
-          if (r.contractUnitPrice != null && r.quantity != null) {
-            base = calcBasePerformanceFee(false, null, r.contractUnitPrice, r.quantity);
-          } else {
-            const work = translationWorkAmount(snapForCost);
-            base = (r.contractUnitPrice != null && work != null)
-              ? calcBasePerformanceFee(false, null, r.contractUnitPrice, work)
-              : Number(computed.baseFee) || 0;
-          }
-        }
-        else if (isInterpretationSnap(snapForCost, r.serviceType)) {
-          // 통역 원가 = 계약단가(1인·1일) × 수행일수(quantity) × 인원(interpreterCount, 없으면 1)(§계약단가통일).
-          const persons = interpreterHeadcount(snapForCost);
-          base = (r.contractUnitPrice != null && r.quantity != null)
-            ? calcBasePerformanceFee(false, null, r.contractUnitPrice, Number(r.quantity) * persons)
-            : Number(computed.baseFee) || 0;
-        }
-        else if (r.contractUnitPrice != null && r.quantity != null)
-          base = calcBasePerformanceFee(false, null, r.contractUnitPrice, r.quantity);   // 계약단가×수량
-        else base = Number(computed.baseFee) || 0;                                       // 폴백: 개인 기본료
-        const totals = calcCostTotal(
-          base,
-          exp.map(e => ({ amount: Number(e.amount), includedInPayout: e.includedInPayout })),
-          ded.map(d => ({ amount: Number(d.amount) })),
-        );
-        await tx.update(performanceAssignmentsTable).set({
-          // directAmount(기준금액 입력값)를 basePerformanceFee(확정 base)와 분리 저장(§통역료85) — 재조회 시 입력값 복원.
-          //   통역료(85%)는 directAmount×0.85 = basePerformanceFee 이므로 두 값이 다르다. 그 외(번역 요금100·경비)는 동일.
-          directAmount: r.directAmount != null ? String(r.directAmount) : null,
-          basePerformanceFee: String(totals.basePerformanceFee),
-          expenseTotal: String(totals.expenseTotal),
-          deductionTotal: String(totals.deductionTotal),
-          costTotal: String(totals.costTotal),
-        }).where(eq(performanceAssignmentsTable.id, assignmentId));
+        await applyPerformanceRow(tx, projectId, r, ctx);   // 저장 SSOT(§33) — Import와 동일 경로
       }
     });
 

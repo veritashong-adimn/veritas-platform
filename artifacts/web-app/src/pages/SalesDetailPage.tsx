@@ -418,6 +418,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
               quoteNumber: quote?.quoteNumber ?? '',
               companyName: companyName ?? '',
               projectTitle: project.title ?? '',
+              contactName: contactName ?? '',
               pmName: pm?.name ?? '',
             }}
           />

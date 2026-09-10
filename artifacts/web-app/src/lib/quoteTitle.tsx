@@ -1,8 +1,9 @@
 /**
  * quoteTitle.tsx — 견적서명 표시 헬퍼
  *
- * 저장 문자열은 'VERITAS│[거래처명]_[대표상품명]_[YYYYMMDD]' 규칙으로 생성된다.
- * 화면에서는 브랜드(VERITAS) 부분만 별도 span으로 분리해
+ * 내부 저장 문자열(견적서명/프로젝트명)은 '[거래처명]_[대표상품명]_[YYYYMMDD]' 규칙으로 생성된다(VERITAS 접두어 없음).
+ * 고객 전달 파일명만 buildDocFileName이 'VERITAS_' 접두어를 부여한다.
+ * 화면에서는 (레거시 데이터에 남아있는) 브랜드(VERITAS) 부분만 별도 span으로 분리해
  *   - 영문 Semi-Condensed 폰트 + weight 600 + 좁은 letter-spacing 으로 가로폭을 줄이고,
  *   - 구분자 '│'는 연한 회색(#9CA3AF)으로,
  *   - 나머지 견적명은 부모의 한글 폰트를 그대로 상속(폰트 변경 금지)
@@ -160,7 +161,7 @@ function pickRepresentativeProduct(items: QuoteTitleItem[]): string {
 
 /**
  * VERITAS 표준 견적서명(프로젝트명) 생성 — 플랫폼 전 화면 공통 사용.
- * 형식: VERITAS│회사명_[브랜드명_]대표상품명[ 외 N건]_YYYYMMDD
+ * 형식: 회사명_[브랜드명_]대표상품명[ 외 N건]_YYYYMMDD  (내부명 — VERITAS 접두어 없음. 고객 파일명만 VERITAS_ 부여 §3)
  *  - 브랜드 없으면 브랜드 구간 생략
  *  - 상품 2개 이상이면 대표상품 뒤에 ' 외 N건' (N = 상품수 − 1)
  *  - 날짜는 항상 YYYYMMDD
@@ -184,13 +185,14 @@ export function generateQuoteTitle(params: {
   const dateStr = (params.issueDate ?? '').replace(/[^0-9]/g, '').slice(0, 8);
 
   // 상품 정보가 아직 없으면 서비스 구간 생략(빈 '_' 없이 회사[_브랜드]_날짜)
+  //   내부 견적서명/프로젝트명에는 VERITAS 접두어를 붙이지 않는다(§1·§2). 고객 파일명만 buildDocFileName이 VERITAS_ 부여(§3).
   if (valid.length === 0) {
-    return `VERITAS│${companyName}_${brandPart}${dateStr}`;
+    return `${companyName}_${brandPart}${dateStr}`;
   }
 
   const rep = pickRepresentativeProduct(valid);
   const extra = valid.length > 1 ? ` 외 ${valid.length - 1}건` : '';
-  return `VERITAS│${companyName}_${brandPart}${rep}${extra}_${dateStr}`;
+  return `${companyName}_${brandPart}${rep}${extra}_${dateStr}`;
 }
 
 // ─── VERITAS 공통 문서번호 표시 형식 ─────────────────────────────────────────
@@ -226,14 +228,24 @@ function sanitizeFileName(name: string): string {
 }
 
 /**
+ * 내부 견적서명에서 레거시 브랜드 접두어('VERITAS│' · 'VERITAS_' · 'VERITAS |' 등)를 제거한다.
+ * 신규 견적서명은 접두어가 없으므로 그대로 반환. 고객 파일명 생성 시 중복 VERITAS 방지용(DB 미변경).
+ */
+function stripBrandPrefix(name: string): string {
+  return name.replace(/^VERITAS\s*[│|_]\s*/, '').trim();
+}
+
+/**
  * 견적서/거래명세서 PDF 다운로드·인쇄용 공통 파일명 생성.
  * 저장된 견적서명(quoteTitle)을 그대로 사용하되, OS 예약 문자만 안전 치환한다.
  * 화면·DB의 견적서명 자체는 변경하지 않는다.
  *
+ * 고객 전달 파일이므로 브랜드 식별을 위해 맨 앞에 'VERITAS_'를 붙인다(§3·§4). '견적서' 단어는 붙이지 않는다.
+ * 내부 견적서명은 VERITAS 접두어가 없으며, 레거시 접두어(VERITAS│/VERITAS_)는 제거 후 표준 VERITAS_로 통일한다.
  *  - 견적서:     buildDocFileName(title, { fallback: 'Q000004_견적서' })
- *      → 값 있으면 '[견적서명]', 비었으면 문서번호 기반 fallback
+ *      → 'VERITAS_[견적서명]', 비었으면 'VERITAS_[문서번호 fallback]'
  *  - 거래명세서: buildDocFileName(title, { suffix: '거래명세서', fallback: 'T000005_거래명세서' })
- *      → 값 있으면 '[견적서명]_거래명세서', 비었으면 fallback
+ *      → 'VERITAS_[견적서명]_거래명세서', 비었으면 'VERITAS_[fallback]'
  *
  * fallback 은 접미어(문서 종류)를 이미 포함하므로 suffix 를 덧붙이지 않는다.
  */
@@ -241,10 +253,10 @@ export function buildDocFileName(
   quoteTitle: string | null | undefined,
   opts: { suffix?: string; fallback: string },
 ): string {
-  const raw = (quoteTitle ?? '').trim();
-  if (!raw) return sanitizeFileName(opts.fallback);
-  const withSuffix = opts.suffix ? `${raw}_${opts.suffix}` : raw;
-  return sanitizeFileName(withSuffix);
+  const raw = stripBrandPrefix((quoteTitle ?? '').trim());   // 레거시 VERITAS 접두어 제거(중복 방지)
+  const core = raw || opts.fallback;
+  const withSuffix = raw && opts.suffix ? `${core}_${opts.suffix}` : core;
+  return sanitizeFileName(`VERITAS_${withSuffix}`);
 }
 
 /** 인쇄창 <title> 주입용 HTML 이스케이프 (파일명 표시에는 영향 없음) */

@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { formatDisplayDate, formatScheduleRange, formatLabelDates } from '../../lib/dateFormat';
-import { api } from '../../lib/constants';
+import { api, formatLanguageLabel } from '../../lib/constants';
 import { Card, GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
 import { Pagination } from '../ui/Paginator';
 import { useClientPagination } from './bulkListShared';
@@ -54,6 +54,9 @@ function groupTaxTreatmentLabel(g: { items?: any[]; payeeType?: string; treatmen
   const labels = new Set(items.map(taxTreatmentLabel));
   return labels.size === 1 ? [...labels][0] : null;
 }
+// Excel 표시 전용 — '세금계산서'만 '세금계산서(부가세별도)'로 명시(부가세 별도). 화면 UI·계산·VAT·enum·대상판정 불변.
+//   '영세율 세금계산서'·'계산서' 등 다른 라벨과 3.3%/2.2%/원천징수예외/세무확인 필요는 그대로 유지.
+const excelTaxLabel = (lbl: string | null): string | null => (lbl === '세금계산서' ? '세금계산서(부가세별도)' : lbl);
 
 // 지급대상별 요약 「공제」 헤더 세율 표시(§2) — 조회된 "개인" 지급대상의 원천세 처리(withholdingTreatment) 기준.
 //  · 데이터는 서버가 내려준 값 그대로 사용(계산·데이터 불변, §5). 확정/지급완료 회차는 payout_round_items 스냅샷 기준(§3).
@@ -428,44 +431,76 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
       numOf(g.count), numOf(g.translationCount), numOf(g.interpretationCount), numOf(g.equipmentEtcCount),
       Math.round(numOf(g.baseTotal)), Math.round(numOf(g.expenseTotal)), Math.round(numOf(g.deductionTotal)),
       Math.round(numOf(g.grossTotal)),
-      groupTaxTreatmentLabel(g) ?? '⚠ 혼재',
+      excelTaxLabel(groupTaxTreatmentLabel(g)) ?? '⚠ 혼재',
       Math.round(numOf(g.withholdingTotal)), Math.round(numOf(g.netTotal)),
     ]);
     downloadTableExcel({ filename: `지급대상별요약_${todayStamp()}.xlsx`, sheetName: '지급대상별요약', columns, rows });
   };
 
+  // 정규 부대비용 3종(독립 컬럼) — 나머지는 기타비용 합계/상세로(7차 수행정보 Export와 동일 원칙).
+  const DEDICATED_EXP = ['수가통역료', '출장비', '교통비'];
+  const expAmtOf = (exps: any[], type: string): number | '' => {
+    const e = (exps ?? []).find((x: any) => x.type === type);
+    return e ? Math.round(numOf(e.amount)) : '';
+  };
+  const etcExpenses = (exps: any[]) => (exps ?? []).filter((x: any) => !DEDICATED_EXP.includes(x.type));
+  const payStatusLabel = (s: string) => s === 'paid' ? '지급완료' : s === 'payment_hold' ? '지급보류' : '미지급';
+  // 수행식별값: 판매품목(saleItemId) 우선, 없으면 배정 id. 확정회차 스냅샷은 saleItemId 미보존 → A{id}.
+  const perfCode = (it: any) => it.saleItemId != null ? `S${it.saleItemId}` : `A${it.id}`;
+  const bankLabel = (v: unknown) => v === true ? '등록' : v === false ? '미등록' : '-';
+
   const exportItemsExcel = () => {
     if (itemRows.length === 0) { onToast('내보낼 데이터가 없습니다.'); return; }
-    // 화면 건별 상세내역 컬럼 순서 그대로(체크박스·조치 열은 데이터 아님 → 제외).
+    // 1 수행자 배정 = 1행. 금액은 서버 정산 SSOT값 그대로(재계산 없음). 100%/85%/기본지급액 분리(§4·§5).
+    //   확정회차(스냅샷)는 요금100/통역료85/언어/실제지급일/계좌등록상태가 스냅샷에 없어 blank/'-' 표시(§한계).
     const columns: ExcelColumn[] = [
-      { header: '지급대상' }, { header: '이메일' }, { header: '거래처' }, { header: '상품·업무' }, { header: '구분' },
-      { header: '수행일' }, { header: '납품일' }, { header: '지급일' }, { header: '작업량' },
-      { header: '단가', type: 'number' }, { header: '통번역료', type: 'number' },
-      { header: '기타비용 내역' }, { header: '차감' },
-      { header: '세전금액', type: 'number' }, { header: '세금처리' }, { header: '공제', type: 'number' }, { header: '실지급', type: 'number' },
-      { header: '지급회차' },
+      { header: '지급회차' }, { header: '견적번호' }, { header: '프로젝트명' }, { header: '거래처' },
+      { header: '수행식별값' }, { header: '상품명' }, { header: '서비스유형' }, { header: '언어' }, { header: '수행일' },
+      { header: '통번역사명' }, { header: '이메일' }, { header: '수행자구분' },
+      { header: '요금(100%)', type: 'number' }, { header: '통역료(85%)', type: 'number' }, { header: '기본지급액', type: 'number' },
+      { header: '추가통역료', type: 'number' }, { header: '출장비', type: 'number' }, { header: '교통비', type: 'number' },
+      { header: '기타비용 합계', type: 'number' }, { header: '기타비용 상세' },
+      { header: '차감액', type: 'number' }, { header: '차감사유' },
+      { header: '세전지급액', type: 'number' }, { header: '세금처리' }, { header: '원천세율' }, { header: '원천세액', type: 'number' }, { header: '세후지급액', type: 'number' },
+      { header: '지급예정일' }, { header: '실제지급일' }, { header: '지급상태' }, { header: '계좌등록상태' }, { header: '비고' },
     ];
-    const rows = itemRows.map((it) => [
-      it.payeeName,
-      it.payeeEmail || '-',
-      it.customerName || '-',
-      it.productName || `#${it.projectId}`,
-      svcLabel(it.serviceType),
-      perfDate(it),
-      formatDisplayDate(it.deliveryDate) || '-',
-      formatDisplayDate(it.expectedPaymentDate) || '-',
-      workAmount(it),
-      (it.isDirectAmount || it.contractUnitPrice == null) ? '-' : Math.round(numOf(it.contractUnitPrice)),
-      Math.round(numOf(it.basePerformanceFee)),
-      inlineItems(it.expenses),
-      inlineItems(it.deductions),
-      Math.round(numOf(it.gross)),
-      taxTreatmentLabel(it),
-      Math.round(numOf(it.withholdingTax)),
-      Math.round(numOf(it.netPayment)),
-      roundLabel(it) ?? '미배정',
-    ]);
-    downloadTableExcel({ filename: `건별상세내역_${todayStamp()}.xlsx`, sheetName: '건별상세내역', columns, rows });
+    const rows = itemRows.map((it) => {
+      const isInterp = it.serviceType === 'interpretation';
+      // 통역: 요금100=계약단가(참조), 통역료85=directAmount(×85% 지급base). 번역: 요금100=directAmount(isDirect). §5·§7차 동일.
+      const fee100 = isInterp
+        ? (it.contractUnitPrice != null ? Math.round(numOf(it.contractUnitPrice)) : '')
+        : (it.isDirectAmount && it.directAmount != null ? Math.round(numOf(it.directAmount)) : '');
+      const fee85 = isInterp && it.directAmount != null ? Math.round(numOf(it.directAmount)) : '';
+      const etc = etcExpenses(it.expenses);
+      const etcSum = etc.reduce((a: number, x: any) => a + numOf(x.amount), 0);
+      const etcDetail = etc.map((x: any) => `${x.type} ${Math.round(numOf(x.amount)).toLocaleString('ko-KR')}`).join(' | ');
+      const rate = numOf(it.rate);
+      return [
+        roundLabel(it) ?? '미배정',
+        it.quoteNumber || '-',
+        it.projectTitle || `#${it.projectId}`,
+        it.customerName || '-',
+        perfCode(it),
+        it.productName || '-',
+        svcLabel(it.serviceType),
+        formatLanguageLabel(it.languageOrService) || '-',
+        perfDate(it),
+        it.payeeName,
+        it.payeeEmail || '',   // 수행자 식별용 — 개인=통번역사 master / 외주=업체 이메일. 없으면 빈칸(임의 생성 안 함).
+        (it.payeeType || it.performerCategory) === 'individual' ? '통번역사' : '외주업체',
+        fee100, fee85, Math.round(numOf(it.basePerformanceFee)),
+        expAmtOf(it.expenses, '수가통역료'), expAmtOf(it.expenses, '출장비'), expAmtOf(it.expenses, '교통비'),
+        etcSum ? Math.round(etcSum) : '', etcDetail,
+        Math.round(numOf(it.deductionTotal)), inlineItems(it.deductions),
+        Math.round(numOf(it.gross)), excelTaxLabel(taxTreatmentLabel(it)), rate ? `${rate}%` : '-', Math.round(numOf(it.withholdingTax)), Math.round(numOf(it.netPayment)),
+        formatDisplayDate(it.expectedPaymentDate) || '-',
+        formatDisplayDate(it.actualPaymentDate) || '-',
+        payStatusLabel(it.paymentStatus),
+        bankLabel(it.bankRegistered),
+        it.remark || '-',
+      ];
+    });
+    downloadTableExcel({ filename: `정산상세내역_${todayStamp()}.xlsx`, sheetName: '정산상세내역', columns, rows });
   };
 
   return (

@@ -29,6 +29,7 @@ import {
 } from './performanceShared';
 import { DateField } from './DatePickerShared';
 import { exportPerformances, type PerformanceExportMeta } from '../../lib/performanceExcel';
+import { PerformanceBulkImportPage } from './PerformanceBulkImportPage';
 
 interface Props {
   projectId: number;
@@ -63,6 +64,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
     } catch { onToast('오류: Excel 다운로드 실패'); }
   };
   const [editMode, setEditMode] = useState(false);
+  const [showBulkImport, setShowBulkImport] = useState(false);   // 수행자 배정 대량등록(§7차)
   const [rows, setRows] = useState<Row[]>([]);
   const [deletedIds, setDeletedIds] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
@@ -907,6 +909,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
         ) : (
           <>
             <GhostBtn onClick={handleExportExcel} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-excel" aria-label="수행정보 Excel 다운로드">⬇ Excel 다운로드</GhostBtn>
+            <GhostBtn onClick={() => setShowBulkImport(true)} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-bulk-import" aria-label="수행자 배정 대량등록">⬆ 대량등록</GhostBtn>
             <GhostBtn onClick={enterEdit} style={{ fontSize: 12, padding: '6px 12px' }} data-testid="btn-perf-edit" aria-label="수행정보 수정">✏ 수행정보 수정</GhostBtn>
           </>
         )}
@@ -932,6 +935,20 @@ export default function PerformanceSection({ projectId, token, performances, onC
   );
 
   const popupRow = amountPopup != null ? rows[amountPopup] : (adjustPopup != null ? rows[adjustPopup] : null);
+
+  // ── 수행자 배정 대량등록(전체화면, §7차) — 완료 시 목록 새로고침 ──
+  if (showBulkImport) {
+    return (
+      <PerformanceBulkImportPage
+        projectId={projectId}
+        token={token}
+        meta={saleMeta}
+        onToast={onToast}
+        onClose={() => setShowBulkImport(false)}
+        onDone={() => { void onChanged(); }}
+      />
+    );
+  }
 
   return (
     <Card>

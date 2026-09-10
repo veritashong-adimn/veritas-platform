@@ -2338,7 +2338,7 @@ export function QuoteEditorWorkspace({
               {/* 입력창 + [자동생성] + [불러오기] — 입력창은 flex:1 로 폭 확보, 버튼은 우측 고정 */}
               <div style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
                 <input value={title} onChange={e => { setTitle(e.target.value); setTitleEdited(true); }}
-                  placeholder="예: VERITAS│삼성전자_영어↔한국어 동시통역_20260720" style={{ ...inpSt, flex: 1, minWidth: 0 }}
+                  placeholder="예: 삼성전자_영어↔한국어 동시통역_20260720" style={{ ...inpSt, flex: 1, minWidth: 0 }}
                   data-testid="input-quote-title" aria-label="견적서명" />
                 <DsButton variant="secondary" size="md" onClick={handleAutoTitle} data-testid="btn-title-auto" aria-label="견적서명 자동생성">자동생성</DsButton>
                 <div ref={titlePickerRef} style={{ position: 'relative', flexShrink: 0 }}>

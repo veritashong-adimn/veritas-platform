@@ -894,6 +894,26 @@ export const LANGUAGE_CODES: { code: string; label: string }[] = [
   { code: "custom",  label: "기타 직접입력" },
 ];
 
+// 언어코드 → 한글 언어명(사용자용 Excel 공통 표준). LANGUAGE_CODES SSOT 재사용 — 별도 매핑 테이블 만들지 않음.
+const LANG_CODE_TO_LABEL: Record<string, string> = Object.fromEntries(
+  LANGUAGE_CODES.map((l) => [l.code.toLowerCase(), l.label]),
+);
+/**
+ * 언어값을 사람이 읽을 수 있는 한글 언어명으로 변환한다.
+ *  · 단일 코드(ko → 한국어) 또는 코드쌍/혼합(en→ko, id · ja 등)을 토큰 단위로 변환.
+ *  · 하이픈은 코드 내부(zh-hans)에 쓰이므로 분리자로 취급하지 않는다.
+ *  · 미등록/알 수 없는 값은 임의로 추정하지 않고 원본 그대로 보존한다.
+ */
+export function formatLanguageLabel(raw: string | null | undefined): string {
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  const whole = LANG_CODE_TO_LABEL[s.toLowerCase()];
+  if (whole) return whole;                                   // 단일 코드(ko, zh-hans)
+  const parts = s.split(/([→↔⟷/,\s]+)/);                     // 구분자 유지하며 분리
+  if (parts.length === 1) return s;                          // 분리 불가 + 미등록 → 원본 보존
+  return parts.map((tok) => LANG_CODE_TO_LABEL[tok.trim().toLowerCase()] ?? tok).join("");
+}
+
 export const EQUIPMENT_QUANTITY_UNITS = ["개", "세트", "부스", "건"] as const;
 export const EQUIPMENT_USAGE_PERIODS = ["반일", "1일", "2일", "3일"] as const;
 export const INTERPRETATION_DIRECTIONS = ["양방향", "A→B", "B→A"] as const;

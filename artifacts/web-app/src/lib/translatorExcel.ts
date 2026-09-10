@@ -30,7 +30,6 @@ export interface TranslatorExportRow {
 
 // 다운로드 컬럼(§3 권장 순서). 민감정보·근거 없는 파생값은 빈 셀.
 const EXPORT_COLUMNS: ExcelColumn<TranslatorExportRow>[] = [
-  { header: '통번역사코드', value: () => '' },
   { header: '성명', value: 'name' },
   { header: '영문명', value: () => '' },              // 민감(translator_sensitive) — 제외
   { header: '활동상태', value: 'availabilityStatus' },

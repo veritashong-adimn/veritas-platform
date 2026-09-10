@@ -324,6 +324,66 @@ export const QUOTE_ITEM_SYNONYMS: Record<string, string[]> = {
   memo: ["비고", "메모", "특이사항"],
 };
 
+// ── 수행정보/통번역사 배정(7차) 대량등록 3개 시트 컬럼 동의어 ─────────────────
+// 프론트 템플릿 헤더(요금(100%)·통역료(85%) 등)와 정확 매칭되도록 normKey 기준으로 정의한다.
+// 민감정보(주민번호·계좌 등)는 절대 포함하지 않는다(§34).
+export const PERF_ASSIGN_SYNONYMS: Record<string, string[]> = {
+  rowSeq: ["수행순번", "순번", "행번호", "수행행키", "행키"],
+  saleItemCode: ["판매품목코드", "품목코드", "수행품목코드", "판매코드"],
+  saleSeq: ["판매품목순번", "품목순번", "판매순번"],
+  productName: ["상품명", "품목명", "제품명", "서비스명"],
+  serviceType: ["서비스유형", "서비스종류", "세부유형", "업무유형"],
+  startDate: ["수행시작일", "시작일", "행사시작일", "수행일"],
+  endDate: ["수행종료일", "종료일", "행사종료일"],
+  deliveryDate: ["납품일", "납기일", "완료일"],
+  startTime: ["시작시간"],
+  endTime: ["종료시간"],
+  place: ["수행장소", "장소", "행사장소"],
+  translatorCode: ["통번역사코드", "통역사코드", "번역사코드", "통번역사id", "수행자코드"],
+  translatorName: ["통번역사명", "통역사명", "번역사명", "수행자명", "성명", "이름"],
+  email: ["이메일", "이메일주소", "email", "e-mail", "전자우편", "메일"],
+  phone: ["휴대폰", "휴대전화", "휴대폰번호", "핸드폰", "연락처", "hp", "mobile"],
+  language: ["언어", "언어쌍", "언어페어", "가능언어"],
+  role: ["역할", "수행역할"],
+  assignStatus: ["배정상태", "상태"],
+  fee100: ["요금(100%)", "요금100", "요금100%", "요금", "협의금액"],
+  fee85: ["통역료(85%)", "통역료85", "통역료85%", "통역료", "기준금액"],
+  quantity: ["수량", "일수", "진행일수", "qty"],
+  unit: ["단위"],
+  contractUnitPrice: ["계약단가", "단가", "unitprice"],
+  addInterpFee: ["추가통역료", "수가통역료", "추가통역"],
+  businessTripFee: ["출장비"],
+  transportFee: ["교통비"],
+  etcCost: ["기타비용", "기타"],
+  // 단일시트 기타비용 3쌍(§4) — 항목명 + 금액. 항목은 자유입력(알려진 유형 정규화, §5·§7).
+  etc1Type: ["기타비용1항목", "기타비용1", "기타1항목", "기타1"],
+  etc1Amount: ["기타비용1금액", "기타1금액"],
+  etc2Type: ["기타비용2항목", "기타비용2", "기타2항목", "기타2"],
+  etc2Amount: ["기타비용2금액", "기타2금액"],
+  etc3Type: ["기타비용3항목", "기타비용3", "기타3항목", "기타3"],
+  etc3Amount: ["기타비용3금액", "기타3금액"],
+  deductionAmount: ["차감액", "차감금액", "차감"],
+  deductionReason: ["차감사유", "차감이유"],
+  taxTreatment: ["세금처리", "원천징수", "세무처리", "세금"],
+  payDate: ["지급예정일", "지급일"],
+  remark: ["비고", "메모", "특이사항"],
+};
+export const PERF_COST_SYNONYMS: Record<string, string[]> = {
+  rowSeq: ["수행순번", "수행행키", "행키", "순번", "행번호"],
+  expenseType: ["비용유형", "비용종류", "항목", "비용항목"],
+  baseAmount: ["기준금액", "원단가", "협의전금액"],
+  payoutRate: ["지급률", "지급비율", "요율"],
+  amount: ["금액", "지급액", "실지급액"],
+  includedInPayout: ["지급대상여부", "지급대상", "포함여부"],
+  memo: ["비고", "메모", "특이사항"],
+};
+export const PERF_DEDUCT_SYNONYMS: Record<string, string[]> = {
+  rowSeq: ["수행순번", "수행행키", "행키", "순번", "행번호"],
+  deductionType: ["차감유형", "차감종류", "차감항목"],
+  amount: ["차감액", "차감금액", "금액"],
+  reason: ["차감사유", "사유", "차감이유", "비고"],
+};
+
 /** aoa 상위 20행에서 헤더 행을 자동 탐지(알려진 동의어가 2개 이상인 행). 실패 시 0행 헤더 폴백. */
 export function detectHeaderInAoa(aoa: unknown[][], synonyms: Record<string, string[]>): { headerRowIndex: number; headers: string[]; dataRows: unknown[][] } {
   const allSynNorm = new Set(Object.values(synonyms).flat().map(normKey));

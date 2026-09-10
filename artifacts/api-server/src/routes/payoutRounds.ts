@@ -100,6 +100,16 @@ function selectItems(whereClause: any) {
       unit: performanceAssignmentsTable.unit,
       contractUnitPrice: performanceAssignmentsTable.contractUnitPrice,
       isDirectAmount: performanceAssignmentsTable.isDirectAmount,
+      // 정산 Excel 표시 전용(§8차) — 계산 로직·SSOT 불변. 조회 필드만 추가.
+      directAmount: performanceAssignmentsTable.directAmount,                     // 요금(100%)/통역료(85%) 분리 표시
+      saleItemId: performanceAssignmentsTable.saleItemId,                         // 수행식별값
+      languageOrService: performanceAssignmentsTable.languageOrServiceSnapshot,   // 언어
+      actualPaymentDate: performanceAssignmentsTable.actualPaymentDate,           // 실제지급일
+      // 계좌등록상태 — 계좌 존재 여부 boolean만(계좌번호·민감정보 미노출 §13). 개인=translator_sensitive / 외주=company_sensitive.
+      bankRegistered: sql<boolean>`(
+        EXISTS(SELECT 1 FROM translator_sensitive ts WHERE ts.translator_id = ${performanceAssignmentsTable.individualUserId} AND (ts.bank_account_enc IS NOT NULL OR ts.bank_account IS NOT NULL))
+        OR EXISTS(SELECT 1 FROM company_sensitive cs WHERE cs.company_id = ${performanceAssignmentsTable.vendorCompanyId} AND cs.bank_account_enc IS NOT NULL)
+      )`,
       // 작업량 표시용 유형별 상세(단어/글자수·통역 인원 등). 기존 수행정보 UI와 동일 원본을 재사용(§2·§7).
       //  · 번역/감수 작업량 = wordCount||charCount(페이지수 미사용), 통역 = 일수×interpreterCount명.
       //  · saleUnitPrice 등 판매값은 사용하지 않는다(단가는 contractUnitPrice 원가단가, §5).

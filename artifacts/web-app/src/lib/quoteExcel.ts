@@ -15,7 +15,7 @@ import XLSX from 'xlsx-js-style';
 import { getPolicy } from './languagePagePolicy';
 import { displayUnit, calcInterpretation } from './quotePdf';
 import { formatScheduleRange } from './dateFormat';
-import type { Product } from './constants';
+import { formatLanguageLabel, type Product } from './constants';
 
 // ─── 타입 ─────────────────────────────────────────────────────────────────────
 
@@ -360,7 +360,7 @@ const QUOTE_ITEM_COLUMNS: ExcelColumn<QuoteItemRow>[] = [
   { header: '견적서명', value: 'title' },
   { header: '서비스대분류', value: (r) => ITEM_TYPE_LABEL[r.itemType ?? ''] ?? r.itemType ?? '' },
   { header: '상품명', value: 'productName' },
-  { header: '언어', value: 'languagePair' },
+  { header: '언어', value: (r) => formatLanguageLabel(r.languagePair) },
   { header: '수행시작일', value: (r) => r.interpretDate || r.eventStartDate || '', type: 'date' },
   { header: '수행종료일', value: (r) => r.eventEndDate || '', type: 'date' },
   { header: '장소', value: 'interpretPlace' },
