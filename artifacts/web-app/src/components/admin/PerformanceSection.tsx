@@ -213,11 +213,6 @@ export default function PerformanceSection({ projectId, token, performances, onC
     { value: '시간', label: '시간' },
     { value: '일', label: '일' },
   ];
-  // 통역 부대비용 전용 컬럼(추가통역료·출장비·교통비) — expenses[]의 특정 항목에 바인딩(원가 SSOT = expenseTotal 유지).
-  const expAmtOf = (r: Row, type: string): string | number => {
-    const e = (r.expenses ?? []).find(x => x.expenseType === type);
-    return e && e.amount != null ? e.amount : '';
-  };
   // 특정 expenseType 금액 upsert/삭제 — 다른 expenses·deductions는 보존. 공란이면 해당 항목 제거.
   const setExpAmt = (i: number, r: Row, type: string, v: string) => {
     const list: ExpenseRow[] = [...(r.expenses ?? [])];
@@ -588,10 +583,11 @@ export default function PerformanceSection({ projectId, token, performances, onC
       style={{ fontSize: 9, fontWeight: 700, lineHeight: 1.4, padding: '0 4px', borderRadius: 4, flexShrink: 0,
         background: rate === 100 ? C.g100 : '#fef3c7', color: rate === 100 ? C.g400 : '#b45309' }}>{rate}%</span>
   );
-  // 비용 셀(§비용지급률·§9·§1) — 실제 지급액(amount) + 지급률 배지. 편집: 클릭 시 지급률 팝업. 조회: 텍스트+배지.
+  // 비용 셀(§비용지급률·§9·§1) — 기준금액(baseAmount) + 지급률 배지 표시. 실제 세전 반영액은 amount(=base×rate)로 별도 계산(§6).
+  //   과거 데이터 등 baseAmount 없으면 amount로 fallback(expenseBase). 편집: 클릭 시 지급률 팝업. 조회: 텍스트+배지.
   const costCell = (r: Row, i: number, type: string, label: string, editable: boolean) => {
     const e = (r.expenses ?? []).find(x => x.expenseType === type);
-    const amt = expAmtOf(r, type);   // 실제 지급액
+    const amt = e ? expenseBase(e) : '';   // 기준금액(원금) — baseAmount ?? amount
     const has = amt !== '' && amt != null;
     const rate = displayPayoutRate(type, e);
     const shown = has
@@ -761,7 +757,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
         <td style={tdR}>{isInterp ? costCell(r, i, INTERP_TRANSPORT_TYPE, '교통비', editable) : muted}</td>
         {/* ⑬ 동적 기타비용 컬럼(§3·§5) — 각 컬럼 = expenses[]의 특정 expenseType. 개인은 지급률 팝업(실제 지급액 표시), 그 외 읽기전용. */}
         {etcCols.map(type => {
-          const amt = expAmtOf(r, type);
+          const etc = (r.expenses ?? []).find(x => x.expenseType === type);
+          const amt = etc ? expenseBase(etc) : '';   // 읽기전용 표시도 기준금액(원금) 기준(§9)
           return (
             <td key={`etc-c-${type}-${i}`} style={tdR}>
               {isIndiv

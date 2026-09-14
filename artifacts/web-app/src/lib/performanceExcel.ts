@@ -11,7 +11,7 @@
 import { exportWorkbook, todayStamp, type ExcelColumn } from './excelExport';
 import { formatLanguageLabel } from './constants';
 import {
-  type Row, num, round2, etcColLabel,
+  type Row, num, round2, etcColLabel, expenseBase, displayPayoutRate,
   INTERP_ADD_FEE_TYPE, INTERP_BIZTRIP_TYPE, INTERP_TRANSPORT_TYPE, INTERP_DEDICATED_EXPENSE_TYPES,
   withholdingRatePct, afterTaxPayout, effectiveTreatment, TREATMENT_OPTS,
 } from '../components/admin/performanceShared';
@@ -46,10 +46,11 @@ const snapOf = (r: Row): any => (r.serviceDetailSnapshot && typeof r.serviceDeta
 const perfKey = (r: Row) => (r.saleItemId != null ? `S${r.saleItemId}` : (r.id != null ? `A${r.id}` : ''));
 const hasPerformer = (r: Row) => r.individualUserId != null || r.vendorCompanyId != null;
 const numOrBlank = (v: unknown): number | '' => (v == null || v === '' ? '' : num(v));
-// 특정 기타비용 항목의 저장된 실지급액(자동 재계산 없이 저장값 그대로, §13).
+// 특정 추가비용 항목의 기준금액(원금) — 화면과 동일 의미(§9). baseAmount 우선, 없으면 amount fallback(과거 데이터).
+//   실제 세전 반영액(amount=base×rate)은 costTotal 기반 세전/원천세/세후 컬럼이 SSOT로 별도 출력.
 const expAmt = (r: Row, type: string): number | '' => {
   const e = (r.expenses ?? []).find((x: any) => x.expenseType === type);
-  return e ? num(e.amount) : '';
+  return e ? expenseBase(e) : '';
 };
 // operationHours("10:00~14:00") → [시작, 종료]. 실제 저장값에서만 도출(임의 생성 금지 §4·§16).
 const splitTime = (oh: unknown): [string, string] => {
@@ -73,10 +74,14 @@ function buildRows(rows: Row[], meta: PerformanceExportMeta) {
       const fee100 = isInterp(r) ? numOrBlank(r.contractUnitPrice) : (r.isDirectAmount ? numOrBlank(r.directAmount) : '');
       const fee85 = isInterp(r) ? numOrBlank(r.directAmount) : '';
 
-      // 기타비용 — 정규 3종(추가통역료·출장비·교통비) 제외 항목. 합계(지급대상) + 상세(항목명·금액 보존, §8).
+      // 기타비용 — 정규 3종(추가통역료·출장비·교통비) 제외 항목. 화면과 동일하게 기준금액(원금) 기준 표기(§9).
+      //   합계·상세 모두 baseAmount(없으면 amount) 기준. 상세에 지급률 병기(예: '숙박비 100,000 (85%)').
       const etcItems = (r.expenses ?? []).filter((e: any) => !INTERP_DEDICATED_EXPENSE_TYPES.includes(e.expenseType));
-      const etcSum = round2(etcItems.filter((e: any) => e.includedInPayout !== false).reduce((a: number, e: any) => a + num(e.amount), 0));
-      const etcDetail = etcItems.map((e: any) => `${etcColLabel(e.expenseType)} ${num(e.amount).toLocaleString('ko-KR')}`).join(' | ');
+      const etcSum = round2(etcItems.filter((e: any) => e.includedInPayout !== false).reduce((a: number, e: any) => a + expenseBase(e), 0));
+      const etcDetail = etcItems.map((e: any) => {
+        const rate = displayPayoutRate(e.expenseType, e);
+        return `${etcColLabel(e.expenseType)} ${expenseBase(e).toLocaleString('ko-KR')}${rate !== 100 ? ` (${rate}%)` : ''}`;
+      }).join(' | ');
 
       // 차감 — 저장값 합계 + 사유별 보존(§11). 복수 차감이면 유형·금액 나열.
       const dedDetail = (r.deductions ?? []).map((d: any) =>
