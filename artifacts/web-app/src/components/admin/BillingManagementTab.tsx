@@ -4,6 +4,7 @@ import { formatWon } from "@/lib/utils";
 import { api } from '../../lib/constants';
 import { Card, GhostBtn } from '../ui';
 import './readTableView.css';
+import { exportAccumulatedBilling } from '../../lib/accumulatedBillingExcel';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -34,7 +35,7 @@ type BillingBatch = {
   itemCount: number; createdAt: string;
   // 1차 연결: 판매전환된 누적견적 '가상 누적청구 행' 식별(실제 billing_batch 아님)
   sourceType?: "billing_batch" | "accumulated_quote";
-  key?: string; quoteNumber?: string | null; batchClosedAt?: string | null; projectId?: number | null;
+  key?: string; quoteNumber?: string | null; projectName?: string | null; batchClosedAt?: string | null; projectId?: number | null;
 };
 
 const STATUS_COLOR: Record<string, { bg: string; color: string; label: string }> = {
@@ -95,7 +96,19 @@ export function BillingManagementTab({ token, onToast, onNavigateToProjects }: P
             {f.label}
           </button>
         ))}
-        <GhostBtn onClick={fetchBillingBatches} style={{ padding: "6px 14px", fontSize: 12, marginLeft: "auto" }}>새로고침</GhostBtn>
+        <GhostBtn
+          onClick={() => {
+            if (billingBatches.length === 0) { onToast("다운로드할 누적 청구 내역이 없습니다."); return; }
+            exportAccumulatedBilling(billingBatches);
+            onToast(`${billingBatches.length.toLocaleString()}건을 Excel로 내보냈습니다.`);
+          }}
+          style={{ padding: "6px 14px", fontSize: 12, marginLeft: "auto" }}
+          data-testid="billing-excel-export-btn"
+          aria-label="누적 청구 Excel 다운로드"
+        >
+          Excel 다운로드
+        </GhostBtn>
+        <GhostBtn onClick={fetchBillingBatches} style={{ padding: "6px 14px", fontSize: 12 }}>새로고침</GhostBtn>
       </div>
 
       {billingBatchesLoading ? (

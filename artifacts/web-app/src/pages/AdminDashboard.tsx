@@ -59,6 +59,7 @@ import { CollectionsTab } from '../components/admin/CollectionsTab';
 import { StaffManagementTab } from '../components/admin/StaffManagementTab';
 import { exportContacts } from '../lib/contactExcel';
 import { exportTranslators } from '../lib/translatorExcel';
+import { exportPrepaidAccounts } from '../lib/prepaidExcel';
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
@@ -2801,6 +2802,19 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         <Section title="선입금 계정 원장"
           action={
             <div style={{ display: "flex", gap: 8 }}>
+              <GhostBtn
+                onClick={() => {
+                  const rows = prepaidAccounts.filter(a => !prepaidCompanyFilter || a.companyName.toLowerCase().includes(prepaidCompanyFilter.toLowerCase()));
+                  if (rows.length === 0) { setToast("다운로드할 선입금 계정이 없습니다."); return; }
+                  exportPrepaidAccounts(rows);
+                  setToast(`${rows.length.toLocaleString()}건을 Excel로 내보냈습니다.`);
+                }}
+                style={{ fontSize: 12, padding: "6px 14px" }}
+                data-testid="prepaid-excel-export-btn"
+                aria-label="선입금 관리 Excel 다운로드"
+              >
+                Excel 다운로드
+              </GhostBtn>
               <GhostBtn onClick={fetchPrepaidAccounts} style={{ fontSize: 12, padding: "6px 14px" }}>새로고침</GhostBtn>
               <PrimaryBtn onClick={() => setShowCreatePrepaidForm(true)} style={{ fontSize: 12, padding: "6px 14px" }}>
                 + 선입금 계정 등록

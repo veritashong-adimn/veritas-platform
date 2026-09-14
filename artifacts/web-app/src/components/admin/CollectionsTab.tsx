@@ -7,9 +7,11 @@
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { formatWon } from "@/lib/utils";
 import { api } from '../../lib/constants';
-import { Card, FilterPill } from '../ui';
+import { Card, FilterPill, GhostBtn } from '../ui';
 import './readTableView.css';
 import { formatDisplayDate } from '../../lib/dateFormat';
+import { exportCollections } from '../../lib/collectionsExcel';
+import { displayPaymentMethod } from '../../lib/paymentMethodDisplay';
 
 type CollectionRow = {
   id: number;
@@ -138,6 +140,18 @@ export function CollectionsTab({ token, onToast, onOpenSalesDetail }: Props) {
     <div style={{ marginBottom: 32 }} data-testid="collections-tab">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#111827" }}>수금 현황 ({filtered.length})</h2>
+        <GhostBtn
+          onClick={() => {
+            if (filtered.length === 0) { onToast?.("다운로드할 수금 내역이 없습니다."); return; }
+            exportCollections(filtered);
+            onToast?.(`${filtered.length.toLocaleString()}건을 Excel로 내보냈습니다.`);
+          }}
+          style={{ fontSize: 12, padding: "6px 14px" }}
+          data-testid="collections-excel-export-btn"
+          aria-label="수금 현황 Excel 다운로드"
+        >
+          Excel 다운로드
+        </GhostBtn>
       </div>
       <p style={{ margin: "0 0 12px", fontSize: 12, color: "#6b7280" }}>
         판매상세 &gt; 청구정보에서 입력된 청구/입금 데이터를 회사 전체 기준으로 조회합니다. (선입금·차감 견적 제외 · 조회 전용)
@@ -218,7 +232,7 @@ export function CollectionsTab({ token, onToast, onOpenSalesDetail }: Props) {
                       </td>
                       <td style={{ ...td, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.projectTitle ?? "(제목 없음)"}</td>
                       <td style={{ ...td, whiteSpace: "nowrap" }}>{r.billingCompanyName ?? "-"}</td>
-                      <td style={{ ...td, whiteSpace: "nowrap" }}>{r.paymentMethod ?? "-"}</td>
+                      <td style={{ ...td, whiteSpace: "nowrap" }}>{displayPaymentMethod(r.paymentMethod) || "-"}</td>
                       <td style={{ ...td, whiteSpace: "nowrap", color: "#6b7280" }}>{fmtDate(r.issueDate)}</td>
                       <td style={{ ...td, whiteSpace: "nowrap", color: r.overdue ? "#dc2626" : "#6b7280", fontWeight: r.overdue ? 700 : 400 }}>
                         {fmtDate(r.expectedDate)}{r.overdue ? " ⚠" : ""}

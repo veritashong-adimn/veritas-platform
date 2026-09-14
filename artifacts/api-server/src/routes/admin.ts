@@ -2323,25 +2323,39 @@ router.get("/admin/billing-batches", ...adminGuard, async (req, res) => {
       itemCountMap = new Map(countRows.map(r => [r.batchId, r.count]));
     }
 
+    // 9차: 실 batch 행에도 누적견적번호/프로젝트명 표시(Excel §9). 견적↔프로젝트 lookup 만 추가하며
+    //  응답 shape 은 기존 필드 유지 + projectName 신규 필드 추가(기존 소비자 무영향).
     const quoteIds = result.map(b => b.quoteId).filter(Boolean) as number[];
-    let quoteStatusMap = new Map<number, string>();
+    let quoteInfoMap = new Map<number, { status: string; quoteNumber: string | null; projectId: number | null }>();
     if (quoteIds.length > 0) {
-      const qRows = await db.select({ id: quotesTable.id, status: quotesTable.status })
+      const qRows = await db.select({ id: quotesTable.id, status: quotesTable.status, quoteNumber: quotesTable.quoteNumber, projectId: quotesTable.projectId })
         .from(quotesTable).where(inArray(quotesTable.id, quoteIds));
-      quoteStatusMap = new Map(qRows.map(q => [q.id, q.status]));
+      quoteInfoMap = new Map(qRows.map(q => [q.id, { status: q.status, quoteNumber: q.quoteNumber, projectId: q.projectId }]));
+    }
+    const realProjectIds = [...quoteInfoMap.values()].map(q => q.projectId).filter(Boolean) as number[];
+    let projectTitleMap = new Map<number, string>();
+    if (realProjectIds.length > 0) {
+      const pRows = await db.select({ id: projectsTable.id, title: projectsTable.title })
+        .from(projectsTable).where(inArray(projectsTable.id, realProjectIds));
+      projectTitleMap = new Map(pRows.map(p => [p.id, p.title]));
     }
 
-    const realRows = result.map(b => ({
-      sourceType: "billing_batch" as const,
-      key: `billing-batch-${b.id}`,
-      ...b,
-      quoteNumber: null as string | null,
-      batchClosedAt: null as string | null,
-      projectId: null as number | null,
-      totalAmount: Number(b.totalAmount),
-      itemCount: itemCountMap.get(b.id) ?? 0,
-      quoteStatus: b.quoteId ? (quoteStatusMap.get(b.quoteId) ?? null) : null,
-    }));
+    const realRows = result.map(b => {
+      const qInfo = b.quoteId ? quoteInfoMap.get(b.quoteId) ?? null : null;
+      const projId = qInfo?.projectId ?? null;
+      return {
+        sourceType: "billing_batch" as const,
+        key: `billing-batch-${b.id}`,
+        ...b,
+        quoteNumber: qInfo?.quoteNumber ?? null as string | null,
+        projectName: projId ? (projectTitleMap.get(projId) ?? null) : null,
+        batchClosedAt: null as string | null,
+        projectId: projId,
+        totalAmount: Number(b.totalAmount),
+        itemCount: itemCountMap.get(b.id) ?? 0,
+        quoteStatus: qInfo?.status ?? null,
+      };
+    });
 
     // ── 1차 연결: 판매전환된 누적견적(accumulated_batch) '가상 누적청구 행' 병합 ─────────
     //  · billing_batches 레코드를 만들지 않고, quote↔project 를 그대로 읽어 표시만 한다(SSOT=quote.price).
@@ -2369,6 +2383,7 @@ router.get("/admin/billing-batches", ...adminGuard, async (req, res) => {
         batchItemCount: quotesTable.batchItemCount,
         batchClosedAt: quotesTable.batchClosedAt,
         projectId: quotesTable.projectId,
+        projectName: projectsTable.title,
         companyId: projectsTable.companyId,
         companyName: companiesTable.name,
         createdAt: quotesTable.createdAt,
@@ -2388,6 +2403,7 @@ router.get("/admin/billing-batches", ...adminGuard, async (req, res) => {
         periodEnd: null as string | null,
         status: v.batchClosedAt ? "closed" : "accumulating",   // 누적중(NULL) / 마감완료
         quoteNumber: v.quoteNumber,
+        projectName: v.projectName ?? null,
         batchClosedAt: v.batchClosedAt,
         projectId: v.projectId,
         totalAmount: Number(v.price),                          // SSOT: 견적 최신 금액
