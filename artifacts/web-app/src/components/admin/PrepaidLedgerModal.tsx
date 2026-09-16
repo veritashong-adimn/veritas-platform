@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { formatDisplayDate } from '../../lib/dateFormat';
 import './readTableView.css';
 import { api } from "../../lib/constants";
-import { PrimaryBtn, GhostBtn, NumericInput } from "../ui";
+import { PrimaryBtn, GhostBtn, NumericInput, confirmDialog } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 import { DateField } from "./DatePickerShared";
 
@@ -97,7 +97,7 @@ export function PrepaidLedgerModal({ accountId, authHeaders, onClose, onUpdate }
   };
 
   const handleDeleteEntry = async (entryId: number) => {
-    if (!confirm("이 항목을 삭제하면 잔액이 자동 재계산됩니다. 계속하시겠습니까?")) return;
+    if (!(await confirmDialog({ title: "원장 항목 삭제", message: "이 항목을 삭제하면 잔액이 자동 재계산됩니다. 계속하시겠습니까?", confirmLabel: "삭제", variant: "danger" }))) return;
     setDeleteId(entryId);
     try {
       const res = await fetch(api(`/api/admin/prepaid-ledger/${entryId}`), {

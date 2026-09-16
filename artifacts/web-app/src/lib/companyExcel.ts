@@ -35,7 +35,7 @@ function classifyLabel(row: CompanyExportRow): string {
   if (row.companyType === 'vendor') return '외주업체';
   switch ((row.customerType ?? 'CORPORATE').toUpperCase()) {
     case 'PUBLIC': return '공공기관';
-    case 'INDIVIDUAL': return '개인';
+    case 'INDIVIDUAL': return '개인고객';
     default: return '기업';
   }
 }

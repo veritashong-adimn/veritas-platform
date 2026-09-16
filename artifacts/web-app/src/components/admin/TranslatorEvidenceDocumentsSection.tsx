@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "../../lib/constants";
+import { confirmDialog } from "../ui";
 import { DocumentPreviewModal } from "./DocumentPreviewModal";
 import { DocumentAnalyzePanel } from "./DocumentAnalyzePanel";
 
@@ -136,7 +137,7 @@ export function TranslatorEvidenceDocumentsSection({
 
     // detail 모드: API 업로드
     if (!translatorId) return;
-    if (exists && !window.confirm(`기존 ${label}을 새 파일로 교체하시겠습니까?`)) return;
+    if (exists && !(await confirmDialog({ title: "파일 교체", message: `기존 ${label}을 새 파일로 교체하시겠습니까?`, confirmLabel: "교체", variant: "warning" }))) return;
     setUploading(true);
     try {
       const fd = new FormData();
@@ -175,7 +176,7 @@ export function TranslatorEvidenceDocumentsSection({
       return;
     }
     if (!translatorId) return;
-    if (!window.confirm(`${label}을 삭제하시겠습니까?`)) return;
+    if (!(await confirmDialog({ title: "파일 삭제", message: `${label}을 삭제하시겠습니까?`, confirmLabel: "삭제", variant: "danger" }))) return;
     setDeleting(true);
     try {
       const r = await fetch(

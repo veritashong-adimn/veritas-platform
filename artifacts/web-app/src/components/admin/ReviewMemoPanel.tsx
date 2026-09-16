@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { confirmDialog } from "../ui";
 
 interface ReviewMemoPanelProps {
   storageKey: string;
@@ -29,8 +30,8 @@ export function ReviewMemoPanel({ storageKey, label = "검수 메모" }: ReviewM
     setTimeout(() => setSaved(false), 1500);
   };
 
-  const handleClear = () => {
-    if (!confirm("검수 메모를 삭제하시겠습니까?")) return;
+  const handleClear = async () => {
+    if (!(await confirmDialog({ title: "검수 메모 삭제", message: "검수 메모를 삭제하시겠습니까?", confirmLabel: "삭제", variant: "danger" }))) return;
     localStorage.removeItem(lsKey);
     setText("");
   };

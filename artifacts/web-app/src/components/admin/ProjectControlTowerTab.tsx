@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import './readTableView.css';
 import { formatWon } from "@/lib/utils";
 import { api, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE } from "../../lib/constants";
-import { StatusBadge } from "../ui";
+import { StatusBadge, confirmDialog } from "../ui";
 import { formatDisplayDate } from "../../lib/dateFormat";
 
 // ── 타입 ─────────────────────────────────────────────────────────────────────
@@ -164,7 +164,7 @@ export function ProjectControlTowerTab({
 
   // ── 지급 처리 ──────────────────────────────────────────────────────────────
   const handlePay = async (settlementId: number) => {
-    if (!confirm("이 정산건을 지급 완료 처리하시겠습니까?")) return;
+    if (!(await confirmDialog({ title: "지급 완료 처리", message: "이 정산건을 지급 완료 처리하시겠습니까?", confirmLabel: "지급완료", variant: "danger" }))) return;
     setPayingId(settlementId);
     try {
       const res = await fetch(api(`/api/admin/settlements/${settlementId}/pay`), {

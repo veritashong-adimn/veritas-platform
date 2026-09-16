@@ -95,7 +95,10 @@ export const COMPANY_COLUMN_SYNONYMS: Record<string, string[]> = {
   businessCategory: ["종목", "종목명", "업종", "업종명"],
   address: ["사업장주소", "주소", "사업자주소", "소재지", "사업장소재지"],
   // 대량등록 템플릿 추가 컬럼(모두 companies 기존 컬럼에만 매핑 — 스키마 무변경)
-  customerType: ["거래처구분", "고객구분", "고객분류", "거래처유형", "구분"],
+  // "구분"(단독)은 제외한다: 홈택스에는 과세구분·매입매출구분·사업자구분 등 "…구분" 컬럼이 흔하고,
+  // 부분포함 매칭 시 이들이 VERITAS 거래처구분(기업/공공기관/개인)으로 오매핑되어 정상 사업자가
+  // "거래처구분 허용값 오류"로 처리되던 원인이었다. 명시적 라벨만 인식한다(홈택스엔 이 개념 자체가 없음).
+  customerType: ["거래처구분", "고객구분", "고객분류", "거래처유형"],
   phone: ["대표전화", "전화", "전화번호", "회사전화", "대표번호"],
   email: ["대표이메일", "이메일", "이메일주소", "email", "e-mail", "전자우편", "메일"],
   website: ["홈페이지", "웹사이트", "website", "url", "홈페이지주소"],
@@ -254,7 +257,10 @@ export function buildColumnMap(headers: string[], synonyms: Record<string, strin
     let found = -1;
     for (const cand of synonyms[field]) {
       const ck = normKey(cand);
-      const idx = normHeaders.findIndex((h, i) => !used.has(i) && !!h && (h.includes(ck) || ck.includes(h)));
+      // 부분 포함 매칭. 단, "동의어가 헤더를 포함"하는 방향(ck.includes(h))은 헤더가 3자 이상일 때만
+      // 허용한다. 그렇지 않으면 "구분"(2자) 같은 초단축 헤더가 "거래처구분"/"고객구분" 같은 긴 동의어에
+      // 잘못 매칭되어(예: 홈택스 과세구분 성격의 "구분" 컬럼 → VERITAS 거래처구분) 오매핑을 유발한다.
+      const idx = normHeaders.findIndex((h, i) => !used.has(i) && !!h && (h.includes(ck) || (h.length >= 3 && ck.includes(h))));
       if (idx >= 0) { found = idx; break; }
     }
     map[field] = found;

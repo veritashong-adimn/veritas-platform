@@ -1,5 +1,5 @@
 import {
-  pgTable, serial, integer, numeric, text, timestamp, boolean, date,
+  pgTable, serial, integer, numeric, text, timestamp, boolean, date, index, type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -75,8 +75,17 @@ export const quoteItemsTable = pgTable("quote_items", {
   discountValue: numeric("discount_value", { precision: 14, scale: 2 }),  // 입력값(금액 또는 %)
   discountReason: text("discount_reason"),                     // 내부 사유(PDF 미출력)
 
+  // ── 서비스 그룹 (본 서비스 ↔ 부대 판매항목 명시적 연결) ──────────────────────
+  //  · NULL = 본 서비스 항목(또는 프로젝트 공통비용). 값 존재 = 그 값(같은 quote의 본 서비스 quote_items.id)에 종속된 부대항목(출장비/교통비/기타비용 등).
+  //  · 그룹 루트 = COALESCE(parent_item_id, id). 1-depth 만 허용(부대항목을 또 부모로 삼지 않음). 같은 quote 내 연결만 유효(API 검증).
+  //  · 레거시/기존 데이터는 NULL 유지(자동 backfill 금지). 수익률 계산에서 groupSaleSupplyAmount 산출에만 사용 — 정산·금액 계산 불변.
+  //  · ON DELETE SET NULL: 부모 삭제 시 자식은 고아 대신 NULL(공통비용으로 강등) — DB 안전망. 편집 버퍼에서는 함께 제거 권장.
+  parentItemId: integer("parent_item_id").references((): AnyPgColumn => quoteItemsTable.id, { onDelete: "set null" }),
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (t) => ({
+  idxQuoteParent: index("idx_quote_items_quote_parent").on(t.quoteId, t.parentItemId),
+}));
 
 export const insertQuoteItemSchema = createInsertSchema(quoteItemsTable).omit({
   id: true,

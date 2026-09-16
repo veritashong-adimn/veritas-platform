@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import './readTableView.css';
 import { api } from '../../lib/constants';
-import { Card, PrimaryBtn, GhostBtn, ClickSelect } from '../ui';
+import { Card, PrimaryBtn, GhostBtn, ClickSelect, confirmDialog } from '../ui';
 
 function Section({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
   return (
@@ -352,7 +352,7 @@ export function DataLayerTab({ token, setToast }: { token: string; setToast: (ms
                   {tuDetailData.status !== "excluded" && (
                     <button disabled={tuActionLoading}
                       onClick={async () => {
-                        if (!confirm("이 유닛을 제외 처리하시겠습니까?")) return;
+                        if (!(await confirmDialog({ title: "유닛 제외", message: "이 유닛을 제외 처리하시겠습니까?", confirmLabel: "제외", variant: "warning" }))) return;
                         setTuActionLoading(true);
                         try {
                           const res = await fetch(api(`/api/admin/translation-units/${tuSelectedId}/exclude`), { method: "PATCH", headers: authHeaders });

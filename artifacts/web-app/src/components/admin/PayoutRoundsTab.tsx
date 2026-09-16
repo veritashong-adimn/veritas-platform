@@ -6,7 +6,7 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { formatDisplayDate, formatScheduleRange, formatLabelDates } from '../../lib/dateFormat';
 import { api, formatLanguageLabel } from '../../lib/constants';
-import { Card, GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
+import { Card, GhostBtn, PrimaryBtn, ClickSelect, confirmDialog } from '../ui';
 import { Pagination } from '../ui/Paginator';
 import { useClientPagination } from './bulkListShared';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
@@ -336,7 +336,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
 
   const confirmRound = async () => {
     if (!selId || busy) return;
-    if (!window.confirm('이 회차를 지급확정할까요?\n확정 후에는 관리자만 수정할 수 있습니다.')) return;
+    if (!(await confirmDialog({ title: '지급확정', message: '이 회차를 지급확정할까요?\n확정 후에는 관리자만 수정할 수 있습니다.', confirmLabel: '지급확정', variant: 'warning' }))) return;
     setBusy(true);
     try {
       const res = await fetch(api(`/api/admin/payout-rounds/${selId}/confirm`), { method: 'PATCH', headers: authH });
@@ -349,7 +349,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   // 확정취소 — 지급완료 전 확정 회차를 작성중으로 되돌림. 확정 스냅샷 해제 + 같은 지급일 미배정 재편입 + 재계산.
   const unconfirmRound = async () => {
     if (!selId || busy) return;
-    if (!window.confirm('이 회차의 지급확정을 취소하고 「작성중」으로 되돌릴까요?\n확정 스냅샷이 해제되고, 같은 지급일의 미배정 건이 다시 편입되며 금액이 재계산됩니다.\n(지급완료된 회차는 취소할 수 없습니다)')) return;
+    if (!(await confirmDialog({ title: '지급확정 취소', message: '이 회차의 지급확정을 취소하고 「작성중」으로 되돌릴까요?\n확정 스냅샷이 해제되고, 같은 지급일의 미배정 건이 다시 편입되며 금액이 재계산됩니다.\n(지급완료된 회차는 취소할 수 없습니다)', confirmLabel: '확정취소', variant: 'warning' }))) return;
     setBusy(true);
     try {
       const res = await fetch(api(`/api/admin/payout-rounds/${selId}/unconfirm`), { method: 'PATCH', headers: authH });
@@ -374,12 +374,12 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
       onToast(okMsg(data));
     } catch { onToast(failMsg); } finally { setBusy(false); }
   };
-  const payItemsSelected = () => {
-    if (!window.confirm(`선택한 ${selectedItems.size}건을 지급완료 처리할까요?\n(지급완료된 건은 되돌릴 수 없습니다)`)) return;
+  const payItemsSelected = async () => {
+    if (!(await confirmDialog({ title: '선택 지급완료', message: `선택한 ${selectedItems.size}건을 지급완료 처리할까요?\n(지급완료된 건은 되돌릴 수 없습니다)`, confirmLabel: '지급완료', variant: 'danger' }))) return;
     runItemAction('pay-items', (d) => `선택 ${d.paidNow ?? 0}건 지급완료 처리했습니다.`, '선택 지급완료 실패');
   };
-  const unconfirmItemsSelected = () => {
-    if (!window.confirm(`선택한 ${selectedItems.size}건을 확정취소(회차에서 제외)할까요?\n제외된 건은 미배정으로 돌아가 다시 처리됩니다.`)) return;
+  const unconfirmItemsSelected = async () => {
+    if (!(await confirmDialog({ title: '선택 확정취소', message: `선택한 ${selectedItems.size}건을 확정취소(회차에서 제외)할까요?\n제외된 건은 미배정으로 돌아가 다시 처리됩니다.`, confirmLabel: '확정취소', variant: 'warning' }))) return;
     runItemAction('unconfirm-items', (d) => `선택 ${d.removed ?? 0}건 확정취소했습니다. (미배정 복귀)`, '선택 확정취소 실패');
   };
   const toggleItem = (id: number) => setSelectedItems((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -387,7 +387,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   // 지급완료 처리 — 확정된 회차의 정상 지급대상(지급보류 제외)을 지급완료(paid)로 전환.
   const payRound = async () => {
     if (!selId || busy) return;
-    if (!window.confirm('이 회차를 지급완료 처리할까요?\n지급보류 건을 제외한 지급대상의 지급상태가 "지급완료"로 변경됩니다.\n(수행정보에서는 되돌릴 수 없습니다)')) return;
+    if (!(await confirmDialog({ title: '회차 지급완료', message: '이 회차를 지급완료 처리할까요?\n지급보류 건을 제외한 지급대상의 지급상태가 "지급완료"로 변경됩니다.\n(수행정보에서는 되돌릴 수 없습니다)', confirmLabel: '지급완료', variant: 'danger' }))) return;
     setBusy(true);
     try {
       const res = await fetch(api(`/api/admin/payout-rounds/${selId}/pay`), { method: 'PATCH', headers: authH });
@@ -452,7 +452,8 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
   const exportItemsExcel = () => {
     if (itemRows.length === 0) { onToast('내보낼 데이터가 없습니다.'); return; }
     // 1 수행자 배정 = 1행. 금액은 서버 정산 SSOT값 그대로(재계산 없음). 100%/85%/기본지급액 분리(§4·§5).
-    //   확정회차(스냅샷)는 요금100/통역료85/언어/실제지급일/계좌등록상태가 스냅샷에 없어 blank/'-' 표시(§한계).
+    //   확정회차(스냅샷)는 요금100/통역료85/언어/계좌등록상태가 스냅샷에 없어 blank/'-' 표시(§한계).
+    //   단, 실제지급일(actualPayDate)은 payout_transfers.paid_at 를 별도 조인해 확정회차에도 채워지므로 blank 아님(지급완료 건=YYYY.MM.DD, 미지급=' -').
     const columns: ExcelColumn[] = [
       { header: '지급회차' }, { header: '견적번호' }, { header: '프로젝트명' }, { header: '거래처' },
       { header: '수행식별값' }, { header: '상품명' }, { header: '서비스유형' }, { header: '언어' }, { header: '수행일' },
@@ -494,7 +495,7 @@ export default function PayoutRoundsTab({ token, onToast }: Props) {
         Math.round(numOf(it.deductionTotal)), inlineItems(it.deductions),
         Math.round(numOf(it.gross)), excelTaxLabel(taxTreatmentLabel(it)), rate ? `${rate}%` : '-', Math.round(numOf(it.withholdingTax)), Math.round(numOf(it.netPayment)),
         formatDisplayDate(it.expectedPaymentDate) || '-',
-        formatDisplayDate(it.actualPaymentDate) || '-',
+        formatDisplayDate(it.actualPayDate) || '-',   // 실제지급일 = payout_transfers.paid_at(지급완료만). 예정일과 분리(§3).
         payStatusLabel(it.paymentStatus),
         bankLabel(it.bankRegistered),
         it.remark || '-',

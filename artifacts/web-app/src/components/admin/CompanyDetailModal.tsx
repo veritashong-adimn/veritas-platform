@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { formatDisplayDate, formatScheduleRange } from '../../lib/dateFormat';
 import { Building2, FileBadge, User, BriefcaseBusiness, Tag, MapPinned, BadgeCheck, Calendar } from "lucide-react";
 import { api, CompanyDetail, Contact, Division, NoteEntry, VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS, VENDOR_TYPE_CATEGORY_CHIPS, resolveVendorType, finalVendorType, CUSTOMER_TYPE_OPTIONS, CUSTOMER_TYPE_LABELS, getCustomerTypeBadgeColors } from "../../lib/constants";
-import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
+import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect, confirmDialog, promptDialog } from "../ui";
 import { formatPhone, formatWon } from "../../lib/utils";
 import { ReviewMemoPanel } from "./ReviewMemoPanel";
 import { PrepaidLedgerModal } from "./PrepaidLedgerModal";
@@ -187,7 +187,12 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   };
 
   const handleDeleteContact = async (c: Contact) => {
-    const reason = window.prompt(`"${c.name}" 담당자를 휴지통으로 이동합니다.\n삭제 사유를 2자 이상 입력해 주세요.`, "");
+    const reason = await promptDialog({
+      title: "담당자 휴지통 이동",
+      message: `"${c.name}" 담당자를 휴지통으로 이동합니다.`,
+      label: "삭제 사유", placeholder: "삭제 사유를 2자 이상 입력", multiline: true, confirmLabel: "이동",
+      validate: (v) => v.trim().length < 2 ? "삭제 사유를 2자 이상 입력해 주세요." : null,
+    });
     if (reason === null) return;              // 취소
     if (reason.trim().length < 2) { onToast("삭제 사유를 2자 이상 입력해 주세요."); return; }
     try {
@@ -203,11 +208,11 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   };
 
   const handlePermanentDeleteContact = async (c: Contact) => {
-    const ok = window.confirm(
-      `⚠️ 이 작업은 되돌릴 수 없습니다.\n\n` +
-      `"${c.name}" 담당자를 완전삭제하시겠습니까?\n` +
-      `테스트 데이터인 경우에만 완전삭제하세요.`
-    );
+    const ok = await confirmDialog({
+      title: "담당자 완전삭제",
+      message: `⚠️ 이 작업은 되돌릴 수 없습니다.\n\n"${c.name}" 담당자를 완전삭제하시겠습니까?\n테스트 데이터인 경우에만 완전삭제하세요.`,
+      confirmLabel: "완전삭제", variant: "danger",
+    });
     if (!ok) return;
     try {
       const res = await fetch(api(`/api/admin/contacts/${c.id}/permanent`), { method: "DELETE", headers: authH });
@@ -263,7 +268,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error}`); return; }
       if (data.canDelete) {
-        if (!confirm(`"${detail?.name}" 거래처를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
+        if (!(await confirmDialog({ title: "거래처 삭제", message: `"${detail?.name}" 거래처를 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`, confirmLabel: "삭제", variant: "danger" }))) return;
         await doDelete();
       } else {
         setDeleteCheckModal({ show: true, reasons: data.reasons ?? [], checking: false });
@@ -307,7 +312,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
   };
 
   const handleDeleteDiv = async (divId: number, name: string) => {
-    if (!confirm(`"${name}" 브랜드/부서를 삭제하시겠습니까?`)) return;
+    if (!(await confirmDialog({ title: "브랜드/부서 삭제", message: `"${name}" 브랜드/부서를 삭제하시겠습니까?`, confirmLabel: "삭제", variant: "danger" }))) return;
     try {
       const res = await fetch(api(`/api/admin/divisions/${divId}`), { method: "DELETE", headers: authH });
       if (!res.ok) { onToast("삭제 실패"); return; }

@@ -12,6 +12,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import './readTableView.css';
 import { api, CUSTOMER_TYPE_LABELS, VENDOR_TYPE_LABELS, getCustomerTypeBadgeColors } from '../../lib/constants';
+import { confirmDialog } from '../ui';
 import { PageHeader } from './PageHeader';
 import { dsStickyPageHeader } from '../../lib/ds';
 
@@ -74,7 +75,7 @@ export function CompanyTrashTab({ token, isAdmin, onToast, onBack }: {
   });
 
   const handleRestore = async (r: TrashRow) => {
-    if (!window.confirm(`'${r.name}' 거래처를 복원하시겠습니까?\n기존 거래처 목록으로 되돌아갑니다. (연결 데이터는 모두 유지됩니다)`)) return;
+    if (!(await confirmDialog({ title: '거래처 복원', message: `'${r.name}' 거래처를 복원하시겠습니까?\n기존 거래처 목록으로 되돌아갑니다. (연결 데이터는 모두 유지됩니다)`, confirmLabel: '복원', variant: 'default' }))) return;
     setBusyId(r.id);
     try {
       const res = await fetch(api(`/api/admin/companies/${r.id}/restore`), { method: 'POST', headers: authH });

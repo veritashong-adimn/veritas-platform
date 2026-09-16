@@ -7,7 +7,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
-import { Card, GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
+import { Card, GhostBtn, PrimaryBtn, ClickSelect, confirmDialog } from '../ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import { DateField } from './DatePickerShared';
 import './readTableView.css';
@@ -177,7 +177,7 @@ function CompanyPicker({ token, companyName, onPick, style }: {
   onPick: (c: { id: number; name: string }) => void; style: React.CSSProperties;
 }) {
   const [q, setQ] = useState(companyName ?? '');
-  const [results, setResults] = useState<{ id: number; name: string }[]>([]);
+  const [results, setResults] = useState<{ id: number; name: string; customerType?: string | null; phone?: string | null; mobile?: string | null; email?: string | null }[]>([]);
   const [open, setOpen] = useState(false);
   useEffect(() => { setQ(companyName ?? ''); }, [companyName]);
   const search = async (term: string) => {
@@ -187,7 +187,7 @@ function CompanyPicker({ token, companyName, onPick, style }: {
       const res = await fetch(api(`/api/admin/companies?search=${encodeURIComponent(term)}&pageSize=8`), { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json().catch(() => ({}));
       const rows = Array.isArray(data) ? data : (data.rows ?? []);
-      setResults(rows.slice(0, 8).map((c: any) => ({ id: c.id, name: c.name })));
+      setResults(rows.slice(0, 8).map((c: any) => ({ id: c.id, name: c.name, customerType: c.customerType, phone: c.phone, mobile: c.mobile, email: c.email })));
     } catch { setResults([]); }
   };
   return (
@@ -196,10 +196,19 @@ function CompanyPicker({ token, companyName, onPick, style }: {
         onChange={e => search(e.target.value)} onFocus={() => { if (results.length) setOpen(true); }} />
       {open && results.length > 0 && (
         <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 30, background: '#fff', border: `1px solid ${C.g200}`, borderRadius: 6, boxShadow: '0 4px 18px rgba(0,0,0,0.1)', maxHeight: 200, overflowY: 'auto' }}>
-          {results.map(c => (
-            <div key={c.id} onMouseDown={() => { onPick(c); setQ(c.name); setOpen(false); setResults([]); }}
-              style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</div>
-          ))}
+          {results.map(c => {
+            // 개인고객은 동명이인 식별을 위해 휴대전화·이메일을 보조줄로 표시(§6). 기업은 이름만.
+            const hint = c.customerType === 'INDIVIDUAL'
+              ? [(c.mobile || c.phone || '').trim() || null, c.email || null].filter(Boolean).join(' · ')
+              : '';
+            return (
+              <div key={c.id} onMouseDown={() => { onPick(c); setQ(c.name); setOpen(false); setResults([]); }}
+                style={{ padding: '6px 10px', cursor: 'pointer', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <span>{c.name}{c.customerType === 'INDIVIDUAL' && <span style={{ marginLeft: 6, fontSize: 10, color: '#c2410c' }}>개인고객</span>}</span>
+                {hint && <div style={{ fontSize: 10, color: '#94a3b8' }}>{hint}</div>}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -335,14 +344,14 @@ export default function PaymentInfoSection({ projectId, token, paymentRecords, s
   // 입금확인 토글 — 수행정보 납품확인과 동일 개념.
   //  · 체크 ON: 입금예정일 → 입금일 복사 + 입금완료(3필드 세트). 체크 OFF: 미입금(3필드 세트).
   //  · 입금일을 직접 수정한 이력(≠예정일)이 있으면 해제 시 경고 후 처리.
-  const toggleDepositConfirm = (i: number) => {
+  const toggleDepositConfirm = async (i: number) => {
     const r = rows[i];
     if (!r.expectedDate) { onToast('입금예정일이 없어 확인할 수 없습니다.'); return; }
     if (!r.depositConfirmed) {
       markPaid(i, r.expectedDate);
     } else {
       const manuallyEdited = !!r.paidDate && dateVal(r.paidDate) !== dateVal(r.expectedDate);
-      if (manuallyEdited && !window.confirm('입금일을 직접 수정한 이력이 있습니다.\n입금확인을 해제하면 입력된 입금일이 삭제됩니다. 계속하시겠습니까?')) return;
+      if (manuallyEdited && !(await confirmDialog({ title: '입금확인 해제', message: '입금일을 직접 수정한 이력이 있습니다.\n입금확인을 해제하면 입력된 입금일이 삭제됩니다. 계속하시겠습니까?', confirmLabel: '해제', variant: 'warning' }))) return;
       markUnpaid(i);
     }
   };

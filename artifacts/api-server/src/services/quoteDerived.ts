@@ -8,6 +8,7 @@
 //  · 적용 대상: b2b_standard 일반견적 family 만. 누적/차감 제외.
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { quotesTable, quoteItemsTable, projectPaymentsTable } from "@workspace/db";
+import { remapClonedParentLinks } from "./quoteItemGroup";
 import { generateRelationQuoteNumber, isRelationEngineQuoteType } from "./quoteRelation";
 
 type Db = any;
@@ -67,10 +68,11 @@ export async function createDerivedSplit(
 
   // ── 각 분할의 품목/금액 구성 + 검증 ─────────────────────────────────────────
   const usedItemIds = new Set<number>();
-  const prepared: Array<{ companyId: number; contactId: number | null; itemRows: any[]; price: number }> = [];
+  const prepared: Array<{ companyId: number; contactId: number | null; itemRows: any[]; srcRows: any[]; price: number }> = [];
   for (const [i, sp] of splits.entries()) {
     if (!sp || !Number.isInteger(sp.companyId) || sp.companyId <= 0) return { http: 400, body: { error: `${i + 1}번 업체를 선택해 주세요.` } };
     let itemRows: any[] = [];
+    let srcRows: any[] = [];   // 서비스 그룹 재매핑용 원본 항목(itemRows 와 1:1). 합성행은 {id:-1,parentItemId:null}.
     let price = 0;
     if (sp.mode === "items") {
       const ids = Array.from(new Set((sp.itemIds ?? []).filter((n) => Number.isInteger(n) && n > 0)));
@@ -81,7 +83,9 @@ export async function createDerivedSplit(
         usedItemIds.add(id);
       }
       const rows = ids.map((id) => srcItemById.get(id));
-      itemRows = rows.map((it: any) => { const { id, quoteId, createdAt, ...rest } = it; void id; void quoteId; void createdAt; return { ...rest }; });
+      // parentItemId 는 old(원견적) 값이라 null 로 넣고 삽입 후 old→new 재매핑(부모가 이 분할에 없으면 NULL 유지 = 공통비용).
+      itemRows = rows.map((it: any) => { const { id, quoteId, createdAt, ...rest } = it; void id; void quoteId; void createdAt; return { ...rest, parentItemId: null }; });
+      srcRows = rows;
       price = rows.reduce((s: number, it: any) => s + Number(it.totalAmount), 0);
     } else if (sp.mode === "amount") {
       const total = Math.round(Number(sp.amount) || 0);
@@ -93,11 +97,12 @@ export async function createDerivedSplit(
         quantity: "1", unitPrice: String(supply), supplyAmount: String(supply), taxAmount: String(tax), totalAmount: String(total),
         memo: null, itemType: "expense", taxType, isCustomProduct: true,
       }];
+      srcRows = [{ id: -1, parentItemId: null }];   // 합성 배분행 — 그룹 링크 없음
       price = total;
     } else {
       return { http: 400, body: { error: `${i + 1}번 업체의 분할 방식이 올바르지 않습니다.` } };
     }
-    prepared.push({ companyId: sp.companyId, contactId: sp.contactId ?? null, itemRows, price });
+    prepared.push({ companyId: sp.companyId, contactId: sp.contactId ?? null, itemRows, srcRows, price });
   }
 
   // ── 100% 분할 invariant (§6/§7): 분할합계 = 현재유효 견적금액 ──────────────────
@@ -129,7 +134,10 @@ export async function createDerivedSplit(
       version: v, versionReason: opts.reason ?? null, quoteNumber,
       derivedCompanyId: p.companyId, derivedContactId: p.contactId,   // 발행/청구 대상(§4)
     }).returning();
-    if (p.itemRows.length > 0) await tx.insert(quoteItemsTable).values(p.itemRows.map((r) => ({ ...r, quoteId: derived.id })));
+    if (p.itemRows.length > 0) {
+      const newRows = await tx.insert(quoteItemsTable).values(p.itemRows.map((r) => ({ ...r, quoteId: derived.id }))).returning({ id: quoteItemsTable.id });
+      await remapClonedParentLinks(tx, p.srcRows, newRows.map((r: any) => r.id));   // 같은 분할 내 부모만 연결(밖이면 NULL)
+    }
     created.push({ id: derived.id, quoteNumber, companyId: p.companyId, price: p.price });
   }
 

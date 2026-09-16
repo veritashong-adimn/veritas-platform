@@ -50,6 +50,9 @@ export function convertToFormItem(it: QuoteDetailItem & { productId?: number | n
   // 할인 항목 복원 — discount_type/value/reason 컬럼에서
   const dc = it as { discountType?: string | null; discountValue?: string | number | null; discountReason?: string | null };
   return {
+    // 서비스 그룹 복원 — 서버 id 로 안정 로컬키('S{id}'). 부대항목의 parentItemId → 부모의 'S{parentItemId}' 로 자동 연결.
+    _lid:             it.id != null ? `S${it.id}` : undefined,
+    parentLid:        it.parentItemId != null ? `S${it.parentItemId}` : null,
     productId:        it.productId ?? null,
     productName:      it.productName,
     productType:      type,

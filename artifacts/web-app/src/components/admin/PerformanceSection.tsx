@@ -8,7 +8,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
-import { Card, GhostBtn, PrimaryBtn, ClickSelect } from '../ui';
+import { Card, GhostBtn, PrimaryBtn, ClickSelect, confirmDialog, promptDialog } from '../ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import PerformanceProfitSummary from './PerformanceProfitSummary';
 import RowControls from './RowControls';
@@ -178,8 +178,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const cancelEdit = () => { setRows([]); setDeletedIds([]); setPinnedEtcCols([]); setEditMode(false); setAmountPopup(null); setAdjustPopup(null); };
   // 기타비용 선택기(§1~§4) — 항목 선택 시 동적 컬럼 추가(pin). 직접입력은 항목명 입력(빈이름·중복·전용3종 금지 §6·§11).
   const addEtcCol = (type: string) => setPinnedEtcCols(prev => prev.includes(type) ? prev : [...prev, type]);
-  const addCustomEtcCol = (dataTypes: string[]) => {
-    const raw = window.prompt('기타비용 항목명을 입력하세요 (예: 주차비, 택배비)');
+  const addCustomEtcCol = async (dataTypes: string[]) => {
+    const raw = await promptDialog({ title: '기타비용 항목 추가', label: '항목명', placeholder: '예: 주차비, 택배비', confirmLabel: '추가' });
     const name = (raw ?? '').trim();
     if (!name) return;                                                       // 빈 이름 금지(§6)
     if ((INTERP_DEDICATED_EXPENSE_TYPES as string[]).includes(name)) { onToast('추가통역료·출장비·교통비는 전용 컬럼입니다.'); return; }  // §11
@@ -306,7 +306,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
     const r = rows[i];
     if (!r) return;
     if (!canDelete(r)) { onToast('지급이 진행된 수행정보는 삭제할 수 없습니다.'); return; }
-    if (!window.confirm('이 수행정보 행을 삭제하시겠습니까?')) return;
+    // 견적 상품정보·판매정보와 동일 UX(§4) — 편집 중 행 삭제는 확인 팝업 없이 즉시 화면에서 제거한다.
+    //   실제 DB 반영은 [저장] 시 deletedIds 로만 이루어진다(저장 전 DB 무변경). 지급 진행 행은 위 canDelete 로 보호.
     setRows(prev => {
       if (prev[i]?.id) setDeletedIds(d => [...d, prev[i].id!]);
       return prev.filter((_, idx) => idx !== i);
@@ -406,13 +407,13 @@ export default function PerformanceSection({ projectId, token, performances, onC
   };
   // 통합 구분 변경(§4·§6) — 선택값 → 상위유형(category)+세부라벨(lineCategory) 분해 저장.
   //   상위유형이 바뀌면 수행자·업체 선택 초기화 확인(§7·§13). 같은 상위유형 내 세부만 바뀌면 유지.
-  const changePerformerType = (i: number, key: string) => {
+  const changePerformerType = async (i: number, key: string) => {
     const r = rows[i];
     const opt = PERFORMER_TYPE_OPTS.find(o => o.value === key);
     if (!opt || key === resolvePerformerType(r)) return;
     const categoryChanged = opt.category !== r.performerCategory;
     const hasPerformer = !!(r.performerNameSnapshot || r.individualUserId || r.vendorCompanyId);
-    if (categoryChanged && hasPerformer && !window.confirm('구분을 변경하면 현재 선택된 수행자 정보가 초기화됩니다. 변경하시겠습니까?')) return;
+    if (categoryChanged && hasPerformer && !(await confirmDialog({ title: '구분 변경', message: '구분을 변경하면 현재 선택된 수행자 정보가 초기화됩니다. 변경하시겠습니까?', confirmLabel: '변경', variant: 'warning' }))) return;
     patchRow(i, categoryChanged && hasPerformer
       ? { performerCategory: opt.category, lineCategory: opt.lineCategory, individualUserId: null, vendorCompanyId: null,
           performerNameSnapshot: null, identifierSnapshotMasked: null, vendorTypeSnapshot: null, residencyType: null, withholdingTreatment: null }
@@ -660,13 +661,24 @@ export default function PerformanceSection({ projectId, token, performances, onC
     // 지급액 세전/세후(§1·§2) — 세전=수행원가(costTotal), 세후=세전×(1−원천세율). 미선택 시 세율 0 → 세후=세전.
     const before = cost.costTotal;
     const after = afterTaxPayout(before, r);
-    // 수익률(§5·§8) — 같은 판매상품(saleItemId) 연결행들의 세전 합계를 원가로 사용. 공급가액은 판매 스냅샷 구조화 필드(§7).
-    const saleSupply = num((r.serviceDetailSnapshot ?? {}).saleSupplyAmount);
+    // 수익률(§서비스그룹) — 서비스 그룹 총매출(본 서비스 + 연결 부대항목)을 원본 인원으로 나눈 1인당 매출 대비, 본인 세전원가(before) 마진율.
+    //   snapshot.groupSaleSupplyAmount 가 있으면(신규 서비스그룹) 1인당 그룹매출 vs 본인원가. 없으면 레거시(전체 공급가 vs 그룹원가 합계) fallback — 기존 동작 보존(§22).
+    const snap = (r.serviceDetailSnapshot ?? {}) as any;
     const agg = r.saleItemId != null ? bySale?.get(r.saleItemId) : undefined;
-    const groupCost = agg ? agg.cost : before;
     const assigned = agg ? agg.assigned : (r.individualUserId != null || r.vendorCompanyId != null);
-    // 미배정+원가 0원은 '미입력'으로 보고 수익률 미표시(§11). 공급가액 없음/0도 미표시(§10). 그 외(음수 포함) 표시(§12).
-    const profit = (assigned || groupCost > 0) ? profitRatePct(saleSupply, groupCost) : null;
+    const groupSupply = snap.groupSaleSupplyAmount != null ? num(snap.groupSaleSupplyAmount) : null;
+    let profit: number | null;
+    if (groupSupply != null && groupSupply > 0) {
+      // 신규 서비스그룹 경로 — 1인당 그룹매출 = 그룹매출 ÷ 원본 투입인원(per-person 행은 각자 본인 세전원가 before 로 비교).
+      const origCount = num(snap.originalInterpreterCount) > 0 ? num(snap.originalInterpreterCount) : 1;
+      const saleSupplyPerPerson = groupSupply / origCount;
+      profit = (assigned || before > 0) ? profitRatePct(saleSupplyPerPerson, before) : null;
+    } else {
+      // 레거시 fallback — 그룹 정보 없는 기존 데이터는 기존 계산(전체 공급가 vs 같은 판매상품 세전원가 합계) 그대로.
+      const saleSupply = num(snap.saleSupplyAmount);
+      const groupCost = agg ? agg.cost : before;
+      profit = (assigned || groupCost > 0) ? profitRatePct(saleSupply, groupCost) : null;
+    }
     const cat = r.performerCategory;
     const isIndiv = cat === 'individual';
     // 유형별 금액 컬럼 분기(§2·§9·§11) — 개인 통역/번역만 신규 구조 적용. 외주·경비·장비는 기존 표시 유지.

@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import './readTableView.css';
 import { api } from '../../lib/constants';
-import { Card, PrimaryBtn, GhostBtn } from '../ui';
+import { Card, PrimaryBtn, GhostBtn, confirmDialog } from '../ui';
 import { BackToListButton } from './BackToListButton';
 import { downloadCompanyTemplate } from '../../lib/companyExcel';
 import { downloadContactTemplate } from '../../lib/contactExcel';
@@ -38,10 +38,42 @@ interface AnalyzedRow {
   warning?: string;   // 경고(저장 가능하나 확인 필요) — status 와 독립(§9)
   existingId?: number | null;
   changes?: Record<string, FieldChange>;
+  // 개인고객 중복 후보의 매칭 기존 레코드(§9) — 사유 칸에 함께 표시.
+  matchDetail?: { id: number; name: string; email: string | null; phone: string | null; fields: string[] } | null;
   [key: string]: unknown;
 }
 
 interface Summary { total: number; new: number; identical: number; update: number; needsReview?: number; duplicateFile: number; error: number; warning?: number; }
+
+// 진단 통계(읽기전용, 2단계 조사): 사업자번호 canonical 기준 그룹 통계. 거래처 대량등록(company)에서만 반환.
+//   개인고객(INDIVIDUAL) 파일이면 mode==="individual" 로 오고, 사업자번호 패널 대신 개인고객 통계를 표시한다(§11).
+interface ImportDiagnostics {
+  mode?: 'business' | 'individual';
+  totalRows: number;
+  rowsNoBiz: number;
+  rowsInvalidBiz: number;
+  rowsWithValidBiz: number;
+  uniqueBizGroups: number;
+  dupGroupCount: number;
+  dupGroupRowCount: number;
+  singleBizGroupCount: number;
+  groupsDiffPhone: number;
+  groupsDiffEmail: number;
+  reviewConflictGroups: number;
+  dbBizExactMatchUnique: number;
+  newUniqueBiz: number;
+  finalUniqueMasters: number;
+  // 개인고객 전용(§11) — mode==="individual" 일 때 의미 있음.
+  indivTotalRows?: number;
+  indivUniqueCandidates?: number;
+  indivNewRegistrable?: number;
+  indivFileExactDup?: number;
+  indivHomonymGroups?: number;
+  indivDbExactDup?: number;
+  indivPhoneOnly?: number;
+  indivEmailOnly?: number;
+  indivErrors?: number;
+}
 
 interface AnalyzeResponse {
   fileName: string;
@@ -49,6 +81,7 @@ interface AnalyzeResponse {
   headerRowIndex: number;
   columnMap: Record<string, string | null>;
   summary: Summary;
+  diagnostics?: ImportDiagnostics;
   rows: AnalyzedRow[];
 }
 
@@ -235,6 +268,8 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
   const [result, setResult] = useState<ExecuteResponse | null>(null);
   const [filter, setFilter] = useState<'all' | RowStatus | 'warning'>('all');
   const [mode, setMode] = useState<ImportMode>('new_only');
+  // 거래처 대량등록 종류: 'business'(사업자 거래처/홈택스, 기본) | 'individual'(개인고객 명단 — 모든 행 INDIVIDUAL 처리)
+  const [companyKind, setCompanyKind] = useState<'business' | 'individual'>('business');
   const inputRef = useRef<HTMLInputElement>(null);
 
   const pickFile = (f: File | null) => {
@@ -249,12 +284,30 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
     setResult(null);
   };
 
+  // ── 초기화 ──
+  // 현재 브라우저의 대량등록 작업 세션 상태만 비운다. 서버/DB 는 전혀 건드리지 않으며
+  // (분석·미리보기는 조회 전용) 화면을 최초 진입 상태로 되돌린다. 동일 파일을 다시
+  // 선택해도 재분석되도록 file input value 도 reset 한다. (요구사항: 거래처 대량등록 초기화)
+  const resetSession = useCallback(() => {
+    setFile(null);
+    setAnalysis(null);
+    setResult(null);
+    setFilter('all');
+    setMode('new_only');
+    setCompanyKind('business');
+    setDragOver(false);
+    if (inputRef.current) inputRef.current.value = '';
+    onToast('업로드한 파일과 분석 결과를 초기화했습니다.');
+  }, [onToast]);
+
   const doAnalyze = useCallback(async () => {
     if (!file) return;
     setAnalyzing(true);
     try {
       const fd = new FormData();
       fd.append('file', file);
+      // 전용 개인고객 모드: 파일 거래처구분 컬럼 없이도 모든 행 INDIVIDUAL 로 처리하도록 서버에 알림.
+      if (entity === 'company' && companyKind === 'individual') fd.append('importKind', 'individual');
       const res = await fetch(api(cfg.analyzeUrl), {
         method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
       });
@@ -267,7 +320,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
     } finally {
       setAnalyzing(false);
     }
-  }, [file, cfg.analyzeUrl, token, onToast]);
+  }, [file, cfg.analyzeUrl, token, onToast, entity, companyKind]);
 
   const doExecute = useCallback(async () => {
     if (!file || !analysis) return;
@@ -277,13 +330,14 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
 
     const parts = [`신규 ${newCount.toLocaleString()}${cfg.resultLabels.unit} 등록`];
     if (updateCount > 0) parts.push(`기존 ${updateCount.toLocaleString()}건 업데이트`);
-    if (!window.confirm(`${parts.join(' · ')}을(를) 진행할까요?${updateCount > 0 ? '\n\n기존 데이터의 허용 필드(연락처·등록일 등)가 엑셀 값으로 수정됩니다. ID·연결관계는 유지됩니다.' : ''}`)) return;
+    if (!(await confirmDialog({ title: '대량등록 진행', message: `${parts.join(' · ')}을(를) 진행할까요?${updateCount > 0 ? '\n\n기존 데이터의 허용 필드(연락처·등록일 등)가 엑셀 값으로 수정됩니다. ID·연결관계는 유지됩니다.' : ''}`, confirmLabel: '진행', variant: 'warning' }))) return;
 
     setExecuting(true);
     try {
       const fd = new FormData();
       fd.append('file', file);
       fd.append('mode', mode);
+      if (entity === 'company' && companyKind === 'individual') fd.append('importKind', 'individual');
       const res = await fetch(api(cfg.executeUrl), {
         method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
       });
@@ -302,7 +356,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
     } finally {
       setExecuting(false);
     }
-  }, [file, analysis, mode, cfg.executeUrl, cfg.resultLabels.unit, token, onToast, onDone]);
+  }, [file, analysis, mode, cfg.executeUrl, cfg.resultLabels.unit, token, onToast, onDone, entity, companyKind]);
 
   const allRows = Array.isArray(analysis?.rows) ? analysis!.rows : [];
   const filteredRows = filter === 'all'
@@ -367,6 +421,36 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                     ? '템플릿(견적등록 + 견적품목 2시트)을 내려받아 작성한 뒤 업로드하세요.'
                     : '홈택스에서 내려받은 거래처목록 엑셀 파일(.xls, .xlsx)을 업로드하세요.'} {cfg.defaultsNote}
             </p>
+
+            {/* 거래처 대량등록 종류 선택 — 개인고객 명단은 사업자번호 없이 이름+연락처로 관리(전용 모드). */}
+            {entity === 'company' && (
+              <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                {([
+                  ['business', '사업자 거래처', '기업·공공기관·홈택스 거래처목록. 사업자등록번호 기준으로 중복을 판정합니다.'],
+                  ['individual', '개인고객 명단', '사업자등록번호 없는 개인고객. 모든 행을 개인고객으로 등록하고, 이름이 같아도 휴대폰·이메일이 다르면 동명이인으로 등록합니다.'],
+                ] as const).map(([val, label, desc]) => {
+                  const active = companyKind === val;
+                  return (
+                    <label key={val} data-testid={`bulk-import-companykind-${val}`}
+                      style={{
+                        flex: '1 1 280px', cursor: 'pointer', display: 'flex', gap: 10, alignItems: 'flex-start',
+                        padding: '10px 12px', borderRadius: 8,
+                        border: active ? '1.5px solid #c2410c' : '1px solid #e5e7eb',
+                        background: active ? '#fff7ed' : '#fff',
+                      }}>
+                      <input type="radio" name="bulk-import-companykind" value={val} checked={active}
+                        onChange={() => { setCompanyKind(val); setAnalysis(null); setResult(null); }}
+                        aria-label={label} style={{ marginTop: 2 }} />
+                      <span>
+                        <span style={{ display: 'block', fontSize: 12.5, fontWeight: 700, color: active ? '#c2410c' : '#374151' }}>{label}</span>
+                        <span style={{ display: 'block', fontSize: 11, color: '#6b7280', marginTop: 2 }}>{desc}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+
             <div
               onDragOver={e => { e.preventDefault(); setDragOver(true); }}
               onDragEnter={e => { e.preventDefault(); setDragOver(true); }}
@@ -394,6 +478,13 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                     data-testid="bulk-import-file-input" aria-label="엑셀 파일 선택"
                     onChange={e => { const f = e.target.files?.[0] ?? null; pickFile(f); }} />
                 </label>
+                {(file || analysis) && (
+                  <GhostBtn onClick={resetSession} disabled={analyzing || executing}
+                    style={{ fontSize: 12, padding: '6px 14px' }}
+                    data-testid="bulk-import-reset" aria-label="초기화">
+                    초기화
+                  </GhostBtn>
+                )}
                 <PrimaryBtn onClick={doAnalyze} disabled={!file || analyzing}
                   style={{ fontSize: 12, padding: '6px 16px' }}
                   data-testid="bulk-import-analyze" aria-label="파일 분석">
@@ -421,6 +512,73 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                 <SummaryCard label="파일 내 중복" value={analysis.summary?.duplicateFile} tone="amber" />
                 <SummaryCard label="오류" value={analysis.summary?.error} tone="red" />
               </div>
+
+              {/* ── 개인고객 진단(읽기전용) — 사업자번호 무관, 이름+연락처 기준(§11) ── */}
+              {entity === 'company' && analysis.diagnostics && analysis.diagnostics.mode === 'individual' && (
+                <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#c2410c', marginBottom: 8 }}>
+                    🔎 개인고객 기준 진단 (읽기전용 · 등록 안 함)
+                  </div>
+                  <div style={{ fontSize: 12.5, color: '#7c2d12', lineHeight: 1.9 }}>
+                    <b>{safeNum(analysis.diagnostics.indivTotalRows).toLocaleString()}</b>행 →{' '}
+                    <b style={{ color: '#c2410c' }}>{safeNum(analysis.diagnostics.indivUniqueCandidates).toLocaleString()}</b>명 unique 개인고객 후보
+                    {' '}(신규등록 가능 <b>{safeNum(analysis.diagnostics.indivNewRegistrable).toLocaleString()}</b>)
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                    {([
+                      ['신규등록 가능', analysis.diagnostics.indivNewRegistrable],
+                      ['파일 내 완전중복(제외)', analysis.diagnostics.indivFileExactDup],
+                      ['동명이인 그룹(등록 가능)', analysis.diagnostics.indivHomonymGroups],
+                      ['기존 개인고객과 완전동일(제외)', analysis.diagnostics.indivDbExactDup],
+                      ['휴대전화 일치·이름 다름', analysis.diagnostics.indivPhoneOnly],
+                      ['이메일 일치·이름 다름', analysis.diagnostics.indivEmailOnly],
+                      ['오류', analysis.diagnostics.indivErrors],
+                    ] as const).map(([label, val]) => (
+                      <span key={label} style={{ fontSize: 11, padding: '3px 9px', borderRadius: 999, background: '#fff', border: '1px solid #fed7aa', color: '#9a3412' }}>
+                        {label} <b style={{ color: '#7c2d12' }}>{safeNum(val).toLocaleString()}</b>
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#c2955b', marginTop: 8 }}>
+                    ※ 개인고객은 이름이 같아도 동일인이 아닙니다(동명이인). 동일성은 이름+연락처로 판단하며, 애매하면 자동병합하지 않고 사람이 확인합니다. 이 통계는 분석 전용이며 DB를 변경하지 않습니다.
+                  </div>
+                </div>
+              )}
+
+              {/* ── 진단 통계(읽기전용, 사업자번호 grouping) — 거래처(사업자)만, 확정 등록과 무관 ── */}
+              {entity === 'company' && analysis.diagnostics && analysis.diagnostics.mode !== 'individual' && (
+                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#334155', marginBottom: 8 }}>
+                    🔎 사업자번호 기준 진단 (읽기전용 · 등록 안 함)
+                  </div>
+                  <div style={{ fontSize: 12.5, color: '#334155', lineHeight: 1.9 }}>
+                    <b>{safeNum(analysis.diagnostics.totalRows).toLocaleString()}</b>행 →{' '}
+                    <b style={{ color: '#0369a1' }}>{safeNum(analysis.diagnostics.finalUniqueMasters).toLocaleString()}</b>개 unique 거래처
+                    {' '}(신규 <b>{safeNum(analysis.diagnostics.newUniqueBiz).toLocaleString()}</b> · 기존일치 <b>{safeNum(analysis.diagnostics.dbBizExactMatchUnique).toLocaleString()}</b>)
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                    {([
+                      ['unique 사업자번호', analysis.diagnostics.uniqueBizGroups],
+                      ['동일 사업자번호 그룹(≥2행)', analysis.diagnostics.dupGroupCount],
+                      ['↑ 포함 행 수', analysis.diagnostics.dupGroupRowCount],
+                      ['1행짜리 사업자', analysis.diagnostics.singleBizGroupCount],
+                      ['전화 다른 그룹', analysis.diagnostics.groupsDiffPhone],
+                      ['이메일 다른 그룹', analysis.diagnostics.groupsDiffEmail],
+                      ['거래처명 충돌(검토)', analysis.diagnostics.reviewConflictGroups],
+                      ['기존535 사업자번호 일치(unique)', analysis.diagnostics.dbBizExactMatchUnique],
+                      ['사업자번호 없음(행)', analysis.diagnostics.rowsNoBiz],
+                      ['형식오류(행)', analysis.diagnostics.rowsInvalidBiz],
+                    ] as const).map(([label, val]) => (
+                      <span key={label} style={{ fontSize: 11, padding: '3px 9px', borderRadius: 999, background: '#fff', border: '1px solid #e2e8f0', color: '#475569' }}>
+                        {label} <b style={{ color: '#0f172a' }}>{safeNum(val).toLocaleString()}</b>
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 8 }}>
+                    ※ "중복 검토 필요"는 행(row) 수이며, 위 unique 거래처 수와 다릅니다. 이 통계는 분석 전용이며 DB를 변경하지 않습니다.
+                  </div>
+                </div>
+              )}
 
               {/* ── 등록 방식 선택 (거래처만: 담당자는 이번 단계에서 신규등록만 지원, §17) ── */}
               {entity === 'company' && (
@@ -498,6 +656,15 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                             {row.warning
                               ? <span style={{ color: '#b45309', fontWeight: 600 }}>⚠ {row.warning}</span>
                               : (row.reason ?? '-')}
+                            {/* 개인고객 중복 후보: 매칭된 기존 레코드를 함께 표시(§9) — 사용자가 직접 비교 */}
+                            {row.matchDetail && (
+                              <div style={{ marginTop: 4, fontSize: 11, color: '#6b7280', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 8px' }}>
+                                <span style={{ fontWeight: 700, color: '#374151' }}>#{row.matchDetail.id} {row.matchDetail.name}</span>
+                                {' · '}이메일: {row.matchDetail.email || '-'}
+                                {' · '}휴대전화: {row.matchDetail.phone || '-'}
+                                {' · '}<span style={{ color: '#c2410c' }}>일치: {row.matchDetail.fields.join('·')}</span>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       );

@@ -131,6 +131,8 @@ export interface QuoteDetailItem {
   interpretType: string | null;
   // 투입 인원(통역). NULL = 레거시(quantity에 인원×일수 포함 → 역산).
   interpreterCount?: number | null;
+  // 서비스 그룹 — 부대항목이 종속된 본 서비스 quote_items.id (NULL=본/공통). 폼에서 parentLid 로 복원.
+  parentItemId?: number | null;
   // 할인 항목(itemType='discount') 전용
   discountType?: string | null;    // 'amount' | 'percent'
   discountValue?: string | number | null;

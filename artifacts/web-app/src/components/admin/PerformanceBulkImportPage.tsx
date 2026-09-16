@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import './readTableView.css';
 import { api } from '../../lib/constants';
-import { Card, PrimaryBtn, GhostBtn } from '../ui';
+import { Card, PrimaryBtn, GhostBtn, confirmDialog } from '../ui';
 import { BackToListButton } from './BackToListButton';
 import { downloadPerformanceImportTemplate, type PerfSeedItem, type PerfTemplateMeta } from '../../lib/performanceImportExcel';
 
@@ -147,7 +147,7 @@ function PerformanceBulkImportInner({ projectId, token, meta, onClose, onToast, 
     if (!file || !analysis) return;
     const keys = [...selected];
     if (keys.length === 0) { onToast('등록할 신규 배정을 선택하세요.'); return; }
-    if (!window.confirm(`선택한 신규 배정 ${keys.length}건을 등록할까요?\n\n기존 배정·정산/지급 데이터는 변경되지 않습니다. 확인필요·오류·기존배정 건은 저장되지 않습니다.`)) return;
+    if (!(await confirmDialog({ title: '대량등록 진행', message: `선택한 신규 배정 ${keys.length}건을 등록할까요?\n\n기존 배정·정산/지급 데이터는 변경되지 않습니다. 확인필요·오류·기존배정 건은 저장되지 않습니다.`, confirmLabel: '등록', variant: 'warning' }))) return;
     setExecuting(true);
     try {
       const fd = new FormData(); fd.append('file', file); fd.append('selectedKeys', JSON.stringify(keys));

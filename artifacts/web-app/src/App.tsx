@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { User, NavPage, saveSession, clearSession, loadSession, getDefaultPage, api } from "./lib/constants";
 import { Card, GhostBtn } from "./components/ui";
+import { ConfirmHost } from "./components/ui/confirmDialog";
 import { Navbar } from "./components/shared/Navbar";
 import { AuthPage } from "./pages/AuthPage";
 import { CustomerDashboard } from "./pages/CustomerDashboard";
@@ -26,7 +27,17 @@ function AccessDenied({ onBack }: { onBack: () => void }) {
 }
 
 
+// 공통 확인/입력/경고 모달 호스트를 라우트와 무관하게 항상 1회 마운트(전역 window.confirm/alert/prompt 대체).
 export default function App() {
+  return (
+    <>
+      <AppInner />
+      <ConfirmHost />
+    </>
+  );
+}
+
+function AppInner() {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [permissions, setPermissions] = useState<string[]>([]);

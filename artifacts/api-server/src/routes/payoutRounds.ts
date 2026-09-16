@@ -232,6 +232,31 @@ function computeTotals(summary: any[]) {
   }), { assignments: 0, payees: 0, individualCount: 0, vendorCount: 0, baseTotal: 0, expenseTotal: 0, deductionTotal: 0, grossTotal: 0, withholdingTotal: 0, vatTotal: 0, netTotal: 0 });
 }
 
+// 실제지급일 부착(10차 §1·§3) — 지급완료 건은 payout_transfers.paid_at 를 '실제지급일'로 사용한다.
+//   payout_transfers 는 (회차, 지급대상) 1건이므로 (payoutRoundId, payeeType, payeeId)로 매핑.
+//   예정일(expected/round paymentDate)을 실제지급일로 fallback 하지 않는다 — 미지급/미확정은 null.
+//   각 group.items[] 에 actualPayDate(YYYY-MM-DD | null)를 부착(표시용, 금액·계산 불변).
+async function attachPaidAtToSummary(summary: any[]) {
+  const roundIds = new Set<number>();
+  for (const g of summary) for (const it of (g.items ?? [])) if (it.payoutRoundId) roundIds.add(it.payoutRoundId);
+  const map = new Map<string, unknown>();
+  if (roundIds.size) {
+    const transfers = await db.select({
+      payoutRoundId: payoutTransfersTable.payoutRoundId,
+      payeeType: payoutTransfersTable.payeeType,
+      payeeId: payoutTransfersTable.payeeId,
+      paidAt: payoutTransfersTable.paidAt,
+    }).from(payoutTransfersTable).where(inArray(payoutTransfersTable.payoutRoundId, [...roundIds]));
+    for (const t of transfers) map.set(`${t.payoutRoundId}:${t.payeeType}:${t.payeeId}`, t.paidAt);
+  }
+  for (const g of summary) for (const it of (g.items ?? [])) {
+    const pid = it.payeeType === "vendor" ? it.vendorCompanyId : it.individualUserId;
+    const paidAt = it.payoutRoundId ? map.get(`${it.payoutRoundId}:${it.payeeType}:${pid}`) : null;
+    it.actualPayDate = (it.paymentStatus === "paid" && paidAt) ? dstr(paidAt) : null;   // 예정일 fallback 금지
+  }
+  return summary;
+}
+
 // 회차 상세 로드 — 지급대상별 요약 + 건별 + 경고(§8) + 총계(§14).
 //  · [Source of Truth 분기] 지급확정 전(draft·reviewing): 원본 수행정보 실시간 재계산.
 //    지급확정·지급완료(confirmed·paid): 확정 당시 건별 스냅샷(payout_round_items)을 그대로 표시 — 원본 재계산 금지(§10·§11).
@@ -261,6 +286,7 @@ async function loadRoundDetail(round: any) {
   });
   const isLocked = round.status === "confirmed" || round.status === "paid";
   const payStats = payStatsOf(summary.flatMap((g: any) => g.items.map((it: any) => it.paymentStatus ?? "unpaid")));
+  await attachPaidAtToSummary(summary);   // 실제지급일(paid_at) 부착
   return { round, summary, totals, warnings, collectable, snapshotSource: isLocked ? "live_legacy" : "live", payStats };
 }
 
@@ -365,6 +391,7 @@ async function loadRoundDetailFromSnapshot(round: any) {
     isVatIncluded: g.payeeType === "vendor" && g.items.length > 0 && g.allVat,
   }));
   const totals = computeTotals(summary);
+  await attachPaidAtToSummary(summary);   // 실제지급일(paid_at) 부착 — 확정 스냅샷 회차 포함
   // 확정 회차는 잠금 — 경고/재포함 대상 없음(원본 기준 수집로직 미적용).
   return { round, summary, totals, warnings: { total: 0, holdAmount: 0, byReason: [] }, collectable: [], snapshotSource: "snapshot", payStats: payStatsOf(rows.map((r) => payMap.get(r.performanceAssignmentId) ?? defaultPs)) };
 }
@@ -628,6 +655,7 @@ router.get("/admin/payout-rounds/overview", ...adminGuard, async (req, res) => {
     const items = await attachLineItems(await selectItems(overviewWhere(unassignedOnly)));
     const summary = aggregate(items);
     const totals = computeTotals(summary);
+    await attachPaidAtToSummary(summary);   // 실제지급일 필드 일관성(개요는 지급완료 제외 → 대부분 null)
     const unassignedCount = items.filter((it: any) => it.payoutRoundId == null).length;
     // 회차 상세와 동일한 응답 형태(round=null)로 반환해 화면 렌더링을 공용화. 회차 전용 필드는 빈 값.
     res.json({
@@ -1295,7 +1323,22 @@ router.patch("/admin/payout-rounds/:id/cancel", ...adminGuard, async (req, res) 
 //  · 국내 3.3%: 세전/세후 금액 / 해외: '해외 현지 송금건'에 실지급액.
 //  · 주민번호: 기본 마스킹. 전체값은 reveal=1 + translator.sensitive 권한(관리자)일 때만.
 // ─────────────────────────────────────────────────────────────────────────────
-const dstr = (v: unknown) => (v ? String(v).slice(0, 10) : null);
+// 실제지급일 등 날짜값 → 'YYYY-MM-DD'(canonical). 두 경로(attachPaidAtToSummary·세무자료 payDate)가 공유하는 단일 helper.
+//   · ORM(timestamp without time zone)은 JS Date를 반환하므로 String(v).slice 는 "Tue Aug 11…"로 깨진다 → Date는 로컬 날짜성분으로 wall-clock 을 그대로 추출.
+//   · 운영/ DB 가 UTC(GMT)이고 node-pg 는 timestamp 를 로컬시로 파싱하므로, 로컬 getter 가 저장 wall-clock 을 정확히 역산한다(toISOString 미사용 → 하루 밀림 방지 §4).
+//   · 문자열('YYYY-MM-DD' | 'YYYY-MM-DD HH:mm:ss' | ISO)은 선두 날짜 성분을 취하고, null/undefined/invalid 는 null(예정일 fallback·NaN·'Tue Aug 11' 금지).
+const dstr = (v: unknown): string | null => {
+  if (v == null) return null;
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return null;
+    const y = v.getFullYear(), m = v.getMonth() + 1, d = v.getDate();
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  }
+  const s = String(v).trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/); // 'YYYY-MM-DD' 또는 pg/ISO 타임스탬프의 wall-clock 날짜(선두 성분만)
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  return null; // 'Tue Aug 11' 등 로케일 문자열은 new Date 로 추측하지 않는다(§3 invalid → null). 정상 입력은 Date/ISO/YYYY-MM-DD 로만 유입.
+};
 // ISO 언어코드 → 한글 언어명(세무자료 '언어'는 업무구분이 아닌 실제 수행 언어). 표시 전용 매핑.
 const LANG_KO: Record<string, string> = {
   ko: "한국어", kr: "한국어", en: "영어", ja: "일본어", jp: "일본어", zh: "중국어", cn: "중국어",
@@ -1341,20 +1384,30 @@ router.get("/admin/tax-report", ...adminGuard, async (req, res) => {
     }
     const reveal = wantReveal && canReveal;
 
-    // 대상 지급건 — 개인 통번역사 + 유효 지급건 + 지급일(실제 or 예정) 기간. 회차/지급상태 무관(기간 내 지급자료 전체).
-    const dateExpr = sql`COALESCE(${performanceAssignmentsTable.actualPaymentDate}, ${performanceAssignmentsTable.expectedPaymentDate})`;
+    // 대상 지급건 — 개인 통번역사 + 유효 지급건(§5). 실제지급일(payout_transfers.paid_at) 기준으로 지급완료 건만
+    //   JS 단계에서 필터한다(기간필터도 paid_at 기준). 예정일을 지급일로 사용하지 않는다(§4). 세금계산서 vendor 는 개인 조건으로 제외.
     const conds: any[] = [
       isNull(performanceAssignmentsTable.deletedAt),
       eq(performanceAssignmentsTable.performerCategory, "individual"),
       isNotNull(performanceAssignmentsTable.individualUserId),
       sql`${performanceAssignmentsTable.costTotal} > 0`,
     ];
-    if (from) conds.push(sql`${dateExpr} >= ${from}`);
-    if (to) conds.push(sql`${dateExpr} <= ${to}`);
 
     // 기존 정산 계산 재사용 — selectItems+attachLineItems+aggregate(내부 calcPayoutWithholding). 중복 계산 없음.
     const items = await attachLineItems(await selectItems(and(...conds)));
     const flat = aggregate(items).flatMap((g: any) => g.items.map((it: any) => ({ ...it, payeeName: g.payeeName, payeeId: g.payeeId })));
+
+    // 실제 지급일 SSOT = payout_transfers.paid_at (지급완료 건만). (회차, 개인, payeeId) 매핑.
+    const taxRoundIds = [...new Set(flat.map((it: any) => it.payoutRoundId).filter(Boolean))] as number[];
+    const paidAtMap = new Map<string, unknown>();
+    if (taxRoundIds.length) {
+      const tr = await db.select({
+        payoutRoundId: payoutTransfersTable.payoutRoundId,
+        payeeId: payoutTransfersTable.payeeId,
+        paidAt: payoutTransfersTable.paidAt,
+      }).from(payoutTransfersTable).where(and(inArray(payoutTransfersTable.payoutRoundId, taxRoundIds), eq(payoutTransfersTable.payeeType, "individual")));
+      for (const t of tr) paidAtMap.set(`${t.payoutRoundId}:${t.payeeId}`, t.paidAt);
+    }
 
     // 보조 조회(selectItems 미포함 필드) — 언어·거주구분·실지급일. id 기준 매핑.
     const ids = flat.map((it: any) => it.id);
@@ -1398,12 +1451,35 @@ router.get("/admin/tax-report", ...adminGuard, async (req, res) => {
       for (const p of profs) profMap.set(p.userId, p.languagePairs ?? null);
     }
 
+    // 확정 스냅샷 SSOT 오버레이(10차 §6) — 확정/지급 회차에 속한 건은 payout_round_items 확정값을
+    //   그대로 사용한다(지급명세서와 100% 동일 기준). 미확정 건은 스냅샷이 없으므로 기존 실시간값 유지.
+    //   원본(performance_assignments) 재계산·보정 없음(§7).
+    const confirmedIds = flat.filter((it: any) => it.roundStatus === "confirmed" || it.roundStatus === "paid").map((it: any) => it.id);
+    const snapMap = new Map<number, any>();
+    if (confirmedIds.length) {
+      const snaps = await db.select({
+        performanceAssignmentId: payoutRoundItemsTable.performanceAssignmentId,
+        grossAmount: payoutRoundItemsTable.grossAmount,
+        withholdingTreatment: payoutRoundItemsTable.withholdingTreatment,
+        withholdingRate: payoutRoundItemsTable.withholdingRate,
+        withholdingAmount: payoutRoundItemsTable.withholdingAmount,
+        netAmount: payoutRoundItemsTable.netAmount,
+      }).from(payoutRoundItemsTable).where(inArray(payoutRoundItemsTable.performanceAssignmentId, confirmedIds));
+      for (const s of snaps) snapMap.set(s.performanceAssignmentId, s);
+    }
+
     const rows = flat.map((it: any) => {
       const ex = extraMap.get(it.id) ?? {};
       const sn = sensMap.get(it.payeeId) ?? {};
-      const payDate = dstr(ex.actualPaymentDate) ?? dstr(it.expectedPaymentDate);
+      const snap = snapMap.get(it.id) ?? null;                  // 확정 스냅샷(있으면 SSOT)
+      // 지급일 = 실제 지급일(payout_transfers.paid_at). 지급완료 건만 값이 있고, 미지급은 null → 최종 필터에서 제외(§4·§5).
+      const paidAtRaw = it.payoutRoundId ? paidAtMap.get(`${it.payoutRoundId}:${it.payeeId}`) : null;
+      const payDate = (it.paymentStatus === "paid" && paidAtRaw) ? dstr(paidAtRaw) : null;
+      // 확정값(스냅샷 우선) — 세금처리·세율·원천세·세전·세후. 미확정 건은 실시간값.
+      const effTreatment = snap ? snap.withholdingTreatment : it.withholdingTreatment;
+      const effRate = snap ? (snap.withholdingRate != null ? Number(snap.withholdingRate) : null) : (it.withholdingRate ?? null);
       // 국내/해외 판정 — 거주구분·수행지 우선, 없으면 세금처리·지급방식.
-      const overseasTreat = it.withholdingTreatment === "nonresident_custom" || it.withholdingTreatment === "treaty_reduction_or_exemption";
+      const overseasTreat = effTreatment === "nonresident_custom" || effTreatment === "treaty_reduction_or_exemption";
       const isOverseas = ex.residencyType === "overseas_or_nonresident" || ex.serviceLocationType === "overseas"
         || overseasTreat || String(sn.paymentMethod ?? "").startsWith("overseas");
       // 교통비 — 추가비용 중 '교통비' 유형 합계(사용자 입력값 기준).
@@ -1424,7 +1500,9 @@ router.get("/admin/tax-report", ...adminGuard, async (req, res) => {
       } else if (ex.identifierSnapshotMasked) {
         residentNumberMasked = ex.identifierSnapshotMasked;   // 암호문 없이 마스킹만 스냅샷된 경우
       }
-      const gross = num(it.gross), net = num(it.netPayment);
+      const gross = snap ? num(snap.grossAmount) : num(it.gross);
+      const net = snap ? num(snap.netAmount) : num(it.netPayment);
+      const withholdingTax = snap ? num(snap.withholdingAmount) : num(it.withholdingTax);
       const note = isOverseas
         ? (sn.remittanceMemo || sn.settlementMemo || it.remark || [sn.country, sn.currency].filter(Boolean).join(" ") || "해외 송금")
         : (it.remark || sn.settlementMemo || "");
@@ -1441,9 +1519,18 @@ router.get("/admin/tax-report", ...adminGuard, async (req, res) => {
         posttax: isOverseas ? null : net,       // 국내 3.3%: 세후
         overseasAmount: isOverseas ? net : null, // 해외: 현지 송금액(실지급액)
         region: isOverseas ? "overseas" : "domestic",
+        // 10차 §4 — 세무자료 세금 컬럼(신규 필드, 기존 shape 보존). 세금처리 표시는 프론트 공용 formatter가 담당.
+        roundName: it.roundBatchNumber ?? null,     // 지급회차
+        withholdingTreatment: effTreatment ?? null, // 세금처리 enum
+        withholdingRate: effRate,                   // 원천세율(%)
+        withholdingTax,                             // 원천세액
+        ssotSource: snap ? "snapshot" : "live",     // 확정 스냅샷 기준 여부(교차검증·표시용)
         note,
       };
     })
+      .filter((r) => r.payDate != null)                        // §5 지급완료(실제 지급일 존재)만 포함 — 미지급 제외
+      .filter((r) => !from || (r.payDate as string) >= from)   // 기간 필터 = 실제 지급일 기준
+      .filter((r) => !to || (r.payDate as string) <= to)
       .filter((r) => region === "all" ? true : r.region === region)
       .filter((r) => !q || (r.payeeName ?? "").toLowerCase().includes(q))
       .sort((a, b) => (a.payDate ?? "").localeCompare(b.payDate ?? "") || (a.payeeName ?? "").localeCompare(b.payeeName ?? "", "ko"));

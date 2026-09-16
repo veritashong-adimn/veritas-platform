@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/constants";
 import { C } from "../../lib/ds";
+import { confirmDialog } from "../ui";
 
 // ─── 공용 Alias(별칭) 관리 ───────────────────────────────────────────────────
 // Tag 기반 별칭 편집 영역. 엔티티(거래처·통번역사 등)에 종속되지 않는 제네릭 컴포넌트.
@@ -144,7 +145,7 @@ export function AliasSection({ basePath, token, onToast, value, onChange, compac
       onChange?.(draftValues.filter((_, i) => i !== it.key));
       return;
     }
-    if (!window.confirm(`별칭 "${it.name}"을(를) 삭제할까요?`)) return;
+    if (!(await confirmDialog({ title: "별칭 삭제", message: `별칭 "${it.name}"을(를) 삭제할까요?`, confirmLabel: "삭제", variant: "danger" }))) return;
     if (busy) return;
     setBusy(true);
     try {

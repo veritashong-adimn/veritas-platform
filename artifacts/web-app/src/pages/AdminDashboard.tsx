@@ -13,7 +13,7 @@ import {
   FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE,
   VENDOR_TYPE_LABELS, VENDOR_TYPE_OPTIONS,
 } from '../lib/constants';
-import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect } from '../components/ui';
+import { StatusBadge, RoleBadge, Toast, Card, PrimaryBtn, GhostBtn, FilterPill, ClickSelect, confirmDialog } from '../components/ui';
 import { Pagination } from '../components/ui/Paginator';
 import { ADMIN_SCROLL_PADDING_TOP, ADMIN_SCROLL_PADDING_X } from '../lib/ds';
 import { formatPhoneDisplay, formatWon } from "../lib/utils";
@@ -434,8 +434,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   // 로고 클릭 → 현재 페이지 새로고침(대시보드 이동 아님). URL/메뉴 위치는 그대로 유지.
   //  · 등록·수정 중 저장하지 않은 변경사항이 있으면(전역 unsavedGuard) 확인창을 먼저 표시, 그 외에는 즉시 새로고침.
   //  · 현재 탭(state)은 세션에 저장 → 새로고침 후 초기화 로직에서 1회 복원(메뉴 위치 유지).
-  const handleLogoRefresh = () => {
-    if (hasUnsavedEdits() && !window.confirm("저장하지 않은 변경사항이 있습니다.\n새로고침하면 변경사항이 사라집니다. 계속하시겠습니까?")) return;
+  const handleLogoRefresh = async () => {
+    if (hasUnsavedEdits() && !(await confirmDialog({ title: "미저장 변경", message: "저장하지 않은 변경사항이 있습니다.\n새로고침하면 변경사항이 사라집니다. 계속하시겠습니까?", confirmLabel: "계속", variant: "warning" }))) return;
     try { sessionStorage.setItem("veritasRestoreTab", adminTab); } catch { /* 세션 사용 불가 시 무시 */ }
     window.location.reload();
   };
@@ -753,7 +753,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   };
 
   const handleDeleteBoardPost = async (id: number) => {
-    if (!confirm("정말 삭제하시겠습니까?")) return;
+    if (!(await confirmDialog({ title: "삭제", message: "정말 삭제하시겠습니까?", confirmLabel: "삭제", variant: "danger" }))) return;
     try {
       const res = await fetch(api(`/api/admin/board/${id}`), { method: "DELETE", headers: authHeaders });
       if (!res.ok) { setToast("오류: 삭제 실패"); return; }
@@ -3006,7 +3006,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           {!r.isSystem && (
                             <button onClick={async e => {
                               e.stopPropagation();
-                              if (!confirm(`"${r.name}" 역할을 삭제하시겠습니까?`)) return;
+                              if (!(await confirmDialog({ title: "역할 삭제", message: `"${r.name}" 역할을 삭제하시겠습니까?`, confirmLabel: "삭제", variant: "danger" }))) return;
                               const res = await fetch(api(`/api/admin/roles/${r.id}`), { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
                               const d = await res.json();
                               if (!res.ok) { setToast(d.error ?? "삭제 실패"); return; }

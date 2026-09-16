@@ -109,6 +109,8 @@ interface CompanyRow {
   warning?: string;             // 경고(저장 가능하나 확인 필요) — status 와 독립(§9)
   existingId?: number | null;   // update/기존일치 대상의 기존 거래처 ID
   changes?: ChangeMap;          // update 행의 변경 필드 미리보기
+  // 개인고객(INDIVIDUAL) 중복 후보의 매칭 기존 레코드(§9) — 사용자가 직접 비교할 수 있도록 표시.
+  matchDetail?: { id: number; name: string; email: string | null; phone: string | null; fields: string[] } | null;
   name: string;
   businessNumber: string;      // 원문(표시용)
   businessNumberNorm: string;  // 숫자만
@@ -136,10 +138,32 @@ const COMPANY_UPDATE_FIELDS: Record<string, (r: CompanyRow) => string | null> = 
   address: (r) => r.address || null,
 };
 
-async function analyzeCompanies(buffer: Buffer): Promise<{
+interface ImportDiagnostics {
+  // 진단 모드: 개인고객(INDIVIDUAL) 파일이면 "individual"(사업자번호 패널 대신 개인고객 통계 표시, §11).
+  mode: "business" | "individual";
+  totalRows: number; rowsNoBiz: number; rowsInvalidBiz: number; rowsWithValidBiz: number;
+  uniqueBizGroups: number; dupGroupCount: number; dupGroupRowCount: number; singleBizGroupCount: number;
+  groupsDiffPhone: number; groupsDiffEmail: number; reviewConflictGroups: number;
+  dbBizExactMatchUnique: number; newUniqueBiz: number; finalUniqueMasters: number;
+  // ── 개인고객 전용 통계(§11) — mode==="individual" 일 때 의미 있음. 사업자번호와 무관. ──
+  indivTotalRows: number;          // 개인고객 행 수
+  indivUniqueCandidates: number;   // unique 개인고객 후보 수(이름+휴대폰+이메일 조합)
+  indivNewRegistrable: number;     // 신규등록 가능(동명이인 포함 — 이름 같아도 연락처 다르면 등록)
+  indivFileExactDup: number;       // 파일 내 완전중복(이름+휴대폰+이메일 모두 동일 = 같은 행 반복)
+  indivHomonymGroups: number;      // 동명이인 그룹 수(같은 이름·다른 연락처 → 모두 등록 가능)
+  indivDbExactDup: number;         // 기존 개인고객과 완전동일(이미 등록됨·제외)
+  indivPhoneOnly: number;          // 휴대폰 일치·이름 다름(검토 후보, 등록 허용)
+  indivEmailOnly: number;          // 이메일 일치·이름 다름(검토 후보, 등록 허용)
+  indivErrors: number;             // 오류
+}
+
+async function analyzeCompanies(buffer: Buffer, opts?: { forceCustomerType?: "INDIVIDUAL" }): Promise<{
   sheetName: string; headerRowIndex: number; columnMap: Record<string, string | null>;
-  rows: CompanyRow[];
+  rows: CompanyRow[]; diagnostics: ImportDiagnostics;
 }> {
+  // 전용 '개인고객 대량등록' 모드: 파일에 거래처구분 컬럼이 없어도 모든 행을 INDIVIDUAL 로 처리한다(명시적 선택).
+  //   사업자(홈택스) Import 에는 영향 없음 — 이 옵션이 없으면 기존과 100% 동일하게 동작한다.
+  const forceIndividual = opts?.forceCustomerType === "INDIVIDUAL";
   const parsed = parseWorkbook(buffer, COMPANY_COLUMN_SYNONYMS);
   const colMap = buildColumnMap(parsed.headers, COMPANY_COLUMN_SYNONYMS);
 
@@ -184,17 +208,40 @@ async function analyzeCompanies(buffer: Buffer): Promise<{
     if (em) pushCand(existingByEmail, em, e);
   }
 
-  // 파일 내부 사업자번호 중복 사전탐지(§7·CASE 9): 같은 파일에서 동일 사업자번호가
-  //   2개 이상 나오면 "선행 1건 등록 + 후행 제외"가 아니라 관련 행 전체를 중복검토로 처리해
-  //   어느 쪽도 자동 등록되지 않게 한다.
+  // 파일 내부 사업자번호 그룹 사전탐지(§5·§6): 같은 파일에 동일 사업자번호가 여러 행 있어도
+  //   "모두 제외"하지 않는다. 그 사업자번호가 DB Master 에 없으면, 정보가 가장 완전한 대표 행 1개를
+  //   신규 Master 로 생성하고 나머지 행은 "동일 사업자번호 source(파일내중복)"로 둔다(회사 N개 생성 금지).
+  //   단, 같은 사업자번호에 실질적으로 다른 거래처명이 섞여 있으면(법인표기 정규화 후에도 상이) 자동 선택
+  //   금지 → 그룹 전체 검토(§7). completeness = 이름·대표자·주소·전화·이메일 중 채워진 개수.
   const fileBizCount = new Map<string, number>();
-  for (const raw of parsed.dataRows) {
-    if (isBlankRow(raw)) continue;
+  const fileBizNameKeys = new Map<string, Set<string>>();               // biz → 정규화 거래처명 집합(충돌 판정)
+  const fileBizRep = new Map<string, { rowNumber: number; score: number }>(); // biz → 대표 행(정보 완전성 최고)
+  parsed.dataRows.forEach((raw, i) => {
+    if (isBlankRow(raw)) return;
     const bn = normalizeBusinessNumber(normalizeName(getCell(raw, colMap, "businessNumber")));
-    if (bn) fileBizCount.set(bn, (fileBizCount.get(bn) ?? 0) + 1);
-  }
+    if (!bn) return;
+    const rowNumber = parsed.headerRowIndex + 2 + i;
+    fileBizCount.set(bn, (fileBizCount.get(bn) ?? 0) + 1);
+    const nk = normalizeCompanyNameKey(normalizeName(getCell(raw, colMap, "name")));
+    if (nk) { const s = fileBizNameKeys.get(bn) ?? new Set<string>(); s.add(nk); fileBizNameKeys.set(bn, s); }
+    const score = [
+      normalizeName(getCell(raw, colMap, "name")),
+      normalizeName(getCell(raw, colMap, "representativeName")),
+      normalizeName(getCell(raw, colMap, "address")),
+      normalizeName(getCell(raw, colMap, "phone")),
+      normalizeName(getCell(raw, colMap, "email")),
+    ].filter(Boolean).length;
+    const cur = fileBizRep.get(bn);
+    if (!cur || score > cur.score) fileBizRep.set(bn, { rowNumber, score }); // 동점이면 선행 행 유지
+  });
 
   const seenNameInFile = new Set<string>();
+  // 개인고객(INDIVIDUAL) 파일 내부 중복 감지용 — 사업자 로직과 완전 분리(§2).
+  //   등록 규칙: 이름이 같아도 휴대폰이나 이메일이 다르면 서로 다른 사람 → 등록 허용(동명이인).
+  //   오직 이름+휴대폰+이메일이 "모두 동일"할 때만 같은 사람 재입력으로 보고 제외한다.
+  const indivTuple = new Set<string>();  // `${nameKey}|${phone}|${email}` 완전 동일(=같은 사람 재입력)
+  const indivPhone = new Map<string, { row: number; nameKey: string }>();  // 휴대폰 일치·이름 다름(검토 후보) 안내용
+  const indivEmail = new Map<string, { row: number; nameKey: string }>();  // 이메일 일치·이름 다름(검토 후보) 안내용
   const rows: CompanyRow[] = [];
 
   parsed.dataRows.forEach((raw, i) => {
@@ -219,13 +266,66 @@ async function analyzeCompanies(buffer: Buffer): Promise<{
       industry: normalizeName(getCell(raw, colMap, "industry")),
       businessCategory: normalizeName(getCell(raw, colMap, "businessCategory")),
       address: normalizeName(getCell(raw, colMap, "address")),
-      customerType: ctRaw,
-      customerTypeValue: ctParsed === undefined ? null : ctParsed,
+      customerType: forceIndividual ? (ctRaw || "개인고객") : ctRaw,
+      customerTypeValue: forceIndividual ? "INDIVIDUAL" : (ctParsed === undefined ? null : ctParsed),
       phone: normalizeName(getCell(raw, colMap, "phone")),
       email: emailNorm,
       website: normalizeName(getCell(raw, colMap, "website")),
       notes: normalizeName(getCell(raw, colMap, "notes")),
     };
+
+    // ── 개인고객(INDIVIDUAL) 전용 중복판정 ────────────────────────────────
+    // 등록 규칙(사용자 확정): 이름이 같아도 휴대폰이나 이메일이 "다르면" 서로 다른 사람 → 등록 허용(동명이인).
+    //   같은 사람으로 보고 제외하는 경우는 이름+휴대폰+이메일이 "모두 동일"할 때뿐이다.
+    //     · 파일 내 완전 동일  → duplicate_file(같은 행 반복)
+    //     · 기존 DB와 완전 동일 → identical(이미 등록됨)
+    //   이름이 다른데 휴대폰/이메일만 겹치는 경우(예: 개인고객 vs 기존 사업자 대표이메일)는 등록을 막지 않고
+    //   경고 + 매칭 레코드만 표시한다(§5·§6, 자동병합/자동UPDATE 없음). 사업자번호 grouping 은 사용하지 않는다.
+    if (row.customerTypeValue === "INDIVIDUAL") {
+      const phoneN = normalizePhone(row.phone);
+      const emailN = row.email; // parse 시 이미 normalizeEmail 적용됨
+      const nk = nameKey;
+      const tupleKey = `${nk}|${phoneN}|${emailN}`; // 이름+휴대폰+이메일 완전 동일 판정용(빈값도 값으로 취급)
+      const mkDetail = (e: Existing, fields: string[]) => ({ id: e.id, name: e.name, email: e.email ?? null, phone: e.phone ?? null, fields });
+
+      if (!name) { row.status = "error"; row.reason = "성명 누락"; rows.push(row); return; }
+
+      // 기존 DB에서 이름+휴대폰+이메일이 모두 동일한 개인고객(=이미 등록된 동일인)
+      const dbNameCands = nk ? (existingByName.get(nk) ?? []) : [];
+      const dbExact = dbNameCands.find((e) => normalizePhone(e.phone) === phoneN && normalizeEmail(e.email) === emailN);
+      // 이름은 다른데 휴대폰/이메일만 같은 기존 레코드 → 등록 허용하되 검토 후보로 안내(차단/병합 아님).
+      const dbPhoneOnly = phoneN ? (existingByPhone.get(phoneN) ?? []).filter((e) => normalizeCompanyNameKey(e.name) !== nk) : [];
+      const dbEmailOnly = emailN ? (existingByEmail.get(emailN) ?? []).filter((e) => normalizeCompanyNameKey(e.name) !== nk) : [];
+
+      if (indivTuple.has(tupleKey)) {
+        // 파일 내 이름+휴대폰+이메일 모두 동일 → 같은 사람 재입력 → 제외.
+        row.status = "duplicate_file"; row.reason = "파일 내 이름+휴대폰+이메일 모두 동일";
+      } else if (dbExact) {
+        // 기존 개인고객과 완전 동일 → 이미 등록됨(등록 제외). 자동 UPDATE 하지 않음.
+        row.status = "identical"; row.existingId = dbExact.id;
+        row.reason = "기존 개인고객과 동일 (이름+휴대폰+이메일 일치)";
+        row.matchDetail = mkDetail(dbExact, ["이름", "휴대전화", "이메일"]);
+      } else {
+        // 등록 대상. 이름이 같아도 휴대폰/이메일이 다르면 동명이인으로 등록(new).
+        //   이름 다름 + 연락처 단독 일치면 경고 + 매칭 레코드만 표시(등록 차단하지 않음).
+        row.status = "new";
+        const warns: string[] = [];
+        if (dbEmailOnly.length > 0) { const e = dbEmailOnly[0]; warns.push(`기존 거래처 #${e.id} ${e.name} 와 이메일 일치 — 동일인 여부 확인`); row.existingId = e.id; row.matchDetail = mkDetail(e, ["이메일"]); }
+        else if (dbPhoneOnly.length > 0) { const e = dbPhoneOnly[0]; warns.push(`기존 거래처 #${e.id} ${e.name} 와 휴대전화 일치 — 동일인 여부 확인`); row.existingId = e.id; row.matchDetail = mkDetail(e, ["휴대전화"]); }
+        else if (emailN && indivEmail.has(emailN) && indivEmail.get(emailN)!.nameKey !== nk) { warns.push(`파일 내 다른 이름과 이메일 일치 (${indivEmail.get(emailN)!.row}행)`); }
+        else if (phoneN && indivPhone.has(phoneN) && indivPhone.get(phoneN)!.nameKey !== nk) { warns.push(`파일 내 다른 이름과 휴대전화 일치 (${indivPhone.get(phoneN)!.row}행)`); }
+        if (row.email && !isValidEmail(row.email)) warns.push("이메일 형식 의심");
+        if (warns.length > 0) row.warning = warns.join(" · ");
+      }
+
+      // 후행 행 비교용 파일 내부 상태 기록(error 제외한 모든 개인고객 행).
+      indivTuple.add(tupleKey);
+      if (phoneN && !indivPhone.has(phoneN)) indivPhone.set(phoneN, { row: rowNumber, nameKey: nk });
+      if (emailN && !indivEmail.has(emailN)) indivEmail.set(emailN, { row: rowNumber, nameKey: nk });
+
+      rows.push(row);
+      return;
+    }
 
     // ── 검증(§9) + 동일성 판정 우선순위(§2~§5) ───────────────────────────
     // 판정 원칙: 자동 "기존거래처 일치"는 후보가 정확히 1개일 때만. 후보가 여러 개거나
@@ -244,19 +344,18 @@ async function analyzeCompanies(buffer: Buffer): Promise<{
     const phoneCands = phoneNorm ? (existingByPhone.get(phoneNorm) ?? []) : [];
     const emailCands = row.email ? (existingByEmail.get(row.email) ?? []) : [];
 
+    // 거래처구분(customerType)은 VERITAS 내부 관리값이며 홈택스엔 존재하지 않는다(§3·§7).
+    //   값이 없거나(빈값→null) 인식 불가한 값이어도 정상 사업자를 오류 처리하지 않는다.
+    //   인식 불가값은 아래 신규등록 분기에서 경고만 남기고 NULL→기본 CORPORATE 로 저장된다.
+    //   (row.customerTypeValue 는 ctParsed===undefined 이면 이미 null 로 세팅되어 있다.)
     if (!name) { row.status = "error"; row.reason = "거래처명 누락"; }
-    else if (ctParsed === undefined) { row.status = "error"; row.reason = "거래처구분 허용값 오류 (기업/공공기관/개인)"; }
     else if (bizRaw && !isValidBusinessNumber(bizNorm)) { row.status = "error"; row.reason = "사업자등록번호 형식 오류"; }
-    else if (bizNorm && (fileBizCount.get(bizNorm) ?? 0) >= 2) {
-      // 파일 내부에서 동일 사업자번호가 2회 이상 → 어느 행도 자동 등록하지 않는다(§7·CASE 9).
-      row.status = "needs_review"; row.reason = "파일 내부 사업자등록번호 중복 (중복검토)";
-    }
     else if (bizCands.length >= 2) {
       // 동일 사업자번호에 기존 거래처가 복수 존재(비정상) → 임의 선택 금지(§2 우선순위 1 단서).
       row.status = "needs_review"; row.reason = "동일 사업자등록번호 기존 거래처 복수 (중복검토)";
     }
     else if (bizCands.length === 1) {
-      // 사업자번호 정확 일치 + 후보 1개 → 매우 강한 동일 거래처(§2 우선순위 1).
+      // 사업자번호 정확 일치 + 후보 1개 → 매우 강한 동일 거래처(§2·§4). 기존 Master 사용(파일 내 중복이어도).
       const ex = bizCands[0];
       // 등록일(registeredAt)은 불변(§10)이므로 변경비교 대상에서 제외한다.
       const changes = diffFields([
@@ -270,6 +369,16 @@ async function analyzeCompanies(buffer: Buffer): Promise<{
       if (Object.keys(changes).length === 0) { row.status = "identical"; row.reason = "기존 데이터 동일"; }
       else { row.status = "update"; row.reason = "기존 데이터 변경 예정"; row.changes = changes; }
     }
+    // ── 파일 내부 동일 사업자번호 그룹 + DB Master 없음(§5·§6·§7) ──────────────
+    // 대표 행 1개만 신규 Master 로 생성하고 나머지는 통합(중복). 상이 거래처명 섞이면 그룹 전체 검토.
+    else if (bizNorm && (fileBizCount.get(bizNorm) ?? 0) >= 2 && (fileBizNameKeys.get(bizNorm)?.size ?? 0) >= 2) {
+      row.status = "needs_review"; row.reason = "동일 사업자등록번호·상이 거래처명 (검토 필요)";
+    }
+    else if (bizNorm && (fileBizCount.get(bizNorm) ?? 0) >= 2 && fileBizRep.get(bizNorm)?.rowNumber !== rowNumber) {
+      // 비대표 행 → 등록하지 않고 동일 사업자번호 source 로 표시(대표 행이 Master 를 생성).
+      row.status = "duplicate_file"; row.reason = "동일 사업자번호 대표행으로 통합(비대표 source)";
+    }
+    // (대표 행·충돌 없음)은 아래 흐름을 그대로 타서 신규 Master(new)로 생성된다.
     else if (!bizNorm && nameCands.length >= 2) {
       // 동일 정규화 거래처명에 기존 거래처가 복수 → 임의 선택 금지(§2 우선순위 2 단서).
       row.status = "needs_review"; row.reason = "동일 거래처명 기존 거래처 복수 (중복검토)";
@@ -289,19 +398,92 @@ async function analyzeCompanies(buffer: Buffer): Promise<{
     else {
       // 신규 등록 대상. 파일 내 재중복 방지용 키 기록(사업자번호 없는 행은 거래처명으로).
       if (!bizNorm && nameKey) seenNameInFile.add(nameKey);
-      // 경고(§9): 저장은 하되 확인 권장.
-      if (!bizNorm) row.warning = "사업자등록번호 없음";
-      else if (row.email && !isValidEmail(row.email)) row.warning = "이메일 형식 의심";
+      // 경고(§9): 저장은 하되 확인 권장. 여러 경고가 겹치면 함께 표시한다.
+      const warns: string[] = [];
+      if (!bizNorm) warns.push("사업자등록번호 없음");
+      if (row.email && !isValidEmail(row.email)) warns.push("이메일 형식 의심");
+      // 거래처구분 값이 있으나 기업/공공기관/개인으로 인식 불가 → 기본 CORPORATE(기업)로 저장(§3·§7).
+      if (ctParsed === undefined) warns.push(`거래처구분 미인식('${ctRaw}') → 기업으로 처리`);
+      if (warns.length > 0) row.warning = warns.join(" · ");
     }
 
     rows.push(row);
   });
+
+  // ── 진단 통계(읽기전용, 2단계 조사 §13) ─────────────────────────────────────
+  // 사업자번호 canonical(10자리) 기준으로 grouping 하여 "행 수"와 "unique 거래처 수"를 분리한다.
+  //   앱 분류는 "파일 내부 사업자번호 중복" 검사가 DB 매칭보다 우선순위가 높아 기존 거래처 일치가
+  //   가려지므로(masking), 여기서는 그 가림을 풀어 기존 535 대비 exact match 를 독립 집계한다.
+  //   추가 DB 조회 없음(위에서 만든 existingByBiz 재사용). 저장/변경 없음.
+  const bizGroups = new Map<string, CompanyRow[]>();
+  for (const r of rows) {
+    if (r.businessNumberNorm && isValidBusinessNumber(r.businessNumberNorm)) {
+      const a = bizGroups.get(r.businessNumberNorm);
+      if (a) a.push(r); else bizGroups.set(r.businessNumberNorm, [r]);
+    }
+  }
+  const dupGroups = [...bizGroups.values()].filter((a) => a.length >= 2);
+  const distinctCount = (xs: string[]) => new Set(xs.filter((x) => x !== "")).size;
+  let groupsDiffPhone = 0, groupsDiffEmail = 0, groupsDiffName = 0;
+  for (const a of dupGroups) {
+    if (distinctCount(a.map((r) => normalizePhone(r.phone))) >= 2) groupsDiffPhone++;
+    if (distinctCount(a.map((r) => r.email)) >= 2) groupsDiffEmail++;
+    if (distinctCount(a.map((r) => normalizeCompanyNameKey(r.name))) >= 2) groupsDiffName++;
+  }
+  const dbMatchUnique = [...bizGroups.keys()].filter((b) => (existingByBiz.get(b)?.length ?? 0) >= 1).length;
+  const noBizRows = rows.filter((r) => !r.businessNumberNorm).length;
+  const invalidBizRows = rows.filter((r) => r.businessNumberNorm && !isValidBusinessNumber(r.businessNumberNorm)).length;
+
+  // ── 개인고객(INDIVIDUAL) 전용 진단(§11) — 사업자번호와 무관. ──────────────────
+  //   진단 모드: 개인고객 행이 있고 기업/공공기관 행이 없으면 individual(사업자번호 패널 대신 개인고객 통계).
+  const indivRows = rows.filter((r) => r.customerTypeValue === "INDIVIDUAL");
+  const hasBizType = rows.some((r) => r.customerTypeValue === "CORPORATE" || r.customerTypeValue === "PUBLIC");
+  const mode: "business" | "individual" = indivRows.length > 0 && !hasBizType ? "individual" : "business";
+  // 동명이인 그룹: 같은 이름키가 2행 이상이면서 서로 다른 연락처(휴대폰|이메일)가 섞여 있는 그룹.
+  const indivNameGroups = new Map<string, CompanyRow[]>();
+  for (const r of indivRows) { const k = normalizeCompanyNameKey(r.name); if (!k) continue; const a = indivNameGroups.get(k); if (a) a.push(r); else indivNameGroups.set(k, [r]); }
+  let indivHomonymGroups = 0;
+  for (const a of indivNameGroups.values()) {
+    if (a.length < 2) continue;
+    if (new Set(a.map((r) => `${normalizePhone(r.phone)}|${r.email}`)).size >= 2) indivHomonymGroups++;
+  }
+  const indivUniqueCandidates = new Set(indivRows.map((r) => `${normalizeCompanyNameKey(r.name)}|${normalizePhone(r.phone)}|${r.email}`)).size;
+  const indivPhoneOnly = indivRows.filter((r) => r.status === "new" && r.matchDetail?.fields?.length === 1 && r.matchDetail.fields[0] === "휴대전화").length;
+  const indivEmailOnly = indivRows.filter((r) => r.status === "new" && r.matchDetail?.fields?.length === 1 && r.matchDetail.fields[0] === "이메일").length;
+
+  const diagnostics = {
+    mode,
+    indivTotalRows: indivRows.length,
+    indivUniqueCandidates,
+    indivNewRegistrable: indivRows.filter((r) => r.status === "new").length,
+    indivFileExactDup: indivRows.filter((r) => r.status === "duplicate_file").length,
+    indivHomonymGroups,
+    indivDbExactDup: indivRows.filter((r) => r.status === "identical").length, // 기존 개인고객과 완전동일(제외)
+    indivPhoneOnly,
+    indivEmailOnly,
+    indivErrors: indivRows.filter((r) => r.status === "error").length,
+    totalRows: rows.length,                                          // 전체 데이터행
+    rowsNoBiz: noBizRows,                                            // 사업자번호 없음
+    rowsInvalidBiz: invalidBizRows,                                  // 사업자번호 형식오류
+    rowsWithValidBiz: rows.length - noBizRows - invalidBizRows,      // 유효 10자리 보유 행
+    uniqueBizGroups: bizGroups.size,                                 // canonical 사업자번호 unique 그룹 수
+    dupGroupCount: dupGroups.length,                                 // 동일 사업자번호 ≥2행 그룹 수
+    dupGroupRowCount: dupGroups.reduce((s, a) => s + a.length, 0),   // 중복 그룹에 포함된 총 행 수
+    singleBizGroupCount: bizGroups.size - dupGroups.length,          // 1행짜리 사업자 수
+    groupsDiffPhone,                                                 // 동일 biz 내 전화 상이 그룹 수
+    groupsDiffEmail,                                                 // 동일 biz 내 이메일 상이 그룹 수
+    reviewConflictGroups: groupsDiffName,                            // 동일 biz 인데 정규화 거래처명 상이 → 사람 검토
+    dbBizExactMatchUnique: dbMatchUnique,                            // 기존 535 와 사업자번호 exact match unique 수(masking 해제)
+    newUniqueBiz: bizGroups.size - dbMatchUnique,                    // 실제 신규 unique 사업자 수
+    finalUniqueMasters: bizGroups.size + noBizRows,                  // 최종 unique Master(사업자번호 그룹 + 사업자번호 없는 행 각 별도)
+  };
 
   return {
     sheetName: parsed.sheetName,
     headerRowIndex: parsed.headerRowIndex,
     columnMap: describeColumnMap(parsed.headers, colMap),
     rows,
+    diagnostics,
   };
 }
 
@@ -312,14 +494,17 @@ router.post(
   excelUpload.single("file"),
   async (req, res) => {
     if (!req.file) { res.status(400).json({ error: "파일을 첨부해주세요. (필드명: file)" }); return; }
+    // importKind="individual" → 전용 개인고객 모드(모든 행 INDIVIDUAL). 미지정/기타 → 기존 사업자 거래처 처리.
+    const forceCustomerType = (req.body as any)?.importKind === "individual" ? ("INDIVIDUAL" as const) : undefined;
     try {
-      const result = await analyzeCompanies(req.file.buffer);
+      const result = await analyzeCompanies(req.file.buffer, { forceCustomerType });
       res.json({
         fileName: decodeFileName(req.file.originalname),
         sheetName: result.sheetName,
         headerRowIndex: result.headerRowIndex,
         columnMap: result.columnMap,
         summary: summarize(result.rows),
+        diagnostics: result.diagnostics,
         rows: result.rows,
       });
     } catch (err) {
@@ -338,9 +523,10 @@ router.post(
     if (!req.file) { res.status(400).json({ error: "파일을 첨부해주세요. (필드명: file)" }); return; }
     const fileName = decodeFileName(req.file.originalname);
     const mode = parseMode((req.body as any)?.mode);
+    const forceCustomerType = (req.body as any)?.importKind === "individual" ? ("INDIVIDUAL" as const) : undefined;
     try {
-      // 서버에서 재분석·재검증 후 상태별 저장
-      const result = await analyzeCompanies(req.file.buffer);
+      // 서버에서 재분석·재검증 후 상태별 저장 (analyze 와 동일 옵션으로 재검증 — §16 보안)
+      const result = await analyzeCompanies(req.file.buffer, { forceCustomerType });
       const newRows = result.rows.filter((r) => r.status === "new");
       const updateRows = mode === "update"
         ? result.rows.filter((r) => r.status === "update" && r.existingId != null)
@@ -506,7 +692,7 @@ interface ContactRow {
   officePhoneNorm: string;
 }
 
-type MiniCompany = { id: number; name: string };
+type MiniCompany = { id: number; name: string; biz?: string };
 
 /** 파일의 거래처 식별정보(사업자번호/거래처명)로 VERITAS 거래처를 확정 연결(§7·§8). */
 function resolveContactCompany(
@@ -517,27 +703,36 @@ function resolveContactCompany(
   const nameCands = companyNameKey ? (byName.get(companyNameKey) ?? []) : [];
 
   if (bizNorm) {
-    if (bizCands.length >= 2) return { company: null, status: "needs_review", reason: "거래처 다중후보(동일 사업자번호)" };
+    // 동일 사업자번호 Master 2건 이상(§10) → 자동연결 금지, 정확한 사유 표시.
+    if (bizCands.length >= 2) return { company: null, status: "needs_review", reason: "동일 사업자번호 거래처 Master 2건 이상 존재 (검토 필요)" };
     if (bizCands.length === 1) {
       const comp = bizCands[0];
-      // 식별정보 충돌(§8): 거래처명이 다른 회사(후보에 comp 없음)를 가리키면 임의 선택 금지.
+      // 사업자번호 exact 1개 → 자동연결(§8·§9). 단, 파일 거래처명이 실질적으로 다른 회사(법인표기 차이 아님)를
+      //   가리키면 임의 선택 금지 → "사업자번호 일치 / 회사명 상이"로 사람 검토(§9).
       if (companyNameKey && nameCands.length > 0 && !nameCands.some((c) => c.id === comp.id)) {
-        return { company: null, status: "needs_review", reason: "거래처 식별정보 충돌(사업자번호↔거래처명)" };
+        return { company: null, status: "needs_review", reason: "사업자번호 일치 / 회사명 상이 (검토 필요)" };
       }
       return { company: comp };
     }
-    // 사업자번호가 있으나 VERITAS 에 없음
+    // 사업자번호가 있으나 canonical 일치하는 Master 없음.
     if (companyNameKey) {
-      if (nameCands.length >= 2) return { company: null, status: "needs_review", reason: "거래처 다중후보(거래처명)·사업자번호 미확인" };
-      if (nameCands.length === 1) return { company: null, status: "needs_review", reason: "사업자번호 미확인(거래처명만 일치) — 확인필요" };
+      if (nameCands.length >= 2) return { company: null, status: "needs_review", reason: "거래처명 다중후보 · 사업자번호 Master 없음 (검토 필요)" };
+      if (nameCands.length === 1) {
+        // 거래처명은 일치하나 사업자번호가 Master 값과 다름/누락(§12 세분화).
+        const nc = nameCands[0];
+        return (nc.biz && nc.biz.length > 0)
+          ? { company: null, status: "needs_review", reason: "회사명 일치 / 사업자번호 상이 (검토 필요)" }
+          : { company: null, status: "needs_review", reason: "거래처 사업자번호 누락 (거래처명 일치) — 확인필요" };
+      }
     }
-    return { company: null, status: "error", reason: "거래처 미확인(사업자번호 불일치)" };
+    // §11: canonical 사업자번호 match 없음 + 안전한 거래처명 match 없음 → 실제 Master 부재.
+    return { company: null, status: "error", reason: "거래처 미등록 (사업자번호·거래처명 모두 Master에 없음)" };
   }
   // 사업자번호 없음 → 거래처명으로만
   if (companyNameKey) {
-    if (nameCands.length >= 2) return { company: null, status: "needs_review", reason: "거래처 다중후보(거래처명)" };
+    if (nameCands.length >= 2) return { company: null, status: "needs_review", reason: "거래처명 다중후보 (검토 필요)" };
     if (nameCands.length === 1) return { company: nameCands[0] };
-    return { company: null, status: "error", reason: "거래처 미확인(거래처명 불일치)" };
+    return { company: null, status: "error", reason: "거래처 미등록 (거래처명 Master에 없음)" };
   }
   return { company: null, status: "error", reason: "거래처 연결 불가(사업자번호·거래처명 없음)" };
 }
@@ -569,7 +764,7 @@ async function analyzeContacts(buffer: Buffer): Promise<{
   const companyByBiz = new Map<string, MiniCompany[]>();
   const companyByName = new Map<string, MiniCompany[]>();
   for (const c of companies) {
-    const mc: MiniCompany = { id: c.id, name: c.name };
+    const mc: MiniCompany = { id: c.id, name: c.name, biz: c.biz };
     if (c.biz && c.biz.length > 0) { const a = companyByBiz.get(c.biz); if (a) a.push(mc); else companyByBiz.set(c.biz, [mc]); }
     const nk = normalizeCompanyNameKey(c.name);
     if (nk) { const a = companyByName.get(nk); if (a) a.push(mc); else companyByName.set(nk, [mc]); }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { api, TranslatorProfile, TranslatorRate, NoteEntry, normalizeLanguages, LangExpEntry, parseLangExperiences } from "../../lib/constants";
 import { registerUnsavedChecker } from "../../lib/unsavedGuard";
-import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
+import { PrimaryBtn, GhostBtn, ClickSelect, confirmDialog, alertDialog } from "../ui";
 import { BackToListButton } from "./BackToListButton";
 import { DraggableModal } from "./DraggableModal";
 import { SensitiveInfoModal, SETTLEMENT_TYPES } from "./SensitiveInfoModal";
@@ -638,7 +638,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
       onToast(RESUME_UPLOAD_ERROR_MSG);
       return;
     }
-    if (profile?.resumeUrl && !window.confirm("기존 이력서를 새 파일로 교체하시겠습니까?")) return;
+    if (profile?.resumeUrl && !(await confirmDialog({ title: "이력서 교체", message: "기존 이력서를 새 파일로 교체하시겠습니까?", confirmLabel: "교체", variant: "warning" }))) return;
     setResumeUploading(true);
     try {
       const fd = new FormData();
@@ -898,8 +898,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
     if (ok) { editSnapshot.current = null; setEditMode(false); }
   };
   // 미저장 변경 보호(§9) — 편집 중 이탈 시 확인.
-  const requestClose = () => {
-    if (editMode && !window.confirm("저장하지 않은 변경사항이 있습니다. 이동하시겠습니까?")) return;
+  const requestClose = async () => {
+    if (editMode && !(await confirmDialog({ title: "미저장 변경", message: "저장하지 않은 변경사항이 있습니다. 이동하시겠습니까?", confirmLabel: "이동", variant: "warning" }))) return;
     onClose();
   };
 
@@ -1023,7 +1023,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   };
 
   const handleActivate = async () => {
-    if (!confirm("이 통번역사를 다시 활성화하시겠습니까?")) return;
+    if (!(await confirmDialog({ title: "통번역사 활성화", message: "이 통번역사를 다시 활성화하시겠습니까?", confirmLabel: "활성화", variant: "default" }))) return;
     setActivating(true);
     try {
       const res = await fetch(api(`/api/admin/translators/${userId}/activate`), {
@@ -1047,11 +1047,12 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   };
 
   const handlePermanentDelete = async () => {
-    const ok = confirm(
+    const ok = await confirmDialog({
+      title: "통번역사 완전삭제", confirmLabel: "완전삭제", variant: "danger", message:
       "⚠️ 이 작업은 되돌릴 수 없습니다.\n\n" +
       "테스트 데이터인 경우에만 완전삭제하세요.\n\n" +
-      "정말 완전삭제하시겠습니까?"
-    );
+      "정말 완전삭제하시겠습니까?",
+    });
     if (!ok) return;
     setPermanentDeleting(true);
     setPermanentDeleteError(null);
@@ -1076,7 +1077,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   };
 
   const handleDeleteTranslator = async () => {
-    if (!confirm("이 통번역사를 비활성 처리하시겠습니까?\n기존 단가, 정산, 작업 데이터는 보존됩니다.")) return;
+    if (!(await confirmDialog({ title: "통번역사 비활성", message: "이 통번역사를 비활성 처리하시겠습니까?\n기존 단가, 정산, 작업 데이터는 보존됩니다.", confirmLabel: "비활성", variant: "warning" }))) return;
     setDeleting(true);
     setDeleteError(null);
     try {
@@ -1676,7 +1677,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                             title={isBlockedForGraduate ? "통번역대학원 출신 전문 통번역사는 일반번역으로 분류하지 않습니다. 전문번역을 선택해 주세요." : undefined}
                             onClick={() => {
                               if (isBlockedForGraduate) {
-                                alert("통번역대학원 출신 전문 통번역사는 일반번역으로 분류하지 않습니다.\n전문번역을 선택해 주세요.");
+                                void alertDialog({ title: "분류 안내", message: "통번역대학원 출신 전문 통번역사는 일반번역으로 분류하지 않습니다.\n전문번역을 선택해 주세요.", variant: "warning" });
                                 return;
                               }
                               const cur = form.profileSubTypes.split(",").map(s => s.trim()).filter(Boolean);
@@ -1912,7 +1913,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                       disabled={resumeDeleting || resumeUploading}
                       aria-label="이력서 삭제"
                       onClick={async () => {
-                        if (!window.confirm("이력서를 삭제하시겠습니까?")) return;
+                        if (!(await confirmDialog({ title: "이력서 삭제", message: "이력서를 삭제하시겠습니까?", confirmLabel: "삭제", variant: "danger" }))) return;
                         setResumeDeleting(true);
                         try {
                           const r = await fetch(api(`/api/admin/translators/${userId}/resume`), { method: "DELETE", headers: authH });

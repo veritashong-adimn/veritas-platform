@@ -114,6 +114,26 @@ function payeeTypeOf(category: "individual" | "vendor" | "expense"): string {
   return category === "vendor" ? "vendor" : category === "expense" ? "none" : "individual";
 }
 
+// 부대비용 상품 판별(§3·§5) — 실제 사람이 수행하는 서비스가 아니라 수행자에게 귀속되는 실비·보상 성격 상품.
+//   이런 상품은 별도 수행행으로 만들지 않고, 실제 수행행 내부의 비용필드(출장비·교통비·추가통역료·기타비용)로 관리한다.
+//   판별은 상품 카탈로그의 구조화된 taxonomy(상품유형·코드 카테고리·메인카테고리)로만 한다 — 상품명 문자열 판단 금지(§5).
+//   주의: '통역사 출장비/교통비/취소보상비' 등은 productType='interpretation' 이라 itemType/productType 만으로는
+//   실제 통역과 구분되지 않는다. 코드 카테고리(IN-MISC/IN-TRIP/IN-CANCEL)·메인카테고리로 안정적으로 구분한다.
+const INCIDENTAL_MAIN_CATEGORIES = new Set([
+  "기타비용", "출장/이동", "취소/보상",           // interpretation 계열 부대비용(레거시 포함)
+  "교통비", "식대", "숙박", "기타실비", "배송/퀵", // operations/expense 계열 실비
+]);
+function isIncidentalCostItem(itemType: string | null | undefined, prod: any): boolean {
+  if ((itemType ?? "") === "expense") return true;                     // EX-*(교통/식비/숙박/배송) + operations 정규화분
+  const pt = String(prod?.productType ?? "").toLowerCase();
+  if (pt === "expense" || pt === "operations") return true;            // 실비/운영 상품유형
+  const code = String(prod?.code ?? "").toUpperCase();
+  if (/^(EX|OP)-/.test(code)) return true;                             // 실비/운영 코드
+  if (/^IN-(MISC|TRIP|CANCEL)(-|$)/.test(code)) return true;           // 통역 부대비용(기타비용·출장/이동·취소보상)
+  if (INCIDENTAL_MAIN_CATEGORIES.has(String(prod?.mainCategory ?? ""))) return true; // 메인카테고리 백업 신호
+  return false;
+}
+
 // §8·§9 기존 행 자동 교정 대상 판정 — "판매불러오기로 생성됐고 아직 사용자가 손대지 않은" 행만.
 //   수행자·업체 미지정 / 원가 0 / 미정산 / 미지급 / 지급회차·명세서 없음 / 실지급 없음.
 //   하나라도 진행되었으면 사용자 확정값으로 보고 자동 교정하지 않는다(§8·§10).
@@ -158,7 +178,7 @@ function parseTranslationMemo(memo: string | null | undefined): { fileName?: str
 //  · 계약단가는 절대 복사하지 않는다(§10) — saleUnitPrice 는 "참고값"으로만 보관.
 //  · 번역 상세(파일명·형식·단어수·글자수)는 판매 memo 인코딩값을 파싱해 스냅샷으로 승격 저장(§6).
 //    파일명 우선순위: 직접입력(memo) → 첨부파일명(fileName 인자) → null. 새 DB 컬럼 없이 JSON만 확장.
-export function buildDetailSnapshot(it: typeof quoteItemsTable.$inferSelect, prod: any, fileName: string | null) {
+export function buildDetailSnapshot(it: typeof quoteItemsTable.$inferSelect, prod: any, fileName: string | null, groupSaleSupplyAmount?: number | null) {
   const mem = parseTranslationMemo(it.memo);
   // 페이지수 — 판매가 페이지 기준일 때 quantity 가 곧 페이지수(단어/글자→페이지 자동환산 결과). 그 외 null.
   const pageCount = it.unit === "페이지" && it.quantity != null ? String(it.quantity) : null;
@@ -172,6 +192,10 @@ export function buildDetailSnapshot(it: typeof quoteItemsTable.$inferSelect, pro
     saleQuantity: it.quantity != null ? String(it.quantity) : null,
     saleUnitPrice: it.unitPrice != null ? String(it.unitPrice) : null,
     saleSupplyAmount: it.supplyAmount != null ? String(it.supplyAmount) : null,
+    // 서비스 그룹 매출(§수익률) — 본 서비스 supply + 연결 부대항목(parent_item_id=본) supply 합. NULL/미제공=레거시(수익률은 기존 saleSupplyAmount fallback).
+    groupSaleSupplyAmount: groupSaleSupplyAmount != null ? String(groupSaleSupplyAmount) : null,
+    // 원본 판매 투입인원 — per-person 행은 interpreterCount=1 로 저장되므로, 1인당 그룹매출 배분용으로 원본 인원을 별도 보존(§16).
+    originalInterpreterCount: it.interpreterCount ?? null,
     // 통역 상세(§5)
     interpretDate: it.interpretDate ?? null,
     interpretPlace: it.interpretPlace ?? null,
@@ -526,6 +550,14 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
     const items = await db.select().from(quoteItemsTable)
       .where(eq(quoteItemsTable.quoteId, quote.id)).orderBy(quoteItemsTable.id);
 
+    // 서비스 그룹 매출(§수익률) — 부대항목(parent_item_id=본)은 수행행을 만들지 않으므로, 그 판매액을 본 서비스 행 스냅샷에 담아 수익률 분모로 사용한다.
+    //   groupSupplyOf(본) = 본 supply + Σ(연결 부대항목 supply). 그룹 미사용(레거시) 항목은 자식이 없어 본인 supply 와 동일 → 기존과 동치.
+    const childSupplyByParent = new Map<number, number>();
+    for (const it of items) {
+      if (it.parentItemId != null) childSupplyByParent.set(it.parentItemId, (childSupplyByParent.get(it.parentItemId) ?? 0) + Number(it.supplyAmount ?? 0));
+    }
+    const groupSupplyOf = (it: typeof items[number]) => Number(it.supplyAmount ?? 0) + (childSupplyByParent.get(it.id) ?? 0);
+
     // 지급일 즉시 자동계산(§10) — 납품일 생성 시 직전 영업일 조정된 지급예정일도 함께 채운다.
     const importHolidaySet = await loadKrHolidaySet();
     const importIsHoliday = (d: string) => importHolidaySet.has(d);
@@ -548,69 +580,87 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
     const existing = await db.select().from(performanceAssignmentsTable)
       .where(and(eq(performanceAssignmentsTable.projectId, projectId), isNull(performanceAssignmentsTable.deletedAt)));
 
-    // 동일 판매항목에 연결된 기존 수행정보 찾기(§9). saleItemId 는 재저장으로 stale 가능 →
-    //   (sequence + 상품명 스냅샷) 폴백으로도 매칭한다.
-    const findExisting = (it: typeof items[number], idx: number) =>
-      existing.find(e => (it.id != null && e.saleItemId === it.id) ||
-        `${e.saleItemSequence}::${e.productNameSnapshot ?? ""}` === `${idx}::${it.productName ?? ""}`);
+    // 동일 판매항목에 연결된 기존 수행정보 전부 찾기(§9·§15). saleItemId 는 재저장으로 stale 가능 →
+    //   (sequence + 상품명 스냅샷) 폴백으로도 매칭한다. 통역 인원분리(§2)로 한 판매항목에 N행이 존재할 수
+    //   있으므로 find(1건) 대신 filter(전체)로 매칭하고, 이미 다른 항목에 귀속된 행은 claimed 로 제외해 중복 귀속을 막는다.
+    const claimed = new Set<number>();
+    const matchExisting = (it: typeof items[number], idx: number) =>
+      existing.filter(e => !claimed.has(e.id) && ((it.id != null && e.saleItemId === it.id) ||
+        `${e.saleItemSequence}::${e.productNameSnapshot ?? ""}` === `${idx}::${it.productName ?? ""}`));
 
     let maxSeq = existing.reduce((m, e) => Math.max(m, e.sequence ?? 0), -1);
     const toInsert: (typeof performanceAssignmentsTable.$inferInsert)[] = [];
-    const toCorrect: { id: number; it: typeof items[number]; idx: number; cls: PerfClass; prior: typeof existing[number] }[] = [];
+    const toCorrect: { id: number; it: typeof items[number]; idx: number; cls: PerfClass; prior: typeof existing[number]; perPerson: boolean }[] = [];
     // 보호 대상 행(수행자 배정·원가 입력 등): 삭제/재생성 금지. 단, 판매 연결이 유지되면
     //   서비스별 상세 스냅샷(표시용 판매참조값·번역 상세)만 부분 갱신한다(§16-2).
     const toRefreshSnapshot: { id: number; it: typeof items[number]; prod: any; fileName: string | null }[] = [];
     let skipped = 0;
+    let excludedExpense = 0;   // 부대비용(itemType="expense") 제외 건수(§3) — 수행행으로 만들지 않음
 
     items.forEach((it, idx) => {
       if (NON_PERFORMABLE_ITEM_TYPES.has(it.itemType ?? "")) return; // 할인·조정 제외(§8)
       const prod = it.productId != null ? prodMap.get(it.productId) : undefined;
+      // 부대비용(출장비·교통비·추가통역료·숙박·식비·이동일보상·취소보상·저작권료 등)은 주 수행행으로 만들지 않는다(§3).
+      //   실제 수행자 행 내부의 비용필드(performance_expenses)로 관리한다. 상품 카탈로그 taxonomy로 판별(§5).
+      //   ※ 이 상품들은 productType='interpretation' 이라 기존 itemType 판별로는 걸러지지 않아 비용행이 생성됐다(버그 원인).
+      if (isIncidentalCostItem(it.itemType, prod)) { excludedExpense++; return; }
       const cls = classifyPerformer({
         itemType: it.itemType, canonicalKey: prod?.canonicalKey, productType: prod?.productType,
         subCategory: prod?.subCategory, productName: it.productName,
       });
       const fileName = fileByItem.get(it.id) ?? null;
+      const detailSnap = buildDetailSnapshot(it, prod, fileName, groupSupplyOf(it));
+      const isInterp = isInterpretationSnap(detailSnap, it.itemType);
+      const isTrans = isTranslationSnap(detailSnap, it.itemType);
+      // 수행자 수(§2) — 통역만 인원(interpreterCount)만큼 per-person 행으로 분리(1행=수행자 1명). 그 외는 1행.
+      const headcount = isInterp ? interpreterHeadcount(detailSnap) : 1;
 
-      // 이미 연결된 판매항목: 중복 생성 금지(§9). 미배정·원가0 등 교정대상이면
-      //   구분값 + 서비스별 상세 스냅샷 + 판매연결(saleItemId) + 초기 기간·수량을 재동기화(§16).
-      const prior = findExisting(it, idx);
-      if (prior) {
-        if (isCorrectableRow(prior)) {
-          toCorrect.push({ id: prior.id, it, idx, cls, prior });
-        } else {
-          // 보호 행: 수행·원가·정산·날짜 정보는 보존하고, 서비스별 상세 스냅샷만 최신화 대상에 등록(§16-2).
-          skipped++;
-          toRefreshSnapshot.push({ id: prior.id, it, prod, fileName });
-        }
+      // 이 판매항목에 연결된 기존 수행행 전부(중복 생성 금지 §9·§15). 매칭된 행은 claim 하여 다른 항목이 재귀속하지 않게 한다.
+      const priors = matchExisting(it, idx);
+      priors.forEach(p => claimed.add(p.id));
+      const protectedPriors = priors.filter(p => !isCorrectableRow(p));
+      const correctablePriors = priors.filter(p => isCorrectableRow(p));
+
+      // 보호 행(수행자 배정·원가 입력 등): 수행·원가·정산·날짜는 보존하고 서비스별 상세 스냅샷만 최신화(§16-2).
+      for (const p of protectedPriors) { skipped++; toRefreshSnapshot.push({ id: p.id, it, prod, fileName }); }
+
+      // 보호 행이 하나라도 있으면 기존 구조(행 수·인원 스냅샷)를 그대로 존중한다(§16·§20):
+      //   교정 가능한 행만 재동기화하고, per-person 분리 행을 새로 만들지 않는다(이중계산 방지). 인원 스냅샷도 유지(perPerson=false).
+      if (protectedPriors.length > 0) {
+        for (const p of correctablePriors) toCorrect.push({ id: p.id, it, idx, cls, prior: p, perPerson: false });
         return;
       }
 
-      const detailSnap = buildDetailSnapshot(it, prod, fileName);
+      // 보호 행 없음 → 인원수만큼 per-person 행으로 정규화(§2). 교정 가능한 기존 행을 먼저 재사용(재동기화)하고
+      //   부족분만 신규 생성. 초과 행(인원 축소 3→2 등)은 삭제하지 않고 보존한다(§16).
+      const reuse = correctablePriors.slice(0, headcount);
+      for (const p of reuse) toCorrect.push({ id: p.id, it, idx, cls, prior: p, perPerson: isInterp });
+      const need = Math.max(0, headcount - reuse.length);
       const baseFields = initialFieldsFromSale(it);
-      // 판매정보 1행 → 수행정보 1행(§1). 번역의 단어수/글자수는 서비스별 상세정보(스냅샷)로 보존하며, 수행행을 분리하지 않는다.
-      //   번역은 수량/단위를 판매정보에서 자동입력하지 않고 공란(§4·§5·§8) — 사용자가 실제 지급기준으로 직접 입력한다.
-      const isTrans = isTranslationSnap(detailSnap, it.itemType);
-      maxSeq += 1;
       // 계약단가·요금(100%) 등 지급금액은 판매정보에서 자동복사하지 않는다(§8) — 신규 수행행은 공란(NULL)으로 시작.
-      toInsert.push({
-        projectId, quoteId: quote.id, saleItemId: it.id, saleItemSequence: idx, sequence: maxSeq,
-        sourceType: "sale_import", costType: cls.costType,   // 생성 출처·비용 유형(원가분석용)
-        performerCategory: cls.category, lineCategory: cls.lineCategory,
-        payeeType: payeeTypeOf(cls.category), status: "unassigned",
-        serviceType: it.itemType ?? null,
-        productNameSnapshot: it.productName ?? null,
-        // 서비스 유형별 상세 스냅샷(금액 제외, 판매 참조값·단어수/글자수 포함 §2·§3·§6·§10)
-        serviceDetailSnapshot: detailSnap,
-        languageOrServiceSnapshot: it.languagePair ?? null,
-        // 초기 기간·수량·단위·납품일(§10·§12) — 비금액 정보만. 단, 번역 수량/단위는 공란(자동입력 금지 §4·§5·§8).
-        ...baseFields,
-        ...(isTrans ? { quantity: null, unit: null } : {}),
-        // 지급일 자동계산(납품일 기준·직전 영업일 §10)
-        expectedPaymentDate: calcPaymentDate(baseFields.deliveryDate, importIsHoliday),
-        expectedPaymentDateAuto: calcPaymentDate(baseFields.deliveryDate, importIsHoliday),
-        createdBy: req.user?.id ?? null,
-        updatedBy: req.user?.id ?? null,
-      });
+      for (let k = 0; k < need; k++) {
+        maxSeq += 1;
+        toInsert.push({
+          projectId, quoteId: quote.id, saleItemId: it.id, saleItemSequence: idx, sequence: maxSeq,
+          sourceType: "sale_import", costType: cls.costType,   // 생성 출처·비용 유형(원가분석용)
+          performerCategory: cls.category, lineCategory: cls.lineCategory,
+          payeeType: payeeTypeOf(cls.category), status: "unassigned",
+          serviceType: it.itemType ?? null,
+          productNameSnapshot: it.productName ?? null,
+          // 서비스 유형별 상세 스냅샷(금액 제외, 판매 참조값·단어수/글자수 포함 §2·§3·§6·§10).
+          //   통역 per-person 행은 인원=1로 저장해 원가 공식(계약단가×수행일수×인원)이 1인분이 되게 한다(§2·§6, 이중계산 금지).
+          serviceDetailSnapshot: isInterp ? { ...detailSnap, interpreterCount: 1 } : detailSnap,
+          languageOrServiceSnapshot: it.languagePair ?? null,
+          // 초기 기간·수량·단위·납품일(§10·§12) — 비금액 정보만. 단, 번역 수량/단위는 공란(자동입력 금지 §4·§5·§8).
+          ...baseFields,
+          ...(isTrans ? { quantity: null, unit: null } : {}),
+          // 지급일 자동계산(납품일 기준·직전 영업일 §10)
+          expectedPaymentDate: calcPaymentDate(baseFields.deliveryDate, importIsHoliday),
+          expectedPaymentDateAuto: calcPaymentDate(baseFields.deliveryDate, importIsHoliday),
+          createdBy: req.user?.id ?? null,
+          updatedBy: req.user?.id ?? null,
+        });
+      }
     });
 
     let created: typeof performanceAssignmentsTable.$inferSelect[] = [];
@@ -625,7 +675,7 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
       const fileName = fileByItem.get(c.it.id) ?? null;
       const init = initialFieldsFromSale(c.it);
       // 번역 교정: 단어/글자 행이 페이지로 붕괴되지 않도록 기존 수량/단위를 보존한다(§단어글자원본반영·§8).
-      const correctSnap = buildDetailSnapshot(c.it, prod, fileName);
+      const correctSnap = buildDetailSnapshot(c.it, prod, fileName, groupSupplyOf(c.it));
       const isTransCorrect = isTranslationSnap(correctSnap, c.it.itemType);
       // §15: 이미 납품일이 입력됐거나 수동/확인완료 행은 납품일·확인상태를 덮어쓰지 않는다.
       const keepDelivery = c.prior.deliveryConfirmed || c.prior.deliveryDateManual || c.prior.deliveryDate != null;
@@ -645,7 +695,8 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
         serviceType: c.it.itemType ?? null,
         productNameSnapshot: c.it.productName ?? null,
         languageOrServiceSnapshot: c.it.languagePair ?? null,
-        serviceDetailSnapshot: correctSnap,
+        // per-person 정규화 행(§2)은 인원=1로 고정해 원가 1인분 유지(이중계산 방지). 그 외/보호구조 존중 행은 스냅샷 그대로.
+        serviceDetailSnapshot: c.perPerson ? { ...correctSnap, interpreterCount: 1 } : correctSnap,
         ...initRest,                            // 기간·수량·단위는 재동기화
         // 번역은 수량/단위를 재동기화하지 않고 기존값 보존(단어/글자 행 유지). 비번역은 위 initRest 그대로.
         ...(isTransCorrect ? { quantity: c.prior.quantity, unit: c.prior.unit } : {}),
@@ -669,7 +720,7 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
     const refreshedIds: number[] = [];
     for (const rf of toRefreshSnapshot) {
       await db.update(performanceAssignmentsTable).set({
-        serviceDetailSnapshot: buildDetailSnapshot(rf.it, rf.prod, rf.fileName),
+        serviceDetailSnapshot: buildDetailSnapshot(rf.it, rf.prod, rf.fileName, groupSupplyOf(rf.it)),
         updatedBy: req.user?.id ?? null,
         updatedAt: new Date(),
       }).where(eq(performanceAssignmentsTable.id, rf.id));
@@ -681,9 +732,11 @@ router.post("/admin/projects/:id/performances/import-from-sale", ...adminGuard, 
       corrected: correctedRows.length,
       skipped,
       refreshed: refreshedIds.length,
+      excludedExpense,
       message: `신규 수행정보 ${created.length}건을 추가했습니다.` +
         (correctedRows.length ? ` 기존 ${correctedRows.length}건을 판매정보(구분·서비스 상세) 기준으로 재동기화했습니다.` : "") +
-        (refreshedIds.length ? ` 보호된 ${refreshedIds.length}건은 수행·원가 정보를 보존하고 서비스 상세정보만 최신화했습니다.` : ""),
+        (refreshedIds.length ? ` 보호된 ${refreshedIds.length}건은 수행·원가 정보를 보존하고 서비스 상세정보만 최신화했습니다.` : "") +
+        (excludedExpense ? ` 부대비용 ${excludedExpense}건은 각 수행자 행의 비용항목으로 관리되므로 별도 수행행을 만들지 않았습니다.` : ""),
       rows: created.map(stripEnc),
       correctedRows: correctedRows.map(stripEnc),
     });

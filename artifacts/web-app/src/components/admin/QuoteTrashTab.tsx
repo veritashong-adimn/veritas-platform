@@ -8,6 +8,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import './readTableView.css';
 import { api } from '../../lib/constants';
+import { confirmDialog } from '../ui';
 import { formatDocNumber } from '../../lib/quoteTitle';
 import { PageHeader } from './PageHeader';
 import { dsStickyPageHeader } from '../../lib/ds';
@@ -73,7 +74,7 @@ export function QuoteTrashTab({ token, isAdmin, onToast, onBack }: {
   });
 
   const handleRestore = async (r: TrashRow) => {
-    if (!window.confirm(`'${formatDocNumber('Q', r.quoteNumber, r.issueDate)}' 견적서를 복원하시겠습니까?\n기본 견적 목록으로 되돌아갑니다.`)) return;
+    if (!(await confirmDialog({ title: '견적서 복원', message: `'${formatDocNumber('Q', r.quoteNumber, r.issueDate)}' 견적서를 복원하시겠습니까?\n기본 견적 목록으로 되돌아갑니다.`, confirmLabel: '복원', variant: 'default' }))) return;
     setBusyId(r.id);
     try {
       const res = await fetch(api(`/api/admin/quotes/${r.id}/restore`), { method: 'POST', headers: authH });

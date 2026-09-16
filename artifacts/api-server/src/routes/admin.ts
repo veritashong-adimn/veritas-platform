@@ -36,6 +36,7 @@ import {
 } from "../services/prepaidDeductionQuote";
 import { closeAccumulatedBatchQuote } from "../services/accumulatedBatch";
 import { effectiveQuoteConditions } from "../services/quoteRelation";
+import { applyParentIndexLinks } from "../services/quoteItemGroup";
 import { createRevision, approveRevision, rejectRevision } from "../services/quoteRevision";
 import { createDerivedSplit, approveDerived, rejectDerived, calculateAllocation, generateDerivedBillingRows, type DerivedSplitInput } from "../services/quoteDerived";
 
@@ -1574,6 +1575,7 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
       unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string;
       itemType?: string; taxType?: string; interpreterCount?: number;
       discountType?: string; discountValue?: number; discountReason?: string;
+      parentItemIndex?: number | null;   // 서비스 그룹: 같은 items[] 내 본 서비스 인덱스(부대항목만 지정, NULL=본/공통)
     }>;
     note?: string; taxDocumentType?: string; taxCategory?: string;
     quoteType?: string; billingType?: string; paymentMethod?: string;
@@ -1652,7 +1654,7 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
       }).returning();
 
       if (hasItems) {
-        await tx.insert(quoteItemsTable).values(calcItemsAll.map(it => ({
+        const insertedItems = await tx.insert(quoteItemsTable).values(calcItemsAll.map(it => ({
           quoteId: quote.id,
           productId: (it as any).productId ?? null,
           productName: it.productName,
@@ -1680,7 +1682,9 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
           discountType: (it as any).discountType ?? null,
           discountValue: (it as any).discountValue != null ? String((it as any).discountValue) : null,
           discountReason: (it as any).discountReason ?? null,
-        })));
+        }))).returning({ id: quoteItemsTable.id });
+        // 서비스 그룹 링크(부대항목 → 본 서비스). 삽입 순서 보존 → insertedItems[i] === items[i].
+        await applyParentIndexLinks(tx, insertedItems.map(r => r.id), items!);
       }
 
       // ── 차감 견적서: 선입/이월 + 차감액을 예약(reserved)으로 기록 ──────────────
@@ -3258,6 +3262,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     interpretationDirection?: string; interpretType?: string;
     hasTravelExpense?: boolean; hasEquipment?: boolean; isCustomProduct?: boolean;
     discountType?: string; discountValue?: number; discountReason?: string;
+    parentItemIndex?: number | null;   // 서비스 그룹: 같은 items[] 내 본 서비스 인덱스(부대항목만 지정)
   };
   const { title, items, note, quoteType, issueDate, validUntil, companyId, contactId, divisionId, adminId, versionReason, prepaidLines } = req.body as {
     title?: string; items?: PutItemInput[]; note?: string;
@@ -3329,7 +3334,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         ...(versionReason !== undefined ? { versionReason: versionReason.trim() || null } : {}),
       }).where(eq(quotesTable.id, quoteId));
       await tx.delete(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId));
-      await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
+      const putInserted = await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
         quoteId,
         productId:               (it as any).productId              ?? null,
         productName:             it.productName,
@@ -3361,7 +3366,9 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         discountType:            (it as any).discountType           ?? null,
         discountValue:           (it as any).discountValue != null ? String((it as any).discountValue) : null,
         discountReason:          (it as any).discountReason         ?? null,
-      })));
+      }))).returning({ id: quoteItemsTable.id });
+      // 서비스 그룹 링크 재확정(수정 시 전량 재삽입 → 인덱스 기반 재연결). 삽입 순서 = items 순서.
+      await applyParentIndexLinks(tx, putInserted.map(r => r.id), items);
 
       // ── 차감 견적서: 선입/이월 + 차감 예약 재동기화 ───────────────────────────
       if (isPrepaidDeductionQuoteType(quoteType ?? "b2b_standard")) {

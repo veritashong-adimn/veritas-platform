@@ -35,6 +35,10 @@ export type ServiceType  = 'translation' | 'interpretation' | 'equipment' | 'exp
 export type DiscountType  = 'amount' | 'percent';
 
 export interface QuoteItemForm {
+  // 서비스 그룹(매출 묶음) — 편집 폼 내부 안정 로컬키(_lid)와 부모 참조(parentLid). 저장 시 parentItemIndex 로 변환.
+  //   서버 로드 항목은 _lid='S'+id 로 안정화되어 parentLid='S'+parentItemId 로 자동 복원(2-pass 불필요).
+  _lid?:        string;
+  parentLid?:   string | null;   // 부대항목이 연결된 본 서비스의 _lid (NULL=본 서비스 또는 공통비용)
   productId:    number | null;
   productName:  string;
   productType:  ServiceType;
@@ -71,7 +75,7 @@ export interface QuoteItemForm {
   discountReason?: string;        // 내부 사유 (PDF 미출력)
 }
 
-interface Company   { id: number; name: string; divisionNames?: string[] }
+interface Company   { id: number; name: string; divisionNames?: string[]; customerType?: string | null; phone?: string | null; mobile?: string | null; email?: string | null }
 interface Division  { id: number; name: string }
 interface Contact   { id: number; name: string; companyId: number | null; divisionId?: number | null; divisionName?: string | null }
 interface AdminUser { id: number; name?: string | null; email: string }
@@ -196,8 +200,13 @@ const QUOTE_TYPE_SHORT: Record<string, string> = {
   b2b_standard: '일반', b2c_prepaid: '차감', prepaid_deduction: '차감', accumulated_batch: '누적',
 };
 
+// 서비스 그룹 로컬키 발급기 — 폼 세션 내 유일. 신규행은 'L{n}', 서버 로드행은 'S{id}'(convertToFormItem) 로 접두어를 달리해 충돌 방지.
+let __lidSeq = 0;
+export function nextLid(): string { return `L${++__lidSeq}`; }
+
 function defaultItem(): QuoteItemForm {
   return {
+    _lid: nextLid(), parentLid: null,
     // 신규 기본 상품 행은 '통역'을 기본 유형으로 한다(지시문 §3·§4). 세부유형은 통역 상품의
     // 기존 정상 기본값을 그대로 사용한다 — 통역 견적행에는 별도 순차/동시 구분 필드가 없고(카탈로그
     // 상품 선택으로 세부유형이 정해짐), 필드를 신설하면 저장 구조가 바뀌므로(§7) 현 구조를 유지한다.
@@ -1246,8 +1255,9 @@ function ServiceFields({ it, update, products }: {
 
 // ─── 견적 항목 Row ────────────────────────────────────────────────────────────
 
-function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, updateItem, removeItem, addItemBelow, moveItem, duplicateItem }: {
+function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOptions, updateItem, removeItem, addItemBelow, moveItem, duplicateItem }: {
   it: QuoteItemForm; idx: number; total: number; vatType: VatType; baseSupply: number; products: Product[];
+  parentOptions: { lid: string; label: string }[];
   updateItem: (idx: number, p: Partial<QuoteItemForm>) => void;
   removeItem: (idx: number) => void;
   addItemBelow: (idx: number) => void;
@@ -1454,6 +1464,16 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, updateIte
             placeholder="비고 (긴급, 감수 포함, 출장비 별도 등)"
             style={{ ...rinp('100%'), color: C.textMuted }}
             title="긴급, 감수 포함, DTP 포함, 출장비 별도, 장비 설치 포함 등" />
+          {/* 서비스 그룹 연결 — 부대비용(expense) 행만. 어느 본 서비스의 매출 묶음에 속하는지 지정(수익률 계산용, 정산 불변). */}
+          {it.productType === 'expense' && parentOptions.length > 0 && (
+            <select value={it.parentLid ?? ''} onChange={e => updateItem(idx, { parentLid: e.target.value || null })}
+              data-testid={`quote-item-parent-${idx}`} aria-label="연결 서비스(매출 그룹)"
+              title="이 부대비용이 속한 본 서비스를 선택하면 해당 서비스의 매출 그룹에 합산되어 수익률이 정확히 계산됩니다."
+              style={{ ...rinp('100%'), marginTop: 4, fontSize: 11, color: it.parentLid ? C.primaryText : C.textMuted }}>
+              <option value="">연결 서비스 없음 (공통비용)</option>
+              {parentOptions.map(o => <option key={o.lid} value={o.lid}>↳ {o.label}</option>)}
+            </select>
+          )}
         </div>
       </div>
 
@@ -1532,10 +1552,15 @@ export function QuoteItemsEditor({ items, onItemsChange, vatType, products }: {
   // 행 복사 — 원본 quote item 사용자 입력값을 그대로 복제해 바로 아래에 삽입한다(수행정보 복사와 동일 UX).
   //   QuoteItemForm 은 평면 구조(PK·생성시각·첨부/판매/정산 연결값 없음)이므로 얕은 복사만으로 완전 독립 행이 되며,
   //   저장 시 id 없는 신규 quote_item 으로 INSERT 된다(원본은 UPDATE 되지 않음). 금액은 새 행 기준으로 기존 로직이 재계산.
-  const duplicateItem = (idx: number) => onItemsChange([...items.slice(0, idx + 1), { ...items[idx] }, ...items.slice(idx + 1)]);
+  const duplicateItem = (idx: number) => onItemsChange([...items.slice(0, idx + 1), { ...items[idx], _lid: nextLid(), parentLid: null }, ...items.slice(idx + 1)]);
   const fieldHint = (() => { const t = [...new Set(items.map(it => it.productType))]; return t.length === 1 ? SVC_FIELD_HINTS[t[0]] : '서비스별 상세 입력 필드'; })();
   // 할인 항목(%)의 기준이 되는 비할인 상품 공급가액 합계 — 모든 행에 공통 전달
   const baseSupply = items.reduce((a, it) => it.productType === 'discount' ? a : a + calcItem(it, vatType).supply, 0);
+  // 서비스 그룹 연결 후보 — 본 서비스(번역/통역/장비)만. 부대(expense)/할인(discount)은 부모가 될 수 없음(1-depth).
+  const parentOptions = items
+    .map((it, i) => ({ it, i }))
+    .filter(({ it }) => (it.productType === 'translation' || it.productType === 'interpretation' || it.productType === 'equipment') && !!it._lid)
+    .map(({ it, i }) => ({ lid: it._lid as string, label: `${i + 1}. ${it.productName || SVC_CFG[it.productType].label}` }));
 
   return (
     <>
@@ -1559,6 +1584,7 @@ export function QuoteItemsEditor({ items, onItemsChange, vatType, products }: {
         <div>
           {items.map((it, idx) => (
             <QuoteItemRow key={idx} it={it} idx={idx} total={items.length} vatType={vatType} baseSupply={baseSupply} products={products}
+              parentOptions={parentOptions}
               updateItem={updateItem} removeItem={removeItem} addItemBelow={addItemBelow} moveItem={moveItem} duplicateItem={duplicateItem} />
           ))}
         </div>
@@ -1586,7 +1612,15 @@ export function QuoteItemsEditor({ items, onItemsChange, vatType, products }: {
 
 // 폼 항목(QuoteItemForm[]) → 저장 API body(items) 매핑 — 견적·판매 저장에서 공용 사용.
 export function buildQuoteItemsBody(items: QuoteItemForm[], vat: VatType) {
-  return items.map(it => toApiItem(it, vat));
+  // 서비스 그룹: parentLid(부모 _lid) → 같은 배열 내 인덱스로 변환해 parentItemIndex 로 전송(서버가 삽입 후 실제 id 로 재매핑).
+  const idxByLid = new Map<string, number>();
+  items.forEach((it, i) => { if (it._lid) idxByLid.set(it._lid, i); });
+  return items.map((it, i) => {
+    const base = toApiItem(it, vat);
+    const pIdx = it.parentLid != null ? idxByLid.get(it.parentLid) : undefined;
+    const parentItemIndex = pIdx != null && pIdx !== i ? pIdx : null;   // 자기참조 방지
+    return { ...base, parentItemIndex };
+  });
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -1877,7 +1911,14 @@ export function QuoteEditorWorkspace({
   const isStandalone   = projectId === null;
   // 거래처 보조정보에 연결된 브랜드(divisions) 전체를 표시한다.
   // (InlineSearchField는 label + sub 를 모두 검색하므로, 전체 브랜드명으로 거래처 검색이 가능해진다)
-  const companyOptions = companies.map(c => ({ id: c.id, label: c.name, sub: c.divisionNames?.join(' · ') }));
+  // 개인고객은 동명이인 식별을 위해 보조줄에 휴대전화·이메일을 표시(§6). 기업 거래처는 기존대로 브랜드/부서명.
+  const companyOptions = companies.map(c => ({
+    id: c.id,
+    label: c.name,
+    sub: c.customerType === 'INDIVIDUAL'
+      ? ['개인고객', (c.mobile || c.phone || '').trim() || null, c.email || null].filter(Boolean).join(' · ')
+      : c.divisionNames?.join(' · '),
+  }));
   const divisionOptions = divisions.map(d => ({ id: d.id, label: d.name }));
   // 담당자: 거래처로 1차 필터, 브랜드 선택 시 해당 브랜드(또는 브랜드 미지정) 담당자만.
   //   담당자 옵션에는 브랜드명을 회색 서브텍스트로 함께 표시한다.
@@ -2821,7 +2862,13 @@ export function QuoteEditorWorkspace({
 
       {/* 파생견적 생성 모달 (STEP3 — 견적서 분할 발행) — N개 업체로 100% 분할 */}
       {showDerivedModal && (() => {
-        const companyOptions = companies.map(c => ({ id: c.id, label: c.name }));
+        const companyOptions = companies.map(c => ({
+          id: c.id,
+          label: c.name,
+          sub: c.customerType === 'INDIVIDUAL'
+            ? ['개인고객', (c.mobile || c.phone || '').trim() || null, c.email || null].filter(Boolean).join(' · ')
+            : undefined,
+        }));
         const base = allocation?.currentEffectiveAmount ?? 0;
         const rowAmount = (r: SplitRow) => r.mode === 'items'
           ? dSourceItems.filter(it => r.itemIds.has(it.id)).reduce((s, it) => s + it.totalAmount, 0)

@@ -8,6 +8,7 @@
  */
 import React, { useRef, useState } from 'react';
 import { api } from '../../lib/constants';
+import { confirmDialog } from '../ui';
 import { EquipmentRow } from '../../lib/inquiryMeta';
 import { InquiryFormFields, InquiryFormState, emptyInquiryForm, buildInquiryPayload } from './InquiryFormFields';
 import { InquiryAiAnalyzePanel, AiInquiryFields, AiInquiryEquipment } from './InquiryAiAnalyzePanel';
@@ -39,9 +40,9 @@ export function InquiryRegisterTab({ token, onToast, onDone, adminUsers = [] }: 
   // ── 초기화 ──────────────────────────────────────────────────────────────────
   // 폼(서비스유형·고객정보·거래처/담당자 선택·서비스별 내용·요구사항)·장비·첨부·AI 패널을 모두 비운다.
   // 접수일시는 현재 시각으로, PM 등 기본값 필드는 기본값으로 복귀(emptyInquiryForm).
-  const handleReset = () => {
+  const handleReset = async () => {
     const hasContent = isInquiryFormDirty(f) || equipment.length > 0 || attachments.length > 0 || aiDirtyRef.current;
-    if (hasContent && !window.confirm('입력한 내용이 모두 삭제됩니다. 초기화하시겠습니까?')) return;
+    if (hasContent && !(await confirmDialog({ title: '입력 초기화', message: '입력한 내용이 모두 삭제됩니다. 초기화하시겠습니까?', confirmLabel: '초기화', variant: 'warning' }))) return;
     setF(emptyInquiryForm());          // receivedAt=현재시각, channel/customerMode 등 기본값 복귀
     setEquipment([]);
     setAttachments([]);

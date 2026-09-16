@@ -136,16 +136,17 @@ export type CompanyType = "client" | "vendor";
 export type VendorType = string;
 export type CustomerType = "CORPORATE" | "PUBLIC" | "INDIVIDUAL";
 
+// 사용자 표시명: INDIVIDUAL = "개인고객" (내부값은 INDIVIDUAL 유지). "개인"과 혼동 방지.
 export const CUSTOMER_TYPE_LABELS: Record<string, string> = {
   CORPORATE: "기업",
   PUBLIC: "공공기관",
-  INDIVIDUAL: "개인",
+  INDIVIDUAL: "개인고객",
 };
 
 export const CUSTOMER_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: "CORPORATE", label: "기업" },
   { value: "PUBLIC", label: "공공기관" },
-  { value: "INDIVIDUAL", label: "개인" },
+  { value: "INDIVIDUAL", label: "개인고객" },
 ];
 
 // 고객 분류별 Badge 색상 — 기업(blue) / 공공기관(green) / 개인(orange)

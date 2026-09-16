@@ -13,6 +13,7 @@ import type { QuotePdfData } from '../../lib/quotePdf';
 import { ITEM_TYPE_LABEL } from '../../lib/quotePdf';
 import { renderQuoteTitle, buildDocFileName, escapeHtmlTitle, formatDocNumber } from '../../lib/quoteTitle';
 import { formatDisplayDate } from '../../lib/dateFormat';
+import { alertDialog } from '../ui';
 
 // ─── 숫자 / 날짜 포맷 ────────────────────────────────────────────────────────
 const fmt = (n: number) => n.toLocaleString('ko-KR');
@@ -74,7 +75,7 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
 
     const printWin = window.open('', '_blank', 'width=900,height=700');
     if (!printWin) {
-      alert('팝업 차단이 활성화되어 있습니다.\n브라우저 설정에서 팝업을 허용해 주세요.');
+      void alertDialog({ title: '팝업 차단됨', message: '팝업 차단이 활성화되어 있습니다.\n브라우저 설정에서 팝업을 허용해 주세요.', variant: 'warning' });
       return;
     }
 

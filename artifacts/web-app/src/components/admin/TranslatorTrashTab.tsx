@@ -11,6 +11,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './readTableView.css';
 import { api } from '../../lib/constants';
+import { confirmDialog } from '../ui';
 
 const th: React.CSSProperties = { padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap' };
 const td: React.CSSProperties = { padding: '8px 10px', fontSize: 12, color: '#374151', whiteSpace: 'nowrap' };
@@ -51,7 +52,7 @@ export function TranslatorTrashTab({ token, isAdmin, onToast, onRestored }: {
   });
 
   const handleRestore = async (r: any) => {
-    if (!window.confirm(`'${r.name ?? r.email}' 통번역사를 복원(활성화)하시겠습니까?\n기존 단가·정산·작업 데이터는 모두 유지됩니다.`)) return;
+    if (!(await confirmDialog({ title: '통번역사 복원', message: `'${r.name ?? r.email}' 통번역사를 복원(활성화)하시겠습니까?\n기존 단가·정산·작업 데이터는 모두 유지됩니다.`, confirmLabel: '복원', variant: 'default' }))) return;
     setBusyId(r.id);
     try {
       const res = await fetch(api(`/api/admin/translators/${r.id}/activate`), { method: 'PATCH', headers: authH });

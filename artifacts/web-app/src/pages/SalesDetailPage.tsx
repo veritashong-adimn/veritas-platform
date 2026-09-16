@@ -12,7 +12,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type Product } from '../lib/constants';
-import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn } from '../components/ui';
+import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn, confirmDialog } from '../components/ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../lib/ds';
 import { buildQuotePdfData, type QuoteDetail } from '../lib/quotePdf';
 import { formatDocNumber } from '../lib/quoteTitle';
@@ -242,7 +242,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   // ── 판매취소 = 판매전환 취소 → 원본 견적을 견적관리로 복귀 (DB 완전삭제 아님) ──
   const handleCancelSale = async () => {
     if (deleting) return;
-    if (!window.confirm('이 판매를 취소하시겠습니까?\n판매전환이 취소되고 원본 견적이 견적관리로 복귀합니다. (견적·상품정보는 유지됩니다)')) return;
+    if (!(await confirmDialog({ title: '판매 취소', message: '이 판매를 취소하시겠습니까?\n판매전환이 취소되고 원본 견적이 견적관리로 복귀합니다. (견적·상품정보는 유지됩니다)', confirmLabel: '판매취소', cancelLabel: '닫기', variant: 'danger' }))) return;
     setDeleting(true);
     try {
       const res = await fetch(api(`/api/admin/projects/${saleId}/cancel`), {

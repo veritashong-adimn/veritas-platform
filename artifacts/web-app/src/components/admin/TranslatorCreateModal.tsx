@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { api, normalizeLanguages, LangExpEntry, emptyLangExp } from "../../lib/constants";
 import { formatPhoneNumber } from "../../lib/utils";
-import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
+import { PrimaryBtn, GhostBtn, ClickSelect, alertDialog } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 import { PAYMENT_METHODS, SETTLEMENT_TYPES, BankNameSelect } from "./SensitiveInfoModal";
 import {
@@ -1124,7 +1124,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
                         title={isBlockedForGraduate ? "통번역대학원 출신 전문 통번역사는 일반번역으로 분류하지 않습니다. 전문번역을 선택해 주세요." : undefined}
                         onClick={() => {
                           if (isBlockedForGraduate) {
-                            alert("통번역대학원 출신 전문 통번역사는 일반번역으로 분류하지 않습니다.\n전문번역을 선택해 주세요.");
+                            void alertDialog({ title: "분류 안내", message: "통번역대학원 출신 전문 통번역사는 일반번역으로 분류하지 않습니다.\n전문번역을 선택해 주세요.", variant: "warning" });
                             return;
                           }
                           const cur = form.profileSubTypes.split(",").map(s => s.trim()).filter(Boolean);

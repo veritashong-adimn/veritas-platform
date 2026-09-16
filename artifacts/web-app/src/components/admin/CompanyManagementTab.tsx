@@ -54,6 +54,11 @@ function getCompanyTypeBadge(
   const { bg, color, border } = getCustomerTypeBadgeColors(ct);
   return { label: CUSTOMER_TYPE_LABELS[ct] ?? "기업", style: { ...base, background: bg, color, border: `1px solid ${border}` } };
 }
+
+// 개인고객 휴대전화 표시값 — 폼 등록은 mobile, 대량등록은 phone 에 저장되므로 우선순위로 합쳐 표시한다(§2 기존 필드 재사용).
+function individualPhone(c: { mobile?: string | null; phone?: string | null }): string {
+  return (c.mobile || c.phone || "").trim();
+}
 // ─────────────────────────────────────────────────────────────────────────────
 
 function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
@@ -390,7 +395,7 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
             { value: "all",        label: "전체" },
             { value: "CORPORATE",  label: "기업" },
             { value: "PUBLIC",     label: "공공기관" },
-            { value: "INDIVIDUAL", label: "개인" },
+            { value: "INDIVIDUAL", label: "개인고객" },
           ];
           // 필터·검색·페이지 변경 시 서버에서 조회한 현재 페이지(companies)를 그대로 렌더.
           // 필터 변경 시 1페이지부터 다시 조회한다.
@@ -512,17 +517,30 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                               <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
                                 aria-label="현재 페이지 전체 선택" style={{ width: 15, height: 15, cursor: "pointer" }} />
                             </th>
-                            {/* 헤더 정렬 = 각 컬럼 본문 정렬(담당자·프로젝트 배지만 center, 나머지 left) */}
-                            {([
-                              { label: "ID", align: "left" as const },
-                              { label: "거래처명", align: "left" as const },
-                              { label: "유형", align: "left" as const },
-                              { label: "업종", align: "left" as const },
-                              { label: "담당자", align: "center" as const },
-                              { label: "프로젝트", align: "center" as const },
-                              { label: "총 결제", align: "left" as const },
-                              { label: "등록일", align: "left" as const },
-                            ]).map(h => <th key={h.label} style={{ ...tableTh, textAlign: h.align }}>{h.label}</th>)}
+                            {/* 헤더 정렬 = 각 컬럼 본문 정렬(담당자·프로젝트 배지만 center, 나머지 left).
+                                개인고객 필터 화면에서는 사람 식별을 위해 성명·휴대전화·이메일 컬럼으로 전환하고 업종·담당자는 제거한다(§1). */}
+                            {(companyCustomerTypeFilter === "INDIVIDUAL"
+                              ? [
+                                  { label: "ID", align: "left" as const },
+                                  { label: "성명", align: "left" as const },
+                                  { label: "유형", align: "left" as const },
+                                  { label: "휴대전화", align: "left" as const },
+                                  { label: "이메일", align: "left" as const },
+                                  { label: "프로젝트", align: "center" as const },
+                                  { label: "총 결제", align: "left" as const },
+                                  { label: "등록일", align: "left" as const },
+                                ]
+                              : [
+                                  { label: "ID", align: "left" as const },
+                                  { label: "거래처명", align: "left" as const },
+                                  { label: "유형", align: "left" as const },
+                                  { label: "업종", align: "left" as const },
+                                  { label: "담당자", align: "center" as const },
+                                  { label: "프로젝트", align: "center" as const },
+                                  { label: "총 결제", align: "left" as const },
+                                  { label: "등록일", align: "left" as const },
+                                ]
+                            ).map(h => <th key={h.label} style={{ ...tableTh, textAlign: h.align }}>{h.label}</th>)}
                           </tr>
                         </thead>
                         <tbody>
@@ -549,15 +567,31 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                                     {c.divisionNames!.slice(0, 3).join(" · ")}{c.divisionNames!.length > 3 ? ` 외 ${c.divisionNames!.length - 3}개` : ""}
                                   </div>
                                 )}
+                                {/* 전체/혼합 목록에서 개인고객 행은 휴대전화·이메일을 보조정보로 함께 표시(§8, 동명이인 식별). 전용 컬럼이 있는 개인고객 필터 화면에서는 생략. */}
+                                {companyCustomerTypeFilter !== "INDIVIDUAL" && c.customerType === "INDIVIDUAL" && (individualPhone(c) || c.email) && (
+                                  <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
+                                    {[individualPhone(c) || null, c.email || null].filter(Boolean).join(" · ")}
+                                  </div>
+                                )}
                               </td>
                               {/* 유형 — 거래처 상세의 '거래처 유형'과 동일 데이터. 최소 폭 · 보조정보 배지. */}
                               <td style={{ ...tableTd, width: 1, whiteSpace: "nowrap" }}>
                                 {(() => { const b = getCompanyTypeBadge(c); return <span style={b.style}>{b.label}</span>; })()}
                               </td>
-                              <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{c.industry ?? "-"}</td>
-                              <td style={{ ...tableTd, textAlign: "center" }}>
-                                <span style={{ padding: "2px 8px", borderRadius: 10, background: "#f3f4f6", color: "#374151", fontSize: 12 }}>{c.contactCount}명</span>
-                              </td>
+                              {companyCustomerTypeFilter === "INDIVIDUAL" ? (
+                                <>
+                                  {/* 개인고객: 업종·담당자 대신 휴대전화·이메일(동명이인 식별용, §1·§4) */}
+                                  <td style={{ ...tableTd, fontSize: 12, color: "#374151", whiteSpace: "nowrap" }}>{individualPhone(c) || "-"}</td>
+                                  <td style={{ ...tableTd, fontSize: 12, color: "#374151" }}>{c.email || "-"}</td>
+                                </>
+                              ) : (
+                                <>
+                                  <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{c.industry ?? "-"}</td>
+                                  <td style={{ ...tableTd, textAlign: "center" }}>
+                                    <span style={{ padding: "2px 8px", borderRadius: 10, background: "#f3f4f6", color: "#374151", fontSize: 12 }}>{c.contactCount}명</span>
+                                  </td>
+                                </>
+                              )}
                               <td style={{ ...tableTd, textAlign: "center" }}>
                                 <span style={{ padding: "2px 8px", borderRadius: 10, background: "#eff6ff", color: "#2563eb", fontSize: 12, fontWeight: 600 }}>{c.projectCount}건</span>
                               </td>

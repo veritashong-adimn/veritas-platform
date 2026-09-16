@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './readTableView.css';
 import { api, ProjectDetail, MatchCandidate, getActionLabel, COMM_TYPE_LABEL, COMM_TYPE_COLOR, STATUS_LABEL, PROJECT_STATUS_TRANSITIONS, ALL_FINANCIAL_STATUSES, FINANCIAL_STATUS_LABEL, FINANCIAL_STATUS_STYLE, AdminUser, BOARD_CATEGORY_LABEL, Product } from '../../lib/constants';
-import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
+import { StatusBadge, PrimaryBtn, GhostBtn, ClickSelect, NumericInput, confirmDialog } from '../ui';
 import { ReviewMemoPanel } from './ReviewMemoPanel';
 import { DraggableModal } from './DraggableModal';
 import { QuoteEditorWorkspace } from './QuoteEditorWorkspace';
@@ -13,6 +13,11 @@ import { formatDisplayDate } from "../../lib/dateFormat";
 import { DateField } from './DatePickerShared';
 
 /* ────── SearchableSelect (거래처 검색용 공통 컴포넌트) ────── */
+// 개인고객 거래처 선택 시 동명이인 식별용 연락정보(휴대전화 · 이메일). 기업/공공기관은 빈 문자열(§6).
+function companyContactHint(c: { customerType?: string | null; phone?: string | null; mobile?: string | null; email?: string | null }): string {
+  if (c.customerType !== "INDIVIDUAL") return "";
+  return [(c.mobile || c.phone || "").trim() || null, c.email || null].filter(Boolean).join(" · ");
+}
 type SSItem = { id: number; label: string; sub?: string };
 function BillingSearchableSelect({ items, value, onChange, placeholder, accentBorder = "#6366f1" }: {
   items: SSItem[]; value: number | null; onChange: (id: number | null) => void;
@@ -179,7 +184,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   const [correctionMemo, setCorrectionMemo] = useState("");
   const [submittingCorrection, setSubmittingCorrection] = useState(false);
   const [savingInfo, setSavingInfo] = useState(false);
-  const [companiesList, setCompaniesList] = useState<{id: number; name: string}[]>([]);
+  const [companiesList, setCompaniesList] = useState<{id: number; name: string; customerType?: string | null; phone?: string | null; mobile?: string | null; email?: string | null}[]>([]);
   const [contactsList, setContactsList] = useState<{id: number; name: string; companyId: number | null}[]>([]);
   const [loadingMeta, setLoadingMeta] = useState(false);
   // 완료 상태 수정 확인 모달
@@ -426,7 +431,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   };
 
   const deleteWorkItem = async (batchId: number, itemId: number) => {
-    if (!confirm("이 작업 항목을 삭제하시겠습니까?")) return;
+    if (!(await confirmDialog({ title: "작업 항목 삭제", message: "이 작업 항목을 삭제하시겠습니까?", confirmLabel: "삭제", variant: "danger" }))) return;
     setActiveBatchOp(true);
     try {
       const res = await fetch(api(`/api/admin/billing-batches/${batchId}/work-items/${itemId}`), { method: "DELETE", headers: authH });
@@ -554,7 +559,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   };
 
   const handleFileDelete = async (fileId: number, fileName: string) => {
-    if (!confirm(`"${fileName}"을(를) 삭제하시겠습니까?`)) return;
+    if (!(await confirmDialog({ title: "파일 삭제", message: `"${fileName}"을(를) 삭제하시겠습니까?`, confirmLabel: "삭제", variant: "danger" }))) return;
     try {
       const res = await fetch(api(`/api/admin/projects/${projectId}/files/${fileId}`), { method: "DELETE", headers: authH });
       if (!res.ok) { onToast("오류: 파일 삭제 실패"); return; }
@@ -621,7 +626,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
   };
 
   const handleCancel = async () => {
-    if (!confirm("이 프로젝트를 취소하시겠습니까?")) return;
+    if (!(await confirmDialog({ title: "프로젝트 취소", message: "이 프로젝트를 취소하시겠습니까?", confirmLabel: "프로젝트 취소", cancelLabel: "닫기", variant: "danger" }))) return;
     setCancelling(true);
     try {
       const res = await fetch(api(`/api/admin/projects/${projectId}/cancel`), {
@@ -643,7 +648,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
         fetch(api("/api/admin/companies"), { headers: authH }),
         fetch(api("/api/admin/contacts"), { headers: authH }),
       ]);
-      if (cRes.ok) setCompaniesList((await cRes.json()).map((c: any) => ({ id: c.id, name: c.name })));
+      if (cRes.ok) setCompaniesList((await cRes.json()).map((c: any) => ({ id: c.id, name: c.name, customerType: c.customerType, phone: c.phone, mobile: c.mobile, email: c.email })));
       if (coRes.ok) setContactsList((await coRes.json()).map((c: any) => ({ id: c.id, name: c.name, companyId: c.companyId })));
     } catch { /* ignore */ }
     finally { setLoadingMeta(false); }
@@ -1443,7 +1448,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                             triggerStyle={{ width: "100%", fontSize: 13, borderRadius: 8 }}
                             options={[
                               { value: "", label: "미연결" },
-                              ...companiesList.map(c => ({ value: String(c.id), label: c.name })),
+                              ...companiesList.map(c => { const h = companyContactHint(c); return { value: String(c.id), label: h ? `${c.name} (${h})` : c.name }; }),
                             ]}
                           />
                         </div>
@@ -1570,7 +1575,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                           triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #bae6fd" }}
                                           options={[
                                             { value: "", label: "— 요청 거래처와 동일 —" },
-                                            ...companiesList.map(c => ({ value: String(c.id), label: c.name })),
+                                            ...companiesList.map(c => { const h = companyContactHint(c); return { value: String(c.id), label: h ? `${c.name} (${h})` : c.name }; }),
                                           ]}
                                         />
                                         <p style={{ margin: "3px 0 0", fontSize: 10, color: "#6b7280" }}>현재: {billingName} → {corrBillingName}</p>
@@ -1587,7 +1592,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                           triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a7f3d0" }}
                                           options={[
                                             { value: "", label: "— 청구 대상과 동일 —" },
-                                            ...companiesList.map(c => ({ value: String(c.id), label: c.name })),
+                                            ...companiesList.map(c => { const h = companyContactHint(c); return { value: String(c.id), label: h ? `${c.name} (${h})` : c.name }; }),
                                           ]}
                                         />
                                         <p style={{ margin: "3px 0 0", fontSize: 10, color: "#6b7280" }}>현재: {payerName} → {corrPayerName}</p>
@@ -1659,7 +1664,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #bae6fd" }}
                                     options={[
                                       { value: "", label: "— 요청 거래처와 동일 —" },
-                                      ...companiesList.map(c => ({ value: String(c.id), label: c.name })),
+                                      ...companiesList.map(c => { const h = companyContactHint(c); return { value: String(c.id), label: h ? `${c.name} (${h})` : c.name }; }),
                                     ]}
                                   />
                                 </div>
@@ -1675,7 +1680,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                     triggerStyle={{ width: "100%", fontSize: 12, borderRadius: 7, border: "1px solid #a7f3d0" }}
                                     options={[
                                       { value: "", label: "— 청구 대상과 동일 —" },
-                                      ...companiesList.map(c => ({ value: String(c.id), label: c.name })),
+                                      ...companiesList.map(c => { const h = companyContactHint(c); return { value: String(c.id), label: h ? `${c.name} (${h})` : c.name }; }),
                                     ]}
                                   />
                                 </div>
@@ -2286,7 +2291,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                         body: JSON.stringify({ billingCompanyId, billingDivisionId, payerCompanyId, payerDivisionId }),
                       });
                       if (res.ok) { setShowBillingCardEdit(false); await loadDetail(); onRefresh(); }
-                      else { const d = await res.json(); alert(d.error ?? "저장 실패"); }
+                      else { const d = await res.json(); onToast("오류: " + (d.error ?? "저장 실패")); }
                     } finally { setSavingBillingCard(false); }
                   };
 
@@ -2347,7 +2352,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 </div>
                                 {billingCardMode === "other_company" && (
                                   <BillingSearchableSelect
-                                    items={companiesList.map(c => ({ id: c.id, label: c.name }))}
+                                    items={companiesList.map(c => ({ id: c.id, label: c.name, sub: companyContactHint(c) || undefined }))}
                                     value={billingCardCompanyId}
                                     onChange={setBillingCardCompanyId}
                                     placeholder="회사명으로 검색..."
@@ -2357,7 +2362,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {billingCardMode === "other_division" && (
                                   <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                                     <BillingSearchableSelect
-                                      items={companiesList.map(c => ({ id: c.id, label: c.name }))}
+                                      items={companiesList.map(c => ({ id: c.id, label: c.name, sub: companyContactHint(c) || undefined }))}
                                       value={billingCardCompanyId}
                                       onChange={cid => {
                                         setBillingCardCompanyId(cid); setBillingCardDivisionId(null);
@@ -2392,7 +2397,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 </div>
                                 {payerCardMode === "other_company" && (
                                   <BillingSearchableSelect
-                                    items={companiesList.map(c => ({ id: c.id, label: c.name }))}
+                                    items={companiesList.map(c => ({ id: c.id, label: c.name, sub: companyContactHint(c) || undefined }))}
                                     value={payerCardCompanyId}
                                     onChange={setPayerCardCompanyId}
                                     placeholder="회사명으로 검색..."
@@ -2402,7 +2407,7 @@ export function ProjectDetailModal({ projectId, token, onClose, onRefresh, onToa
                                 {payerCardMode === "other_division" && (
                                   <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                                     <BillingSearchableSelect
-                                      items={companiesList.map(c => ({ id: c.id, label: c.name }))}
+                                      items={companiesList.map(c => ({ id: c.id, label: c.name, sub: companyContactHint(c) || undefined }))}
                                       value={payerCardCompanyId}
                                       onChange={cid => {
                                         setPayerCardCompanyId(cid); setPayerCardDivisionId(null);

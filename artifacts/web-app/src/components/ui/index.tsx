@@ -3,6 +3,9 @@ import { createPortal } from "react-dom";
 import { STATUS_LABEL, STATUS_STYLE, ROLE_LABEL, ROLE_STYLE, Role } from "../../lib/constants";
 import { C, BD, BTN, TYPO, SP, FORM, type BtnVariant, type BtnSize } from "../../lib/ds";
 
+// 공통 확인/입력/경고 모달 — 전역 window.confirm/alert/prompt 대체(barrel 재노출).
+export { confirmDialog, promptDialog, alertDialog, ConfirmHost, type DialogVariant } from "./confirmDialog";
+
 // DS-aligned standard input style (Standard scale: 14px / padding 9×12 / radius 8)
 export const inputStyle: React.CSSProperties = {
   width: "100%",

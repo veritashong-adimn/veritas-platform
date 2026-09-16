@@ -12,6 +12,7 @@ import { Card, GhostBtn, ClickSelect } from '../ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import PayoutStatementModal from './PayoutStatementModal';
 import { DateField } from './DatePickerShared';
+import { exportPayoutStatementList } from '../../lib/payoutStatementListExcel';
 
 const dateVal = (v?: string | null) => (v ? String(v).slice(0, 10) : '');
 // 재집계용 안전 수치 변환(NaN·null → 0). 건별 서버 계산값을 그대로 합산할 뿐 계산식은 불변.
@@ -169,6 +170,17 @@ export default function PayoutStatementTab({ token, onToast }: Props) {
             <GhostBtn onClick={() => { setCustFilter('all'); setPayeeQ(''); setDateFrom(''); setDateTo(''); }}
               style={{ fontSize: 12, padding: '7px 14px' }} data-testid="statement-filter-reset" aria-label="필터 초기화">필터 초기화</GhostBtn>
           )}
+          {/* 명세서 목록 Excel — 현재 조회범위/필터에 해당하는 전체 지급건을 다행 목록으로 내보낸다(§3·§8, 현재 페이지 아님). */}
+          <GhostBtn
+            onClick={() => {
+              const roundName = round ? (formatLabelDates(round.batchNumber) || formatDisplayDate(round.paymentDate)) : (scopeLabel ?? '전체');
+              const total = filteredSummary.reduce((n, g: any) => n + (g.items?.length ?? 0), 0);
+              if (total === 0) { onToast('다운로드할 지급명세 내역이 없습니다.'); return; }
+              exportPayoutStatementList({ filename: `지급명세서목록_${roundName || 'all'}.xlsx`, roundName: roundName ?? '', summary: filteredSummary });
+              onToast(`${total.toLocaleString()}건을 Excel로 내보냈습니다.`);
+            }}
+            style={{ fontSize: 12, padding: '7px 14px', marginLeft: 'auto' }}
+            data-testid="statement-list-excel" aria-label="지급명세서 목록 Excel 다운로드">명세서 목록 Excel</GhostBtn>
         </div>
       </Card>
 

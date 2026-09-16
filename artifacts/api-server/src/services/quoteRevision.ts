@@ -11,6 +11,7 @@ import {
 } from "@workspace/db";
 import { generateRelationQuoteNumber, isRelationEngineQuoteType } from "./quoteRelation";
 import { approvedDerivedSum } from "./quoteDerived";
+import { remapClonedParentLinks } from "./quoteItemGroup";
 
 type Db = any;
 export type Result = { http: number; body: Record<string, unknown> };
@@ -55,11 +56,13 @@ export async function createRevision(
   // quote_items 별도 row 로 복제(원견적 품목과 공유 금지 §6)
   const items = await tx.select().from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, sourceQuoteId)).orderBy(quoteItemsTable.id);
   if (items.length > 0) {
-    await tx.insert(quoteItemsTable).values(items.map((it: any) => {
+    // 서비스 그룹: parent_item_id 는 old 값(원견적 항목 id)이라 그대로 복제하면 cross-quote 오링크 → null 로 넣고 old→new 재매핑(§12).
+    const newRows = await tx.insert(quoteItemsTable).values(items.map((it: any) => {
       const { id, quoteId, createdAt, ...rest } = it;   // 식별/시각 필드 제외
       void id; void quoteId; void createdAt;
-      return { ...rest, quoteId: rev.id };
-    }));
+      return { ...rest, quoteId: rev.id, parentItemId: null };
+    })).returning({ id: quoteItemsTable.id });
+    await remapClonedParentLinks(tx, items as any, newRows.map((r: any) => r.id));
   }
 
   // 거래처/담당자/담당PM 등 기본 관계정보 승계 — 거래처·담당자·PM 은 quote 가 아니라 project 에 저장된다.

@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import './readTableView.css';
 import { api } from '../../lib/constants';
-import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput } from '../ui';
+import { Card, PrimaryBtn, GhostBtn, ClickSelect, NumericInput, confirmDialog } from '../ui';
 
 type ServiceType = "translation" | "interpretation" | "equipment";
 
@@ -182,7 +182,7 @@ export function LanguageServiceDataTab({ token, setToast }: { token: string; set
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm("이 항목을 삭제하시겠습니까?")) return;
+    if (!(await confirmDialog({ title: "항목 삭제", message: "이 항목을 삭제하시겠습니까?", confirmLabel: "삭제", variant: "danger" }))) return;
     try {
       const res = await fetch(api(`/api/admin/language-service-data/${id}`), { method: "DELETE", headers: authHeaders });
       if (res.ok) {
@@ -214,7 +214,7 @@ export function LanguageServiceDataTab({ token, setToast }: { token: string; set
   };
 
   const handleDeleteInsight = async (id: number) => {
-    if (!confirm("인사이트를 삭제하시겠습니까?")) return;
+    if (!(await confirmDialog({ title: "인사이트 삭제", message: "인사이트를 삭제하시겠습니까?", confirmLabel: "삭제", variant: "danger" }))) return;
     try {
       const res = await fetch(api(`/api/admin/content-insights/${id}`), { method: "DELETE", headers: authHeaders });
       if (res.ok) { setToast("삭제 완료"); if (selectedItem) fetchInsights(selectedItem.id); }
