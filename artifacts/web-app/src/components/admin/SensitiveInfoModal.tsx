@@ -25,6 +25,8 @@ const grid2: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 
 const grid3: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px 14px" };
 
 export const PAYMENT_METHODS = [
+  // 지급수단(=실제 돈을 지급하는 방법). 세무처리(정산유형)와 독립. 신규 "국내 계좌송금"은 국내 은행계좌로 송금(원천징수 여부와 무관).
+  { value: "domestic_bank_transfer", label: "국내 계좌송금" },
   { value: "domestic_withholding", label: "국내 3.3% 원천징수" },
   { value: "domestic_business",    label: "국내 사업자 (세금계산서)" },
   { value: "overseas_paypal",      label: "해외 PayPal" },
@@ -37,6 +39,8 @@ export const SETTLEMENT_TYPES = [
   { value: "사업자",      label: "사업자 (세금계산서)",  color: "#6d28d9", bg: "#f5f3ff", border: "#ddd8fe" },
   { value: "해외개인",    label: "해외개인",              color: "#b45309", bg: "#fffbeb", border: "#fde68a" },
   { value: "해외법인",    label: "해외법인",              color: "#0f766e", bg: "#f0fdfa", border: "#99f6e4" },
+  // 원천세 신고 예외 — 세무 판단상 원천징수·신고 대상이 아님(사용자가 명시 선택). 해외개인 등과 자동 연동하지 않음.
+  { value: "원천세 신고 예외", label: "원천세 신고 예외", color: "#be123c", bg: "#fff1f2", border: "#fecdd3" },
   { value: "외주업체",    label: "외주업체 (소속업체 경유)", color: "#374151", bg: "#f3f4f6", border: "#d1d5db" },
 ];
 
@@ -372,6 +376,7 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                 {PAYMENT_METHODS.map(m => (
                   <button key={m.value} onClick={() => {
                       const AUTO_CURRENCY: Record<string, string> = {
+                        domestic_bank_transfer: "KRW",
                         domestic_withholding: "KRW",
                         domestic_business: "KRW",
                         overseas_paypal: "USD",

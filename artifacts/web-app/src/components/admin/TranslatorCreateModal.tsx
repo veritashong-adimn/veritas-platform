@@ -244,7 +244,8 @@ const emptySensitive = () => ({
   paypalEmail: "", englishName: "", country: "", currency: "",
   remittanceMemo: "", addressEn: "", bankNameEn: "", swiftCode: "",
   routingNumber: "", iban: "",
-  baseCurrency: "", remittanceFeePayer: "", settlementMemo: "",
+  // 신규 등록 기본 통화 = KRW(§7). 기존 통번역사 수정은 SensitiveInfoModal 에서 DB 저장값을 우선 표시(일괄 변경 아님, §8).
+  baseCurrency: "KRW", remittanceFeePayer: "", settlementMemo: "",
   paymentHold: false,
 });
 
@@ -1047,7 +1048,119 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         </div>
       </div>
 
-      {/* ── 2. 전문 정보 ── */}
+      {/* ── 2. 이력서&증빙서류 (기본정보 직후로 이동 — 원천자료 우선 업로드 동선) ── */}
+      <p style={sH}>이력서&증빙서류</p>
+      <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
+
+        {/* 서류 유형 탭 */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: "1px solid #e5e7eb", paddingBottom: 10 }}>
+          {([
+            { key: "resume", label: "📄 이력서" },
+            { key: "id",     label: "🪪 신분증" },
+            { key: "bank",   label: "🏦 통장사본" },
+          ] as const).map(({ key, label }) => (
+            <button key={key} type="button"
+              onClick={() => setDocSubTab(key)}
+              style={{
+                padding: "5px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer",
+                background: docSubTab === key ? "#0ea5e9" : "#f0f9ff",
+                color: docSubTab === key ? "#fff" : "#0369a1",
+                border: `1px solid ${docSubTab === key ? "#0ea5e9" : "#bae6fd"}`,
+                fontWeight: docSubTab === key ? 700 : 400,
+              }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* ① 이력서 탭 */}
+        {docSubTab === "resume" && (<>
+          {resumeFile && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8,
+              padding: "8px 12px", marginBottom: 10,
+              background: "#f0fdf4", borderRadius: 8, border: "1px solid #a7f3d0",
+            }}>
+              <span style={{ fontSize: 16, flexShrink: 0 }}>📄</span>
+              <span style={{ fontSize: 12, color: "#065f46", fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+                {resumeFile.name}
+              </span>
+              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                <button type="button" onClick={() => setShowAnalyzePanel(true)}
+                  style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #059669", background: "#f0fdf4", cursor: "pointer", color: "#065f46", fontWeight: 600, whiteSpace: "nowrap" }}>
+                  ✨ AI 분석
+                </button>
+                <button type="button" onClick={() => setResumeFile(null)}
+                  style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #fca5a5", background: "#fff5f5", cursor: "pointer", color: "#b91c1c", whiteSpace: "nowrap" }}>
+                  삭제
+                </button>
+              </div>
+            </div>
+          )}
+          <div
+            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={e => { e.preventDefault(); setDragOver(false); handleResumeFile(e.dataTransfer.files?.[0]); }}
+            style={{
+              border: `2px dashed ${dragOver ? "#059669" : "#d1d5db"}`,
+              borderRadius: 8, padding: "14px 16px",
+              background: dragOver ? "#f0fdf4" : "#fff",
+              transition: "border-color 0.15s, background 0.15s",
+              textAlign: "center" as const,
+            }}>
+            <p style={{ fontSize: 11, color: dragOver ? "#059669" : "#9ca3af", margin: "0 0 8px", fontWeight: dragOver ? 600 : 400 }}>
+              {dragOver ? "여기에 파일을 놓으세요" : "파일을 드래그하거나 아래 버튼으로 선택"}
+            </p>
+            <label style={{ fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151", display: "inline-block" }}>
+              파일 선택
+              <input type="file" hidden
+                accept=".pdf,.hwp,.hwpx,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/haansofthwp,application/x-hwp,application/vnd.hancom.hwp,application/vnd.hancom.hwpx"
+                onChange={e => handleResumeFile(e.target.files?.[0])} />
+            </label>
+            <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>PDF · HWP · HWPX · DOC · DOCX · TXT (최대 10 MB)</p>
+          </div>
+          {!resumeFile && (
+            <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>
+              이력서 선택 후 ✨ AI 분석으로 프로필 정보를 자동으로 채울 수 있습니다.
+            </p>
+          )}
+        </>)}
+
+        {/* ② 신분증 탭 */}
+        {docSubTab === "id" && (
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>신분증 파일</label>
+            <TranslatorEvidenceDocumentsSection
+              docType="id_card"
+              mode="create"
+              token={token}
+              onToast={onToast}
+              file={idCardFile}
+              onFileChange={setIdCardFile}
+              onOcrApply={(fields, values) => handleDocOcrApply("id_card", fields, values)}
+            />
+          </div>
+        )}
+
+        {/* ③ 통장사본 탭 */}
+        {docSubTab === "bank" && (
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>통장사본 파일</label>
+            <TranslatorEvidenceDocumentsSection
+              docType="bankbook"
+              mode="create"
+              token={token}
+              onToast={onToast}
+              file={bankbookFile}
+              onFileChange={setBankbookFile}
+              onOcrApply={(fields, values) => handleDocOcrApply("bankbook", fields, values)}
+            />
+          </div>
+        )}
+
+      </div>
+
+      {/* ── 3. 전문 정보 ── */}
       <p style={sH}>전문 정보</p>
       <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
 
@@ -1226,118 +1339,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         })()}
       </div>
 
-      {/* ── 3. 이력서&증빙서류 ── */}
-      <p style={sH}>이력서&증빙서류</p>
-      <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
-
-        {/* 서류 유형 탭 */}
-        <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: "1px solid #e5e7eb", paddingBottom: 10 }}>
-          {([
-            { key: "resume", label: "📄 이력서" },
-            { key: "id",     label: "🪪 신분증" },
-            { key: "bank",   label: "🏦 통장사본" },
-          ] as const).map(({ key, label }) => (
-            <button key={key} type="button"
-              onClick={() => setDocSubTab(key)}
-              style={{
-                padding: "5px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer",
-                background: docSubTab === key ? "#0ea5e9" : "#f0f9ff",
-                color: docSubTab === key ? "#fff" : "#0369a1",
-                border: `1px solid ${docSubTab === key ? "#0ea5e9" : "#bae6fd"}`,
-                fontWeight: docSubTab === key ? 700 : 400,
-              }}>
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {/* ① 이력서 탭 */}
-        {docSubTab === "resume" && (<>
-          {resumeFile && (
-            <div style={{
-              display: "flex", alignItems: "center", gap: 8,
-              padding: "8px 12px", marginBottom: 10,
-              background: "#f0fdf4", borderRadius: 8, border: "1px solid #a7f3d0",
-            }}>
-              <span style={{ fontSize: 16, flexShrink: 0 }}>📄</span>
-              <span style={{ fontSize: 12, color: "#065f46", fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-                {resumeFile.name}
-              </span>
-              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                <button type="button" onClick={() => setShowAnalyzePanel(true)}
-                  style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #059669", background: "#f0fdf4", cursor: "pointer", color: "#065f46", fontWeight: 600, whiteSpace: "nowrap" }}>
-                  ✨ AI 분석
-                </button>
-                <button type="button" onClick={() => setResumeFile(null)}
-                  style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #fca5a5", background: "#fff5f5", cursor: "pointer", color: "#b91c1c", whiteSpace: "nowrap" }}>
-                  삭제
-                </button>
-              </div>
-            </div>
-          )}
-          <div
-            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={e => { e.preventDefault(); setDragOver(false); handleResumeFile(e.dataTransfer.files?.[0]); }}
-            style={{
-              border: `2px dashed ${dragOver ? "#059669" : "#d1d5db"}`,
-              borderRadius: 8, padding: "14px 16px",
-              background: dragOver ? "#f0fdf4" : "#fff",
-              transition: "border-color 0.15s, background 0.15s",
-              textAlign: "center" as const,
-            }}>
-            <p style={{ fontSize: 11, color: dragOver ? "#059669" : "#9ca3af", margin: "0 0 8px", fontWeight: dragOver ? 600 : 400 }}>
-              {dragOver ? "여기에 파일을 놓으세요" : "파일을 드래그하거나 아래 버튼으로 선택"}
-            </p>
-            <label style={{ fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151", display: "inline-block" }}>
-              파일 선택
-              <input type="file" hidden
-                accept=".pdf,.hwp,.hwpx,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/haansofthwp,application/x-hwp,application/vnd.hancom.hwp,application/vnd.hancom.hwpx"
-                onChange={e => handleResumeFile(e.target.files?.[0])} />
-            </label>
-            <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>PDF · HWP · HWPX · DOC · DOCX · TXT (최대 10 MB)</p>
-          </div>
-          {!resumeFile && (
-            <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>
-              이력서 선택 후 ✨ AI 분석으로 프로필 정보를 자동으로 채울 수 있습니다.
-            </p>
-          )}
-        </>)}
-
-        {/* ② 신분증 탭 */}
-        {docSubTab === "id" && (
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>신분증 파일</label>
-            <TranslatorEvidenceDocumentsSection
-              docType="id_card"
-              mode="create"
-              token={token}
-              onToast={onToast}
-              file={idCardFile}
-              onFileChange={setIdCardFile}
-              onOcrApply={(fields, values) => handleDocOcrApply("id_card", fields, values)}
-            />
-          </div>
-        )}
-
-        {/* ③ 통장사본 탭 */}
-        {docSubTab === "bank" && (
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>통장사본 파일</label>
-            <TranslatorEvidenceDocumentsSection
-              docType="bankbook"
-              mode="create"
-              token={token}
-              onToast={onToast}
-              file={bankbookFile}
-              onFileChange={setBankbookFile}
-              onOcrApply={(fields, values) => handleDocOcrApply("bankbook", fields, values)}
-            />
-          </div>
-        )}
-
-      </div>
-
       {/* ── 4. 언어·국제경험 ── */}
       <p style={sH}>언어·국제경험</p>
       <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
@@ -1379,7 +1380,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 10, padding: "16px 18px" }}>
             {/* 정산유형 */}
             <p style={{ fontSize: 12, fontWeight: 700, color: "#92400e", margin: "0 0 8px" }}>정산유형</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginBottom: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, marginBottom: 16 }}>
               {SETTLEMENT_TYPES.map(st => (
                 <button key={st.value} onClick={() => setF("settlementType", st.value === form.settlementType ? "" : st.value)}
                   style={{
@@ -1393,7 +1394,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
             </div>
 
             <p style={{ fontSize: 12, fontWeight: 700, color: "#92400e", margin: "0 0 10px" }}>지급방식</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginBottom: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, marginBottom: 16 }}>
               {PAYMENT_METHODS.map(m => (
                 <button key={m.value} onClick={() => setSf("paymentMethod", m.value === sf.paymentMethod ? "" : m.value)}
                   style={{
@@ -1536,6 +1537,16 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           <GhostBtn onClick={onClose} style={{ fontSize: 14, padding: "10px 20px" }}>취소</GhostBtn>
           <PrimaryBtn onClick={handleSubmit} disabled={saving} style={{ fontSize: 14, padding: "10px 24px" }}>
             {saving ? "등록 중..." : "통번역사 등록"}
+          </PrimaryBtn>
+        </div>
+      )}
+
+      {/* ── 하단 액션 (asPage 전용) — 긴 폼 하단에서 재스크롤 없이 저장. 상단 headerExtra 와 동일한 handleSubmit/onClose/saving 공유(중복 저장 로직 없음) ── */}
+      {asPage && (
+        <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 20, paddingTop: 16, borderTop: "1px solid #f3f4f6" }}>
+          <GhostBtn onClick={onClose} style={{ fontSize: 14, padding: "10px 20px" }}>취소</GhostBtn>
+          <PrimaryBtn onClick={handleSubmit} disabled={saving} style={{ fontSize: 14, padding: "10px 24px" }}>
+            {saving ? "등록 중..." : "저장"}
           </PrimaryBtn>
         </div>
       )}

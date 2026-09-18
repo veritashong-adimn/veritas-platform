@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Landmark } from "lucide-react";
 import { api } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn } from "../ui";
+import { BankNameSelect } from "./SensitiveInfoModal"; // 공통 은행 표준목록(BANK_LIST) 기반 선택형 — 통번역사 계좌와 동일 SSOT 재사용
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 거래처 지급/환급 계좌정보 섹션 — 모든 거래처 유형(고객사/외주업체/행사·운영/기타)에서 사용.
@@ -97,10 +98,10 @@ export function CompanyPaymentAccountSection({ companyId, token, onToast }: {
           </p>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
             <div>
-              <label style={labelStyle} htmlFor="cpa-bank">은행명</label>
-              <input id="cpa-bank" style={inputStyle} value={form.bankName}
-                onChange={e => setForm(f => ({ ...f, bankName: e.target.value }))}
-                placeholder="예: 국민은행" data-testid="company-payment-bank" aria-label="은행명" />
+              {/* 은행명 — 공통 은행 표준목록(BANK_LIST) 기반 선택형. 기존 자유입력값이 목록에 있으면 자동 선택, 없으면 '기타(직접 입력)'로 안전 표시(기존 데이터 유실 없음). */}
+              <BankNameSelect label="은행명" value={form.bankName}
+                onChange={v => setForm(f => ({ ...f, bankName: v }))}
+                inputStyle={inputStyle} labelStyle={labelStyle} />
             </div>
             <div>
               <label style={labelStyle} htmlFor="cpa-holder">예금주</label>

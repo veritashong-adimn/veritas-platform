@@ -125,6 +125,15 @@ function FileNameChip({ name }: { name?: string | null }) {
   );
 }
 
+// 보조 라벨(작업기간/파일명) — 작고 옅은 회색. 값보다 강하지 않게. 표시전용(§1).
+function SubLabel({ children }: { children: React.ReactNode }) {
+  return <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 500, color: C.textMuted, opacity: 0.85 }}>{children}</span>;
+}
+// 필드 구분자 — 얇은 세로 구분선. 작업기간 | 파일명 | 수량 을 눈으로 즉시 구분(§1·§4).
+function FieldDivider() {
+  return <span aria-hidden style={{ flexShrink: 0, alignSelf: 'center', width: 1, height: 10, background: C.g200 }} />;
+}
+
 // 번역 작업량 세그먼트 — 파일명 뒤에 작업량(단어수/글자수)만 표시. 페이지수는 표시하지 않는다
 //   (판매정보의 수량/단위 컬럼에서 확인 — 중복표시 금지). pageCount 는 스냅샷에 계속 저장되며 표시만 제외.
 function translationSegments(r: Row, snap: any): string[] {
@@ -196,14 +205,37 @@ export default function ServiceDetailCell({ r, editable, patch, onEndDateChange 
   if (!editable) {
     // 번역: 작업기간 · 파일명(말줄임+툴팁) · 작업량(단어/글자). 계산식·금액은 표시하지 않음(§7 — 기간+작업량 모두 표시).
     if (kind === 'translation') {
+      // 작업기간 | 파일명 | 수량 을 보조라벨+구분선으로 시각 분리(§1·§4). 파일명은 넓게 + 말줄임 시 tooltip 전체표시(§2·§3).
       const tperiod = formatScheduleRange(r.performanceStartDate, r.performanceEndDate);
-      const summary = renderTranslationSummary(r, snap);
-      if (!tperiod && !summary) return <span style={{ ...ref, color: C.textSecondary }}>—</span>;
+      const fname = (snap.fileName ?? '') as string;
+      const segs = translationSegments(r, snap);
+      if (!tperiod && !fname && segs.length === 0) return <span style={{ ...ref, color: C.textSecondary }}>—</span>;
       return (
-        <span style={{ ...ref, color: C.textSecondary, display: 'inline-flex', alignItems: 'baseline', gap: 4, maxWidth: '100%' }}>
-          {tperiod && <span style={{ flexShrink: 0 }}>{tperiod}</span>}
-          {tperiod && summary && <span style={{ flexShrink: 0 }}>·</span>}
-          {summary}
+        <span style={{ ...ref, color: C.textSecondary, display: 'inline-flex', alignItems: 'baseline', gap: 6, maxWidth: '100%', minWidth: 0 }}>
+          {tperiod && (
+            <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'baseline', gap: 3 }}>
+              <SubLabel>작업기간</SubLabel>
+              <span>{tperiod}</span>
+            </span>
+          )}
+          {tperiod && (fname || segs.length > 0) && <FieldDivider />}
+          {fname && (
+            <span style={{ flex: '1 1 auto', minWidth: 60, display: 'inline-flex', alignItems: 'baseline', gap: 3, overflow: 'hidden' }}>
+              <SubLabel>파일명</SubLabel>
+              <span title={fname} style={{ maxWidth: 460, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{fname}</span>
+            </span>
+          )}
+          {fname && segs.length > 0 && <FieldDivider />}
+          {segs.length > 0 && (
+            <span style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
+              {segs.map((s, i) => (
+                <React.Fragment key={i}>
+                  {i > 0 ? <span style={{ color: C.textMuted }}>/</span> : null}
+                  <span>{s}</span>
+                </React.Fragment>
+              ))}
+            </span>
+          )}
         </span>
       );
     }

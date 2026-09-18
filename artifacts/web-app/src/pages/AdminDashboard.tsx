@@ -351,6 +351,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   // translators tab state
   const [translatorList, setTranslatorList] = useState<TranslatorListItem[]>([]);
   const [translatorsLoading, setTranslatorsLoading] = useState(false);
+  // 서버 페이지네이션(거래처/담당자와 동일 패턴). 기본 50개, 선택 50/100/200. total은 검색/필터 적용 후 전체 건수.
+  const [translatorPage, setTranslatorPage] = useState(1);
+  const [translatorPageSize, setTranslatorPageSize] = useState(50);
+  const [translatorTotal, setTranslatorTotal] = useState(0);
   const [translatorSearch, setTranslatorSearch] = useState("");
   const [translatorLangFilter, setTranslatorLangFilter] = useState("");
   const [translatorStatusFilter, setTranslatorStatusFilter] = useState("all");
@@ -694,6 +698,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     setTranslatorsLoading(true);
     try {
       const params = new URLSearchParams();
+      params.set("page", String(translatorPage));
+      params.set("pageSize", String(translatorPageSize));
       if (translatorSearch.trim()) params.set("search", translatorSearch.trim());
       if (translatorLangFilter.trim()) params.set("languagePair", translatorLangFilter.trim());
       if (translatorStatusFilter !== "all") params.set("status", translatorStatusFilter);
@@ -701,12 +707,22 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       if (translatorRatingFilter.trim()) params.set("minRating", translatorRatingFilter.trim());
       if (translatorSvcFilter !== "all") params.set("svc", translatorSvcFilter);
       if (showInactiveTranslators) params.set("includeInactive", "true");
-      const res = await fetch(api(`/api/admin/translators${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
+      const res = await fetch(api(`/api/admin/translators?${params.toString()}`), { headers: authHeaders });
       const data = await res.json();
-      if (res.ok) setTranslatorList(Array.isArray(data) ? data : []);
+      if (res.ok) {
+        // 페이지네이션 응답 {rows,total} 또는 (구버전) 배열 모두 수용.
+        const rows: TranslatorListItem[] = Array.isArray(data?.rows) ? data.rows : Array.isArray(data) ? data : [];
+        const total: number = typeof data?.total === "number" ? data.total : rows.length;
+        setTranslatorList(rows);
+        setTranslatorTotal(total);
+        // 현재 페이지가 비었는데 앞 페이지가 남아있으면 한 페이지 뒤로(삭제/필터로 마지막 페이지가 사라진 경우).
+        if (rows.length === 0 && total > 0 && translatorPage > 1) {
+          setTranslatorPage(p => Math.max(1, p - 1));
+        }
+      }
     } catch { setToast("오류: 통번역사 조회 실패"); }
     finally { setTranslatorsLoading(false); }
-  }, [token, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter, translatorSvcFilter, showInactiveTranslators]);
+  }, [token, translatorPage, translatorPageSize, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter, translatorSvcFilter, showInactiveTranslators]);
 
   // 통번역사 Excel 다운로드: 현재 검색/필터의 "전체 매칭 행"을 내보낸다(민감정보 제외 — translatorExcel.ts, §4).
   const handleExportTranslators = useCallback(async () => {
@@ -2270,7 +2286,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       )}
       {adminTab === "translators" && !showTranslatorBulkImport && (
         // 목록: 조회/검색/필터/선택/상세 + 공통 Engine 기반 [Excel 다운로드][대량등록](§22). 민감정보는 다운로드에서 제외(§4).
-        <Section title={`통번역사 목록 (${translatorList.length})`} action={
+        <Section title={`통번역사 목록 (${translatorTotal})`} action={
           <div style={{ display: "flex", gap: 8 }}>
             <GhostBtn onClick={handleExportTranslators} disabled={translatorExporting} style={{ fontSize: 13, padding: "7px 14px" }}
               data-testid="translator-excel-export-btn" aria-label="통번역사 Excel 다운로드">
@@ -2283,16 +2299,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           </div>
         }>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
-            <input value={translatorSearch} onChange={e => setTranslatorSearch(e.target.value)}
+            <input value={translatorSearch} onChange={e => { setTranslatorSearch(e.target.value); setTranslatorPage(1); }}
               placeholder="이름, 별칭, 이메일, 가능언어, 학력, 지역 검색..."
               style={{ ...inputStyle, maxWidth: 240, flex: "1 1 180px", padding: "8px 12px", fontSize: 13 }}
               onKeyDown={e => e.key === "Enter" && fetchTranslators()} />
-            <input value={translatorLangFilter} onChange={e => setTranslatorLangFilter(e.target.value)}
+            <input value={translatorLangFilter} onChange={e => { setTranslatorLangFilter(e.target.value); setTranslatorPage(1); }}
               placeholder="가능언어 검색..."
               style={{ ...inputStyle, maxWidth: 150, padding: "8px 12px", fontSize: 13 }} />
             <ClickSelect
               value={translatorSvcFilter}
-              onChange={setTranslatorSvcFilter}
+              onChange={v => { setTranslatorSvcFilter(v); setTranslatorPage(1); }}
               triggerStyle={{ fontSize: 13, padding: "8px 12px", minWidth: 100, borderRadius: 8 }}
               options={[
                 { value: "all", label: "전체 업무" },
@@ -2301,20 +2317,20 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             />
             <ClickSelect
               value={translatorGradeFilter}
-              onChange={setTranslatorGradeFilter}
+              onChange={v => { setTranslatorGradeFilter(v); setTranslatorPage(1); }}
               triggerStyle={{ fontSize: 13, padding: "8px 12px", minWidth: 90, borderRadius: 8 }}
               options={[{ value: "all", label: "전체 등급" }, ...["S","A","B","C"].map(g => ({ value: g, label: `${g}등급` }))]}
             />
             <ClickSelect
               value={translatorStatusFilter}
-              onChange={setTranslatorStatusFilter}
+              onChange={v => { setTranslatorStatusFilter(v); setTranslatorPage(1); }}
               triggerStyle={{ fontSize: 13, padding: "8px 12px", minWidth: 100, borderRadius: 8 }}
               options={[
                 { value: "all", label: "전체 상태" }, { value: "available", label: "가능" },
                 { value: "busy", label: "바쁨" }, { value: "unavailable", label: "불가" },
               ]}
             />
-            <input value={translatorRatingFilter} onChange={e => setTranslatorRatingFilter(e.target.value)}
+            <input value={translatorRatingFilter} onChange={e => { setTranslatorRatingFilter(e.target.value); setTranslatorPage(1); }}
               placeholder="최소 평점"
               style={{ ...inputStyle, maxWidth: 100, padding: "8px 12px", fontSize: 13 }} />
             <PrimaryBtn onClick={fetchTranslators} disabled={translatorsLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
@@ -2324,13 +2340,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               <input
                 type="checkbox"
                 checked={showInactiveTranslators}
-                onChange={e => setShowInactiveTranslators(e.target.checked)}
+                onChange={e => { setShowInactiveTranslators(e.target.checked); setTranslatorPage(1); }}
                 style={{ width: 15, height: 15, accentColor: "#6b7280", cursor: "pointer" }}
               />
               비활성 포함
             </label>
           </div>
-          {translatorsLoading ? (
+          {translatorsLoading && translatorList.length === 0 ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
           ) : translatorList.length === 0 ? (
             <Card style={{ textAlign: "center", padding: "40px 32px" }}>
@@ -2548,6 +2564,19 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                 </table>
               </div>
             </Card>
+          )}
+          {translatorTotal > 0 && (
+            <Pagination
+              idPrefix="translator"
+              page={translatorPage}
+              pageSize={translatorPageSize}
+              total={translatorTotal}
+              unit="명"
+              disabled={translatorsLoading}
+              pageSizeOptions={[50, 100, 200]}
+              onPageChange={setTranslatorPage}
+              onPageSizeChange={s => { setTranslatorPageSize(s); setTranslatorPage(1); }}
+            />
           )}
         </Section>
       )}

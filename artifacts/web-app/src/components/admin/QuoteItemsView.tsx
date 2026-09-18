@@ -71,8 +71,8 @@ function ReadOnlyServiceFields({ f }: { f: QuoteItemForm }) {
           {tperiod && <RoCell w={150} value={tperiod} title="번역 작업기간" />}
           <RoCell flex={1} value={f.fileName} title="원본 파일명" />
           <RoCell w={90} value={f.fileFormat} />
-          <RoCell w={88} value={f.wordCount ? Number(f.wordCount).toLocaleString() : ''} suffix="단어" align="right" />
-          <RoCell w={88} value={f.charCount ? Number(f.charCount).toLocaleString() : ''} suffix="글자" align="right" />
+          <RoCell w={108} value={f.wordCount ? Number(f.wordCount).toLocaleString() : ''} suffix="단어" align="right" />
+          <RoCell w={108} value={f.charCount ? Number(f.charCount).toLocaleString() : ''} suffix="글자" align="right" />
         </div>
       );
     }

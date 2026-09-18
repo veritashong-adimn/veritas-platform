@@ -339,10 +339,16 @@ const normalizeEmail = (e: unknown): string => String(e ?? "").trim().toLowerCas
 // ─── 번역사 목록 (검색/필터) ──────────────────────────────────────────────────
 router.get("/admin/translators", ...adminGuard, async (req, res) => {
   try {
-    const { search, languagePair, specialization, status, minRating, grade, includeInactive, svc } = req.query as {
+    const { search, languagePair, specialization, status, minRating, grade, includeInactive, svc, page, pageSize } = req.query as {
       search?: string; languagePair?: string; specialization?: string;
       status?: string; minRating?: string; grade?: string; includeInactive?: string; svc?: string;
+      page?: string; pageSize?: string;
     };
+    // 서버 페이지네이션: page 파라미터가 있을 때만 {rows,total,page,pageSize} 래핑 응답.
+    // page 미지정(예: Excel 다운로드 등 전체 매칭 조회)은 기존 배열 응답을 그대로 유지한다(§10 export ≠ pagination 분리).
+    const paginate = page != null && String(page).trim() !== "";
+    const pageNum = Math.max(1, Number(page) || 1);
+    const pageSizeNum = Math.min(500, Math.max(1, Number(pageSize) || 50));
 
     const rows = await db
       .select({
@@ -387,7 +393,7 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
           ? eq(usersTable.role, "translator")
           : and(eq(usersTable.role, "translator"), eq(usersTable.isActive, true))
       )
-      .orderBy(desc(usersTable.createdAt));
+      .orderBy(desc(usersTable.createdAt), desc(usersTable.id));
 
     const translatorIds = rows.map(r => r.id);
 
@@ -499,6 +505,16 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         t.workTypes.includes(svcTrim) ||
         (t.profileWorkTypes ?? "").split(",").map(s => s.trim()).filter(Boolean).includes(svcTrim)
       );
+    }
+
+    // 서버 페이지네이션: 필터 적용 후의 전체 결과 기준으로 total 산정 → 현재 페이지 구간만 slice.
+    // (기존 검색/필터 의미는 그대로. 정렬은 createdAt DESC, id DESC로 stable → 페이지 간 중복/누락 없음.)
+    if (paginate) {
+      const total = result.length;
+      const offset = (pageNum - 1) * pageSizeNum;
+      const rows = result.slice(offset, offset + pageSizeNum);
+      res.json({ rows, total, page: pageNum, pageSize: pageSizeNum, totalPages: Math.max(1, Math.ceil(total / pageSizeNum)) });
+      return;
     }
 
     res.json(result);
