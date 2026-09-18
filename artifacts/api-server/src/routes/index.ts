@@ -38,6 +38,7 @@ import aiQuoteDraftRouter from "./aiQuoteDraft";
 import docxDiagRouter from "./docxDiag";
 import inquiriesRouter from "./inquiries";
 import inquiryAiAnalyzeRouter from "./inquiryAiAnalyze";
+import comparisonQuotesRouter from "./comparisonQuotes";
 
 const router: IRouter = Router();
 
@@ -48,6 +49,7 @@ router.use(projectsRouter);
 router.use(aiQuoteDraftRouter);
 router.use(docxDiagRouter);
 router.use(quotesRouter);
+router.use(comparisonQuotesRouter);
 router.use(inquiryAiAnalyzeRouter);
 router.use(inquiriesRouter);
 router.use(tasksRouter);

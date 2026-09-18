@@ -20,6 +20,7 @@ import {
   type ValidationResult,
 } from '../../lib/languagePagePolicy';
 import AiQuoteModal, { type AiDraftRow } from './AiQuoteModal';
+import ComparisonQuoteModal from './ComparisonQuoteModal';
 import { PrepaidLinesSection, PrepaidSummarySection, prepaidLinesToApi, makeEmptyPrepaidLine, sumPrepaidLines, type PrepaidLine } from './PrepaidDeductionSection';
 import { calcInterpretation, displayUnit, buildQuotePdfData } from '../../lib/quotePdf';
 import { generateQuoteTitle } from '../../lib/quoteTitle';
@@ -1677,6 +1678,7 @@ export function QuoteEditorWorkspace({
 
   const authH = { Authorization: `Bearer ${token}` };
   const [showAiModal,   setShowAiModal]   = useState(false);
+  const [showComparison, setShowComparison] = useState(false);
   // ── 누적 견적서 마감 상태 (accumulated_batch 전용) ───────────────────────────
   const [batchClosed,       setBatchClosed]       = useState<boolean>(!!initialBatchClosedAt);
   const [batchCloseConfirm, setBatchCloseConfirm] = useState(false);
@@ -2662,6 +2664,15 @@ export function QuoteEditorWorkspace({
           cursor: pdfDisabled ? 'not-allowed' : 'pointer', opacity: pdfDisabled ? 0.55 : 1 }}>
         📄 {pdfLoading ? '여는 중…' : '견적서 보기'}
       </button>
+      {/* 비교견적 — 현재 견적을 SOURCE 로 다른 상호의 비교견적서 생성(고객 제출용 보조문서). 원본 견적/매출과 분리(§10). */}
+      <button type="button" onClick={() => setShowComparison(true)} disabled={savedQuoteId == null}
+        data-testid="btn-comparison-quote" aria-label="비교견적"
+        title={savedQuoteId == null ? '견적을 먼저 저장하면 비교견적을 만들 수 있습니다.' : undefined}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600,
+          border: `1px solid ${C.border}`, background: '#ffffff', color: savedQuoteId == null ? C.textMuted : '#0f766e',
+          cursor: savedQuoteId == null ? 'not-allowed' : 'pointer', opacity: savedQuoteId == null ? 0.55 : 1 }}>
+        📊 비교견적
+      </button>
       <button type="button" onClick={() => setShowAiModal(true)} data-testid="btn-ai-quote" aria-label="AI 견적 생성"
         style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', background: C.ai, color: '#ffffff' }}>
         🤖 AI 견적 생성
@@ -2774,6 +2785,30 @@ export function QuoteEditorWorkspace({
   // 견적서 PDF 미리보기 모달 — 두 렌더 분기(인라인/오버레이)가 공유. 닫으면 상세 화면 상태 유지.
   const pdfModal = pdfData && (
     <QuotePdfPreviewModal data={pdfData.data} quoteTitle={pdfData.title} onClose={() => setPdfData(null)} />
+  );
+
+  // 비교견적 모달 — 저장된 견적(savedQuoteId)이 있을 때만. 원본 품목을 초기 복사(할인행 제외).
+  const comparisonModal = showComparison && savedQuoteId != null && (
+    <ComparisonQuoteModal
+      sourceQuoteId={savedQuoteId}
+      sourceTitle={title.trim() || String(savedQuoteId)}
+      sourceTotal={totals.supply}
+      seedRows={items
+        .filter(it => it.productType !== 'discount')
+        .map(it => ({
+          sourceQuoteItemId: null,
+          description: it.productName || '',
+          languagePair: it.sourceLanguage || null,
+          quantity: Number(it.quantity) || 0,
+          unit: it.unit || '건',
+          unitPrice: Number(it.unitPrice) || 0,
+          amount: calcItem(it, vatType).supply,
+          memo: it.memo || null,
+        }))}
+      token={token}
+      onClose={() => setShowComparison(false)}
+      onToast={onToast}
+    />
   );
 
   const wsHeader = (bg: string, border: string, shadow: string, padH: string) => (
@@ -3012,6 +3047,7 @@ export function QuoteEditorWorkspace({
         )}
         {convertOverlays}
         {pdfModal}
+        {comparisonModal}
         {/* 인라인 Workspace 헤더 — 스크롤 영역에서 full-bleed sticky (공통 헤더 토큰) */}
         <PageHeader
           onBack={onClose}
@@ -3044,6 +3080,7 @@ export function QuoteEditorWorkspace({
       )}
       {convertOverlays}
       {pdfModal}
+      {comparisonModal}
       {wsHeader(C.bgCard, BD.card, BD.shadow.card, '24px')}
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 24px 64px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>
