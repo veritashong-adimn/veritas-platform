@@ -96,9 +96,11 @@ interface QuoteListTabProps {
   onExitToList?: () => void;
   /** 목록 상단 [대량등록] 클릭 — 공통 Excel Import 화면으로 진입(4차) */
   onOpenBulkImport?: () => void;
+  /** 목록 상단 [과거자료 일괄등록] 클릭 — 과거 결제리스트 이관(견적→판매→수행→지급) 화면 진입 */
+  onOpenPastWorkImport?: () => void;
 }
 
-export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales, onOpenSalesDetail, canConvert: convertPerm = true, view = 'list', onExitToList, onOpenBulkImport }: QuoteListTabProps) {
+export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales, onOpenSalesDetail, canConvert: convertPerm = true, view = 'list', onExitToList, onOpenBulkImport, onOpenPastWorkImport }: QuoteListTabProps) {
   const authH = { Authorization: `Bearer ${token}` };
 
   const [quotes, setQuotes]             = useState<QuoteRow[]>([]);
@@ -485,6 +487,13 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
                 data-testid="quote-bulk-import-btn" aria-label="견적 대량등록"
                 style={{ fontSize: 12, padding: '6px 12px', borderRadius: 6, border: '1px solid #0284c7', background: '#e0f2fe', color: '#0369a1', cursor: 'pointer', fontWeight: 700 }}>
                 대량등록
+              </button>
+            )}
+            {onOpenPastWorkImport && (
+              <button onClick={onOpenPastWorkImport}
+                data-testid="quote-pastwork-import-btn" aria-label="과거자료 일괄등록"
+                style={{ fontSize: 12, padding: '6px 12px', borderRadius: 6, border: '1px solid #7c3aed', background: '#f5f3ff', color: '#6d28d9', cursor: 'pointer', fontWeight: 700 }}>
+                과거자료 일괄등록
               </button>
             )}
           </div>

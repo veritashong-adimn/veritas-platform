@@ -396,6 +396,7 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
                           const q = companyQuery.toLowerCase();
                           const filtered = (companies ?? []).filter(c =>
                             c.name.toLowerCase().includes(q) ||
+                            (c.aliases ?? []).some(a => a.toLowerCase().includes(q)) ||
                             (c.divisionNames ?? []).some(d => d.toLowerCase().includes(q)) ||
                             (c.businessNumber ?? "").replace(/-/g, "").includes(q.replace(/-/g, ""))
                           ).slice(0, 10);
@@ -404,6 +405,9 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
                           );
                           return filtered.map(c => {
                             const matchedDiv = (c.divisionNames ?? []).find(d => d.toLowerCase().includes(q));
+                            // 별칭으로 매칭됐거나(예: "식약처") 별칭이 있으면 정식명 옆에 보조표시.
+                            const matchedAlias = (c.aliases ?? []).find(a => a.toLowerCase().includes(q));
+                            const aliasHint = matchedAlias ?? (c.aliases ?? [])[0];
                             return (
                               <div key={c.id}
                                 onClick={async () => {
@@ -417,6 +421,7 @@ export function ContactFormModal({ mode, token, companies, contactId, initialDat
                                 onMouseEnter={e => (e.currentTarget.style.background = "#eff6ff")}
                                 onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
                                 <span style={{ fontWeight: 600 }}>{c.name}</span>
+                                {aliasHint && <span style={{ color: "#0891b2", fontWeight: 600, marginLeft: 5, fontSize: 12 }}>({aliasHint})</span>}
                                 {matchedDiv && <span style={{ color: "#7c3aed", fontWeight: 700, marginLeft: 4 }}>({matchedDiv})</span>}
                                 {c.businessNumber && <span style={{ color: "#9ca3af", marginLeft: 8, fontSize: 12 }}>{c.businessNumber}</span>}
                               </div>

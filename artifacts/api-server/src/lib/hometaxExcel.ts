@@ -390,6 +390,57 @@ export const PERF_DEDUCT_SYNONYMS: Record<string, string[]> = {
   reason: ["차감사유", "사유", "차감이유", "비고"],
 };
 
+// ── 과거자료 일괄등록(결제리스트) 컬럼 동의어 ────────────────────────────────
+// 실제 과거 「결제리스트」는 한 행 = 수행 1건(견적 정보가 여러 행에 반복/병합)인 flat 구조다.
+// 견적/영업 · 수행정보 · 수행비용 컬럼을 하나의 사전으로 매핑한다(시트별 서비스구분은 시트명으로 판별).
+// 주민등록번호(PII, §20)는 절대 매핑하지 않는다 — 여기에 동의어를 추가하지 말 것.
+// ※ 실제 파일 헤더 확인 후 최종 확정(§4, 사용자 합의). 지금은 spec 컬럼 기준 방어적 정의.
+export const PASTWORK_SYNONYMS: Record<string, string[]> = {
+  // 견적/영업
+  contractDate: ["체결일", "계약체결일", "체결일자"],
+  invoiceDate: ["계산서발행일", "세금계산서발행일", "계산서일자"],
+  quoteIssueDate: ["견적서발행일", "견적일", "견적일자", "견적발행일"],
+  quoteKind: ["견적서구분", "견적구분"],
+  businessNumber: ["사업자등록번호", "사업자번호", "거래처등록번호", "등록번호"],
+  companyName: ["거래처명", "거래처", "고객사", "회사명", "상호"],
+  customerName: ["고객명", "고객", "요청자"],
+  phone: ["연락처", "고객연락처"],
+  wordCount: ["단어수"],
+  charCount: ["글자수", "자수"],
+  unitPrice: ["단가", "견적단가", "판매단가"],
+  quantity: ["수량"],
+  volume: ["volume1", "volume", "물량"],
+  supplyAmount: ["공급가액", "공급가", "공급액"],
+  vatAmount: ["부가세", "부가가치세", "vat", "세액"],
+  totalAmount: ["총액", "합계금액", "총금액", "청구액"],
+  depositDate: ["입금일", "입금일자", "수금일"],
+  depositMemo: ["입금내역", "입금메모", "수금내역"],
+  note: ["비고", "메모", "특이사항"],
+  pm: ["담당자", "담당pm", "영업담당", "담당영업"],
+  content: ["내용", "업무내용", "건명", "프로젝트명"],
+  productName: ["상품명", "품목명", "서비스명", "제품명"],
+  // 수행정보 (주민등록번호는 §20 절대 매핑 금지)
+  translatorName: ["통번역사명", "통역사명", "번역사명", "수행자명", "작업자"],
+  detailInfo: ["상세정보", "상세", "세부정보"],
+  fileName: ["파일명", "파일", "원고명", "문서명"],
+  language: ["언어", "언어쌍", "언어페어"],
+  deliveryDate: ["통번역사납품일", "납품일", "납기일", "완료일"],
+  payDate: ["통번역사지급일", "지급일", "지급예정일"],
+  place: ["통역장소", "수행장소", "장소", "행사장소"],
+  // 수행비용
+  fee100: ["요금(100%)", "요금100", "요금", "협의금액"],
+  fee85: ["요율(85%)", "요율85", "요율", "통역료(85%)", "통역료85", "통역료"],
+  transportFee: ["교통비"],
+  businessTripFee: ["출장비"],
+  travelDayCompensation: ["이동보상비", "이동일보상", "이동일보상비", "이동보상"],
+  copyrightFee: ["저작권료", "저작권"],
+  cancellationCompensation: ["취소보상비", "취소보상"],
+  perfQuantity: ["통번역수량", "수행수량", "작업량"],
+  perfUnit: ["단위", "통번역단위"],
+  perfUnitPrice: ["통번역단가", "수행단가", "지급단가"],
+  preTaxPayout: ["지급액(세전)", "세전지급액", "지급액세전", "세전금액"],
+};
+
 /** aoa 상위 20행에서 헤더 행을 자동 탐지(알려진 동의어가 2개 이상인 행). 실패 시 0행 헤더 폴백. */
 export function detectHeaderInAoa(aoa: unknown[][], synonyms: Record<string, string[]>): { headerRowIndex: number; headers: string[]; dataRows: unknown[][] } {
   const allSynNorm = new Set(Object.values(synonyms).flat().map(normKey));
@@ -403,6 +454,36 @@ export function detectHeaderInAoa(aoa: unknown[][], synonyms: Record<string, str
   }
   if (bestRow < 0) return { headerRowIndex: 0, headers: (aoa[0] ?? []).map(cellToString), dataRows: aoa.slice(1) };
   return { headerRowIndex: bestRow, headers: (aoa[bestRow] || []).map(cellToString), dataRows: aoa.slice(bestRow + 1) };
+}
+
+/** 워크북의 "모든" 시트를 파싱한다(과거자료 결제리스트: 번역/통역/장비 등 여러 도메인 시트).
+ *  알려진 동의어가 2개 미만인 시트(요약 Sheet1 등)는 건너뛴다. 시트명을 함께 반환한다. */
+export function parseAllSheets(buffer: Buffer, synonyms: Record<string, string[]>): ParsedSheet[] {
+  const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });
+  const allSynNorm = new Set(Object.values(synonyms).flat().map(normKey));
+  const out: ParsedSheet[] = [];
+  for (const sheetName of wb.SheetNames) {
+    const ws = wb.Sheets[sheetName];
+    if (!ws) continue;
+    const aoa: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true, blankrows: true });
+    if (aoa.length === 0) continue;
+    // 헤더 후보 탐색(상위 20행 중 동의어 매칭 최다 행, ≥2)
+    const scanLimit = Math.min(20, aoa.length);
+    let bestRow = -1, bestScore = 1;
+    for (let r = 0; r < scanLimit; r++) {
+      let m = 0;
+      for (const c of (aoa[r] || [])) { const k = normKey(c); if (k && allSynNorm.has(k)) m++; }
+      if (m >= 2 && m > bestScore) { bestScore = m; bestRow = r; }
+    }
+    if (bestRow < 0) continue; // 데이터 시트 아님(요약 등) → 스킵
+    out.push({
+      sheetName,
+      headerRowIndex: bestRow,
+      headers: (aoa[bestRow] || []).map(cellToString),
+      dataRows: aoa.slice(bestRow + 1),
+    });
+  }
+  return out;
 }
 
 /** 워크북에서 이름 힌트/동의어 점수로 여러 논리 시트를 각각 파싱한다. 못 찾으면 해당 key=null. */

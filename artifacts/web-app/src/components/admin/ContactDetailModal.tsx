@@ -175,7 +175,7 @@ export function ContactDetailModal({ contactId, token, onClose, onToast, onOpenP
                 { label: "직책",     icon: <BriefcaseBusiness size={17} color="#6b7280" />, value: [detail.department, detail.position].filter(Boolean).join(" · ") || "-" },
                 { label: "이메일",   icon: <Mail             size={17} color="#6b7280" />, value: detail.email ?? "-" },
                 { label: "휴대폰",   icon: <Smartphone       size={17} color="#6b7280" />, value: formatPhoneDisplay(detail.mobile) },
-                { label: "전화",     icon: <Phone            size={17} color="#6b7280" />, value: formatPhoneDisplay(detail.phone) },
+                { label: "전화",     icon: <Phone            size={17} color="#6b7280" />, value: formatPhoneDisplay(detail.officePhone ?? detail.phone) },
                 ...(detail.memo ? [{ label: "메모", icon: <Mail size={17} color="#6b7280" />, value: detail.memo }] : []),
               ] as { label: string; icon: React.ReactNode; value: string }[]).map(({ label, icon, value }, i, arr) => (
                 <div key={label} style={{

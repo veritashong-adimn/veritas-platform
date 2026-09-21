@@ -269,6 +269,8 @@ export type Company = {
   divisionNames?: string[];
   /** 검색어와 매칭된 브랜드/부서명 (검색 시만 존재) */
   matchedDivisionName?: string | null;
+  /** 등록된 별칭(Alias) 목록. 자동생성 기본 별칭 제외, 실제 별칭(예: 식약처)만. */
+  aliases?: string[];
 };
 export type Division = {
   id: number; companyId: number; name: string; type: string | null; createdAt: string;

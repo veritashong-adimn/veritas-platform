@@ -236,12 +236,25 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
       divisionsByCompany.get(d.companyId)!.push({ id: d.id, name: d.name });
     }
 
-    // 기본 응답에 divisionNames 추가
-    type ResultRow = typeof rows[number] & { divisionNames: string[]; matchedDivisionName: string | null };
+    // 기업명 Alias 전체 로드 (companyId → 별칭[] 맵). 자동생성 기본 별칭(isPrimary)은 정식명과
+    // 사실상 동일하므로 제외하고, 실제 별칭(예: 식약처)만 검색·보조표시에 노출한다.
+    const allAliases = await db
+      .select({ companyId: companyAliasesTable.companyId, aliasName: companyAliasesTable.aliasName, isPrimary: companyAliasesTable.isPrimary })
+      .from(companyAliasesTable);
+    const aliasesByCompany = new Map<number, string[]>();
+    for (const a of allAliases) {
+      if (a.isPrimary) continue;
+      if (!aliasesByCompany.has(a.companyId)) aliasesByCompany.set(a.companyId, []);
+      aliasesByCompany.get(a.companyId)!.push(a.aliasName);
+    }
+
+    // 기본 응답에 divisionNames · aliases 추가
+    type ResultRow = typeof rows[number] & { divisionNames: string[]; matchedDivisionName: string | null; aliases: string[] };
     let result: ResultRow[] = rows.map(c => ({
       ...c,
       divisionNames: (divisionsByCompany.get(c.id) ?? []).map(d => d.name),
       matchedDivisionName: null as string | null,
+      aliases: aliasesByCompany.get(c.id) ?? [],
     }));
 
     if (search?.trim()) {

@@ -47,6 +47,7 @@ import { CompanyManagementTab } from '../components/admin/CompanyManagementTab';
 import { isCompanyPath, companyPaths, navigate as navPath } from '../lib/adminNav';
 import { hasUnsavedChanges as hasUnsavedEdits } from '../lib/unsavedGuard';
 import { BulkImportPage } from '../components/admin/BulkImportPage';
+import { PastWorkBulkImportPage } from '../components/admin/PastWorkBulkImportPage';
 import { ContactTrashTab } from '../components/admin/ContactTrashTab';
 import { DataLayerTab } from '../components/admin/DataLayerTab';
 import { LanguageServiceDataTab } from '../components/admin/LanguageServiceDataTab';
@@ -265,6 +266,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [loading, setLoading] = useState(true);
   const [quoteTick, setQuoteTick] = useState(0);
   const [showQuoteBulkImport, setShowQuoteBulkImport] = useState(false);
+  const [showPastWorkImport, setShowPastWorkImport] = useState(false);
   const [customersLoading, setCustomersLoading] = useState(false);
 
 
@@ -1530,7 +1532,15 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onDone={() => setQuoteTick(t => t + 1)}
         />
       )}
-      {adminTab === "quotes" && !showQuoteBulkImport && (
+      {adminTab === "quotes" && showPastWorkImport && (
+        <PastWorkBulkImportPage
+          token={token}
+          onToast={setToast}
+          onClose={() => setShowPastWorkImport(false)}
+          onDone={() => setQuoteTick(t => t + 1)}
+        />
+      )}
+      {adminTab === "quotes" && !showQuoteBulkImport && !showPastWorkImport && (
         <QuoteListTab
           view="list"
           token={token}
@@ -1542,6 +1552,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onOpenSalesDetail={openSalesDetail}
           canConvert={hasPerm("quote.create")}
           onOpenBulkImport={() => setShowQuoteBulkImport(true)}
+          onOpenPastWorkImport={() => setShowPastWorkImport(true)}
         />
       )}
 

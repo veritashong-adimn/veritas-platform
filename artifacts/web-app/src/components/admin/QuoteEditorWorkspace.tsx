@@ -76,7 +76,7 @@ export interface QuoteItemForm {
   discountReason?: string;        // 내부 사유 (PDF 미출력)
 }
 
-interface Company   { id: number; name: string; divisionNames?: string[]; customerType?: string | null; phone?: string | null; mobile?: string | null; email?: string | null }
+interface Company   { id: number; name: string; divisionNames?: string[]; aliases?: string[]; customerType?: string | null; phone?: string | null; mobile?: string | null; email?: string | null }
 interface Division  { id: number; name: string }
 interface Contact   { id: number; name: string; companyId: number | null; divisionId?: number | null; divisionName?: string | null }
 interface AdminUser { id: number; name?: string | null; email: string }
@@ -360,13 +360,14 @@ function useFixedAnchor(ref: React.RefObject<HTMLElement | null>, open: boolean,
 // ─── 검색 팝업 ────────────────────────────────────────────────────────────────
 
 function SearchPopup({ title, items, value, onSelect, onClose }: {
-  title: string; items: { id: number; label: string; sub?: string }[]; value: number | null;
+  title: string; items: { id: number; label: string; sub?: string; keywords?: string }[]; value: number | null;
   onSelect: (id: number | null) => void; onClose: () => void;
 }) {
   const [q, setQ] = useState('');
   const ref = useRef<HTMLInputElement>(null);
   useEffect(() => { ref.current?.focus(); }, []);
-  const filtered = q.trim() ? items.filter(i => i.label.toLowerCase().includes(q.toLowerCase()) || (i.sub ?? '').toLowerCase().includes(q.toLowerCase())).slice(0, 40) : items.slice(0, 40);
+  // label(정식명)·sub(브랜드) 외에 keywords(별칭 등 숨은 검색어)도 매칭한다. 표시는 그대로.
+  const filtered = q.trim() ? items.filter(i => i.label.toLowerCase().includes(q.toLowerCase()) || (i.sub ?? '').toLowerCase().includes(q.toLowerCase()) || (i.keywords ?? '').toLowerCase().includes(q.toLowerCase())).slice(0, 40) : items.slice(0, 40);
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
@@ -400,7 +401,7 @@ function SearchPopup({ title, items, value, onSelect, onClose }: {
 // ─── 인라인 검색 필드 ─────────────────────────────────────────────────────────
 
 function InlineSearchField({ items, value, onChange, placeholder = '검색…', popupTitle = '검색', accentColor = C.ai, compact = false }: {
-  items: { id: number; label: string; sub?: string }[]; value: number | null; onChange: (id: number | null) => void;
+  items: { id: number; label: string; sub?: string; keywords?: string }[]; value: number | null; onChange: (id: number | null) => void;
   placeholder?: string; popupTitle?: string; accentColor?: string; compact?: boolean;
 }) {
   const [open, setOpen]           = useState(false);
@@ -409,7 +410,8 @@ function InlineSearchField({ items, value, onChange, placeholder = '검색…', 
   const ref      = useRef<HTMLDivElement>(null);
   const anchor   = useFixedAnchor(ref, open, 2);
   const selected = items.find(i => i.id === value);
-  const filtered = q.trim() ? items.filter(i => i.label.toLowerCase().includes(q.toLowerCase()) || (i.sub ?? '').toLowerCase().includes(q.toLowerCase())).slice(0, 12) : items.slice(0, 12);
+  // label(정식명)·sub(브랜드) 외에 keywords(별칭 등 숨은 검색어)도 매칭한다. 표시는 그대로.
+  const filtered = q.trim() ? items.filter(i => i.label.toLowerCase().includes(q.toLowerCase()) || (i.sub ?? '').toLowerCase().includes(q.toLowerCase()) || (i.keywords ?? '').toLowerCase().includes(q.toLowerCase())).slice(0, 12) : items.slice(0, 12);
 
   useEffect(() => {
     const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setQ(''); } };
@@ -1920,6 +1922,8 @@ export function QuoteEditorWorkspace({
     sub: c.customerType === 'INDIVIDUAL'
       ? ['개인고객', (c.mobile || c.phone || '').trim() || null, c.email || null].filter(Boolean).join(' · ')
       : c.divisionNames?.join(' · '),
+    // 별칭(식약처 등)으로도 거래처 검색이 되도록 숨은 검색어로 포함(표시는 정식명·브랜드 그대로).
+    keywords: c.aliases?.join(' '),
   }));
   const divisionOptions = divisions.map(d => ({ id: d.id, label: d.name }));
   // 담당자: 거래처로 1차 필터, 브랜드 선택 시 해당 브랜드(또는 브랜드 미지정) 담당자만.
