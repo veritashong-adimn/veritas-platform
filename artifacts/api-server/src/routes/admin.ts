@@ -39,6 +39,7 @@ import { effectiveQuoteConditions } from "../services/quoteRelation";
 import { applyParentIndexLinks } from "../services/quoteItemGroup";
 import { createRevision, approveRevision, rejectRevision } from "../services/quoteRevision";
 import { createDerivedSplit, approveDerived, rejectDerived, calculateAllocation, generateDerivedBillingRows, type DerivedSplitInput } from "../services/quoteDerived";
+import { evaluateProjectDependencies, buildGuardMessage } from "../services/saleDependency";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -1152,6 +1153,16 @@ router.patch("/admin/projects/:id/cancel", ...adminGuard, requirePermission("pro
   // 배정·진행 단계 이후는 판매취소 불가 (배정완료/진행중/정산). 배정 전(approved/paid)만 허용.
   if (project.status === "matched" || project.status === "in_progress") {
     res.status(409).json({ error: "배정·진행 중인 판매는 취소할 수 없습니다. 먼저 배정 해제/진행 중단이 필요합니다." }); return;
+  }
+
+  // ── Dependency Guard(§금융 정합성) ─────────────────────────────────────────
+  //   확정 금융이력(입금확정/실입금/지급확정/지급완료 = D등급) 또는 미확정 금융자료(입금예정/
+  //   draft 지급회차 = C등급)가 있으면 판매취소를 차단한다. 검사는 READ-ONLY 이며 DB 를 변경하지 않는다.
+  //   B등급(수행정보만)·A등급(후속 데이터 없음)은 통과. 금융자료를 자동 DELETE 하지 않는다.
+  const guard = await evaluateProjectDependencies(projectId);
+  if (!guard.canCancel) {
+    res.status(409).json({ error: buildGuardMessage("취소", guard), guard });
+    return;
   }
 
   const { reason } = req.body as { reason?: string };

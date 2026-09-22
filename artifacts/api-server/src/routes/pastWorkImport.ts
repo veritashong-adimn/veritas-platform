@@ -142,6 +142,7 @@ interface QuotePreview {
   companyName: string; matchedCompanyId: number | null; matchedCompanyName: string;
   companyMatchMethod: CoMethod;                       // bizno|canonical|alias|relation|normalized|ambiguous|unmatched
   matchedDivisionId: number | null; matchedDivisionName: string;   // 본점/브랜드 관계 매칭 시
+  quoteCategory: "translation" | "interpretation" | "equipment" | "mixed";   // 견적 유형(번역/통역/장비/혼합)
   customerName: string; matchedContactId: number | null;
   pm: string; matchedAdminId: number | null;
   quoteIssueDate: string; contractDate: string; quoteKind: string;
@@ -169,10 +170,12 @@ interface AnalyzeResult {
 const GROUP_KEY_FIELDS = ["canonical거래처", "공급가액", "부가세", "총액"] as const;
 /** 금액 매칭 키: 빈값(null)=0으로 취급(빈 VAT가 실제 0을 의미). 반올림·변형 없이 숫자 원값 사용. */
 function amtKey(n: number | null): string { return n == null ? "0" : String(n); }
-// 거래처 부분키: Master resolution 된 회사 ID(canonical, §5)를 쓴다. 미매칭은 정규화 원문으로 폴백해
-// 서로 다른 미매칭 거래처가 한 그룹으로 뭉치지 않게 한다. (annotateCompanies 선행 필요)
+// 견적 Grouping 은 "원본 거래처명(정규화)" + 공급가 + 부가세 + 총액 기준이다(§2·§3·§7).
+// Master resolution 결과(canonical 회사 ID)를 그룹 키에 넣지 않는다 — canonicalize-before-group 은
+// 동일 원본 견적을 resolution 상태 차이로 쪼개(29→33 과분리) 회귀를 유발했으므로 제거한다.
+// resolution 은 그룹 확정 후 각 그룹에 붙인다(annotateCompanies 결과는 매칭 표시·연결용으로만 사용).
 function companyGroupPart(r: RawRow): string {
-  return r.resolvedCompanyId != null ? `co#${r.resolvedCompanyId}` : `raw:${normalizeCompanyName(r.companyName)}`;
+  return normalizeCompanyNameKey(r.companyName);
 }
 function buildGroupKey(r: RawRow): string {
   return [companyGroupPart(r), amtKey(r.supplyAmount), amtKey(r.vatAmount), amtKey(r.totalAmount)].join("|");
@@ -449,13 +452,19 @@ export async function analyzePastWork(buffer: Buffer): Promise<AnalyzeResult> {
 
   for (const [groupKey, group] of groups) {
     const head = group.find(r => r.companyName) ?? group[0];
+    // 견적 유형(번역/통역/장비/혼합) — 그룹 내 수행행 category 로 판정.
+    const cats = new Set(group.map(r => r.category));
+    const quoteCategory: QuotePreview["quoteCategory"] = cats.size === 1 ? [...cats][0] : "mixed";
+    // 그룹 대표 resolution — 그룹 내에서 실제로 매칭된 행을 우선(원본명 변형으로 일부만 매칭될 수 있음).
+    const resRow = group.find(r => r.resolvedCompanyId != null) ?? head;
     const title = `${head.content || head.productName || "과거 업무"}${head.quoteIssueDate ? ` (${head.quoteIssueDate})` : ""}`;
 
     const qp: QuotePreview = {
       groupKey, rowKey: `pastwork|quote|${groupKey}`,
       companyName: head.companyName, matchedCompanyId: null, matchedCompanyName: "",
-      companyMatchMethod: head.resolvedMethod ?? "unmatched",
-      matchedDivisionId: head.resolvedDivisionId ?? null, matchedDivisionName: head.resolvedDivisionName ?? "",
+      companyMatchMethod: resRow.resolvedMethod ?? "unmatched",
+      matchedDivisionId: resRow.resolvedDivisionId ?? null, matchedDivisionName: resRow.resolvedDivisionName ?? "",
+      quoteCategory,
       customerName: head.customerName, matchedContactId: null, pm: head.pm, matchedAdminId: null,
       quoteIssueDate: head.quoteIssueDate, contractDate: head.contractDate, quoteKind: head.quoteKind,
       title, itemCount: 0, assignmentCount: group.length,
@@ -463,14 +472,14 @@ export async function analyzePastWork(buffer: Buffer): Promise<AnalyzeResult> {
       status: "new",
     };
 
-    // 거래처 매칭 결과(§2~5, annotateCompanies 에서 resolve). fuzzy 자동확정 없음.
-    qp.matchedCompanyId = head.resolvedCompanyId ?? null;
-    qp.matchedCompanyName = head.resolvedCompanyName ?? "";
+    // 거래처 매칭 결과(§7·§8, annotateCompanies 에서 resolve — grouping 이후 적용). fuzzy 자동확정 없음.
+    qp.matchedCompanyId = resRow.resolvedCompanyId ?? null;
+    qp.matchedCompanyName = resRow.resolvedCompanyName ?? "";
     if (qp.matchedCompanyId != null) {
-      if (head.resolvedMethod === "relation" && qp.matchedDivisionName) qp.warning = `본점/브랜드 관계로 매칭: ${qp.matchedCompanyName} / ${qp.matchedDivisionName}`;
-    } else if (head.resolvedMethod === "ambiguous") {
+      if (resRow.resolvedMethod === "relation" && qp.matchedDivisionName) qp.warning = `본점/브랜드 관계로 매칭: ${qp.matchedCompanyName} / ${qp.matchedDivisionName}`;
+    } else if (resRow.resolvedMethod === "ambiguous") {
       qp.status = "needs_review";
-      qp.reason = (head.resolvedCandidates ?? 0) >= 2 ? `거래처 다중후보(${head.resolvedCandidates}) — 확인 필요` : "거래처 복합명/본점·브랜드 관계 미확인 — 확인 필요";
+      qp.reason = (resRow.resolvedCandidates ?? 0) >= 2 ? `거래처 다중후보(${resRow.resolvedCandidates}) — 확인 필요` : "거래처 복합명/본점·브랜드 관계 미확인 — 확인 필요";
     } else {
       qp.status = "error"; qp.reason = "거래처 미등록 — 마스터 연결/신규등록 결정 필요";
     }
@@ -540,20 +549,39 @@ export async function analyzePastWork(buffer: Buffer): Promise<AnalyzeResult> {
   return { sheetNames, columnMap, quotes, assignments };
 }
 
+// 이번 과거자료 지급회차 기준일(§10) — 이 날짜가 지급예정일인 수행행만 9/15 지급 대상.
+const TARGET_PAYOUT_DATE = "2026-09-15";
+
 function summarize(a: AnalyzeResult) {
   const q = a.quotes;
   const asg = a.assignments;
+  const sum = (xs: AssignPreview[], f: (x: AssignPreview) => number) => round2(xs.reduce((s, x) => s + f(x), 0));
   const projectCount = q.filter(x => x.status === "new").length;
-  const translatorMatched = asg.filter(x => x.matchedTranslatorId != null).length;
+  // 번역/통역/장비 분리(§1·§5·§13). 장비는 통번역사 지급/견적 수에서 분리 집계.
+  const tr = asg.filter(x => x.category === "translation");
+  const itp = asg.filter(x => x.category === "interpretation");
+  const eq = asg.filter(x => x.category === "equipment");
+  const nonEq = asg.filter(x => x.category !== "equipment");   // 통번역사 세전 대사 대상(장비 제외)
+  // 9/15 지급 대상 = 원본 지급예정일이 TARGET_PAYOUT_DATE 인 통번역 수행행(§10·§11). 장비 제외.
+  const pay0915 = nonEq.filter(x => x.payDate === TARGET_PAYOUT_DATE);
   return {
-    // 전체(§7)
+    // ── 원본(§14 A) ──
     rawRows: asg.length,
-    quotesNew: projectCount, quotesIdentical: q.filter(x => x.status === "identical").length,
+    rawRowsTranslation: tr.length, rawRowsInterpretation: itp.length, rawRowsEquipment: eq.length,
+    // ── 견적 Grouping(§14 견적) ──
+    quotesTotal: q.length,                                   // 원본 분석 전체 견적 Group 수
+    quotesNew: projectCount,                                 // 신규등록 가능(status=new)
+    quotesIdentical: q.filter(x => x.status === "identical").length,
     quotesNeedsReview: q.filter(x => x.status === "needs_review").length,
     quotesDuplicate: q.filter(x => x.status === "duplicate_file").length,
     quotesError: q.filter(x => x.status === "error").length,
+    quotesTranslation: q.filter(x => x.quoteCategory === "translation").length,
+    quotesInterpretation: q.filter(x => x.quoteCategory === "interpretation").length,
+    quotesEquipment: q.filter(x => x.quoteCategory === "equipment").length,
+    quotesMixed: q.filter(x => x.quoteCategory === "mixed").length,
     projectCount, assignmentCount: asg.length,
-    // 매칭(§7) — 거래처 resolution 방식별 분해(Preview C 섹션)
+    assignmentsTranslation: tr.length, assignmentsInterpretation: itp.length, assignmentsEquipment: eq.length,
+    // ── Master(§14) — 거래처 resolution 방식별 분해 ──
     companyMatched: q.filter(x => x.matchedCompanyId != null).length,
     companyUnmatched: q.filter(x => x.matchedCompanyId == null).length,
     companyExact: q.filter(x => x.companyMatchMethod === "bizno" || x.companyMatchMethod === "canonical").length,
@@ -562,14 +590,25 @@ function summarize(a: AnalyzeResult) {
     companyNormalized: q.filter(x => x.companyMatchMethod === "normalized").length,
     contactMatched: q.filter(x => x.matchedContactId != null).length,
     contactUnmatched: q.filter(x => x.customerName && x.matchedContactId == null).length,
-    translatorMatched, translatorUnmatched: asg.filter(x => x.category !== "equipment" && x.matchedTranslatorId == null).length,
-    // 금액(§7·§26)
-    quoteTotalOriginal: round2(q.reduce((s, x) => s + x.originalTotal, 0)),
-    quoteTotalSystem: round2(q.reduce((s, x) => s + x.systemTotal, 0)),
-    quoteTotalDiff: round2(q.reduce((s, x) => s + x.totalDiff, 0)),
-    preTaxOriginal: round2(asg.reduce((s, x) => s + (x.originalPreTax ?? 0), 0)),
-    preTaxSystem: round2(asg.reduce((s, x) => s + x.computedPreTax, 0)),
-    preTaxDiff: round2(asg.reduce((s, x) => s + (x.originalPreTax != null ? x.preTaxDiff : 0), 0)),
+    translatorMatched: nonEq.filter(x => x.matchedTranslatorId != null).length,
+    translatorUnmatched: nonEq.filter(x => x.matchedTranslatorId == null).length,
+    // ── 견적금액 대사(§9·§14) — 그룹 대표금액 1회, 중복합산 없음 ──
+    quoteTotalOriginal: sum(q as any, (x: any) => x.originalTotal),
+    quoteTotalSystem: sum(q as any, (x: any) => x.systemTotal),
+    quoteTotalDiff: sum(q as any, (x: any) => x.totalDiff),
+    // ── 금액 대사(전체, Master 매칭과 무관 §11) — 장비 제외 통번역 세전 ──
+    preTaxOriginal: sum(nonEq, x => x.originalPreTax ?? 0),
+    preTaxSystem: sum(nonEq, x => x.computedPreTax),
+    preTaxDiff: sum(nonEq, x => (x.originalPreTax ?? 0) - x.computedPreTax),
+    // ── 9/15 지급회차 대상만(§10·§11·§14) ──
+    pay0915Rows: pay0915.length,
+    pay0915PreTaxOriginal: sum(pay0915, x => x.originalPreTax ?? 0),
+    pay0915PreTaxSystem: sum(pay0915, x => x.computedPreTax),
+    pay0915PreTaxDiff: sum(pay0915, x => (x.originalPreTax ?? 0) - x.computedPreTax),
+    nonPay0915Rows: nonEq.length - pay0915.length,
+    // ── 장비(별도 §13) ──
+    equipmentRows: eq.length,
+    equipmentOriginalTotal: sum(eq, x => x.originalPreTax ?? 0),
     // 오류(§7)
     errorCount: q.filter(x => x.status === "error").length + asg.filter(x => x.status === "error").length,
   };

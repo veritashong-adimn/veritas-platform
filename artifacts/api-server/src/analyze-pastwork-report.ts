@@ -21,23 +21,17 @@ async function main() {
   console.log("\n════════ 과거자료 일괄등록 — 실제 파일 검증 리포트 (등록 없음, DB 미변경) ════════");
   console.log("파일:", path);
 
-  // ── item 9 요약 15항목 ──
-  console.log("\n── [요약] item 9 (15항목) ─────────────────────────────────");
-  console.log("01. 원본 수행행 수        :", s.rawRows);
-  console.log("02. 생성 예정 견적 수      :", s.quotesNew, ` (신그룹 ${rep.newGroupCount} / 구그룹 ${rep.oldGroupCount})  ← 목표 26`);
-  console.log("    확인필요/오류/중복      :", s.quotesNeedsReview, "/", s.quotesError, "/", s.quotesDuplicate);
-  console.log("04. 거래처 매칭          :", s.companyMatched, ` (exact ${s.companyExact} · alias ${s.companyAlias} · 관계 ${s.companyRelation} · normalized ${s.companyNormalized})`);
-  console.log("05. Alias 매칭          :", s.companyAlias);
-  console.log("06. 본점/브랜드 관계 매칭  :", s.companyRelation);
-  console.log("07. 거래처 미매칭         :", s.companyUnmatched);
-  console.log("08. 담당자 매칭/미매칭     :", s.contactMatched, "/", s.contactUnmatched);
-  console.log("09. 통번역사 매칭/미매칭   :", s.translatorMatched, "/", s.translatorUnmatched);
-  console.log("10. 견적 원본 총액        :", won(s.quoteTotalOriginal));
-  console.log("11. 견적 시스템 총액       :", won(s.quoteTotalSystem));
-  console.log("12. 견적 차액           :", won(s.quoteTotalDiff));
-  console.log("13. 9/15 원본 세전 지급액  :", won(s.preTaxOriginal));
-  console.log("14. 9/15 시스템 세전 지급액:", won(s.preTaxSystem));
-  console.log("15. 세전 차액           :", won(s.preTaxDiff));
+  // ── item 14 요약 (번역/통역 분리 · 9/15 분리) ──
+  console.log("\n── [요약] (번역+통역 전체 · 목표숫자 강제 없음) ────────────");
+  console.log("[원본] 전체 수행행:", s.rawRows, "| 번역:", s.rawRowsTranslation, "| 통역:", s.rawRowsInterpretation, "| 장비:", s.rawRowsEquipment);
+  console.log("[견적] 전체:", s.quotesTotal, "| 번역:", s.quotesTranslation, "| 통역:", s.quotesInterpretation, "| 혼합:", s.quotesMixed, "| 장비:", s.quotesEquipment);
+  console.log("[등록] 등록가능(신규):", s.quotesNew, "| 확인필요:", s.quotesNeedsReview, "| 오류:", s.quotesError, "| 기존/중복:", (s.quotesIdentical + s.quotesDuplicate));
+  console.log("[수행배정] 전체:", s.assignmentCount, "| 번역:", s.assignmentsTranslation, "| 통역:", s.assignmentsInterpretation, "| 장비:", s.assignmentsEquipment);
+  console.log("[Master] 거래처 exact:", s.companyExact, "| Alias:", s.companyAlias, "| 본점/브랜드:", s.companyRelation, "| normalized:", s.companyNormalized, "| 미매칭:", s.companyUnmatched);
+  console.log("        담당자 미매칭:", s.contactUnmatched, "| 통번역사 미매칭:", s.translatorUnmatched);
+  console.log("[견적금액] 원본:", won(s.quoteTotalOriginal), "| 시스템:", won(s.quoteTotalSystem), "| 차액:", won(s.quoteTotalDiff));
+  console.log("[전체 세전(장비제외)] 원본:", won(s.preTaxOriginal), "| 시스템:", won(s.preTaxSystem), "| 차액:", won(s.preTaxDiff));
+  console.log("[9/15 지급대상만] 행수:", (s as any).pay0915Rows, "| 원본:", won((s as any).pay0915PreTaxOriginal), "| 시스템:", won((s as any).pay0915PreTaxSystem), "| 차액:", won((s as any).pay0915PreTaxDiff), "| 9/15아님:", (s as any).nonPay0915Rows, "행");
 
   // ── ① 29개 그룹 전체 진단 ──
   console.log("\n── [①] 신규 그룹 전체 진단 (" + rep.allGroups.length + "개) ──────────────────");
@@ -87,6 +81,10 @@ async function main() {
   const zeroSys = (rep.assignments as any[]).filter(a => a.computedPreTax === 0 && (a.originalPreTax ?? 0) > 0);
   console.log(`   시스템 세전=0 인데 원본>0 인 행: ${zeroSys.length}건 (원본합 ${won(zeroSys.reduce((s, a) => s + (a.originalPreTax ?? 0), 0))}) → 요금/요율 컬럼 파싱 여부 확인 대상`);
   if (zeroSys.length) console.log("   해당 Excel 행:", list(zeroSys.map(a => String(a.rowNumber)), 30));
+  const TARGET = "2026-09-15";
+  const non0915 = (rep.assignments as any[]).filter(a => a.category !== "equipment" && a.payDate !== TARGET);
+  console.log(`\n   [지급일 ≠ 9/15 행] ${non0915.length}건 (프로젝트 등록 대상이나 9/15 지급회차 제외):`);
+  for (const a of non0915) console.log(`     행 ${a.rowNumber} | ${(a.companyName || "-").slice(0, 14)} | ${a.translatorName || "-"} | 지급일 ${a.payDate || "(없음)"} | 원본세전 ${won(a.originalPreTax)}`);
 
   // ── 미매칭 목록 ──
   console.log("\n── [⑤] 미매칭 목록 ──");

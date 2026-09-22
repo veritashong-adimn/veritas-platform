@@ -12,7 +12,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type Product } from '../lib/constants';
-import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn, confirmDialog } from '../components/ui';
+import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn, confirmDialog, alertDialog } from '../components/ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../lib/ds';
 import { buildQuotePdfData, type QuoteDetail } from '../lib/quotePdf';
 import { formatDocNumber } from '../lib/quoteTitle';
@@ -251,7 +251,23 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
         body: JSON.stringify({ reason: '판매 상세에서 판매취소' }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { setToast(`판매취소 실패: ${data.error ?? res.status}`); return; }
+      if (!res.ok) {
+        // Dependency Guard(409): 연결된 금융자료를 사용자에게 구체적으로 표시(기존 dialog 재사용).
+        const g = data.guard as { grade?: string; blockingReasons?: string[]; requiredActions?: string[] } | undefined;
+        if (g && (g.blockingReasons?.length || g.requiredActions?.length)) {
+          const reasons = (g.blockingReasons ?? []).map(r => `• ${r}`).join('\n');
+          const actions = (g.requiredActions ?? []).join('\n');
+          const title = g.grade === 'D' ? '[판매취소 불가] 확정 금융이력 존재' : '[판매취소 불가] 미확정 금융자료 존재';
+          await alertDialog({
+            title,
+            message: `연결된 금융자료가 있어 판매를 직접 취소할 수 없습니다.\n\n${reasons}${actions ? `\n\n${actions}` : ''}`,
+            confirmLabel: '확인', variant: 'danger',
+          });
+        } else {
+          setToast(`판매취소 실패: ${data.error ?? res.status}`);
+        }
+        return;
+      }
       setToast('판매가 취소되어 견적관리로 되돌아갔습니다.');
       // 취소된 판매건은 목록에서 제외되므로 목록으로 이동
       setTimeout(() => onBack(), 600);

@@ -76,8 +76,24 @@ app.use("/api", (req: Request, res: Response) => {
 // __dirname = artifacts/api-server/dist/ → ../../web-app/dist/public
 const clientDist = path.resolve(__dirname, "../../web-app/dist/public");
 if (fs.existsSync(clientDist)) {
-  app.use(express.static(clientDist));
+  // 정적 파일 서빙. index.html(및 모든 html)은 절대 캐시하지 않는다(no-cache).
+  //   이유: index.html 이 캐시되면(기본 'public, max-age=0' 은 CDN/프록시 캐싱 허용) 브라우저·엣지가
+  //   구 번들 해시를 물고 있게 되고, 그 구 프론트 번들이 신규 서버 페이지네이션 응답({rows,total})을
+  //   '배열'로 읽어 Master 목록이 빈 배열이 되는 버전 스큐가 발생한다. no-cache 로 항상 최신 index.html →
+  //   최신 해시 번들을 받게 하여 배포 후 hard-refresh 없이도 최신 코드가 로드되도록 한다.
+  //   (해시된 assets 는 파일명이 내용에 따라 바뀌므로 express.static 기본 revalidation 으로 충분하다.)
+  app.use(
+    express.static(clientDist, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith(".html")) {
+          res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        }
+      },
+    }),
+  );
   app.get(/^\/(?!api).*/, (_req, res) => {
+    // SPA fallback(모든 비-API 경로)도 동일하게 no-cache 로 최신 index.html 을 강제한다.
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     res.sendFile(path.join(clientDist, "index.html"));
   });
 }

@@ -15,16 +15,23 @@ type Status = 'new' | 'identical' | 'duplicate_file' | 'needs_review' | 'error';
 interface Summary {
   rawRows: number; quotesNew: number; quotesIdentical: number; quotesNeedsReview: number;
   quotesDuplicate: number; quotesError: number; projectCount: number; assignmentCount: number;
+  quotesTotal?: number;
+  rawRowsTranslation?: number; rawRowsInterpretation?: number; rawRowsEquipment?: number;
+  quotesTranslation?: number; quotesInterpretation?: number; quotesEquipment?: number; quotesMixed?: number;
+  assignmentsTranslation?: number; assignmentsInterpretation?: number; assignmentsEquipment?: number;
   companyMatched: number; companyUnmatched: number; contactMatched: number; contactUnmatched: number;
   companyExact?: number; companyAlias?: number; companyRelation?: number; companyNormalized?: number;
   translatorMatched: number; translatorUnmatched: number;
   quoteTotalOriginal: number; quoteTotalSystem: number; quoteTotalDiff: number;
   preTaxOriginal: number; preTaxSystem: number; preTaxDiff: number; errorCount: number;
+  pay0915Rows?: number; pay0915PreTaxOriginal?: number; pay0915PreTaxSystem?: number; pay0915PreTaxDiff?: number; nonPay0915Rows?: number;
+  equipmentRows?: number; equipmentOriginalTotal?: number;
 }
 interface QuotePreview {
   groupKey: string; rowKey: string;
   companyName: string; matchedCompanyId: number | null; matchedCompanyName: string;
   companyMatchMethod?: string; matchedDivisionId?: number | null; matchedDivisionName?: string;
+  quoteCategory?: string;
   customerName: string; matchedContactId: number | null; pm: string; matchedAdminId: number | null;
   quoteIssueDate: string; contractDate: string; quoteKind: string;
   title: string; itemCount: number; assignmentCount: number;
@@ -243,52 +250,68 @@ function PastWorkBulkImportInner({ token, onClose, onToast, onDone }: Props) {
                 {Object.entries(analysis.columnMap ?? {}).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(', ') || '없음'}
               </div>
 
-              {/* A. 원본 기준 */}
-              <SectionLabel>A. 원본 기준</SectionLabel>
+              {/* A. 원본 (번역/통역/장비 분리) */}
+              <SectionLabel>A. 원본 (Excel 수행행)</SectionLabel>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
-                <SummaryCard label="원본 수행행 수" value={s.rawRows} tone="default" />
-                <SummaryCard label="원본 견적금액" value={s.quoteTotalOriginal} tone="default" isCurrency />
-                <SummaryCard label="9/15 세전 지급액(원본)" value={s.preTaxOriginal} tone="default" isCurrency />
+                <SummaryCard label="전체 수행행" value={s.rawRows} tone="default" />
+                <SummaryCard label="번역 수행행" value={s.rawRowsTranslation ?? 0} tone="blue" />
+                <SummaryCard label="통역 수행행" value={s.rawRowsInterpretation ?? 0} tone="blue" />
+                <SummaryCard label="장비 수행행" value={s.rawRowsEquipment ?? 0} tone="gray" />
               </div>
-              {/* B. Grouping */}
-              <SectionLabel>B. Grouping (canonical 거래처 + 공급가 + 부가세 + 총액)</SectionLabel>
+              {/* B. 견적 Grouping (원본 거래처명 + 공급가 + 부가세 + 총액) — 번역/통역 분리 */}
+              <SectionLabel>B. 견적 Grouping (원본 거래처명 + 공급가 + 부가세 + 총액)</SectionLabel>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                <SummaryCard label="전체 견적" value={s.quotesTotal ?? quotes.length} tone="default" />
+                <SummaryCard label="번역 견적" value={s.quotesTranslation ?? 0} tone="blue" />
+                <SummaryCard label="통역 견적" value={s.quotesInterpretation ?? 0} tone="blue" />
+                {(s.quotesMixed ?? 0) > 0 ? <SummaryCard label="혼합 견적" value={s.quotesMixed ?? 0} tone="amber" /> : null}
+                {(s.quotesEquipment ?? 0) > 0 ? <SummaryCard label="장비 견적" value={s.quotesEquipment ?? 0} tone="gray" /> : null}
+              </div>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
-                <SummaryCard label="생성 예정 견적" value={s.quotesNew} tone="green" />
                 <SummaryCard label="생성 예정 프로젝트" value={s.projectCount} tone="green" />
-                <SummaryCard label="수행배정 예정" value={s.assignmentCount} tone="blue" />
+                <SummaryCard label="수행배정(번역)" value={s.assignmentsTranslation ?? 0} tone="blue" />
+                <SummaryCard label="수행배정(통역)" value={s.assignmentsInterpretation ?? 0} tone="blue" />
+                <SummaryCard label="수행배정 전체" value={s.assignmentCount} tone="blue" />
               </div>
-              {/* C. Master Resolution */}
-              <SectionLabel>C. Master Resolution (거래처)</SectionLabel>
+              {/* C. Master Resolution (Grouping 이후 적용) */}
+              <SectionLabel>C. Master Resolution (거래처 — Grouping 이후)</SectionLabel>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
                 <SummaryCard label="거래처 exact" value={s.companyExact ?? 0} tone="green" />
                 <SummaryCard label="거래처 Alias" value={s.companyAlias ?? 0} tone="green" />
                 <SummaryCard label="본점/브랜드 관계" value={s.companyRelation ?? 0} tone="green" />
                 <SummaryCard label="거래처 미매칭" value={s.companyUnmatched} tone="amber" />
-                <SummaryCard label="담당자 매칭/미매칭" value={s.contactMatched} tone="green" />
+                <SummaryCard label="담당자 미매칭" value={s.contactUnmatched} tone="amber" />
                 <SummaryCard label="통번역사 미매칭" value={s.translatorUnmatched} tone="amber" />
               </div>
-              {/* D. 금액 대사 — Master 매칭 여부와 무관하게 원본 수행행 기준으로 계산 */}
-              <SectionLabel>D. 금액 대사 (Master 매칭과 무관 · 원본 수행행 기준)</SectionLabel>
+              {/* D. 견적금액 대사 */}
+              <SectionLabel>D. 견적금액 대사</SectionLabel>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
                 <SummaryCard label="견적 총액(원본)" value={s.quoteTotalOriginal} tone="default" isCurrency />
                 <SummaryCard label="견적 총액(시스템)" value={s.quoteTotalSystem} tone="blue" isCurrency />
                 <SummaryCard label="견적 차액" value={s.quoteTotalDiff} tone={diffTone(s.quoteTotalDiff)} isCurrency />
-                <SummaryCard label="9/15 세전(원본)" value={s.preTaxOriginal} tone="default" isCurrency />
-                <SummaryCard label="9/15 세전(시스템)" value={s.preTaxSystem} tone="blue" isCurrency />
-                <SummaryCard label="세전 차액" value={s.preTaxDiff} tone={diffTone(s.preTaxDiff)} isCurrency />
               </div>
-              {/* E. 등록 가능 여부 */}
+              {/* D-2. 9/15 지급회차 대사 (원본 지급일=9/15 인 통번역 행만 · Master 매칭과 무관) */}
+              <SectionLabel>D-2. 9/15 지급 대사 (지급일=2026-09-15 행만 · 장비 제외 · Master 매칭 무관)</SectionLabel>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+                <SummaryCard label="9/15 지급 대상 행" value={s.pay0915Rows ?? 0} tone="default" />
+                <SummaryCard label="9/15 세전(원본)" value={s.pay0915PreTaxOriginal ?? 0} tone="default" isCurrency />
+                <SummaryCard label="9/15 세전(시스템)" value={s.pay0915PreTaxSystem ?? 0} tone="blue" isCurrency />
+                <SummaryCard label="9/15 세전 차액" value={s.pay0915PreTaxDiff ?? 0} tone={diffTone(s.pay0915PreTaxDiff ?? 0)} isCurrency />
+                <SummaryCard label="9/15 아닌 행" value={s.nonPay0915Rows ?? 0} tone="gray" />
+              </div>
+              {/* E. 등록 가능 여부 — 카운트 통일 */}
               <SectionLabel>E. 등록 가능 여부</SectionLabel>
               <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-                <SummaryCard label="정상(등록 예정)" value={s.quotesNew} tone="green" />
+                <SummaryCard label="전체 견적" value={s.quotesTotal ?? quotes.length} tone="default" />
+                <SummaryCard label="등록 가능(신규)" value={s.quotesNew} tone="green" />
                 <SummaryCard label="확인필요" value={s.quotesNeedsReview} tone="amber" />
                 <SummaryCard label="등록불가(오류)" value={s.quotesError} tone="red" />
                 <SummaryCard label="기존/중복(제외)" value={s.quotesIdentical + s.quotesDuplicate} tone="gray" />
               </div>
 
-              {/* 견적별 / 수행별 탭 */}
+              {/* 견적별 / 수행별 탭 — 견적별은 전체 견적 Group 수(생성예정과 구분) */}
               <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-                {([['quotes', `견적별 (${quotes.length})`], ['assignments', `수행별 (${assignments.length})`]] as const).map(([k, label]) => (
+                {([['quotes', `견적별 · 전체 ${quotes.length} (등록가능 ${s.quotesNew})`], ['assignments', `수행별 (${assignments.length})`]] as const).map(([k, label]) => (
                   <button key={k} onClick={() => setTab(k)} data-testid={`pastwork-tab-${k}`} aria-label={`${label} 보기`}
                     style={{ fontSize: 12, padding: '6px 14px', borderRadius: 8, cursor: 'pointer', border: tab === k ? '1px solid #0284c7' : '1px solid #e5e7eb', background: tab === k ? '#e0f2fe' : '#fff', color: tab === k ? '#0369a1' : '#6b7280', fontWeight: 700 }}>
                     {label}
@@ -305,6 +328,7 @@ function PastWorkBulkImportInner({ token, onClose, onToast, onDone }: Props) {
                           <input type="checkbox" checked={allNewSelected} onChange={toggleAll} disabled={newQuotes.length === 0} data-testid="pastwork-select-all" aria-label="신규 견적 전체 선택" />
                         </th>
                         <th style={th}>상태</th>
+                        <th style={th}>유형</th>
                         <th style={th}>거래처</th>
                         <th style={th}>고객</th>
                         <th style={th}>견적일</th>
@@ -330,6 +354,7 @@ function PastWorkBulkImportInner({ token, onClose, onToast, onDone }: Props) {
                               ) : <span style={{ color: '#cbd5e1' }}>-</span>}
                             </td>
                             <td style={td}><span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: m.bg, color: m.color, border: `1px solid ${m.border}`, whiteSpace: 'nowrap' }}>{m.label}</span></td>
+                            <td style={td}>{q.quoteCategory === 'mixed' ? '혼합' : (CATEGORY_LABEL[q.quoteCategory ?? ''] ?? '-')}</td>
                             <td style={td}>
                               {q.matchedCompanyName || q.companyName || '-'}
                               {q.matchedDivisionName ? <span style={{ color: '#6d28d9' }}> / {q.matchedDivisionName}</span> : ''}

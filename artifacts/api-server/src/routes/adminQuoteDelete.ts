@@ -3,6 +3,7 @@ import { db, quotesTable, projectsTable, isQuoteConverted } from "@workspace/db"
 import { eq, and, isNull, isNotNull, desc, sql } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
+import { evaluateQuoteDependencies, buildGuardMessage } from "../services/saleDependency";
 
 // 견적 삭제(Soft Delete) 전용 라우터.
 // admin.ts(초대형 파일)의 타입 추론 부하를 늘리지 않도록 별도 파일로 분리한다.
@@ -39,6 +40,15 @@ router.delete("/admin/quotes/:id", ...adminGuard, requirePermission("quote.updat
     //    판매취소 시 status가 'pending'으로 복귀하므로 취소 후에는 정상 삭제된다.
     if (isQuoteConverted(quote.status)) {
       res.status(409).json({ error: "판매전환된 견적은 삭제할 수 없습니다. 먼저 판매취소를 진행한 후 삭제해 주세요." });
+      return;
+    }
+
+    // 3-1) Dependency Guard — 연결된 project 에 확정/미확정 금융이력이 있으면 삭제 차단.
+    //   판매취소를 막아놓고 견적삭제로 우회하는 경로를 봉쇄한다(pending 견적이라도 과거 판매전환으로
+    //   생성된 입금/지급이 project 에 남아 있을 수 있음). 검사는 READ-ONLY.
+    const guard = await evaluateQuoteDependencies(quoteId);
+    if (!guard.canDelete) {
+      res.status(409).json({ error: buildGuardMessage("삭제", guard), guard });
       return;
     }
 
@@ -137,6 +147,14 @@ router.delete("/admin/quotes/:id/permanent", requireAuth, requireRole("admin"), 
     if (!quote) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }
     // 안전장치: 휴지통에 있는(soft-delete 된) 견적만 영구삭제 허용
     if (!quote.deletedAt) { res.status(400).json({ error: "휴지통에 있는 견적만 영구삭제할 수 있습니다." }); return; }
+
+    // Dependency Guard — 영구삭제로 확정 금융이력이 연결된 quote/project 부모관계를 끊지 못하게 차단.
+    //   C/D 등급이면 hard delete 금지. 검사는 READ-ONLY.
+    const guard = await evaluateQuoteDependencies(quoteId);
+    if (!guard.canDelete) {
+      res.status(409).json({ error: buildGuardMessage("영구삭제", guard), guard });
+      return;
+    }
 
     // 감사로그를 실제 삭제 "이전"에 먼저 기록(행 제거 후에는 참조 불가).
     await logEvent("quote", quoteId, "quote_purged", req.log, req.user ?? undefined,

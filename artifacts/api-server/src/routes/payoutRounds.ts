@@ -1298,15 +1298,35 @@ router.patch("/admin/payout-rounds/:id/cancel", ...adminGuard, async (req, res) 
   const [round] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
   if (!round) { res.status(404).json({ error: "지급회차를 찾을 수 없습니다." }); return; }
   if (round.status === "paid") { res.status(400).json({ error: "지급완료 회차는 취소할 수 없습니다." }); return; }
+
+  // §송금 정합성: 회차가 paid 가 아니어도 개별 송금(payout_transfers)이 이미 지급완료(paid)일 수 있다.
+  //   이 상태에서 회차만 cancelled 로 바꾸면 "회차=cancelled 인데 송금=paid" 모순이 발생하고, 실지급 이력이
+  //   고아가 된다. 따라서 지급완료 송금이 하나라도 있으면 회차 취소를 차단한다(실제 paid 데이터를 자동 삭제하지 않음).
+  const paidTransfers = await db
+    .select({ id: payoutTransfersTable.id })
+    .from(payoutTransfersTable)
+    .where(and(
+      eq(payoutTransfersTable.payoutRoundId, id),
+      or(eq(payoutTransfersTable.status, "paid"), isNotNull(payoutTransfersTable.paidAt)),
+    ));
+  if (paidTransfers.length > 0) {
+    res.status(409).json({ error: `지급완료된 송금건 ${paidTransfers.length}건이 있어 회차를 취소할 수 없습니다. 지급이력은 환수/정정 절차로 처리해야 합니다.` });
+    return;
+  }
+
   try {
-    // 취소 시 3개 작업을 하나의 트랜잭션으로 원자 처리(§동시성): ①수행건 귀속 해제 ②확정 스냅샷 정리 ③회차 상태=cancelled.
+    // 취소 시 4개 작업을 하나의 트랜잭션으로 원자 처리(§동시성): ①수행건 귀속 해제 ②확정 스냅샷 정리
+    // ③미지급 송금건 cancelled 처리 ④회차 상태=cancelled.
     // 확정취소(unconfirm)와 동일하게 payout_round_items 를 삭제한다. 이를 누락하면 취소회차의 고아 스냅샷이
     // 남아, 귀속 해제된 수행건이 신규 회차로 재수집될 때 "취소회차 스냅샷 + 신규회차" 이중집계·이중지급 위험이 생긴다.
-    // draft/reviewing 회차는 스냅샷이 없어 delete 는 no-op 이며, paid 회차는 위에서 이미 차단된다. payout_rounds
-    // 레코드 자체는 status=cancelled 로 보존되어 감사 이력은 유지된다.
+    // payout_transfers 는 삭제하지 않고 status=cancelled 로 보존한다(지급명세서/은행 스냅샷·감사이력 유지). paid 는 위에서 차단됨.
+    // draft/reviewing 회차는 스냅샷·송금이 없어 delete/update 는 no-op 이며, paid 회차는 위에서 이미 차단된다.
     await db.transaction(async (tx) => {
       await tx.update(performanceAssignmentsTable).set({ payoutRoundId: null, updatedAt: new Date() }).where(eq(performanceAssignmentsTable.payoutRoundId, id));
       await tx.delete(payoutRoundItemsTable).where(eq(payoutRoundItemsTable.payoutRoundId, id));
+      await tx.update(payoutTransfersTable)
+        .set({ status: "cancelled", updatedAt: new Date() })
+        .where(and(eq(payoutTransfersTable.payoutRoundId, id), ne(payoutTransfersTable.status, "paid")));
       await tx.update(payoutRoundsTable).set({ status: "cancelled", totalAssignments: 0, totalPayees: 0, grossAmount: "0", deductionAmount: "0", netAmount: "0", updatedAt: new Date() }).where(eq(payoutRoundsTable.id, id));
     });
     const [refreshed] = await db.select().from(payoutRoundsTable).where(eq(payoutRoundsTable.id, id));
