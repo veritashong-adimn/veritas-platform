@@ -11,17 +11,25 @@ import {
   quoteItemsTable, quoteItemFilesTable,
   projectFilesTable, translatorProfilesTable,
   companyAliasesTable, projectPaymentsTable, companySensitiveTable,
+  companyVendorProfilesTable,
 } from "@workspace/db";
 import { eq, and, ilike, or, inArray, sql, desc, ne, isNull, isNotNull } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { toEncryptedAccount, readAccountPlain, maskBankAccount } from "../lib/encrypt";
 import { logEvent } from "../lib/logEvent";
+import { normalizeBusinessNumber, isValidBusinessNumber } from "../lib/hometaxExcel";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
 import { buildAliasValues, ensureDefaultAlias } from "../lib/companyAlias";
 import {
   isOcrSupportedExt, buildImageDataUrl, renderPdfFirstPageAsPng,
 } from "../lib/documentOcr";
 import { effectiveRevenueConditions } from "../services/quoteRelation";
+
+// 외주분야 허용값(§4). 향후 확장 가능하되 과도한 구조는 만들지 않는다 — 서버에서 화이트리스트만 검증.
+const OUTSOURCING_FIELDS = ["translation", "interpretation", "equipment", "etc"] as const;
+type OutsourcingField = (typeof OUTSOURCING_FIELDS)[number];
+const isOutsourcingField = (v: unknown): v is OutsourcingField =>
+  typeof v === "string" && (OUTSOURCING_FIELDS as readonly string[]).includes(v);
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -114,6 +122,12 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
 
       const filterConds = [notDeleted];
       if (companyType === "client" || companyType === "vendor") filterConds.push(eq(companiesTable.companyType, companyType));
+      // 역할(role) 필터(§3): companyType(배타적 단일값)과 달리 겸업(고객+외주)까지 포괄한다.
+      //  · role=vendor → is_vendor=true (외주 역할 보유 회사. 수행등록 외주 검색이 이 값을 사용)
+      //  · role=customer → is_customer=true
+      const role = req.query.role as string | undefined;
+      if (role === "vendor") filterConds.push(eq(companiesTable.isVendor, true));
+      else if (role === "customer") filterConds.push(eq(companiesTable.isCustomer, true));
       if (vendorType) filterConds.push(eq(companiesTable.vendorType, vendorType));
       if (customerType === "CORPORATE" || customerType === "PUBLIC" || customerType === "INDIVIDUAL") {
         filterConds.push(sql`coalesce(${companiesTable.customerType},'CORPORATE') = ${customerType}`);
@@ -337,6 +351,28 @@ router.post("/admin/companies", ...adminGuard, requirePermission("company.create
   const resolvedCustomerType = resolvedCompanyType === "client"
     ? (customerType === "INDIVIDUAL" ? "INDIVIDUAL" : customerType === "PUBLIC" ? "PUBLIC" : "CORPORATE")
     : null;
+  // 역할 플래그(§3·§12): 최초 생성 유형에 맞춰 설정. 이후 외주역할 부여는 vendor-profile 이 additive 로 처리.
+  const resolvedIsVendor = resolvedCompanyType === "vendor";
+  const resolvedIsCustomer = resolvedCompanyType === "client";
+
+  // 사업자번호 중복검사(§5): 형식이 유효한 사업자번호면 정규화(숫자만) 기준으로 기존 회사와 대조.
+  //  · 동일 사업자번호 company 복제 생성 차단(§3·§12). 휴지통(soft-delete) 포함해 안내한다.
+  //  · 사업자번호가 없거나 형식이 아니면 스킵(개인/해외 등 사업자번호 미보유 허용).
+  const bizNorm = normalizeBusinessNumber(businessNumber);
+  if (bizNorm && isValidBusinessNumber(bizNorm)) {
+    const [dup] = await db
+      .select({ id: companiesTable.id, name: companiesTable.name, companyType: companiesTable.companyType, deletedAt: companiesTable.deletedAt })
+      .from(companiesTable)
+      .where(sql`regexp_replace(coalesce(${companiesTable.businessNumber},''),'[^0-9]','','g') = ${bizNorm}`)
+      .limit(1);
+    if (dup) {
+      res.status(409).json({
+        error: "이미 등록된 사업자번호입니다. 기존 거래처에 역할을 연결하세요.",
+        duplicate: { id: dup.id, name: dup.name, companyType: dup.companyType, inTrash: !!dup.deletedAt },
+      });
+      return;
+    }
+  }
 
   // 오늘 날짜를 기본 등록일로
   const today = new Date().toISOString().slice(0, 10);
@@ -344,7 +380,7 @@ router.post("/admin/companies", ...adminGuard, requirePermission("company.create
   try {
     const [company] = await db
       .insert(companiesTable)
-      .values({ name: name.trim(), businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, registeredAt: registeredAt ?? today, companyType: resolvedCompanyType, vendorType: resolvedVendorType, customerType: resolvedCustomerType })
+      .values({ name: name.trim(), businessNumber, representativeName, email, phone, mobile, industry, businessCategory, address, website, notes, registeredAt: registeredAt ?? today, companyType: resolvedCompanyType, vendorType: resolvedVendorType, customerType: resolvedCustomerType, isVendor: resolvedIsVendor, isCustomer: resolvedIsCustomer })
       .returning();
 
     // 최초 상호를 이력으로 기록
@@ -517,10 +553,200 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
       contactCount: contacts.filter(c => c.divisionId === d.id).length,
     }));
 
-    res.json({ ...company, contacts, divisions: divisionsWithStats, projects, totalQuote, totalPayment, totalSettlement, prepaidBalance, activeAccumulatedCount, unpaidAmount, lastProjectDate, lastPaymentDate, nameHistory, changeHistory });
+    // 외주업체 역할 Profile(§4). 활성(미삭제) 1건만 노출. 없으면 null → 프론트가 "외주역할 없음" 판단.
+    const [vendorProfile] = await db
+      .select()
+      .from(companyVendorProfilesTable)
+      .where(and(eq(companyVendorProfilesTable.companyId, companyId), isNull(companyVendorProfilesTable.deletedAt)))
+      .limit(1);
+
+    res.json({ ...company, contacts, divisions: divisionsWithStats, projects, totalQuote, totalPayment, totalSettlement, prepaidBalance, activeAccumulatedCount, unpaidAmount, lastProjectDate, lastPaymentDate, nameHistory, changeHistory, vendorProfile: vendorProfile ?? null });
   } catch (err) {
     req.log.error({ err }, "Companies: failed to get detail");
     res.status(500).json({ error: "거래처 상세 조회 실패." });
+  }
+});
+
+// ─── 외주업체(Vendor) 역할 Profile ───────────────────────────────────────────
+// companies 는 identity SSOT(§12). 아래는 company 에 "외주업체 역할"을 additive 로 부여/관리한다.
+//  · 역할 연결 = companies.isVendor=true + company_vendor_profiles upsert (동일 company 복제 없음, §3)
+//  · 계좌/지급정보는 기존 company_sensitive(암호화, /payment-account) 재사용 — 여기서 다루지 않음(§5·§6)
+//  · 역할 해제(soft)는 identity·재무이력을 보존한다(§12·§13).
+
+// 외주업체 목록(역할 뷰): isVendor=true 인 company 를 vendor profile 과 조인. 검색/외주분야/상태 필터 + 페이지네이션.
+router.get("/admin/vendors", ...adminGuard, async (req, res) => {
+  try {
+    const s = (req.query.search as string | undefined)?.trim().toLowerCase();
+    const field = req.query.outsourcingField as string | undefined;
+    const status = req.query.status as string | undefined; // active | inactive | all
+    const page = Math.max(1, parseInt(String(req.query.page ?? "1"), 10) || 1);
+    const allowedSizes = [20, 30, 50, 100];
+    let pageSize = parseInt(String(req.query.pageSize ?? "20"), 10) || 20;
+    if (!allowedSizes.includes(pageSize)) pageSize = 20;
+    const offset = (page - 1) * pageSize;
+
+    const conds: any[] = [
+      eq(companiesTable.isVendor, true),
+      isNull(companiesTable.deletedAt),
+      isNull(companyVendorProfilesTable.deletedAt),
+    ];
+    if (s) {
+      const digits = s.replace(/\D/g, "");
+      const searchOr: any[] = [
+        ilike(companiesTable.name, `%${s}%`),
+        ilike(companiesTable.representativeName, `%${s}%`),
+      ];
+      if (digits) searchOr.push(sql`regexp_replace(coalesce(${companiesTable.businessNumber},''),'[^0-9]','','g') LIKE ${"%" + digits + "%"}`);
+      conds.push(or(...searchOr.filter(Boolean)));
+    }
+    if (field && isOutsourcingField(field)) conds.push(eq(companyVendorProfilesTable.outsourcingField, field));
+    if (status === "active" || status === "inactive") conds.push(eq(companyVendorProfilesTable.status, status));
+    const whereAll = and(...conds.filter(Boolean));
+
+    const [{ cnt: total }] = await db
+      .select({ cnt: sql<number>`count(*)::int` })
+      .from(companiesTable)
+      .innerJoin(companyVendorProfilesTable, eq(companyVendorProfilesTable.companyId, companiesTable.id))
+      .where(whereAll);
+
+    const rows = await db
+      .select({
+        id: companiesTable.id,
+        name: companiesTable.name,
+        businessNumber: companiesTable.businessNumber,
+        representativeName: companiesTable.representativeName,
+        phone: companiesTable.phone,
+        email: companiesTable.email,
+        companyType: companiesTable.companyType,
+        isCustomer: companiesTable.isCustomer,
+        isVendor: companiesTable.isVendor,
+        registeredAt: companiesTable.registeredAt,
+        createdAt: companiesTable.createdAt,
+        profileId: companyVendorProfilesTable.id,
+        outsourcingField: companyVendorProfilesTable.outsourcingField,
+        mainWork: companyVendorProfilesTable.mainWork,
+        issuesTaxInvoice: companyVendorProfilesTable.issuesTaxInvoice,
+        vendorStatus: companyVendorProfilesTable.status,
+        memo: companyVendorProfilesTable.memo,
+      })
+      .from(companiesTable)
+      .innerJoin(companyVendorProfilesTable, eq(companyVendorProfilesTable.companyId, companiesTable.id))
+      .where(whereAll)
+      .orderBy(desc(companiesTable.createdAt), desc(companiesTable.id))
+      .limit(pageSize)
+      .offset(offset);
+
+    res.json({ rows, total, page, pageSize });
+  } catch (err) {
+    req.log.error({ err }, "Vendors: failed to list");
+    res.status(500).json({ error: "외주업체 목록 조회 실패." });
+  }
+});
+
+// 특정 회사의 외주 Profile 조회 (없으면 null)
+router.get("/admin/companies/:id/vendor-profile", ...adminGuard, async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 company id." }); return; }
+  try {
+    const [profile] = await db
+      .select()
+      .from(companyVendorProfilesTable)
+      .where(and(eq(companyVendorProfilesTable.companyId, companyId), isNull(companyVendorProfilesTable.deletedAt)))
+      .limit(1);
+    res.json({ vendorProfile: profile ?? null });
+  } catch (err) {
+    req.log.error({ err }, "Vendor profile: get failed");
+    res.status(500).json({ error: "외주 프로필 조회 실패." });
+  }
+});
+
+// 외주 역할 부여/프로필 upsert. companies.isVendor=true 설정. (동일 company 복제 없이 역할만 연결, §3)
+router.put("/admin/companies/:id/vendor-profile", ...adminGuard, requirePermission("company.update"), async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 company id." }); return; }
+  const { outsourcingField, mainWork, issuesTaxInvoice, memo, status } = req.body as {
+    outsourcingField?: string | null; mainWork?: string | null; issuesTaxInvoice?: boolean; memo?: string | null; status?: string;
+  };
+  if (outsourcingField != null && outsourcingField !== "" && !isOutsourcingField(outsourcingField)) {
+    res.status(400).json({ error: "허용되지 않은 외주분야입니다.", allowed: OUTSOURCING_FIELDS }); return;
+  }
+  const resolvedField: OutsourcingField | null = isOutsourcingField(outsourcingField) ? outsourcingField : null;
+  const resolvedStatus = status === "inactive" ? "inactive" : "active";
+  try {
+    const [company] = await db
+      .select({ id: companiesTable.id })
+      .from(companiesTable)
+      .where(and(eq(companiesTable.id, companyId), isNull(companiesTable.deletedAt)))
+      .limit(1);
+    if (!company) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
+
+    const [existing] = await db
+      .select({ id: companyVendorProfilesTable.id })
+      .from(companyVendorProfilesTable)
+      .where(eq(companyVendorProfilesTable.companyId, companyId))
+      .limit(1);
+
+    let profile;
+    if (existing) {
+      // 기존 프로필 재사용(soft-deleted 였다면 되살림) — company 당 1개 유지(companyId UNIQUE).
+      [profile] = await db
+        .update(companyVendorProfilesTable)
+        .set({
+          outsourcingField: resolvedField,
+          mainWork: mainWork ?? null,
+          issuesTaxInvoice: !!issuesTaxInvoice,
+          memo: memo ?? null,
+          status: resolvedStatus,
+          deletedAt: null, deletedBy: null, deletionReason: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(companyVendorProfilesTable.companyId, companyId))
+        .returning();
+    } else {
+      [profile] = await db
+        .insert(companyVendorProfilesTable)
+        .values({
+          companyId,
+          outsourcingField: resolvedField,
+          mainWork: mainWork ?? null,
+          issuesTaxInvoice: !!issuesTaxInvoice,
+          memo: memo ?? null,
+          status: resolvedStatus,
+        })
+        .returning();
+    }
+    // 외주 역할 부여(§3). companyType/customerType 등 기존 값은 건드리지 않는다(겸업 허용).
+    await db.update(companiesTable).set({ isVendor: true, updatedAt: new Date() }).where(eq(companiesTable.id, companyId));
+
+    res.json({ vendorProfile: profile });
+  } catch (err) {
+    req.log.error({ err }, "Vendor profile: upsert failed");
+    res.status(500).json({ error: "외주 프로필 저장 실패." });
+  }
+});
+
+// 외주 역할 해제(soft). profile soft-delete + companies.isVendor=false. identity·재무이력 보존(§12·§13).
+router.delete("/admin/companies/:id/vendor-profile", ...adminGuard, requirePermission("company.update"), async (req, res) => {
+  const companyId = Number(req.params.id);
+  if (isNaN(companyId) || companyId <= 0) { res.status(400).json({ error: "유효하지 않은 company id." }); return; }
+  const reason = (req.body?.reason as string | undefined)?.trim();
+  try {
+    const [existing] = await db
+      .select({ id: companyVendorProfilesTable.id })
+      .from(companyVendorProfilesTable)
+      .where(and(eq(companyVendorProfilesTable.companyId, companyId), isNull(companyVendorProfilesTable.deletedAt)))
+      .limit(1);
+    if (!existing) { res.status(404).json({ error: "외주 프로필이 없습니다." }); return; }
+    const user = (req as any).user;
+    await db
+      .update(companyVendorProfilesTable)
+      .set({ deletedAt: new Date(), deletedBy: user?.id ?? null, deletionReason: reason || "외주역할 해제", updatedAt: new Date() })
+      .where(eq(companyVendorProfilesTable.companyId, companyId));
+    await db.update(companiesTable).set({ isVendor: false, updatedAt: new Date() }).where(eq(companiesTable.id, companyId));
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error({ err }, "Vendor profile: soft-delete failed");
+    res.status(500).json({ error: "외주역할 해제 실패." });
   }
 });
 

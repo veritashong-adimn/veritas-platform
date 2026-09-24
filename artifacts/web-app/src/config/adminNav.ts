@@ -87,9 +87,12 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     items: [
       // 통번역사 ERP 마스터: 목록 / 등록. 상세는 목록에서 진입하는 하위 페이지(메뉴 미노출).
       //  · 개별 휴지통 메뉴는 향후 플랫폼 통합 휴지통으로 정리 예정 → 여기서 추가하지 않음.
-      { id: "translator-catalog", label: "통번역사", icon: "🌐", perm: "menu.translator", children: [
+      // Master별로 「목록 → 등록」 순서 유지: 통번역사(목록·등록) → 외주업체(목록·등록).
+      { id: "translator-catalog", label: "통번역사·외주업체", icon: "🌐", perm: "menu.translator", children: [
         { id: "translators",         label: "통번역사 목록", icon: "🌐", perm: "menu.translator" },
         { id: "translator-register", label: "통번역사 등록", icon: "➕", perm: "menu.translator" },
+        { id: "vendors",             label: "외주업체 목록", icon: "🏭", perm: "menu.translator" },
+        { id: "vendor-register",     label: "외주업체 등록", icon: "➕", perm: "menu.translator" },
       ] },
       // 상품 개별 휴지통 메뉴도 「통합 휴지통」으로 일원화(진입점 제거). ProductTrashTab·API는 유지.
       { id: "products-catalog", label: "상품관리", icon: "🏷️", perm: "menu.product", children: [
@@ -179,6 +182,8 @@ export const ADMIN_PAGE_TITLE: Record<string, string> = {
   translators: "통번역사 목록",
   "translator-register": "통번역사 등록",
   "translator-detail": "통번역사 상세",
+  vendors: "외주업체 목록",
+  "vendor-register": "외주업체 등록",
   products:    "상품목록",
   "product-register": "상품등록",
   "product-trash":    "휴지통",

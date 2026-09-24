@@ -44,6 +44,8 @@ import { ProjectManagementTab } from '../components/admin/ProjectManagementTab';
 import { SalesDetailPage } from './SalesDetailPage';
 import { QuoteListTab } from '../components/admin/QuoteListTab';
 import { CompanyManagementTab } from '../components/admin/CompanyManagementTab';
+import { VendorManagementTab } from '../components/admin/VendorManagementTab';
+import { VendorRegisterPage } from '../components/admin/VendorRegisterPage';
 import { isCompanyPath, companyPaths, navigate as navPath } from '../lib/adminNav';
 import { hasUnsavedChanges as hasUnsavedEdits } from '../lib/unsavedGuard';
 import { BulkImportPage } from '../components/admin/BulkImportPage';
@@ -231,7 +233,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   };
 
   // 초기 탭 — /admin/companies* 경로로 새로고침·직접진입 시 거래처 탭을 복원한다(URL 라우팅 연동).
-  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"quote-register"|"quote-trash"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"translator-register"|"translator-detail"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics"|"trash"|"inquiries"|"inquiry-register"|"inquiry-detail">(() => {
+  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"quote-register"|"quote-trash"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"translator-register"|"translator-detail"|"vendors"|"vendor-register"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics"|"trash"|"inquiries"|"inquiry-register"|"inquiry-detail">(() => {
     // 로고 클릭 새로고침(§로고): 직전 탭을 세션에 저장해 두었다면 복원(1회 소비) → 메뉴 위치 유지.
     try {
       const restore = sessionStorage.getItem("veritasRestoreTab");
@@ -2179,6 +2181,28 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onToast={setToast}
           onSaved={() => fetchTranslators()}
           onDeleted={() => { navigateToAdminTab("translators"); fetchTranslators(); }}
+        />
+      )}
+
+      {/* ── 외주업체 목록(역할 뷰) — companies(is_vendor=true) + vendor profile 조인. 행 클릭 시 거래처 상세 재사용. ── */}
+      {adminTab === "vendors" && (
+        <VendorManagementTab
+          token={token}
+          hasPerm={hasPerm}
+          onToast={setToast}
+          onOpenProject={(id) => openDetail(id)}
+          onRegister={() => navigateToAdminTab("vendor-register")}
+        />
+      )}
+
+      {/* ── 외주업체 등록 — 기존 거래처 선택 / 신규 업체 등록(회사 복제 없이 외주 역할 부여, §3·§12). ── */}
+      {adminTab === "vendor-register" && (
+        <VendorRegisterPage
+          token={token}
+          hasPerm={hasPerm}
+          onToast={setToast}
+          onCancel={() => navigateToAdminTab("vendors")}
+          onDone={() => navigateToAdminTab("vendors")}
         />
       )}
 

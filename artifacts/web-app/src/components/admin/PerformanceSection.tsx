@@ -327,7 +327,8 @@ export default function PerformanceSection({ projectId, token, performances, onC
     } catch { setSearchResults([]); }
   };
   const onSearchTranslator = (i: number, s: string) => { if (!s.trim()) { setSearchIdx(i); setSearchResults([]); return; } runSearch(i, `/api/admin/translators?search=${encodeURIComponent(s)}`); };
-  const onSearchVendor = (i: number, s: string) => { if (!s.trim()) { setSearchIdx(i); setSearchResults([]); return; } runSearch(i, `/api/admin/companies?companyType=vendor&search=${encodeURIComponent(s)}`); };
+  // 외주 역할(is_vendor=true) 회사 검색 — 고객+외주 겸업 회사도 포함(§3·§7). page 지정으로 서버 필터/검색 분기 사용.
+  const onSearchVendor = (i: number, s: string) => { if (!s.trim()) { setSearchIdx(i); setSearchResults([]); return; } runSearch(i, `/api/admin/companies?role=vendor&page=1&pageSize=20&search=${encodeURIComponent(s)}`); };
   const onClearPerformer = (i: number) => { patchRow(i, { performerNameSnapshot: null }); setSearchIdx(i); setSearchResults([]); };
 
   // 통번역사 최근 수행이력 조회(§2·§3) — 상세 미리보기에서 지연 호출. 실패해도 빈 배열(미리보기 유지).

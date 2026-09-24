@@ -1,4 +1,4 @@
-import { pgTable, serial, text, timestamp, varchar, integer } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, timestamp, varchar, integer, boolean } from "drizzle-orm/pg-core";
 
 export const companiesTable = pgTable("companies", {
   id: serial("id").primaryKey(),
@@ -20,6 +20,17 @@ export const companiesTable = pgTable("companies", {
   companyType: varchar("company_type", { length: 30 }).notNull().default("client"),
   // vendor 전용: interpretation_equipment | editing | translation_agency | cleaning | water_supply | etc
   vendorType: varchar("vendor_type", { length: 50 }),
+
+  // ── 역할 플래그(가산·additive) ──────────────────────────
+  // companies 는 사업자/법인 identity 의 SSOT(§12). 한 회사가 "고객"이면서 "외주업체" 역할을
+  // 동시에 가질 수 있다(§3·§12). 기존 단일값 companyType 은 그대로 두고(호환), 아래 두 플래그로
+  // 역할 공존을 표현한다. companyType 기반 기존 로직/필터는 변경하지 않는다.
+  //  · 외주업체 목록  = is_vendor = true
+  //  · 고객사 목록    = 기존 companyType 로직 유지(회귀 방지)
+  // 도입 시 companyType 으로부터 1회 backfill: vendor→is_vendor, 그 외→is_customer.
+  // 신규 등록 시 API 가 등록 유형에 따라 명시적으로 설정한다.
+  isCustomer: boolean("is_customer").notNull().default(false),
+  isVendor: boolean("is_vendor").notNull().default(false),
   // client 전용: CORPORATE | PUBLIC | INDIVIDUAL (NULL = vendor 또는 레거시 client → CORPORATE 처리)
   customerType: varchar("customer_type", { length: 20 }).default("CORPORATE"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
