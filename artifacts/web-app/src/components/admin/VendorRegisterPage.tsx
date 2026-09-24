@@ -19,6 +19,7 @@ import { PageHeader } from './PageHeader';
 import { dsStickyPageHeader } from '../../lib/ds';
 import { CompanyForm, emptyCompanyFormValues } from './CompanyForm';
 import { OUTSOURCING_FIELD_OPTIONS } from './VendorManagementTab';
+import { VendorDocumentsSection, type PendingVendorDoc } from './VendorDocumentsSection';
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
@@ -66,8 +67,9 @@ type Step = 'path' | 'company-new' | 'vendor-info';
 export function VendorRegisterPage({ token, onToast, hasPerm, onCancel, onDone, onOpenCompany }: VendorRegisterPageProps) {
   const authHeaders = { Authorization: `Bearer ${token}` };
 
-  const [path, setPath] = useState<Path>('existing');
-  const [step, setStep] = useState<Step>('path');
+  // §1: 진입 시 기본값 = 신규 업체 등록. 바로 '신규 업체 기본정보' 입력 화면(company-new)이 표시된다.
+  const [path, setPath] = useState<Path>('new');
+  const [step, setStep] = useState<Step>('company-new');
   const [selected, setSelected] = useState<SelectedCompany | null>(null);
 
   // ── 기존 거래처 검색 ──
@@ -114,6 +116,33 @@ export function VendorRegisterPage({ token, onToast, hasPerm, onCancel, onDone, 
   const [accountHolder, setAccountHolder] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // §2·§4: 신규 등록 단계에서 첨부한 기타서류 — companyId 가 생기기 전엔 R2 업로드만 하고 메타데이터를
+  // 여기(pending)에 보관한다. 회사+외주프로필 생성 성공 후 selected.id 로 vendor_documents 에 등록한다.
+  const [pendingDocs, setPendingDocs] = useState<PendingVendorDoc[]>([]);
+
+  // AI 문서 자동입력(사업자등록증/통장사본)에서 선택한 원본 파일 — CompanyForm 이 노출한다.
+  // 등록 완료 후 vendor_documents 로 1회 보관해 상세 서류관리에서 조회/다운로드 가능하게 한다(중복 저장 없음).
+  const [evidenceFiles, setEvidenceFiles] = useState<{ license: File | null; bankbook: File | null }>({ license: null, bankbook: null });
+
+  // 파일 1개를 R2 업로드 → vendor_documents 로 등록. 성공 여부 반환.
+  const uploadFileAsVendorDoc = async (companyId: number, file: File, documentType: string): Promise<boolean> => {
+    try {
+      const urlRes = await fetch(api('/api/storage/uploads/request-url'), {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: file.name, size: file.size, contentType: file.type }),
+      });
+      if (!urlRes.ok) return false;
+      const { uploadURL, objectPath } = await urlRes.json();
+      const putRes = await fetch(uploadURL, { method: 'PUT', headers: { 'Content-Type': file.type || 'application/octet-stream' }, body: file });
+      if (!putRes.ok) return false;
+      const regRes = await fetch(api(`/api/admin/companies/${companyId}/documents`), {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documentType, documentName: file.name, originalFileName: file.name, objectPath, mimeType: file.type || null, fileSize: file.size }),
+      });
+      return regRes.ok;
+    } catch { return false; }
+  };
+
   const saveVendorInfo = async () => {
     if (!selected) return;
     setSaving(true);
@@ -141,6 +170,48 @@ export function VendorRegisterPage({ token, onToast, hasPerm, onCancel, onDone, 
         if (!payRes.ok) { onToast('외주 역할은 저장됐으나 지급계좌 저장에 실패했습니다. 상세에서 다시 시도하세요.'); }
       }
 
+      // 3) 기타서류(§4) — 회사+외주프로필이 확정된 이후에만 vendor_documents 에 등록(고아 레코드 방지).
+      //    파일 실체는 이미 R2 에 업로드되어 있고 여기서는 메타데이터만 연결한다.
+      if (pendingDocs.length > 0) {
+        let saved = 0;
+        for (const d of pendingDocs) {
+          try {
+            const r = await fetch(api(`/api/admin/companies/${selected.id}/documents`), {
+              method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                documentType: d.documentType,
+                documentName: d.documentName,
+                originalFileName: d.originalFileName,
+                objectPath: d.objectPath,
+                mimeType: d.mimeType,
+                fileSize: d.fileSize,
+                memo: d.memo,
+              }),
+            });
+            if (r.ok) saved++;
+          } catch { /* 개별 실패는 아래에서 합산 안내 */ }
+        }
+        if (saved < pendingDocs.length) {
+          onToast(`외주업체는 등록됐으나 서류 ${pendingDocs.length - saved}건 저장에 실패했습니다. 상세에서 다시 시도하세요.`);
+        }
+      }
+
+      // 4) AI 문서 원본 보관 — 상단에서 업로드한 사업자등록증/통장사본을 등록 완료 후 vendor_documents 로
+      //    1회 저장(중복 없음). 상세 서류관리에서 조회/다운로드 가능. AI 분석 기능 자체는 그대로 유지.
+      const evidence = [
+        { file: evidenceFiles.license, type: '사업자등록증' },
+        { file: evidenceFiles.bankbook, type: '통장사본' },
+      ];
+      let evidFail = 0;
+      for (const e of evidence) {
+        if (!e.file) continue;
+        const ok = await uploadFileAsVendorDoc(selected.id, e.file, e.type);
+        if (!ok) evidFail++;
+      }
+      if (evidFail > 0) {
+        onToast(`외주업체는 등록됐으나 AI 문서 ${evidFail}건 보관에 실패했습니다. 상세 서류관리에서 다시 등록하세요.`);
+      }
+
       onToast(`외주업체가 등록되었습니다: ${selected.name}`);
       onDone(selected.id);
     } catch { onToast('오류: 외주업체 등록 실패'); }
@@ -164,29 +235,26 @@ export function VendorRegisterPage({ token, onToast, hasPerm, onCancel, onDone, 
 
         {/* ── 경로 선택(§4): 기존 거래처 / 신규 업체 ── */}
         {step !== 'vendor-info' && (
-          <Card style={{ padding: '14px 16px' }}>
-            <p style={{ margin: '0 0 10px', fontSize: 13, color: '#6b7280' }}>
-              외주업체는 별도 회사가 아니라 <b style={{ color: '#7c3aed' }}>거래처(회사)에 외주 역할을 부여</b>하는 방식입니다.
-              동일 사업자번호로 회사를 새로 만들지 않습니다.
-            </p>
+          <Card style={{ padding: '10px 12px' }}>
             <div style={{ display: 'flex', gap: 8 }}>
               {([
-                { v: 'existing', label: '기존 거래처에서 선택', desc: '이미 등록된 거래처에 외주 역할 부여' },
-                { v: 'new', label: '신규 업체 등록', desc: '새 회사 생성 후 외주 역할 부여' },
-              ] as { v: Path; label: string; desc: string }[]).map(opt => {
+                // §1: 「신규 업체 등록」을 첫 번째(기본)로, 「기존 거래처에서 선택」을 두 번째로 배치.
+                { v: 'new', label: '신규 업체 등록' },
+                { v: 'existing', label: '기존 거래처에서 선택' },
+              ] as { v: Path; label: string }[]).map(opt => {
                 const active = path === opt.v;
                 return (
                   <button key={opt.v} type="button"
                     data-testid={`vendor-path-${opt.v}`}
-                    onClick={() => { setPath(opt.v); setStep(opt.v === 'new' ? 'company-new' : 'path'); }}
+                    onClick={() => { setPath(opt.v); setPendingDocs([]); setEvidenceFiles({ license: null, bankbook: null }); setStep(opt.v === 'new' ? 'company-new' : 'path'); }}
                     style={{
-                      flex: 1, textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '12px 14px',
+                      flex: 1, textAlign: 'center', cursor: 'pointer', borderRadius: 8, padding: '9px 14px',
                       background: active ? '#f5f3ff' : '#fff',
                       border: `2px solid ${active ? '#7c3aed' : '#e5e7eb'}`,
                       boxShadow: active ? '0 0 0 3px #7c3aed20' : 'none', transition: 'all 0.15s',
+                      fontSize: 14, fontWeight: 700, color: active ? '#6d28d9' : '#374151',
                     }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: active ? '#6d28d9' : '#374151' }}>{opt.label}</div>
-                    <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 3 }}>{opt.desc}</div>
+                    {opt.label}
                   </button>
                 );
               })}
@@ -210,8 +278,8 @@ export function VendorRegisterPage({ token, onToast, hasPerm, onCancel, onDone, 
               </PrimaryBtn>
             </div>
             {searched && results.length === 0 && !searching && (
-              <div style={{ textAlign: 'center', padding: '24px', color: '#9ca3af', fontSize: 13 }}>
-                검색 결과가 없습니다. 신규 업체로 등록하려면 상단에서 「신규 업체 등록」을 선택하세요.
+              <div style={{ textAlign: 'center', padding: '20px', color: '#9ca3af', fontSize: 13 }}>
+                검색 결과가 없습니다.
               </div>
             )}
             {results.length > 0 && (
@@ -252,18 +320,39 @@ export function VendorRegisterPage({ token, onToast, hasPerm, onCancel, onDone, 
         {step === 'company-new' && (
           <Card style={{ padding: '14px 16px' }}>
             <div style={cardHead}><span style={cardBar} /><p style={cardTitle}>신규 업체 기본정보</p></div>
-            <p style={{ margin: '10px 0 0', fontSize: 12, color: '#9ca3af' }}>
-              회사를 먼저 생성합니다. 다음 단계에서 외주분야·지급정보를 입력합니다.
-            </p>
             <div style={{ marginTop: 10 }}>
               <CompanyForm
                 mode="create"
                 token={token}
                 onToast={onToast}
+                lockVendorRole
                 initialValues={{ ...emptyCompanyFormValues(), companyType: 'vendor' }}
                 onSaved={(c) => { setSelected({ id: c.id, name: c.name, companyType: 'vendor' }); setStep('vendor-info'); }}
-                onCancel={() => setStep('path')}
+                onCancel={() => { setPendingDocs([]); setEvidenceFiles({ license: null, bankbook: null }); setStep('path'); }}
                 onOpenCompany={onOpenCompany}
+                onEvidenceFilesChange={setEvidenceFiles}
+                renderAfterAiDocs={
+                  // §2·§3: AI 문서(사업자등록증/통장사본) 바로 아래에 「외주업체 서류」 배치.
+                  //  · 필수서류(AI)와 구분. companyId 가 아직 없어 pending 모드로 R2 업로드만 하고,
+                  //    등록 완료 시 selected.id 로 vendor_documents 에 저장한다(§4).
+                  <div style={{ background: '#fff', border: '1px solid #e9d5ff', borderRadius: 12, overflow: 'hidden', boxShadow: '0 1px 3px rgba(124,58,237,0.06)' }}>
+                    <div style={{ background: '#faf5ff', padding: '9px 16px', borderBottom: '1px solid #e9d5ff', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 15 }}>📁</span>
+                      <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: '#6d28d9' }}>외주업체 서류</p>
+                    </div>
+                    <div style={{ padding: '12px 16px' }}>
+                      <VendorDocumentsSection
+                        token={token}
+                        onToast={onToast}
+                        canEdit={hasPerm('company.update')}
+                        compact
+                        pendingMode
+                        pendingDocs={pendingDocs}
+                        onPendingDocsChange={setPendingDocs}
+                      />
+                    </div>
+                  </div>
+                }
               />
             </div>
           </Card>
@@ -346,6 +435,33 @@ export function VendorRegisterPage({ token, onToast, hasPerm, onCancel, onDone, 
                   </div>
                 </div>
                 <p style={{ margin: 0, fontSize: 11, color: '#9ca3af' }}>계좌번호는 기존 통번역사/거래처와 동일하게 암호화 저장됩니다.</p>
+              </div>
+            </Card>
+
+            {/* 기타서류(§3·§5): 기존 거래처 경로는 즉시 보관(live), 신규 경로는 이전 단계에서 첨부한
+                서류를 검토(pending) — [외주업체 등록] 시 함께 저장. 등록 후 상세에서 계속 관리 가능. */}
+            <Card style={{ padding: 0, overflow: 'hidden' }}>
+              <div style={cardHead}><span style={cardBar} /><p style={cardTitle}>기타서류</p></div>
+              <div style={{ padding: '14px 16px' }}>
+                {path === 'existing' ? (
+                  <VendorDocumentsSection
+                    companyId={selected.id}
+                    token={token}
+                    onToast={onToast}
+                    canEdit={hasPerm('company.update')}
+                    compact
+                  />
+                ) : (
+                  <VendorDocumentsSection
+                    token={token}
+                    onToast={onToast}
+                    canEdit={hasPerm('company.update')}
+                    compact
+                    pendingMode
+                    pendingDocs={pendingDocs}
+                    onPendingDocsChange={setPendingDocs}
+                  />
+                )}
               </div>
             </Card>
 

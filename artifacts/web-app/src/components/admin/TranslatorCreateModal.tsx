@@ -14,6 +14,7 @@ import { TranslatorRateEntryCard, RateEntryData, emptyRateEntry } from "./Transl
 import { ResumeAnalyzePanel, ResumeAnalysisResult } from "./ResumeAnalyzePanel";
 import { TranslatorLangExpSection } from "./TranslatorLangExpSection";
 import { TranslatorEvidenceDocumentsSection } from "./TranslatorEvidenceDocumentsSection";
+import { TranslatorDocumentsSection, type PendingTranslatorDoc } from "./TranslatorDocumentsSection";
 import { AliasSection } from "./AliasSection";
 
 // ── 학력 ────────────────────────────────────────────────────────────────
@@ -458,6 +459,8 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
   const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [idCardFile, setIdCardFile] = useState<File | null>(null);
   const [bankbookFile, setBankbookFile] = useState<File | null>(null);
+  // 추가서류(§5): 등록 전엔 R2 업로드만 하고 메타데이터는 pending 으로 보관 → 저장 성공 후 연결.
+  const [pendingDocs, setPendingDocs] = useState<PendingTranslatorDoc[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [showAnalyzePanel, setShowAnalyzePanel] = useState(false);
   const [docSubTab, setDocSubTab] = useState<"resume" | "id" | "bank">("resume");
@@ -755,6 +758,32 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         }).catch(() => {});
       }
 
+      // 추가서류(§5) — 등록 성공 후에만 translator_documents 에 연결(고아 레코드 방지).
+      //    파일 실체는 이미 R2 에 업로드되어 있고 여기서는 메타데이터만 연결한다.
+      if (pendingDocs.length > 0) {
+        let saved = 0;
+        for (const d of pendingDocs) {
+          try {
+            const r = await fetch(api(`/api/admin/translators/${userId}/documents`), {
+              method: "POST", headers: { ...authH, "Content-Type": "application/json" },
+              body: JSON.stringify({
+                documentType: d.documentType,
+                documentName: d.documentName,
+                originalFileName: d.originalFileName,
+                objectPath: d.objectPath,
+                mimeType: d.mimeType,
+                fileSize: d.fileSize,
+                memo: d.memo,
+              }),
+            });
+            if (r.ok) saved++;
+          } catch { /* 개별 실패는 아래에서 합산 안내 */ }
+        }
+        if (saved < pendingDocs.length) {
+          onToast(`통번역사는 등록됐으나 추가서류 ${pendingDocs.length - saved}건 저장에 실패했습니다. 상세에서 다시 시도하세요.`);
+        }
+      }
+
       onToast(`통번역사 "${data.name ?? data.email}"이(가) 등록되었습니다.`);
       onCreated(data);
     } catch { onToast("오류: 등록 실패"); }
@@ -827,7 +856,133 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         </>
       ) : undefined}>
 
-      {/* ── 1. 기본 정보 ── */}
+      {/* ── 1. AI 문서 자동입력 (외주업체 등록과 동일 동선: 업로드 → AI 분석/자동입력 → 기본정보 확인) ── */}
+      <p style={sH}>AI 문서 자동입력</p>
+      <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
+
+        {/* 서류 유형 탭 */}
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: "1px solid #e5e7eb", paddingBottom: 10 }}>
+          {([
+            { key: "resume", label: "📄 이력서" },
+            { key: "id",     label: "🪪 신분증" },
+            { key: "bank",   label: "🏦 통장사본" },
+          ] as const).map(({ key, label }) => (
+            <button key={key} type="button"
+              onClick={() => setDocSubTab(key)}
+              style={{
+                padding: "5px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer",
+                background: docSubTab === key ? "#0ea5e9" : "#f0f9ff",
+                color: docSubTab === key ? "#fff" : "#0369a1",
+                border: `1px solid ${docSubTab === key ? "#0ea5e9" : "#bae6fd"}`,
+                fontWeight: docSubTab === key ? 700 : 400,
+              }}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* ① 이력서 탭 */}
+        {docSubTab === "resume" && (<>
+          {resumeFile && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8,
+              padding: "8px 12px", marginBottom: 10,
+              background: "#f0fdf4", borderRadius: 8, border: "1px solid #a7f3d0",
+            }}>
+              <span style={{ fontSize: 16, flexShrink: 0 }}>📄</span>
+              <span style={{ fontSize: 12, color: "#065f46", fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+                {resumeFile.name}
+              </span>
+              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                <button type="button" onClick={() => setShowAnalyzePanel(true)}
+                  style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #059669", background: "#f0fdf4", cursor: "pointer", color: "#065f46", fontWeight: 600, whiteSpace: "nowrap" }}>
+                  ✨ AI 분석
+                </button>
+                <button type="button" onClick={() => setResumeFile(null)}
+                  style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #fca5a5", background: "#fff5f5", cursor: "pointer", color: "#b91c1c", whiteSpace: "nowrap" }}>
+                  삭제
+                </button>
+              </div>
+            </div>
+          )}
+          <div
+            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={e => { e.preventDefault(); setDragOver(false); handleResumeFile(e.dataTransfer.files?.[0]); }}
+            style={{
+              border: `2px dashed ${dragOver ? "#059669" : "#d1d5db"}`,
+              borderRadius: 8, padding: "14px 16px",
+              background: dragOver ? "#f0fdf4" : "#fff",
+              transition: "border-color 0.15s, background 0.15s",
+              textAlign: "center" as const,
+            }}>
+            <p style={{ fontSize: 11, color: dragOver ? "#059669" : "#9ca3af", margin: "0 0 8px", fontWeight: dragOver ? 600 : 400 }}>
+              {dragOver ? "여기에 파일을 놓으세요" : "파일을 드래그하거나 아래 버튼으로 선택"}
+            </p>
+            <label style={{ fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151", display: "inline-block" }}>
+              파일 선택
+              <input type="file" hidden
+                accept=".pdf,.hwp,.hwpx,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/haansofthwp,application/x-hwp,application/vnd.hancom.hwp,application/vnd.hancom.hwpx"
+                onChange={e => handleResumeFile(e.target.files?.[0])} />
+            </label>
+            <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>PDF · HWP · HWPX · DOC · DOCX · TXT (최대 10 MB)</p>
+          </div>
+          {!resumeFile && (
+            <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>
+              이력서 선택 후 ✨ AI 분석으로 프로필 정보를 자동으로 채울 수 있습니다.
+            </p>
+          )}
+        </>)}
+
+        {/* ② 신분증 탭 */}
+        {docSubTab === "id" && (
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>신분증 파일</label>
+            <TranslatorEvidenceDocumentsSection
+              docType="id_card"
+              mode="create"
+              token={token}
+              onToast={onToast}
+              file={idCardFile}
+              onFileChange={setIdCardFile}
+              onOcrApply={(fields, values) => handleDocOcrApply("id_card", fields, values)}
+            />
+          </div>
+        )}
+
+        {/* ③ 통장사본 탭 */}
+        {docSubTab === "bank" && (
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>통장사본 파일</label>
+            <TranslatorEvidenceDocumentsSection
+              docType="bankbook"
+              mode="create"
+              token={token}
+              onToast={onToast}
+              file={bankbookFile}
+              onFileChange={setBankbookFile}
+              onOcrApply={(fields, values) => handleDocOcrApply("bankbook", fields, values)}
+            />
+          </div>
+        )}
+
+      </div>
+
+      {/* ── 2. 추가서류 (AI 문서 자동입력에 이어 — 외주업체 등록과 동일하게 서류를 먼저 확정) ── */}
+      <p style={sH}>추가서류</p>
+      <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
+        {/* 이력서/신분증/통장사본 외 자격증·경력증명서 등. 저장 성공 후 연결(고아 방지). */}
+        <TranslatorDocumentsSection
+          token={token}
+          onToast={onToast}
+          compact
+          pendingMode
+          pendingDocs={pendingDocs}
+          onPendingDocsChange={setPendingDocs}
+        />
+      </div>
+
+      {/* ── 3. 기본 정보 ── */}
       <p style={sH}>기본 정보</p>
       <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
 
@@ -1046,118 +1201,6 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
             placeholder="출신학교, 경력 요약, 전문분야, 통역/번역 특징, 주의사항 등"
             style={{ ...inputStyle, resize: "vertical" }} />
         </div>
-      </div>
-
-      {/* ── 2. 이력서&증빙서류 (기본정보 직후로 이동 — 원천자료 우선 업로드 동선) ── */}
-      <p style={sH}>이력서&증빙서류</p>
-      <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
-
-        {/* 서류 유형 탭 */}
-        <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: "1px solid #e5e7eb", paddingBottom: 10 }}>
-          {([
-            { key: "resume", label: "📄 이력서" },
-            { key: "id",     label: "🪪 신분증" },
-            { key: "bank",   label: "🏦 통장사본" },
-          ] as const).map(({ key, label }) => (
-            <button key={key} type="button"
-              onClick={() => setDocSubTab(key)}
-              style={{
-                padding: "5px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer",
-                background: docSubTab === key ? "#0ea5e9" : "#f0f9ff",
-                color: docSubTab === key ? "#fff" : "#0369a1",
-                border: `1px solid ${docSubTab === key ? "#0ea5e9" : "#bae6fd"}`,
-                fontWeight: docSubTab === key ? 700 : 400,
-              }}>
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {/* ① 이력서 탭 */}
-        {docSubTab === "resume" && (<>
-          {resumeFile && (
-            <div style={{
-              display: "flex", alignItems: "center", gap: 8,
-              padding: "8px 12px", marginBottom: 10,
-              background: "#f0fdf4", borderRadius: 8, border: "1px solid #a7f3d0",
-            }}>
-              <span style={{ fontSize: 16, flexShrink: 0 }}>📄</span>
-              <span style={{ fontSize: 12, color: "#065f46", fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
-                {resumeFile.name}
-              </span>
-              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                <button type="button" onClick={() => setShowAnalyzePanel(true)}
-                  style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #059669", background: "#f0fdf4", cursor: "pointer", color: "#065f46", fontWeight: 600, whiteSpace: "nowrap" }}>
-                  ✨ AI 분석
-                </button>
-                <button type="button" onClick={() => setResumeFile(null)}
-                  style={{ fontSize: 11, padding: "3px 8px", borderRadius: 5, border: "1px solid #fca5a5", background: "#fff5f5", cursor: "pointer", color: "#b91c1c", whiteSpace: "nowrap" }}>
-                  삭제
-                </button>
-              </div>
-            </div>
-          )}
-          <div
-            onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={e => { e.preventDefault(); setDragOver(false); handleResumeFile(e.dataTransfer.files?.[0]); }}
-            style={{
-              border: `2px dashed ${dragOver ? "#059669" : "#d1d5db"}`,
-              borderRadius: 8, padding: "14px 16px",
-              background: dragOver ? "#f0fdf4" : "#fff",
-              transition: "border-color 0.15s, background 0.15s",
-              textAlign: "center" as const,
-            }}>
-            <p style={{ fontSize: 11, color: dragOver ? "#059669" : "#9ca3af", margin: "0 0 8px", fontWeight: dragOver ? 600 : 400 }}>
-              {dragOver ? "여기에 파일을 놓으세요" : "파일을 드래그하거나 아래 버튼으로 선택"}
-            </p>
-            <label style={{ fontSize: 12, padding: "5px 12px", borderRadius: 6, border: "1px solid #d1d5db", background: "#fff", cursor: "pointer", color: "#374151", display: "inline-block" }}>
-              파일 선택
-              <input type="file" hidden
-                accept=".pdf,.hwp,.hwpx,.doc,.docx,.txt,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,application/haansofthwp,application/x-hwp,application/vnd.hancom.hwp,application/vnd.hancom.hwpx"
-                onChange={e => handleResumeFile(e.target.files?.[0])} />
-            </label>
-            <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>PDF · HWP · HWPX · DOC · DOCX · TXT (최대 10 MB)</p>
-          </div>
-          {!resumeFile && (
-            <p style={{ fontSize: 11, color: "#9ca3af", margin: "6px 0 0" }}>
-              이력서 선택 후 ✨ AI 분석으로 프로필 정보를 자동으로 채울 수 있습니다.
-            </p>
-          )}
-        </>)}
-
-        {/* ② 신분증 탭 */}
-        {docSubTab === "id" && (
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>신분증 파일</label>
-            <TranslatorEvidenceDocumentsSection
-              docType="id_card"
-              mode="create"
-              token={token}
-              onToast={onToast}
-              file={idCardFile}
-              onFileChange={setIdCardFile}
-              onOcrApply={(fields, values) => handleDocOcrApply("id_card", fields, values)}
-            />
-          </div>
-        )}
-
-        {/* ③ 통장사본 탭 */}
-        {docSubTab === "bank" && (
-          <div>
-            <label style={{ fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 8 }}>통장사본 파일</label>
-            <TranslatorEvidenceDocumentsSection
-              docType="bankbook"
-              mode="create"
-              token={token}
-              onToast={onToast}
-              file={bankbookFile}
-              onFileChange={setBankbookFile}
-              onOcrApply={(fields, values) => handleDocOcrApply("bankbook", fields, values)}
-            />
-          </div>
-        )}
-
       </div>
 
       {/* ── 3. 전문 정보 ── */}

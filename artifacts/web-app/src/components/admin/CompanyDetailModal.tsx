@@ -10,6 +10,8 @@ import { DraggableModal } from "./DraggableModal";
 import { CompanyDocumentAnalyzePanel, type CompanyOcrDocType } from "./CompanyDocumentAnalyzePanel";
 import { CompanyAliasSection } from "./CompanyAliasSection";
 import { CompanyPaymentAccountSection } from "./CompanyPaymentAccountSection";
+import { CompanyVendorProfileSection } from "./CompanyVendorProfileSection";
+import { VendorDocumentsSection } from "./VendorDocumentsSection";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -630,6 +632,19 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
 
                 {/* 지급/환급 계좌정보 — 모든 거래처 유형에서 등록 가능(용역대금 지급·오송금 반환 등) */}
                 <CompanyPaymentAccountSection companyId={companyId} token={token} onToast={onToast} />
+
+                {/* 외주업체(is_vendor) 전용 — 외주정보 + 서류관리(§5). 회사 identity/기본정보는 건드리지 않는다. */}
+                {(detail as any).isVendor && (
+                  <>
+                    <CompanyVendorProfileSection companyId={companyId} token={token} onToast={onToast} onChanged={onRefresh} />
+                    <VendorDocumentsSection
+                      companyId={companyId}
+                      token={token}
+                      onToast={onToast}
+                      vendorProfileId={(detail as any).vendorProfile?.id ?? null}
+                    />
+                  </>
+                )}
               </div>
             )}
 

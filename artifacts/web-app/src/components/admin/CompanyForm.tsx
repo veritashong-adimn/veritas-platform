@@ -111,12 +111,31 @@ interface CompanyFormProps {
   /** 유사 거래처/인물 후보 상세보기 */
   onOpenCompany?: (id: number) => void;
   onOpenTranslator?: (userId: number, email: string) => void;
+  /**
+   * 외주업체 등록 전용: 「고객사/외주업체」 역할 선택 UI를 숨기고 외주업체 역할로 고정한다(§1).
+   * companyType 은 항상 vendor 로 유지되며 서버가 isVendor=true·isCustomer=false 로 생성한다.
+   * 다른 사용처(일반 거래처 등록/수정)는 이 값을 넘기지 않으므로 영향 없음.
+   */
+  lockVendorRole?: boolean;
+  /**
+   * AI 문서 자동입력(사업자등록증/통장사본) 카드 바로 아래에 삽입할 추가 영역.
+   * 외주업체 등록 화면에서 「외주업체 서류(기타서류)」 섹션을 이 위치에 배치하는 데 사용한다(§2).
+   * 미제공(기본) 시 아무것도 렌더링하지 않아 다른 사용처에는 영향이 없다.
+   */
+  renderAfterAiDocs?: React.ReactNode;
+  /**
+   * AI 문서 자동입력에서 선택한 사업자등록증/통장사본 원본 파일을 부모에 전달한다(opt-in).
+   * 외주업체 등록에서 등록 완료 후 이 원본들을 vendor_documents 로 보관하는 데 사용한다.
+   * 미제공(기본) 시 아무 동작도 하지 않아 일반 거래처 등록/수정에는 영향이 없다.
+   */
+  onEvidenceFilesChange?: (files: { license: File | null; bankbook: File | null }) => void;
 }
 
 export function CompanyForm({
   mode, token, onToast, onSaved, onCancel,
   companyId, initialValues, initialVendorTypeCustom = "", originalName = "",
-  onOpenCompany, onOpenTranslator,
+  onOpenCompany, onOpenTranslator, lockVendorRole = false, renderAfterAiDocs,
+  onEvidenceFilesChange,
 }: CompanyFormProps) {
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -142,6 +161,11 @@ export function CompanyForm({
   const [bankbookFile, setBankbookFile] = useState<File | null>(null);
   const [ocrPanel, setOcrPanel] = useState<CompanyOcrDocType | null>(null);
   const [dragOverType, setDragOverType] = useState<CompanyOcrDocType | null>(null);
+
+  // AI 업로드 원본(사업자등록증/통장사본)을 부모에 노출(외주업체 등록 시 vendor_documents 보관용, opt-in).
+  useEffect(() => {
+    onEvidenceFilesChange?.({ license: licenseFile, bankbook: bankbookFile });
+  }, [licenseFile, bankbookFile]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 개인고객 기존 인물 후보 안내 모달 (등록 전용)
   const [personCandidateModal, setPersonCandidateModal] = useState<{ show: boolean; candidates: PersonCandidate[] } | null>(null);
@@ -460,6 +484,9 @@ export function CompanyForm({
           );
         })()}
 
+        {/* 외주업체 서류(기타서류) 등 — AI 문서 자동입력 바로 아래에 삽입(§2). 기본은 미렌더. */}
+        {renderAfterAiDocs}
+
         {/* ── Card 2: 거래처 기본정보 ── */}
         <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
           <div style={{ padding: "10px 16px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8 }}>
@@ -474,25 +501,49 @@ export function CompanyForm({
                 <label style={{ fontSize: 14, fontWeight: 600, color: "#374151", whiteSpace: "nowrap" }}>
                   거래처 유형 <span style={{ color: "#dc2626" }}>*</span>
                 </label>
-                <div style={{ display: "flex", gap: 8 }}>
-                  {[
-                    { v: "client", label: "고객사", icon: "🏢", color: "#1d4ed8", bg: "#dbeafe", border: "#3b82f6", ring: "#3b82f620" },
-                    { v: "vendor", label: "외주업체", icon: "🔧", color: "#6d28d9", bg: "#ede9fe", border: "#7c3aed", ring: "#7c3aed20" },
-                  ].map(opt => (
-                    <button key={opt.v} type="button"
-                      onClick={() => setForm(p => ({ ...p, companyType: opt.v, vendorType: "", customerType: "CORPORATE" }))}
-                      style={{
-                        padding: "5px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
-                        transition: "all 0.15s", lineHeight: "20px",
-                        background: form.companyType === opt.v ? opt.bg : "#f9fafb",
-                        color: form.companyType === opt.v ? opt.color : "#9ca3af",
-                        border: `2px solid ${form.companyType === opt.v ? opt.border : "#e5e7eb"}`,
-                        boxShadow: form.companyType === opt.v ? `0 0 0 3px ${opt.ring}` : "none",
-                      }}>
-                      {opt.icon} {opt.label}
-                    </button>
-                  ))}
-                </div>
+                {lockVendorRole ? (
+                  // §1·§3: 외주업체 등록 전용 — 역할은 외주업체로 자동 고정하고, 외주유형(vendorType)
+                  //         드롭다운을 같은 행 오른쪽에 인라인 배치한다.
+                  <>
+                    <span data-testid="company-type-locked-vendor"
+                      style={{ padding: "5px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700, lineHeight: "20px", background: "#ede9fe", color: "#6d28d9", border: "2px solid #7c3aed", boxShadow: "0 0 0 3px #7c3aed20" }}>
+                      🔧 외주업체 <span style={{ fontSize: 11, fontWeight: 600, color: "#7c3aed", opacity: 0.8 }}>(자동)</span>
+                    </span>
+                    <label style={{ fontSize: 13, fontWeight: 600, color: "#6b7280", whiteSpace: "nowrap", marginLeft: 4 }}>외주유형</label>
+                    <ClickSelect
+                      value={form.vendorType}
+                      onChange={v => { setForm(p => ({ ...p, vendorType: v })); if (v !== "etc") setVendorTypeCustom(""); }}
+                      triggerStyle={{ fontSize: 13, padding: "5px 10px", minWidth: 160, borderRadius: 8, borderColor: "#ddd6fe" }}
+                      chips={VENDOR_TYPE_CATEGORY_CHIPS}
+                      options={[{ value: "", label: "선택 안 함" }, ...VENDOR_TYPE_OPTIONS]}
+                    />
+                    {form.vendorType === "etc" && (
+                      <input value={vendorTypeCustom} onChange={e => setVendorTypeCustom(e.target.value)}
+                        placeholder="기타 외주유형 직접 입력" aria-label="기타 외주유형 직접 입력"
+                        style={{ ...inputStyle, width: "auto", flex: "1 1 180px", borderColor: "#ddd6fe", color: "#7c3aed" }} />
+                    )}
+                  </>
+                ) : (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {[
+                      { v: "client", label: "고객사", icon: "🏢", color: "#1d4ed8", bg: "#dbeafe", border: "#3b82f6", ring: "#3b82f620" },
+                      { v: "vendor", label: "외주업체", icon: "🔧", color: "#6d28d9", bg: "#ede9fe", border: "#7c3aed", ring: "#7c3aed20" },
+                    ].map(opt => (
+                      <button key={opt.v} type="button"
+                        onClick={() => setForm(p => ({ ...p, companyType: opt.v, vendorType: "", customerType: "CORPORATE" }))}
+                        style={{
+                          padding: "5px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: "pointer",
+                          transition: "all 0.15s", lineHeight: "20px",
+                          background: form.companyType === opt.v ? opt.bg : "#f9fafb",
+                          color: form.companyType === opt.v ? opt.color : "#9ca3af",
+                          border: `2px solid ${form.companyType === opt.v ? opt.border : "#e5e7eb"}`,
+                          boxShadow: form.companyType === opt.v ? `0 0 0 3px ${opt.ring}` : "none",
+                        }}>
+                        {opt.icon} {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               {/* 2차: 고객 분류 (고객사 선택 시) — 별도 제목 없이 유형 아래로 자연스럽게 이어지는 인라인 배치 */}
               {form.companyType === "client" && (
@@ -516,8 +567,9 @@ export function CompanyForm({
                   })}
                 </div>
               )}
-              {/* 2차: 외주 분류 (외주업체 선택 시) — 별도 제목 없이 유형 아래로 이어지는 인라인 배치 */}
-              {form.companyType === "vendor" && (
+              {/* 2차: 외주 분류 (외주업체 선택 시) — 별도 제목 없이 유형 아래로 이어지는 인라인 배치.
+                  단, 외주업체 등록 전용(lockVendorRole)에서는 위 한 줄 배치로 대체하므로 여기선 렌더하지 않음. */}
+              {!lockVendorRole && form.companyType === "vendor" && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 6, paddingLeft: 12, borderLeft: "2px solid #c4b5fd" }}>
                   <ClickSelect
                     value={form.vendorType}

@@ -40,6 +40,8 @@ import docxDiagRouter from "./docxDiag";
 import inquiriesRouter from "./inquiries";
 import inquiryAiAnalyzeRouter from "./inquiryAiAnalyze";
 import comparisonQuotesRouter from "./comparisonQuotes";
+import vendorDocumentsRouter from "./vendorDocuments";
+import translatorDocumentsRouter from "./translatorDocuments";
 
 const router: IRouter = Router();
 
@@ -68,8 +70,10 @@ router.use(logsRouter);
 router.use(bulkImportRouter);
 router.use(pastWorkImportRouter);
 router.use(companiesRouter);
+router.use(vendorDocumentsRouter);
 router.use(productsRouter);
 router.use(boardRouter);
+router.use(translatorDocumentsRouter);
 router.use(translatorsRouter);
 router.use(translatorDocumentOcrRouter);
 router.use(companyDocumentOcrRouter);

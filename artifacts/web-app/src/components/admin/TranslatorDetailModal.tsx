@@ -17,6 +17,7 @@ import {
 import { TranslatorRateEntryCard, RateEntryData, emptyRateEntry } from "./TranslatorRateEntryCard";
 import { ResumeAnalyzePanel, ResumeAnalysisResult } from "./ResumeAnalyzePanel";
 import { TranslatorEvidenceDocumentsSection } from "./TranslatorEvidenceDocumentsSection";
+import { TranslatorDocumentsSection } from "./TranslatorDocumentsSection";
 import { DocumentPreviewModal } from "./DocumentPreviewModal";
 import { AliasSection } from "./AliasSection";
 
@@ -2020,6 +2021,15 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 
           </div>
           )} {/* !collapsed.resume */}
+
+          {/* ═══ 서류관리 — 통번역사 제출 서류 영구보관(translator_documents, R2). 위 이력서/신분증/통장사본
+              (GCS)과 별개 SSOT이며 자격증·경력증명서 등 추가서류 + 이력서 버전 이력을 보존한다(§6). ═══ */}
+          {secRow("서류관리")}
+          <TranslatorDocumentsSection
+            translatorId={userId}
+            token={token}
+            onToast={onToast}
+          />
 
           </div>{/* /이력서·증빙 탭 */}
 
