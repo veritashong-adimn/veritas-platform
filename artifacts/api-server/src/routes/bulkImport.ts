@@ -545,7 +545,7 @@ router.post(
             .insert(importBatchesTable)
             .values({
               module: "company",
-              importType: "excel_bulk",
+              importType: ((req.body as any)?.sourceSystem) ? "legacy_migration" : "excel_bulk",
               originalFilename: fileName || null,
               sheetName: result.sheetName || null,
               totalRows: summary.total,
@@ -554,6 +554,7 @@ router.post(
               errorRows: summary.error,
               status: "completed",
               createdBy: performer.id || null,
+              sourceSystem: (req.body as any)?.sourceSystem ?? null,  // C-1(additive): legacy 이관 연계
             })
             .returning({ id: importBatchesTable.id });
           batchId = batch.id;
@@ -938,7 +939,7 @@ router.post(
             .insert(importBatchesTable)
             .values({
               module: "contact",
-              importType: "excel_bulk",
+              importType: ((req.body as any)?.sourceSystem) ? "legacy_migration" : "excel_bulk",
               originalFilename: fileName || null,
               sheetName: result.sheetName || null,
               totalRows: summary.total,
@@ -947,6 +948,7 @@ router.post(
               errorRows: summary.error,
               status: "completed",
               createdBy: performer.id || null,
+              sourceSystem: (req.body as any)?.sourceSystem ?? null,  // C-1(additive): legacy 이관 연계
             })
             .returning({ id: importBatchesTable.id });
           batchId = batch.id;
@@ -1215,10 +1217,11 @@ router.post(
           const [batch] = await tx
             .insert(importBatchesTable)
             .values({
-              module: "translator", importType: "excel_bulk",
+              module: "translator", importType: ((req.body as any)?.sourceSystem) ? "legacy_migration" : "excel_bulk",
               originalFilename: fileName || null, sheetName: result.sheetName || null,
               totalRows: summary.total, successRows: newRows.length, warningRows: 0, errorRows: summary.error,
               status: "completed", createdBy: performer.id || null,
+              sourceSystem: (req.body as any)?.sourceSystem ?? null,  // C-1(additive): legacy 이관 연계
             })
             .returning({ id: importBatchesTable.id });
           batchId = batch.id;

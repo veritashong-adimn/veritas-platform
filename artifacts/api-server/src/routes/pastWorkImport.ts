@@ -802,6 +802,10 @@ router.post("/admin/past-work/bulk-import/execute", ...adminGuard, requirePermis
           const [project] = await tx.insert(projectsTable).values({
             userId: performer.id || null, adminId: qp.matchedAdminId ?? (performer.id || null),
             companyId: qp.matchedCompanyId ?? null, contactId: qp.matchedContactId ?? null,
+            // 과거자료 Snapshot: Master 현재명이 아니라 Excel 원본 거래처명/담당자명을 그대로 보존(§Phase2).
+            // ID 는 매칭된 Master(qp.matchedCompanyId/matchedContactId)로 연결 — 이름/ID 병행.
+            companyNameSnapshot: head.companyName || null,
+            contactNameSnapshot: head.customerName || null,
             title: qp.title, status: "approved",
           }).returning({ id: projectsTable.id });
           projectsCreated += 1;

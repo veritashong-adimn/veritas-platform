@@ -76,6 +76,9 @@ export const quotesTable = pgTable("quotes", {
   //  둘 다 nullable — 일반/변경/누적/차감 견적에는 사용하지 않는다(기존 company/project 구조 무변경).
   derivedCompanyId: integer("derived_company_id").references(() => companiesTable.id),
   derivedContactId: integer("derived_contact_id").references(() => contactsTable.id),
+  // 파생견적 발행 당시 대상 회사/담당자 표시명 Snapshot — 조회는 COALESCE(snapshot, 현재 Master명).
+  derivedCompanyNameSnapshot: text("derived_company_name_snapshot"),
+  derivedContactNameSnapshot: text("derived_contact_name_snapshot"),
 
   createdAt: timestamp("created_at").notNull().defaultNow(),
 

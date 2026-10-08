@@ -3,6 +3,7 @@ import { db, projectsTable, insertProjectSchema } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logEvent } from "../lib/logEvent";
 import { requireAuth, requireRole } from "../middlewares/auth";
+import { fetchCompanyName, fetchContactName } from "../lib/nameSnapshot";
 
 const router: IRouter = Router();
 
@@ -25,9 +26,12 @@ router.post(
     }
 
     try {
+      // 거래 당시 거래처/담당자 표시명 Snapshot(생성 시점 Master 이름으로 고정, §Phase2)
+      const companyNameSnapshot = await fetchCompanyName(db, parsed.data.companyId ?? null);
+      const contactNameSnapshot = await fetchContactName(db, parsed.data.contactId ?? null);
       const [project] = await db
         .insert(projectsTable)
-        .values({ ...parsed.data, fileUrl: fileUrl ?? null })
+        .values({ ...parsed.data, companyNameSnapshot, contactNameSnapshot, fileUrl: fileUrl ?? null })
         .returning();
       await logEvent("project", project.id, "project_created", req.log);
       res.status(201).json(project);

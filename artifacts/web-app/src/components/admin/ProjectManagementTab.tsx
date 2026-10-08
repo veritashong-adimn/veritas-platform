@@ -10,6 +10,7 @@ import { stickyBulkBarStyle } from './bulkListShared';
 import { DraggableModal } from './DraggableModal';
 import { renderQuoteTitle } from '../../lib/quoteTitle';
 import { exportSales } from '../../lib/salesExcel';
+import { UnifiedSalesHistoryView } from './UnifiedSalesHistoryView';
 import { DateField } from './DatePickerShared';
 import './readTableView.css';
 
@@ -217,13 +218,17 @@ interface Props {
   openDetail: (id: number, section?: string) => void;
   /** 판매건 클릭 시 독립 판매 상세페이지(/sales/:id)로 이동 */
   onOpenSalesDetail?: (id: number) => void;
+  /** 과거 CRM(Legacy) 판매 클릭 시 /legacy-archive/:id 로 이동 (C-4C) */
+  onOpenLegacyDetail?: (id: number) => void;
   onProjectCreated?: () => void;
 }
 
 // ─── 컴포넌트 ──────────────────────────────────────────────────────────────────
-export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeaders, adminUsers, openDetail, onOpenSalesDetail, onProjectCreated }: Props) {
+export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeaders, adminUsers, openDetail, onOpenSalesDetail, onOpenLegacyDetail, onProjectCreated }: Props) {
   // 판매건 진입: 판매 상세페이지(/sales/:id)로 이동. 미연결 시 기존 모달로 폴백.
   const goToDetail = (id: number) => (onOpenSalesDetail ? onOpenSalesDetail(id) : openDetail(id));
+  // 자료범위(C-4C): 전체자료(Current+Legacy) / 현재(기존 경로 그대로) / 과거 CRM(Legacy only).
+  const [salesRange, setSalesRange] = useState<'all' | 'current' | 'legacy'>('all');
 
   // ── 프로젝트 목록 ──────────────────────────────────────────────────────────
   const [projects, setProjects] = useState<AdminProject[]>([]);
@@ -815,7 +820,28 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
         </div>
       )}
 
-      {/* ── 프로젝트 탭 ── */}
+      {/* ── 자료범위 (C-4C): 현재 + 과거 CRM 통합조회 ── */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+        {([["all", "전체자료"], ["current", "현재"], ["legacy", "과거 CRM"]] as [typeof salesRange, string][]).map(([v, l]) => (
+          <div key={v} role="button" aria-label={`자료범위 ${l}`} data-testid={`sales-range-${v}`} onClick={() => setSalesRange(v)}
+               style={{ padding: "6px 16px", borderRadius: 8, cursor: "pointer", fontWeight: 700, fontSize: 13,
+                 border: salesRange === v ? "2px solid #0ea5e9" : "1px solid #d1d5db", background: salesRange === v ? "#e0f2fe" : "#fff", color: salesRange === v ? "#0369a1" : "#374151" }}>{l}</div>
+        ))}
+        {salesRange !== "current" && <span style={{ fontSize: 12, color: "#6b7280" }}>진행상태·상세필터는 [현재] 판매건에 적용됩니다. 과거 CRM 자료는 읽기 전용입니다.</span>}
+      </div>
+
+      {/* 전체자료 / 과거 CRM: Current+Legacy 통합 뷰(server-side pagination) */}
+      {salesRange !== "current" && (
+        <UnifiedSalesHistoryView
+          authHeaders={authHeaders} setToast={setToast} adminUsers={adminUsers}
+          range={salesRange} search={projectSearch}
+          onOpenSalesDetail={goToDetail}
+          onOpenLegacyDetail={(id) => onOpenLegacyDetail?.(id)}
+        />
+      )}
+
+      {/* ── 프로젝트 탭 (현재: 기존 경로 그대로) ── */}
+      {salesRange === "current" && (
       <Section title={`전체 판매건 (${projects.length})`} action={
         <div style={{ display: "flex", gap: 8 }}>
           <GhostBtn onClick={handleExportProjects} style={{ fontSize: 13, padding: "7px 14px" }}>⬇ CSV 내보내기</GhostBtn>
@@ -1172,6 +1198,7 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
           );
         })()}
       </Section>
+      )}
     </>
   );
 }

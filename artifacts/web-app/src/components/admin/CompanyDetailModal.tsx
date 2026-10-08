@@ -313,14 +313,24 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
     finally { setHardDeleteModal(p => ({ ...p, loading: false })); }
   };
 
+  // 기본 삭제 = 사용중지(Soft). 과거자료의 부서 연결은 그대로 보존되며, 선택목록에서만 제외된다.
   const handleDeleteDiv = async (divId: number, name: string) => {
-    if (!(await confirmDialog({ title: "브랜드/부서 삭제", message: `"${name}" 브랜드/부서를 삭제하시겠습니까?`, confirmLabel: "삭제", variant: "danger" }))) return;
+    if (!(await confirmDialog({ title: "브랜드/부서 사용중지", message: `"${name}" 브랜드/부서를 사용중지하시겠습니까?\n과거 거래/담당자 연결은 그대로 유지되며, 신규 선택목록에서만 제외됩니다.`, confirmLabel: "사용중지", variant: "danger" }))) return;
     try {
       const res = await fetch(api(`/api/admin/divisions/${divId}`), { method: "DELETE", headers: authH });
-      if (!res.ok) { onToast("삭제 실패"); return; }
-      setDetail(prev => prev ? { ...prev, divisions: prev.divisions.filter(d => d.id !== divId) } : prev);
-      onToast("삭제되었습니다.");
-    } catch { onToast("오류: 삭제 실패"); }
+      if (!res.ok) { onToast("사용중지 실패"); return; }
+      setDetail(prev => prev ? { ...prev, divisions: prev.divisions.map(d => d.id === divId ? { ...d, isActive: false } : d) } : prev);
+      onToast("사용중지되었습니다.");
+    } catch { onToast("오류: 사용중지 실패"); }
+  };
+
+  const handleActivateDiv = async (divId: number) => {
+    try {
+      const res = await fetch(api(`/api/admin/divisions/${divId}/activate`), { method: "PATCH", headers: authH });
+      if (!res.ok) { onToast("재활성화 실패"); return; }
+      setDetail(prev => prev ? { ...prev, divisions: prev.divisions.map(d => d.id === divId ? { ...d, isActive: true } : d) } : prev);
+      onToast("재활성화되었습니다.");
+    } catch { onToast("오류: 재활성화 실패"); }
   };
 
   return (
@@ -757,10 +767,11 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                           </div>
                         </div>
                       ) : (
-                        <div key={d.id} style={{ display: "flex", gap: 12, padding: "10px 14px", background: "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6", alignItems: "center", flexWrap: "wrap" }}>
+                        <div key={d.id} style={{ display: "flex", gap: 12, padding: "10px 14px", background: d.isActive === false ? "#f3f4f6" : "#f9fafb", borderRadius: 8, border: "1px solid #f3f4f6", alignItems: "center", flexWrap: "wrap", opacity: d.isActive === false ? 0.7 : 1 }}>
                           <div style={{ flex: 1, minWidth: 120 }}>
                             <span style={{ fontWeight: 700, fontSize: 13, color: "#111827" }}>{d.name}</span>
                             {d.type && <span style={{ marginLeft: 6, fontSize: 11, color: "#9ca3af", padding: "1px 6px", background: "#f3f4f6", borderRadius: 6 }}>{d.type}</span>}
+                            {d.isActive === false && <span style={{ marginLeft: 6, fontSize: 11, background: "#f3f4f6", color: "#9ca3af", borderRadius: 4, padding: "1px 6px", fontWeight: 600, border: "1px solid #e5e7eb" }}>사용중지</span>}
                           </div>
                           <div style={{ display: "flex", gap: 12, fontSize: 12, color: "#6b7280" }}>
                             <span>프로젝트 <strong style={{ color: "#2563eb" }}>{d.projectCount ?? 0}건</strong></span>
@@ -770,8 +781,12 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                           <div style={{ display: "flex", gap: 6 }}>
                             <button onClick={() => { setEditDivId(d.id); setEditDivForm({ name: d.name, type: d.type ?? "" }); }}
                               style={{ background: "none", border: "1px solid #e5e7eb", borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", color: "#6b7280" }}>수정</button>
-                            <button onClick={() => handleDeleteDiv(d.id, d.name)}
-                              style={{ background: "none", border: "1px solid #fca5a5", borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", color: "#ef4444" }}>삭제</button>
+                            {d.isActive === false
+                              ? <button onClick={() => handleActivateDiv(d.id)}
+                                  style={{ background: "none", border: "1px solid #86efac", borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", color: "#059669" }}>재활성화</button>
+                              : <button onClick={() => handleDeleteDiv(d.id, d.name)}
+                                  style={{ background: "none", border: "1px solid #fca5a5", borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", color: "#ef4444" }}>사용중지</button>
+                            }
                           </div>
                         </div>
                       )

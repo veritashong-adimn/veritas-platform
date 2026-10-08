@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, productsTable, productOptionsTable, productRequestsTable, quoteItemsTable, translatorProductsTable, performanceAssignmentsTable, usersTable } from "@workspace/db";
+import { db, productsTable, productOptionsTable, productRequestsTable, quoteItemsTable, translatorProductsTable, performanceAssignmentsTable, usersTable, importBatchesTable, importRowSourcesTable } from "@workspace/db";
 import { eq, desc, sql, and, or, isNull, isNotNull } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
@@ -9,6 +9,9 @@ import { expandCompactPattern }    from "../lib/product-parser/compactPatternRul
 import { REVIEW_REASONS, NON_PENALTY_REASONS } from "../lib/product-parser/reviewReasonRules";
 import { INTERP_SUBTYPES, EQUIP_CANONICALS } from "../lib/product-parser/displayNamePolicy";
 import { buildProductSearchText, normalizeSearchQuery } from "../lib/product-parser/searchNormalize";
+import { evaluateProductHardDeleteDependencies } from "../services/masterDependency";
+import { recordMapping, legacyRowKey, resolveByLegacy, PREVIEW_STATUS } from "../services/legacyMapping";
+import { pickLegacyIdColumn, normalizeLegacyId, resolveProductImportRow, type ProductExistingIndex } from "../services/productImportResolve";
 import {
   LAZY_SERVICE_TYPES, isLazyServiceType,
   buildCanonicalKey, buildVirtualProduct, buildAuditMetadata,
@@ -258,7 +261,7 @@ export const LANGUAGE_CODES: { code: string; label: string }[] = [
 ];
 
 // ─── 단위 정의 ────────────────────────────────────────────────────────────────
-const UNITS_BY_TYPE: Record<string, string[]> = {
+export const UNITS_BY_TYPE: Record<string, string[]> = {
   translation:    ["어절", "단어", "글자", "페이지", "건"],
   interpretation: ["1시간", "반일", "종일", "추가시간"],
   combined:       ["어절", "단어", "글자", "페이지", "건", "1시간", "반일", "종일"],
@@ -434,7 +437,7 @@ async function findDuplicate(
 }
 
 // ─── 상품명 normalize ─────────────────────────────────────────────────────────
-function normalizeProdName(s: string): string {
+export function normalizeProdName(s: string): string {
   return (s ?? "")
     .toLowerCase()
     .replace(/[\s\-_·•]/g, "")
@@ -480,7 +483,7 @@ type GetOrCreateResult = {
   canonicalKey: string;
 };
 
-async function getOrCreateProduct(
+export async function getOrCreateProduct(
   input: GetOrCreateInput,
   logger: import("pino").Logger | undefined,
   user: { id: number; email: string } | undefined,
@@ -563,6 +566,45 @@ async function getOrCreateProduct(
     JSON.stringify({ code, name: product.name, productType, sourceLanguage, targetLanguage, mainCategory, canonicalKey, creationSource: input.creationSource ?? "manual" }));
 
   return { product, created: true, reason: "new", canonicalKey };
+}
+
+// ─── Legacy Import 전용 Product 생성 (C-3 FIX) ────────────────────────────────
+// 일반 getOrCreateProduct 와 분리된 경로. Legacy resolver 가 "new" 로 확정한 row 를
+// "legacyId 당 독립 Product 1개"로 생성한다. 유형-only dedup(언어쌍 없는 통역/번역의 오병합)을
+// 회피하기 위해 canonicalKey/code 를 (sourceSystem, legacyId) 기반으로 deterministic 하게 만든다.
+//  · legacyId 원문은 훼손하지 않고 legacy_master_mappings.legacyId 에 그대로 저장(여기선 code/canonicalKey 파생만).
+//  · 상품명은 trim 외 변형 없음.
+//  · getOrCreateProduct 동작은 전혀 변경하지 않는다(일반 경로 회귀 없음).
+export function legacyProductCanonicalKey(sourceSystem: string, legacyId: string): string {
+  return `LEGACY:${sourceSystem}:${legacyId}`;
+}
+export function legacyProductCode(sourceSystem: string, legacyId: string): string {
+  const sys = sourceSystem.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return `LGC-${sys}-${legacyId}`;
+}
+export async function createLegacyImportedProduct(
+  dbx: any,
+  input: {
+    sourceSystem: string; legacyId: string;
+    productType: string; name: string; unit: string;
+    basePrice?: number | null; mainCategory?: string | null;
+  },
+): Promise<{ product: any; created: true }> {
+  const canonicalKey = legacyProductCanonicalKey(input.sourceSystem, input.legacyId);
+  const code = legacyProductCode(input.sourceSystem, input.legacyId);
+  const [product] = await dbx.insert(productsTable).values({
+    code,
+    name: input.name.trim(),               // trim 외 원문 변형 없음
+    productType: input.productType,
+    sourceLanguage: null,
+    targetLanguage: null,
+    mainCategory: input.mainCategory || null,
+    subCategory: null,
+    unit: input.unit,
+    basePrice: input.basePrice ?? null,
+    canonicalKey,                           // (sourceSystem, legacyId) 당 고유 → 유형-only 병합 불가
+  }).returning();
+  return { product, created: true };
 }
 
 // ─── Product + Option 구조 분석 ──────────────────────────────────────────────
@@ -1439,6 +1481,11 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
     status: PreviewStatus; issues: string[]; suggestedType: string;
     duplicateOf: { code: string; name: string }[];
     analysis: ProductAnalysis;
+    // ── C-2: legacy 이관 공통 resolution 결과(additive) ──
+    legacyId: string | null;
+    legacyStatus: string;                 // new|legacy_match|existing_reuse|duplicate_candidate|needs_review|invalid|required_missing|unmatched
+    resolvedProductId: number | null;     // 재사용될 기존 VERITAS product id
+    resolvedProductCode: string | null;   // 연결될 기존 상품코드(표시용)
   };
 
   try {
@@ -1452,6 +1499,16 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
       .select({ id: productsTable.id, code: productsTable.code, name: productsTable.name, productType: productsTable.productType, mainCategory: productsTable.mainCategory })
       .from(productsTable)
       .where(isNull(productsTable.deletedAt));
+
+    // ── C-2: legacy 이관 공통 resolution 준비(additive) ──
+    const sourceSystem: string | null = ((req.body as any)?.sourceSystem ?? "").trim() || null;
+    const legacyIdCol = pickLegacyIdColumn(rows[0] ?? []);
+    const prodIndex: ProductExistingIndex = { byCode: new Map(), byName: new Map() };
+    for (const ep of existingProducts) {
+      if (ep.code) prodIndex.byCode.set(ep.code, ep);
+      const nk = normalizeProdName(ep.name);
+      const arr = prodIndex.byName.get(nk); if (arr) arr.push(ep); else prodIndex.byName.set(nk, [ep]);
+    }
 
     const items: PreviewItem[] = [];
 
@@ -1527,9 +1584,21 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
         }
       }
 
+      // ── C-2: 공통 resolver 로 legacy 처리상태 산출(Execute 와 동일 서비스) ──
+      const legacyId = legacyIdCol >= 0 ? normalizeLegacyId(r[legacyIdCol]) : null;
+      const codeRaw = String(r[0] ?? "").trim() || null;   // 원본 상품코드(강식별자 보조)
+      const resolved = await resolveProductImportRow(db,
+        { legacyId, code: codeRaw, name: nameRaw, productType: pType, normalizedName: nameNorm },
+        prodIndex,
+        { sourceSystem, isKnownType: !!PRODUCT_TYPES[pType] });
+      const resolvedCode = resolved.resolvedProductId != null
+        ? (existingProducts.find(ep => ep.id === resolved.resolvedProductId)?.code ?? null) : null;
+      for (const iss of resolved.issues) if (!issues.includes(iss)) issues.push(iss);
+
       items.push({ rowNum, name: nameRaw, productType: pType, mainCategory: mainCat, subCategory: subCat,
         sourceLanguage: srcLang, targetLanguage: tgtLang, unit, basePrice: null, description: desc,
-        status, issues, suggestedType: suggestedType !== pType ? suggestedType : "", duplicateOf, analysis });
+        status, issues, suggestedType: suggestedType !== pType ? suggestedType : "", duplicateOf, analysis,
+        legacyId, legacyStatus: resolved.status, resolvedProductId: resolved.resolvedProductId, resolvedProductCode: resolvedCode });
     }
 
     // 옵션화 가능 탐지: 동일 productCandidate + 다른 langPair 조합이 2개 이상인 항목
@@ -1552,6 +1621,20 @@ router.post("/admin/products/import/preview", ...adminOnly, excelUpload.single("
       duplicate: items.filter(x => x.status === "duplicate").length,
       conflict: items.filter(x => x.status === "conflict").length,
       review: items.filter(x => x.status === "review").length,
+      // ── C-2: legacy 이관 집계(additive) ──
+      legacy: {
+        sourceSystem,
+        hasLegacyColumn: legacyIdCol >= 0,
+        new: items.filter(x => x.legacyStatus === PREVIEW_STATUS.NEW).length,
+        legacyMatch: items.filter(x => x.legacyStatus === PREVIEW_STATUS.LEGACY_MATCH).length,
+        existingReuse: items.filter(x => x.legacyStatus === PREVIEW_STATUS.EXISTING_REUSE).length,
+        duplicateCandidate: items.filter(x => x.legacyStatus === PREVIEW_STATUS.DUPLICATE_CANDIDATE).length,
+        needsReview: items.filter(x => x.legacyStatus === PREVIEW_STATUS.NEEDS_REVIEW).length,
+        invalid: items.filter(x => x.legacyStatus === PREVIEW_STATUS.INVALID).length,
+        requiredMissing: items.filter(x => x.legacyStatus === PREVIEW_STATUS.REQUIRED_MISSING).length,
+        // 등록 가능 = 신규 + legacy_match + existing_reuse (검토/오류 제외)
+        importable: items.filter(x => [PREVIEW_STATUS.NEW, PREVIEW_STATUS.LEGACY_MATCH, PREVIEW_STATUS.EXISTING_REUSE].includes(x.legacyStatus as any)).length,
+      },
     };
 
     // multer parses Content-Disposition as latin1; re-decode UTF-8 Korean filenames
@@ -1588,54 +1671,176 @@ router.post("/admin/products/import/execute", ...adminOnly, async (req, res) => 
     mainCategory: string; subCategory?: string;
     sourceLanguage?: string | null; targetLanguage?: string | null;
     unit?: string; basePrice?: number | null; description?: string | null;
+    // C-1(additive): legacyId 가 있으면 legacy mapping 을 기록한다. 없으면 lineage 만 남긴다.
+    legacyId?: string | null;
   };
-  const { rows, fileName } = req.body as { rows: ExecuteRow[]; fileName?: string };
+  // C-1(additive): 원본 시스템(선택). legacyId 가 함께 있을 때만 mapping 에 사용.
+  const { rows, fileName, sourceSystem } = req.body as { rows: ExecuteRow[]; fileName?: string; sourceSystem?: string };
 
   if (!Array.isArray(rows) || rows.length === 0) {
     res.status(400).json({ error: "등록할 행이 없습니다." }); return;
   }
 
-  const result = { created: 0, skipped: 0, errors: [] as { row: number; message: string }[] };
+  const ss: string | null = (sourceSystem ?? "").trim() || null;
+  // 통계(§13) — Preview/Execute 공통 resolver 기반.
+  const result = {
+    created: 0, skipped: 0, errors: [] as { row: number; message: string }[],
+    legacyMatch: 0, existingReuse: 0, needsReview: 0,
+  };
+  type Lin = { rowNum: number; entityId: number | null; status: string; legacyId: string | null };
 
   try {
-    for (const row of rows) {
-      const rowNum = row.rowNum ?? 0;
-      const pType  = row.productType;
-      if (!PRODUCT_TYPES[pType]) {
-        result.errors.push({ row: rowNum, message: `상품유형 오류: '${pType}'` }); continue;
-      }
-      if (!row.name?.trim()) {
-        result.errors.push({ row: rowNum, message: "상품명 없음" }); continue;
-      }
-      const srcLang = row.sourceLanguage ?? null;
-      const tgtLang = row.targetLanguage ?? null;
-      const mainCat = row.mainCategory ?? "";
-      const subCat  = row.subCategory  ?? "";
-      const validUnits = UNITS_BY_TYPE[pType] ?? ["건"];
-      const unit = row.unit && validUnits.includes(row.unit) ? row.unit : validUnits[0];
-      try {
-        const goc = await getOrCreateProduct({
-          productType: pType, sourceLanguage: srcLang, targetLanguage: tgtLang,
-          mainCategory: mainCat, subCategory: subCat,
-          name: row.name.trim(), unit,
-          basePrice: row.basePrice ?? null, description: row.description ?? null,
-          creationSource: "import",
-        }, req.log, req.user as any);
-        if (goc.created) {
-          result.created++;
-        } else {
-          result.skipped++;
-        }
-      } catch (rowErr) {
-        result.errors.push({ row: rowNum, message: `저장 오류: ${(rowErr as Error).message}` });
+    // ── 0) import_batches 1건 먼저 생성(lineage 부모). chunk 들이 이 batch 로 묶인다. ──
+    const [batch] = await db.insert(importBatchesTable).values({
+      module: "product",
+      importType: ss ? "legacy_migration" : "excel_bulk",
+      originalFilename: fileName ?? null,
+      totalRows: rows.length,
+      status: "analyzed",   // 완료 시 completed 로 갱신
+      createdBy: (req.user as any)?.id ?? null,
+      sourceSystem: ss,
+    }).returning({ id: importBatchesTable.id });
+
+    // ── 1) 기존 상품 인덱스(공통 resolver 용) ──
+    const prodIndex: ProductExistingIndex = { byCode: new Map(), byName: new Map() };
+    {
+      const eps = await db.select({ id: productsTable.id, code: productsTable.code, name: productsTable.name })
+        .from(productsTable).where(isNull(productsTable.deletedAt));
+      for (const ep of eps) {
+        if (ep.code) prodIndex.byCode.set(ep.code, ep);
+        const nk = normalizeProdName(ep.name);
+        const arr = prodIndex.byName.get(nk); if (arr) arr.push(ep); else prodIndex.byName.set(nk, [ep]);
       }
     }
 
+    // ── 2) chunk 단위 처리(§13) — 한 chunk 실패가 전체를 불완전하게 만들지 않도록 분리 ──
+    const CHUNK = 500;
+    for (let start = 0; start < rows.length; start += CHUNK) {
+      const chunk = rows.slice(start, start + CHUNK);
+      const lineage: Lin[] = [];
+      for (const row of chunk) {
+        const rowNum = row.rowNum ?? 0;
+        const pType  = row.productType;
+        const legacyId = normalizeLegacyId(row.legacyId ?? null);
+        try {
+          // 공통 resolver(§6) — Preview 와 동일 서비스. mapping 우선.
+          const decision = await resolveProductImportRow(db,
+            { legacyId, code: null, name: row.name ?? "", productType: pType, normalizedName: normalizeProdName(row.name ?? "") },
+            prodIndex,
+            { sourceSystem: ss, isKnownType: !!PRODUCT_TYPES[pType] });
+
+          if (decision.status === PREVIEW_STATUS.LEGACY_MATCH || decision.status === PREVIEW_STATUS.EXISTING_REUSE) {
+            // 기존 product 재사용 — 신규 생성 금지(§7).
+            if (decision.status === PREVIEW_STATUS.LEGACY_MATCH) result.legacyMatch++; else result.existingReuse++;
+            lineage.push({ rowNum, entityId: decision.resolvedProductId, status: decision.status, legacyId });
+            continue;
+          }
+          if (decision.status === PREVIEW_STATUS.NEEDS_REVIEW || decision.status === PREVIEW_STATUS.DUPLICATE_CANDIDATE
+            || decision.status === PREVIEW_STATUS.INVALID || decision.status === PREVIEW_STATUS.REQUIRED_MISSING) {
+            // 자동 생성 금지 — 검토 대상으로 skip(§7).
+            if (decision.status === PREVIEW_STATUS.NEEDS_REVIEW || decision.status === PREVIEW_STATUS.DUPLICATE_CANDIDATE) result.needsReview++;
+            result.skipped++;
+            lineage.push({ rowNum, entityId: null, status: decision.status, legacyId });
+            continue;
+          }
+
+          // status === new → 실제 생성.
+          const validUnits = UNITS_BY_TYPE[pType] ?? ["건"];
+          const unit = row.unit && validUnits.includes(row.unit) ? row.unit : validUnits[0];
+
+          if (ss && legacyId) {
+            // ── Legacy 전용 생성 경로(C-3 FIX): legacyId 당 독립 Product. getOrCreateProduct 의 유형-only 병합 회피.
+            // TOCTOU: Preview 이후 mapping 이 생겼으면 legacy_match 로 전환(강제 INSERT 하지 않음).
+            const appeared = await resolveByLegacy(db, { sourceSystem: ss, entityType: "product", legacyId });
+            if (appeared) {
+              result.legacyMatch++;
+              lineage.push({ rowNum, entityId: appeared.entityId, status: PREVIEW_STATUS.LEGACY_MATCH, legacyId });
+            } else {
+              const made = await createLegacyImportedProduct(db, {
+                sourceSystem: ss, legacyId, productType: pType, name: row.name.trim(), unit,
+                basePrice: row.basePrice ?? null, mainCategory: row.mainCategory ?? null,
+              });
+              result.created++;
+              const p = made.product;
+              if (p?.code) prodIndex.byCode.set(p.code, { id: p.id, code: p.code, name: p.name });
+              const nk = normalizeProdName(p.name);
+              const arr = prodIndex.byName.get(nk); if (arr) arr.push({ id: p.id, code: p.code, name: p.name }); else prodIndex.byName.set(nk, [{ id: p.id, code: p.code, name: p.name }]);
+              lineage.push({ rowNum, entityId: p.id, status: PREVIEW_STATUS.NEW, legacyId });
+            }
+          } else {
+            // ── 비-legacy(일반) import: 기존 getOrCreateProduct 동작 100% 유지(회귀 없음) ──
+            const goc = await getOrCreateProduct({
+              productType: pType, sourceLanguage: row.sourceLanguage ?? null, targetLanguage: row.targetLanguage ?? null,
+              mainCategory: row.mainCategory ?? "", subCategory: row.subCategory ?? "",
+              name: row.name.trim(), unit,
+              basePrice: row.basePrice ?? null, description: row.description ?? null,
+              creationSource: "import",
+            }, req.log, req.user as any);
+            if (goc.created) {
+              result.created++;
+              if (goc.product?.code) prodIndex.byCode.set(goc.product.code, { id: goc.product.id, code: goc.product.code, name: goc.product.name });
+              const nk = normalizeProdName(goc.product.name);
+              const arr = prodIndex.byName.get(nk); if (arr) arr.push({ id: goc.product.id, code: goc.product.code, name: goc.product.name }); else prodIndex.byName.set(nk, [{ id: goc.product.id, code: goc.product.code, name: goc.product.name }]);
+            } else {
+              result.existingReuse++;
+            }
+            lineage.push({ rowNum, entityId: goc.product?.id ?? null, status: goc.created ? PREVIEW_STATUS.NEW : PREVIEW_STATUS.EXISTING_REUSE, legacyId });
+          }
+        } catch (rowErr) {
+          result.errors.push({ row: rowNum, message: `저장 오류: ${(rowErr as Error).message}` });
+          lineage.push({ rowNum, entityId: null, status: "error", legacyId });
+        }
+      }
+
+      // chunk 의 lineage + legacy mapping 을 트랜잭션으로 기록(한 chunk 실패가 다른 chunk 를 되돌리지 않음).
+      try {
+        await db.transaction(async (tx) => {
+          if (lineage.length > 0) {
+            await tx.insert(importRowSourcesTable).values(lineage.map(l => ({
+              batchId: batch.id, module: "product", entityId: l.entityId,
+              sourceFile: fileName ?? null, sourceRow: l.rowNum,
+              rowKey: (ss && l.legacyId)
+                ? legacyRowKey({ sourceSystem: ss, entityType: "product", legacyId: l.legacyId })
+                : (l.entityId != null ? `product|id|${l.entityId}` : null),
+              status: l.status,
+              sourceSystem: ss,
+              legacyId: l.legacyId ?? null,
+            })));
+          }
+          // legacyId + entityId 가 있는 행만 mapping 기록(멱등). new/existing_reuse 모두 대상.
+          if (ss) {
+            for (const l of lineage) {
+              if (l.entityId != null && l.legacyId) {
+                await recordMapping(tx, {
+                  sourceSystem: ss, entityType: "product", legacyId: l.legacyId,
+                  entityId: l.entityId, importBatchId: batch.id, sourceRow: l.rowNum,
+                  matchMethod: "legacy", createdBy: (req.user as any)?.id ?? null,
+                });
+              }
+            }
+          }
+        });
+      } catch (lineErr) {
+        req.log.warn({ err: (lineErr as Error).message, chunkStart: start }, "products import: chunk lineage/mapping record failed (non-blocking)");
+      }
+    }
+
+    // ── 3) batch 통계 최종 갱신 ──
+    await db.update(importBatchesTable).set({
+      successRows: result.created + result.legacyMatch + result.existingReuse,
+      warningRows: result.needsReview,
+      errorRows: result.errors.length,
+      skippedRows: result.skipped,
+      status: "completed",
+    }).where(eq(importBatchesTable.id, batch.id));
+
     await logEvent("product", 0, "products_imported", req.log, req.user as any, JSON.stringify({
-      fileName: fileName ?? "unknown", created: result.created, errors: result.errors.length,
+      fileName: fileName ?? "unknown", batchId: batch.id, sourceSystem: ss,
+      created: result.created, legacyMatch: result.legacyMatch, existingReuse: result.existingReuse,
+      needsReview: result.needsReview, errors: result.errors.length,
     }));
 
-    res.json(result);
+    res.json({ ...result, batchId: batch.id });
   } catch (err) {
     req.log.error({ err }, "Products import execute failed");
     res.status(500).json({ error: "가져오기 실패." });
@@ -2392,36 +2597,16 @@ router.delete("/admin/products/:id/purge", ...adminOnly, async (req, res) => {
     const [existing] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
     if (!existing) { res.status(404).json({ error: "상품을 찾을 수 없습니다." }); return; }
 
-    // 사용 이력 확인 — 하나라도 있으면 완전삭제 불가 (휴지통 보관만 가능).
-    //   1) 견적/판매: quote_items.productId
-    //   2) 상품요청 승인: product_requests.approvedProductId
-    //   3) 수행정보: performance_assignments.productNameSnapshot (이름 스냅샷)
-    //   * 청구/정산은 product FK 없이 quotes/tasks 경유 → 위 견적 체크로 커버됨.
-    const [usedInQuotes] = await db
-      .select({ id: quoteItemsTable.id })
-      .from(quoteItemsTable)
-      .where(eq(quoteItemsTable.productId, productId))
-      .limit(1);
-    const [usedInRequests] = await db
-      .select({ id: productRequestsTable.id })
-      .from(productRequestsTable)
-      .where(eq(productRequestsTable.approvedProductId, productId))
-      .limit(1);
-    const [usedInPerformance] = await db
-      .select({ id: performanceAssignmentsTable.id })
-      .from(performanceAssignmentsTable)
-      .where(eq(performanceAssignmentsTable.productNameSnapshot, existing.name))
-      .limit(1);
-
-    const usedReason = usedInQuotes ? "quote_items"
-      : usedInRequests ? "product_requests"
-      : usedInPerformance ? "performance_assignments"
-      : null;
-
-    if (usedReason) {
+    // Dependency Guard (K-2) — 과거 사용 이력이 하나라도 있으면 완전삭제 금지(휴지통 보관만).
+    //   견적/판매(quote_items.productId) · 상품요청(product_requests.approvedProductId) · 수행(이름 스냅샷) 검사.
+    //   productNameSnapshot 존재가 삭제 허용 근거가 되지 않도록, 이름 사용 이력도 차단에 포함.
+    const dep = await evaluateProductHardDeleteDependencies(db, productId, existing.name);
+    if (dep.blocked) {
+      req.log.warn({ productId, deletedBy: req.user?.email, categories: dep.categories },
+        "[HARD_DELETE_BLOCKED] product — 사용 이력 존재");
       res.status(409).json({
-        error: "이 상품은 이미 업무 데이터에서 사용된 이력이 있으므로 완전삭제할 수 없습니다. 휴지통 상태로만 보관 가능합니다.",
-        reason: usedReason,
+        error: "이 상품은 과거 견적/판매/수행 데이터에서 사용된 이력이 있어 완전삭제할 수 없습니다. 사용중지 또는 보관(휴지통) 처리를 사용하세요.",
+        code: "product_hard_delete_blocked",
       });
       return;
     }

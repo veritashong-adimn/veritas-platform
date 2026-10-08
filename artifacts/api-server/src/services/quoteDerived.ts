@@ -10,6 +10,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { quotesTable, quoteItemsTable, projectPaymentsTable } from "@workspace/db";
 import { remapClonedParentLinks } from "./quoteItemGroup";
 import { generateRelationQuoteNumber, isRelationEngineQuoteType } from "./quoteRelation";
+import { fetchCompanyName, fetchContactName } from "../lib/nameSnapshot";
 
 type Db = any;
 export type Result = { http: number; body: Record<string, unknown> };
@@ -123,6 +124,9 @@ export async function createDerivedSplit(
   for (const p of prepared) {
     const quoteNumber = await generateRelationQuoteNumber(tx, rootId, "derived");
     v += 1;
+    // 파생견적 발행 당시 대상 회사/담당자 표시명 Snapshot(§Phase2)
+    const derivedCompanyNameSnapshot = await fetchCompanyName(tx, p.companyId);
+    const derivedContactNameSnapshot = await fetchContactName(tx, p.contactId);
     const [derived] = await tx.insert(quotesTable).values({
       price: String(p.price), title: src.title, note: src.note,
       quoteType: "b2b_standard", billingType: src.billingType, paymentMethod: src.paymentMethod,
@@ -133,6 +137,7 @@ export async function createDerivedSplit(
       rootQuoteId: rootId, parentVersionId: src.id, relationType: "derived",
       version: v, versionReason: opts.reason ?? null, quoteNumber,
       derivedCompanyId: p.companyId, derivedContactId: p.contactId,   // 발행/청구 대상(§4)
+      derivedCompanyNameSnapshot, derivedContactNameSnapshot,
     }).returning();
     if (p.itemRows.length > 0) {
       const newRows = await tx.insert(quoteItemsTable).values(p.itemRows.map((r) => ({ ...r, quoteId: derived.id }))).returning({ id: quoteItemsTable.id });
@@ -215,12 +220,16 @@ export async function generateDerivedBillingRows(
     const supply = items.reduce((s: number, it: any) => s + Number(it.supplyAmount ?? 0), 0);
     const tax = items.reduce((s: number, it: any) => s + Number(it.taxAmount ?? 0), 0);
     seq += 1;
+    // 청구 당시 표시명 Snapshot — 파생견적 발행 시점 Snapshot 을 그대로 승계(없으면 현재 Master 이름, §Phase2)
+    const billingCompanyNameSnapshot = d.derivedCompanyNameSnapshot ?? await fetchCompanyName(tx, d.derivedCompanyId ?? null);
+    const billingContactNameSnapshot = d.derivedContactNameSnapshot ?? await fetchContactName(tx, d.derivedContactId ?? null);
     await tx.insert(projectPaymentsTable).values({
       projectId: saleProjectId, sequence: seq,
       paymentType: "other", paymentCategory: "일반결제",
       supplyAmount: String(supply), vatAmount: String(tax), amount: String(Number(d.price)),
       depositStatus: "scheduled",
       billingCompanyId: d.derivedCompanyId ?? null, billingContactId: d.derivedContactId ?? null,
+      billingCompanyNameSnapshot, billingContactNameSnapshot,
       note: `파생 ${d.quoteNumber ?? d.id}`,   // 청구행 → 파생견적 추적(문자 표기, schema 무변경)
       createdBy: userId,
     });

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { api, normalizeLanguages, LangExpEntry, emptyLangExp } from "../../lib/constants";
 import { formatPhoneNumber } from "../../lib/utils";
-import { PrimaryBtn, GhostBtn, ClickSelect, alertDialog } from "../ui";
+import { Card, PrimaryBtn, GhostBtn, ClickSelect, alertDialog } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 import { PAYMENT_METHODS, SETTLEMENT_TYPES, BankNameSelect } from "./SensitiveInfoModal";
 import {
@@ -218,14 +218,27 @@ const inputStyle: React.CSSProperties = {
 const inpAmber: React.CSSProperties = { ...inputStyle, borderColor: "#fcd34d", background: "#fffbeb" };
 const labelSt: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: "#374151", display: "block", marginBottom: 4 };
 const labelAmber: React.CSSProperties = { ...labelSt, color: "#92400e" };
-const sH: React.CSSProperties = {
-  fontSize: 12, fontWeight: 700, color: "#6b7280", textTransform: "uppercase",
-  letterSpacing: "0.06em", margin: "20px 0 10px", paddingBottom: 6, borderBottom: "1px solid #f3f4f6",
-};
-const sHAmber: React.CSSProperties = { ...sH, color: "#92400e", borderBottomColor: "#fde68a" };
 const errStyle: React.CSSProperties = { color: "#dc2626", fontSize: 12, marginTop: 2 };
 const grid2: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 14px" };
 const grid3: React.CSSProperties = { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px 14px" };
+
+// ── 섹션 카드 (외주업체 등록 화면 VendorRegisterPage 와 동일한 시각 구조로 통일) ──
+const cardHead: React.CSSProperties = { padding: "10px 16px", borderBottom: "1px solid #f3f4f6", display: "flex", alignItems: "center", gap: 8 };
+const cardBar: React.CSSProperties = { width: 3, height: 18, background: "#7c3aed", borderRadius: 2, display: "inline-block", flexShrink: 0 };
+const cardTitle: React.CSSProperties = { margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" };
+// 정산/지급(민감정보) 전용 — 앰버 톤
+const cardHeadAmber: React.CSSProperties = { ...cardHead, borderBottomColor: "#fde68a", background: "#fffbeb" };
+const cardBarAmber: React.CSSProperties = { ...cardBar, background: "#d97706" };
+const cardTitleAmber: React.CSSProperties = { ...cardTitle, color: "#92400e" };
+
+function Section({ title, headerExtra, children }: { title: React.ReactNode; headerExtra?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <Card style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}>
+      <div style={cardHead}><span style={cardBar} /><p style={cardTitle}>{title}</p>{headerExtra}</div>
+      <div style={{ padding: "14px 16px" }}>{children}</div>
+    </Card>
+  );
+}
 
 const GRADES = ["S", "A", "B", "C"];
 const LANG_LEVELS = ["일반", "전문"];
@@ -857,8 +870,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
       ) : undefined}>
 
       {/* ── 1. AI 문서 자동입력 (외주업체 등록과 동일 동선: 업로드 → AI 분석/자동입력 → 기본정보 확인) ── */}
-      <p style={sH}>AI 문서 자동입력</p>
-      <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
+      <Section title="AI 문서 자동입력">
 
         {/* 서류 유형 탭 */}
         <div style={{ display: "flex", gap: 6, marginBottom: 14, borderBottom: "1px solid #e5e7eb", paddingBottom: 10 }}>
@@ -966,11 +978,10 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           </div>
         )}
 
-      </div>
+      </Section>
 
       {/* ── 2. 추가서류 (AI 문서 자동입력에 이어 — 외주업체 등록과 동일하게 서류를 먼저 확정) ── */}
-      <p style={sH}>추가서류</p>
-      <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
+      <Section title="추가서류">
         {/* 이력서/신분증/통장사본 외 자격증·경력증명서 등. 저장 성공 후 연결(고아 방지). */}
         <TranslatorDocumentsSection
           token={token}
@@ -980,11 +991,10 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           pendingDocs={pendingDocs}
           onPendingDocsChange={setPendingDocs}
         />
-      </div>
+      </Section>
 
       {/* ── 3. 기본 정보 ── */}
-      <p style={sH}>기본 정보</p>
-      <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
+      <Section title="기본 정보">
 
         {/* 이름 · 별칭(Alias) · 휴대폰 (약 4:3:3) */}
         <div style={{ display: "grid", gridTemplateColumns: "4fr 3fr 3fr", gap: "10px 14px", alignItems: "start" }}>
@@ -1201,11 +1211,10 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
             placeholder="출신학교, 경력 요약, 전문분야, 통역/번역 특징, 주의사항 등"
             style={{ ...inputStyle, resize: "vertical" }} />
         </div>
-      </div>
+      </Section>
 
       {/* ── 3. 전문 정보 ── */}
-      <p style={sH}>전문 정보</p>
-      <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
+      <Section title="전문 정보">
 
         {/* 가능언어 */}
         <div style={{ marginBottom: 10 }}>
@@ -1380,47 +1389,48 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
             </div>
           );
         })()}
-      </div>
+      </Section>
 
       {/* ── 4. 언어·국제경험 ── */}
-      <p style={sH}>언어·국제경험</p>
-      <div style={{ background: "#f9fafb", borderRadius: 10, border: "1px solid #f3f4f6", padding: "14px 16px", marginBottom: 4 }}>
+      <Section title="언어·국제경험">
         <TranslatorLangExpSection entries={langExperiences} onChange={setLangExperiences} />
-      </div>
+      </Section>
 
       {/* ── 5. 단가 등록 ── */}
-      <p style={sH}>단가 등록</p>
-      {rates.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
-          {rates.map((r, i) => (
-            <TranslatorRateEntryCard
-              key={i} value={r}
-              onChange={patch => {
-                setRates(p => p.map((x, idx) => idx === i ? { ...x, ...patch } : x));
-                setRateErrors(p => { const n = [...p]; n[i] = ""; return n; });
-              }}
-              onRemove={() => { setRates(p => p.filter((_, idx) => idx !== i)); setRateErrors(p => p.filter((_, idx) => idx !== i)); }}
-              error={rateErrors[i]}
-            />
-          ))}
-        </div>
-      )}
-      <button
-        onClick={() => setRates(p => [...p, emptyRateEntry()])}
-        style={{ fontSize: 13, fontWeight: 600, padding: "8px 16px", borderRadius: 8, border: "1.5px dashed #9ca3af", background: "#f9fafb", color: "#374151", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-        + 단가 추가
-      </button>
+      <Section title="단가 등록">
+        {rates.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+            {rates.map((r, i) => (
+              <TranslatorRateEntryCard
+                key={i} value={r}
+                onChange={patch => {
+                  setRates(p => p.map((x, idx) => idx === i ? { ...x, ...patch } : x));
+                  setRateErrors(p => { const n = [...p]; n[i] = ""; return n; });
+                }}
+                onRemove={() => { setRates(p => p.filter((_, idx) => idx !== i)); setRateErrors(p => p.filter((_, idx) => idx !== i)); }}
+                error={rateErrors[i]}
+              />
+            ))}
+          </div>
+        )}
+        <button
+          onClick={() => setRates(p => [...p, emptyRateEntry()])}
+          style={{ fontSize: 13, fontWeight: 600, padding: "8px 16px", borderRadius: 8, border: "1.5px dashed #9ca3af", background: "#f9fafb", color: "#374151", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          + 단가 추가
+        </button>
+      </Section>
 
-      {/* ── 5. 정산/지급 정보 (권한자만) ── */}
+      {/* ── 6. 정산/지급 정보 (권한자만) ── */}
       {hasPerm("translator.sensitive") && (
-        <>
-          <p style={sHAmber}>
-            🔒 정산/지급 정보
-            <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 400, color: "#9ca3af", textTransform: "none", letterSpacing: 0 }}>
+        <Card style={{ padding: 0, overflow: "hidden", marginBottom: 12 }}>
+          <div style={cardHeadAmber}>
+            <span style={cardBarAmber} />
+            <p style={cardTitleAmber}>🔒 정산/지급 정보</p>
+            <span style={{ fontSize: 11, fontWeight: 400, color: "#9ca3af" }}>
               암호화 저장 · admin/finance 권한만 열람 가능 · 나중에 입력해도 됩니다
             </span>
-          </p>
-          <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 10, padding: "16px 18px" }}>
+          </div>
+          <div style={{ background: "#fff7ed", padding: "16px 18px" }}>
             {/* 정산유형 */}
             <p style={{ fontSize: 12, fontWeight: 700, color: "#92400e", margin: "0 0 8px" }}>정산유형</p>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, marginBottom: 16 }}>
@@ -1459,8 +1469,13 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
             </p>
             <div style={{ marginBottom: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <input type="password" value={sf.residentFront}
+                <input type="text" inputMode="numeric" value={sf.residentFront}
                   onChange={e => { const v = e.target.value.replace(/\D/g, "").slice(0, 6); setSf("residentFront", v); if (v.length === 6) backRef.current?.focus(); }}
+                  onPaste={e => {
+                    // CRM 전체 주민번호(13자리)를 한 번에 붙여넣으면 앞 6 / 뒤 7로 자동 분리
+                    const digits = (e.clipboardData.getData("text") || "").replace(/\D/g, "");
+                    if (digits.length === 13) { e.preventDefault(); setSf("residentFront", digits.slice(0, 6)); setSf("residentBack", digits.slice(6, 13)); backRef.current?.focus(); }
+                  }}
                   placeholder="앞 6자리" maxLength={6} autoComplete="off"
                   style={{ width: 110, padding: "9px 12px", borderRadius: 8, border: "1px solid #fcd34d", fontSize: 13, textAlign: "center", fontFamily: "monospace", letterSpacing: 2, boxSizing: "border-box", background: "#fffbeb" }} />
                 <span style={{ fontSize: 18, color: "#d97706", fontWeight: 700 }}>-</span>
@@ -1571,7 +1586,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
               </label>
             </div>
           </div>
-        </>
+        </Card>
       )}
 
       {/* ── 액션 버튼 (모달 모드 하단. asPage 는 상단 headerExtra 에 노출) ── */}

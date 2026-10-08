@@ -42,6 +42,7 @@ import { InquiryRegisterTab } from '../components/admin/InquiryRegisterTab';
 import { InquiryDetailTab } from '../components/admin/InquiryDetailTab';
 import { ProjectManagementTab } from '../components/admin/ProjectManagementTab';
 import { SalesDetailPage } from './SalesDetailPage';
+import { LegacyArchiveDetailPage } from '../components/admin/LegacyArchiveDetailPage';
 import { QuoteListTab } from '../components/admin/QuoteListTab';
 import { CompanyManagementTab } from '../components/admin/CompanyManagementTab';
 import { VendorManagementTab } from '../components/admin/VendorManagementTab';
@@ -52,6 +53,7 @@ import { BulkImportPage } from '../components/admin/BulkImportPage';
 import { PastWorkBulkImportPage } from '../components/admin/PastWorkBulkImportPage';
 import { ContactTrashTab } from '../components/admin/ContactTrashTab';
 import { DataLayerTab } from '../components/admin/DataLayerTab';
+import { LegacyCrmArchiveTab } from '../components/admin/LegacyCrmArchiveTab';
 import { LanguageServiceDataTab } from '../components/admin/LanguageServiceDataTab';
 import { InsightManagementTab } from '../components/admin/InsightManagementTab';
 import { InsightAnalyticsTab } from '../components/admin/InsightAnalyticsTab';
@@ -233,7 +235,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   };
 
   // 초기 탭 — /admin/companies* 경로로 새로고침·직접진입 시 거래처 탭을 복원한다(URL 라우팅 연동).
-  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"quote-register"|"quote-trash"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"translator-register"|"translator-detail"|"vendors"|"vendor-register"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"data-layer"|"language-service"|"insight-management"|"insight-analytics"|"trash"|"inquiries"|"inquiry-register"|"inquiry-detail">(() => {
+  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"quote-register"|"quote-trash"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"translator-register"|"translator-detail"|"vendors"|"vendor-register"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"legacy-crm-archive"|"data-layer"|"language-service"|"insight-management"|"insight-analytics"|"trash"|"inquiries"|"inquiry-register"|"inquiry-detail">(() => {
     // 로고 클릭 새로고침(§로고): 직전 탭을 세션에 저장해 두었다면 복원(1회 소비) → 메뉴 위치 유지.
     try {
       const restore = sessionStorage.getItem("veritasRestoreTab");
@@ -428,10 +430,26 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
     if (parseSalesId() !== null) window.history.pushState({}, "", "/");
     setSalesDetailId(null);
   };
+  // ── Legacy 과거 CRM 판매 상세 deep link (/legacy-archive/:id). Current /sales/:id 와 분리. ──
+  const parseLegacyArchiveId = (): number | null => {
+    const m = window.location.pathname.match(/^\/legacy-archive\/(\d+)$/);
+    return m ? Number(m[1]) : null;
+  };
+  const [legacyArchiveDetailId, setLegacyArchiveDetailId] = useState<number | null>(parseLegacyArchiveId);
+  const openLegacyDetail = (id: number) => {
+    if (window.location.pathname !== `/legacy-archive/${id}`) window.history.pushState({}, "", `/legacy-archive/${id}`);
+    setAdminTab("projects");
+    setLegacyArchiveDetailId(id);
+  };
+  const closeLegacyDetail = () => {
+    if (parseLegacyArchiveId() !== null) window.history.pushState({}, "", "/");
+    setLegacyArchiveDetailId(null);
+  };
   // 사이드바 관리자 메뉴 공통 이동 — 판매 상세(/sales/:id)에 있던 경우 함께 닫는다.
   // (closeSalesDetail 이 URL(/sales/:id → /)과 salesDetailId 초기화를 담당하므로 중복 없음)
   const navigateToAdminTab = (tabId: typeof adminTab) => {
     closeSalesDetail();
+    closeLegacyDetail();
     // 거래처 탭은 URL(/admin/companies)로 라우팅한다. 다른 탭으로 나갈 때 거래처 경로에 있었다면
     // URL을 루트로 되돌려 URL과 표시 화면이 어긋나지 않게 한다.
     if (tabId === "companies") navPath(companyPaths.list);
@@ -451,6 +469,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   useEffect(() => {
     const onPop = () => {
       setSalesDetailId(parseSalesId());
+      setLegacyArchiveDetailId(parseLegacyArchiveId());
       // 거래처 경로면 거래처 탭 유지, 거래처에서 루트로 뒤로가기하면 대시보드로 복귀.
       const onCompany = isCompanyPath(window.location.pathname);
       setAdminTab(prev => onCompany ? "companies" : (prev === "companies" ? "dashboard" : prev));
@@ -1256,7 +1275,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           {/* 스크롤 컨텐츠 */}
           <div style={{ flex: 1, overflowY: "auto", padding: `${ADMIN_SCROLL_PADDING_TOP}px ${ADMIN_SCROLL_PADDING_X}px`, background: "#f9fafb" }}>
 
-          {salesDetailId !== null ? (
+          {legacyArchiveDetailId !== null ? (
+            <LegacyArchiveDetailPage
+              id={legacyArchiveDetailId}
+              token={token}
+              setToast={setToast}
+              onBack={closeLegacyDetail}
+            />
+          ) : salesDetailId !== null ? (
             <SalesDetailPage
               saleId={salesDetailId}
               token={token}
@@ -1631,6 +1657,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           adminUsers={adminUsers}
           openDetail={openDetail}
           onOpenSalesDetail={openSalesDetail}
+          onOpenLegacyDetail={openLegacyDetail}
           onProjectCreated={fetchAll}
         />
       )}
@@ -3213,6 +3240,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             </div>
           </div>
         </Section>
+      )}
+
+      {/* ── 과거 CRM 자료 탭 (Legacy Archive Lite, C-4A) ─────────────────────────── */}
+      {adminTab === "legacy-crm-archive" && (
+        <LegacyCrmArchiveTab token={token} setToast={setToast} />
       )}
 
       {/* ── 번역 데이터 탭 ─────────────────────────────────────────────────────── */}

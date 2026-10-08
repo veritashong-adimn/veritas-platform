@@ -6,6 +6,8 @@ import { quotesTable } from "./quotes";
 export const billingBatchesTable = pgTable("billing_batches", {
   id: serial("id").primaryKey(),
   companyId: integer("company_id").notNull().references(() => companiesTable.id),
+  // 청구 당시 청구처 표시명 Snapshot — Master 개명에도 과거 청구배치는 당시 회사명 유지. 조회는 COALESCE fallback.
+  companyNameSnapshot: text("company_name_snapshot"),
   periodStart: timestamp("period_start").notNull(),
   periodEnd: timestamp("period_end").notNull(),
   status: varchar("status", { length: 50 }).notNull().default("draft"),

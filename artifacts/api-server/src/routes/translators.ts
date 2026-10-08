@@ -15,6 +15,7 @@ import { buildTranslatorAliasValues, ensureDefaultTranslatorAlias } from "../lib
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { encrypt, decrypt, maskResidentNumber } from "../lib/encrypt";
+import { evaluateTranslatorHardDeleteDependencies } from "../services/masterDependency";
 import { logEvent } from "../lib/logEvent";
 import {
   uploadResumeToGCS, deleteResumeFromGCS, getResumeDownloadUrl, isAllowedMime, isAllowedExt,
@@ -3072,29 +3073,16 @@ router.delete("/admin/translators/:id/permanent", ...adminGuard, async (req, res
     );
     if (!existing) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
 
-    // 2. 연결된 작업 존재 여부 확인
-    const [taskCount] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(tasksTable)
-      .where(eq(tasksTable.translatorId, userId));
-    if ((taskCount?.count ?? 0) > 0) {
+    // 2. Dependency Guard (K-2) — 과거 수행/정산/지급/작업 이력이 1건이라도 있으면 삭제 전면 차단.
+    //    tasks·settlements 뿐 아니라 performance_assignments·payout(개인) 까지 검사(기존 누락 보완).
+    //    translator_profiles/rates 등 종속정보 존재는 차단 사유가 아니다.
+    const dep = await evaluateTranslatorHardDeleteDependencies(db, userId);
+    if (dep.blocked) {
+      req.log.warn({ userId, deletedBy: req.user?.email, categories: dep.categories },
+        "[HARD_DELETE_BLOCKED] translator — 연결된 수행/정산/지급 자료 존재");
       res.status(409).json({
-        error: "이 통번역사는 프로젝트/작업 이력이 있어 완전삭제할 수 없습니다. 비활성 처리만 가능합니다.",
-        reason: "tasks",
-        count: taskCount.count,
-      }); return;
-    }
-
-    // 3. 연결된 정산 존재 여부 확인
-    const [settlementCount] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(settlementsTable)
-      .where(eq(settlementsTable.translatorId, userId));
-    if ((settlementCount?.count ?? 0) > 0) {
-      res.status(409).json({
-        error: "이 통번역사는 정산 이력이 있어 완전삭제할 수 없습니다. 비활성 처리만 가능합니다.",
-        reason: "settlements",
-        count: settlementCount.count,
+        error: "과거 수행/정산/지급 자료가 연결되어 있어 영구 삭제할 수 없습니다. 비활성(사용중지) 또는 보관 처리를 사용하세요.",
+        code: "translator_hard_delete_blocked",
       }); return;
     }
 

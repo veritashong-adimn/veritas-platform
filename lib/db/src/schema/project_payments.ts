@@ -44,6 +44,9 @@ export const projectPaymentsTable = pgTable("project_payments", {
   // 청구정보(Phase 1) — 청구 = 입금 관리 단위. 청구업체·담당자.
   billingCompanyId: integer("billing_company_id").references(() => companiesTable.id), // 청구업체
   billingContactId: integer("billing_contact_id").references(() => contactsTable.id),  // 담당자
+  // 청구 당시 표시명 Snapshot — Master 개명·통합에도 수금 과거기록은 당시 청구처/담당자명 유지. 조회는 COALESCE fallback.
+  billingCompanyNameSnapshot: text("billing_company_name_snapshot"),
+  billingContactNameSnapshot: text("billing_contact_name_snapshot"),
   note: text("note"),                                  // 비고
   createdBy: integer("created_by").references(() => usersTable.id),
   updatedBy: integer("updated_by").references(() => usersTable.id),

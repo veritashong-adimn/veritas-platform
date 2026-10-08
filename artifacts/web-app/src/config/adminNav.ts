@@ -128,6 +128,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
     accentColor: "#0ea5e9",
     perm: "menu.user",
     items: [
+      { id: "legacy-crm-archive", label: "과거 CRM 자료",      icon: "🗂️", perm: "menu.user" },
       { id: "data-layer",         label: "번역 데이터",        icon: "🗃️", perm: "menu.user" },
       { id: "language-service",   label: "언어 서비스 데이터",  icon: "📊", perm: "menu.user" },
       { id: "insight-management", label: "인사이트 관리",       icon: "💡", perm: "menu.user" },
@@ -193,6 +194,7 @@ export const ADMIN_PAGE_TITLE: Record<string, string> = {
   board:       "게시판",
   settings:    "환경설정",
   test:        "운영 테스트",
+  "legacy-crm-archive":   "과거 CRM 자료",
   "data-layer":           "번역 데이터",
   "language-service":     "언어 서비스 데이터",
   "insight-management":   "인사이트 관리",

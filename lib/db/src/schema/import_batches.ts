@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, timestamp, varchar } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, timestamp, varchar, jsonb, boolean } from "drizzle-orm/pg-core";
 
 // ─── 공통 Excel Import Batch / Source Lineage ─────────────────────────────
 // 공통 Excel Import Engine 이 남기는 "어떤 파일을, 언제, 누가, 몇 건" 기록과
@@ -22,6 +22,16 @@ export const importBatchesTable = pgTable("import_batches", {
   // analyzed | completed | failed
   status: varchar("status", { length: 20 }).notNull().default("completed"),
   createdBy: integer("created_by"),          // 실행 관리자 user id
+  // ── Legacy 이관 확장(C-1, additive nullable) ──
+  sourceSystem: varchar("source_system", { length: 40 }),  // old_crm | another_crm | manual_migration
+  fileHash: text("file_hash"),                             // 동일 파일 재실행 감지(파일명 아님)
+  skippedRows: integer("skipped_rows"),                    // skip 처리 행수
+  // ── (C-4G) Legacy Archive 스냅샷 세대(additive nullable) ──
+  // 하나의 import_batch = 하나의 CRM 다운로드 스냅샷. source_type 별로 최신 1개만 is_current=true.
+  sourceType: varchar("source_type", { length: 20 }),      // legacy_archive 스냅샷의 source_type(sales_list|progress)
+  isCurrent: boolean("is_current"),                        // 해당 source_type 최신 스냅샷 여부(legacy_archive 전용)
+  // (C-4I-c) 원본 Excel header 순서 보존(JSONB 키순서는 소실되므로 배열로 별도 저장). 조회 화면 전체컬럼 정렬용.
+  headersJson: jsonb("headers_json"),                      // string[] — 원본 header 원래 순서(dominant sheet)
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -39,6 +49,10 @@ export const importRowSourcesTable = pgTable("import_row_sources", {
   rowKey: text("row_key"),
   // new | identical | update | duplicate_file | error
   status: varchar("status", { length: 20 }).notNull().default("new"),
+  // ── Legacy 이관 확장(C-1, additive nullable) ──
+  sourceSystem: varchar("source_system", { length: 40 }),  // 원본 시스템(legacy mapping 과 연계)
+  legacyId: text("legacy_id"),                             // 이 행의 원본 CRM 식별자(있을 때)
+  sourceRaw: jsonb("source_raw"),                          // 비-PII 원본 행 보존(감사/재검증). PII 저장 금지.
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

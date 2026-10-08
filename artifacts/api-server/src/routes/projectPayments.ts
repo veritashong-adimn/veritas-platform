@@ -7,9 +7,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, type IRouter } from "express";
 import { db, projectPaymentsTable, paymentTransactionsTable, companiesTable, contactsTable } from "@workspace/db";
-import { eq, and, inArray, asc, getTableColumns } from "drizzle-orm";
+import { eq, and, inArray, asc, getTableColumns, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireRole } from "../middlewares/auth";
+import { fetchCompanyName, fetchContactName } from "../lib/nameSnapshot";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -19,8 +20,9 @@ export async function loadPaymentRecords(projectId: number) {
   const records = await db
     .select({
       ...getTableColumns(projectPaymentsTable),
-      billingCompanyName: companiesTable.name,
-      billingContactName: contactsTable.name,
+      // 표시명 = 청구 당시 Snapshot 우선 → 없으면 현재 Master명 fallback(§Phase3)
+      billingCompanyName: sql<string | null>`COALESCE(${projectPaymentsTable.billingCompanyNameSnapshot}, ${companiesTable.name})`,
+      billingContactName: sql<string | null>`COALESCE(${projectPaymentsTable.billingContactNameSnapshot}, ${contactsTable.name})`,
     })
     .from(projectPaymentsTable)
     .leftJoin(companiesTable, eq(projectPaymentsTable.billingCompanyId, companiesTable.id))
@@ -94,6 +96,9 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, async (req, res
         const reconciledStatus: (typeof DEPOSIT_STATUS)[number] = isPaid
           ? "completed"
           : (r.depositStatus === "completed" ? "scheduled" : (r.depositStatus ?? "scheduled"));
+        // 청구 당시 청구처/담당자 표시명 Snapshot(저장 시점 Master 이름으로 고정, §Phase2)
+        const billingCompanyNameSnapshot = await fetchCompanyName(tx, r.billingCompanyId ?? null);
+        const billingContactNameSnapshot = await fetchContactName(tx, r.billingContactId ?? null);
         const values = {
           sequence: seq++,                         // 회차 자동번호(프로젝트별, 순서 기준)
           issueDate: r.issueDate || null,
@@ -111,6 +116,8 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, async (req, res
           depositItem: r.depositItem ?? null,
           billingCompanyId: r.billingCompanyId ?? null,
           billingContactId: r.billingContactId ?? null,
+          billingCompanyNameSnapshot,
+          billingContactNameSnapshot,
           note: r.note ?? null,
           updatedBy: userId,
           updatedAt: new Date(),

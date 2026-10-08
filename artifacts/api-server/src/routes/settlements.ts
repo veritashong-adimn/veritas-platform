@@ -85,7 +85,8 @@ router.get("/admin/settlements", ...adminGuard, async (req, res) => {
 
         projectTitle: projectsTable.title,
         translatorEmail: usersTable.email,
-        companyName: companiesTable.name,
+        // 표시명 = 거래 당시 거래처 Snapshot 우선 → 현재 Master명 fallback(§Phase3). 정산 금액/지급 Snapshot 구조는 불변.
+        companyName: sql<string | null>`COALESCE(${projectsTable.companyNameSnapshot}, ${companiesTable.name})`,
       })
       .from(settlementsTable)
       .leftJoin(projectsTable, eq(settlementsTable.projectId, projectsTable.id))

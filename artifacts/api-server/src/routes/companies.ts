@@ -24,6 +24,8 @@ import {
   isOcrSupportedExt, buildImageDataUrl, renderPdfFirstPageAsPng,
 } from "../lib/documentOcr";
 import { effectiveRevenueConditions } from "../services/quoteRelation";
+import { evaluateCompanyHardDeleteDependencies } from "../services/companyDependency";
+import { evaluateContactHardDeleteDependencies, evaluateDivisionHardDeleteDependencies } from "../services/masterDependency";
 
 // 외주분야 허용값(§4). 향후 확장 가능하되 과도한 구조는 만들지 않는다 — 서버에서 화이트리스트만 검증.
 const OUTSOURCING_FIELDS = ["translation", "interpretation", "equipment", "etc"] as const;
@@ -433,10 +435,11 @@ router.get("/admin/companies/:id", ...adminGuard, async (req, res) => {
     const divisions = await db
       .select({
         id: divisionsTable.id, companyId: divisionsTable.companyId,
-        name: divisionsTable.name, type: divisionsTable.type, createdAt: divisionsTable.createdAt,
+        name: divisionsTable.name, type: divisionsTable.type,
+        isActive: divisionsTable.isActive, createdAt: divisionsTable.createdAt,
       })
       .from(divisionsTable)
-      .where(eq(divisionsTable.companyId, companyId))
+      .where(eq(divisionsTable.companyId, companyId))   // 관리화면: 활성/비활성 모두 반환(상태 표시·재활성화용)
       .orderBy(divisionsTable.name);
 
     const projects = await db
@@ -1300,8 +1303,23 @@ router.delete("/admin/companies/:id/hard", ...adminGuard, async (req, res) => {
     const [existing] = await db.select().from(companiesTable).where(eq(companiesTable.id, companyId));
     if (!existing) { res.status(404).json({ error: "거래처를 찾을 수 없습니다." }); return; }
 
+    // ── Dependency Guard (K-1) ──────────────────────────────────────────────
+    // 과거 거래/수행/정산/수금 자료가 1건이라도 연결되어 있으면 물리삭제·cascade 를 전면 차단한다.
+    // (고객+외주 역할 모두 검사. Snapshot 존재는 삭제 허용 근거가 아니다.)
+    const dep = await evaluateCompanyHardDeleteDependencies(db, companyId);
+    if (dep.blocked) {
+      req.log.warn({ companyId, deletedBy: req.user?.email, categories: dep.categories },
+        "[HARD_DELETE_BLOCKED] 연결된 거래/수행/정산/수금 자료 존재");
+      // 사용자 메시지는 원인만 일반적으로 안내(내부 DB 구조/민감정보 비노출).
+      res.status(409).json({
+        error: "과거 거래/수행/정산/수금 자료가 연결되어 있어 이 거래처를 영구 삭제할 수 없습니다. 사용중지 또는 보관(휴지통) 처리를 사용하세요.",
+        code: "company_hard_delete_blocked",
+      });
+      return;
+    }
+
     req.log.warn({ companyId, companyName: existing.name, deletedBy: req.user?.email },
-      "[HARD_DELETE_COMPANY] 완전삭제 시작");
+      "[HARD_DELETE_COMPANY] 완전삭제 시작 (연결 거래자료 0건 확인됨)");
 
     // 프로젝트 ID 수집
     const projectRows = await db
@@ -1421,9 +1439,13 @@ router.get("/admin/companies/:id/divisions", ...adminGuard, async (req, res) => 
   if (isNaN(companyId) || companyId <= 0) {
     res.status(400).json({ error: "유효하지 않은 company id." }); return;
   }
+  // 기본: 활성 부서만(신규 거래/담당자 선택목록용 — §3④). 관리화면은 ?includeInactive=true 로 전체 조회.
+  const includeInactive = req.query.includeInactive === "true";
   try {
     const rows = await db.select().from(divisionsTable)
-      .where(eq(divisionsTable.companyId, companyId))
+      .where(includeInactive
+        ? eq(divisionsTable.companyId, companyId)
+        : and(eq(divisionsTable.companyId, companyId), eq(divisionsTable.isActive, true)))
       .orderBy(divisionsTable.name);
     res.json(rows);
   } catch (err) {
@@ -1482,29 +1504,55 @@ router.delete("/admin/divisions/:id", ...adminGuard, async (req, res) => {
   if (isNaN(divId) || divId <= 0) {
     res.status(400).json({ error: "유효하지 않은 division id." }); return;
   }
+  // 기본 삭제 = 물리삭제가 아니라 "사용중지"(§K-3). 과거자료(divisionId 참조)는 그대로 보존된다.
+  // 진짜 물리삭제는 ?hard=true + 연결자료 0건(Dependency Guard 통과)일 때만 허용.
+  const hard = req.query.hard === "true";
   try {
-    // 삭제 전 참조 검사(§TOP5) — divisionId 계열 컬럼에 FK가 없어 물리삭제 시 orphan이 남을 수 있으므로,
-    // 참조 중인 담당자/프로젝트가 있으면 삭제를 차단한다(자동 null 처리하지 않음 — 연결 관계 임의 훼손 방지).
-    const [contactRef] = await db.select({ id: contactsTable.id }).from(contactsTable)
-      .where(eq(contactsTable.divisionId, divId)).limit(1);
-    const [projectRef] = await db.select({ id: projectsTable.id }).from(projectsTable)
-      .where(or(
-        eq(projectsTable.requestingDivisionId, divId),
-        eq(projectsTable.billingDivisionId, divId),
-        eq(projectsTable.payerDivisionId, divId),
-      )).limit(1);
-    if (contactRef || projectRef) {
-      const parts: string[] = [];
-      if (contactRef) parts.push("담당자");
-      if (projectRef) parts.push("프로젝트");
-      res.status(409).json({ error: `이 부서를 사용하는 ${parts.join(" 또는 ")}가 있어 삭제할 수 없습니다. 연결을 먼저 정리해 주세요.` });
+    const [existing] = await db.select().from(divisionsTable).where(eq(divisionsTable.id, divId));
+    if (!existing) { res.status(404).json({ error: "브랜드/부서를 찾을 수 없습니다." }); return; }
+
+    if (!hard) {
+      // 사용중지(Soft) — 레코드 보존. 선택목록에서만 제외되고 과거자료 조회는 정상.
+      const [updated] = await db.update(divisionsTable)
+        .set({ isActive: false }).where(eq(divisionsTable.id, divId)).returning();
+      res.json({ ok: true, mode: "deactivated", division: updated });
+      return;
+    }
+
+    // ?hard=true — Dependency Guard: 연결자료가 하나라도 있으면 물리삭제 전면 차단.
+    const dep = await evaluateDivisionHardDeleteDependencies(db, divId);
+    if (dep.blocked) {
+      req.log.warn({ divId, deletedBy: req.user?.email, categories: dep.categories },
+        "[HARD_DELETE_BLOCKED] division — 연결된 담당자/프로젝트/문의 존재");
+      res.status(409).json({
+        error: "이 부서를 사용하는 과거 거래/담당자/프로젝트 자료가 있어 영구 삭제할 수 없습니다. 사용중지 처리를 사용하세요.",
+        code: "division_hard_delete_blocked",
+      });
       return;
     }
     await db.delete(divisionsTable).where(eq(divisionsTable.id, divId));
-    res.json({ ok: true });
+    res.json({ ok: true, mode: "hard_deleted" });
   } catch (err) {
     req.log.error({ err }, "Divisions: failed to delete");
     res.status(500).json({ error: "브랜드/부서 삭제 실패." });
+  }
+});
+
+// ─── 브랜드/부서 재활성화(사용중지 해제) ──────────────────────────────────────
+router.patch("/admin/divisions/:id/activate", ...adminGuard, async (req, res) => {
+  const divId = Number(req.params.id);
+  if (isNaN(divId) || divId <= 0) {
+    res.status(400).json({ error: "유효하지 않은 division id." }); return;
+  }
+  try {
+    const [existing] = await db.select().from(divisionsTable).where(eq(divisionsTable.id, divId));
+    if (!existing) { res.status(404).json({ error: "브랜드/부서를 찾을 수 없습니다." }); return; }
+    const [updated] = await db.update(divisionsTable)
+      .set({ isActive: true }).where(eq(divisionsTable.id, divId)).returning();
+    res.json({ ok: true, division: updated });
+  } catch (err) {
+    req.log.error({ err }, "Divisions: failed to activate");
+    res.status(500).json({ error: "브랜드/부서 재활성화 실패." });
   }
 });
 
@@ -2165,16 +2213,15 @@ router.delete("/admin/contacts/:id/permanent", ...adminGuard, async (req, res) =
     const [existing] = await db.select().from(contactsTable).where(eq(contactsTable.id, contactId));
     if (!existing) { res.status(404).json({ error: "담당자를 찾을 수 없습니다." }); return; }
 
-    // 연결된 프로젝트 확인
-    const [projectCount] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(projectsTable)
-      .where(eq(projectsTable.contactId, contactId));
-    if ((projectCount?.count ?? 0) > 0) {
+    // Dependency Guard (K-2) — 과거 거래에 한 번이라도 사용된 담당자는 완전삭제 금지.
+    //   projects.contactId · quotes.derivedContactId · project_payments.billingContactId 전부 검사(기존 projects-only 보완).
+    const dep = await evaluateContactHardDeleteDependencies(db, contactId);
+    if (dep.blocked) {
+      req.log.warn({ contactId, deletedBy: req.user?.email, categories: dep.categories },
+        "[HARD_DELETE_BLOCKED] contact — 연결된 견적/프로젝트/수금 자료 존재");
       res.status(409).json({
-        error: "이 담당자는 프로젝트/견적/청구 이력이 있어 완전삭제할 수 없습니다. 비활성 처리만 가능합니다.",
-        reason: "projects",
-        count: projectCount.count,
+        error: "과거 거래/견적/프로젝트/수금 자료가 연결되어 있어 영구 삭제할 수 없습니다. 비활성(사용중지) 또는 보관 처리를 사용하세요.",
+        code: "contact_hard_delete_blocked",
       }); return;
     }
 

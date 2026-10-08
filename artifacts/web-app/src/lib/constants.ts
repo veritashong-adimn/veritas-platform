@@ -274,6 +274,7 @@ export type Company = {
 };
 export type Division = {
   id: number; companyId: number; name: string; type: string | null; createdAt: string;
+  isActive?: boolean;
   projectCount?: number; totalPayment?: number; contactCount?: number;
 };
 export type Contact = {

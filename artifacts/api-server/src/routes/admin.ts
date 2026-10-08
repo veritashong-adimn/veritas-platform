@@ -21,6 +21,7 @@ import { getSettings, invalidateSettingsCache } from "../lib/getSettings";
 import { tryBuildOnProjectComplete } from "../services/translationUnitService";
 import { loadPerformanceRows } from "./performances";
 import { loadPaymentRecords } from "./projectPayments";
+import { fetchCompanyName, fetchContactName } from "../lib/nameSnapshot";
 import adminUsersRouter from "./admin/users";
 import adminCustomersRouter from "./admin/customers";
 import adminNotesRouter from "./admin/notes";
@@ -59,7 +60,7 @@ router.use(adminNotesRouter);
 // ─── 프로젝트 목록 (검색/필터) ────────────────────────────────────────────
 // 필터 로직 공유 헬퍼 — GET /admin/projects 와 GET /admin/projects/export 가 동일 필터를 쓰도록 추출.
 //  (§18: Excel export 는 화면과 동일한 검색/필터 조건 전체를 반영해야 한다. 로직 복제 대신 단일 SSOT.)
-async function buildFilteredSalesProjectList(query: Record<string, string | undefined>) {
+export async function buildFilteredSalesProjectList(query: Record<string, string | undefined>) {
     const {
       search, status, financialStatus: financialStatusFilter, dateFrom, dateTo, assignedAdminId, companyName, contactName,
       companyId: companyIdFilter, contactId: contactIdFilter,
@@ -96,7 +97,9 @@ async function buildFilteredSalesProjectList(query: Record<string, string | unde
         billingDivisionId: projectsTable.billingDivisionId,
         payerCompanyId: projectsTable.payerCompanyId,
         payerDivisionId: projectsTable.payerDivisionId,
-        contactName: contactAlias.name, companyName: companyAlias.name,
+        // 표시명 = 거래 당시 Snapshot 우선 → 없으면 현재 Master명 fallback(§Phase3)
+        contactName: sql<string | null>`COALESCE(${projectsTable.contactNameSnapshot}, ${contactAlias.name})`,
+        companyName: sql<string | null>`COALESCE(${projectsTable.companyNameSnapshot}, ${companyAlias.name})`,
         divisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
         billingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.billingCompanyId})`,
         billingDivisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.billingDivisionId})`,
@@ -1290,12 +1293,17 @@ router.post("/admin/projects", ...adminGuard, requirePermission("project.create"
   const effectiveRequestingId = requestingCompanyId ?? companyId ?? null;
 
   try {
+    // 거래 당시 거래처/담당자 표시명 Snapshot(생성 시점 Master 이름으로 1회 고정, §Phase2)
+    const companyNameSnapshot = await fetchCompanyName(db, companyId ? Number(companyId) : null);
+    const contactNameSnapshot = await fetchContactName(db, contactId ? Number(contactId) : null);
     const [project] = await db.insert(projectsTable).values({
       userId: adminUser.id,
       customerId: customerId ? Number(customerId) : null,
       customerUserId: customerUserId ? Number(customerUserId) : null,
       companyId: companyId ? Number(companyId) : null,
       contactId: contactId ? Number(contactId) : null,
+      companyNameSnapshot,
+      contactNameSnapshot,
       requestingCompanyId: effectiveRequestingId ? Number(effectiveRequestingId) : null,
       requestingDivisionId: requestingDivisionId ? Number(requestingDivisionId) : null,
       billingCompanyId: effectiveBillingId ? Number(effectiveBillingId) : null,
@@ -1353,6 +1361,9 @@ router.patch("/admin/projects/:id/info", ...adminGuard, requirePermission("proje
       }
       updates.status = "in_progress";
     }
+    // 거래처/담당자를 다른 대상으로 재지정할 때만 Snapshot 재동결(단순 Master 개명은 반영하지 않음, §Phase2)
+    if (companyId !== undefined) updates.companyNameSnapshot = await fetchCompanyName(db, companyId);
+    if (contactId !== undefined) updates.contactNameSnapshot = await fetchContactName(db, contactId);
     const [updated] = await db.update(projectsTable).set(updates).where(eq(projectsTable.id, projectId)).returning();
     await logEvent("project", projectId, "project_updated", req.log, req.user ?? undefined);
     if (billingCompanyId !== undefined && billingCompanyId !== project.billingCompanyId) {
@@ -1488,8 +1499,9 @@ router.get("/admin/quotes", ...adminGuard, async (req, res) => {
         projectStatus: projectsTable.status,
         projectCompanyId: projectsTable.companyId,
         // 분할견적(derived, project 없음)은 고객사/고객명을 derived_* 에서 표시(COALESCE). 그 외는 기존 project 기준(변경 없음).
-        companyName: sql<string | null>`(SELECT name FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId}))`,
-        contactName: sql<string | null>`(SELECT name FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,
+        // 표시명 = 견적 Snapshot → 프로젝트 Snapshot → 현재 Master명 fallback(§Phase3)
+        companyName: sql<string | null>`COALESCE(${quotesTable.derivedCompanyNameSnapshot}, ${projectsTable.companyNameSnapshot}, (SELECT name FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId})))`,
+        contactName: sql<string | null>`COALESCE(${quotesTable.derivedContactNameSnapshot}, ${projectsTable.contactNameSnapshot}, (SELECT name FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId})))`,
         adminName:   sql<string | null>`(SELECT name FROM users WHERE id = ${projectsTable.adminId})`,
       })
       .from(quotesTable)
@@ -2311,7 +2323,9 @@ router.get("/admin/billing-batches", ...adminGuard, async (req, res) => {
 
     const batches = await db.select({
       id: billingBatchesTable.id, companyId: billingBatchesTable.companyId,
-      companyName: companyAlias2.name, periodStart: billingBatchesTable.periodStart,
+      // 표시명 = 청구 당시 Snapshot 우선 → 현재 Master명 fallback(§Phase3)
+      companyName: sql<string | null>`COALESCE(${billingBatchesTable.companyNameSnapshot}, ${companyAlias2.name})`,
+      periodStart: billingBatchesTable.periodStart,
       periodEnd: billingBatchesTable.periodEnd, status: billingBatchesTable.status,
       totalAmount: billingBatchesTable.totalAmount, quoteId: billingBatchesTable.quoteId,
       createdAt: billingBatchesTable.createdAt,
@@ -2480,7 +2494,8 @@ router.post("/admin/billing-batches", ...adminGuard, async (req, res) => {
     const now = new Date();
     const start = periodStart ? new Date(periodStart) : new Date(now.getFullYear(), now.getMonth(), 1);
     const end = periodEnd ? new Date(periodEnd) : new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    const [batch] = await db.insert(billingBatchesTable).values({ companyId, periodStart: start, periodEnd: end, status: "draft", totalAmount: "0", note: note ?? null }).returning();
+    const companyNameSnapshot = await fetchCompanyName(db, companyId); // 청구 당시 청구처명 고정(§Phase2)
+    const [batch] = await db.insert(billingBatchesTable).values({ companyId, companyNameSnapshot, periodStart: start, periodEnd: end, status: "draft", totalAmount: "0", note: note ?? null }).returning();
     res.status(201).json({ ...batch, totalAmount: 0, items: [] });
   } catch (err) {
     req.log.error({ err }, "Failed to create batch");
@@ -3457,10 +3472,11 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
         // 브랜드(Division) — projects.requestingDivisionId 재사용
         divisionId:          projectsTable.requestingDivisionId,
         divisionName:        sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
-        companyName:         sql<string | null>`(SELECT name FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId}))`,
+        // 표시명 = 견적 Snapshot → 프로젝트 Snapshot → 현재 Master명 fallback(§Phase3). 대표자/사업자번호 등은 현재 Master값 유지(이름만 Snapshot 대상).
+        companyName:         sql<string | null>`COALESCE(${quotesTable.derivedCompanyNameSnapshot}, ${projectsTable.companyNameSnapshot}, (SELECT name FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId})))`,
         representativeName:    sql<string | null>`(SELECT representative_name FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId}))`,
         companyBusinessNumber: sql<string | null>`(SELECT business_number FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId}))`,
-        contactName:           sql<string | null>`(SELECT name FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,
+        contactName:           sql<string | null>`COALESCE(${quotesTable.derivedContactNameSnapshot}, ${projectsTable.contactNameSnapshot}, (SELECT name FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId})))`,
         contactDivision: sql<string | null>`(SELECT department FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,
         contactPhone:    sql<string | null>`(SELECT COALESCE(phone, mobile, office_phone) FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,
         contactEmail:    sql<string | null>`(SELECT email FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,

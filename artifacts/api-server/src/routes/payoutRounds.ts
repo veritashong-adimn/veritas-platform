@@ -76,7 +76,8 @@ function selectItems(whereClause: any) {
       quoteId: performanceAssignmentsTable.quoteId,
       quoteNumber: quotesTable.quoteNumber,
       quoteIssueDate: quotesTable.issueDate,
-      customerName: companiesTable.name,
+      // 표시명 = 거래 당시 거래처 Snapshot 우선 → 현재 Master명 fallback(§Phase3)
+      customerName: sql<string | null>`COALESCE(${projectsTable.companyNameSnapshot}, ${companiesTable.name})`,
       projectTitle: projectsTable.title,
       performerCategory: performanceAssignmentsTable.performerCategory,
       payeeType: performanceAssignmentsTable.payeeType,

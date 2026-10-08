@@ -606,7 +606,12 @@ function ResidentInput({ front, back, backRef, onFront, onBack, existing }: {
         </div>
       )}
       <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-        <input type="password" value={front} onChange={e => onFront(e.target.value.replace(/\D/g, "").slice(0, 6))}
+        <input type="text" inputMode="numeric" value={front} onChange={e => onFront(e.target.value.replace(/\D/g, "").slice(0, 6))}
+          onPaste={e => {
+            // CRM 전체 주민번호(13자리)를 한 번에 붙여넣으면 앞 6 / 뒤 7로 자동 분리
+            const digits = (e.clipboardData.getData("text") || "").replace(/\D/g, "");
+            if (digits.length === 13) { e.preventDefault(); onFront(digits.slice(0, 6)); onBack(digits.slice(6, 13)); backRef.current?.focus(); }
+          }}
           placeholder="앞 6자리" maxLength={6} autoComplete="off"
           style={{ width:110, padding:"9px 12px", borderRadius:8, border:"1px solid #d1d5db", fontSize:13, textAlign:"center", fontFamily:"monospace", letterSpacing:2, boxSizing:"border-box" }} />
         <span style={{ fontSize:18, color:"#d1d5db", fontWeight:700 }}>-</span>
