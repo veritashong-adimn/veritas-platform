@@ -109,6 +109,8 @@ router.get("/admin/companies", ...adminGuard, async (req, res) => {
           ilike(companiesTable.name, `%${s}%`),
           ilike(companiesTable.representativeName, `%${s}%`),
           ilike(companiesTable.email, `%${s}%`),
+          ilike(companiesTable.industry, `%${s}%`),           // 업태 검색 포함
+          ilike(companiesTable.businessCategory, `%${s}%`),   // 종목 검색 포함
           auxIds.length ? inArray(companiesTable.id, auxIds) : undefined,
         ];
         if (digits) {

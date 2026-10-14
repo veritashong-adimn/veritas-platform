@@ -192,8 +192,8 @@ export function CollectionsTab({ token, onToast, onOpenSalesDetail }: Props) {
         </Card>
       ) : (
         <Card style={{ padding: 0, overflow: "hidden" }}>
-          <div style={{ overflowX: "auto" }}>
-            <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+          <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 300px)" }}>
+            <table className="veritas-read-table vz-sticky" style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
                   {/* 헤더 정렬 = 본문 정렬(금액 3열만 right, 나머지 left) */}

@@ -128,8 +128,8 @@ export function ProductTrashTab({ token, user, setToast, authHeaders }: Props) {
         ) : trashProducts.length === 0 ? (
           <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>휴지통이 비어 있습니다.</Card>
         ) : (
-          <Card style={{ padding: 0, overflow: "hidden" }}>
-            <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <Card style={{ padding: 0, overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 300px)" }}>
+            <table className="veritas-read-table vz-sticky" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
               <thead>
                 <tr style={{ background: "#f9fafb", color: "#6b7280", textAlign: "left" }}>
                   <th style={{ padding: "10px 14px", fontWeight: 600, width: 44 }}>

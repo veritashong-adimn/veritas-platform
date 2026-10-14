@@ -112,8 +112,8 @@ export function ContactTrashTab({ token, isAdmin, onToast, onBack, onRestored }:
       />
 
       <div style={{ padding: '20px 0 64px' }}>
-        <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-          <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}>
+          <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: '#f9fafb' }}>
                 {['담당자명', '거래처', '부서/직책', '삭제일', '삭제자', '삭제 사유', '관리'].map(h => (

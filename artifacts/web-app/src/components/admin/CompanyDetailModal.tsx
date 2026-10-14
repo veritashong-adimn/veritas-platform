@@ -607,7 +607,7 @@ export function CompanyDetailModal({ companyId, token, onClose, onToast, onOpenP
                   if (!Array.isArray(changes) || changes.length === 0) return null;
                   const FIELD_LABELS: Record<string, string> = {
                     businessNumber: "사업자등록번호", representativeName: "대표자명", address: "주소",
-                    industry: "업태", businessCategory: "업종", phone: "대표전화", email: "대표이메일", website: "홈페이지",
+                    industry: "업태", businessCategory: "종목", phone: "대표전화", email: "대표이메일", website: "홈페이지",
                   };
                   const SOURCE_LABELS: Record<string, string> = {
                     MANUAL: "직접수정", NATIVE_IMPORT: "엑셀 업데이트", LEGACY_MIGRATION: "레거시 이관", HOMETAX_RECONCILIATION: "홈택스 대조",

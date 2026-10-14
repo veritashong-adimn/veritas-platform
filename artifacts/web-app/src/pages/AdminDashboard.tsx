@@ -19,7 +19,6 @@ import { ADMIN_SCROLL_PADDING_TOP, ADMIN_SCROLL_PADDING_X } from '../lib/ds';
 import { formatPhoneDisplay, formatWon } from "../lib/utils";
 import { LogModal } from '../components/admin/LogModal';
 import { ContactDetailModal } from '../components/admin/ContactDetailModal';
-import { stickyBulkBarStyle } from '../components/admin/bulkListShared';
 import { ContactFormModal } from '../components/admin/ContactFormModal';
 import { bulkBtnStyle } from '../components/admin/product/productShared';
 import { CustomerDetailModal } from '../components/admin/CustomerDetailModal';
@@ -62,6 +61,7 @@ import { SettingsTab } from '../components/admin/SettingsTab';
 import { BillingManagementTab } from '../components/admin/BillingManagementTab';
 import { CollectionsTab } from '../components/admin/CollectionsTab';
 import { StaffManagementTab } from '../components/admin/StaffManagementTab';
+import { PayoutReproductionTab } from '../components/admin/PayoutReproductionTab';
 import { exportContacts } from '../lib/contactExcel';
 import { exportTranslators } from '../lib/translatorExcel';
 import { exportPrepaidAccounts } from '../lib/prepaidExcel';
@@ -235,7 +235,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   };
 
   // 초기 탭 — /admin/companies* 경로로 새로고침·직접진입 시 거래처 탭을 복원한다(URL 라우팅 연동).
-  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"quote-register"|"quote-trash"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"translator-register"|"translator-detail"|"vendors"|"vendor-register"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"legacy-crm-archive"|"data-layer"|"language-service"|"insight-management"|"insight-analytics"|"trash"|"inquiries"|"inquiry-register"|"inquiry-detail">(() => {
+  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"quote-register"|"quote-trash"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"payout-reproduction"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"translator-register"|"translator-detail"|"vendors"|"vendor-register"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"legacy-crm-archive"|"data-layer"|"language-service"|"insight-management"|"insight-analytics"|"trash"|"inquiries"|"inquiry-register"|"inquiry-detail">(() => {
     // 로고 클릭 새로고침(§로고): 직전 탭을 세션에 저장해 두었다면 복원(1회 소비) → 메뉴 위치 유지.
     try {
       const restore = sessionStorage.getItem("veritasRestoreTab");
@@ -359,7 +359,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [translatorsLoading, setTranslatorsLoading] = useState(false);
   // 서버 페이지네이션(거래처/담당자와 동일 패턴). 기본 50개, 선택 50/100/200. total은 검색/필터 적용 후 전체 건수.
   const [translatorPage, setTranslatorPage] = useState(1);
-  const [translatorPageSize, setTranslatorPageSize] = useState(50);
+  const [translatorPageSize, setTranslatorPageSize] = useState(20);  // 거래처 목록과 동일 기본 페이지당 건수(페이지네이션 UI 통일)
   const [translatorTotal, setTranslatorTotal] = useState(0);
   const [translatorSearch, setTranslatorSearch] = useState("");
   const [translatorLangFilter, setTranslatorLangFilter] = useState("");
@@ -1716,6 +1716,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         />
       )}
 
+      {/* ── 과거 지급 재현(검증, READ-ONLY) ── */}
+      {adminTab === "payout-reproduction" && (
+        <PayoutReproductionTab token={token ?? ""} onToast={setToast} />
+      )}
+
       {/* ── 사용자 관리 탭 ── */}
       {adminTab === "users" && (
         <StaffManagementTab
@@ -1969,8 +1974,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               비활성 포함
             </label>
           </div>
-          {/* 선택 기반 공통 작업 바 (상품·거래처와 동일 패턴) */}
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10, padding: "9px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, ...stickyBulkBarStyle }}>
+          {/* 선택 기반 공통 작업 바 (상품·거래처와 동일 패턴). sticky 미적용 — 헤더 고정은 아래 테이블 thead 가 담당. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10, padding: "9px 12px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#374151", cursor: "pointer", fontWeight: 600 }}>
               <input type="checkbox"
                 checked={selectedContactIds.size === contacts.length && contacts.length > 0}
@@ -2005,8 +2010,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 담당자가 없습니다.</Card>
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ overflowX: "auto" }}>
-                <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+              <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 300px)" }}>
+                <table className="veritas-read-table vz-sticky" style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr>
                       <th style={{ ...tableTh, width: 36, textAlign: "center" }}>
@@ -2419,8 +2424,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             </Card>
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
-              <div style={{ overflowX: "auto" }}>
-                <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", minWidth: 1180 }}>
+              <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 300px)" }}>
+                <table className="veritas-read-table vz-sticky" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed", minWidth: 1180 }}>
                   <colgroup>
                     {/* 이름(12%) 주민번호(6%) 가능언어(8%) 학력(8%) 업무유형(6%) 세부유형(8%) 전문분야(8%) 상세정보(13%) 평점(5%) 지역(8%·말줄임) 가용상태(6%·고정) 운영상태(7%·고정) 등록일(5%) */}
                     <col style={{ width: "12%" }} />
@@ -2635,7 +2640,6 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               total={translatorTotal}
               unit="명"
               disabled={translatorsLoading}
-              pageSizeOptions={[50, 100, 200]}
               onPageChange={setTranslatorPage}
               onPageSizeChange={s => { setTranslatorPageSize(s); setTranslatorPage(1); }}
             />

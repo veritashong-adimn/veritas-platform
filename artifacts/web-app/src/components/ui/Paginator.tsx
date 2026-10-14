@@ -9,7 +9,7 @@ import { C } from '../../lib/ds';
 //   - 이전 · 1 2 3 … · 다음 (현재 페이지 강조, 다수 시 … 축약)
 // 디자인은 ds.ts 토큰(C)을 따른다.
 
-const DEFAULT_PAGE_SIZES = [20, 30, 50, 100];
+const DEFAULT_PAGE_SIZES = [10, 20, 50, 100, 200];
 
 export interface PaginationProps {
   page: number;                          // 1-based
@@ -24,23 +24,14 @@ export interface PaginationProps {
   idPrefix?: string;
 }
 
-/** 표시할 페이지 번호 목록(… 포함). 항상 1과 마지막, 현재±1을 노출한다. */
-function buildPageItems(current: number, totalPages: number): (number | 'ellipsis')[] {
-  const set = new Set<number>();
-  set.add(1);
-  set.add(totalPages);
-  for (let p = current - 1; p <= current + 1; p++) {
-    if (p >= 1 && p <= totalPages) set.add(p);
-  }
-  const sorted = [...set].sort((a, b) => a - b);
-  const out: (number | 'ellipsis')[] = [];
-  let prev = 0;
-  for (const p of sorted) {
-    if (prev && p - prev > 1) out.push('ellipsis');
-    out.push(p);
-    prev = p;
-  }
-  return out;
+/** (표준화) 현재 페이지 중심 최대 5개 연속 구간. 예: 10페이지 → 8 9 10 11 12 / 끝단 보정. */
+function buildPageItems(current: number, totalPages: number): number[] {
+  const maxButtons = 5;
+  if (totalPages <= maxButtons) return Array.from({ length: totalPages }, (_, i) => i + 1);
+  let start = Math.max(1, current - 2);
+  const end = Math.min(totalPages, start + maxButtons - 1);
+  start = Math.max(1, end - maxButtons + 1);
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
 }
 
 const navBtnBase: React.CSSProperties = {
@@ -120,23 +111,29 @@ export function Pagination({
         </label>
       </div>
 
-      {/* 우: 페이지 네비게이션 */}
+      {/* 우: 페이지 네비게이션 — [처음][이전][1~5][다음][마지막] 표준 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <PageBtn label="첫 페이지" disabled={disabled || safePage <= 1}
+          onClick={() => onPageChange(1)} testid={`${idPrefix}-pagination-first`}>
+          «
+        </PageBtn>
         <PageBtn label="이전 페이지" disabled={disabled || safePage <= 1}
           onClick={() => onPageChange(safePage - 1)} testid={`${idPrefix}-pagination-prev`}>
           이전
         </PageBtn>
-        {items.map((it, i) =>
-          it === 'ellipsis'
-            ? <span key={`e${i}`} style={{ minWidth: 24, textAlign: 'center', color: C.g400, fontSize: 13 }}>…</span>
-            : <PageBtn key={it} label={`${it}페이지`} active={it === safePage} disabled={disabled}
-                onClick={() => onPageChange(it)} testid={`${idPrefix}-pagination-page-${it}`}>
-                {it}
-              </PageBtn>,
-        )}
+        {items.map(it => (
+          <PageBtn key={it} label={`${it}페이지`} active={it === safePage} disabled={disabled}
+            onClick={() => onPageChange(it)} testid={`${idPrefix}-pagination-page-${it}`}>
+            {it}
+          </PageBtn>
+        ))}
         <PageBtn label="다음 페이지" disabled={disabled || safePage >= totalPages}
           onClick={() => onPageChange(safePage + 1)} testid={`${idPrefix}-pagination-next`}>
           다음
+        </PageBtn>
+        <PageBtn label="마지막 페이지" disabled={disabled || safePage >= totalPages}
+          onClick={() => onPageChange(totalPages)} testid={`${idPrefix}-pagination-last`}>
+          »
         </PageBtn>
       </div>
     </div>

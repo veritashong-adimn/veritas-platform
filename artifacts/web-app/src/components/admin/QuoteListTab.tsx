@@ -640,8 +640,8 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
             {quotes.length === 0 ? '등록된 견적서가 없습니다.' : '검색 결과가 없습니다.'}
           </div>
         ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}>
+            <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e5e7eb' }}>
                   <th style={{ padding: '6px 10px', textAlign: 'center', width: 36 }}>

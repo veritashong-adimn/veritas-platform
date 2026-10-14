@@ -18,6 +18,25 @@ export function formatWon(n: number): string {
 }
 
 /**
+ * 금액 천단위 콤마 표시 포맷(표시 전용 — DB 원본값/계산값/Excel 다운로드 데이터는 변경하지 않는다).
+ * 과거 CRM 목록·상세의 금액 표기에 사용. 입력은 숫자 또는 문자열(이미 콤마 포함 가능).
+ *   · 순수 숫자가 아니면 가공 없이 원문 그대로 반환.
+ *   · null/undefined/'' → 빈 문자열(대체 표기는 호출부가 처리).
+ *   예) "3080000" → "3,080,000", 3080000 → "3,080,000", "4,200,000" → "4,200,000"
+ */
+export function formatAmountDisplay(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v.trim() : String(v);
+  if (s === "") return "";
+  const cleaned = s.replace(/,/g, "");
+  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return s;   // 숫자 아님 → 원문 보존
+  const neg = cleaned.startsWith("-");
+  const [intPart, decPart] = (neg ? cleaned.slice(1) : cleaned).split(".");
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${neg ? "-" : ""}${grouped}${decPart ? "." + decPart : ""}`;
+}
+
+/**
  * 전화번호 표시 포맷(플랫폼 공통 Utility). DB 값은 변경하지 않고 화면 표시·입력 보조용으로만 사용한다.
  * 국내 번호 규칙과 맞는 경우에만 하이픈을 자동 삽입한다.
  *   01012345678 → 010-1234-5678 · 0101234567 → 010-123-4567

@@ -175,8 +175,8 @@ export default function TaxReportTab({ token, onToast }: Props) {
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: SP[3] }}>
             <h3 style={{ margin: 0, ...TYPO.sectionTitle }}>세무자료 목록 ({filtered.length})</h3>
           </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="veritas-read-table" style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1100 }}>
+          <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}>
+            <table className="veritas-read-table vz-sticky" style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1100 }}>
               <thead><tr>
                 <th style={th}>지급일</th><th style={th}>통역사명</th><th style={th}>주민번호</th><th style={th}>언어</th>
                 <th style={{ ...th, textAlign: 'right' }}>지급액(세전)</th><th style={{ ...th, textAlign: 'right' }}>지급액(세후)</th>

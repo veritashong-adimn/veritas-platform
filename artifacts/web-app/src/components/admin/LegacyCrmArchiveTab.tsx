@@ -3,6 +3,7 @@
 // 한 화면 안에서 [자료 조회](기본) / [Excel 등록] 모드로 구분. 검색은 server-side pagination.
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { api } from '../../lib/constants';
+import { formatAmountDisplay } from '../../lib/utils';
 import { LegacyArchiveDetailPage } from './LegacyArchiveDetailPage';
 
 type SourceType = 'sales_list' | 'progress';
@@ -83,7 +84,8 @@ type FullRow = { id: number; sourceRow: number | null; sourceSheet: string | nul
 type ExportEstimate = { scope: 'search' | 'all'; sourceType: string; total: number; types: { sourceType: SourceType; label: string; count: number }[] };
 
 const PAGE_SIZE = 50;
-const EMPTY_FILTERS = { sourceType: 'all' as 'all' | SourceType, q: '', company: '', translator: '', product: '', language: '', collectionStatus: '', dateFrom: '', dateTo: '', snapshot: 'current' as 'current' | 'all' | string };
+// (C-4J-2C-8) 기본 선택 탭 = 판매목록. '전체(혼합)' 탭은 화면에서 제거(통합검색 API/기능은 유지).
+const EMPTY_FILTERS = { sourceType: 'sales_list' as 'all' | SourceType, q: '', company: '', translator: '', product: '', language: '', collectionStatus: '', dateFrom: '', dateTo: '', snapshot: 'current' as 'current' | 'all' | string };
 
 export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToast: (msg: string) => void }) {
   const authHeaders = { Authorization: `Bearer ${token}` };
@@ -98,6 +100,8 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
   const [fullHeaders, setFullHeaders] = useState<string[]>([]);
   const [fullRows, setFullRows] = useState<FullRow[]>([]);
   const [fullResolved, setFullResolved] = useState(true);
+  // (C-4J-2C-7) full 뷰의 유형. sales_list full 뷰 행은 상세화면으로 이동 가능(progress 는 불가).
+  const [fullSourceType, setFullSourceType] = useState<SourceType | null>(null);
   const [pagination, setPagination] = useState<Pagination>({ page: 1, pageSize: PAGE_SIZE, total: 0, totalPages: 1 });
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
@@ -148,16 +152,17 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
   const onDragOver = (e: React.DragEvent) => { e.preventDefault(); if (!dragActive) setDragActive(true); };
   const onDragLeave = (e: React.DragEvent) => { e.preventDefault(); setDragActive(false); };
 
-  const runSearch = useCallback(async (page = 1) => {
+  // (C-4J-2C-9) f 로 조회조건 스냅샷을 명시 주입 가능(기본은 현재 filters). 초기화 등 setState 직후 즉시 조회 시 stale closure 방지.
+  const runSearch = useCallback(async (page = 1, f: typeof filters = filters) => {
     setSearching(true);
     try {
       const p = new URLSearchParams();
-      if (filters.sourceType !== 'all') p.set('sourceType', filters.sourceType);
+      if (f.sourceType !== 'all') p.set('sourceType', f.sourceType);
       for (const k of ['q', 'company', 'translator', 'product', 'language', 'collectionStatus', 'dateFrom', 'dateTo'] as const) {
-        if (filters[k]?.trim()) p.set(k, filters[k].trim());
+        if (f[k]?.trim()) p.set(k, f[k].trim());
       }
       p.set('page', String(page)); p.set('pageSize', String(PAGE_SIZE));
-      if (filters.snapshot && filters.snapshot !== 'current') p.set('snapshot', filters.snapshot);  // (C-4G) 기본 current(=effective)
+      if (f.snapshot && f.snapshot !== 'current') p.set('snapshot', f.snapshot);  // (C-4G) 기본 current(=effective)
       // (C-4I-c/e) 전체컬럼(full) 뷰 여부는 서버가 데이터 기준으로 판정한다:
       //   진행관리 탭 또는 '전체' 탭 결과가 단일 progress 유형이면 full. 화면은 data.view 로 분기.
       p.set('view', 'full');   // 서버에 full 가능 여부 판정을 요청(혼합/판매목록이면 서버가 요약 목록을 반환).
@@ -167,8 +172,9 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
       setSearched(true); setPagination(data.pagination);
       if (data.view === 'full') {
         setFullView(true); setFullHeaders(data.headers ?? []); setFullRows(data.rows ?? []); setFullResolved(data.headersResolved !== false);
+        setFullSourceType((data.sourceType as SourceType) ?? null);
       } else {
-        setFullView(false); setRows(data.rows ?? []);
+        setFullView(false); setRows(data.rows ?? []); setFullSourceType(null);
       }
     } catch (e: any) { setToast(e?.message || '검색 실패'); }
     finally { setSearching(false); }
@@ -242,7 +248,9 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
     } catch (e: any) { setToast(e?.message || '스냅샷 이력 조회 실패'); }
   }, [filters.sourceType, token]);
 
-  useEffect(() => { if (mode === 'search' && !searched) runSearch(1); /* 첫 진입 자동 조회 */ }, [mode]); // eslint-disable-line
+  // (C-4J-2C-9) search 모드 첫 진입 + 탭(sourceType) 전환 시 즉시 1페이지 자동 조회(검색 버튼 불필요).
+  //   단일 effect 로 통합해 탭 클릭당 요청 1회만 발생(중복요청 방지). 동일 탭 재클릭은 sourceType 불변 → 미발생.
+  useEffect(() => { if (mode === 'search') runSearch(1); }, [mode, filters.sourceType]); // eslint-disable-line
 
   const runAnalyze = useCallback(async () => {
     if (!file) { setToast('엑셀 파일을 선택하세요.'); return; }
@@ -333,9 +341,15 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
           {/* 필터 */}
           <div style={box}>
             <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-              {([['all', '전체'], ['sales_list', '판매목록'], ['progress', '통번역 진행관리']] as [string, string][]).map(([v, l]) => (
+              {([['sales_list', '판매목록'], ['progress', '통번역 진행관리']] as [string, string][]).map(([v, l]) => (
                 <div key={v} style={chip(filters.sourceType === v)} role="button" aria-label={`유형 ${l}`} data-testid={`archive-filter-type-${v}`}
-                     onClick={() => setFilters(f => ({ ...f, sourceType: v as any }))}>{l}</div>
+                     aria-pressed={filters.sourceType === v}
+                     onClick={() => {
+                       // (C-4J-2C-9) 탭 전환: 동일 탭 재클릭은 무시(중복요청 방지). 이전 탭 데이터 즉시 비우고 1페이지부터 자동 조회(effect).
+                       if (filters.sourceType === v) return;
+                       setFullRows([]); setRows([]); setSearching(true);
+                       setFilters(f => ({ ...f, sourceType: v as any }));
+                     }}>{l}</div>
               ))}
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -363,7 +377,11 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
                 {filters.snapshot !== 'current' && filters.snapshot !== 'all' && <option value="batch">스냅샷 #{filters.snapshot}</option>}
               </select>
               <button style={btn(searching, true)} disabled={searching} onClick={() => runSearch(1)} aria-label="검색" data-testid="archive-search-btn">{searching ? '검색 중…' : '검색'}</button>
-              <button style={btn(false)} onClick={() => { setFilters({ ...EMPTY_FILTERS }); setTimeout(() => runSearch(1), 0); }} aria-label="초기화">초기화</button>
+              <button style={btn(false)} onClick={() => {
+                // (C-4J-2C-9) 초기화: 검색조건만 비우고 현재 선택 탭은 유지. 리셋 조건을 즉시 주입해 1페이지 재조회(stale closure 방지).
+                const nf = { ...EMPTY_FILTERS, sourceType: filters.sourceType };
+                setFilters(nf); setFullRows([]); setRows([]); runSearch(1, nf);
+              }} aria-label="초기화">초기화</button>
               {/* (C-4I-n) [과거 스냅샷]·[Excel 다운로드] 는 상단 줄 우측으로 이동(중복 생성 금지). */}
             </div>
             {/* (C-4G §10) 스냅샷 이력 패널 */}
@@ -422,8 +440,16 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
                       </tr>
                     </thead>
                     <tbody>
-                      {fullRows.map((r, ri) => (
-                        <tr key={r.id} data-testid={`archive-progress-row-${r.id}`} style={{ background: ri % 2 ? '#fafafa' : '#fff' }}>
+                      {fullRows.map((r, ri) => {
+                        // (C-4J-2C-7) 판매목록 full 뷰 행은 '전체' 탭과 동일한 상세화면으로 이동. 진행관리 행은 이동 없음(원본 보기 유지).
+                        const clickable = fullSourceType === 'sales_list';
+                        return (
+                        <tr key={r.id} data-testid={`archive-progress-row-${r.id}`}
+                            onClick={clickable ? () => setDetailId(r.id) : undefined}
+                            aria-label={clickable ? '판매건 상세 보기' : undefined}
+                            style={{ background: ri % 2 ? '#fafafa' : '#fff', cursor: clickable ? 'pointer' : 'default' }}
+                            onMouseEnter={e => clickable && (e.currentTarget.style.background = '#eff6ff')}
+                            onMouseLeave={e => (e.currentTarget.style.background = ri % 2 ? '#fafafa' : '#fff')}>
                           <td style={{ position: 'sticky', left: 0, background: ri % 2 ? '#fafafa' : '#fff', zIndex: 1, padding: '6px 10px', fontWeight: 700, color: '#4338ca', whiteSpace: 'nowrap', borderBottom: '1px solid #f0f0f0' }}>{r.sourceRow ?? '-'}</td>
                           {fullHeaders.map((h, ci) => {
                             const v = r.sourceRaw?.[h];
@@ -434,7 +460,8 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
                             );
                           })}
                         </tr>
-                      ))}
+                        );
+                      })}
                       {fullRows.length === 0 && !searching && (
                         <tr><td colSpan={fullHeaders.length + 1} style={{ padding: '32px', textAlign: 'center', color: '#9ca3af' }} data-testid="archive-empty">{searched ? '검색 결과가 없습니다.' : '과거 CRM 자료가 없습니다.'}</td></tr>
                       )}
@@ -472,7 +499,7 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
                       <td style={{ padding: '8px' }}>{r.productName ?? '-'}</td>
                       <td style={{ padding: '8px' }}>{r.translatorName ?? '-'}</td>
                       <td style={{ padding: '8px' }}>{r.language ?? '-'}</td>
-                      <td style={{ padding: '8px' }}>{r.totalAmount ?? r.payoutPretax ?? '-'}</td>
+                      <td style={{ padding: '8px' }}>{formatAmountDisplay(r.totalAmount ?? r.payoutPretax) || '-'}</td>
                       <td style={{ padding: '8px' }}>{r.collectionDate ?? r.payoutDate ?? r.deliveryDate ?? '-'}</td>
                       <td style={{ padding: '8px' }}>{r.collectionStatus ?? '-'}</td>
                     </tr>

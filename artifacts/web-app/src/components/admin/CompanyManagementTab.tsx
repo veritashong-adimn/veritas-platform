@@ -509,8 +509,9 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                   <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>해당하는 거래처가 없습니다.</Card>
                 ) : (
                   <Card style={{ padding: 0, overflow: "hidden" }}>
-                    <div style={{ overflowX: "auto" }}>
-                      <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 300px)" }}>
+                      {/* (열 너비 균형) tableLayout:fixed + 컬럼별 width 로 특정 열 공백 집중 방지. 체크박스 34px 고정. */}
+                      <table className="veritas-read-table vz-sticky" style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
                         <thead>
                           <tr>
                             <th style={{ ...tableTh, width: 34, textAlign: "center" }}>
@@ -518,29 +519,31 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                                 aria-label="현재 페이지 전체 선택" style={{ width: 15, height: 15, cursor: "pointer" }} />
                             </th>
                             {/* 헤더 정렬 = 각 컬럼 본문 정렬(담당자·프로젝트 배지만 center, 나머지 left).
-                                개인고객 필터 화면에서는 사람 식별을 위해 성명·휴대전화·이메일 컬럼으로 전환하고 업종·담당자는 제거한다(§1). */}
+                                개인고객 필터 화면에서는 사람 식별을 위해 성명·휴대전화·이메일 컬럼으로 전환하고 업태·종목·담당자는 제거한다(§1). */}
                             {(companyCustomerTypeFilter === "INDIVIDUAL"
                               ? [
-                                  { label: "ID", align: "left" as const },
-                                  { label: "성명", align: "left" as const },
-                                  { label: "유형", align: "left" as const },
-                                  { label: "휴대전화", align: "left" as const },
-                                  { label: "이메일", align: "left" as const },
-                                  { label: "프로젝트", align: "center" as const },
-                                  { label: "총 결제", align: "left" as const },
-                                  { label: "등록일", align: "left" as const },
+                                  { label: "ID", align: "left" as const, w: "5%" },
+                                  { label: "성명", align: "left" as const, w: "18%" },
+                                  { label: "유형", align: "left" as const, w: "9%" },
+                                  { label: "휴대전화", align: "left" as const, w: "15%" },
+                                  { label: "이메일", align: "left" as const, w: "24%" },
+                                  { label: "프로젝트", align: "center" as const, w: "9%" },
+                                  { label: "총 결제", align: "left" as const, w: "12%" },
+                                  { label: "등록일", align: "left" as const, w: "8%" },
                                 ]
                               : [
-                                  { label: "ID", align: "left" as const },
-                                  { label: "거래처명", align: "left" as const },
-                                  { label: "유형", align: "left" as const },
-                                  { label: "업종", align: "left" as const },
-                                  { label: "담당자", align: "center" as const },
-                                  { label: "프로젝트", align: "center" as const },
-                                  { label: "총 결제", align: "left" as const },
-                                  { label: "등록일", align: "left" as const },
+                                  { label: "ID", align: "left" as const, w: "5%" },
+                                  { label: "거래처명", align: "left" as const, w: "19%" },
+                                  { label: "대표자명", align: "left" as const, w: "9%" },
+                                  { label: "유형", align: "left" as const, w: "8%" },
+                                  { label: "업태", align: "left" as const, w: "13%" },
+                                  { label: "종목", align: "left" as const, w: "16%" },
+                                  { label: "담당자", align: "center" as const, w: "8%" },
+                                  { label: "프로젝트", align: "center" as const, w: "7%" },
+                                  { label: "총 결제", align: "left" as const, w: "9%" },
+                                  { label: "등록일", align: "left" as const, w: "6%" },
                                 ]
-                            ).map(h => <th key={h.label} style={{ ...tableTh, textAlign: h.align }}>{h.label}</th>)}
+                            ).map(h => <th key={h.label} style={{ ...tableTh, textAlign: h.align, width: h.w }}>{h.label}</th>)}
                           </tr>
                         </thead>
                         <tbody>
@@ -555,26 +558,30 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                               </td>
                               <td style={{ ...tableTd, color: "#9ca3af" }}>#{c.id}</td>
                               {/* 거래처명 — 회사명만 표시(유형 배지는 별도 컬럼으로 분리). 가장 강한 존재감. */}
-                              <td style={{ ...tableTd, minWidth: 200 }}>
-                                <div style={{ fontSize: 14, fontWeight: 700, color: "#111827" }}>
+                              <td style={{ ...tableTd, overflow: "hidden" }}>
+                                <div style={{ fontSize: 14, fontWeight: 700, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.name}>
                                   {c.name}
                                   {c.matchedDivisionName && (
                                     <span style={{ fontWeight: 600, color: "#7c3aed", marginLeft: 4 }}>({c.matchedDivisionName})</span>
                                   )}
                                 </div>
                                 {!c.matchedDivisionName && (c.divisionNames?.length ?? 0) > 0 && (
-                                  <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
+                                  <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                     {c.divisionNames!.slice(0, 3).join(" · ")}{c.divisionNames!.length > 3 ? ` 외 ${c.divisionNames!.length - 3}개` : ""}
                                   </div>
                                 )}
                                 {/* 전체/혼합 목록에서 개인고객 행은 휴대전화·이메일을 보조정보로 함께 표시(§8, 동명이인 식별). 전용 컬럼이 있는 개인고객 필터 화면에서는 생략. */}
                                 {companyCustomerTypeFilter !== "INDIVIDUAL" && c.customerType === "INDIVIDUAL" && (individualPhone(c) || c.email) && (
-                                  <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
+                                  <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                     {[individualPhone(c) || null, c.email || null].filter(Boolean).join(" · ")}
                                   </div>
                                 )}
                               </td>
-                              {/* 유형 — 거래처 상세의 '거래처 유형'과 동일 데이터. 최소 폭 · 보조정보 배지. */}
+                              {/* 대표자명 — 거래처명 오른쪽(비개인고객 목록만). 기존 등록 대표자명 표시, 없으면 '-'. 저장구조 변경 없음. */}
+                              {companyCustomerTypeFilter !== "INDIVIDUAL" && (
+                                <td style={{ ...tableTd, fontSize: 13, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={(c as any).representativeName ?? undefined}>{(c as any).representativeName ?? "-"}</td>
+                              )}
+                              {/* 유형 — 거래처 상세의 '거래처 유형'과 동일 데이터. 보조정보 배지. */}
                               <td style={{ ...tableTd, width: 1, whiteSpace: "nowrap" }}>
                                 {(() => { const b = getCompanyTypeBadge(c); return <span style={b.style}>{b.label}</span>; })()}
                               </td>
@@ -586,7 +593,9 @@ export function CompanyManagementTab({ token, onToast, onOpenProject, onOpenTran
                                 </>
                               ) : (
                                 <>
-                                  <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>{c.industry ?? "-"}</td>
+                                  {/* 업태(industry) / 종목(businessCategory) — 긴 내용은 말줄임+툴팁, 원본 보존. 미등록은 '-' */}
+                                  <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={c.industry ?? undefined}>{c.industry ?? "-"}</td>
+                                  <td style={{ ...tableTd, fontSize: 12, color: "#6b7280", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={(c as any).businessCategory ?? undefined}>{(c as any).businessCategory ?? "-"}</td>
                                   <td style={{ ...tableTd, textAlign: "center" }}>
                                     <span style={{ padding: "2px 8px", borderRadius: 10, background: "#f3f4f6", color: "#374151", fontSize: 12 }}>{c.contactCount}명</span>
                                   </td>

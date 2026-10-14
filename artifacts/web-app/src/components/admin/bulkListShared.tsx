@@ -9,7 +9,7 @@ import { bulkBtnStyle, pageNavBtnStyle, inputStyle } from './product/productShar
 // 상품목록(ProductListTab)의 체크박스·일괄버튼·페이지네이션 디자인을 단일 소스로 재사용한다.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const PAGE_SIZE_OPTIONS = [20, 50, 100];
+export const PAGE_SIZE_OPTIONS = [10, 20, 50, 100, 200];
 
 // ─── 선택 상태 훅 ────────────────────────────────────────────────────────────
 // selectedIds 는 페이지를 넘겨도 유지된다. 전체선택/해제는 "현재 페이지" 기준.
@@ -101,6 +101,24 @@ export const stickyBulkBarStyle: React.CSSProperties = {
   boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
 };
 
+// ─── (표준화) 목록 테이블 헤더 고정(sticky) 공통 프리미티브 ───────────────────
+// 판매관리(UnifiedSalesHistoryView)에서 검증된 패턴을 전역 재사용한다.
+//   · tableScrollBoxStyle: 표를 "자체 스크롤 영역"으로 감싸 헤더가 그 상단에만 고정되게 한다.
+//     → 페이지 상단 메뉴/검색영역/Sticky 작업바(top:0, z=30)와 겹치지 않는다.
+//   · stickyHeaderCellStyle: <th> 에 spread. 배경·z-index 로 데이터 행이 헤더 위로 겹치지 않게 한다.
+//   · 컬럼명/순서/너비는 각 화면 기존 값을 유지하고, 이 스타일만 th 에 덧씌운다.
+//   · 가로 스크롤이 필요한 넓은 표도 같은 컨테이너(overflowX:auto)로 컬럼 정렬이 유지된다.
+export const tableScrollBoxStyle: React.CSSProperties = {
+  overflowX: "auto",
+  overflowY: "auto",
+  maxHeight: "calc(100vh - 300px)",
+  border: "1px solid #e5e7eb",
+  borderRadius: 10,
+};
+export function stickyHeaderCellStyle(bg = "#f3f4f6"): React.CSSProperties {
+  return { position: "sticky", top: 0, zIndex: 2, background: bg };
+}
+
 // ─── 선택 기반 일괄 관리 바 ──────────────────────────────────────────────────
 // 좌측: 현재 페이지 전체선택 + 선택 n건 / 우측: 일괄 작업 버튼(children)
 export function BulkSelectBar({ allSelected, onToggleAll, selectedCount, children }: {
@@ -139,10 +157,11 @@ export function Pagination({ total, totalPages, page, pageSize, rangeStart, rang
 }) {
   if (total <= 0) return null;
 
+  // (표준화) 현재 페이지 중심 최대 5개 구간. 예: 10페이지 → 8 9 10 11 12 / 끝단 보정.
   const pageNumbers = (): number[] => {
-    const maxButtons = 7;
+    const maxButtons = 5;
     if (totalPages <= maxButtons) return Array.from({ length: totalPages }, (_, i) => i + 1);
-    let start = Math.max(1, page - 3);
+    let start = Math.max(1, page - 2);
     const end = Math.min(totalPages, start + maxButtons - 1);
     start = Math.max(1, end - maxButtons + 1);
     return Array.from({ length: end - start + 1 }, (_, i) => start + i);
@@ -150,17 +169,22 @@ export function Pagination({ total, totalPages, page, pageSize, rangeStart, rang
 
   return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
-      <span data-testid="pagination-info" style={{ fontSize: 13, color: "#6b7280" }}>
-        전체 {total}건 중 {rangeStart}–{rangeEnd}건 표시
-        <span style={{ marginLeft: 8, color: "#9ca3af" }}>({total}건 / {totalPages}페이지)</span>
-      </span>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      {/* 좌: 표시범위/전체 + 페이지당 선택 (공통 표준 레이아웃) */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <span data-testid="pagination-info" style={{ fontSize: 13, color: "#6b7280" }}>
+          전체 {total}건 중 {rangeStart}–{rangeEnd}건 표시
+          <span style={{ marginLeft: 8, color: "#9ca3af" }}>({total}건 / {totalPages}페이지)</span>
+        </span>
         <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))}
           aria-label="페이지당 표시 수" data-testid="page-size"
           style={{ ...inputStyle, padding: "6px 8px", fontSize: 12, width: "auto", minWidth: 110 }}>
           {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>페이지당 {n}건</option>)}
         </select>
-        <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+      </div>
+      {/* 우: 처음/이전/숫자/다음/마지막 */}
+      <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+          <button data-testid="page-first" disabled={page <= 1} aria-label="첫 페이지"
+            onClick={() => { if (page > 1) setPage(1); }} style={pageNavBtnStyle(page > 1)}>«</button>
           <button data-testid="page-prev" disabled={page <= 1}
             onClick={() => { if (page > 1) setPage(page - 1); }} style={pageNavBtnStyle(page > 1)}>이전</button>
           {pageNumbers().map(n => (
@@ -176,7 +200,8 @@ export function Pagination({ total, totalPages, page, pageSize, rangeStart, rang
           ))}
           <button data-testid="page-next" disabled={page >= totalPages}
             onClick={() => { if (page < totalPages) setPage(page + 1); }} style={pageNavBtnStyle(page < totalPages)}>다음</button>
-        </div>
+          <button data-testid="page-last" disabled={page >= totalPages} aria-label="마지막 페이지"
+            onClick={() => { if (page < totalPages) setPage(totalPages); }} style={pageNavBtnStyle(page < totalPages)}>»</button>
       </div>
     </div>
   );

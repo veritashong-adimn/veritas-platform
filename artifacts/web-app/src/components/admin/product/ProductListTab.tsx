@@ -526,9 +526,9 @@ export function ProductListTab({ token, hasPerm, setToast, authHeaders, onNaviga
           <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>등록된 상품이 없습니다.</Card>
         ) : (
           <Card style={{ padding: 0, overflow: "hidden" }}>
-            <div style={{ overflowX: "auto" }}>
+            <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 300px)" }}>
               {/* 공통 read-table 규격(veritas-read-table) — 헤더/zebra/hover 전역 규격 재사용. 상품목록 전용 스타일 없음. */}
-              <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+              <table className="veritas-read-table vz-sticky" style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
                     {canManage && (

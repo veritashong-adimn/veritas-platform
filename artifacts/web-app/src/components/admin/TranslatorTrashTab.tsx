@@ -92,8 +92,8 @@ export function TranslatorTrashTab({ token, isAdmin, onToast, onRestored }: {
           style={{ width: 280, maxWidth: '100%', padding: '8px 12px', fontSize: 13, border: '1px solid #d1d5db', borderRadius: 8, outline: 'none' }} />
       </div>
 
-      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-        <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}>
+        <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr style={{ background: '#f9fafb' }}>
               {['이름', '이메일', '가능언어', '등급', '관리'].map(h => <th key={h} style={th}>{h}</th>)}

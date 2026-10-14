@@ -123,8 +123,8 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
       </div>
 
       {/* 목록 */}
-      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'auto' }}>
-        <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1180 }}>
+      <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 300px)' }}>
+        <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1180 }}>
           <thead>
             <tr style={{ background: '#f9fafb' }}>
               <th style={{ ...th, width: 40 }}></th>

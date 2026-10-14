@@ -9,8 +9,9 @@
 //   · Current/Legacy 쿼리를 독립 실행(try/catch) → 부분 실패 격리. degraded 시 가짜 total 만들지 않는다.
 //   · Current Master 생성/mapping 없음. 날짜/금액/상태 추측 없음.
 import { Router, type IRouter } from "express";
-import { db, legacyArchiveRowsTable } from "@workspace/db";
+import { db, legacyArchiveRowsTable, legacySalesProgressLinksTable } from "@workspace/db";
 import { eq, and, or, ilike, gte, lte, count, desc, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { buildFilteredSalesProjectList } from "./admin";
 
@@ -18,6 +19,10 @@ const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
 const LA = legacyArchiveRowsTable;
+// 과거 CRM 판매건의 "판매일" — sales_list 는 record_date 가 비어 있고(견적일 컬럼 없음) 날짜가 판매번호(YYYY-MM-DD-NNNN)에 내장됨.
+//   권위 순서(C-4I-f 판매목록 정렬과 동일): record_date → 판매번호 앞 10자 → 세금계산서발행(예정)일 앞 10자.
+//   원본(source_raw)·판매번호는 변경하지 않고 조회 시점 표시/정렬용으로만 파생한다.
+const LEGACY_SALE_DATE = sql<string>`coalesce(to_char(${LA.recordDate},'YYYY-MM-DD'), substring(${LA.sourceRaw} ->> '판매번호' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}'), substring(${LA.sourceRaw} ->> '세금계산서발행(예정)일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}'))`;
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 // Legacy 전량 로드 안전 상한(수만 건 규모). 초과 시 degraded/truncated 로 표기(거짓 total 금지).
@@ -42,6 +47,12 @@ export interface SalesHistoryRow {
   adminId: number | null;
   financialStatus: string | null;
   quoteType: string | null;
+  // (목록 표시 전용, READ-ONLY) 계산서발행일·영업담당자. legacy 는 source_raw 원본값, current 는 null.
+  taxInvoiceDate: string | null;
+  salesRep: string | null;
+  // (목록/상세 표시 전용, READ-ONLY) 입금일(YYYY-MM-DD)·입금내역(원문 문자열). legacy 는 source_raw, current 는 null(임의 생성 금지).
+  paymentDate: string | null;
+  paymentMemo: string | null;
 }
 
 function toDateStr(v: unknown): string | null {
@@ -81,16 +92,22 @@ function mapCurrentRow(p: any): SalesHistoryRow {
     adminId: p.adminId ?? null,
     financialStatus: p.financialStatus ?? null,
     quoteType: p.quoteType ?? null,
+    taxInvoiceDate: null,         // current 은 계산서발행일 별도 보유 안 함(추정 금지)
+    salesRep: null,               // current 담당자는 프론트에서 adminName(adminId) 사용
+    paymentDate: null,            // current 수금/정산은 별도 로직 — 여기서 임의 생성하지 않음
+    paymentMemo: null,
   };
 }
 function mapLegacyRow(r: any): SalesHistoryRow {
   return {
     source: "legacy", key: `legacy:${r.id}`, id: r.id,
-    recordDate: r.recordDate ?? null,
-    saleNumber: null,
+    // (정렬/표시) 판매번호 내장 날짜를 판매일로 사용(원본 불변). record_date 가 있으면 우선.
+    recordDate: r.saleDate ?? r.recordDate ?? null,
+    saleNumber: r.saleNumber ?? null,
+    // 고객 담당자 = 연결 매핑으로 집계한 진행관리 '고객명'(거래처 측). 담당PM(영업담당자)과 대체하지 않음.
     saleName: r.productName ?? r.companyName ?? null,
     companyName: r.companyName ?? null,
-    contactName: r.contactName ?? null,
+    contactName: r.customerContact ?? null,   // 연결 매핑 집계 '고객명'(없거나 미연결이면 null → 화면 '-')
     productName: r.productName ?? null,
     amount: toNum(r.totalAmount),
     collectionDate: r.collectionDate ?? null,
@@ -98,6 +115,10 @@ function mapLegacyRow(r: any): SalesHistoryRow {
     workflowStatus: null,         // Legacy 는 Current workflow 없음(가짜 생성 금지)
     pmName: null,
     adminId: null, financialStatus: null, quoteType: null,
+    taxInvoiceDate: r.taxInvoiceDate ?? null,   // 원본 세금계산서발행(예정)일 값 그대로
+    salesRep: r.salesRep ?? null,               // 원본 영업담당자 값 그대로
+    paymentDate: r.paymentDate ?? null,         // 원본 입금일(YYYY-MM-DD)
+    paymentMemo: r.paymentMemo ?? null,         // 원본 입금내역 문자열 보존(상태 변환 없음)
   };
 }
 
@@ -165,10 +186,26 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
       const where = legacyWhere(q);
       const totalRow = await dbx.select({ n: count() }).from(LA).where(where);
       const legacyTotal = Number(totalRow[0]?.n ?? 0);
+      // (C-4J-2C-13) 고객 담당자 — 기존 확정 매핑(legacy_sales_progress_links)으로 연결된 진행관리 수행행의 '고객명'을 판매건별 집계.
+      //   READ-ONLY 조회만(매핑 재계산/DB 변경 없음). 고유 1명→이름 / 복수 상이→'확인 필요' / 없음·미연결→null.
+      //   '고객명'은 거래처 측 고객 담당자(내부 담당자·영업담당자·통번역사명과 구분됨 — 검증 완료).
+      const LP = alias(legacyArchiveRowsTable, "lp");
+      const LSP = legacySalesProgressLinksTable;
+      const custSq = dbx.select({
+        saleRowId: LSP.saleRowId,
+        dn: sql<number>`count(distinct nullif(btrim(${LP.sourceRaw} ->> '고객명'), ''))`.as("dn"),
+        oneName: sql<string | null>`max(nullif(btrim(${LP.sourceRaw} ->> '고객명'), ''))`.as("one_name"),
+      }).from(LSP).innerJoin(LP, eq(LP.id, LSP.progressRowId)).groupBy(LSP.saleRowId).as("cust");
       const fetched = await dbx.select({
-        id: LA.id, recordDate: LA.recordDate, companyName: LA.companyName, contactName: LA.contactName,
+        id: LA.id, recordDate: LA.recordDate, saleDate: LEGACY_SALE_DATE, saleNumber: sql<string | null>`${LA.sourceRaw} ->> '판매번호'`,
+        companyName: LA.companyName, contactName: LA.contactName,
         productName: LA.productName, totalAmount: LA.totalAmount, collectionDate: LA.collectionDate, collectionStatus: LA.collectionStatus,
-      }).from(LA).where(where).orderBy(sql`${LA.recordDate} desc nulls last`, desc(LA.id)).limit(LEGACY_FETCH_CAP);
+        taxInvoiceDate: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '세금계산서발행(예정)일'), '')`,
+        salesRep: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '영업담당자'), '')`,
+        paymentDate: sql<string | null>`substring(${LA.sourceRaw} ->> '입금일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}')`,
+        paymentMemo: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '입금내역'), '')`,
+        customerContact: sql<string | null>`case when ${custSq.dn} = 1 then ${custSq.oneName} when ${custSq.dn} > 1 then '확인 필요' else null end`,
+      }).from(LA).leftJoin(custSq, eq(custSq.saleRowId, LA.id)).where(where).orderBy(sql`${LEGACY_SALE_DATE} desc nulls last`, desc(LA.id)).limit(LEGACY_FETCH_CAP);
       legacyRows = fetched.map(mapLegacyRow);
       const truncated = legacyTotal > fetched.length;
       sources.legacy = { ok: true, count: legacyTotal, truncated };

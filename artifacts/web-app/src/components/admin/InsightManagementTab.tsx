@@ -1622,8 +1622,8 @@ export function InsightManagementTab({ token, setToast }: Props) {
               <div>인사이트가 없습니다.</div>
             </div>
           ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+            <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 300px)" }}>
+              <table className="veritas-read-table vz-sticky" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: "#f9fafb", borderBottom: "2px solid #e5e7eb" }}>
                     {/* 헤더 정렬 = 각 컬럼 본문 정렬 */}

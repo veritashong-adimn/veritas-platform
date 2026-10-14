@@ -506,8 +506,8 @@ export function StaffManagementTab({ token, currentUser, users, setUsers, rbacRo
         <Card style={{ textAlign: "center", padding: "32px", color: "#9ca3af", fontSize: 14 }}>{users.length === 0 ? "사용자가 없습니다." : "조건에 맞는 사용자가 없습니다."}</Card>
       ) : (
         <Card style={{ padding: 0, overflow: "hidden" }}>
-          <div style={{ overflowX: "auto" }}>
-            <table className="veritas-read-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+          <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "calc(100vh - 300px)" }}>
+            <table className="veritas-read-table vz-sticky" style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
                   <th style={{ ...tableTh, width: 36, textAlign: "center" }} aria-label="선택" />

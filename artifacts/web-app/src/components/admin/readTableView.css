@@ -71,3 +71,24 @@
   border-bottom: 1px solid #e5e7eb !important;
   vertical-align: middle !important;
 }
+
+/* (표준화) 목록 헤더 고정(sticky) — 'vz-sticky' 가 붙은 목록 표에만 적용한다.
+   상세/모달/입력폼/PDF 소형표는 이 클래스를 붙이지 않으므로 영향 없음(#1 단서).
+   각 화면은 표를 세로 스크롤 컨테이너(maxHeight+overflowY)로 감싸야 헤더가 그 상단에 고정된다.
+   배경(#f3f4f6)은 위 규칙에서 지정되어 데이터 행이 헤더 위로 비치지 않는다. */
+.veritas-read-table.vz-sticky thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+/* (표준화) 글자 크기 — 판매관리(UnifiedSalesHistoryView) 기준 13px 로 통일.
+   vz-sticky 목록에만 적용(상세/모달/밀집 표 등 미적용). 셀 가로 padding·정렬·너비는 기존 유지,
+   세로 여백만 통일(행 높이 일관). 다중 줄 셀은 내용에 맞춰 높이가 늘어나며 잘리지 않는다. */
+.veritas-read-table.vz-sticky thead th { font-size: 13px !important; }
+.veritas-read-table.vz-sticky tbody td {
+  font-size: 13px;
+  padding-top: 9px;
+  padding-bottom: 9px;
+  vertical-align: middle;
+}
