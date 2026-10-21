@@ -26,7 +26,7 @@ function safeNum(v: unknown): number {
 
 export type BulkImportEntity = 'company' | 'contact' | 'translator' | 'quote';
 
-type RowStatus = 'new' | 'identical' | 'update' | 'needs_review' | 'duplicate_file' | 'error';
+type RowStatus = 'new' | 'identical' | 'update' | 'needs_review' | 'duplicate_file' | 'conflict' | 'error';
 type ImportMode = 'new_only' | 'update';
 
 interface FieldChange { old: string; new: string; }
@@ -37,13 +37,41 @@ interface AnalyzedRow {
   reason?: string;
   warning?: string;   // 경고(저장 가능하나 확인 필요) — status 와 독립(§9)
   existingId?: number | null;
+  matchMethod?: 'rrn' | 'email' | 'phone' | 'name';   // 통번역사: 연결 근거(요구사항1)
+  reviewCategory?: 'same_person' | 'homonym' | 'file_internal' | 'undecidable' | 'legacy_no_email';  // needs_review 세분(요구사항3)
+  changeSummary?: string;   // 통번역사: 보완/충돌 필드 요약(컬럼 외 필드 포함)
+  residentMasked?: string;  // 통번역사: 엑셀 원본 주민번호 마스킹 표기(원문 아님) — 없으면 미전달 → '-' 표시
+  masterInactive?: boolean; // 통번역사: 매칭된 기존 Master 가 비활성 인력인지(요구사항4)
   changes?: Record<string, FieldChange>;
   // 개인고객 중복 후보의 매칭 기존 레코드(§9) — 사유 칸에 함께 표시.
   matchDetail?: { id: number; name: string; email: string | null; phone: string | null; fields: string[] } | null;
   [key: string]: unknown;
 }
 
-interface Summary { total: number; new: number; identical: number; update: number; needsReview?: number; duplicateFile: number; error: number; warning?: number; }
+interface Summary { total: number; new: number; identical: number; update: number; needsReview?: number; duplicateFile: number; conflict?: number; error: number; warning?: number; }
+
+// 통번역사 전용 진단(읽기전용 · 미리보기 전용) — 단순화 기준 핵심 요약 + A~F 보고서.
+interface TranslatorDiagnostics {
+  linkedPersons: number;        // 기존 Master 연결(동일인 확정) 고유 인원
+  newPersons: number;           // 신규 등록 가능 고유 인원
+  exceptionPersons: number;     // 예외 검토 고유 인원
+  updatablePersons: number;     // 업데이트 가능 고유 인원
+  errorBreakdown: Record<string, number>;
+  conflictFieldCounts: Record<string, number>;   // 동일인 확정 후 실제 변경 필드별 건수
+  fillFieldCounts: Record<string, number>;        // 공란 보완 필드별 건수
+  legacyMappedTotal: number; legacyLinkedInFile: number;
+  report: {
+    rowsTotal: number;
+    A_nameRrn: number;
+    B_nameEmail: number;
+    C_namePhone: number;
+    D_updatable: number;
+    E_newRegistrable: number;
+    F_exception: number;
+    legacyNotInFile: number;
+    reconciliation: { bucketSum: number; rowsTotal: number; reconciled: boolean; buckets: Record<string, number> };
+  };
+}
 
 // 진단 통계(읽기전용, 2단계 조사): 사업자번호 canonical 기준 그룹 통계. 거래처 대량등록(company)에서만 반환.
 //   개인고객(INDIVIDUAL) 파일이면 mode==="individual" 로 오고, 사업자번호 패널 대신 개인고객 통계를 표시한다(§11).
@@ -82,8 +110,134 @@ interface AnalyzeResponse {
   columnMap: Record<string, string | null>;
   summary: Summary;
   diagnostics?: ImportDiagnostics;
+  translatorDiagnostics?: TranslatorDiagnostics;
+  snapshotId?: string | null;   // 서버 암호화 보관 식별자(Master 재구축 재분석용). 셀 값·주민번호는 포함되지 않음.
   rows: AnalyzedRow[];
 }
+
+// 통번역사 Master 재구축 분석(읽기 전용) — 저장된 암호화 스냅샷을 서버가 재분석한 결과.
+//   DB·Master·이관 매핑을 변경하지 않으며, 주민번호 원문은 응답에 포함되지 않는다(건수만).
+interface RebuildAnalysisResponse {
+  dryRun: boolean;
+  committed: boolean;
+  snapshot: { id: string; filename: string; createdAt: string };
+  classification: {
+    sheetName: string;
+    crmTotalRows: number;             // CRM 명부 전체 데이터 행
+    crmUniquePersons: number;         // 실제 고유 인원(식별자 중복 제거)
+    crmInternalDupById: number;       // 동일 식별자 중복행(제외)
+    crmSameNameNoIdentifier: number;  // 식별자 없는 동명 — 확인 필요(병합 안 함)
+    crmInvalidRows: number;           // 성명 누락 등
+    uniqueWithRrn: number;            // 고유 인원 중 주민번호 보유
+    A_withHistory: number;            // A: 수행이력 O → 전원 등록
+    A_confirmedByRrn: number;         // A 중 주민번호로 확정
+    A_byNameOnlyNeedsCheck: number;   // A 중 이름만 일치(동명이인 확인 필요)
+    B_rrnNoHistory: number;           // B: 수행이력 X · 주민번호 O → 등록
+    C_hold: number;                   // C: 수행이력 X · 주민번호 X → 보류
+    registerTarget: number;           // 최종 등록(A+B)
+    // ── 기존 Master 교차대조(요구사항5) — reuse + new + exception = registerTarget 로 정합. ──
+    reuseExistingMaster: number;      // ⑤ 기존 Master 재사용 예정 인원(동일인 확정)
+    reuseMasterCount: number;         // ↑ 참고: 실제 재사용되는 고유 Master 수
+    masterSupplementable: number;     // ⑥ 기존 Master 정보 보완 가능 인원(재사용 대상 중 CRM이 결측 식별정보 보유)
+    newMasterToCreate: number;        // ⑦ 신규 Master 생성 예정 인원(이름·식별정보 모두 기존 Master에 없음)
+    identityException: number;        // ⑨ 동일인 확인 예외 인원(복수일치·동명 미확정)
+    masterTotal: number;              // 참고: 기존 통번역사 Master 총원(미삭제)
+    masterNotInCrm: number;           // ⑩ CRM 명부엔 없고 기존 Master엔 존재하는 인원
+    dupMasterCleanup: number;         // 중복 Master 정리 예정 인원(동일 주민번호 초과분·검증 후 비활성화 후보)
+    masterMatchReconciled: boolean;   // reuse+new+exception === A+B
+    // ── 동일인 확정 불가 인원 재분류(요구사항1~5) — 독립 신규 후보 vs 실제 수동 ──
+    exceptionAnalysis: {
+      total: number;
+      newCandidate: number;                 // 독립 신규 등록 후보로 재분류
+      manualReview: number;                 // 실제 수동 확인 필요
+      byReason: {
+        multiCandidate: number;
+        idConflictOtherMaster: number;
+        historyIdMismatch: number;
+        rrnMismatchSameName: number;
+        rrnIndependentNew: number;
+        historyIndependentNew: number;
+        other: number;
+      };
+      diagnostics: { missingRrn: number; missingContact: number };
+      reconciled: boolean;
+    };
+    newMasterCandidateTotal: number;  // 신규 Master 등록 가능 인원(순수 신규 + 재분류 독립 신규)
+    finalDisposition: {
+      reuseExisting: number;
+      newCandidate: number;
+      manualReview: number;
+      excluded: number;
+      total: number;
+      reconciled: boolean;
+    };
+    reconciled: boolean;              // A+B+C === 고유 인원
+  };
+  progressLink: { groups: number; linked: number; unlinked: number; confirmed: number; candidate: number; expected: number; unresolvedException: number };
+  note: string;
+}
+
+// 재구축 실제 등록 실행 — 드라이런(계획·검증) 응답. commit 전까지 DB 미변경.
+interface RebuildExecuteResponse {
+  dryRun: boolean;
+  committed: boolean;
+  snapshot: { id: string; filename: string; createdAt: string };
+  disposition: { reuseExisting: number; newCandidate: number; manualReview: number; excluded: number; total: number; reconciled: boolean };
+  willRegister: { reuseExisting: number; newCreate: number; manualHold: number; excluded: number };
+  validation: {
+    idPreserved: boolean; newCreatable: number; emailCollision: number; rrnCollision: number; fileDupBlocked: number;
+    blockedSample: { rowNumber: number; name: string; reason: string }[];
+    cleanupCandidates: number; originalsPreserved: boolean;
+  };
+  beforeCount: number;
+  projectedAfter: number;
+  readyToExecute: boolean;
+  planMatchesAnalysis: boolean;
+  excludeAudit: { total: number; criterionC: number; withRrnButExcluded: number; nameMissingSeparate: number; allCriterionC: boolean };
+  manualReviewDetail: { rowNumber: number; nameMasked: string; residentMasked: string; reasonCode: string; reason: string; action: string }[];
+  note: string;
+}
+
+// 기존 Master 상세정보 보완 — 드라이런(계획) 응답. DB 미반영.
+type FieldDecision = 'keep' | 'apply' | 'hold';
+type FieldCategory = 'fill' | 'email_replace' | 'merge' | 'contact_review' | 'conflict_review';
+interface UpdatePlanResponse {
+  fileName: string;
+  dryRun: boolean;
+  committed: boolean;
+  summary: {
+    eligibleRows: number; eligiblePersons: number; blockedRows: number;
+    personsToUpdate: number; appliedFieldTotal: number;
+    applyFieldCounts: Record<string, number>; holdFieldCounts: Record<string, number>; keepFieldCounts: Record<string, number>;
+    categoryCounts: Record<FieldCategory, number>;
+    inactiveWithApply: number;
+  };
+  rrnReport: {
+    rrnSingleTotal: number; rrnAutoUpdatable: number; rrnReviewNeeded: number;
+    rrnNoChange: number; rrnMultiBlocked: number; reconciled: boolean;
+  };
+  auditPreview: Array<{
+    masterId: number; name: string; residentMasked: string | null; matchMethod: string | null;
+    masterInactive: boolean; autoUpdatable: boolean;
+    changes: Array<{ field: string; label: string; old: string; new: string; category: FieldCategory; autoAllowed: boolean; decision: FieldDecision }>;
+  }>;
+  note: string;
+}
+
+// 프론트 기본 결정 규칙(서버 updateFieldCategory 와 동일). 토글 기본값·범주 배지에 사용.
+const LEGACY_EMAIL_SUFFIX = '@crm-migrated.invalid';
+const FE_MERGE_FIELDS = new Set(['languages', 'bio']);
+function feFieldCategory(field: string, oldVal: string, newVal: string): FieldCategory {
+  if (!(oldVal ?? '').trim()) return 'fill';
+  if (field === 'email') return oldVal.toLowerCase().endsWith(LEGACY_EMAIL_SUFFIX) ? 'email_replace' : 'contact_review';
+  if (field === 'phone') return 'contact_review';
+  if (FE_MERGE_FIELDS.has(field)) return 'merge';
+  return 'conflict_review';
+}
+const FE_AUTO_CATEGORIES = new Set<FieldCategory>(['fill', 'email_replace']);
+const CATEGORY_LABELS: Record<FieldCategory, string> = {
+  fill: '공란 보완', email_replace: '임시→실제 교체', merge: '통합 검토', contact_review: '연락처 검토', conflict_review: '충돌 검토',
+};
 
 interface ExecuteResponse {
   fileName: string;
@@ -93,7 +247,14 @@ interface ExecuteResponse {
   summary: Summary;
 }
 
-interface ColumnDef { key: string; label: string; }
+interface ColumnDef { key: string; label: string; width?: number; align?: 'left' | 'center'; ellipsis?: boolean; }
+
+// 통번역사 보완 필드 한글 라벨(서버 FIELD_LABELS 와 동일 키).
+const FIELD_LABELS: Record<string, string> = {
+  name: '성명', email: '이메일', phone: '휴대폰', languages: '언어', services: '가능서비스',
+  specializations: '전문분야', grade: '인력등급', region: '활동지역',
+  education: '학력', major: '전공', graduationYear: '졸업년도', bio: '상세정보',
+};
 
 interface EntityConfig {
   title: string;
@@ -147,15 +308,17 @@ const TRANSLATOR_CONFIG: EntityConfig = {
   title: '통번역사 대량등록',
   analyzeUrl: '/api/admin/translators/bulk-import/analyze',
   executeUrl: '/api/admin/translators/bulk-import/execute',
+  // 미리보기 테이블 컬럼: 명시적 너비(px)·정렬을 지정하면 고정 레이아웃(table-layout: fixed)으로 렌더된다.
   columns: [
-    { key: 'name', label: '성명' },
-    { key: 'email', label: '이메일' },
-    { key: 'phone', label: '휴대폰' },
-    { key: 'languages', label: '언어' },
-    { key: 'services', label: '가능서비스' },
-    { key: 'specializations', label: '전문분야' },
-    { key: 'grade', label: '인력등급' },
-    { key: 'region', label: '활동지역' },
+    { key: 'name', label: '성명', width: 110, align: 'left' },
+    { key: 'residentMasked', label: '주민번호', width: 125, align: 'center' },
+    { key: 'email', label: '이메일', width: 220, align: 'left', ellipsis: true },
+    { key: 'phone', label: '휴대폰', width: 135, align: 'center' },
+    { key: 'languages', label: '언어', width: 85, align: 'center' },
+    { key: 'services', label: '가능서비스', width: 105, align: 'center' },
+    { key: 'specializations', label: '전문분야', width: 105, align: 'center' },
+    { key: 'grade', label: '인력등급', width: 90, align: 'center' },
+    { key: 'region', label: '활동지역', width: 110, align: 'center' },
   ],
   defaultsNote: '활동상태 활성으로 신규 등록됩니다. 민감정보(주민번호·계좌 등)는 이 일반 대량등록에 포함되지 않습니다. 이번 단계는 신규 통번역사만 등록합니다.',
   resultLabels: { new: '신규 통번역사 등록', unit: '명' },
@@ -187,6 +350,7 @@ const STATUS_META: Record<RowStatus, StatusMeta> = {
   update: { label: '기존 데이터 변경 예정', bg: '#eff6ff', color: '#1d4ed8', border: '#bfdbfe' },
   needs_review: { label: '중복 검토 필요(제외)', bg: '#fffbeb', color: '#b45309', border: '#fde68a' },
   duplicate_file: { label: '파일 내 중복(제외)', bg: '#fff7ed', color: '#c2410c', border: '#fed7aa' },
+  conflict: { label: '정보 충돌(검토)', bg: '#fef3f2', color: '#c2410c', border: '#fecaca' },
   error: { label: '오류(제외)', bg: '#fef2f2', color: '#b91c1c', border: '#fecaca' },
 };
 
@@ -232,15 +396,18 @@ function SummaryCard({ label, value, tone }: { label: string; value: number | un
   );
 }
 
-/** 변경 예정 셀: 이전값 → 새값 강조. 변경 없는 셀은 일반 표시. */
+/** 변경 예정 셀: 이전값 → 새값 강조. update(보완)=파랑, conflict(충돌)=주황. 변경 없는 셀은 일반 표시. */
 function CellValue({ row, colKey }: { row: AnalyzedRow; colKey: string }) {
-  const change = row.status === 'update' ? row.changes?.[colKey] : undefined;
+  const change = (row.status === 'update' || row.status === 'conflict') ? row.changes?.[colKey] : undefined;
   if (change) {
+    // 기존 공란 → 값 채움(보완)은 파랑, 기존 값이 있는데 달라짐(충돌)은 주황으로 구분.
+    const isConflict = !!(change.old && change.old.trim());
+    const hi = isConflict ? { color: '#c2410c', bg: '#fff7ed' } : { color: '#1d4ed8', bg: '#eff6ff' };
     return (
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
         <span style={{ color: '#9ca3af', textDecoration: 'line-through' }}>{change.old || '(없음)'}</span>
         <span style={{ color: '#9ca3af' }}>→</span>
-        <span style={{ color: '#1d4ed8', fontWeight: 700, background: '#eff6ff', padding: '1px 6px', borderRadius: 5 }}>{change.new || '(없음)'}</span>
+        <span style={{ color: hi.color, fontWeight: 700, background: hi.bg, padding: '1px 6px', borderRadius: 5 }}>{change.new || '(없음)'}</span>
       </span>
     );
   }
@@ -267,9 +434,31 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
   const [result, setResult] = useState<ExecuteResponse | null>(null);
   const [filter, setFilter] = useState<'all' | RowStatus | 'warning'>('all');
+  // 통번역사 검토 세분 필터(요구사항4) — 상태 필터와 AND 로 결합. needs_review 하위 분류 탐색용.
+  type ReviewCat = NonNullable<AnalyzedRow['reviewCategory']>;
+  const [reviewFilter, setReviewFilter] = useState<'all' | ReviewCat>('all');
   const [mode, setMode] = useState<ImportMode>('new_only');
   // 거래처 대량등록 종류: 'business'(사업자 거래처/홈택스, 기본) | 'individual'(개인고객 명단 — 모든 행 INDIVIDUAL 처리)
   const [companyKind, setCompanyKind] = useState<'business' | 'individual'>('business');
+  // 통번역사 기존 Master 보완(5단계): 필드별 선택 { "<masterId>:<field>": keep|apply|hold } + 드라이런 계획 결과.
+  const [updateSel, setUpdateSel] = useState<Record<string, FieldDecision>>({});
+  const [plan, setPlan] = useState<UpdatePlanResponse | null>(null);
+  const [planning, setPlanning] = useState(false);
+  // 통번역사 4단계 UX: ①업로드 ②분석결과 ③정보검토 ④최종등록. (타 엔티티는 단일 화면 유지)
+  const isWizard = entity === 'translator';
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4>(1);
+  const [detailsOpen, setDetailsOpen] = useState(false);            // 상세 매칭 통계·검증 보고서 접기/펼치기(요구사항3)
+  const [reviewSearch, setReviewSearch] = useState('');             // 정보 검토 대상자 검색(요구사항4)
+  const [reviewScope, setReviewScope] = useState<'all' | 'auto' | 'review'>('all');  // 검토 상태 필터
+  const [reviewPageSize, setReviewPageSize] = useState<20 | 50 | 100>(20);
+  const [reviewPage, setReviewPage] = useState(1);
+  // 통번역사 Master 재구축 분석(읽기 전용) — 서버 암호화 스냅샷 재분석 결과. DB 미변경.
+  const [rebuild, setRebuild] = useState<RebuildAnalysisResponse | null>(null);
+  const [rebuilding, setRebuilding] = useState(false);
+  const [snapshotDeleted, setSnapshotDeleted] = useState(false);
+  // 재구축 실제 등록 실행 계획(드라이런) — 검증·예정 인원. DB 미변경(commit 전).
+  const [execPlan, setExecPlan] = useState<RebuildExecuteResponse | null>(null);
+  const [execPlanning, setExecPlanning] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const pickFile = (f: File | null) => {
@@ -293,8 +482,19 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
     setAnalysis(null);
     setResult(null);
     setFilter('all');
+    setReviewFilter('all');
     setMode('new_only');
     setCompanyKind('business');
+    setUpdateSel({});
+    setPlan(null);
+    setWizardStep(1);
+    setDetailsOpen(false);
+    setReviewSearch('');
+    setReviewScope('all');
+    setReviewPage(1);
+    setRebuild(null);
+    setExecPlan(null);
+    setSnapshotDeleted(false);
     setDragOver(false);
     if (inputRef.current) inputRef.current.value = '';
     onToast('업로드한 파일과 분석 결과를 초기화했습니다.');
@@ -315,6 +515,10 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
       if (!res.ok) { onToast(`오류: ${data.error ?? '분석 실패'}`); return; }
       setAnalysis(data);
       setFilter('all');
+      setRebuild(null);            // 새 분석 → 이전 재구축 결과 초기화
+      setExecPlan(null);
+      setSnapshotDeleted(false);
+      if (entity === 'translator') setWizardStep(2);   // 분석 완료 → 2단계로 이동
     } catch {
       onToast('오류: 파일 분석 중 문제가 발생했습니다.');
     } finally {
@@ -358,13 +562,163 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
     }
   }, [file, analysis, mode, cfg.executeUrl, cfg.resultLabels.unit, token, onToast, onDone, entity, companyKind]);
 
+  // 기존 Master 보완 — 드라이런 계획 생성(DB 미반영). 현재 필드별 선택을 서버에 전달해 반영될 내용을 계산.
+  const runUpdatePlan = useCallback(async () => {
+    if (!file) return;
+    setPlanning(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('selections', JSON.stringify(updateSel));
+      const res = await fetch(api('/api/admin/translators/bulk-import/update-plan'), {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error ?? '계획 생성 실패'}`); return; }
+      setPlan(data);
+      onToast('드라이런 계획을 생성했습니다. (DB 미반영)');
+    } catch {
+      onToast('오류: 업데이트 계획 생성 중 문제가 발생했습니다.');
+    } finally {
+      setPlanning(false);
+    }
+  }, [file, updateSel, token, onToast]);
+
+  // ── Master 재구축 분석(읽기 전용) ──
+  // 서버에 암호화 저장된 업로드 원본(snapshotId)을 서버가 다시 읽어 CRM 명부↔진행관리표를 대조한다.
+  // DB·Master·이관 매핑을 전혀 변경하지 않으며(dryRun), 주민번호 원문은 응답·로그에 들어오지 않는다(건수만).
+  const doRebuildAnalysis = useCallback(async () => {
+    const sid = analysis?.snapshotId;
+    if (!sid) { onToast('저장된 업로드 원본이 없습니다. 파일을 다시 업로드해 분석해주세요.'); return; }
+    setRebuilding(true);
+    try {
+      const res = await fetch(api(`/api/admin/translators/bulk-import/snapshots/${sid}/rebuild-analysis`), {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error ?? '재구축 분석 실패'}`); return; }
+      setRebuild(data);
+      setExecPlan(null);
+      onToast('Master 재구축 분석을 완료했습니다. (읽기 전용 · DB 미변경)');
+    } catch {
+      onToast('오류: 재구축 분석 중 문제가 발생했습니다.');
+    } finally {
+      setRebuilding(false);
+    }
+  }, [analysis?.snapshotId, token, onToast]);
+
+  // 재구축 실제 등록 실행 계획·검증(드라이런) — commit 미포함. DB 미변경.
+  const doRebuildExecutePlan = useCallback(async () => {
+    const sid = analysis?.snapshotId;
+    if (!sid) { onToast('저장된 업로드 원본이 없습니다. 파일을 다시 업로드해 분석해주세요.'); return; }
+    setExecPlanning(true);
+    try {
+      const res = await fetch(api(`/api/admin/translators/bulk-import/snapshots/${sid}/rebuild-execute`), {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ commit: false }),
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error ?? '실행 계획 검증 실패'}`); return; }
+      setExecPlan(data);
+      onToast('실제 등록 실행 계획을 검증했습니다. (드라이런 · DB 미변경)');
+    } catch {
+      onToast('오류: 실행 계획 검증 중 문제가 발생했습니다.');
+    } finally {
+      setExecPlanning(false);
+    }
+  }, [analysis?.snapshotId, token, onToast]);
+
+  // 저장된 암호화 원본 파기(작업 종료 시). 메타·암호문 파일을 서버에서 삭제한다.
+  const doDeleteSnapshot = useCallback(async () => {
+    const sid = analysis?.snapshotId;
+    if (!sid) return;
+    if (!(await confirmDialog({ title: '저장된 업로드 원본 파기', message: '서버에 암호화 보관된 업로드 원본을 삭제합니다.\n삭제 후에는 재분석을 하려면 파일을 다시 업로드해야 합니다.', confirmLabel: '파기', variant: 'warning' }))) return;
+    try {
+      const res = await fetch(api(`/api/admin/translators/bulk-import/snapshots/${sid}`), {
+        method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) { onToast(`오류: ${data.error ?? '삭제 실패'}`); return; }
+      setSnapshotDeleted(true);
+      setRebuild(null);
+      onToast(data.deleted ? '저장된 업로드 원본을 파기했습니다.' : '이미 파기되었거나 찾을 수 없습니다.');
+    } catch {
+      onToast('오류: 원본 파기 중 문제가 발생했습니다.');
+    }
+  }, [analysis?.snapshotId, token, onToast]);
+
   const allRows = Array.isArray(analysis?.rows) ? analysis!.rows : [];
-  const filteredRows = filter === 'all'
+  const statusFiltered = filter === 'all'
     ? allRows
     : filter === 'warning'
       ? allRows.filter(r => !!r.warning)
       : allRows.filter(r => r.status === filter);
+  const filteredRows = reviewFilter === 'all'
+    ? statusFiltered
+    : statusFiltered.filter(r => r.reviewCategory === reviewFilter);
   const shownRows = filteredRows.slice(0, MAX_PREVIEW_ROWS);
+
+  // ── 기존 Master 보완 대상(동일인 확정 — update/conflict + rrn/email/phone 매칭) ──
+  const eligibleUpdateRows = entity === 'translator'
+    ? allRows.filter(r => (r.status === 'update' || r.status === 'conflict') && r.existingId != null
+        && (r.matchMethod === 'rrn' || r.matchMethod === 'email' || r.matchMethod === 'phone'))
+    : [];
+  // 기본 결정(요구사항 규칙): 주민번호 일치 + (공란 보완 | 임시이메일 교체) → 적용, 그 외 → 보류.
+  const defaultDecisionFor = (r: AnalyzedRow, field: string, ch: FieldChange): FieldDecision => {
+    const cat = feFieldCategory(field, ch.old, ch.new);
+    return (r.matchMethod === 'rrn' && FE_AUTO_CATEGORIES.has(cat)) ? 'apply' : 'hold';
+  };
+  const decisionFor = (r: AnalyzedRow, field: string, ch: FieldChange): FieldDecision =>
+    updateSel[`${r.existingId}:${field}`] ?? defaultDecisionFor(r, field, ch);
+  const setDecision = (id: number, field: string, d: FieldDecision) =>
+    setUpdateSel(prev => ({ ...prev, [`${id}:${field}`]: d }));
+
+  // ── 정보 검토(3단계): 검색·상태필터·페이지네이션·검토 완료 집계(요구사항4) ──
+  const rowHasReview = (r: AnalyzedRow): boolean =>
+    Object.entries(r.changes ?? {}).some(([f, ch]) =>
+      !(r.matchMethod === 'rrn' && FE_AUTO_CATEGORIES.has(feFieldCategory(f, ch.old, ch.new))));
+  const rowReviewDone = (r: AnalyzedRow): boolean => {
+    const reviewFields = Object.entries(r.changes ?? {}).filter(([f, ch]) =>
+      !(r.matchMethod === 'rrn' && FE_AUTO_CATEGORIES.has(feFieldCategory(f, ch.old, ch.new))));
+    if (reviewFields.length === 0) return true;   // 자동 전용 → 검토 불필요(완료)
+    return reviewFields.every(([f]) => updateSel[`${r.existingId}:${f}`] !== undefined);
+  };
+  const reviewMatches = (r: AnalyzedRow): boolean => {
+    const q = reviewSearch.trim().toLowerCase();
+    if (q && !`${r.name ?? ''} ${r.email ?? ''} ${r.existingId ?? ''}`.toLowerCase().includes(q)) return false;
+    if (reviewScope === 'auto') return !rowHasReview(r);
+    if (reviewScope === 'review') return rowHasReview(r);
+    return true;
+  };
+  const reviewFilteredRows = eligibleUpdateRows.filter(reviewMatches);
+  const reviewTotalPages = Math.max(1, Math.ceil(reviewFilteredRows.length / reviewPageSize));
+  const reviewPageClamped = Math.min(reviewPage, reviewTotalPages);
+  const reviewPageRows = reviewFilteredRows.slice((reviewPageClamped - 1) * reviewPageSize, reviewPageClamped * reviewPageSize);
+  const reviewDoneCount = eligibleUpdateRows.filter(rowReviewDone).length;
+  const reviewPendingCount = eligibleUpdateRows.length - reviewDoneCount;
+  // 일괄 선택(동일 처리 기준): 현재 페이지 / 전체 필터 대상의 모든 변경 필드에 결정 적용.
+  const bulkSetDecision = (d: FieldDecision, scope: 'page' | 'all') => {
+    const rows = scope === 'page' ? reviewPageRows : reviewFilteredRows;
+    setUpdateSel(prev => {
+      const next = { ...prev };
+      for (const r of rows) for (const f of Object.keys(r.changes ?? {})) next[`${r.existingId}:${f}`] = d;
+      return next;
+    });
+  };
+
+  // 4단계 가시성(통번역사만 단계 분리 · 타 엔티티는 전부 노출).
+  const showStep2 = !isWizard || wizardStep === 2;
+  const showStep3 = !isWizard || wizardStep === 3;
+  const showStep4 = !isWizard || wizardStep === 4;
+
+  // ── 미리보기 테이블 레이아웃(요구사항: 명시적 너비·정렬) ──
+  // cfg.columns 에 width 가 지정되면 고정 레이아웃으로 렌더(현재 통번역사). 타 엔티티는 기존 auto 레이아웃 유지.
+  const useFixedLayout = cfg.columns.some(c => c.width != null);
+  const STATUS_COL_W = 110;   // 상태(중앙)
+  const REASON_COL_W = 300;   // 사유(좌측, 최소 너비)
+  const tableMinWidth = useFixedLayout
+    ? STATUS_COL_W + cfg.columns.reduce((s, c) => s + (c.width ?? 120), 0) + REASON_COL_W
+    : 720;
 
   const newCount = safeNum(analysis?.summary?.new);
   const updateCount = safeNum(analysis?.summary?.update);
@@ -380,6 +734,30 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
         <BackToListButton onClick={onClose} variant="subtle" label="뒤로가기" testId="bulk-import-back" />
         <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#111827' }}>{cfg.title}</h2>
       </div>
+
+      {/* ── 4단계 네비게이션(통번역사 전용) ── */}
+      {isWizard && !result && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
+          {([[1, '① 파일 업로드'], [2, '② 분석 결과'], [3, '③ 정보 검토'], [4, '④ 최종 등록']] as const).map(([s, label]) => {
+            const reachable = s === 1 || !!analysis;
+            const active = wizardStep === s;
+            return (
+              <button key={s} type="button" disabled={!reachable}
+                onClick={() => reachable && setWizardStep(s)}
+                data-testid={`wizard-step-${s}`} aria-label={label} aria-current={active}
+                style={{
+                  flex: 1, padding: '8px 10px', borderRadius: 8, fontSize: 13, fontWeight: active ? 700 : 500,
+                  cursor: reachable ? 'pointer' : 'not-allowed',
+                  border: `1px solid ${active ? '#0284c7' : '#e5e7eb'}`,
+                  background: active ? '#e0f2fe' : (reachable ? '#fff' : '#f9fafb'),
+                  color: active ? '#0369a1' : (reachable ? '#374151' : '#cbd5e1'),
+                }}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* ── 결과 화면 ── */}
       {result ? (
@@ -403,6 +781,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
       ) : (
         <>
           {/* ── 단계 1: 파일 업로드 ── */}
+          {(!isWizard || wizardStep === 1) && (
           <Card style={{ padding: 20, marginBottom: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 4 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>1. 파일 업로드</div>
@@ -493,25 +872,44 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
               </div>
             </div>
           </Card>
+          )}
+
+          {/* 분석 파일명 요약(2~4단계 공통, 통번역사) */}
+          {isWizard && analysis && wizardStep !== 1 && (
+            <div style={{ fontSize: 12, color: '#6b7280', margin: '0 0 12px' }}>분석 파일: <b>{analysis.fileName || file?.name || '-'}</b></div>
+          )}
 
           {/* ── 단계 2 & 3: 분석 결과 + 미리보기 ── */}
           {analysis && (
             <Card style={{ padding: 20, marginBottom: 16 }}>
+              {showStep2 && (<>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 10 }}>2. 파일 분석 결과</div>
               <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 12 }}>
                 시트: <b>{analysis.sheetName || '-'}</b> · 헤더 {safeNum(analysis.headerRowIndex) + 1}행 감지 · 매핑된 컬럼:{' '}
                 {Object.entries(analysis.columnMap ?? {}).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(', ') || '없음'}
               </div>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
-                <SummaryCard label="전체 행" value={analysis.summary?.total} tone="default" />
-                <SummaryCard label="신규 등록 예정" value={analysis.summary?.new} tone="green" />
-                <SummaryCard label="경고" value={analysis.summary?.warning} tone="amber" />
-                <SummaryCard label="변경 예정" value={analysis.summary?.update} tone="blue" />
-                <SummaryCard label="기존 데이터 동일" value={analysis.summary?.identical} tone="gray" />
-                <SummaryCard label="중복 검토 필요" value={analysis.summary?.needsReview} tone="amber" />
-                <SummaryCard label="파일 내 중복" value={analysis.summary?.duplicateFile} tone="amber" />
-                <SummaryCard label="오류" value={analysis.summary?.error} tone="red" />
-              </div>
+              {/* 통번역사: 핵심 3분류(기존 연결 / 신규 / 예외) 우선 표시(요구사항5). 상세는 접기. */}
+              {entity === 'translator' && analysis.translatorDiagnostics ? (
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+                  <SummaryCard label="전체 행" value={analysis.summary?.total} tone="default" />
+                  <SummaryCard label="기존 Master 연결(동일인)" value={analysis.translatorDiagnostics.linkedPersons} tone="blue" />
+                  <SummaryCard label="└ 업데이트 가능" value={analysis.translatorDiagnostics.updatablePersons} tone="blue" />
+                  <SummaryCard label="신규 등록 가능" value={analysis.translatorDiagnostics.newPersons} tone="green" />
+                  <SummaryCard label="예외 검토" value={analysis.translatorDiagnostics.exceptionPersons} tone="amber" />
+                  <SummaryCard label="오류" value={analysis.summary?.error} tone="red" />
+                </div>
+              ) : (
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+                  <SummaryCard label="전체 행" value={analysis.summary?.total} tone="default" />
+                  <SummaryCard label="신규 등록 예정" value={analysis.summary?.new} tone="green" />
+                  <SummaryCard label="경고" value={analysis.summary?.warning} tone="amber" />
+                  <SummaryCard label="변경 예정" value={analysis.summary?.update} tone="blue" />
+                  <SummaryCard label="기존 데이터 동일" value={analysis.summary?.identical} tone="gray" />
+                  <SummaryCard label="중복 검토 필요" value={analysis.summary?.needsReview} tone="amber" />
+                  <SummaryCard label="파일 내 중복" value={analysis.summary?.duplicateFile} tone="amber" />
+                  <SummaryCard label="오류" value={analysis.summary?.error} tone="red" />
+                </div>
+              )}
 
               {/* ── 개인고객 진단(읽기전용) — 사업자번호 무관, 이름+연락처 기준(§11) ── */}
               {entity === 'company' && analysis.diagnostics && analysis.diagnostics.mode === 'individual' && (
@@ -580,6 +978,271 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                 </div>
               )}
 
+              {/* 상세 매칭 통계·검증 보고서: 접기/펼치기(요구사항3) — 기본 접힘, 핵심 숫자만 상단에 노출 */}
+              {entity === 'translator' && analysis.translatorDiagnostics && (
+                <button type="button" onClick={() => setDetailsOpen(o => !o)}
+                  data-testid="bulk-import-details-toggle" aria-expanded={detailsOpen}
+                  style={{ fontSize: 12, padding: '6px 12px', borderRadius: 8, border: '1px solid #e5e7eb', background: '#fff', color: '#374151', cursor: 'pointer', marginBottom: 12, fontWeight: 600 }}>
+                  {detailsOpen ? '▾ 상세 매칭 통계 · 검증 보고서 접기' : '▸ 상세 매칭 통계 · 검증 보고서 펼치기'}
+                </button>
+              )}
+              {/* ── 상세 진단(읽기전용 · 미리보기 전용 · DB 변경 없음) — 단순화 기준 A~F(요구사항) ── */}
+              {entity === 'translator' && analysis.translatorDiagnostics && detailsOpen && (() => {
+                const d = analysis.translatorDiagnostics!;
+                const rep = d.report;
+                return (
+                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#334155', marginBottom: 8 }}>🔎 매칭 진단 — 성명+식별정보 기준 (읽기전용)</div>
+                  {rep && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 8, marginBottom: 10 }}>
+                      {([
+                        ['A. 이름+주민/외국인번호 일치', rep.A_nameRrn],
+                        ['B. 이름+실제이메일 일치', rep.B_nameEmail],
+                        ['C. 이름+휴대폰 일치', rep.C_namePhone],
+                        ['D. 기존 Master 업데이트 가능', rep.D_updatable],
+                        ['E. 신규 등록 가능', rep.E_newRegistrable],
+                        ['F. 예외 검토', rep.F_exception],
+                        ['CRM 명부에 없는 기존 이관자', rep.legacyNotInFile],
+                        ['기존 이관자 연결(파일 내)', d.legacyLinkedInFile],
+                      ] as const).map(([label, val]) => (
+                        <div key={label} style={{ fontSize: 12, color: '#0c4a6e', background: '#fff', border: '1px solid #e0f2fe', borderRadius: 8, padding: '7px 10px', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                          <span>{label}</span><b>{safeNum(val).toLocaleString()}명</b>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* 동일인 확정 후 실제 변경 필드별 건수 */}
+                  {Object.keys(d.conflictFieldCounts ?? {}).length > 0 && (
+                    <>
+                      <div style={{ fontSize: 11.5, color: '#475569', margin: '4px 0 6px' }}>변경(업데이트 후보) 항목별 건수</div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {Object.entries(d.conflictFieldCounts).map(([field, val]) => (
+                          <span key={field} style={{ fontSize: 11, padding: '3px 9px', borderRadius: 999, background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c' }}>
+                            {FIELD_LABELS[field] ?? field} <b style={{ color: '#9a3412' }}>{safeNum(val).toLocaleString()}</b>
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {/* 공란 보완 항목별 건수 */}
+                  {Object.keys(d.fillFieldCounts ?? {}).length > 0 && (
+                    <>
+                      <div style={{ fontSize: 11.5, color: '#475569', margin: '10px 0 6px' }}>공란 보완 항목별 건수(기존 Master 공란)</div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {Object.entries(d.fillFieldCounts).map(([field, val]) => (
+                          <span key={field} style={{ fontSize: 11, padding: '3px 9px', borderRadius: 999, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1d4ed8' }}>
+                            {FIELD_LABELS[field] ?? field} <b style={{ color: '#1e3a8a' }}>{safeNum(val).toLocaleString()}</b>
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {Object.keys(d.errorBreakdown ?? {}).length > 0 && (
+                    <>
+                      <div style={{ fontSize: 11.5, color: '#475569', margin: '10px 0 6px' }}>오류 유형</div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {Object.entries(d.errorBreakdown).map(([reason, val]) => (
+                          <span key={reason} style={{ fontSize: 11, padding: '3px 9px', borderRadius: 999, background: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c' }}>
+                            {reason} <b>{safeNum(val).toLocaleString()}</b>
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {rep?.reconciliation && (
+                    <div style={{ fontSize: 11.5, marginTop: 10, color: rep.reconciliation.reconciled ? '#047857' : '#b91c1c', fontWeight: 600 }}>
+                      {rep.reconciliation.reconciled ? '✓' : '✗'} 분류 합계 {safeNum(rep.reconciliation.bucketSum).toLocaleString()}행 = 전체 {safeNum(rep.reconciliation.rowsTotal).toLocaleString()}행
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 8 }}>
+                    ※ 성명 + (주민/외국인번호 | 실제 이메일 | 휴대폰) 중 하나 일치 시 동일인 확정. 임시 이메일은 매칭 제외. 복수 Master·식별번호 모순·동명 미확정은 예외 검토. 주민번호 원문은 화면·로그 미노출. 분석 전용이며 DB·Master·이관 매핑을 변경하지 않습니다.
+                  </div>
+                </div>
+                );
+              })()}
+
+              {/* ── Master 재구축 분석 (읽기 전용 · DB/Master/매핑 변경 없음) ── */}
+              {entity === 'translator' && (
+                <div style={{ background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 10, padding: '14px 16px', marginBottom: 16 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: '#5b21b6' }}>
+                      🧩 Master 재구축 분석 (읽기 전용)
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      {analysis.snapshotId && !snapshotDeleted ? (
+                        <span style={{ fontSize: 11, color: '#6d28d9', background: '#ede9fe', border: '1px solid #ddd6fe', borderRadius: 999, padding: '3px 9px' }}>
+                          서버 암호화 보관됨 · ID {analysis.snapshotId.slice(0, 8)}…
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 11, color: '#9ca3af', background: '#fff', border: '1px solid #e5e7eb', borderRadius: 999, padding: '3px 9px' }}>
+                          {snapshotDeleted ? '원본 파기됨' : '저장된 원본 없음(재업로드 필요)'}
+                        </span>
+                      )}
+                      <PrimaryBtn onClick={doRebuildAnalysis}
+                        data-testid="rebuild-analysis-run" aria-label="Master 재구축 분석 실행"
+                        disabled={rebuilding || !analysis.snapshotId || snapshotDeleted}>
+                        {rebuilding ? '분석 중…' : '재구축 분석 실행'}
+                      </PrimaryBtn>
+                      {analysis.snapshotId && !snapshotDeleted && (
+                        <GhostBtn onClick={doDeleteSnapshot} data-testid="rebuild-snapshot-delete" aria-label="저장된 업로드 원본 파기">원본 파기</GhostBtn>
+                      )}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#7c6fb3', marginTop: 8, lineHeight: 1.7 }}>
+                    기준 — <b>A</b>: 진행관리표 수행이력 있음(주민번호 유무 무관) → 전원 등록 · <b>B</b>: 수행이력 없으나 주민번호 있음 → 등록 · <b>C</b>: 수행이력·주민번호 모두 없음 → 보류.
+                    동일인 판별은 주민번호 우선 · 이메일/전화 보조, 이름만으로 동명이인을 자동 병합하지 않습니다. 기존 455/581/993 분류는 산정에 사용하지 않습니다.
+                  </div>
+
+                  {rebuild && (() => {
+                    const c = rebuild.classification;
+                    const pl = rebuild.progressLink;
+                    return (
+                      <div style={{ marginTop: 12 }}>
+                        <div style={{ fontSize: 12, color: '#047857', fontWeight: 600, marginBottom: 10 }}>
+                          ✓ 서버에서 원본 파일을 정상적으로 읽었습니다 — 시트 <b>{c.sheetName || '-'}</b> · 전체 {safeNum(c.crmTotalRows).toLocaleString()}행
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 8 }}>
+                          {([
+                            ['CRM 명부 실제 고유 인원', c.crmUniquePersons, '#4c1d95', '#f5f3ff'],
+                            ['A. 수행이력 있는 등록 대상', c.A_withHistory, '#047857', '#ecfdf5'],
+                            ['B. 수행이력 없음·주민번호 있음', c.B_rrnNoHistory, '#047857', '#ecfdf5'],
+                            ['C. 등록 보류(이력·주민번호 없음)', c.C_hold, '#b45309', '#fffbeb'],
+                            ['최종 등록 대상 총인원(A+B)', c.registerTarget, '#5b21b6', '#ede9fe'],
+                          ] as const).map(([label, val, color, bg]) => (
+                            <div key={label} style={{ fontSize: 12, color, background: bg, border: `1px solid ${color}22`, borderRadius: 8, padding: '9px 11px', display: 'flex', justifyContent: 'space-between', gap: 8, fontWeight: 600 }}>
+                              <span>{label}</span><b>{safeNum(val).toLocaleString()}명</b>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* 기존 Master 교차대조(요구사항5) — reuse + new + exception = 등록 대상(A+B) */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 8, marginTop: 8 }}>
+                          {([
+                            ['기존 Master 재사용 예정', c.reuseExistingMaster, '#1d4ed8', '#eff6ff'],
+                            ['└ 기존 Master 정보 보완 가능', c.masterSupplementable, '#0e7490', '#ecfeff'],
+                            ['신규 Master 생성 예정', c.newMasterToCreate, '#047857', '#ecfdf5'],
+                            ['동일인 확인 예외', c.identityException, '#b45309', '#fffbeb'],
+                            ['CRM 미존재 · 기존 Master 보유', c.masterNotInCrm, '#6d28d9', '#f5f3ff'],
+                            ['중복 Master 정리 예정(검증 후)', c.dupMasterCleanup, '#9f1239', '#fff1f2'],
+                          ] as const).map(([label, val, color, bg]) => (
+                            <div key={label} style={{ fontSize: 12, color, background: bg, border: `1px solid ${color}22`, borderRadius: 8, padding: '9px 11px', display: 'flex', justifyContent: 'space-between', gap: 8, fontWeight: 600 }}>
+                              <span>{label}</span><b>{safeNum(val).toLocaleString()}명</b>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 11.5, marginTop: 8, color: c.masterMatchReconciled ? '#047857' : '#b91c1c', fontWeight: 600 }}>
+                          {c.masterMatchReconciled ? '✓' : '✗'} 재사용 {safeNum(c.reuseExistingMaster).toLocaleString()} + 신규 {safeNum(c.newMasterToCreate).toLocaleString()} + 예외 {safeNum(c.identityException).toLocaleString()} = 등록 대상 {safeNum(c.registerTarget).toLocaleString()}명 {c.masterMatchReconciled ? '일치' : '불일치(확인 필요)'}
+                        </div>
+
+                        {/* 동일인 확정 불가 인원 재분류 — 독립 신규 후보 vs 실제 수동(요구사항1~5) */}
+                        {(() => {
+                          const ex = c.exceptionAnalysis;
+                          const br = ex.byReason;
+                          const fd = c.finalDisposition;
+                          return (
+                            <div style={{ marginTop: 12, background: '#fff', border: '1px solid #fcd34d', borderRadius: 8, padding: '10px 12px' }}>
+                              <div style={{ fontSize: 11.5, fontWeight: 700, color: '#92400e', marginBottom: 2 }}>동일인 확정 불가 {safeNum(ex.total).toLocaleString()}명 — 등록자격/식별 분리 재분류</div>
+                              <div style={{ fontSize: 11, marginBottom: 8 }}>
+                                <span style={{ color: '#047857' }}>독립 신규 등록 후보 <b>{safeNum(ex.newCandidate).toLocaleString()}명</b></span> · <span style={{ color: '#b45309' }}>실제 수동 확인 필요 <b>{safeNum(ex.manualReview).toLocaleString()}명</b></span>
+                              </div>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))', gap: 6 }}>
+                                {([
+                                  ['신규 후보 · 주민번호 보유·충돌 없음', br.rrnIndependentNew, '#047857', '#ecfdf5'],
+                                  ['신규 후보 · 수행이력 확인·주민번호 없음(동명이인 가능)', br.historyIndependentNew, '#047857', '#ecfdf5'],
+                                  ['수동 · 동일인 후보 복수', br.multiCandidate, '#b45309', '#fffbeb'],
+                                  ['수동 · 식별정보 충돌(타 Master 보유)', br.idConflictOtherMaster, '#b45309', '#fffbeb'],
+                                  ['수동 · 진행관리표↔CRM 주민번호 불일치', br.historyIdMismatch, '#b45309', '#fffbeb'],
+                                  ['수동 · 동명 Master와 주민번호 불일치(귀화 확인)', br.rrnMismatchSameName, '#b45309', '#fffbeb'],
+                                  ['수동 · 기타', br.other, '#6b7280', '#f9fafb'],
+                                ] as const).map(([label, val, color, bg]) => (
+                                  <div key={label} style={{ fontSize: 11, color, background: bg, border: `1px solid ${color}22`, borderRadius: 8, padding: '7px 9px', display: 'flex', justifyContent: 'space-between', gap: 8, fontWeight: 600 }}>
+                                    <span>{label}</span><b>{safeNum(val).toLocaleString()}명</b>
+                                  </div>
+                                ))}
+                              </div>
+                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                                {([
+                                  ['(진단) 주민번호 누락', ex.diagnostics.missingRrn],
+                                  ['(진단) 이메일·휴대폰 모두 누락', ex.diagnostics.missingContact],
+                                ] as const).map(([label, val]) => (
+                                  <span key={label} style={{ fontSize: 10.5, padding: '2px 8px', borderRadius: 999, background: '#fff7ed', border: '1px solid #fed7aa', color: '#9a3412' }}>
+                                    {label} <b>{safeNum(val).toLocaleString()}</b>
+                                  </span>
+                                ))}
+                              </div>
+                              <div style={{ fontSize: 11, marginTop: 8, color: ex.reconciled ? '#047857' : '#b91c1c', fontWeight: 600 }}>
+                                {ex.reconciled ? '✓' : '✗'} 원인별 합계 = 미확정 {safeNum(ex.total).toLocaleString()}명 {ex.reconciled ? '일치' : '불일치(확인 필요)'}
+                              </div>
+                              {/* 최종 처리방향 합계 정합(요구사항6) */}
+                              <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px dashed #fcd34d', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 6 }}>
+                                {([
+                                  ['기존 Master 재사용', fd.reuseExisting, '#1d4ed8'],
+                                  ['신규 등록 가능', fd.newCandidate, '#047857'],
+                                  ['실제 수동 확인', fd.manualReview, '#b45309'],
+                                  ['등록 제외', fd.excluded, '#9f1239'],
+                                ] as const).map(([label, val, color]) => (
+                                  <div key={label} style={{ fontSize: 11, color, fontWeight: 700, display: 'flex', justifyContent: 'space-between', gap: 6 }}>
+                                    <span>{label}</span><b>{safeNum(val).toLocaleString()}명</b>
+                                  </div>
+                                ))}
+                              </div>
+                              <div style={{ fontSize: 11, marginTop: 6, color: fd.reconciled ? '#047857' : '#b91c1c', fontWeight: 600 }}>
+                                {fd.reconciled ? '✓' : '✗'} 재사용 + 신규가능 + 수동 + 제외 = 고유 인원 {safeNum(fd.total).toLocaleString()}명 {fd.reconciled ? '일치' : '불일치(확인 필요)'}
+                              </div>
+                              <div style={{ fontSize: 10.5, marginTop: 6, color: '#9a3412' }}>
+                                ※ 등록자격(A 주민번호 / B 수행이력 / C 제외)과 동일인 식별을 분리. 이름만 일치로는 기존 Master에 자동연결·병합하지 않음. 수동 확인은 복수후보·주민번호 충돌·식별정보 충돌 등 실제 중복위험만. 신규 후보는 기존 Master의 실명이메일·휴대폰·주민번호와 충돌 없음을 확인한 인원이며, 실제 등록은 승인 후.
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* 진행관리표 미연결 그룹 대조 결과(요구사항2·5) */}
+                        <div style={{ marginTop: 12, background: '#fff', border: '1px solid #e9d5ff', borderRadius: 8, padding: '10px 12px' }}>
+                          <div style={{ fontSize: 11.5, fontWeight: 700, color: '#6b21a8', marginBottom: 6 }}>진행관리표 수행자 이름 그룹 대조 <span style={{ fontWeight: 500, color: '#9ca3af' }}>(이름 기준 그룹 1,366 ≠ 실인원 · 이름만 일치는 확정 아님)</span></div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            {([
+                              ['전체 이름 그룹', pl.groups],
+                              ['확정 연결(기존 매핑)', pl.confirmed],
+                              ['연결 후보(성명 매칭·확정 아님)', pl.candidate],
+                              ['미연결 그룹', pl.unlinked],
+                              ['└ 동일인 확인 예외(별도 목록)', pl.unresolvedException],
+                            ] as const).map(([label, val]) => (
+                              <span key={label} style={{ fontSize: 11, padding: '3px 9px', borderRadius: 999, background: '#faf5ff', border: '1px solid #e9d5ff', color: '#7e22ce' }}>
+                                {label} <b style={{ color: '#581c87' }}>{safeNum(val).toLocaleString()}</b>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* 참고 통계(읽기 전용) */}
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                          {([
+                            ['기존 통번역사 Master 총원', c.masterTotal],
+                            ['고유 인원 중 주민번호 보유', c.uniqueWithRrn],
+                            ['A 중 주민번호로 확정', c.A_confirmedByRrn],
+                            ['A 중 이름만 일치(동명이인 확인)', c.A_byNameOnlyNeedsCheck],
+                            ['동일 식별자 중복행(제외)', c.crmInternalDupById],
+                            ['식별자 없는 동명(확인 필요)', c.crmSameNameNoIdentifier],
+                            ['성명 누락 등 무효행', c.crmInvalidRows],
+                          ] as const).map(([label, val]) => (
+                            <span key={label} style={{ fontSize: 11, padding: '3px 9px', borderRadius: 999, background: '#fff', border: '1px solid #e5e7eb', color: '#475569' }}>
+                              {label} <b style={{ color: '#1e293b' }}>{safeNum(val).toLocaleString()}</b>
+                            </span>
+                          ))}
+                        </div>
+
+                        <div style={{ fontSize: 11.5, marginTop: 10, color: c.reconciled ? '#047857' : '#b91c1c', fontWeight: 600 }}>
+                          {c.reconciled ? '✓' : '✗'} 분류 합계 A+B+C = 고유 인원 {safeNum(c.crmUniquePersons).toLocaleString()}명 {c.reconciled ? '일치' : '불일치(확인 필요)'}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 8 }}>
+                          ※ {rebuild.note}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
               {/* ── 등록 방식 선택 (거래처만: 담당자는 이번 단계에서 신규등록만 지원, §17) ── */}
               {entity === 'company' && (
               <div style={{ background: '#f8fafc', border: '1px solid #eef2f7', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
@@ -612,10 +1275,19 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
               </div>
               )}
 
+              {/* 2단계 → 3단계 이동(통번역사) */}
+              {isWizard && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+                  <PrimaryBtn onClick={() => setWizardStep(3)} data-testid="wizard-to-review" aria-label="정보 검토로 이동">정보 검토 →</PrimaryBtn>
+                </div>
+              )}
+              </>)}
+
+              {showStep3 && (<>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 8 }}>3. 미리보기</div>
               {/* 상태 필터 */}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-                {([['all', '전체'], ['new', '신규 등록 예정'], ['warning', '경고'], ['update', '변경 예정'], ['identical', '기존 동일'], ['needs_review', '중복 검토'], ['duplicate_file', '파일 내 중복'], ['error', '오류']] as const).map(([k, label]) => (
+                {(([['all', '전체'], ['new', '신규 등록 예정'], ['warning', '경고'], ['update', entity === 'translator' ? '보완 가능' : '변경 예정'], ['identical', '기존 동일'], ...(entity === 'translator' ? [['conflict', '정보 충돌'] as const] : []), ['needs_review', '중복 검토'], ['duplicate_file', '파일 내 중복'], ['error', '오류']]) as ReadonlyArray<readonly [string, string]>).map(([k, label]) => (
                   <button key={k} onClick={() => setFilter(k as 'all' | RowStatus | 'warning')}
                     data-testid={`bulk-import-filter-${k}`} aria-label={`${label} 필터`}
                     style={{
@@ -627,37 +1299,77 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                   </button>
                 ))}
               </div>
+              {/* 통번역사 검토 세분 필터(요구사항4) — 상태 필터와 함께(AND) 적용 */}
+              {entity === 'translator' && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10, alignItems: 'center' }}>
+                  <span style={{ fontSize: 11, color: '#9ca3af' }}>검토 세분:</span>
+                  {(([['all', '전체'], ['same_person', '실제 동일인 후보'], ['homonym', '동명이인'], ['file_internal', 'CRM 내부 중복'], ['undecidable', '판단 불가'], ['legacy_no_email', '무이메일 이관대기']]) as ReadonlyArray<readonly [string, string]>).map(([k, label]) => (
+                    <button key={k} onClick={() => setReviewFilter(k as 'all' | ReviewCat)}
+                      data-testid={`bulk-import-review-filter-${k}`} aria-label={`검토 세분 ${label} 필터`}
+                      style={{
+                        fontSize: 11, padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
+                        border: reviewFilter === k ? '1px solid #b45309' : '1px solid #e5e7eb',
+                        background: reviewFilter === k ? '#fffbeb' : '#fff', color: reviewFilter === k ? '#b45309' : '#6b7280', fontWeight: 600,
+                      }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
 
               <div style={{ overflowX: 'auto', maxHeight: 460, overflowY: 'auto', border: '1px solid #eef2f7', borderRadius: 10 }}>
-                <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+                <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: tableMinWidth, tableLayout: useFixedLayout ? 'fixed' : 'auto' }}>
+                  {/* 고정 레이아웃: 컬럼 너비를 colgroup 으로 명시 관리(헤더·데이터 정렬 일치). */}
+                  {useFixedLayout && (
+                    <colgroup>
+                      <col style={{ width: STATUS_COL_W }} />
+                      {cfg.columns.map(c => <col key={c.key} style={{ width: c.width }} />)}
+                      <col style={{ width: REASON_COL_W }} />
+                    </colgroup>
+                  )}
                   <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
                     <tr>
-                      <th style={tableTh}>상태</th>
-                      {cfg.columns.map(c => <th key={c.key} style={tableTh}>{c.label}</th>)}
+                      <th style={{ ...tableTh, textAlign: useFixedLayout ? 'center' : 'left' }}>상태</th>
+                      {cfg.columns.map(c => <th key={c.key} style={{ ...tableTh, textAlign: c.align ?? 'left' }}>{c.label}</th>)}
                       <th style={tableTh}>사유</th>
                     </tr>
                   </thead>
                   <tbody>
                     {shownRows.map((row, idx) => {
                       const meta = statusMeta(row.status);
+                      // 셀 공통 말줄임(고정 레이아웃): 넘치면 ...(title 로 전체 확인). 컬럼별 ellipsis 플래그는 추가 강제.
+                      // 고정 레이아웃에선 colgroup 너비가 셀 폭을 결정하므로 td 에 직접 ellipsis 적용.
+                      const clip: React.CSSProperties = useFixedLayout
+                        ? { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
+                        : {};
                       return (
-                        <tr key={idx} style={{ background: row.status === 'update' ? '#fbfdff' : (row.status === 'new' ? '#fff' : '#fcfcfd') }}>
-                          <td style={tableTd}>
+                        <tr key={idx} style={{ background: row.status === 'conflict' ? '#fffaf6' : (row.status === 'update' ? '#fbfdff' : (row.status === 'new' ? '#fff' : '#fcfcfd')) }}>
+                          <td style={{ ...tableTd, textAlign: useFixedLayout ? 'center' : 'left' }}>
                             <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: meta.bg, color: meta.color, border: `1px solid ${meta.border}`, whiteSpace: 'nowrap' }}>
                               {meta.label}
                             </span>
                           </td>
                           {cfg.columns.map(c => (
-                            <td key={c.key} style={tableTd} title={String(row[c.key] ?? '')}>
+                            <td key={c.key} style={{ ...tableTd, textAlign: c.align ?? 'left', ...clip }} title={String(row[c.key] ?? '')}>
                               <CellValue row={row} colKey={c.key} />
                             </td>
                           ))}
-                          <td style={{ ...tableTd, color: row.status === 'error' ? '#b91c1c' : '#9ca3af', whiteSpace: 'normal' }}>
+                          {/* 사유: 한 줄 말줄임 + title 로 전체 확인(요구사항5). changeSummary 를 같은 줄에 이어 붙여 행 높이 통일. */}
+                          <td
+                            style={{ ...tableTd, color: row.status === 'error' ? '#b91c1c' : '#9ca3af', ...(useFixedLayout ? clip : { whiteSpace: 'normal' }) }}
+                            title={[row.warning ? `⚠ ${row.warning}` : (row.reason ?? ''), row.changeSummary ?? ''].filter(Boolean).join(' · ')}
+                          >
                             {row.warning
                               ? <span style={{ color: '#b45309', fontWeight: 600 }}>⚠ {row.warning}</span>
                               : (row.reason ?? '-')}
-                            {/* 개인고객 중복 후보: 매칭된 기존 레코드를 함께 표시(§9) — 사용자가 직접 비교 */}
-                            {row.matchDetail && (
+                            {/* 통번역사: 보완/충돌 필드 요약(컬럼에 없는 학력·전공·상세정보 등도 노출) — 승인 전 변경 대상 확인 */}
+                            {row.changeSummary && (
+                              <span style={{ marginLeft: 6, fontSize: 11, color: row.status === 'conflict' ? '#c2410c' : '#1d4ed8', fontWeight: 600 }}>
+                                · {row.changeSummary}
+                              </span>
+                            )}
+                            {/* 개인고객 중복 후보(거래처 개인고객 경로): 매칭된 기존 레코드를 함께 표시(§9) */}
+                            {row.matchDetail && !useFixedLayout && (
                               <div style={{ marginTop: 4, fontSize: 11, color: '#6b7280', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6, padding: '4px 8px' }}>
                                 <span style={{ fontWeight: 700, color: '#374151' }}>#{row.matchDetail.id} {row.matchDetail.name}</span>
                                 {' · '}이메일: {row.matchDetail.email || '-'}
@@ -678,18 +1390,339 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                 </div>
               )}
 
-              {/* ── 단계 4: 등록 실행 ── */}
-              <div style={{ marginTop: 18, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                <PrimaryBtn onClick={doExecute} disabled={execDisabled}
-                  data-testid="bulk-import-execute" aria-label="등록 실행">
-                  {executing ? '처리 중...' : execLabel}
-                </PrimaryBtn>
-                <span style={{ fontSize: 12, color: '#6b7280' }}>
-                  {mode === 'update'
-                    ? '기존 ID·연결관계는 유지되며 허용 필드만 수정됩니다. 동일·중복·오류 건은 저장되지 않습니다.'
-                    : '기존 데이터는 변경되지 않습니다. 동일·중복·오류 건은 저장되지 않습니다.'}
-                </span>
-              </div>
+              {/* ── 기존 Master 상세정보 보완 승인(드라이런 · DB 미반영) — 통번역사 전용(5단계) ── */}
+              {entity === 'translator' && eligibleUpdateRows.length > 0 && (
+                <div style={{ marginTop: 20, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 10, padding: '14px 16px' }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e', marginBottom: 4 }}>
+                    기존 Master 상세정보 보완 승인 (동일인 확정 {eligibleUpdateRows.length.toLocaleString()}건 · 드라이런)
+                  </div>
+                  <div style={{ fontSize: 11.5, color: '#b45309', marginBottom: 10 }}>
+                    필드별로 <b>기존값 유지 / CRM값 적용 / 보류</b>를 선택하세요. 기본값 = 공란 보완은 '적용', 정보 충돌은 '유지'(안전).
+                    동명이인·판단불가 대상은 보완 불가로 차단됩니다. 이 화면은 <b>DB를 변경하지 않습니다</b>.
+                  </div>
+
+                  {/* 검색 · 상태 필터 · 검토 완료 집계(요구사항4) */}
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+                    <input value={reviewSearch} onChange={e => { setReviewSearch(e.target.value); setReviewPage(1); }}
+                      placeholder="성명·이메일·Master ID 검색" data-testid="review-search" aria-label="대상자 검색"
+                      style={{ fontSize: 13, padding: '6px 10px', borderRadius: 8, border: '1px solid #e5e7eb', width: 220 }} />
+                    {(['all', 'auto', 'review'] as const).map(s => (
+                      <button key={s} type="button" onClick={() => { setReviewScope(s); setReviewPage(1); }}
+                        data-testid={`review-scope-${s}`} aria-label={`검토 상태 ${s} 필터`}
+                        style={{ fontSize: 11, padding: '4px 10px', borderRadius: 999, cursor: 'pointer',
+                          border: reviewScope === s ? '1px solid #0284c7' : '1px solid #e5e7eb',
+                          background: reviewScope === s ? '#e0f2fe' : '#fff', color: reviewScope === s ? '#0369a1' : '#6b7280', fontWeight: 600 }}>
+                        {s === 'all' ? '전체' : s === 'auto' ? '자동 가능' : '검토 필요'}
+                      </button>
+                    ))}
+                    <span style={{ marginLeft: 'auto', fontSize: 12, color: '#374151' }}>
+                      검토 완료 <b style={{ color: '#047857' }}>{reviewDoneCount.toLocaleString()}</b> · 미완료 <b style={{ color: '#b45309' }}>{reviewPendingCount.toLocaleString()}</b> / {eligibleUpdateRows.length.toLocaleString()}명
+                    </span>
+                  </div>
+                  {/* 동일 기준 일괄 선택(요구사항4) */}
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+                    <span style={{ fontSize: 11, color: '#9ca3af' }}>일괄(현재 페이지):</span>
+                    {(['keep', 'apply', 'hold'] as const).map(d => (
+                      <button key={d} type="button" onClick={() => bulkSetDecision(d, 'page')}
+                        data-testid={`review-bulk-page-${d}`} aria-label={`현재 페이지 일괄 ${d}`}
+                        style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid #e5e7eb', background: '#fff', color: '#374151', fontWeight: 600 }}>
+                        {d === 'keep' ? '유지' : d === 'apply' ? '적용' : '보류'}
+                      </button>
+                    ))}
+                    <span style={{ fontSize: 11, color: '#9ca3af', marginLeft: 8 }}>일괄(전체 {reviewFilteredRows.length.toLocaleString()}):</span>
+                    {(['keep', 'apply', 'hold'] as const).map(d => (
+                      <button key={d} type="button" onClick={() => bulkSetDecision(d, 'all')}
+                        data-testid={`review-bulk-all-${d}`} aria-label={`전체 일괄 ${d}`}
+                        style={{ fontSize: 11, padding: '3px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid #e5e7eb', background: '#fff', color: '#374151', fontWeight: 600 }}>
+                        {d === 'keep' ? '유지' : d === 'apply' ? '적용' : '보류'}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div style={{ maxHeight: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {reviewPageRows.length === 0 && (
+                      <div style={{ fontSize: 12, color: '#9ca3af', padding: '12px 0', textAlign: 'center' }}>검색·필터 조건에 맞는 대상이 없습니다.</div>
+                    )}
+                    {reviewPageRows.map((r, i) => (
+                      <div key={`${r.existingId}-${i}`} style={{ background: '#fff', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 10px' }}>
+                        <div style={{ fontSize: 12, color: '#374151', marginBottom: 6, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <b>{String(r.name || '(이름없음)')}</b>
+                          <span style={{ color: '#6b7280' }}>Master #{r.existingId}</span>
+                          <span style={{ color: '#6b7280' }}>주민번호 {String(r.residentMasked ?? '-')}</span>
+                          <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 5, background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>{r.matchMethod ?? '-'} 매칭</span>
+                          {r.status === 'conflict' && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 5, background: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa' }}>정보 충돌</span>}
+                          {r.masterInactive && <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 5, background: '#f3f4f6', color: '#6b7280', border: '1px solid #e5e7eb' }}>비활성(자동 활성화 안 함)</span>}
+                        </div>
+                        {Object.entries(r.changes ?? {}).map(([field, ch]) => {
+                          const d = decisionFor(r, field, ch);
+                          const cat = feFieldCategory(field, ch.old, ch.new);
+                          const autoCat = r.matchMethod === 'rrn' && FE_AUTO_CATEGORIES.has(cat);
+                          return (
+                            <div key={field} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '3px 0', borderTop: '1px dashed #f3f4f6' }}>
+                              <span style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', minWidth: 64 }}>{FIELD_LABELS[field] ?? field}</span>
+                              <span style={{ fontSize: 11, color: '#9ca3af', textDecoration: 'line-through' }}>{ch.old || '(없음)'}</span>
+                              <span style={{ fontSize: 11, color: '#9ca3af' }}>→</span>
+                              <span style={{ fontSize: 11, color: '#1d4ed8', fontWeight: 600 }}>{ch.new || '(없음)'}</span>
+                              <span style={{ fontSize: 10, padding: '1px 6px', borderRadius: 5, border: `1px solid ${autoCat ? '#bbf7d0' : '#fde68a'}`, background: autoCat ? '#f0fdf4' : '#fffbeb', color: autoCat ? '#047857' : '#b45309' }}>
+                                {CATEGORY_LABELS[cat]}{autoCat ? ' · 자동' : ' · 검토'}
+                              </span>
+                              <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 4 }}>
+                                {(['keep', 'apply', 'hold'] as const).map(opt => (
+                                  <button key={opt} type="button" onClick={() => setDecision(r.existingId as number, field, opt)}
+                                    data-testid={`master-field-${r.existingId}-${field}-${opt}`}
+                                    aria-label={`${FIELD_LABELS[field] ?? field} ${opt === 'keep' ? '기존값 유지' : opt === 'apply' ? 'CRM값 적용' : '보류'}`}
+                                    style={{
+                                      fontSize: 10.5, padding: '2px 8px', borderRadius: 6, cursor: 'pointer',
+                                      border: d === opt ? '1px solid #0284c7' : '1px solid #e5e7eb',
+                                      background: d === opt ? '#e0f2fe' : '#fff', color: d === opt ? '#0369a1' : '#6b7280', fontWeight: 600,
+                                    }}>
+                                    {opt === 'keep' ? '유지' : opt === 'apply' ? '적용' : '보류'}
+                                  </button>
+                                ))}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                  {/* 페이지네이션(요구사항4): 페이지당 20/50/100 */}
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+                    <GhostBtn onClick={() => setReviewPage(p => Math.max(1, p - 1))} disabled={reviewPageClamped <= 1} style={{ fontSize: 12, padding: '4px 10px' }} data-testid="review-prev-page" aria-label="이전 페이지">◂ 이전</GhostBtn>
+                    <span style={{ fontSize: 12, color: '#6b7280' }}>{reviewPageClamped} / {reviewTotalPages} 페이지 ({reviewFilteredRows.length.toLocaleString()}명)</span>
+                    <GhostBtn onClick={() => setReviewPage(p => Math.min(reviewTotalPages, p + 1))} disabled={reviewPageClamped >= reviewTotalPages} style={{ fontSize: 12, padding: '4px 10px' }} data-testid="review-next-page" aria-label="다음 페이지">다음 ▸</GhostBtn>
+                    <span style={{ marginLeft: 12, fontSize: 11, color: '#9ca3af' }}>페이지당</span>
+                    {([20, 50, 100] as const).map(n => (
+                      <button key={n} type="button" onClick={() => { setReviewPageSize(n); setReviewPage(1); }} data-testid={`review-pagesize-${n}`} aria-label={`페이지당 ${n}명`}
+                        style={{ fontSize: 11, padding: '3px 9px', borderRadius: 6, cursor: 'pointer', border: reviewPageSize === n ? '1px solid #0284c7' : '1px solid #e5e7eb', background: reviewPageSize === n ? '#e0f2fe' : '#fff', color: reviewPageSize === n ? '#0369a1' : '#6b7280', fontWeight: 600 }}>{n}</button>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    <PrimaryBtn onClick={runUpdatePlan} disabled={planning}
+                      data-testid="master-update-plan-btn" aria-label="업데이트 계획 검증(미반영)">
+                      {planning ? '검증 중...' : '업데이트 계획 검증 (미반영)'}
+                    </PrimaryBtn>
+                    <span style={{ fontSize: 11.5, color: '#92400e' }}>실제 반영은 다음 단계 최종 승인 후 진행됩니다. 이 버튼은 DB를 변경하지 않습니다.</span>
+                  </div>
+
+                  {/* 드라이런 결과 — 최종 검증 보고서 */}
+                  {plan && plan.dryRun && (
+                    <div style={{ marginTop: 12, background: '#fff', border: '1px solid #bae6fd', borderRadius: 8, padding: '12px 14px' }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#075985', marginBottom: 8 }}>
+                        🧾 최종 검증 보고서 (미반영 · committed={String(plan.committed)})
+                      </div>
+                      {/* 주민번호 일치 대상 핵심 집계(요구사항) */}
+                      {plan.rrnReport && (
+                        <div style={{ marginBottom: 10 }}>
+                          <div style={{ fontSize: 11.5, fontWeight: 700, color: '#0369a1', marginBottom: 6 }}>주민번호 13자리 일치 대상 {safeNum(plan.rrnReport.rrnSingleTotal).toLocaleString()}행</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 8 }}>
+                            {([
+                              ['자동 업데이트 가능', plan.rrnReport.rrnAutoUpdatable, '#047857', '#f0fdf4', '#bbf7d0'],
+                              ['추가 검토 필요', plan.rrnReport.rrnReviewNeeded, '#b45309', '#fffbeb', '#fde68a'],
+                              ['변경 없음(이미 동일)', plan.rrnReport.rrnNoChange, '#6b7280', '#f3f4f6', '#e5e7eb'],
+                              ['주민번호 중복(자동 금지)', plan.rrnReport.rrnMultiBlocked, '#b91c1c', '#fef2f2', '#fecaca'],
+                            ] as const).map(([label, val, color, bg, border]) => (
+                              <div key={label} style={{ fontSize: 12, color, background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: '7px 10px', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                                <span>{label}</span><b>{safeNum(val).toLocaleString()}</b>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ fontSize: 11, marginTop: 6, color: plan.rrnReport.reconciled ? '#047857' : '#b91c1c', fontWeight: 600 }}>
+                            {plan.rrnReport.reconciled ? '✓' : '✗'} 자동가능 + 검토필요 + 변경없음 = 주민번호 일치 {safeNum(plan.rrnReport.rrnSingleTotal).toLocaleString()}행
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 8, marginBottom: 8 }}>
+                        {([
+                          ['보완 대상 인원', plan.summary.personsToUpdate],
+                          ['적용 예정 필드수', plan.summary.appliedFieldTotal],
+                          ['동일인 확정 행', plan.summary.eligibleRows],
+                          ['차단(동명이인·판단불가) 행', plan.summary.blockedRows],
+                          ['비활성 인력 보완건(활성화 안 함)', plan.summary.inactiveWithApply],
+                        ] as const).map(([label, val]) => (
+                          <div key={label} style={{ fontSize: 12, color: '#0c4a6e', background: '#f0f9ff', border: '1px solid #e0f2fe', borderRadius: 8, padding: '7px 10px', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                            <span>{label}</span><b>{safeNum(val).toLocaleString()}</b>
+                          </div>
+                        ))}
+                      </div>
+                      {Object.keys(plan.summary.applyFieldCounts ?? {}).length > 0 && (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+                          <span style={{ fontSize: 11, color: '#475569' }}>적용 예정(필드별):</span>
+                          {Object.entries(plan.summary.applyFieldCounts).map(([f, v]) => (
+                            <span key={f} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1d4ed8' }}>
+                              {FIELD_LABELS[f] ?? f} <b>{safeNum(v).toLocaleString()}</b>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div style={{ fontSize: 11, color: '#94a3b8' }}>※ {plan.note}</div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 3단계 내비게이션(통번역사) */}
+              {isWizard && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>
+                  <GhostBtn onClick={() => setWizardStep(2)} data-testid="wizard-back-analysis" aria-label="분석 결과로">← 분석 결과</GhostBtn>
+                  <PrimaryBtn onClick={() => setWizardStep(4)} data-testid="wizard-to-final" aria-label="최종 등록으로">최종 등록 →</PrimaryBtn>
+                </div>
+              )}
+              </>)}
+
+              {/* ── 단계 4: 최종 등록 ── */}
+              {showStep4 && (<>
+              {isWizard && <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 10 }}>4. 최종 등록 — Master 재구축 기준</div>}
+              {/* ④ 최종 등록은 Master 재구축 기준(고유 2,019 / 등록 1,493 / 보류 526)으로 표시한다.
+                  기존 대량등록(구 581명) 기준은 이 화면에서 사용하지 않는다(요구사항4·7). 재구축 분석 미실행 시 ② 단계로 안내. */}
+              {isWizard && !rebuild && (
+                <div style={{ marginBottom: 14, padding: '12px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 12.5, color: '#92400e', lineHeight: 1.8 }}>
+                  Master 재구축 최종 등록 기준을 표시하려면 <b>② 분석 결과</b> 단계에서 <b>‘재구축 분석 실행’</b>을 먼저 눌러주세요.
+                  (이 화면은 기존 581명 기준을 사용하지 않습니다.)
+                  <div style={{ marginTop: 10 }}>
+                    <GhostBtn onClick={() => setWizardStep(2)} data-testid="wizard-to-rebuild" aria-label="분석 결과로 이동">② 분석 결과로 이동</GhostBtn>
+                  </div>
+                </div>
+              )}
+              {isWizard && rebuild && (() => {
+                const c = rebuild.classification;
+                const fd = c.finalDisposition;
+                const pl = rebuild.progressLink;
+                return (
+                  <>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10, marginBottom: 10 }}>
+                    {([
+                      ['CRM 고유 인원', fd.total, '#4c1d95', '#f5f3ff'],
+                      ['기존 Master 재사용', fd.reuseExisting, '#1d4ed8', '#eff6ff'],
+                      ['신규 Master 등록 가능', fd.newCandidate, '#047857', '#ecfdf5'],
+                      ['실제 수동 확인 필요', fd.manualReview, '#b45309', '#fffbeb'],
+                      ['등록 제외', fd.excluded, '#9f1239', '#fff1f2'],
+                      ['진행관리표 연결 확정', pl.confirmed, '#7e22ce', '#faf5ff'],
+                      ['진행관리표 연결 후보', pl.candidate, '#7e22ce', '#faf5ff'],
+                      ['진행관리표 미연결', pl.unlinked, '#6b7280', '#f9fafb'],
+                    ] as const).map(([label, val, color, bg]) => (
+                      <div key={label} style={{ fontSize: 12, color, background: bg, border: `1px solid ${color}22`, borderRadius: 8, padding: '10px 12px', display: 'flex', justifyContent: 'space-between', gap: 8, fontWeight: 600 }}>
+                        <span>{label}</span><b>{safeNum(val).toLocaleString()}{label.includes('진행관리표') ? '건' : '명'}</b>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ fontSize: 11.5, marginBottom: 14, color: fd.reconciled ? '#047857' : '#b91c1c', fontWeight: 600 }}>
+                    {fd.reconciled ? '✓' : '✗'} 재사용 {safeNum(fd.reuseExisting).toLocaleString()} + 신규가능 {safeNum(fd.newCandidate).toLocaleString()} + 수동 {safeNum(fd.manualReview).toLocaleString()} + 제외 {safeNum(fd.excluded).toLocaleString()} = 고유 {safeNum(fd.total).toLocaleString()}명 {fd.reconciled ? '일치' : '불일치(확인 필요)'} · <span style={{ color: '#6b21a8' }}>최신 재구축 기준</span>
+                  </div>
+                  </>
+                );
+              })()}
+              {/* 변경 전후 요약 — 필드별 적용 예정(계획 검증 후) */}
+              {isWizard && plan && Object.keys(plan.summary.applyFieldCounts ?? {}).length > 0 && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+                  <span style={{ fontSize: 11, color: '#475569' }}>필드별 변경 예정:</span>
+                  {Object.entries(plan.summary.applyFieldCounts).map(([f, v]) => (
+                    <span key={f} style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1d4ed8' }}>
+                      {FIELD_LABELS[f] ?? f} <b>{safeNum(v).toLocaleString()}</b>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {isWizard && !plan && eligibleUpdateRows.length > 0 && (
+                <div style={{ fontSize: 11.5, color: '#92400e', marginBottom: 12 }}>※ 기존 Master 보완의 변경 전후 요약을 보려면 ③ 정보 검토에서 '업데이트 계획 검증'을 먼저 실행하세요.</div>
+              )}
+
+              {/* 실행 영역 — 타 엔티티는 기존 실행 버튼 유지. 통번역사는 이번 단계 드라이런 전용(신규·업데이트 모두 별도 승인 후 실행, 요구사항6). */}
+              {!isWizard ? (
+                <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <PrimaryBtn onClick={doExecute} disabled={execDisabled}
+                    data-testid="bulk-import-execute" aria-label="등록 실행">
+                    {executing ? '처리 중...' : execLabel}
+                  </PrimaryBtn>
+                  <span style={{ fontSize: 12, color: '#6b7280' }}>
+                    {mode === 'update'
+                      ? '기존 ID·연결관계는 유지되며 허용 필드만 수정됩니다. 동일·중복·오류 건은 저장되지 않습니다.'
+                      : '기존 데이터는 변경되지 않습니다. 동일·중복·오류 건은 저장되지 않습니다.'}
+                  </span>
+                </div>
+              ) : (
+                <div style={{ marginTop: 6 }}>
+                  {!rebuild ? (
+                    <div style={{ padding: '12px 14px', background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 8, fontSize: 12.5, color: '#475569', lineHeight: 1.8 }}>
+                      ② 분석 결과 단계에서 <b>재구축 분석</b>을 실행하면 등록 대상·재사용·신규·정리 예정 인원이 이 화면에 표시됩니다. 실제 반영은 대표 승인 후 진행합니다.
+                    </div>
+                  ) : (<>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
+                      <PrimaryBtn onClick={doRebuildExecutePlan} disabled={execPlanning}
+                        data-testid="rebuild-execute-plan" aria-label="실제 등록 실행 계획 검증">
+                        {execPlanning ? '검증 중...' : '실제 등록 실행 계획 검증 (드라이런)'}
+                      </PrimaryBtn>
+                      <span style={{ fontSize: 12, color: '#6b7280' }}>DB 미변경. 기존 ID 유지·UNIQUE 충돌·중복 생성·원본 보존을 사전 검증합니다.</span>
+                    </div>
+                    {execPlan && (() => {
+                      const w = execPlan.willRegister; const v = execPlan.validation;
+                      const blockers = v.emailCollision + v.rrnCollision;
+                      return (
+                        <div style={{ padding: '12px 14px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: 8 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: '#334155', marginBottom: 8 }}>실제 등록 실행 계획 (검증 결과 · DB 미반영)</div>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 6, marginBottom: 8 }}>
+                            {([
+                              ['기존 Master 재사용(ID 유지·보완)', w.reuseExisting, '#1d4ed8'],
+                              ['신규 Master 생성 가능', w.newCreate, '#047857'],
+                              ['수동 확인 보류(등록 안 함)', w.manualHold, '#b45309'],
+                              ['등록 제외(생성 안 함)', w.excluded, '#9f1239'],
+                            ] as const).map(([label, val, color]) => (
+                              <div key={label} style={{ fontSize: 11.5, color, fontWeight: 700, display: 'flex', justifyContent: 'space-between', gap: 6 }}>
+                                <span>{label}</span><b>{safeNum(val).toLocaleString()}명</b>
+                              </div>
+                            ))}
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', fontSize: 11, marginBottom: 8 }}>
+                            {([
+                              ['실행 전 인원', execPlan.beforeCount],
+                              ['예상 실행 후', execPlan.projectedAfter],
+                              ['이메일 UNIQUE 충돌', v.emailCollision],
+                              ['주민번호 UNIQUE 충돌', v.rrnCollision],
+                              ['파일내부 중복 차단', v.fileDupBlocked],
+                              ['최종 정리 대상(삭제 안 함)', v.cleanupCandidates],
+                            ] as const).map(([label, val]) => (
+                              <span key={label} style={{ padding: '2px 8px', borderRadius: 999, background: '#fff', border: '1px solid #e5e7eb', color: '#475569' }}>
+                                {label} <b style={{ color: '#1e293b' }}>{safeNum(val).toLocaleString()}</b>
+                              </span>
+                            ))}
+                          </div>
+                          <div style={{ fontSize: 11.5, color: '#334155', lineHeight: 1.7, marginBottom: 8 }}>
+                            검증: 분석↔실행계획 정합 {execPlan.planMatchesAnalysis ? '✓' : '✗'} · 기존 ID 유지 {v.idPreserved ? '✓' : '✗'} · 원본(진행관리표·판매목록·매핑·민감정보) 보존 {v.originalsPreserved ? '✓' : '✗'} · 단일 트랜잭션·실패 시 롤백 ✓ · 실행 전후 기록 ✓
+                            {blockers > 0 && <span style={{ color: '#b91c1c', fontWeight: 700 }}> · UNIQUE 충돌 {blockers}건은 해당 인원만 자동 제외(나머지는 정상 생성)</span>}
+                          </div>
+                          {/* 요구사항2: 등록 제외 기준 C 검증 */}
+                          <div style={{ fontSize: 11.5, marginBottom: 8, color: execPlan.excludeAudit.allCriterionC ? '#047857' : '#b91c1c', fontWeight: 600 }}>
+                            {execPlan.excludeAudit.allCriterionC ? '✓' : '✗'} 등록 제외 {safeNum(execPlan.excludeAudit.total).toLocaleString()}명 전원 기준 C(주민번호 없음·수행이력 없음)
+                            {execPlan.excludeAudit.withRrnButExcluded > 0 && <span style={{ color: '#b91c1c' }}> · 다른 사유 제외 {execPlan.excludeAudit.withRrnButExcluded}명(확인 필요)</span>}
+                            {execPlan.excludeAudit.nameMissingSeparate > 0 && <span style={{ color: '#6b7280', fontWeight: 500 }}> · (별도) 성명 누락 무효행 {safeNum(execPlan.excludeAudit.nameMissingSeparate).toLocaleString()}건은 고유인원·제외에 미포함</span>}
+                          </div>
+                          {/* 요구사항3: 수동 확인 대상 상세(마스킹) */}
+                          {execPlan.manualReviewDetail.length > 0 && (
+                            <div style={{ marginBottom: 8, padding: '8px 10px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8 }}>
+                              <div style={{ fontSize: 11.5, fontWeight: 700, color: '#92400e', marginBottom: 4 }}>수동 확인 대상 {execPlan.manualReviewDetail.length}명 (개인정보 마스킹)</div>
+                              {execPlan.manualReviewDetail.map((m) => (
+                                <div key={m.rowNumber} style={{ fontSize: 11, color: '#78350f', lineHeight: 1.7 }}>
+                                  · {m.nameMasked} ({m.residentMasked}) — <b>{m.reason}</b> → {m.action}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <div style={{ padding: '10px 12px', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 8, fontSize: 11.5, color: '#9a3412', lineHeight: 1.7 }}>
+                            <b>실제 DB 등록 실행 기능은 준비되었습니다.</b> 이번 작업에서는 실행하지 않습니다(요구사항8). 실제 반영은 <b>대표 승인 + 서버 호출(commit=true, confirm=&lt;스냅샷ID&gt;)</b> 에서만 수행됩니다. 이름만 일치 자동연결 없음 · 기존 Master 삭제/비활성화 없음 · 민감정보·계좌·단가·기존 매핑 보존.
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </>)}
+                </div>
+              )}
+
+              {isWizard && (
+                <div style={{ marginTop: 14 }}>
+                  <GhostBtn onClick={() => setWizardStep(3)} data-testid="wizard-back-review" aria-label="정보 검토로">← 정보 검토</GhostBtn>
+                </div>
+              )}
+              </>)}
             </Card>
           )}
         </>

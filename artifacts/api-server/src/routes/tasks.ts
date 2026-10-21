@@ -3,7 +3,7 @@ import {
   db, tasksTable, projectsTable, usersTable, paymentsTable,
   settlementsTable, translatorSensitiveTable,
 } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { logEvent } from "../lib/logEvent";
 import { requireAuth, requireRole } from "../middlewares/auth";
 
@@ -264,7 +264,8 @@ router.post(
       return;
     }
 
-    const translators = await db.select().from(usersTable).where(eq(usersTable.role, "translator"));
+    // 배정 대상: 중복정리 제외(soft-delete)·비활성 Master는 선택 대상에서 제외.
+    const translators = await db.select().from(usersTable).where(and(eq(usersTable.role, "translator"), eq(usersTable.isActive, true), isNull(usersTable.deletedAt)));
     if (translators.length === 0) {
       res.status(404).json({ error: "등록된 번역사가 없습니다." });
       return;

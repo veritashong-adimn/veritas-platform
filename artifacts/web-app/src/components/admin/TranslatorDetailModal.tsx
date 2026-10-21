@@ -556,6 +556,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [permanentDeleting, setPermanentDeleting] = useState(false);
   const [permanentDeleteError, setPermanentDeleteError] = useState<string | null>(null);
   const [userInfo, setUserInfo] = useState<{ name: string; email: string; isActive: boolean; invitePending?: boolean } | null>(null);
+  const [isLegacyMigrated, setIsLegacyMigrated] = useState(false);   // 과거 CRM 이관 인력(이메일 미등록 표시)
   const [reinviting, setReinviting] = useState(false);
   const [rates, setRates] = useState<TranslatorRate[]>([]);
   const [notes, setNotes] = useState<NoteEntry[]>([]);
@@ -675,7 +676,10 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
       }
       if (dRes.ok) {
         const u = dData.user;
-        setUserInfo({ name: u?.name ?? "", email: u?.email ?? userEmail, isActive: u?.isActive ?? true, invitePending: dData.user?.inviteStatus === "pending" });
+        const migrated = u?.isLegacyMigrated === true;
+        setIsLegacyMigrated(migrated);
+        // 이관 인력은 내부 식별 이메일을 표시하지 않음 → 공란.
+        setUserInfo({ name: u?.name ?? "", email: migrated ? "" : (u?.email ?? userEmail), isActive: u?.isActive ?? true, invitePending: dData.user?.inviteStatus === "pending" });
         const p: TranslatorProfile | null = dData.profile;
         setProfile(p);
         setRates(Array.isArray(dData.rates) ? dData.rates : []);
@@ -1377,7 +1381,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         <input type="email" value={entry.email}
                           onChange={e => setEmailEntries(p => p.map((x, idx) => idx === i ? { ...x, email: e.target.value, error: "" } : x))}
-                          placeholder="이메일 주소"
+                          placeholder={isLegacyMigrated && !entry.email ? "이메일 미등록 (과거 CRM 이관)" : "이메일 주소"}
                           style={{ ...inputStyle, fontSize: 13, padding: "6px 10px", flex: 1, borderColor: entry.error ? "#dc2626" : "#d1d5db" }}
                         />
                         {entry.isPrimary ? (

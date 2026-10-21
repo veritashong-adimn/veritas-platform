@@ -24,6 +24,7 @@ import { bulkBtnStyle } from '../components/admin/product/productShared';
 import { CustomerDetailModal } from '../components/admin/CustomerDetailModal';
 import { TranslatorProfileModal } from '../components/admin/TranslatorProfileModal';
 import { TranslatorDetailModal } from '../components/admin/TranslatorDetailModal';
+import { TranslatorMergeCompareModal } from '../components/admin/TranslatorMergeCompareModal';
 import { TranslatorCreateModal } from '../components/admin/TranslatorCreateModal';
 import { ProjectDetailModal } from '../components/admin/ProjectDetailModal';
 import { DateField } from '../components/admin/DatePickerShared';
@@ -367,8 +368,25 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   const [translatorGradeFilter, setTranslatorGradeFilter] = useState("all");
   const [translatorRatingFilter, setTranslatorRatingFilter] = useState("");
   const [translatorSvcFilter, setTranslatorSvcFilter] = useState("all");
-  const [showInactiveTranslators, setShowInactiveTranslators] = useState(false);
-  const [showTranslatorBulkImport, setShowTranslatorBulkImport] = useState(false);
+  // 등록구분(all|existing|migrated) · 활동상태(all|active|inactive|unverified) — '비활성 포함' 체크박스를 대체.
+  const [translatorRegFilter, setTranslatorRegFilter] = useState("all");
+  const [translatorActivityFilter, setTranslatorActivityFilter] = useState("all");
+  // 이름 중복 여부 필터(all|dup|unique) + 전역 중복 통계(그룹 수/계정 수). 중복 판정은 전체 Master 기준(서버).
+  const [translatorNameDupFilter, setTranslatorNameDupFilter] = useState("all");
+  const [translatorDupStats, setTranslatorDupStats] = useState<{ groups: number; accounts: number } | null>(null);
+  // 수동 통합(Phase 2): 선택 계정(id→이름) — 페이지 이동에도 유지. 통합 비교 모달 대상 ids.
+  const [mergeSelected, setMergeSelected] = useState<Map<number, string>>(new Map());
+  const [mergeModalIds, setMergeModalIds] = useState<number[] | null>(null);
+  const mergeNorm = (s: string | null | undefined) => (s ?? "").replace(/[\s　()[\]{}·.,\-_/'"]/g, "").toLowerCase().trim();
+  const toggleMergeSelect = (id: number, name: string | null) => setMergeSelected(prev => {
+    const next = new Map(prev);
+    if (next.has(id)) next.delete(id); else next.set(id, name ?? "");
+    return next;
+  });
+  const mergeSelectedArr = Array.from(mergeSelected.entries());
+  const mergeAllSameName = mergeSelectedArr.length >= 2 && new Set(mergeSelectedArr.map(([, n]) => mergeNorm(n))).size === 1;
+  // 통번역사 등록 페이지의 하위 탭(§2): 기본은 개별 등록. 엑셀 대량등록은 공통 Excel Engine(BulkImportPage) 재사용.
+  const [translatorRegisterTab, setTranslatorRegisterTab] = useState<"individual" | "excel">("individual");
   const [translatorExporting, setTranslatorExporting] = useState(false);
   const [translatorDetailModal, setTranslatorDetailModal] = useState<{ userId: number; email: string } | null>(null);
   const [expandedSubtypeRows, setExpandedSubtypeRows] = useState<Set<number>>(new Set());
@@ -729,7 +747,11 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       if (translatorGradeFilter !== "all") params.set("grade", translatorGradeFilter);
       if (translatorRatingFilter.trim()) params.set("minRating", translatorRatingFilter.trim());
       if (translatorSvcFilter !== "all") params.set("svc", translatorSvcFilter);
-      if (showInactiveTranslators) params.set("includeInactive", "true");
+      // Master 등록 인력 전원 조회(활동/이관 무관). 운영 배정·정산 대상 선정은 별도 로직이라 영향 없음.
+      params.set("includeInactive", "true");
+      if (translatorRegFilter !== "all") params.set("regType", translatorRegFilter);
+      if (translatorActivityFilter !== "all") params.set("activityState", translatorActivityFilter);
+      if (translatorNameDupFilter !== "all") params.set("nameDup", translatorNameDupFilter);
       const res = await fetch(api(`/api/admin/translators?${params.toString()}`), { headers: authHeaders });
       const data = await res.json();
       if (res.ok) {
@@ -738,6 +760,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         const total: number = typeof data?.total === "number" ? data.total : rows.length;
         setTranslatorList(rows);
         setTranslatorTotal(total);
+        // 전역 중복 통계(응답 가산 필드) — 중복 필터 적용 시 상단 배너에 사용.
+        setTranslatorDupStats(data?.dupStats && typeof data.dupStats.groups === "number" ? data.dupStats : null);
         // 현재 페이지가 비었는데 앞 페이지가 남아있으면 한 페이지 뒤로(삭제/필터로 마지막 페이지가 사라진 경우).
         if (rows.length === 0 && total > 0 && translatorPage > 1) {
           setTranslatorPage(p => Math.max(1, p - 1));
@@ -745,7 +769,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       }
     } catch { setToast("오류: 통번역사 조회 실패"); }
     finally { setTranslatorsLoading(false); }
-  }, [token, translatorPage, translatorPageSize, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter, translatorSvcFilter, showInactiveTranslators]);
+  }, [token, translatorPage, translatorPageSize, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter, translatorSvcFilter, translatorRegFilter, translatorActivityFilter, translatorNameDupFilter]);
 
   // 통번역사 Excel 다운로드: 현재 검색/필터의 "전체 매칭 행"을 내보낸다(민감정보 제외 — translatorExcel.ts, §4).
   const handleExportTranslators = useCallback(async () => {
@@ -758,7 +782,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       if (translatorGradeFilter !== "all") params.set("grade", translatorGradeFilter);
       if (translatorRatingFilter.trim()) params.set("minRating", translatorRatingFilter.trim());
       if (translatorSvcFilter !== "all") params.set("svc", translatorSvcFilter);
-      if (showInactiveTranslators) params.set("includeInactive", "true");
+      params.set("includeInactive", "true");
+      if (translatorRegFilter !== "all") params.set("regType", translatorRegFilter);
+      if (translatorActivityFilter !== "all") params.set("activityState", translatorActivityFilter);
+      if (translatorNameDupFilter !== "all") params.set("nameDup", translatorNameDupFilter);
       const res = await fetch(api(`/api/admin/translators${params.toString() ? "?" + params.toString() : ""}`), { headers: authHeaders });
       const data = await res.json();
       if (!res.ok) { setToast(`오류: 통번역사 조회 실패 (${res.status})`); return; }
@@ -768,7 +795,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       setToast(`${rows.length.toLocaleString()}건을 Excel로 내보냈습니다.`);
     } catch { setToast("오류: Excel 다운로드 실패"); }
     finally { setTranslatorExporting(false); }
-  }, [token, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter, translatorSvcFilter, showInactiveTranslators]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [token, translatorSearch, translatorLangFilter, translatorStatusFilter, translatorGradeFilter, translatorRatingFilter, translatorSvcFilter, translatorRegFilter, translatorActivityFilter, translatorNameDupFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // [제거됨] 구식 통번역사 엑셀 대량등록 핸들러(handleExcelUpload/closeExcelModal/handleBulkCreate).
   //  → 공통 Excel Import Engine(목록 → 대량등록, BulkImportPage entity="translator")으로 일원화.
@@ -2185,20 +2212,57 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         />
       )}
 
-      {/* ── 통번역사 등록 (독립 ERP 페이지) — 개별등록 전용(§2·§9). 엑셀 대량등록은 [목록 → 대량등록] 공통 Engine 하나로 통일. ── */}
+      {/* ── 통번역사 등록 (독립 ERP 페이지) — [개별 등록 / 엑셀 대량등록] 탭(§2). ── */}
+      {/* 개별 등록: 기존 폼 그대로. 엑셀 대량등록: 공통 Excel Engine(BulkImportPage entity="translator") 재사용 — 로직·API 중복 없음. */}
       {adminTab === "translator-register" && (
-        <TranslatorCreateModal
-          asPage
-          token={token}
-          permissions={permissions}
-          onClose={() => navigateToAdminTab("translators")}
-          onCreated={(data) => {
-            fetchTranslators();
-            // 등록 완료 → 방금 등록한 통번역사 상세페이지로 이동. 초대 링크는 상세의 [링크 재발급]으로 재획득 가능.
-            if (data?.id) { setTranslatorDetailModal({ userId: data.id, email: data.email }); navigateToAdminTab("translator-detail"); }
-          }}
-          onToast={setToast}
-        />
+        <>
+          <div style={{ display: "flex", gap: 6, marginBottom: 18, borderBottom: "1px solid #e5e7eb", paddingBottom: 12 }}>
+            {([
+              { key: "individual", label: "개별 등록" },
+              { key: "excel",      label: "엑셀 대량등록" },
+            ] as const).map(({ key, label }) => (
+              <button key={key} type="button"
+                onClick={() => setTranslatorRegisterTab(key)}
+                data-testid={`translator-register-tab-${key}`}
+                aria-label={`통번역사 ${label} 탭`}
+                aria-pressed={translatorRegisterTab === key}
+                style={{
+                  padding: "7px 18px", borderRadius: 8, fontSize: 13, cursor: "pointer",
+                  background: translatorRegisterTab === key ? "#0ea5e9" : "#f0f9ff",
+                  color: translatorRegisterTab === key ? "#fff" : "#0369a1",
+                  border: `1px solid ${translatorRegisterTab === key ? "#0ea5e9" : "#bae6fd"}`,
+                  fontWeight: translatorRegisterTab === key ? 700 : 500,
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {translatorRegisterTab === "individual" && (
+            <TranslatorCreateModal
+              asPage
+              token={token}
+              permissions={permissions}
+              onClose={() => navigateToAdminTab("translators")}
+              onCreated={(data) => {
+                fetchTranslators();
+                // 등록 완료 → 방금 등록한 통번역사 상세페이지로 이동. 초대 링크는 상세의 [링크 재발급]으로 재획득 가능.
+                if (data?.id) { setTranslatorDetailModal({ userId: data.id, email: data.email }); navigateToAdminTab("translator-detail"); }
+              }}
+              onToast={setToast}
+            />
+          )}
+
+          {translatorRegisterTab === "excel" && (
+            <BulkImportPage
+              entity="translator"
+              token={token}
+              onToast={setToast}
+              onClose={() => navigateToAdminTab("translators")}
+              onDone={() => { void fetchTranslators(); }}
+            />
+          )}
+        </>
       )}
 
       {/* ── 통번역사 상세 (독립 ERP 탭 페이지) — 목록/등록에서 진입. 팝업 아님. ── */}
@@ -2213,6 +2277,16 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onToast={setToast}
           onSaved={() => fetchTranslators()}
           onDeleted={() => { navigateToAdminTab("translators"); fetchTranslators(); }}
+        />
+      )}
+
+      {/* ── 통번역사 수동 통합 비교·미리보기·실행 모달(실행 성공 시 onMerged 로 목록 새로고침) ── */}
+      {mergeModalIds !== null && (
+        <TranslatorMergeCompareModal
+          token={token}
+          masterIds={mergeModalIds}
+          onClose={() => setMergeModalIds(null)}
+          onMerged={() => { setMergeSelected(new Map()); void fetchTranslators(); }}
         />
       )}
 
@@ -2342,26 +2416,14 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       )}
 
       {/* ── 통번역사 탭 ── */}
-      {adminTab === "translators" && showTranslatorBulkImport && (
-        <BulkImportPage
-          entity="translator"
-          token={token}
-          onToast={setToast}
-          onClose={() => setShowTranslatorBulkImport(false)}
-          onDone={() => { void fetchTranslators(); }}
-        />
-      )}
-      {adminTab === "translators" && !showTranslatorBulkImport && (
-        // 목록: 조회/검색/필터/선택/상세 + 공통 Engine 기반 [Excel 다운로드][대량등록](§22). 민감정보는 다운로드에서 제외(§4).
+      {adminTab === "translators" && (
+        // 목록: 조회/검색/필터/선택/상세 + [Excel 다운로드](§22). 민감정보는 다운로드에서 제외(§4).
+        // 엑셀 대량등록은 목록이 아니라 [통번역사 등록 → 엑셀 대량등록] 탭으로 이동(§2).
         <Section title={`통번역사 목록 (${translatorTotal})`} action={
           <div style={{ display: "flex", gap: 8 }}>
             <GhostBtn onClick={handleExportTranslators} disabled={translatorExporting} style={{ fontSize: 13, padding: "7px 14px" }}
               data-testid="translator-excel-export-btn" aria-label="통번역사 Excel 다운로드">
               {translatorExporting ? "내보내는 중…" : "Excel 다운로드"}
-            </GhostBtn>
-            <GhostBtn onClick={() => setShowTranslatorBulkImport(true)} style={{ fontSize: 13, padding: "7px 14px" }}
-              data-testid="translator-bulk-import-btn" aria-label="통번역사 대량등록">
-              대량등록
             </GhostBtn>
           </div>
         }>
@@ -2403,16 +2465,62 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
             <PrimaryBtn onClick={fetchTranslators} disabled={translatorsLoading} style={{ padding: "8px 16px", fontSize: 13 }}>
               {translatorsLoading ? "검색 중..." : "검색"}
             </PrimaryBtn>
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6b7280", cursor: "pointer", userSelect: "none", padding: "6px 0" }}>
-              <input
-                type="checkbox"
-                checked={showInactiveTranslators}
-                onChange={e => { setShowInactiveTranslators(e.target.checked); setTranslatorPage(1); }}
-                style={{ width: 15, height: 15, accentColor: "#6b7280", cursor: "pointer" }}
-              />
-              비활성 포함
-            </label>
+            <ClickSelect
+              value={translatorRegFilter}
+              onChange={v => { setTranslatorRegFilter(v); setTranslatorPage(1); }}
+              triggerStyle={{ fontSize: 13, padding: "8px 12px", minWidth: 120, borderRadius: 8 }}
+              options={[
+                { value: "all", label: "등록 전체" }, { value: "existing", label: "기존 등록" },
+                { value: "migrated", label: "과거 CRM 이관" },
+              ]}
+            />
+            <ClickSelect
+              value={translatorActivityFilter}
+              onChange={v => { setTranslatorActivityFilter(v); setTranslatorPage(1); }}
+              triggerStyle={{ fontSize: 13, padding: "8px 12px", minWidth: 110, borderRadius: 8 }}
+              options={[
+                { value: "all", label: "활동 전체" }, { value: "active", label: "활동 중" },
+                { value: "inactive", label: "비활성" }, { value: "unverified", label: "활동 미확인" },
+              ]}
+            />
+            {/* 이름 중복 여부 필터(§1) — 중복 판정은 전체 Master 기준(서버 계산). */}
+            <ClickSelect
+              value={translatorNameDupFilter}
+              onChange={v => { setTranslatorNameDupFilter(v); setTranslatorPage(1); }}
+              triggerStyle={{ fontSize: 13, padding: "8px 12px", minWidth: 120, borderRadius: 8 }}
+              options={[
+                { value: "all", label: "이름 전체" }, { value: "dup", label: "중복 이름만" },
+                { value: "unique", label: "중복 없는 이름" },
+              ]}
+            />
           </div>
+          {/* 중복 필터 적용 시 전역 통계 배너(§5) */}
+          {translatorNameDupFilter === "dup" && translatorDupStats && (
+            <div data-testid="translator-dup-stats" style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "9px 14px", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, fontSize: 13, color: "#9a3412" }}>
+              <span style={{ fontWeight: 700 }}>중복 이름 {translatorDupStats.groups.toLocaleString()}개 그룹</span>
+              <span style={{ color: "#c2410c" }}>/</span>
+              <span style={{ fontWeight: 700 }}>해당 계정 {translatorDupStats.accounts.toLocaleString()}명</span>
+              <span style={{ color: "#c2410c", fontSize: 12 }}>· 전체 Master 기준 · 이름 가나다순 · 기존 우선 정렬</span>
+            </div>
+          )}
+          {/* 수동 통합 선택 액션바(§2) — 같은 이름 2개 이상 선택 시 '선택 계정 통합' 활성 */}
+          {translatorNameDupFilter === "dup" && mergeSelected.size > 0 && (
+            <div data-testid="merge-action-bar" style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, padding: "9px 14px", background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: 8, fontSize: 13, color: "#3730a3", flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 700 }}>선택 {mergeSelected.size}건</span>
+              {!mergeAllSameName && mergeSelected.size >= 2 && (
+                <span style={{ color: "#b45309" }}>⚠ 서로 다른 이름이 포함되어 있습니다 — 같은 이름의 계정만 선택하세요.</span>
+              )}
+              {mergeSelected.size < 2 && <span style={{ color: "#6366f1" }}>같은 이름의 Master를 2개 이상 선택하세요.</span>}
+              <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+                <GhostBtn onClick={() => setMergeSelected(new Map())} style={{ fontSize: 12, padding: "6px 12px" }} data-testid="merge-clear-btn">선택 해제</GhostBtn>
+                <PrimaryBtn disabled={!mergeAllSameName} onClick={() => setMergeModalIds(Array.from(mergeSelected.keys()))}
+                  data-testid="merge-compare-open-btn"
+                  style={{ fontSize: 13, padding: "6px 16px", opacity: mergeAllSameName ? 1 : 0.5, cursor: mergeAllSameName ? "pointer" : "not-allowed" }}>
+                  선택 계정 통합
+                </PrimaryBtn>
+              </div>
+            </div>
+          )}
           {translatorsLoading && translatorList.length === 0 ? (
             <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af", fontSize: 14 }}>불러오는 중...</div>
           ) : translatorList.length === 0 ? (
@@ -2460,15 +2568,31 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                       const statusColor = inactive ? "#9ca3af" : t.availabilityStatus === "available" ? "#059669" : t.availabilityStatus === "busy" ? "#d97706" : "#dc2626";
                       const statusBg = inactive ? "#f3f4f6" : t.availabilityStatus === "available" ? "#f0fdf4" : t.availabilityStatus === "busy" ? "#fffbeb" : "#fef2f2";
                       return (
-                        <tr key={t.id} onClick={() => { setTranslatorDetailModal({ userId: t.id, email: t.email }); navigateToAdminTab("translator-detail"); }} style={{ cursor: "pointer", opacity: inactive ? 0.6 : 1 }}>
+                        <tr key={t.id} onClick={() => { setTranslatorDetailModal({ userId: t.id, email: t.email ?? "" }); navigateToAdminTab("translator-detail"); }} style={{ cursor: "pointer", opacity: inactive ? 0.6 : 1 }}>
                           {/* 이름 / 이메일 / 휴대폰 */}
                           <td style={{ ...tableTd }}>
-                            <div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                              {translatorNameDupFilter === "dup" && (
+                                <input type="checkbox" data-testid={`merge-select-${t.id}`} aria-label={`${t.name ?? t.id} 통합 선택`}
+                                  checked={mergeSelected.has(t.id)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={(e) => { e.stopPropagation(); toggleMergeSelect(t.id, t.name); }}
+                                  style={{ width: 15, height: 15, cursor: "pointer", flexShrink: 0 }} />
+                              )}
                               {t.name
                                 ? <span style={{ fontWeight: 700, fontSize: 13, color: "#111827" }}>{t.name}</span>
-                                : <span style={{ fontSize: 13, color: "#374151" }}>{t.email}</span>}
+                                : <span style={{ fontSize: 13, color: "#374151" }}>{(t as any).isLegacyMigrated ? "(이름 미등록)" : t.email}</span>}
+                              {/* Master ID — 동명 그룹 비교 식별자(§4) */}
+                              <span style={{ fontSize: 10, color: "#9ca3af", fontFamily: "monospace" }}>#{t.id}</span>
+                              {/* 기존/신규 등록 구분(§4) */}
+                              <span style={{ background: t.isNew ? "#ecfdf5" : "#f3f4f6", color: t.isNew ? "#047857" : "#4b5563", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>{t.isNew ? "신규" : "기존"}</span>
+                              {/* 수행이력 연결 여부(§4) */}
+                              {t.hasHistory && <span style={{ background: "#fef3c7", color: "#92400e", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>이력</span>}
+                              {(t as any).isLegacyMigrated && <span style={{ background: "#eef2ff", color: "#4338ca", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>과거 CRM 이관</span>}
                             </div>
-                            {t.name && <div style={{ color: "#6b7280", fontSize: 11 }}>{t.email}</div>}
+                            {t.name && (t.email
+                              ? <div style={{ color: "#6b7280", fontSize: 11 }}>{t.email}</div>
+                              : <div style={{ color: "#c4b5fd", fontSize: 11 }}>이메일 미등록</div>)}
                             {t.phone && <div style={{ fontSize: 11, color: "#9ca3af" }}>{formatPhoneDisplay(t.phone)}</div>}
                           </td>
                           {/* 주민번호 (서버사이드 마스킹) */}
@@ -2586,13 +2710,22 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           <td style={{ ...tableTd, padding: "9px 4px", overflow: "hidden" }}>
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
                               <span style={{ padding: "2px 7px", borderRadius: 10, background: statusBg, color: statusColor, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
-                                {inactive ? "불가" : (AVAILABILITY_LABEL[t.availabilityStatus ?? "available"] ?? t.availabilityStatus)}
+                                {(t as any).isLegacyMigrated ? "활동 미확인" : inactive ? "불가" : (AVAILABILITY_LABEL[t.availabilityStatus ?? "available"] ?? t.availabilityStatus)}
                               </span>
                             </div>
                           </td>
                           {/* 운영상태 */}
                           <td style={{ ...tableTd, padding: "9px 4px", overflow: "hidden" }}>
                             {(() => {
+                              if ((t as any).isLegacyMigrated) {
+                                return (
+                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                    <span style={{ padding: "2px 7px", borderRadius: 10, background: "#eef2ff", color: "#4338ca", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
+                                      과거 CRM 이관
+                                    </span>
+                                  </div>
+                                );
+                              }
                               if (inactive) {
                                 return (
                                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>

@@ -15,10 +15,23 @@ type RoundRow = {
   payeeCount: number; assignmentCount: number; pretaxTotal: number; posttaxTotal: number;
   withholdingImplied: number; withholdingRecalc: number; withholdingDiff: number;
 };
+type MatchStatus = 'confirmed' | 'candidate' | 'vendor' | 'client' | 'unmatched';
 type DetailRow = {
   id: number; deliveryDate: string | null; payoutDate: string | null;
-  translator: string | null; matched: boolean; matchedUserId: number | null;
-  content: string | null; pretax: number; posttax: number; withholdingImplied: number;
+  translator: string | null; residentMasked: string | null;
+  language: string | null; languageSource: 'original' | 'master' | null;
+  masterEmail: string | null; masterPhone: string | null;
+  matchStatus: MatchStatus; matched: boolean; matchedUserId: number | null; matchedUserName: string | null; isPayroll: boolean;
+  content: string | null; filename: string | null; pretax: number; posttax: number; withholdingImplied: number;
+};
+
+// 연결상태 배지 — 확정매핑만 '연결(확정)'. 이름일치는 '연결후보(확인필요)'로 구분(§5·§6).
+const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
+  confirmed: { label: '연결(확정)', bg: '#ecfdf5', fg: '#047857' },
+  candidate: { label: '연결후보(확인필요)', bg: '#eff6ff', fg: '#1d4ed8' },
+  vendor: { label: '외주업체', bg: '#f5f3ff', fg: '#6d28d9' },
+  client: { label: '거래처', bg: '#fdf2f8', fg: '#be185d' },
+  unmatched: { label: '미연결', bg: '#fef3c7', fg: '#92400e' },
 };
 
 const won = (n: number | null | undefined) => (n == null ? '-' : Math.round(Number(n)).toLocaleString());
@@ -103,8 +116,11 @@ export function PayoutReproductionTab({ token, onToast }: { token: string; onToa
       { header: '납품일', value: (r) => r.deliveryDate ?? '', type: 'date' },
       { header: '지급일', value: (r) => r.payoutDate ?? '', type: 'date' },
       { header: '통번역사', value: (r) => r.translator ?? '' },
-      { header: '현재Master연결', value: (r) => (r.matched ? `연결(user#${r.matchedUserId})` : '미연결') },
+      { header: '주민번호(마스킹)', value: (r) => r.residentMasked ?? '' },
+      { header: '언어', value: (r) => r.language ? (r.language + (r.languageSource === 'master' ? ' (Master참고)' : '')) : '' },
+      { header: '연결상태', value: (r) => (STATUS_META[r.matchStatus] ?? STATUS_META.unmatched).label + (r.matchedUserId ? ` (${r.matchedUserName ?? ''}#${r.matchedUserId})` : '') + (r.isPayroll ? ' [직원성]' : '') },
       { header: '수행내용', value: (r) => r.content ?? '' },
+      { header: '파일명', value: (r) => r.filename ?? '' },
       { header: '세전지급액', value: 'pretax', type: 'number' },
       { header: '세후지급액', value: 'posttax', type: 'number' },
       { header: '원본공제액', value: 'withholdingImplied', type: 'number' },
@@ -199,27 +215,52 @@ export function PayoutReproductionTab({ token, onToast }: { token: string; onToa
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
             <h2 style={{ fontSize: 15, fontWeight: 800, color: '#111827', margin: 0 }}>{sel.label} — 수행건별 상세</h2>
             {detailTotals && <span style={{ fontSize: 12, color: '#6b7280' }}>수취인 {detailTotals.payeeCount.toLocaleString()}명 · {detailTotals.assignmentCount.toLocaleString()}건 · 세전 {won(detailTotals.pretaxTotal)} · 세후 {won(detailTotals.posttaxTotal)} · 원본공제 {won(detailTotals.withholdingImpliedTotal)}</span>}
+            {detail.length > 0 && (() => {
+              const sc = detail.reduce((m: Record<string, number>, r) => { m[r.matchStatus] = (m[r.matchStatus] ?? 0) + 1; if (r.isPayroll) m.payroll = (m.payroll ?? 0) + 1; return m; }, {});
+              const parts = [['confirmed', '연결확정'], ['candidate', '후보'], ['vendor', '외주업체'], ['client', '거래처'], ['unmatched', '미연결'], ['payroll', '직원성']]
+                .filter(([k]) => sc[k]).map(([k, lbl]) => `${lbl} ${sc[k]}`);
+              return <span style={{ fontSize: 11, color: '#334155', fontWeight: 700 }} data-testid="pr-detail-statusbar">[{parts.join(' · ')}]</span>;
+            })()}
             {applied.basis === 'delivery' && <span style={{ fontSize: 11, color: '#b45309', fontWeight: 700 }}>※ 납품일 필터 적용분만 표시(전체 지급내역 아님)</span>}
           </div>
           <div style={scrollBox}>
             <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead><tr>{['납품일', '지급일', '통번역사', '현재 Master 연결', '수행내용', '세전지급액', '세후지급액', '원본공제액'].map(h => <th key={h} style={{ padding: '9px 12px', textAlign: h.includes('액') ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
+              <thead><tr>{['납품일', '지급일', '통번역사', '주민번호', '언어', '연결상태', '수행내용', '파일명', '세전지급액', '세후지급액', '원본공제액'].map(h => <th key={h} style={{ padding: '9px 12px', textAlign: h.includes('액') ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
               <tbody>
-                {detail.map((p, i) => (
-                  <tr key={p.id} data-testid={`pr-detail-${i}`}>
+                {detail.map((p, i) => {
+                  const meta = STATUS_META[p.matchStatus] ?? STATUS_META.unmatched;
+                  return (
+                  <tr key={p.id} data-testid={`pr-detail-${i}`} data-matchstatus={p.matchStatus}>
                     <td style={td}>{p.deliveryDate ?? <span style={{ color: '#b45309' }}>(납품일 미상)</span>}</td>
                     <td style={td}>{p.payoutDate ?? <span style={{ color: '#b45309', fontWeight: 700 }}>(지급일 미확인)</span>}</td>
-                    <td style={td}>{p.translator ?? '-'}</td>
-                    <td style={td}>{p.matched
-                      ? <span style={{ padding: '2px 8px', borderRadius: 10, background: '#ecfdf5', color: '#047857', fontSize: 12, fontWeight: 700 }}>연결 user#{p.matchedUserId}</span>
-                      : <span style={{ padding: '2px 8px', borderRadius: 10, background: '#fef3c7', color: '#92400e', fontSize: 12, fontWeight: 700 }}>미연결</span>}</td>
+                    <td style={{ ...td, whiteSpace: 'normal', lineHeight: 1.35 }}>
+                      <div style={{ fontWeight: 600, color: '#111827' }}>{p.translator ?? '-'}</div>
+                      {(p.masterEmail || p.masterPhone) && (
+                        <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }} title="현재 Master 등록 연락처 · 과거 CRM 원본 아님">
+                          {p.masterEmail && <div data-testid={`pr-detail-email-${i}`}>✉ {p.masterEmail}</div>}
+                          {p.masterPhone && <div data-testid={`pr-detail-phone-${i}`}>☎ {p.masterPhone}</div>}
+                        </div>
+                      )}
+                    </td>
+                    <td style={{ ...td, fontVariantNumeric: 'tabular-nums', color: p.residentMasked ? '#6b7280' : '#d1d5db' }} title="주민번호는 앞 6자리만 표시(마스킹)">{p.residentMasked ?? '-'}</td>
+                    <td style={{ ...td, whiteSpace: 'normal', maxWidth: 160 }} data-testid={`pr-detail-language-${i}`} title={p.languageSource === 'master' ? 'Master 등록 언어(참고) · 원본에 언어 없음' : (p.languageSource === 'original' ? '과거 CRM 원본 언어' : undefined)}>
+                      {p.language ? <>{p.language}{p.languageSource === 'master' && <span style={{ marginLeft: 3, fontSize: 10, color: '#9ca3af' }}>(Master참고)</span>}</> : '-'}
+                    </td>
+                    <td style={td}>
+                      <span style={{ padding: '2px 8px', borderRadius: 10, background: meta.bg, color: meta.fg, fontSize: 12, fontWeight: 700 }} data-testid={`pr-detail-status-${i}`}>
+                        {meta.label}{(p.matchStatus === 'confirmed' || p.matchStatus === 'candidate') && p.matchedUserId ? ` · ${p.matchedUserName ?? ''}#${p.matchedUserId}` : ''}
+                      </span>
+                      {p.isPayroll && <span style={{ marginLeft: 4, padding: '2px 6px', borderRadius: 10, background: '#f1f5f9', color: '#475569', fontSize: 11, fontWeight: 700 }}>직원성 지급</span>}
+                    </td>
                     <td style={{ ...td, whiteSpace: 'normal', maxWidth: 280 }}>{p.content ?? '-'}</td>
+                    <td style={{ ...td, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.filename ?? undefined} data-testid={`pr-detail-filename-${i}`}>{p.filename ?? '-'}</td>
                     <td style={tdR}>{won(p.pretax)}</td>
                     <td style={tdR}>{won(p.posttax)}</td>
                     <td style={tdR}>{won(p.withholdingImplied)}</td>
                   </tr>
-                ))}
-                {detail.length === 0 && !payeeLoading && <tr><td colSpan={8} style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>상세 내역이 없습니다.</td></tr>}
+                  );
+                })}
+                {detail.length === 0 && !payeeLoading && <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>상세 내역이 없습니다.</td></tr>}
               </tbody>
             </table>
           </div>

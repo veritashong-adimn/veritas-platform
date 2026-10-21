@@ -11,7 +11,18 @@ export interface MailOptions {
  * SMTP 미설정 환경에서는 콘솔 로그로 출력.
  * 추후 nodemailer 등으로 교체 가능.
  */
+// 과거 CRM 이관 전용 내부 식별 이메일 — 실제 주소 아님(발송·로그인·초대·재설정 금지).
+export const LEGACY_EMAIL_DOMAIN = "@crm-migrated.invalid";
+export function isLegacyPlaceholderEmail(email: string | null | undefined): boolean {
+  return !!email && email.toLowerCase().endsWith(LEGACY_EMAIL_DOMAIN);
+}
+
 export async function sendEmail(opts: MailOptions): Promise<void> {
+  // 이관 전용 비배달 주소로는 어떤 메일도 발송하지 않는다.
+  if (isLegacyPlaceholderEmail(opts.to)) {
+    logger.warn({ to: opts.to }, "메일 발송 차단: 과거 CRM 이관 전용 식별 주소(비배달)");
+    return;
+  }
   const smtpHost = process.env["SMTP_HOST"];
 
   if (smtpHost) {

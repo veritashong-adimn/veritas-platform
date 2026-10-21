@@ -6,8 +6,8 @@ import { api } from '../../lib/constants';
 import { formatAmountDisplay } from '../../lib/utils';
 import { LegacyArchiveDetailPage } from './LegacyArchiveDetailPage';
 
-type SourceType = 'sales_list' | 'progress';
-const SOURCE_LABEL: Record<SourceType, string> = { sales_list: '판매목록', progress: '통번역 진행관리' };
+type SourceType = 'sales_list' | 'progress' | 'translator_list';
+const SOURCE_LABEL: Record<SourceType, string> = { sales_list: '판매목록', progress: '통번역 진행관리', translator_list: 'CRM 통번역사 명부' };
 
 type DuplicateAnalysis = {
   duplicateExcludedRows: number; duplicateGroups: number;
@@ -341,7 +341,7 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
           {/* 필터 */}
           <div style={box}>
             <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-              {([['sales_list', '판매목록'], ['progress', '통번역 진행관리']] as [string, string][]).map(([v, l]) => (
+              {([['sales_list', '판매목록'], ['progress', '통번역 진행관리'], ['translator_list', 'CRM 통번역사 명부']] as [string, string][]).map(([v, l]) => (
                 <div key={v} style={chip(filters.sourceType === v)} role="button" aria-label={`유형 ${l}`} data-testid={`archive-filter-type-${v}`}
                      aria-pressed={filters.sourceType === v}
                      onClick={() => {
@@ -396,7 +396,7 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
                     {snapshots.map(s => (
                       <tr key={s.id} style={{ borderBottom: '1px solid #f0f0f0', background: s.isCurrent ? '#ecfdf5' : '#fff' }}>
                         <td style={{ padding: '6px 10px', fontWeight: 700 }}>#{s.id}</td>
-                        <td style={{ padding: '6px 10px' }}>{s.sourceType === 'progress' ? '진행관리' : s.sourceType === 'sales_list' ? '판매목록' : (s.sourceType ?? '-')}</td>
+                        <td style={{ padding: '6px 10px' }}>{s.sourceType === 'progress' ? '진행관리' : s.sourceType === 'sales_list' ? '판매목록' : s.sourceType === 'translator_list' ? 'CRM 명부' : (s.sourceType ?? '-')}</td>
                         <td style={{ padding: '6px 10px', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.originalFilename ?? ''}>{s.originalFilename ?? '-'}</td>
                         <td style={{ padding: '6px 10px' }}>{(s.successRows || s.totalRows || 0).toLocaleString()}</td>
                         <td style={{ padding: '6px 10px', fontFamily: 'monospace', color: '#6b7280' }}>{s.fileHash ?? '-'}</td>
@@ -588,7 +588,7 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
           <div style={box}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 10 }}>자료 유형</div>
             <div style={{ display: 'flex', gap: 10 }}>
-              {(['sales_list', 'progress'] as SourceType[]).map(t => (
+              {(['sales_list', 'progress', 'translator_list'] as SourceType[]).map(t => (
                 <div key={t} role="button" aria-label={`자료유형 ${SOURCE_LABEL[t]}`} data-testid={`source-type-${t}`}
                      style={chip(impType === t)} onClick={() => { setImpType(t); resetImport(); }}>{SOURCE_LABEL[t]}</div>
               ))}

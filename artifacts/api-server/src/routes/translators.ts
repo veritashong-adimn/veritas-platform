@@ -8,14 +8,19 @@ import {
   translatorProductsTable, productsTable, translatorSensitiveTable,
   tasksTable, settlementsTable, logsTable, translatorEmailsTable,
   notesTable, invitationsTable, companiesTable, translatorAliasesTable,
+  performanceAssignmentsTable, legacyMasterMappingsTable, importRowSourcesTable,
 } from "@workspace/db";
-import { eq, and, ilike, ne, or, sql, desc, gte, lte, inArray, isNotNull } from "drizzle-orm";
+import { eq, and, ilike, ne, or, sql, desc, gte, lte, inArray, isNotNull, isNull } from "drizzle-orm";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
 import { buildTranslatorAliasValues, ensureDefaultTranslatorAlias } from "../lib/translatorAlias";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { encrypt, decrypt, maskResidentNumber } from "../lib/encrypt";
+import { autoLinkTranslatorByRrn, type AutoLinkResult } from "../lib/autoLinkPastCrm";
+import { isLegacyPlaceholderEmail } from "../lib/mailer";
 import { evaluateTranslatorHardDeleteDependencies } from "../services/masterDependency";
+import { buildMergePreview } from "../services/translatorMerge";
+import { runMergeExecute, revertMerge } from "../services/translatorMergeExecute";
 import { logEvent } from "../lib/logEvent";
 import {
   uploadResumeToGCS, deleteResumeFromGCS, getResumeDownloadUrl, isAllowedMime, isAllowedExt,
@@ -337,14 +342,23 @@ const adminGuard = [requireAuth, requireRole("admin", "staff")];
 // 개별등록·대량등록·프로필수정 경로가 동일 기준(대소문자·공백 무시)으로 동일 인물을 식별한다.
 const normalizeEmail = (e: unknown): string => String(e ?? "").trim().toLowerCase();
 
+// 재구축 신규 Master 배치(기존/신규 구분 기준) — dedup 보고서(name-dedup-report)와 동일 정의.
+// batch 182 = 2026-10 통번역사 Master 재구축으로 생성된 신규 1,035명. 이 배치 소속이면 '신규', 아니면 '기존'.
+const REBUILD_BATCH_ID = 182;
+
 // ─── 번역사 목록 (검색/필터) ──────────────────────────────────────────────────
 router.get("/admin/translators", ...adminGuard, async (req, res) => {
   try {
-    const { search, languagePair, specialization, status, minRating, grade, includeInactive, svc, page, pageSize } = req.query as {
+    const { search, languagePair, specialization, status, minRating, grade, includeInactive, svc, page, pageSize, regType, activityState, nameDup } = req.query as {
       search?: string; languagePair?: string; specialization?: string;
       status?: string; minRating?: string; grade?: string; includeInactive?: string; svc?: string;
       page?: string; pageSize?: string;
+      regType?: string; activityState?: string;   // 등록구분(all|existing|migrated) · 활동상태(all|active|inactive|unverified)
+      nameDup?: string;                             // 이름 중복 필터(all|dup|unique)
     };
+    // 신규 필터(등록구분/활동상태)가 지정되면 비활성 이관 인력까지 조회 대상에 포함한다.
+    // 이름 중복 필터(dup)는 운영상태와 무관하게 동명 Master를 모두 보여줘야 하므로 전체 대상을 포함한다(§중복누락 방지).
+    const wantAll = includeInactive === "true" || (regType && regType !== "all") || (activityState && activityState !== "all") || nameDup === "dup";
     // 서버 페이지네이션: page 파라미터가 있을 때만 {rows,total,page,pageSize} 래핑 응답.
     // page 미지정(예: Excel 다운로드 등 전체 매칭 조회)은 기존 배열 응답을 그대로 유지한다(§10 export ≠ pagination 분리).
     const paginate = page != null && String(page).trim() !== "";
@@ -390,9 +404,10 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       .from(usersTable)
       .leftJoin(translatorProfilesTable, eq(translatorProfilesTable.userId, usersTable.id))
       .where(
-        includeInactive === "true"
-          ? eq(usersTable.role, "translator")
-          : and(eq(usersTable.role, "translator"), eq(usersTable.isActive, true))
+        // deleted_at IS NULL: 중복정리 제외(soft-delete)된 Master는 운영목록·검색·선택창에서 항상 제외.
+        wantAll
+          ? and(eq(usersTable.role, "translator"), isNull(usersTable.deletedAt))
+          : and(eq(usersTable.role, "translator"), eq(usersTable.isActive, true), isNull(usersTable.deletedAt))
       )
       .orderBy(desc(usersTable.createdAt), desc(usersTable.id));
 
@@ -449,15 +464,74 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       }
     }
 
-    let result = rows.map(r => ({
-      ...r,
-      workTypes: serviceMap[r.id]?.workTypes ?? [],
-      subTypes: serviceMap[r.id]?.subTypes ?? [],
-      profileWorkTypes: r.profileWorkTypes ?? null,
-      profileSubTypes: r.profileSubTypes ?? null,
-      languageExperiences: r.languageExperiences ?? null,
-      residentNumber: sensitiveMap[r.id] ?? null,
-    }));
+    // ── 기존/신규 구분 · 수행이력 연결 · CRM 이관 — 목록 보조 플래그(읽기 전용) ───────────
+    const newIds = new Set<number>();          // 신규(재구축 batch 182) Master id
+    const historyIds = new Set<number>();      // 수행이력(과업/실적배정) 연결된 id
+    const crmIds = new Set<number>();          // 과거 CRM 원본 매핑(legacy_master_mappings) 보유 id
+    if (translatorIds.length > 0) {
+      const newRows = await db
+        .select({ entityId: importRowSourcesTable.entityId })
+        .from(importRowSourcesTable)
+        .where(and(eq(importRowSourcesTable.batchId, REBUILD_BATCH_ID), inArray(importRowSourcesTable.entityId, translatorIds)));
+      for (const r of newRows) if (r.entityId != null) newIds.add(Number(r.entityId));
+
+      const taskRows = await db
+        .selectDistinct({ tid: tasksTable.translatorId })
+        .from(tasksTable)
+        .where(inArray(tasksTable.translatorId, translatorIds));
+      for (const r of taskRows) historyIds.add(Number(r.tid));
+      const perfRows = await db
+        .selectDistinct({ uid: performanceAssignmentsTable.individualUserId })
+        .from(performanceAssignmentsTable)
+        .where(and(inArray(performanceAssignmentsTable.individualUserId, translatorIds), isNull(performanceAssignmentsTable.deletedAt)));
+      for (const r of perfRows) if (r.uid != null) historyIds.add(Number(r.uid));
+
+      const crmRows = await db
+        .selectDistinct({ eid: legacyMasterMappingsTable.entityId })
+        .from(legacyMasterMappingsTable)
+        .where(and(eq(legacyMasterMappingsTable.entityType, "translator"), ne(legacyMasterMappingsTable.status, "rolled_back"), inArray(legacyMasterMappingsTable.entityId, translatorIds)));
+      for (const r of crmRows) crmIds.add(Number(r.eid));
+    }
+
+    // ── 전역 이름 중복 집계 — 현재 검색결과가 아닌 '전체 Master' 기준으로 계산(§6) ───────────
+    // 정규화는 dedup 보고서와 동일(normalizeCompanyName: 앞뒤/중복 공백·기호 제거). 서로 다른 Master ID 기준 집계.
+    const allNameRows = await db
+      .select({ id: usersTable.id, name: usersTable.name })
+      .from(usersTable)
+      .where(and(eq(usersTable.role, "translator"), isNull(usersTable.deletedAt)));
+    const nameToIds = new Map<string, Set<number>>();
+    for (const u of allNameRows) {
+      const nn = normalizeCompanyName(u.name ?? "");
+      if (!nn) continue;
+      const s = nameToIds.get(nn) ?? new Set<number>();
+      s.add(Number(u.id));
+      nameToIds.set(nn, s);
+    }
+    const dupNameSet = new Set<string>();
+    let dupAccountCount = 0;
+    for (const [nn, ids] of nameToIds) { if (ids.size >= 2) { dupNameSet.add(nn); dupAccountCount += ids.size; } }
+    const dupStats = { groups: dupNameSet.size, accounts: dupAccountCount };
+
+    let result = rows.map(r => {
+      // 과거 CRM 이관 전용 식별 이메일은 실제 주소가 아님 → 목록에 노출하지 않음(프론트 '이메일 미등록').
+      const legacyMigrated = isLegacyPlaceholderEmail(r.email) || r.operationalStatus === "legacy_migrated";
+      return {
+        ...r,
+        email: isLegacyPlaceholderEmail(r.email) ? null : r.email,
+        isLegacyMigrated: legacyMigrated,
+        workTypes: serviceMap[r.id]?.workTypes ?? [],
+        subTypes: serviceMap[r.id]?.subTypes ?? [],
+        profileWorkTypes: r.profileWorkTypes ?? null,
+        profileSubTypes: r.profileSubTypes ?? null,
+        languageExperiences: r.languageExperiences ?? null,
+        residentNumber: sensitiveMap[r.id] ?? null,
+        // ── 중복 이름 필터용 보조 플래그(가산 필드, 기존 shape 불변) ──
+        isNew: newIds.has(r.id),                                     // 기존/신규 등록 구분
+        hasResidentNumber: (sensitiveMap[r.id] ?? null) !== null,    // 주민번호 보유 여부(번호 미노출)
+        hasHistory: historyIds.has(r.id),                           // 수행이력 연결 여부
+        hasCrmMapping: crmIds.has(r.id) || legacyMigrated,          // 기존 CRM 이관 여부
+      };
+    });
 
     if (search?.trim()) {
       const s = search.trim().toLowerCase();
@@ -472,7 +546,7 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         ].filter(Boolean) as any));
       const aliasMatchIds = new Set(aliasRows.map(a => a.translatorId));
       result = result.filter(t =>
-        t.email.toLowerCase().includes(s) ||
+        (t.email ?? "").toLowerCase().includes(s) ||
         (t.name ?? "").toLowerCase().includes(s) ||
         (t.phone ?? "").toLowerCase().includes(s) ||
         (t.languagePairs ?? "").toLowerCase().includes(s) ||
@@ -508,13 +582,40 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       );
     }
 
+    // 등록구분 필터(기존 등록 vs 과거 CRM 이관)
+    if (regType === "migrated") result = result.filter(t => t.isLegacyMigrated === true);
+    else if (regType === "existing") result = result.filter(t => t.isLegacyMigrated !== true);
+    // 활동상태 필터(활동중 / 비활성 / 활동미확인)
+    if (activityState === "active") result = result.filter(t => t.isActive === true);
+    else if (activityState === "inactive") result = result.filter(t => t.isActive === false);
+    else if (activityState === "unverified") result = result.filter(t => (t.availabilityStatus ?? "") === "unavailable");
+
+    // 이름 중복 필터 — 전역 dupNameSet(전체 Master 기준) 소속 여부로 현재 결과를 선별(§2·§6).
+    //  · 중복 판정은 다른 검색/필터와 무관하게 '전체 Master'로 이미 계산됨 → 여기서는 포함/제외만 수행.
+    const normName = (n: string | null | undefined) => normalizeCompanyName(n ?? "");
+    if (nameDup === "dup") result = result.filter(t => dupNameSet.has(normName(t.name)));
+    else if (nameDup === "unique") result = result.filter(t => !dupNameSet.has(normName(t.name)));
+
+    // 중복 필터(dup) 정렬: ①이름 가나다순 ②기존 Master 우선 ③Master ID 오름차순.
+    //  → 동일 이름 계정이 반드시 연속 배치되어 페이지 이동 중에도 그룹 비교가 쉬움(§3·§7).
+    if (nameDup === "dup") {
+      result.sort((a, b) => {
+        const c = normName(a.name).localeCompare(normName(b.name), "ko");
+        if (c !== 0) return c;
+        const an = a.isNew ? 1 : 0, bn = b.isNew ? 1 : 0;   // 기존(false=0) 우선
+        if (an !== bn) return an - bn;
+        return a.id - b.id;
+      });
+    }
+
     // 서버 페이지네이션: 필터 적용 후의 전체 결과 기준으로 total 산정 → 현재 페이지 구간만 slice.
     // (기존 검색/필터 의미는 그대로. 정렬은 createdAt DESC, id DESC로 stable → 페이지 간 중복/누락 없음.)
     if (paginate) {
       const total = result.length;
       const offset = (pageNum - 1) * pageSizeNum;
       const rows = result.slice(offset, offset + pageSizeNum);
-      res.json({ rows, total, page: pageNum, pageSize: pageSizeNum, totalPages: Math.max(1, Math.ceil(total / pageSizeNum)) });
+      // dupStats: 전역 중복 통계(가산 필드). 기존 {rows,total,page,pageSize,totalPages} shape는 그대로 유지.
+      res.json({ rows, total, page: pageNum, pageSize: pageSizeNum, totalPages: Math.max(1, Math.ceil(total / pageSizeNum)), dupStats });
       return;
     }
 
@@ -522,6 +623,63 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
   } catch (err) {
     req.log.error({ err }, "Translators: failed to list");
     res.status(500).json({ error: "번역사 조회 실패." });
+  }
+});
+
+// ─── 통번역사 수동 통합: 비교/미리보기 (읽기 전용, DB 미변경) ──────────────────
+//  · 선택한 Master들의 비교정보 + 동일인 참고신호 + (대표 지정 시) 통합 후 미리보기(record-id 기준 중복제거).
+//  · 관리자 권한 전용(주민번호 보유여부·마스킹 노출). 원문 주민번호·진행관리표/판매목록 원본은 변경하지 않는다.
+router.post("/admin/translators/merge-preview", ...adminGuard, requirePermission("translator.sensitive"), async (req, res) => {
+  try {
+    const { masterIds, representativeId } = (req.body ?? {}) as { masterIds?: unknown; representativeId?: unknown };
+    const ids = Array.isArray(masterIds) ? masterIds.map(Number).filter((n) => Number.isInteger(n) && n > 0) : [];
+    if (ids.length < 2) { res.status(400).json({ error: "통합 비교에는 2개 이상의 Master ID가 필요합니다." }); return; }
+    if (ids.length > 10) { res.status(400).json({ error: "한 번에 비교 가능한 Master는 최대 10개입니다." }); return; }
+    const repId = representativeId != null && Number.isInteger(Number(representativeId)) ? Number(representativeId) : undefined;
+    const preview = await buildMergePreview(db, ids, repId);
+    res.json(preview);
+  } catch (err) {
+    req.log.error({ err }, "Translators: merge-preview failed");
+    res.status(500).json({ error: "통합 미리보기 생성 실패." });
+  }
+});
+
+// ─── 통번역사 수동 통합: 실행(DRY-RUN 기본) / 되돌리기 (Phase 3) ───────────────
+//  · commit=false(기본) → 계획·검증만 반환(DB 미변경). commit=true 는 토큰+동일인확인 체크 충족 시에만 실제 실행.
+//  · 운영 DB에 translator_merges 스키마 미적용 시 commit 은 실패(안전) — 승인 후 SQL 적용 필요.
+//  · [2026-10-21] 운영 DB에 translator_merges/translator_merge_audit 스키마 적용 완료 → commit 경로 활성(대표 화면 실행 대기).
+router.post("/admin/translators/merge-execute", ...adminGuard, requirePermission("translator.sensitive"), async (req, res) => {
+  try {
+    const { masterIds, representativeId, samePersonConfirmed, confirmToken, commit, note } = (req.body ?? {}) as any;
+    const ids = Array.isArray(masterIds) ? masterIds.map(Number).filter((x: number) => Number.isInteger(x) && x > 0) : [];
+    if (ids.length < 2) { res.status(400).json({ error: "통합에는 2개 이상의 Master ID가 필요합니다." }); return; }
+    if (!Number.isInteger(Number(representativeId))) { res.status(400).json({ error: "대표 Master ID가 필요합니다." }); return; }
+    const result = await runMergeExecute(db, {
+      masterIds: ids, representativeId: Number(representativeId),
+      samePersonConfirmed: samePersonConfirmed === true, confirmToken: typeof confirmToken === "string" ? confirmToken : undefined,
+      performedBy: req.user!.id, commit: commit === true, note: typeof note === "string" ? note : undefined,
+    });
+    res.json(result);
+  } catch (err: any) {
+    // translator_merges 미적용(스키마 승인 대기) 등
+    if (/translator_merges|relation .* does not exist/i.test(String(err?.message))) {
+      res.status(409).json({ error: "통합 스키마(translator_merges)가 운영 DB에 아직 적용되지 않았습니다 — 승인 후 SQL 적용이 필요합니다.", code: "SCHEMA_NOT_APPLIED" });
+      return;
+    }
+    req.log.error({ err }, "Translators: merge-execute failed");
+    res.status(500).json({ error: "통합 실행 실패(롤백됨)." });
+  }
+});
+
+router.post("/admin/translators/merges/:id/revert", ...adminGuard, requirePermission("translator.sensitive"), async (req, res) => {
+  try {
+    const mergeId = Number(req.params.id);
+    if (!Number.isInteger(mergeId)) { res.status(400).json({ error: "merge id가 올바르지 않습니다." }); return; }
+    const out = await revertMerge(db, mergeId, req.user!.id);
+    res.json({ ok: true, ...out });
+  } catch (err: any) {
+    req.log.error({ err }, "Translators: merge revert failed");
+    res.status(500).json({ error: "통합 되돌리기 실패(롤백됨)." });
   }
 });
 
@@ -1089,11 +1247,13 @@ router.get("/admin/translators/:id", ...adminGuard, async (req, res) => {
       .orderBy(translatorEmailsTable.createdAt);
 
     const inviteStatus = !user.password ? "pending" : "active";
+    // 과거 CRM 이관 전용 식별 이메일은 상세화면에도 노출하지 않는다(§4) → null('이메일 미등록').
+    const legacyMigrated = isLegacyPlaceholderEmail(user.email) || profile?.operationalStatus === "legacy_migrated";
     res.json({
       user: {
-        id: user.id, email: user.email, name: user.name,
+        id: user.id, email: isLegacyPlaceholderEmail(user.email) ? null : user.email, name: user.name,
         isActive: user.isActive, inviteToken: user.inviteToken,
-        inviteStatus, createdAt: user.createdAt,
+        inviteStatus, createdAt: user.createdAt, isLegacyMigrated: legacyMigrated,
       },
       profile: profile ? {
         ...profile,
@@ -1192,7 +1352,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
       settlementType: settlementType?.trim() || null,
       profileWorkTypes: profileWorkTypes !== undefined ? (profileWorkTypes?.trim() || null) : undefined,
       profileSubTypes: profileSubTypes !== undefined ? (profileSubTypes?.trim() || null) : undefined,
-      operationalStatus: (operationalStatus && ["normal","warning","hold","excluded"].includes(operationalStatus))
+      operationalStatus: (operationalStatus && ["normal","warning","hold","excluded","legacy_migrated"].includes(operationalStatus))
         ? operationalStatus : undefined,
       operationalNote: operationalNote !== undefined ? (operationalNote?.trim() || null) : undefined,
       reassignmentAllowed: reassignmentAllowed !== undefined ? Boolean(reassignmentAllowed) : undefined,
@@ -2981,8 +3141,16 @@ router.post("/admin/translators/:id/sensitive", ...adminGuard, requirePermission
       ? maskResidentNumber(decrypt(result.residentNumber))
       : null;
 
+    // 주민번호 등록·변경 직후 과거 CRM 동일인 자동 연결(RRN 전체일치). 실패해도 민감정보 저장은 유지(§3).
+    let pastCrmLink: AutoLinkResult | null = null;
+    try {
+      pastCrmLink = await autoLinkTranslatorByRrn(userId);
+      if (pastCrmLink.status === "confirmed") req.log.info({ targetUserId: userId, action: "pastcrm.autolink", status: pastCrmLink.status, rows: pastCrmLink.pastRowCount }, "과거 CRM 자동 연결");
+    } catch (e) { req.log.warn({ e, targetUserId: userId }, "과거 CRM 자동 연결 스킵(민감정보 저장은 완료)"); }
+
     res.json({
       exists: true,
+      pastCrmLink,                       // {status, legacyName, masterId, pastRowCount, reason} — 주민번호 값 미포함
       paymentMethod: result.paymentMethod,
       residentNumberMasked,
       bankName: result.bankName,

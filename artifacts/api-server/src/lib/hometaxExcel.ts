@@ -153,6 +153,8 @@ export const CONTACT_COLUMN_SYNONYMS: Record<string, string[]> = {
 // 민감정보(주민번호·계좌·해외송금 등)는 이 매핑에 절대 포함하지 않는다(§4·§5·§14).
 export const TRANSLATOR_COLUMN_SYNONYMS: Record<string, string[]> = {
   name: ["성명", "이름", "통번역사명", "통역사명", "번역사명", "담당자명"],
+  // 주민번호: 분석(매칭)에서만 서버 내부로 사용. 원문은 행/응답/로그에 절대 저장·노출하지 않는다(§4·요구사항7).
+  residentNumber: ["주민등록번호", "주민번호", "주민", "resident number", "ssn"],
   email: ["이메일", "이메일주소", "email", "e-mail", "전자우편", "메일"],
   englishName: ["영문명", "영문이름", "영어이름", "english name", "englishname"],
   phone: ["휴대폰", "휴대전화", "휴대폰번호", "핸드폰", "휴대전화번호", "hp", "mobile", "연락처"],

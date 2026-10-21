@@ -304,7 +304,8 @@ export type TranslatorRate = {
   memo: string | null; createdAt: string;
 };
 export type TranslatorListItem = {
-  id: number; email: string; name: string | null; isActive: boolean; createdAt: string;
+  id: number; email: string | null; name: string | null; isActive: boolean; createdAt: string;
+  isLegacyMigrated?: boolean;   // 과거 CRM 이관 인력(내부 식별 이메일 → 화면 '이메일 미등록')
   profileId: number | null; languagePairs: string | null; languageLevel: string | null;
   specializations: string | null; phone: string | null;
   region: string | null; grade: string | null;
@@ -317,6 +318,11 @@ export type TranslatorListItem = {
   residentNumber: string | null;
   operationalStatus?: string | null;
   reassignmentAllowed?: boolean | null;
+  // 중복 이름 필터용 보조 플래그(목록 응답 가산 필드) — 번호 자체는 표시하지 않음
+  isNew?: boolean;              // 기존/신규(재구축 batch) 등록 구분
+  hasResidentNumber?: boolean;  // 주민번호 보유 여부
+  hasHistory?: boolean;         // 수행이력(과업/실적배정) 연결 여부
+  hasCrmMapping?: boolean;      // 기존 CRM 이관 여부
 };
 
 // ── 언어·국제경험 엔트리 ────────────────────────────────────────────────────

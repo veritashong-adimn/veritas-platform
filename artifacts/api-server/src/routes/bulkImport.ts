@@ -19,8 +19,12 @@ import {
   db, companiesTable, contactsTable, companyNameHistoryTable, companyAliasesTable,
   importBatchesTable, importRowSourcesTable,
   usersTable, translatorProfilesTable, translatorEmailsTable, translatorAliasesTable,
+  translatorSensitiveTable, legacyMasterMappingsTable,
   quotesTable, quoteItemsTable, projectsTable, productsTable,
 } from "@workspace/db";
+import { decrypt, encrypt, maskResidentNumber } from "../lib/encrypt";
+import { isLegacyPlaceholderEmail } from "../lib/mailer";
+import { saveSnapshot, listSnapshots, readSnapshotBuffer, getSnapshotMeta, deleteSnapshot, pruneExpired, isValidSnapshotId } from "../lib/importSnapshot";
 import { sql, eq, and, desc, inArray } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
@@ -56,8 +60,9 @@ const excelUpload = multer({
 // update      : 기존 데이터 변경 예정(update 모드에서만 저장)
 // needs_review: 중복검토 — 자동 동일판정이 위험한 경우(다중 후보·전화/이메일만 일치·파일내 사업자번호 중복 등). 절대 자동 insert/update 하지 않음(§2~§7).
 // duplicate_file : 파일 내부 중복(선행 1건은 신규로 등록, 후행은 제외)
+// conflict    : 기존 Master 와 동일인으로 식별되나 일부 필드가 기존 값과 충돌(§req2). 자동 반영 금지·별도 검토.
 // error       : 오류
-type RowStatus = "new" | "identical" | "update" | "needs_review" | "duplicate_file" | "error";
+type RowStatus = "new" | "identical" | "update" | "needs_review" | "duplicate_file" | "conflict" | "error";
 type ImportMode = "new_only" | "update";
 
 /** 변경 필드 미리보기: 컬럼 key → { old, new }(표시용 원문) */
@@ -95,6 +100,7 @@ function summarize(rows: { status: RowStatus; warning?: string }[]) {
     update: rows.filter((r) => r.status === "update").length,
     needsReview: rows.filter((r) => r.status === "needs_review").length,
     duplicateFile: rows.filter((r) => r.status === "duplicate_file").length,
+    conflict: rows.filter((r) => r.status === "conflict").length,
     error: rows.filter((r) => r.status === "error").length,
     // 경고(§9): 저장은 가능하나 확인이 필요한 행(사업자번호 없음·이메일 형식 의심 등). status 와 독립.
     warning: rows.filter((r) => !!r.warning).length,
@@ -1009,11 +1015,22 @@ router.post(
 // 민감정보(translator_sensitive: 주민번호·계좌·해외송금 등)는 이 일반 Import 에서 절대 수신하지 않는다(§4·§5·§14).
 // 신원 신호: 이메일(users.email + translator_emails) · 휴대폰(profile.phone) · 이름(users.name + aliases).
 // 이름만으로 동일인 자동판정 금지(§12). new-only(§17), Import Batch/Lineage(§19), idempotency(§20).
+// needs_review 세분(요구사항3): 실제 동일인 후보 / 동명이인 / CRM 내부중복 / 판단불가 / 무이메일 이관대기.
+type ReviewCategory = "same_person" | "homonym" | "file_internal" | "undecidable" | "legacy_no_email";
+// 매칭 근거(요구사항1): 원본 행 ↔ Master 연결 방법. 주민번호 > 이메일 > 휴대폰 > 이름 우선순위.
+type MatchMethod = "rrn" | "email" | "phone" | "name";
+
 interface TranslatorRow {
   rowNumber: number;
-  status: RowStatus;               // new | identical | needs_review | duplicate_file | error
+  status: RowStatus;               // new | identical | update | conflict | needs_review | duplicate_file | error
   reason?: string;
-  existingId?: number | null;      // 기존통번역사 일치 시 매칭된 user id(표시용)
+  existingId?: number | null;      // 기존통번역사 일치 시 매칭된 user id(표시용·연결 근거)
+  matchMethod?: MatchMethod;       // 연결 근거 보존(요구사항1)
+  reviewCategory?: ReviewCategory; // needs_review 세분(요구사항3)
+  changes?: ChangeMap;             // update/conflict 행의 변경·충돌 필드 미리보기(컬럼 key → old/new)
+  changeSummary?: string;          // 보완/충돌 필드 요약(한글 라벨, 컬럼 외 필드도 노출)
+  residentMasked?: string;         // 엑셀 원본 주민번호 마스킹 표기(예: 900101-1******). 원문은 절대 미보관(§4·요구사항7).
+  masterInactive?: boolean;        // 매칭된 기존 Master 가 비활성 인력인지(요구사항4 — 자동 활성화 금지 표시).
   name: string;
   englishName: string;
   email: string;                   // 원문 표시용
@@ -1030,6 +1047,7 @@ interface TranslatorRow {
   grade: string;
   availabilityStatus: string;
   bio: string;                     // 상세정보 — 원문 보존(trim 만, §23)
+  // 주의: 주민번호 원문은 이 구조체에 절대 보관하지 않는다(§4·요구사항7). 매칭은 서버 지역변수에서만 수행.
 }
 
 /** 신규 통번역사의 안정적 business key(idempotency·lineage §19·§20). 파일명 무관. */
@@ -1039,34 +1057,153 @@ function translatorRowKey(r: TranslatorRow): string {
   return `translator|n:${normalizeCompanyName(r.name)}`;
 }
 
+/** 주민번호 13자리 숫자만 추출(서버 내부 매칭 전용 — 원문/반환/로그 금지, §4·요구사항7). */
+function rrnDigits13(s: string | null | undefined): string | null {
+  const d = (s ?? "").replace(/[^0-9]/g, "");
+  return d.length === 13 ? d : null;
+}
+
+/** 졸업년도 안전 파싱(정수 컬럼용) — 4자리 연도만 인정, 비정상(문자·범위 밖)은 null(NaN 삽입 방지). */
+function gradYear(s: string | null | undefined): number | null {
+  const m = String(s ?? "").match(/\d{4}/);
+  if (!m) return null;
+  const n = Number(m[0]);
+  return Number.isInteger(n) && n >= 1900 && n <= 2100 ? n : null;
+}
+
+/** 필드 비교용 기존 Master 요약(민감정보 제외 — 주민번호·계좌는 포함하지 않는다). */
+interface MiniTranslator {
+  id: number; name: string; email: string; phone: string; region: string;
+  languagePairs: string; profileWorkTypes: string; specializations: string;
+  education: string; major: string; graduationYear: string; grade: string; bio: string;
+}
+
+/** 기존 Master vs 엑셀 행 필드 비교(요구사항2).
+ *  규칙: 엑셀 공란→보존(임의 생성 금지) · 동일→변경 아님 ·
+ *        기존 공란 & 엑셀 값 있음→보완(fill, update 후보) · 기존 값 있음 & 상이→충돌(conflict, 별도 검토).
+ *  email/phone 은 정규화 비교. 성명은 매칭이 이미 성명호환을 통과한 경우(includeName=false) 비교 제외(별칭 오탐 방지). */
+function classifyTranslatorChange(ex: MiniTranslator, r: TranslatorRow, includeName: boolean): {
+  status: "identical" | "update" | "conflict"; changes: ChangeMap; fill: string[]; conflict: string[];
+} {
+  const norm = (s: string) => (s ?? "").trim();
+  const defs: { key: string; label: string; excel: string; db: string; cmp?: (s: string) => string }[] = [
+    ...(includeName ? [{ key: "name", label: "성명", excel: r.name, db: ex.name }] : []),
+    { key: "email", label: "이메일", excel: r.email, db: ex.email, cmp: (s: string) => normalizeEmail(s) },
+    { key: "phone", label: "휴대폰", excel: r.phone, db: ex.phone, cmp: (s: string) => normalizePhone(s) },
+    { key: "languages", label: "언어", excel: r.languages, db: ex.languagePairs },
+    { key: "services", label: "가능서비스", excel: r.services, db: ex.profileWorkTypes },
+    { key: "specializations", label: "전문분야", excel: r.specializations, db: ex.specializations },
+    { key: "grade", label: "인력등급", excel: r.grade, db: ex.grade },
+    { key: "region", label: "활동지역", excel: r.region, db: ex.region },
+    { key: "education", label: "학력", excel: r.education, db: ex.education },
+    { key: "major", label: "전공", excel: r.major, db: ex.major },
+    { key: "graduationYear", label: "졸업년도", excel: r.graduationYear, db: ex.graduationYear },
+    { key: "bio", label: "상세정보", excel: r.bio, db: ex.bio },
+  ];
+  const changes: ChangeMap = {};
+  const fill: string[] = []; const conflict: string[] = [];
+  for (const d of defs) {
+    const cmp = d.cmp ?? norm;
+    const exc = cmp(d.excel);
+    if (exc === "") continue;            // 엑셀 공란 → 기존값 보존
+    const dbv = cmp(d.db);
+    if (exc === dbv) continue;           // 동일 → 변경 아님
+    changes[d.key] = { old: d.db ?? "", new: d.excel ?? "" };
+    if (dbv === "") fill.push(d.label);  // 기존 공란 → 보완 후보
+    else conflict.push(d.label);         // 기존 값 상이 → 충돌
+  }
+  const status = conflict.length ? "conflict" : (fill.length ? "update" : "identical");
+  return { status, changes, fill, conflict };
+}
+
 async function analyzeTranslators(buffer: Buffer): Promise<{
   sheetName: string; headerRowIndex: number; columnMap: Record<string, string | null>;
-  rows: TranslatorRow[];
+  rows: TranslatorRow[]; translatorDiagnostics: Record<string, unknown>;
 }> {
   const parsed = parseWorkbook(buffer, TRANSLATOR_COLUMN_SYNONYMS);
   const colMap = buildColumnMap(parsed.headers, TRANSLATOR_COLUMN_SYNONYMS);
 
   // 기존 사용자(이메일 소유자 — 유니크 충돌/타 계정 사용 탐지). 휴지통(soft delete)은 제외.
   const users = await db
-    .select({ id: usersTable.id, name: usersTable.name, email: usersTable.email, role: usersTable.role })
+    .select({ id: usersTable.id, name: usersTable.name, email: usersTable.email, role: usersTable.role, isActive: usersTable.isActive })
     .from(usersTable)
     .where(sql`${usersTable.deletedAt} is null`);
   const emailOwners = new Map<string, { id: number; role: string }[]>();
   const pushOwner = (em: string, v: { id: number; role: string }) => { const a = emailOwners.get(em); if (a) a.push(v); else emailOwners.set(em, [v]); };
   const translatorName = new Map<number, string>();  // id → users.name
+  const userById = new Map<number, { name: string; email: string; isActive: boolean }>();  // 필드 비교용(요구사항2) + 활성상태(요구사항4)
   for (const u of users) {
     const em = normalizeEmail(u.email);
     if (em) pushOwner(em, { id: u.id, role: u.role });
-    if (u.role === "translator") translatorName.set(u.id, u.name ?? "");
+    if (u.role === "translator") { translatorName.set(u.id, u.name ?? ""); userById.set(u.id, { name: u.name ?? "", email: u.email ?? "", isActive: u.isActive !== false }); }
   }
   // translator_emails(대표/보조) 도 이메일 소유자에 포함
   const temails = await db.select({ translatorId: translatorEmailsTable.translatorId, email: translatorEmailsTable.email }).from(translatorEmailsTable);
   for (const te of temails) { const em = normalizeEmail(te.email); if (em && translatorName.has(te.translatorId)) pushOwner(em, { id: te.translatorId, role: "translator" }); }
 
-  // 휴대폰 → 통번역사 id (profile.phone)
-  const profiles = await db.select({ userId: translatorProfilesTable.userId, phone: translatorProfilesTable.phone }).from(translatorProfilesTable);
+  // 기존 프로필 전체(필드 보완/충돌 비교용 — 요구사항2) + 휴대폰 → 통번역사 id 역색인.
+  const profiles = await db.select({
+    userId: translatorProfilesTable.userId, phone: translatorProfilesTable.phone,
+    region: translatorProfilesTable.region, languagePairs: translatorProfilesTable.languagePairs,
+    profileWorkTypes: translatorProfilesTable.profileWorkTypes, specializations: translatorProfilesTable.specializations,
+    education: translatorProfilesTable.education, major: translatorProfilesTable.major,
+    graduationYear: translatorProfilesTable.graduationYear, grade: translatorProfilesTable.grade,
+    bio: translatorProfilesTable.bio,
+  }).from(translatorProfilesTable);
   const phoneToIds = new Map<string, Set<number>>();
-  for (const p of profiles) { const ph = normalizePhone(p.phone); if (ph && translatorName.has(p.userId)) { const s = phoneToIds.get(ph) ?? new Set(); s.add(p.userId); phoneToIds.set(ph, s); } }
+  const profileById = new Map<number, typeof profiles[number]>();
+  for (const p of profiles) {
+    if (!translatorName.has(p.userId)) continue;
+    profileById.set(p.userId, p);
+    const ph = normalizePhone(p.phone); if (ph) { const s = phoneToIds.get(ph) ?? new Set(); s.add(p.userId); phoneToIds.set(ph, s); }
+  }
+
+  // 주민번호 → 통번역사 id 역색인(요구사항1·우선 매칭). 복호는 서버 내부에서만, 원문/13자리는
+  // 어떤 행·응답·로그에도 저장하지 않는다(§4·요구사항7). 복호 실패/불완전 값은 조용히 skip.
+  const sensitives = await db
+    .select({ translatorId: translatorSensitiveTable.translatorId, rn: translatorSensitiveTable.residentNumber })
+    .from(translatorSensitiveTable);
+  const rrnToIds = new Map<string, number[]>();
+  const rrnById = new Map<number, string>();   // 모순(귀화 등 식별번호 상이) 판정용 — 서버 내부만.
+  for (const s of sensitives) {
+    if (!translatorName.has(s.translatorId)) continue;
+    const raw = s.rn ? String(s.rn).trim() : "";
+    if (!raw) continue;
+    let plain: string; try { plain = decrypt(raw); } catch { continue; }
+    const k = rrnDigits13(plain); if (!k) continue;   // 주민등록·외국인등록번호 공통 13자리
+    const arr = rrnToIds.get(k); if (arr) arr.push(s.translatorId); else rrnToIds.set(k, [s.translatorId]);
+    if (!rrnById.has(s.translatorId)) rrnById.set(s.translatorId, k);
+  }
+
+  // 실제(비임시) 이메일 → 통번역사 id 역색인. 기존 시스템 생성 임시 이메일(@crm-migrated.invalid)은 비교 제외(요구사항1).
+  const realEmailToIds = new Map<string, Set<number>>();
+  const addRealEmail = (rawEmail: string | null | undefined, id: number) => {
+    if (!rawEmail || isLegacyPlaceholderEmail(rawEmail)) return;
+    const em = normalizeEmail(rawEmail); if (!em) return;
+    const s = realEmailToIds.get(em) ?? new Set(); s.add(id); realEmailToIds.set(em, s);
+  };
+  for (const [id, u] of userById) addRealEmail(u.email, id);
+  for (const te of temails) { if (translatorName.has(te.translatorId)) addRealEmail(te.email, te.translatorId); }
+
+  // 기존 과거 CRM 이관자(legacy_master_mappings, entity_type='translator', 미롤백) → Master id 집합(요구사항5·6F).
+  // 읽기 전용. 매핑은 변경하지 않는다.
+  const legacyMaps = await db
+    .select({ entityId: legacyMasterMappingsTable.entityId, status: legacyMasterMappingsTable.status })
+    .from(legacyMasterMappingsTable)
+    .where(eq(legacyMasterMappingsTable.entityType, "translator"));
+  const legacyMappedMasterIds = new Set<number>();
+  for (const m of legacyMaps) { if (m.status !== "rolled_back" && translatorName.has(m.entityId)) legacyMappedMasterIds.add(m.entityId); }
+
+  const buildMini = (id: number): MiniTranslator => {
+    const u = userById.get(id); const p = profileById.get(id);
+    return {
+      id, name: u?.name ?? translatorName.get(id) ?? "", email: u?.email ?? "",
+      phone: p?.phone ?? "", region: p?.region ?? "", languagePairs: p?.languagePairs ?? "",
+      profileWorkTypes: p?.profileWorkTypes ?? "", specializations: p?.specializations ?? "",
+      education: p?.education ?? "", major: p?.major ?? "",
+      graduationYear: p?.graduationYear != null ? String(p.graduationYear) : "", grade: p?.grade ?? "", bio: p?.bio ?? "",
+    };
+  };
 
   // 이름 → 통번역사 id (users.name + aliases). id별 정규화 이름 집합(이름 호환 판정용).
   const aliases = await db.select({ translatorId: translatorAliasesTable.translatorId, norm: translatorAliasesTable.normalizedAlias }).from(translatorAliasesTable);
@@ -1091,6 +1228,19 @@ async function analyzeTranslators(buffer: Buffer): Promise<{
   const seenFilePhone = new Set<string>();
   const seenFileName = new Set<string>();
   const rows: TranslatorRow[] = [];
+
+  // ── 정합성 검증 집계(읽기 전용, 2단계) — 원본 행 수와 고유 인원 수 구분(요구사항6). ──
+  const conflictFieldCounts: Record<string, number> = {};   // 정보 충돌 유형별 건수(요구사항1·B)
+  const fillFieldCounts: Record<string, number> = {};       // 보완 가능 필드별 건수(요구사항3·C)
+  const confirmedMasterIds = new Set<number>();             // 동일인 확정(identical/update/conflict)의 고유 Master
+  const updateMasterIds = new Set<number>();                // 보완 대상 고유 Master
+  const matchedExistingIds = new Set<number>();             // 어떤 방식으로든 기존 Master 와 연결된 id(F 계산용)
+  const linkedLegacyMasterIds = new Set<number>();          // 기존 이관자(legacy)와 연결된 Master
+  const newKeys = new Set<string>();                        // 신규 등록 고유 인원 키
+  const homonymNames = new Set<string>();                   // 동명이인 고유 성명
+  // 단순화 기준(요구사항) — Master 별 확정 매칭 방식(우선순위 rrn>email>phone, 중복 집계 방지) + 예외 고유 집계.
+  const masterMethod = new Map<number, MatchMethod>();      // A/B/C: Master → 확정 방식(인원 기준 1회)
+  const exceptionKeys = new Set<string>();                  // F: 예외 검토 고유(인원 기준)
 
   parsed.dataRows.forEach((raw, i) => {
     if (isBlankRow(raw)) return;
@@ -1119,56 +1269,150 @@ async function analyzeTranslators(buffer: Buffer): Promise<{
       bio: normalizeName(getCell(raw, colMap, "bio")),  // 상세정보: trim 만(§23), 내용 변경 없음
     };
 
-    // ── 필수값(§13·§16): 성명, 이메일(users.email 필수·unique) ──
+    // ── 필수값: 성명만 필수. 이메일 없는 과거 CRM 이관자는 '비활성 Master 이관 대상'으로 분류(요구사항4). ──
     if (!name) { row.status = "error"; row.reason = "성명 누락"; rows.push(row); return; }
-    if (!emailNorm) { row.status = "error"; row.reason = "이메일 누락(통번역사 생성 필수)"; rows.push(row); return; }
 
     const nameNorm = normalizeCompanyName(name);
     const nameMatches = (id: number) => { const set = idToNameNorms.get(id); return !nameNorm || !set || set.has(nameNorm); };
+    // 주민번호 매칭키(서버 지역변수 — 행/응답/로그에 저장하지 않음, §4·요구사항7).
+    const rrnKey = rrnDigits13(normalizeName(getCell(raw, colMap, "residentNumber")));
+    const rrnIds = rrnKey ? (rrnToIds.get(rrnKey) ?? []) : [];
+    // 미리보기 표시용 마스킹: 900101-1****** (생년월일 6 + 성별 1자리만 노출, 뒤 6자리 마스킹).
+    // 마스킹 문자열만 응답에 포함하고 전체 13자리는 서버 지역변수 밖으로 내보내지 않는다.
+    if (rrnKey) row.residentMasked = `${rrnKey.slice(0, 6)}-${rrnKey[6]}******`;
 
-    const emailTransIds = transIdsByEmail(emailNorm);
-    const phoneIds = phoneNorm ? [...(phoneToIds.get(phoneNorm) ?? [])] : [];
-    const nameIds = nameNorm ? [...(nameToIds.get(nameNorm) ?? [])] : [];
+    // CRM 이메일이 임시 주소(@crm-migrated.invalid)면 매칭에서 제외(요구사항1).
+    const emailRealNorm = isLegacyPlaceholderEmail(row.email) ? "" : emailNorm;
 
-    if (hasNonTranslatorOwner(emailNorm) && emailTransIds.length === 0) {
-      // 이메일이 통번역사 아닌 다른 계정에서 사용중 → unique 충돌 방지 + 확인필요
-      row.status = "needs_review"; row.reason = "이메일이 다른 사용자 계정에서 사용중 — 확인필요";
-    } else if (emailTransIds.length >= 2) {
-      row.status = "needs_review"; row.reason = "이메일 다중후보(여러 통번역사) — 중복검토";   // CASE G
-    } else if (emailTransIds.length === 1) {
-      row.existingId = emailTransIds[0];
-      if (nameMatches(emailTransIds[0])) { row.status = "identical"; row.reason = "기존통번역사 일치(이메일)"; }   // CASE A/C
-      else { row.status = "needs_review"; row.reason = "이메일 일치하나 성명 상이 — 자동 merge 금지·중복검토"; }  // CASE 6
-    } else if (phoneIds.length >= 2) {
-      row.status = "needs_review"; row.reason = "휴대폰 다중후보(여러 통번역사) — 중복검토";   // CASE H
-    } else if (phoneIds.length === 1) {
-      row.existingId = phoneIds[0];
-      if (nameMatches(phoneIds[0])) { row.status = "identical"; row.reason = "기존통번역사 일치(휴대폰)"; }   // CASE B
-      else { row.status = "needs_review"; row.reason = "휴대폰 일치하나 성명 상이 — 중복검토"; }   // CASE D
-    } else if (nameIds.length > 0) {
-      // 이메일/휴대폰 매칭 없음 + 이름만 일치 → 동명이인 가능(§12·CASE E/F)
-      row.status = "needs_review"; row.reason = "동일 성명 존재 — 동명이인 가능, 중복검토";
-    } else if (emailNorm && seenFileEmail.has(emailNorm)) {
-      row.status = "duplicate_file"; row.reason = "파일 내부 중복(이메일)";
-    } else if (phoneNorm && seenFilePhone.has(phoneNorm)) {
-      row.status = "duplicate_file"; row.reason = "파일 내부 중복(휴대폰)";
-    } else if (nameNorm && seenFileName.has(nameNorm)) {
-      row.status = "needs_review"; row.reason = "파일 내부 동일 성명 — 동명이인 가능, 중복검토";
+    // 동일인 확정: 필드 비교 후 변경 있으면 update(보완·변경 후보), 없으면 identical. (충돌 일괄 분류 폐지 — 요구사항3)
+    const applyMatch = (id: number, method: MatchMethod) => {
+      row.existingId = id; row.matchMethod = method;
+      row.masterInactive = userById.get(id)?.isActive === false;   // 비활성 Master 표시(요구사항2·9)
+      const { changes, fill, conflict } = classifyTranslatorChange(buildMini(id), row, !nameMatches(id));
+      confirmedMasterIds.add(id);
+      const prio: Record<MatchMethod, number> = { rrn: 3, email: 2, phone: 1, name: 0 };   // 우선순위 ①주민번호 ②이메일 ③휴대폰
+      const prev = masterMethod.get(id);
+      if (!prev || prio[method] > prio[prev]) masterMethod.set(id, method);
+      if (Object.keys(changes).length === 0) {
+        row.status = "identical"; row.reason = `기존 Master #${id} 와 동일(${method})`;
+      } else {
+        row.status = "update"; row.changes = changes; updateMasterIds.add(id);
+        row.reason = `기존 Master #${id} 보완/변경 ${Object.keys(changes).length}개 필드`;
+        row.changeSummary = [fill.length ? `보완: ${fill.join("·")}` : "", conflict.length ? `변경: ${conflict.join("·")}` : ""].filter(Boolean).join(" / ");
+        for (const label of fill) fillFieldCounts[label] = (fillFieldCounts[label] ?? 0) + 1;
+        for (const label of conflict) conflictFieldCounts[label] = (conflictFieldCounts[label] ?? 0) + 1;
+      }
+    };
+    const markException = (reason: string) => {
+      row.status = "needs_review"; row.reviewCategory = "undecidable"; row.reason = reason;
+      exceptionKeys.add(row.existingId != null ? `m:${row.existingId}` : `k:${rrnKey || emailRealNorm || phoneNorm || `n:${nameNorm}`}`);
+    };
+
+    // ── 단순화 매칭(요구사항1): 성명 + (주민번호 | 실제 이메일 | 휴대폰). 우선순위 ①주민번호 ②이메일 ③휴대폰. ──
+    // 후보는 "성명 일치 Master" 로 제한. 식별자별 소유 Master 와 교집합.
+    const nameMatchedSet = new Set<number>(nameNorm ? [...(nameToIds.get(nameNorm) ?? [])] : []);
+    const rrnOwners = rrnKey ? (rrnToIds.get(rrnKey) ?? []) : [];
+    const emailOwners2 = emailRealNorm ? [...(realEmailToIds.get(emailRealNorm) ?? [])] : [];
+    const phoneOwners = phoneNorm ? [...(phoneToIds.get(phoneNorm) ?? [])] : [];
+    const cand = new Map<number, Set<MatchMethod>>();
+    const addCand = (ids: number[], m: MatchMethod) => { for (const id of ids) if (nameMatchedSet.has(id)) { const s = cand.get(id) ?? new Set<MatchMethod>(); s.add(m); cand.set(id, s); } };
+    addCand(rrnOwners, "rrn"); addCand(emailOwners2, "email"); addCand(phoneOwners, "phone");
+    const candIds = [...cand.keys()];
+
+    if (candIds.length >= 2) {
+      // 복수 Master 일치 → 명백한 모순(요구사항1 단서) → 예외 검토.
+      markException("성명+식별정보가 복수 Master와 일치 — 예외 검토");
+    } else if (candIds.length === 1) {
+      const id = candIds[0];
+      const methods = cand.get(id)!;
+      const method: MatchMethod = methods.has("rrn") ? "rrn" : methods.has("email") ? "email" : "phone";
+      const masterRrn = rrnById.get(id);
+      // 식별번호 모순(귀화 등): 이메일/휴대폰으로 확정됐는데 양쪽 주민번호가 모두 있고 다르면 예외(번호 불일치만으론 타인 확정 안 함 → 검토로).
+      if (method !== "rrn" && rrnKey && masterRrn && masterRrn !== rrnKey) {
+        row.existingId = id; row.matchMethod = method; row.masterInactive = userById.get(id)?.isActive === false;
+        markException(`기존 Master #${id} 와 ${method} 일치하나 식별번호 상이 — 귀화 등 예외 검토`);
+      } else {
+        applyMatch(id, method);
+      }
     } else {
-      row.status = "new";
-      if (emailNorm) seenFileEmail.add(emailNorm);
-      if (phoneNorm) seenFilePhone.add(phoneNorm);
-      if (nameNorm) seenFileName.add(nameNorm);
+      // 성명+식별정보로 확정된 Master 없음.
+      const otherDup = rrnOwners.length + emailOwners2.length + phoneOwners.length > 0;  // 이름 무관 식별정보가 타 Master와 일치
+      if (otherDup) {
+        markException("식별정보가 다른 성명의 Master와 일치 — 중복 가능성, 예외 검토");
+      } else if (nameMatchedSet.size > 0) {
+        // 동명 Master 존재하나 식별정보 미일치/부재 → 중복 가능성 남음 → 보류(요구사항4).
+        row.status = "needs_review"; row.reviewCategory = "homonym";
+        row.reason = "동명 Master 존재·식별정보 불일치 — 중복 가능성, 보류";
+        if (nameNorm) homonymNames.add(nameNorm);
+        exceptionKeys.add(`k:${emailRealNorm || phoneNorm || `n:${nameNorm}`}`);
+      } else if ((emailRealNorm && seenFileEmail.has(emailRealNorm)) || (phoneNorm && seenFilePhone.has(phoneNorm)) || (nameNorm && seenFileName.has(nameNorm))) {
+        // CRM 파일 내부 중복 → 보류(요구사항4).
+        row.status = "duplicate_file"; row.reviewCategory = "file_internal"; row.reason = "CRM 파일 내부 중복 — 보류";
+        exceptionKeys.add(`k:${emailRealNorm || phoneNorm || `n:${nameNorm}`}`);
+      } else {
+        row.status = "new";
+        if (emailRealNorm) seenFileEmail.add(emailRealNorm);
+        if (phoneNorm) seenFilePhone.add(phoneNorm);
+        if (nameNorm) seenFileName.add(nameNorm);
+      }
     }
+
+    // ── 고유 인원·연결 집계(원본 행 수와 구분, 요구사항6) ──
+    if (row.existingId != null) {
+      matchedExistingIds.add(row.existingId);                               // 기존 Master 와 연결된 행(F 계산)
+      if (legacyMappedMasterIds.has(row.existingId)) linkedLegacyMasterIds.add(row.existingId);  // 기존 이관자 연결(요구사항5)
+    }
+    if (row.status === "new") newKeys.add(emailRealNorm || phoneNorm || `n:${nameNorm}`);
 
     rows.push(row);
   });
+
+  // 진단 통계(읽기전용·미리보기 전용) — 단순화 기준 A~F(중복 집계 없이 실제 인원).
+  const errorBreakdown: Record<string, number> = {};
+  for (const r of rows) if (r.status === "error" && r.reason) errorBreakdown[r.reason] = (errorBreakdown[r.reason] ?? 0) + 1;
+  const countStatus = (s: RowStatus) => rows.filter((r) => r.status === s).length;
+
+  const buckets = {
+    new: countStatus("new"), identical: countStatus("identical"), update: countStatus("update"),
+    needsReview: countStatus("needs_review"), duplicateFile: countStatus("duplicate_file"), error: countStatus("error"),
+  };
+  const bucketSum = buckets.new + buckets.identical + buckets.update + buckets.needsReview + buckets.duplicateFile + buckets.error;
+  const methodVals = [...masterMethod.values()];
+  const A_rrn = methodVals.filter((m) => m === "rrn").length;
+  const B_email = methodVals.filter((m) => m === "email").length;
+  const C_phone = methodVals.filter((m) => m === "phone").length;
+
+  const translatorDiagnostics = {
+    // 핵심 요약(요구사항5): 기존 연결 / 신규 / 예외.
+    linkedPersons: confirmedMasterIds.size,            // 기존 Master 연결(동일인 확정) 고유 인원
+    newPersons: newKeys.size,                          // 신규 등록 가능 고유 인원
+    exceptionPersons: exceptionKeys.size,              // 예외 검토 고유 인원
+    updatablePersons: updateMasterIds.size,            // 업데이트 가능 고유 인원
+    errorBreakdown,
+    conflictFieldCounts,   // 동일인 확정 후 실제 변경 필드별 건수
+    fillFieldCounts,       // 공란 보완 필드별 건수
+    legacyMappedTotal: legacyMappedMasterIds.size,
+    legacyLinkedInFile: linkedLegacyMasterIds.size,
+    // ── A~F 보고서(중복 집계 없이 실제 인원 기준, 요구사항) ──
+    report: {
+      rowsTotal: rows.length,
+      A_nameRrn: A_rrn,                                // 이름+주민/외국인번호 일치 인원
+      B_nameEmail: B_email,                            // 이름+실제이메일 일치 인원
+      C_namePhone: C_phone,                            // 이름+휴대폰 일치 인원
+      D_updatable: updateMasterIds.size,               // 기존 Master 업데이트 가능 인원
+      E_newRegistrable: newKeys.size,                  // 신규 등록 가능 인원
+      F_exception: exceptionKeys.size,                 // 예외 검토 인원
+      legacyNotInFile: legacyMappedMasterIds.size - [...legacyMappedMasterIds].filter((id) => matchedExistingIds.has(id)).length,
+      reconciliation: { bucketSum, rowsTotal: rows.length, reconciled: bucketSum === rows.length, buckets },
+    },
+  };
 
   return {
     sheetName: parsed.sheetName,
     headerRowIndex: parsed.headerRowIndex,
     columnMap: describeColumnMap(parsed.headers, colMap),
     rows,
+    translatorDiagnostics,
   };
 }
 
@@ -1180,12 +1424,27 @@ router.post(
     if (!req.file) { res.status(400).json({ error: "파일을 첨부해주세요. (필드명: file)" }); return; }
     try {
       const result = await analyzeTranslators(req.file.buffer);
+      // 업로드 원본을 암호화 임시 저장소에 보관(Master 재구축 재사용). 실패해도 분석 응답은 정상 반환.
+      // 원본 바이트만 암호화 저장하고, 메타·응답·로그에 주민번호 등 셀 값은 넣지 않는다(§PII).
+      let snapshotId: string | null = null;
+      try {
+        pruneExpired();
+        const snap = saveSnapshot("translator", req.file.buffer, {
+          filename: decodeFileName(req.file.originalname),
+          sheetName: result.sheetName, totalRows: result.rows.length,
+          createdBy: (req as any).user?.id ?? null,
+        });
+        snapshotId = snap.id;
+      } catch (e) { req.log.warn({ err: e }, "BulkImport: snapshot save failed (분석은 계속)"); }
+
       res.json({
         fileName: decodeFileName(req.file.originalname),
         sheetName: result.sheetName,
         headerRowIndex: result.headerRowIndex,
         columnMap: result.columnMap,
         summary: summarize(result.rows),
+        translatorDiagnostics: result.translatorDiagnostics,
+        snapshotId,              // 서버 암호화 보관 식별자(재분석/삭제에 사용)
         rows: result.rows,
       });
     } catch (err) {
@@ -1194,6 +1453,605 @@ router.post(
     }
   },
 );
+
+// ── 통번역사 Master 재구축 — 저장된 업로드 스냅샷 관리 + 수행이력(진행관리표) 대조 분석(읽기 전용) ──
+// ★이 엔드포인트들은 DB·Master·매핑을 변경하지 않는다. 주민번호 원문은 복호 후 서버 내부 매칭에만 사용.★
+// 재구축 실행용 1인 액션(요구사항1~4). 주민번호는 원문 미보관 — 신규 생성용 암호문(rrnEnc)·마스킹만.
+interface RebuildPersonAction {
+  rowNumber: number;
+  action: "reuse" | "new" | "manual" | "exclude";
+  bucket: string;                 // reuse | newPure | rrnIndepNew | historyIndepNew | multiCandidate | idConflict | historyMismatch | rrnMismatch | other | excludeC
+  masterId?: number;              // reuse 대상 기존 Master id(요구사항1·7 — ID 유지)
+  name: string;
+  englishName: string;
+  emailNorm: string;
+  phoneNorm: string;
+  region: string; languages: string; services: string; specializations: string;
+  education: string; major: string; graduationYear: string; grade: string;
+  availabilityStatus: string; bio: string;
+  rrnEnc: string | null;          // 신규 생성 시 translator_sensitive 적재용 암호문(요구사항7). 원문·13자리 미보관.
+  hasRrn: boolean;
+  residentMasked: string;         // 표시용 마스킹(예: 900101-*******)
+  rowKey: string;                 // idempotency/lineage 키
+}
+
+async function classifyRebuildTargets(buffer: Buffer, opts: { withPlan?: boolean } = {}): Promise<Record<string, unknown>> {
+  const parsed = parseWorkbook(buffer, TRANSLATOR_COLUMN_SYNONYMS);
+  const colMap = buildColumnMap(parsed.headers, TRANSLATOR_COLUMN_SYNONYMS);
+  const plan: RebuildPersonAction[] = [];
+
+  // 진행관리표(수행이력) 신원 집합 — 읽기 전용.
+  const prog = await db.execute(sql`
+    SELECT nullif(btrim(source_raw->>'통번역사명'),'') AS nm,
+           substring(regexp_replace(coalesce(source_raw->>'주민등록번호',''),'[^0-9]','','g') from 1 for 13) AS rrn
+    FROM legacy_archive_rows WHERE source_type='progress' AND is_effective=true`);
+  const progNames = new Set<string>();
+  const progRrn = new Set<string>();
+  const progNameToRrns = new Map<string, Set<string>>();   // 수행자 이름 → 진행관리표상 주민번호 집합(식별정보 불일치 판정용)
+  for (const r of (prog.rows as any[])) {
+    const nm = r.nm ? normalizeCompanyName(String(r.nm)) : "";
+    if (nm) progNames.add(nm);
+    const rr = r.rrn && String(r.rrn).length === 13 ? String(r.rrn) : "";
+    if (rr) progRrn.add(rr);
+    if (nm && rr) { const s = progNameToRrns.get(nm) ?? new Set<string>(); s.add(rr); progNameToRrns.set(nm, s); }
+  }
+
+  // ── 기존 Master(통번역사) 교차대조 인덱스 — 전부 읽기 전용 SELECT. 재사용/신규/정리 산정용(요구사항1·5). ──
+  //   매칭 원칙: 성명 호환 + (주민번호 | 실제 이메일 | 휴대폰) 중 하나 일치 → 동일인 '확정'. 이름만 일치는 확정 아님(동명이인 자동병합 금지).
+  const mUsers = await db
+    .select({ id: usersTable.id, name: usersTable.name, email: usersTable.email, role: usersTable.role })
+    .from(usersTable)
+    .where(sql`${usersTable.deletedAt} is null`);
+  const masterIds = new Set<number>();                     // 통번역사 Master id
+  const masterNameNorms = new Set<string>();               // 기존 Master 정규화 성명(진행관리표 연결 예정 판정)
+  const nameToIds = new Map<string, Set<number>>();        // 정규화 성명 → Master id (users.name + aliases)
+  const mEmailToIds = new Map<string, Set<number>>();      // 실제 이메일 → Master id
+  const mPhoneToIds = new Map<string, Set<number>>();      // 휴대폰 → Master id
+  const mRrnToIds = new Map<string, Set<number>>();        // 주민/외국인 13자리 → Master id (서버 내부만)
+  // 기존 Master별 식별정보 보유 여부(⑥ 보완 가능 판정용) — 특정 Master에 이메일/휴대폰/주민번호가 있는지.
+  const mHasEmail = new Set<number>();
+  const mHasPhone = new Set<number>();
+  const mHasRrn = new Set<number>();
+  const addTo = (m: Map<string, Set<number>>, k: string, id: number) => { if (!k) return; const s = m.get(k) ?? new Set<number>(); s.add(id); m.set(k, s); };
+  const addRealEmail = (m: Map<string, Set<number>>, rawEmail: string | null | undefined, id: number) => {
+    if (!rawEmail || isLegacyPlaceholderEmail(rawEmail)) return;
+    addTo(m, normalizeEmail(rawEmail), id);
+    mHasEmail.add(id);
+  };
+  for (const u of mUsers) {
+    if (u.role !== "translator") continue;
+    masterIds.add(u.id);
+    const nn = normalizeCompanyName(u.name ?? "");
+    if (nn) { masterNameNorms.add(nn); addTo(nameToIds, nn, u.id); }
+    addRealEmail(mEmailToIds, u.email, u.id);
+  }
+  // 보조 이메일(translator_emails) · 프로필 휴대폰 · 별칭 성명 — Master 소속분만 반영.
+  const mTEmails = await db.select({ translatorId: translatorEmailsTable.translatorId, email: translatorEmailsTable.email }).from(translatorEmailsTable);
+  for (const te of mTEmails) if (masterIds.has(te.translatorId)) addRealEmail(mEmailToIds, te.email, te.translatorId);
+  const mProfiles = await db.select({ userId: translatorProfilesTable.userId, phone: translatorProfilesTable.phone }).from(translatorProfilesTable);
+  for (const p of mProfiles) if (masterIds.has(p.userId)) { const ph = normalizePhone(p.phone); if (ph) { addTo(mPhoneToIds, ph, p.userId); mHasPhone.add(p.userId); } }
+  const mAliases = await db.select({ translatorId: translatorAliasesTable.translatorId, norm: translatorAliasesTable.normalizedAlias }).from(translatorAliasesTable);
+  for (const a of mAliases) if (masterIds.has(a.translatorId)) { if (a.norm) { masterNameNorms.add(a.norm); addTo(nameToIds, a.norm, a.translatorId); } }
+  // 주민번호 역색인(복호는 서버 내부에서만, 원문·13자리 미반환·미로그 — §4·요구사항7).
+  const mSensitives = await db.select({ translatorId: translatorSensitiveTable.translatorId, rn: translatorSensitiveTable.residentNumber }).from(translatorSensitiveTable);
+  for (const s of mSensitives) {
+    if (!masterIds.has(s.translatorId)) continue;
+    const raw = s.rn ? String(s.rn).trim() : ""; if (!raw) continue;
+    let plain: string; try { plain = decrypt(raw); } catch { continue; }
+    const k = rrnDigits13(plain); if (!k) continue;
+    addTo(mRrnToIds, k, s.translatorId);
+    mHasRrn.add(s.translatorId);
+  }
+  // 중복 Master 정리 후보(요구사항1): 동일 주민번호가 2개 이상의 기존 Master에 존재 → 초과분만 '검증 후 비활성화' 후보로 집계(실행 없음·자동병합 금지).
+  let dupMasterCleanup = 0;
+  for (const ids of mRrnToIds.values()) if (ids.size >= 2) dupMasterCleanup += ids.size - 1;
+
+  const seenKey = new Set<string>();
+  let totalRows = 0, crmUnique = 0, internalDupById = 0, sameNameNoId = 0, invalid = 0, uniqueWithRrn = 0;
+  let A_history = 0, A_byRrn = 0, A_byNameOnly = 0, B_rrnNoHistory = 0, C_hold = 0;
+  // 등록 대상(A+B) → 기존 Master 교차대조 결과(요구사항5). 합계 = registerTarget 로 정합.
+  let reuseExistingMaster = 0, newMasterToCreate = 0, identityException = 0;
+  let masterSupplementable = 0;                             // ⑥ 기존 Master 정보 보완 가능 인원(재사용 대상 중 CRM이 결측 식별정보 보유)
+  // ── 동일인 확정 불가 인원 세분(요구사항1~4) — 등록자격(A/B/C)과 동일인 식별을 분리. ──
+  //   · 실제 중복위험(복수후보·주민번호/식별정보 충돌)만 '수동 확인'. 이름만 일치는 수동 사유 아님(병합 금지).
+  //   · 수행이력/주민번호로 등록자격을 갖추고 충돌이 없으면 '독립 신규 등록 후보'로 분류(이름만 일치로 자동연결 안 함).
+  let exMultiCandidate = 0;        // 성명+식별정보가 복수 Master와 일치 → 수동(자동병합 금지)
+  let exIdConflict = 0;            // CRM 식별정보(실명이메일/휴대폰/주민번호)를 다른 이름 Master가 보유 → 수동(실제 충돌)
+  let exHistoryMismatch = 0;       // 진행관리표 수행이력과 CRM 주민번호 불일치 → 수동(실제 충돌)
+  let exRrnMismatch = 0;           // 동명 Master가 다른 주민번호 보유 → 수동(귀화 가능성 포함 확인·실제 충돌)
+  let exRrnIndepNew = 0;           // 이름만 일치·CRM 고유 주민번호 보유·동명 Master 주민번호 없음 → 독립 신규 후보(주민번호 기준)
+  let exHistoryIndepNew = 0;       // 이름만 일치·주민번호 없음·수행이력 확인 → 독립 신규 후보(동명이인 가능 표시, 자동병합 금지)
+  let exOther = 0;                 // 기타(이론상 희소) → 수동
+  let exMissingRrn = 0;            // (비배타 진단) 동일인 미확정 인원 중 주민번호 누락
+  let exMissingContact = 0;        // (비배타 진단) 동일인 미확정 인원 중 이메일·휴대폰 모두 누락
+  const reuseMasterIds = new Set<number>();                 // 재사용 대상 기존 Master(참고)
+  const mastersFoundInCrm = new Set<number>();              // CRM 명부에서 동일인으로 확정된 기존 Master(⑩ 산정용)
+  const registerTargetNameNorms = new Set<string>();        // 등록 대상 정규화 성명(진행관리표 연결 예정 판정)
+
+  for (const raw of parsed.dataRows) {
+    if (isBlankRow(raw)) continue;
+    totalRows++;
+    const name = normalizeName(getCell(raw, colMap, "name"));
+    if (!name) { invalid++; continue; }
+    const nameNorm = normalizeCompanyName(name);
+    const rrn = rrnDigits13(normalizeName(getCell(raw, colMap, "residentNumber")));   // 서버 지역변수(미반환·미로그)
+    const emailRaw = normalizeName(getCell(raw, colMap, "email"));
+    const emailReal = isLegacyPlaceholderEmail(emailRaw) ? "" : normalizeEmail(emailRaw);
+    const phone = normalizePhone(getCell(raw, colMap, "phone"));
+
+    // 고유 인원: 식별자(주민번호>실제이메일>휴대폰) 우선. 식별자 동일 = 동일인 중복행 → 제외.
+    // 식별자 없는 동일 이름은 병합하지 않음(동명이인 가능) → 별도 집계만.
+    const idKey = rrn ? `r:${rrn}` : emailReal ? `e:${emailReal}` : phone ? `p:${phone}` : "";
+    if (idKey) {
+      if (seenKey.has(idKey)) { internalDupById++; continue; }
+      seenKey.add(idKey);
+    } else {
+      const nk = `n:${nameNorm}`;
+      if (seenKey.has(nk)) sameNameNoId++;   // 동명이인 확인 대상(병합 안 함)
+      seenKey.add(nk);
+    }
+
+    crmUnique++;
+    if (rrn) uniqueWithRrn++;
+    const histRrn = !!rrn && progRrn.has(rrn);
+    const histName = progNames.has(nameNorm);
+    const isRegisterTarget = histRrn || histName || !!rrn;   // A(이력) 또는 B(주민번호) → 등록 대상
+    if (histRrn || histName) { A_history++; if (histRrn) A_byRrn++; else A_byNameOnly++; }
+    else if (rrn) { B_rrnNoHistory++; }
+    else { C_hold++; }
+
+    // ── 기존 Master 교차대조(요구사항1·5) — 성명 호환 + 식별자 일치 시 동일인 확정. ──
+    //    확정 Master는 모든 고유행 기준으로 수집(⑩ CRM 미존재 Master 산정). 재사용/신규/예외 분류는 등록 대상(A+B)만.
+    const nameSet = nameToIds.get(nameNorm) ?? new Set<number>();
+    const idCands = new Set<number>();                       // 성명 호환 + 식별자 일치 Master(동일인 확정 후보)
+    if (rrn) for (const id of (mRrnToIds.get(rrn) ?? [])) if (nameSet.has(id)) idCands.add(id);
+    if (emailReal) for (const id of (mEmailToIds.get(emailReal) ?? [])) if (nameSet.has(id)) idCands.add(id);
+    if (phone) for (const id of (mPhoneToIds.get(phone) ?? [])) if (nameSet.has(id)) idCands.add(id);
+    for (const id of idCands) mastersFoundInCrm.add(id);     // CRM에서 확정된 기존 Master(동명이인 자동병합 아님)
+
+    let act: RebuildPersonAction["action"] = "exclude";   // 기본값: 등록 제외(C). register target 에서 재지정.
+    let bkt = "excludeC";
+    let mId: number | undefined;
+    if (isRegisterTarget) {
+      registerTargetNameNorms.add(nameNorm);
+      if (idCands.size === 1) {
+        const only = [...idCands][0];
+        reuseExistingMaster++; reuseMasterIds.add(only);     // 기존 ID 재사용(안전 연결)
+        act = "reuse"; bkt = "reuse"; mId = only;
+        // ⑥ 보완 가능: CRM 행이 기존 Master에 없는 식별정보(이메일/휴대폰/주민번호)를 보유 → 보완 후보.
+        if ((emailReal && !mHasEmail.has(only)) || (phone && !mHasPhone.has(only)) || (rrn && !mHasRrn.has(only))) masterSupplementable++;
+      } else {
+        const idOwnerElsewhere = (!!rrn && mRrnToIds.has(rrn)) || (!!emailReal && mEmailToIds.has(emailReal)) || (!!phone && mPhoneToIds.has(phone));
+        if (idCands.size === 0 && !idOwnerElsewhere && nameSet.size === 0) {
+          newMasterToCreate++;                               // 기존 Master 없음(이름·식별정보 모두 미존재) → 신규 생성 예정
+          act = "new"; bkt = "newPure";
+        } else {
+          // ── 동일인 확정 불가 → 등록자격(A/B)과 식별을 분리해 재분류(요구사항1~4). ──
+          //   실제 중복위험(복수후보·식별정보/주민번호 충돌)만 수동. 그 외 자격 충족분은 독립 신규 후보.
+          identityException++;
+          if (!rrn) exMissingRrn++;
+          if (!emailReal && !phone) exMissingContact++;
+          const sameNameWithRrn = [...nameSet].some((id) => mHasRrn.has(id));
+          const progRrns = progNameToRrns.get(nameNorm);
+          const historyIdMismatch = histName && !!rrn && !!progRrns && progRrns.size > 0 && !progRrns.has(rrn);
+          // idOwnerElsewhere=false 지점이므로 CRM 식별정보(주민번호/실명이메일/휴대폰)는 기존 Master와 '실제 충돌' 없음(요구사항4).
+          if (idCands.size >= 2) {
+            exMultiCandidate++; act = "manual"; bkt = "multiCandidate";   // 복수 후보 → 수동(자동병합 금지)
+          } else if (idOwnerElsewhere) {
+            exIdConflict++; act = "manual"; bkt = "idConflict";          // 식별정보를 다른 이름 Master가 보유 → 수동(실제 충돌)
+          } else if (historyIdMismatch) {
+            exHistoryMismatch++; act = "manual"; bkt = "historyMismatch"; // 진행관리표 주민번호와 CRM 주민번호 불일치 → 수동
+          } else if (rrn && sameNameWithRrn) {
+            exRrnMismatch++; act = "manual"; bkt = "rrnMismatch";        // 동명 Master가 다른 주민번호 보유 → 수동(귀화 포함 확인)
+          } else if (rrn) {
+            exRrnIndepNew++; act = "new"; bkt = "rrnIndepNew";           // 주민번호 보유·충돌 없음 → 독립 신규 후보(주민번호 우선 식별)
+          } else if (histName) {
+            exHistoryIndepNew++; act = "new"; bkt = "historyIndepNew";   // 수행이력 확인·주민번호 없음·충돌 없음 → 독립 신규 후보(동명이인 가능)
+          } else {
+            exOther++; act = "manual"; bkt = "other";                    // 기타(이론상 희소) → 수동
+          }
+        }
+      }
+    }
+
+    // 실행 계획 1인 레코드(요구사항7·8) — withPlan 일 때만. 주민번호 원문 미보관(신규용 암호문·마스킹만).
+    if (opts.withPlan) {
+      const rrnPlain = rrn;   // 서버 지역변수(13자리). plan 에는 암호문/마스킹만 저장하고 원문은 보관하지 않는다.
+      plan.push({
+        rowNumber: parsed.headerRowIndex + 2 + parsed.dataRows.indexOf(raw),
+        action: act, bucket: bkt, masterId: mId,
+        name,
+        englishName: normalizeName(getCell(raw, colMap, "englishName")),
+        emailNorm: emailReal || normalizeEmail(emailRaw),   // 실명 우선, 없으면 정규화 이메일(임시 포함)
+        phoneNorm: phone,
+        region: normalizeName(getCell(raw, colMap, "region")),
+        languages: normalizeName(getCell(raw, colMap, "languages")),
+        services: normalizeName(getCell(raw, colMap, "services")),
+        specializations: normalizeName(getCell(raw, colMap, "specializations")),
+        education: normalizeName(getCell(raw, colMap, "education")),
+        major: normalizeName(getCell(raw, colMap, "major")),
+        graduationYear: normalizeName(getCell(raw, colMap, "graduationYear")),
+        grade: normalizeName(getCell(raw, colMap, "grade")),
+        availabilityStatus: normalizeName(getCell(raw, colMap, "availabilityStatus")),
+        bio: (getCell(raw, colMap, "bio") ?? "").toString().trim(),
+        rrnEnc: rrnPlain ? encrypt(rrnPlain) : null,         // 신규 생성 시 translator_sensitive 적재용(요구사항7)
+        hasRrn: !!rrnPlain,
+        residentMasked: rrnPlain ? maskResidentNumber(rrnPlain) : "",
+        rowKey: emailReal ? `translator|e:${emailReal}` : phone ? `translator|m:${phone}` : `translator|n:${nameNorm}`,
+      });
+    }
+  }
+  const exceptionNewCandidate = exRrnIndepNew + exHistoryIndepNew;   // 동일인 미확정 → 독립 신규 후보로 재분류
+  const exceptionManualReview = identityException - exceptionNewCandidate;   // 실제 수동 확인 필요(복수후보·식별정보/주민번호 충돌)
+  const exceptionReconciled =
+    exMultiCandidate + exIdConflict + exHistoryMismatch + exRrnMismatch + exRrnIndepNew + exHistoryIndepNew + exOther === identityException;
+
+  // ── 진행관리표 수행자 이름 그룹(1,366) 연결 예정 산정(요구사항2·5) — 미연결 그룹을 CRM 등록대상·기존 Master와 전수 대조. ──
+  const linkRow = (await db.execute(sql`
+    WITH names AS (SELECT DISTINCT nullif(btrim(source_raw->>'통번역사명'),'') nm
+      FROM legacy_archive_rows WHERE source_type='progress' AND is_effective=true
+        AND nullif(btrim(source_raw->>'통번역사명'),'') IS NOT NULL)
+    SELECT (SELECT count(*) FROM names) AS groups,
+      (SELECT count(*) FROM names n WHERE EXISTS (SELECT 1 FROM legacy_master_mappings m
+         WHERE m.entity_type='translator' AND m.status<>'rolled_back' AND btrim(m.legacy_id)=n.nm)) AS linked`)).rows[0] as any;
+  // 미연결 그룹의 원본 이름 → 정규화 후 등록대상/기존 Master 성명과 대조(이름 기준 그룹이므로 실인원과 동일 가정 안 함).
+  const unlinkedNames = (await db.execute(sql`
+    WITH names AS (SELECT DISTINCT nullif(btrim(source_raw->>'통번역사명'),'') nm
+      FROM legacy_archive_rows WHERE source_type='progress' AND is_effective=true
+        AND nullif(btrim(source_raw->>'통번역사명'),'') IS NOT NULL)
+    SELECT n.nm FROM names n WHERE NOT EXISTS (SELECT 1 FROM legacy_master_mappings m
+       WHERE m.entity_type='translator' AND m.status<>'rolled_back' AND btrim(m.legacy_id)=n.nm)`)).rows as any[];
+  const groups = Number(linkRow?.groups ?? 0);
+  const linked = Number(linkRow?.linked ?? 0);
+  const unlinked = groups - linked;
+  let unlinkedWillConnect = 0;        // 미연결 그룹 중 등록대상/기존 Master와 성명 매칭 → 연결 예정
+  for (const r of unlinkedNames) {
+    const nn = r.nm ? normalizeCompanyName(String(r.nm)) : "";
+    if (nn && (registerTargetNameNorms.has(nn) || masterNameNorms.has(nn))) unlinkedWillConnect++;
+  }
+  const progressLink = {
+    groups, linked, unlinked,
+    confirmed: linked,                            // 확정 연결(기존 legacy_master_mappings) — 이름만 일치는 포함 안 함(요구사항4)
+    candidate: unlinkedWillConnect,               // 연결 후보(미연결 그룹 중 성명 매칭) — 확정 아님
+    expected: linked + unlinkedWillConnect,       // 연결 예정 건수(기존 연결 + 미연결 중 매칭)
+    unresolvedException: unlinked - unlinkedWillConnect,   // 동일인 확인 어려움 → 별도 예외 목록(요구사항2)
+  };
+
+  return {
+    sheetName: parsed.sheetName,
+    crmTotalRows: totalRows,
+    crmUniquePersons: crmUnique,
+    crmInternalDupById: internalDupById,         // 동일 식별자 중복행(K)
+    crmSameNameNoIdentifier: sameNameNoId,        // 식별자 없는 동명 — 확인 필요
+    crmInvalidRows: invalid,                      // 성명 누락 등
+    uniqueWithRrn,
+    A_withHistory: A_history,                     // 수행이력 O → 전원 등록
+    A_confirmedByRrn: A_byRrn,                     // 주민번호로 확정
+    A_byNameOnlyNeedsCheck: A_byNameOnly,          // 이름만 일치(동명이인 확인 필요)
+    B_rrnNoHistory: B_rrnNoHistory,               // 수행이력 X · 주민번호 O → 등록
+    C_hold: C_hold,                                // 수행이력 X · 주민번호 X → 보류
+    registerTarget: A_history + B_rrnNoHistory,    // 최종 등록(A+B)
+    // ── 기존 Master 교차대조(요구사항5) — reuse + new + exception = registerTarget 로 정합. ──
+    reuseExistingMaster,                          // ⑤ 기존 Master 재사용 예정 인원(동일인 확정)
+    reuseMasterCount: reuseMasterIds.size,         // ↑ 참고: 실제 재사용되는 고유 Master 수
+    masterSupplementable,                         // ⑥ 기존 Master 정보 보완 가능 인원(재사용 대상 중 CRM이 결측 식별정보 보유)
+    newMasterToCreate,                            // ⑦ 신규 Master 생성 예정 인원(이름·식별정보 모두 기존 Master에 없음)
+    identityException,                            // ⑨ 동일인 확인 예외 인원(복수일치·동명 미확정 등)
+    masterTotal: masterIds.size,                  // 참고: 기존 통번역사 Master 총원(미삭제)
+    masterNotInCrm: masterIds.size - mastersFoundInCrm.size,   // ⑩ CRM 명부엔 없고 기존 Master엔 존재하는 인원
+    dupMasterCleanup,                             // 중복 Master 정리 예정 인원(동일 주민번호 초과분·검증 후 비활성화 후보)
+    masterMatchReconciled: reuseExistingMaster + newMasterToCreate + identityException === A_history + B_rrnNoHistory,
+    // ── 동일인 확정 불가 인원 재분류(요구사항1~5) — 등록자격/식별 분리. 독립 신규 후보 vs 실제 수동. ──
+    exceptionAnalysis: {
+      total: identityException,
+      newCandidate: exceptionNewCandidate,              // 독립 신규 등록 후보로 재분류(이름만 일치 자동연결 안 함)
+      manualReview: exceptionManualReview,              // 실제 수동 확인 필요(복수후보·식별정보/주민번호 충돌)
+      byReason: {
+        multiCandidate: exMultiCandidate,               // 수동: 동일인 후보 복수
+        idConflictOtherMaster: exIdConflict,            // 수동: 식별정보(실명이메일/휴대폰/주민번호)를 다른 Master 보유
+        historyIdMismatch: exHistoryMismatch,           // 수동: 진행관리표 수행이력과 CRM 주민번호 불일치
+        rrnMismatchSameName: exRrnMismatch,             // 수동: 동명 Master와 주민번호 불일치(귀화 포함 확인)
+        rrnIndependentNew: exRrnIndepNew,               // 신규 후보: 주민번호 보유·충돌 없음(주민번호 우선 식별)
+        historyIndependentNew: exHistoryIndepNew,       // 신규 후보: 수행이력 확인·주민번호 없음·충돌 없음(동명이인 가능)
+        other: exOther,
+      },
+      diagnostics: { missingRrn: exMissingRrn, missingContact: exMissingContact },  // 비배타 진단(주민번호·연락처 누락)
+      reconciled: exceptionReconciled,                  // 원인별 합계 === 동일인 미확정 총원
+    },
+    newMasterCandidateTotal: newMasterToCreate + exceptionNewCandidate,   // 신규 Master 등록 가능 인원(순수 신규 + 재분류 독립 신규)
+    // ── 최종 처리방향(요구사항6) — 고유 인원 기준, 합계 정합 검증. ──
+    finalDisposition: {
+      reuseExisting: reuseExistingMaster,                             // 기존 Master 재사용
+      newCandidate: newMasterToCreate + exceptionNewCandidate,        // 신규 Master 등록 가능
+      manualReview: exceptionManualReview,                            // 실제 수동 확인 필요
+      excluded: C_hold,                                               // 등록 제외
+      total: crmUnique,
+      reconciled: reuseExistingMaster + (newMasterToCreate + exceptionNewCandidate) + exceptionManualReview + C_hold === crmUnique,
+    },
+    progressLink,                                 // 진행관리표 연결 현황·예정(확정/후보/미연결 구분)
+    reconciled: A_history + B_rrnNoHistory + C_hold === crmUnique,
+    ...(opts.withPlan ? { plan } : {}),           // 실행 계획(요구사항7·8) — withPlan 호출에서만. PII(주민번호 원문) 미포함.
+  };
+}
+
+const snapshotGuard = adminGuard;   // 관리자 전용. (super-admin 또는 admin/staff)
+
+router.get("/admin/translators/bulk-import/snapshots", ...snapshotGuard, async (_req, res) => {
+  try { res.json({ snapshots: listSnapshots("translator") }); }
+  catch (err) { res.status(500).json({ error: "스냅샷 목록 조회 실패." }); }
+});
+
+router.post("/admin/translators/bulk-import/snapshots/:id/rebuild-analysis", ...snapshotGuard, async (req, res) => {
+  const id = String(req.params.id);
+  if (!isValidSnapshotId(id)) { res.status(400).json({ error: "잘못된 스냅샷 ID." }); return; }
+  const meta = getSnapshotMeta(id);
+  const buf = readSnapshotBuffer(id);
+  if (!meta || !buf) { res.status(404).json({ error: "스냅샷을 찾을 수 없거나 복호화 실패." }); return; }
+  try {
+    const classification = await classifyRebuildTargets(buf);
+    // 진행관리표 연결 현황·예정(읽기 전용) — 이름 그룹 1,366 / 연결 / 미연결 / 연결 예정은 분류 함수가 산출.
+    res.json({
+      dryRun: true, committed: false,
+      snapshot: { id: meta.id, filename: meta.filename, createdAt: meta.createdAt },
+      classification,
+      progressLink: classification.progressLink,
+      note: "읽기 전용. Master 등록·삭제·매핑 변경 없음. 주민번호 원문 미반환·미로그.",
+    });
+  } catch (err) {
+    req.log.error({ err }, "BulkImport: rebuild-analysis failed");
+    res.status(500).json({ error: "재구축 분석 실패." });
+  }
+});
+
+// ── 통번역사 Master 재구축 실제 등록 실행(요구사항1~9) ───────────────────────────────
+//  · 기본은 DRY-RUN(계획+검증만, DB 미변경). 실제 반영은 commit=true + confirm=<snapshotId> 일 때만.
+//  · 재사용(action='reuse')은 기존 Master ID 유지 + 공란 필드만 보완(fill-only). 주민번호/계좌/단가/이메일/별칭 보존.
+//  · 신규(action='new')는 Master 생성 + 암호화 주민번호 적재 + CRM 매핑 신규 추가(기존 매핑 보존). UNIQUE(이메일/주민번호) 사전·실행 재검증.
+//  · 수동(action='manual')·제외(action='exclude')는 생성하지 않음. 기존 Master 중 재사용 외 인원은 삭제·비활성화 없이 '최종 정리 대상' 목록만.
+//  · 전 과정 단일 트랜잭션 — 실패 시 전체 롤백. 실행 전/후 인원·변경내역 기록(logs/import_batches).
+// 재구축 실행 코어(요구사항1~9) — HTTP 라우트와 헤드리스 러너가 공유하는 단일 소스(로직 중복 방지). {status, body} 반환.
+export async function runRebuildExecute(
+  buf: Buffer,
+  meta: { id: string; filename: string; createdAt?: string },
+  performer: { id: number; email: string },
+  opts: { commit: boolean; confirmToken: string },
+  log?: { error?: (...a: any[]) => void },
+): Promise<{ status: number; body: Record<string, unknown> }> {
+    const result = await classifyRebuildTargets(buf, { withPlan: true });
+    const plan = (result.plan as RebuildPersonAction[] | undefined) ?? [];
+    const fd = result.finalDisposition as Record<string, unknown>;
+    const commit = opts.commit;
+    const confirmToken = opts.confirmToken;
+
+    // 실행 전 인원(요구사항7 — 실행 전후 기록).
+    const beforeCount = Number(((await db.execute(sql`SELECT count(*)::int n FROM users WHERE role='translator' AND deleted_at IS NULL`)).rows[0] as any)?.n ?? 0);
+
+    // ── 라이브 UNIQUE 소유자 색인(요구사항7 — 이메일·주민번호 충돌 방지). 주민번호 복호는 서버 내부만. ──
+    const liveUsers = await db.select({ email: usersTable.email }).from(usersTable).where(sql`${usersTable.deletedAt} is null`);
+    const liveEmail = new Set<string>();
+    for (const u of liveUsers) { const e = normalizeEmail(u.email); if (e) liveEmail.add(e); }
+    const liveTEmails = await db.select({ email: translatorEmailsTable.email }).from(translatorEmailsTable);
+    for (const te of liveTEmails) { const e = normalizeEmail(te.email); if (e) liveEmail.add(e); }
+    const liveRrn = new Set<string>();
+    const liveSens = await db.select({ rn: translatorSensitiveTable.residentNumber }).from(translatorSensitiveTable);
+    for (const s of liveSens) { const raw = s.rn ? String(s.rn).trim() : ""; if (!raw) continue; try { const k = rrnDigits13(decrypt(raw)); if (k) liveRrn.add(k); } catch { /* skip */ } }
+    const planRrn = (p: RebuildPersonAction): string | null => { if (!p.rrnEnc) return null; try { return rrnDigits13(decrypt(p.rrnEnc)); } catch { return null; } };
+
+    // ── 신규 대상 사전검증: UNIQUE 충돌·파일내부 중복 → 생성 불가분 분리(요구사항7 — 중복 생성 방지). ──
+    const seenNewEmail = new Set<string>(); const seenNewRrn = new Set<string>();
+    let newCreatable = 0, emailCollision = 0, rrnCollision = 0, fileDupBlocked = 0;
+    const blocked: { rowNumber: number; name: string; reason: string }[] = [];
+    for (const p of plan) {
+      if (p.action !== "new") continue;
+      const rrnK = planRrn(p);
+      const realEmail = p.emailNorm && !isLegacyPlaceholderEmail(p.emailNorm) ? p.emailNorm : "";
+      if (realEmail && liveEmail.has(realEmail)) { emailCollision++; blocked.push({ rowNumber: p.rowNumber, name: p.name, reason: "email_unique_conflict" }); continue; }
+      if (rrnK && liveRrn.has(rrnK)) { rrnCollision++; blocked.push({ rowNumber: p.rowNumber, name: p.name, reason: "rrn_unique_conflict" }); continue; }
+      if (realEmail && seenNewEmail.has(realEmail)) { fileDupBlocked++; blocked.push({ rowNumber: p.rowNumber, name: p.name, reason: "file_internal_duplicate" }); continue; }
+      if (rrnK && seenNewRrn.has(rrnK)) { fileDupBlocked++; blocked.push({ rowNumber: p.rowNumber, name: p.name, reason: "file_internal_duplicate" }); continue; }
+      if (realEmail) seenNewEmail.add(realEmail);
+      if (rrnK) seenNewRrn.add(rrnK);
+      newCreatable++;
+    }
+
+    const reuseList = plan.filter((p) => p.action === "reuse");
+    const manualList = plan.filter((p) => p.action === "manual");
+    const excludeCount = plan.filter((p) => p.action === "exclude").length;
+
+    // 최종 정리 대상(요구사항5): 기존 Master 중 재사용에 포함되지 않는 인원 — 삭제·비활성화 없이 목록 수만.
+    const reuseIds = new Set<number>(reuseList.map((p) => p.masterId!).filter((x): x is number => !!x));
+    const allMasters = await db.select({ id: usersTable.id }).from(usersTable).where(sql`${usersTable.role}='translator' and ${usersTable.deletedAt} is null`);
+    const cleanupCandidates = allMasters.filter((m) => !reuseIds.has(m.id)).length;
+
+    const validation = {
+      idPreserved: true,                                // 재사용은 기존 id 유지(신규 id 생성 안 함)
+      newCreatable, emailCollision, rrnCollision, fileDupBlocked,
+      blockedSample: blocked.slice(0, 50),
+      cleanupCandidates,                                // 최종 정리 대상(삭제/비활성화 안 함)
+      originalsPreserved: true,                         // progress/sales_list/매핑/민감정보 원본 — 쓰기 경로에 포함 안 함
+    };
+    const projectedAfter = beforeCount + newCreatable;
+    const readyToExecute = (result.exceptionAnalysis as any)?.reconciled === true && fd?.reconciled === true;
+
+    // ── 요구사항2: 등록 제외 = 기준 C(주민번호 없음 AND 수행이력 없음) 검증. 다른 사유 제외 탐지. ──
+    //   exclude 액션은 register target(histRrn||histName||rrn)이 아닐 때만 부여되므로 구조상 주민번호 보유 제외는 0이어야 함.
+    const excludeList = plan.filter((p) => p.action === "exclude");
+    const excludeWithRrn = excludeList.filter((p) => p.hasRrn).length;   // 기준 위반(있으면 안 됨)
+    const excludeAudit = {
+      total: excludeList.length,
+      criterionC: excludeList.length - excludeWithRrn,   // 기준 C 정상 제외
+      withRrnButExcluded: excludeWithRrn,                // 주민번호 보유인데 제외(다른 사유) — 0 기대
+      nameMissingSeparate: Number((result.crmInvalidRows as number) ?? 0),  // 성명 누락 무효행(고유 2,019·526에 미포함)
+      allCriterionC: excludeWithRrn === 0,
+    };
+
+    // ── 요구사항3: 수동 확인 대상 상세(개인정보 마스킹). ──
+    const maskName = (n: string) => { const s = (n ?? "").trim(); return !s ? "(이름없음)" : s.length <= 1 ? "*" : s[0] + "*".repeat(s.length - 1); };
+    const MANUAL_REASON: Record<string, { reason: string; action: string }> = {
+      multiCandidate: { reason: "성명+식별정보가 복수 기존 Master와 일치", action: "수동 대조 후 1인 선택 또는 분리 등록" },
+      idConflict: { reason: "식별정보(실명이메일/휴대폰/주민번호)를 다른 이름의 기존 Master가 보유", action: "타인 식별정보 여부 확인 → 동일인이면 보완, 아니면 신규" },
+      historyMismatch: { reason: "진행관리표 수행이력과 CRM 주민번호 불일치", action: "수행이력 신원 확인 후 연결/분리" },
+      rrnMismatch: { reason: "동명 기존 Master와 주민번호 불일치(귀화/개명 가능성)", action: "귀화·개명 여부 확인 후 동일인/별인 판정" },
+      other: { reason: "기타", action: "수동 검토" },
+    };
+    const manualReviewDetail = manualList.map((p) => ({
+      rowNumber: p.rowNumber, nameMasked: maskName(p.name), residentMasked: p.residentMasked || "(없음)",
+      reasonCode: p.bucket, reason: MANUAL_REASON[p.bucket]?.reason ?? p.bucket, action: MANUAL_REASON[p.bucket]?.action ?? "수동 검토",
+    }));
+
+    // ── 요구사항1: 분석 결과 ↔ 실행 계획 정합. newCandidate = 실제 생성가능 + UNIQUE/중복 차단분. ──
+    const blockedTotal = emailCollision + rrnCollision + fileDupBlocked;
+    const planMatchesAnalysis =
+      Number((fd as any).reuseExisting) === reuseList.length &&
+      Number((fd as any).manualReview) === manualList.length &&
+      Number((fd as any).excluded) === excludeCount &&
+      Number((fd as any).newCandidate) === newCreatable + blockedTotal;
+
+    if (!commit) {
+      // DRY-RUN — DB INSERT/UPDATE/DELETE 없음.
+      return { status: 200, body: {
+        dryRun: true, committed: false,
+        snapshot: { id: meta.id, filename: meta.filename, createdAt: meta.createdAt },
+        disposition: fd,                                // reuse/newCandidate/manualReview/excluded + reconciled
+        willRegister: { reuseExisting: reuseList.length, newCreate: newCreatable, manualHold: manualList.length, excluded: excludeCount },
+        validation, beforeCount, projectedAfter, readyToExecute,
+        planMatchesAnalysis,                            // 요구사항1
+        excludeAudit,                                   // 요구사항2
+        manualReviewDetail,                             // 요구사항3(마스킹)
+        note: "읽기 전용. DB 미반영. 실제 실행은 commit=true & confirm=<snapshotId> 에서만. 이름만 일치 자동연결 없음·기존 ID 유지·민감정보/계좌/매핑 보존.",
+      } };
+    }
+
+    // ── 실제 실행(commit=true) — 단일 트랜잭션·실패 시 롤백(요구사항7·8). ──
+    if (confirmToken !== meta.id) { return { status: 400, body: { error: "확인 토큰 불일치. 실제 실행 시 confirm=<snapshotId> 필요." } }; }
+
+    // 재사용 보완용 라이브 프로필/이메일 로드(공란 판정). 읽기 전용.
+    const reuseUsers = await db.select({ id: usersTable.id, email: usersTable.email }).from(usersTable).where(sql`${usersTable.role}='translator' and ${usersTable.deletedAt} is null`);
+    const userEmailById = new Map<number, string>(); for (const u of reuseUsers) userEmailById.set(u.id, u.email ?? "");
+    const reuseProfiles = await db.select({
+      userId: translatorProfilesTable.userId, phone: translatorProfilesTable.phone, region: translatorProfilesTable.region,
+      languagePairs: translatorProfilesTable.languagePairs, profileWorkTypes: translatorProfilesTable.profileWorkTypes,
+      specializations: translatorProfilesTable.specializations, education: translatorProfilesTable.education,
+      major: translatorProfilesTable.major, graduationYear: translatorProfilesTable.graduationYear,
+      grade: translatorProfilesTable.grade, bio: translatorProfilesTable.bio,
+    }).from(translatorProfilesTable);
+    const profById = new Map<number, typeof reuseProfiles[number]>(); for (const p of reuseProfiles) profById.set(p.userId, p);
+    const empty = (v: unknown) => !((v ?? "").toString().trim());
+
+    let createdCount = 0, updatedCount = 0, batchId: number | null = null;
+    await db.transaction(async (tx) => {
+      const [batch] = await tx.insert(importBatchesTable).values({
+        module: "translator", importType: "legacy_migration",
+        originalFilename: meta.filename || null, sheetName: null,
+        totalRows: plan.length, successRows: 0, warningRows: manualList.length, errorRows: 0,
+        status: "completed", createdBy: performer.id || null, sourceSystem: "crm_rebuild",
+      }).returning({ id: importBatchesTable.id });
+      batchId = batch.id;
+
+      // 1) 신규 생성(action='new') — UNIQUE 재검증 후 users→profile→email→alias→sensitive→lineage→mapping.
+      for (const p of plan) {
+        if (p.action !== "new") continue;
+        const rrnK = planRrn(p);
+        const realEmail = p.emailNorm && !isLegacyPlaceholderEmail(p.emailNorm) ? p.emailNorm : "";
+        if (realEmail && liveEmail.has(realEmail)) continue;    // 실행 시점 재검증(요구사항7)
+        if (rrnK && liveRrn.has(rrnK)) continue;
+        // users.email 은 NOT NULL·UNIQUE — 실명 이메일이 없으면 임시 이메일 생성(레거시 이관 방식). 스냅샷ID+행번호로 유일.
+        const insertEmail = p.emailNorm || `rebuild-${meta.id}-${p.rowNumber}@crm-migrated.invalid`;
+        const [u] = await tx.insert(usersTable).values({
+          email: insertEmail, password: null, name: p.name || null, role: "translator", isActive: true,
+        }).returning({ id: usersTable.id });
+        await tx.insert(translatorProfilesTable).values({
+          userId: u.id, phone: p.phoneNorm || null, region: p.region || null,
+          languagePairs: p.languages || null, profileWorkTypes: p.services || null,
+          specializations: p.specializations || null, education: p.education || null,
+          major: p.major || null, graduationYear: gradYear(p.graduationYear),
+          grade: p.grade || null, availabilityStatus: p.availabilityStatus || "available", bio: p.bio || null,
+        });
+        await tx.insert(translatorEmailsTable).values({ translatorId: u.id, email: insertEmail, isPrimary: true }).onConflictDoNothing();
+        const aliasVals = [buildTranslatorAliasValues(u.id, p.name, true)];
+        if (p.englishName) aliasVals.push(buildTranslatorAliasValues(u.id, p.englishName, false));
+        const aliasClean = aliasVals.filter((v) => v.normalizedAlias);
+        if (aliasClean.length) await tx.insert(translatorAliasesTable).values(aliasClean).onConflictDoNothing();
+        if (p.rrnEnc) await tx.insert(translatorSensitiveTable).values({ translatorId: u.id, residentNumber: p.rrnEnc }).onConflictDoNothing();  // 암호문 적재(요구사항7)
+        await tx.insert(importRowSourcesTable).values({ batchId: batch.id, module: "translator", entityId: u.id, sourceFile: meta.filename || null, sourceSheet: null, sourceRow: p.rowNumber, rowKey: p.rowKey, status: "new" });
+        await tx.execute(sql`INSERT INTO legacy_master_mappings (source_system, entity_type, legacy_id, entity_id, match_method, status, created_by, created_at)
+          VALUES ('old_crm','translator', ${normalizeCompanyName(p.name)}, ${u.id}, 'crm_rebuild', 'active', ${performer.id || null}, now())
+          ON CONFLICT (source_system, entity_type, legacy_id) DO NOTHING`);   // 기존 매핑 보존·신규만 추가
+        if (realEmail) liveEmail.add(realEmail); if (rrnK) liveRrn.add(rrnK);
+        createdCount++;
+      }
+
+      // 2) 재사용 보완(action='reuse') — 공란 필드만 채움(fill-only). 기존값·주민번호·계좌·단가 보존.
+      for (const p of plan) {
+        if (p.action !== "reuse" || !p.masterId) continue;
+        const prof = profById.get(p.masterId);
+        const upd: Record<string, unknown> = {};
+        if (prof) {
+          if (empty(prof.phone) && p.phoneNorm) upd.phone = p.phoneNorm;
+          if (empty(prof.region) && p.region) upd.region = p.region;
+          if (empty(prof.languagePairs) && p.languages) upd.languagePairs = p.languages;
+          if (empty(prof.profileWorkTypes) && p.services) upd.profileWorkTypes = p.services;
+          if (empty(prof.specializations) && p.specializations) upd.specializations = p.specializations;
+          if (empty(prof.education) && p.education) upd.education = p.education;
+          if (empty(prof.major) && p.major) upd.major = p.major;
+          if (prof.graduationYear == null) { const gy = gradYear(p.graduationYear); if (gy != null) upd.graduationYear = gy; }
+          if (empty(prof.grade) && p.grade) upd.grade = p.grade;
+          if (empty(prof.bio) && p.bio) upd.bio = p.bio;
+        }
+        let changed = false;
+        if (Object.keys(upd).length) { await tx.update(translatorProfilesTable).set(upd).where(eq(translatorProfilesTable.userId, p.masterId)); changed = true; }
+        // 이메일: 기존이 임시(@crm-migrated.invalid)이고 CRM 실명 이메일이 충돌 없을 때만 교체(fill-only 확장).
+        const curEmail = userEmailById.get(p.masterId) ?? "";
+        const realEmail = p.emailNorm && !isLegacyPlaceholderEmail(p.emailNorm) ? p.emailNorm : "";
+        if (realEmail && isLegacyPlaceholderEmail(curEmail) && !liveEmail.has(realEmail)) {
+          await tx.update(usersTable).set({ email: realEmail }).where(eq(usersTable.id, p.masterId));
+          await tx.insert(translatorEmailsTable).values({ translatorId: p.masterId, email: realEmail, isPrimary: false }).onConflictDoNothing();
+          liveEmail.add(realEmail); changed = true;
+        }
+        // 별칭 보강(검색 일관성) — 중복 무시. 기존 별칭 삭제 안 함.
+        const aliasVals = [buildTranslatorAliasValues(p.masterId, p.name, false)];
+        if (p.englishName) aliasVals.push(buildTranslatorAliasValues(p.masterId, p.englishName, false));
+        const aliasClean = aliasVals.filter((v) => v.normalizedAlias);
+        if (aliasClean.length) await tx.insert(translatorAliasesTable).values(aliasClean).onConflictDoNothing();
+        // CRM↔기존 Master 매핑 신규 추가(기존 보존).
+        await tx.execute(sql`INSERT INTO legacy_master_mappings (source_system, entity_type, legacy_id, entity_id, match_method, status, created_by, created_at)
+          VALUES ('old_crm','translator', ${normalizeCompanyName(p.name)}, ${p.masterId}, 'crm_rebuild_reuse', 'active', ${performer.id || null}, now())
+          ON CONFLICT (source_system, entity_type, legacy_id) DO NOTHING`);
+        if (changed) updatedCount++;
+      }
+
+      await tx.update(importBatchesTable).set({ successRows: createdCount + updatedCount }).where(eq(importBatchesTable.id, batch.id));
+    });
+
+    await logEvent("translator", 0, "crm_rebuild_execute", log as any, performer.id ? performer : undefined,
+      JSON.stringify({ snapshot: meta.id, beforeCount, afterCount: beforeCount + createdCount, created: createdCount, updated: updatedCount, manualHold: manualList.length, excluded: excludeCount, cleanupCandidates, batchId }));
+    return { status: 200, body: { dryRun: false, committed: true, batchId, beforeCount, afterCount: beforeCount + createdCount, created: createdCount, updated: updatedCount, manualHold: manualList.length, excluded: excludeCount } };
+}
+
+router.post("/admin/translators/bulk-import/snapshots/:id/rebuild-execute", ...snapshotGuard, async (req, res) => {
+  const id = String(req.params.id);
+  if (!isValidSnapshotId(id)) { res.status(400).json({ error: "잘못된 스냅샷 ID." }); return; }
+  const meta = getSnapshotMeta(id);
+  const buf = readSnapshotBuffer(id);
+  if (!meta || !buf) { res.status(404).json({ error: "스냅샷을 찾을 수 없거나 복호화 실패." }); return; }
+  try {
+    const commit = (req.body as any)?.commit === true || (req.body as any)?.commit === "true";
+    const confirmToken = String((req.body as any)?.confirm ?? "");
+    const performer = { id: (req as any).user?.id ?? 0, email: (req as any).user?.email ?? "" };
+    const out = await runRebuildExecute(buf, meta, performer, { commit, confirmToken }, req.log);
+    res.status(out.status).json(out.body);
+  } catch (err) {
+    req.log.error({ err }, "BulkImport: rebuild-execute failed");
+    res.status(500).json({ error: "재구축 실행 실패(트랜잭션 롤백됨)." });
+  }
+});
+
+router.delete("/admin/translators/bulk-import/snapshots/:id", ...snapshotGuard, async (req, res) => {
+  const id = String(req.params.id);
+  if (!isValidSnapshotId(id)) { res.status(400).json({ error: "잘못된 스냅샷 ID." }); return; }
+  const ok = deleteSnapshot(id);
+  res.json({ deleted: ok });
+});
 
 router.post(
   "/admin/translators/bulk-import/execute",
@@ -1273,6 +2131,150 @@ router.post(
     } catch (err) {
       req.log.error({ err }, "BulkImport: translator execute failed");
       res.status(500).json({ error: "통번역사 일괄 등록 실패." });
+    }
+  },
+);
+
+// ── 통번역사 기존 Master 상세정보 보완 — 드라이런(계획) ────────────────────────────
+// 요구사항: 주민번호 13자리 완전 일치 = 동일인 확정 → 상세정보 보완 계획을 산출(★DB 미변경 dry-run★).
+//   · 자동 반영(apply) 허용 = 주민번호 단일일치(matchMethod='rrn')에 한함(요구사항1·8). 그 외는 검토(hold).
+//   · 필드 결정 규칙(요구사항3~7):
+//       - CRM 공란 → 기존 유지(변경 아님, 요구사항5)
+//       - 기존 공란 + CRM 값 → 보완(fill, 자동)
+//       - 이메일: 기존이 임시(@crm-migrated.invalid) → CRM 실제 이메일로 교체(자동, 요구사항4)
+//                 기존이 실제 이메일 & 상이 → 연락처 검토(요구사항7)
+//       - 휴대폰: 기존 값 & 상이 → 수정일 불명확 → 검토(요구사항7)
+//       - 언어·상세정보: 기존 유효값 삭제 금지 → 추가·통합 검토(merge, 요구사항6)
+//       - 그 외 상이 → 충돌 검토
+//   · 비활성 계정은 보완해도 비활성 유지(요구사항9) — isActive 는 계획에 포함하지 않음.
+//   · 주민번호 불일치·중복·미등록 자동 반영 금지(요구사항8). 주민번호 원문·ID·매핑·수행/지급 연결 보존(요구사항10).
+//   · 감사기록은 변경 전/후 비교 + 결정(category/decision)을 미리보기로 제공(실제 기록은 commit 단계, logs/import_batches 재사용).
+type FieldDecision = "keep" | "apply" | "hold";
+type FieldCategory = "fill" | "email_replace" | "merge" | "contact_review" | "conflict_review";
+const UPDATE_FIELD_LABELS: Record<string, string> = {
+  name: "성명", email: "이메일", phone: "휴대폰", languages: "언어", services: "가능서비스",
+  specializations: "전문분야", grade: "인력등급", region: "활동지역",
+  education: "학력", major: "전공", graduationYear: "졸업년도", bio: "상세정보",
+};
+const MERGE_FIELDS = new Set(["languages", "bio"]);     // 언어·상세정보(경력) — 삭제 금지·통합 검토(요구사항6)
+const AUTO_CATEGORIES = new Set<FieldCategory>(["fill", "email_replace"]);
+// 변경된 필드(old≠new, CRM 비공란)에 대한 결정 범주. old 공란이면 "fill".
+function updateFieldCategory(field: string, oldVal: string, newVal: string): FieldCategory {
+  if (!(oldVal ?? "").trim()) return "fill";                                              // 기존 공란 → 보완(자동)
+  if (field === "email") return isLegacyPlaceholderEmail(oldVal) ? "email_replace" : "contact_review"; // 임시→교체(자동)/실제상이→검토
+  if (field === "phone") return "contact_review";                                        // 연락처 상이 → 검토(요구사항7)
+  if (MERGE_FIELDS.has(field)) return "merge";                                           // 언어·상세정보 → 통합 검토(요구사항6)
+  return "conflict_review";
+}
+router.post(
+  "/admin/translators/bulk-import/update-plan",
+  ...adminGuard,
+  excelUpload.single("file"),
+  async (req, res) => {
+    if (!req.file) { res.status(400).json({ error: "파일을 첨부해주세요. (필드명: file)" }); return; }
+    try {
+      // 관리자 필드별 선택(override): { "<existingId>:<fieldKey>": "keep"|"apply"|"hold" }
+      let selections: Record<string, FieldDecision> = {};
+      try {
+        const raw = (req.body as any)?.selections;
+        if (typeof raw === "string" && raw.trim()) selections = JSON.parse(raw);
+        else if (raw && typeof raw === "object") selections = raw;
+      } catch { selections = {}; }
+      const decisionOf = (id: number, field: string, fallback: FieldDecision): FieldDecision => {
+        const v = selections[`${id}:${field}`];
+        return v === "keep" || v === "apply" || v === "hold" ? v : fallback;
+      };
+
+      // 서버 재분석(§16 보안). DB 변경 없음.
+      const result = await analyzeTranslators(req.file.buffer);
+
+      // 동일인 확정 대상(applyMatch 결과) — 보완 가능.
+      const eligible = result.rows.filter(
+        (r) => (r.status === "update" || r.status === "conflict") && r.existingId != null &&
+          (r.matchMethod === "rrn" || r.matchMethod === "email" || r.matchMethod === "phone"),
+      );
+      const blocked = result.rows.filter(
+        (r) => r.reviewCategory === "homonym" || r.reviewCategory === "undecidable" ||
+          r.reviewCategory === "same_person" || r.reviewCategory === "legacy_no_email" || r.reviewCategory === "file_internal",
+      ).length;
+
+      const applyFieldCounts: Record<string, number> = {};
+      const holdFieldCounts: Record<string, number> = {};
+      const keepFieldCounts: Record<string, number> = {};
+      const categoryCounts: Record<FieldCategory, number> = { fill: 0, email_replace: 0, merge: 0, contact_review: 0, conflict_review: 0 };
+      const personsToUpdate = new Set<number>();
+      let appliedFieldTotal = 0;
+      const auditPreview: Array<{
+        masterId: number; name: string; residentMasked: string | null; matchMethod: string | null;
+        masterInactive: boolean; autoUpdatable: boolean;
+        changes: Array<{ field: string; label: string; old: string; new: string; category: FieldCategory; autoAllowed: boolean; decision: FieldDecision }>;
+      }> = [];
+
+      for (const r of eligible) {
+        const id = r.existingId as number;
+        const isRrn = r.matchMethod === "rrn";   // 자동 반영은 주민번호 일치에 한함(요구사항1·8)
+        const rowChanges: Array<{ field: string; label: string; old: string; new: string; category: FieldCategory; autoAllowed: boolean; decision: FieldDecision }> = [];
+        let anyReview = false;
+        for (const [field, ch] of Object.entries(r.changes ?? {})) {
+          const category = updateFieldCategory(field, ch.old, ch.new);
+          categoryCounts[category] += 1;
+          const autoAllowed = isRrn && AUTO_CATEGORIES.has(category);   // fill·임시이메일교체 & 주민번호 일치만 자동
+          if (!autoAllowed) anyReview = true;
+          const decision = decisionOf(id, field, autoAllowed ? "apply" : "hold");
+          rowChanges.push({ field, label: UPDATE_FIELD_LABELS[field] ?? field, old: ch.old, new: ch.new, category, autoAllowed, decision });
+          if (decision === "apply") { applyFieldCounts[field] = (applyFieldCounts[field] ?? 0) + 1; appliedFieldTotal += 1; personsToUpdate.add(id); }
+          else if (decision === "hold") holdFieldCounts[field] = (holdFieldCounts[field] ?? 0) + 1;
+          else keepFieldCounts[field] = (keepFieldCounts[field] ?? 0) + 1;
+        }
+        if (rowChanges.length > 0) {
+          auditPreview.push({
+            masterId: id, name: r.name, residentMasked: r.residentMasked ?? null, matchMethod: r.matchMethod ?? null,
+            masterInactive: r.masterInactive === true, autoUpdatable: isRrn && !anyReview, changes: rowChanges,
+          });
+        }
+      }
+
+      // ── 주민번호 일치 대상 산출(요구사항: 453행 대상 자동 가능/검토 필요) ──
+      const rrnSingle = result.rows.filter((r) => r.matchMethod === "rrn" && (r.status === "identical" || r.status === "update" || r.status === "conflict"));
+      const rrnMulti = result.rows.filter((r) => r.matchMethod === "rrn" && r.status === "needs_review").length;  // 주민번호 중복 → 자동 금지(요구사항8)
+      let rrnNoChange = 0, rrnAutoUpdatable = 0, rrnReviewNeeded = 0;
+      for (const r of rrnSingle) {
+        const changes = Object.entries(r.changes ?? {});
+        if (changes.length === 0) { rrnNoChange += 1; continue; }   // 이미 동일(변경 없음)
+        const hasReview = changes.some(([field, ch]) => !AUTO_CATEGORIES.has(updateFieldCategory(field, ch.old, ch.new)));
+        if (hasReview) rrnReviewNeeded += 1; else rrnAutoUpdatable += 1;
+      }
+
+      const inactiveWithApply = auditPreview.filter((a) => a.masterInactive && a.changes.some((c) => c.decision === "apply")).length;
+
+      res.json({
+        fileName: decodeFileName(req.file.originalname),
+        dryRun: true,            // ★ 실제 DB 변경 없음 ★
+        committed: false,
+        summary: {
+          eligibleRows: eligible.length,
+          eligiblePersons: new Set(eligible.map((r) => r.existingId)).size,
+          blockedRows: blocked,
+          personsToUpdate: personsToUpdate.size,
+          appliedFieldTotal,
+          applyFieldCounts, holdFieldCounts, keepFieldCounts, categoryCounts,
+          inactiveWithApply,
+        },
+        // 주민번호 일치 대상 핵심 집계(요구사항).
+        rrnReport: {
+          rrnSingleTotal: rrnSingle.length,       // 주민번호 13자리 단일 일치(동일인 확정)
+          rrnAutoUpdatable,                        // 자동 업데이트 가능(공란 보완·임시이메일 교체만)
+          rrnReviewNeeded,                         // 추가 검토 필요(연락처 상이·언어/상세정보 통합·기타 충돌)
+          rrnNoChange,                             // 이미 동일(변경 없음)
+          rrnMultiBlocked: rrnMulti,               // 주민번호 중복 → 자동 반영 금지
+          reconciled: rrnNoChange + rrnAutoUpdatable + rrnReviewNeeded === rrnSingle.length,
+        },
+        auditPreview,
+        note: "dry-run: DB 미반영. 자동 반영은 주민번호 일치에 한함. 활성화(isActive)·주민번호 원문·ID·legacy 매핑·수행/지급 연결은 변경 대상에서 제외됩니다.",
+      });
+    } catch (err) {
+      req.log.error({ err }, "BulkImport: translator update-plan failed");
+      res.status(500).json({ error: "업데이트 계획 생성 실패." });
     }
   },
 );

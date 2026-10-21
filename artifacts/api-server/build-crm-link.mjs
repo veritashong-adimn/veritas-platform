@@ -1,0 +1,10 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { build as esbuild } from "esbuild";
+import { createBuildOptions } from "./esbuild.config.mjs";
+const dir = path.dirname(fileURLToPath(import.meta.url));
+const opts = createBuildOptions(dir);
+opts.entryPoints = [path.resolve(dir, "src/crm-link-verify.ts")];
+opts.logLevel = "warning";
+await esbuild(opts);
+console.log("built dist/crm-link-verify.mjs");
