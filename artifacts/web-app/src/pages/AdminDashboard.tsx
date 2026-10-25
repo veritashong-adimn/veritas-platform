@@ -62,7 +62,6 @@ import { SettingsTab } from '../components/admin/SettingsTab';
 import { BillingManagementTab } from '../components/admin/BillingManagementTab';
 import { CollectionsTab } from '../components/admin/CollectionsTab';
 import { StaffManagementTab } from '../components/admin/StaffManagementTab';
-import { PayoutReproductionTab } from '../components/admin/PayoutReproductionTab';
 import { exportContacts } from '../lib/contactExcel';
 import { exportTranslators } from '../lib/translatorExcel';
 import { exportPrepaidAccounts } from '../lib/prepaidExcel';
@@ -1743,10 +1742,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         />
       )}
 
-      {/* ── 과거 지급 재현(검증, READ-ONLY) ── */}
-      {adminTab === "payout-reproduction" && (
-        <PayoutReproductionTab token={token ?? ""} onToast={setToast} />
-      )}
+      {/* 「과거 지급 재현(검증)」은 SettlementTabs(지급회차 관리) 상단 하위탭으로 통합됨 — 별도 렌더 경로 제거(§3). */}
 
       {/* ── 사용자 관리 탭 ── */}
       {adminTab === "users" && (
@@ -2429,7 +2425,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
         }>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
             <input value={translatorSearch} onChange={e => { setTranslatorSearch(e.target.value); setTranslatorPage(1); }}
-              placeholder="이름, 별칭, 이메일, 가능언어, 학력, 지역 검색..."
+              placeholder="이름, Master ID(#), 별칭, 이메일, 가능언어, 학력, 지역 검색..."
               style={{ ...inputStyle, maxWidth: 240, flex: "1 1 180px", padding: "8px 12px", fontSize: 13 }}
               onKeyDown={e => e.key === "Enter" && fetchTranslators()} />
             <input value={translatorLangFilter} onChange={e => { setTranslatorLangFilter(e.target.value); setTranslatorPage(1); }}
@@ -2582,13 +2578,9 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                               {t.name
                                 ? <span style={{ fontWeight: 700, fontSize: 13, color: "#111827" }}>{t.name}</span>
                                 : <span style={{ fontSize: 13, color: "#374151" }}>{(t as any).isLegacyMigrated ? "(이름 미등록)" : t.email}</span>}
-                              {/* Master ID — 동명 그룹 비교 식별자(§4) */}
-                              <span style={{ fontSize: 10, color: "#9ca3af", fontFamily: "monospace" }}>#{t.id}</span>
-                              {/* 기존/신규 등록 구분(§4) */}
-                              <span style={{ background: t.isNew ? "#ecfdf5" : "#f3f4f6", color: t.isNew ? "#047857" : "#4b5563", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>{t.isNew ? "신규" : "기존"}</span>
-                              {/* 수행이력 연결 여부(§4) */}
+                              {/* Master ID는 목록에서 숨김(상세 '관리정보' 탭에서 읽기전용 표시). ID 검색은 지원. */}
+                              {/* 수행이력 연결 여부(§4) — '신규/기존'·'과거 CRM 이관' 출처 배지는 목록 간소화로 제거(표시 전용). */}
                               {t.hasHistory && <span style={{ background: "#fef3c7", color: "#92400e", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>이력</span>}
-                              {(t as any).isLegacyMigrated && <span style={{ background: "#eef2ff", color: "#4338ca", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontWeight: 700 }}>과거 CRM 이관</span>}
                             </div>
                             {t.name && (t.email
                               ? <div style={{ color: "#6b7280", fontSize: 11 }}>{t.email}</div>
@@ -2717,15 +2709,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           {/* 운영상태 */}
                           <td style={{ ...tableTd, padding: "9px 4px", overflow: "hidden" }}>
                             {(() => {
-                              if ((t as any).isLegacyMigrated) {
-                                return (
-                                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                    <span style={{ padding: "2px 7px", borderRadius: 10, background: "#eef2ff", color: "#4338ca", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
-                                      과거 CRM 이관
-                                    </span>
-                                  </div>
-                                );
-                              }
+                              // 출처 구분값('과거 CRM 이관')은 운영상태에 표시하지 않음(목록 간소화). 실제 운영상태(정상/비활성 등)로 표시.
                               if (inactive) {
                                 return (
                                   <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>

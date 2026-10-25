@@ -6,6 +6,7 @@ import { BackToListButton } from "./BackToListButton";
 import { DraggableModal } from "./DraggableModal";
 import { SensitiveInfoModal, SETTLEMENT_TYPES } from "./SensitiveInfoModal";
 import { TranslatorLangExpSection } from "./TranslatorLangExpSection";
+import { TranslatorPerformanceHistorySection } from "./TranslatorPerformanceHistorySection";
 import { formatPhoneNumber } from "../../lib/utils";
 import {
   ALL_RATE_UNITS as ALL_UNITS,
@@ -250,6 +251,10 @@ const OVERSEAS_CITIES: Record<string, readonly string[]> = {
 
 type EmailEntry = { email: string; isPrimary: boolean; error: string };
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// 이관 과정에서 생성한 내부 식별용 이메일(@crm-migrated.invalid: legacy-… / rebuild-…)은 실제 이메일이 아니므로
+// 화면에서 공란 처리한다(목록의 '이메일 미등록'과 일치). DB·계정식별·Master연결에는 그대로 유지(표시 전용).
+const isPlaceholderEmail = (e: string | null | undefined): boolean =>
+  !!e && e.trim().toLowerCase().endsWith("@crm-migrated.invalid");
 
 // 전화번호 포맷은 공통 Utility(formatPhoneNumber, ../../lib/utils) 사용
 
@@ -561,6 +566,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   const [rates, setRates] = useState<TranslatorRate[]>([]);
   const [notes, setNotes] = useState<NoteEntry[]>([]);
   const [emailEntries, setEmailEntries] = useState<EmailEntry[]>([]);
+  // 공란 표시된 대표 이메일의 내부 식별용 placeholder 원본(저장 시 그대로 유지 → DB·식별·로그인 불변).
+  const [placeholderEmail, setPlaceholderEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [noteText, setNoteText] = useState("");
@@ -678,20 +685,24 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         const u = dData.user;
         const migrated = u?.isLegacyMigrated === true;
         setIsLegacyMigrated(migrated);
-        // 이관 인력은 내부 식별 이메일을 표시하지 않음 → 공란.
-        setUserInfo({ name: u?.name ?? "", email: migrated ? "" : (u?.email ?? userEmail), isActive: u?.isActive ?? true, invitePending: dData.user?.inviteStatus === "pending" });
         const p: TranslatorProfile | null = dData.profile;
         setProfile(p);
         setRates(Array.isArray(dData.rates) ? dData.rates : []);
-        // 이메일 목록 구성
+        // 이메일 목록 구성 — 내부 식별용(@crm-migrated.invalid)은 화면에서 빈칸(DB·식별은 불변).
+        //   user.email 은 백엔드가 이미 null 마스킹하나, translator_emails(emails[])에는 placeholder가 남아 입력란에 노출됨 → 여기서 공란 처리.
+        const primaryRaw = u?.email ?? userEmail;
         const allEmails: Array<{ email: string; isPrimary: boolean }> = Array.isArray(dData.emails) ? dData.emails : [];
-        const fallbackPrimary = u?.email ?? userEmail;
+        const arrayPrimary = (allEmails.find(e => e.isPrimary) ?? allEmails[0])?.email ?? null;
+        // 저장 시 그대로 유지할 내부 식별 placeholder 원본(user.email 또는 emails[] 어느 쪽이든).
+        const placeholderSrc = [primaryRaw, arrayPrimary].find(e => isPlaceholderEmail(e)) ?? null;
+        setPlaceholderEmail(placeholderSrc);
+        setUserInfo({ name: u?.name ?? "", email: isPlaceholderEmail(primaryRaw) ? "" : primaryRaw, isActive: u?.isActive ?? true, invitePending: dData.user?.inviteStatus === "pending" });
         let entries: EmailEntry[];
         if (allEmails.length > 0) {
-          entries = allEmails.map(e => ({ email: e.email, isPrimary: e.isPrimary, error: "" }));
+          entries = allEmails.map(e => ({ email: isPlaceholderEmail(e.email) ? "" : e.email, isPrimary: e.isPrimary, error: "" }));
         } else {
-          // translator_emails 없으면 users.email을 대표로
-          entries = [{ email: fallbackPrimary, isPrimary: true, error: "" }];
+          // translator_emails 없으면 users.email을 대표로(placeholder면 공란)
+          entries = [{ email: isPlaceholderEmail(primaryRaw) ? "" : primaryRaw, isPrimary: true, error: "" }];
         }
         // 대표 없으면 첫 번째를 대표로
         if (!entries.some(e => e.isPrimary)) entries[0].isPrimary = true;
@@ -765,17 +776,20 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   };
 
   const handleSave = async () => {
-    // 이메일 검증
+    // 이메일 검증 — 공란 대표 이메일이 '내부 식별 placeholder' 자리면 저장 비차단(원본 placeholder 그대로 유지).
     const validated = emailEntries.map(e => {
       const t = e.email.trim().toLowerCase();
-      if (!t) return { ...e, error: "이메일을 입력하세요." };
+      if (!t) {
+        if (e.isPrimary && placeholderEmail) return { ...e, error: "", usePlaceholder: true as const };
+        return { ...e, error: "이메일을 입력하세요." };
+      }
       if (!emailRegex.test(t)) return { ...e, error: "올바른 이메일 형식이 아닙니다." };
       return { ...e, error: "" };
     });
-    if (validated.some(e => e.error)) { setEmailEntries(validated); return false; }
+    if (validated.some(e => e.error)) { setEmailEntries(validated.map(({ usePlaceholder, ...e }: any) => e)); return false; }
 
-    // 중복 검사
-    const allNorm = validated.map(e => e.email.trim().toLowerCase());
+    // 중복 검사 — placeholder 유지 항목은 원본 식별값 기준.
+    const allNorm = validated.map(e => (e as any).usePlaceholder ? (placeholderEmail ?? "").toLowerCase() : e.email.trim().toLowerCase());
     if (new Set(allNorm).size !== allNorm.length) {
       onToast("동일한 이메일이 중복 입력되어 있습니다."); return false;
     }
@@ -812,7 +826,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           operationalNote: form.operationalNote.trim() || null,
           reassignmentAllowed: form.reassignmentAllowed,
           languageExperiences: langExperiences.length > 0 ? JSON.stringify(langExperiences) : null,
-          emails: validated.map(e => ({ email: e.email.trim().toLowerCase(), isPrimary: e.isPrimary })),
+          emails: validated.map(e => ({ email: (e as any).usePlaceholder ? placeholderEmail! : e.email.trim().toLowerCase(), isPrimary: e.isPrimary })),
         }),
       });
       const data = await res.json();
@@ -1361,7 +1375,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               <div>
                 <label style={{ ...labelSt, fontSize: 11 }}>휴대폰번호</label>
                 <input type="tel" value={form.phone} onChange={e => setForm(p => ({ ...p, phone: formatPhoneNumber(e.target.value) }))}
-                  placeholder="010-0000-0000" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  placeholder="휴대전화번호 입력" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
               </div>
               {/* 별칭(Alias) — 거래처 상세와 동일한 Tag UI(bound 모드: 즉시 서버 반영) */}
               <div style={{ gridColumn: "1 / -1" }}>
@@ -1381,7 +1395,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                       <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                         <input type="email" value={entry.email}
                           onChange={e => setEmailEntries(p => p.map((x, idx) => idx === i ? { ...x, email: e.target.value, error: "" } : x))}
-                          placeholder={isLegacyMigrated && !entry.email ? "이메일 미등록 (과거 CRM 이관)" : "이메일 주소"}
+                          placeholder="이메일 주소 입력"
                           style={{ ...inputStyle, fontSize: 13, padding: "6px 10px", flex: 1, borderColor: entry.error ? "#dc2626" : "#d1d5db" }}
                         />
                         {entry.isPrimary ? (
@@ -2039,6 +2053,11 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
 
           {/* 관리정보 탭 — 운영 정보(상태·재배정·운영메모 등) */}
           <div style={tabShow("mgmt")}>
+          {/* Master ID — 읽기 전용(수행이력·정산·판매·중복통합 이력 연결 식별자). 변경 불가. */}
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelSt}>Master ID</label>
+            <div data-testid="translator-master-id" style={{ padding: "7px 10px", borderRadius: 8, border: "1px solid #e5e7eb", background: "#f9fafb", fontSize: 13, color: "#374151", fontFamily: "monospace", fontWeight: 700 }}>#{userId}</div>
+          </div>
           {/* ═══ 6. 운영 정보 — 통합 섹션 (기본 접힘) ═══ */}
           {secRow("운영 정보", "operational")}
           {!collapsed.operational && (
@@ -2171,12 +2190,10 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             </div>
           </div>
 
-          {/* 수행이력 탭 — 현재 상세에 전용 조회 API 미연결(§13). 별도 작업 필요. */}
+          {/* 수행이력 탭 — 과거 CRM + 신규 플랫폼 통합 조회(Master 연결 기준 · 읽기전용). */}
           <div style={tabShow("performance")}>
             {secRow("수행 이력")}
-            <p style={{ color: "#9ca3af", fontSize: 13, padding: "8px 0", lineHeight: 1.6 }}>
-              통번역사별 수행이력 전용 조회는 현재 상세 화면에 연결돼 있지 않습니다. 수행이력 데이터/API 연결은 별도 작업으로 진행합니다.
-            </p>
+            <TranslatorPerformanceHistorySection translatorId={userId} token={token} onToast={onToast} />
           </div>
 
           {/* ── 하단 바 ── */}

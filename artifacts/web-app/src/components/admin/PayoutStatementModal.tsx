@@ -123,21 +123,19 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
   const exportExcel = (g: any) => {
     // 추가비용/차감은 내역(명칭)과 금액(숫자 셀)을 분리 — 사람 확인 + Excel 계산·분석 모두 만족.
     const columns: ExcelColumn[] = [
-      { header: '거래처', width: 18 }, { header: '상품·업무', width: 24 }, { header: '구분', width: 7 }, { header: '수행일', width: 13 }, { header: '납품일', width: 12 }, { header: '지급일', width: 12 }, { header: '작업량', width: 12 },
-      { header: '단가', type: 'number', width: 11 }, { header: '통번역료', type: 'number', width: 12 },
+      { header: '거래처', width: 20 }, { header: '상품·업무', width: 26 }, { header: '상세내역', width: 34 }, { header: '납품일', width: 12 }, { header: '지급일', width: 12 },
+      { header: '통번역료', type: 'number', width: 12 },
       { header: '기타비용 내역', width: 18 }, { header: '기타비용 금액', type: 'number', width: 13 },
       { header: '차감 내역', width: 16 }, { header: '차감 금액', type: 'number', width: 12 },
-      { header: '세전금액', type: 'number', width: 13 }, { header: '세금처리', width: 12 }, { header: '공제액', type: 'number', width: 12 }, { header: '실지급액', type: 'number', width: 17 },
+      { header: '세전금액', type: 'number', width: 13 }, { header: '세금처리', width: 12 }, { header: '원천세공제(3.3%)', type: 'number', width: 16 }, { header: '실지급액', type: 'number', width: 17 },
     ];
     const rows: ExcelCell[][] = (g.items ?? []).map((it: any) => [
       it.customerName || '-',
       it.productName || `#${it.projectId}`,
-      svcLabel(it.serviceType),
-      perfDate(it),
+      // 상세내역 = 신규 수행정보의 파일명(현 구조에 전용 필드 없음 → '-'; 임의 대체 금지).
+      it.fileName || it.filename || '-',
       formatDisplayDate(it.deliveryDate) || '-',
       formatDisplayDate(it.expectedPaymentDate) || '-',
-      workAmount(it),
-      (it.isDirectAmount || it.contractUnitPrice == null) ? '-' : Math.round(numOf(it.contractUnitPrice)),
       Math.round(numOf(it.basePerformanceFee)),
       itemTypeNames(it.expenses),
       Math.round(numOf(it.expenseTotal)),
@@ -150,8 +148,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
     ]);
     // 컬럼 정렬 합계행(기본수행료·추가비용 금액·차감 금액·세전·공제·실지급 합계) — 서버 그룹 총계 그대로.
     const totals: ExcelCell[] = [
-      `합계 (${g.count}건)`, '', '', '', '', '', '',
-      '', Math.round(numOf(g.baseTotal)),
+      `합계 (${g.count}건)`, '', '', '', '',
+      Math.round(numOf(g.baseTotal)),
       '', Math.round(numOf(g.expenseTotal)),
       '', Math.round(numOf(g.deductionTotal)),
       Math.round(numOf(g.grossTotal)), '', Math.round(numOf(g.withholdingTotal)), Math.round(numOf(g.netTotal)),
@@ -162,7 +160,7 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
       ['기타비용 합계', Math.round(numOf(g.expenseTotal))],
       ['차감 합계', Math.round(numOf(g.deductionTotal))],
       ['세전금액 합계', Math.round(numOf(g.grossTotal))],
-      ['공제액', Math.round(numOf(g.withholdingTotal))],
+      ['원천세공제(3.3%)', Math.round(numOf(g.withholdingTotal))],
       ['최종 실지급액', Math.round(numOf(g.netTotal))],
     ];
     downloadStatementExcel({
@@ -172,8 +170,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
       info: [
         ['지급대상', String(g.payeeName ?? '')],
         ['이메일', g.payeeEmail || '-'],
+        ['연락처', g.payeePhone || '-'],
         ['구분', payeeTypeLabel(g.payeeType)],
-        [scopeFieldLabel, roundName],
         ['지급일', payDateSummary(g.items)],
         ['세금처리', groupTaxDisplay(g)],
       ],
@@ -187,12 +185,9 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
     const pdfRows: PayoutStatementPdfRow[] = (g.items ?? []).map((it: any) => ({
       customer: it.customerName || '-',
       product: it.productName || `#${it.projectId}`,
-      service: svcLabel(it.serviceType),
-      perfDate: perfDate(it),
+      detail: it.fileName || it.filename || '-',   // 상세내역 = 신규 수행정보 파일명(전용 필드 없으면 '-')
       deliveryDate: formatDisplayDate(it.deliveryDate) || '-',
       payDate: formatDisplayDate(it.expectedPaymentDate) || '-',
-      workAmount: workAmount(it),
-      unitPrice: unitPrice(it),
       base: numOf(it.basePerformanceFee),
       expenses: inlineItems(it.expenses),
       deductions: inlineItems(it.deductions),
@@ -206,6 +201,7 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
       issuedDate: `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`,
       payeeName: String(g.payeeName ?? ''),
       email: g.payeeEmail || '-',
+      phone: g.payeePhone || '-',
       payeeType: payeeTypeLabel(g.payeeType),
       scopeFieldLabel,
       scopeValue: roundName,
@@ -295,8 +291,8 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
             {[
               ['지급대상', group.payeeName],
               ['이메일', group.payeeEmail || '-'],
+              ['연락처', group.payeePhone || '-'],
               ['구분', payeeTypeLabel(group.payeeType)],
-              [scopeFieldLabel, roundName],
               ['지급일', payDateSummary(group.items)],
               ['세금처리', groupTaxDisplay(group)],
             ].map(([k, v]) => (
@@ -311,21 +307,18 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
           <div style={{ overflowX: 'auto' }}>
             <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 1360 }}>
               <thead><tr>
-                <th style={th}>거래처</th><th style={th}>상품·업무</th><th style={th}>구분</th><th style={th}>수행일</th><th style={th}>납품일</th><th style={th}>지급일</th><th style={th}>작업량</th>
-                <th style={{ ...th, textAlign: 'right' }}>단가</th><th style={{ ...th, textAlign: 'right' }}>통번역료</th><th style={th}>기타비용 내역</th><th style={th}>차감</th>
-                <th style={{ ...th, textAlign: 'right' }}>세전금액</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>공제액</th><th style={{ ...th, textAlign: 'right' }}>실지급액</th>
+                <th style={th}>거래처</th><th style={th}>상품·업무</th><th style={th}>상세내역</th><th style={th}>납품일</th><th style={th}>지급일</th>
+                <th style={{ ...th, textAlign: 'right' }}>통번역료</th><th style={th}>기타비용 내역</th><th style={th}>차감</th>
+                <th style={{ ...th, textAlign: 'right' }}>세전금액</th><th style={th}>세금처리</th><th style={{ ...th, textAlign: 'right' }}>원천세공제(3.3%)</th><th style={{ ...th, textAlign: 'right' }}>실지급액</th>
               </tr></thead>
               <tbody>
                 {(group.items ?? []).map((it: any) => (
                   <tr key={it.id}>
                     <td style={td} title={it.customerName || '-'}>{it.customerName || '-'}</td>
                     <td style={td} title={it.productName || `#${it.projectId}`}>{it.productName || `#${it.projectId}`}</td>
-                    <td style={td}>{svcLabel(it.serviceType)}</td>
-                    <td style={td}>{perfDate(it)}</td>
+                    <td style={{ ...td, whiteSpace: 'normal' }} title={it.fileName || it.filename || '-'}>{it.fileName || it.filename || '-'}</td>
                     <td style={td}>{formatDisplayDate(it.deliveryDate) || '-'}</td>
                     <td style={td}>{formatDisplayDate(it.expectedPaymentDate) || '-'}</td>
-                    <td style={td}>{workAmount(it)}</td>
-                    <td style={tdR}>{unitPrice(it)}</td>
                     <td style={tdR}>{won(it.basePerformanceFee)}</td>
                     <td style={{ ...td, whiteSpace: 'normal', color: (it.expenses?.length ? C.textSecondary : C.g400) }}>{inlineItems(it.expenses)}</td>
                     <td style={{ ...td, whiteSpace: 'normal', color: (it.deductions?.length ? C.danger : C.g400) }}>{inlineItems(it.deductions)}</td>
@@ -338,8 +331,7 @@ export default function PayoutStatementModal({ round, summary, snapshotSource, s
               </tbody>
               {/* 컬럼 정렬 합계행 — 기본수행료·추가비용·차감·세전·공제·실지급 합계(서버 그룹 총계 · 재계산 없음) */}
               <tfoot><tr>
-                <td style={{ ...td, fontWeight: 800, background: C.primaryBg }} colSpan={7}>합계 ({group.count}건)</td>
-                <td style={{ ...tdR, background: C.primaryBg }}></td>
+                <td style={{ ...td, fontWeight: 800, background: C.primaryBg }} colSpan={5}>합계 ({group.count}건)</td>
                 <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg }}>{won(group.baseTotal)}</td>
                 <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg }}>{won(group.expenseTotal)}</td>
                 <td style={{ ...tdR, fontWeight: 800, background: C.primaryBg }}>{won(group.deductionTotal)}</td>

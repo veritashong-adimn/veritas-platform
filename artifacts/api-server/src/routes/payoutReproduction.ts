@@ -42,6 +42,8 @@ const PROG = sql`
     SELECT
       id,
       nullif(btrim(source_raw->>'통번역사명'), '') AS translator,
+      nullif(btrim(source_raw->>'거래처명'), '') AS client,   -- 과거 CRM 원본 거래처명(1순위). 비어있으면 NULL → 화면/명세서에서 '거래처 확인 필요'.
+      nullif(btrim(source_raw->>'연락처'), '') AS orig_phone,  -- 과거 CRM 원본 연락처(해당 수행 건 기록값). Master 휴대폰 없을 때 명세서 연락처 대체 후보.
       substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') AS payout_date,
       substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') AS delivery_date,
       nullif(btrim(source_raw->>'상품명'), '') AS product_name,
@@ -231,6 +233,8 @@ router.get("/admin/payout-reproduction/payees", ...adminGuard, async (req, res) 
         prog.delivery_date,
         prog.payout_date,
         prog.translator,
+        prog.client,
+        prog.orig_phone,
         prog.product_name,
         prog.language,
         prog.filename,
@@ -282,12 +286,14 @@ router.get("/admin/payout-reproduction/payees", ...adminGuard, async (req, res) 
         id: num(r.id),
         deliveryDate: r.delivery_date ?? null,
         payoutDate: r.payout_date ?? null,
+        client: r.client ?? null,                     // 과거 CRM 원본 거래처명(없으면 null → 화면에서 '거래처 확인 필요')
         translator: r.translator ?? null,
         residentMasked: r.rrn_masked ?? null,       // 앞6+마스킹(전체값 미노출)
         language,                                     // 과거 원본 or (확정 연결 시) Master 참고 언어
         languageSource,                               // 'original' | 'master' | null (출처 구분)
         masterEmail,                                  // Master 등록 이메일(마스킹, 연결행만)
         masterPhone,                                  // Master 등록 전화(마스킹, 연결행만)
+        originalPhone: canViewFullContact ? phoneFull(r.orig_phone) : maskPhone(r.orig_phone),  // 과거 CRM 원본 연락처(권한 따라 전체/마스킹). 명세서 연락처 대체 후보.
         matchStatus,                                  // confirmed|candidate|vendor|client|unmatched
         matchedUserId,
         matchedUserName,
@@ -313,7 +319,7 @@ router.get("/admin/payout-reproduction/payees", ...adminGuard, async (req, res) 
     const statusCounts = items.reduce((m: Record<string, number>, i) => { m[i.matchStatus] = (m[i.matchStatus] ?? 0) + 1; if (i.isPayroll) m.payroll = (m.payroll ?? 0) + 1; return m; }, {});
 
     // 개인정보 접근 기록(§1·§6) — 전체 연락처를 '실제 열람'한 경우에만 1건. 값은 기록하지 않고 건수만.
-    const fullContactCount = canViewFullContact ? items.filter(i => i.masterEmail || i.masterPhone).length : 0;
+    const fullContactCount = canViewFullContact ? items.filter(i => i.masterEmail || i.masterPhone || i.originalPhone).length : 0;
     if (canViewFullContact && fullContactCount > 0) {
       void logEvent("translator", 0, "payout_reproduction.contact_view_full", (req as any).log, { id: user.id, email: user.email },
         JSON.stringify({ date: date ?? null, basis, rows: fullContactCount }));  // 연락처/주민번호 값은 미기록

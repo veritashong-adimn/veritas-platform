@@ -92,3 +92,28 @@
   padding-bottom: 9px;
   vertical-align: middle;
 }
+
+/* ── 과거 지급 재현(검증) 전용 교차배경 ─────────────────────────────────────────
+   대표 지정 색: 홀수 #fff · 짝수 #f3f4f6 · hover #e5e7eb · 선택 #dbeafe.
+   공유 .veritas-read-table 기본 zebra(#f9fafb)가 너무 옅어 이 두 영역에만 더 진하게 덮어쓴다.
+   (다른 화면 영향 없음 — pr- 접두 클래스로 스코프 한정) */
+
+/* A. 통번역사별 지급명세서 목록(그리드 → 행 단위 div). 헤더는 .pr-stmt-list 밖이라 제외. */
+.pr-stmt-list .pr-stmt-row { transition: background-color 0.12s ease; }
+.pr-stmt-list .pr-stmt-row:nth-child(odd)  { background: #ffffff; }
+.pr-stmt-list .pr-stmt-row:nth-child(even) { background: #f3f4f6; }
+.pr-stmt-list .pr-stmt-row:hover { background: #e5e7eb; }
+
+/* 통합 지급회차 — 통번역사별 지급내역(메인) 행: 교차배경 + hover 연한 파랑 + 선택행(인라인 #dbeafe). */
+.pu-payee-list .pu-payee-row { transition: background-color 0.12s ease; cursor: pointer; }
+.pu-payee-list .pu-payee-row:nth-child(odd)  { background: #ffffff; }
+.pu-payee-list .pu-payee-row:nth-child(even) { background: #f3f4f6; }
+.pu-payee-list .pu-payee-row:hover { background: #eff6ff; }
+
+/* B. 수행건별 상세내역 테이블 — 이 표에만(두 클래스로 특이도↑) 덮어쓴다. 헤더/합계는 대상 아님. */
+.veritas-read-table.pr-detail-zebra tbody tr { transition: background-color 0.12s ease; }
+.veritas-read-table.pr-detail-zebra tbody tr:nth-child(odd)  { background: #ffffff; }
+.veritas-read-table.pr-detail-zebra tbody tr:nth-child(even) { background: #f3f4f6; }
+.veritas-read-table.pr-detail-zebra tbody tr:hover { background: #e5e7eb; }
+.veritas-read-table.pr-detail-zebra tbody tr.vz-summary,
+.veritas-read-table.pr-detail-zebra tbody tr.vz-norow { background: transparent; }

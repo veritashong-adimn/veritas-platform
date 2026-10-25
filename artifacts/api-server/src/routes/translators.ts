@@ -545,7 +545,9 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
           ns ? ilike(translatorAliasesTable.normalizedAlias, `%${ns}%`) : undefined,
         ].filter(Boolean) as any));
       const aliasMatchIds = new Set(aliasRows.map(a => a.translatorId));
+      const idQuery = s.replace(/^#/, "").trim(); // Master ID 검색('#2489' 또는 '2489') — 숫자 전체일치
       result = result.filter(t =>
+        (/^\d+$/.test(idQuery) && String(t.id) === idQuery) ||
         (t.email ?? "").toLowerCase().includes(s) ||
         (t.name ?? "").toLowerCase().includes(s) ||
         (t.phone ?? "").toLowerCase().includes(s) ||

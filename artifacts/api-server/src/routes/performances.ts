@@ -15,6 +15,7 @@ import {
   calcBasePerformanceFee, calcCostTotal, calcPaymentDate,
 } from "@workspace/db";
 import { LANGUAGE_CODES } from "./products";
+import { normalizeCompanyName } from "../lib/normalizeCompany";
 import { eq, and, isNull, inArray, ne, desc, sql } from "drizzle-orm";
 import { z } from "zod";
 import { requireAuth, requireRole } from "../middlewares/auth";
@@ -1180,6 +1181,245 @@ router.get("/admin/performances/recent-by-translator", ...adminGuard, async (req
   } catch (err) {
     req.log.error({ err }, "통번역사 최근 수행이력 조회 실패");
     res.status(500).json({ error: "최근 수행이력을 불러오지 못했습니다." });
+  }
+});
+
+// ── 동일인 조회 링크(조회 계층 병합 뷰) — DB·매핑·원본 무변경, 조회 시에만 과거이력 계승 ──────────
+//   근거(우선순위): (a) 승인된 병합기록 translator_merges(same_person_confirmed·active),
+//     (b) 2026-10-20 중복정리 결과 복원 — delete-execute.ts 로직(batch 182 신규 Master ↔ 동일 정규화이름 old Master)을
+//        그대로 재현. 당시 대표가 동일인으로 판단·승인한 짝이므로 재확인 대상 아님(§作業목적).
+//     (c) 대표 수동 승인 상수(중복정리 코호트 밖 예외용).
+//   안전: 대표(활성 batch182 Master)가 동일 정규화이름으로 '유일'할 때만 복원. 복수면 '대표 모호'로 미연결·보고(§3).
+//   이름만 일치하는 '중복정리 비대상' 계정은 연결하지 않는다(코호트=2026-10-20 일괄 비활성분만).
+const DEDUP_COHORT_MINUTE = "2026-10-20 21:31:00"; // 중복정리 일괄 soft-delete 시각(delete-execute.ts --commit)
+const DEDUP_NEW_BATCH = 182;                        // 유지(대표)로 선정된 신규 Master 임포트 배치
+const REP_APPROVED_SAME_PERSON_LINKS: Record<number, { linkedMasterIds: number[]; basis: string }> = {
+  // 중복정리 코호트 밖에서 대표가 별도 확인한 건만 등록(현재 없음 — 김나사리야 #2485←#215 는 코호트 복원으로 자동 포함).
+};
+
+// ── 통번역사 통합 수행이력(읽기전용) — 과거 CRM(진행관리표) + 신규 플랫폼 수행이력을 Master 기준 통합 조회. ──
+//   연결 기준(§3): legacy_master_mappings(entity_id=Master, status<>'rolled_back')로 연결된 legacy 이름만 과거이력으로 집계.
+//     · 확정/활성 매핑 + 병합 이력(여러 legacy 이름 → 대표 Master) 모두 포함. 이름만 일치(미매핑)는 합산하지 않는다.
+//   집계(§5): 과거는 legacy_archive_rows 원본 행(id) 단위, 신규는 performance_assignments(id) 단위 — 중복 집계 없음.
+//     · 원본 데이터 수정 없음(순수 SELECT). 지급·판매·정산 금액에 영향 없음(금액 미반환·미변경).
+router.get("/admin/performances/history-by-translator", ...adminGuard, async (req, res) => {
+  const translatorId = Number(req.query.translatorId);
+  if (!Number.isInteger(translatorId) || translatorId <= 0) { res.status(400).json({ error: "translatorId 가 필요합니다." }); return; }
+  const qp = req.query as Record<string, string | undefined>;
+  const page = Math.max(1, parseInt(String(qp.page ?? "1"), 10) || 1);
+  const pageSize = Math.min(1000, Math.max(1, parseInt(String(qp.pageSize ?? "50"), 10) || 50));
+  const dFrom = /^\d{4}-\d{2}-\d{2}$/.test(qp.dateFrom ?? "") ? qp.dateFrom! : null;
+  const dTo = /^\d{4}-\d{2}-\d{2}$/.test(qp.dateTo ?? "") ? qp.dateTo! : null;
+  const clientQ = (qp.client ?? "").trim().toLowerCase();
+  const productQ = (qp.product ?? "").trim().toLowerCase();
+  const sourceFilter = (qp.source ?? "all").trim(); // all | legacy | current
+  try {
+    // 1) 본인(대상 Master) 직접 연결 legacy 이름(확정/활성 매핑 · 병합 포함). 이름만 일치는 제외(§3·§5).
+    const ownNameRows = (await db.execute(sql`
+      SELECT DISTINCT btrim(legacy_id) AS legacy_id FROM legacy_master_mappings
+      WHERE entity_type='translator' AND entity_id=${translatorId} AND status <> 'rolled_back' AND btrim(legacy_id) <> ''`)).rows as any[];
+    const ownNames = ownNameRows.map(r => String(r.legacy_id));
+    const ownNameSet = new Set(ownNames);
+
+    // 1-b) 동일인 확정 조회 링크(§2). DB·매핑 변경 없음 — 이름만 '조회 시' union.
+    // (a) 승인된 병합기록
+    const mergeLinked = (await db.execute(sql`
+      SELECT merged_master_id FROM translator_merges
+      WHERE representative_master_id=${translatorId} AND same_person_confirmed=true AND status='active'`)).rows.map((r: any) => Number(r.merged_master_id));
+
+    // (b) 2026-10-20 중복정리 결과 복원 — 대상 Master가 '활성 + batch182(대표)'일 때만.
+    //     동일 정규화이름(normalizeCompanyName)으로 유지된 대표가 '유일'해야 복원(복수=대표 모호→미연결·보고).
+    let dedupLinked: number[] = []; let dedupAmbiguous = false; let dedupBasis = false;
+    const meRow = (await db.execute(sql`
+      SELECT u.name, (u.deleted_at IS NULL) AS live,
+        EXISTS(SELECT 1 FROM import_row_sources WHERE batch_id=${DEDUP_NEW_BATCH} AND entity_id=u.id) AS b182
+      FROM users u WHERE u.id=${translatorId} AND u.role='translator' LIMIT 1`)).rows[0] as any;
+    if (meRow?.live && meRow?.b182) {
+      const normX = normalizeCompanyName(meRow.name);
+      if (normX) {
+        const repRows = (await db.execute(sql`
+          SELECT u.name FROM users u JOIN import_row_sources irs ON irs.batch_id=${DEDUP_NEW_BATCH} AND irs.entity_id=u.id
+          WHERE u.role='translator' AND u.deleted_at IS NULL`)).rows as any[];
+        const repSameNorm = repRows.filter(r => normalizeCompanyName(r.name) === normX).length;
+        if (repSameNorm === 1) { // 대표 유일 → 복원
+          const delRows = (await db.execute(sql`
+            SELECT id, name FROM users
+            WHERE role='translator' AND deleted_at IS NOT NULL AND date_trunc('minute',deleted_at)=${DEDUP_COHORT_MINUTE}`)).rows as any[];
+          dedupLinked = delRows.filter(r => normalizeCompanyName(r.name) === normX).map(r => Number(r.id));
+          dedupBasis = dedupLinked.length > 0;
+        } else if (repSameNorm > 1) {
+          dedupAmbiguous = true; // 대표 모호 → 미연결(보고 대상)
+        }
+      }
+    }
+
+    // (c) 대표 수동 승인(코호트 밖)
+    const approvedLink = REP_APPROVED_SAME_PERSON_LINKS[translatorId];
+    const linkedMasterIds = [...new Set([...mergeLinked, ...dedupLinked, ...(approvedLink?.linkedMasterIds ?? [])])].filter(id => id !== translatorId);
+    const linkedNameRows = linkedMasterIds.length === 0 ? [] : (await db.execute(sql`
+      SELECT DISTINCT btrim(legacy_id) AS legacy_id FROM legacy_master_mappings
+      WHERE entity_type='translator' AND entity_id IN (${sql.join(linkedMasterIds.map(id => sql`${id}`), sql`, `)})
+        AND status <> 'rolled_back' AND btrim(legacy_id) <> ''`)).rows as any[];
+    const linkedNames = linkedNameRows.map(r => String(r.legacy_id)).filter(n => !ownNameSet.has(n));
+
+    // 본인 + 동일인 링크 이름 합집합(원본 행은 통번역사명 1개라 행 중복 없음).
+    const legacyNames = [...new Set([...ownNames, ...linkedNames])];
+
+    // 2) 과거 CRM 수행이력 — 연결/링크된 이름으로만. 원본 행(id) 단위.
+    //   legacy 행 조회 헬퍼(통번역사명 목록 기준). 통역/번역 구분은 원본 텍스트에서 도출(임의 생성 아님).
+    const fetchLegacyByNames = async (names: string[]): Promise<any[]> => {
+      if (names.length === 0) return [];
+      const nl = sql.join(names.map(n => sql`${n}`), sql`, `);
+      return (await db.execute(sql`
+        SELECT id,
+          'legacy:' || id AS source_key,
+          btrim(source_raw->>'통번역사명') AS nm,
+          substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') AS work_date,
+          nullif(btrim(source_raw->>'거래처명'), '') AS client,
+          coalesce(nullif(btrim(source_raw->>'담당자'), ''), nullif(btrim(source_raw->>'고객명'), '')) AS contact,
+          nullif(btrim(source_raw->>'상품명'), '') AS product,
+          nullif(btrim(source_raw->>'언어'), '') AS language,
+          coalesce(nullif(btrim(source_raw->>'내용'), ''), nullif(btrim(source_raw->>'상세정보'), '')) AS content,
+          nullif(btrim(source_raw->>'파일명'), '') AS filename,
+          CASE
+            WHEN nullif(btrim(source_raw->>'통역장소'), '') IS NOT NULL THEN '통역'
+            WHEN (coalesce(source_raw->>'상품명','')||' '||coalesce(source_raw->>'내용','')) LIKE '%통역%'
+                 AND (coalesce(source_raw->>'상품명','')||' '||coalesce(source_raw->>'내용','')) NOT LIKE '%번역%' THEN '통역'
+            WHEN (coalesce(source_raw->>'상품명','')||' '||coalesce(source_raw->>'내용','')) LIKE '%번역%' THEN '번역'
+            WHEN (coalesce(source_raw->>'상품명','')||' '||coalesce(source_raw->>'내용','')) LIKE '%통역%' THEN '통역'
+            ELSE NULL
+          END AS work_type
+        FROM legacy_archive_rows
+        WHERE source_type='progress' AND is_effective=true
+          AND btrim(source_raw->>'통번역사명') IN (${nl})`)).rows as any[];
+    };
+
+    // 2-a) 1차: raw(원문) 통번역사명 정확 일치.
+    let legacyRows = await fetchLegacyByNames(legacyNames);
+
+    // 2-b) 정규화 해석 보강(승인 §2) — raw 매칭 0건인 legacy_id(crm_rebuild 정규화형)를 normalizeCompanyName 규칙으로 해석.
+    //   · 정규화키가 '단일 live Master(=대상)'일 때만 포함. 복수 live Master면 충돌 → 미연결·보고. DB·매핑 무변경.
+    const coveredRaw = new Set(legacyRows.map(r => String(r.nm)));
+    const uncovered = legacyNames.filter(n => !coveredRaw.has(n));
+    let normalizedResolved: string[] = []; const normalizedConflicts: string[] = [];
+    if (uncovered.length > 0) {
+      const normTargets = [...new Set(uncovered.map(n => normalizeCompanyName(n)).filter(Boolean))];
+      if (normTargets.length > 0) {
+        // 정규화키 → live Master(entity_id) 집합(충돌 판정용). rolled_back·삭제 Master 제외.
+        const liveMaps = (await db.execute(sql`
+          SELECT m.legacy_id, m.entity_id FROM legacy_master_mappings m
+          JOIN users u ON u.id = m.entity_id AND u.deleted_at IS NULL
+          WHERE m.entity_type='translator' AND m.status <> 'rolled_back'`)).rows as any[];
+        const normKeyToEntities = new Map<string, Set<number>>();
+        for (const m of liveMaps) {
+          const k = normalizeCompanyName(String(m.legacy_id)); if (!k) continue;
+          if (!normKeyToEntities.has(k)) normKeyToEntities.set(k, new Set());
+          normKeyToEntities.get(k)!.add(Number(m.entity_id));
+        }
+        const safeNorms = new Set<string>();
+        for (const nk of normTargets) {
+          const ents = normKeyToEntities.get(nk);
+          if (ents && ents.size === 1 && ents.has(translatorId)) safeNorms.add(nk);
+          else if (ents && ents.size > 1) normalizedConflicts.push(nk); // 복수 live Master → 충돌(보고)
+        }
+        if (safeNorms.size > 0) {
+          // 원본 통번역사명(DISTINCT)을 정규화하여 safeNorms 에 해당하는 raw 이름 수집.
+          const distinctNames = (await db.execute(sql`
+            SELECT DISTINCT btrim(source_raw->>'통번역사명') AS nm FROM legacy_archive_rows
+            WHERE source_type='progress' AND is_effective=true AND nullif(btrim(source_raw->>'통번역사명'),'') IS NOT NULL`)).rows as any[];
+          const matchedRaw = distinctNames.map(r => String(r.nm))
+            .filter(nm => !coveredRaw.has(nm) && safeNorms.has(normalizeCompanyName(nm)));
+          if (matchedRaw.length > 0) {
+            const extra = await fetchLegacyByNames(matchedRaw);
+            const seen = new Set(legacyRows.map(r => Number(r.id)));       // 원본 ID 기준 중복 집계 방지(§2)
+            for (const r of extra) if (!seen.has(Number(r.id))) { legacyRows.push(r); seen.add(Number(r.id)); }
+            normalizedResolved = matchedRaw;
+          }
+        }
+      }
+    }
+
+    // 3) 신규 플랫폼 수행이력 — individual_user_id = Master. 취소·삭제 제외.
+    const curRows = (await db.execute(sql`
+      SELECT pa.id,
+        'current:' || pa.id AS source_key,
+        to_char(coalesce(pa.delivery_date, pa.delivery_date_auto), 'YYYY-MM-DD') AS work_date,
+        p.company_name_snapshot AS client,
+        NULL::text AS contact,
+        pa.product_name_snapshot AS product,
+        pa.language_or_service_snapshot AS language,
+        NULL::text AS content,
+        NULL::text AS filename,
+        pa.service_type::text AS service_type,
+        pa.status::text AS status
+      FROM performance_assignments pa
+      LEFT JOIN projects p ON p.id = pa.project_id
+      WHERE pa.individual_user_id = ${translatorId} AND pa.deleted_at IS NULL AND pa.status <> 'cancelled'`)).rows as any[];
+
+    // 통역/번역 구분 — 신규는 service_type 기반. 수행상태 — 과거는 완료 이력(납품일 보유), 신규는 실제 status.
+    const CUR_WORKTYPE: Record<string, string> = { interpretation: "통역", translation: "번역" };
+    const CUR_STATUS: Record<string, string> = { assigned: "배정", in_progress: "진행중", submitted: "제출", delivered: "납품완료", done: "완료", paid: "지급완료", payment_hold: "보류" };
+    const linkedNameSet = new Set(linkedNames);
+    const norm = (r: any, source: "legacy" | "current") => ({
+      source, sourceKey: r.source_key, id: Number(r.id),
+      // 동일인 링크를 통해 조회된 과거이력 표시(물리 연결 아님 · 투명성). 본인 직접연결은 false.
+      viaLinkedMaster: source === "legacy" && r.nm != null && linkedNameSet.has(String(r.nm)),
+      workDate: r.work_date ?? null, client: r.client ?? null, contact: r.contact ?? null,
+      workType: source === "legacy" ? (r.work_type ?? null) : (CUR_WORKTYPE[String(r.service_type)] ?? r.service_type ?? null),
+      language: r.language ?? null, product: r.product ?? null, content: r.content ?? null, filename: r.filename ?? null,
+      // 수행상태: 과거 CRM 완료 이력(납품일 존재 시 '완료'), 신규는 실제 상태. 원본에 없는 값 생성 아님(납품 완료 이력 표기).
+      status: source === "legacy" ? (r.work_date ? "완료(과거)" : null) : (CUR_STATUS[String(r.status)] ?? r.status ?? null),
+    });
+    const allItems = [...legacyRows.map(r => norm(r, "legacy")), ...curRows.map(r => norm(r, "current"))];
+
+    // 요약(§4) — 전체 연결 이력 기준(필터 무관). 최초/최근 수행일.
+    const dates = allItems.map(i => i.workDate).filter((d): d is string => !!d).sort();
+    const summary = {
+      total: allItems.length,
+      legacyCount: legacyRows.length,
+      currentCount: curRows.length,
+      firstDate: dates[0] ?? null,
+      lastDate: dates[dates.length - 1] ?? null,
+    };
+
+    // 필터(목록만 적용) — 출처(전체/과거/신규) · 수행일 범위 · 거래처 · 상품/업무. 요약(summary)은 필터 무관 전체 기준.
+    let filtered = allItems;
+    if (sourceFilter === "legacy" || sourceFilter === "current") filtered = filtered.filter(i => i.source === sourceFilter);
+    if (dFrom) filtered = filtered.filter(i => i.workDate && i.workDate >= dFrom);
+    if (dTo) filtered = filtered.filter(i => i.workDate && i.workDate <= dTo);
+    if (clientQ) filtered = filtered.filter(i => (i.client ?? "").toLowerCase().includes(clientQ));
+    if (productQ) filtered = filtered.filter(i => (i.product ?? "").toLowerCase().includes(productQ));
+
+    // 기본 정렬 — 최근 수행일 순(날짜 null 은 뒤로), 동일 날짜는 신규 우선·id 역순.
+    filtered.sort((a, b) => {
+      if (a.workDate && b.workDate) { if (a.workDate !== b.workDate) return b.workDate.localeCompare(a.workDate); }
+      else if (a.workDate) return -1; else if (b.workDate) return 1;
+      if (a.source !== b.source) return a.source === "current" ? -1 : 1;
+      return b.id - a.id;
+    });
+
+    const total = filtered.length;
+    const items = filtered.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize);
+    // 동일인 링크 경유로 추가된 과거이력 건수(조회 계층 · 물리 병합 아님) — 투명성·보고용.
+    const viaLinkedCount = allItems.filter((i: any) => i.viaLinkedMaster).length;
+    res.json({
+      items, summary,
+      pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
+      connection: {
+        masterId: translatorId, linkedLegacyNames: legacyNames,
+        samePersonLinkedMasterIds: linkedMasterIds,
+        samePersonBasis: dedupBasis ? "2026-10-20 중복정리 결과(동일인 통합 대표)"
+          : mergeLinked.length ? "승인된 병합기록(translator_merges)"
+          : approvedLink?.basis ?? null,
+        dedupAmbiguous, // 대표 모호(동명 활성 대표 복수) → 미연결, 관리자 확인 필요
+        normalizedResolvedCount: normalizedResolved.length, // 정규화 해석으로 연결된 원본 이름 수
+        normalizedConflictKeys: normalizedConflicts,        // 정규화 충돌(복수 live Master)로 미연결된 키
+        viaLinkedCount,
+      },
+    });
+  } catch (err) {
+    req.log.error({ err }, "통번역사 통합 수행이력 조회 실패");
+    res.status(500).json({ error: "수행이력을 불러오지 못했습니다." });
   }
 });
 

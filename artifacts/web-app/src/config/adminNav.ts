@@ -112,7 +112,7 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
         { id: "settlements",          label: "지급회차 관리",     icon: "📊", perm: "menu.settlement" },
         { id: "settlement-statement", label: "지급명세서",        icon: "📄", perm: "menu.settlement" },
         { id: "settlement-tax",       label: "세무자료",          icon: "🧾", perm: "menu.settlement" },
-        { id: "payout-reproduction",  label: "과거 지급 재현(검증)", icon: "🔎", perm: "menu.settlement" },
+        // 「과거 지급 재현(검증)」은 별도 사이드바 항목이 아니라 '지급회차 관리' 화면의 상단 하위탭으로 통합(§3).
       ] },
       // [수입] 수금관리 — 고객/거래처 → 회사 수금. 하위 화면의 기존 id·route·API·DB 는 그대로 재사용(위치만 이동).
       //  · 그룹은 perm 미지정(항상 통과) → 하위 각 항목의 개별 perm 으로 노출 제어 → 기존 접근권한 보존.

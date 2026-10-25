@@ -6,6 +6,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { api } from '../../lib/constants';
 import { Pagination } from '../ui/Paginator';
 import { exportDataset, todayStamp, type ExcelColumn } from '../../lib/excelExport';
+import { exportReproStatementExcel, exportReproStatementPdf } from '../../lib/payoutReproStatement';
 import { DateField } from './DatePickerShared';
 import './readTableView.css';
 
@@ -18,9 +19,10 @@ type RoundRow = {
 type MatchStatus = 'confirmed' | 'candidate' | 'vendor' | 'client' | 'unmatched';
 type DetailRow = {
   id: number; deliveryDate: string | null; payoutDate: string | null;
+  client: string | null;
   translator: string | null; residentMasked: string | null;
   language: string | null; languageSource: 'original' | 'master' | null;
-  masterEmail: string | null; masterPhone: string | null;
+  masterEmail: string | null; masterPhone: string | null; originalPhone: string | null;
   matchStatus: MatchStatus; matched: boolean; matchedUserId: number | null; matchedUserName: string | null; isPayroll: boolean;
   content: string | null; filename: string | null; pretax: number; posttax: number; withholdingImplied: number;
 };
@@ -38,6 +40,18 @@ const won = (n: number | null | undefined) => (n == null ? '-' : Math.round(Numb
 const scrollBox: React.CSSProperties = { overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 360px)', border: '1px solid #e5e7eb', borderRadius: 10 };
 const td: React.CSSProperties = { padding: '9px 12px', fontSize: 13, color: '#374151', whiteSpace: 'nowrap' };
 const tdR: React.CSSProperties = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
+// 통번역사별 지급명세서 목록 컬럼 템플릿(헤더·데이터 행 공용) — 통번역사·건수·세전·공제·실지급·출력
+const STMT_COLS = 'minmax(120px,1fr) 70px 110px 110px 110px auto';
+
+// 명세서 연락처 선정(§3) — 1순위 연결확정(동일인) Master 휴대폰, 2순위 원본 CRM 연락처.
+//   그룹(동일 통번역사) 내 값이 상충하거나 없으면 null('-'). 임의로 다른 사람 번호를 쓰지 않는다.
+function pickStatementPhone(rows: DetailRow[]): string | null {
+  const conf = new Set(rows.filter(r => r.matchStatus === 'confirmed' && r.masterPhone).map(r => r.masterPhone as string));
+  if (conf.size === 1) return [...conf][0];
+  if (conf.size > 1) return null;                 // 확정 Master 번호가 둘 이상 상충 → 표시 안 함
+  const orig = new Set(rows.filter(r => r.originalPhone).map(r => r.originalPhone as string));
+  return orig.size === 1 ? [...orig][0] : null;   // 원본 연락처가 유일할 때만 사용(상충·없음 → '-')
+}
 
 export function PayoutReproductionTab({ token, onToast }: { token: string; onToast: (m: string) => void }) {
   const authH = { Authorization: `Bearer ${token}` };
@@ -115,6 +129,7 @@ export function PayoutReproductionTab({ token, onToast }: { token: string; onToa
       { header: '날짜기준', value: () => basisLabel(applied.basis) },
       { header: '납품일', value: (r) => r.deliveryDate ?? '', type: 'date' },
       { header: '지급일', value: (r) => r.payoutDate ?? '', type: 'date' },
+      { header: '거래처', value: (r) => r.client ?? '거래처 확인 필요' },
       { header: '통번역사', value: (r) => r.translator ?? '' },
       { header: '주민번호(마스킹)', value: (r) => r.residentMasked ?? '' },
       { header: '언어', value: (r) => r.language ? (r.language + (r.languageSource === 'master' ? ' (Master참고)' : '')) : '' },
@@ -223,34 +238,80 @@ export function PayoutReproductionTab({ token, onToast }: { token: string; onToa
             })()}
             {applied.basis === 'delivery' && <span style={{ fontSize: 11, color: '#b45309', fontWeight: 700 }}>※ 납품일 필터 적용분만 표시(전체 지급내역 아님)</span>}
           </div>
+
+          {/* 통번역사별 정식 지급명세서(재현) 출력 — 기존 양식 그대로(Excel/PDF). 원본값 전달만(계산·저장 없음). */}
+          {detail.length > 0 && (() => {
+            // 통번역사명 기준 그룹핑(이름 없는 행은 '(이름 미상)'). 재현 payees 원본값만 사용.
+            const groups = new Map<string, { name: string; email: string | null; rows: typeof detail }>();
+            for (const r of detail) {
+              const key = r.translator ?? '(이름 미상)';
+              const g = groups.get(key) ?? { name: key, email: r.masterEmail ?? null, rows: [] };
+              if (!g.email && r.masterEmail) g.email = r.masterEmail;
+              g.rows.push(r); groups.set(key, g);
+            }
+            const list = [...groups.values()].sort((a, b) => a.name.localeCompare(b.name, 'ko'));
+            const scopeValue = `${sel.payoutDate ?? '지급일 미확인'} 지급`;
+            const toRows = (rs: typeof detail) => rs.map(r => ({ client: r.client, filename: r.filename, deliveryDate: r.deliveryDate, payoutDate: r.payoutDate, content: r.content, pretax: r.pretax, posttax: r.posttax }));
+            const sBtn: React.CSSProperties = { padding: '3px 9px', borderRadius: 6, fontSize: 12, fontWeight: 700, border: '1px solid #cbd5e1', background: '#fff', color: '#334155', cursor: 'pointer' };
+            return (
+              <div data-testid="pr-statement-panel" style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 14px', marginBottom: 12, background: '#f8fafc' }}>
+                <div style={{ fontSize: 13, fontWeight: 800, color: '#111827', marginBottom: 8 }}>통번역사별 지급명세서(재현) 출력 <span style={{ fontSize: 11, fontWeight: 600, color: '#9ca3af' }}>· 기존 정식 양식(Excel/PDF) · 원본값 기준 · {list.length}명</span></div>
+                {/* 헤더 행 — 교차배경 대상 아님(.pr-stmt-list 밖). */}
+                <div style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 12px', alignItems: 'center', fontSize: 12.5, padding: '6px 10px' }}>
+                  <div style={{ fontWeight: 700, color: '#6b7280' }}>통번역사</div><div style={{ fontWeight: 700, color: '#6b7280', textAlign: 'right' }}>건수</div>
+                  <div style={{ fontWeight: 700, color: '#6b7280', textAlign: 'right' }}>세전</div><div style={{ fontWeight: 700, color: '#6b7280', textAlign: 'right' }}>공제</div>
+                  <div style={{ fontWeight: 700, color: '#6b7280', textAlign: 'right' }}>실지급</div><div style={{ fontWeight: 700, color: '#6b7280' }}>출력</div>
+                </div>
+                {/* 데이터 행 — 행 단위 div(.pr-stmt-row)에 전체 너비 교차배경(버튼 영역까지 포함). */}
+                <div className="pr-stmt-list" style={{ borderTop: '1px solid #e5e7eb' }}>
+                  {list.map((g) => {
+                    const pre = g.rows.reduce((a, r) => a + Number(r.pretax || 0), 0);
+                    const post = g.rows.reduce((a, r) => a + Number(r.posttax || 0), 0);
+                    const payDate = g.rows.find(r => r.payoutDate)?.payoutDate ?? '-';
+                    const opts = { payeeName: g.name, email: g.email, phone: pickStatementPhone(g.rows), scopeValue, payDate, rows: toRows(g.rows) };
+                    return (
+                      <div className="pr-stmt-row" key={g.name} data-testid={`pr-stmt-row-${g.name}`} style={{ display: 'grid', gridTemplateColumns: STMT_COLS, gap: '0 12px', alignItems: 'center', fontSize: 12.5, padding: '7px 10px' }}>
+                        <div style={{ color: '#111827', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{g.name}</div>
+                        <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{g.rows.length}</div>
+                        <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{won(pre)}</div>
+                        <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: '#dc2626' }}>{won(pre - post)}</div>
+                        <div style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>{won(post)}</div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button style={sBtn} data-testid={`pr-stmt-excel-${g.name}`} onClick={() => { exportReproStatementExcel(opts); onToast(`${g.name} 지급명세서(재현) Excel을 다운로드했습니다.`); }}>📊 Excel</button>
+                          <button style={sBtn} data-testid={`pr-stmt-pdf-${g.name}`} onClick={() => { if (!exportReproStatementPdf(opts)) onToast('팝업 차단을 해제한 후 다시 시도해 주세요.'); }}>📄 PDF</button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
           <div style={scrollBox}>
-            <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead><tr>{['납품일', '지급일', '통번역사', '주민번호', '언어', '연결상태', '수행내용', '파일명', '세전지급액', '세후지급액', '원본공제액'].map(h => <th key={h} style={{ padding: '9px 12px', textAlign: h.includes('액') ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
+            <table className="veritas-read-table vz-sticky pr-detail-zebra" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead><tr>{['납품일', '지급일', '거래처', '통번역사', '주민번호', '언어', '수행내용', '파일명', '세전지급액', '세후지급액', '원본공제액'].map(h => <th key={h} style={{ padding: '9px 12px', textAlign: h.includes('액') ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
               <tbody>
                 {detail.map((p, i) => {
-                  const meta = STATUS_META[p.matchStatus] ?? STATUS_META.unmatched;
                   return (
                   <tr key={p.id} data-testid={`pr-detail-${i}`} data-matchstatus={p.matchStatus}>
                     <td style={td}>{p.deliveryDate ?? <span style={{ color: '#b45309' }}>(납품일 미상)</span>}</td>
                     <td style={td}>{p.payoutDate ?? <span style={{ color: '#b45309', fontWeight: 700 }}>(지급일 미확인)</span>}</td>
+                    <td style={{ ...td, whiteSpace: 'normal', maxWidth: 200 }} data-testid={`pr-detail-client-${i}`}>
+                      {p.client ?? <span style={{ color: '#b45309', fontWeight: 700 }}>거래처 확인 필요</span>}
+                    </td>
                     <td style={{ ...td, whiteSpace: 'normal', lineHeight: 1.35 }}>
                       <div style={{ fontWeight: 600, color: '#111827' }}>{p.translator ?? '-'}</div>
                       {(p.masterEmail || p.masterPhone) && (
                         <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 1 }} title="현재 Master 등록 연락처 · 과거 CRM 원본 아님">
-                          {p.masterEmail && <div data-testid={`pr-detail-email-${i}`}>✉ {p.masterEmail}</div>}
-                          {p.masterPhone && <div data-testid={`pr-detail-phone-${i}`}>☎ {p.masterPhone}</div>}
+                          {p.masterEmail && <div data-testid={`pr-detail-email-${i}`}>{p.masterEmail}</div>}
+                          {p.masterPhone && <div data-testid={`pr-detail-phone-${i}`}>{p.masterPhone}</div>}
                         </div>
                       )}
                     </td>
                     <td style={{ ...td, fontVariantNumeric: 'tabular-nums', color: p.residentMasked ? '#6b7280' : '#d1d5db' }} title="주민번호는 앞 6자리만 표시(마스킹)">{p.residentMasked ?? '-'}</td>
                     <td style={{ ...td, whiteSpace: 'normal', maxWidth: 160 }} data-testid={`pr-detail-language-${i}`} title={p.languageSource === 'master' ? 'Master 등록 언어(참고) · 원본에 언어 없음' : (p.languageSource === 'original' ? '과거 CRM 원본 언어' : undefined)}>
                       {p.language ? <>{p.language}{p.languageSource === 'master' && <span style={{ marginLeft: 3, fontSize: 10, color: '#9ca3af' }}>(Master참고)</span>}</> : '-'}
-                    </td>
-                    <td style={td}>
-                      <span style={{ padding: '2px 8px', borderRadius: 10, background: meta.bg, color: meta.fg, fontSize: 12, fontWeight: 700 }} data-testid={`pr-detail-status-${i}`}>
-                        {meta.label}{(p.matchStatus === 'confirmed' || p.matchStatus === 'candidate') && p.matchedUserId ? ` · ${p.matchedUserName ?? ''}#${p.matchedUserId}` : ''}
-                      </span>
-                      {p.isPayroll && <span style={{ marginLeft: 4, padding: '2px 6px', borderRadius: 10, background: '#f1f5f9', color: '#475569', fontSize: 11, fontWeight: 700 }}>직원성 지급</span>}
                     </td>
                     <td style={{ ...td, whiteSpace: 'normal', maxWidth: 280 }}>{p.content ?? '-'}</td>
                     <td style={{ ...td, maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis' }} title={p.filename ?? undefined} data-testid={`pr-detail-filename-${i}`}>{p.filename ?? '-'}</td>
