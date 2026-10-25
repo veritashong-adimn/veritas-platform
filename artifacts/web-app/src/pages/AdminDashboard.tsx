@@ -2585,7 +2585,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                             {t.name && (t.email
                               ? <div style={{ color: "#6b7280", fontSize: 11 }}>{t.email}</div>
                               : <div style={{ color: "#c4b5fd", fontSize: 11 }}>이메일 미등록</div>)}
-                            {t.phone && <div style={{ fontSize: 11, color: "#9ca3af" }}>{formatPhoneDisplay(t.phone)}</div>}
+                            {/* 전화번호: NULL·빈 문자열·공백은 미등록으로 표시(이메일 미등록과 동일 스타일, 표시 전용) */}
+                            {t.phone && t.phone.trim()
+                              ? <div style={{ fontSize: 11, color: "#9ca3af" }}>{formatPhoneDisplay(t.phone)}</div>
+                              : <div style={{ color: "#c4b5fd", fontSize: 11 }}>전화번호 미등록</div>}
                           </td>
                           {/* 주민번호 (서버사이드 마스킹) */}
                           <td style={{ ...tableTd, fontSize: 11, textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontFamily: "monospace", color: t.residentNumber ? "#374151" : "#d1d5db" }}>

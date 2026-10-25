@@ -22,3 +22,9 @@ button:disabled {
    금액/수치=right, 상태/배지/체크박스/날짜=center). 과거 이 파일에 있던 `th { text-align: center
    !important }` 전역 규칙이 컬럼별 인라인 정렬(우/좌)을 모두 덮어써 헤더가 항상 가운데로 보이던
    문제가 있어 제거했다. 헤더 정렬은 이제 각 테이블 th 의 인라인/const 정렬(본문과 일치)로 결정된다. */
+
+/* 통번역사 상세 — 전화번호 미등록 시 안내 문구(연한 회색 placeholder) */
+.tdm-light-placeholder::placeholder {
+  color: #c0c4cc;
+  opacity: 1;
+}

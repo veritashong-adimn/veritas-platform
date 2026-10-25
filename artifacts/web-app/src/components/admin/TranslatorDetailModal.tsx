@@ -1375,7 +1375,9 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               <div>
                 <label style={{ ...labelSt, fontSize: 11 }}>휴대폰번호</label>
                 <input type="tel" value={form.phone} onChange={e => setForm(p => ({ ...p, phone: formatPhoneNumber(e.target.value) }))}
-                  placeholder="휴대전화번호 입력" style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
+                  placeholder="휴대전화번호 입력" className="tdm-light-placeholder"
+                  data-testid="translator-detail-phone-input" aria-label="휴대전화번호"
+                  style={{ ...inputStyle, fontSize: 13, padding: "7px 10px" }} />
               </div>
               {/* 별칭(Alias) — 거래처 상세와 동일한 Tag UI(bound 모드: 즉시 서버 반영) */}
               <div style={{ gridColumn: "1 / -1" }}>
