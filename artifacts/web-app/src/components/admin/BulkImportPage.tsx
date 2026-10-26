@@ -1,4 +1,9 @@
 import React, { useState, useCallback, useRef } from 'react';
+import { TranslatorImportApprovalPanel } from './TranslatorImportApprovalPanel';
+import { PartyImportBatches } from './PartyImportBatches';
+import { CompanyReviewList } from './CompanyReviewList';
+// ④ 최종 등록은 통합 판정(실행 로직과 동일)만 표시한다. 구 Master 재구축 기준 요약·드라이런은 판정이 달라 혼동을 주므로 숨김(실행 경로도 차단됨).
+const SHOW_LEGACY_REBUILD_FINAL = false;
 import './readTableView.css';
 import { api } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn, confirmDialog } from '../ui';
@@ -38,7 +43,7 @@ interface AnalyzedRow {
   warning?: string;   // 경고(저장 가능하나 확인 필요) — status 와 독립(§9)
   existingId?: number | null;
   matchMethod?: 'rrn' | 'email' | 'phone' | 'name';   // 통번역사: 연결 근거(요구사항1)
-  reviewCategory?: 'same_person' | 'homonym' | 'file_internal' | 'undecidable' | 'legacy_no_email';  // needs_review 세분(요구사항3)
+  reviewCategory?: 'same_person' | 'homonym' | 'file_internal' | 'undecidable' | 'legacy_no_email' | 'excluded_master';  // needs_review 세분(요구사항3)
   changeSummary?: string;   // 통번역사: 보완/충돌 필드 요약(컬럼 외 필드 포함)
   residentMasked?: string;  // 통번역사: 엑셀 원본 주민번호 마스킹 표기(원문 아님) — 없으면 미전달 → '-' 표시
   masterInactive?: boolean; // 통번역사: 매칭된 기존 Master 가 비활성 인력인지(요구사항4)
@@ -104,6 +109,9 @@ interface ImportDiagnostics {
 }
 
 interface AnalyzeResponse {
+  // 거래처·담당자: 고유 대상 기준 6개 항목 + 실행 승인 토큰
+  uniqueSummary?: { uniqueTotal: number; counts: { same: number; new: number; update: number; review: number; individual?: number; excluded: number }; rows: number; duplicateRows: number; excludedReasons: Record<string, number> };
+  planToken?: string;
   fileName: string;
   sheetName: string;
   headerRowIndex: number;
@@ -378,7 +386,7 @@ const tableTd: React.CSSProperties = {
   borderBottom: '1px solid #edf0f3', verticalAlign: 'middle', whiteSpace: 'nowrap',
 };
 
-function SummaryCard({ label, value, tone }: { label: string; value: number | undefined; tone: 'default' | 'green' | 'amber' | 'red' | 'blue' | 'gray' }) {
+function SummaryCard({ label, value, tone, onClick, active }: { label: string; value: number | undefined; tone: 'default' | 'green' | 'amber' | 'red' | 'blue' | 'gray'; onClick?: () => void; active?: boolean }) {
   const tones: Record<string, { bg: string; color: string }> = {
     default: { bg: '#f9fafb', color: '#111827' },
     green: { bg: '#ecfdf5', color: '#047857' },
@@ -389,7 +397,9 @@ function SummaryCard({ label, value, tone }: { label: string; value: number | un
   };
   const t = tones[tone];
   return (
-    <div style={{ flex: '1 1 120px', minWidth: 110, background: t.bg, borderRadius: 10, padding: '12px 14px', border: '1px solid #eef2f7' }}>
+    <div onClick={onClick} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined} aria-label={onClick ? `${label} 보기` : undefined}
+      data-testid={onClick ? `summary-card-${label}` : undefined} onKeyDown={onClick ? (e) => { if (e.key === 'Enter') onClick(); } : undefined}
+      style={{ flex: '1 1 120px', minWidth: 110, background: t.bg, borderRadius: 10, padding: '12px 14px', border: active ? `2px solid ${t.color}` : '1px solid #eef2f7', cursor: onClick ? 'pointer' : 'default' }}>
       <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, color: t.color }}>{safeNum(value).toLocaleString()}</div>
     </div>
@@ -437,7 +447,11 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
   // 통번역사 검토 세분 필터(요구사항4) — 상태 필터와 AND 로 결합. needs_review 하위 분류 탐색용.
   type ReviewCat = NonNullable<AnalyzedRow['reviewCategory']>;
   const [reviewFilter, setReviewFilter] = useState<'all' | ReviewCat>('all');
-  const [mode, setMode] = useState<ImportMode>('new_only');
+  // 거래처·담당자: 등록 방식은 '신규 등록 + 기존 정보 업데이트'로 통일(변경 항목만, 빈 셀 덮어쓰기 없음)
+  const [mode, setMode] = useState<ImportMode>(entity === 'company' || entity === 'contact' ? 'update' : 'new_only');
+  const [rowStatsOpen, setRowStatsOpen] = useState(false);
+  const [reviewDecisions, setReviewDecisions] = useState<Record<string, string>>({});
+  const [catFilter, setCatFilter] = useState<'all' | 'same' | 'new' | 'update' | 'review' | 'individual' | 'excluded'>('all');   // 6개 카드 클릭 필터(고유 대상 분류)   // 거래처 '확인 필요' 관리자 결정(등록/수정/보류)
   // 거래처 대량등록 종류: 'business'(사업자 거래처/홈택스, 기본) | 'individual'(개인고객 명단 — 모든 행 INDIVIDUAL 처리)
   const [companyKind, setCompanyKind] = useState<'business' | 'individual'>('business');
   // 통번역사 기존 Master 보완(5단계): 필드별 선택 { "<masterId>:<field>": keep|apply|hold } + 드라이런 계획 결과.
@@ -447,7 +461,8 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
   // 통번역사 4단계 UX: ①업로드 ②분석결과 ③정보검토 ④최종등록. (타 엔티티는 단일 화면 유지)
   const isWizard = entity === 'translator';
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4>(1);
-  const [detailsOpen, setDetailsOpen] = useState(false);            // 상세 매칭 통계·검증 보고서 접기/펼치기(요구사항3)
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [legacyOpen, setLegacyOpen] = useState(false);              // 통번역사: 구 분석·재구축·A/B/C·식별자 통계 '상세 분석 보기'(기본 접힘)            // 상세 매칭 통계·검증 보고서 접기/펼치기(요구사항3)
   const [reviewSearch, setReviewSearch] = useState('');             // 정보 검토 대상자 검색(요구사항4)
   const [reviewScope, setReviewScope] = useState<'all' | 'auto' | 'review'>('all');  // 검토 상태 필터
   const [reviewPageSize, setReviewPageSize] = useState<20 | 50 | 100>(20);
@@ -514,6 +529,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
       const data = await res.json();
       if (!res.ok) { onToast(`오류: ${data.error ?? '분석 실패'}`); return; }
       setAnalysis(data);
+      setReviewDecisions({}); setCatFilter('all');
       setFilter('all');
       setRebuild(null);            // 새 분석 → 이전 재구축 결과 초기화
       setExecPlan(null);
@@ -528,11 +544,14 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
 
   const doExecute = useCallback(async () => {
     if (!file || !analysis) return;
-    const newCount = safeNum(analysis.summary?.new);
-    const updateCount = mode === 'update' ? safeNum(analysis.summary?.update) : 0;
-    if (newCount === 0 && updateCount === 0) { onToast('처리할 대상이 없습니다.'); return; }
+    const newCount = safeNum(analysis.uniqueSummary?.counts.new ?? analysis.summary?.new);
+    const updateCount = mode === 'update' ? safeNum(analysis.uniqueSummary?.counts.update ?? analysis.summary?.update) : 0;
+    const decidedN = entity === 'company' ? Object.values(reviewDecisions).filter(v => v !== 'hold').length : 0;
+    if (newCount === 0 && updateCount === 0 && decidedN === 0) { onToast('처리할 대상이 없습니다.'); return; }
 
     const parts = [`신규 ${newCount.toLocaleString()}${cfg.resultLabels.unit} 등록`];
+    const decided = Object.values(reviewDecisions).filter(v => v !== 'hold').length;
+    if (entity === 'company' && decided > 0) parts.push(`확인 필요 중 관리자 결정 ${decided}건(등록·수정) 반영`);
     if (updateCount > 0) parts.push(`기존 ${updateCount.toLocaleString()}건 업데이트`);
     if (!(await confirmDialog({ title: '대량등록 진행', message: `${parts.join(' · ')}을(를) 진행할까요?${updateCount > 0 ? '\n\n기존 데이터의 허용 필드(연락처·등록일 등)가 엑셀 값으로 수정됩니다. ID·연결관계는 유지됩니다.' : ''}`, confirmLabel: '진행', variant: 'warning' }))) return;
 
@@ -541,6 +560,8 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
       const fd = new FormData();
       fd.append('file', file);
       fd.append('mode', mode);
+      if (analysis.planToken) fd.append('planToken', analysis.planToken);   // 미리보기와 같은 기준일 때만 서버가 반영
+      if (entity === 'company') fd.append('reviewDecisions', JSON.stringify(Object.fromEntries(Object.entries(reviewDecisions).filter(([, v]) => v !== 'hold'))));
       if (entity === 'company' && companyKind === 'individual') fd.append('importKind', 'individual');
       const res = await fetch(api(cfg.executeUrl), {
         method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
@@ -560,7 +581,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
     } finally {
       setExecuting(false);
     }
-  }, [file, analysis, mode, cfg.executeUrl, cfg.resultLabels.unit, token, onToast, onDone, entity, companyKind]);
+  }, [file, analysis, mode, cfg.executeUrl, cfg.resultLabels.unit, token, onToast, onDone, entity, companyKind, reviewDecisions]);
 
   // 기존 Master 보완 — 드라이런 계획 생성(DB 미반영). 현재 필드별 선택을 서버에 전달해 반영될 내용을 계산.
   const runUpdatePlan = useCallback(async () => {
@@ -648,7 +669,9 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
   }, [analysis?.snapshotId, token, onToast]);
 
   const allRows = Array.isArray(analysis?.rows) ? analysis!.rows : [];
-  const statusFiltered = filter === 'all'
+  const statusFiltered = catFilter !== 'all'
+    ? allRows.filter(r => (r as any).category === catFilter)
+    : filter === 'all'
     ? allRows
     : filter === 'warning'
       ? allRows.filter(r => !!r.warning)
@@ -656,7 +679,11 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
   const filteredRows = reviewFilter === 'all'
     ? statusFiltered
     : statusFiltered.filter(r => r.reviewCategory === reviewFilter);
-  const shownRows = filteredRows.slice(0, MAX_PREVIEW_ROWS);
+  const shownRows = filteredRows.slice(0, catFilter !== 'all' ? 3000 : MAX_PREVIEW_ROWS);
+  // 등록 제외 사유별 건수(행 기준, 실제 판정 사유)
+  const excludedReasonCounts = catFilter === 'excluded'
+    ? Object.entries(filteredRows.reduce((m: Record<string, number>, r) => { const k = String(r.reason ?? '사유 없음').replace(/\s*\(.*$/, ''); m[k] = (m[k] ?? 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1])
+    : [];
 
   // ── 기존 Master 보완 대상(동일인 확정 — update/conflict + rrn/email/phone 매칭) ──
   const eligibleUpdateRows = entity === 'translator'
@@ -722,7 +749,8 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
 
   const newCount = safeNum(analysis?.summary?.new);
   const updateCount = safeNum(analysis?.summary?.update);
-  const execDisabled = executing || (newCount === 0 && (mode !== 'update' || updateCount === 0));
+  const decidedReview = entity === 'company' ? Object.values(reviewDecisions).filter(v => v !== 'hold').length : 0;
+  const execDisabled = executing || (newCount === 0 && decidedReview === 0 && (mode !== 'update' || updateCount === 0));
   const execLabel = mode === 'update' && updateCount > 0
     ? `신규 ${newCount.toLocaleString()}${cfg.resultLabels.unit} 등록 · 기존 ${updateCount.toLocaleString()}건 업데이트`
     : `신규 ${newCount.toLocaleString()}${cfg.resultLabels.unit} 등록`;
@@ -888,6 +916,15 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                 시트: <b>{analysis.sheetName || '-'}</b> · 헤더 {safeNum(analysis.headerRowIndex) + 1}행 감지 · 매핑된 컬럼:{' '}
                 {Object.entries(analysis.columnMap ?? {}).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(', ') || '없음'}
               </div>
+              {/* 통번역사: 최신 통합 판정(실행과 동일)만 메인에 표시 */}
+              {isWizard && <TranslatorImportApprovalPanel token={token} snapshotId={analysis?.snapshotId} onToast={onToast} mode="summary" />}
+              {isWizard && (
+                <button onClick={() => setLegacyOpen(v => !v)} data-testid="bulk-import-legacy-toggle" aria-expanded={legacyOpen} aria-label="상세 분석 보기"
+                  style={{ fontSize: 12, fontWeight: 600, background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '10px 0 4px' }}>
+                  {legacyOpen ? '▾ 상세 분석 접기' : '▸ 상세 분석 보기 (구 분석 통계 · Master 재구축 분석 · 식별자 통계 — 참고용, 등록 기준 아님)'}
+                </button>
+              )}
+              {(!isWizard || legacyOpen) && (<>
               {/* 통번역사: 핵심 3분류(기존 연결 / 신규 / 예외) 우선 표시(요구사항5). 상세는 접기. */}
               {entity === 'translator' && analysis.translatorDiagnostics ? (
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
@@ -898,7 +935,36 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                   <SummaryCard label="예외 검토" value={analysis.translatorDiagnostics.exceptionPersons} tone="amber" />
                   <SummaryCard label="오류" value={analysis.summary?.error} tone="red" />
                 </div>
-              ) : (
+              ) : (<>
+                {analysis.uniqueSummary && (
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }} data-testid="bulk-import-unique-summary">
+                    {(() => {
+                      const pick = (c: typeof catFilter) => () => { setCatFilter(catFilter === c ? 'all' : c); setFilter('all'); setReviewFilter('all'); setTimeout(() => document.getElementById('bulk-import-preview-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); };
+                      const u = analysis.uniqueSummary!;
+                      return (<>
+                        <SummaryCard label={`전체 고유 ${entity === 'contact' ? '담당자' : '거래처'}`} value={u.uniqueTotal} tone="default" active={catFilter === 'all'} onClick={pick('all')} />
+                        <SummaryCard label="기존 동일" value={u.counts.same} tone="gray" active={catFilter === 'same'} onClick={pick('same')} />
+                        <SummaryCard label="신규 등록" value={u.counts.new} tone="green" active={catFilter === 'new'} onClick={pick('new')} />
+                        <SummaryCard label="정보 수정" value={u.counts.update} tone="blue" active={catFilter === 'update'} onClick={pick('update')} />
+                        <SummaryCard label="확인 필요" value={u.counts.review} tone="amber" active={catFilter === 'review'} onClick={pick('review')} />
+                        {entity === 'company' && <SummaryCard label="개인 고객 분리" value={u.counts.individual ?? 0} tone="gray" active={catFilter === 'individual'} onClick={pick('individual')} />}
+                        <SummaryCard label="등록 제외" value={u.counts.excluded} tone="red" active={catFilter === 'excluded'} onClick={pick('excluded')} />
+                      </>);
+                    })()}
+                  </div>
+                )}
+                {analysis.uniqueSummary && (
+                  <button onClick={() => setRowStatsOpen(v => !v)} data-testid="bulk-import-rowstats-toggle" aria-expanded={rowStatsOpen} aria-label="상세 보기"
+                    style={{ fontSize: 12, fontWeight: 600, background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '0 0 10px' }}>
+                    {rowStatsOpen ? '▾ 상세 접기' : `▸ 상세 보기 (엑셀 ${analysis.uniqueSummary.rows.toLocaleString()}행 기준 · 중복 행 ${analysis.uniqueSummary.duplicateRows.toLocaleString()} · 제외 사유)`}
+                  </button>
+                )}
+                {analysis.uniqueSummary && rowStatsOpen && Object.keys(analysis.uniqueSummary.excludedReasons).length > 0 && (
+                  <div style={{ fontSize: 12, color: '#475569', marginBottom: 10 }}>
+                    등록 제외 사유(행): {Object.entries(analysis.uniqueSummary.excludedReasons).map(([k, v]) => `${({ A_no_name: 'A. 담당자 성명 없음', B_company_only: 'B. 거래처 정보만 있는 행', E_error: 'E. 형식 오류', individual: '개인 고객 분리' } as Record<string, string>)[k] ?? k} ${v.toLocaleString()}`).join(' · ')}
+                  </div>
+                )}
+                {(!analysis.uniqueSummary || rowStatsOpen) && (
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
                   <SummaryCard label="전체 행" value={analysis.summary?.total} tone="default" />
                   <SummaryCard label="신규 등록 예정" value={analysis.summary?.new} tone="green" />
@@ -908,6 +974,12 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                   <SummaryCard label="중복 검토 필요" value={analysis.summary?.needsReview} tone="amber" />
                   <SummaryCard label="파일 내 중복" value={analysis.summary?.duplicateFile} tone="amber" />
                   <SummaryCard label="오류" value={analysis.summary?.error} tone="red" />
+                </div>
+                )}
+              </>)}
+              {(entity === 'company' || entity === 'contact') && (
+                <div style={{ fontSize: 12, color: '#374151', background: '#f8fafc', border: '1px solid #eef2f7', borderRadius: 8, padding: '8px 12px', marginBottom: 12 }}>
+                  등록 방식: <b>신규 등록 + 기존 정보 업데이트</b> — 신규만 새로 만들고, 기존 {entity === 'contact' ? '담당자' : '거래처'}는 ID를 유지한 채 변경된 항목만 수정합니다(빈 셀은 덮어쓰지 않음). 확인 필요·등록 제외는 반영하지 않습니다.
                 </div>
               )}
 
@@ -1243,8 +1315,8 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                 </div>
               )}
 
-              {/* ── 등록 방식 선택 (거래처만: 담당자는 이번 단계에서 신규등록만 지원, §17) ── */}
-              {entity === 'company' && (
+              {/* ── 등록 방식 선택: 거래처·담당자는 '신규 등록 + 기존 정보 업데이트'로 통일되어 숨김 ── */}
+              {false && entity === 'company' && (
               <div style={{ background: '#f8fafc', border: '1px solid #eef2f7', borderRadius: 10, padding: '12px 14px', marginBottom: 16 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 8 }}>등록 방식</div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1275,6 +1347,8 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
               </div>
               )}
 
+              </>)}
+
               {/* 2단계 → 3단계 이동(통번역사) */}
               {isWizard && (
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
@@ -1284,7 +1358,16 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
               </>)}
 
               {showStep3 && (<>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 8 }}>3. 미리보기</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 8 }}>{isWizard ? '3. 정보 검토 — 통합 판정' : '3. 미리보기'}</div>
+              {isWizard && <TranslatorImportApprovalPanel token={token} snapshotId={analysis?.snapshotId} onToast={onToast} mode="review" />}
+              {isWizard && (
+                <button onClick={() => setLegacyOpen(v => !v)} data-testid="bulk-import-legacy-toggle" aria-expanded={legacyOpen} aria-label="상세 분석 보기"
+                  style={{ fontSize: 12, fontWeight: 600, background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '10px 0 4px' }}>
+                  {legacyOpen ? '▾ 상세 분석 접기' : '▸ 상세 분석 보기 (구 분석 통계 · Master 재구축 분석 · 식별자 통계 — 참고용, 등록 기준 아님)'}
+                </button>
+              )}
+              {(!isWizard || legacyOpen) && (<>
+
               {/* 상태 필터 */}
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
                 {(([['all', '전체'], ['new', '신규 등록 예정'], ['warning', '경고'], ['update', entity === 'translator' ? '보완 가능' : '변경 예정'], ['identical', '기존 동일'], ...(entity === 'translator' ? [['conflict', '정보 충돌'] as const] : []), ['needs_review', '중복 검토'], ['duplicate_file', '파일 내 중복'], ['error', '오류']]) as ReadonlyArray<readonly [string, string]>).map(([k, label]) => (
@@ -1303,7 +1386,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
               {entity === 'translator' && (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10, alignItems: 'center' }}>
                   <span style={{ fontSize: 11, color: '#9ca3af' }}>검토 세분:</span>
-                  {(([['all', '전체'], ['same_person', '실제 동일인 후보'], ['homonym', '동명이인'], ['file_internal', 'CRM 내부 중복'], ['undecidable', '판단 불가'], ['legacy_no_email', '무이메일 이관대기']]) as ReadonlyArray<readonly [string, string]>).map(([k, label]) => (
+                  {(([['all', '전체'], ['same_person', '실제 동일인 후보'], ['homonym', '동명이인'], ['file_internal', 'CRM 내부 중복'], ['undecidable', '판단 불가'], ['legacy_no_email', '무이메일 이관대기'], ['excluded_master', '통합·제외 Master 일치']]) as ReadonlyArray<readonly [string, string]>).map(([k, label]) => (
                     <button key={k} onClick={() => setReviewFilter(k as 'all' | ReviewCat)}
                       data-testid={`bulk-import-review-filter-${k}`} aria-label={`검토 세분 ${label} 필터`}
                       style={{
@@ -1317,6 +1400,23 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                 </div>
               )}
 
+              <div id="bulk-import-preview-table" />
+              {catFilter !== 'all' && (
+                <div style={{ fontSize: 12, color: '#374151', margin: '4px 0 8px' }} data-testid="bulk-import-cat-filter-note">
+                  <b>{({ same: '기존 동일', new: '신규 등록', update: '정보 수정', review: '확인 필요', individual: '개인 고객 분리', excluded: '등록 제외' } as Record<string, string>)[catFilter]}</b> 항목만 표시 중 — 엑셀 {filteredRows.length.toLocaleString()}행
+                  <button onClick={() => setCatFilter('all')} data-testid="bulk-import-cat-filter-clear" aria-label="필터 해제" style={{ marginLeft: 8, fontSize: 11.5, border: '1px solid #d1d5db', background: '#fff', borderRadius: 6, padding: '2px 8px', cursor: 'pointer' }}>전체 보기</button>
+                  {excludedReasonCounts.length > 0 && (
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }} data-testid="bulk-import-excluded-reasons">
+                      <span style={{ color: '#6b7280' }}>제외 사유별:</span>
+                      {excludedReasonCounts.map(([k, v]) => <span key={k} style={{ padding: '2px 8px', borderRadius: 999, background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b' }}>{k} {v.toLocaleString()}</span>)}
+                    </div>
+                  )}
+                </div>
+              )}
+              {entity === 'company' && catFilter === 'review' ? (
+                <CompanyReviewList rows={allRows.filter(r => (r as any).category === 'review')} decisions={reviewDecisions}
+                  onChange={(rn, d) => setReviewDecisions(prev => ({ ...prev, [String(rn)]: d }))} />
+              ) : (
               <div style={{ overflowX: 'auto', maxHeight: 460, overflowY: 'auto', border: '1px solid #eef2f7', borderRadius: 10 }}>
                 <table className="veritas-read-table" style={{ width: '100%', borderCollapse: 'collapse', minWidth: tableMinWidth, tableLayout: useFixedLayout ? 'fixed' : 'auto' }}>
                   {/* 고정 레이아웃: 컬럼 너비를 colgroup 으로 명시 관리(헤더·데이터 정렬 일치). */}
@@ -1384,6 +1484,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                   </tbody>
                 </table>
               </div>
+              )}
               {filteredRows.length > MAX_PREVIEW_ROWS && (
                 <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 8 }}>
                   ※ 미리보기는 {MAX_PREVIEW_ROWS.toLocaleString()}행까지만 표시됩니다. 처리는 전체 대상에 적용됩니다.
@@ -1561,6 +1662,8 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                 </div>
               )}
 
+              </>)}
+
               {/* 3단계 내비게이션(통번역사) */}
               {isWizard && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 12 }}>
@@ -1572,10 +1675,12 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
 
               {/* ── 단계 4: 최종 등록 ── */}
               {showStep4 && (<>
-              {isWizard && <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 10 }}>4. 최종 등록 — Master 재구축 기준</div>}
+                {/* 통합 판정 · 대표 승인 등록(통번역사 실제 등록 유일 경로 — 일반/재구축 판정 기준 통합) */}
+                {entity === 'translator' && <TranslatorImportApprovalPanel token={token} snapshotId={analysis?.snapshotId} onToast={onToast} mode="final" />}
+
               {/* ④ 최종 등록은 Master 재구축 기준(고유 2,019 / 등록 1,493 / 보류 526)으로 표시한다.
                   기존 대량등록(구 581명) 기준은 이 화면에서 사용하지 않는다(요구사항4·7). 재구축 분석 미실행 시 ② 단계로 안내. */}
-              {isWizard && !rebuild && (
+              {SHOW_LEGACY_REBUILD_FINAL && isWizard && !rebuild && (
                 <div style={{ marginBottom: 14, padding: '12px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 12.5, color: '#92400e', lineHeight: 1.8 }}>
                   Master 재구축 최종 등록 기준을 표시하려면 <b>② 분석 결과</b> 단계에서 <b>‘재구축 분석 실행’</b>을 먼저 눌러주세요.
                   (이 화면은 기존 581명 기준을 사용하지 않습니다.)
@@ -1584,7 +1689,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                   </div>
                 </div>
               )}
-              {isWizard && rebuild && (() => {
+              {SHOW_LEGACY_REBUILD_FINAL && isWizard && rebuild && (() => {
                 const c = rebuild.classification;
                 const fd = c.finalDisposition;
                 const pl = rebuild.progressLink;
@@ -1613,7 +1718,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                 );
               })()}
               {/* 변경 전후 요약 — 필드별 적용 예정(계획 검증 후) */}
-              {isWizard && plan && Object.keys(plan.summary.applyFieldCounts ?? {}).length > 0 && (
+              {SHOW_LEGACY_REBUILD_FINAL && isWizard && plan && Object.keys(plan.summary.applyFieldCounts ?? {}).length > 0 && (
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
                   <span style={{ fontSize: 11, color: '#475569' }}>필드별 변경 예정:</span>
                   {Object.entries(plan.summary.applyFieldCounts).map(([f, v]) => (
@@ -1623,7 +1728,7 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                   ))}
                 </div>
               )}
-              {isWizard && !plan && eligibleUpdateRows.length > 0 && (
+              {SHOW_LEGACY_REBUILD_FINAL && isWizard && !plan && eligibleUpdateRows.length > 0 && (
                 <div style={{ fontSize: 11.5, color: '#92400e', marginBottom: 12 }}>※ 기존 Master 보완의 변경 전후 요약을 보려면 ③ 정보 검토에서 '업데이트 계획 검증'을 먼저 실행하세요.</div>
               )}
 
@@ -1640,7 +1745,10 @@ function BulkImportPageInner({ entity, token, onClose, onToast, onDone }: BulkIm
                       : '기존 데이터는 변경되지 않습니다. 동일·중복·오류 건은 저장되지 않습니다.'}
                   </span>
                 </div>
-              ) : (
+              ) : null}
+              {!isWizard && (entity === 'company' || entity === 'contact') ? (
+                <PartyImportBatches token={token} module={entity === 'contact' ? 'contact' : 'company'} onToast={onToast} refreshKey={result} />
+              ) : !SHOW_LEGACY_REBUILD_FINAL ? null : (
                 <div style={{ marginTop: 6 }}>
                   {!rebuild ? (
                     <div style={{ padding: '12px 14px', background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 8, fontSize: 12.5, color: '#475569', lineHeight: 1.8 }}>

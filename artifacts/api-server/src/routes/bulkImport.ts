@@ -32,6 +32,8 @@ import { buildAliasValues } from "../lib/companyAlias";
 import { buildTranslatorAliasValues } from "../lib/translatorAlias";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
 import { getSettings } from "../lib/getSettings";
+import { buildExcludedTranslatorIndex } from "../lib/excludedTranslatorIndex";
+import { refineCompanyRows, refineContactRows, uniqueSummary, companyKey, contactKey, partyPlanToken, attachCompanyReviewInfo, applyCompanyReviewDecisions } from "../services/partyImportPlan";
 import { generateQuoteNumber, computeQuoteItemAmounts } from "./admin";
 import {
   parseWorkbook, parseWorkbookSheets, buildColumnMap, describeColumnMap, isBlankRow, getCell,
@@ -416,6 +418,9 @@ async function analyzeCompanies(buffer: Buffer, opts?: { forceCustomerType?: "IN
     rows.push(row);
   });
 
+  // 홈택스 최신화 보정: 개인 식별번호 보류·마스킹, 같은 거래처 여러 행 값 상이 → 확인 필요(임의 선택 금지)
+  refineCompanyRows(rows);
+
   // ── 진단 통계(읽기전용, 2단계 조사 §13) ─────────────────────────────────────
   // 사업자번호 canonical(10자리) 기준으로 grouping 하여 "행 수"와 "unique 거래처 수"를 분리한다.
   //   앱 분류는 "파일 내부 사업자번호 중복" 검사가 DB 매칭보다 우선순위가 높아 기존 거래처 일치가
@@ -504,12 +509,15 @@ router.post(
     const forceCustomerType = (req.body as any)?.importKind === "individual" ? ("INDIVIDUAL" as const) : undefined;
     try {
       const result = await analyzeCompanies(req.file.buffer, { forceCustomerType });
+      await attachCompanyReviewInfo(result.rows);   // 확인 필요 행: 기존 거래처 비교 정보·허용 동작(등록/수정)
       res.json({
         fileName: decodeFileName(req.file.originalname),
         sheetName: result.sheetName,
         headerRowIndex: result.headerRowIndex,
         columnMap: result.columnMap,
         summary: summarize(result.rows),
+        uniqueSummary: uniqueSummary(result.rows as any, companyKey),       // 고유 거래처 기준 6개 항목
+        planToken: await partyPlanToken("company", req.file.buffer),        // 실행 시 미리보기와 동일 기준 확인
         diagnostics: result.diagnostics,
         rows: result.rows,
       });
@@ -531,8 +539,22 @@ router.post(
     const mode = parseMode((req.body as any)?.mode);
     const forceCustomerType = (req.body as any)?.importKind === "individual" ? ("INDIVIDUAL" as const) : undefined;
     try {
+      // 승인 토큰: 미리보기 이후 거래처 자료가 바뀌었으면 거부(미리보기 = 실제 저장)
+      const token0 = String((req.body as any)?.planToken ?? "");
+      if (!token0 || token0 !== await partyPlanToken("company", req.file.buffer)) {
+        res.status(409).json({ error: "미리보기 이후 거래처 자료가 바뀌었거나 승인 토큰이 없습니다. 다시 분석한 뒤 실행하세요.", code: "PLAN_CHANGED" }); return;
+      }
       // 서버에서 재분석·재검증 후 상태별 저장 (analyze 와 동일 옵션으로 재검증 — §16 보안)
       const result = await analyzeCompanies(req.file.buffer, { forceCustomerType });
+      // 확인 필요 행은 관리자 결정(등록/수정)이 있을 때만 반영. 결정이 없으면 보류.
+      let reviewDecisions: Record<string, string> = {};
+      try { const v = JSON.parse(String((req.body as any)?.reviewDecisions ?? "{}")); if (v && typeof v === "object") reviewDecisions = v; } catch { /* 결정 없음 = 전부 보류 */ }
+      if (Object.keys(reviewDecisions).length) {
+        const ids = [...new Set(result.rows.filter((r) => r.existingId != null).map((r) => r.existingId as number))];
+        const exList = ids.length ? await db.select().from(companiesTable).where(inArray(companiesTable.id, ids)) : [];
+        const err = applyCompanyReviewDecisions(result.rows, reviewDecisions, new Map(exList.map((c) => [c.id, c])));
+        if (err) { res.status(400).json({ error: err, code: "INVALID_REVIEW_DECISION" }); return; }
+      }
       const newRows = result.rows.filter((r) => r.status === "new");
       const updateRows = mode === "update"
         ? result.rows.filter((r) => r.status === "update" && r.existingId != null)
@@ -636,7 +658,11 @@ router.post(
               if (getter) set[key] = getter(r);
             }
             if (Object.keys(set).length === 0) continue;
-            await tx.update(companiesTable).set(set).where(eq(companiesTable.id, r.existingId as number));
+            await tx.update(companiesTable).set({ ...set, updatedAt: new Date() }).where(eq(companiesTable.id, r.existingId as number));
+            // 변경 이력(되돌리기 근거): 변경 전/후 값
+            await tx.insert(importRowSourcesTable).values({ batchId: batch.id, module: "company", entityId: r.existingId as number, sourceFile: fileName || null, sourceSheet: result.sheetName || null,
+              sourceRow: r.rowNumber, rowKey: `company|update|${r.existingId}`, status: "update",
+              sourceRaw: { fields: Object.keys(set).map((k) => ({ key: k, before: changes[k]?.old ?? null, after: set[k] })) } });
 
             // 상호가 바뀌면 개별 편집과 동일하게 이력 종료 + 신규 current 추가
             if (changes.name) {
@@ -697,6 +723,8 @@ interface ContactRow {
   emailNorm: string;
   officePhone: string;
   officePhoneNorm: string;
+  changes?: ChangeMap;             // 기존 담당자 정보 변경(update) 미리보기
+  category?: "same" | "new" | "update" | "review" | "excluded"; categoryReason?: string;   // 홈택스 최신화 분류(고유 대상 집계·A~E 사유)
 }
 
 type MiniCompany = { id: number; name: string; biz?: string };
@@ -887,6 +915,9 @@ async function analyzeContacts(buffer: Buffer): Promise<{
     rows.push(row);
   });
 
+  // 홈택스 최신화 보정: 오류 A~E 분류, 개인 식별번호 보류·마스킹, 기존 담당자 정보 변경 감지
+  await refineContactRows(rows);
+
   return {
     sheetName: parsed.sheetName,
     headerRowIndex: parsed.headerRowIndex,
@@ -910,6 +941,8 @@ router.post(
         headerRowIndex: result.headerRowIndex,
         columnMap: result.columnMap,
         summary: summarize(result.rows),
+        uniqueSummary: uniqueSummary(result.rows as any, contactKey),       // 고유 담당자 기준 6개 항목
+        planToken: await partyPlanToken("contact", req.file.buffer),
         rows: result.rows,
       });
     } catch (err) {
@@ -928,17 +961,22 @@ router.post(
     if (!req.file) { res.status(400).json({ error: "파일을 첨부해주세요. (필드명: file)" }); return; }
     const fileName = decodeFileName(req.file.originalname);
     try {
-      // 서버 재분석·재검증(§16 보안). 이번 단계는 new-only(§17): "신규등록" + 거래처 확정 행만 INSERT.
-      // 기존 담당자 자동 UPDATE/MERGE 없음. update 모드는 아직 미구현.
+      // 승인 토큰: 미리보기 이후 담당자·거래처 자료가 바뀌었으면 거부(미리보기 = 실제 저장)
+      const token0 = String((req.body as any)?.planToken ?? "");
+      if (!token0 || token0 !== await partyPlanToken("contact", req.file.buffer)) {
+        res.status(409).json({ error: "미리보기 이후 담당자·거래처 자료가 바뀌었거나 승인 토큰이 없습니다. 다시 분석한 뒤 실행하세요.", code: "PLAN_CHANGED" }); return;
+      }
+      // 서버 재분석·재검증(§16 보안). 신규 등록 + 기존 담당자 정보 업데이트(변경 항목만, 빈 셀 덮어쓰기 없음).
       const result = await analyzeContacts(req.file.buffer);
       const newRows = result.rows.filter((r) => r.status === "new" && r.companyId != null);
+      const updRows = result.rows.filter((r) => r.status === "update" && r.existingId != null && r.changes);
       const summary = summarize(result.rows);
       const today = new Date().toISOString().slice(0, 10);
       const performer = { id: (req as any).user?.id ?? 0, email: (req as any).user?.email ?? "" };
 
-      let inserted = 0;
+      let inserted = 0, updated = 0;
       let batchId: number | null = null;
-      if (newRows.length > 0) {
+      if (newRows.length > 0 || updRows.length > 0) {
         await db.transaction(async (tx) => {
           // 0) Import Batch(§18)
           const [batch] = await tx
@@ -996,13 +1034,30 @@ router.post(
             }));
             inserted += created.length;
           }
+
+          // 2) 기존 담당자 정보 업데이트(ID 유지·변경 항목만) + 변경 이력
+          const valueOf: Record<string, (r: ContactRow) => string | null> = {
+            email: (r) => r.emailNorm || null, mobile: (r) => r.mobileNorm || null, officePhone: (r) => r.officePhoneNorm || null,
+            department: (r) => r.department || null, position: (r) => r.position || null,
+          };
+          for (const r of updRows) {
+            const set: Record<string, string | null> = {};
+            for (const k of Object.keys(r.changes!)) if (valueOf[k]) set[k] = valueOf[k](r);
+            if (!Object.keys(set).length) continue;
+            await tx.update(contactsTable).set({ ...set, updatedAt: new Date() }).where(eq(contactsTable.id, r.existingId as number));
+            await tx.insert(importRowSourcesTable).values({ batchId: batch.id, module: "contact", entityId: r.existingId as number, sourceFile: fileName || null, sourceSheet: result.sheetName || null,
+              sourceRow: r.rowNumber, rowKey: `contact|update|${r.existingId}`, status: "update",
+              sourceRaw: { fields: Object.keys(set).map((k) => ({ key: k, before: r.changes![k]?.old ?? null, after: set[k] })) } });
+            updated++;
+          }
+          await tx.update(importBatchesTable).set({ successRows: inserted + updated }).where(eq(importBatchesTable.id, batch.id));
         });
       }
 
       await logEvent("company", 0, "bulk_import_contacts", req.log, performer.id ? performer : undefined,
-        JSON.stringify({ fileName, mode: "new_only", batchId, total: summary.total, inserted, identical: summary.identical, needsReview: summary.needsReview, duplicateFile: summary.duplicateFile, error: summary.error }));
+        JSON.stringify({ fileName, mode: "new_and_update", batchId, total: summary.total, inserted, updated, identical: summary.identical, needsReview: summary.needsReview, duplicateFile: summary.duplicateFile, error: summary.error }));
 
-      res.json({ fileName, mode: "new_only", batchId, inserted, updated: 0, summary });
+      res.json({ fileName, mode: "update", batchId, inserted, updated, summary });
     } catch (err) {
       req.log.error({ err }, "BulkImport: contact execute failed");
       res.status(500).json({ error: "담당자 일괄 등록 실패." });
@@ -1016,7 +1071,7 @@ router.post(
 // 신원 신호: 이메일(users.email + translator_emails) · 휴대폰(profile.phone) · 이름(users.name + aliases).
 // 이름만으로 동일인 자동판정 금지(§12). new-only(§17), Import Batch/Lineage(§19), idempotency(§20).
 // needs_review 세분(요구사항3): 실제 동일인 후보 / 동명이인 / CRM 내부중복 / 판단불가 / 무이메일 이관대기.
-type ReviewCategory = "same_person" | "homonym" | "file_internal" | "undecidable" | "legacy_no_email";
+type ReviewCategory = "same_person" | "homonym" | "file_internal" | "undecidable" | "legacy_no_email" | "excluded_master";
 // 매칭 근거(요구사항1): 원본 행 ↔ Master 연결 방법. 주민번호 > 이메일 > 휴대폰 > 이름 우선순위.
 type MatchMethod = "rrn" | "email" | "phone" | "name";
 
@@ -1027,6 +1082,7 @@ interface TranslatorRow {
   existingId?: number | null;      // 기존통번역사 일치 시 매칭된 user id(표시용·연결 근거)
   matchMethod?: MatchMethod;       // 연결 근거 보존(요구사항1)
   reviewCategory?: ReviewCategory; // needs_review 세분(요구사항3)
+  excludedMasterId?: number;       // 통합·제외된 Master 와 대조된 경우 그 Master id(신규 생성 방지)
   changes?: ChangeMap;             // update/conflict 행의 변경·충돌 필드 미리보기(컬럼 key → old/new)
   changeSummary?: string;          // 보완/충돌 필드 요약(한글 라벨, 컬럼 외 필드도 노출)
   residentMasked?: string;         // 엑셀 원본 주민번호 마스킹 표기(예: 900101-1******). 원문은 절대 미보관(§4·요구사항7).
@@ -1116,7 +1172,7 @@ function classifyTranslatorChange(ex: MiniTranslator, r: TranslatorRow, includeN
   return { status, changes, fill, conflict };
 }
 
-async function analyzeTranslators(buffer: Buffer): Promise<{
+export async function analyzeTranslators(buffer: Buffer): Promise<{
   sheetName: string; headerRowIndex: number; columnMap: Record<string, string | null>;
   rows: TranslatorRow[]; translatorDiagnostics: Record<string, unknown>;
 }> {
@@ -1193,6 +1249,10 @@ async function analyzeTranslators(buffer: Buffer): Promise<{
     .where(eq(legacyMasterMappingsTable.entityType, "translator"));
   const legacyMappedMasterIds = new Set<number>();
   for (const m of legacyMaps) { if (m.status !== "rolled_back" && translatorName.has(m.entityId)) legacyMappedMasterIds.add(m.entityId); }
+
+  // 통합·제외(soft delete)된 Master 대조 색인 — 반복 업로드 시 기존 인물이 신규 Master 로 재생성되지 않게 한다(읽기 전용).
+  const excludedIdx = await buildExcludedTranslatorIndex({ name: normalizeCompanyName, email: normalizeEmail, phone: normalizePhone, rrn13: rrnDigits13 });
+  let excludedToRep = 0, excludedHeld = 0;
 
   const buildMini = (id: number): MiniTranslator => {
     const u = userById.get(id); const p = profileById.get(id);
@@ -1337,7 +1397,22 @@ async function analyzeTranslators(buffer: Buffer): Promise<{
     } else {
       // 성명+식별정보로 확정된 Master 없음.
       const otherDup = rrnOwners.length + emailOwners2.length + phoneOwners.length > 0;  // 이름 무관 식별정보가 타 Master와 일치
-      if (otherDup) {
+      const exHit = excludedIdx.lookup(nameNorm, rrnKey, emailRealNorm, phoneNorm);
+      if (exHit && exHit.method !== "name" && exHit.representativeId != null && userById.has(exHit.representativeId)) {
+        // 통합된 Master 와 동일인(성명+식별정보) → 대표 Master 로 연결. 신규 생성·재활성화 없음.
+        applyMatch(exHit.representativeId, exHit.method);
+        row.excludedMasterId = exHit.excludedId;
+        row.reason = `통합된 Master #${exHit.excludedId} → 대표 Master #${exHit.representativeId} 로 연결 · ${row.reason ?? ""}`;
+        excludedToRep++;
+      } else if (exHit) {
+        // 제외된 Master 와 동일인/동명 → 보류(신규 생성 금지). 대표 확인 후 처리.
+        row.status = "needs_review"; row.reviewCategory = "excluded_master"; row.excludedMasterId = exHit.excludedId;
+        row.reason = exHit.method === "name"
+          ? `통합·제외 처리된 Master #${exHit.excludedId} 와 동명 — 동일인 확인 전 신규 생성 보류`
+          : `통합·제외 처리된 Master #${exHit.excludedId} 와 동일인(${exHit.method}) — 신규 생성·재활성화 금지, 확인 필요`;
+        exceptionKeys.add(`x:${exHit.excludedId}`);
+        excludedHeld++;
+      } else if (otherDup) {
         markException("식별정보가 다른 성명의 Master와 일치 — 중복 가능성, 예외 검토");
       } else if (nameMatchedSet.size > 0) {
         // 동명 Master 존재하나 식별정보 미일치/부재 → 중복 가능성 남음 → 보류(요구사항4).
@@ -1393,6 +1468,8 @@ async function analyzeTranslators(buffer: Buffer): Promise<{
     fillFieldCounts,       // 공란 보완 필드별 건수
     legacyMappedTotal: legacyMappedMasterIds.size,
     legacyLinkedInFile: linkedLegacyMasterIds.size,
+    // 통합·제외 Master 대조(반복 업로드 재생성 방지)
+    excludedMasters: { indexed: excludedIdx.size, linkedToRepresentative: excludedToRep, held: excludedHeld },
     // ── A~F 보고서(중복 집계 없이 실제 인원 기준, 요구사항) ──
     report: {
       rowsTotal: rows.length,
@@ -1922,7 +1999,9 @@ export async function runRebuildExecute(
       } };
     }
 
-    // ── 실제 실행(commit=true) — 단일 트랜잭션·실패 시 롤백(요구사항7·8). ──
+    // ── 실제 실행(commit=true) — 통합 판정 일원화로 차단(독립 신규 후보가 동명 기존 Master·통합·제외 Master 를 재생성할 위험). ──
+    //   DRY-RUN(분석)은 위에서 그대로 반환. 실제 등록은 /admin/translators/import-plan/execute 에서만.
+    if (process.env.ALLOW_LEGACY_TRANSLATOR_EXECUTE !== "true") return { status: 409, body: { error: "재구축 실제 실행은 '통합 판정 · 대표 승인' 경로로 일원화되었습니다.", code: "USE_IMPORT_PLAN" } };
     if (confirmToken !== meta.id) { return { status: 400, body: { error: "확인 토큰 불일치. 실제 실행 시 confirm=<snapshotId> 필요." } }; }
 
     // 재사용 보완용 라이브 프로필/이메일 로드(공란 판정). 읽기 전용.
@@ -2058,6 +2137,9 @@ router.post(
   ...adminGuard,   // 통번역사 수동 등록과 동일한 접근 기준(별도 permission key 없음)
   excelUpload.single("file"),
   async (req, res) => {
+    // 통합 판정 일원화: 통번역사 실제 등록은 /admin/translators/import-plan/execute(대표 승인)에서만 수행한다.
+    //   이 경로는 판정 기준이 달라 중복 Master·이메일 고유제약 실패 위험이 있어 기본 차단(분석 API 는 유지, 비상시 ALLOW_LEGACY_TRANSLATOR_EXECUTE=true).
+    if (process.env.ALLOW_LEGACY_TRANSLATOR_EXECUTE !== "true") { res.status(409).json({ error: "통번역사 등록은 '통합 판정 · 대표 승인' 화면에서 진행하세요.", code: "USE_IMPORT_PLAN" }); return; }
     if (!req.file) { res.status(400).json({ error: "파일을 첨부해주세요. (필드명: file)" }); return; }
     const fileName = decodeFileName(req.file.originalname);
     try {
@@ -2195,7 +2277,8 @@ router.post(
       );
       const blocked = result.rows.filter(
         (r) => r.reviewCategory === "homonym" || r.reviewCategory === "undecidable" ||
-          r.reviewCategory === "same_person" || r.reviewCategory === "legacy_no_email" || r.reviewCategory === "file_internal",
+          r.reviewCategory === "same_person" || r.reviewCategory === "legacy_no_email" || r.reviewCategory === "file_internal" ||
+          r.reviewCategory === "excluded_master",
       ).length;
 
       const applyFieldCounts: Record<string, number> = {};

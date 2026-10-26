@@ -5,6 +5,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { api } from '../../lib/constants';
 import { formatAmountDisplay } from '../../lib/utils';
 import { LegacyArchiveDetailPage } from './LegacyArchiveDetailPage';
+import { LegacyArchiveSyncPanel } from './LegacyArchiveSyncPanel';
 
 type SourceType = 'sales_list' | 'progress' | 'translator_list';
 const SOURCE_LABEL: Record<SourceType, string> = { sales_list: '판매목록', progress: '통번역 진행관리', translator_list: 'CRM 통번역사 명부' };
@@ -279,24 +280,6 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
       setExcelPreview(data); setExcelPageSize(data.pageSize);
     } catch (e: any) { setToast(e?.message || '원본 미리보기 조회 실패'); } finally { setExcelLoading(false); }
   }, [file, impType, token]);
-
-  const runExecute = useCallback(async () => {
-    if (!file || !analyze) { setToast('먼저 Preview 를 실행하세요.'); return; }
-    if (analyze.archivePlan?.safeToExecute === false) {
-      setToast('동일 파일 위치에 다른 내용이 이미 보존되어 있어(원본 무결성 위험) 저장할 수 없습니다. 충돌 상세를 확인하세요.'); return;
-    }
-    setExecuting(true);
-    try {
-      const fd = new FormData(); fd.append('file', file); fd.append('sourceType', impType);
-      const res = await fetch(api('/api/admin/legacy-archive/execute'), { method: 'POST', headers: authHeaders, body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || '저장 실패');
-      setExecResult(data);
-      setToast(data.mode === 'duplicate_file'
-        ? '이미 등록된 동일 파일입니다. 새 스냅샷을 생성하지 않았습니다.'
-        : `새 CRM 스냅샷 저장 완료: ${data.created}건 보존${data.supersededSnapshotIds?.length ? `, 이전 스냅샷 ${data.supersededSnapshotIds.length}개 historical 전환` : ''}`);
-    } catch (e: any) { setToast(e?.message || '저장 실패'); } finally { setExecuting(false); }
-  }, [file, impType, analyze, token]);
 
   // 상세 모드
   if (detailId !== null) {
@@ -635,7 +618,6 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
             {/* 액션 */}
             <div style={{ display: 'flex', gap: 12, marginTop: 14 }}>
               <button style={btn(!file || analyzing, true)} disabled={!file || analyzing} onClick={runAnalyze} aria-label="Preview 실행" data-testid="archive-preview-btn">{analyzing ? '분석 중…' : 'Preview'}</button>
-              <button style={btn(!analyze || executing || dupBlocksExecute)} disabled={!analyze || executing || dupBlocksExecute} onClick={runExecute} aria-label="Execute 저장" data-testid="archive-execute-btn">{executing ? '저장 중…' : 'Execute (저장)'}</button>
             </div>
           </div>
 
@@ -920,76 +902,11 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
                 );
               })()}
 
-              {/* ── (C-4I-a) 업데이트 판정 미리보기 (DRY-RUN, 저장 안 함) ── */}
-              {analyze.recordMatching && (() => {
-                const rm = analyze.recordMatching!;
-                const cards: [string, number, string][] = [
-                  ['신규 NEW', rm.counts.NEW, '#1e40af'], ['동일 SAME', rm.counts.SAME, '#065f46'],
-                  ['변경 UPDATED', rm.counts.UPDATED, '#92400e'], ['검토 AMBIGUOUS', rm.counts.AMBIGUOUS, '#991b1b'],
-                ];
-                return (
-                  <div style={{ marginTop: 18, borderTop: '2px solid #e5e7eb', paddingTop: 14 }} data-testid="archive-record-matching">
-                    <div style={{ fontSize: 14, fontWeight: 800, color: '#111827', marginBottom: 4 }}>업데이트 판정 미리보기 <span style={{ fontWeight: 600, fontSize: 12, color: '#6b7280' }}>(DRY-RUN · 저장 안 함 · {rm.mode === 'INITIAL_IMPORT' ? '최초 등록' : '재업로드'})</span></div>
-                    {rm.mode === 'INITIAL_IMPORT' && <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>※ 기존 저장 자료가 없어 최초 등록 파일은 전량 NEW 로 표시되는 것이 정상입니다.</div>}
-                    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 10 }}>
-                      {cards.map(([k, v, col]) => (
-                        <div key={k} style={{ padding: '8px 16px', borderRadius: 8, background: '#f9fafb', border: '1px solid #e5e7eb', minWidth: 110 }}>
-                          <div style={{ fontSize: 11, color: '#6b7280' }}>{k}</div><div style={{ fontSize: 20, fontWeight: 800, color: col }}>{v.toLocaleString()}</div>
-                        </div>
-                      ))}
-                    </div>
-                    {rm.sameSetGroups > 0 && <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>동일내용·동일 개수 SAME-set 그룹 {rm.sameSetGroups}개 (개별 행 식별자를 만들지 않고 집합 단위 보존)</div>}
-
-                    {rm.updatedSamples.length > 0 && (
-                      <div style={{ marginTop: 6 }} data-testid="archive-updated-samples">
-                        <div style={{ fontSize: 13, fontWeight: 800, color: '#92400e', margin: '6px 0' }}>변경 감지 (대표 {rm.updatedSamples.length}건)</div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                          {rm.updatedSamples.map((s, i) => (
-                            <div key={i} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #fde68a', background: '#fffbeb', fontSize: 12.5 }}>
-                              <div style={{ fontWeight: 700 }}>{[s.companyName, s.productName].filter(Boolean).join(' / ') || '(표시없음)'} <span style={{ color: '#6b7280', fontWeight: 500 }}>· Excel행 {s.sourceRow} · {s.confidence}</span></div>
-                              {s.changedFields.map((cf, ci) => (
-                                <div key={ci} style={{ color: '#374151', marginTop: 2 }}>· <b>{cf.field}</b>: <span style={{ color: '#9ca3af' }}>{cf.before == null || cf.before === '' ? '(없음)' : String(cf.before)}</span> → <span style={{ color: '#065f46', fontWeight: 700 }}>{cf.after == null || cf.after === '' ? '(없음)' : String(cf.after)}</span></div>
-                              ))}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {rm.ambiguousSamples.length > 0 && (
-                      <div style={{ marginTop: 10 }} data-testid="archive-ambiguous-samples">
-                        <div style={{ fontSize: 13, fontWeight: 800, color: '#991b1b', margin: '6px 0' }}>검토 필요 (대표 {rm.ambiguousSamples.length}건)</div>
-                        <div style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #fecaca', background: '#fef2f2', color: '#991b1b', fontSize: 12.5, marginBottom: 6 }}>
-                          동일 후보가 여러 건이거나 식별근거가 부족하여 <b>자동 업데이트하지 않습니다.</b> 원본은 모두 보존됩니다.
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                          {rm.ambiguousSamples.map((s, i) => (
-                            <div key={i} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #fecaca', background: '#fff', fontSize: 12.5 }}>
-                              <div style={{ color: '#374151' }}>{[s.companyName, s.productName, s.translatorName, s.language].filter(Boolean).join(' / ') || '(표시없음)'} <span style={{ color: '#6b7280' }}>· Excel행 {s.sourceRows.join(', ')} · 후보 {s.candidateCount}건</span></div>
-                              <div style={{ color: '#991b1b', marginTop: 2 }}>{s.reason}</div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
             </div>
           )}
 
-          {execResult && (
-            <div style={{ ...box, borderColor: '#10b981' }} data-testid="archive-execute-result">
-              <div style={{ fontSize: 15, fontWeight: 800, color: '#065f46', marginBottom: 10 }}>저장 완료 (batch #{execResult.batchId ?? '-'})</div>
-              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                {[['총 행', execResult.total], ['생성', execResult.created], ['중복 제외', execResult.skippedDuplicate], ['경고', execResult.warnings]].map(([k, v]) => (
-                  <div key={String(k)} style={{ padding: '10px 16px', borderRadius: 8, background: '#ecfdf5', border: '1px solid #a7f3d0', minWidth: 110 }}>
-                    <div style={{ fontSize: 12, color: '#047857' }}>{k}</div><div style={{ fontSize: 20, fontWeight: 800, color: '#065f46' }}>{v as number}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* 반복 업로드: 변경분 미리보기 · 대표 승인 반영 · 배치 되돌리기(5분류, 중복 의심 보류, 삭제 의심 표시만) */}
+          <LegacyArchiveSyncPanel token={token} file={file} sourceType={impType} setToast={setToast} onApplied={loadSnapshots} />
         </>
       )}
     </div>

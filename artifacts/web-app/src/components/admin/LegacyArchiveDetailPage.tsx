@@ -25,14 +25,15 @@ type ArchiveRow = {
   linkedProgress?: LinkedProgress[];
 };
 
-// (C-4J-2C-15) 주민등록번호 기본 마스킹(표시 전용). 생년월일 6자리만 노출, 뒤 7자리 마스킹.
-//   원문 노출은 별도 권한처리 영역 — 현재 화면은 항상 마스킹한다(원본 DB 값은 불변).
+// (C-4J-2C-15) 주민등록번호 표시(표시 전용). 서버가 '생년월일 6자리-뒷자리 첫 숫자******'로 마스킹해 보낸 값을 그대로 표시한다.
+//   서버 마스킹 형식이 아닌 값은 방어적으로 같은 형식으로 마스킹(원본 DB 값은 불변).
 function maskRRN(v: unknown): string {
   if (v == null) return '-';
   const s = String(v).trim();
   if (!s) return '-';
-  const m = s.match(/^(\d{6})[-\s]?\d{7}$/);
-  if (m) return `${m[1]}-*******`;
+  if (/^(\d{6}|\*{6})-(\d|\*)\*{6}$/.test(s)) return s;   // 서버 마스킹 결과
+  const m = s.match(/^(\d{6})[-\s]?(\d)\d{6}$/);
+  if (m) return `${m[1]}-${m[2]}******`;
   return s.replace(/\d/g, '*');   // 기타 형식: 숫자 전부 마스킹
 }
 

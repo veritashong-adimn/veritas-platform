@@ -57,6 +57,22 @@ function synonymsFor(sourceType: ArchiveSourceType): Record<string, string[]> {
 //   · sales_list 는 RRN 컬럼이 없어 무영향.
 const RRN_HEADER_RE = /주민\s*(등록)?\s*번호/;
 const RRN_PATTERN = /\d{6}\D?\d{7}/;   // 6자리-7자리(구분자 선택). 금액/날짜와 구분되는 RRN 형태.
+// 읽기 응답용 주민번호 표시 형식: 생년월일 6자리 + '-' + 뒷자리 첫 숫자 + '******'(예: 850312-2******).
+//   원본에 있는 숫자만 노출하고 없는 자리는 생성하지 않는다(앞 6자리만 → 850312-*******). 그 외 형식(문장·다른 숫자 혼재)은 전체 마스킹.
+const RRN_READ_RE = /^(\d{6})\s*-?\s*(\d)[\d*]{0,6}$/;
+function maskRrnForRead(v: string): string {
+  const s = v.trim();
+  const m = s.match(RRN_READ_RE);
+  if (m) return `${m[1]}-${m[2]}******`;
+  if (/^\d{6}\s*-?$/.test(s)) return `${s.slice(0, 6)}-*******`;
+  return "******-*******";
+}
+// 문장 속에 섞인 주민번호(상세정보·비고·파일명 등)도 같은 형식으로 마스킹 — 6자리-7자리, 또는 생년월일+성별 형태의 13자리 연속 숫자.
+const RRN_EMBED_HYPHEN_RE = /(?<!\d)(\d{6})\s*-\s*(\d)\d{6}(?!\d)/g;
+const RRN_EMBED_PLAIN_RE = /(?<!\d)(\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))([1-8])\d{6}(?!\d)/g;
+function maskEmbeddedRrn(v: string): string {
+  return v.replace(RRN_EMBED_HYPHEN_RE, "$1-$2******").replace(RRN_EMBED_PLAIN_RE, "$1-$2******");
+}
 export function maskSourceRawForRead(sourceType: string, sourceRaw: Record<string, unknown> | null | undefined): Record<string, unknown> {
   const src = (sourceRaw ?? {}) as Record<string, unknown>;
   const out: Record<string, unknown> = {};
@@ -64,20 +80,21 @@ export function maskSourceRawForRead(sourceType: string, sourceRaw: Record<strin
     if (k.startsWith("__")) continue;                 // 내부 보존 키(암호문·마커) 미노출
     if (sourceType === "progress" && typeof v === "string" && v.trim() !== "") {
       const digits = v.replace(/[^0-9]/g, "");
-      // RRN 컬럼은 항상 마스킹. 그 외 컬럼이라도 13자리 RRN 형태면 방어적으로 마스킹(평문 0 보장).
-      if (RRN_HEADER_RE.test(k) && digits.length >= 6) { out[k] = maskResidentNumber(v); continue; }
-      if (digits.length === 13 && RRN_PATTERN.test(v)) { out[k] = maskResidentNumber(v); continue; }
+      // RRN 컬럼은 항상 마스킹. 그 외 컬럼도 13자리 RRN 형태·문장 속 주민번호를 방어적으로 마스킹(평문 0 보장).
+      if (RRN_HEADER_RE.test(k) && digits.length >= 6) { out[k] = maskRrnForRead(v); continue; }
+      out[k] = maskRrnValue(v); continue;
     }
     out[k] = v;
   }
   return out;
 }
 
-// 단일 셀값 RRN 마스킹(13자리 주민번호 형태 문자열만). 그 외 값·타입은 그대로. differences/셀 투영 공용.
+// 단일 셀값 RRN 마스킹(13자리 주민번호 형태 + 문장 속 주민번호). 그 외 값·타입은 그대로. differences/셀 투영 공용.
 export function maskRrnValue(v: unknown): unknown {
   if (typeof v !== "string") return v;
-  const digits = v.replace(/[^0-9]/g, "");
-  return digits.length === 13 && RRN_PATTERN.test(v) ? maskResidentNumber(v) : v;
+  const e = maskEmbeddedRrn(v);   // 문장 속 주민번호는 주변 문구를 유지한 채 해당 부분만 마스킹
+  const digits = e.replace(/[^0-9]/g, "");
+  return digits.length === 13 && RRN_PATTERN.test(e) ? maskRrnForRead(e) : e;
 }
 
 // 미리보기(Excel 원본 미리보기·Identity 진단)용 — parse 결과 sheets 의 '표시 사본'에서만 progress RRN 을 마스킹한다.
@@ -95,7 +112,7 @@ export function maskSheetsForDisplay(sourceType: ArchiveSourceType, sheets: Arch
       rows: s.rows.map(r => ({
         ...r,
         rawRow: r.rawRow.map((cell, i) =>
-          (rrnCols.has(i) && typeof cell === "string" && cell.trim() !== "") ? maskResidentNumber(cell) : maskRrnValue(cell)),
+          (rrnCols.has(i) && typeof cell === "string" && cell.trim() !== "") ? maskRrnForRead(cell) : maskRrnValue(cell)),
         sourceRaw: maskSourceRawForRead(sourceType, r.sourceRaw),
       })),
     };
@@ -162,7 +179,7 @@ function stableRowContent(headers: string[], row: unknown[]): string {
 }
 // source_file 은 identity 에서 제외. source_type + source_sheet + 원본 row 내용만.
 export function computeRowHash(sourceType: string, sourceSheet: string, headers: string[], row: unknown[]): string {
-  const payload = `${sourceType} ${sourceSheet} ${stableRowContent(headers, row)}`;
+  const payload = `${sourceType}\u0000${sourceSheet}\u0000${stableRowContent(headers, row)}`;
   return crypto.createHash("sha256").update(payload).digest("hex");
 }
 
@@ -201,7 +218,7 @@ export interface ArchiveSheetPreview {
 // 파서가 읽은 모든 데이터 시트를 archive preview row 로 변환(DB 접근 없음, 원본 보존).
 export function buildArchivePreview(buffer: Buffer, sourceType: ArchiveSourceType): ArchiveSheetPreview[] {
   const syn = synonymsFor(sourceType);
-  const sheets: ParsedSheet[] = parseAllSheets(buffer, syn);
+  const sheets: ParsedSheet[] = parseAllSheets(buffer, syn, { lean: true });   // raw 값만 사용 → lean 읽기(결과 동일)
   const out: ArchiveSheetPreview[] = [];
   for (const sheet of sheets) {
     const colMap = buildColumnMap(sheet.headers, syn);
@@ -525,7 +542,7 @@ export function computeFileHash(buffer: Buffer): string {
 
 // 한 analyze/execute 요청 안에서 file_hash·source_type 은 고정 → identity 는 (sheet, row) 로 환원.
 export function sourceIdentityKey(sourceSheet: string, sourceRow: number): string {
-  return `${sourceSheet} ${sourceRow}`;
+  return `${sourceSheet}\u0000${sourceRow}`;
 }
 
 // 동일 source identity 인데 저장된 내용(row_hash)이 다른 경우 — 데이터 손상/변조 의심. 자동 overwrite/skip 금지(§8·TEST E).
@@ -709,7 +726,7 @@ export function analyzeExcelIdentity(sheets: ArchiveSheetPreview[]): ExcelIdenti
     for (const r of rows) {
       const parts: string[] = []; let ok = true;
       for (const i of idxs) { const s = serCell(i < r.rawRow.length ? r.rawRow[i] : null); if (s == null) { ok = false; break; } parts.push(s); }
-      if (!ok) continue; coverage++; set.add(parts.join(""));
+      if (!ok) continue; coverage++; set.add(parts.join("\u0001"));
     }
     const ratio = coverage > 0 ? set.size / coverage : 0;
     compositeCandidates.push({
@@ -753,8 +770,8 @@ export function analyzeExcelIdentity(sheets: ArchiveSheetPreview[]): ExcelIdenti
   const idIdxSet = new Set(candidateColumns.map(c => c.columnIndex));
   const contentKey = (r: ArchivePreviewRow): string => {
     const parts: string[] = [];
-    for (let i = 0; i < cols; i++) { if (idIdxSet.has(i)) continue; const v = i < r.rawRow.length ? r.rawRow[i] : null; parts.push(v == null ? " " : (typeof v === "string" ? v : String(v))); }
-    return parts.join("");
+    for (let i = 0; i < cols; i++) { if (idIdxSet.has(i)) continue; const v = i < r.rawRow.length ? r.rawRow[i] : null; parts.push(v == null ? "\u0000" : (typeof v === "string" ? v : String(v))); }
+    return parts.join("\u0001");
   };
   const byContent = new Map<string, ArchivePreviewRow[]>();
   for (const r of rows) { const a = byContent.get(contentKey(r)); if (a) a.push(r); else byContent.set(contentKey(r), [r]); }
@@ -858,12 +875,12 @@ export interface RecordMatchingSummary {
   ambiguousSamples: { sourceRows: number[]; companyName: string | null; productName: string | null; translatorName: string | null; language: string | null; recordDate: string | null; candidateCount: number; reason: string }[];
 }
 
-function normName(v: unknown): string { return String(v ?? "").replace(/[\s　()\[\]{}·.,\-_/'"]/g, "").toLowerCase(); }
+export function normName(v: unknown): string { return String(v ?? "").replace(/[\s　()\[\]{}·.,\-_/'"]/g, "").toLowerCase(); }
 function emptyNorm(v: unknown): string { if (v == null) return "∅"; const s = typeof v === "string" ? v.trim() : String(v); return s === "" ? "∅" : s; }
 function numNorm(v: unknown): string { if (v == null || v === "") return "∅"; const n = Number(String(v).replace(/,/g, "")); return Number.isFinite(n) ? String(n) : String(v); }
 // stable(contextual) 키 — mutable/금액/사람/주민번호 제외. 이 값들이 같아야 같은 업무 record 후보.
-function stableKey(r: MatchableRow): string {
-  return [normName(r.companyName), normName(r.contactName), normName(r.productName), emptyNorm(r.language), emptyNorm(r.recordDate)].join("");
+export function stableKey(r: MatchableRow): string {
+  return [normName(r.companyName), normName(r.contactName), normName(r.productName), emptyNorm(r.language), emptyNorm(r.recordDate)].join("\u0001");
 }
 function wellFormed(r: MatchableRow): boolean { return !!(r.companyName && r.productName); }  // 최소 근거: 거래처+상품
 
@@ -873,7 +890,7 @@ const MUTABLE_FIELDS: { field: keyof MatchableRow; kind: "text" | "num" }[] = [
   { field: "payoutPretax", kind: "num" }, { field: "collectionDate", kind: "text" }, { field: "collectionStatus", kind: "text" },
   { field: "supplyAmount", kind: "num" }, { field: "vatAmount", kind: "num" }, { field: "totalAmount", kind: "num" },
 ];
-function diffMutable(ex: MatchableRow, inc: MatchableRow): ChangedField[] {
+export function diffMutable(ex: MatchableRow, inc: MatchableRow): ChangedField[] {
   const out: ChangedField[] = [];
   for (const { field, kind } of MUTABLE_FIELDS) {
     const a = kind === "num" ? numNorm(ex[field]) : emptyNorm(ex[field]);
@@ -920,15 +937,47 @@ export function matchIncomingRows(incoming: MatchableRow[], existing: MatchableR
         reason: cf.length > 0 ? "유일 stable 후보 + mutable 변경" : contentChanged ? "유일 stable 후보 + 원본 내용 변경(비정규화 포함)" : "유일 stable 후보 + 변경 없음" };
       continue;
     }
-    // 다중성(기존 ≥2 또는 신규 ≥2) — 1:1 날조 금지
-    const incRows = idxs.map(i => incoming[i]);
-    if (exRows.length === idxs.length && sameMultiset(exRows, incRows)) {
-      sameSetGroups++;
-      for (const i of idxs) decisions[i] = { index: i, classification: "SAME", matchedExistingId: null, matchedLogicalGroupKey: null, matchedEffectiveVersion: null, changedFields: [], confidence: "medium", sameSet: true, groupKey: key, candidateCount: exRows.length, reason: "동일내용·동일 개수 SAME-set(1:1 미생성)" };
-    } else {
-      const reason = exRows.length !== idxs.length ? `동일내용 개수 변동(기존 ${exRows.length} ↔ 신규 ${idxs.length}) — 1:1 매칭 불가` : "동일 후보 다수 — 자동 업데이트 불가";
-      for (const i of idxs) decisions[i] = { index: i, classification: "AMBIGUOUS", matchedExistingId: null, matchedLogicalGroupKey: null, matchedEffectiveVersion: null, changedFields: [], confidence: "low", sameSet: false, groupKey: key, candidateCount: exRows.length, reason };
+    // 다중성(기존 ≥2 또는 신규 ≥2) — 같은 묶음 안에서도 '확실한' 1:1 만 만든다(서로 다른 실제 수행 건 자동 병합 금지).
+    //   ① 내용(row_hash) 완전 동일 행끼리 1:1 → 변경 없음
+    //   ② 남은 행이 기존 1 ↔ 신규 1 → 그 둘을 대응(수정/변경 없음)
+    //   ③ 남은 행끼리 통번역사명이 양쪽에서 각각 유일하게 일치 → 대응(수정/변경 없음)
+    //   ④ 기존 행이 모두 대응되고 남은 신규 행 → 같은 묶음의 추가 수행 건(신규)
+    //   ⑤ 그 외 남은 신규 행 → 중복 의심(자동 판정 안 함). 남은 기존 행은 묶음 단위로 '존재 확인'(삭제 의심 제외)
+    const exUsed = new Set<number>();
+    const byHash = new Map<string, number[]>();
+    exRows.forEach((e, j) => { const a = byHash.get(e.rowHash); if (a) a.push(j); else byHash.set(e.rowHash, [j]); });
+    const pair = (i: number, j: number, how: string, conf: "high" | "medium") => {
+      exUsed.add(j);
+      const ex = exRows[j], inc = incoming[i];
+      const cf = diffMutable(ex, inc);
+      const changed = cf.length > 0 || ex.rowHash !== inc.rowHash;
+      decisions[i] = { index: i, classification: changed ? "UPDATED" : "SAME", matchedExistingId: ex.id ?? null, matchedLogicalGroupKey: ex.logicalGroupKey ?? null, matchedEffectiveVersion: ex.effectiveVersion ?? null,
+        changedFields: cf, confidence: conf, sameSet: false, groupKey: key, candidateCount: exRows.length, reason: changed ? `${how} + 내용 변경` : `${how} + 변경 없음` };
+    };
+    let left: number[] = [];
+    for (const i of idxs) { const a = byHash.get(incoming[i].rowHash); const j = a?.find(x => !exUsed.has(x)); if (j != null) pair(i, j, "동일 묶음 내 내용 완전 일치", "high"); else left.push(i); }
+    let exLeft = exRows.map((_, j) => j).filter(j => !exUsed.has(j));
+    if (left.length === 1 && exLeft.length === 1) { pair(left[0], exLeft[0], "동일 묶음에서 유일하게 남은 기존 행과 대응", "medium"); left = []; exLeft = []; }
+    if (left.length && exLeft.length) {
+      const tn = (r: MatchableRow) => normName(r.translatorName);
+      const cntInc = new Map<string, number>(), cntEx = new Map<string, number>();
+      for (const i of left) { const k = tn(incoming[i]); if (k) cntInc.set(k, (cntInc.get(k) ?? 0) + 1); }
+      for (const j of exLeft) { const k = tn(exRows[j]); if (k) cntEx.set(k, (cntEx.get(k) ?? 0) + 1); }
+      const rest: number[] = [];
+      for (const i of left) {
+        const k = tn(incoming[i]);
+        const j = k && cntInc.get(k) === 1 && cntEx.get(k) === 1 ? exLeft.find(x => tn(exRows[x]) === k && !exUsed.has(x)) : undefined;
+        if (j != null) pair(i, j, "동일 묶음 + 통번역사명 유일 일치", "medium"); else rest.push(i);
+      }
+      left = rest; exLeft = exLeft.filter(j => !exUsed.has(j));
     }
+    if (left.length && exLeft.length === 0) {
+      for (const i of left) decisions[i] = { index: i, classification: "NEW", matchedExistingId: null, matchedLogicalGroupKey: null, matchedEffectiveVersion: null, changedFields: [], confidence: "medium", sameSet: false, groupKey: key, candidateCount: exRows.length, reason: `동일 묶음의 기존 ${exRows.length}건이 모두 대응됨 — 추가 수행 건` };
+    } else if (left.length) {
+      const reason = `동일 묶음(거래처·담당자·상품·언어·체결일) 안에서 대응 불확실 — 기존 미대응 ${exLeft.length}건 ↔ 신규 미대응 ${left.length}건`;
+      for (const i of left) decisions[i] = { index: i, classification: "AMBIGUOUS", matchedExistingId: null, matchedLogicalGroupKey: null, matchedEffectiveVersion: null, changedFields: [], confidence: "low", sameSet: false, groupKey: key, candidateCount: exLeft.length, reason };
+    }
+    if (exUsed.size === exRows.length && idxs.every(i => decisions[i].classification === "SAME")) sameSetGroups++;
   }
   return { decisions, sameSetGroups };
 }

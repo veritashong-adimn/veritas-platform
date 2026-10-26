@@ -460,8 +460,11 @@ export function detectHeaderInAoa(aoa: unknown[][], synonyms: Record<string, str
 
 /** 워크북의 "모든" 시트를 파싱한다(과거자료 결제리스트: 번역/통역/장비 등 여러 도메인 시트).
  *  알려진 동의어가 2개 미만인 시트(요약 Sheet1 등)는 건너뛴다. 시트명을 함께 반환한다. */
-export function parseAllSheets(buffer: Buffer, synonyms: Record<string, string[]>): ParsedSheet[] {
-  const wb = XLSX.read(buffer, { type: "buffer", cellDates: false });
+//  opts.lean: 서식 텍스트·HTML·스타일을 만들지 않고 dense 로 읽는다(raw:true 값만 쓰므로 결과 동일, 대용량 속도 개선).
+export function parseAllSheets(buffer: Buffer, synonyms: Record<string, string[]>, opts?: { lean?: boolean }): ParsedSheet[] {
+  const wb = XLSX.read(buffer, opts?.lean
+    ? { type: "buffer", cellDates: false, cellHTML: false, cellText: false, cellNF: false, cellStyles: false, dense: true }
+    : { type: "buffer", cellDates: false });
   const allSynNorm = new Set(Object.values(synonyms).flat().map(normKey));
   const out: ParsedSheet[] = [];
   for (const sheetName of wb.SheetNames) {

@@ -195,7 +195,10 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
         saleRowId: LSP.saleRowId,
         dn: sql<number>`count(distinct nullif(btrim(${LP.sourceRaw} ->> '고객명'), ''))`.as("dn"),
         oneName: sql<string | null>`max(nullif(btrim(${LP.sourceRaw} ->> '고객명'), ''))`.as("one_name"),
-      }).from(LSP).innerJoin(LP, eq(LP.id, LSP.progressRowId)).groupBy(LSP.saleRowId).as("cust");
+      }).from(LSP).innerJoin(LP, eq(LP.id, LSP.progressRowId))
+        // 반복 업로드: 확정 연결 + 현재 유효 수행행만(수정 이전 버전·되돌린 이관 연결 제외 → 고객명 중복 집계 방지).
+        .where(and(eq(LSP.decision, "confirmed"), eq(LP.isEffective, true)))
+        .groupBy(LSP.saleRowId).as("cust");
       const fetched = await dbx.select({
         id: LA.id, recordDate: LA.recordDate, saleDate: LEGACY_SALE_DATE, saleNumber: sql<string | null>`${LA.sourceRaw} ->> '판매번호'`,
         companyName: LA.companyName, contactName: LA.contactName,
