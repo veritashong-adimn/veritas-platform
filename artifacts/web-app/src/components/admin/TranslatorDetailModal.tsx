@@ -4,7 +4,7 @@ import { registerUnsavedChecker } from "../../lib/unsavedGuard";
 import { PrimaryBtn, GhostBtn, ClickSelect, confirmDialog, alertDialog } from "../ui";
 import { BackToListButton } from "./BackToListButton";
 import { DraggableModal } from "./DraggableModal";
-import { SensitiveInfoModal, SETTLEMENT_TYPES } from "./SensitiveInfoModal";
+import { SensitiveInfoModal, findSettlementType } from "./SensitiveInfoModal";
 import { TranslatorLangExpSection } from "./TranslatorLangExpSection";
 import { TranslatorPerformanceHistorySection } from "./TranslatorPerformanceHistorySection";
 import { formatPhoneNumber } from "../../lib/utils";
@@ -1286,14 +1286,14 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               </span>
             )}
             {form.settlementType && (() => {
-              const st = SETTLEMENT_TYPES.find(s => s.value === form.settlementType);
+              const st = findSettlementType(form.settlementType);
               return (
                 <span style={{
                   fontSize: 12, borderRadius: 20, padding: "2px 9px", fontWeight: 700,
                   background: st?.bg ?? "#f3f4f6", color: st?.color ?? "#374151",
                   border: `1px solid ${st?.border ?? "#d1d5db"}`,
                 }}>
-                  💳 {st?.label ?? form.settlementType}
+                  💳 {st?.label ?? form.settlementType}{st?.needsReview ? " · 확인 필요" : ""}
                 </span>
               );
             })()}

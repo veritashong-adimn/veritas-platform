@@ -14,7 +14,7 @@ import { db, legacyMasterMappingsTable } from "@workspace/db";
 type Dbx = any; // db 또는 tx (services 의 `type Db = any` 관례)
 
 export type LegacyEntityType =
-  | "company" | "division" | "contact" | "product" | "translator" | "vendor_profile";
+  | "company" | "division" | "contact" | "product" | "translator" | "vendor_profile" | "sale";
 
 export type LegacyMatchMethod =
   | "legacy" | "strong" | "probable" | "duplicate_candidate" | "needs_review" | "unmatched";
@@ -27,6 +27,7 @@ export const LEGACY_ENTITY_TARGET: Record<LegacyEntityType, string> = {
   product: "products.id",
   translator: "users.id(role=translator)",
   vendor_profile: "companies.id",
+  sale: "projects.id(과거 CRM 판매번호 → 운영 판매건)",
 };
 
 export interface LegacyKey {

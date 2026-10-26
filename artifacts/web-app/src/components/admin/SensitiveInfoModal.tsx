@@ -34,15 +34,65 @@ export const PAYMENT_METHODS = [
   { value: "other",                label: "기타" },
 ];
 
+// 정산/지급 정보 관리 화면의 지급방식 선택지 — 송금 수단만 표시한다(세무처리는 원천징수율로 분리).
+//   DB(payment_method)에는 정산·대량이체 로직이 쓰는 기존 코드를 그대로 저장한다(국내 계좌송금 + 원천징수율 → 아래 WITHHOLDING_RATES.code).
+export const PAYMENT_METHOD_CHOICES = [
+  { value: "domestic_bank_transfer", label: "국내 계좌송금" },
+  { value: "overseas_paypal",        label: "해외 PayPal" },
+  { value: "overseas_bank",          label: "해외 은행송금" },
+  { value: "other",                  label: "기타" },
+];
+
+// 원천징수율(국내 계좌송금일 때) ↔ payment_method 코드. 1:1 대응이라 저장·재조회 시 값이 바뀌지 않는다.
+//   원천세 신고 제외 = 확정 0%(지급회차 'exempt'). 기존 '세무 검토(domestic_bank_transfer)'는 미확정 상태로 별도 유지.
+export const WITHHOLDING_RATES = [
+  { value: "3.3",    label: "3.3% 원천징수",       code: "domestic_withholding" },
+  { value: "2.2",    label: "2.2% 원천징수",       code: "domestic_withholding_2_2" },
+  { value: "vat",    label: "미적용 (세금계산서)", code: "domestic_business" },
+  { value: "exempt", label: "원천세 신고 제외",    code: "domestic_withholding_exempt" },
+];
+// 기존 미확정 데이터(선택 버튼 없음) — 관리자가 위 4개 중 하나를 직접 선택하기 전까지 코드 그대로 유지.
+const UNCONFIRMED_RATE = { value: "review", label: "미확정 · 세무 검토", code: "domestic_bank_transfer" };
+const ALL_RATES = [...WITHHOLDING_RATES, UNCONFIRMED_RATE];
+
+// 저장 코드 → (지급방식, 원천징수율). 국내 코드는 모두 '국내 계좌송금'으로 표시. 알 수 없는 코드는 그대로 둔다(임의 변환 금지).
+export function splitPaymentCode(code: string | null | undefined): { method: string; rate: string } {
+  if (!code) return { method: "", rate: "" };
+  const r = ALL_RATES.find(w => w.code === code);
+  return r ? { method: "domestic_bank_transfer", rate: r.value } : { method: code, rate: "" };
+}
+// (지급방식, 원천징수율) → 저장 코드. 해외·기타는 지급방식 코드 그대로.
+export function joinPaymentCode(method: string, rate: string): string {
+  if (method !== "domestic_bank_transfer") return method;
+  return ALL_RATES.find(w => w.value === rate)?.code ?? "domestic_bank_transfer";
+}
+
+// 정산유형별 원천징수율 기본값(제안용). 해외·원천세 신고 제외·외주업체는 기존 세무 처리 규칙 유지 → 제안 없음.
+//   원천세 신고 제외는 기본값으로 제안하지 않는다(사용자가 명시 선택한 경우에만 적용).
+const DEFAULT_RATE_BY_SETTLEMENT: Record<string, string> = { "개인(3.3%)": "3.3", "개인": "3.3", "사업자": "vat" };
+
 export const SETTLEMENT_TYPES = [
-  { value: "개인(3.3%)", label: "개인 (3.3% 원천징수)", color: "#1d4ed8", bg: "#eff6ff", border: "#bfdbfe" },
+  // value 는 기존 저장값 그대로(변경 시 기존 데이터 표시가 깨짐). 표시명만 정산유형 의미로 정리.
+  { value: "개인(3.3%)", label: "개인 (사업소득)",       color: "#1d4ed8", bg: "#eff6ff", border: "#bfdbfe" },
   { value: "사업자",      label: "사업자 (세금계산서)",  color: "#6d28d9", bg: "#f5f3ff", border: "#ddd8fe" },
   { value: "해외개인",    label: "해외개인",              color: "#b45309", bg: "#fffbeb", border: "#fde68a" },
   { value: "해외법인",    label: "해외법인",              color: "#0f766e", bg: "#f0fdfa", border: "#99f6e4" },
-  // 원천세 신고 예외 — 세무 판단상 원천징수·신고 대상이 아님(사용자가 명시 선택). 해외개인 등과 자동 연동하지 않음.
-  { value: "원천세 신고 예외", label: "원천세 신고 예외", color: "#be123c", bg: "#fff1f2", border: "#fecdd3" },
   { value: "외주업체",    label: "외주업체 (소속업체 경유)", color: "#374151", bg: "#f3f4f6", border: "#d1d5db" },
 ];
+// 선택지에서 제외된 기존 저장값 — 조회 표시만 하고 '정산유형 확인 필요'로 안내(값 자동 변경 없음).
+//   '원천세 신고 예외'는 세무 처리 기준이라 원천징수율(원천세 신고 제외)에서 관리한다.
+const LEGACY_SETTLEMENT_TYPES = [
+  { value: "원천세 신고 예외", label: "원천세 신고 예외", color: "#be123c", bg: "#fff1f2", border: "#fecdd3" },
+  { value: "개인",            label: "개인",            color: "#1d4ed8", bg: "#eff6ff", border: "#bfdbfe" },
+  { value: "업체정산",        label: "업체정산",        color: "#374151", bg: "#f3f4f6", border: "#d1d5db" },
+];
+export function findSettlementType(value: string | null | undefined) {
+  if (!value) return null;
+  const cur = SETTLEMENT_TYPES.find(s => s.value === value);
+  if (cur) return { ...cur, needsReview: false };
+  const old = LEGACY_SETTLEMENT_TYPES.find(s => s.value === value);
+  return { ...(old ?? { value, label: value, color: "#374151", bg: "#f3f4f6", border: "#d1d5db" }), needsReview: true };
+}
 
 const CURRENCIES = ["KRW", "USD", "EUR", "JPY", "GBP", "CAD", "AUD", "CNY", "HKD", "SGD"];
 const FEE_PAYER_OPTIONS = [
@@ -81,7 +131,8 @@ type SensitiveData = {
 
 const emptyForm = () => ({
   settlementType: "",
-  paymentMethod: "",
+  paymentMethod: "",      // 화면용 지급방식(송금 수단). 저장 시 withholdingRate 와 합쳐 기존 코드로 변환
+  withholdingRate: "",
   residentFront: "", residentBack: "",
   bankName: "", bankAccount: "", accountHolder: "",
   businessNumber: "", businessName: "", businessOwner: "", taxInvoiceEmail: "",
@@ -115,7 +166,8 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
         setData(d);
         setForm({
           settlementType: initialSettlementType ?? "",
-          paymentMethod: d.paymentMethod ?? "",
+          paymentMethod: splitPaymentCode(d.paymentMethod).method,
+          withholdingRate: splitPaymentCode(d.paymentMethod).rate,
           residentFront: "", residentBack: "",
           bankName: d.bankName ?? "", bankAccount: d.bankAccount ?? "", accountHolder: d.accountHolder ?? "",
           businessNumber: d.businessNumber ?? "", businessName: d.businessName ?? "",
@@ -142,7 +194,7 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
     try {
       const rn = `${form.residentFront.trim()}${form.residentBack.trim()}`;
       const body: Record<string, unknown> = {
-        paymentMethod: form.paymentMethod || null,
+        paymentMethod: form.paymentMethod ? joinPaymentCode(form.paymentMethod, form.withholdingRate) : null,
         bankName: form.bankName || null,
         bankAccount: form.bankAccount || null,
         accountHolder: form.accountHolder || null,
@@ -197,14 +249,40 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
   };
 
   const pm = form.paymentMethod;
-  const isDomesticWith = pm === "domestic_withholding";
-  const isDomesticBiz  = pm === "domestic_business";
+  const isDomestic     = pm === "domestic_bank_transfer";
   const isPaypal       = pm === "overseas_paypal";
   const isBank         = pm === "overseas_bank";
   const isOther        = pm === "other";
+  // 사업자정보 표시: 정산유형 사업자 또는 세금계산서(원천징수 미적용) 선택 시
+  const isBizInfo      = form.settlementType === "사업자" || (isDomestic && form.withholdingRate === "vat");
+  const defaultRate    = DEFAULT_RATE_BY_SETTLEMENT[form.settlementType] ?? "";
+  const rateUnconfirmed = isDomestic && form.withholdingRate === "review";   // 기존 미확정 데이터 — 관리자 확인 대상
+  const rateMismatch   = isDomestic && !!defaultRate && !!form.withholdingRate && !rateUnconfirmed
+    && (defaultRate === "3.3" ? !["3.3", "2.2"].includes(form.withholdingRate) : form.withholdingRate !== defaultRate);
 
-  const pmLabel = (val: string | null) =>
-    PAYMENT_METHODS.find(m => m.value === val)?.label ?? val ?? "미등록";
+  // 정산유형 선택 — 원천징수율 기본값은 '미설정/세무 검토' 상태일 때만 제안 적용(사용자가 정한 세율은 덮어쓰지 않음)
+  const pickSettlementType = (value: string) => {
+    const next = value === form.settlementType ? "" : value;
+    const rate = DEFAULT_RATE_BY_SETTLEMENT[next];
+    setForm(p => {
+      const canSuggest = !!rate && (p.paymentMethod === "" || p.paymentMethod === "domestic_bank_transfer")
+        && p.withholdingRate === "";   // 기존 미확정(세무 검토)·사용자 선택 세율은 자동 변경하지 않음
+      return canSuggest
+        ? { ...p, settlementType: next, paymentMethod: "domestic_bank_transfer", withholdingRate: rate, baseCurrency: p.baseCurrency || "KRW" }
+        : { ...p, settlementType: next };
+    });
+  };
+
+  const pmLabel = (val: string | null) => {
+    const { method } = splitPaymentCode(val);
+    return PAYMENT_METHOD_CHOICES.find(m => m.value === method)?.label ?? PAYMENT_METHODS.find(m => m.value === val)?.label ?? val ?? "미등록";
+  };
+  const rateLabel = (val: string | null) => {
+    const { method, rate } = splitPaymentCode(val);
+    if (method !== "domestic_bank_transfer") return method ? "기존 규칙 (해외·기타)" : null;
+    return ALL_RATES.find(w => w.value === rate)?.label ?? null;
+  };
+  const viewIsBiz = savedSettlementType === "사업자" || data?.paymentMethod === "domestic_business";
   const feeLabel = (val: string | null) =>
     FEE_PAYER_OPTIONS.find(f => f.value === val)?.label ?? val ?? "미설정";
 
@@ -239,7 +317,7 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                   {/* 정산유형 + 지급방식 배지 */}
                   <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap" }}>
                     {(() => {
-                      const st = SETTLEMENT_TYPES.find(s => s.value === savedSettlementType);
+                      const st = findSettlementType(savedSettlementType);
                       if (!st && !savedSettlementType) return (
                         <span style={{ fontSize:12, color:"#9ca3af", fontStyle:"italic" }}>정산유형 미설정</span>
                       );
@@ -248,7 +326,7 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                       const border = st?.border ?? "#d1d5db";
                       return (
                         <span style={{ padding:"4px 12px", borderRadius:20, fontSize:12, fontWeight:700, background:bg, color, border:`1px solid ${border}` }}>
-                          {st?.label ?? savedSettlementType}
+                          {st?.label ?? savedSettlementType}{st?.needsReview ? " · 정산유형 확인 필요" : ""}
                         </span>
                       );
                     })()}
@@ -257,6 +335,16 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                     <span style={{ padding:"4px 12px", borderRadius:20, fontSize:12, fontWeight:700, background:"#eff6ff", color:"#1d4ed8", border:"1px solid #bfdbfe" }}>
                       {pmLabel(data.paymentMethod)}
                     </span>
+                    {rateLabel(data.paymentMethod) && (
+                      <>
+                        <span style={{ fontSize:12, color:"#d1d5db" }}>|</span>
+                        <span style={{ fontSize:13, fontWeight:700, color:"#374151" }}>원천징수</span>
+                        <span style={{ padding:"4px 12px", borderRadius:20, fontSize:12, fontWeight:700, background:"#f9fafb", color:"#374151", border:"1px solid #e5e7eb" }}
+                          data-testid="sensitive-view-withholding">
+                          {rateLabel(data.paymentMethod)}
+                        </span>
+                      </>
+                    )}
                     {data.paymentHold && (
                       <span style={{ padding:"3px 10px", borderRadius:20, fontSize:11, fontWeight:700, background:"#fef2f2", color:"#dc2626", border:"1px solid #fecaca" }}>⏸ 지급 보류</span>
                     )}
@@ -271,8 +359,8 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                     <InfoField label="예금주" value={data.accountHolder ?? "미등록"} />
                   </div>
 
-                  {/* 국내 사업자 — 사업자 추가 정보 */}
-                  {data.paymentMethod === "domestic_business" && (
+                  {/* 사업자(세금계산서) — 사업자 추가 정보 */}
+                  {viewIsBiz && (
                     <>
                       <p style={sH}>사업자 정보</p>
                       <div style={grid2}>
@@ -355,11 +443,12 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
           {/* ─── 편집 모드 ─────────────────────────────────────────────────── */}
           {editMode && (
             <div style={{ display:"flex", flexDirection:"column", gap:0 }}>
-              {/* 정산유형 선택 */}
+              {/* ① 정산유형 선택 */}
               <p style={sH}>정산유형</p>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6, marginBottom:16 }}>
                 {SETTLEMENT_TYPES.map(st => (
-                  <button key={st.value} onClick={() => sf("settlementType", st.value === form.settlementType ? "" : st.value)}
+                  <button key={st.value} onClick={() => pickSettlementType(st.value)}
+                    data-testid={`sensitive-settlement-type-${st.value}`} aria-label={`정산유형 ${st.label}`} aria-pressed={form.settlementType === st.value}
                     style={{
                       padding:"9px 8px", borderRadius:8, fontSize:12, cursor:"pointer", textAlign:"center", lineHeight:1.3,
                       border: form.settlementType === st.value ? `2px solid ${st.color}` : `1.5px solid ${st.border}`,
@@ -370,21 +459,30 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                 ))}
               </div>
 
-              {/* 지급방식 선택 */}
+              {findSettlementType(form.settlementType)?.needsReview && (
+                <p style={{ fontSize:11, color:"#b45309", margin:"-10px 0 12px" }} data-testid="sensitive-settlement-type-review">
+                  기존 저장값 '{form.settlementType}' — 정산유형 확인 필요. 올바른 정산유형을 선택해 저장하세요(선택하지 않으면 기존 값 유지).
+                </p>
+              )}
+
+              {/* ② 지급방식 선택(송금 수단) */}
               <p style={sH}>지급방식</p>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:4 }}>
-                {PAYMENT_METHODS.map(m => (
+                {PAYMENT_METHOD_CHOICES.map(m => (
                   <button key={m.value} onClick={() => {
                       const AUTO_CURRENCY: Record<string, string> = {
                         domestic_bank_transfer: "KRW",
-                        domestic_withholding: "KRW",
-                        domestic_business: "KRW",
                         overseas_paypal: "USD",
                         overseas_bank: "USD",
                       };
                       const auto = AUTO_CURRENCY[m.value];
-                      setForm(p => ({ ...p, paymentMethod: m.value, ...(auto ? { baseCurrency: auto } : {}) }));
+                      setForm(p => ({
+                        ...p, paymentMethod: m.value, ...(auto ? { baseCurrency: auto } : {}),
+                        // 국내 계좌송금 최초 선택 시에만 정산유형 기본 세율 제안(기존 세율 유지)
+                        ...(m.value === "domestic_bank_transfer" && !p.withholdingRate ? { withholdingRate: DEFAULT_RATE_BY_SETTLEMENT[p.settlementType] ?? "" } : {}),
+                      }));
                     }}
+                    data-testid={`sensitive-payment-method-${m.value}`} aria-label={`지급방식 ${m.label}`} aria-pressed={form.paymentMethod === m.value}
                     style={{
                       padding:"10px 14px", borderRadius:8, fontSize:13, cursor:"pointer", textAlign:"left",
                       border: form.paymentMethod === m.value ? "2px solid #2563eb" : "1.5px solid #e5e7eb",
@@ -394,27 +492,45 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                     }}>{m.label}</button>
                 ))}
               </div>
+              {pm && !PAYMENT_METHOD_CHOICES.some(m => m.value === pm) && (
+                <p style={{ fontSize:11, color:"#b45309", margin:"4px 0 0" }}>기존 저장값({pm})을 유지합니다. 지급방식을 선택하면 변경됩니다.</p>
+              )}
 
-              {/* ── 주민등록번호 (항상 표시) ── */}
-              <p style={sH}>
-                주민등록번호
-                {(isPaypal || isBank || isOther) && (
-                  <span style={{ fontSize:10, fontWeight:400, color:"#9ca3af", marginLeft:8, textTransform:"none", letterSpacing:0 }}>해외 방식 — 선택 입력</span>
-                )}
-              </p>
-              <ResidentInput
-                front={form.residentFront} back={form.residentBack} backRef={backRef}
-                onFront={v => { sf("residentFront", v); if (v.length === 6) backRef.current?.focus(); }}
-                onBack={v => sf("residentBack", v)}
-                existing={data?.residentNumberMasked}
-              />
+              {/* ③ 원천징수율 — 국내 계좌송금일 때만. 해외·기타는 기존 세무 처리 규칙 유지 */}
+              {isDomestic && (
+                <>
+                  <p style={sH}>원천징수율</p>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:4 }}>
+                    {WITHHOLDING_RATES.map(w => (
+                      <button key={w.value} onClick={() => sf("withholdingRate", w.value)}
+                        data-testid={`sensitive-withholding-${w.value}`} aria-label={`원천징수율 ${w.label}`} aria-pressed={form.withholdingRate === w.value}
+                        style={{
+                          padding:"10px 14px", borderRadius:8, fontSize:13, cursor:"pointer", textAlign:"left",
+                          border: form.withholdingRate === w.value ? "2px solid #2563eb" : "1.5px solid #e5e7eb",
+                          background: form.withholdingRate === w.value ? "#eff6ff" : "#f9fafb",
+                          color: form.withholdingRate === w.value ? "#1d4ed8" : "#374151",
+                          fontWeight: form.withholdingRate === w.value ? 700 : 400,
+                        }}>{w.label}{defaultRate === w.value ? " (기본)" : ""}</button>
+                    ))}
+                  </div>
+                  {rateUnconfirmed && (
+                    <p style={{ fontSize:11, color:"#b45309", margin:"4px 0 0" }} data-testid="sensitive-withholding-unconfirmed">
+                      기존 저장값: 미확정 (세무 검토) — 원천징수율을 확인 후 직접 선택하세요. 선택하지 않으면 기존 값이 유지됩니다.
+                    </p>
+                  )}
+                  {rateMismatch && (
+                    <div style={{ display:"flex", alignItems:"center", flexWrap:"wrap", gap:8, fontSize:11, color:"#b45309", margin:"4px 0 0" }} data-testid="sensitive-withholding-mismatch">
+                      정산유형 기본값({WITHHOLDING_RATES.find(w => w.value === defaultRate)?.label})과 다릅니다 — 확인 필요 (자동 변경하지 않음)
+                      <button onClick={() => sf("withholdingRate", defaultRate)} data-testid="sensitive-withholding-apply-default" aria-label="원천징수율 기본값 적용"
+                        style={{ padding:"2px 8px", borderRadius:6, border:"1px solid #fcd34d", background:"#fffbeb", color:"#92400e", fontSize:11, cursor:"pointer", whiteSpace:"nowrap" }}>
+                        기본값 적용 → {WITHHOLDING_RATES.find(w => w.value === defaultRate)?.label}</button>
+                    </div>
+                  )}
+                </>
+              )}
 
-              {/* ── 계좌정보 (항상 표시) ── */}
-              <p style={sH}>계좌정보</p>
-              <BankFields form={form} sf={sf} />
-
-              {/* ── 국내 사업자 — 사업자 추가 정보 ── */}
-              {isDomesticBiz && (
+              {/* ④ 주민등록번호 또는 사업자정보 */}
+              {isBizInfo ? (
                 <>
                   <p style={sH}>사업자 정보</p>
                   <div style={{ ...grid2, marginBottom:10 }}>
@@ -423,6 +539,29 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                     <Field label="대표자명" value={form.businessOwner} onChange={v => sf("businessOwner", v)} placeholder="홍길동" />
                     <Field label="세금계산서 이메일" value={form.taxInvoiceEmail} onChange={v => sf("taxInvoiceEmail", v)} placeholder="tax@company.com" type="email" />
                   </div>
+                </>
+              ) : (
+                <>
+                  <p style={sH}>
+                    주민등록번호
+                    {(isPaypal || isBank || isOther) && (
+                      <span style={{ fontSize:10, fontWeight:400, color:"#9ca3af", marginLeft:8, textTransform:"none", letterSpacing:0 }}>해외 방식 — 선택 입력</span>
+                    )}
+                  </p>
+                  <ResidentInput
+                    front={form.residentFront} back={form.residentBack} backRef={backRef}
+                    onFront={v => { sf("residentFront", v); if (v.length === 6) backRef.current?.focus(); }}
+                    onBack={v => sf("residentBack", v)}
+                    existing={data?.residentNumberMasked}
+                  />
+                </>
+              )}
+
+              {/* ⑤ 계좌정보 — 국내·기타·미선택(해외 은행송금은 아래 해외 은행 정보, PayPal 은 계좌 불필요) */}
+              {!isPaypal && !isBank && (
+                <>
+                  <p style={sH}>계좌정보</p>
+                  <BankFields form={form} sf={sf} />
                 </>
               )}
 
@@ -468,7 +607,7 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                 </div>
               )}
 
-              {/* ── 공통 추가 정보 (항상 표시) ── */}
+              {/* ⑥ 추가 정보 (항상 표시) */}
               <>
                 <p style={sH}>추가 정보</p>
                 <div style={{ ...grid2, marginBottom:10 }}>
@@ -487,6 +626,8 @@ export function SensitiveInfoModal({ userId, userName, token, onClose, onToast, 
                     </div>
                   )}
                 </div>
+                {/* ⑦ 정산 메모 · 지급 보류 */}
+                <p style={sH}>정산 메모 · 지급 보류</p>
                 <div style={{ marginBottom:10 }}>
                   <Field label="정산 메모 (내부용)" value={form.settlementMemo} onChange={v => sf("settlementMemo", v)} placeholder="특이사항, 지급 조건 등" />
                 </div>

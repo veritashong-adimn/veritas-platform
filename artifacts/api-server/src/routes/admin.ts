@@ -455,6 +455,11 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
         payerCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.payerCompanyId})`,
         payerDivisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.payerDivisionId})`,
         requestingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.requestingCompanyId})`,
+        // 거래 당시 Snapshot(Master 미연결 판매 — 과거 CRM 전환 등 — 의 표시용, additive)
+        companyNameSnapshot: projectsTable.companyNameSnapshot,
+        contactNameSnapshot: projectsTable.contactNameSnapshot,
+        // 담당PM 표시명(내부 직원 — admin/staff 모두). 화면의 관리자 목록에 없는 직원 PM 표시용(additive)
+        adminName: sql<string | null>`(SELECT coalesce(name, email) FROM users WHERE id = ${projectsTable.adminId})`,
       })
       .from(projectsTable)
       .leftJoin(usersTable, eq(projectsTable.userId, usersTable.id))
@@ -1364,8 +1369,12 @@ router.patch("/admin/projects/:id/info", ...adminGuard, requirePermission("proje
     // 거래처/담당자를 다른 대상으로 재지정할 때만 Snapshot 재동결(단순 Master 개명은 반영하지 않음, §Phase2)
     if (companyId !== undefined) updates.companyNameSnapshot = await fetchCompanyName(db, companyId);
     if (contactId !== undefined) updates.contactNameSnapshot = await fetchContactName(db, contactId);
+    const [prior] = await db.select().from(projectsTable).where(eq(projectsTable.id, projectId));
     const [updated] = await db.update(projectsTable).set(updates).where(eq(projectsTable.id, projectId)).returning();
-    await logEvent("project", projectId, "project_updated", req.log, req.user ?? undefined);
+    const changed = Object.keys(updates).filter(k => JSON.stringify((prior as any)?.[k] ?? null) !== JSON.stringify((updated as any)?.[k] ?? null));
+    await logEvent("project", projectId, "project_updated", req.log, req.user ?? undefined, JSON.stringify({
+      before: Object.fromEntries(changed.map(k => [k, (prior as any)?.[k] ?? null])), after: Object.fromEntries(changed.map(k => [k, (updated as any)?.[k] ?? null])),
+    }));
     if (billingCompanyId !== undefined && billingCompanyId !== project.billingCompanyId) {
       await logEvent("project", projectId, "billing_company_changed", req.log, req.user ?? undefined,
         JSON.stringify({ from: project.billingCompanyId, to: billingCompanyId }));
@@ -3316,6 +3325,13 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
   // 할인 항목(음수 공급가) 포함 금액 계산 (POST와 동일 로직)
   const calcItems = computeQuoteItemAmounts(items);
   const totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
+  // 감사로그용 수정 전 값 + 판매 확정(approved) 견적의 금액 변경은 변경사유 필수
+  const [qBefore] = await db.select({ price: quotesTable.price, status: quotesTable.status, projectId: quotesTable.projectId }).from(quotesTable).where(eq(quotesTable.id, quoteId));
+  const itemsBefore = await db.select({ productName: quoteItemsTable.productName, totalAmount: quoteItemsTable.totalAmount }).from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId));
+  const priceChanged = qBefore != null && Math.abs(Number(qBefore.price ?? 0) - totalPrice) >= 0.005;
+  if (qBefore?.status === "approved" && priceChanged && !versionReason?.trim()) {
+    res.status(400).json({ error: "판매 확정 건의 금액을 변경하려면 변경사유를 입력하세요.", code: "REASON_REQUIRED" }); return;
+  }
   try {
     await db.transaction(async tx => {
       // 거래처/브랜드/담당자/담당PM 연결 처리
@@ -3427,6 +3443,11 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         await releaseQuoteReservations(tx, [quoteId]);
       }
     });
+    await logEvent("quote", quoteId, "quote_items_updated", req.log, (req as any).user ?? undefined, JSON.stringify({
+      projectId: qBefore?.projectId ?? null, reason: versionReason?.trim() || null,
+      before: { price: qBefore ? Number(qBefore.price) : null, items: itemsBefore.map(i => ({ productName: i.productName, totalAmount: Number(i.totalAmount) })) },
+      after: { price: totalPrice, items: calcItems.map(i => ({ productName: i.productName, totalAmount: i.totalAmount })) },
+    }));
     res.json({ id: quoteId, price: totalPrice });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to update quote");

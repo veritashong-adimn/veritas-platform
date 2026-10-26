@@ -7,6 +7,7 @@
 //   · source_raw 원본 보존. normalized 필드는 별도. 파싱 실패해도 row 는 버리지 않는다.
 //   · 멱등: row_hash(파일명 무관). 중복 row 는 Execute 시 skip.
 //   · search/detail/sales-history 엔드포인트는 C-4B 이후.
+import { findActivationBySaleNo } from "../services/legacySaleActivation";
 import { Router, type IRouter } from "express";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -726,7 +727,10 @@ router.get("/admin/legacy-archive/:id", ...adminGuard, async (req, res, next) =>
     const maskedRow = { ...row, sourceRaw: maskSourceRawForRead(row.sourceType as string, row.sourceRaw as any) };
     // 연결된 progress 수행행의 source_raw(평문 RRN 포함)도 동일 마스킹.
     const maskedLinked = (linkedProgress as any[]).map((lp) => ({ ...lp, sourceRaw: maskSourceRawForRead("progress", lp.sourceRaw) }));
-    res.json({ ...maskedRow, linkedProgress: maskedLinked });
+    // 운영 판매건 전환 여부(additive) — 판매번호 기준 매핑(원본 행 버전과 무관).
+    const saleNo = row.sourceType === "sales_list" ? String((row.sourceRaw as any)?.["판매번호"] ?? "").trim() : "";
+    const activation = saleNo ? await findActivationBySaleNo(db, saleNo) : null;
+    res.json({ ...maskedRow, linkedProgress: maskedLinked, activation });
   } catch (err) {
     req.log.error({ err }, "legacy-archive detail failed");
     res.status(500).json({ error: "과거자료 상세 조회 실패." });

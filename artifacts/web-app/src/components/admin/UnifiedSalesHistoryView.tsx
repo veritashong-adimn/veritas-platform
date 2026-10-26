@@ -7,7 +7,7 @@ import { Pagination } from '../ui/Paginator';
 
 type AdminUser = { id: number; name?: string | null; email?: string | null };
 type Row = {
-  source: 'current' | 'legacy'; key: string; id: number | string;
+  source: 'current' | 'legacy'; key: string; id: number | string; origin?: 'legacy_crm' | null; pmName?: string | null;
   recordDate: string | null; saleName: string | null; companyName: string | null; contactName: string | null;
   productName: string | null; amount: number | null; collectionDate: string | null; collectionStatus: string | null;
   workflowStatus: string | null; adminId: number | null; financialStatus: string | null; quoteType: string | null;
@@ -106,7 +106,11 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                     onMouseEnter={e => (e.currentTarget.style.background = '#f3f4f6')} onMouseLeave={e => (e.currentTarget.style.background = zebra)}>
                   {/* 구분 badge 열 제거 — 현재/과거 구분은 탭 필터·행 클릭 라우팅(isLegacy)으로 유지 */}
                   {/* 열 순서: 날짜 | 거래처 | 고객 담당자 | 통역/번역 | 상품 | 금액 | 계산서발행일 | 입금일 | 입금내역 | 담당PM */}
-                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.recordDate ?? '-'}</td>
+                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {r.recordDate ?? '-'}
+                    {/* 과거 CRM 에서 운영 전환된 판매건 — 출처 표시(목록에는 운영 판매 1건만 표시) */}
+                    {r.origin === 'legacy_crm' && <span style={{ marginLeft: 6, padding: '1px 5px', borderRadius: 4, background: '#fef3c7', color: '#92400e', fontSize: 10, fontWeight: 700 }} data-testid={`sh-origin-${r.key}`}>과거 CRM</span>}
+                  </td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.companyName ?? undefined}>{r.companyName ?? '-'}</td>
                   {/* 고객 담당자 = 거래처 측 담당자(contactName). 담당PM 과 서로 대체하지 않음. */}
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.contactName ?? undefined}>{r.contactName ?? '-'}</td>
@@ -118,7 +122,7 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.paymentDate ?? '-'}</td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.paymentMemo ?? undefined}>{r.paymentMemo ?? '-'}</td>
                   {/* 담당PM = 베리타스 내부 담당자(legacy=영업담당자, current=adminName). 고객 담당자와 대체 금지. 맨 오른쪽. */}
-                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={(isLegacy ? r.salesRep : adminName(r.adminId)) ?? undefined}>{(isLegacy ? r.salesRep : adminName(r.adminId)) ?? '-'}</td>
+                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={(isLegacy ? r.salesRep : (adminName(r.adminId) ?? r.pmName)) ?? undefined}>{(isLegacy ? r.salesRep : (adminName(r.adminId) ?? r.pmName)) ?? '-'}</td>
                 </tr>
               );
             })}

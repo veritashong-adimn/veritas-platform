@@ -9,6 +9,7 @@
 //   · Current/Legacy 쿼리를 독립 실행(try/catch) → 부분 실패 격리. degraded 시 가짜 total 만들지 않는다.
 //   · Current Master 생성/mapping 없음. 날짜/금액/상태 추측 없음.
 import { Router, type IRouter } from "express";
+import { activatedSaleExists } from "../services/legacyActivationLineage";
 import { db, legacyArchiveRowsTable, legacySalesProgressLinksTable } from "@workspace/db";
 import { eq, and, or, ilike, gte, lte, count, desc, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -30,6 +31,7 @@ const LEGACY_FETCH_CAP = 20000;
 
 export interface SalesHistoryRow {
   source: "current" | "legacy";
+  origin?: "legacy_crm" | null;   // current 중 과거 CRM 에서 전환된 판매건(출처 배지용, additive)
   key: string;
   id: number | string;
   recordDate: string | null;
@@ -98,6 +100,30 @@ function mapCurrentRow(p: any): SalesHistoryRow {
     paymentMemo: null,
   };
 }
+// 담당PM 표시명(내부 직원 admin/staff) — 화면의 관리자 목록에 없는 직원 PM 도 표시되도록 current 행에 채운다(additive).
+async function fillPmNames(dbx: any, list: SalesHistoryRow[]) {
+  const ids = [...new Set(list.map(r => r.adminId).filter((v): v is number => v != null))];
+  if (!ids.length) return;
+  const us = (await dbx.execute(sql`SELECT id, coalesce(name, email) nm FROM users WHERE id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)})`)).rows as any[];
+  const byId = new Map(us.map(u => [Number(u.id), String(u.nm)]));
+  for (const r of list) if (r.adminId != null) r.pmName = byId.get(Number(r.adminId)) ?? null;
+}
+
+// 과거 CRM 전환 판매건 — 판매일은 전환일(createdAt)이 아니라 원본 판매번호의 판매일로 표시·정렬(원본 불변).
+async function markLegacyOrigin(dbx: any, list: SalesHistoryRow[]) {
+  if (!list.length) return;
+  const ids = list.map(r => Number(r.id));
+  const maps = (await dbx.execute(sql`SELECT entity_id, legacy_id FROM legacy_master_mappings
+    WHERE source_system = 'old_crm' AND entity_type = 'sale' AND status = 'active' AND entity_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)})`)).rows as any[];
+  const byId = new Map(maps.map(m => [Number(m.entity_id), String(m.legacy_id)]));
+  for (const r of list) {
+    const saleNo = byId.get(Number(r.id));
+    if (!saleNo) continue;
+    r.origin = "legacy_crm"; r.saleNumber = saleNo;
+    r.recordDate = saleNo.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? r.recordDate;
+  }
+}
+
 function mapLegacyRow(r: any): SalesHistoryRow {
   return {
     source: "legacy", key: `legacy:${r.id}`, id: r.id,
@@ -126,7 +152,9 @@ function mapLegacyRow(r: any): SalesHistoryRow {
 // (C-4I-b §14) Legacy 는 "effective 누적(is_effective)"만 사용 — 부분파일 업로드 후에도 과거 판매자료 소실 없이,
 //   superseded 과거 version 은 통합목록에서 제외(중복 방지). Current Sales schema/데이터는 불변.
 function legacyWhere(q: Record<string, string | undefined>): SQL {
-  const conds: SQL[] = [eq(LA.sourceType, "sales_list"), eq(LA.isEffective, true)];
+  const conds: SQL[] = [eq(LA.sourceType, "sales_list"), eq(LA.isEffective, true),
+    // 운영 판매건으로 전환된 판매번호는 current 행 1건으로만 표시(중복 표시 방지). 전환 판매가 취소되면 다시 과거 행으로 표시.
+    sql`NOT ${activatedSaleExists(sql`${LA.sourceRaw} ->> '판매번호'`)}`];
   if (q.search?.trim() || q.q?.trim()) {
     const term = likeTerm((q.search || q.q || "").trim());
     const orExpr = or(ilike(LA.companyName, term), ilike(LA.contactName, term), ilike(LA.productName, term));
@@ -174,6 +202,8 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
     try {
       const list = await buildFilteredSalesProjectList(q);
       currentRows = (list as any[]).map(mapCurrentRow);
+      await markLegacyOrigin(dbx, currentRows);
+      await fillPmNames(dbx, currentRows);
       sources.current = { ok: true, count: currentRows.length };
     } catch (e: any) {
       sources.current = { ok: false, error: "현재 판매자료 조회 실패" };

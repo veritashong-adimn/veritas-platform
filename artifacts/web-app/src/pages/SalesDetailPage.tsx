@@ -12,7 +12,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type Product } from '../lib/constants';
-import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn, confirmDialog, alertDialog } from '../components/ui';
+import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn, confirmDialog, alertDialog, promptDialog } from '../components/ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../lib/ds';
 import { buildQuotePdfData, type QuoteDetail } from '../lib/quotePdf';
 import { formatDocNumber } from '../lib/quoteTitle';
@@ -24,6 +24,7 @@ import { QuoteItemsEditor, buildQuoteItemsBody, calcTotals, type QuoteItemForm }
 import { convertToFormItem } from '../lib/quoteItemForm';
 import PerformanceSection from '../components/admin/PerformanceSection';
 import PaymentInfoSection from '../components/admin/PaymentInfoSection';
+import { LegacyOriginSection } from '../components/admin/LegacyOriginSection';
 
 // ─── 로컬 라벨 맵 (견적관리 상세와 동일 문구) ────────────────────────────────
 const QUOTE_TYPE_LABEL: Record<string, string> = {
@@ -108,6 +109,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   const [editItems, setEditItems] = useState<QuoteItemForm[]>([]);
   const [products,  setProducts]  = useState<Product[]>([]);
   const [saving,    setSaving]    = useState(false);
+  const [isLegacyOrigin, setIsLegacyOrigin] = useState(false);   // 과거 CRM 에서 전환된 판매건(출처 배지)
 
   // ── 판매 상세(=프로젝트 + 원본 견적) 조회 ─────────────────────────────────
   // silent=true: 저장 후 백그라운드 갱신(예: 수행정보 추가비용 저장). 로딩 오버레이로 화면을 비우지 않아
@@ -169,6 +171,13 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   const saveSaleItems = async () => {
     if (!quote || saving) return;
     if (editItems.length === 0) { setToast('최소 1개 이상의 품목이 필요합니다.'); return; }
+    const vatForCheck = items[0]?.taxType ?? 'taxable';
+    let versionReason: string | undefined;
+    if (saleConfirmed && Math.abs(calcTotals(editItems, vatForCheck).total - Number(quote.price ?? 0)) >= 0.005) {
+      const r = await promptDialog({ title: '판매금액 변경 사유', message: '판매 확정 건의 금액이 변경됩니다. 변경 사유를 입력하세요(감사로그에 기록됩니다).', placeholder: '예: 고객 요청으로 수량 조정', confirmLabel: '저장' });
+      if (r == null || !r.trim()) return;
+      versionReason = r.trim();
+    }
     setSaving(true);
     try {
       const vat = items[0]?.taxType ?? 'taxable';   // 판매 견적의 부가세 유형(품목 기준)
@@ -190,6 +199,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
           validUntil,
           note: quote.note ?? undefined,
           title: quote.title ?? undefined,
+          ...(versionReason ? { versionReason } : {}),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -300,8 +310,12 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
 
   const companyName = project.company?.name ?? project.requestingCompanyName ?? null;
   const contactName = project.contact?.name ?? null;
+  // 상단 요약 표시 — Master 연결이 없으면 거래 당시 Snapshot(과거 CRM 원본명) 사용
+  const headerCompany = companyName ?? project.companyNameSnapshot ?? null;
+  const headerContact = contactName ?? project.contactNameSnapshot ?? null;
+  const productSummary = items.length ? `${items[0]?.productName ?? ''}${items.length > 1 ? ` 외 ${items.length - 1}건` : ''}` : null;
   const pm = adminUsers.find(u => u.id === project.adminId);
-  const pmName = pm ? (pm.name ?? pm.email) : null;
+  const pmName = pm ? (pm.name ?? pm.email) : (project.adminName ?? null);   // 관리자 목록에 없는 직원 PM 은 서버 표시명 사용
   const vatType = items[0]?.taxType ?? 'taxable';
 
   // 수정모드 판매금액 요약 — 편집 항목의 실시간 계산(편집 그리드와 동일).
@@ -370,6 +384,20 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
 
       {quote && (
         <>
+          {/* ── 판매 요약 — 과거 CRM 판매 상세와 동일 구조(제목=거래처명 · 상품명 | 판매일 | 담당자/고객) ── */}
+          <Card>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+              <span style={{ padding: '3px 10px', borderRadius: 6, background: '#dbeafe', color: '#1e40af', fontWeight: 800, fontSize: 12 }}>판매</span>
+              {isLegacyOrigin && <span style={{ padding: '3px 10px', borderRadius: 6, background: '#fef3c7', color: '#92400e', fontWeight: 800, fontSize: 12 }} data-testid="sales-origin-legacy">과거 CRM</span>}
+              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: C.textPrimary }} data-testid="sales-detail-title">{headerCompany || quote.title || `판매 #${project.id}`}</h2>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px 20px' }}>
+              <ReadField label="상품명" value={productSummary} />
+              <ReadField label="판매일" value={quote.issueDate} />
+              <ReadField label="담당자/고객" value={headerContact} />
+            </div>
+          </Card>
+
           {/* ── A. 기본정보 ─────────────────────────────────────────────── */}
           <Card>
             <CardSectionHeader badge="A" badgeBg="#eff6ff" badgeColor="#2563eb" title="기본정보" />
@@ -466,6 +494,10 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
               </div>
             </div>
           </Card>
+
+          {/* ── F. 과거 CRM 원본정보(전환 판매건만 표시) ─────────────────────── */}
+          <LegacyOriginSection projectId={saleId} token={token} onToast={setToast}
+            onChanged={() => fetchDetail({ silent: true })} onLoaded={setIsLegacyOrigin} />
         </>
       )}
 

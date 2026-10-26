@@ -18,7 +18,9 @@ import { LANGUAGE_CODES } from "./products";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
 import { eq, and, isNull, inArray, ne, desc, sql } from "drizzle-orm";
 import { z } from "zod";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requireRolePermission } from "../middlewares/auth";
+import { logEvent } from "../lib/logEvent";
+import { isPendingPayoutReview, activatedSaleExists } from "../services/legacyActivationLineage";
 import { getPermissionsForRole } from "../lib/rbac";
 import { decrypt, maskResidentNumber } from "../lib/encrypt";
 import { autoAssignByPaymentDate } from "./payoutRounds";
@@ -797,6 +799,19 @@ export type ApplyRowCtx = {
   priorById: Map<number, typeof performanceAssignmentsTable.$inferSelect>;
 };
 
+// 지급완료 행 변경 감지 — 지급대상(개인/업체)과 원가합계(기본수행료+추가비용−차감)가 저장값과 같으면 '변경 없음'.
+async function paidRowChanged(tx: any, prior: typeof performanceAssignmentsTable.$inferSelect, r: RowInput, computed: ReturnType<typeof computeRowValues>): Promise<boolean> {
+  if (r.individualUserId !== undefined && (r.individualUserId ?? null) !== (prior.individualUserId ?? null)) return true;
+  if (r.vendorCompanyId !== undefined && (r.vendorCompanyId ?? null) !== (prior.vendorCompanyId ?? null)) return true;
+  const exp = r.expenses !== undefined ? r.expenses.map(e => ({ amount: Number(e.amount ?? 0), includedInPayout: e.includedInPayout }))
+    : (await tx.select().from(performanceExpensesTable).where(eq(performanceExpensesTable.assignmentId, prior.id))).map((e: any) => ({ amount: Number(e.amount), includedInPayout: e.includedInPayout }));
+  const ded = r.deductions !== undefined ? r.deductions.map(d => ({ amount: Number(d.amount ?? 0) }))
+    : (await tx.select().from(performanceDeductionsTable).where(eq(performanceDeductionsTable.assignmentId, prior.id))).map((d: any) => ({ amount: Number(d.amount) }));
+  const base = computePerformanceBaseFee(r, computed, r.serviceDetailSnapshot ?? prior.serviceDetailSnapshot ?? null);
+  const totals = calcCostTotal(base, exp, ded);
+  return Math.abs(Number(totals.costTotal) - Number(prior.costTotal ?? 0)) >= 0.005;
+}
+
 export async function applyPerformanceRow(
   tx: any,
   projectId: number,
@@ -806,6 +821,20 @@ export async function applyPerformanceRow(
   const { userId, isHoliday, mayConfirm, priorById } = ctx;
   const category = r.performerCategory ?? "individual";
   const computed = computeRowValues(r);
+  const lockedPrior = r.id ? priorById.get(r.id) : undefined;
+  if (lockedPrior?.paymentStatus === "paid") {
+    // 지급완료 수행정보는 일반 수정으로 지급대상·금액을 바꿀 수 없다(정정은 정산관리 추가지급·환수·차감 절차). 비고만 갱신.
+    if (await paidRowChanged(tx, lockedPrior, r, computed)) {
+      throw new Error(`지급완료된 수행정보(id ${r.id})는 지급대상·금액을 수정할 수 없습니다. 정산관리의 추가지급·환수·차감 절차를 이용하세요.`);
+    }
+    await tx.update(performanceAssignmentsTable).set({ remark: r.remark ?? lockedPrior.remark ?? null, updatedBy: userId, updatedAt: new Date() })
+      .where(and(eq(performanceAssignmentsTable.id, r.id!), eq(performanceAssignmentsTable.projectId, projectId)));
+    return r.id!;
+  }
+  if (lockedPrior?.paymentStatus === "payment_hold" && r.paymentStatus && r.paymentStatus !== "payment_hold"
+      && await isPendingPayoutReview(tx, r.id!)) {
+    throw new Error(`과거 CRM '과거 지급 확인 필요' 수행정보(id ${r.id})는 판매 상세의 과거 지급 확인에서 관리자 확인으로만 지급보류를 해제할 수 있습니다.`);
+  }
   const values: Record<string, any> = {
     ...commonFields(r),
     ...computed,
@@ -990,7 +1019,7 @@ const batchSchema = z.object({
   deletedIds: z.array(z.number().int().positive()).default([]),
 });
 
-router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) => {
+router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermission("project.update"), async (req, res) => {
   const projectId = Number(req.params.id);
   if (!Number.isInteger(projectId)) { res.status(400).json({ error: "잘못된 프로젝트 ID" }); return; }
   const parsed = batchSchema.safeParse(req.body);
@@ -999,12 +1028,16 @@ router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) =
   const userId = req.user?.id ?? null;
 
   try {
+    const auditBefore = await db.select({ id: performanceAssignmentsTable.id, individualUserId: performanceAssignmentsTable.individualUserId,
+      vendorCompanyId: performanceAssignmentsTable.vendorCompanyId, costTotal: performanceAssignmentsTable.costTotal, paymentStatus: performanceAssignmentsTable.paymentStatus,
+      expectedPaymentDate: performanceAssignmentsTable.expectedPaymentDate, deliveryDate: performanceAssignmentsTable.deliveryDate })
+      .from(performanceAssignmentsTable).where(and(eq(performanceAssignmentsTable.projectId, projectId), isNull(performanceAssignmentsTable.deletedAt)));
     await db.transaction(async (tx) => {
       // 1) 삭제 — 지급완료(paid) 행은 차단(§29). 소유 프로젝트 검증.
       if (deletedIds.length) {
         const targets = await tx.select().from(performanceAssignmentsTable)
           .where(and(eq(performanceAssignmentsTable.projectId, projectId), inArray(performanceAssignmentsTable.id, deletedIds)));
-        const paid = targets.filter(t => t.status === "paid");
+        const paid = targets.filter(t => t.status === "paid" || t.paymentStatus === "paid");
         if (paid.length) throw new Error(`지급완료된 수행정보는 삭제할 수 없습니다 (id: ${paid.map(p => p.id).join(", ")}).`);
         await tx.update(performanceAssignmentsTable)
           .set({ deletedAt: new Date(), deletedBy: userId, updatedBy: userId, updatedAt: new Date() })
@@ -1032,6 +1065,19 @@ router.put("/admin/projects/:id/performances", ...adminGuard, async (req, res) =
     catch (e) { req.log.error({ e, projectId }, "지급회차 자동배정 실패(저장은 정상)"); }
 
     const rowsOut = await loadPerformanceRows(projectId);
+    // 감사로그 — 변경된 행만 전후 값 기록(지급대상·원가합계·지급상태·지급예정일·납품일), 삭제 id.
+    try {
+      const pick = (r: any) => ({ individualUserId: r.individualUserId ?? null, vendorCompanyId: r.vendorCompanyId ?? null, costTotal: r.costTotal != null ? String(Number(r.costTotal)) : null,
+        paymentStatus: r.paymentStatus ?? null, expectedPaymentDate: r.expectedPaymentDate ? String(r.expectedPaymentDate).slice(0, 10) : null, deliveryDate: r.deliveryDate ? String(r.deliveryDate).slice(0, 10) : null });
+      const after = await db.select().from(performanceAssignmentsTable).where(and(eq(performanceAssignmentsTable.projectId, projectId), isNull(performanceAssignmentsTable.deletedAt)));
+      const beforeById = new Map(auditBefore.map(b => [b.id, pick(b)]));
+      const changes = after.map(a => ({ id: a.id, before: beforeById.get(a.id) ?? null, after: pick(a) }))
+        .filter(c => JSON.stringify(c.before) !== JSON.stringify(c.after));
+      if (changes.length || deletedIds.length) {
+        await logEvent("project", projectId, "performances_saved", req.log, req.user ? { id: req.user.id, email: req.user.email } : undefined,
+          JSON.stringify({ changes, deletedIds }));
+      }
+    } catch (e) { req.log.error({ e, projectId }, "수행정보 감사로그 기록 실패(저장은 정상)"); }
     res.json({ ok: true, rows: rowsOut });
   } catch (err: any) {
     req.log.error({ err }, "수행정보 저장 실패");
@@ -1111,6 +1157,8 @@ async function deriveIndividualSnapshot(dbx: typeof db, translatorId: number) {
   let residencyType: string | null = null;
   let withholdingTreatment: string = "tax_review_required";
   if (pm === "domestic_withholding") { residencyType = "domestic_resident"; withholdingTreatment = DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT; }
+  else if (pm === "domestic_withholding_2_2") { residencyType = "domestic_resident"; withholdingTreatment = "domestic_2_2"; }   // 원천징수율 2.2% 선택
+  else if (pm === "domestic_withholding_exempt") { residencyType = "domestic_resident"; withholdingTreatment = "exempt"; }    // 원천세 신고 제외(확정 0%)
   else if (pm === "domestic_business") { residencyType = "domestic_resident"; withholdingTreatment = "tax_review_required"; }
   else if (pm === "overseas_paypal" || pm === "overseas_bank") { residencyType = "overseas_or_nonresident"; withholdingTreatment = "tax_review_required"; }
   const rate = profile?.unitPrice != null ? Number(profile.unitPrice) : null;
@@ -1291,7 +1339,11 @@ router.get("/admin/performances/history-by-translator", ...adminGuard, async (re
           END AS work_type
         FROM legacy_archive_rows
         WHERE source_type='progress' AND is_effective=true
-          AND btrim(source_raw->>'통번역사명') IN (${nl})`)).rows as any[];
+          AND btrim(source_raw->>'통번역사명') IN (${nl})
+          -- 운영 판매건으로 전환된 판매의 원본 수행행은 제외(전환 후에는 운영 수행정보 1건으로만 집계 — 중복 방지)
+          AND NOT EXISTS (SELECT 1 FROM legacy_sales_progress_links lk JOIN legacy_archive_rows ls ON ls.id = lk.sale_row_id
+            WHERE lk.progress_row_id = legacy_archive_rows.id AND lk.decision = 'confirmed'
+              AND ${activatedSaleExists(sql`ls.source_raw->>'판매번호'`)})`)).rows as any[];
     };
 
     // 2-a) 1차: raw(원문) 통번역사명 정확 일치.

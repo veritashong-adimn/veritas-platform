@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { api, TranslatorProfile } from "../../lib/constants";
 import { PrimaryBtn, GhostBtn, ClickSelect } from "../ui";
 import { DraggableModal } from "./DraggableModal";
+import { SETTLEMENT_TYPES, findSettlementType } from "./SensitiveInfoModal";
 
 const inputStyle: React.CSSProperties = {
   width: "100%", padding: "9px 12px", borderRadius: 8,
@@ -153,9 +154,10 @@ export function TranslatorProfileModal({ userId, userEmail, token, onClose, onTo
                     triggerStyle={{ width: "100%", fontSize: 13, padding: "7px 10px", borderRadius: 8 }}
                     options={[
                       { value: "", label: "선택 안 함" },
-                      { value: "개인", label: "개인 (3.3% 원천징수)" },
-                      { value: "사업자", label: "사업자 (세금계산서)" },
-                      { value: "업체정산", label: "업체정산 (소속업체 경유)" },
+                      ...SETTLEMENT_TYPES.map(st => ({ value: st.value, label: st.label })),
+                      // 선택지에 없는 기존 저장값은 그대로 보존 표시(자동 변경 없음)
+                      ...(form.settlementType && findSettlementType(form.settlementType)?.needsReview
+                        ? [{ value: form.settlementType, label: `${form.settlementType} (기존값 · 정산유형 확인 필요)` }] : []),
                     ]}
                   />
                 </div>

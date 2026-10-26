@@ -92,7 +92,7 @@ function categoryFromText(...texts: string[]): "translation" | "interpretation" 
 }
 
 // ── 원본 행(한 행 = 수행 1건) ─────────────────────────────────────────────────
-interface RawRow {
+export interface RawRow {
   sheet: string; rowNumber: number;
   category: "translation" | "interpretation" | "equipment";
   // 견적/영업(그룹 판별·금액)
@@ -321,28 +321,44 @@ function readRawRows(buffer: Buffer): { rows: RawRow[]; sheetNames: string[]; co
     const sheetCat = categoryFromSheet(sheet.sheetName);
     sheet.dataRows.forEach((raw, i) => {
       if (isBlankRow(raw)) return;
-      const g = (f: string) => getCell(raw, cMap, f);
-      const productName = strCell(g("productName"));
-      const content = strCell(g("content"));
-      const category = sheetCat ?? categoryFromText(productName, content);
-      rows.push({
-        sheet: sheet.sheetName, rowNumber: sheet.headerRowIndex + 2 + i, category,
-        companyName: strCell(g("companyName")), bizNo: strCell(g("businessNumber")), customerName: strCell(g("customerName")), phone: strCell(g("phone")),
-        quoteIssueDate: normalizeDate(g("quoteIssueDate")), quoteKind: strCell(g("quoteKind")), contractDate: normalizeDate(g("contractDate")),
-        content, productName, note: strCell(g("note")), pm: strCell(g("pm")),
-        unitPrice: numOrNull(g("unitPrice")), quantity: numOrNull(g("quantity")),
-        supplyAmount: numOrNull(g("supplyAmount")), vatAmount: numOrNull(g("vatAmount")), totalAmount: numOrNull(g("totalAmount")),
-        translatorName: strCell(g("translatorName")), fileName: strCell(g("fileName")), detailInfo: strCell(g("detailInfo")),
-        language: strCell(g("language")), deliveryDate: normalizeDate(g("deliveryDate")), payDate: normalizeDate(g("payDate")), place: strCell(g("place")),
-        fee100: numOrNull(g("fee100")), fee85: numOrNull(g("fee85")),
-        transportFee: numOrNull(g("transportFee")), businessTripFee: numOrNull(g("businessTripFee")),
-        travelDayCompensation: numOrNull(g("travelDayCompensation")), copyrightFee: numOrNull(g("copyrightFee")),
-        cancellationCompensation: numOrNull(g("cancellationCompensation")),
-        perfQuantity: numOrNull(g("perfQuantity")), perfUnit: strCell(g("perfUnit")), perfUnitPrice: numOrNull(g("perfUnitPrice")),
-        preTaxPayout: numOrNull(g("preTaxPayout")),
-      });
+      rows.push(buildRawRow((f: string) => getCell(raw, cMap, f), sheet.sheetName, sheet.headerRowIndex + 2 + i, sheetCat));
     });
   });
+  return finishRawRows(rows, sheets.map(s => s.sheetName), firstColMap);
+}
+
+// 한 행(셀 조회 함수 g) → RawRow. 결제리스트 Excel 파싱과 과거 CRM 진행관리 원본(source_raw) 변환이 공용으로 사용(동일 규칙).
+function buildRawRow(g: (f: string) => unknown, sheetName: string, rowNumber: number, sheetCat: RawRow["category"] | null): RawRow {
+  const productName = strCell(g("productName"));
+  const content = strCell(g("content"));
+  const category = sheetCat ?? categoryFromText(productName, content);
+  return {
+    sheet: sheetName, rowNumber, category,
+    companyName: strCell(g("companyName")), bizNo: strCell(g("businessNumber")), customerName: strCell(g("customerName")), phone: strCell(g("phone")),
+    quoteIssueDate: normalizeDate(g("quoteIssueDate")), quoteKind: strCell(g("quoteKind")), contractDate: normalizeDate(g("contractDate")),
+    content, productName, note: strCell(g("note")), pm: strCell(g("pm")),
+    unitPrice: numOrNull(g("unitPrice")), quantity: numOrNull(g("quantity")),
+    supplyAmount: numOrNull(g("supplyAmount")), vatAmount: numOrNull(g("vatAmount")), totalAmount: numOrNull(g("totalAmount")),
+    translatorName: strCell(g("translatorName")), fileName: strCell(g("fileName")), detailInfo: strCell(g("detailInfo")),
+    language: strCell(g("language")), deliveryDate: normalizeDate(g("deliveryDate")), payDate: normalizeDate(g("payDate")), place: strCell(g("place")),
+    fee100: numOrNull(g("fee100")), fee85: numOrNull(g("fee85")),
+    transportFee: numOrNull(g("transportFee")), businessTripFee: numOrNull(g("businessTripFee")),
+    travelDayCompensation: numOrNull(g("travelDayCompensation")), copyrightFee: numOrNull(g("copyrightFee")),
+    cancellationCompensation: numOrNull(g("cancellationCompensation")),
+    perfQuantity: numOrNull(g("perfQuantity")), perfUnit: strCell(g("perfUnit")), perfUnitPrice: numOrNull(g("perfUnitPrice")),
+    preTaxPayout: numOrNull(g("preTaxPayout")),
+  };
+}
+
+// 과거 CRM 진행관리 원본 1행(source_raw: 헤더명→값) → RawRow. 헤더 동의어 매핑은 결제리스트와 동일(PASTWORK_SYNONYMS).
+export function rawRowFromRecord(record: Record<string, unknown>, sheetName: string, rowNumber: number): RawRow {
+  const headers = Object.keys(record).filter(k => !k.startsWith("__"));
+  const cMap = buildColumnMap(headers, PASTWORK_SYNONYMS);
+  const cells = headers.map(h => record[h]);
+  return buildRawRow((f: string) => getCell(cells, cMap, f), sheetName, rowNumber, null);
+}
+
+function finishRawRows(rows: RawRow[], sheetNames: string[], firstColMap: Record<string, string | null>): { rows: RawRow[]; sheetNames: string[]; columnMap: Record<string, string | null> } {
   // forward-fill: 병합/첫행에만 있는 "견적금액"(공급가/부가세/총액)과 PM·비고를 같은 거래처
   // 연속행에 상속한다(§4). 행별 상세(단가/수량/수행비 등)는 각 행 고유값이므로 상속하지 않는다.
   let prevId = ""; let fill: Partial<RawRow> = {};
@@ -354,7 +370,7 @@ function readRawRows(buffer: Buffer): { rows: RawRow[]; sheetNames: string[]; co
       else (fill as any)[f] = (r as any)[f];
     }
   }
-  return { rows, sheetNames: sheets.map(s => s.sheetName), columnMap: firstColMap };
+  return { rows, sheetNames, columnMap: firstColMap };
 }
 
 // ── 통번역사 매칭(§5·§20) — 이름 only(동명이인 위험은 경고). 미등록은 오류(자동생성 금지). ──
@@ -368,7 +384,7 @@ function matchTranslator(name: string, m: Masters): { id: number | null; status:
 }
 
 // ── 한 수행 행의 지급비용 미리보기(기존 SSOT 재사용, §11·§28) ──────────────────
-function buildAssignPayload(r: RawRow, translatorId: number | null): RowInput {
+export function buildAssignPayload(r: RawRow, translatorId: number | null): RowInput {
   const isInterp = r.category === "interpretation";
   let isDirectAmount = false; let directAmount: number | null = null;
   let contractUnitPrice: number | null = null; let quantity: number | null = r.perfQuantity ?? r.quantity;
@@ -419,7 +435,7 @@ function buildAssignPayload(r: RawRow, translatorId: number | null): RowInput {
   };
 }
 
-function computeAssignPreview(payload: RowInput): { base: number; expenseTotal: number; deductionTotal: number; gross: number; rate: number; deduction: number; net: number } {
+export function computeAssignPreview(payload: RowInput): { base: number; expenseTotal: number; deductionTotal: number; gross: number; rate: number; deduction: number; net: number } {
   const computed = computeRowValues(payload);
   const base = computePerformanceBaseFee(payload, computed, payload.serviceDetailSnapshot ?? null);
   const totals = calcCostTotal(

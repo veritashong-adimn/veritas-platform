@@ -225,6 +225,8 @@ export async function analyzePerformanceImport(projectId: number, buffer: Buffer
   for (const s of sens) payMethodById.set(s.translatorId, s.paymentMethod ?? null);
   const defaultTreatmentFor = (id: number | null | undefined): string => {
     const pm = id != null ? payMethodById.get(id) : null;
+    if (pm === "domestic_withholding_2_2") return "domestic_2_2";   // 원천징수율 2.2% 선택
+    if (pm === "domestic_withholding_exempt") return "exempt";       // 원천세 신고 제외(확정 0%)
     return pm === "domestic_withholding" ? DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT : "tax_review_required";
   };
 

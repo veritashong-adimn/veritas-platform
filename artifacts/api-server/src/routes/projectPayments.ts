@@ -9,7 +9,8 @@ import { Router, type IRouter } from "express";
 import { db, projectPaymentsTable, paymentTransactionsTable, companiesTable, contactsTable } from "@workspace/db";
 import { eq, and, inArray, asc, getTableColumns, sql } from "drizzle-orm";
 import { z } from "zod";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requireRolePermission } from "../middlewares/auth";
+import { logEvent } from "../lib/logEvent";
 import { fetchCompanyName, fetchContactName } from "../lib/nameSnapshot";
 
 const router: IRouter = Router();
@@ -70,13 +71,29 @@ const batchSchema = z.object({
 });
 
 // 배치 저장 — 삭제 후 upsert. 회차는 전송된 순서대로 1..N 재부여(자동번호).
-router.put("/admin/projects/:id/payment-records", ...adminGuard, async (req, res) => {
+router.put("/admin/projects/:id/payment-records", ...adminGuard, requireRolePermission("payment.update"), async (req, res) => {
   const projectId = Number(req.params.id);
   if (!Number.isInteger(projectId) || projectId <= 0) { res.status(400).json({ error: "잘못된 프로젝트 ID" }); return; }
   const parsed = batchSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "유효성 검증 실패", detail: parsed.error.flatten() }); return; }
   const { rows, deletedIds } = parsed.data;
   const userId = req.user?.id ?? null;
+
+  // 입금확인(확정) 수금기록 보호 — 삭제·금액·입금일·확인해제는 일반 저장으로 불가(비고·청구정보 등은 수정 가능).
+  const before = await db.select().from(projectPaymentsTable).where(eq(projectPaymentsTable.projectId, projectId));
+  const confirmedById = new Map(before.filter(b => b.depositConfirmed).map(b => [b.id, b]));
+  const delLocked = deletedIds.filter(id => confirmedById.has(id));
+  if (delLocked.length) { res.status(409).json({ error: `입금확인된 수금기록은 삭제할 수 없습니다 (id: ${delLocked.join(", ")}).` }); return; }
+  const n2 = (v: unknown) => Number(v ?? 0).toFixed(2);
+  for (const r of rows) {
+    const b = r.id ? confirmedById.get(r.id) : undefined;
+    if (!b) continue;
+    const confirmedNow = r.depositConfirmed === true && r.depositStatus === "completed" && !!r.paidDate;
+    if (!confirmedNow || (r.paidDate || null) !== (b.paidDate ? String(b.paidDate).slice(0, 10) : null)
+        || n2(r.amount) !== n2(b.amount) || n2(r.supplyAmount) !== n2(b.supplyAmount) || n2(r.vatAmount) !== n2(b.vatAmount)) {
+      res.status(409).json({ error: `입금확인된 수금기록(id ${b.id})의 금액·입금일·확인상태는 변경할 수 없습니다.` }); return;
+    }
+  }
 
   try {
     await db.transaction(async (tx) => {
@@ -130,7 +147,11 @@ router.put("/admin/projects/:id/payment-records", ...adminGuard, async (req, res
         }
       }
     });
-    res.json({ rows: await loadPaymentRecords(projectId) });
+    const saved = await loadPaymentRecords(projectId);
+    const pick = (r: any) => ({ id: r.id, expectedDate: r.expectedDate ?? null, paidDate: r.paidDate ?? null, amount: n2(r.amount), supplyAmount: n2(r.supplyAmount), vatAmount: n2(r.vatAmount), depositStatus: r.depositStatus, depositConfirmed: !!r.depositConfirmed });
+    await logEvent("project", projectId, "payment_records_saved", req.log, req.user ? { id: req.user.id, email: req.user.email } : undefined,
+      JSON.stringify({ before: before.map(pick), after: saved.map(pick), deletedIds }));
+    res.json({ rows: saved });
   } catch (err) {
     req.log.error({ err }, "결제정보 저장 실패");
     res.status(500).json({ error: "결제정보 저장 중 오류가 발생했습니다." });
@@ -176,7 +197,7 @@ const txnRowSchema = z.object({
 });
 const txnBatchSchema = z.object({ rows: z.array(txnRowSchema), deletedIds: z.array(z.number().int()).default([]) });
 
-router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, async (req, res) => {
+router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, requireRolePermission("payment.update"), async (req, res) => {
   const paymentId = Number(req.params.paymentId);
   if (!Number.isInteger(paymentId) || paymentId <= 0) { res.status(400).json({ error: "잘못된 청구행 ID" }); return; }
   const parsed = txnBatchSchema.safeParse(req.body);
@@ -188,6 +209,7 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, asy
   const [pay] = await db.select({ id: projectPaymentsTable.id, projectId: projectPaymentsTable.projectId })
     .from(projectPaymentsTable).where(eq(projectPaymentsTable.id, paymentId));
   if (!pay) { res.status(404).json({ error: "청구행을 찾을 수 없습니다." }); return; }
+  const txBefore = await db.select().from(paymentTransactionsTable).where(eq(paymentTransactionsTable.projectPaymentId, paymentId));
 
   try {
     await db.transaction(async (tx) => {
@@ -224,6 +246,9 @@ router.put("/admin/project-payments/:paymentId/transactions", ...adminGuard, asy
       }
     });
     // 갱신된 프로젝트 전체 청구정보(청구행 + 거래) 반환 → 화면이 미수금/입금상태를 재계산.
+    await logEvent("project", pay.projectId, "payment_transactions_saved", req.log, req.user ? { id: req.user.id, email: req.user.email } : undefined,
+      JSON.stringify({ paymentId, beforeTx: txBefore.map(t => ({ id: t.id, paidDate: t.paidDate, customerPaidAmount: t.customerPaidAmount })),
+        saved: rows.map(r => ({ id: r.id ?? null, paidDate: r.paidDate ?? null, customerPaidAmount: r.customerPaidAmount ?? null })), deletedIds }));
     res.json({ rows: await loadPaymentRecords(pay.projectId) });
   } catch (err) {
     req.log.error({ err }, "수금거래 저장 실패");

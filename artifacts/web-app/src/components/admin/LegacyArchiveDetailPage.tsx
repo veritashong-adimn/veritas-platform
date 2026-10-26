@@ -1,10 +1,11 @@
-// ─── Legacy Archive 상세 (C-4B) — 완전 READ-ONLY ─────────────────────────────
-// sales_list / progress 공용. 상단 normalized 요약 + 하단 CRM 원본정보(source_raw 전체).
-// 수정/삭제/판매전환/배정/정산/입금처리/workflow/Master 생성·mapping 없음.
+// ─── Legacy Archive 상세 (C-4B) ───────────────────────────────────────────────
+// sales_list / progress 공용. 상단 normalized 요약 + 하단 CRM 원본정보(source_raw 전체). 원본은 항상 조회 전용.
+// 판매건은 [수정] → 운영 판매건 전환(미리보기·확인) 후 운영 판매 상세에서 수정한다(원본 불변).
 import React, { useEffect, useState } from 'react';
 import { api } from '../../lib/constants';
 import { formatAmountDisplay } from '../../lib/utils';
 import { BackToListButton } from './BackToListButton';
+import { LegacySaleActivationModal } from './LegacySaleActivationModal';
 
 // (C-4J-2C-7) 판매건에 연결된 통번역 진행관리 수행행(READ-ONLY). 매핑 테이블 조회 결과. 원본값 그대로.
 type LinkedProgress = {
@@ -23,6 +24,7 @@ type ArchiveRow = {
   sourceFile: string | null; sourceSheet: string | null; sourceRow: number | null;
   importBatchId: number | null; sourceRaw: Record<string, unknown>; createdAt: string;
   linkedProgress?: LinkedProgress[];
+  activation?: { projectId: number; status: string | null } | null;   // 운영 판매건 전환 여부(판매번호 매핑)
 };
 
 // (C-4J-2C-15) 주민등록번호 표시(표시 전용). 서버가 '생년월일 6자리-뒷자리 첫 숫자******'로 마스킹해 보낸 값을 그대로 표시한다.
@@ -45,8 +47,9 @@ function renderRawValue(v: unknown): { text: string; muted: boolean } {
   try { return { text: JSON.stringify(v), muted: false }; } catch { return { text: String(v), muted: false }; }
 }
 
-export function LegacyArchiveDetailPage({ id, token, onBack, setToast }: { id: number; token: string; onBack: () => void; setToast: (m: string) => void }) {
+export function LegacyArchiveDetailPage({ id, token, onBack, setToast, onOpenSale }: { id: number; token: string; onBack: () => void; setToast: (m: string) => void; onOpenSale?: (projectId: number) => void }) {
   const [row, setRow] = useState<ArchiveRow | null>(null);
+  const [showActivate, setShowActivate] = useState(false);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
@@ -69,11 +72,20 @@ export function LegacyArchiveDetailPage({ id, token, onBack, setToast }: { id: n
   const isSales = row?.sourceType === 'sales_list';
   const label = isSales ? '판매' : '진행관리';
 
+  // 판매일(표시 전용) — 판매관리 목록(sales-history)과 동일 규칙: recordDate → 판매번호 앞 날짜 → 세금계산서발행(예정)일.
+  const dateOf = (v: unknown) => (typeof v === 'string' ? (v.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? null) : null);
+  // 고객담당자(거래처 측) — 판매목록 원본에는 고객담당자 칸이 없다(정규화 contactName 은 내부 '영업담당자'). 판매관리 목록과 동일하게
+  //   연결 진행행 '고객명'이 단일일 때만 표시하고, 없거나 여러 명이면 '-'. 내부 담당PM 이름으로 대체하지 않는다.
+  const custNames = row ? [...new Set((row.linkedProgress ?? []).map(lp => String(lp.sourceRaw?.['고객명'] ?? '').trim()).filter(Boolean))] : [];
+  const customerContact = custNames.length === 1 ? custNames[0] : custNames.length > 1 ? '확인 필요' : null;   // 목록과 동일 표기
+  const saleDate = row ? (dateOf(row.recordDate) ?? dateOf(row.sourceRaw?.['판매번호']) ?? dateOf(row.sourceRaw?.['세금계산서발행(예정)일'])) : null;
+
   // source_type별 상단 normalized 요약(값 있는 것만 의미있게, 없으면 "-").
   // (C-4J-2C-8) 금액은 천단위 콤마 표시(표시 전용 — 원본값/계산/다운로드 데이터 불변).
   const salesFields: [string, string | null][] = row ? [
-    ['판매일', row.recordDate], ['거래처', row.companyName], ['담당자/고객', row.contactName],
-    ['상품명', row.productName], ['공급가', formatAmountDisplay(row.supplyAmount) || null], ['VAT', formatAmountDisplay(row.vatAmount) || null],
+    // 첫 줄: 상품명 · 판매일 · 담당자/고객 (거래처명은 상단 제목으로 이동)
+    ['상품명', row.productName], ['판매일', saleDate], ['담당자/고객', customerContact],
+    ['공급가', formatAmountDisplay(row.supplyAmount) || null], ['VAT', formatAmountDisplay(row.vatAmount) || null],
     // (C-4J-2C-14) 입금일(원본 입금일 normalized) + 입금내역(원문 보존, 상태 변환 없음). 값 없으면 '-'.
     ['총액', formatAmountDisplay(row.totalAmount) || null], ['입금일', row.collectionDate],
     ['입금내역', typeof row.sourceRaw?.['입금내역'] === 'string' ? (row.sourceRaw['입금내역'] as string) : null],
@@ -89,11 +101,27 @@ export function LegacyArchiveDetailPage({ id, token, onBack, setToast }: { id: n
 
   return (
     <div style={{ width: '94%', maxWidth: 2000, margin: '0 auto', padding: '24px 0' }} data-testid="legacy-archive-detail">
+      {showActivate && onOpenSale && (
+        <LegacySaleActivationModal legacyRowId={id} token={token} onToast={setToast}
+          onClose={() => setShowActivate(false)}
+          onActivated={(pid) => { setShowActivate(false); onOpenSale(pid); }} />
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
         {/* (C-4J-2C-10) 통번역사 상세화면과 동일한 공통 '〈 뒤로가기' 버튼 재사용(BackToListButton subtle). 복귀 동작(onBack)은 기존 그대로. */}
         <BackToListButton onClick={onBack} variant="subtle" label="뒤로가기" testId="archive-detail-back" />
         <span style={{ padding: '4px 10px', borderRadius: 6, background: '#fef3c7', color: '#92400e', fontWeight: 800, fontSize: 12 }}>과거 CRM</span>
-        <span style={{ fontSize: 12, color: '#6b7280' }}>READ-ONLY · 조회 전용</span>
+        {row?.sourceType === 'sales_list' && onOpenSale ? (
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            {row.activation && <span style={{ fontSize: 12, color: '#1e40af' }}>운영 판매건으로 전환됨</span>}
+            <button type="button" onClick={() => row.activation ? onOpenSale(row.activation.projectId) : setShowActivate(true)}
+              data-testid="archive-detail-edit" aria-label={row.activation ? '운영 판매 상세에서 수정' : '판매건 수정'}
+              style={{ padding: '7px 16px', borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>
+              수정
+            </button>
+          </div>
+        ) : (
+          <span style={{ fontSize: 12, color: '#6b7280' }}>READ-ONLY · 조회 전용</span>
+        )}
       </div>
 
       {loading && <div style={{ color: '#6b7280' }}>불러오는 중…</div>}
@@ -104,7 +132,7 @@ export function LegacyArchiveDetailPage({ id, token, onBack, setToast }: { id: n
           <div style={card}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
               <span style={{ padding: '3px 10px', borderRadius: 6, background: isSales ? '#dbeafe' : '#ede9fe', color: isSales ? '#1e40af' : '#5b21b6', fontWeight: 800, fontSize: 12 }}>{label}</span>
-              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#111827' }}>{row.productName || row.companyName || `과거자료 #${row.id}`}</h2>
+              <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: '#111827' }} data-testid="archive-detail-title">{(isSales ? (row.companyName || row.productName) : (row.productName || row.companyName)) || `과거자료 #${row.id}`}</h2>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
               {fields.map(([k, v]) => (

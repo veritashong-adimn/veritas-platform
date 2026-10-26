@@ -512,7 +512,10 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       if (pmRes.ok) setPayments(Array.isArray(pmData) ? pmData : []);
       if (tRes.ok) setTasks(Array.isArray(tData) ? tData : []);
       if (sRes.ok) setSettlements(Array.isArray(sData) ? sData : []);
-      if (auRes.ok) setAdminUsers(Array.isArray(auData) ? auData : []);
+      // 담당PM = 베리타스 내부 직원(admin + staff). 직원 PM 이 이름 표시·PM 선택 목록에서 빠지지 않도록 staff 도 합친다.
+      let staffData: AdminUser[] = [];
+      try { const sr = await fetch(api("/api/admin/users?role=staff"), { headers: authHeaders }); if (sr.ok) { const d = await sr.json(); staffData = Array.isArray(d) ? d : []; } } catch { /* staff 조회 실패 시 admin 만 */ }
+      if (auRes.ok) { const base: AdminUser[] = Array.isArray(auData) ? auData : []; setAdminUsers([...base, ...staffData.filter(st => !base.some(b => b.id === st.id))]); }
       setQuoteTick(t => t + 1);
     } catch { setToast("오류: 데이터 불러오기 실패"); }
     finally { setLoading(false); }
@@ -1307,6 +1310,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
               token={token}
               setToast={setToast}
               onBack={closeLegacyDetail}
+              onOpenSale={(projectId) => { setLegacyArchiveDetailId(null); openSalesDetail(projectId); }}
             />
           ) : salesDetailId !== null ? (
             <SalesDetailPage

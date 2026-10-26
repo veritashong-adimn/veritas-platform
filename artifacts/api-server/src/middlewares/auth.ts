@@ -56,6 +56,17 @@ export function requireRole(...roles: UserRole[]) {
  * - admin (roleId 없음) → 전체 권한 허용 (하위 호환)
  * - staff / admin (roleId 있음) → 해당 역할의 권한 목록에서 key 확인
  */
+// 역할(roleId)이 지정된 사용자는 권한 키를 서버에서 검증하고, 역할 미지정 기존 사용자(슈퍼관리자·역할 미지정 직원)는
+// 기존과 같이 통과시킨다 — 그동안 adminGuard 만 적용되던 저장 API 에 권한 검증을 더하면서 기존 권한체계를 유지하기 위함.
+export function requireRolePermission(key: string) {
+  const strict = requirePermission(key);
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    if (!req.user) { res.status(401).json({ error: "인증이 필요합니다." }); return; }
+    if (!req.user.roleId) { next(); return; }
+    return strict(req, res, next);
+  };
+}
+
 export function requirePermission(key: string) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     if (!req.user) {

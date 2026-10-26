@@ -1433,7 +1433,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           <div style={{ background: "#fff7ed", padding: "16px 18px" }}>
             {/* 정산유형 */}
             <p style={{ fontSize: 12, fontWeight: 700, color: "#92400e", margin: "0 0 8px" }}>정산유형</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, marginBottom: 16 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, marginBottom: 16 }}>
               {SETTLEMENT_TYPES.map(st => (
                 <button key={st.value} onClick={() => setF("settlementType", st.value === form.settlementType ? "" : st.value)}
                   style={{
