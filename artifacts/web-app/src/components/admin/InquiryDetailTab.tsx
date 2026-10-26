@@ -6,9 +6,9 @@
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../../lib/constants';
-import { CHANNEL_LABEL, SERVICE_LABEL, PROCESSING_META, QUOTE_PROGRESS_META, INQUIRY_CLOSE_REASONS, CLOSE_REASON_LABEL, EquipmentRow } from '../../lib/inquiryMeta';
+import { CHANNEL_LABEL, PROCESSING_META, QUOTE_PROGRESS_META, INQUIRY_CLOSE_REASONS, CLOSE_REASON_LABEL, EquipmentRow, inquiryServiceTypes, inquiryServiceLabel } from '../../lib/inquiryMeta';
 import { setQuoteHandoff, buildHandoffItems, parseEquipmentJson } from '../../lib/inquiryHandoff';
-import { InquiryFormFields, InquiryFormState, inquiryFormFromDetail, buildInquiryPayload } from './InquiryFormFields';
+import { InquiryFormFields, InquiryFormState, inquiryFormFromDetail, buildInquiryPayload, validateInquiryServices } from './InquiryFormFields';
 import { BackToListButton } from './BackToListButton';
 
 const th: React.CSSProperties = { padding: '7px 10px', textAlign: 'left', fontSize: 12, color: '#6b7280', fontWeight: 600, width: 130, verticalAlign: 'top', whiteSpace: 'nowrap' };
@@ -24,6 +24,7 @@ interface Detail {
   companyId: number | null; contactId: number | null; divisionId: number | null;
   companyName: string | null; contactNameLinked: string | null; divisionName: string | null;
   serviceType: string | null; languageFrom: string | null; languageTo: string | null;
+  serviceTypes?: string[] | null; otherServices?: string[] | null;   // 복수 선택(없으면 serviceType 1개)
   scheduleFrom: string | null; scheduleTo: string | null; place: string | null; volume: string | null; subject: string | null; requirements: string | null;
   quoteDueDate: string | null; interpretType: string | null; interpretDuration: string | null;
   documentType: string | null; documentUsage: string | null; desiredCompletionDate: string | null;
@@ -94,7 +95,7 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
     setEditing(true);
   };
   const cancelEdit = () => { setEditing(false); setForm(null); };
-  const setField = (k: keyof InquiryFormState, v: string | boolean) => setForm(prev => (prev ? { ...prev, [k]: v } : prev));
+  const setField = (k: keyof InquiryFormState, v: string | boolean | string[]) => setForm(prev => (prev ? { ...prev, [k]: v } : prev));
   const handleUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setUploading(true);
@@ -110,6 +111,8 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
   };
   const saveEdit = async () => {
     if (!form) return;
+    const svcErr = validateInquiryServices(form);
+    if (svcErr) { onToast(svcErr); return; }
     // 견적 연결 여부와 무관하게 의뢰건 원본만 수정한다(연결된 견적서 내용은 자동으로 덮어쓰지 않음).
     const ok = await patch(buildInquiryPayload(form, editEquip, editAttach), '수정 내용이 저장되었습니다.');
     if (ok) { setEditing(false); setForm(null); }
@@ -141,11 +144,12 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
   // [견적서 작성] → 의뢰정보 프리필 handoff 저장 후 견적 등록 화면으로 이동
   const goQuote = () => {
     if (!d) return;
-    const isInterp = d.serviceType === 'interpretation';
-    const isTrans = d.serviceType === 'translation';
+    const types = inquiryServiceTypes(d);
+    const isInterp = types.includes('interpretation');
+    const isTrans = types.includes('translation');
     const noteLines = [
       `[의뢰 접수 ${d.inquiryNumber ?? ''}]`,
-      d.serviceType ? `서비스: ${SERVICE_LABEL[d.serviceType] ?? d.serviceType}` : '',
+      types.length ? `서비스: ${inquiryServiceLabel(d)}` : '',
       (d.languageFrom || d.languageTo) ? `언어: ${[d.languageFrom, d.languageTo].filter(Boolean).join('→')}` : '',
       // 통역
       isInterp && d.interpretType ? `통역형태: ${d.interpretType}` : '',
@@ -166,7 +170,7 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
       inquiryId: d.id, inquiryNumber: d.inquiryNumber,
       companyId: d.companyId, contactId: d.contactId, divisionId: d.divisionId,
       title: d.subject ?? (d.companyName ?? d.customerCompanyName ?? '') , note: noteLines.join('\n'),
-      // 서비스별 견적항목 시드(통역/통역+장비/번역/장비). 기타는 항목 없이 고객정보·메모만 전달.
+      // 서비스별 견적항목 시드(통역/장비/번역 — 복수 선택 시 각각, 금액 없음). 기타 세부 서비스는 메모로만 전달(항목·금액 자동 생성 없음).
       items: buildHandoffItems(d),
     });
     onNavigateQuoteRegister();
@@ -190,6 +194,7 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
   if (!d) return <div style={{ padding: 24, color: '#9ca3af' }}>{loading ? '불러오는 중…' : '의뢰건을 찾을 수 없습니다.'}</div>;
 
   const pm = PROCESSING_META[d.processingStatus] ?? PROCESSING_META.new;
+  const svc = inquiryServiceTypes(d);   // 복수 선택(없으면 기존 단일 serviceType)
   const qm = QUOTE_PROGRESS_META[d.quoteProgress] ?? QUOTE_PROGRESS_META.none;
   const closed = d.processingStatus === 'closed_no_quote';
   const attachments: Array<{ name: string; url: string }> = (() => { try { return d.attachmentsJson ? JSON.parse(d.attachmentsJson) : []; } catch { return []; } })();
@@ -241,33 +246,33 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
               ['접수일시', fmtDateTime(d.receivedAt)],
               ['접수경로', CHANNEL_LABEL[d.channel] ?? d.channel],
               ['담당 PM', d.pmName ?? '미지정'],
-              ['서비스', d.serviceType ? (SERVICE_LABEL[d.serviceType] ?? d.serviceType) : '—'],
+              ['서비스 유형', inquiryServiceLabel(d) || '—'],
               ['견적서 수령 희망일', fmtDateTime(d.quoteDueDate)],
               // 언어는 통역/번역만 표시
-              ...((d.serviceType === 'interpretation' || d.serviceType === 'translation') ? [
+              ...((svc.includes('interpretation') || svc.includes('translation')) ? [
                 ['언어', [d.languageFrom, d.languageTo].filter(Boolean).join('→') || '—'],
               ] : []),
               // 통역 전용
-              ...(d.serviceType === 'interpretation' ? [
+              ...(svc.includes('interpretation') ? [
                 ['통역 형태', d.interpretType ?? '—'],
                 ['통역 일시', [fmtDateTime(d.scheduleFrom), fmtDateTime(d.scheduleTo)].filter(x => x !== '—').join(' ~ ') || '—'],
                 ['1일 통역시간', d.interpretDuration ?? '—'],
                 ['통역 장소', d.place ?? '—'],
               ] : []),
               // 번역 전용
-              ...(d.serviceType === 'translation' ? [
+              ...(svc.includes('translation') ? [
                 ['원문서 형태', d.documentType ?? '—'],
                 ['번역 분량', d.volume ?? '—'],
                 ['문서 사용처', d.documentUsage ?? '—'],
                 ['완료 희망일', fmtDateTime(d.desiredCompletionDate)],
               ] : []),
-              // 장비 단독 전용
-              ...(d.serviceType === 'equipment' ? [
+              // 장비(통역과 함께면 일정·장소는 통역 항목과 동일 — 중복 표시 생략)
+              ...(svc.includes('equipment') && !svc.includes('interpretation') ? [
                 ['장비 사용기간', [fmtDateTime(d.scheduleFrom), fmtDateTime(d.scheduleTo)].filter(x => x !== '—').join(' ~ ') || '—'],
                 ['사용 장소', d.place ?? '—'],
               ] : []),
-              // 기타 전용
-              ...(d.serviceType === 'other' ? [
+              // 기타(통역·장비가 없을 때만 일정·장소 표시)
+              ...(svc.includes('other') && !svc.includes('interpretation') && !svc.includes('equipment') ? [
                 ['희망 일정', [fmtDateTime(d.scheduleFrom), fmtDateTime(d.scheduleTo)].filter(x => x !== '—').join(' ~ ') || '—'],
                 ['장소', d.place ?? '—'],
               ] : []),

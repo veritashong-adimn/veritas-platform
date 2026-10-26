@@ -76,13 +76,13 @@ export function parseEquipmentJson(s: string | null | undefined): Array<{ kind?:
 
 /**
  * 의뢰건 상세 데이터 → 견적 항목(QuoteHandoffItem[]) 변환.
- *  · 통역: 통역행 1개 (+「통역장비 필요」 시 장비행들)
- *  · 번역: 번역행 1개
- *  · 장비 단독: 장비행들
- *  · 기타: 항목 없음(고객정보/메모만 전달)
+ *  · 통역: 통역행 1개 · 번역: 번역행 1개 · 장비(또는 통역+「통역장비 필요」): 장비행들 — 복수 선택 시 각각 생성
+ *  · 기타(감수·편집·공증 등): 항목 없음(메모로만 전달) — 금액·항목 자동 생성 없음, 사용자가 견적 항목을 직접 추가
+ *  · 모든 항목은 금액 없는 초안(단가·금액은 견적 화면에서 사용자가 입력)
  */
 export function buildHandoffItems(d: {
   serviceType: string | null;
+  serviceTypes?: string[] | null;
   languageFrom: string | null; languageTo: string | null;
   interpretType: string | null; interpretDuration: string | null;
   scheduleFrom: string | null; scheduleTo: string | null; place: string | null;
@@ -104,7 +104,8 @@ export function buildHandoffItems(d: {
       memo: r.note || undefined,
     }));
 
-  if (d.serviceType === "interpretation") {
+  const types = Array.isArray(d.serviceTypes) && d.serviceTypes.length ? d.serviceTypes : (d.serviceType ? [d.serviceType] : []);
+  if (types.includes("interpretation")) {
     items.push({
       productType: "interpretation",
       productName: d.interpretType || "통역",
@@ -113,8 +114,8 @@ export function buildHandoffItems(d: {
       interpretPlace: d.place || undefined,
       memo: [d.interpretDuration ? `1일 통역시간: ${d.interpretDuration}` : "", d.subject || ""].filter(Boolean).join(" / ") || undefined,
     });
-    items.push(...eqItems());
-  } else if (d.serviceType === "translation") {
+  }
+  if (types.includes("translation")) {
     items.push({
       productType: "translation",
       productName: d.subject || "번역",
@@ -122,8 +123,8 @@ export function buildHandoffItems(d: {
       fileFormat: d.documentType || undefined,
       memo: d.volume ? `분량: ${d.volume}` : undefined,
     });
-  } else if (d.serviceType === "equipment") {
-    items.push(...eqItems());
   }
+  // 장비행은 의뢰건에 한 번만 저장되므로 통역·장비를 함께 골라도 한 번만 추가(중복 방지)
+  if (types.includes("interpretation") || types.includes("equipment")) items.push(...eqItems());
   return items;
 }

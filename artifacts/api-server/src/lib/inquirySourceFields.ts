@@ -344,6 +344,24 @@ export function parseSchedule(raw: string): { from: string; to: string; parsed: 
   return { from, to: "", parsed: !!from };
 }
 
+// ─── 복수 서비스 인식(자동 입력 제안 전용) ─────────────────────────────────────
+//   원문에 나타난 서비스 키워드를 모두 찾는다. 회사명 등에 흔한 '통번역'은 서비스 근거로 보지 않고,
+//   '통역장비'의 '통역'은 통역 서비스로 보지 않는다. 최종 선택·등록은 사용자가 한다.
+export function detectServiceKinds(text: string, opts: { hasEquipmentRows?: boolean } = {}): { serviceTypes: string[]; otherServices: string[] } {
+  const t = String(text ?? "").replace(/통\s*번역/g, " ");
+  const types = new Set<string>();
+  if (/통역(?!\s*장비)/.test(t)) types.add("interpretation");
+  if (/번역/.test(t)) types.add("translation");
+  if (opts.hasEquipmentRows || /통역\s*장비|장비\s*(대여|임대|렌탈|설치)|수신기|송신기|리시버|통역\s*부스|인포포트|infoport/i.test(t)) types.add("equipment");
+  const others: string[] = [];
+  if (/감수|원어민\s*검수|proofread/i.test(t)) others.push("감수");
+  if (/편집|dtp/i.test(t)) others.push("편집");
+  if (/공증|아포스티유|apostille/i.test(t)) others.push("공증");
+  if (others.length) types.add("other");
+  const order = ["interpretation", "translation", "equipment", "other"];
+  return { serviceTypes: order.filter(x => types.has(x)), otherServices: others };
+}
+
 // ─── Stage 2: sourceFields → VERITAS 등록폼 필드 매핑(결정론적) ──────────────
 
 export interface MappedFields {
@@ -354,6 +372,8 @@ export interface MappedFields {
   subject: string; requirements: string; quoteDueDate: string;
   interpretType: string; scheduleFrom: string; scheduleTo: string; interpretDuration: string; place: string;
   documentType: string; documentUsage: string; volume: string; desiredCompletionDate: string;
+  // 복수 서비스(자동 입력 제안) — 등록폼 복수 선택 구조
+  serviceTypes: string[]; otherServices: string[];
 }
 export interface MapResult {
   fields: Partial<MappedFields>;
@@ -380,7 +400,7 @@ export function mapSourceFieldsToForm(sf: SourceFields, channelDefault = ""): Ma
   const inferredLabels: string[] = [];
 
   // 값이 있으면 그대로 복사하고 근거/추론 표시.
-  const take = (key: SourceKey, formKey: keyof MappedFields, label: string): void => {
+  const take = (key: SourceKey, formKey: Exclude<keyof MappedFields, "serviceTypes" | "otherServices">, label: string): void => {
     const f = sf[key];
     if (!f || !f.raw.trim()) return;
     fields[formKey] = f.raw;

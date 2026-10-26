@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
-import { CHANNEL_LABEL, SERVICE_LABEL, PROCESSING_META, QUOTE_PROGRESS_META, kstTodayStr } from '../../lib/inquiryMeta';
+import { CHANNEL_LABEL, PROCESSING_META, QUOTE_PROGRESS_META, kstTodayStr, inquiryServiceLabel } from '../../lib/inquiryMeta';
 import { DateField } from './DatePickerShared';
 import './readTableView.css';
 
@@ -21,6 +21,7 @@ interface InquiryRow {
   companyDisplay: string | null;
   contactDisplay: string | null;
   serviceType: string | null;
+  serviceTypes?: string[] | null; otherServices?: string[] | null;
   languageFrom: string | null;
   languageTo: string | null;
   pmName: string | null;
@@ -155,7 +156,7 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
                   <td style={{ ...td, fontFamily: 'monospace', color: '#475569' }}>{r.inquiryNumber ?? `#${r.id}`}</td>
                   <td style={{ ...td, color: '#111827', fontWeight: 600, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.companyDisplay ?? '—'}</td>
                   <td style={td}>{r.contactDisplay ?? '—'}</td>
-                  <td style={td}>{r.serviceType ? (SERVICE_LABEL[r.serviceType] ?? r.serviceType) : '—'}</td>
+                  <td style={td}>{inquiryServiceLabel(r) || '—'}</td>
                   <td style={td}>{lang(r)}</td>
                   <td style={td}>{CHANNEL_LABEL[r.channel] ?? r.channel}</td>
                   <td style={td}>{r.pmName ?? '—'}</td>

@@ -10,7 +10,8 @@ import React, { useRef, useState } from 'react';
 import { api } from '../../lib/constants';
 import { confirmDialog } from '../ui';
 import { EquipmentRow } from '../../lib/inquiryMeta';
-import { InquiryFormFields, InquiryFormState, emptyInquiryForm, buildInquiryPayload } from './InquiryFormFields';
+import { InquiryFormFields, InquiryFormState, emptyInquiryForm, buildInquiryPayload, validateInquiryServices } from './InquiryFormFields';
+import { OTHER_SERVICE_PRESETS } from '../../lib/inquiryMeta';
 import { InquiryAiAnalyzePanel, AiInquiryFields, AiInquiryEquipment } from './InquiryAiAnalyzePanel';
 
 /** 폼에 사용자 입력이 있는지 판정(접수일시는 자동 갱신되므로 제외). 초기화 확인창 노출 판단용. */
@@ -35,7 +36,7 @@ export function InquiryRegisterTab({ token, onToast, onDone, adminUsers = [] }: 
   const [resetKey, setResetKey] = useState(0);
   // AI 패널의 미분석 입력(붙여넣은 텍스트/추가한 파일/분석결과) 존재 여부 — 초기화 확인창 판단용
   const aiDirtyRef = useRef(false);
-  const set = (k: keyof InquiryFormState, v: string | boolean) => setF(prev => ({ ...prev, [k]: v }));
+  const set = (k: keyof InquiryFormState, v: string | boolean | string[]) => setF(prev => ({ ...prev, [k]: v }));
 
   // ── 초기화 ──────────────────────────────────────────────────────────────────
   // 폼(서비스유형·고객정보·거래처/담당자 선택·서비스별 내용·요구사항)·장비·첨부·AI 패널을 모두 비운다.
@@ -66,8 +67,20 @@ export function InquiryRegisterTab({ token, onToast, onDone, adminUsers = [] }: 
         const v = (fields as Record<string, unknown>)[k];
         if (typeof v === 'string' && v.trim()) (next as Record<string, unknown>)[k] = v;
       }
-      // 통역+장비: 장비 행이 분석되면 체크박스 자동 활성화(장비 단독은 항상 노출되어 불필요)
-      if (eq.length > 0 && next.serviceType === 'interpretation') next.equipmentNeeded = true;
+      // 복수 서비스 제안 — AI가 인식한 유형을 모두 선택(기존 선택은 유지하고 추가만). 장비행이 분석되면 장비 유형도 선택.
+      const sug = new Set<string>([...prev.serviceTypes,
+        ...(Array.isArray(fields.serviceTypes) && fields.serviceTypes.length ? fields.serviceTypes : (fields.serviceType ? [fields.serviceType] : [])),
+        ...(eq.length > 0 ? ['equipment'] : [])]);
+      next.serviceTypes = [...sug];
+      // 기타 세부 제안 — 프리셋(감수/편집/공증)은 해당 버튼, 그 외는 직접 입력란에 추가
+      const others = Array.isArray(fields.otherServices) ? fields.otherServices.filter(Boolean) : [];
+      if (others.length) {
+        if (!next.serviceTypes.includes('other')) next.serviceTypes = [...next.serviceTypes, 'other'];
+        const presets = others.filter(o => (OTHER_SERVICE_PRESETS as readonly string[]).includes(o));
+        const custom = others.filter(o => !(OTHER_SERVICE_PRESETS as readonly string[]).includes(o));
+        next.otherServices = [...new Set([...prev.otherServices, ...presets])];
+        if (custom.length) { next.otherCustomOn = true; next.otherCustom = [...prev.otherCustom.filter(v => v.trim()), ...custom]; }
+      }
       return next;
     });
     if (eq.length > 0) {
@@ -93,6 +106,8 @@ export function InquiryRegisterTab({ token, onToast, onDone, adminUsers = [] }: 
   };
 
   const submit = async () => {
+    const svcErr = validateInquiryServices(f);
+    if (svcErr) { onToast(svcErr); return; }
     if (!f.customerCompanyName.trim() && !f.contactName.trim() && !f.subject.trim()) {
       onToast('회사명·담당자·주제 중 하나 이상 입력해 주세요.'); return;
     }

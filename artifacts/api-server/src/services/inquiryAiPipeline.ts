@@ -21,6 +21,7 @@ import {
   type SourceFields,
   type SourceKey,
   type MappedFields,
+  detectServiceKinds,
 } from "../lib/inquirySourceFields";
 
 export type VisionImg = { type: "image_url"; image_url: { url: string; detail?: "high" | "low" | "auto" } };
@@ -241,6 +242,16 @@ export async function analyzeInquiry(params: {
     try { equipment = await aiExtractEquipment({ text: eqSource, apiKey, baseURL }); }
     catch (e) { console.error("[INQUIRY-AI] 장비 추출 실패:", e); }
   }
+
+  // 복수 서비스 제안 — 서비스 라벨·주제·요구사항·원문 전체에서 인식(기존 단일 serviceType 은 대표값으로 유지)
+  const svcText = [sourceFields.serviceHint?.raw, sourceFields.subject?.raw, sourceFields.requirements?.raw, pastedText, ocrText, ...visionRows.map(r => `${r.label}: ${r.value}`)].filter(Boolean).join("\n");
+  const svc = detectServiceKinds(svcText, { hasEquipmentRows: equipment.length > 0 });
+  if (mapped.fields.serviceType && !svc.serviceTypes.includes(mapped.fields.serviceType)) svc.serviceTypes.unshift(mapped.fields.serviceType);
+  if (svc.serviceTypes.length) {
+    mapped.fields.serviceTypes = ["interpretation", "translation", "equipment", "other"].filter(x => svc.serviceTypes.includes(x));
+    mapped.fields.serviceType = mapped.fields.serviceType || mapped.fields.serviceTypes[0];
+  }
+  if (svc.otherServices.length) mapped.fields.otherServices = svc.otherServices;
 
   const confidence: AnalyzeOutput["confidence"] = structured ? "high" : (matchedCount > 0 ? "medium" : "low");
 

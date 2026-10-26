@@ -32,6 +32,22 @@ export const SERVICE_LABEL: Record<string, string> = {
   expense: "실비", // legacy 데이터 표시용 (신규 접수에서는 선택 불가)
 };
 
+// 기타 서비스 세부 선택지(복수 선택). '직접 입력'은 화면에서 자유 입력란으로 처리.
+export const OTHER_SERVICE_PRESETS = ["감수", "편집", "공증"] as const;
+
+// 서비스 유형 목록 — 신규 복수 선택(serviceTypes) 우선, 없으면 기존 단일 serviceType 1개(과거 데이터 호환).
+export function inquiryServiceTypes(d: { serviceType?: string | null; serviceTypes?: string[] | null }): string[] {
+  if (Array.isArray(d.serviceTypes) && d.serviceTypes.length) return d.serviceTypes;
+  return d.serviceType ? [d.serviceType] : [];
+}
+// 표시 문자열 — 예: "통역 · 장비 · 감수 · 공증"(기타 세부 서비스가 있으면 '기타' 대신 세부 항목 표시).
+export function inquiryServiceLabel(d: { serviceType?: string | null; serviceTypes?: string[] | null; otherServices?: string[] | null }): string {
+  const types = inquiryServiceTypes(d);
+  const others = Array.isArray(d.otherServices) ? d.otherServices.filter(Boolean) : [];
+  const parts = types.flatMap(t => (t === "other" && others.length ? others : [SERVICE_LABEL[t] ?? t]));
+  return parts.join(" · ");
+}
+
 // 통역장비/장비 단독 — 복수 장비행. 견적 장비항목(constants EQUIPMENT_ITEMS/단위) 재사용.
 export interface EquipmentRow {
   kind: string;      // 장비 종류 (EQUIPMENT_KINDS)

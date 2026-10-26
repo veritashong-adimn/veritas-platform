@@ -198,6 +198,26 @@ const str = (v: any): string | null => (typeof v === "string" && v.trim() ? v.tr
 const num = (v: any): number | null => (v === null || v === undefined || v === "" || isNaN(Number(v)) ? null : Number(v));
 const ts = (v: any): Date | null => { if (!v) return null; const d = new Date(v); return isNaN(d.getTime()) ? null : d; };
 const CHANNELS = ["homepage", "email", "phone", "kakao", "other"];
+// 서비스 유형(복수 선택) — 표시 순서 = 대표값 결정 순서. expense 는 레거시 저장값 호환용.
+const SERVICE_TYPES = ["interpretation", "translation", "equipment", "other", "expense"];
+// 복수 선택 정규화: 허용값만·중복 제거·표시 순서 정렬. 대표 service_type = 목록 첫 값(기존 단일 필드 호환).
+//   기타(other) 미선택이면 기타 세부 서비스는 저장하지 않는다. 세부 서비스는 앞뒤 공백 제거·빈 값/중복 제거·길이 제한.
+function normalizeServices(b: any) {
+  const out: { serviceType?: string | null; serviceTypes?: string[] | null; otherServices?: string[] | null } = {};
+  const hasTypes = Array.isArray(b.serviceTypes);
+  if (!hasTypes && !("serviceType" in b)) return out;   // 수정 요청에 서비스 필드가 없으면 기존값 유지
+  const raw: string[] = hasTypes ? b.serviceTypes : (str(b.serviceType) ? [str(b.serviceType)!] : []);
+  const types = SERVICE_TYPES.filter(t => raw.includes(t));
+  out.serviceTypes = types.length ? types : null;
+  out.serviceType = types[0] ?? null;
+  if (types.includes("other")) {
+    const others = (Array.isArray(b.otherServices) ? b.otherServices : [])
+      .map((v: unknown) => (typeof v === "string" ? v.trim().slice(0, 50) : "")).filter(Boolean);
+    out.otherServices = [...new Set<string>(others)].slice(0, 20);
+    if (!out.otherServices.length) out.otherServices = null;
+  } else out.otherServices = null;
+  return out;
+}
 
 // ── 등록 ─────────────────────────────────────────────────────────────────────
 router.post("/admin/inquiries", ...adminGuard, async (req, res) => {
@@ -214,7 +234,7 @@ router.post("/admin/inquiries", ...adminGuard, async (req, res) => {
       department: str(b.department), contactPosition: str(b.contactPosition),
       contactPhone: str(b.contactPhone), contactMobile: str(b.contactMobile), contactEmail: str(b.contactEmail),
       companyId: num(b.companyId), contactId: num(b.contactId), divisionId: num(b.divisionId),
-      serviceType: str(b.serviceType), languageFrom: str(b.languageFrom), languageTo: str(b.languageTo),
+      ...normalizeServices(b), languageFrom: str(b.languageFrom), languageTo: str(b.languageTo),
       scheduleFrom: ts(b.scheduleFrom), scheduleTo: ts(b.scheduleTo),
       place: str(b.place), volume: str(b.volume), subject: str(b.subject), requirements: str(b.requirements),
       quoteDueDate: ts(b.quoteDueDate),
@@ -249,10 +269,11 @@ router.patch("/admin/inquiries/:id", ...adminGuard, async (req, res) => {
     if (b.status === "new" || b.status === "reviewing") patch.status = b.status;
     for (const f of ["customerCompanyName", "contactName", "department", "contactPosition",
       "contactPhone", "contactMobile", "contactEmail",
-      "serviceType", "languageFrom", "languageTo", "place", "volume", "subject", "requirements",
+      "languageFrom", "languageTo", "place", "volume", "subject", "requirements",
       "interpretType", "interpretDuration", "documentType", "documentUsage", "equipmentJson", "rawSource", "attachmentsJson"]) {
       if (f in b) patch[f] = str(b[f]);
     }
+    Object.assign(patch, normalizeServices(b));   // serviceType/serviceTypes/otherServices(요청에 있을 때만)
     for (const f of ["companyId", "contactId", "divisionId", "assignedPmId"]) {
       if (f in b) patch[f] = num(b[f]);
     }

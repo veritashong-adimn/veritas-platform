@@ -15,6 +15,7 @@ import { api } from '../../lib/constants';
 /** AI가 채워줄 의뢰건 필드(등록폼 InquiryFormState 의 부분집합, 모두 문자열). */
 export interface AiInquiryFields {
   channel?: string; serviceType?: string;
+  serviceTypes?: string[]; otherServices?: string[];   // 복수 서비스 제안(자동 입력 제안 전용)
   customerCompanyName?: string; department?: string; contactName?: string; contactPosition?: string;
   contactPhone?: string; contactMobile?: string; contactEmail?: string;
   languageFrom?: string; languageTo?: string;

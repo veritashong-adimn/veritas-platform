@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, varchar, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, varchar, timestamp, pgEnum, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
 /**
@@ -45,6 +45,10 @@ export const inquiriesTable = pgTable("inquiries", {
 
   // ── 의뢰내용 (공통) ────────────────────────────────────
   serviceType: text("service_type"),                          // translation | interpretation | equipment | expense | other
+  // 복수 선택(2026-10 승인) — 선택한 서비스 유형 전체 / 기타 세부 서비스. null 이면 기존 단일 service_type 1개로 간주.
+  //   service_type 은 대표값(선택 목록의 첫 유형)으로 계속 저장해 기존 화면·API 와 호환한다.
+  serviceTypes: jsonb("service_types").$type<string[]>(),     // 예: ["interpretation","equipment","other"]
+  otherServices: jsonb("other_services").$type<string[]>(),   // 예: ["감수","공증","자막 제작"] (기타 선택 시만)
   languageFrom: text("language_from"),
   languageTo: text("language_to"),
   scheduleFrom: timestamp("schedule_from"),                   // 통역 시작일시 (통역)
