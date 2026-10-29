@@ -37,13 +37,16 @@ export function convertToFormItem(it: QuoteDetailItem & { productId?: number | n
     }
   }
   // 폼 수량 복원 —
-  //  · 통역: 진행일수 (신규 포맷은 qty가 이미 일수, 구 포맷은 날짜에서 재산출)
-  //  · 장비: 저장 quantity = 사용일수 × 수량 이므로 사용일수로 나눠 '순수 수량'을 복원한다.
+  //  · 통역: 신규 포맷(interpreter_count 저장)은 저장된 수량 그대로(직원 수정값 0.5일 등 유지),
+  //          구 포맷(quantity = 인원×일수)은 날짜에서 진행일수를 재산출
+  //  · 장비: 저장 quantity = 사용일수 × 수량 이므로 사용일수로 나눠 '순수 수량'을 복원한다(소수 둘째 자리까지).
   //    (나누지 않으면 저장 시마다 사용일수가 재차 곱해져 수량이 1→2→4→…로 증식하는 버그가 발생)
   const usageDays = type === 'equipment' ? Math.max(1, Number(it.usagePeriod) || 1) : 1;
+  const hasCountCol = Number((it as { interpreterCount?: number | null }).interpreterCount) > 0;
+  const eqQty = Math.round((qty / usageDays) * 100) / 100;
   const formQuantity =
-    type === 'interpretation' && sd > 0 ? String(sd)
-    : type === 'equipment' ? String(Math.max(1, Math.round(qty / usageDays)))
+    type === 'interpretation' ? (hasCountCol || sd === 0 ? String(qty) : String(sd))
+    : type === 'equipment' ? String(eqQty > 0 ? eqQty : 1)
     : String(qty);
   const [startTime = '', endTime = ''] = it.interpretDuration ? it.interpretDuration.split('~') : [];
   const sourceLanguage = it.languagePair ? it.languagePair.split('-')[0] : 'ko';
@@ -58,7 +61,8 @@ export function convertToFormItem(it: QuoteDetailItem & { productId?: number | n
     productType:      type,
     quantity:         formQuantity,
     unit:             it.unit,
-    unitPrice:        String(Number(it.unitPrice)),
+    // 단가 미입력(price_status=unset)은 0원이 아니라 빈 칸으로 복원 — 실제 0원(무상·기존 자료)과 구분
+    unitPrice:        (it as { priceStatus?: string | null }).priceStatus === 'unset' ? '' : String(Number(it.unitPrice)),
     taxType,
     memo:             userMemo,
     sourceLanguage,
@@ -75,7 +79,8 @@ export function convertToFormItem(it: QuoteDetailItem & { productId?: number | n
     // 운영시간 복원 — 저장된 자유입력 문자열 그대로
     operationHours:   (it as { operationHours?: string | null }).operationHours ?? '',
     interpretPlace:   it.interpretPlace    ?? '',
-    interpreterCount,
+    // 인원 미확정(interpreter_count_confirmed=false)은 계산용 저장값(1)을 보여주지 않고 빈 칸('인원 미확정')으로 복원
+    interpreterCount: (it as { interpreterCountConfirmed?: boolean | null }).interpreterCountConfirmed === false ? '' : interpreterCount,
     eventStartDate:   it.eventStartDate    ?? '',
     eventEndDate:     it.eventEndDate      ?? '',
     itemLocation:     it.itemLocation      ?? '',

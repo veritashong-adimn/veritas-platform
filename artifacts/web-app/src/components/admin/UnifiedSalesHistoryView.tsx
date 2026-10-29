@@ -4,11 +4,13 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { api } from '../../lib/constants';
 import { Pagination } from '../ui/Paginator';
+import { SaleContactPicker } from './SaleContactPicker';
+import { ContactReviewListModal } from './ContactReviewListModal';
 
 type AdminUser = { id: number; name?: string | null; email?: string | null };
 type Row = {
   source: 'current' | 'legacy'; key: string; id: number | string; origin?: 'legacy_crm' | null; pmName?: string | null;
-  recordDate: string | null; saleName: string | null; companyName: string | null; contactName: string | null;
+  recordDate: string | null; saleName: string | null; companyName: string | null; contactName: string | null; contactState?: 'master' | 'restored' | 'review' | null;
   productName: string | null; amount: number | null; collectionDate: string | null; collectionStatus: string | null;
   workflowStatus: string | null; adminId: number | null; financialStatus: string | null; quoteType: string | null;
   taxInvoiceDate: string | null; salesRep: string | null;
@@ -42,6 +44,9 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
   const [result, setResult] = useState<Result | null>(null);
   const [loading, setLoading] = useState(false);
   const [pageSize, setPageSize] = useState(PAGE_SIZE);   // 기본 50(기존 유지). 공통 Pagination 의 페이지당 선택과 연동.
+  // 과거 CRM 판매건(미전환·전환) 고객 담당자 보완 창
+  const [contactEdit, setContactEdit] = useState<{ source: 'legacy' | 'current'; id: number } | null>(null);
+  const [showReview, setShowReview] = useState(false);   // 고객 담당자 확인 필요 목록
 
   const adminName = (id: number | null) => (id == null ? null : adminUsers.find(u => u.id === id)?.name || null);
 
@@ -77,6 +82,7 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                style={{ padding: '8px 11px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 13, flex: '1 1 320px', maxWidth: 420 }} />
         <button style={btn(loading, true)} disabled={loading} onClick={() => load(1, q)} data-testid="sales-history-search-btn">{loading ? '검색 중…' : '검색'}</button>
         <span style={{ fontSize: 12, color: '#6b7280' }}>총 {(p?.total ?? 0).toLocaleString()}건{range === 'all' ? ' (현재+과거)' : ' (과거 CRM)'}</span>
+        <button style={{ ...btn(false), marginLeft: 'auto' }} onClick={() => setShowReview(true)} data-testid="btn-contact-review-open" aria-label="고객 담당자 확인 필요 목록">고객 담당자 확인 필요 목록</button>
       </div>
 
       {/* 부분 실패 / degraded 배너 */}
@@ -113,7 +119,22 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
                   </td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.companyName ?? undefined}>{r.companyName ?? '-'}</td>
                   {/* 고객 담당자 = 거래처 측 담당자(contactName). 담당PM 과 서로 대체하지 않음. */}
-                  <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.contactName ?? undefined}>{r.contactName ?? '-'}</td>
+                  {/* 과거 CRM 판매건(미전환·전환)은 칸을 눌러 담당자 검색·선택·신규 등록(원본 불변, 별도 연결) */}
+                  {(isLegacy || r.origin === 'legacy_crm') ? (
+                    <td style={{ padding: '6px 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.contactName ? `${r.contactName} — 눌러서 수정` : '눌러서 고객 담당자 입력'}
+                        onClick={e => { e.stopPropagation(); setContactEdit({ source: isLegacy ? 'legacy' : 'current', id: Number(r.id) }); }}>
+                      <button type="button" data-testid={`sh-contact-${r.key}`} aria-label="고객 담당자 수정" data-state={r.contactState ?? 'none'}
+                        style={{ border: '1px dashed #cbd5e1', background: 'transparent', borderRadius: 6, padding: '2px 6px', cursor: 'pointer', fontSize: 13, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis',
+                          color: r.contactState === 'review' ? '#b45309' : r.contactName ? '#111827' : '#9ca3af' }}>
+                        {/* ① 담당자 Master 연결 ② 진행관리표 복원 고객명(미연결) ③ 확인 필요 ④ 없음 */}
+                        {r.contactState === 'review' ? '확인 필요' : (r.contactName ?? '-')}
+                        {r.contactState === 'restored' && <span style={{ marginLeft: 4, fontSize: 10, color: '#9ca3af' }} title="진행관리표에서 복원한 고객명 — 담당자 Master 미연결">미연결</span>}
+                        <span style={{ marginLeft: 3, color: '#9ca3af' }}>✎</span>
+                      </button>
+                    </td>
+                  ) : (
+                    <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.contactName ?? undefined}>{r.contactName ?? '-'}</td>
+                  )}
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>{serviceTypeOf(r)}</td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.productName ?? undefined}>{r.productName ?? '-'}</td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.amount != null ? r.amount.toLocaleString() : '-'}</td>
@@ -132,6 +153,16 @@ export function UnifiedSalesHistoryView({ authHeaders, setToast, adminUsers, ran
           </tbody>
         </table>
       </div>
+
+      {showReview && (
+        <ContactReviewListModal authHeaders={authHeaders} onClose={() => setShowReview(false)}
+          onPick={id => { setShowReview(false); setContactEdit({ source: 'legacy', id }); }} />
+      )}
+      {contactEdit && (
+        <SaleContactPicker source={contactEdit.source} id={contactEdit.id} authHeaders={authHeaders}
+          onClose={() => setContactEdit(null)}
+          onSaved={msg => { setContactEdit(null); setToast(msg); load(p?.page ?? 1, q); }} />
+      )}
 
       {/* (표준화) 거래처 등과 동일한 공통 Pagination — 좌: 범위/전체/페이지당, 우: 처음/이전/1~5/다음/마지막 */}
       {p && p.total > 0 && (

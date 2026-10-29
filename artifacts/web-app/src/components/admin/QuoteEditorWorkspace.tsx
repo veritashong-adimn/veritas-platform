@@ -8,10 +8,16 @@
  */
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from 'react';
 import { formatWon } from "@/lib/utils";
-import { api, Product } from '../../lib/constants';
+import { api, Product, UNITS_BY_PRODUCT_TYPE } from '../../lib/constants';
+import { QuickProductCreateModal } from './QuickProductCreateModal';
+import { buildQuickInitial, type QuickCreateInitial, type CreatedQuickProduct } from './LazyProductPanel';
 import { registerUnsavedChecker } from '../../lib/unsavedGuard';
-import { readQuoteHandoff, clearQuoteHandoff } from '../../lib/inquiryHandoff';
-import { Card, DsButton, ClickSelect, NumericInput } from '../ui';
+import { readQuoteHandoff, clearQuoteHandoff, matchProductsForHint } from '../../lib/inquiryHandoff';
+import { InquiryQuoteLinkCard, type InquiryProductMatch } from './InquiryQuoteLinkCard';
+import { useInquiryCustomerPlan } from './useInquiryCustomerPlan';
+import { priceStatusOf, isPriceBlank, isHeadcountBlank } from '../../lib/quoteItemStatus';
+import { Card, DsButton, ClickSelect, NumericInput, confirmDialog, promptDialog, alertDialog } from '../ui';
+import { LegacyVatNotice, confirmLegacyVatChange } from './LegacyVatNotice';
 import { dsInput, dsInputStd, dsField, dsAmount, dsStickyPageHeader, C, BD, TBL, TYPO, SP, FORM, FIELD, CRM_FIELD_COLS } from '../../lib/ds';
 import { SVC_CFG, COL_H, SVC_FIELD_HINTS, tblRow } from './quoteItemsShared';
 import RowControls from './RowControls';
@@ -22,7 +28,8 @@ import {
 import AiQuoteModal, { type AiDraftRow } from './AiQuoteModal';
 import ComparisonQuoteModal from './ComparisonQuoteModal';
 import { PrepaidLinesSection, PrepaidSummarySection, prepaidLinesToApi, makeEmptyPrepaidLine, sumPrepaidLines, type PrepaidLine } from './PrepaidDeductionSection';
-import { calcInterpretation, displayUnit, buildQuotePdfData } from '../../lib/quotePdf';
+import { calcInterpretation, interpretationServiceDays, displayUnit, buildQuotePdfData } from '../../lib/quotePdf';
+import { QuoteRecipientRefreshBar } from './QuoteRecipientRefreshBar';
 import { generateQuoteTitle } from '../../lib/quoteTitle';
 import QuotePdfPreviewModal from './QuotePdfPreviewModal';
 import { PageHeader } from './PageHeader';
@@ -68,6 +75,10 @@ export interface QuoteItemForm {
   eventEndDate:   string;  // 사용 종료일 (기간 사용)
   itemLocation:   string;
   usagePeriod:    string;  // 사용일수 (숫자, "일" 표시는 UI에서만)
+  // 원본 견적 단가·공급가액(의뢰건 원본 견적서) — 내부 보존(저장·PDF·화면 미표시). 단가는 의뢰건 연결 시 unitPrice 에 바로 입력되고,
+  //   공급가액은 계산 결과와 다를 때만 행에 확인 안내를 띄우는 데 쓴다.
+  refUnitPrice?:  string;
+  refAmount?:     string;
   // 기타 전용
   expenseType:    string;  // 서비스 유형 (공증/속기/녹취 등)
   // 할인 전용 (productType='discount') — 하나의 품목 행으로 저장(공급가액 음수)
@@ -78,7 +89,7 @@ export interface QuoteItemForm {
 
 interface Company   { id: number; name: string; divisionNames?: string[]; aliases?: string[]; customerType?: string | null; phone?: string | null; mobile?: string | null; email?: string | null }
 interface Division  { id: number; name: string }
-interface Contact   { id: number; name: string; companyId: number | null; divisionId?: number | null; divisionName?: string | null }
+interface Contact   { id: number; name: string; companyId: number | null; divisionId?: number | null; divisionName?: string | null; email?: string | null; position?: string | null; department?: string | null }
 interface AdminUser { id: number; name?: string | null; email: string }
 
 // ─── 서비스 유형 설정 ─────────────────────────────────────────────────────────
@@ -102,6 +113,11 @@ const SVC_UNITS: Record<ServiceType, string[]> = {
   equipment:      ['세트', '개', '일', '회', '건'],
   expense:        ['건', '회', '시간', '일', '페이지', '부', '권', '개', '세트'],
   discount:       ['건'],
+};
+// 비고 입력 안내 — 입력값이 아님을 알 수 있게 '예:' 로 시작(장비 행에 번역·통역 예시 문구가 보이지 않게 유형별로 구분)
+const MEMO_PLACEHOLDER: Partial<Record<ServiceType, string>> = {
+  translation: '비고 (예: 긴급, 감수 포함)', interpretation: '비고 (예: 출장비 별도)',
+  equipment: '비고 (예: 설치·운영 조건)', expense: '비고',
 };
 function getUnitOptions(serviceType: ServiceType, v: string): string[] {
   const list = SVC_UNITS[serviceType] ?? SVC_UNITS.expense;   // 미지원 유형 방어(undefined.includes 크래시 방지)
@@ -151,11 +167,11 @@ function calcItem(it: QuoteItemForm, vat: VatType, baseSupply = 0) {
   const p = Number(it.unitPrice.replace?.(/,/g, '') || 0);
   let s: number;
   if (it.productType === 'interpretation') {
-    // 통역 공급가액은 항상 원본 입력(시작일·종료일·인원·단가)에서 파생한다.
-    // 화면 '수량' 입력값(오래된 상태)은 참조하지 않는다. (지시문 5·6절)
+    // 통역 공급가액 = 수량 × 인원 × 단가. 수량은 직원 수정값(1, 2, 0.5 …), 비어 있으면 날짜 진행일수.
     s = calcInterpretation({
       startDate:        it.interpretDate,
       endDate:          it.interpretEndDate,
+      quantity:         it.quantity,
       interpreterCount: it.interpreterCount,
       unitPrice:        it.unitPrice,
     }).supplyAmount;
@@ -180,9 +196,9 @@ export function calcTotals(items: QuoteItemForm[], vat: VatType) {
   const nonDiscountSupply = items.reduce((a, it) => it.productType === 'discount' ? a : a + calcItem(it, vat).supply, 0);
   return items.reduce((a, it) => { const r = calcItem(it, vat, nonDiscountSupply); return { supply: a.supply + r.supply, tax: a.tax + r.tax, total: a.total + r.total }; }, { supply: 0, tax: 0, total: 0 });
 }
+// 오늘(+d일) 날짜 — KST 기준. toISOString() 은 UTC 라 KST 00:00~09:00 사이에는 전날 날짜가 견적일로 들어갔다.
 function dateOffset(d: number) {
-  const dt = new Date(); dt.setDate(dt.getDate() + d);
-  return dt.toISOString().split('T')[0];
+  return new Date(Date.now() + 9 * 3600_000 + d * 86_400_000).toISOString().split('T')[0];
 }
 
 // 견적서명 불러오기: 제목이 명확한 _YYYYMMDD(유효 날짜)로 끝나면 현재 견적일의 YYYYMMDD로 교체.
@@ -220,6 +236,22 @@ function defaultItem(): QuoteItemForm {
     expenseType: '',
   };
 }
+/** 상품 선택 시 행에 적용할 값(행의 상품 선택·의뢰건 상품 추천이 같은 규칙을 쓴다). 수행정보(일자·장소·시간)는 건드리지 않는다. */
+function buildProductPatch(p: Product | null, currentType: ServiceType): Partial<QuoteItemForm> {
+  // 상품 선택 시: 지원 유형은 그대로, 미지원 카탈로그 유형(project/proofreading 등)은 기타로 정규화. 해제(null)면 현재 유형 유지.
+  const productType: ServiceType = p ? normalizeServiceType(p.productType) : currentType;
+  return {
+    productId: p?.id ?? null,
+    productName: p?.name ?? '',
+    productType,
+    // 통역 단위는 항상 '일'로 고정 (상품 마스터의 '시간' 등 단위에 좌우되지 않음)
+    unit: productType === 'interpretation'
+      ? '일'
+      : (p ? (displayUnit(p.name, p.unit) || SVC_DEFAULT_UNIT[productType]) : SVC_DEFAULT_UNIT[productType]),
+    ...(productType === 'translation' && p?.sourceLanguage ? { sourceLanguage: p.sourceLanguage } : {}),
+  };
+}
+
 function defaultItemForType(t: ServiceType): Partial<QuoteItemForm> {
   if (t === 'discount') {
     // 할인 항목 기본값 — 상품명 'Special D.C'(수정 가능), 금액 방식, 단가/수량 미사용
@@ -231,16 +263,26 @@ function defaultItemForType(t: ServiceType): Partial<QuoteItemForm> {
 
 // ─── 저장 시 API 항목 변환 ────────────────────────────────────────────────────
 
+// 수량 — 소수(0.5 등) 허용, DB numeric(10,2) 에 맞춰 소수 둘째 자리까지
+function qty2(v: string): number {
+  const n = Number(String(v ?? '').replace(/,/g, ''));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
+}
+
 function toApiItem(it: QuoteItemForm, vat: VatType) {
   const base = {
     productId:  it.productId ?? undefined,
     productName: it.productName.trim(),
     unit:       it.unit || SVC_DEFAULT_UNIT[it.productType],
-    quantity:   Number(it.quantity) || 1,
+    quantity:   qty2(it.quantity) || 1,
     unitPrice:  Number(it.unitPrice.replace?.(/,/g, '') || 0),
     taxRate:    (vat === 'taxable' ? 0.1 : 0) as 0 | 0.1,
     taxType:    vat,
     itemType:   it.productType,
+    // 단가 상태(unset=미입력·free=무상 확정·set) — 할인 행은 대상 아님
+    ...(it.productType !== 'discount' ? { priceStatus: priceStatusOf(it.unitPrice) } : {}),
+    // 통역 인원 확정 여부 — 입력란이 비어 있으면 미확정(계산은 기존대로 1명 기준)
+    ...(it.productType === 'interpretation' ? { interpreterCountConfirmed: !isHeadcountBlank(it.interpreterCount) } : {}),
   };
   switch (it.productType) {
     case 'translation': {
@@ -260,19 +302,20 @@ function toApiItem(it: QuoteItemForm, vat: VatType) {
       // 통역시간(안내 정보) — 하루 기준 시간 숫자(소수 허용)를 "N시간/일" 형식으로 interpretDuration 컬럼에 저장. 계산 미사용.
       const hours = (it.interpretHours ?? '').replace(/[^\d.]/g, '');
       const dur = hours ? `${hours}시간/일` : '';
-      // 통역 저장 모델: 수량 = 진행일수, 인원 = 별도(interpreterCount).
-      // 서버 공급가액 = 진행일수 × 인원 × 단가 (편집 화면·요약과 동일 기준).
-      const { serviceDays } = calcInterpretation({
+      // 통역 저장 모델: 수량 = 직원이 정한 수량(초기값 진행일수), 인원 = 별도(interpreterCount).
+      // 서버 공급가액 = 수량 × 인원 × 단가 (편집 화면·요약과 동일 기준).
+      const { quantity: interpQty } = calcInterpretation({
         startDate:        it.interpretDate,
         endDate:          it.interpretEndDate,
+        quantity:         qty2(it.quantity),
         interpreterCount: it.interpreterCount,
         unitPrice:        it.unitPrice,
       });
       const peopleCount = Number(it.interpreterCount) > 0 ? Math.round(Number(it.interpreterCount)) : 1;
       return {
         ...base,
-        quantity:          serviceDays,   // 진행일수 (종료일 − 시작일 + 1)
-        unit:              '일',           // 통역 단위 고정
+        quantity:          interpQty,                 // 수정 수량(없으면 진행일수)
+        unit:              it.unit || '일',           // 선택 단위(기본 '일')
         interpreterCount:  peopleCount,   // 투입 인원 — 서버가 공급가액에 별도로 곱함
         interpretDate:     it.interpretDate    || undefined,
         interpretPlace:    it.interpretPlace   || undefined,
@@ -359,9 +402,10 @@ function useFixedAnchor(ref: React.RefObject<HTMLElement | null>, open: boolean,
 
 // ─── 검색 팝업 ────────────────────────────────────────────────────────────────
 
-function SearchPopup({ title, items, value, onSelect, onClose }: {
+function SearchPopup({ title, items, value, onSelect, onClose, create }: {
   title: string; items: { id: number; label: string; sub?: string; keywords?: string }[]; value: number | null;
   onSelect: (id: number | null) => void; onClose: () => void;
+  create?: ProductCreateEntry;
 }) {
   const [q, setQ] = useState('');
   const ref = useRef<HTMLInputElement>(null);
@@ -382,7 +426,7 @@ function SearchPopup({ title, items, value, onSelect, onClose }: {
         </div>
         <div style={{ overflowY: 'auto', flex: 1 }}>
           {value !== null && <div onClick={() => { onSelect(null); onClose(); }} style={{ padding: '10px 18px', fontSize: 13, color: C.g400, cursor: 'pointer', borderBottom: '1px solid #f8f9fa' }} onMouseEnter={e => (e.currentTarget.style.background = C.g50)} onMouseLeave={e => (e.currentTarget.style.background = '')}>선택 해제</div>}
-          {filtered.length === 0 && <div style={{ padding: '24px 18px', textAlign: 'center', fontSize: 13, color: C.g400 }}>검색 결과 없습니다.</div>}
+          {filtered.length === 0 && <div style={{ padding: '24px 18px', textAlign: 'center', fontSize: 13, color: C.g400 }}>{create ? '검색 결과가 없습니다.' : '검색 결과 없습니다.'}</div>}
           {filtered.map(item => (
             <div key={item.id} onClick={() => { onSelect(item.id); onClose(); }}
               style={{ padding: '10px 18px', cursor: 'pointer', background: item.id === value ? C.primaryBg : undefined, borderBottom: '1px solid #f8f9fa' }}
@@ -393,21 +437,45 @@ function SearchPopup({ title, items, value, onSelect, onClose }: {
             </div>
           ))}
         </div>
+        {create && <CreateEntryFooter create={create} query={q} onBeforeOpen={onClose} big />}
       </div>
+    </div>
+  );
+}
+
+// 상품 검색의 [+ 신규 상품 등록] — 결과가 있어도 항상 하단에 노출. 권한이 없으면 안내만(서버도 관리자 권한 검증).
+type ProductCreateEntry = { onCreate?: (query: string) => void; note?: string };
+function CreateEntryFooter({ create, query, onBeforeOpen, big = false }: { create: ProductCreateEntry; query: string; onBeforeOpen: () => void; big?: boolean }) {
+  return (
+    <div style={{ padding: big ? '10px 18px' : '6px 10px', borderTop: '1px solid #f0f2f5', background: C.g50 }}>
+      {create.onCreate ? (
+        <button type="button" data-testid="product-create-new" aria-label="신규 상품 등록"
+          onMouseDown={e => e.preventDefault()}
+          onClick={() => { const q = query; onBeforeOpen(); create.onCreate!(q); }}
+          style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', fontSize: big ? 13 : 12, fontWeight: 700, color: C.primary }}>
+          + 신규 상품 등록{query.trim() ? ` — "${query.trim()}"` : ''}
+        </button>
+      ) : (
+        <span data-testid="product-create-denied" style={{ fontSize: 11, color: C.g400 }}>{create.note ?? '상품 등록 권한이 없습니다.'}</span>
+      )}
     </div>
   );
 }
 
 // ─── 인라인 검색 필드 ─────────────────────────────────────────────────────────
 
-function InlineSearchField({ items, value, onChange, placeholder = '검색…', popupTitle = '검색', accentColor = C.ai, compact = false }: {
+function InlineSearchField({ items, value, onChange, placeholder = '검색…', popupTitle = '검색', accentColor = C.ai, compact = false, pendingLabel, create, testId }: {
   items: { id: number; label: string; sub?: string; keywords?: string }[]; value: number | null; onChange: (id: number | null) => void;
   placeholder?: string; popupTitle?: string; accentColor?: string; compact?: boolean;
+  create?: ProductCreateEntry;   // 상품 검색 전용 — [+ 신규 상품 등록](간편등록)
+  testId?: string;
+  pendingLabel?: string;   // Master ID 없이 보여줄 임시 값(예: 저장 시 등록될 신규 담당자). 검색·선택하면 선택값이 우선
 }) {
   const [open, setOpen]           = useState(false);
   const [q, setQ]                 = useState('');
   const [showPopup, setShowPopup] = useState(false);
   const ref      = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const anchor   = useFixedAnchor(ref, open, 2);
   const selected = items.find(i => i.id === value);
   // label(정식명)·sub(브랜드) 외에 keywords(별칭 등 숨은 검색어)도 매칭한다. 표시는 그대로.
@@ -424,8 +492,11 @@ function InlineSearchField({ items, value, onChange, placeholder = '검색…', 
   return (
     <>
       <div ref={ref} style={{ position: 'relative', display: 'flex', alignItems: 'center', border: `1px solid ${open ? accentColor : C.g300}`, borderRadius: 7, background: C.bgCard, minWidth: 0, flex: 1, transition: 'border-color 0.12s' }}>
-        <input value={open ? q : (selected?.label ?? '')} onChange={e => { setQ(e.target.value); setOpen(true); }} onFocus={() => { setOpen(true); if (selected) setQ(''); }} placeholder={placeholder}
-          style={{ flex: 1, minWidth: 0, padding: pad, fontSize: fs, border: 'none', outline: 'none', background: 'transparent', color: selected && !open ? C.textPrimary : undefined }} />
+        <input ref={inputRef} value={open ? q : (selected?.label ?? pendingLabel ?? '')} onChange={e => { setQ(e.target.value); setOpen(true); }} onFocus={() => { setOpen(true); if (selected) setQ(''); }}
+          // 이미 포커스된 채 닫힌 상태(선택값 표시 중)에서 다시 클릭하면 첫 클릭과 같이 열고 검색어를 비운다(선택값 뒤에 입력이 이어 붙지 않게)
+          onClick={() => { if (!open) { setOpen(true); if (selected) setQ(''); } }} placeholder={placeholder}
+          data-pending={!selected && pendingLabel ? 'true' : undefined} data-testid={testId}
+          style={{ flex: 1, minWidth: 0, padding: pad, fontSize: fs, border: 'none', outline: 'none', background: 'transparent', color: selected && !open ? C.textPrimary : (!selected && pendingLabel && !open ? '#1d4ed8' : undefined), fontStyle: !selected && pendingLabel && !open ? 'italic' : undefined }} />
         <button type="button" title="전체 검색" onClick={() => { setOpen(false); setShowPopup(true); }}
           style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 4px', fontSize: 12, color: C.ai, flexShrink: 0 }}>🔍</button>
         {value !== null && <button type="button" title="초기화" onClick={() => { onChange(null); setQ(''); setOpen(false); }}
@@ -433,7 +504,9 @@ function InlineSearchField({ items, value, onChange, placeholder = '검색…', 
         {open && (
           <div style={{ position: 'fixed', top: anchor.top, left: anchor.left, width: anchor.width, zIndex: 700, background: C.bgCard, border: `1px solid ${accentColor}`, borderRadius: 9, boxShadow: '0 6px 20px rgba(0,0,0,0.1)', maxHeight: 200, overflowY: 'auto' }}>
             {value !== null && <div onClick={() => { onChange(null); setQ(''); setOpen(false); }} style={{ padding: '6px 10px', fontSize: 12, color: C.g400, cursor: 'pointer', borderBottom: '1px solid #f3f4f6' }} onMouseEnter={e => (e.currentTarget.style.background = C.g50)} onMouseLeave={e => (e.currentTarget.style.background = '')}>선택 해제</div>}
-            {filtered.length === 0 && <div style={{ padding: '8px 10px', fontSize: 12, color: C.g400 }}>결과 없음 — <span style={{ color: accentColor, cursor: 'pointer', fontWeight: 600 }} onClick={() => { setOpen(false); setShowPopup(true); }}>전체 검색 🔍</span></div>}
+            {filtered.length === 0 && (create
+              ? <div style={{ padding: '8px 10px', fontSize: 12, color: C.g400 }}>검색 결과가 없습니다.</div>
+              : <div style={{ padding: '8px 10px', fontSize: 12, color: C.g400 }}>결과 없음 — <span style={{ color: accentColor, cursor: 'pointer', fontWeight: 600 }} onClick={() => { setOpen(false); setShowPopup(true); }}>전체 검색 🔍</span></div>)}
             {filtered.map(item => (
               <div key={item.id} onClick={() => { onChange(item.id); setQ(''); setOpen(false); }}
                 style={{ padding: '6px 10px', cursor: 'pointer', background: item.id === value ? C.primaryBg : undefined }}
@@ -443,10 +516,11 @@ function InlineSearchField({ items, value, onChange, placeholder = '검색…', 
                 {item.sub && <div style={{ fontSize: 10, color: C.g400 }}>{item.sub}</div>}
               </div>
             ))}
+            {create && <CreateEntryFooter create={create} query={q} onBeforeOpen={() => { setOpen(false); setQ(''); inputRef.current?.blur(); }} />}
           </div>
         )}
       </div>
-      {showPopup && <SearchPopup title={popupTitle} items={items} value={value} onSelect={onChange} onClose={() => setShowPopup(false)} />}
+      {showPopup && <SearchPopup title={popupTitle} items={items} value={value} onSelect={onChange} onClose={() => setShowPopup(false)} create={create} />}
     </>
   );
 }
@@ -491,7 +565,7 @@ function ServiceTypeSelector({ value, onChange }: { value: ServiceType; onChange
 // native <select>는 blur 이벤트로 즉시 닫혀 캡처·검수 불가.
 // mousedown 기반으로만 닫기 → 스크린샷/포커스 이동 시 목록 유지.
 
-function UnitSelect({ value, onChange, serviceType }: { value: string; onChange: (v: string) => void; serviceType: ServiceType }) {
+function UnitSelect({ value, onChange, serviceType, testId }: { value: string; onChange: (v: string) => void; serviceType: ServiceType; testId?: string }) {
   const [open, setOpen] = useState(false);
   const ref  = useRef<HTMLDivElement>(null);
   const anchor = useFixedAnchor(ref, open, 2);
@@ -511,7 +585,7 @@ function UnitSelect({ value, onChange, serviceType }: { value: string; onChange:
 
   return (
     <div ref={ref} style={{ position: 'relative', width: '100%' }}>
-      <button type="button" onClick={() => setOpen(v => !v)}
+      <button type="button" onClick={() => setOpen(v => !v)} aria-label="단위 선택" data-testid={testId}
         style={{ width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3, border: `1px solid ${open ? C.ai : C.g300}`, borderRadius: 6, padding: '0 6px', fontSize: 13, background: C.bgCard, color: value ? C.textPrimary : C.g400, cursor: 'pointer', outline: 'none' }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value || '단위'}</span>
         <span style={{ fontSize: 8, color: C.g400, flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
@@ -519,7 +593,7 @@ function UnitSelect({ value, onChange, serviceType }: { value: string; onChange:
       {open && (
         <div style={{ position: 'fixed', top: anchor.top, left: anchor.left, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 9, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', minWidth: 72, padding: 4 }}>
           {opts.map(u => (
-            <button key={u} type="button" onClick={() => { onChange(u); setOpen(false); }}
+            <button key={u} type="button" onClick={() => { onChange(u); setOpen(false); }} aria-label={`단위 ${u}`} data-testid={testId ? `${testId}-opt-${u}` : undefined}
               style={{ display: 'block', width: '100%', textAlign: 'left', padding: '5px 9px', fontSize: 13, border: 'none', borderRadius: 6, cursor: 'pointer', background: value === u ? C.primaryBg : 'none', color: value === u ? C.primaryText : C.textPrimary, fontWeight: value === u ? 700 : 400 }}
               onMouseEnter={e => { if (value !== u) (e.currentTarget as HTMLButtonElement).style.background = C.bgHover; }}
               onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = value === u ? C.primaryBg : 'none'; }}>
@@ -815,7 +889,8 @@ function TimeRangeField({ value, onChange, onConfirm, onReset, boxStyle }: {
       {/* 입력칸 — 어디를 클릭해도 Popover 열림 + 직접 입력 허용 (기존 입력칸과 동일 크기/디자인) */}
       <div onClick={() => { if (!open) openPicker(); }}
         style={{ ...boxStyle, display: 'flex', alignItems: 'center', gap: 2, padding: 0, overflow: 'hidden', cursor: 'pointer' }}>
-        <input value={value} onChange={e => onChange(e.target.value)} placeholder="예: 09:00~13:00"
+        {/* 값이 없으면 '시작·종료 미정' — 예시 시각을 보여주지 않는다(실제 확정시간으로 오인 방지). 저장값은 비어 있음 */}
+        <input value={value} onChange={e => onChange(e.target.value)} placeholder="시작·종료 미정" data-testid="qe-operation-hours"
           style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, padding: '0 5px', height: '100%', cursor: 'pointer' }}
           title="운영시간 (클릭하여 선택 또는 직접 입력, 예: 09:00~18:00). 공급가액 계산에는 사용되지 않습니다." />
         <span aria-hidden style={{ fontSize: 9, color: C.g400, padding: '0 4px', flexShrink: 0, userSelect: 'none' }}>▼</span>
@@ -952,8 +1027,8 @@ function InstallDateTimeField({ value, onChange, boxStyle, prefix }: {
 }) {
   // 저장 문자열 파싱 — "YYYY-MM-DD HH:MM" 및 레거시 datetime-local "YYYY-MM-DDTHH:MM" 모두 허용
   const parse = (v: string) => {
-    const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/.exec(v || '');
-    return m ? { d: m[1], h: m[2], mi: m[3] } : { d: '', h: '', mi: '' };
+    const m = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(v || '');
+    return m ? { d: m[1], h: m[2] ?? '', mi: m[3] ?? '' } : { d: '', h: '', mi: '' };
   };
   const [open, setOpen] = useState(false);
   const [d, setD]   = useState('');   // 임시 날짜
@@ -993,15 +1068,16 @@ function InstallDateTimeField({ value, onChange, boxStyle, prefix }: {
   }, [open]);
 
   const parsed  = parse(value);
-  // 표시 — "26-07-20 10:00" (2자리 연도, 분까지). 값이 없으면 placeholder
+  // 표시 — "26-07-20 10:00" (2자리 연도, 분까지) 또는 날짜만 "26-07-20". 값이 없으면 placeholder
   const display = parsed.d ? (parsed.h && parsed.mi ? `${parsed.d.slice(2)} ${parsed.h}:${parsed.mi}` : parsed.d.slice(2)) : '';
 
   const allSet   = !!d && !!h && !!mi;
+  const dateOnly = !!d && !h && !mi;       // 설치일만(시간 미정) 허용
   const allEmpty = !d && !h && !mi;
-  const partial  = !allSet && !allEmpty;   // 일부만 선택 → 저장 차단(§11)
+  const partial  = !allSet && !dateOnly && !allEmpty;   // 시·분 중 하나만, 또는 날짜 없이 시간만 → 저장 차단(§11)
 
-  // 확인 — 모두 선택: 저장 / 모두 비움: 빈 값(삭제) / 일부만: 차단
-  const confirm = () => { if (partial) return; onChange(allSet ? `${d} ${h}:${mi}` : ''); setOpen(false); };
+  // 확인 — 날짜+시간: "YYYY-MM-DD HH:MM" / 날짜만: "YYYY-MM-DD" / 모두 비움: 빈 값(삭제) / 일부만: 차단
+  const confirm = () => { if (partial) return; onChange(allSet ? `${d} ${h}:${mi}` : dateOnly ? d : ''); setOpen(false); };
   const reset   = () => { setD(''); setH(''); setMi(''); };   // 임시값만 비움 → 확인 시 반영(§8)
 
   // 시·분 목록 — 팝업 내부 인라인(하단 버튼을 가리지 않음), 클릭 선택(빠른 스크롤 없음)(§3·§5)
@@ -1024,19 +1100,19 @@ function InstallDateTimeField({ value, onChange, boxStyle, prefix }: {
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       {/* 단일 필드 — 클릭 시 팝오버. 시스템 placeholder 대신 "설치일시(선택)" 표시 */}
       <div onClick={() => { if (!open) openPicker(); }}
-        data-testid="field-equip-install" aria-label="설치일시(선택)" title={display || '설치일시 (선택)'}
+        data-testid="field-equip-install" aria-label="설치일" title={display ? `설치일 ${display}` : '설치일 (선택 — 원본에 없으면 비워 둡니다)'}
         style={{ ...boxStyle, display: 'flex', alignItems: 'center', gap: 0, padding: 0, overflow: 'hidden', cursor: 'pointer' }}>
         {/* Prefix(addon) — 입력창 내부 좌측 라벨. UI 전용(저장값 미포함). 우측 border로 한 컨트롤처럼 분리 */}
         {prefix && (
           <span aria-hidden style={{ flexShrink: 0, alignSelf: 'stretch', display: 'flex', alignItems: 'center', padding: '0 5px', fontSize: 11, color: C.textMuted, background: C.g50, borderRight: BD.divider, userSelect: 'none' }}>{prefix}</span>
         )}
         <span style={{ flex: 1, minWidth: 0, padding: '0 6px 0 8px', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-          color: display ? C.textPrimary : C.g400 }}>{display || '설치일시(선택)'}</span>
+          color: display ? C.textPrimary : C.g400 }}>{display ? (prefix ? display : `설치 ${display}`) : '설치일 선택'}</span>
         <span aria-hidden style={{ fontSize: 9, color: C.g400, padding: '0 4px 0 2px', flexShrink: 0, userSelect: 'none' }}>▼</span>
       </div>
       {open && (
         <div style={{ position: 'fixed', top: anchor.top, left: anchor.left, zIndex: 900, background: C.bgCard, border: BD.card, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: 10, width: 236 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.textPrimary, marginBottom: 8 }}>설치일시 (선택)</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.textPrimary, marginBottom: 8 }}>설치일 (선택 · 시간은 생략 가능)</div>
           {/* 날짜 */}
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: C.textMuted, fontWeight: 700 }}>
             <span style={{ width: 30, flexShrink: 0 }}>날짜</span>
@@ -1054,7 +1130,7 @@ function InstallDateTimeField({ value, onChange, boxStyle, prefix }: {
           </div>
           {/* 안내/검증(§11) — 일부만 선택 시 경고 */}
           <div style={{ fontSize: 10, color: partial ? C.danger : C.textMuted, marginTop: 6 }}>
-            {partial ? '설치 날짜와 시간을 모두 선택해 주세요.' : '전일·야간·새벽 설치 등 참고용 (계산·PDF 미반영)'}
+            {partial ? (d ? '시와 분을 모두 선택하거나 시간을 비워 주세요.' : '설치 날짜를 선택해 주세요.') : '전일·야간·새벽 설치 등 참고용 (계산·PDF 미반영)'}
           </div>
           {/* 하단 버튼 — 인라인 시간목록이라 항상 접근 가능. [취소]/[확인]으로만 확정(§4·§5·§6) */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginTop: 8 }}>
@@ -1167,7 +1243,13 @@ function ServiceFields({ it, update, products }: {
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
             {/* ① 기간 — 단일 기간 필드(Date Range Picker). 저장은 start/end 2필드 유지 */}
             <DateRangeField start={it.interpretDate} end={it.interpretEndDate}
-              onChange={(s, e) => update({ interpretDate: s, interpretEndDate: e })}
+              onChange={(s, e) => {
+                // 수량이 기존 진행일수 그대로(또는 비어 있음)일 때만 새 진행일수를 따라간다 — 직원이 바꾼 수량(0.5일 등)은 유지
+                const prevDays = interpretationServiceDays(it.interpretDate, it.interpretEndDate);
+                const nextDays = interpretationServiceDays(s, e);
+                const follows  = !String(it.quantity ?? '').trim() || Number(it.quantity) === prevDays;
+                update({ interpretDate: s, interpretEndDate: e, ...(follows && nextDays >= 1 ? { quantity: String(nextDays) } : {}) });
+              }}
               boxStyle={{ ...rinp(200), height: 32 }}
               title="행사 기간" startTitle="행사 시작일" endTitle="행사 종료일 (당일은 비워두세요)" />
             {/* ② 운영시간 — Time Range Picker. 확인 시 통역시간 자동 계산(사용자 수정 가능) */}
@@ -1183,12 +1265,18 @@ function ServiceFields({ it, update, products }: {
             <CountInput value={it.interpretHours} onChange={v => update({ interpretHours: v })}
               unit="시간/일" placeholder="통역시간" decimal style={{ ...rinp(86, { paddingLeft: 5, paddingRight: 5 }), flexShrink: 0 }} />
             {/* ④ 인원 — 투입 인원 "2명" 표시 */}
+            {/* 인원 — 비어 있으면 '인원 미확정'(계산은 기존 정책대로 1명 기준, 저장 후에도 미확정 유지) */}
             <CountInput value={it.interpreterCount} onChange={v => update({ interpreterCount: v })}
-              unit="명" placeholder="인원" style={{ ...rinp(56, { paddingLeft: 5, paddingRight: 5 }), flexShrink: 0 }} />
+              unit="명" placeholder="인원 미확정" style={{ ...rinp(76, { paddingLeft: 5, paddingRight: 5 }), flexShrink: 0, ...(isHeadcountBlank(it.interpreterCount) ? { borderColor: '#fcd34d', background: '#fffbeb' } : {}) }} />
             {/* ⑤ 장소 — 시간 그룹 뒤 마지막 배치. 남는 공간 우선 흡수(flex:1) + 최소폭 보장 (§1·§5·§8) */}
-            <input value={it.interpretPlace}
-              onChange={e => update({ interpretPlace: e.target.value })}
-              placeholder="장소" style={{ ...rinp('auto'), flex: 1, minWidth: 100 }} title="행사 장소" />
+            {/* 같은 칸 안에 '장소' 항목명을 붙여 날짜·시간·인원과 구분(칸 폭·배치는 그대로) */}
+            <label style={{ ...rinp('auto'), flex: 1, minWidth: 100, display: 'flex', alignItems: 'center', gap: 4, padding: 0, overflow: 'hidden' }} title={it.interpretPlace ? `장소: ${it.interpretPlace}` : '수행 장소'}>
+              <span style={{ fontSize: 11, color: C.g400, paddingLeft: 6, flexShrink: 0, userSelect: 'none' }}>장소:</span>
+              <input value={it.interpretPlace}
+                onChange={e => update({ interpretPlace: e.target.value })}
+                placeholder="미정" data-testid="qe-interpret-place" aria-label="수행 장소"
+                style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, padding: '0 6px 0 0', height: '100%' }} />
+            </label>
           </div>
           {/* 날짜 오류 경고만 유지 (정보성 안내 문구는 제거 — 값이 이미 각 컬럼에 표시됨) */}
           {interp.invalidDateRange && (
@@ -1199,36 +1287,50 @@ function ServiceFields({ it, update, products }: {
         </div>
       );
     }
-    case 'equipment':
+    case 'equipment': {
+      // 사용기간(시작~종료)과 청구 사용일수는 구분한다 — 기간을 바꿔도 사용일수를 자동 확정하지 않는다(장비별 직접 입력).
+      // 원본 공급가액 대조 — 원본 단가 그대로인데 기존 계산(calcItem) 결과가 원본 공급가액과 다를 때만 안내(수량·단가는 바꾸지 않음)
+      const refAmt = Number(it.refAmount || 0);
+      const priceNum = Number(String(it.unitPrice).replace(/,/g, '') || 0);
+      const supplyNow = calcItem(it, 'taxable').supply;
+      const mismatch = refAmt > 0 && priceNum > 0 && priceNum === Number(it.refUnitPrice || 0) && supplyNow !== refAmt;
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
-          {/* ① 기간 — 통역과 동일한 단일 기간 필드(Date Range Picker). 확인 시 사용일수 자동 재계산 */}
-          <DateRangeField start={it.eventStartDate} end={it.eventEndDate}
-            onChange={(s, e) => {
-              const upd: Partial<QuoteItemForm> = { eventStartDate: s, eventEndDate: e };
-              const days = calcSpanDays(s, e);
-              if (days > 0) upd.usagePeriod = String(days);   // 종료일 − 시작일 + 1
-              update(upd);
-            }}
-            boxStyle={{ ...rinp(200), height: 32 }}
-            title="사용 기간" startTitle="사용 시작일" endTitle="사용 종료일 (당일은 비워두세요)" />
-          {/* ② 설치일시(선택) — 전일·야간·새벽·대형 장비 등 사전 설치 일정 관리용 참고정보.
-              사용일수·공급가액 계산에 영향 없음, PDF·출력물 미표시. 저장은 operationHours 컬럼
-              재활용(장비 미사용) — DB·API 무변경.
-              "설치"는 입력창 내부 Prefix(UI 전용, 저장값 미포함) — 사용기간과 구분해 하나의 컨트롤로 인식. */}
-          <InstallDateTimeField value={it.operationHours}
-            onChange={v => update({ operationHours: v })}
-            prefix="설치"
-            boxStyle={{ ...rinp(200), height: 32 }} />
-          {/* ③ 사용일수 — 날짜 입력 시 자동 계산, 직접 수정도 가능 (통역과 동일 흐름: 기간→수량→장소) */}
-          <CountInput value={it.usagePeriod} onChange={v => update({ usagePeriod: v })}
-            unit="일" placeholder="사용일수" style={{ ...rinp(72), flexShrink: 0 }} />
-          {/* ④ 사용 장소 — 마지막 배치. 남는 공간 우선 흡수(flex:1) + 최소폭 보장 (§2·§5) */}
-          <input value={it.itemLocation}
-            onChange={e => update({ itemLocation: e.target.value })}
-            placeholder="사용 장소" style={{ ...rinp('auto'), flex: 1, minWidth: 100 }} title="장비 사용 장소" />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          {/* 시작일~종료일 | 설치일 | 사용일수 | 사용 장소 — 한 줄(장소는 남는 폭을 차지하고, 길면 말줄임 + 툴팁) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
+            {/* ① 시작일 ~ 종료일 — 통역과 동일한 단일 기간 필드(Date Range Picker) */}
+            <DateRangeField start={it.eventStartDate} end={it.eventEndDate}
+              onChange={(s, e) => update({ eventStartDate: s, eventEndDate: e })}
+              boxStyle={{ ...rinp(186), height: 32 }}
+              title="사용 기간" startTitle="사용 시작일" endTitle="사용 종료일 (당일은 비워두세요)" />
+            {/* ② 설치일(선택) — 사전 설치 일정 참고정보. 원본에 없으면 비워 둔다(행사 시작일로 채우지 않음).
+                사용일수·공급가액 계산에 영향 없음. 저장은 operationHours 컬럼 재활용(장비 미사용) — DB·API 무변경. */}
+            <InstallDateTimeField value={it.operationHours}
+              onChange={v => update({ operationHours: v })}
+              boxStyle={{ ...rinp(104), height: 32 }} />
+            {/* ③ 사용일수 — 장비별 청구 일수. 비어 있으면 '미정'(계산은 수량 × 단가) */}
+            <span data-testid="qe-equip-days" style={{ display: 'contents' }}>
+              <CountInput value={it.usagePeriod} onChange={v => update({ usagePeriod: v })}
+                unit="일" placeholder="미정" style={{ ...rinp(50), flexShrink: 0, textAlign: 'center' }} />
+            </span>
+            {/* ④ 사용 장소 — "장소:" 는 화면 표시용 접두어(저장값은 장소명만). 붙여넣은 "장소:" 는 떼어 낸다 */}
+            <div title={it.itemLocation ? `장소: ${it.itemLocation}` : '장비 사용 장소'}
+              style={{ ...rinp('auto'), flex: 1, minWidth: 0, height: 32, display: 'flex', alignItems: 'center', padding: 0, overflow: 'hidden', boxSizing: 'border-box' }}>
+              <span aria-hidden style={{ flexShrink: 0, padding: '0 2px 0 7px', fontSize: 12, color: C.textMuted, userSelect: 'none' }}>장소:</span>
+              <input value={it.itemLocation}
+                onChange={e => update({ itemLocation: e.target.value.replace(/^\s*(?:사용\s*)?장소\s*[:：]\s*/, '') })}
+                placeholder="미정" aria-label="사용 장소" data-testid="qe-equip-location"
+                style={{ flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent', fontSize: 13, padding: '0 6px 0 2px', height: '100%', textOverflow: 'ellipsis' }} />
+            </div>
+          </div>
+          {mismatch && (
+            <div data-testid="qe-equip-mismatch" style={{ fontSize: 11, color: '#b45309', paddingLeft: 2 }}>
+              원본 공급가액 {refAmt.toLocaleString()}원과 다릅니다 — 수량·사용일수를 확인해 주세요.
+            </div>
+          )}
         </div>
       );
+    }
     case 'expense': {
       // EXPENSE_CUSTOM sentinel 또는 미리 정의 목록 외 값 = 직접 입력 모드
       const isCustomInput = it.expenseType === EXPENSE_CUSTOM ||
@@ -1258,8 +1360,9 @@ function ServiceFields({ it, update, products }: {
 
 // ─── 견적 항목 Row ────────────────────────────────────────────────────────────
 
-function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOptions, updateItem, removeItem, addItemBelow, moveItem, duplicateItem }: {
+function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOptions, updateItem, removeItem, addItemBelow, moveItem, duplicateItem, productCreate }: {
   it: QuoteItemForm; idx: number; total: number; vatType: VatType; baseSupply: number; products: Product[];
+  productCreate?: QuoteProductCreate;
   parentOptions: { lid: string; label: string }[];
   updateItem: (idx: number, p: Partial<QuoteItemForm>) => void;
   removeItem: (idx: number) => void;
@@ -1337,11 +1440,12 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOpt
       </div>
     );
   }
-  // 통역 파생 계산수량(인원 × 일수) — 수량 컬럼 읽기전용 표시에 사용
+  // 통역 진행일수(수량 초기값·날짜 확인용)
   const interp = it.productType === 'interpretation'
     ? calcInterpretation({
         startDate:        it.interpretDate,
         endDate:          it.interpretEndDate,
+        quantity:         it.quantity,
         interpreterCount: it.interpreterCount,
         unitPrice:        it.unitPrice,
       })
@@ -1355,22 +1459,8 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOpt
 
   // 상품 선택 시 productType, unit, sourceLanguage 자동 적용
   const selectProduct = (pid: number | null) => {
-    const p = pid != null ? products.find(pr => pr.id === pid) : null;
-    // 상품 선택 시: 지원 유형은 그대로, 미지원 카탈로그 유형(project/proofreading 등)은 기타로 정규화.
-    // 상품 해제(pid=null)면 현재 행 유형 유지.
-    const productType: ServiceType = p ? normalizeServiceType(p.productType) : it.productType;
-    updateItem(idx, {
-      productId: p?.id ?? null,
-      productName: p?.name ?? '',
-      productType,
-      // 통역 단위는 항상 '일'로 고정 (상품 마스터의 '시간' 등 단위에 좌우되지 않음)
-      unit: productType === 'interpretation'
-        ? '일'
-        : (p ? (displayUnit(p.name, p.unit) || SVC_DEFAULT_UNIT[productType]) : SVC_DEFAULT_UNIT[productType]),
-      ...(productType === 'translation' && p?.sourceLanguage
-        ? { sourceLanguage: p.sourceLanguage }
-        : {}),
-    });
+    const p = pid != null ? products.find(pr => pr.id === pid) ?? null : null;
+    updateItem(idx, buildProductPatch(p, it.productType));
   };
 
   return (
@@ -1395,7 +1485,10 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOpt
         <div style={{ display: 'flex' }}>
           <InlineSearchField items={products.map(p => ({ id: p.id, label: p.name, sub: p.code ?? undefined }))}
             value={it.productId} onChange={selectProduct} placeholder="상품 검색…" popupTitle="상품 검색"
-            accentColor={cfg.border} compact />
+            accentColor={cfg.border} compact testId={`qe-product-${idx}`}
+            create={productCreate
+              ? (productCreate.canCreate ? { onCreate: q => productCreate.onCreate(idx, q) } : { note: '상품 등록은 관리자 권한이 필요합니다 — 상품관리 담당자에게 요청해 주세요.' })
+              : undefined} />
         </div>
 
         {/* ④ 서비스별 동적 필드 — 1fr 셀, minWidth:0 으로 축소 허용 */}
@@ -1423,50 +1516,45 @@ function QuoteItemRow({ it, idx, total, vatType, baseSupply, products, parentOpt
           )}
         </div>
 
-        {/* ⑥ 수량 — 통역은 진행일수(읽기전용, 날짜에서 파생), 그 외는 직접 입력 */}
-        <div>
-          {it.productType === 'interpretation' ? (
-            <div
-              title={interp && !interp.invalidDateRange
-                ? `수량 = 진행일수 ${interp.serviceDays}일 (종료일 − 시작일 + 1). 인원은 별도, 공급가액 = 단가 × 일수 × 인원`
-                : '시작일·종료일을 입력하면 진행일수가 자동 계산됩니다'}
-              style={{
-                ...rinp('100%', { textAlign: 'center' }),
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                background: C.g50, cursor: 'default', fontVariantNumeric: 'tabular-nums',
-                color: interp?.invalidDateRange ? C.danger : C.textPrimary, fontWeight: 700,
-              }}>
-              {interp && !interp.invalidDateRange ? interp.serviceDays.toLocaleString() : '—'}
-            </div>
-          ) : (
-            <NumericInput value={it.quantity} onChange={v => updateItem(idx, { quantity: v })} placeholder="1"
-              style={rinp('100%', { textAlign: 'center' })} />
-          )}
+        {/* ⑥ 수량 — 모든 유형 직접 입력(1, 2, 0.5 …). 통역은 진행일수가 초기값이며 날짜가 바뀌면 수정하지 않은 수량만 따라간다 */}
+        <div title={it.productType === 'interpretation'
+          ? (interp && !interp.invalidDateRange
+              ? `진행일수 ${interp.serviceDays}일(초기값). 수량은 직접 수정할 수 있습니다 — 공급가액 = 수량 × 인원 × 단가`
+              : '종료일이 시작일보다 빠릅니다 — 기간을 확인해 주세요')
+          : undefined}>
+          <NumericInput value={it.quantity} onChange={v => updateItem(idx, { quantity: v })}
+            allowDecimal ariaLabel={`${idx + 1}행 수량`} testId={`qe-qty-${idx}`}
+            placeholder={it.productType === 'interpretation' && interp && !interp.invalidDateRange ? String(interp.serviceDays) : '1'}
+            style={rinp('100%', { textAlign: 'center', ...(interp?.invalidDateRange ? { color: C.danger } : {}) })} />
         </div>
 
         {/* ⑦ 단위 */}
         <div>
-          <UnitSelect value={it.unit} onChange={v => updateItem(idx, { unit: v })} serviceType={it.productType} />
+          <UnitSelect value={it.unit} onChange={v => updateItem(idx, { unit: v })} serviceType={it.productType} testId={`qe-unit-${idx}`} />
         </div>
 
         {/* ⑧ 단가 — 통역은 1인 기준 단가 */}
         <div title={it.productType === 'interpretation' ? '통역사 1인 기준 단가 (공급가액 = 투입인원 × 수량 × 단가)' : undefined}>
           <NumericInput value={it.unitPrice} onChange={v => updateItem(idx, { unitPrice: v })}
-            placeholder="0" suffix="원"
-            style={rinp('100%', { textAlign: 'right' })} />
+            placeholder="단가 미입력" suffix="원"
+            style={rinp('100%', { textAlign: 'right', ...(it.productName.trim() && isPriceBlank(it.unitPrice) ? { borderColor: '#fcd34d', background: '#fffbeb' } : {}) })} />
         </div>
 
-        {/* ⑨ 공급가액 */}
-        <div style={dsAmount(supply > 0, { paddingRight: 6 })}>
-          {supply > 0 ? supply.toLocaleString() + '원' : '—'}
+        {/* ⑨ 공급가액 — 단가 미입력은 0원과 구분해 표시, 0을 직접 입력한 행은 '무상' */}
+        <div style={dsAmount(supply > 0, { paddingRight: 6 })} data-testid={`qe-supply-${idx}`}>
+          {supply > 0 ? supply.toLocaleString() + '원'
+            : it.productName.trim() && isPriceBlank(it.unitPrice) ? <span style={{ color: '#b45309', fontSize: 12 }}>단가 미입력</span>
+            : it.productName.trim() && priceStatusOf(it.unitPrice) === 'free' ? <span style={{ color: '#065f46', fontSize: 12 }}>무상(0원)</span>
+            : '—'}
         </div>
 
         {/* ⑩ 비고 — 공급가액과 명확히 구분 */}
         <div style={{ borderLeft: '2px solid #e5e7eb', paddingLeft: 14 }}>
           <input value={it.memo} onChange={e => updateItem(idx, { memo: e.target.value })}
-            placeholder="비고 (긴급, 감수 포함, 출장비 별도 등)"
-            style={{ ...rinp('100%'), color: C.textMuted }}
-            title="긴급, 감수 포함, DTP 포함, 출장비 별도, 장비 설치 포함 등" />
+            placeholder={MEMO_PLACEHOLDER[it.productType] ?? '비고'}
+            data-testid={`qe-memo-${idx}`} aria-label={`${idx + 1}행 비고`}
+            style={{ ...rinp('100%'), color: C.textPrimary }}
+            title={it.memo || '비고 (선택)'} />
           {/* 서비스 그룹 연결 — 부대비용(expense) 행만. 어느 본 서비스의 매출 묶음에 속하는지 지정(수익률 계산용, 정산 불변). */}
           {it.productType === 'expense' && parentOptions.length > 0 && (
             <select value={it.parentLid ?? ''} onChange={e => updateItem(idx, { parentLid: e.target.value || null })}
@@ -1538,11 +1626,14 @@ function CardSectionHeader({ badge, badgeBg, badgeColor, title, hint }: {
 // 헤더행 + 항목 행(QuoteItemRow) + 유형별 추가버튼을 렌더하며, 행 제어(추가/삭제/이동)는
 // onItemsChange 기반으로 파생한다. 상위(카드/섹션 제목)와 상태 소유는 사용하는 화면이 담당한다.
 // (Card·CardSectionHeader 는 포함하지 않는다 — 견적='상품정보' / 판매='판매정보' 로 각자 표기)
-export function QuoteItemsEditor({ items, onItemsChange, vatType, products }: {
+/** 상품 검색의 간편등록 연결(견적 편집기만 전달 — 판매관리 수정모드 등은 기존 그대로) */
+type QuoteProductCreate = { canCreate: boolean; onCreate: (idx: number, query: string) => void };
+export function QuoteItemsEditor({ items, onItemsChange, vatType, products, productCreate }: {
   items: QuoteItemForm[];
   onItemsChange: (items: QuoteItemForm[]) => void;
   vatType: VatType;
   products: Product[];
+  productCreate?: QuoteProductCreate;
 }) {
   const updateItem   = (idx: number, p: Partial<QuoteItemForm>) => onItemsChange(items.map((it, i) => i === idx ? { ...it, ...p } : it));
   const addItemBelow = (idx: number) => onItemsChange([...items.slice(0, idx + 1), defaultItem(), ...items.slice(idx + 1)]);
@@ -1588,7 +1679,8 @@ export function QuoteItemsEditor({ items, onItemsChange, vatType, products }: {
           {items.map((it, idx) => (
             <QuoteItemRow key={idx} it={it} idx={idx} total={items.length} vatType={vatType} baseSupply={baseSupply} products={products}
               parentOptions={parentOptions}
-              updateItem={updateItem} removeItem={removeItem} addItemBelow={addItemBelow} moveItem={moveItem} duplicateItem={duplicateItem} />
+              updateItem={updateItem} removeItem={removeItem} addItemBelow={addItemBelow} moveItem={moveItem} duplicateItem={duplicateItem}
+              productCreate={productCreate} />
           ))}
         </div>
       </div>
@@ -1666,6 +1758,12 @@ export interface QuoteEditorWorkspaceProps {
   canConvert?:       boolean;
   /** 다른 견적(변경견적/원견적)으로 이동. 미제공 시 목록 갱신 후 닫기로 폴백. */
   onOpenQuote?:      (quoteId: number) => void;
+  /** 상품 간편등록 권한(상품 등록 API 와 같은 기준: 관리자). false 면 [+ 신규 상품 등록] 대신 안내만 */
+  canCreateProduct?: boolean;
+  /** 견적서 삭제 권한(관리자·견적 수정 권한). true 이고 onDeleted 가 있을 때만 [견적서 삭제] 표시 */
+  canDelete?:        boolean;
+  /** 견적서 삭제(논리 삭제) 완료 — 연결 의뢰건이 있으면 inquiryId 로 의뢰건 상세 이동 */
+  onDeleted?:        (result: { inquiryId: number | null; message: string }) => void;
 }
 
 // ─── 메인 컴포넌트 ────────────────────────────────────────────────────────────
@@ -1676,6 +1774,7 @@ export function QuoteEditorWorkspace({
   onClose, onSaved, onToast, adminList = [], asPage = false,
   initialQuoteId, initialItems, initialNote, initialQuoteType, initialIssueDate, initialVatType,
   initialStatus, initialBatchClosedAt = null, onConverted, onNavigateToSales, onOpenSalesDetail, canConvert = true, onOpenQuote,
+  canDelete = false, onDeleted, canCreateProduct = false,
 }: QuoteEditorWorkspaceProps) {
 
   const authH = { Authorization: `Bearer ${token}` };
@@ -1715,7 +1814,12 @@ export function QuoteEditorWorkspace({
   // 의뢰건 handoff items 가 있으면 견적 항목으로 시드(각 항목을 defaultItem 위에 병합). 없으면 기존 로직 유지.
   const [items,          setItems]         = useState<QuoteItemForm[]>(
     inqPrefill?.items?.length
-      ? inqPrefill.items.map((hi) => ({ ...defaultItem(), ...hi } as QuoteItemForm))
+      ? inqPrefill.items.map((hi) => ({
+          // 서비스별 기본값 위에 병합 — 번역·장비 행이 통역 기본값(수량 1·단위 '일')을 물려받지 않게
+          ...defaultItem(), ...defaultItemForType(hi.productType), ...hi,
+          // 통역 수량 초기값 = 의뢰건 일정의 진행일수(고정값 아님 — 직원이 수정 가능)
+          ...(hi.productType === 'interpretation' && !hi.quantity ? { quantity: String(Math.max(1, interpretationServiceDays(hi.interpretDate, hi.interpretEndDate))) } : {}),
+        } as QuoteItemForm))
       : (initialItems ?? [defaultItem()]),
   );
   const [companies,      setCompanies]     = useState<Company[]>([]);
@@ -1724,6 +1828,59 @@ export function QuoteEditorWorkspace({
   const [products,       setProducts]      = useState<Product[]>([]);
   const [loading,        setLoading]       = useState(true);
   const [saving,         setSaving]        = useState(false);
+  const [deleting,       setDeleting]      = useState(false);
+  // 상품 간편등록(검색 결과 없음 → 신규 상품 등록) — 대상 행은 _lid 로 고정(모달 중 행 순서가 바뀌어도 같은 행)
+  const [quickCreate,    setQuickCreate]   = useState<{ lid: string; rowType: ServiceType; initial: QuickCreateInitial } | null>(null);
+  // ── 상품 간편등록 ──
+  const openQuickCreate = (idx: number, query: string) => {
+    const it = items[idx];
+    if (!it?._lid) return;
+    const text = query.trim() || it.productName;
+    setQuickCreate({ lid: it._lid, rowType: it.productType, initial: buildQuickInitial(it.productType, text, { unit: it.unit, sourceLanguage: it.sourceLanguage }) });
+  };
+  // 등록(또는 기존 상품 선택) 후 현재 행에 연결 — 상품·유형·단위·(기본단가)만 바꾸고 수량·날짜·장소·사용일수·메모 등은 그대로.
+  // 기존 입력과 다른 단위·단가는 확인 후 반영. 등록 실패·취소 시 행은 바뀌지 않는다.
+  const applyQuickProduct = async (p: CreatedQuickProduct) => {
+    const target = quickCreate;
+    setQuickCreate(null);
+    if (!target) return;
+    const list = await fetch(api('/api/admin/products'), { headers: authH }).then(r => r.ok ? r.json() : null).catch(() => null);
+    const active: Product[] = Array.isArray(list) ? list.filter((x: Product) => x.active) : products;
+    setProducts(active);
+    const full = active.find(x => x.id === p.id);
+    const row = items.find(it => it._lid === target.lid);
+    if (!full || !row) { onToast('등록된 상품을 견적 행에 연결하지 못했습니다 — 상품 검색에서 다시 선택해 주세요.'); return; }
+    const patch: Partial<QuoteItemForm> = buildProductPatch(full, row.productType);
+    if (row.productType !== 'interpretation' && row.unit && patch.unit && row.unit !== patch.unit) {
+      const change = await confirmDialog({
+        title: '단위 확인', message: `현재 견적 행의 단위는 '${row.unit}', 상품 기본 단위는 '${patch.unit}'입니다.\n상품 기본 단위로 바꿀까요?`,
+        confirmLabel: `'${patch.unit}'로 변경`, cancelLabel: `'${row.unit}' 유지`,
+      });
+      if (!change) delete patch.unit;
+    }
+    const base = Number(full.basePrice) || 0;
+    if (base > 0) {
+      const cur = String(row.unitPrice ?? '').replace(/,/g, '').trim();
+      if (!cur) patch.unitPrice = String(base);
+      else if (Number(cur) === Number(row.refUnitPrice || 0)) { /* 원본 문서 단가 우선 — 그대로 유지 */ }
+      else if (Number(cur) !== base && await confirmDialog({
+        title: '단가 확인', message: `현재 견적 단가는 ${Number(cur).toLocaleString()}원, 상품 기본 판매단가는 ${base.toLocaleString()}원입니다.\n상품 기본 판매단가로 바꿀까요?`,
+        confirmLabel: '기본 판매단가로 변경', cancelLabel: '현재 단가 유지',
+      })) patch.unitPrice = String(base);
+    }
+    setItems(prev => prev.map(it => it._lid === target.lid ? { ...it, ...patch } : it));
+    onToast(`상품 「${full.name}」을(를) 견적 행에 연결했습니다.`);
+  };
+  const quickUnitOptions = (t: ServiceType) => {
+    const key = t === 'expense' ? 'operations' : t;
+    return [...new Set([...(UNITS_BY_PRODUCT_TYPE[key] ?? []), ...(SVC_UNITS[t] ?? [])])];
+  };
+  const quickCreateModal = quickCreate && (
+    <QuickProductCreateModal token={token} initial={quickCreate.initial} unitOptions={quickUnitOptions(quickCreate.rowType)}
+      onToast={onToast} onClose={() => setQuickCreate(null)} onDone={p => { void applyQuickProduct(p); }} />
+  );
+
+  const deletingRef = useRef(false);   // 중복 클릭 방지(상태 반영 전 두 번째 클릭 차단)
   // 견적서 버튼: 신규 견적을 자동 저장하면 이후 저장은 이 id로 업데이트(중복 생성 방지)
   const [savedQuoteId,   setSavedQuoteId]  = useState<number | null>(initialQuoteId ?? null);
   // ── 차감 견적서(b2c_prepaid) 전용: 선입/이월 라인 + 이전 가용잔액 ─────────────
@@ -1735,14 +1892,22 @@ export function QuoteEditorWorkspace({
 
   // 의뢰건 프리필로 진입한 경우: 견적 최초 저장(savedQuoteId 생성) 시 의뢰건에 quoteId 역연결 후 handoff 소비.
   const inqLinkedRef = useRef(false);
-  useEffect(() => {
-    if (savedQuoteId == null || inqLinkedRef.current || !inqPrefill?.inquiryId) return;
+  // 저장 직후 onSaved 가 편집기를 닫으면(언마운트) 아래 effect 가 실행되지 못해 연결이 누락됐다 →
+  // 신규 견적 생성(persistQuote) 안에서 직접 await 로 연결하고, effect 는 보조 경로로 남긴다(1회만 실행).
+  const linkInquiryToQuote = async (quoteId: number) => {
+    if (inqLinkedRef.current || !inqPrefill?.inquiryId) return;
     inqLinkedRef.current = true;
-    fetch(api(`/api/admin/inquiries/${inqPrefill.inquiryId}/link-quote`), {
-      method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ quoteId: savedQuoteId }),
-    }).catch(() => { /* 연결 실패는 무시(견적 저장 자체는 성공) */ });
+    try {
+      await fetch(api(`/api/admin/inquiries/${inqPrefill.inquiryId}/link-quote`), {
+        method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ quoteId }),
+      });
+    } catch { /* 연결 실패는 무시(견적 저장 자체는 성공) */ }
     clearQuoteHandoff();
+  };
+  useEffect(() => {
+    if (savedQuoteId == null) return;
+    void linkInquiryToQuote(savedQuoteId);
   }, [savedQuoteId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 저장되지 않은 변경사항 추적(값 기준) ─────────────────────────────────────
@@ -1780,6 +1945,36 @@ export function QuoteEditorWorkspace({
       setProducts(Array.isArray(prds) ? prds.filter((p: Product) => p.active) : []);
     }).finally(() => setLoading(false));
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 의뢰건 연동: 상품 Master 추천(1회) ── 의뢰건 조건(서비스·언어·통역 형태)이 정확히 1개 상품과 일치할 때만 자동 선택.
+  //  여러 개/조건 부족이면 후보만 제시. 수행정보(일자·장소·통역시간)는 상품 선택과 무관하게 유지. 직원이 고른 상품은 바꾸지 않음.
+  const [inqProductMatches, setInqProductMatches] = useState<InquiryProductMatch[]>([]);
+  // ── 의뢰건 연동: 거래처·담당자 Master 판정(서버 미리보기) — 일치 1건이면 입력란에 자동 선택, 신규 등록은 저장 시 ──
+  const inqCustomer = useInquiryCustomerPlan({
+    token, inquiryId: inqPrefill?.inquiryId, enabled: !!inqPrefill?.inquiryContext && savedQuoteId == null,
+    companyId, contactId,
+    onAutoCompany: (id) => { setCompanyId(id); setDivisionId(null); },
+    onAutoContact: (id) => setContactId(id),
+  });
+  const inqMatchDoneRef = useRef(false);
+  useEffect(() => {
+    if (inqMatchDoneRef.current || !inqPrefill?.productHints?.length || products.length === 0) return;
+    inqMatchDoneRef.current = true;
+    const matches: InquiryProductMatch[] = inqPrefill.productHints.map(h => {
+      const r = matchProductsForHint(products, h);
+      const label = h.productType === 'equipment'
+        ? ['장비', h.productName].filter(Boolean).join(' · ')
+        : [h.productType === 'interpretation' ? '통역' : '번역',
+            [h.sourceLanguageName, h.targetLanguageName].filter(Boolean).join(' → '), h.interpretType].filter(Boolean).join(' · ');
+      return { itemIndex: h.itemIndex, label, status: r.auto ? 'auto' : r.candidates.length ? 'choose' : 'none', autoProduct: r.auto, candidates: r.candidates };
+    });
+    setInqProductMatches(matches);
+    setItems(prev => prev.map((it, i) => {
+      const m = matches.find(x => x.itemIndex === i);
+      const p = m?.autoProduct ? products.find(pr => pr.id === m.autoProduct!.id) ?? null : null;
+      return p && it.productId == null ? { ...it, ...buildProductPatch(p, it.productType) } : it;
+    }));
+  }, [products]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 거래처 선택 시 해당 거래처의 브랜드(Division) 목록 로드 (기존 API 재사용)
   useEffect(() => {
@@ -1840,18 +2035,23 @@ export function QuoteEditorWorkspace({
   //  allowEmpty=false(자동입력 effect): 기존대로 상품이 있어야 생성(조기 자동 채움 방지).
   const computeAutoTitle = useCallback((allowEmpty = false): string => {
     const co = companies.find(c => c.id === companyId);
-    if (!co) return '';
+    // 의뢰건 견적에서 거래처가 아직 Master 에 없으면(저장 시 신규 등록) 의뢰건 회사명으로 같은 규칙을 적용
+    const coName = co?.name ?? (inqPrefill?.inquiryContext?.customerCompanyName?.trim() || '');
+    if (!coName) return '';
     const vi = items.filter(it => it.productType !== 'discount' && it.productName.trim());
     if (vi.length === 0 && !allowEmpty) return '';
     const brand = divisions.find(d => d.id === divisionId);
     return generateQuoteTitle({
-      companyName: co.name,
+      companyName: coName,
       brandName: brand?.name ?? null,
       items: vi.map(it => ({
         productName: it.productName,
         productType: it.productType,
         // 역할(대표/보조) 판정을 위해 선택된 상품의 대분류를 함께 전달 (통역 연장료·할증 = 보조상품)
         mainCategory: it.productId != null ? (products.find(p => p.id === it.productId)?.mainCategory ?? null) : null,
+        // 장비 대표 우선순위(주장비/부속) 판정용 Master 키 · 서비스 그룹 부대항목 여부
+        canonicalKey: it.productId != null ? (products.find(p => p.id === it.productId)?.canonicalKey ?? null) : null,
+        isAttached: it.parentLid != null,
         supplyAmount: calcItem(it, vatType).supply,
       })),
       issueDate,
@@ -1995,14 +2195,14 @@ export function QuoteEditorWorkspace({
   // 저장 실행부 — 편집 화면을 닫지 않고 저장만 수행하고 { quoteId, projectId }를 반환한다.
   // 신규 견적은 최초 저장 시 생성하고 savedQuoteId를 기록 → 이후(저장/견적서)엔 동일 견적을 업데이트(중복 생성 방지).
   const persistQuote = useCallback(async (): Promise<{ quoteId: number; projectId: number | null } | null> => {
-    // 유효 품목: 일반 상품은 품목명+단가(>0), 할인 항목은 할인값(>0) 기준으로 판별.
-    //  (할인 항목은 단가가 0이므로 기존 단가 필터에서 누락되던 버그 수정)
+    // 유효 품목: 일반 상품은 품목명이 있으면 저장(단가가 비어 있으면 '단가 미입력' 초안, 0을 직접 입력하면 '무상'),
+    //  할인 항목은 할인값(>0) 기준. 판매전환 시 서버가 단가 미입력·인원 미확정 행을 막는다.
     const isValidItem = (it: QuoteItemForm) =>
       it.productType === 'discount'
         ? Number(String(it.discountValue ?? '').replace(/,/g, '') || 0) > 0
-        : it.productName.trim() && Number(it.unitPrice.replace?.(/,/g, '') || 0) > 0;
+        : !!it.productName.trim() && (isPriceBlank(it.unitPrice) || Number(it.unitPrice.replace?.(/,/g, '') || 0) >= 0);
     const vi = items.filter(isValidItem);
-    if (vi.length === 0) { onToast('품목명과 단가를 입력하세요.'); return null; }
+    if (vi.length === 0) { onToast('품목명을 입력하세요.'); return null; }
     const itemsBody  = vi.map(it => toApiItem(it, vatType));
     const commonBody = {
       items: itemsBody, quoteType,
@@ -2029,11 +2229,16 @@ export function QuoteEditorWorkspace({
           // 변경사유/분리사유 — 변경견적·파생견적에서만 전달(일반/버전견적 저장 동작은 기존과 동일하게 유지)
           ...(isRevisionRef.current || isDerivedRef.current ? { versionReason } : {}),
         };
-        const res  = await fetch(url, {
+        let res  = await fetch(url, {
           method: 'PUT', headers: { ...authH, 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
-        const data = await res.json();
+        let data = await res.json();
+        // 과거 CRM 전환 견적: 원본 총액과 다른 금액으로 저장하려면 직원 확인(임의 VAT 가산 방지)
+        if (res.status === 409 && await confirmLegacyVatChange(data, m => confirmDialog({ title: '원본 총액 변경 확인', message: m, confirmLabel: '변경 저장', cancelLabel: '취소' }))) {
+          res = await fetch(url, { method: 'PUT', headers: { ...authH, 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, confirmLegacyVat: true }) });
+          data = await res.json();
+        }
         if (!res.ok) {
           const msg = res.status === 404 ? '견적 수정 API를 찾을 수 없습니다. (서버 재시작 필요)'
                     : res.status === 400 ? `입력값을 확인해 주세요: ${data.error}`
@@ -2048,11 +2253,30 @@ export function QuoteEditorWorkspace({
         if (!t) { onToast('견적서명을 입력하세요.'); return null; }
         const res = await fetch(api('/api/admin/quotes'), {
           method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...commonBody, title: t, companyId: companyId ?? undefined, contactId: contactId ?? undefined, divisionId: divisionId ?? undefined, adminId: adminId ?? undefined }),
+          body: JSON.stringify({
+            ...commonBody, title: t, companyId: companyId ?? undefined, contactId: contactId ?? undefined, divisionId: divisionId ?? undefined, adminId: adminId ?? undefined,
+            // 의뢰건 견적: 거래처·담당자 판정/신규등록·고객정보 스냅샷·의뢰건 연결을 서버가 같은 트랜잭션에서 처리
+            ...(inqPrefill?.inquiryId ? { inquiryCustomer: { inquiryId: inqPrefill.inquiryId, companyId: companyId ?? null, contactId: contactId ?? null, ...inqCustomer.choice } } : {}),
+          }),
         });
         const data = await res.json();
-        if (!res.ok) { onToast(`견적서 저장 실패: ${data.error}`); return null; }
+        if (!res.ok) {
+          onToast(`견적서 저장 실패: ${data.error}`);
+          if (data.customerPlan) inqCustomer.refresh();   // 확인 필요 — 패널 갱신
+          return null;
+        }
+        if (data.existing) onToast(`이 의뢰건으로 이미 저장된 견적(${data.quoteNumber ?? `#${data.id}`})이 있어 새로 만들지 않았습니다.`);
+        // 서버가 연결·등록한 거래처/담당자를 입력란에 반영(신규 담당자는 목록에 추가해 실제 Master 이름으로 표시)
+        const cr = data.customerResolution as { companyId: number | null; contactId: number | null; created?: { company?: number; contact?: number } } | null | undefined;
+        if (cr) {
+          if (cr.created?.company && cr.companyId) setCompanies(prev => prev.some(c => c.id === cr.companyId) ? prev : [...prev, { id: cr.companyId!, name: data.customerCompanyName ?? '' }]);
+          if (cr.created?.contact && cr.contactId) setContacts(prev => prev.some(c => c.id === cr.contactId) ? prev : [...prev, { id: cr.contactId!, name: data.customerContactName ?? '', companyId: cr.companyId, email: data.customerContactEmail, position: data.customerContactPosition, department: data.customerContactDepartment }]);
+          if (cr.companyId) setCompanyId(cr.companyId);
+          if (cr.contactId) setContactId(cr.contactId);
+        }
         setSavedQuoteId(data.id);   // 이후 저장·견적서는 이 견적을 업데이트
+        if (inqPrefill?.inquiryId) { inqLinkedRef.current = true; clearQuoteHandoff(); }   // 서버가 의뢰건 연결까지 완료
+        else await linkInquiryToQuote(data.id);
         return { quoteId: data.id, projectId: null };
       }
       // 프로젝트 버전 견적 (Version Engine)
@@ -2346,6 +2570,22 @@ export function QuoteEditorWorkspace({
   ) : (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
+      {/* ── 의뢰건 연동(의뢰건 상세 [견적서 작성]으로 진입한 신규 견적만) ── */}
+      {inqPrefill?.inquiryContext && savedQuoteId == null && (
+        <InquiryQuoteLinkCard
+          inquiryNumber={inqPrefill.inquiryNumber}
+          ctx={inqPrefill.inquiryContext}
+          plan={inqCustomer.plan} setChoice={inqCustomer.setChoice}
+          issueDate={issueDate}
+          productMatches={inqProductMatches}
+          currentProductIds={items.map(it => it.productId)}
+          // 후보 선택은 실제 거래처·담당자 입력란에 반영(견적서명은 handleCompanyChange 와 같이 재생성 대상)
+          onPickCompany={(id) => handleCompanyChange(id)}
+          onPickContact={(id) => { const c = contacts.find(x => x.id === id); if (c?.companyId != null && c.companyId !== companyId) { setCompanyId(c.companyId); setDivisionId(null); } setContactId(id); }}
+          onPickProduct={(i, pid) => { const p = products.find(pr => pr.id === pid) ?? null; setItems(prev => prev.map((it, j) => j === i ? { ...it, ...buildProductPatch(p, it.productType) } : it)); }}
+        />
+      )}
+
       {/* ── A. 기본정보 ─────────────────────────────────────────────────── */}
       <Card style={{ padding: '14px 22px' }}>
         <CardSectionHeader badge="A" badgeBg="#eff6ff" badgeColor="#2563eb" title="기본정보" />
@@ -2439,7 +2679,9 @@ export function QuoteEditorWorkspace({
                 {isStandalone && (
                   <div>
                     {fLbl('담당자')}
-                    <InlineSearchField items={contactOptions} value={contactId} onChange={setContactId} placeholder="담당자 검색…" popupTitle="담당자 검색" />
+                    <InlineSearchField items={contactOptions} value={contactId} onChange={setContactId} placeholder="담당자 검색…" popupTitle="담당자 검색"
+                      // 의뢰건 견적: 기존 담당자가 없어 저장 시 신규 등록될 예정이면 그 이름을 임시로 표시(Master ID 없음)
+                      pendingLabel={contactId == null && inqCustomer.plan?.contact.action === 'create' && inqCustomer.plan.contact.name ? `${inqCustomer.plan.contact.name} (신규 · 저장 시 등록)` : undefined} />
                   </div>
                 )}
                 <div>
@@ -2461,6 +2703,9 @@ export function QuoteEditorWorkspace({
         />
       )}
 
+      {savedQuoteId != null && <QuoteRecipientRefreshBar quoteId={savedQuoteId} token={token} onToast={onToast} refreshKey={saving} />}
+      {savedQuoteId != null && <LegacyVatNotice quoteId={savedQuoteId} token={token} />}
+
       {/* ── B. 상품정보 ─────────────────────────────────────────────────── */}
       <Card>
         <CardSectionHeader badge="B" badgeBg="#f0fdf4" badgeColor="#16a34a" title={isPrepaidQuote ? '차감 사용내역' : '상품정보'} hint="← 유형 클릭으로 번역/통역/장비/기타 전환" />
@@ -2474,7 +2719,8 @@ export function QuoteEditorWorkspace({
         {/* 상품정보 편집 그리드 — 판매관리 수정모드와 공용(QuoteItemsEditor).
             누적 마감 시 편집 차단(pointer-events 무효화 + 흐리게). API에서도 수정 차단됨. */}
         <div style={batchClosed ? { pointerEvents: 'none', opacity: 0.6 } : undefined} aria-disabled={batchClosed}>
-          <QuoteItemsEditor items={items} onItemsChange={setItems} vatType={vatType} products={products} />
+          <QuoteItemsEditor items={items} onItemsChange={setItems} vatType={vatType} products={products}
+            productCreate={{ canCreate: canCreateProduct, onCreate: openQuickCreate }} />
         </div>
       </Card>
 
@@ -2550,8 +2796,11 @@ export function QuoteEditorWorkspace({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
             {fLbl('견적 비고')}
-            <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="견적 관련 메모 또는 안내 사항" rows={2}
-              style={{ ...inpSt, resize: 'vertical', fontFamily: 'inherit' }} />
+            {/* 기본 6줄, 내용이 많으면 자동으로 늘어난다(줄바꿈 그대로). 저장·출력 방식은 그대로 */}
+            <textarea value={note} onChange={e => setNote(e.target.value)} placeholder="견적 관련 메모 또는 안내 사항" rows={6}
+              data-testid="qe-note" aria-label="견적 비고"
+              ref={el => { if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight + 2}px`; } }}
+              style={{ ...inpSt, resize: 'vertical', fontFamily: 'inherit', minHeight: '9em', overflow: 'hidden' }} />
           </div>
           {(projectId !== null || isRevision || isDerived) && (
             <div style={{ background: C.warningBg, borderRadius: BD.radius.xl, padding: `${SP[5]}px ${SP[6]}px`, border: `1px solid ${C.warningBorder}` }}>
@@ -2654,6 +2903,43 @@ export function QuoteEditorWorkspace({
       )}
     </span>
   ) : (projectId !== null ? 'Version Engine' : undefined);
+
+  // ── 견적서 삭제(논리 삭제) — 서버가 삭제 가능 조건을 다시 검증하고, 의뢰건·프로젝트 상태를 같은 트랜잭션에서 원복한다 ──
+  const handleDeleteQuote = async () => {
+    if (savedQuoteId == null || deletingRef.current) return;
+    deletingRef.current = true;   // 확인창이 열려 있는 동안에도 중복 실행 차단
+    try {
+      const chk = await fetch(api(`/api/admin/quotes/${savedQuoteId}/delete-check`), { headers: authH });
+      const c = await chk.json().catch(() => ({}));
+      if (!chk.ok) { onToast(c.error ?? '삭제 가능 여부를 확인하지 못했습니다.'); return; }
+      if (!c.ok) {
+        await alertDialog({ title: '견적서를 삭제할 수 없습니다', message: (c.reasons ?? []).map((r: string) => `· ${r}`).join('\n'), variant: 'warning' });
+        return;
+      }
+      const others = (c.otherActiveQuotes ?? []) as Array<{ quoteNumber: string | null }>;
+      const reason = await promptDialog({
+        title: '견적서 삭제 확인',
+        message: '이 견적서를 삭제하시겠습니까?\n\n'
+          + '삭제하면 해당 견적서는 목록에서 제외되며,\n다른 유효 견적서가 없는 경우\n프로젝트 상태가 \'접수됨\'으로 변경됩니다.\n\n'
+          + '기존 고객정보, 의뢰내용, 첨부파일 및\nAI 분석 결과는 유지됩니다.'
+          + (others.length ? `\n\n※ 같은 의뢰의 다른 유효 견적서 ${others.length}건(${others.map(o => o.quoteNumber ?? '-').join(', ')})이 있어 프로젝트 상태는 유지됩니다.` : ''),
+        label: '삭제 사유 (선택)', placeholder: '예: 견적서 디자인 확인용 임시 저장', multiline: true,
+        confirmLabel: '견적서 삭제', cancelLabel: '취소', variant: 'danger',
+      });
+      if (reason === null) return;   // 취소
+      setDeleting(true);
+      const res = await fetch(api(`/api/admin/quotes/${savedQuoteId}`), {
+        method: 'DELETE', headers: { ...authH, 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: reason.trim() }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        await alertDialog({ title: '견적서를 삭제할 수 없습니다', message: [d.error, ...((d.reasons ?? []) as string[]).slice(1)].filter(Boolean).map(r => `· ${r}`).join('\n') || '삭제에 실패했습니다.', variant: 'warning' });
+        return;
+      }
+      onToast(d.message ?? '견적서가 삭제 처리되었습니다.');
+      onDeleted?.({ inquiryId: d.inquiryId ?? null, message: d.message ?? '' });
+    } finally { deletingRef.current = false; setDeleting(false); }
+  };
 
   // 우측 기능 버튼 그룹 — 두 헤더(오버레이·인라인)가 공유
   // 견적서 보기 — 저장 전(quoteId 없음)에는 비활성. 저장 성공 시 savedQuoteId가 생기며 즉시 활성화된다.
@@ -2778,6 +3064,16 @@ export function QuoteEditorWorkspace({
             background: batchClosed ? '#6b7280' : (batchClosing ? '#9ca3af' : C.warning), color: '#ffffff',
             cursor: (batchClosed || batchClosing) ? 'not-allowed' : 'pointer', opacity: (batchClosed || batchClosing) ? 0.7 : 1 }}>
           {batchClosed ? '🔒 마감완료' : batchClosing ? '마감 중…' : '📦 누적 마감'}
+        </button>
+      )}
+      {/* 견적서 삭제 — 저장된 견적 + 삭제 권한이 있을 때만. 삭제 가능 조건은 클릭 시 서버가 확인(발송·승인·배정·결제·정산 등은 사유 안내) */}
+      {canDelete && onDeleted && savedQuoteId != null && (
+        <button type="button" onClick={() => { void handleDeleteQuote(); }} disabled={deleting || saving || converting}
+          data-testid="btn-quote-delete" aria-label="견적서 삭제" title="견적서만 삭제(휴지통)하고 의뢰건은 유지합니다."
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', borderRadius: 7, fontSize: 13, fontWeight: 700,
+            border: `1px solid ${C.danger}`, background: '#fff', color: C.danger,
+            cursor: deleting ? 'not-allowed' : 'pointer', opacity: deleting ? 0.6 : 1 }}>
+          🗑 {deleting ? '삭제 중…' : '견적서 삭제'}
         </button>
       )}
       <DsButton variant="primary" size="md" onClick={handleSave} disabled={saving || batchClosed}>
@@ -3050,6 +3346,7 @@ export function QuoteEditorWorkspace({
           />
         )}
         {convertOverlays}
+      {quickCreateModal}
         {pdfModal}
         {comparisonModal}
         {/* 인라인 Workspace 헤더 — 스크롤 영역에서 full-bleed sticky (공통 헤더 토큰) */}
@@ -3083,6 +3380,7 @@ export function QuoteEditorWorkspace({
         />
       )}
       {convertOverlays}
+      {quickCreateModal}
       {pdfModal}
       {comparisonModal}
       {wsHeader(C.bgCard, BD.card, BD.shadow.card, '24px')}

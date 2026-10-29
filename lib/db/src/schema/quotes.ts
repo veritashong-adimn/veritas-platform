@@ -80,6 +80,17 @@ export const quotesTable = pgTable("quotes", {
   derivedCompanyNameSnapshot: text("derived_company_name_snapshot"),
   derivedContactNameSnapshot: text("derived_contact_name_snapshot"),
 
+  // ── 견적 작성 당시 고객정보 스냅샷(일반 견적 공통) ─────────────────────────────
+  //  거래처/담당자 Master 연결(project.companyId/contactId)과 별개로, 견적 작성 시점의 고객정보를 보존한다.
+  //  Master 가 나중에 바뀌어도 과거 견적서 정보가 유지되고, Master 미연결 견적도 고객정보를 갖는다. NULL = 기존 자료.
+  customerCompanyName: text("customer_company_name"),
+  customerContactName: text("customer_contact_name"),
+  customerContactPosition: text("customer_contact_position"),
+  customerContactDepartment: text("customer_contact_department"),
+  customerContactPhone: text("customer_contact_phone"),
+  customerContactMobile: text("customer_contact_mobile"),
+  customerContactEmail: text("customer_contact_email"),
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
 
   // ── Soft Delete ────────────────────────────────────────

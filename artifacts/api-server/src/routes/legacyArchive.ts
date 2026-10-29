@@ -8,6 +8,7 @@
 //   · 멱등: row_hash(파일명 무관). 중복 row 는 Execute 시 skip.
 //   · search/detail/sales-history 엔드포인트는 C-4B 이후.
 import { findActivationBySaleNo } from "../services/legacySaleActivation";
+import { linkedContactNameOfSaleNo, reviewNeededOfSaleRow } from "../services/legacyContactRestore";
 import { Router, type IRouter } from "express";
 import multer from "multer";
 import ExcelJS from "exceljs";
@@ -730,7 +731,11 @@ router.get("/admin/legacy-archive/:id", ...adminGuard, async (req, res, next) =>
     // 운영 판매건 전환 여부(additive) — 판매번호 기준 매핑(원본 행 버전과 무관).
     const saleNo = row.sourceType === "sales_list" ? String((row.sourceRaw as any)?.["판매번호"] ?? "").trim() : "";
     const activation = saleNo ? await findActivationBySaleNo(db, saleNo) : null;
-    res.json({ ...maskedRow, linkedProgress: maskedLinked, activation });
+    // 판매번호에 연결된 고객 담당자 Master(수동 보완·정확 일치 자동 연결) — 없으면 화면은 진행관리표 복원 고객명(미연결)을 보여 준다
+    const linkedContactName = saleNo ? ((await db.execute(sql`SELECT ${linkedContactNameOfSaleNo(saleNo)} AS name`)).rows[0] as any)?.name ?? null : null;
+    // 고객 담당자 확인 필요(B: 연결키가 같은 판매 복수) — 최신 복원 실행 배치 기준
+    const contactReviewNeeded = row.sourceType === "sales_list" ? Boolean(((await db.execute(sql`SELECT ${reviewNeededOfSaleRow(id)} AS v`)).rows[0] as any)?.v) : false;
+    res.json({ ...maskedRow, linkedProgress: maskedLinked, activation, linkedContactName, contactReviewNeeded });
   } catch (err) {
     req.log.error({ err }, "legacy-archive detail failed");
     res.status(500).json({ error: "과거자료 상세 조회 실패." });

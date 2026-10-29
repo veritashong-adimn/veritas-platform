@@ -1,4 +1,4 @@
-import { pgTable, serial, integer, text, varchar, timestamp, pgEnum, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, integer, text, varchar, timestamp, pgEnum, jsonb, date, time } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
 /**
@@ -23,7 +23,16 @@ export const inquiriesTable = pgTable("inquiries", {
   inquiryNumber: varchar("inquiry_number", { length: 30 }),   // R000001 (견적번호와 별개 시퀀스)
 
   // ── 접수 ──────────────────────────────────────────────
+  // 목록·일별 집계·정렬 기준 일시(기존 의미 유지). 신규 등록은 저장 시각이 들어간다 — 고객 접수일시가 아니다.
   receivedAt: timestamp("received_at").notNull().defaultNow(),
+  // 고객 접수일시(고객이 실제 의뢰를 제출한 일시) — received_at·created_at(시스템 등록일시)과 별개. 모두 NULL 허용.
+  //  · date/time 분리: 원문에 시각이 없으면 time=NULL(00:00/09:00 생성 금지)
+  //  · status: confirmed | needs_review | not_provided — NULL = 기존 자료(미분류, received_at 을 복사하지 않음)
+  //  · source: homepage | email_received | email_sent | manual | unknown
+  customerReceivedDate: date("customer_received_date", { mode: "string" }),
+  customerReceivedTime: time("customer_received_time"),
+  customerReceivedStatus: varchar("customer_received_status", { length: 20 }),
+  customerReceivedSource: varchar("customer_received_source", { length: 20 }),
   channel: inquiryChannelEnum("channel").notNull().default("phone"),
   status: inquiryStatusEnum("status").notNull().default("new"),
   assignedPmId: integer("assigned_pm_id"),                     // 담당 PM (users.id)

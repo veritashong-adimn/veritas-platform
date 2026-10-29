@@ -6,6 +6,7 @@
  * 행 클릭 → 상세, 체크박스 → 선택(동작 분리). 기존 ERP 목록 디자인 패턴을 따른다.
  */
 import React, { useState, useEffect, useCallback } from 'react';
+import { confirmAndDeleteInquiry } from './inquiryDeleteFlow';
 import { formatDisplayDate } from '../../lib/dateFormat';
 import { api } from '../../lib/constants';
 import { CHANNEL_LABEL, PROCESSING_META, QUOTE_PROGRESS_META, kstTodayStr, inquiryServiceLabel } from '../../lib/inquiryMeta';
@@ -16,6 +17,7 @@ interface InquiryRow {
   id: number;
   inquiryNumber: string | null;
   receivedAt: string;
+  customerReceivedDate?: string | null; customerReceivedTime?: string | null; customerReceivedStatus?: string | null;
   channel: string;
   status: string;
   companyDisplay: string | null;
@@ -58,8 +60,11 @@ function StatCard({ label, value, accent, highlight }: { label: string; value: n
   );
 }
 
-export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, refreshTick }: {
+export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, refreshTick, canDelete = false, onToast }: {
   token: string;
+  /** 의뢰건 삭제 권한(관리자·견적 수정 권한) — 행의 [삭제] 표시. 서버에서도 검증 */
+  canDelete?: boolean;
+  onToast?: (msg: string) => void;
   onOpenDetail: (id: number) => void;
   onOpenQuote?: (quoteId: number) => void;
   onRegister?: () => void;
@@ -70,6 +75,7 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
   const [data, setData] = useState<ListResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -129,12 +135,13 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
           <thead>
             <tr style={{ background: '#f9fafb' }}>
               <th style={{ ...th, width: 40 }}></th>
-              {['접수일시', '접수번호', '회사명', '담당자', '서비스', '언어', '접수경로', '담당PM', '처리상태', '견적상태', '견적번호', '견적발송일시', '종결'].map(h => <th key={h} style={th}>{h}</th>)}
+              {['등록일시', '접수번호', '회사명', '담당자', '서비스', '언어', '접수경로', '담당PM', '처리상태', '견적상태', '견적번호', '견적발송일시', '종결'].map(h => <th key={h} style={th}>{h}</th>)}
+              {canDelete && <th style={{ ...th, width: 64 }}>관리</th>}
             </tr>
           </thead>
           <tbody>
             {!data || data.rows.length === 0 ? (
-              <tr><td colSpan={14} style={{ ...td, textAlign: 'center', color: '#9ca3af', padding: '32px 8px' }}>
+              <tr><td colSpan={canDelete ? 15 : 14} style={{ ...td, textAlign: 'center', color: '#9ca3af', padding: '32px 8px' }}>
                 {loading ? '불러오는 중…' : '해당 일자의 의뢰건이 없습니다.'}
               </td></tr>
             ) : data.rows.map(r => {
@@ -152,6 +159,11 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
                   <td style={td}>
                     {r.isCarryover && <span style={{ ...badge({ label: '이월', color: '#c2410c', bg: '#ffedd5', border: '#fed7aa' }), marginRight: 6 }}>이월</span>}
                     {fmtDateTime(r.receivedAt)}
+                    {/* 고객 접수일시(별도 데이터) — 확정이면 값, 확인 필요면 표시. 기존 자료(미분류)는 표시하지 않음 */}
+                    {r.customerReceivedStatus === 'confirmed' && r.customerReceivedDate && (
+                      <div style={{ fontSize: 11, color: '#6b7280' }}>고객 {r.customerReceivedDate.slice(2).replace(/-/g, '.')}{r.customerReceivedTime ? ` ${r.customerReceivedTime.slice(0, 5)}` : ''}</div>
+                    )}
+                    {r.customerReceivedStatus === 'needs_review' && <div style={{ fontSize: 11, color: '#b45309' }}>고객 접수 확인 필요</div>}
                   </td>
                   <td style={{ ...td, fontFamily: 'monospace', color: '#475569' }}>{r.inquiryNumber ?? `#${r.id}`}</td>
                   <td style={{ ...td, color: '#111827', fontWeight: 600, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.companyDisplay ?? '—'}</td>
@@ -172,6 +184,23 @@ export function InquiryListTab({ token, onOpenDetail, onOpenQuote, onRegister, r
                   </td>
                   <td style={td}>{r.quoteProgress === 'sent' ? (r.quoteIssueDate ? formatDisplayDate(r.quoteIssueDate) : '—') : '—'}</td>
                   <td style={td}>{r.processingStatus === 'closed_no_quote' ? <span style={badge(PROCESSING_META.closed_no_quote)}>종결</span> : '—'}</td>
+                  {canDelete && (
+                    <td style={td} onClick={e => e.stopPropagation()}>
+                      <button type="button" disabled={deletingId === r.id}
+                        onClick={async () => {
+                          if (deletingId != null) return;
+                          setDeletingId(r.id);
+                          try {
+                            const out = await confirmAndDeleteInquiry(token, r.id);
+                            if (out.deleted) { onToast?.(out.message!); await load(); }
+                          } finally { setDeletingId(null); }
+                        }}
+                        data-testid={`inquiry-delete-${r.id}`} aria-label={`${r.inquiryNumber ?? r.id} 의뢰건 삭제`}
+                        style={{ padding: '4px 10px', fontSize: 12, fontWeight: 700, borderRadius: 6, border: '1px solid #fecaca', background: '#fff', color: '#dc2626', cursor: deletingId === r.id ? 'not-allowed' : 'pointer', opacity: deletingId === r.id ? 0.6 : 1 }}>
+                        삭제
+                      </button>
+                    </td>
+                  )}
                 </tr>
               );
             })}

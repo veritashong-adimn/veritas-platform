@@ -1,6 +1,7 @@
 import {
-  pgTable, serial, integer, numeric, text, timestamp, boolean, date, index, type AnyPgColumn,
+  pgTable, serial, integer, numeric, text, varchar, timestamp, boolean, date, index, check, type AnyPgColumn,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { quotesTable } from "./quotes";
@@ -82,9 +83,17 @@ export const quoteItemsTable = pgTable("quote_items", {
   //  · ON DELETE SET NULL: 부모 삭제 시 자식은 고아 대신 NULL(공통비용으로 강등) — DB 안전망. 편집 버퍼에서는 함께 제거 권장.
   parentItemId: integer("parent_item_id").references((): AnyPgColumn => quoteItemsTable.id, { onDelete: "set null" }),
 
+  // ── 단가 상태 · 통역 인원 확정 여부 (모두 NULL = 기존 자료, 값 보정 없음) ──────────────────
+  //  · priceStatus: unset(단가 미입력 — unit_price 0으로 저장되지만 '실제 0원'이 아님) | set(입력) | free(무상 확정, 0원)
+  //    unit_price 와 어긋나지 않도록 DB CHECK(quote_items_price_status_check)로 강제한다.
+  //  · interpreterCountConfirmed: false = 인원 미확정(interpreter_count 는 계산용 저장값) | true = 확정
+  priceStatus: varchar("price_status", { length: 10 }),
+  interpreterCountConfirmed: boolean("interpreter_count_confirmed"),
+
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (t) => ({
   idxQuoteParent: index("idx_quote_items_quote_parent").on(t.quoteId, t.parentItemId),
+  priceStatusCheck: check("quote_items_price_status_check", sql`${t.priceStatus} IS NULL OR (${t.priceStatus} = 'set' AND ${t.unitPrice} <> 0) OR (${t.priceStatus} IN ('unset', 'free') AND ${t.unitPrice} = 0)`),
 }));
 
 export const insertQuoteItemSchema = createInsertSchema(quoteItemsTable).omit({

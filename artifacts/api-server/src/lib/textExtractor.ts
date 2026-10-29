@@ -438,13 +438,20 @@ async function extractDoc(buf: Buffer): Promise<TextStats> {
 // ─── PDF ─────────────────────────────────────────────────────────────────────
 
 async function extractPdf(buf: Buffer): Promise<TextStats> {
-  // pdf-parse 기본 옵션으로 텍스트 추출. 스캔본 PDF는 텍스트 빈 경우 있음.
+  // pdf-parse v2 — 호출 가능한 함수(v1 `pdfParse(buf)`)가 아니라 PDFParse 클래스를 내보낸다(routes/translators.ts 와 동일 사용법).
+  // 스캔본 PDF는 텍스트 레이어가 없어 빈 문자열 — 경고로 알리고 호출측(vision/OCR 경로)이 이미지로 판독한다.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mod      = (await import("pdf-parse")) as any;
-  const pdfParse = mod.default ?? mod;
-  const data     = await pdfParse(buf, { max: 0 });
-  const text     = data.text ?? "";
-  const warn     = text.trim().length === 0 ? "스캔 PDF — 텍스트 레이어 없음. 이미지로 재업로드를 권장합니다." : undefined;
+  const mod = (await import("pdf-parse")) as any;
+  const PDFParse = mod.PDFParse ?? mod.default?.PDFParse;
+  if (typeof PDFParse !== "function") throw new Error("PDF 텍스트 추출 모듈(pdf-parse) 로드 실패 — PDFParse 클래스를 찾을 수 없습니다.");
+  const parser = new PDFParse({ data: buf });
+  let raw = "";
+  try { raw = (await parser.getText()).text ?? ""; }
+  finally { await parser.destroy().catch(() => undefined); }
+  // pdf-parse v2 가 페이지 사이에 넣는 "-- 1 of 2 --" 표시는 문서 내용이 아니다(값으로 읽히지 않게 제거)
+  const pages = Math.max(0, ...[...raw.matchAll(/^--\s*\d+\s+of\s+(\d+)\s*--\s*$/gm)].map(m => +m[1]));
+  const text = raw.replace(/^--\s*\d+\s+of\s+\d+\s*--\s*$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+  const warn = text.length === 0 ? `이미지(스캔) PDF — 텍스트 레이어가 없습니다${pages > 1 ? `(총 ${pages}페이지)` : ""}.` : undefined;
   return stats(text, "pdf-parse", "Text Extraction", warn);
 }
 

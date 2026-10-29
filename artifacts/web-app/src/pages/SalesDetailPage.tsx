@@ -14,7 +14,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api, type Product } from '../lib/constants';
 import { Card, StatusBadge, Toast, GhostBtn, PrimaryBtn, confirmDialog, alertDialog, promptDialog } from '../components/ui';
 import { C, TYPO, SP, BD, dsInputStd } from '../lib/ds';
-import { buildQuotePdfData, type QuoteDetail } from '../lib/quotePdf';
+import { buildQuotePdfData, formatPhoneDisplay, type QuoteDetail } from '../lib/quotePdf';
+import { QuoteRecipientRefreshBar } from '../components/admin/QuoteRecipientRefreshBar';
+import { LegacyVatNotice, confirmLegacyVatChange } from '../components/admin/LegacyVatNotice';
 import { formatDocNumber } from '../lib/quoteTitle';
 import QuotePdfPreviewModal from '../components/admin/QuotePdfPreviewModal';
 import { BackToListButton } from '../components/admin/BackToListButton';
@@ -110,6 +112,8 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   const [products,  setProducts]  = useState<Product[]>([]);
   const [saving,    setSaving]    = useState(false);
   const [isLegacyOrigin, setIsLegacyOrigin] = useState(false);   // 과거 CRM 에서 전환된 판매건(출처 배지)
+  // 견적 수신자 연락처·이메일 — 견적서에 실제 출력되는 값(발행 문서와 동일)
+  const [recipient, setRecipient] = useState<{ phone: string | null; email: string | null } | null>(null);
 
   // ── 판매 상세(=프로젝트 + 원본 견적) 조회 ─────────────────────────────────
   // silent=true: 저장 후 백그라운드 갱신(예: 수행정보 추가비용 저장). 로딩 오버레이로 화면을 비우지 않아
@@ -138,6 +142,19 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   // ── 연결된 현재 견적 ───────────────────────────────────────────────────────
   const quote = project?.quotes?.find((q: any) => q.isCurrent) ?? project?.quotes?.[0] ?? null;
   const items: any[] = quote?.items ?? [];
+  const quoteIdForRecipient: number | null = quote?.id ?? null;
+  useEffect(() => {
+    if (!quoteIdForRecipient) { setRecipient(null); return; }
+    fetch(api(`/api/admin/quotes/${quoteIdForRecipient}`), { headers: authH })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return setRecipient(null);
+        // 견적서에 실제 출력되는 값과 같게: 고정값이 있으면 고정값, 없으면(기존 견적) 현재 출력 값 — 자동 결정 이메일은 '담당자 정보 갱신'으로 반영
+        setRecipient(d.customerSnapshotFixed
+          ? { phone: d.customerContactPhone ?? d.customerContactMobile ?? null, email: d.customerContactEmail ?? null }
+          : { phone: d.contactPhone ?? null, email: d.contactEmail ?? null });
+      }).catch(() => setRecipient(null));
+  }, [quoteIdForRecipient, project?.contactId]); // eslint-disable-line react-hooks/exhaustive-deps
   const saleConfirmed = ['approved', 'paid', 'matched', 'in_progress', 'completed'].includes(project?.status);
 
   const quoteDocTitle = quote ? (quote.title ?? quote.quoteNumber ?? `견적 #${quote.id}`) : '';
@@ -185,7 +202,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
       const validUntil = issue
         ? (d => d.toISOString().split('T')[0])(new Date(new Date(issue).getTime() + 30 * 86400000))
         : undefined;
-      const res = await fetch(api(`/api/admin/quotes/${quote.id}`), {
+      const putBody = (extra: Record<string, unknown> = {}) => fetch(api(`/api/admin/quotes/${quote.id}`), {
         method: 'PUT',
         headers: { ...authH, 'Content-Type': 'application/json' },
         // 품목만 갱신 — 메타데이터(제목/비고/유형/견적일)는 기존값 유지, 프로젝트 CRM 링크는 미전송(불변)
@@ -200,9 +217,16 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
           note: quote.note ?? undefined,
           title: quote.title ?? undefined,
           ...(versionReason ? { versionReason } : {}),
+          ...extra,
         }),
       });
-      const data = await res.json().catch(() => ({}));
+      let res = await putBody();
+      let data = await res.json().catch(() => ({}));
+      // 과거 CRM 전환 판매: 원본 총액과 다른 금액이면 직원 확인 후에만 저장(임의 VAT 가산 방지)
+      if (res.status === 409 && await confirmLegacyVatChange(data, m => confirmDialog({ title: '원본 총액 변경 확인', message: m, confirmLabel: '변경 저장', cancelLabel: '취소' }))) {
+        res = await putBody({ confirmLegacyVat: true });
+        data = await res.json().catch(() => ({}));
+      }
       if (!res.ok) { setToast(`판매정보 저장 실패: ${data.error ?? res.status}`); return; }
       setEditMode(false);
       setEditItems([]);
@@ -309,10 +333,15 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
   }
 
   const companyName = project.company?.name ?? project.requestingCompanyName ?? null;
+  const recipientPhone = recipient?.phone ? formatPhoneDisplay(recipient.phone) : null;
   const contactName = project.contact?.name ?? null;
   // 상단 요약 표시 — Master 연결이 없으면 거래 당시 Snapshot(과거 CRM 원본명) 사용
   const headerCompany = companyName ?? project.companyNameSnapshot ?? null;
-  const headerContact = contactName ?? project.contactNameSnapshot ?? null;
+  // 담당자 Master → 거래 당시 Snapshot → 과거 CRM 진행관리표 복원 고객명(Master 미연결 표시)
+  const restoredContact = !contactName && !project.contactNameSnapshot && project.legacyCustomerName ? `${project.legacyCustomerName} (미연결)` : null;
+  // 과거 CRM 전환 판매에서 담당자 Master 없이 이름 스냅샷만 있으면 목록과 같게 '미연결' 표시
+  const snapshotContact = project.contactNameSnapshot ? (isLegacyOrigin && !project.contactId ? `${project.contactNameSnapshot} (미연결)` : project.contactNameSnapshot) : null;
+  const headerContact = contactName ?? snapshotContact ?? restoredContact;
   const productSummary = items.length ? `${items[0]?.productName ?? ''}${items.length > 1 ? ` 외 ${items.length - 1}건` : ''}` : null;
   const pm = adminUsers.find(u => u.id === project.adminId);
   const pmName = pm ? (pm.name ?? pm.email) : (project.adminName ?? null);   // 관리자 목록에 없는 직원 PM 은 서버 표시명 사용
@@ -410,12 +439,17 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
               </div>
               <ReadField label="거래처" value={companyName} />
               <ReadField label="담당자" value={contactName} />
+              <ReadField label="담당자 연락처" value={recipientPhone} />
+              <ReadField label="담당자 이메일" value={recipient?.email ?? null} />
               <ReadField label="담당 PM" value={pmName} />
               {/* 상단 헤더에서 이관한 식별정보 — 번호는 실제로 '견적번호'(formatDocNumber 'Q' 접두)이며 판매/프로젝트 번호가 아님. 상태는 판매 상태. */}
               <ReadField label="견적번호" value={quote.quoteNumber ? (formatDocNumber('Q', quote.quoteNumber, quote.issueDate) || quote.quoteNumber) : undefined} />
               <ReadField label="상태" value={<StatusBadge status={project.status} />} />
             </div>
           </Card>
+
+          {/* 견적서 수신자 고정값 ≠ 현재 담당자일 때만 '담당자 정보 갱신' 안내(사용자 선택 시에만 변경) */}
+          <QuoteRecipientRefreshBar quoteId={quote.id} token={token} onToast={setToast} refreshKey={project.contactId ?? null} />
 
           {/* ── B. 판매정보 ─────────────────────────────────────────────── */}
           {/* 조회모드: 읽기전용 뷰(QuoteItemsView). 수정모드: 견적관리와 공용 편집 그리드(QuoteItemsEditor).
@@ -438,6 +472,7 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
             />
             {editMode ? (
               <>
+                {isLegacyOrigin && <LegacyVatNotice quoteId={quote.id} token={token} />}
                 <QuoteItemsEditor items={editItems} onItemsChange={setEditItems} vatType={vatType} products={products} />
                 {/* 수정모드 — 편집 그리드와 동일 폭의 overflow 안에 합계 행을 렌더해 공급가액 컬럼과 정렬.
                     조회모드는 QuoteItemsView 내부에 합계 행이 포함된다. */}
@@ -497,7 +532,8 @@ export function SalesDetailPage({ saleId, token, adminUsers = [], onBack }: Sale
 
           {/* ── F. 과거 CRM 원본정보(전환 판매건만 표시) ─────────────────────── */}
           <LegacyOriginSection projectId={saleId} token={token} onToast={setToast}
-            onChanged={() => fetchDetail({ silent: true })} onLoaded={setIsLegacyOrigin} />
+            onChanged={() => fetchDetail({ silent: true })} onLoaded={setIsLegacyOrigin}
+            onReverted={() => setTimeout(() => onBack(), 600)} />
         </>
       )}
 

@@ -55,3 +55,9 @@ Thumbs.db
 
 # Claude Code session/memory data
 .claude/
+
+# 의뢰건 AI 분석 개발환경 진단 저장(원본 업로드·분석 결과) — 커밋 금지
+.inquiry-ai-diagnostics/
+
+# 임시 빌드 산출물
+artifacts/api-server/dist-scratch/

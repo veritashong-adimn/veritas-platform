@@ -1,76 +1,73 @@
 import { Router, type IRouter } from "express";
-import { db, quotesTable, projectsTable, isQuoteConverted } from "@workspace/db";
+import { db, quotesTable, projectsTable, inquiriesTable, logsTable } from "@workspace/db";
 import { eq, and, isNull, isNotNull, desc, sql } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import { evaluateQuoteDependencies, buildGuardMessage } from "../services/saleDependency";
+import { checkQuoteDeletable, deleteQuoteAndRevert, QuoteDeleteError } from "../services/quoteDeletion";
 
 // 견적 삭제(Soft Delete) 전용 라우터.
 // admin.ts(초대형 파일)의 타입 추론 부하를 늘리지 않도록 별도 파일로 분리한다.
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 
-// ─── 견적 삭제 (Soft Delete) ─────────────────────────────────────────────────
-// 물리 삭제하지 않고 deletedAt/deletedBy/deletionReason 만 기록한다.
-// 판매전환 완료(활성 Project 연결) 견적은 삭제 불가 — 먼저 판매취소 필요.
+// ─── 견적 삭제 (Soft Delete) + 의뢰건·프로젝트 원복 ─────────────────────────────
+// 물리 삭제하지 않고 deletedAt/deletedBy/deletionReason 만 기록한다(견적번호 재사용 없음).
+// 삭제 가능 조건·원복 규칙은 services/quoteDeletion(checkQuoteDeletable / deleteQuoteAndRevert) — 화면 검사와 별개로 서버에서 다시 검증.
+//   저장만 된 견적(pending)만 — 발송·승인·거절·누적마감·배정·작업·결제·정산·청구 증빙·선입금 차감이 있으면 409 + 사유.
+router.get("/admin/quotes/:id/delete-check", ...adminGuard, requirePermission("quote.update"), async (req, res) => {
+  const quoteId = Number(req.params.id);
+  if (isNaN(quoteId) || quoteId <= 0) { res.status(400).json({ error: "유효하지 않은 견적 id." }); return; }
+  try {
+    const r = await checkQuoteDeletable(quoteId);
+    if (!r.quote) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }
+    res.json({ ok: r.ok, reasons: r.reasons, inquiryIds: r.inquiryIds, projectStatus: r.project?.status ?? null,
+      otherActiveQuotes: r.otherActiveQuotes.map(o => ({ id: o.id, quoteNumber: o.quoteNumber, status: o.status })) });
+  } catch (err) {
+    req.log.error({ err }, "Admin: quote delete-check failed");
+    res.status(500).json({ error: "삭제 가능 여부 확인 실패." });
+  }
+});
+
 router.delete("/admin/quotes/:id", ...adminGuard, requirePermission("quote.update"), async (req, res) => {
   const quoteId = Number(req.params.id);
   if (isNaN(quoteId) || quoteId <= 0) {
     res.status(400).json({ error: "유효하지 않은 견적 id." });
     return;
   }
-
-  const { reason } = req.body as { reason?: string };
-  const trimmedReason = (reason ?? "").trim();
+  // 삭제 사유 — 선택 입력(목록 일괄 삭제 화면은 기존대로 입력을 받는다)
+  const trimmedReason = ((req.body as { reason?: string } | undefined)?.reason ?? "").trim() || null;
 
   try {
-    // 1) 견적 존재 확인
-    const [quote] = await db
-      .select({ id: quotesTable.id, status: quotesTable.status, deletedAt: quotesTable.deletedAt, quoteNumber: quotesTable.quoteNumber })
-      .from(quotesTable)
-      .where(eq(quotesTable.id, quoteId));
-    if (!quote) { res.status(404).json({ error: "견적을 찾을 수 없습니다." }); return; }
-
-    // 2) 이미 삭제된 견적인가
-    if (quote.deletedAt) { res.status(400).json({ error: "이미 삭제된 견적입니다." }); return; }
-
-    // 3) 판매전환 완료 견적은 삭제 불가 (먼저 판매취소 필요).
-    //    목록 UI와 100% 동일한 기준(status === 'approved') = 공통 함수 isQuoteConverted() 사용.
-    //    projectId 연결 여부로 판단하지 않는다(저장 시점에 이미 연결될 수 있어 오판 원인이었음).
-    //    판매취소 시 status가 'pending'으로 복귀하므로 취소 후에는 정상 삭제된다.
-    if (isQuoteConverted(quote.status)) {
-      res.status(409).json({ error: "판매전환된 견적은 삭제할 수 없습니다. 먼저 판매취소를 진행한 후 삭제해 주세요." });
-      return;
+    const r = await deleteQuoteAndRevert(quoteId, req.user?.id ?? null, trimmedReason);
+    // 감사로그(커밋 후) — 실제 처리 결과 그대로
+    const meta = {
+      event: "QUOTE_DELETED", quoteNumber: r.quoteNumber, projectId: r.projectId,
+      projectStatusBefore: r.projectStatusBefore, projectStatusAfter: r.projectStatusAfter,
+      inquiryIds: r.inquiries.map(i => i.id), relinkedQuoteId: r.inquiries[0]?.relinkedQuoteId ?? null,
+      otherActiveQuoteIds: r.otherActiveQuoteIds, reason: trimmedReason,
+    };
+    await logEvent("quote", quoteId, "quote_deleted", req.log, req.user ?? undefined, JSON.stringify(meta));
+    for (const i of r.inquiries) {
+      await logEvent("inquiry", i.id, "inquiry_quote_unlinked", req.log, req.user ?? undefined,
+        JSON.stringify({ quoteId, quoteNumber: r.quoteNumber, projectId: r.projectId, relinkedQuoteId: i.relinkedQuoteId }));
     }
-
-    // 3-1) Dependency Guard — 연결된 project 에 확정/미확정 금융이력이 있으면 삭제 차단.
-    //   판매취소를 막아놓고 견적삭제로 우회하는 경로를 봉쇄한다(pending 견적이라도 과거 판매전환으로
-    //   생성된 입금/지급이 project 에 남아 있을 수 있음). 검사는 READ-ONLY.
-    const guard = await evaluateQuoteDependencies(quoteId);
-    if (!guard.canDelete) {
-      res.status(409).json({ error: buildGuardMessage("삭제", guard), guard });
-      return;
+    if (r.projectId != null) {
+      await logEvent("project", r.projectId, "quote_deleted", req.log, req.user ?? undefined,
+        JSON.stringify({ quoteId, quoteNumber: r.quoteNumber, statusBefore: r.projectStatusBefore, statusAfter: r.projectStatusAfter, reason: trimmedReason }));
     }
-
-    // 4) 삭제 사유 검증 (필수, 공백 제외 2자 이상)
-    if (trimmedReason.length < 2) {
-      res.status(400).json({ error: "삭제 사유를 2자 이상 입력해 주세요." });
-      return;
-    }
-
-    // 5) Soft Delete 처리 — 레코드 보존, 목록/현황/검색에서만 제외
-    const [updated] = await db
-      .update(quotesTable)
-      .set({ deletedAt: new Date(), deletedBy: req.user?.id ?? null, deletionReason: trimmedReason })
-      .where(and(eq(quotesTable.id, quoteId), isNull(quotesTable.deletedAt)))
-      .returning({ id: quotesTable.id });
-
-    if (!updated) { res.status(409).json({ error: "이미 삭제된 견적입니다." }); return; }
-
-    await logEvent("quote", quoteId, "quote_deleted", req.log, req.user ?? undefined, JSON.stringify({ reason: trimmedReason }));
-    req.log.info({ quoteId, quoteNumber: quote.quoteNumber, deletedBy: req.user?.id }, "Admin: quote soft-deleted");
-    res.json({ success: true, deletedQuoteId: quoteId });
+    req.log.info({ quoteId, quoteNumber: r.quoteNumber, deletedBy: req.user?.id }, "Admin: quote soft-deleted");
+    const reverted = r.otherActiveQuoteIds.length === 0;
+    res.json({
+      success: true, deletedQuoteId: quoteId, projectId: r.projectId,
+      projectStatusBefore: r.projectStatusBefore, projectStatusAfter: r.projectStatusAfter,
+      inquiryId: r.inquiries[0]?.id ?? null, relinkedQuoteId: r.inquiries[0]?.relinkedQuoteId ?? null,
+      message: reverted
+        ? (r.inquiries.length ? "견적서가 삭제 처리되었습니다. 기존 의뢰건으로 돌아갑니다." : "견적서가 삭제 처리되었습니다.")
+        : `견적서가 삭제 처리되었습니다. 같은 의뢰의 다른 유효 견적서(${r.otherActiveQuoteIds.length}건)가 있어 프로젝트 상태는 유지됩니다.`,
+    });
   } catch (err) {
+    if (err instanceof QuoteDeleteError) { res.status(err.status).json({ error: err.message, reasons: err.reasons }); return; }
     req.log.error({ err }, "Admin: failed to soft-delete quote");
     res.status(500).json({ error: "견적 삭제 실패." });
   }
@@ -121,6 +118,14 @@ router.post("/admin/quotes/:id/restore", ...adminGuard, requirePermission("quote
     await db.update(quotesTable)
       .set({ deletedAt: null, deletedBy: null, deletionReason: null })
       .where(eq(quotesTable.id, quoteId));
+    // 삭제 때 연결이 풀린 의뢰건이 아직 다른 견적과 연결되지 않았으면 다시 연결한다
+    const unlinked = await db.select({ entityId: logsTable.entityId }).from(logsTable)
+      .where(and(eq(logsTable.entityType, "inquiry"), eq(logsTable.action, "inquiry_quote_unlinked"), sql`${logsTable.metadata}::jsonb ->> 'quoteId' = ${String(quoteId)}`));
+    for (const u of unlinked) {
+      const [relinked] = await db.update(inquiriesTable).set({ quoteId, updatedAt: new Date() })
+        .where(and(eq(inquiriesTable.id, u.entityId), isNull(inquiriesTable.quoteId))).returning({ id: inquiriesTable.id });
+      if (relinked) await logEvent("inquiry", relinked.id, "inquiry_quote_linked", req.log, req.user ?? undefined, JSON.stringify({ quoteId, restored: true }));
+    }
 
     await logEvent("quote", quoteId, "quote_restored", req.log, req.user ?? undefined,
       JSON.stringify({ quoteNumber: quote.quoteNumber, ...(restoreReason ? { restoreReason } : {}) }));

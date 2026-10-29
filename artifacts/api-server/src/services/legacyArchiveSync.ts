@@ -14,6 +14,7 @@
 import crypto from "node:crypto";
 import { sql, eq, and, count, isNotNull, inArray } from "drizzle-orm";
 import { legacyArchiveRowsTable, importBatchesTable, importRowSourcesTable, legacySalesProgressLinksTable } from "@workspace/db";
+import { planLateLinks, LATE_LINK_METHOD } from "./legacyContactRestore";
 import {
   buildArchivePreview, computeFileHash, planArchiveImport, sourceIdentityKey, matchIncomingRows,
   stableKey, normName, diffMutable,
@@ -346,7 +347,7 @@ export interface SyncPreview {
 //   · 같은 키의 판매건이 2건 이상이면 보류 · 해당 진행 행이 이미 다른 판매건에 연결돼 있으면 보류 · 진행 행 없으면 미연결.
 export interface NewSaleLink { status: "link" | "hold" | "none"; method?: string; key?: string; progressIds?: number[]; reason?: string }
 const amtKey = (v: unknown) => { const t = String(v ?? "").replace(/[,\s원]/g, ""); if (!t) return ""; const n = Number(t); return Number.isFinite(n) ? String(Math.round(n)) : ""; };
-function saleLinkKey(company: string | null, product: string | null, total: unknown, date: string | null): { key: string; method: string } | null {
+export function saleLinkKey(company: string | null, product: string | null, total: unknown, date: string | null): { key: string; method: string } | null {
   const c = (company ?? "").trim(), pr = (product ?? "").trim(), a = amtKey(total), d = (date ?? "").slice(0, 10);
   if (!a || !d || (!c && !pr)) return null;
   return { key: `${c || "∅"}|${pr || "∅"}|${a}|${d}`, method: c && pr ? "full_key_v1" : c ? "reduced_co_amt_date_v1" : "reduced_prod_amt_date_v1" };
@@ -789,6 +790,20 @@ export async function executeArchiveSync(dbx: any, opts: {
           carryLogs.push({ batchId: batch.id, module: "legacy_archive", entityId: ins[0].id, sourceFile: opts.fileName, sourceSheet: p.allRows[a.i].sourceSheet, sourceRow: p.allRows[a.i].sourceRow,
             rowKey: `newlink:${ins[0].id}`, status: SYNC_LOG.linkNew, sourceSystem: SOURCE_SYSTEM, legacyId: String(saleId), sourceRaw: { saleRowId: saleId, progressRowId: pid, method: nl.method } });
         }
+      }
+    }
+  }
+  // 진행관리표 신규 행 ↔ 기존 판매건 연결(판매보다 늦게 올라온 진행행). 같은 연결키·같은 조건(키의 판매 1건, 다른 판매에 미연결)일 때만.
+  //   되돌리기는 link_new 기록으로 함께 정리된다.
+  if (opts.sourceType === "progress" && insertedId.size) {
+    const { links: late } = await planLateLinks(dbx, { progressIds: [...insertedId.values()] });
+    for (const l of late) {
+      const ins = await dbx.insert(L).values({ saleRowId: l.saleRowId, progressRowId: l.progressRowId, saleNo: l.saleNo, matchKey: l.key, matchMethod: LATE_LINK_METHOD, decision: "confirmed" })
+        .onConflictDoNothing().returning({ id: L.id });
+      if (ins.length) {
+        newLinks++;
+        carryLogs.push({ batchId: batch.id, module: "legacy_archive", entityId: ins[0].id, sourceFile: opts.fileName, rowKey: `newlink:${ins[0].id}`, status: SYNC_LOG.linkNew,
+          sourceSystem: SOURCE_SYSTEM, legacyId: String(l.saleRowId), sourceRaw: { saleRowId: l.saleRowId, progressRowId: l.progressRowId, method: LATE_LINK_METHOD, key: l.key } });
       }
     }
   }

@@ -2,6 +2,7 @@
 // sales_list / progress 공용. 상단 normalized 요약 + 하단 CRM 원본정보(source_raw 전체). 원본은 항상 조회 전용.
 // 판매건은 [수정] → 운영 판매건 전환(미리보기·확인) 후 운영 판매 상세에서 수정한다(원본 불변).
 import React, { useEffect, useState } from 'react';
+import { SaleContactInfoPanel, type ContactInfo } from './SaleContactInfoPanel';
 import { api } from '../../lib/constants';
 import { formatAmountDisplay } from '../../lib/utils';
 import { BackToListButton } from './BackToListButton';
@@ -18,6 +19,8 @@ type LinkedProgress = {
 type ArchiveRow = {
   id: number; sourceType: 'sales_list' | 'progress'; sourceSystem: string;
   recordDate: string | null; companyName: string | null; contactName: string | null;
+  linkedContactName?: string | null;
+  contactReviewNeeded?: boolean;      // 고객 담당자 확인 필요(후보 복수)   // 판매번호에 연결된 고객 담당자 Master(수동 보완·정확 일치 자동 연결)
   translatorName: string | null; productName: string | null; language: string | null;
   supplyAmount: string | null; vatAmount: string | null; totalAmount: string | null; payoutPretax: string | null;
   deliveryDate: string | null; payoutDate: string | null; collectionDate: string | null; collectionStatus: string | null;
@@ -52,6 +55,13 @@ export function LegacyArchiveDetailPage({ id, token, onBack, setToast, onOpenSal
   const [showActivate, setShowActivate] = useState(false);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  // 고객 담당자 연락처(출처 구분) — 담당자 보완 창과 같은 API(/admin/sales-contact/context)
+  const [contactCtx, setContactCtx] = useState<{ company: { name: string } | null; rawCompanyName: string | null; contactInfo: ContactInfo | null } | null>(null);
+  useEffect(() => {
+    if (row?.sourceType !== 'sales_list') return;
+    fetch(api(`/api/admin/sales-contact/context?source=legacy&id=${id}`), { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null).then(setContactCtx).catch(() => setContactCtx(null));
+  }, [row?.sourceType, id, token]);
 
   useEffect(() => {
     let alive = true;
@@ -76,8 +86,12 @@ export function LegacyArchiveDetailPage({ id, token, onBack, setToast, onOpenSal
   const dateOf = (v: unknown) => (typeof v === 'string' ? (v.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? null) : null);
   // 고객담당자(거래처 측) — 판매목록 원본에는 고객담당자 칸이 없다(정규화 contactName 은 내부 '영업담당자'). 판매관리 목록과 동일하게
   //   연결 진행행 '고객명'이 단일일 때만 표시하고, 없거나 여러 명이면 '-'. 내부 담당PM 이름으로 대체하지 않는다.
-  const custNames = row ? [...new Set((row.linkedProgress ?? []).map(lp => String(lp.sourceRaw?.['고객명'] ?? '').trim()).filter(Boolean))] : [];
-  const customerContact = custNames.length === 1 ? custNames[0] : custNames.length > 1 ? '확인 필요' : null;   // 목록과 동일 표기
+  //   표시 우선순위(목록과 동일): ① 연결된 담당자 Master ② 진행관리표 복원 고객명(미연결) ③ 없음. 무효값(문자 없음·전화번호 형태)·영업담당자 이름 제외.
+  const salesRep = String(row?.sourceRaw?.['영업담당자'] ?? '').replace(/\s/g, '');
+  const custNames = row ? [...new Set((row.linkedProgress ?? []).map(lp => String(lp.sourceRaw?.['고객명'] ?? '').trim())
+    .filter(n => n && /[가-힣A-Za-z]/.test(n) && n.replace(/\D/g, '').length < 7 && n.replace(/\s/g, '') !== salesRep))] : [];
+  const customerContact = row?.linkedContactName ? row.linkedContactName
+    : custNames.length === 1 ? `${custNames[0]} (미연결)` : (custNames.length > 1 || row?.contactReviewNeeded) ? '확인 필요' : null;
   const saleDate = row ? (dateOf(row.recordDate) ?? dateOf(row.sourceRaw?.['판매번호']) ?? dateOf(row.sourceRaw?.['세금계산서발행(예정)일'])) : null;
 
   // source_type별 상단 normalized 요약(값 있는 것만 의미있게, 없으면 "-").
@@ -143,6 +157,14 @@ export function LegacyArchiveDetailPage({ id, token, onBack, setToast, onOpenSal
               ))}
             </div>
           </div>
+
+          {/* 고객 담당자 — 판매 당시 원본 연락처와 현재 담당자 Master 연락처를 구분해 표시(확인된 값만, 없으면 '-') */}
+          {isSales && contactCtx?.contactInfo && (
+            <div style={card} data-testid="archive-detail-contact">
+              <div style={{ fontSize: 15, fontWeight: 800, color: '#111827', marginBottom: 10 }}>고객 담당자</div>
+              <SaleContactInfoPanel companyName={contactCtx.company?.name ?? contactCtx.rawCompanyName} info={contactCtx.contactInfo} />
+            </div>
+          )}
 
           {/* (C-4J-2C-7) 통번역사 수행정보 — 판매건에 연결된 progress 수행행(READ-ONLY, 매핑 테이블 조회) */}
           {isSales && (() => {

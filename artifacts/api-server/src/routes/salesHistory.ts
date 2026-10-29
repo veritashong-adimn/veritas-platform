@@ -10,6 +10,7 @@
 //   · Current Master 생성/mapping 없음. 날짜/금액/상태 추측 없음.
 import { Router, type IRouter } from "express";
 import { activatedSaleExists } from "../services/legacyActivationLineage";
+import { RESTORE_MODULE, restoredCustomerNameOfProject } from "../services/legacyContactRestore";
 import { db, legacyArchiveRowsTable, legacySalesProgressLinksTable } from "@workspace/db";
 import { eq, and, or, ilike, gte, lte, count, desc, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
@@ -39,6 +40,10 @@ export interface SalesHistoryRow {
   saleName: string | null;
   companyName: string | null;
   contactName: string | null;
+  // 고객 담당자 상태(additive) — 이름과 Master 연결 여부를 구분한다.
+  //   master = 담당자 Master 연결(판매 보완 연결·정확 일치 자동 연결·운영 판매 담당자) / restored = 진행관리표 고객명 복원(Master 미연결)
+  //   review = 확인 필요(후보 복수) / null = 확인 가능한 정보 없음
+  contactState?: "master" | "restored" | "review" | null;
   productName: string | null;
   amount: number | null;
   collectionDate: string | null;
@@ -116,11 +121,19 @@ async function markLegacyOrigin(dbx: any, list: SalesHistoryRow[]) {
   const maps = (await dbx.execute(sql`SELECT entity_id, legacy_id FROM legacy_master_mappings
     WHERE source_system = 'old_crm' AND entity_type = 'sale' AND status = 'active' AND entity_id IN (${sql.join(ids.map(i => sql`${i}`), sql`, `)})`)).rows as any[];
   const byId = new Map(maps.map(m => [Number(m.entity_id), String(m.legacy_id)]));
+  // 전환 판매의 고객 담당자: 운영 판매 담당자 Master 가 있으면 그대로, 없으면 진행관리표 복원 고객명(미연결)
+  const legacyIds = list.filter(r => byId.has(Number(r.id))).map(r => Number(r.id));
+  const restored = legacyIds.length ? new Map(((await dbx.execute(sql`SELECT p.id, p.contact_id, ${restoredCustomerNameOfProject(sql`p.id`)} AS name
+    FROM projects p WHERE p.id IN (${sql.join(legacyIds.map(i => sql`${i}`), sql`, `)})`)).rows as any[]).map(x => [Number(x.id), x])) : new Map();
   for (const r of list) {
     const saleNo = byId.get(Number(r.id));
     if (!saleNo) continue;
     r.origin = "legacy_crm"; r.saleNumber = saleNo;
     r.recordDate = saleNo.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? r.recordDate;
+    const x = restored.get(Number(r.id));
+    if (x?.contact_id) r.contactState = "master";
+    else if (x?.name) { r.contactName = x.name; r.contactState = "restored"; }
+    else if (r.contactName) r.contactState = "restored";   // 담당자 Master 없이 이름 스냅샷만 있는 전환 판매
   }
 }
 
@@ -133,7 +146,11 @@ function mapLegacyRow(r: any): SalesHistoryRow {
     // 고객 담당자 = 연결 매핑으로 집계한 진행관리 '고객명'(거래처 측). 담당PM(영업담당자)과 대체하지 않음.
     saleName: r.productName ?? r.companyName ?? null,
     companyName: r.companyName ?? null,
-    contactName: r.customerContact ?? null,   // 연결 매핑 집계 '고객명'(없거나 미연결이면 null → 화면 '-')
+    // 표시 우선순위: ① 확정 연결된 담당자 Master ② 진행관리표에서 복원한 고객명 ③ 없음('-'). 후보 복수는 '확인 필요'.
+    contactName: r.supplementContact ?? (r.customerContact && r.customerContact !== "확인 필요" ? r.customerContact : null),
+    contactState: r.supplementContact ? "master"
+      : r.customerContact && r.customerContact !== "확인 필요" ? "restored"
+      : (r.customerContact === "확인 필요" || r.reviewNeeded) ? "review" : null,
     productName: r.productName ?? null,
     amount: toNum(r.totalAmount),
     collectionDate: r.collectionDate ?? null,
@@ -157,7 +174,12 @@ function legacyWhere(q: Record<string, string | undefined>): SQL {
     sql`NOT ${activatedSaleExists(sql`${LA.sourceRaw} ->> '판매번호'`)}`];
   if (q.search?.trim() || q.q?.trim()) {
     const term = likeTerm((q.search || q.q || "").trim());
-    const orExpr = or(ilike(LA.companyName, term), ilike(LA.contactName, term), ilike(LA.productName, term));
+    const orExpr = or(ilike(LA.companyName, term), ilike(LA.contactName, term), ilike(LA.productName, term),
+      // 고객 담당자명 검색 — 진행관리표 복원 고객명·연결된 담당자 Master 이름
+      sql`EXISTS (SELECT 1 FROM legacy_sales_progress_links sl JOIN legacy_archive_rows sp ON sp.id = sl.progress_row_id AND sp.is_effective
+        WHERE sl.sale_row_id = ${LA.id} AND sl.decision = 'confirmed' AND sp.source_raw ->> '고객명' ILIKE ${term})`,
+      sql`EXISTS (SELECT 1 FROM legacy_master_mappings sm JOIN contacts sc ON sc.id = sm.entity_id
+        WHERE sm.source_system = 'old_crm' AND sm.entity_type = 'sale_contact' AND sm.status = 'active' AND sm.legacy_id = ${LA.sourceRaw} ->> '판매번호' AND sc.name ILIKE ${term})`);
     if (orExpr) conds.push(orExpr);
   }
   const dFrom = validDate(q.dateFrom), dTo = validDate(q.dateTo);
@@ -227,7 +249,10 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
         oneName: sql<string | null>`max(nullif(btrim(${LP.sourceRaw} ->> '고객명'), ''))`.as("one_name"),
       }).from(LSP).innerJoin(LP, eq(LP.id, LSP.progressRowId))
         // 반복 업로드: 확정 연결 + 현재 유효 수행행만(수정 이전 버전·되돌린 이관 연결 제외 → 고객명 중복 집계 방지).
-        .where(and(eq(LSP.decision, "confirmed"), eq(LP.isEffective, true)))
+        // 고객명으로 쓸 수 없는 값(문자 없음·전화번호 형태)은 제외 — 복원 서비스(legacyContactRestore)와 같은 기준
+        .where(and(eq(LSP.decision, "confirmed"), eq(LP.isEffective, true),
+          sql`btrim(coalesce(${LP.sourceRaw} ->> '고객명', '')) ~ '[가-힣A-Za-z]'`,
+          sql`length(regexp_replace(coalesce(${LP.sourceRaw} ->> '고객명', ''), '[^0-9]', '', 'g')) < 7`))
         .groupBy(LSP.saleRowId).as("cust");
       const fetched = await dbx.select({
         id: LA.id, recordDate: LA.recordDate, saleDate: LEGACY_SALE_DATE, saleNumber: sql<string | null>`${LA.sourceRaw} ->> '판매번호'`,
@@ -237,7 +262,13 @@ export async function getSalesHistory(dbx: any, q: Record<string, string | undef
         salesRep: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '영업담당자'), '')`,
         paymentDate: sql<string | null>`substring(${LA.sourceRaw} ->> '입금일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}')`,
         paymentMemo: sql<string | null>`nullif(btrim(${LA.sourceRaw} ->> '입금내역'), '')`,
-        customerContact: sql<string | null>`case when ${custSq.dn} = 1 then ${custSq.oneName} when ${custSq.dn} > 1 then '확인 필요' else null end`,
+        // 내부 영업담당자 이름이 고객명 칸에 들어간 경우는 고객 담당자로 쓰지 않는다
+        customerContact: sql<string | null>`case when ${custSq.dn} = 1 and replace(${custSq.oneName}, ' ', '') <> replace(coalesce(${LA.sourceRaw} ->> '영업담당자', ''), ' ', '') then ${custSq.oneName} when ${custSq.dn} > 1 then '확인 필요' else null end`,
+        reviewNeeded: sql<boolean>`${LA.id} IN (SELECT rr.entity_id FROM import_row_sources rr JOIN import_batches rb ON rb.id = rr.batch_id AND rb.is_current AND rb.module = ${RESTORE_MODULE}
+          WHERE rr.module = ${RESTORE_MODULE} AND rr.status = 'review')`,
+        // 판매관리 고객 담당자 보완 연결(legacy_master_mappings 'sale_contact', 판매번호 기준 — 원본 불변)
+        supplementContact: sql<string | null>`(SELECT c.name FROM legacy_master_mappings m JOIN contacts c ON c.id = m.entity_id AND c.deleted_at IS NULL
+          WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale_contact' AND m.status = 'active' AND m.legacy_id = ${LA.sourceRaw} ->> '판매번호')`,
       }).from(LA).leftJoin(custSq, eq(custSq.saleRowId, LA.id)).where(where).orderBy(sql`${LEGACY_SALE_DATE} desc nulls last`, desc(LA.id)).limit(LEGACY_FETCH_CAP);
       legacyRows = fetched.map(mapLegacyRow);
       const truncated = legacyTotal > fetched.length;

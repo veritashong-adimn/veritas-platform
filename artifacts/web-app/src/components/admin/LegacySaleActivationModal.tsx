@@ -2,6 +2,7 @@
 //   미리보기(GET activation-preview, DB 미변경) → 관리자 확인 → 전환(POST activate, planToken 검증) → 판매 상세로 이동.
 import React, { useEffect, useState } from "react";
 import { api } from "../../lib/constants";
+import { formatPhoneDisplay } from "../../lib/quotePdf";
 import { PrimaryBtn, GhostBtn } from "../ui";
 import { DraggableModal } from "./DraggableModal";
 
@@ -14,8 +15,8 @@ type Perf = {
 type Plan = {
   legacyRowId: number; saleNo: string; saleDate: string | null; existing: { projectId: number } | null;
   title: string; productName: string; total: number;
-  company: { name: string | null; matchedId: number | null; matchedName: string | null; method: string };
-  contact: { name: string | null; matchedId: number | null; method: string };
+  company: { name: string | null; matchedId: number | null; matchedName: string | null; method: string; email?: string | null };
+  contact: { name: string | null; matchedId: number | null; method: string; phone?: string | null; mobile?: string | null; email?: string | null; from?: 'master' | 'source' | null; phoneShared?: boolean };
   pm: { name: string | null; matchedId: number | null };
   performances: Perf[];
   perfSummary: { total: number; legacyPaid: number; payoutReview: number; unpaid: number; translatorUnmapped: number };
@@ -87,6 +88,11 @@ export function LegacySaleActivationModal({ legacyRowId, token, onClose, onActiv
               ["판매번호", plan.saleNo], ["판매일", plan.saleDate ?? "-"], ["판매금액(총액)", `${won(plan.total)}원`],
               ["거래처", plan.company.matchedId ? `${plan.company.name} → Master 연결` : `${plan.company.name ?? "-"} (${plan.company.method === "ambiguous" ? "후보 여러 곳 · 미연결" : "Master 미연결"})`],
               ["담당자/고객", plan.contact.matchedId ? `${plan.contact.name} → 담당자 연결` : `${plan.contact.name ?? "-"} (미연결)`],
+              // 새 견적 수신자로 전달할 연락처 — Master 연결이면 Master 값, 아니면 원본 개인번호(공용번호 제외). 전환 후 견적에서 확인·수정 가능.
+              ["담당자 연락처", [plan.contact.mobile, plan.contact.phone].filter(Boolean).join(" · ")
+                ? `${[plan.contact.mobile, plan.contact.phone].filter(Boolean).map(v => formatPhoneDisplay(v)).join(" · ")} (${plan.contact.from === "master" ? "담당자 Master" : plan.contact.phoneShared ? "진행관리표 원본 · 대표/공용번호" : "진행관리표 원본"})` : "-"],
+              ["담당자 이메일", plan.contact.email || "-"],
+              ["담당 PM(내부)", plan.pm.name ? `${plan.pm.name}${plan.pm.matchedId ? "" : " (직원 미연결)"}` : "-"],
               ["상품(1개 항목)", plan.productName],
             ] as [string, string][]).map(([k, v]) => (
               <div key={k} style={{ padding: "7px 10px", background: "#f9fafb", border: "1px solid #f0f0f0", borderRadius: 8 }}>

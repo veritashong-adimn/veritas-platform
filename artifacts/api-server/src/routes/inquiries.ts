@@ -1,9 +1,11 @@
+import { planCustomer } from "../services/quoteCustomerResolve";
 import { Router, type IRouter } from "express";
 import {
   db, inquiriesTable, quotesTable, companiesTable, contactsTable, divisionsTable, usersTable,
 } from "@workspace/db";
 import { eq, and, isNull, desc, sql } from "drizzle-orm";
-import { requireAuth, requireRole } from "../middlewares/auth";
+import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
+import { checkInquiryDeletable, deleteInquiry, InquiryDeleteError } from "../services/inquiryDeletion";
 import { logEvent } from "../lib/logEvent";
 
 /**
@@ -159,6 +161,11 @@ router.get("/admin/inquiries/:id", ...adminGuard, async (req, res) => {
         quotePrice: quotesTable.price,
         companyName: companiesTable.name,
         contactNameLinked: contactsTable.name,
+        // 연결된 담당자 Master 연락처(견적 연동 시 의뢰 입력값과 비교용 — 추가 필드, 기존 응답 키 불변)
+        contactEmailLinked: contactsTable.email,
+        contactPhoneLinked: contactsTable.phone,
+        contactOfficePhoneLinked: contactsTable.officePhone,
+        contactMobileLinked: contactsTable.mobile,
         divisionName: divisionsTable.name,
         pmName: usersTable.name,
       })
@@ -176,6 +183,9 @@ router.get("/admin/inquiries/:id", ...adminGuard, async (req, res) => {
       ...r.inq,
       companyName: r.companyName ?? null,
       contactNameLinked: r.contactNameLinked ?? null,
+      contactEmailLinked: r.contactEmailLinked ?? null,
+      contactPhoneLinked: r.contactPhoneLinked ?? r.contactOfficePhoneLinked ?? null,
+      contactMobileLinked: r.contactMobileLinked ?? null,
       divisionName: r.divisionName ?? null,
       pmName: r.pmName ?? null,
       quoteNumber: r.quoteNumber ?? null,
@@ -198,6 +208,25 @@ const str = (v: any): string | null => (typeof v === "string" && v.trim() ? v.tr
 const num = (v: any): number | null => (v === null || v === undefined || v === "" || isNaN(Number(v)) ? null : Number(v));
 const ts = (v: any): Date | null => { if (!v) return null; const d = new Date(v); return isNaN(d.getTime()) ? null : d; };
 const CHANNELS = ["homepage", "email", "phone", "kakao", "other"];
+// 고객 접수일시(customer_received_*) — 형식이 맞는 값만 저장. 잘못된 값은 저장하지 않는다(임의 보정 없음).
+const CR_STATUS = ["confirmed", "needs_review", "not_provided"];
+const CR_SOURCE = ["homepage", "email_received", "email_sent", "manual", "unknown"];
+function customerReceived(b: any, isCreate: boolean): Record<string, any> {
+  const out: Record<string, any> = {};
+  const has = (k: string) => k in b;
+  if (has("customerReceivedDate")) out.customerReceivedDate = typeof b.customerReceivedDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(b.customerReceivedDate) ? b.customerReceivedDate : null;
+  if (has("customerReceivedTime")) out.customerReceivedTime = typeof b.customerReceivedTime === "string" && /^\d{2}:\d{2}(:\d{2})?$/.test(b.customerReceivedTime) ? b.customerReceivedTime.slice(0, 5) : null;
+  if (out.customerReceivedDate === null) out.customerReceivedTime = null;   // 날짜 없는 시각은 저장하지 않음
+  if (has("customerReceivedStatus") && CR_STATUS.includes(b.customerReceivedStatus)) out.customerReceivedStatus = b.customerReceivedStatus;
+  if (has("customerReceivedSource") && CR_SOURCE.includes(b.customerReceivedSource)) out.customerReceivedSource = b.customerReceivedSource;
+  // 신규 등록은 상태를 항상 남긴다 — 값이 없으면 미기재, 날짜만 오고 상태가 없으면 직원 입력 확정
+  if (isCreate) {
+    const dateGiven = !!out.customerReceivedDate;
+    out.customerReceivedStatus ??= dateGiven ? "confirmed" : "not_provided";
+    out.customerReceivedSource ??= dateGiven ? "manual" : "unknown";
+  }
+  return out;
+}
 // 서비스 유형(복수 선택) — 표시 순서 = 대표값 결정 순서. expense 는 레거시 저장값 호환용.
 const SERVICE_TYPES = ["interpretation", "translation", "equipment", "other", "expense"];
 // 복수 선택 정규화: 허용값만·중복 제거·표시 순서 정렬. 대표 service_type = 목록 첫 값(기존 단일 필드 호환).
@@ -219,6 +248,25 @@ function normalizeServices(b: any) {
   return out;
 }
 
+// ── 견적 저장 시 거래처·담당자 처리 미리보기(읽기 전용 — Master 를 만들거나 바꾸지 않음) ─────────────
+router.get("/admin/inquiries/:id/customer-plan", ...adminGuard, async (req, res) => {
+  const id = Number(req.params.id);
+  if (isNaN(id) || id <= 0) { res.status(400).json({ error: "유효하지 않은 id." }); return; }
+  try {
+    const [inq] = await db.select().from(inquiriesTable).where(and(eq(inquiriesTable.id, id), isNull(inquiriesTable.deletedAt)));
+    if (!inq) { res.status(404).json({ error: "의뢰건을 찾을 수 없습니다." }); return; }
+    const q = req.query as Record<string, string | undefined>;
+    const plan = await planCustomer(db, inq, {
+      companyId: q.companyId ? Number(q.companyId) : null, contactId: q.contactId ? Number(q.contactId) : null,
+      createCompany: q.createCompany === "1", createContact: q.createContact === "1", skipContact: q.skipContact === "1",
+    });
+    res.json({ ...plan, quoteId: inq.quoteId ?? null });
+  } catch (err) {
+    req.log.error({ err }, "Inquiries: customer plan failed");
+    res.status(500).json({ error: "거래처·담당자 판정 실패." });
+  }
+});
+
 // ── 등록 ─────────────────────────────────────────────────────────────────────
 router.post("/admin/inquiries", ...adminGuard, async (req, res) => {
   const b = req.body ?? {};
@@ -229,6 +277,7 @@ router.post("/admin/inquiries", ...adminGuard, async (req, res) => {
 
     const [created] = await db.insert(inquiriesTable).values({
       inquiryNumber, receivedAt, channel, status: "new",
+      ...customerReceived(b, true),
       assignedPmId: num(b.assignedPmId), createdBy: req.user?.id ?? null,
       customerCompanyName: str(b.customerCompanyName), contactName: str(b.contactName),
       department: str(b.department), contactPosition: str(b.contactPosition),
@@ -279,6 +328,7 @@ router.patch("/admin/inquiries/:id", ...adminGuard, async (req, res) => {
     }
     if ("channel" in b && CHANNELS.includes(b.channel)) patch.channel = b.channel;
     if ("receivedAt" in b) { const t = ts(b.receivedAt); if (t) patch.receivedAt = t; }
+    Object.assign(patch, customerReceived(b, false));   // 고객 접수일시(요청에 있을 때만)
     for (const f of ["scheduleFrom", "scheduleTo", "quoteDueDate", "desiredCompletionDate"]) {
       if (f in b) patch[f] = ts(b[f]);
     }
@@ -344,19 +394,34 @@ router.post("/admin/inquiries/:id/close", ...adminGuard, async (req, res) => {
 });
 
 // ── soft delete (감사 포함, 종결과 별개) ──────────────────────────────────────
-router.delete("/admin/inquiries/:id", ...adminGuard, async (req, res) => {
+// ── 의뢰건 삭제(논리 삭제) ─────────────────────────────────────────────────────
+// 권한: 관리자 또는 견적 수정 권한(quote.update — 견적서 삭제와 같은 기준). 삭제 가능 조건은 services/inquiryDeletion 에서 서버가 다시 검증.
+router.get("/admin/inquiries/:id/delete-check", ...adminGuard, requirePermission("quote.update"), async (req, res) => {
   const id = Number(req.params.id);
   if (isNaN(id) || id <= 0) { res.status(400).json({ error: "유효하지 않은 id." }); return; }
-  const reason = str(req.body?.reason) ?? "";
   try {
-    const [existing] = await db.select().from(inquiriesTable).where(and(eq(inquiriesTable.id, id), isNull(inquiriesTable.deletedAt)));
-    if (!existing) { res.status(404).json({ error: "의뢰건을 찾을 수 없습니다." }); return; }
-    await db.update(inquiriesTable)
-      .set({ deletedAt: new Date(), deletedBy: req.user?.id ?? null, deletionReason: reason || null, updatedAt: new Date() })
-      .where(eq(inquiriesTable.id, id));
-    await logEvent("inquiry", id, "inquiry_deleted", req.log, req.user ?? undefined, JSON.stringify(reason ? { reason } : {}));
-    res.json({ ok: true });
+    const r = await checkInquiryDeletable(id);
+    if (!r.inquiry) { res.status(404).json({ error: "의뢰건을 찾을 수 없습니다." }); return; }
+    res.json({ ok: r.ok, reasons: r.reasons });
   } catch (err) {
+    req.log.error({ err }, "Inquiries: delete-check failed");
+    res.status(500).json({ error: "삭제 가능 여부 확인 실패." });
+  }
+});
+
+router.delete("/admin/inquiries/:id", ...adminGuard, requirePermission("quote.update"), async (req, res) => {
+  const id = Number(req.params.id);
+  if (isNaN(id) || id <= 0) { res.status(400).json({ error: "유효하지 않은 id." }); return; }
+  const reason = (str(req.body?.reason) ?? "").trim() || null;
+  try {
+    const r = await deleteInquiry(id, req.user?.id ?? null, reason);
+    // 감사로그 — 원래 프로젝트·견적 ID 보존(프로젝트·견적·고객 데이터는 변경하지 않음)
+    await logEvent("inquiry", id, "inquiry_deleted", req.log, req.user ?? undefined, JSON.stringify({
+      event: "INQUIRY_DELETED", inquiryNumber: r.inquiry?.inquiryNumber ?? null, projectIds: r.projectIds, quoteIds: r.quoteIds, reason,
+    }));
+    res.json({ ok: true, message: "의뢰건이 삭제 처리되었습니다." });
+  } catch (err) {
+    if (err instanceof InquiryDeleteError) { res.status(err.status).json({ error: err.message, reasons: err.reasons }); return; }
     req.log.error({ err }, "Inquiries: delete failed");
     res.status(500).json({ error: "의뢰건 삭제 실패." });
   }

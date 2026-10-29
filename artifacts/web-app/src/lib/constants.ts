@@ -51,6 +51,7 @@ export type AdminProject = {
   projectCustomerId: number | null; adminId: number | null;
   contactId: number | null; companyId: number | null;
   contactName: string | null; companyName: string | null;
+  legacyCustomerName?: string | null;   // 과거 CRM 전환 판매 — 진행관리표 복원 고객명(담당자 Master 미연결, 표시 전용)
   financialStatus?: string | null;
   divisionName?: string | null;
   billingCompanyName?: string | null;
@@ -463,6 +464,7 @@ export type Product = {
   quantityUnit: string | null;
   usagePeriod: string | null;
   interpretationDirection: string | null;
+  canonicalKey?: string | null;
   deletedAt?: string | null;
   deletedBy?: number | null;
   deletedByName?: string | null;
@@ -924,7 +926,8 @@ export function formatLanguageLabel(raw: string | null | undefined): string {
   return parts.map((tok) => LANG_CODE_TO_LABEL[tok.trim().toLowerCase()] ?? tok).join("");
 }
 
-export const EQUIPMENT_QUANTITY_UNITS = ["개", "세트", "부스", "건"] as const;
+// "대" — 상품 Master 장비 단위(송신기·통역부스 등)와 맞춤. 의뢰건 장비행 선택용(견적 계산과 무관)
+export const EQUIPMENT_QUANTITY_UNITS = ["개", "세트", "부스", "건", "대"] as const;
 export const EQUIPMENT_USAGE_PERIODS = ["반일", "1일", "2일", "3일"] as const;
 export const INTERPRETATION_DIRECTIONS = ["양방향", "A→B", "B→A"] as const;
 
@@ -941,6 +944,7 @@ export const UNITS_BY_PRODUCT_TYPE: Record<string, string[]> = {
 };
 
 export const EQUIPMENT_ITEMS: string[] = [
+  "동시통역장비",   // 상품 Master EQ-SIM-006 동시통역장비(세트)와 대응 — AI 분석의 "통역장비 1 set" 매칭 대상
   "FM장비",
   "적외선장비",
   "리시버",

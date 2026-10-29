@@ -83,6 +83,10 @@ interface QuoteListTabProps {
   onNavigateToSales?: () => void;
   /** 견적 상세 판매전환 성공 시 자동 생성된 판매 상세페이지(/sales/:id)로 이동 */
   onOpenSalesDetail?: (projectId: number) => void;
+  /** 견적서 삭제 권한 — 견적 상세 [견적서 삭제] 표시 제어(서버에서도 검증) */
+  canDeleteQuote?: boolean;
+  /** 견적서 삭제 후 연결된 의뢰건 상세로 이동 */
+  onOpenInquiry?: (inquiryId: number) => void;
   /** 판매전환 권한 충족 여부(기본 true) — 견적 상세 판매전환 버튼 활성 제어 */
   canConvert?: boolean;
   /**
@@ -100,7 +104,7 @@ interface QuoteListTabProps {
   onOpenPastWorkImport?: () => void;
 }
 
-export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales, onOpenSalesDetail, canConvert: convertPerm = true, view = 'list', onExitToList, onOpenBulkImport, onOpenPastWorkImport }: QuoteListTabProps) {
+export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isAdmin = false, onNavigateToSales, onOpenSalesDetail, canConvert: convertPerm = true, view = 'list', onExitToList, onOpenBulkImport, onOpenPastWorkImport, canDeleteQuote = false, onOpenInquiry }: QuoteListTabProps) {
   const authH = { Authorization: `Bearer ${token}` };
 
   const [quotes, setQuotes]             = useState<QuoteRow[]>([]);
@@ -437,6 +441,14 @@ export function QuoteListTab({ token, onToast, adminUsers = [], refreshTick, isA
         onOpenSalesDetail={onOpenSalesDetail}
         canConvert={convertPerm}
         onOpenQuote={(id) => handleEditQuote(id, '견적', 'pending')}
+        canDelete={canDeleteQuote}
+        canCreateProduct={isAdmin}   // 상품 등록 API(관리자 전용)와 같은 기준
+        onDeleted={({ inquiryId }) => {
+          // 편집기 닫고 목록 갱신 — 연결 의뢰건이 있으면 그 의뢰건 상세로 이동(견적 생성 버튼으로 다시 작성)
+          setShowEditor(false); setEditQuoteId(null); setEditInitData(null); fetchQuotes();
+          if (inquiryId && onOpenInquiry) onOpenInquiry(inquiryId);
+          else if (view === 'register') onExitToList?.();
+        }}
       />
     );
   }

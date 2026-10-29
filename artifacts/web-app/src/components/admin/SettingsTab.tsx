@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../../lib/constants';
 import { Card, ClickSelect } from '../ui';
+import { CompanySealManager } from './CompanySealManager';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -42,7 +43,7 @@ export function SettingsTab({ token, onToast }: Props) {
   const [settingsForm, setSettingsForm] = useState({
     companyName: "", businessNumber: "", ceoName: "", address: "", email: "", phone: "",
     bankName: "", accountNumber: "", accountHolder: "",
-    quoteValidityDays: "14", taxRate: "10", quoteNotes: "", signatureImageUrl: "",
+    quoteValidityDays: "14", taxRate: "10", quoteNotes: "",
     defaultBillingType: "postpaid_per_project", paymentDueDays: "7", allowPartialPayment: false,
     settlementRatio: "70", settlementCycle: "monthly", applyWithholdingTax: true,
     autoPublishEnabled: false, autoPublishThreshold: "80", autoPublishDryRun: false,
@@ -65,7 +66,6 @@ export function SettingsTab({ token, onToast }: Props) {
         quoteValidityDays: String(d.quoteValidityDays ?? "14"),
         taxRate:           String(d.taxRate            ?? "10"),
         quoteNotes:        d.quoteNotes         ?? "",
-        signatureImageUrl: d.signatureImageUrl  ?? "",
         defaultBillingType:  d.defaultBillingType  ?? "postpaid_per_project",
         paymentDueDays:      String(d.paymentDueDays ?? "7"),
         allowPartialPayment: Boolean(d.allowPartialPayment ?? false),
@@ -145,6 +145,8 @@ export function SettingsTab({ token, onToast }: Props) {
             </div>
           </div>
           {saveBtn}
+          {/* 회사 직인 — 등록·교체·삭제는 즉시 반영(위 [저장]과 별개) */}
+          <CompanySealManager token={token} onToast={onToast} />
         </Card>
       )}
 
@@ -180,19 +182,6 @@ export function SettingsTab({ token, onToast }: Props) {
               <textarea value={sf.quoteNotes} onChange={e => set("quoteNotes")(e.target.value)}
                 placeholder={"예) 본 견적서는 발행일로부터 14일간 유효합니다.\n문의: service@veritasco.co.kr"}
                 rows={4} style={{ ...inputStyle, fontSize: 13, resize: "vertical" }} />
-            </div>
-            <div>
-              <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 3 }}>서명 이미지 URL</div>
-              <div style={{ fontSize: 11, color: "#9ca3af", marginBottom: 4 }}>Object Storage에 업로드된 서명 이미지 주소를 입력하세요.</div>
-              <input value={sf.signatureImageUrl} onChange={e => set("signatureImageUrl")(e.target.value)}
-                placeholder="예) https://storage.example.com/signature.png"
-                style={{ ...inputStyle, fontSize: 13 }} />
-              {sf.signatureImageUrl && (
-                <div style={{ marginTop: 8, padding: 8, background: "#f8fafc", borderRadius: 6, border: "1px solid #e2e8f0", textAlign: "center" }}>
-                  <img src={sf.signatureImageUrl} alt="서명 미리보기" style={{ maxHeight: 60, maxWidth: "100%", objectFit: "contain" }}
-                    onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                </div>
-              )}
             </div>
           </div>
           {saveBtn}

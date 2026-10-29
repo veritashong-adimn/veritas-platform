@@ -5,19 +5,20 @@
  * - 견적서 PDF의 데이터 파이프라인·레이아웃을 공유하되, 거래명세서 전용 문서로 분리한다.
  * - 견적서와의 차이: 제목 "거래명세서", 거래 정보(명세서 번호·작성일·견적번호),
  *   수신자에 사업자등록번호 추가, 견적 조건/유효기간 미표시.
- * - 금액은 견적서에 저장된 값을 그대로 사용하고 재계산하지 않는다.
- * - 인쇄 버튼 클릭 시 브라우저 프린트 대화상자를 열어 PDF 저장이 가능하다.
+ * - 금액은 견적서에 저장된 값을 그대로 사용하고 재계산하지 않는다(부가세 라벨은 견적서와 같은 vatSummaryLabel).
+ * - 공급자·수신자 박스·품목 배지·직인은 견적서와 같은 공통 부품(docParts)을 쓴다. 직인은 공급자 정보 박스 오른쪽 위에만 표시.
+ * - 인쇄는 견적서와 같은 인쇄 HTML(buildQuotePrintHtml — 페이지 여백·표 분리 규칙 공통)을 사용한다.
  */
 import React, { useEffect, useRef } from 'react';
 import type { QuotePdfData } from '../../lib/quotePdf';
-import { ITEM_TYPE_LABEL } from '../../lib/quotePdf';
-import { renderQuoteTitle, buildDocFileName, escapeHtmlTitle, formatDocNumber } from '../../lib/quoteTitle';
-import { formatDisplayDate } from '../../lib/dateFormat';
+import { vatSummaryLabel } from '../../lib/quotePdf';
+import { renderQuoteTitle, buildDocFileName, formatDocNumber } from '../../lib/quoteTitle';
 import { alertDialog } from '../ui';
+import { buildQuotePrintHtml } from '../../lib/quotePrintHtml';
+import { BRAND, BRAND_LIGHT, useCompanySeal, SealImage, SealErrorNotice, InfoBox, PartyRows, SummaryRow, ItemTypeBadge } from './docParts';
 
 // ─── 숫자 / 날짜 포맷 ────────────────────────────────────────────────────────
 const fmt = (n: number) => n.toLocaleString('ko-KR');
-const fmtDate = (d: string) => formatDisplayDate(d);
 
 // 오늘 날짜 (YYYY.MM.DD) — 거래명세서 작성일(출력일)
 function todayStr(): string {
@@ -25,10 +26,6 @@ function todayStr(): string {
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}.${p(d.getMonth() + 1)}.${p(d.getDate())}`;
 }
-
-// ─── 색상 ─────────────────────────────────────────────────────────────────────
-const BRAND = '#1e3a5f';
-const BRAND_LIGHT = '#e8edf5';
 
 // ─── 공통 인라인 스타일 ───────────────────────────────────────────────────────
 const PAGE_STYLE: React.CSSProperties = {
@@ -54,6 +51,8 @@ interface TransactionStatementModalProps {
 
 export default function TransactionStatementModal({ data, quoteTitle, onClose }: TransactionStatementModalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
+  // 회사 직인 — 견적서와 같은 환경설정 직인(R2 비공개, 서버가 data URI 로 제공). 실패·미등록이면 직인 없이 출력
+  const { url: sealUrl, error: sealError } = useCompanySeal();
 
   // 공식 문서번호 — 견적서와 동일한 formatDocNumber 규칙 사용(표시 전용, 내부 Raw 번호 미노출).
   // 거래명세서 T260716-008 / 견적번호 Q260716-008. 발행일(quoteDate) 기반 순번 파생.
@@ -84,48 +83,13 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
     const effectiveTitle = quoteTitle && quoteTitle !== data.quoteNumber ? quoteTitle : '';
     const fileName = buildDocFileName(effectiveTitle, { suffix: '거래명세서', fallback: `${statementNo}_거래명세서` });
 
-    printWin.document.write(`<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<title>${escapeHtmlTitle(fileName)}</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", "NanumGothic", sans-serif;
-    font-size: 12px;
-    color: #1a1a2e;
-    line-height: 1.6;
-    background: #fff;
-  }
-  @page {
-    size: A4 portrait;
-    margin: 15mm 18mm;
-  }
-  @media print {
-    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  }
-  .page {
-    width: 100%;
-    padding: 0;
-    background: #fff;
-  }
-</style>
-</head>
-<body>
-<div class="page">
-  ${content.innerHTML}
-</div>
-<script>window.onload = function() { window.print(); }<\/script>
-</body>
-</html>`);
+    printWin.document.write(buildQuotePrintHtml(fileName, content.innerHTML));
     printWin.document.close();
   };
 
   const hasItems = data.items.length > 0;
   const hasBankInfo = data.bankAccount.bankName || data.bankAccount.accountNumber;
   const hasSupplierInfo = data.supplier.companyName || data.supplier.businessNumber;
-  const hasCustomer = !!(data.customer.companyName || data.customer.contactName);
 
   return (
     <>
@@ -162,14 +126,16 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
             <span style={{ color: '#94a3b8', fontSize: 12 }}>
               {statementNo} · {renderQuoteTitle(quoteTitle)}
             </span>
+            <SealErrorNotice error={sealError} />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               onClick={handlePrint}
+              disabled={sealUrl === undefined}
               style={{
                 padding: '8px 20px', borderRadius: 7, border: 'none',
                 background: '#2563eb', color: '#fff',
-                fontWeight: 700, fontSize: 13, cursor: 'pointer',
+                fontWeight: 700, fontSize: 13, cursor: sealUrl === undefined ? 'wait' : 'pointer', opacity: sealUrl === undefined ? 0.7 : 1,
               }}
               data-testid="btn-statement-print"
               aria-label="거래명세서 인쇄 / PDF 저장"
@@ -199,7 +165,7 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
             style={{ ...PAGE_STYLE, boxShadow: '0 4px 24px rgba(0,0,0,0.25)' }}
           >
             {/* ── 문서 헤더 ──────────────────────────────────────────────── */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+            <div className="qp-keep qp-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
               {/* 회사명 / 로고 */}
               <div>
                 <div style={{ fontSize: 20, fontWeight: 900, color: BRAND, letterSpacing: -0.5 }}>
@@ -219,61 +185,58 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
             </div>
 
             {/* 상단 구분선 */}
-            <div style={{ height: 2, background: BRAND, marginBottom: 18 }} />
+            <div className="qp-rule" style={{ height: 2, background: BRAND, marginBottom: 18 }} />
 
-            {/* ── 공급자 정보 · 수신자 정보 2컬럼 ────────────────────── */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
-              {/* 공급자 정보 */}
-              <InfoBox title="공급자 정보">
-                {hasSupplierInfo ? (
-                  <>
-                    {data.supplier.companyName    && <InfoRow label="상호"       value={data.supplier.companyName} />}
-                    {data.supplier.businessNumber && <InfoRow label="사업자번호" value={data.supplier.businessNumber} />}
-                    {data.supplier.ceoName        && <InfoRow label="대표자"     value={data.supplier.ceoName} />}
-                    {data.supplier.address        && <InfoRow label="주소"       value={data.supplier.address} />}
-                    {data.supplier.phone          && <InfoRow label="전화"       value={data.supplier.phone} />}
-                    {data.supplier.email          && <InfoRow label="이메일"     value={data.supplier.email} />}
-                  </>
-                ) : (
-                  <p style={{ fontSize: 10, color: '#9ca3af' }}>설정에서 공급자 정보를 입력해 주세요.</p>
+            {/* ── 공급자 정보 · 수신자 정보 2컬럼 — 견적서와 같은 항목·순서(PartyRows)·직인 위치 ─────── */}
+            <div className="qp-keep qp-gap" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+              <InfoBox title="공급자 정보" aside={sealUrl ? <SealImage src={sealUrl} testId="ts-seal" /> : null}>
+                <PartyRows
+                  companyName={data.supplier.companyName}
+                  businessNumber={data.supplier.businessNumber}
+                  representative={data.supplier.ceoName}
+                  showContact={false}
+                  phone={data.supplier.phone}
+                  email={data.supplier.email}
+                  address={data.supplier.address}
+                />
+                {!hasSupplierInfo && (
+                  <p style={{ fontSize: 10, color: '#9ca3af', marginTop: 4 }}>설정에서 공급자 정보를 입력해 주세요.</p>
                 )}
               </InfoBox>
 
-              {/* 수신자 정보 — 사업자등록번호 포함, 값 없으면 '-' */}
+              {/* 수신자 정보 — 견적서와 같은 수신자(견적에 고정된 고객정보 우선, 없으면 연결 거래처·담당자) */}
               <InfoBox title="수신자 정보">
-                {!hasCustomer ? (
-                  <p style={{ fontSize: 11, color: '#9ca3af' }}>수신자 정보 미입력</p>
-                ) : (
-                  <>
-                    <InfoRow label="상호"       value={data.customer.companyName        || '-'} />
-                    {data.customer.brandName && <InfoRow label="브랜드"     value={data.customer.brandName} />}
-                    <InfoRow label="사업자번호" value={data.customer.businessNumber     || '-'} />
-                    <InfoRow label="대표자"     value={data.customer.representativeName || '-'} />
-                    <InfoRow label="담당자"     value={data.customer.contactName        || '-'} />
-                    <InfoRow label="연락처"     value={data.customer.contactPhone       || '-'} />
-                    <InfoRow label="이메일"     value={data.customer.contactEmail       || '-'} />
-                  </>
-                )}
+                <PartyRows
+                  companyName={data.customer.brandName ? `${data.customer.companyName} (${data.customer.brandName})` : data.customer.companyName}
+                  businessNumber={data.customer.businessNumber}
+                  representative={data.customer.representativeName}
+                  contactName={data.customer.contactName}
+                  phone={data.customer.contactPhone}
+                  email={data.customer.contactEmail}
+                  address={data.customer.address}
+                  omitEmptyContact   /* 담당자·연락처·이메일이 없으면 행 숨김(박스 외곽은 그리드 높이로 공급자 박스와 동일) */
+                />
               </InfoBox>
             </div>
 
             {/* ── 거래 정보 ────────────────────────────────────────────── */}
-            <div style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '10px 14px', marginBottom: 14 }}>
+            <div className="qp-keep qp-gap" style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '10px 14px', marginBottom: 14 }}>
               <div style={{
                 fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5,
                 marginBottom: 8, paddingBottom: 5, borderBottom: `1.5px solid ${BRAND_LIGHT}`,
               }}>
                 거래 정보
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '3px 16px' }}>
-                <InfoRow label="거래명세서 번호" value={statementNo} mono />
-                <InfoRow label="작성일"          value={writtenDate} />
-                <InfoRow label="견적번호"        value={quoteNo} mono />
+              {/* 3칸 균등 — 칸마다 '항목명 + 간격 + 값'(항목명 줄바꿈 없음), 값 길이가 달라도 칸 안에서 줄바꿈되어 겹치지 않는다 */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '3px 16px', alignItems: 'baseline' }}>
+                <DealField label="거래명세서 번호" value={statementNo} mono testId="ts-deal-no" />
+                <DealField label="작성일"          value={writtenDate} testId="ts-deal-date" />
+                <DealField label="견적번호"        value={quoteNo || '-'} mono testId="ts-deal-quote" />
               </div>
             </div>
 
             {/* ── 총금액 박스 ─────────────────────────────────────────── */}
-            <div style={{
+            <div className="qp-keep qp-gap" style={{
               background: BRAND_LIGHT, borderRadius: 6, padding: '10px 16px',
               marginBottom: 18, display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
             }}>
@@ -287,7 +250,7 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
 
             {/* ── 상품 내역 테이블 ─────────────────────────────────────── */}
             {hasItems ? (
-              <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 14, fontSize: 11 }}>
+              <table className="qp-items" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 14, fontSize: 11 }}>
                 <thead>
                   <tr style={{ background: BRAND }}>
                     {['No', '유형', '상품명', '서비스 상세', '수량', '단위', '단가', '공급가액', '비고'].map((h, i) => (
@@ -341,10 +304,10 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
             )}
 
             {/* ── 금액 합계 ────────────────────────────────────────────── */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 20 }}>
+            <div className="qp-keep qp-gap" style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 20 }}>
               <div style={{ width: 280 }}>
                 <SummaryRow label="공급가액 합계" value={`${fmt(data.supplyTotal)}원`} />
-                <SummaryRow label="부가세 (10%)" value={`${fmt(data.taxTotal)}원`} />
+                <SummaryRow label={vatSummaryLabel(data.items, data.taxTotal)} value={`${fmt(data.taxTotal)}원`} />
                 <div style={{
                   display: 'flex', justifyContent: 'space-between',
                   padding: '9px 12px', background: BRAND, borderRadius: 6, marginTop: 6,
@@ -357,48 +320,30 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
               </div>
             </div>
 
-            {/* ── 하단: 입금 계좌(좌) + 직인(우) ───────────────────────────
-                입금계좌 박스와 직인은 서로 독립 영역이다. 직인은 계좌를 인증하는 것이 아니라
-                거래명세서 전체를 ㈜베리타스가 공식 발행했다는 의미이므로, 계좌 박스에 넣지 않고
-                우측에 충분한 간격(space-between)을 두어 시각적으로 분리한다.
-                한 행으로 묶어 직인만 2페이지로 넘어가는 현상을 방지하고 1페이지에서 마무리한다. */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 28, marginBottom: 8 }}>
-              {/* 좌측: 입금 계좌 — 기존 높이 유지(직인 영향 없음). 계좌 정보 없으면 좌측 여백만 확보. */}
-              <div style={{ width: '52%', flexShrink: 0 }}>
-                {hasBankInfo && (
-                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '12px 14px' }}>
-                    <div style={{ fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5, marginBottom: 8 }}>
-                      입금 계좌
-                    </div>
-                    {data.bankAccount.bankName      && <InfoRow label="은행"     value={data.bankAccount.bankName} />}
-                    {data.bankAccount.accountNumber && <InfoRow label="계좌번호" value={data.bankAccount.accountNumber} mono />}
-                    {data.bankAccount.accountHolder && <InfoRow label="예금주"   value={data.bankAccount.accountHolder} />}
-                  </div>
-                )}
-              </div>
-
-              {/* 우측: 직인 — 독립 영역, 우측 하단 정렬. 문서 전체 공식 발행 인증. */}
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', textAlign: 'center' }}>
-                <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 6 }}>
-                  {data.supplier.companyName || 'VERITAS'} (인)
+            {/* ── 입금 안내 — 총 거래금액 아래, 상품 테이블과 같은 전체 폭의 가로형 한 줄(은행 | 계좌번호 | 예금주).
+                계좌는 환경설정 값 그대로(하드코딩 없음). 값이 없으면 영역 전체를 그리지 않아 빈 공간이 남지 않는다.
+                인쇄 시 한 덩어리(qp-keep)로 유지 — 페이지 하단에서 일부만 넘어가지 않는다. 직인은 공급자 정보 박스에만 표시. */}
+            {hasBankInfo && (
+              <div className="qp-keep qp-footer" data-testid="ts-bank" style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '10px 14px', background: '#fff', marginBottom: 8 }}>
+                <div style={{ fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5, lineHeight: '16px', marginBottom: 4 }}>
+                  입금 안내
                 </div>
-                {data.signatureImageUrl ? (
-                  <img
-                    src={data.signatureImageUrl}
-                    alt="직인"
-                    style={{ width: 80, height: 80, objectFit: 'contain', border: '1px solid #f0f0f0', borderRadius: 4 }}
-                  />
-                ) : (
-                  <div style={{
-                    width: 80, height: 80, border: '1px dashed #d1d5db',
-                    borderRadius: 4, display: 'flex', alignItems: 'center',
-                    justifyContent: 'center', fontSize: 9, color: '#9ca3af',
-                  }}>
-                    직인
-                  </div>
-                )}
+                {/* 항목 3개를 같은 행 높이(16px)·가운데 정렬로 맞추고, 구분선은 글자 대신 세로선(높이 고정)으로 좌우 여백을 같게 둔다 */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', rowGap: 2 }}>
+                  {[
+                    { label: '은행',     value: data.bankAccount.bankName },
+                    { label: '계좌번호', value: data.bankAccount.accountNumber, mono: true },
+                    { label: '예금주',   value: data.bankAccount.accountHolder },
+                  ].filter(f => f.value).map((f, i) => (
+                    <span key={f.label} data-testid="ts-bank-field" style={{ display: 'inline-flex', alignItems: 'center', minWidth: 0, lineHeight: '16px' }}>
+                      {i > 0 && <span aria-hidden data-testid="ts-bank-sep" style={{ width: 1, height: 10, background: '#d1d5db', margin: '0 14px', flexShrink: 0 }} />}
+                      <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, marginRight: 8, whiteSpace: 'nowrap' }}>{f.label}</span>
+                      <span style={{ fontSize: f.mono ? 10 : 11, color: '#111827', fontWeight: 500, wordBreak: 'keep-all', overflowWrap: 'break-word', ...(f.mono ? { fontFamily: 'monospace' } : {}) }}>{f.value}</span>
+                    </span>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
 
           </div>{/* /page */}
         </div>
@@ -407,69 +352,12 @@ export default function TransactionStatementModal({ data, quoteTitle, onClose }:
   );
 }
 
-// ─── 서브 컴포넌트 ────────────────────────────────────────────────────────────
-
-function InfoBox({ title, children }: { title: string; children: React.ReactNode }) {
+// 거래 정보 한 칸 — 항목명(줄바꿈 없음) + 10px 간격 + 값. 고정 폭 라벨(InfoRow 70px)보다 긴 '거래명세서 번호'도 값과 붙지 않는다.
+function DealField({ label, value, mono, testId }: { label: string; value: string; mono?: boolean; testId: string }) {
   return (
-    <div style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '10px 12px' }}>
-      <div style={{
-        fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5,
-        marginBottom: 7, paddingBottom: 5, borderBottom: `1.5px solid ${BRAND_LIGHT}`,
-      }}>
-        {title}
-      </div>
-      {children}
+    <div data-testid={testId} style={{ display: 'flex', alignItems: 'baseline', gap: 10, minWidth: 0, lineHeight: '16px', marginBottom: 2 }}>
+      <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>{label}</span>
+      <span style={{ fontSize: mono ? 10 : 11, color: '#111827', fontWeight: 500, minWidth: 0, overflowWrap: 'anywhere', ...(mono ? { fontFamily: 'monospace' } : {}) }}>{value}</span>
     </div>
-  );
-}
-
-function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 2 }}>
-      <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, minWidth: 70, flexShrink: 0 }}>
-        {label}
-      </span>
-      <span style={{
-        fontSize: 11, color: '#111827', fontWeight: 500,
-        // 인쇄 시 주소·숫자 단위(예: "2406호")가 중간에서 끊기지 않도록 견적서 PDF와 동일 처리:
-        // keep-all → 공백 단위로만 줄바꿈(동·호 토큰 유지), break-word → 박스 초과 시에만 예외 처리.
-        // (break-all 금지 — 숫자 중간 분리의 원인) 주소 2줄이어도 전화·이메일은 정상 출력됨.
-        minWidth: 0,
-        whiteSpace: 'normal',
-        wordBreak: 'keep-all',
-        overflowWrap: 'break-word',
-        ...(mono ? { fontFamily: 'monospace', fontSize: 10 } : {}),
-      }}>
-        {value}
-      </span>
-    </div>
-  );
-}
-
-function SummaryRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 11, borderBottom: '1px solid #f1f5f9' }}>
-      <span style={{ color: '#6b7280', fontWeight: 600 }}>{label}</span>
-      <span style={{ color: '#111827', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
-    </div>
-  );
-}
-
-function ItemTypeBadge({ type }: { type: string }) {
-  const colors: Record<string, { bg: string; color: string }> = {
-    translation:    { bg: '#dbeafe', color: '#1d4ed8' },
-    interpretation: { bg: '#dcfce7', color: '#15803d' },
-    equipment:      { bg: '#fef3c7', color: '#b45309' },
-    expense:        { bg: '#f3f4f6', color: '#6b7280' },
-    discount:       { bg: '#fee2e2', color: '#dc2626' },
-  };
-  const c = colors[type] ?? colors.expense;
-  return (
-    <span style={{
-      display: 'inline-block', padding: '2px 5px', borderRadius: 4,
-      background: c.bg, color: c.color, fontSize: 9, fontWeight: 700,
-    }}>
-      {ITEM_TYPE_LABEL[type] ?? type}
-    </span>
   );
 }

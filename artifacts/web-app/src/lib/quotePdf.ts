@@ -33,27 +33,30 @@ export function calculateInterpretationAmount(
 
 // ─── 통역 행 파생 계산 (편집 화면·저장·요약 단일 기준) ────────────────────────
 /**
- * 통역 상품의 계산은 항상 아래 원본 입력에서만 파생한다 (파생값을 별도 상태로 저장·참조하지 않음).
- * 화면 '수량' 입력값 등 오래된 상태는 절대 참조하지 않는다.
+ * 통역 상품의 계산은 아래 입력에서 파생한다.
  *
- *   startDate / endDate → serviceDays  (양끝 포함: 종료일 − 시작일 + 1)
+ *   startDate / endDate → serviceDays  (양끝 포함: 종료일 − 시작일 + 1) — 수량의 초기값
+ *   quantity            → 직원이 수정한 수량(1, 2, 0.5 …). 비어 있거나 0 이하면 serviceDays 를 쓴다
  *   interpreterCount    → 투입 인원
- *   unitPrice           → 통역사 1인 × 1일 단가
+ *   unitPrice           → 통역사 1인 × 수량 1단위 단가
  *
  * 반환:
  *   serviceDays        통역 일수 (시작일 없으면 당일 1일 / 종료일<시작일이면 0)
- *   effectiveQuantity  인원 × 일수 (서버 전송 quantity · 화면 '수량' 표시에 공통 사용)
+ *   quantity           계산에 쓴 수량 (수정값 우선, 없으면 serviceDays)
+ *   effectiveQuantity  인원 × 수량
  *   supplyAmount       effectiveQuantity × 단가
  *   invalidDateRange   종료일이 시작일보다 빠름 → 계산 보류, 호출측에서 날짜 확인 메시지 표시
  */
 export interface InterpretationInput {
   startDate?:        string | null;
   endDate?:          string | null;
+  quantity?:         number | string | null;
   interpreterCount?: number | string | null;
   unitPrice?:        number | string | null;
 }
 export interface InterpretationResult {
   serviceDays:       number;
+  quantity:          number;
   effectiveQuantity: number;
   supplyAmount:      number;
   invalidDateRange:  boolean;
@@ -83,13 +86,15 @@ export function calcInterpretation(input: InterpretationInput): InterpretationRe
   const rawDays = interpretationServiceDays(input.startDate, input.endDate);
   if (rawDays < 1) {
     // 종료일 < 시작일 → 계산하지 않음 (지시문 2절)
-    return { serviceDays: 0, effectiveQuantity: 0, supplyAmount: 0, invalidDateRange: true };
+    return { serviceDays: 0, quantity: 0, effectiveQuantity: 0, supplyAmount: 0, invalidDateRange: true };
   }
+  const qtyNum      = parseNum(input.quantity);
+  const quantity    = qtyNum > 0 ? qtyNum : rawDays;            // 수정 수량 우선, 없으면 진행일수
   const cntNum      = parseNum(input.interpreterCount);
   const peopleCount = cntNum > 0 ? Math.round(cntNum) : 1;  // 미입력 시 1명 기준
   const price       = parseNum(input.unitPrice);
-  const { billingQuantity, supplyAmount } = calculateInterpretationAmount(peopleCount, rawDays, price);
-  return { serviceDays: rawDays, effectiveQuantity: billingQuantity, supplyAmount, invalidDateRange: false };
+  const { billingQuantity, supplyAmount } = calculateInterpretationAmount(peopleCount, quantity, price);
+  return { serviceDays: rawDays, quantity, effectiveQuantity: billingQuantity, supplyAmount, invalidDateRange: false };
 }
 
 // ─── 언어 코드 → 한국어 이름 매핑 ────────────────────────────────────────────
@@ -118,6 +123,7 @@ export interface QuoteDetailItem {
   supplyAmount: string;
   taxAmount: string;
   totalAmount: string;
+  taxType?: string | null;   // 과세 구분 "taxable" | "exempt" | "zero_rate" (NULL = taxable)
   memo: string | null;
   languagePair: string | null;
   interpretDate: string | null;
@@ -131,6 +137,11 @@ export interface QuoteDetailItem {
   interpretType: string | null;
   // 투입 인원(통역). NULL = 레거시(quantity에 인원×일수 포함 → 역산).
   interpreterCount?: number | null;
+  // 신규 견적 행(상태 컬럼 보유) — NULL 이면 기존 자료로 보고 기존 출력 형식을 유지한다
+  priceStatus?: string | null;
+  interpreterCountConfirmed?: boolean | null;
+  // 고객용 상품 비고(서버 제공) — 내부 이관 문구를 뺀 값. 없으면(구 응답) memo 를 그대로 쓴다
+  customerMemo?: string | null;
   // 서비스 그룹 — 부대항목이 종속된 본 서비스 quote_items.id (NULL=본/공통). 폼에서 parentLid 로 복원.
   parentItemId?: number | null;
   // 할인 항목(itemType='discount') 전용
@@ -162,17 +173,30 @@ export interface QuoteDetail {
   status: string;
   quoteType: string;
   note: string | null;
+  // 고객용 견적 비고(서버 제공) — 내부 이관 문구를 뺀 값. 없으면(구 응답) note 를 그대로 쓴다
+  customerNote?: string | null;
+  // 견적별 고객정보 고정 여부(서버 제공). true 면 수신자 거래처명·담당자는 customer* 고정값만 출력한다(빈 칸은 빈 칸)
+  customerSnapshotFixed?: boolean;
+  // 현재 Master 기준 수신자(‘담당자 정보 갱신’ 비교용 — 출력에는 쓰지 않음)
+  liveRecipient?: { customerCompanyName: string | null; customerContactName: string | null; customerContactPosition: string | null;
+    customerContactDepartment: string | null; customerContactPhone: string | null; customerContactMobile: string | null; customerContactEmail: string | null } | null;
+  // 과거 CRM 전환 판매의 견적이면 출처·세금 구분 상태(내부 정보 — 문서에 출력하지 않음)
+  legacyOrigin?: { source: string; saleNo: string; taxBreakdown: string } | null;
   issueDate: string | null;
   validUntil: string | null;
   projectId: number | null;
   companyName: string | null;
   companyBusinessNumber: string | null;
+  companyAddress?: string | null;   // 연결 거래처 Master 주소(없으면 공란)
   representativeName: string | null;
   divisionName: string | null;   // 브랜드(Division) — projects.requestingDivisionId 기준
   contactName: string | null;
   contactDivision: string | null;
   contactPhone: string | null;
   contactEmail: string | null;
+  // 견적 작성 당시 고객정보 스냅샷(신규 견적) — Master 미연결이면 이 값으로 출력
+  customerCompanyName?: string | null; customerContactName?: string | null; customerContactPosition?: string | null;
+  customerContactDepartment?: string | null; customerContactPhone?: string | null; customerContactMobile?: string | null; customerContactEmail?: string | null;
   adminName: string | null;
   items: QuoteDetailItem[];
   settings: QuoteDetailSettings;
@@ -205,6 +229,7 @@ export interface QuotePdfItem {
   supplyAmount: number;
   taxAmount: number;
   totalAmount: number;      // 공급가액+VAT = 해당 행 VAT 포함 차감 대상금액
+  taxType: string;          // 과세 구분 — 견적 품목에 저장된 값(taxable | exempt | zero_rate)
   memo: string;             // 사용자 비고 (서비스 정보 제외)
 }
 
@@ -250,6 +275,7 @@ export interface QuotePdfData {
     companyName: string;
     businessNumber: string;
     representativeName: string;
+    address: string;     // 수신자 주소 — 연결 거래처 Master 주소, 없으면 ''(다른 정보로 대체하지 않음)
     brandName: string;   // 브랜드(Division) — 있을 때만 표시
     contactName: string;
     contactDivision: string;
@@ -401,12 +427,16 @@ function buildDetailText(item: QuoteDetailItem): string {
     }
     // 행사기간 (날짜 범위) — 연·월 중복은 종료일에서 생략(공통 규칙)
     if (item.interpretDate) lines.push(formatScheduleRange(item.interpretDate, item.eventEndDate));
+    // 신규 견적 행(인원 확정 여부를 저장하는 행)은 항목명을 붙이고 비어 있는 시간·인원을 '미정'으로 명시한다.
+    // 기존 자료(NULL)는 이미 발행된 문서와 같도록 기존 형식 그대로 출력한다.
+    const labeled = item.interpreterCountConfirmed != null;
     // 운영시간 (행사 운영시간 — 기간 다음. 지시문 6절 순서: 기간→운영시간→통역시간→장소→인원)
-    if (item.operationHours) lines.push(`운영시간 ${item.operationHours}`);
+    if (item.operationHours) lines.push(`${labeled ? '시작·종료 ' : '운영시간 '}${item.operationHours}`);
+    else if (labeled && item.interpretDate) lines.push('시작·종료 시간 미정');
     // 통역시간 (계약 기준 안내 정보)
     if (item.interpretDuration) lines.push(`통역시간 ${item.interpretDuration}`);
     // 장소
-    if (item.interpretPlace) lines.push(item.interpretPlace);
+    if (item.interpretPlace) lines.push(labeled ? `장소: ${item.interpretPlace}` : item.interpretPlace);
     // 투입인원 (일수는 수량/단위 컬럼에 이미 표시됨)
     //  - 신규: interpreterCount 컬럼 사용 (quantity = 진행일수)
     //  - 레거시: interpreterCount 없음 → quantity(=인원×일수) ÷ 일수 역산
@@ -415,7 +445,9 @@ function buildDetailText(item: QuoteDetailItem): string {
     const pplCount = item.interpreterCount != null
       ? Number(item.interpreterCount)
       : (svcDays > 0 ? Math.round(qty / svcDays) : qty);
-    if (pplCount > 0) {
+    // 인원 미확정(신규 행): 계산용 저장값(1)을 '통역사 1명'으로 출력하지 않는다
+    if (item.interpreterCountConfirmed === false) lines.push('통역 인원 미확정');
+    else if (pplCount > 0) {
       lines.push(`통역사 ${pplCount}명`);
     }
   } else if (type === 'equipment') {
@@ -454,10 +486,28 @@ function detectServiceType(items: QuoteDetailItem[]): string {
   return 'mixed';
 }
 
+// 고객 문서 표시용 전화번호 하이픈(저장값 불변) — 숫자만 저장된 국내 번호만 형식화, 그 외는 원문 그대로
+export function formatPhoneDisplay(v: string | null | undefined): string {
+  const raw = String(v ?? '').trim();
+  if (!raw || /[^0-9]/.test(raw)) return raw;
+  const d = raw;
+  if (/^02\d{7,8}$/.test(d)) return d.length === 9 ? `02-${d.slice(2, 5)}-${d.slice(5)}` : `02-${d.slice(2, 6)}-${d.slice(6)}`;
+  if (/^0\d{9,10}$/.test(d)) return d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}` : `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
+  if (/^1[5-9]\d{6}$/.test(d)) return `${d.slice(0, 4)}-${d.slice(4)}`;
+  return raw;
+}
+
 // ─── buildQuotePdfData ────────────────────────────────────────────────────────
 
-export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
+export function buildQuotePdfData(source: QuoteDetail): QuotePdfData {
+  // 고객용 문서는 고객용 비고만 쓴다 — 상품 비고에서 파생되는 서비스 상세·비고 열·요약 모두 같은 값을 보도록 먼저 바꿔 둔다
+  const detail: QuoteDetail = {
+    ...source,
+    note: source.customerNote !== undefined ? source.customerNote : source.note,
+    items: source.items.map(it => it.customerMemo !== undefined ? { ...it, memo: it.customerMemo } : it),
+  };
   const s = detail.settings;
+  const fixed = detail.customerSnapshotFixed === true;
 
   const items: QuotePdfItem[] = detail.items.map((it, idx) => {
     let supplyAmount = Number(it.supplyAmount);
@@ -477,6 +527,7 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
       supplyAmount,
       taxAmount,
       totalAmount,
+      taxType:      it.taxType ?? 'taxable',
       memo:         extractUserMemo(it),
     };
   });
@@ -595,14 +646,17 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
       email:          s.email          ?? '',
     },
     customer: {
-      companyName:         detail.companyName            ?? '',
+      // 견적별 고객정보 고정: 고정된 견적은 고정값만(Master 연결·수정으로 발행 문서가 바뀌지 않음),
+      //  고정값이 없는 기존 견적은 이전과 같이 연결된 거래처·담당자 Master 값
+      companyName:         fixed ? (detail.customerCompanyName ?? detail.companyName ?? '') : (detail.companyName ?? detail.customerCompanyName ?? ''),
       businessNumber:      detail.companyBusinessNumber  ?? '',
       representativeName:  detail.representativeName     ?? '',
+      address:             detail.companyAddress?.trim() ?? '',
       brandName:           detail.divisionName          ?? '',
-      contactName:         detail.contactName         ?? '',
-      contactDivision:     detail.contactDivision     ?? '',
-      contactPhone:        detail.contactPhone        ?? '',
-      contactEmail:        detail.contactEmail        ?? '',
+      contactName:         fixed ? (detail.customerContactName ?? '') : (detail.contactName ?? detail.customerContactName ?? ''),
+      contactDivision:     fixed ? (detail.customerContactDepartment ?? '') : (detail.contactDivision ?? detail.customerContactDepartment ?? ''),
+      contactPhone:        formatPhoneDisplay(fixed ? (detail.customerContactPhone ?? detail.customerContactMobile ?? '') : (detail.contactPhone ?? detail.customerContactPhone ?? detail.customerContactMobile ?? '')),
+      contactEmail:        fixed ? (detail.customerContactEmail ?? '') : (detail.contactEmail ?? detail.customerContactEmail ?? ''),
     },
     manager:      detail.adminName ?? '',
     summary,
@@ -622,6 +676,20 @@ export function buildQuotePdfData(detail: QuoteDetail): QuotePdfData {
 }
 
 // ─── 유형 레이블 ──────────────────────────────────────────────────────────────
+/**
+ * 견적서·거래명세서 공통 부가세 행 라벨 — 품목에 저장된 과세 구분 기준(금액은 저장값 그대로, 재계산 없음).
+ *  · 과세 품목만: "부가세 (10%)"(기존 표기 유지). 단 공급가액이 있는데 저장된 부가세가 0원이면 근거 확인 대상이라 세율을 표기하지 않는다.
+ *  · 면세만: "부가세 (면세)" / 영세율만: "부가세 (영세율)" / 섞여 있으면: "부가세"
+ */
+export function vatSummaryLabel(items: Pick<QuotePdfItem, 'taxType' | 'supplyAmount' | 'productType'>[], taxTotal: number): string {
+  const kinds = new Set(items.filter(it => it.productType !== 'discount').map(it => it.taxType || 'taxable'));
+  if (kinds.size === 1 && kinds.has('exempt')) return '부가세 (면세)';
+  if (kinds.size === 1 && kinds.has('zero_rate')) return '부가세 (영세율)';
+  if (kinds.size > 1) return '부가세';
+  const supply = items.reduce((a, it) => a + it.supplyAmount, 0);
+  return supply > 0 && taxTotal === 0 ? '부가세' : '부가세 (10%)';
+}
+
 export const ITEM_TYPE_LABEL: Record<string, string> = {
   translation:    '번역',
   interpretation: '통역',

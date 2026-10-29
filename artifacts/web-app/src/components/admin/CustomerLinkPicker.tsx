@@ -13,6 +13,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { CompanyHit, ContactHit, searchCompanies, listCompanyContacts } from '../../lib/customerSearch';
+import { confirmDialog } from '../ui';
 
 const label: React.CSSProperties = { display: 'block', fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 5 };
 const input: React.CSSProperties = { width: '100%', boxSizing: 'border-box', padding: '8px 10px', fontSize: 13, border: '1px solid #d1d5db', borderRadius: 8, outline: 'none' };
@@ -101,7 +102,9 @@ export function CustomerLinkPicker({ token, f, set }: {
     set('customerMode', 'existing');
     set('companyId', String(c.id));
     set('customerCompanyName', c.name ?? '');
-    clearContactFields();
+    // 이미 담당자가 연결돼 있으면 비운다(다른 거래처 담당자 오연결 방지). 연결 전 원문 담당자(AI 분석/직접 입력)는 유지 —
+    // 기존 담당자 Master 연결은 아래 「기존 담당자 연결」 확인 후에만 한다.
+    if (f.contactId) clearContactFields();
     setContacts([]);
     setQuery(''); setResults([]); setSearched(false); setDupes([]);
     void loadContacts(c.id);
@@ -135,6 +138,23 @@ export function CustomerLinkPicker({ token, f, set }: {
     set('contactPhone', c.phone ?? c.officePhone ?? '');
     set('contactMobile', c.mobile ?? '');
     set('contactEmail', c.email ?? '');
+  };
+
+  // 원문 담당자와 이메일 또는 이름이 같은 기존 담당자 — 자동 연결·자동 생성하지 않고 확인 후 연결(중복 담당자 방지).
+  //  이메일 일치를 우선한다(같은 이메일 = 같은 사람일 가능성이 가장 높음).
+  const emailKey = f.contactEmail.trim().toLowerCase();
+  const nameMatch = !f.contactId
+    ? (emailKey ? contacts.find(c => (c.email ?? '').trim().toLowerCase() === emailKey) : undefined)
+      ?? (f.contactName.trim() ? contacts.find(c => (c.name ?? '').replace(/\s+/g, '') === f.contactName.replace(/\s+/g, '')) : undefined)
+    : undefined;
+  const linkNameMatch = async () => {
+    if (!nameMatch) return;
+    const ok = await confirmDialog({
+      title: '기존 담당자 연결',
+      message: `기존 담당자 「${nameMatch.name}」${nameMatch.department ? ` (${nameMatch.department})` : ''}와 연결합니다. 부서·직함·연락처는 등록된 담당자 정보로 바뀝니다. 연결하시겠습니까?`,
+      confirmLabel: '연결',
+    });
+    if (ok) selectContact(String(nameMatch.id));
   };
 
   const switchMode = (mode: 'existing' | 'new') => {
@@ -224,6 +244,13 @@ export function CustomerLinkPicker({ token, f, set }: {
               {/* 담당자 선택 */}
               <div style={{ marginTop: 12 }}>
                 <label style={label}>담당자</label>
+                {nameMatch && (
+                  <div data-testid="inq-contact-match" style={{ marginBottom: 8, padding: '8px 12px', background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8, fontSize: 12, color: '#1e40af', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {emailKey && (nameMatch.email ?? '').trim().toLowerCase() === emailKey ? '같은 이메일의 기존 담당자가 있습니다' : '같은 이름의 기존 담당자가 있습니다'}: <b>{nameMatch.name}</b>{nameMatch.department ? ` · ${nameMatch.department}` : ''}
+                    <button type="button" onClick={linkNameMatch} data-testid="inq-contact-match-link" aria-label={`기존 담당자 ${nameMatch.name} 연결`}
+                      style={{ marginLeft: 'auto', padding: '4px 10px', fontSize: 12, fontWeight: 700, color: '#fff', background: '#2563eb', border: 'none', borderRadius: 6, cursor: 'pointer' }}>기존 담당자 연결</button>
+                  </div>
+                )}
                 {contacts.length === 0 ? (
                   <div data-testid="inq-contact-empty" style={{ padding: '10px 14px', background: '#fffdf5', border: '1px dashed #fcd34d', borderRadius: 8, fontSize: 12, color: '#92400e' }}>
                     등록된 담당자가 없습니다. 아래에 신규 담당자 정보를 직접 입력하세요. (담당자 미연결로 접수됩니다)

@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { findReusableProjectForInquiry } from "../services/quoteDeletion";
 import {
   db, projectsTable, paymentsTable, tasksTable, usersTable,
   logsTable, quotesTable, settlementsTable, notesTable,
@@ -7,7 +8,7 @@ import {
   quoteItemsTable, calcQuoteItemAmounts,
   billingBatchesTable, billingBatchItemsTable, billingBatchWorkItemsTable,
   prepaidAccountsTable, prepaidLedgerTable, settingsTable,
-  productRequestsTable, performanceAssignmentsTable,
+  productRequestsTable, performanceAssignmentsTable, inquiriesTable,
   WITHHOLDING_RATE_BY_TREATMENT, DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT,
 } from "@workspace/db";
 
@@ -18,6 +19,7 @@ import { eq, and, ne, ilike, or, gte, lte, inArray, sql, desc, isNull } from "dr
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
 import { getSettings, invalidateSettingsCache } from "../lib/getSettings";
+import { isSealRef, publicSignatureValue } from "../services/companySeal";
 import { tryBuildOnProjectComplete } from "../services/translationUnitService";
 import { loadPerformanceRows } from "./performances";
 import { loadPaymentRecords } from "./projectPayments";
@@ -41,6 +43,11 @@ import { applyParentIndexLinks } from "../services/quoteItemGroup";
 import { createRevision, approveRevision, rejectRevision } from "../services/quoteRevision";
 import { createDerivedSplit, approveDerived, rejectDerived, calculateAllocation, generateDerivedBillingRows, type DerivedSplitInput } from "../services/quoteDerived";
 import { evaluateProjectDependencies, buildGuardMessage } from "../services/saleDependency";
+import { planCustomer, executeCustomer, unresolved, type CustomerChoice, type CustomerSnapshot } from "../services/quoteCustomerResolve";
+import { validateItemStatuses } from "../services/quoteItemStatus";
+import { legacyOriginOfProject, customerNoteOf, customerMemoOf } from "../services/customerDocText";
+import { captureIfMissing, recaptureRecipient, freezeProjectQuotes, liveRecipientOf, hasSnapshot } from "../services/quoteRecipientSnapshot";
+import { restoredCustomerNameOfProject, linkedContactNameOfSaleNo } from "../services/legacyContactRestore";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -99,6 +106,8 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
         payerDivisionId: projectsTable.payerDivisionId,
         // 표시명 = 거래 당시 Snapshot 우선 → 없으면 현재 Master명 fallback(§Phase3)
         contactName: sql<string | null>`COALESCE(${projectsTable.contactNameSnapshot}, ${contactAlias.name})`,
+        // 과거 CRM 전환 판매의 복원 고객명(담당자 Master 미연결일 때 표시용, additive)
+        legacyCustomerName: restoredCustomerNameOfProject(projectsTable.id),
         companyName: sql<string | null>`COALESCE(${projectsTable.companyNameSnapshot}, ${companyAlias.name})`,
         divisionName: sql<string | null>`(SELECT name FROM divisions WHERE id = ${projectsTable.requestingDivisionId})`,
         billingCompanyName: sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.billingCompanyId})`,
@@ -184,6 +193,7 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
         p.title.toLowerCase().includes(s) ||
         (p.customerEmail ?? "").toLowerCase().includes(s) ||
         (p.contactName ?? "").toLowerCase().includes(s) ||
+        (p.legacyCustomerName ?? "").toLowerCase().includes(s) ||   // 과거 CRM 전환 판매의 복원 고객명
         (p.companyName ?? "").toLowerCase().includes(s)
       );
     }
@@ -193,7 +203,7 @@ export async function buildFilteredSalesProjectList(query: Record<string, string
     }
     if (contactName?.trim()) {
       const ct = contactName.trim().toLowerCase();
-      result = result.filter(p => (p.contactName ?? "").toLowerCase().includes(ct));
+      result = result.filter(p => (p.contactName ?? "").toLowerCase().includes(ct) || (p.legacyCustomerName ?? "").toLowerCase().includes(ct));
     }
     if (status?.trim()) {
       const statuses = status.split(",").map(s => s.trim()).filter(Boolean);
@@ -441,6 +451,8 @@ router.get("/admin/projects/:id", ...adminGuard, async (req, res) => {
         customerEmail: usersTable.email,
         customerId: usersTable.id,
         contactId: projectsTable.contactId,
+        // 과거 CRM 전환 판매: 진행관리표에서 복원한 고객명(담당자 Master 미연결 — 표시 전용, additive)
+        legacyCustomerName: restoredCustomerNameOfProject(projectsTable.id),
         companyId: projectsTable.companyId,
         adminId: projectsTable.adminId,
         requestingCompanyId: projectsTable.requestingCompanyId,
@@ -1600,12 +1612,17 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
     prepaidBalanceBefore, prepaidUsageAmount, prepaidBalanceAfter,
     prepaidLines,
     batchPeriodStart, batchPeriodEnd,
+    inquiryCustomer, customerSnapshot,
   } = req.body as {
     title?: string; companyId?: number; contactId?: number; divisionId?: number | null; adminId?: number;
+    // 의뢰건에서 작성한 견적: 저장 트랜잭션 안에서 거래처·담당자 판정/연결/신규등록 + 의뢰건 연결(선택 필드, 기존 호출 무영향)
+    inquiryCustomer?: { inquiryId: number } & CustomerChoice;
+    customerSnapshot?: Partial<CustomerSnapshot>;   // 견적 작성 당시 고객정보(없으면 Master 에서 채움)
     amount?: number; items?: Array<{
       productName: string; unit?: string; quantity?: number;
       unitPrice: number; taxRate?: 0 | 0.1; productId?: number; memo?: string;
       itemType?: string; taxType?: string; interpreterCount?: number;
+      priceStatus?: string; interpreterCountConfirmed?: boolean;
       discountType?: string; discountValue?: number; discountReason?: string;
       parentItemIndex?: number | null;   // 서비스 그룹: 같은 items[] 내 본 서비스 인덱스(부대항목만 지정, NULL=본/공통)
     }>;
@@ -1629,21 +1646,65 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
   if (totalPrice <= 0 && !hasItems) {
     res.status(400).json({ error: "견적 금액 또는 품목 목록이 필요합니다." }); return;
   }
+  // 단가 상태·인원 확정 여부 검증(보내지 않은 구버전 요청은 NULL)
+  const itemStatus = hasItems ? validateItemStatuses(items!) : { values: [] };
+  if ("error" in itemStatus) { res.status(400).json({ error: itemStatus.error }); return; }
+
+  // 의뢰건 견적 — 이미 연결된 견적이 있으면 새로 만들지 않고 그 견적을 돌려준다(재시도·중복 클릭 방지)
+  const inquiryId = inquiryCustomer?.inquiryId ? Number(inquiryCustomer.inquiryId) : null;
+  if (inquiryId) {
+    const [inq0] = await db.select({ quoteId: inquiriesTable.quoteId, deletedAt: inquiriesTable.deletedAt }).from(inquiriesTable).where(eq(inquiriesTable.id, inquiryId));
+    if (!inq0) { res.status(404).json({ error: "의뢰건을 찾을 수 없습니다." }); return; }
+    if (inq0.deletedAt) { res.status(409).json({ error: "삭제된 의뢰건입니다 — 견적서를 만들 수 없습니다." }); return; }
+    if (inq0.quoteId) {
+      const [ex] = await db.select().from(quotesTable).where(eq(quotesTable.id, inq0.quoteId));
+      if (ex) { res.status(200).json({ ...ex, existing: true }); return; }
+    }
+  }
 
   try {
     const stgQ = await getSettings();
     const qNum = await generateQuoteNumber();
 
     const result = await db.transaction(async tx => {
+      // ── 의뢰건 고객 판정·등록(같은 트랜잭션) ──
+      let resolvedCompanyId: number | null = companyId ?? null;
+      let resolvedContactId: number | null = contactId ?? null;
+      let snapshot: Partial<CustomerSnapshot> | null = customerSnapshot ?? null;
+      let resolution: Awaited<ReturnType<typeof executeCustomer>> | null = null;
+      if (inquiryId) {
+        // 같은 의뢰건의 동시 저장을 직렬화하고, 잠근 뒤 연결 견적을 다시 확인한다
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`inquiry-quote:${inquiryId}`}))`);
+        const [inq] = await tx.select().from(inquiriesTable).where(eq(inquiriesTable.id, inquiryId)).for("update");
+        if (inq.quoteId) throw Object.assign(new Error("EXISTING_QUOTE"), { existingQuoteId: inq.quoteId });
+        const plan = await planCustomer(tx, inq, { ...inquiryCustomer, companyId: inquiryCustomer!.companyId ?? companyId ?? null, contactId: inquiryCustomer!.contactId ?? contactId ?? null });
+        const why = unresolved(plan);
+        if (why) throw Object.assign(new Error("CUSTOMER_CONFIRM"), { plan, why });
+        resolution = await executeCustomer(tx, plan, inq);
+        resolvedCompanyId = resolution.companyId;
+        resolvedContactId = resolution.contactId;
+        snapshot = { ...plan.snapshot, ...(customerSnapshot ?? {}) };
+      }
+      // 일반 견적: 저장 시점의 거래처·담당자 Master 값을 아래에서 스냅샷으로 고정한다(captureIfMissing — 출력 식과 동일)
+
       // 거래처/담당자가 선택된 경우 — 프로젝트를 미리 생성하여 company/contact를 보존
       let linkedProjectId: number | null = null;
-      if (companyId || contactId) {
+      const companyId_ = resolvedCompanyId, contactId_ = resolvedContactId;
+      // 견적서 삭제로 연결이 풀린 의뢰건에서 다시 견적을 만들면 그 견적의 프로젝트(접수·유효 견적 없음)를 재사용 — 기존 프로젝트 ID 유지
+      const reuseProjectId = inquiryId && (companyId_ || contactId_) ? await findReusableProjectForInquiry(tx, inquiryId) : null;
+      if (reuseProjectId) {
+        await tx.update(projectsTable).set({
+          adminId: adminId ?? null, companyId: companyId_ ?? null, contactId: contactId_ ?? null,
+          requestingDivisionId: divisionId ?? null, title: title.trim(),
+        }).where(eq(projectsTable.id, reuseProjectId));
+        linkedProjectId = reuseProjectId;
+      } else if (companyId_ || contactId_) {
         const creatorId = ((req as any).user as { id: number }).id;
         const [proj] = await tx.insert(projectsTable).values({
           userId:    creatorId,
           adminId:   adminId ?? null,
-          companyId: companyId ?? null,
-          contactId: contactId ?? null,
+          companyId: companyId_ ?? null,
+          contactId: contactId_ ?? null,
           // 브랜드(Division) — 기존 projects.requestingDivisionId 재사용 (별도 컬럼 없음)
           requestingDivisionId: divisionId ?? null,
           title:     title.trim(),
@@ -1683,10 +1744,18 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
         batchPeriodEnd: batchPeriodEnd || null,
         batchItemCount: hasItems ? items!.length : null,
         equipmentCommon: null,
+        // 견적 작성 당시 고객정보 스냅샷(A)
+        customerCompanyName: snapshot?.customerCompanyName ?? null,
+        customerContactName: snapshot?.customerContactName ?? null,
+        customerContactPosition: snapshot?.customerContactPosition ?? null,
+        customerContactDepartment: snapshot?.customerContactDepartment ?? null,
+        customerContactPhone: snapshot?.customerContactPhone ?? null,
+        customerContactMobile: snapshot?.customerContactMobile ?? null,
+        customerContactEmail: snapshot?.customerContactEmail ?? null,
       }).returning();
 
       if (hasItems) {
-        const insertedItems = await tx.insert(quoteItemsTable).values(calcItemsAll.map(it => ({
+        const insertedItems = await tx.insert(quoteItemsTable).values(calcItemsAll.map((it, i) => ({
           quoteId: quote.id,
           productId: (it as any).productId ?? null,
           productName: it.productName,
@@ -1706,6 +1775,8 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
           interpretDuration: (it as any).interpretDuration ?? null,
           operationHours: (it as any).operationHours ?? null,
           interpreterCount: it.interpreterCount ?? null,
+          priceStatus: itemStatus.values[i]?.priceStatus ?? null,
+          interpreterCountConfirmed: itemStatus.values[i]?.interpreterCountConfirmed ?? null,
           usagePeriod: (it as any).usagePeriod ?? null,
           eventStartDate: (it as any).eventStartDate ?? null,
           eventEndDate: (it as any).eventEndDate ?? null,
@@ -1741,12 +1812,33 @@ router.post("/admin/quotes", ...adminGuard, requirePermission("quote.create"), a
           }).where(eq(quotesTable.id, quote.id));
         }
       }
-      return quote;
+      // 의뢰건 ↔ 견적 연결(같은 트랜잭션). 의뢰건의 Master 연결이 비어 있으면 판정 결과로 채운다(Master 자체는 수정 안 함).
+      if (inquiryId) {
+        const [inqNow] = await tx.select({ status: inquiriesTable.status, companyId: inquiriesTable.companyId, contactId: inquiriesTable.contactId }).from(inquiriesTable).where(eq(inquiriesTable.id, inquiryId));
+        await tx.update(inquiriesTable).set({
+          quoteId: quote.id,
+          status: (inqNow.status === "new" ? "reviewing" : inqNow.status) as any,
+          ...(inqNow.companyId == null && resolvedCompanyId ? { companyId: resolvedCompanyId } : {}),
+          ...(inqNow.contactId == null && resolvedContactId ? { contactId: resolvedContactId } : {}),
+          updatedAt: new Date(),
+        }).where(eq(inquiriesTable.id, inquiryId));
+      }
+      // 견적별 고객정보 고정 — 위에서 스냅샷을 받지 않은 견적은 저장 시점 출력값으로 고정
+      if (!snapshot || !hasSnapshot(snapshot)) await captureIfMissing(tx, quote.id, "effective");   // 새 견적 — 담당자 이메일 자동 결정
+      return { ...quote, customerResolution: resolution };
     });
 
-    req.log.info({ quoteId: result.id, quoteNumber: qNum, companyId }, "Admin: standalone quote created");
+    req.log.info({ quoteId: result.id, quoteNumber: qNum, companyId: result.customerResolution?.companyId ?? companyId, created: result.customerResolution?.created }, "Admin: standalone quote created");
     res.status(201).json(result);
   } catch (err) {
+    const e = err as { message?: string; existingQuoteId?: number; plan?: unknown; why?: string };
+    if (e?.message === "EXISTING_QUOTE" && e.existingQuoteId) {
+      const [ex] = await db.select().from(quotesTable).where(eq(quotesTable.id, e.existingQuoteId));
+      res.status(200).json({ ...ex, existing: true }); return;
+    }
+    if (e?.message === "CUSTOMER_CONFIRM") {
+      res.status(409).json({ error: `거래처·담당자 확인이 필요합니다 — ${e.why}`, customerPlan: e.plan }); return;
+    }
     req.log.error({ err }, "Admin: failed to create standalone quote");
     res.status(500).json({ error: "견적서 생성 실패." });
   }
@@ -1782,6 +1874,22 @@ router.patch("/admin/quotes/:quoteId/status", ...adminGuard, requirePermission("
     }
 
     const adminUser = (req as any).user as { id: number };
+
+    // 판매전환 금액 검증: 단가 미입력(price_status=unset) 또는 통역 인원 미확정(interpreter_count_confirmed=false) 행이 있으면 전환하지 않는다.
+    //  (NULL = 기존 자료 — 기존 견적의 전환 동작은 그대로)
+    if (status === "approved") {
+      const pending = await db.select({ productName: quoteItemsTable.productName, priceStatus: quoteItemsTable.priceStatus, icc: quoteItemsTable.interpreterCountConfirmed })
+        .from(quoteItemsTable).where(and(eq(quoteItemsTable.quoteId, quoteId), sql`(${quoteItemsTable.priceStatus} = 'unset' OR ${quoteItemsTable.interpreterCountConfirmed} = false)`));
+      if (pending.length) {
+        const unset = pending.filter(p => p.priceStatus === "unset").map(p => p.productName);
+        const icc = pending.filter(p => p.icc === false).map(p => p.productName);
+        res.status(409).json({
+          error: ["판매전환 전에 확인이 필요합니다.", unset.length ? `단가 미입력: ${unset.join(", ")}` : "", icc.length ? `통역 인원 미확정: ${icc.join(", ")}` : ""].filter(Boolean).join(" "),
+          unsetPriceItems: unset, unconfirmedHeadcountItems: icc,
+        });
+        return;
+      }
+    }
 
     // approved 전환 + 프로젝트 미연결 → 프로젝트 자동 생성
     if (status === "approved" && !quote.projectId) {
@@ -3172,7 +3280,8 @@ router.get("/admin/export/settlements", ...adminGuard, async (req, res) => {
 router.get("/admin/settings", ...adminGuard, async (_req, res) => {
   try {
     const rows = await db.select().from(settingsTable).limit(1);
-    res.json(rows[0] ?? {});
+    // 직인 내부 참조(R2 비공개 키)는 내보내지 않는다 — 직인은 /admin/company-seal 로 관리
+    res.json(rows[0] ? { ...rows[0], signatureImageUrl: publicSignatureValue(rows[0].signatureImageUrl) } : {});
   } catch (e) { res.status(500).json({ error: "설정 조회 실패" }); }
 });
 
@@ -3184,6 +3293,7 @@ router.patch("/admin/settings", ...adminGuard, async (req, res) => {
     const num  = (k: string) => (b[k] !== undefined ? (b[k] === "" ? null : String(b[k])) : undefined);
     const int  = (k: string) => (b[k] !== undefined ? (b[k] === "" || b[k] === null ? null : Number(b[k])) : undefined);
     const bool = (k: string) => (b[k] !== undefined ? Boolean(b[k]) : undefined);
+    const sealRegistered = isSealRef((await db.select({ v: settingsTable.signatureImageUrl }).from(settingsTable).limit(1))[0]?.v);
 
     const payload: Record<string, unknown> = {
       // 공급자 정보
@@ -3201,7 +3311,8 @@ router.patch("/admin/settings", ...adminGuard, async (req, res) => {
       ...(b.quoteValidityDays  !== undefined && { quoteValidityDays:  int("quoteValidityDays")  }),
       ...(b.taxRate            !== undefined && { taxRate:            num("taxRate")            }),
       ...(b.quoteNotes         !== undefined && { quoteNotes:         str("quoteNotes")         }),
-      ...(b.signatureImageUrl  !== undefined && { signatureImageUrl:  str("signatureImageUrl")  }),
+      // 직인이 등록돼 있으면(내부 참조) 설정 저장으로 덮어쓰지 않는다 — 직인 등록·교체·삭제는 /admin/company-seal 에서만
+      ...(b.signatureImageUrl  !== undefined && !sealRegistered && { signatureImageUrl:  str("signatureImageUrl")  }),
       // 결제 설정
       ...(b.defaultBillingType  !== undefined && { defaultBillingType:  str("defaultBillingType")   }),
       ...(b.paymentDueDays      !== undefined && { paymentDueDays:      int("paymentDueDays")        }),
@@ -3225,7 +3336,7 @@ router.patch("/admin/settings", ...adminGuard, async (req, res) => {
       [row] = await db.update(settingsTable).set(payload as never).where(eq(settingsTable.id, existing[0].id)).returning();
     }
     invalidateSettingsCache(); // 캐시 무효화 → 이후 모든 요청에 최신 설정 적용
-    res.json(row);
+    res.json(row ? { ...row, signatureImageUrl: publicSignatureValue(row.signatureImageUrl) } : row);
   } catch (e) { res.status(500).json({ error: "설정 저장 실패" }); }
 });
 
@@ -3293,6 +3404,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
     taxRate?: 0 | 0.1; taxType?: string; productId?: number; memo?: string;
     itemType?: string; interpretDate?: string; interpretPlace?: string;
     interpretDuration?: string; operationHours?: string; interpreterCount?: number; eventEndDate?: string; eventStartDate?: string;
+    priceStatus?: string; interpreterCountConfirmed?: boolean;
     itemLocation?: string; usagePeriod?: string; languagePair?: string;
     interpretationDirection?: string; interpretType?: string;
     hasTravelExpense?: boolean; hasEquipment?: boolean; isCustomProduct?: boolean;
@@ -3322,6 +3434,8 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
       res.status(409).json({ error: "과거(대체된) 견적은 수정할 수 없습니다." }); return;
     }
   }
+  const putStatus = validateItemStatuses(items);
+  if ("error" in putStatus) { res.status(400).json({ error: putStatus.error }); return; }
   // 할인 항목(음수 공급가) 포함 금액 계산 (POST와 동일 로직)
   const calcItems = computeQuoteItemAmounts(items);
   const totalPrice = calcItems.reduce((s, it) => s + it.totalAmount, 0);
@@ -3329,9 +3443,22 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
   const [qBefore] = await db.select({ price: quotesTable.price, status: quotesTable.status, projectId: quotesTable.projectId }).from(quotesTable).where(eq(quotesTable.id, quoteId));
   const itemsBefore = await db.select({ productName: quoteItemsTable.productName, totalAmount: quoteItemsTable.totalAmount }).from(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId));
   const priceChanged = qBefore != null && Math.abs(Number(qBefore.price ?? 0) - totalPrice) >= 0.005;
+  // 과거 CRM 전환 견적 — 원본은 총액만 있고 공급가·부가세 구분이 확인되지 않은 금액이다.
+  //   편집 화면의 부가세 재계산 등으로 원본 총액과 다른 금액이 저장되지 않도록, 금액이 바뀌는 저장은 명시적 확인을 요구한다(임의 VAT 가산 방지).
+  if (priceChanged && qBefore?.projectId && (req.body as any)?.confirmLegacyVat !== true) {
+    const origin = await legacyOriginOfProject(db, qBefore.projectId);
+    if (origin?.taxBreakdown === "unknown") {
+      res.status(409).json({
+        error: `과거 CRM 원본 총액은 공급가·부가세 구분이 확인되지 않은 금액입니다. 저장하면 총액이 ${Math.round(Number(qBefore.price ?? 0)).toLocaleString()}원 → ${Math.round(totalPrice).toLocaleString()}원으로 바뀝니다. 부가세 포함 여부를 확인한 뒤 진행하세요.`,
+        code: "LEGACY_VAT_UNCONFIRMED", before: Number(qBefore.price ?? 0), after: totalPrice,
+      });
+      return;
+    }
+  }
   if (qBefore?.status === "approved" && priceChanged && !versionReason?.trim()) {
     res.status(400).json({ error: "판매 확정 건의 금액을 변경하려면 변경사유를 입력하세요.", code: "REASON_REQUIRED" }); return;
   }
+  let recipientChanged = false;
   try {
     await db.transaction(async tx => {
       // 거래처/브랜드/담당자/담당PM 연결 처리
@@ -3341,6 +3468,12 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         const [existing] = await tx.select({ projectId: quotesTable.projectId })
           .from(quotesTable).where(eq(quotesTable.id, quoteId));
         if (existing?.projectId) {
+          // 견적에서 거래처·담당자를 직접 바꾼 저장이면 이 견적의 수신자 고정값을 갱신하고,
+          // 같은 판매의 다른 기존 견적은 바뀌기 전 출력값으로 고정한다(자동 변경 금지).
+          const [pNow] = await tx.select({ companyId: projectsTable.companyId, contactId: projectsTable.contactId }).from(projectsTable).where(eq(projectsTable.id, existing.projectId));
+          recipientChanged = (companyId !== undefined && (companyId ?? null) !== (pNow?.companyId ?? null))
+            || (contactId !== undefined && (contactId ?? null) !== (pNow?.contactId ?? null));
+          if (recipientChanged) await freezeProjectQuotes(tx, existing.projectId, quoteId);
           // 기존 프로젝트 업데이트
           const patch: Record<string, unknown> = {};
           if (companyId !== undefined) patch.companyId = companyId ?? null;
@@ -3362,6 +3495,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
             status:    'created',
           }).returning();
           await tx.update(quotesTable).set({ projectId: proj.id }).where(eq(quotesTable.id, quoteId));
+          recipientChanged = !!(companyId || contactId);
         }
       }
 
@@ -3376,7 +3510,7 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         ...(versionReason !== undefined ? { versionReason: versionReason.trim() || null } : {}),
       }).where(eq(quotesTable.id, quoteId));
       await tx.delete(quoteItemsTable).where(eq(quoteItemsTable.quoteId, quoteId));
-      const putInserted = await tx.insert(quoteItemsTable).values(calcItems.map(it => ({
+      const putInserted = await tx.insert(quoteItemsTable).values(calcItems.map((it, i) => ({
         quoteId,
         productId:               (it as any).productId              ?? null,
         productName:             it.productName,
@@ -3396,6 +3530,8 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         interpretDuration:       it.interpretDuration               ?? null,
         operationHours:          it.operationHours                  ?? null,
         interpreterCount:        it.interpreterCount                ?? null,
+        priceStatus:             putStatus.values[i]?.priceStatus   ?? null,
+        interpreterCountConfirmed: putStatus.values[i]?.interpreterCountConfirmed ?? null,
         hasTravelExpense:        it.hasTravelExpense                ?? false,
         hasEquipment:            it.hasEquipment                    ?? false,
         interpretationDirection: (it as any).interpretationDirection ?? null,
@@ -3442,6 +3578,8 @@ router.put("/admin/quotes/:id", ...adminGuard, requirePermission("quote.create")
         // 유형이 차감이 아니게 변경된 경우: 남은 예약 라인 해제(잔액 원복)
         await releaseQuoteReservations(tx, [quoteId]);
       }
+      // 수신자 고정값: 담당자·거래처를 직접 바꿨으면 갱신, 아니면 고정값이 없을 때만 저장 시점 값으로 고정
+      if (recipientChanged) await recaptureRecipient(tx, quoteId); else await captureIfMissing(tx, quoteId);
     });
     await logEvent("quote", quoteId, "quote_items_updated", req.log, (req as any).user ?? undefined, JSON.stringify({
       projectId: qBefore?.projectId ?? null, reason: versionReason?.trim() || null,
@@ -3497,11 +3635,21 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
         companyName:         sql<string | null>`COALESCE(${quotesTable.derivedCompanyNameSnapshot}, ${projectsTable.companyNameSnapshot}, (SELECT name FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId})))`,
         representativeName:    sql<string | null>`(SELECT representative_name FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId}))`,
         companyBusinessNumber: sql<string | null>`(SELECT business_number FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId}))`,
+        // 수신자 주소 — 연결된 거래처 Master 주소(추가 필드). 견적·의뢰건에는 주소 컬럼이 없어 Master 만 사용
+        companyAddress:        sql<string | null>`(SELECT NULLIF(btrim(address), '') FROM companies WHERE id = COALESCE(${quotesTable.derivedCompanyId}, ${projectsTable.companyId}))`,
         contactName:           sql<string | null>`COALESCE(${quotesTable.derivedContactNameSnapshot}, ${projectsTable.contactNameSnapshot}, (SELECT name FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId})))`,
         contactDivision: sql<string | null>`(SELECT department FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,
         contactPhone:    sql<string | null>`(SELECT COALESCE(phone, mobile, office_phone) FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,
         contactEmail:    sql<string | null>`(SELECT email FROM contacts WHERE id = COALESCE(${quotesTable.derivedContactId}, ${projectsTable.contactId}))`,
         adminName:       sql<string | null>`(SELECT name FROM users WHERE id = COALESCE(${projectsTable.adminId}, (SELECT p2.admin_id FROM projects p2 JOIN quotes q2 ON q2.project_id = p2.id WHERE q2.id = ${quotesTable.parentVersionId})))`,
+        // 견적 작성 당시 고객정보 스냅샷(추가 필드 — 기존 contact* 는 Master 기준 그대로)
+        customerCompanyName:       quotesTable.customerCompanyName,
+        customerContactName:       quotesTable.customerContactName,
+        customerContactPosition:   quotesTable.customerContactPosition,
+        customerContactDepartment: quotesTable.customerContactDepartment,
+        customerContactPhone:      quotesTable.customerContactPhone,
+        customerContactMobile:     quotesTable.customerContactMobile,
+        customerContactEmail:      quotesTable.customerContactEmail,
       })
       .from(quotesTable)
       .leftJoin(projectsTable, eq(quotesTable.projectId, projectsTable.id))
@@ -3527,7 +3675,7 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
       bankName:          s.bankName           ?? null,
       accountNumber:     s.accountNumber      ?? null,
       accountHolder:     s.accountHolder      ?? null,
-      signatureImageUrl: s.signatureImageUrl  ?? null,
+      signatureImageUrl: publicSignatureValue(s.signatureImageUrl),   // 직인 내부 참조는 미노출(견적서는 /admin/company-seal/document)
       quoteNotes:        s.quoteNotes         ?? null,
       quoteValidityDays: s.quoteValidityDays  ?? 14,
     };
@@ -3543,7 +3691,23 @@ router.get("/admin/quotes/:id", ...adminGuard, async (req, res) => {
       }
     }
 
-    res.json({ ...quote, items, settings, prepaidLines, prepaidState });
+    // 고객용 문서 출력값(추가 필드 — 기존 note/memo 는 내부 화면용으로 그대로 둔다).
+    //  과거 CRM 전환 판매의 견적(분할견적은 기준견적의 판매)이면 시스템이 기록한 이관 문구만 뺀 값을 준다.
+    const originProjectId = quote.projectId
+      ?? ((await db.execute(sql`SELECT q2.project_id FROM quotes q1 JOIN quotes q2 ON q2.id = q1.parent_version_id WHERE q1.id = ${quoteId}`)).rows as Array<{ project_id: number | null }>)[0]?.project_id
+      ?? null;
+    const legacyOrigin = await legacyOriginOfProject(db, originProjectId);
+    const customerItems = items.map(it => ({ ...it, customerMemo: customerMemoOf(it.memo, legacyOrigin) }));
+
+    // 견적별 고객정보 고정 여부 + 현재 Master 기준 수신자(‘담당자 정보 갱신’ 비교용, 출력에는 쓰지 않음)
+    const customerSnapshotFixed = hasSnapshot({
+      customerCompanyName: quote.customerCompanyName, customerContactName: quote.customerContactName, customerContactPosition: quote.customerContactPosition,
+      customerContactDepartment: quote.customerContactDepartment, customerContactPhone: quote.customerContactPhone, customerContactMobile: quote.customerContactMobile,
+      customerContactEmail: quote.customerContactEmail,
+    });
+    const liveRecipient = await liveRecipientOf(db, quoteId);
+
+    res.json({ ...quote, items: customerItems, settings, prepaidLines, prepaidState, customerNote: customerNoteOf(quote.note, legacyOrigin), legacyOrigin, customerSnapshotFixed, liveRecipient });
   } catch (err) {
     req.log.error({ err }, "Admin: failed to fetch quote detail");
     res.status(500).json({ error: "견적 조회 실패." });

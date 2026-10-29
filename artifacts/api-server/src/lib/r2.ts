@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "node:crypto";
@@ -14,6 +15,8 @@ export const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY ?? "";
 export const bucketName         = process.env.R2_BUCKET_NAME ?? "";
 // 퍼블릭 커스텀 도메인 (e.g. https://cdn.example.com) - 설정 시 공개 URL에 사용
 export const R2_PUBLIC_DOMAIN   = (process.env.R2_PUBLIC_DOMAIN ?? "").replace(/\/$/, "");
+// S3 호환 엔드포인트 직접 지정(선택) — 로컬 검증용. 미설정 시 Cloudflare R2 기본 엔드포인트(운영 동작 동일)
+const R2_ENDPOINT               = (process.env.R2_ENDPOINT ?? "").replace(/\/$/, "");
 
 export function isR2Configured(): boolean {
   return !!(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && bucketName);
@@ -31,7 +34,8 @@ export function getR2Client(): S3Client {
     }
     _client = new S3Client({
       region: "auto",
-      endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      endpoint: R2_ENDPOINT || `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      ...(R2_ENDPOINT ? { forcePathStyle: true } : {}),
       credentials: {
         accessKeyId: R2_ACCESS_KEY_ID,
         secretAccessKey: R2_SECRET_ACCESS_KEY,
@@ -105,6 +109,20 @@ export async function getR2ObjectStream(key: string): Promise<{
     contentType: res.ContentType ?? "application/octet-stream",
     contentLength: res.ContentLength,
   };
+}
+
+/** R2 객체 전체를 Buffer 로 읽기(작은 파일 전용 — 직인 등) */
+export async function getR2ObjectBuffer(key: string): Promise<{ body: Buffer; contentType: string }> {
+  const client = getR2Client();
+  const res = await client.send(new GetObjectCommand({ Bucket: bucketName, Key: key }));
+  if (!res.Body) throw new Error("R2 응답 본문이 비어있습니다");
+  return { body: Buffer.from(await res.Body.transformToByteArray()), contentType: res.ContentType ?? "application/octet-stream" };
+}
+
+/** R2 객체 삭제 */
+export async function deleteFromR2(key: string): Promise<void> {
+  const client = getR2Client();
+  await client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: key }));
 }
 
 // ── 존재 확인 ─────────────────────────────────────────────────────────────────

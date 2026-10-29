@@ -16,6 +16,7 @@ import {
 import { eq, and, ilike, or, inArray, sql, desc, ne, isNull, isNotNull } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { toEncryptedAccount, readAccountPlain, maskBankAccount } from "../lib/encrypt";
+import { freezeContactQuotes } from "../services/quoteRecipientSnapshot";
 import { logEvent } from "../lib/logEvent";
 import { normalizeBusinessNumber, isValidBusinessNumber } from "../lib/hometaxExcel";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
@@ -2056,6 +2057,9 @@ async function patchContact(req: any, res: any, contactId: number) {
 
   const prevPrimary = existing.isPrimary;
 
+  // 견적별 고객정보 고정 — 이 담당자를 수신자로 쓰는 기존 견적은 수정 전 출력값으로 고정(Master 수정으로 발행 문서가 바뀌지 않게)
+  await freezeContactQuotes(db, [contactId]);
+
   // isPrimary 변경 → 기존 기본 담당자 자동 해제
   if (isPrimary === true && !existing.isPrimary) {
     await db.update(contactsTable)
@@ -2280,6 +2284,8 @@ router.post("/admin/contacts/merge", ...adminGuard, requirePermission("contact.u
     const companyId = primaryRow.companyId;
 
     await db.transaction(async (tx) => {
+      // 견적별 고객정보 고정 — 통합으로 수신자가 바뀌는 기존 견적은 통합 전 출력값으로 고정
+      await freezeContactQuotes(tx, [primaryContactId, ...mergeContactIds]);
       // 연결 테이블(projects.contactId) → primaryContactId로 변경
       if (mergeContactIds.length > 0) {
         await tx.update(projectsTable)

@@ -1609,6 +1609,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onNavigateToSales={() => setAdminTab("projects")}
           onOpenSalesDetail={openSalesDetail}
           canConvert={hasPerm("quote.create")}
+          canDeleteQuote={hasPerm("quote.update")}
+          onOpenInquiry={(id) => { setSelectedInquiryId(id); setInquiryTick(t => t + 1); setAdminTab("inquiry-detail"); }}
           onOpenBulkImport={() => setShowQuoteBulkImport(true)}
           onOpenPastWorkImport={() => setShowPastWorkImport(true)}
         />
@@ -1622,6 +1624,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onOpenDetail={(id) => { setSelectedInquiryId(id); setAdminTab("inquiry-detail"); }}
           onOpenQuote={() => setAdminTab("quotes")}
           onRegister={() => setAdminTab("inquiry-register")}
+          canDelete={hasPerm("quote.update")}
+          onToast={setToast}
         />
       )}
       {adminTab === "inquiry-register" && (
@@ -1641,6 +1645,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onBack={() => { setInquiryTick(t => t + 1); setAdminTab("inquiries"); }}
           onNavigateQuoteRegister={() => setAdminTab("quote-register")}
           onOpenQuote={() => setAdminTab("quotes")}
+          canDelete={hasPerm("quote.update")}
+          onDeleted={() => { setInquiryTick(t => t + 1); setAdminTab("inquiries"); }}
         />
       )}
 
@@ -1657,6 +1663,8 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
           onNavigateToSales={() => setAdminTab("projects")}
           onOpenSalesDetail={openSalesDetail}
           canConvert={hasPerm("quote.create")}
+          canDeleteQuote={hasPerm("quote.update")}
+          onOpenInquiry={(id) => { setSelectedInquiryId(id); setInquiryTick(t => t + 1); setAdminTab("inquiry-detail"); }}
         />
       )}
 

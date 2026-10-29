@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { api, LANGUAGE_CODES, SUB_CATEGORIES_BY_MAIN, MAIN_CATEGORIES_BY_TYPE } from '../../lib/constants';
 import { Card, PrimaryBtn, GhostBtn } from '../ui';
 import { getZhExcludeCodes, normalizeZhForType } from '../../lib/zhLangPolicy';
@@ -179,30 +179,46 @@ function inlineInput(placeholder: string): React.CSSProperties {
 
 // ─── Props ─────────────────────────────────────────────────────────────────────
 
+/** 견적서 간편등록(모달)용 — 견적 행 유형으로 탭 고정, 행·검색어로 초기값, 단위·기본단가 입력, 기존 상품 선택 */
+export interface QuickCreateInitial {
+  quickType: QuickType;
+  srcLang?: string; tgtLang?: string;      // 언어 코드(LANGUAGE_CODES)
+  subtype?: string;                        // LANG_SUBTYPES label(번역/순차통역/동시통역 …)
+  itemLabel?: string; itemCustom?: string; // 비언어(통역장비 등) 항목 — 목록에 없으면 기타* + 직접입력
+  opsCustom?: string;                      // 운영/실비 직접입력 항목명
+  unit?: string;                           // 견적 행의 현재 단위(기본 단위 후보)
+}
+export interface CreatedQuickProduct { id: number; code: string; name: string; active: boolean; unit?: string; basePrice?: number }
+export type { QuickType };
+
 interface Props {
   token: string;
   authHeaders: Record<string, string>;
   setToast: (msg: string) => void;
-  onProductCreated: () => void;
+  /** 생성 완료 — 간편등록 모드에서는 생성된 상품을 넘긴다(기존 호출측은 인자 무시) */
+  onProductCreated: (product?: CreatedQuickProduct) => void;
+  quick?: { initial: QuickCreateInitial; unitOptions: string[]; onUseExisting: (p: CreatedQuickProduct) => void };
 }
 
 // ─── 컴포넌트 ─────────────────────────────────────────────────────────────────
 
-export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Props) {
+export function LazyProductPanel({ authHeaders, setToast, onProductCreated, quick }: Props) {
+  const qi = quick?.initial;
 
   // ── 공통 상태 ──────────────────────────────────────────────────────────────
-  const [quickType, setQuickType]   = useState<QuickType>("번역");
+  const [quickType, setQuickType]   = useState<QuickType>(qi?.quickType ?? "번역");
   const [result, setResult]         = useState<QuickResult | null>(null);
   const [loading, setLoading]       = useState(false);
   const [creating, setCreating]     = useState(false);
   const [created, setCreated]       = useState<ExistingProduct | null>(null);
 
   // ── 언어쌍 공통 ────────────────────────────────────────────────────────────
-  const [srcLang, setSrcLang]       = useState("ko");
-  const [tgtLang, setTgtLang]       = useState("en");
+  const [srcLang, setSrcLang]       = useState(qi?.srcLang || "ko");
+  const [tgtLang, setTgtLang]       = useState(qi?.tgtLang || "en");
   const [srcLangCustom, setSrcLangCustom] = useState("");
   const [tgtLangCustom, setTgtLangCustom] = useState("");
-  const [langSubtype, setLangSubtype]     = useState<string>("번역");
+  const [langSubtype, setLangSubtype]     = useState<string>(
+    qi?.subtype ?? (qi && LANG_PAIR_SET.has(qi.quickType) ? DEFAULT_LANG_SUBTYPE[qi.quickType as LangPairType] : "번역"));
   const [langSubtypeCustom, setLangSubtypeCustom] = useState(""); // 기타* 직접입력
   const [relayTargets, setRelayTargets]   = useState<string[]>([]); // 다국어릴레이 대상언어(복수)
   const [reviewMode, setReviewMode]       = useState<"single" | "pair">("single"); // 원어민감수 언어 방식
@@ -210,13 +226,16 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
   const [reviewLangCustom, setReviewLangCustom] = useState("");
 
   // ── 비언어 공통 ────────────────────────────────────────────────────────────
-  const [nlItem, setNlItem]           = useState("");  // 통역장비/편집/미디어
-  const [nlItemCustom, setNlItemCustom] = useState(""); // 기타* item
+  const [nlItem, setNlItem]           = useState(qi?.itemLabel ?? "");  // 통역장비/편집/미디어
+  const [nlItemCustom, setNlItemCustom] = useState(qi?.itemCustom ?? ""); // 기타* item
   const [nlMainCat, setNlMainCat]     = useState(() =>
     MAIN_CATEGORIES_BY_TYPE["operations"]?.[0]?.label ?? "교통비"
   );
-  const [nlSubCat, setNlSubCat]       = useState(""); // 운영/실비 subcat
-  const [nlSubCatCustom, setNlSubCatCustom] = useState(""); // 기타* subcat
+  const [nlSubCat, setNlSubCat]       = useState(() => qi?.opsCustom ? (OPS_CUSTOM_SUBCAT[MAIN_CATEGORIES_BY_TYPE["operations"]?.[0]?.label ?? "교통비"] ?? "") : ""); // 운영/실비 subcat
+  const [nlSubCatCustom, setNlSubCatCustom] = useState(qi?.opsCustom ?? ""); // 기타* subcat
+  // 간편등록: 기본 단위·기본 판매단가(선택) — 생성 시 기존 등록/수정 API 로 함께 저장
+  const [qUnit, setQUnit]   = useState(qi?.unit ?? "");
+  const [qPrice, setQPrice] = useState("");
   const [nlProjectCat, setNlProjectCat] = useState(() =>
     MAIN_CATEGORIES_BY_TYPE["project"]?.[0]?.label ?? "번역프로젝트"
   );
@@ -536,7 +555,16 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
   const handleLookup = () =>
     isLangPair ? handleLangLookup() : handleNonLangLookup();
 
+  // 간편등록: 행·검색어로 채운 조건으로 바로 중복 조회(기존 상품이 있으면 선택 안내, 없으면 생성 후보)
+  const autoLookedUp = useRef(false);
+  useEffect(() => {
+    if (!quick || autoLookedUp.current) return;
+    autoLookedUp.current = true;
+    void handleLookup();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── 생성 ───────────────────────────────────────────────────────────────────
+  const priceNum = qPrice.trim() && Number(qPrice.replace(/,/g, "")) > 0 ? Math.round(Number(qPrice.replace(/,/g, ""))) : null;
   const handleCreate = async () => {
     if (!result || result.found) return;
     const c = result.candidate;
@@ -568,6 +596,8 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
             mainCategory: c.mainCategory,
             subCategory: c.subCategory || null,
             name: c.name,
+            ...(quick && qUnit ? { unit: qUnit } : {}),
+            ...(quick && priceNum != null ? { basePrice: priceNum } : {}),
           }),
         });
       }
@@ -582,10 +612,20 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
         return;
       }
       const product: ExistingProduct = c.isLazy ? data.product : data;
+      let finalUnit: string | undefined = c.isLazy ? (c.unit ?? data.product?.unit) : (data.unit ?? qUnit);
+      // 간편등록: 언어쌍(lazy) 상품은 생성 API 가 서비스 기본 단위를 쓰므로, 다른 단위·기본단가를 고른 경우 기존 수정 API 로 반영
+      if (quick && c.isLazy && ((qUnit && qUnit !== c.unit) || priceNum != null)) {
+        const pr = await fetch(api(`/api/admin/products/${product.id}`), {
+          method: "PATCH", headers: { ...authHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify({ ...(qUnit && qUnit !== c.unit ? { unit: qUnit } : {}), ...(priceNum != null ? { basePrice: priceNum } : {}) }),
+        });
+        if (pr.ok) { if (qUnit) finalUnit = qUnit; }
+        else setToast("상품은 등록되었으나 단위·기본단가 저장에 실패했습니다 — 상품관리에서 확인해 주세요.");
+      }
       setCreated(product);
       setResult({ found: true, product });
       setToast(`✅ 상품 생성 완료: ${product.name} (${product.code})`);
-      onProductCreated();
+      onProductCreated(quick ? { ...product, unit: finalUnit, basePrice: priceNum ?? undefined } : undefined);
     } catch { setToast("네트워크 오류"); }
     finally { setCreating(false); }
   };
@@ -601,8 +641,8 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
         </span>
       </div>
 
-      {/* ── 상품유형 탭 ── */}
-      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 14 }}>
+      {/* ── 상품유형 탭 ── (간편등록은 견적 행 유형으로 고정) */}
+      <div style={{ display: quick ? "none" : "flex", gap: 4, flexWrap: "wrap", marginBottom: 14 }}>
         {QUICK_TYPES.map(qt => (
           <button key={qt} onClick={() => handleTypeChange(qt)}
             style={chipStyle(quickType === qt, TYPE_COLOR[qt])}
@@ -943,6 +983,19 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
                   )}
                 </div>
               </div>
+              {quick && !created && (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
+                  {result.product.active ? (
+                    <>
+                      <PrimaryBtn onClick={() => quick.onUseExisting(result.product)} style={{ fontSize: 13, padding: "8px 18px" }}
+                        data-testid="quick-use-existing" aria-label="기존 상품 선택">이 상품 선택</PrimaryBtn>
+                      <span style={{ fontSize: 11, color: "#6b7280" }}>같은 조건의 상품이 이미 있습니다 — 신규 등록 대신 기존 상품을 사용합니다.</span>
+                    </>
+                  ) : (
+                    <span style={{ fontSize: 12, color: "#b91c1c" }}>비활성 상품입니다 — 상품관리에서 활성화한 뒤 사용할 수 있습니다(중복 등록 불가).</span>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             <div style={{ padding: "10px 14px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8 }}>
@@ -983,6 +1036,19 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
                   )}
                 </div>
               </div>
+              {quick && (
+                <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 10 }}>
+                  <label style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>기본 단위<br />
+                    <select value={qUnit || result.candidate.unit || ""} onChange={e => setQUnit(e.target.value)}
+                      data-testid="quick-unit" aria-label="기본 단위" style={{ ...inlineInput(""), minWidth: 110, marginTop: 4 }}>
+                      {!(qUnit || result.candidate.unit) && <option value="">선택</option>}
+                      {[...new Set([...(result.candidate.unit ? [result.candidate.unit] : []), ...quick.unitOptions])].map(u => <option key={u} value={u}>{u}</option>)}
+                    </select></label>
+                  <label style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>기본 판매단가 <span style={{ fontWeight: 400, color: "#9ca3af" }}>(선택)</span><br />
+                    <input value={qPrice} onChange={e => setQPrice(e.target.value.replace(/[^\d,]/g, ""))} inputMode="numeric" placeholder="미입력"
+                      data-testid="quick-price" aria-label="기본 판매단가" style={{ ...inlineInput(""), minWidth: 140, marginTop: 4 }} /></label>
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <PrimaryBtn onClick={handleCreate} disabled={creating}
                   style={{ fontSize: 13, padding: "8px 20px", background: "#d97706" }}
@@ -998,4 +1064,41 @@ export function LazyProductPanel({ authHeaders, setToast, onProductCreated }: Pr
       )}
     </Card>
   );
+}
+
+// ─── 견적서 간편등록 초기값 ──────────────────────────────────────────────────────
+//  견적 행 유형 + 검색어(또는 행 이름)로 간편등록 화면 초기값을 만든다. 언어는 기존 언어 목록(LANGUAGE_CODES)의 이름·코드로만 찾는다.
+const LANGS_BY_LEN = [...LANGUAGE_CODES].sort((a, b) => b.label.length - a.label.length);
+export function buildQuickInitial(rowType: string, text: string, opts: { unit?: string; sourceLanguage?: string } = {}): QuickCreateInitial {
+  const t = (text ?? "").trim();
+  const norm = (v: string) => v.replace(/\s+/g, "").toLowerCase();
+  if (rowType === "equipment") {
+    // 장비 목록 항목명·세부분류와 정확히 같으면 그 항목, 아니면 기타장비 + 직접입력(검색어 그대로)
+    const hit = EQUIP_ITEMS.find(i => !i.isCustom && (norm(i.label) === norm(t) || (!!i.subCategory && norm(i.subCategory) === norm(t))));
+    return hit ? { quickType: "통역장비", itemLabel: hit.label, unit: opts.unit }
+      : { quickType: "통역장비", itemLabel: "기타장비", itemCustom: t, unit: opts.unit };
+  }
+  if (rowType === "translation" || rowType === "interpretation") {
+    const quickType: QuickType = rowType === "translation" ? "번역" : "통역";
+    // "일본어-한국어 번역", "일본어→한국어", "ja-ko" — 앞에서부터 언어 2개
+    const found: string[] = [];
+    let rest = t;
+    while (found.length < 2 && rest) {
+      let best: { code: string; at: number; len: number } | null = null;
+      for (const l of LANGS_BY_LEN) {
+        for (const key of [l.label, l.code]) {
+          const re = key.length <= 3 ? new RegExp(`(^|[^a-z])${key}(?![a-z])`, "i") : new RegExp(key.replace(/[()]/g, "\\$&"));
+          const m = rest.match(re);
+          if (m && m.index != null) { const at = m.index + (m[1]?.length ?? 0); if (!best || at < best.at) best = { code: l.code, at, len: key.length }; }
+        }
+      }
+      if (!best) break;
+      found.push(best.code); rest = rest.slice(best.at + best.len);
+    }
+    const subtypes = LANG_SUBTYPES[quickType as LangPairType].filter(s => !s.isCustom).sort((a, b) => b.label.length - a.label.length);
+    const sub = subtypes.find(s => t.includes(s.label))?.label;
+    // 통역 견적 행 단위는 항상 '일'(견적 정책) — 상품 기본 단위로 넘기지 않고 서비스 기본 단위를 쓴다
+    return { quickType, srcLang: found[0] ?? opts.sourceLanguage, tgtLang: found[1], subtype: sub, unit: rowType === "translation" ? (opts.unit || undefined) : undefined };
+  }
+  return { quickType: "운영/실비", opsCustom: t, unit: opts.unit };
 }

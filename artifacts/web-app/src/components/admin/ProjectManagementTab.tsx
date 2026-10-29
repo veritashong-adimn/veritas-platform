@@ -1111,7 +1111,10 @@ export function ProjectManagementTab({ token, user, hasPerm, setToast, authHeade
                             {/* 담당자 */}
                             <td style={{ ...tableTd, maxWidth: 90 }}>
                               <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, color: "#6b7280" }}>
-                                {p.contactName ?? "—"}
+                                {/* 담당자 Master·스냅샷 우선, 없으면 과거 CRM 진행관리표 복원 고객명(미연결 표시) */}
+                                {p.contactName ?? (p.legacyCustomerName
+                                  ? <span title="진행관리표에서 복원한 고객명 — 담당자 Master 미연결" data-testid={`pm-contact-restored-${p.id}`}>{p.legacyCustomerName} <span style={{ fontSize: 10, color: "#9ca3af" }}>미연결</span></span>
+                                  : "—")}
                               </div>
                             </td>
 

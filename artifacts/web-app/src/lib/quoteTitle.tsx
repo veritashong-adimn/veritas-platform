@@ -113,13 +113,48 @@ export function isInterpretationEquipment(productType: string, mainCategory?: st
 }
 
 /**
+ * 장비 대표 우선순위 (숫자가 작을수록 대표) — 상품 Master canonical_key 기준.
+ * 장비 대분류(main_category)는 주장비/부속장비를 구분하지 못하므로(리시버='리시버', 믹서·무선마이크='기타장비',
+ * 송신기·수신기='동시통역장비') 장비 역할은 이 표 한 곳에서만 정의한다. 새 주장비가 생기면 여기에 한 줄 추가.
+ *  - 10 주장비 시스템(동시통역장비 계열) · 20 위스퍼링/가이드 시스템 · 30 부스
+ *  - 50 부속장비(표에 없는 장비 기본값 — 리시버·송신기·수신기·마이크·믹서 등)
+ *  - 90 부대비용(엔지니어 출장비·운영비·연장 사용료) — 다른 장비가 없을 때만 대표
+ * 부속장비도 단독 견적이면 그대로 대표가 된다(후보에서 제외하지 않음).
+ */
+export const EQUIPMENT_REPRESENTATIVE_PRIORITY: Record<string, number> = {
+  'EQ:::동시통역장비': 10, 'EQ:::동시통역장비fm': 10, 'EQ:::fm장비': 10, 'EQ:::적외선장비': 10,
+  'EQ:::위스퍼링송신기': 20,
+  'EQ:::통역부스': 30, 'EQ:::부스': 30,
+  'EQ:::장비엔지니어출장비': 90, 'EQ:::장비운영비': 90, 'EQ:::장비연장사용료': 90,
+};
+const EQUIPMENT_DEFAULT_PRIORITY = 50;
+
+/** 서버 normalizeProdName(routes/products.ts)과 동일 규칙 — Master 미연결(직접입력) 장비의 canonical_key 추정용 */
+function normalizeProdName(s: string): string {
+  return (s ?? '').toLowerCase()
+    .replace(/[\s\-_·•]/g, '')
+    .replace(/[()（）\[\]【】]/g, '')
+    .replace(/간체|번체/g, '')
+    .normalize('NFC');
+}
+
+function representativePriority(it: QuoteTitleItem): number {
+  if (it.productType !== 'equipment') return EQUIPMENT_DEFAULT_PRIORITY;
+  const key = it.canonicalKey || `EQ:::${normalizeProdName(it.productName)}`;
+  return EQUIPMENT_REPRESENTATIVE_PRIORITY[key] ?? EQUIPMENT_DEFAULT_PRIORITY;
+}
+
+/**
  * 견적서명 생성 입력 상품. 공급가액과 역할(productType+mainCategory)로 대표상품을 선정한다.
  * mainCategory는 상품 카탈로그 대분류(있으면). 없으면 productType만으로 역할 판정.
+ * canonicalKey(상품 Master)·isAttached(서비스 그룹 부대항목 여부)는 장비 대표 선정에 쓴다. 배열 순서 = 견적서 행 순서.
  */
 export interface QuoteTitleItem {
   productName: string;
   productType: string;
   mainCategory?: string | null;
+  canonicalKey?: string | null;
+  isAttached?: boolean;
   supplyAmount: number;
 }
 
@@ -132,7 +167,8 @@ export interface QuoteTitleItem {
  *  ② 서비스 금액이 가장 큰 서비스를 대표로 선정하고, 그 서비스의 대표상품명을 사용한다.
  *       - 통역 서비스가 대표면 이름은 '통역 본상품' 중 최대 공급가액 (통역장비는 이름 후보가 아님 → 지시문 4절)
  *       - 번역 서비스가 대표면 이름은 번역 상품 중 최대 공급가액
- *  ③ 대표 후보 서비스가 하나도 없으면(장비만/보조만 존재) 전체 상품 중 최대 공급가액으로 대체한다.
+ *  ③ 대표 후보 서비스가 하나도 없으면(장비만/보조만 존재) 공급가액이 아니라 EQUIPMENT_REPRESENTATIVE_PRIORITY
+ *     (주장비 → 부속장비 → 부대비용)로 선정하고, 동률이면 견적서 행 순서를 따른다. 서비스 그룹 부대항목은 후보에서 뺀다.
  *  ④ 통역장비·통역 보조(addon)는 단독 대표상품이 될 수 없다. (합산 대상 or 제외)
  *  ※ 서비스 금액 동률이면 먼저 평가된(번역 → 통역 → 기타 순, 배열 앞선) 서비스를 유지한다.
  */
@@ -156,7 +192,11 @@ function pickRepresentativeProduct(items: QuoteTitleItem[]): string {
   if (services.length > 0) {
     return services.reduce((a, b) => (b.value > a.value ? b : a), services[0]).name;
   }
-  return largest(items).productName.trim();  // 후보 서비스 없음(장비만 등) → 전체 최대 공급가액
+  // 후보 서비스 없음(장비만 등) → 공급가액이 아니라 대표 우선순위로 선정.
+  //  서비스 그룹 부대항목(isAttached)은 본 항목이 있으면 제외, 동일 우선순위는 견적서 행 순서(먼저 나온 행).
+  const roots = items.filter(it => !it.isAttached);
+  const pool = roots.length > 0 ? roots : items;
+  return pool.reduce((a, b) => (representativePriority(b) < representativePriority(a) ? b : a), pool[0]).productName.trim();
 }
 
 /**

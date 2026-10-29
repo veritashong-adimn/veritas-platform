@@ -29,6 +29,9 @@ import { rawRowFromRecord, buildAssignPayload, computeAssignPreview } from "../r
 import { maskSourceRawForRead } from "./legacyArchiveResolve";
 
 import { ACTIVATION_MODULE, activatedSaleExists } from "./legacyActivationLineage";
+import { legacyActivationNote, LEGACY_ACTIVATION_ITEM_MEMO } from "./customerDocText";
+import { captureIfMissing } from "./quoteRecipientSnapshot";
+import { personKey, normPhone, phoneType, loadPhoneIndex } from "./legacyContactRestore";
 export { ACTIVATION_MODULE, activatedSaleExists };
 const SRC = "old_crm";
 const ENTITY = "sale";
@@ -42,7 +45,7 @@ export class ActivationError extends Error {
 
 const dateOf = (v: unknown): string | null => (typeof v === "string" ? (v.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? null) : null);
 const num = (v: unknown): number | null => { if (v == null || v === "") return null; const n = Number(String(v).replace(/,/g, "")); return Number.isFinite(n) ? n : null; };
-const nameKey = (s: unknown) => String(s ?? "").replace(/\s+/g, "").toLowerCase();
+export const nameKey = (s: unknown) => String(s ?? "").replace(/\s+/g, "").toLowerCase();
 
 // 입금내역 원문에서 금액 추출(예: "국민 880,000", "하나 100,000 / 국민 68,750"). 3자리 콤마 숫자 또는 4자리 이상 숫자만 금액으로 본다.
 export function parseDepositAmounts(memo: unknown): number[] {
@@ -82,7 +85,7 @@ async function loadTranslatorIndex(dbx: Dbx) {
   };
 }
 
-async function matchCompany(dbx: Dbx, name: string | null) {
+export async function matchCompany(dbx: Dbx, name: string | null) {
   const key = normalizeCompanyName(name ?? "");
   if (!key) return { matchedId: null as number | null, matchedName: null as string | null, method: "unmatched", candidates: 0 };
   // 앱 공용 정규화(normalizeCompanyName)로 거래처명·별칭을 정확 비교. 후보 1곳일 때만 연결.
@@ -94,11 +97,17 @@ async function matchCompany(dbx: Dbx, name: string | null) {
   return { matchedId: null, matchedName: null, method: hits.size > 1 ? "ambiguous" : "unmatched", candidates: hits.size };
 }
 
-async function matchContact(dbx: Dbx, companyId: number | null, name: string | null) {
+// 고객 담당자 Master — 같은 거래처 + 같은 이름 1명 + 진행관리표 연락처가 그 담당자 연락처와 일치할 때만 연결(이름만으로는 연결하지 않음).
+//   고객명 복원(legacyContactRestore)의 자동 연결 기준과 같다. 확정되지 않으면 이름만 판매 스냅샷으로 남는다.
+async function matchContact(dbx: Dbx, companyId: number | null, name: string | null, tels: string[] = []) {
   if (!companyId || !nameKey(name)) return { matchedId: null as number | null, method: companyId ? "unmatched" : "no_company" };
-  const cs = await rows(dbx, sql`SELECT id, name FROM contacts WHERE company_id = ${companyId} AND deleted_at IS NULL AND is_active`);
-  const hit = cs.filter(c => nameKey(c.name) === nameKey(name));
-  return hit.length === 1 ? { matchedId: Number(hit[0].id), method: "name" } : { matchedId: null, method: hit.length > 1 ? "ambiguous" : "unmatched" };
+  const cs = await rows(dbx, sql`SELECT id, name, phone, mobile, office_phone FROM contacts WHERE company_id = ${companyId} AND deleted_at IS NULL AND is_active`);
+  const hit = cs.filter(c => personKey(c.name) === personKey(name));
+  if (hit.length > 1) return { matchedId: null, method: "ambiguous" };
+  if (!hit.length) return { matchedId: null, method: "unmatched" };
+  const dg = (v: unknown) => String(v ?? "").replace(/\D/g, "");
+  const telOk = [hit[0].phone, hit[0].mobile, hit[0].office_phone].map(dg).some(t => t.length >= 7 && tels.includes(t));
+  return telOk ? { matchedId: Number(hit[0].id), method: "name_phone" } : { matchedId: null, method: "name_only_unconfirmed" };
 }
 
 async function matchStaff(dbx: Dbx, name: string | null) {
@@ -163,9 +172,59 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
     WHERE l.sale_row_id = ${sale.id} AND l.decision = 'confirmed' ORDER BY p.source_row NULLS LAST, p.id`);
   // 고객담당자 = 연결 진행행 '고객명'이 단일일 때만(판매관리 목록과 동일 규칙). 내부 담당PM 이름은 고객담당자로 쓰지 않는다.
   const custNames = [...new Set(prog.map((p: any) => String(p.source_raw?.["고객명"] ?? "").trim()).filter(Boolean))];
-  const contactName = custNames.length === 1 && nameKey(custNames[0]) !== nameKey(pmName) ? custNames[0] : null;
-  const company = await matchCompany(dbx, companyName);
-  const contact = await matchContact(dbx, company.matchedId, contactName);   // 해당 거래처 소속 담당자 중 동명 1명일 때만 연결
+  let contactName = custNames.length === 1 && nameKey(custNames[0]) !== nameKey(pmName) ? custNames[0] : null;
+  let company: Awaited<ReturnType<typeof matchCompany>> = await matchCompany(dbx, companyName);
+  const custTels = [...new Set(prog.filter((p: any) => contactName && personKey(p.source_raw?.["고객명"]) === personKey(contactName))
+    .map((p: any) => String(p.source_raw?.["연락처"] ?? "").replace(/\D/g, "")).filter((t: string) => t.length >= 7))];
+  let contact: { matchedId: number | null; method: string } = await matchContact(dbx, company.matchedId, contactName, custTels);   // 같은 거래처 동명 1명 + 연락처 일치일 때만 연결
+  // 판매관리에서 직원이 보완 연결한 고객 담당자(sale_contact)가 있으면 그 담당자를 쓴다(추측 매칭보다 우선).
+  //   거래처가 원본명으로 확정되지 않았으면 담당자의 거래처(직원이 고른 거래처)를 쓰고, 확정 거래처와 다르면 쓰지 않는다.
+  const supplementWarn: string[] = [];
+  if (saleNo) {
+    const [sup] = await rows(dbx, sql`SELECT c.id, c.name, c.company_id, co.name company_name FROM legacy_master_mappings m
+      JOIN contacts c ON c.id = m.entity_id AND c.deleted_at IS NULL JOIN companies co ON co.id = c.company_id AND co.deleted_at IS NULL
+      WHERE m.source_system = ${SRC} AND m.entity_type = 'sale_contact' AND m.status = 'active' AND m.legacy_id = ${saleNo}`);
+    if (sup && (!company.matchedId || company.matchedId === Number(sup.company_id))) {
+      if (!company.matchedId) company = { matchedId: Number(sup.company_id), matchedName: String(sup.company_name), method: "supplement", candidates: 1 };
+      contact = { matchedId: Number(sup.id), method: "supplement" };
+      contactName = String(sup.name);
+    } else if (sup) supplementWarn.push(`보완 연결된 담당자(${sup.name})의 거래처가 이 판매의 거래처와 달라 연결하지 않습니다.`);
+  }
+  // 담당자 연락처(미리보기에서 직원이 확인) — 담당자 Master 가 연결되면 Master 값, 아니면 같은 고객명 진행행의 원본 번호
+  //   (원본 개인번호 1개, 없으면 대표·공용번호를 일반 연락처로). 값을 만들거나 다른 사람 번호와 섞지 않는다.
+  const contactInfo: { phone: string | null; mobile: string | null; email: string | null; from: "master" | "source" | null; phoneShared?: boolean; emailFrom?: "master" | "source" | "company" | null } = { phone: null, mobile: null, email: null, from: null };
+  if (contact.matchedId) {
+    const [c] = await rows(dbx, sql`SELECT phone, mobile, office_phone, email FROM contacts WHERE id = ${contact.matchedId}`);
+    const me = c?.email && String(c.email).trim() ? String(c.email).trim() : null;
+    Object.assign(contactInfo, { phone: c?.phone ?? c?.office_phone ?? null, mobile: c?.mobile ?? null, email: me, from: "master", emailFrom: me ? "master" : null });
+  }
+  if (!contact.matchedId && contactName && custTels.length) {
+    const rawByNum = new Map<string, string>();
+    for (const p of prog) if (personKey(p.source_raw?.["고객명"]) === personKey(contactName)) { const raw = String(p.source_raw?.["연락처"] ?? "").trim(); if (normPhone(raw).length >= 7) rawByNum.set(normPhone(raw), raw); }
+    const [cp] = company.matchedId ? await rows(dbx, sql`SELECT phone FROM companies WHERE id = ${company.matchedId}`) : [];
+    const sharedOf = await loadPhoneIndex(dbx, [...rawByNum.keys()]);
+    const nums = [...rawByNum.keys()];
+    const personal = nums.filter(t => !sharedOf(companyName, t, cp?.phone ?? null) && phoneType(t) !== "unknown");
+    if (personal.length === 1) {
+      const t = personal[0];
+      Object.assign(contactInfo, phoneType(t) === "mobile" ? { mobile: rawByNum.get(t)! } : { phone: rawByNum.get(t)! }, { from: "source" });
+    } else if (!personal.length && nums.length === 1) {
+      // 원본 번호가 대표·공용번호뿐이면 휴대전화가 아닌 일반 연락처로만 전달(개인 휴대로 분류하지 않음 — 원본 정보 보존)
+      Object.assign(contactInfo, { phone: rawByNum.get(nums[0])!, from: "source", phoneShared: true });
+    }
+  }
+  // 원본 이메일 — 비고에 고객명과 함께 적힌 이메일 1개(통번역사 정보 문구 제외). 담당자 Master 이메일이 없을 때 사용.
+  if (!contactInfo.email && contactName) {
+    const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+    const emails = [...new Set(prog.filter((p: any) => personKey(p.source_raw?.["고객명"]) === personKey(contactName))
+      .map((p: any) => String(p.source_raw?.["비고"] ?? "")).filter((m: string) => EMAIL_RE.test(m) && m.replace(/\s/g, "").includes(contactName!.replace(/\s/g, "")) && !/(페이팔|paypal|메일변경|원천세)/i.test(m))
+      .map((m: string) => m.match(EMAIL_RE)![0].toLowerCase()))];
+    if (emails.length === 1) Object.assign(contactInfo, { email: emails[0], emailFrom: "source", ...(contactInfo.from ? {} : { from: "source" }) });
+  }
+  // 담당자 이메일 자동 결정: 담당자 Master → 과거 CRM 원본 → 같은 거래처 Master 이메일(업무용 — 공유·대표 이메일 허용)
+  const [coRow] = company.matchedId ? await rows(dbx, sql`SELECT email FROM companies WHERE id = ${company.matchedId}`) : [];
+  const companyEmail: string | null = coRow?.email && String(coRow.email).trim() ? String(coRow.email).trim() : null;
+  if (!contactInfo.email && companyEmail) Object.assign(contactInfo, { email: companyEmail, emailFrom: "company" });
   const matchTr = await loadTranslatorIndex(dbx);
   const performances = prog.map((p: any, i: number) => {
     const rr = rawRowFromRecord(p.source_raw ?? {}, "진행관리", Number(p.source_row ?? i + 1));
@@ -198,7 +257,7 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
   else if (parsedSum !== total) collection = { status: "review", reason: parsedSum < total ? "입금합계 < 판매금액(부분입금 가능성)" : "입금합계 > 판매금액", parsedAmount: parsedSum };
   else collection = { status: "matched", reason: null, parsedAmount: parsedSum };
 
-  const warnings: string[] = ["과거 CRM 판매목록에는 총액만 있어 공급가·부가세를 구분하지 않고 총액 그대로 1개 항목으로 만듭니다."];
+  const warnings: string[] = ["과거 CRM 판매목록에는 총액만 있어 공급가·부가세를 구분하지 않고 총액 그대로 1개 항목으로 만듭니다.", ...supplementWarn];
   if (!company.matchedId) warnings.push(company.method === "ambiguous" ? "거래처 후보가 여러 곳이라 연결하지 않습니다(전환 후 판매 상세에서 지정)." : "일치하는 거래처 Master 가 없어 원본 거래처명만 보존합니다.");
   const unm = performances.filter(p => !p.translatorId).length;
   if (unm) warnings.push(`통번역사 Master 미연결 ${unm}건 — 수행정보는 원본 이름으로 만들고 연결은 전환 후 지정합니다.`);
@@ -218,7 +277,7 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
   return {
     legacyRowId: sale.id, saleNo, saleDate, existing,
     title: opportunity || productName, productName, total,
-    company: { name: companyName, ...company }, contact: { name: contactName, ...contact },
+    company: { name: companyName, ...company, email: companyEmail }, contact: { name: contactName, ...contact, ...contactInfo },
     pm: { name: pmName, matchedId: pmId }, taxInvoiceDate,
     performances, perfSummary,
     collection: { depositDate, depositMemo, ...collection },
@@ -259,14 +318,20 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
     }).returning({ id: projectsTable.id });
 
     // 원본↔운영 매핑(고유키) — 동시 전환은 여기서 고유 제약으로 차단된다.
-    await tx.insert(legacyMasterMappingsTable).values({
+    //   과거 CRM 으로 원복(rolled_back)된 판매번호의 재전환: 고유키상 새 행을 만들 수 없으므로 그 매핑 행을 새 운영 판매로 다시 활성화한다
+    //   (이전 운영 판매 id 는 원복 로그·이전 전환 계보에 남는다). active 행이 있으면 위 재검증에서 이미 차단된다.
+    const revived = await rows(tx, sql`UPDATE legacy_master_mappings SET entity_id = ${project.id}, import_batch_id = ${batch.id},
+        source_row = ${plan._sale.sourceRow ?? null}, match_method = 'activation', status = 'active', created_by = ${userId}
+      WHERE source_system = ${SRC} AND entity_type = ${ENTITY} AND legacy_id = ${plan.saleNo} AND status = 'rolled_back' RETURNING id`);
+    if (!revived.length) await tx.insert(legacyMasterMappingsTable).values({
       sourceSystem: SRC, entityType: ENTITY, legacyId: plan.saleNo, entityId: project.id,
       importBatchId: batch.id, sourceRow: plan._sale.sourceRow ?? null, matchMethod: "activation", status: "active", createdBy: userId,
     });
 
     const [quote] = await tx.insert(quotesTable).values({
       projectId: project.id, quoteNumber, title: plan.title, price: String(plan.total), status: "approved",
-      note: `과거 CRM 판매 전환 (판매번호 ${plan.saleNo})`,
+      // 견적 비고는 고객용 문서에 출력된다 — 이관 경위는 아래 이관 이력(import_row_sources)에만 기록한다
+      note: null,
       taxDocumentType: "tax_invoice", taxCategory: "normal", quoteType: "b2b_standard", billingType: stg.defaultBillingType, paymentMethod: null,
       issueDate: plan.saleDate ?? new Date().toISOString().slice(0, 10), validUntil: plan.saleDate ?? new Date().toISOString().slice(0, 10),
       batchItemCount: 1,
@@ -275,13 +340,26 @@ export async function executeActivation(legacyRowId: number, planToken: string, 
       quoteId: quote.id, productId: null, productName: plan.productName, unit: "건", quantity: "1",
       unitPrice: String(plan.total), supplyAmount: String(plan.total), taxAmount: "0", totalAmount: String(plan.total),
       itemType: itemTypeOf(plan.productName), taxType: "taxable", isCustomProduct: true,
-      memo: "과거 CRM 원본 상품명·총액 그대로(원본에 공급가·부가세 구분 없음)",
+      memo: null,   // 상품 비고도 고객용 출력 — 원본 특성(총액만, 공급가·부가세 구분 없음)은 이관 이력에 기록
+
     }).returning({ id: quoteItemsTable.id });
+    // 견적별 고객정보 고정 — 전환 시점의 거래처·담당자(보완 연결 포함)를 견적 수신자로 저장(새 견적: 담당자 이메일 자동 결정)
+    await captureIfMissing(tx, quote.id, "effective");
+    // 담당자 Master 미연결: 원본 개인번호(미리보기에 보여 준 값)만 새 견적 수신자 연락처로 넣는다. 직원은 견적에서 확인·수정한다.
+    if (!plan.contact.matchedId && plan.contact.from === "source" && (plan.contact.mobile || plan.contact.phone)) {
+      await tx.execute(sql`UPDATE quotes SET customer_contact_mobile = COALESCE(customer_contact_mobile, ${plan.contact.mobile}),
+          customer_contact_phone = COALESCE(customer_contact_phone, ${plan.contact.phone}) WHERE id = ${quote.id}`);
+    }
+    // 담당자 이메일 — 미리보기에서 보여 준 자동 결정값(담당자 Master → 원본 → 거래처)을 새 견적 수신자 이메일로
+    if (plan.contact.email) await tx.execute(sql`UPDATE quotes SET customer_contact_email = ${plan.contact.email} WHERE id = ${quote.id}`);
 
     const lineage: any[] = [{
       batchId: batch.id, module: ACTIVATION_MODULE, entityId: project.id, rowKey: `sale:${plan.saleNo}`, status: "activated",
       sourceSystem: SRC, legacyId: String(plan.legacyRowId), sourceRow: plan._sale.sourceRow ?? null,
-      sourceRaw: { legacyRowId: plan.legacyRowId, rowHash: plan._sale.rowHash, quoteId: quote.id, itemId: item.id, progressRowIds: plan.performances.map(p => p.progressRowId) },
+      sourceRaw: { legacyRowId: plan.legacyRowId, rowHash: plan._sale.rowHash, quoteId: quote.id, itemId: item.id, progressRowIds: plan.performances.map(p => p.progressRowId),
+        // 내부 관리 정보(고객용 문서 미출력): 원본 상품명·총액, 세금 구분 상태, 이관 경위
+        originalProductName: plan.productName, originalTotal: plan.total, taxBreakdown: "unknown",
+        internalNote: legacyActivationNote(plan.saleNo), internalItemMemo: LEGACY_ACTIVATION_ITEM_MEMO },
     }];
 
     const ctx: ApplyRowCtx = { userId, isHoliday: (d: string) => holidaySet.has(d), mayConfirm: true, priorById: new Map() };
@@ -373,6 +451,8 @@ export async function getLegacyOrigin(dbx: Dbx, projectId: number) {
     saleNo, activatedAt: m.created_at, batchId: Number(m.import_batch_id),
     legacyRowId: cur ? Number(cur.id) : null, originalLegacyRowId: saleLin?.source_raw?.legacyRowId ?? null,
     sourceChanged,
+    // 원본 금액 기준(내부 정보 — 고객용 문서 미출력): 과거 판매목록은 총액만 있어 공급가·부가세 구분이 확인되지 않는다
+    amountBasis: { originalProductName: cur?.product_name ?? null, originalTotal: cur?.total_amount != null ? Number(cur.total_amount) : null, taxBreakdown: "unknown" as const },
     sourceRaw: cur ? maskSourceRawForRead("sales_list", cur.source_raw) : null,
     payoutItems,
     payoutSummary: {
@@ -391,6 +471,10 @@ export async function resolvePayoutReview(assignmentId: number, decision: "paid"
   return db.transaction(async (tx: any) => {
     const [lin] = await rows(tx, sql`SELECT id, status FROM import_row_sources WHERE module = ${ACTIVATION_MODULE} AND row_key LIKE 'progress:%' AND entity_id = ${assignmentId} FOR UPDATE`);
     if (!lin) throw new ActivationError(404, "과거 CRM 전환 수행정보가 아닙니다.");
+    // 과거 CRM 으로 원복된 판매(매핑 rolled_back)의 수행정보는 보관 자료 — 지급보류를 풀면 지급회차에 수집될 수 있어 처리하지 않는다
+    const [act] = await rows(tx, sql`SELECT 1 FROM performance_assignments a JOIN legacy_master_mappings m ON m.entity_id = a.project_id
+      AND m.source_system = ${SRC} AND m.entity_type = ${ENTITY} AND m.status = 'active' WHERE a.id = ${assignmentId}`);
+    if (!act) throw new ActivationError(409, "과거 CRM 으로 원복된 판매건의 수행정보입니다. 다시 운영 판매건으로 전환한 뒤 처리하세요.", "REVERTED");
     if (lin.status !== "payout_review") throw new ActivationError(409, "이미 확인 처리된 수행정보입니다.");
     const [a] = await tx.select().from(performanceAssignmentsTable).where(eq(performanceAssignmentsTable.id, assignmentId));
     if (!a || a.deletedAt) throw new ActivationError(404, "수행정보를 찾을 수 없습니다.");

@@ -43,7 +43,7 @@ export const COL_H: React.CSSProperties = dsColH('center');
 export const SVC_FIELD_HINTS: Record<ServiceType, string> = {
   translation:    '파일명 / 파일형식 / 단어수 / 글자수',
   interpretation: '시작일 ~ 종료일 / 시작시간 ~ 종료시간 / 장소 / 인원',
-  equipment:      '시작일 ~ 종료일 / 사용 장소 / 사용일수',
+  equipment:      '시작일 ~ 종료일 / 설치일 / 사용일수 / 사용 장소',
   expense:        '서비스유형 (공증·속기·녹취·더빙·편집·감수·DTP 등)',
   discount:       '할인방식 / 할인값 / 할인사유',
 };

@@ -7,21 +7,21 @@
  */
 import React, { useEffect, useRef } from 'react';
 import type { QuotePdfData } from '../../lib/quotePdf';
-import { ITEM_TYPE_LABEL, QUOTE_NOTES_BY_SERVICE } from '../../lib/quotePdf';
-import { renderQuoteTitle, buildDocFileName, escapeHtmlTitle, formatDocNumber } from '../../lib/quoteTitle';
+import { QUOTE_NOTES_BY_SERVICE, vatSummaryLabel } from '../../lib/quotePdf';
+import { renderQuoteTitle, buildDocFileName, formatDocNumber } from '../../lib/quoteTitle';
 import { formatDisplayDate, formatScheduleRange } from '../../lib/dateFormat';
 import { alertDialog } from '../ui';
+import { buildQuotePrintHtml } from '../../lib/quotePrintHtml';
+import { buildQuoteNotices, type NoticeSection, type NoticeRate } from '../../lib/quoteNotices';
+import { BRAND, BRAND_LIGHT, useCompanySeal, SealImage, SealErrorNotice, InfoBox, PartyRows, InfoRow, SummaryRow, ItemTypeBadge } from './docParts';
 
 // ─── 숫자 / 날짜 포맷 ────────────────────────────────────────────────────────
 const fmt = (n: number) => n.toLocaleString('ko-KR');
 const fmtDate = (d: string) => formatDisplayDate(d);
 const fmtDateRange = (start: string, end: string) => formatScheduleRange(start, end);
 
-// ─── 색상 ─────────────────────────────────────────────────────────────────────
-const BRAND = '#1e3a5f';
-const BRAND_LIGHT = '#e8edf5';
-
 // ─── 공통 인라인 스타일 ───────────────────────────────────────────────────────
+
 const PAGE_STYLE: React.CSSProperties = {
   width: 794,
   minHeight: 1123,
@@ -45,6 +45,9 @@ interface QuotePdfPreviewModalProps {
 
 export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: QuotePdfPreviewModalProps) {
   const contentRef = useRef<HTMLDivElement>(null);
+  // 회사 직인 — 서버가 권한 확인 후 data URI 로 내려준다(R2 원본 URL 미노출). 미등록·표시 안 함·오류면 직인 없이 출력.
+  //   undefined = 불러오는 중(인쇄 버튼 잠시 대기 — 직인 없이 인쇄되는 것 방지)
+  const { url: sealUrl, error: sealError } = useCompanySeal();
 
   // ESC로 닫기
   useEffect(() => {
@@ -69,95 +72,19 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
     const effectiveTitle = quoteTitle && quoteTitle !== data.quoteNumber ? quoteTitle : '';
     const fileName = buildDocFileName(effectiveTitle, { fallback: `${data.quoteNumber}_견적서` });
 
-    printWin.document.write(`<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8">
-<title>${escapeHtmlTitle(fileName)}</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: "Apple SD Gothic Neo", "Malgun Gothic", "맑은 고딕", "NanumGothic", sans-serif;
-    font-size: 12px;
-    color: #1a1a2e;
-    line-height: 1.6;
-    background: #fff;
-  }
-  @page {
-    size: A4 portrait;
-    margin: 15mm 18mm;
-  }
-  @media print {
-    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  }
-  .page {
-    width: 100%;
-    padding: 0;
-    background: #fff;
-  }
-  .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 28px; }
-  .company-logo { font-size: 22px; font-weight: 900; color: #1e3a5f; letter-spacing: -0.5px; }
-  .doc-title { text-align: right; }
-  .doc-title h1 { font-size: 26px; font-weight: 900; color: #1e3a5f; letter-spacing: 6px; margin-bottom: 4px; }
-  .doc-title .quote-num { font-size: 11px; color: #6b7280; font-family: monospace; }
-  .divider { height: 2px; background: #1e3a5f; margin-bottom: 20px; }
-  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 14px; }
-  .info-box { border: 1px solid #d1d5db; border-radius: 6px; padding: 12px 14px; }
-  .info-box-title { font-size: 10px; font-weight: 800; color: #1e3a5f; letter-spacing: 1px; margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1.5px solid #e8edf5; }
-  .info-row { display: flex; align-items: baseline; margin-bottom: 3px; }
-  .info-key { font-size: 10px; color: #6b7280; font-weight: 600; min-width: 76px; flex-shrink: 0; }
-  .info-val { font-size: 11px; color: #111827; font-weight: 500; min-width: 0; white-space: normal; word-break: keep-all; overflow-wrap: break-word; }
-  .quote-info-box { border: 1px solid #d1d5db; border-radius: 6px; padding: 10px 14px; margin-bottom: 14px; }
-  .quote-info-inner { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 16px; }
-  .total-box { background: #e8edf5; border-radius: 6px; padding: 10px 16px; margin-bottom: 20px; display: flex; justify-content: flex-end; align-items: center; }
-  .total-box-right { font-size: 18px; font-weight: 900; color: #1e3a5f; }
-  .total-box-right .label { font-size: 10px; font-weight: 600; color: #6b7280; display: block; text-align: right; margin-bottom: 2px; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-  th { background: #1e3a5f; color: #fff; font-size: 10px; font-weight: 700; padding: 7px 6px; text-align: center; white-space: nowrap; }
-  th.left { text-align: left; }
-  td { font-size: 10px; padding: 6px 6px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
-  td.center { text-align: center; }
-  td.right { text-align: right; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  td.detail { white-space: pre-line; word-break: break-word; max-width: 200px; }
-  td.name { word-break: break-word; max-width: 120px; font-weight: 600; }
-  tr:nth-child(even) td { background: #f9fafb; }
-  .summary { margin-left: auto; width: 260px; }
-  .summary-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 11px; border-bottom: 1px solid #f1f5f9; }
-  .summary-row .sk { color: #6b7280; font-weight: 600; }
-  .summary-row .sv { color: #111827; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
-  .summary-total { display: flex; justify-content: space-between; padding: 8px 12px; background: #1e3a5f; border-radius: 6px; margin-top: 6px; }
-  .summary-total .sk { color: #bfdbfe; font-size: 11px; font-weight: 700; }
-  .summary-total .sv { color: #fff; font-size: 14px; font-weight: 900; font-variant-numeric: tabular-nums; }
-  .footer { margin-top: 28px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .footer-box { border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px 14px; }
-  .footer-box-title { font-size: 10px; font-weight: 800; color: #1e3a5f; letter-spacing: 0.5px; margin-bottom: 8px; }
-  .footer-note { font-size: 10px; color: #374151; white-space: pre-line; line-height: 1.7; }
-  .signature-area { display: flex; justify-content: flex-end; margin-top: 24px; }
-  .signature-box { text-align: center; min-width: 100px; }
-  .signature-label { font-size: 10px; color: #6b7280; margin-bottom: 4px; }
-  .signature-img { width: 80px; height: 80px; object-fit: contain; }
-  .signature-placeholder { width: 80px; height: 80px; border: 1px dashed #d1d5db; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; color: #9ca3af; border-radius: 4px; }
-</style>
-</head>
-<body>
-<div class="page">
-  ${content.innerHTML}
-</div>
-<script>window.onload = function() { window.print(); }<\/script>
-</body>
-</html>`);
+    printWin.document.write(buildQuotePrintHtml(fileName, content.innerHTML));
     printWin.document.close();
   };
 
   const hasItems = data.items.length > 0;
   const hasBankInfo = data.bankAccount.bankName || data.bankAccount.accountNumber;
   const hasSupplierInfo = data.supplier.companyName || data.supplier.businessNumber;
-  const hasCustomer = !!(data.customer.companyName || data.customer.contactName);
 
   // 안내문: 설정값 우선, 없으면 서비스 유형별 기본값
   const defaultNotes = QUOTE_NOTES_BY_SERVICE[data.serviceType] ?? QUOTE_NOTES_BY_SERVICE['mixed'];
   const notesText = data.quoteNotes || defaultNotes;
+  // 안내말씀 — 품목 서비스 유형별 고지사항(발행일 기준 템플릿 버전). 통역·번역·장비 품목이 없으면 null(미표시)
+  const notices = buildQuoteNotices(data.items, data.quoteDate);
 
   return (
     <>
@@ -194,14 +121,16 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
             <span style={{ color: '#94a3b8', fontSize: 12 }}>
               {(formatDocNumber('Q', data.quoteNumber, data.quoteDate) || data.quoteNumber)} · {renderQuoteTitle(quoteTitle)}
             </span>
+            <SealErrorNotice error={sealError} />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
               onClick={handlePrint}
+              disabled={sealUrl === undefined}
               style={{
                 padding: '8px 20px', borderRadius: 7, border: 'none',
                 background: '#2563eb', color: '#fff',
-                fontWeight: 700, fontSize: 13, cursor: 'pointer',
+                fontWeight: 700, fontSize: 13, cursor: sealUrl === undefined ? 'wait' : 'pointer', opacity: sealUrl === undefined ? 0.7 : 1,
               }}
               data-testid="btn-pdf-print"
               aria-label="PDF 다운로드 (인쇄)"
@@ -231,7 +160,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
             style={{ ...PAGE_STYLE, boxShadow: '0 4px 24px rgba(0,0,0,0.25)' }}
           >
             {/* ── 문서 헤더 ──────────────────────────────────────────────── */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+            <div className="qp-keep qp-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
               {/* 회사명 / 로고 */}
               <div>
                 <div style={{ fontSize: 20, fontWeight: 900, color: BRAND, letterSpacing: -0.5 }}>
@@ -252,45 +181,49 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
             </div>
 
             {/* 상단 구분선 */}
-            <div style={{ height: 2, background: BRAND, marginBottom: 18 }} />
+            <div className="qp-rule" style={{ height: 2, background: BRAND, marginBottom: 18 }} />
 
             {/* ── 공급자 정보 · 수신자 정보 2컬럼 ────────────────────── */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+            <div className="qp-keep qp-gap" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
               {/* 공급자 정보 */}
-              <InfoBox title="공급자 정보">
-                {hasSupplierInfo ? (
-                  <>
-                    {data.supplier.companyName    && <InfoRow label="상호"       value={data.supplier.companyName} />}
-                    {data.supplier.businessNumber && <InfoRow label="사업자번호" value={data.supplier.businessNumber} />}
-                    {data.supplier.ceoName        && <InfoRow label="대표자"     value={data.supplier.ceoName} />}
-                    {data.supplier.address        && <InfoRow label="주소"       value={data.supplier.address} />}
-                    {data.supplier.phone          && <InfoRow label="전화"       value={data.supplier.phone} />}
-                    {data.supplier.email          && <InfoRow label="이메일"     value={data.supplier.email} />}
-                  </>
-                ) : (
-                  <p style={{ fontSize: 10, color: '#9ca3af' }}>설정에서 공급자 정보를 입력해 주세요.</p>
+              {/* 공급자·수신자 공통 항목·순서(PartyRows). 값이 없으면 행은 유지하고 공란 — 임의 값으로 채우지 않는다.
+                  공급자: 상호→사업자번호→대표자→연락처→이메일→주소 / 수신자: 상호→사업자번호→대표자→담당자→연락처→이메일→주소
+                  두 박스는 그리드 셀 높이(stretch)를 공유하므로 행 수가 달라도 박스 높이는 같다. */}
+              <InfoBox title="공급자 정보" aside={sealUrl ? (
+                /* 직인 — 상호 행 오른쪽(박스 우측). 절대 위치라 박스 높이를 늘리지 않고, 짧은 값(상호·사업자번호·대표자) 오른쪽 빈 공간에 놓인다.
+                   첫 페이지 상단 블록에만 있으므로 여러 페이지 견적서에서도 한 번만 출력된다. */
+                <SealImage src={sealUrl} testId="qp-seal" />
+              ) : null}>
+                <PartyRows
+                  companyName={data.supplier.companyName}
+                  businessNumber={data.supplier.businessNumber}
+                  representative={data.supplier.ceoName}
+                  showContact={false}   /* 공급자 박스는 담당자 행을 출력하지 않음(데이터는 그대로) */
+                  phone={data.supplier.phone}
+                  email={data.supplier.email}
+                  address={data.supplier.address}
+                />
+                {!hasSupplierInfo && (
+                  <p style={{ fontSize: 10, color: '#9ca3af', marginTop: 4 }}>설정에서 공급자 정보를 입력해 주세요.</p>
                 )}
               </InfoBox>
 
-              {/* 수신자 정보 */}
+              {/* 수신자 정보 — 사업자번호·대표자·주소는 연결 거래처 Master, 없으면 공란 */}
               <InfoBox title="수신자 정보">
-                {!hasCustomer ? (
-                  <p style={{ fontSize: 11, color: '#9ca3af' }}>수신자 정보 미입력</p>
-                ) : (
-                  <>
-                    <InfoRow label="상호"     value={data.customer.companyName        || '-'} />
-                    {data.customer.brandName && <InfoRow label="브랜드"   value={data.customer.brandName} />}
-                    <InfoRow label="대표자"   value={data.customer.representativeName || '-'} />
-                    <InfoRow label="담당자"   value={data.customer.contactName        || '-'} />
-                    <InfoRow label="연락처"   value={data.customer.contactPhone       || '-'} />
-                    <InfoRow label="이메일"   value={data.customer.contactEmail       || '-'} />
-                  </>
-                )}
+                <PartyRows
+                  companyName={data.customer.brandName ? `${data.customer.companyName} (${data.customer.brandName})` : data.customer.companyName}
+                  businessNumber={data.customer.businessNumber}
+                  representative={data.customer.representativeName}
+                  contactName={data.customer.contactName}
+                  phone={data.customer.contactPhone}
+                  email={data.customer.contactEmail}
+                  address={data.customer.address}
+                />
               </InfoBox>
             </div>
 
             {/* ── 견적 정보 (별도 영역) ────────────────────────────────── */}
-            <div style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '10px 14px', marginBottom: 14 }}>
+            <div className="qp-keep qp-gap" style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '10px 14px', marginBottom: 14 }}>
               <div style={{
                 fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5,
                 marginBottom: 8, paddingBottom: 5, borderBottom: `1.5px solid ${BRAND_LIGHT}`,
@@ -308,7 +241,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
             </div>
 
             {/* ── 총금액 박스 ─────────────────────────────────────────── */}
-            <div style={{
+            <div className="qp-keep qp-gap" style={{
               background: BRAND_LIGHT, borderRadius: 6, padding: '10px 16px',
               marginBottom: 18, display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
             }}>
@@ -323,7 +256,7 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
             {/* ── 품목 테이블 + 금액 합계 (일반/누적 견적서 전용) ─────────── */}
             {!data.prepaid && (<>
             {hasItems ? (
-              <table style={{
+              <table className="qp-items" style={{
                 width: '100%', borderCollapse: 'collapse', marginBottom: 14,
                 fontSize: 11,
               }}>
@@ -380,10 +313,10 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
             )}
 
             {/* ── 금액 합계 ────────────────────────────────────────────── */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 20 }}>
+            <div className="qp-keep qp-gap" style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 20 }}>
               <div style={{ width: 280 }}>
                 <SummaryRow label="공급가액 합계" value={`${fmt(data.supplyTotal)}원`} />
-                <SummaryRow label="부가세 (10%)" value={`${fmt(data.taxTotal)}원`} />
+                <SummaryRow label={vatSummaryLabel(data.items, data.taxTotal)} value={`${fmt(data.taxTotal)}원`} />
                 <div style={{
                   display: 'flex', justifyContent: 'space-between',
                   padding: '9px 12px', background: BRAND, borderRadius: 6, marginTop: 6,
@@ -413,9 +346,9 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
               return (
                 <>
                   {/* [선입금 / 이월 내역] — 언제 얼마를 선입/이월했는지 */}
-                  <div style={hdrStyle}>선입금 / 이월 내역</div>
+                  <div className="qp-heading" style={hdrStyle}>선입금 / 이월 내역</div>
                   {p.lines.length > 0 ? (
-                    <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 18, fontSize: 11 }}>
+                    <table className="qp-items" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 18, fontSize: 11 }}>
                       <thead>
                         <tr style={{ background: BRAND }}>
                           <th style={th(p.dateLabel, 'center', false)}>{p.dateLabel}</th>
@@ -440,8 +373,8 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
                   )}
 
                   {/* [진행 및 차감내역] — 언제 어떤 업무를 진행했고 얼마가 차감되는지 */}
-                  <div style={hdrStyle}>진행 및 차감내역</div>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 18, fontSize: 11 }}>
+                  <div className="qp-heading" style={hdrStyle}>진행 및 차감내역</div>
+                  <table className="qp-items" style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 18, fontSize: 11 }}>
                     <thead>
                       <tr style={{ background: BRAND }}>
                         <th style={th('일자', 'center', false)}>일자</th>
@@ -480,8 +413,8 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
                   </table>
 
                   {/* [차감 잔액] — 최종적으로 얼마가 남았는지 */}
-                  <div style={hdrStyle}>차감 잔액</div>
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', pageBreakInside: 'avoid', marginBottom: 20 }}>
+                  <div className="qp-heading" style={hdrStyle}>차감 잔액</div>
+                  <div className="qp-keep qp-gap" style={{ display: 'flex', justifyContent: 'flex-end', pageBreakInside: 'avoid', marginBottom: 20 }}>
                     <div style={{ width: 300 }}>
                       <PrepaidSummaryRow label="이전 가용잔액"     value={`${fmt(p.previousAvailable)}원`} />
                       <PrepaidSummaryRow label="이번 선입/이월액"   value={`${fmt(p.incoming)}원`} />
@@ -509,14 +442,33 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
 
             {/* ── 비고 ─────────────────────────────────────────────────── */}
             {data.note && (
-              <div style={{ marginBottom: 16, padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6 }}>
+              <div className="qp-note qp-gap" style={{ marginBottom: 16, padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6 }}>
                 <div style={{ fontSize: 10, fontWeight: 700, color: '#92400e', marginBottom: 4 }}>비고</div>
                 <div style={{ fontSize: 11, color: '#374151', whiteSpace: 'pre-line' }}>{data.note}</div>
               </div>
             )}
 
-            {/* ── 하단 정보 (좌: 입금 계좌 / 우: 견적 조건 + 직인) ─────────── */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
+            {/* ── 안내말씀 (공통 운영조건 + 서비스별 고지사항) ─────────────
+                비고(프로젝트별 요청)·견적 조건(유효기간·문의)과 겹치지 않는 고정 고지. 금액에 합산하지 않는다. */}
+            {/* 인쇄: 연속 배치 — 안내말씀은 앞 영역이 끝난 자리에서 시작해 조항 단위로 페이지를 넘긴다(전체를 한 덩어리로 묶지 않음).
+                하단 정보(입금 계좌·견적 조건)만 한 덩어리로 유지한다. */}
+            <div className="qp-tail">
+            {notices && (
+              <div className="qp-gap qp-notice" data-notice-version={notices.version} style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '12px 14px', marginBottom: 14 }}>
+                <div className="qp-heading" style={{
+                  fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5,
+                  marginBottom: 8, paddingBottom: 5, borderBottom: `1.5px solid ${BRAND_LIGHT}`,
+                }}>
+                  안내말씀
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px 18px' }}>
+                  {notices.sections.map(sec => <NoticeBlock key={sec.key} section={sec} />)}
+                </div>
+              </div>
+            )}
+
+            {/* ── 하단 정보 (좌: 입금 계좌 / 우: 견적 조건) ─────────── */}
+            <div className="qp-keep qp-footer" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 20 }}>
               {/* 입금 계좌 — 좌측 */}
               {hasBankInfo && (
                 <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '12px 14px' }}>
@@ -529,39 +481,18 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
                 </div>
               )}
 
-              {/* 견적 조건 (서비스 유형별) — 우측. 직인을 박스 내부 우측 하단에 포함(공식 발행 인증) */}
-              <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '12px 14px', display: 'flex', flexDirection: 'column' }}>
-                <div style={{ fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5, marginBottom: 8 }}>
+              {/* 견적 조건 (서비스 유형별) — 우측. (직인은 첫 페이지 공급자 정보 박스로 이동) */}
+              <div className="qp-cond" style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '12px 14px', display: 'flex', flexDirection: 'column' }}>
+                <div className="qp-cond-title" style={{ fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5, marginBottom: 8 }}>
                   견적 조건
                 </div>
                 <div style={{ fontSize: 10, color: '#374151', lineHeight: 1.8, whiteSpace: 'pre-line' }}>
                   {notesText}
                 </div>
-                {/* 직인 — 견적 조건 문구 아래 충분한 여백 후 박스 내부 우측 하단. 견적서 전체의 공식 발행을 의미. */}
-                <div style={{ marginTop: 'auto', paddingTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 6 }}>
-                      {data.supplier.companyName || 'VERITAS'} (인)
-                    </div>
-                    {data.signatureImageUrl ? (
-                      <img
-                        src={data.signatureImageUrl}
-                        alt="직인"
-                        style={{ width: 80, height: 80, objectFit: 'contain', border: '1px solid #f0f0f0', borderRadius: 4 }}
-                      />
-                    ) : (
-                      <div style={{
-                        width: 80, height: 80, border: '1px dashed #d1d5db',
-                        borderRadius: 4, display: 'flex', alignItems: 'center',
-                        justifyContent: 'center', fontSize: 9, color: '#9ca3af',
-                      }}>
-                        직인
-                      </div>
-                    )}
-                  </div>
-                </div>
               </div>
             </div>
+
+            </div>{/* /qp-tail */}
 
           </div>{/* /page */}
         </div>
@@ -572,42 +503,48 @@ export default function QuotePdfPreviewModal({ data, quoteTitle, onClose }: Quot
 
 // ─── 서브 컴포넌트 ────────────────────────────────────────────────────────────
 
-function InfoBox({ title, children }: { title: string; children: React.ReactNode }) {
+const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨'];
+
+// 안내말씀 소제목 + 본문 한 단위(인쇄 시 중간 분리 없음)
+function NoticeBlock({ section }: { section: NoticeSection }) {
+  const text: React.CSSProperties = { fontSize: 10, color: '#374151', lineHeight: 1.65, wordBreak: 'keep-all', overflowWrap: 'break-word' };
+  const numbered = (t: string, n: number, key: React.Key) => (
+    <div key={key} className="qp-keep" style={{ ...text, display: 'flex', gap: 3 }}>
+      <span style={{ flexShrink: 0 }}>{CIRCLED[n] ?? `${n + 1}.`}</span><span>{t}</span>
+    </div>
+  );
+  const rateTable = (rates: NoticeRate[], key: React.Key) => (
+    <div key={key} className="qp-keep" style={{ margin: '4px 0', border: '1px solid #e5e7eb', borderRadius: 4, overflow: 'hidden' }}>
+      {rates.map((r, i) => (
+        <div key={i} style={{
+          display: 'flex', justifyContent: 'space-between', gap: 8, padding: '2px 8px', fontSize: 10, lineHeight: 1.6,
+          background: i % 2 === 1 ? '#f9fafb' : '#fff', borderTop: i ? '1px solid #f1f5f9' : 'none',
+        }}>
+          <span style={{ color: '#374151' }}>{r.label}</span>
+          <span style={{ color: BRAND, whiteSpace: 'nowrap' }}>{r.value}</span>
+        </div>
+      ))}
+    </div>
+  );
   return (
-    <div style={{ border: '1px solid #d1d5db', borderRadius: 6, padding: '10px 12px' }}>
-      <div style={{
-        fontSize: 10, fontWeight: 800, color: BRAND, letterSpacing: 0.5,
-        marginBottom: 7, paddingBottom: 5, borderBottom: `1.5px solid ${BRAND_LIGHT}`,
-      }}>
-        {title}
-      </div>
-      {children}
+    // 인쇄 분할 단위: 소제목은 첫 조항과 붙여 두고(qp-heading), 조항·문단·요율표는 각각 중간에서 자르지 않는다(qp-keep)
+    <div data-notice={section.key}>
+      <div className="qp-heading" style={{ fontSize: 10, fontWeight: 700, color: BRAND, marginBottom: 3 }}>[{section.title}]</div>
+      {section.items?.map((t, i) => numbered(t, i, i))}
+      {section.intro?.map((t, i) => <div key={i} className="qp-keep" style={text}>{t}</div>)}
+      {section.rates && rateTable(section.rates, 'rates')}
+      {section.outro?.map((t, i) => <div key={i} className="qp-keep" style={{ ...text, color: '#4b5563' }}>{t}</div>)}
+      {/* 번호 항목과 요율표가 섞인 영역(통역장비 취소보상비) — 번호는 항목만 이어서 매긴다 */}
+      {section.blocks?.map((b, i) => 'rates' in b
+        ? rateTable(b.rates, `b${i}`)
+        : numbered(b.item, section.blocks!.slice(0, i).filter(x => 'item' in x).length, `b${i}`))}
     </div>
   );
 }
 
-function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 2 }}>
-      <span style={{ fontSize: 10, color: '#6b7280', fontWeight: 600, minWidth: 70, flexShrink: 0 }}>
-        {label}
-      </span>
-      <span style={{
-        fontSize: 11, color: '#111827', fontWeight: 500,
-        // 인쇄 시 주소·숫자 단위(예: "2406호")가 중간에서 끊기지 않도록:
-        // keep-all → 공백 단위로만 줄바꿈(동·호 등 토큰 유지), break-word → 박스 초과 시에만 예외 처리.
-        // (break-all 금지 — 숫자 중간 분리의 원인. 지시문 §3·§4)
-        minWidth: 0,
-        whiteSpace: 'normal',
-        wordBreak: 'keep-all',
-        overflowWrap: 'break-word',
-        ...(mono ? { fontFamily: 'monospace', fontSize: 10 } : {}),
-      }}>
-        {value}
-      </span>
-    </div>
-  );
-}
+
+
+
 
 // 수신자 정보 내 서비스 구분선 (복합 견적 시 [번역] / [통역] 라벨 포함)
 function SvcDivider({ label }: { label?: string }) {
@@ -616,14 +553,6 @@ function SvcDivider({ label }: { label?: string }) {
     : <div style={{ height: 1, background: '#e5e7eb', margin: '7px 0 4px' }} />;
 }
 
-function SummaryRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 11, borderBottom: '1px solid #f1f5f9' }}>
-      <span style={{ color: '#6b7280', fontWeight: 600 }}>{label}</span>
-      <span style={{ color: '#111827', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{value}</span>
-    </div>
-  );
-}
 
 // 차감 요약 행 — 강조(strong)/색상(accent) 옵션. 과한 강조 없이 문서 톤 유지.
 function PrepaidSummaryRow({ label, value, accent, strong }: { label: string; value: string; accent?: string; strong?: boolean }) {
@@ -635,21 +564,3 @@ function PrepaidSummaryRow({ label, value, accent, strong }: { label: string; va
   );
 }
 
-function ItemTypeBadge({ type }: { type: string }) {
-  const colors: Record<string, { bg: string; color: string }> = {
-    translation:    { bg: '#dbeafe', color: '#1d4ed8' },
-    interpretation: { bg: '#dcfce7', color: '#15803d' },
-    equipment:      { bg: '#fef3c7', color: '#b45309' },
-    expense:        { bg: '#f3f4f6', color: '#6b7280' },
-    discount:       { bg: '#fee2e2', color: '#dc2626' },
-  };
-  const c = colors[type] ?? colors.expense;
-  return (
-    <span style={{
-      display: 'inline-block', padding: '2px 5px', borderRadius: 4,
-      background: c.bg, color: c.color, fontSize: 9, fontWeight: 700,
-    }}>
-      {ITEM_TYPE_LABEL[type] ?? type}
-    </span>
-  );
-}

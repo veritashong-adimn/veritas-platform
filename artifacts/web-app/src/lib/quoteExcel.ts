@@ -130,10 +130,11 @@ export function formatServiceDetail(item: ExportItem, products: Product[]): stri
 function calcSupply(item: ExportItem): number {
   const p = fmtN(item.unitPrice);
   if (item.productType === 'interpretation') {
-    // 통역: 진행일수 × 인원 × 단가 (날짜 기반 — 편집 화면·서버와 동일 공통 함수)
+    // 통역: 수량 × 인원 × 단가 (수량 = 수정값, 없으면 진행일수 — 편집 화면·서버와 동일 공통 함수)
     return calcInterpretation({
       startDate:        item.interpretDate,
       endDate:          item.interpretEndDate,
+      quantity:         item.quantity,
       interpreterCount: item.interpreterCount,
       unitPrice:        item.unitPrice,
     }).supplyAmount;
@@ -143,14 +144,15 @@ function calcSupply(item: ExportItem): number {
   return Math.round(days * q * p);
 }
 
-/** 엑셀 '수량' 열 값 — 통역은 진행일수, 그 외는 quantity. */
+/** 엑셀 '수량' 열 값 — 통역은 수량(수정값, 없으면 진행일수), 그 외는 quantity. */
 function displayQuantity(item: ExportItem): number {
   if (item.productType === 'interpretation') {
-    const { serviceDays, invalidDateRange } = calcInterpretation({
+    const { quantity, invalidDateRange } = calcInterpretation({
       startDate: item.interpretDate,
       endDate:   item.interpretEndDate,
+      quantity:  item.quantity,
     });
-    return invalidDateRange ? 0 : serviceDays;
+    return invalidDateRange ? 0 : quantity;
   }
   return Number(item.quantity) || 1;
 }

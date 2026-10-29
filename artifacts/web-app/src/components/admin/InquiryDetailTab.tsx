@@ -5,9 +5,10 @@
  * 처리/견적 상태는 서버 파생값을 표시(중복 저장 없음). 기존 거래처/담당자 검색·생성 흐름을 재사용한다.
  */
 import React, { useState, useEffect, useCallback } from 'react';
+import { confirmAndDeleteInquiry } from './inquiryDeleteFlow';
 import { api } from '../../lib/constants';
-import { CHANNEL_LABEL, PROCESSING_META, QUOTE_PROGRESS_META, INQUIRY_CLOSE_REASONS, CLOSE_REASON_LABEL, EquipmentRow, inquiryServiceTypes, inquiryServiceLabel } from '../../lib/inquiryMeta';
-import { setQuoteHandoff, buildHandoffItems, parseEquipmentJson } from '../../lib/inquiryHandoff';
+import { CHANNEL_LABEL, PROCESSING_META, QUOTE_PROGRESS_META, INQUIRY_CLOSE_REASONS, CLOSE_REASON_LABEL, EquipmentRow, inquiryServiceTypes, inquiryServiceLabel, parseDocumentTypes, formatDocumentTypes } from '../../lib/inquiryMeta';
+import { setQuoteHandoff, buildHandoffItems, parseEquipmentJson, buildInquiryQuoteNote, buildProductHints, additionalLanguagesOf } from '../../lib/inquiryHandoff';
 import { InquiryFormFields, InquiryFormState, inquiryFormFromDetail, buildInquiryPayload, validateInquiryServices } from './InquiryFormFields';
 import { BackToListButton } from './BackToListButton';
 
@@ -16,13 +17,37 @@ const tdv: React.CSSProperties = { padding: '7px 10px', fontSize: 13, color: '#1
 const badge = (m: { label: string; color: string; bg: string; border: string }): React.CSSProperties => ({ display: 'inline-block', fontSize: 12, fontWeight: 700, padding: '3px 10px', borderRadius: 6, background: m.bg, color: m.color, border: `1px solid ${m.border}` });
 const btn = (bg: string, color = '#fff', border = 'none'): React.CSSProperties => ({ padding: '8px 16px', fontSize: 13, fontWeight: 700, borderRadius: 8, border, background: bg, color, cursor: 'pointer' });
 const fmtDateTime = (s: string | null) => s ? new Date(s).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }) : '—';
+// 고객 접수일시 — 날짜/시각/확인 상태. 상태가 없으면 기존 자료(미분류): received_at 을 고객 접수일시로 표시하지 않는다.
+const CR_STATUS_LABEL: Record<string, string> = { confirmed: '확정', needs_review: '확인 필요', not_provided: '미기재' };
+const CR_SOURCE_LABEL: Record<string, string> = { homepage: '홈페이지 고객 제출', email_received: '메일 수신일시', email_sent: '메일 발송일시', manual: '직원 입력', unknown: '출처 미상' };
+const fmtCustomerReceived = (d: { customerReceivedDate?: string | null; customerReceivedTime?: string | null; customerReceivedStatus?: string | null; customerReceivedSource?: string | null }) => {
+  if (!d.customerReceivedStatus) return '기존 자료(미분류)';
+  const when = d.customerReceivedDate
+    ? `${d.customerReceivedDate.replace(/-/g, '. ')}.${d.customerReceivedTime ? ' ' + d.customerReceivedTime.slice(0, 5) : ' (시각 미기재)'}`
+    : '공란';
+  const src = d.customerReceivedSource && d.customerReceivedSource !== 'unknown' ? ` · ${CR_SOURCE_LABEL[d.customerReceivedSource] ?? d.customerReceivedSource}` : '';
+  return `${when} [${CR_STATUS_LABEL[d.customerReceivedStatus] ?? d.customerReceivedStatus}]${src}`;
+};
+// 날짜만 있는 항목(견적서 수령 희망일·완료 희망일) — 시각을 표시하지 않는다(저장값의 00:00 UTC가 "오전 9:00"으로 보이던 문제)
+const fmtDate = (s: string | null) => s ? new Date(s).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' }) : '—';
+// 일정: 시간 미정은 00:00(KST)으로 저장된다(InquiryFormFields) → 날짜만 + "시간 미정" 표시
+const fmtSchedule = (s: string | null) => {
+  if (!s) return '—';
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return '—';
+  const hm = d.toLocaleTimeString('en-GB', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit' });
+  return hm === '00:00' ? `${d.toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul' })} (시간 미정)` : fmtDateTime(s);
+};
 
 interface Detail {
   id: number; inquiryNumber: string | null; receivedAt: string; channel: string; status: string;
+  createdAt?: string | null;   // 시스템 등록일시
+  customerReceivedDate?: string | null; customerReceivedTime?: string | null; customerReceivedStatus?: string | null; customerReceivedSource?: string | null;
   assignedPmId: number | null; pmName: string | null;
   customerCompanyName: string | null; contactName: string | null; department: string | null; contactPosition: string | null; contactPhone: string | null; contactMobile: string | null; contactEmail: string | null;
   companyId: number | null; contactId: number | null; divisionId: number | null;
   companyName: string | null; contactNameLinked: string | null; divisionName: string | null;
+  contactEmailLinked?: string | null; contactPhoneLinked?: string | null; contactMobileLinked?: string | null;   // 연결 담당자 Master 연락처
   serviceType: string | null; languageFrom: string | null; languageTo: string | null;
   serviceTypes?: string[] | null; otherServices?: string[] | null;   // 복수 선택(없으면 serviceType 1개)
   scheduleFrom: string | null; scheduleTo: string | null; place: string | null; volume: string | null; subject: string | null; requirements: string | null;
@@ -34,8 +59,10 @@ interface Detail {
   closeReasonCode: string | null; closeReasonDetail: string | null; closedAt: string | null;
 }
 
-export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigateQuoteRegister, onOpenQuote, adminUsers = [] }: {
+export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigateQuoteRegister, onOpenQuote, adminUsers = [], canDelete = false, onDeleted }: {
   token: string; inquiryId: number; onBack: () => void; onToast: (m: string) => void;
+  /** 의뢰건 삭제 권한 — [의뢰건 삭제] 표시(서버에서도 검증). 삭제 성공 시 onDeleted(목록으로 이동) */
+  canDelete?: boolean; onDeleted?: () => void;
   onNavigateQuoteRegister: () => void; onOpenQuote?: (quoteId: number) => void;
   adminUsers?: Array<{ id: number; name?: string | null; email: string }>;
 }) {
@@ -87,7 +114,9 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
   const startEdit = () => {
     if (!d) return;
     const eq: EquipmentRow[] = parseEquipmentJson(d.equipmentJson).map(r => ({
-      kind: r.kind ?? '', quantity: r.quantity ?? '1', unit: r.unit ?? '세트', location: r.location ?? '', note: r.note ?? '',
+      kind: r.kind ?? '', quantity: r.quantity ?? '1', unit: r.unit ?? '세트', location: r.location ?? '', note: r.note ?? '', days: r.days ?? '',
+      // 원본 참고단가는 화면에서 수정하지 않지만 다시 저장할 때 지워지지 않게 그대로 둔다
+      ...(r.refUnitPrice ? { refUnitPrice: r.refUnitPrice } : {}), ...(r.refAmount ? { refAmount: r.refAmount } : {}),
     }));
     setEditEquip(eq);
     setEditAttach((() => { try { return d.attachmentsJson ? JSON.parse(d.attachmentsJson) : []; } catch { return []; } })());
@@ -142,36 +171,36 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
   };
 
   // [견적서 작성] → 의뢰정보 프리필 handoff 저장 후 견적 등록 화면으로 이동
+  // [견적서 작성] → 의뢰정보 프리필 handoff 저장 후 견적 등록 화면으로 이동
+  //  · 견적서명: 거래처명 + 언어 + 서비스 형태(공통 규칙, 통역 주제는 쓰지 않음)
+  //  · 거래처/담당자: Master 연결값(ID)은 그대로, 미연결이면 의뢰건 원문 정보를 inquiryContext 로 전달(견적 화면에서 검색·연결)
+  //  · 상품 행: 수행일·장소·통역시간을 행의 정식 필드로, 상품은 productHints 로 견적 화면이 상품 Master 에서 추천
+  //  · 메모: 정식 필드로 전달되는 값은 빼고, 견적서에 담을 필드가 없는 정보만
   const goQuote = () => {
     if (!d) return;
     const types = inquiryServiceTypes(d);
-    const isInterp = types.includes('interpretation');
     const isTrans = types.includes('translation');
-    const noteLines = [
-      `[의뢰 접수 ${d.inquiryNumber ?? ''}]`,
-      types.length ? `서비스: ${inquiryServiceLabel(d)}` : '',
-      (d.languageFrom || d.languageTo) ? `언어: ${[d.languageFrom, d.languageTo].filter(Boolean).join('→')}` : '',
-      // 통역
-      isInterp && d.interpretType ? `통역형태: ${d.interpretType}` : '',
-      isInterp && (d.scheduleFrom || d.scheduleTo) ? `일정: ${[fmtDateTime(d.scheduleFrom), fmtDateTime(d.scheduleTo)].filter(x => x !== '—').join(' ~ ')}` : '',
-      isInterp && d.interpretDuration ? `1일 통역시간: ${d.interpretDuration}` : '',
-      isInterp && d.place ? `장소: ${d.place}` : '',
-      // 번역
-      isTrans && d.documentType ? `원문서 형태: ${d.documentType}` : '',
-      isTrans && d.volume ? `분량: ${d.volume}` : '',
-      isTrans && d.documentUsage ? `사용처: ${d.documentUsage}` : '',
-      isTrans && d.desiredCompletionDate ? `완료 희망일: ${fmtDateTime(d.desiredCompletionDate)}` : '',
-      // 공통
-      d.subject ? `주제: ${d.subject}` : '',
-      d.requirements ? `요구사항: ${d.requirements}` : '',
-      d.quoteDueDate ? `견적서 수령 희망일: ${fmtDateTime(d.quoteDueDate)}` : '',
-    ].filter(Boolean);
+    const items = buildHandoffItems(d);
+    // 견적 비고(고객 PDF 출력) — 요청사항·추가 언어·정식 필드가 없는 번역 정보만
+    const note = buildInquiryQuoteNote(d, [
+      isTrans && d.documentUsage ? `문서 사용처: ${d.documentUsage}` : '',
+      isTrans && d.desiredCompletionDate ? `번역 완료 희망일: ${fmtDate(d.desiredCompletionDate)}` : '',
+    ]);
     setQuoteHandoff({
       inquiryId: d.id, inquiryNumber: d.inquiryNumber,
       companyId: d.companyId, contactId: d.contactId, divisionId: d.divisionId,
-      title: d.subject ?? (d.companyName ?? d.customerCompanyName ?? '') , note: noteLines.join('\n'),
+      // 견적서명은 견적 화면의 플랫폼 표준 규칙(거래처명_대표상품_YYYYMMDD)으로 자동 생성 — 여기서 보내지 않는다(통역 주제 사용 금지)
+      note,
       // 서비스별 견적항목 시드(통역/장비/번역 — 복수 선택 시 각각, 금액 없음). 기타 세부 서비스는 메모로만 전달(항목·금액 자동 생성 없음).
-      items: buildHandoffItems(d),
+      items,
+      productHints: buildProductHints(d, items),
+      inquiryContext: {
+        customerCompanyName: d.customerCompanyName, companyNameLinked: d.companyName,
+        contact: { name: d.contactName, position: d.contactPosition, department: d.department, phone: d.contactPhone, mobile: d.contactMobile, email: d.contactEmail },
+        contactNameLinked: d.contactNameLinked,
+        additionalLanguages: additionalLanguagesOf(d.requirements),
+        quoteDueDate: d.quoteDueDate ? new Date(new Date(d.quoteDueDate).getTime() + 9 * 3600_000).toISOString().slice(0, 10) : null,
+      },
     });
     onNavigateQuoteRegister();
   };
@@ -217,6 +246,17 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
         {!editing && d.quoteId && d.quoteNumber && (
           <button type="button" onClick={() => onOpenQuote?.(d.quoteId!)} data-testid="inq-open-quote" style={btn('#ecfdf5', '#059669', '1px solid #a7f3d0')}>연결 견적 {d.quoteNumber}</button>
         )}
+        {canDelete && onDeleted && !editing && (
+          <button type="button" disabled={busy} data-testid="inq-delete" aria-label="의뢰건 삭제"
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const out = await confirmAndDeleteInquiry(token, d.id);
+                if (out.deleted) { onToast(out.message!); onDeleted(); }
+              } finally { setBusy(false); }
+            }}
+            style={btn('#fff', '#dc2626', '1px solid #fecaca')}>의뢰건 삭제</button>
+        )}
       </div>
 
       {editing && form && (
@@ -224,7 +264,7 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
           <div style={{ fontSize: 15, fontWeight: 800, color: '#111827', marginBottom: 4 }}>의뢰 내용 수정</div>
           <p style={{ fontSize: 12, color: '#9ca3af', margin: '0 0 8px' }}>서비스 유형·통역/번역/장비/기타 정보를 수정합니다.{d.quoteId ? ' 연결된 견적서 내용은 자동으로 변경되지 않습니다.' : ''}</p>
           <InquiryFormFields
-            f={form} set={setField}
+            f={form} set={setField} systemRegisteredAt={d.createdAt ?? null}
             equipment={editEquip} setEquipment={setEditEquip}
             adminUsers={adminUsers}
             attachments={editAttach} onUpload={handleUpload} onRemoveAttachment={(i) => setEditAttach(prev => prev.filter((_, j) => j !== i))} uploading={uploading}
@@ -243,11 +283,12 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
           <div style={{ padding: '10px 14px', fontWeight: 800, fontSize: 13, borderBottom: '1px solid #f1f5f9', color: '#111827' }}>접수 · 의뢰 내용</div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}><tbody>
             {([
-              ['접수일시', fmtDateTime(d.receivedAt)],
+              ['고객 접수일시', fmtCustomerReceived(d)],
+              ['시스템 등록일시', fmtDateTime(d.createdAt ?? null)],
               ['접수경로', CHANNEL_LABEL[d.channel] ?? d.channel],
               ['담당 PM', d.pmName ?? '미지정'],
               ['서비스 유형', inquiryServiceLabel(d) || '—'],
-              ['견적서 수령 희망일', fmtDateTime(d.quoteDueDate)],
+              ['견적서 수령 희망일', fmtDate(d.quoteDueDate)],
               // 언어는 통역/번역만 표시
               ...((svc.includes('interpretation') || svc.includes('translation')) ? [
                 ['언어', [d.languageFrom, d.languageTo].filter(Boolean).join('→') || '—'],
@@ -255,25 +296,25 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
               // 통역 전용
               ...(svc.includes('interpretation') ? [
                 ['통역 형태', d.interpretType ?? '—'],
-                ['통역 일시', [fmtDateTime(d.scheduleFrom), fmtDateTime(d.scheduleTo)].filter(x => x !== '—').join(' ~ ') || '—'],
+                ['통역 일시', [fmtSchedule(d.scheduleFrom), fmtSchedule(d.scheduleTo)].filter(x => x !== '—').join(' ~ ') || '—'],
                 ['1일 통역시간', d.interpretDuration ?? '—'],
                 ['통역 장소', d.place ?? '—'],
               ] : []),
               // 번역 전용
               ...(svc.includes('translation') ? [
-                ['원문서 형태', d.documentType ?? '—'],
+                ['원문서 형태', d.documentType ? formatDocumentTypes(parseDocumentTypes(d.documentType)) : '—'],   // 구 값(한글·PowerPoint)도 현재 항목명으로
                 ['번역 분량', d.volume ?? '—'],
                 ['문서 사용처', d.documentUsage ?? '—'],
-                ['완료 희망일', fmtDateTime(d.desiredCompletionDate)],
+                ['완료 희망일', fmtDate(d.desiredCompletionDate)],
               ] : []),
               // 장비(통역과 함께면 일정·장소는 통역 항목과 동일 — 중복 표시 생략)
               ...(svc.includes('equipment') && !svc.includes('interpretation') ? [
-                ['장비 사용기간', [fmtDateTime(d.scheduleFrom), fmtDateTime(d.scheduleTo)].filter(x => x !== '—').join(' ~ ') || '—'],
+                ['장비 사용기간', [fmtSchedule(d.scheduleFrom), fmtSchedule(d.scheduleTo)].filter(x => x !== '—').join(' ~ ') || '—'],
                 ['사용 장소', d.place ?? '—'],
               ] : []),
               // 기타(통역·장비가 없을 때만 일정·장소 표시)
               ...(svc.includes('other') && !svc.includes('interpretation') && !svc.includes('equipment') ? [
-                ['희망 일정', [fmtDateTime(d.scheduleFrom), fmtDateTime(d.scheduleTo)].filter(x => x !== '—').join(' ~ ') || '—'],
+                ['희망 일정', [fmtSchedule(d.scheduleFrom), fmtSchedule(d.scheduleTo)].filter(x => x !== '—').join(' ~ ') || '—'],
                 ['장소', d.place ?? '—'],
               ] : []),
               ['주제/내용', d.subject ?? '—'],
@@ -293,7 +334,7 @@ export function InquiryDetailTab({ token, inquiryId, onBack, onToast, onNavigate
                 {equipmentRows.map((r, i) => (
                   <tr key={i} style={{ borderBottom: '1px solid #f6f8fa' }}>
                     <td style={{ padding: '5px 8px', fontWeight: 700, color: '#111827', whiteSpace: 'nowrap' }}>{r.kind || '—'}</td>
-                    <td style={{ padding: '5px 8px', color: '#374151', whiteSpace: 'nowrap' }}>{[r.quantity, r.unit].filter(Boolean).join(' ') || '—'}</td>
+                    <td style={{ padding: '5px 8px', color: '#374151', whiteSpace: 'nowrap' }}>{[r.quantity, r.unit].filter(Boolean).join(' ') || '—'}{r.days ? ` × ${r.days}일` : ''}</td>
                     <td style={{ padding: '5px 8px', color: '#6b7280' }}>{r.location || ''}</td>
                     <td style={{ padding: '5px 8px', color: '#6b7280' }}>{r.note || ''}</td>
                   </tr>

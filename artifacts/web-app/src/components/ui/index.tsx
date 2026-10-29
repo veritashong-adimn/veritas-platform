@@ -633,9 +633,13 @@ export function NumericInput({
   placeholder = "0",
   style,
   disabled = false,
+  ariaLabel,
+  testId,
 }: {
   value: string | number;
   onChange: (raw: string) => void;
+  ariaLabel?: string;
+  testId?: string;
   allowDecimal?: boolean;
   allowNegative?: boolean;
   suffix?: string;
@@ -701,7 +705,9 @@ export function NumericInput({
         onChange={handleChange}
         placeholder={placeholder}
         disabled={disabled}
-        inputMode="numeric"
+        inputMode={allowDecimal ? "decimal" : "numeric"}
+        aria-label={ariaLabel}
+        data-testid={testId}
         // 숫자 입력은 Tabular Numbers 공통 적용 — 단가·수량·할인 등 모든 숫자 폭 일정 (지시문 §3·§8)
         style={{ width: "100%", boxSizing: "border-box", fontVariantNumeric: "tabular-nums", ...style, paddingRight: hasSuffix ? 28 : undefined }}
       />

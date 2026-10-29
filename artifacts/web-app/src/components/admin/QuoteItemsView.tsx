@@ -95,7 +95,7 @@ function ReadOnlyServiceFields({ f }: { f: QuoteItemForm }) {
           <RoCell w={174} value={period} title="사용 기간" />
           <RoCell w={200} value={f.operationHours ? `설치 ${f.operationHours}` : ''} title="설치일시" />
           <RoCell w={72} value={f.usagePeriod} suffix="일" align="right" title="사용일수" />
-          <RoCell flex={1} value={f.itemLocation} title="장비 사용 장소" />
+          <RoCell flex={1} value={f.itemLocation ? `장소: ${f.itemLocation}` : ''} title="장비 사용 장소" />
         </div>
       );
     }
