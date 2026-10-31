@@ -14,6 +14,8 @@ interface Props {
   r: Row; i: number;
   searchIdx: number | null;
   searchResults: any[];
+  searchState?: 'idle' | 'loading' | 'done' | 'error';
+  initialQuery?: string;   // 검색칸 초기값(조회모드 필터어 이어받기)
   onSearchTranslator: (i: number, q: string) => void;
   onSearchVendor: (i: number, q: string) => void;
   onPickTranslator: (i: number, result: any) => void;
@@ -46,7 +48,7 @@ const snapshotPerformer = (r: Row): Partial<Row> =>
 const inp: React.CSSProperties = { ...dsInputStd(), fontSize: 12, minHeight: 30, padding: '4px 8px', width: '100%' };
 
 export default function InlinePerformerPicker(props: Props) {
-  const { r, i, searchIdx, searchResults, onSearchTranslator, onSearchVendor, onPickTranslator, onPickVendor, onClear, onCancelChange, patch, fetchRecentPerformances } = props;
+  const { r, i, searchIdx, searchResults, searchState = 'idle', initialQuery, onSearchTranslator, onSearchVendor, onPickTranslator, onPickVendor, onClear, onCancelChange, patch, fetchRecentPerformances } = props;
   const inputRef = useRef<HTMLInputElement>(null);
   const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null);
   // 통번역사 상세 미리보기 대상(§2) — 검색결과 클릭 시 즉시 선택하지 않고 이 값에 담아 미리보기를 띄운다. null=미표시.
@@ -54,7 +56,11 @@ export default function InlinePerformerPicker(props: Props) {
   // 변경 전 원본 스냅샷(§변경취소) — 변경 시작 시 1회 캡처, 취소/저장 전까지 유지. null이면 진행 중 변경 없음.
   const [orig, setOrig] = useState<Partial<Row> | null>(null);
   const cat = r.performerCategory;
-  const open = searchIdx === i && searchResults.length > 0;
+  // 결과가 없을 때도 검색 중·결과 없음·조회 오류를 드롭다운에 구분 표시(검색어 없음=idle 은 닫힘)
+  const open = searchIdx === i && (searchResults.length > 0 || searchState !== 'idle');
+  const emptyMsg = searchState === 'loading' ? '검색 중…'
+    : searchState === 'error' ? '조회 오류 — 잠시 후 다시 입력해 주세요'
+    : '검색 결과 없음';
 
   // 변경 시작 — 원본을 아직 안 잡았을 때만 캡처(연속 재선택 시 최초 원본 보존) 후 검색모드 진입.
   const startChange = () => { setOrig(prev => prev ?? snapshotPerformer(r)); onClear(i); };
@@ -107,13 +113,17 @@ export default function InlinePerformerPicker(props: Props) {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <input ref={inputRef} style={inp} placeholder={placeholder}
+        <input ref={inputRef} style={inp} placeholder={placeholder} defaultValue={initialQuery || undefined}
           onChange={e => onSearch(e.target.value)} onFocus={e => onSearch(e.target.value)}
           data-testid={`perf-inline-search-${i}`} aria-label={placeholder} />
         {orig && cancelBtn}
       </div>
       {open && rect && createPortal(
         <div style={{ position: 'fixed', left: rect.left, top: rect.top, width: rect.width, zIndex: 9600, background: C.bgCard, border: `1px solid ${C.g200}`, borderRadius: 8, boxShadow: '0 4px 14px rgba(0,0,0,0.12)', maxHeight: 300, overflowY: 'auto' }}>
+          {searchResults.length === 0 && (
+            <div role="status" data-testid={`perf-search-empty-${i}`} aria-label={emptyMsg}
+              style={{ padding: '8px 10px', fontSize: 12, color: searchState === 'error' ? C.danger : C.textMuted }}>{emptyMsg}</div>
+          )}
           {searchResults.map((x: any) => (
             <button key={x.id} type="button" onMouseDown={e => { e.preventDefault(); onRowClick(x); }}
               data-testid={`perf-search-result-${i}-${x.id}`}

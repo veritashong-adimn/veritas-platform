@@ -70,6 +70,11 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const [busy, setBusy] = useState(false);
   const [searchIdx, setSearchIdx] = useState<number | null>(null);
   const [searchResults, setSearchResults] = useState<any[]>([]);
+  // 검색 상태 — 결과 없음(done·0건)과 조회 오류(error)를 구분해 표시. idle=검색어 없음.
+  const [searchState, setSearchState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const searchSeq = React.useRef(0);   // 최신 검색 요청 번호 — 늦게 도착한 이전 응답이 결과를 덮어쓰지 않도록
+  const searchTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [prefillQ, setPrefillQ] = useState('');   // 조회모드 필터어 → Master 검색 이어받기(새 행 검색칸 초기값)
   const [summaryKey, setSummaryKey] = useState(0);
   // 소형 팝업(§금액상세 / §조정항목) — 행 인덱스 기준
   const [amountPopup, setAmountPopup] = useState<number | null>(null);
@@ -317,19 +322,41 @@ export default function PerformanceSection({ projectId, token, performances, onC
   const rowKey = (r: Row, i: number) => String(r.id ?? `new-${i}`);
 
   // ── 수행자·업체 검색/선택 ──
-  const runSearch = async (i: number, url: string) => {
-    setSearchIdx(i);
-    try {
-      const res = await fetch(api(url), { headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json().catch(() => []);
-      const arr = Array.isArray(data) ? data : (data.rows ?? []);
-      setSearchResults(arr.slice(0, 8));
-    } catch { setSearchResults([]); }
+  //   한글 입력 중(ㅇ→오→옷→오수…)에는 글자마다 요청이 나가므로 짧게 모아 보내고, 마지막 요청의 응답만 반영한다.
+  const clearSearch = (i: number | null) => {
+    searchSeq.current++;
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    setSearchIdx(i); setSearchResults([]); setSearchState('idle'); setPrefillQ('');
   };
-  const onSearchTranslator = (i: number, s: string) => { if (!s.trim()) { setSearchIdx(i); setSearchResults([]); return; } runSearch(i, `/api/admin/translators?search=${encodeURIComponent(s)}`); };
+  const runSearch = (i: number, url: string) => {
+    setSearchIdx(i);
+    const seq = ++searchSeq.current;
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    setSearchState('loading');
+    searchTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(api(url), { headers: { Authorization: `Bearer ${token}` } });
+        const data = await res.json().catch(() => null);
+        if (seq !== searchSeq.current) return;
+        if (!res.ok || data == null) { setSearchResults([]); setSearchState('error'); return; }
+        const arr = Array.isArray(data) ? data : (data.rows ?? []);
+        setSearchResults(arr.slice(0, 8)); setSearchState('done');
+      } catch { if (seq === searchSeq.current) { setSearchResults([]); setSearchState('error'); } }
+    }, 200);
+  };
+  const onSearchTranslator = (i: number, s: string) => { if (!s.trim()) { clearSearch(i); return; } runSearch(i, `/api/admin/translators?search=${encodeURIComponent(s.trim())}`); };
   // 외주 역할(is_vendor=true) 회사 검색 — 고객+외주 겸업 회사도 포함(§3·§7). page 지정으로 서버 필터/검색 분기 사용.
-  const onSearchVendor = (i: number, s: string) => { if (!s.trim()) { setSearchIdx(i); setSearchResults([]); return; } runSearch(i, `/api/admin/companies?role=vendor&page=1&pageSize=20&search=${encodeURIComponent(s)}`); };
-  const onClearPerformer = (i: number) => { patchRow(i, { performerNameSnapshot: null }); setSearchIdx(i); setSearchResults([]); };
+  const onSearchVendor = (i: number, s: string) => { if (!s.trim()) { clearSearch(i); return; } runSearch(i, `/api/admin/companies?role=vendor&page=1&pageSize=20&search=${encodeURIComponent(s.trim())}`); };
+  // 조회모드 필터는 '배정된 행' 안에서만 찾는다. 0건이면 같은 검색어로 수정모드 새 통번역사 행에서 Master 검색을 시작한다.
+  const searchMasterFromFilter = () => {
+    const kw = q.trim();
+    const base = list.map(toRow);
+    setRows([...base, { performerCategory: 'individual', lineCategory: '통번역사', status: 'unassigned', paymentStatus: 'unpaid', quantity: 1, expenses: [], deductions: [] }]);
+    setDeletedIds([]); setPinnedEtcCols([]); setEditMode(true); setQ('');
+    runSearch(base.length, `/api/admin/translators?search=${encodeURIComponent(kw)}`);
+    setPrefillQ(kw);
+  };
+  const onClearPerformer = (i: number) => { patchRow(i, { performerNameSnapshot: null }); clearSearch(i); };
 
   // 통번역사 최근 수행이력 조회(§2·§3) — 상세 미리보기에서 지연 호출. 실패해도 빈 배열(미리보기 유지).
   const fetchRecentPerformances = React.useCallback(async (translatorId: number) => {
@@ -350,7 +377,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
       performerCategory: 'individual', individualUserId: t.id, vendorCompanyId: null,
       performerNameSnapshot: t.name || t.email, lineCategory: r.lineCategory || '통번역사', vendorTypeSnapshot: null,
     });
-    setSearchResults([]); setSearchIdx(null);   // 검색 드롭다운만 닫는다(수정화면 유지)
+    clearSearch(null);   // 검색 드롭다운만 닫는다(수정화면 유지)
     try {
       const res = await fetch(api(`/api/admin/performances/resolve-individual?translatorId=${t.id}`), { headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json().catch(() => ({}));
@@ -404,7 +431,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
       identifierSnapshotMasked: c.businessNumber ?? null, lineCategory: r.lineCategory || '외주업체',
       residencyType: null, withholdingTreatment: 'tax_review_required',   // 외주업체 기본값: 세금계산서(기록용)
     });
-    setSearchResults([]); setSearchIdx(null);
+    clearSearch(null);
   };
   // 통합 구분 변경(§4·§6) — 선택값 → 상위유형(category)+세부라벨(lineCategory) 분해 저장.
   //   상위유형이 바뀌면 수행자·업체 선택 초기화 확인(§7·§13). 같은 상위유형 내 세부만 바뀌면 유지.
@@ -419,7 +446,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
       ? { performerCategory: opt.category, lineCategory: opt.lineCategory, individualUserId: null, vendorCompanyId: null,
           performerNameSnapshot: null, identifierSnapshotMasked: null, vendorTypeSnapshot: null, residencyType: null, withholdingTreatment: null }
       : { performerCategory: opt.category, lineCategory: opt.lineCategory });
-    setSearchIdx(i); setSearchResults([]);
+    clearSearch(i);
   };
 
   const importFromSale = async () => {
@@ -710,10 +737,10 @@ export default function PerformanceSection({ projectId, token, performances, onC
         {/* '구분' 셀 제거(§2·§3) — 수행자·업체 선택 시 대상 자체로 내부 유형 판별. 사용자 별도 선택 단계 없음. */}
         <td style={{ ...tdBase, width: LW.performer }}>
           {editable
-            ? <InlinePerformerPicker r={r} i={i} searchIdx={searchIdx} searchResults={searchResults}
+            ? <InlinePerformerPicker r={r} i={i} searchIdx={searchIdx} searchResults={searchResults} searchState={searchState} initialQuery={searchIdx === i ? prefillQ : ''}
                 onSearchTranslator={onSearchTranslator} onSearchVendor={onSearchVendor}
                 onPickTranslator={pickTranslator} onPickVendor={pickVendor} onClear={onClearPerformer}
-                onCancelChange={() => { setSearchIdx(null); setSearchResults([]); }} patch={(p) => patchRow(i, p)}
+                onCancelChange={() => clearSearch(null)} patch={(p) => patchRow(i, p)}
                 fetchRecentPerformances={fetchRecentPerformances} />
             : <span>{r.performerNameSnapshot || muted}</span>}
         </td>
@@ -930,7 +957,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
   // ── 필터바 (조회모드) ──
   const filterBar = (
     <div style={{ display: 'flex', gap: SP[3], flexWrap: 'wrap', alignItems: 'center', marginBottom: SP[4] }}>
-      <input style={{ ...filterInp, width: 200 }} placeholder="수행자·업체·상품 검색" value={q} onChange={e => setQ(e.target.value)} data-testid="perf-filter-q" aria-label="수행정보 검색" />
+      <input style={{ ...filterInp, width: 200 }} placeholder="배정된 수행자·업체·상품 검색" title="이미 배정된 행 안에서 찾습니다. 통번역사 Master 검색·배정은 「수행정보 수정」에서 합니다." value={q} onChange={e => setQ(e.target.value)} data-testid="perf-filter-q" aria-label="수행정보 검색" />
       <ClickSelect value={catFilter} onChange={setCatFilter} triggerStyle={{ ...filterInp, minWidth: 110 }} options={[{ value: '', label: '전체 구분' }, ...CATEGORY_OPTS]} />
       <ClickSelect value={payFilter} onChange={setPayFilter} triggerStyle={{ ...filterInp, minWidth: 120 }} options={[{ value: '', label: '전체 지급상태' }, ...PAYMENT_STATUS_OPTS]} />
       <label style={{ display: 'flex', alignItems: 'center', gap: 4, ...TYPO.helper, cursor: 'pointer' }}>
@@ -941,6 +968,13 @@ export default function PerformanceSection({ projectId, token, performances, onC
           style={{ ...TYPO.helper, background: 'none', border: 'none', color: C.primaryText, cursor: 'pointer' }}>필터 초기화</button>
       )}
       <span style={{ ...TYPO.helper, marginLeft: 'auto' }}>{viewRows.length} / {list.length}건</span>
+      {q.trim() && viewRows.length === 0 && (
+        <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', gap: 8, ...TYPO.helper }} role="status">
+          배정된 수행자 중 '{q.trim()}' 없음 —
+          <button type="button" onClick={searchMasterFromFilter} data-testid="perf-filter-search-master" aria-label="통번역사 Master에서 검색해 배정"
+            style={{ ...TYPO.helper, background: 'none', border: 'none', color: C.primaryText, cursor: 'pointer', fontWeight: 600, padding: 0 }}>통번역사 Master에서 '{q.trim()}' 찾아 배정 →</button>
+        </div>
+      )}
     </div>
   );
 
