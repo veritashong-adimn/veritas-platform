@@ -18,6 +18,7 @@ import { requireAuth, requireRole, requirePermission } from "../middlewares/auth
 import { toEncryptedAccount, readAccountPlain, maskBankAccount } from "../lib/encrypt";
 import { freezeContactQuotes } from "../services/quoteRecipientSnapshot";
 import { logEvent } from "../lib/logEvent";
+import { deleterNameSql } from "../lib/deleterName";
 import { normalizeBusinessNumber, isValidBusinessNumber } from "../lib/hometaxExcel";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
 import { buildAliasValues, ensureDefaultAlias } from "../lib/companyAlias";
@@ -1146,7 +1147,8 @@ router.get("/admin/companies-trash", ...adminGuard, async (req, res) => {
         customerType: companiesTable.customerType,
         deletedAt: companiesTable.deletedAt,
         deletionReason: companiesTable.deletionReason,
-        deletedByName: sql<string | null>`(SELECT name FROM users WHERE id = ${companiesTable.deletedBy})`,
+        deletedBy: companiesTable.deletedBy,
+        deletedByName: deleterNameSql("companies"),
       })
       .from(companiesTable)
       .where(and(...conds))
@@ -2169,7 +2171,8 @@ router.get("/admin/contacts-trash", ...adminGuard, async (req, res) => {
         position: contactsTable.position,
         deletedAt: contactsTable.deletedAt,
         deletionReason: contactsTable.deletionReason,
-        deletedByName: sql<string | null>`(SELECT name FROM users WHERE id = ${contactsTable.deletedBy})`,
+        deletedBy: contactsTable.deletedBy,
+        deletedByName: deleterNameSql("contacts"),
       })
       .from(contactsTable)
       .leftJoin(companiesTable, eq(contactsTable.companyId, companiesTable.id))

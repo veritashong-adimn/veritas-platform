@@ -3,6 +3,7 @@ import { db, quotesTable, projectsTable, inquiriesTable, logsTable } from "@work
 import { eq, and, isNull, isNotNull, desc, sql } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { logEvent } from "../lib/logEvent";
+import { deleterNameSql } from "../lib/deleterName";
 import { evaluateQuoteDependencies, buildGuardMessage } from "../services/saleDependency";
 import { checkQuoteDeletable, deleteQuoteAndRevert, QuoteDeleteError } from "../services/quoteDeletion";
 
@@ -87,7 +88,8 @@ router.get("/admin/quotes-trash", ...adminGuard, async (_req, res) => {
         issueDate:      quotesTable.issueDate,
         deletedAt:      quotesTable.deletedAt,
         deletionReason: quotesTable.deletionReason,
-        deletedByName:  sql<string | null>`(SELECT name FROM users WHERE id = ${quotesTable.deletedBy})`,
+        deletedBy:      quotesTable.deletedBy,
+        deletedByName:  deleterNameSql("quotes"),
         companyName:    sql<string | null>`(SELECT name FROM companies WHERE id = ${projectsTable.companyId})`,
       })
       .from(quotesTable)

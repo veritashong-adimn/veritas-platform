@@ -28,7 +28,7 @@ interface TrashItem {
   title: string;                 // 이름/제목
   subtitle: string | null;       // 보조 식별정보(견적번호·거래처·이메일 등)
   deletedAt: string | null;      // 삭제일 (통번역사는 없음 → null)
-  deletedByName: string | null;  // 삭제자 (통번역사는 없음 → null)
+  deletedByName: string;         // 삭제자 표시값(deleterLabel) — 빈 값 없음
   deletionReason: string | null; // 삭제사유 (상품/통번역사는 없음 → null)
   raw: any;                       // 완전삭제 확인 모달 표시용 원본
 }
@@ -55,6 +55,17 @@ interface DomainMeta {
 
 const DASH = '—';
 const s = (v: any): string | null => (v === undefined || v === null || v === '' ? null : String(v));
+
+/** 삭제 기록 자체가 없을 때의 표시값 */
+const DELETER_NO_RECORD = '기록 없음';
+/**
+ * 삭제자 표시 공통 정책 — 다른 사용자를 대입하지 않는다.
+ *  · 이름(없으면 이메일) 있음 → 그대로(비활성·삭제된 사용자 포함)
+ *  · deleted_by 는 있는데 사용자를 못 찾음 → '사용자 확인 불가'
+ *  · deleted_by 없음 → '기록 없음'
+ */
+const deleterLabel = (r: any): string =>
+  s(r.deletedByName) ?? s(r.deletedByEmail) ?? (r.deletedBy != null ? '사용자 확인 불가' : DELETER_NO_RECORD);
 
 /** 복원/완전삭제 공통 요청 — 사유(선택)를 JSON body로 전달. 서버가 logs.metadata에 기록한다. */
 const trashFetch = (path: string, method: string, authH: Record<string, string>, reason?: string): Promise<Response> =>
@@ -86,7 +97,7 @@ const DOMAINS: Record<TrashDomain, DomainMeta> = {
         domain: 'inquiry', id: r.id,
         title: s(r.subject) ?? no,
         subtitle: [s(r.subject) ? no : null, companies].filter(Boolean).join(' · ') || null,
-        deletedAt: s(r.deletedAt), deletedByName: s(r.deletedByName), deletionReason: s(r.deletionReason),
+        deletedAt: s(r.deletedAt), deletedByName: deleterLabel(r), deletionReason: s(r.deletionReason),
         raw: r,
       };
     },
@@ -112,7 +123,7 @@ const DOMAINS: Record<TrashDomain, DomainMeta> = {
         domain: 'quote', id: r.id,
         title: s(r.title) ?? '(제목 미입력)',
         subtitle: [doc, s(r.companyName)].filter(Boolean).join(' · '),
-        deletedAt: s(r.deletedAt), deletedByName: s(r.deletedByName), deletionReason: s(r.deletionReason),
+        deletedAt: s(r.deletedAt), deletedByName: deleterLabel(r), deletionReason: s(r.deletionReason),
         raw: r,
       };
     },
@@ -134,7 +145,7 @@ const DOMAINS: Record<TrashDomain, DomainMeta> = {
       domain: 'company', id: r.id,
       title: s(r.name) ?? DASH,
       subtitle: r.companyType === 'vendor' ? '외주업체' : '고객사',
-      deletedAt: s(r.deletedAt), deletedByName: s(r.deletedByName), deletionReason: s(r.deletionReason),
+      deletedAt: s(r.deletedAt), deletedByName: deleterLabel(r), deletionReason: s(r.deletionReason),
       raw: r,
     }),
     restore: (id, authH, reason) => trashFetch(`/api/admin/companies/${id}/restore`, 'POST', authH, reason),
@@ -158,7 +169,7 @@ const DOMAINS: Record<TrashDomain, DomainMeta> = {
       domain: 'contact', id: r.id,
       title: s(r.name) ?? DASH,
       subtitle: [s(r.companyName), [s(r.department), s(r.position)].filter(Boolean).join('/')].filter(Boolean).join(' · ') || null,
-      deletedAt: s(r.deletedAt), deletedByName: s(r.deletedByName), deletionReason: s(r.deletionReason),
+      deletedAt: s(r.deletedAt), deletedByName: deleterLabel(r), deletionReason: s(r.deletionReason),
       raw: r,
     }),
     restore: (id, authH, reason) => trashFetch(`/api/admin/contacts/${id}/restore`, 'POST', authH, reason),
@@ -182,7 +193,7 @@ const DOMAINS: Record<TrashDomain, DomainMeta> = {
       title: s(r.name) ?? DASH,
       subtitle: s(r.code),
       deletedAt: s(r.deletedAt),
-      deletedByName: s(r.deletedByName) ?? s(r.deletedByEmail),
+      deletedByName: deleterLabel(r),
       deletionReason: null,
       raw: r,
     }),
@@ -204,12 +215,12 @@ const DOMAINS: Record<TrashDomain, DomainMeta> = {
       const list = Array.isArray(data) ? data : (data?.rows ?? []);
       return list.filter((r: any) => r.isActive === false);
     },
-    // 삭제일/삭제자/삭제사유 컬럼이 없다 → 모두 '-'로 표시된다.
+    // 비활성 처리에는 삭제일/삭제자/삭제사유 기록이 없다 → 삭제일·사유는 '-', 삭제자는 '기록 없음'.
     normalize: (r) => ({
       domain: 'translator', id: r.id,
       title: s(r.name) ?? s(r.email) ?? DASH,
       subtitle: [s(r.email), s(r.languagePairs)].filter(Boolean).join(' · ') || null,
-      deletedAt: null, deletedByName: null, deletionReason: null,
+      deletedAt: null, deletedByName: DELETER_NO_RECORD, deletionReason: null,
       raw: r,
     }),
     // 통번역사 복원은 기존 activate 기능 사용(PATCH). 사유는 activate 감사로그의 metadata.restoreReason 에 기록.
@@ -236,7 +247,7 @@ const DOMAINS: Record<TrashDomain, DomainMeta> = {
         domain: 'user', id: r.id,
         title: s(r.name) ?? s(r.email) ?? DASH,
         subtitle: [s(r.email), roleLabel, [s(r.department), s(r.jobTitle)].filter(Boolean).join('/') || null, statusLabel].filter(Boolean).join(' · ') || null,
-        deletedAt: s(r.deletedAt), deletedByName: s(r.deletedByName), deletionReason: s(r.deletionReason),
+        deletedAt: s(r.deletedAt), deletedByName: deleterLabel(r), deletionReason: s(r.deletionReason),
         raw: r,
       };
     },
@@ -513,7 +524,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
                     {it.subtitle && <div style={{ color: '#9ca3af', fontSize: 11, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.subtitle}</div>}
                   </td>
                   <td style={td}>{it.deletedAt ? formatDisplayDate(it.deletedAt) : DASH}</td>
-                  <td style={td}>{it.deletedByName ?? DASH}</td>
+                  <td style={td}>{it.deletedByName}</td>
                   <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', color: '#6b7280' }} title={it.deletionReason ?? ''}>{it.deletionReason ?? DASH}</td>
                   <td style={{ ...td, color: '#6b7280' }}>{meta.areaLabel}</td>
                 </tr>
@@ -531,6 +542,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
         체크박스로 선택 후 상단의 [선택 복원]/[선택 완전삭제]로 처리하며, 각 영역의 기존 규칙·권한을 그대로 따릅니다.
         완전삭제는 관리자만 실행할 수 있고 연결 데이터가 있으면 서버가 차단합니다.
         통번역사 휴지통은 비활성(isActive=false) 세트이며 삭제일·삭제자·삭제사유가 없습니다.
+        삭제자가 '기록 없음'이면 삭제 시 기록되지 않은 건이고, '사용자 확인 불가'는 기록된 삭제자 계정을 찾을 수 없는 건입니다.
       </p>
 
       {/* 선택 복원 사유 입력 팝업 (사유 선택 입력) */}

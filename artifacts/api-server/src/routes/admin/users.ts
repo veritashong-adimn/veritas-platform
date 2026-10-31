@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, usersTable } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, and, isNull, isNotNull, desc, sql } from "drizzle-orm";
+import { deleterNameSql } from "../../lib/deleterName";
 import { requireAuth, requireRole, requirePermission } from "../../middlewares/auth";
 
 const router: IRouter = Router();
@@ -375,7 +376,8 @@ router.get("/admin/users-trash", ...adminGuard, async (req, res) => {
         isActive: usersTable.isActive,
         deletedAt: usersTable.deletedAt,
         deletionReason: usersTable.deletionReason,
-        deletedByName: sql<string | null>`(SELECT name FROM users WHERE id = ${usersTable.deletedBy})`,
+        deletedBy: usersTable.deletedBy,
+        deletedByName: deleterNameSql("users"),
       })
       .from(usersTable)
       .where(isNotNull(usersTable.deletedAt))

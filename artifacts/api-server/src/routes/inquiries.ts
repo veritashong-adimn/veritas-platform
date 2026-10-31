@@ -7,6 +7,7 @@ import { eq, and, isNull, isNotNull, desc, sql } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
 import { checkInquiryDeletable, deleteInquiry, restoreInquiry, purgeInquiry, InquiryDeleteError } from "../services/inquiryDeletion";
 import { logEvent } from "../lib/logEvent";
+import { deleterNameSql } from "../lib/deleterName";
 
 /**
  * 의뢰건 접수(inquiries) — pre-sales 단계 라우터.
@@ -431,7 +432,6 @@ router.delete("/admin/inquiries/:id", ...adminGuard, requirePermission("quote.up
 // 경로 충돌 회피: GET /admin/inquiries/:id 와 겹치지 않도록 '-trash' 사용.
 router.get("/admin/inquiries-trash", ...adminGuard, async (req, res) => {
   try {
-    // 하위쿼리 컬럼은 테이블명까지 직접 쓴다 — 단일 테이블 select 에서 ${col} 은 테이블명 없이 출력돼 users.deleted_by 로 잘못 해석된다.
     const rows = await db.select({
       id:             inquiriesTable.id,
       inquiryNumber:  inquiriesTable.inquiryNumber,
@@ -440,7 +440,8 @@ router.get("/admin/inquiries-trash", ...adminGuard, async (req, res) => {
       companyName:    sql<string | null>`(SELECT name FROM companies WHERE companies.id = inquiries.company_id)`,
       deletedAt:      inquiriesTable.deletedAt,
       deletionReason: inquiriesTable.deletionReason,
-      deletedByName:  sql<string | null>`(SELECT COALESCE(name, email) FROM users WHERE users.id = inquiries.deleted_by)`,
+      deletedBy:      inquiriesTable.deletedBy,
+      deletedByName:  deleterNameSql("inquiries"),
     }).from(inquiriesTable).where(isNotNull(inquiriesTable.deletedAt)).orderBy(desc(inquiriesTable.deletedAt));
     res.json(rows);
   } catch (err) {
