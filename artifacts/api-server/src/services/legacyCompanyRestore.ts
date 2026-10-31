@@ -27,12 +27,15 @@ export const COMPANY_RESTORE_MODULE = "legacy_company_restore";
 type Dbx = { execute: (q: any) => Promise<{ rows: unknown[]; rowCount?: number | null }> };
 const rows = async (dbx: Dbx, q: any) => (await dbx.execute(q)).rows as any[];
 
-export type AliasRelation = "notation" | "abbreviation" | "english" | "former_name" | "renamed" | "merger" | "misspelling";
+export type AliasRelation = "notation" | "abbreviation" | "english" | "former_name" | "renamed" | "merger" | "misspelling" | "business_unit";
 export const ALIAS_RELATION_LABEL: Record<AliasRelation, string> = {
   notation: "표기 차이", abbreviation: "약칭", english: "영문 명칭", former_name: "과거 상호", renamed: "상호 변경", merger: "합병 관계", misspelling: "오기",
+  business_unit: "사업부·지점(세금계산서 발행 사업자)",
 };
+// 대상 거래처는 DB id 가 아니라 사업자등록번호(+확인용 이름)로 지정한다 — 개발·운영 DB 의 id 가 서로 달라도 같은 법인을 찾도록.
+//   실행 시 대상 DB 에서 사업자번호로 살아 있는 거래처를 찾고, 정확히 1곳이며 이름도 확인되면 그 DB 의 id 를 쓴다(resolveConfirmedTarget).
 type ConfirmedDecision =
-  | { companyId: number; relation: AliasRelation; note?: string }
+  | { target: { brn: string; name: string }; relation: AliasRelation; note?: string }
   | { create: "individual" | "overseas"; note?: string }
   | { hold: true; note: string };   // 관리자 추가 확인 — 자동 규칙이 연결하더라도 보류
 /**
@@ -40,16 +43,25 @@ type ConfirmedDecision =
  * 합병·상호 변경은 확인된 관계만 여기에 둔다(법인 병합 아님: 과거 상호를 현재 거래처의 별칭으로 추적).
  */
 export const CONFIRMED_COMPANY_DECISIONS: Record<string, ConfirmedDecision> = {
-  [N("(주)루닛")]: { companyId: 2352, relation: "notation", note: "Master 표기 '(주)루닛 (Lunit Inc.)'" },
-  [N("(주)에이디티캡스")]: { companyId: 2755, relation: "merger", note: "과거 상호(에이디티캡스) — 합병 후 에스케이쉴더스(주). 법인 병합 아님" },
-  [N("SK쉴더스(주)")]: { companyId: 2755, relation: "english", note: "SK ↔ 에스케이" },
-  [N("주한 덴마크 대사관")]: { companyId: 2806, relation: "misspelling", note: "Master 표기 '주한덴마아크 대사관'" },
-  [N("수협중앙회")]: { companyId: 2721, relation: "abbreviation", note: "공식 명칭 수산업협동조합중앙회" },
-  [N("KT&G")]: { companyId: 2494, relation: "english", note: "공식 명칭 (주)케이티앤지" },
+  [N("(주)루닛")]: { target: { brn: "314-86-50626", name: "(주)루닛 (Lunit Inc.)" }, relation: "notation", note: "Master 표기 '(주)루닛 (Lunit Inc.)'" },
+  [N("(주)에이디티캡스")]: { target: { brn: "120-86-07747", name: "에스케이쉴더스(주)" }, relation: "merger", note: "과거 상호(에이디티캡스) — 합병 후 에스케이쉴더스(주). 법인 병합 아님" },
+  [N("SK쉴더스(주)")]: { target: { brn: "120-86-07747", name: "에스케이쉴더스(주)" }, relation: "english", note: "SK ↔ 에스케이" },
+  [N("주한 덴마크 대사관")]: { target: { brn: "106-83-04869", name: "주한덴마아크 대사관" }, relation: "misspelling", note: "Master 표기 '주한덴마아크 대사관'" },
+  [N("수협중앙회")]: { target: { brn: "219-82-01220", name: "수산업협동조합중앙회" }, relation: "abbreviation", note: "공식 명칭 수산업협동조합중앙회" },
+  [N("KT&G")]: { target: { brn: "306-81-30866", name: "(주)케이티앤지" }, relation: "english", note: "공식 명칭 (주)케이티앤지" },
   [N("이향숙")]: { create: "individual" },
   [N("한영애")]: { create: "individual" },
   [N("김학성")]: { create: "individual" },
   [N("Clyde & CoClasisSingapore Pte. Ltd.")]: { create: "overseas", note: "견적서(2019-07-26) 담당자 Loke Jolie · +6562406162 · jolie.loke@clydeco.com · 170,000원" },
+  // 2026-10-29 관리자 확인 — 롯데백화점(잠실점·본점·온라인 등) 거래의 세금계산서 발행 사업자는 롯데쇼핑.
+  //   진행관리표 비고에도 '롯데쇼핑으로 계산서 발행'. 롯데백화점 표기는 별칭(사업부·지점 관계)으로 보존, 원본·지점 정보 불변.
+  [N("롯데백화점")]: { target: { brn: "104-81-26067", name: "롯데쇼핑(주)" }, relation: "business_unit", note: "롯데백화점 → 발행 사업자 롯데쇼핑(관리자 확인)" },
+  // 다른 롯데 계열은 '롯데'라는 이름만으로 통합하지 않는다. 기존 법인과 같은지 확인 전까지 신규 등록도 하지 않고 보류(중복 거래처 방지).
+  [N("롯데제과")]: { hold: true, note: "2023년 롯데웰푸드(주)로 상호 변경된 같은 법인일 가능성 — 롯데웰푸드(주) 연결 여부 확인" },
+  [N("롯데호텔")]: { hold: true, note: "법인명 (주)호텔롯데의 사업장일 가능성 — 호텔롯데 연결 여부 확인" },
+  [N("롯데월드")]: { hold: true, note: "(주)호텔롯데 롯데월드 사업부일 가능성 — 호텔롯데 연결 여부 확인" },
+  [N("롯데MCC")]: { hold: true, note: "롯데엠시시(주)와 같은 법인일 가능성 — 연결 여부 확인" },
+  [N("롯데인재개발원")]: { hold: true, note: "롯데 계열 교육기관 — 세금계산서 발행 사업자 확인 필요" },
   // 2026-10-29 실행 승인 시 보류 지시 — EMP BELSTAR 가 다른 거래처(이엠피벨스타 #1760)일 수 있음
   [N("(주)한국초저온(EMP BELSTAR)")]: { hold: true, note: "영문 병기 'EMP BELSTAR' 가 이엠피벨스타(주) #1760 일 수 있음 — 관리자 추가 확인" },
 };
@@ -59,7 +71,7 @@ export const COMPANY_REVIEW_LABEL: Record<CompanyReviewReason, string> = {
   admin_hold: "관리자 추가 확인 보류",
   part_brand: "부분 일치 — 브랜드·행사·지점명 포함(동일 법인 확인 필요)", similar: "유사 거래처 후보(동일성 미확인)",
   multi_candidate: "일치 거래처 Master 2곳 이상", deleted_master: "삭제된 거래처와만 일치", new_overlap: "신규 등록 대상끼리 이름 포함 관계(중복 등록 위험)",
-  generic: "여러 고객을 묶은 이름(개인고객 등)", no_name: "거래처명 없음", confirmed_missing: "관리자 확인 대상 거래처가 없음(삭제 등)",
+  generic: "여러 고객을 묶은 이름(개인고객 등)", no_name: "거래처명 없음", confirmed_missing: "관리자 확인 대상 거래처를 이 DB 에서 확정할 수 없음(사업자번호·이름 불일치·없음·복수)",
 };
 export type LinkBasis = "confirmed" | "annotation" | "master_annotation" | "transliteration";
 export const LINK_BASIS_LABEL: Record<LinkBasis, string> = {
@@ -119,9 +131,29 @@ function abbreviationOf(short: string, long: string): boolean {
   return j === short.length;
 }
 
+const brnKey = (v: unknown) => String(v ?? "").replace(/\D/g, "");
+/**
+ * 관리자 확인 대상 거래처를 현재 DB 에서 찾는다 — ① 사업자번호 정확 일치 ② (번호로 못 찾으면) 정규화 이름·별칭 정확 일치.
+ * 정확히 1곳이고, 번호로 찾았다면 이름(정규화·별칭)도 확인 이름과 맞을 때만 그 id. 아니면 이유와 함께 null(자동 연결 안 함).
+ */
+export function resolveConfirmedTarget(target: { brn: string; name: string }, live: Array<{ id: number; name: string; brn: string }>, idx: Map<string, Set<number>>):
+  { id: number | null; why: string } {
+  const byBrn = live.filter(c => c.brn && c.brn === brnKey(target.brn));
+  const nameIds = idx.get(N(target.name)) ?? new Set<number>();
+  if (byBrn.length > 1) return { id: null, why: `사업자번호 ${target.brn} 거래처 ${byBrn.length}곳` };
+  if (byBrn.length === 1) {
+    const c = byBrn[0];
+    return nameIds.has(c.id) || N(c.name) === N(target.name) ? { id: c.id, why: "사업자번호·이름 일치" }
+      : { id: null, why: `사업자번호 ${target.brn} 거래처 이름이 다름('${c.name}')` };
+  }
+  if (nameIds.size === 1) return { id: [...nameIds][0], why: "사업자번호 미등록 — 이름 정확 일치" };
+  return { id: null, why: nameIds.size > 1 ? `'${target.name}' 일치 거래처 ${nameIds.size}곳` : `'${target.name}'(${target.brn}) 거래처 없음` };
+}
+
 /** 거래처 미확정 판매 그룹 계획(읽기 전용) */
 export async function planCompanyLinks(dbx: Dbx): Promise<CompanyGroup[]> {
-  const live = await rows(dbx, sql`SELECT id, name FROM companies WHERE deleted_at IS NULL`);
+  const live = await rows(dbx, sql`SELECT id, name, business_number FROM companies WHERE deleted_at IS NULL`);
+  const liveBrn = live.map(c => ({ id: Number(c.id), name: String(c.name), brn: brnKey(c.business_number) }));
   const nameOf = new Map(live.map(c => [Number(c.id), String(c.name)]));
   const idx = new Map<string, Set<number>>();
   const add = (m: Map<string, Set<number>>, k: string, id: number) => { if (k) (m.get(k) ?? m.set(k, new Set()).get(k)!).add(id); };
@@ -179,9 +211,10 @@ export async function planCompanyLinks(dbx: Dbx): Promise<CompanyGroup[]> {
     out.push(g);
     // A-1 관리자 확인 결정
     const conf = CONFIRMED_COMPANY_DECISIONS[g.key];
-    if (conf && "companyId" in conf) {
-      if (nameOf.has(conf.companyId)) link(g, conf.companyId, "confirmed", conf.relation, conf.note);
-      else review(g, "confirmed_missing", [], `확인된 대상 #${conf.companyId} 없음`);
+    if (conf && "target" in conf) {
+      const t = resolveConfirmedTarget(conf.target, liveBrn, idx);
+      if (t.id != null) link(g, t.id, "confirmed", conf.relation, `${conf.note ?? ""} · ${t.why}`.replace(/^ · /, ""));
+      else review(g, "confirmed_missing", [], t.why);
       continue;
     }
     if (conf && "hold" in conf) { review(g, "admin_hold", [], conf.note); continue; }
@@ -273,11 +306,13 @@ export function summarizeCompanyLinks(groups: CompanyGroup[]) {
  *  · 신규 거래처: companies 1곳(이름만, customer) + 원문 표기 별칭. 출처는 notes 와 import_row_sources 에 남긴다.
  *  · 판매 원본·진행관리표·담당자는 건드리지 않는다(담당자 연결은 applyNameLinks 로 이어서 한다).
  */
-export async function applyCompanyLinks(tx: Dbx, opts: { userId: number | null }) {
+// onlyKeys: 시범 실행 — 지정한 거래처명 그룹(정규화 키)만 처리한다. 확인 필요 목록·is_current 는 건드리지 않는다.
+export async function applyCompanyLinks(tx: Dbx, opts: { userId: number | null; onlyKeys?: string[] }) {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${COMPANY_RESTORE_MODULE}))`);
-  const groups = await planCompanyLinks(tx);
+  const scope = opts.onlyKeys ? new Set(opts.onlyKeys) : null;
+  const groups = (await planCompanyLinks(tx)).filter(g => !scope || (scope.has(g.key) && g.decision !== "review"));
   const [batch] = await rows(tx, sql`INSERT INTO import_batches (module, import_type, original_filename, total_rows, success_rows, status, created_by, source_system, is_current)
-    VALUES (${COMPANY_RESTORE_MODULE}, 'company_link', '전체(거래처명 기준)', 0, 0, 'running', ${opts.userId}, 'old_crm', false) RETURNING id`);
+    VALUES (${COMPANY_RESTORE_MODULE}, ${scope ? "company_link_pilot" : "company_link"}, ${scope ? `시범(거래처 ${scope.size}그룹)` : "전체(거래처명 기준)"}, 0, 0, 'running', ${opts.userId}, 'old_crm', false) RETURNING id`);
   const batchId = Number(batch.id);
   const lineage: any[] = [];
   let aliasesAdded = 0, companiesCreated = 0, salesLinked = 0;
@@ -312,7 +347,7 @@ export async function applyCompanyLinks(tx: Dbx, opts: { userId: number | null }
     await tx.execute(sql`INSERT INTO import_row_sources (batch_id, module, entity_id, row_key, status, source_system, legacy_id, source_raw) VALUES
       ${sql.join(chunk.map(x => sql`(${batchId}, ${COMPANY_RESTORE_MODULE}, ${x.entityId}, ${x.rowKey}, ${x.status}, 'old_crm', NULL, ${JSON.stringify(x.sourceRaw)}::jsonb)`), sql`, `)}`);
   }
-  await tx.execute(sql`UPDATE import_batches SET is_current = (id = ${batchId}) WHERE module = ${COMPANY_RESTORE_MODULE}`);
+  if (!scope) await tx.execute(sql`UPDATE import_batches SET is_current = (id = ${batchId}) WHERE module = ${COMPANY_RESTORE_MODULE}`);
   const summary = { ...summarizeCompanyLinks(groups), aliasesAdded, companiesCreated, salesLinked };
   await tx.execute(sql`UPDATE import_batches SET total_rows = ${groups.length}, success_rows = ${salesLinked}, status = 'completed', headers_json = ${JSON.stringify(summary)}::jsonb WHERE id = ${batchId}`);
   return { batchId, ...summary };
@@ -333,7 +368,9 @@ export async function rollbackCompanyLinks(tx: Dbx, batchId: number) {
       "company_sensitive", "company_vendor_profiles", "company_change_history", "company_name_history"];
     const [u] = await rows(tx, sql`SELECT (${sql.join(refTables.map(t => sql`EXISTS (SELECT 1 FROM ${sql.identifier(t)} WHERE company_id = ${id})`), sql` OR `)}) used`);
     if (u?.used) { kept.push(id); continue; }
-    companiesRemoved += (await tx.execute(sql`DELETE FROM companies WHERE id = ${id}`)).rowCount ?? 0;   // 별칭은 ON DELETE CASCADE
+    // 별칭을 먼저 명시적으로 지운다(FK CASCADE 에만 기대지 않음 — 이 거래처는 이 배치가 만든 것이라 별칭도 모두 이 배치 소산)
+    await tx.execute(sql`DELETE FROM company_aliases WHERE company_id = ${id}`);
+    companiesRemoved += (await tx.execute(sql`DELETE FROM companies WHERE id = ${id}`)).rowCount ?? 0;
   }
   await tx.execute(sql`UPDATE import_batches SET status = 'rolled_back', is_current = false WHERE id = ${batchId} AND module = ${COMPANY_RESTORE_MODULE}`);
   return { batchId, aliasesRemoved, companiesRemoved, companiesKept: kept };

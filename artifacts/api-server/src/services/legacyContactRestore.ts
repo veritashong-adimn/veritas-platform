@@ -107,6 +107,56 @@ export async function planLateLinks(dbx: Dbx, opts: { progressIds?: number[] } =
   return { links, collisions };
 }
 
+/**
+ * 연결 보정 대상 검증 — planLateLinks 결과 중 안전한 것만 남긴다(읽기 전용).
+ *  · 판매·진행행이 모두 유효, 진행행이 어떤 판매에도(결정 무관) 연결돼 있지 않음, 같은 진행행 중복 없음
+ *  · 기존 확정 진행행이 있는 판매라면 보정 진행행의 고객명이 기존 고객명과 같아야 함(다른 사람이 섞이면 제외)
+ */
+export async function verifyLateLinks(dbx: Dbx) {
+  const { links, collisions } = await planLateLinks(dbx);
+  const ok: LateLink[] = []; const rejected: Array<LateLink & { reason: string }> = [];
+  const seen = new Set<number>();
+  const ids = (xs: number[]) => sql.join(xs.map(x => sql`${x}`), sql`, `);
+  const progIds = links.map(l => l.progressRowId), saleIds = [...new Set(links.map(l => l.saleRowId))];
+  const anyLinked = new Set(progIds.length ? (await rows(dbx, sql`SELECT progress_row_id FROM legacy_sales_progress_links WHERE progress_row_id IN (${ids(progIds)})`)).map(r => Number(r.progress_row_id)) : []);
+  const eff = new Set(progIds.length ? (await rows(dbx, sql`SELECT id FROM legacy_archive_rows WHERE is_effective AND ((source_type = 'progress' AND id IN (${ids(progIds)})) OR (source_type = 'sales_list' AND id IN (${ids(saleIds)})))`)).map(r => Number(r.id)) : []);
+  const custOf = new Map((progIds.length ? await rows(dbx, sql`SELECT id, source_raw->>'고객명' cust FROM legacy_archive_rows WHERE id IN (${ids(progIds)})`) : []).map(r => [Number(r.id), r.cust]));
+  const existing = new Map<number, Set<string>>();
+  for (const r of saleIds.length ? await rows(dbx, sql`SELECT l.sale_row_id, p.source_raw->>'고객명' cust FROM legacy_sales_progress_links l JOIN legacy_archive_rows p ON p.id = l.progress_row_id AND p.is_effective
+      WHERE l.decision = 'confirmed' AND l.sale_row_id IN (${ids(saleIds)})`) : []) {
+    if (invalidCustomerName(r.cust)) continue;
+    (existing.get(Number(r.sale_row_id)) ?? existing.set(Number(r.sale_row_id), new Set()).get(Number(r.sale_row_id))!).add(personKey(r.cust));
+  }
+  let addsName = 0, newMulti = 0;
+  for (const l of links) {
+    const reason = !eff.has(l.saleRowId) || !eff.has(l.progressRowId) ? "판매 또는 진행행 무효"
+      : anyLinked.has(l.progressRowId) ? "진행행이 이미 다른 연결에 사용됨"
+      : seen.has(l.progressRowId) ? "같은 진행행 중복" : null;
+    if (reason) { rejected.push({ ...l, reason }); continue; }
+    const c = custOf.get(l.progressRowId); const have = existing.get(l.saleRowId);
+    if (!invalidCustomerName(c) && have?.size && !have.has(personKey(c))) { rejected.push({ ...l, reason: `기존 고객명(${[...have].join(",")})과 다른 고객명(${String(c).trim()})` }); newMulti++; continue; }
+    if (!invalidCustomerName(c) && !have?.size) addsName++;
+    seen.add(l.progressRowId); ok.push(l);
+  }
+  return { ok, rejected, collisions: collisions.size, impact: { salesGainingCustomerName: addsName, wouldCreateMultiName: newMulti } };
+}
+
+/** 검증된 보정 연결만 반영(같은 트랜잭션). 실행 근거는 import_row_sources(status=late_link) — rollbackRestore 로 되돌릴 수 있다. */
+export async function applyLateLinks(tx: Dbx, opts: { userId: number | null; links: LateLink[] }) {
+  const [batch] = await rows(tx, sql`INSERT INTO import_batches (module, import_type, original_filename, total_rows, success_rows, status, created_by, source_system, is_current)
+    VALUES (${RESTORE_MODULE}, 'late_link', '진행관리표 보정 연결', ${opts.links.length}, 0, 'running', ${opts.userId}, 'old_crm', false) RETURNING id`);
+  const batchId = Number(batch.id); let n = 0; const lineage: any[] = [];
+  for (const l of opts.links) {
+    const [ins] = await rows(tx, sql`INSERT INTO legacy_sales_progress_links (sale_row_id, progress_row_id, sale_no, match_key, match_method, decision)
+      VALUES (${l.saleRowId}, ${l.progressRowId}, ${l.saleNo}, ${l.key}, ${LATE_LINK_METHOD}, 'confirmed') ON CONFLICT (sale_row_id, progress_row_id) DO NOTHING RETURNING id`);
+    if (ins) { n++; lineage.push(sql`(${batchId}, ${RESTORE_MODULE}, ${Number(ins.id)}, ${`link:${ins.id}`}, 'late_link', 'old_crm', ${l.saleNo}, ${JSON.stringify({ saleRowId: l.saleRowId, progressRowId: l.progressRowId, key: l.key, keyMethod: l.method })}::jsonb)`); }
+  }
+  for (let i = 0; i < lineage.length; i += 500)
+    await tx.execute(sql`INSERT INTO import_row_sources (batch_id, module, entity_id, row_key, status, source_system, legacy_id, source_raw) VALUES ${sql.join(lineage.slice(i, i + 500), sql`, `)}`);
+  await tx.execute(sql`UPDATE import_batches SET success_rows = ${n}, status = 'completed' WHERE id = ${batchId}`);
+  return { batchId, lateLinks: n };
+}
+
 export type ContactClass = "A" | "B" | "C";
 export interface SaleContactResult {
   saleRowId: number; saleNo: string | null; company: string | null; product: string | null; total: number | null; saleDate: string | null;
@@ -397,11 +447,18 @@ export function summarizeNameLinks(p: NameLinkPlan) {
  *  · 기존 연결·담당자·거래처·원본은 수정하지 않는다. 새로 쓰는 것은 contacts(신규 담당자)와 legacy_master_mappings(sale_contact)뿐.
  *  · 예외는 import_row_sources(review/unverified)로 남겨 판매관리 '확인 필요' 표시와 검토 목록에 쓰인다.
  */
-export async function applyNameLinks(tx: Dbx, opts: { userId: number | null }) {
+// onlySaleRowIds: 시범 실행 — 지정한 판매건만 연결(신규 담당자도 그 판매건 몫만). 예외 목록·is_current 는 건드리지 않는다.
+export async function applyNameLinks(tx: Dbx, opts: { userId: number | null; onlySaleRowIds?: number[] }) {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${RESTORE_MODULE + ":name_link"}))`);
+  const scope = opts.onlySaleRowIds ? new Set(opts.onlySaleRowIds) : null;
   const plan = await planNameLinks(tx);
+  if (scope) {
+    plan.existing = plan.existing.filter(e => scope.has(e.saleRowId));
+    plan.creates = plan.creates.map(g => ({ ...g, sales: g.sales.filter(x => scope.has(x.saleRowId)) })).filter(g => g.sales.length);
+    plan.exceptions = plan.exceptions.filter(e => scope.has(e.saleRowId));
+  }
   const [batch] = await rows(tx, sql`INSERT INTO import_batches (module, import_type, original_filename, total_rows, success_rows, status, created_by, source_system, is_current)
-    VALUES (${RESTORE_MODULE}, 'contact_name_link', '전체(이름 기준)', 0, 0, 'running', ${opts.userId}, 'old_crm', false) RETURNING id`);
+    VALUES (${RESTORE_MODULE}, ${scope ? "contact_name_link_pilot" : "contact_name_link"}, ${scope ? `시범(판매 ${scope.size}건)` : "전체(이름 기준)"}, 0, 0, 'running', ${opts.userId}, 'old_crm', false) RETURNING id`);
   const batchId = Number(batch.id);
   const lineage: any[] = [];
   const link = async (saleNo: string, contactId: number, method: string) => (await rows(tx, sql`INSERT INTO legacy_master_mappings (source_system, entity_type, legacy_id, entity_id, import_batch_id, match_method, status, created_by)
@@ -424,15 +481,15 @@ export async function applyNameLinks(tx: Dbx, opts: { userId: number | null }) {
         sourceRaw: { saleRowId: s.saleRowId, contactId: Number(c.id), companyId: g.companyId, created: true } }); }
     }
   }
-  for (const e of plan.exceptions) lineage.push({ entityId: e.saleRowId, rowKey: `sale:${e.saleNo}`, status: e.reason === "no_name" ? "unverified" : "review", legacyId: e.saleNo,
+  if (!scope) for (const e of plan.exceptions) lineage.push({ entityId: e.saleRowId, rowKey: `sale:${e.saleNo}`, status: e.reason === "no_name" ? "unverified" : "review", legacyId: e.saleNo,
     sourceRaw: { reason: NAME_LINK_EXCEPTION_LABEL[e.reason], reasonCode: e.reason, detail: e.detail, companyId: e.companyId, customerName: e.customerName, linkedContactId: e.linkedContactId } });
   for (let i = 0; i < lineage.length; i += 500) {
     const chunk = lineage.slice(i, i + 500);
     await tx.execute(sql`INSERT INTO import_row_sources (batch_id, module, entity_id, row_key, status, source_system, legacy_id, source_raw) VALUES
       ${sql.join(chunk.map(x => sql`(${batchId}, ${RESTORE_MODULE}, ${x.entityId}, ${x.rowKey}, ${x.status}, 'old_crm', ${x.legacyId}, ${JSON.stringify(x.sourceRaw)}::jsonb)`), sql`, `)}`);
   }
-  // 확인 필요·미확인 목록과 판매관리 '확인 필요' 표시는 이 배치를 기준으로 본다
-  await tx.execute(sql`UPDATE import_batches SET is_current = (id = ${batchId}) WHERE module = ${RESTORE_MODULE}`);
+  // 확인 필요·미확인 목록과 판매관리 '확인 필요' 표시는 이 배치를 기준으로 본다(시범 실행은 바꾸지 않음)
+  if (!scope) await tx.execute(sql`UPDATE import_batches SET is_current = (id = ${batchId}) WHERE module = ${RESTORE_MODULE}`);
   const summary = { ...summarizeNameLinks(plan), linkedExisting, linkedNew, contactsCreated };
   await tx.execute(sql`UPDATE import_batches SET total_rows = ${plan.total}, success_rows = ${linkedExisting + linkedNew}, status = 'completed', headers_json = ${JSON.stringify(summary)}::jsonb WHERE id = ${batchId}`);
   return { batchId, ...summary };
