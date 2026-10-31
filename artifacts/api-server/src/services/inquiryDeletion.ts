@@ -1,5 +1,5 @@
 /**
- * 의뢰건 삭제(논리 삭제) — inquiries.deleted_at/deleted_by/deletion_reason(기존 컬럼).
+ * 의뢰건 삭제(논리 삭제)·복원·완전삭제 — inquiries.deleted_at/deleted_by/deletion_reason(기존 컬럼).
  *
  *  · 삭제 가능: 유효(삭제되지 않은) 견적서가 연결되어 있지 않고, 이 의뢰건에 연결됐던 모든 견적(삭제된 견적 포함)에
  *    발송·승인·배정·작업·결제·정산·청구 증빙·선입금 차감 이력이 없을 때. 견적 삭제와 같은 기준(services/quoteDeletion)을 쓴다.
@@ -7,7 +7,7 @@
  *  · 한 트랜잭션(의뢰건 행 잠금 → 재검증 → 삭제 표시). 감사로그는 커밋 후(원래 프로젝트·견적 ID 포함).
  */
 import { db, inquiriesTable, quotesTable, logsTable } from "@workspace/db";
-import { and, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { checkQuoteDeletable } from "./quoteDeletion";
 
 export interface InquiryDeletable {
@@ -79,4 +79,59 @@ export async function deleteInquiry(inquiryId: number, userId: number | null, re
     if (!done) throw new InquiryDeleteError(409, "이미 삭제된 의뢰건입니다.");
   });
   return pre;
+}
+
+// ─── 휴지통 복원·완전삭제 ───────────────────────────────────────────────────────
+
+/** 복원 — 삭제 표시만 해제한다(새 행 없음). 의뢰번호·거래처·담당자·첨부·견적 연결은 행에 그대로 보존돼 있다. */
+export async function restoreInquiry(inquiryId: number) {
+  return db.transaction(async tx => {
+    const [inq] = await tx.select({
+      inquiryNumber: inquiriesTable.inquiryNumber, deletedAt: inquiriesTable.deletedAt, deletedBy: inquiriesTable.deletedBy, deletionReason: inquiriesTable.deletionReason,
+      quoteId: inquiriesTable.quoteId, companyId: inquiriesTable.companyId, contactId: inquiriesTable.contactId,
+    }).from(inquiriesTable).where(eq(inquiriesTable.id, inquiryId)).for("update");
+    if (!inq) throw new InquiryDeleteError(404, "의뢰건을 찾을 수 없습니다.");
+    if (!inq.deletedAt) throw new InquiryDeleteError(409, "휴지통에 있는 의뢰건이 아닙니다.");
+    await tx.update(inquiriesTable).set({ deletedAt: null, deletedBy: null, deletionReason: null, updatedAt: new Date() })
+      .where(eq(inquiriesTable.id, inquiryId));
+    return inq;
+  });
+}
+
+/**
+ * 완전삭제 가능 여부(읽기 전용) — 휴지통에 있고, 연결됐던 견적이 하나도 남아 있지 않을 때만.
+ * 되돌릴 수 없는 작업이므로 휴지통의 견적도 차단한다. 판매·청구·수행·정산은 모두 견적·프로젝트를 거쳐 연결되므로 견적이 남아 있으면 함께 막힌다.
+ */
+export async function checkInquiryPurgeable(inquiryId: number): Promise<{ reasons: string[]; found: boolean }> {
+  const [inq] = await db.select({ quoteId: inquiriesTable.quoteId, deletedAt: inquiriesTable.deletedAt })
+    .from(inquiriesTable).where(eq(inquiriesTable.id, inquiryId));
+  if (!inq) return { reasons: ["의뢰건을 찾을 수 없습니다."], found: false };
+  if (!inq.deletedAt) return { reasons: ["휴지통에 있는 의뢰건만 완전삭제할 수 있습니다."], found: true };
+  const qids = await linkedQuoteIds(inquiryId, inq.quoteId);
+  const quotes = qids.length
+    ? await db.select({ id: quotesTable.id, quoteNumber: quotesTable.quoteNumber, deletedAt: quotesTable.deletedAt }).from(quotesTable).where(inArray(quotesTable.id, qids))
+    : [];
+  return { found: true, reasons: quotes.map(q => q.deletedAt
+    ? `휴지통의 견적서(${q.quoteNumber ?? `#${q.id}`})가 연결되어 있습니다 — 견적서를 먼저 정리해 주세요.`
+    : `유효한 견적서(${q.quoteNumber ?? `#${q.id}`})가 연결되어 있습니다.`) };
+}
+
+/** 완전삭제 — 의뢰건 행만 지운다(연결 데이터 연쇄 삭제 없음, 감사로그 보존). 삭제한 행의 식별정보를 돌려줘 감사로그에 남긴다. */
+export async function purgeInquiry(inquiryId: number) {
+  const pre = await checkInquiryPurgeable(inquiryId);
+  if (!pre.found) throw new InquiryDeleteError(404, pre.reasons[0]);
+  if (pre.reasons.length) throw new InquiryDeleteError(409, pre.reasons[0], pre.reasons);
+  return db.transaction(async tx => {
+    const [inq] = await tx.select({ quoteId: inquiriesTable.quoteId }).from(inquiriesTable).where(eq(inquiriesTable.id, inquiryId)).for("update");
+    if (!inq) throw new InquiryDeleteError(409, "이미 완전삭제된 의뢰건입니다.");
+    // 검사 후 견적 복원으로 다시 연결됐을 수 있다
+    if (inq.quoteId) {
+      const [q] = await tx.select({ id: quotesTable.id }).from(quotesTable).where(eq(quotesTable.id, inq.quoteId));
+      if (q) throw new InquiryDeleteError(409, "견적서가 연결되어 있습니다 — 화면을 새로고침한 뒤 다시 확인해 주세요.");
+    }
+    const [gone] = await tx.delete(inquiriesTable).where(and(eq(inquiriesTable.id, inquiryId), isNotNull(inquiriesTable.deletedAt)))
+      .returning({ inquiryNumber: inquiriesTable.inquiryNumber, customerCompanyName: inquiriesTable.customerCompanyName, companyId: inquiriesTable.companyId, contactId: inquiriesTable.contactId, subject: inquiriesTable.subject, deletedAt: inquiriesTable.deletedAt, deletionReason: inquiriesTable.deletionReason });
+    if (!gone) throw new InquiryDeleteError(409, "휴지통에 있는 의뢰건만 완전삭제할 수 있습니다.");
+    return gone;
+  });
 }

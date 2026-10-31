@@ -3,9 +3,9 @@ import { Router, type IRouter } from "express";
 import {
   db, inquiriesTable, quotesTable, companiesTable, contactsTable, divisionsTable, usersTable,
 } from "@workspace/db";
-import { eq, and, isNull, desc, sql } from "drizzle-orm";
+import { eq, and, isNull, isNotNull, desc, sql } from "drizzle-orm";
 import { requireAuth, requireRole, requirePermission } from "../middlewares/auth";
-import { checkInquiryDeletable, deleteInquiry, InquiryDeleteError } from "../services/inquiryDeletion";
+import { checkInquiryDeletable, deleteInquiry, restoreInquiry, purgeInquiry, InquiryDeleteError } from "../services/inquiryDeletion";
 import { logEvent } from "../lib/logEvent";
 
 /**
@@ -424,6 +424,65 @@ router.delete("/admin/inquiries/:id", ...adminGuard, requirePermission("quote.up
     if (err instanceof InquiryDeleteError) { res.status(err.status).json({ error: err.message, reasons: err.reasons }); return; }
     req.log.error({ err }, "Inquiries: delete failed");
     res.status(500).json({ error: "의뢰건 삭제 실패." });
+  }
+});
+
+// ─── 의뢰건 휴지통 (통합 휴지통 — 견적 휴지통과 같은 경로·권한 규칙) ─────────────
+// 경로 충돌 회피: GET /admin/inquiries/:id 와 겹치지 않도록 '-trash' 사용.
+router.get("/admin/inquiries-trash", ...adminGuard, async (req, res) => {
+  try {
+    // 하위쿼리 컬럼은 테이블명까지 직접 쓴다 — 단일 테이블 select 에서 ${col} 은 테이블명 없이 출력돼 users.deleted_by 로 잘못 해석된다.
+    const rows = await db.select({
+      id:             inquiriesTable.id,
+      inquiryNumber:  inquiriesTable.inquiryNumber,
+      subject:        inquiriesTable.subject,
+      customerCompanyName: inquiriesTable.customerCompanyName,   // 접수 원문 거래처명
+      companyName:    sql<string | null>`(SELECT name FROM companies WHERE companies.id = inquiries.company_id)`,
+      deletedAt:      inquiriesTable.deletedAt,
+      deletionReason: inquiriesTable.deletionReason,
+      deletedByName:  sql<string | null>`(SELECT COALESCE(name, email) FROM users WHERE users.id = inquiries.deleted_by)`,
+    }).from(inquiriesTable).where(isNotNull(inquiriesTable.deletedAt)).orderBy(desc(inquiriesTable.deletedAt));
+    res.json(rows);
+  } catch (err) {
+    req.log.error({ err }, "Inquiries: trash list failed");
+    res.status(500).json({ error: "휴지통 조회 실패." });
+  }
+});
+
+// 복원 — 삭제와 같은 권한(quote.update). 사유(선택)는 logs.metadata.restoreReason 에 기록.
+router.post("/admin/inquiries/:id/restore", ...adminGuard, requirePermission("quote.update"), async (req, res) => {
+  const id = Number(req.params.id);
+  if (isNaN(id) || id <= 0) { res.status(400).json({ error: "유효하지 않은 id." }); return; }
+  const restoreReason = (str(req.body?.reason) ?? "").trim();
+  try {
+    const r = await restoreInquiry(id);
+    await logEvent("inquiry", id, "inquiry_restored", req.log, req.user ?? undefined, JSON.stringify({
+      event: "INQUIRY_RESTORED", inquiryNumber: r.inquiryNumber, quoteId: r.quoteId, companyId: r.companyId, contactId: r.contactId,
+      deletedAt: r.deletedAt, deletedBy: r.deletedBy, deletionReason: r.deletionReason, ...(restoreReason ? { restoreReason } : {}),
+    }));
+    res.json({ success: true, restoredInquiryId: id });
+  } catch (err) {
+    if (err instanceof InquiryDeleteError) { res.status(err.status).json({ error: err.message, reasons: err.reasons }); return; }
+    req.log.error({ err }, "Inquiries: restore failed");
+    res.status(500).json({ error: "의뢰건 복원 실패." });
+  }
+});
+
+// 완전삭제(관리자 전용) — 휴지통에 있고 연결 견적이 없을 때만. 연쇄 삭제 없음. 사유(선택)는 logs.metadata.purgeReason 에 기록.
+router.delete("/admin/inquiries/:id/permanent", requireAuth, requireRole("admin"), async (req, res) => {
+  const id = Number(req.params.id);
+  if (isNaN(id) || id <= 0) { res.status(400).json({ error: "유효하지 않은 id." }); return; }
+  const purgeReason = (str(req.body?.reason) ?? "").trim();
+  try {
+    const r = await purgeInquiry(id);
+    // 감사로그(커밋 후) — 행이 사라지므로 식별정보를 함께 남긴다
+    await logEvent("inquiry", id, "inquiry_purged", req.log, req.user ?? undefined, JSON.stringify({ event: "INQUIRY_PURGED", ...r, ...(purgeReason ? { purgeReason } : {}) }));
+    req.log.warn({ inquiryId: id, inquiryNumber: r.inquiryNumber, purgedBy: req.user?.id }, "Inquiries: PERMANENTLY deleted");
+    res.json({ success: true, purgedInquiryId: id });
+  } catch (err) {
+    if (err instanceof InquiryDeleteError) { res.status(err.status).json({ error: err.message, reasons: err.reasons }); return; }
+    req.log.error({ err }, "Inquiries: purge failed");
+    res.status(500).json({ error: "의뢰건 완전삭제 실패." });
   }
 });
 

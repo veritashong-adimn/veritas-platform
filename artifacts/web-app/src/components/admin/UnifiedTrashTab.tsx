@@ -1,9 +1,9 @@
 /**
  * UnifiedTrashTab — VERITAS OS 통합 휴지통 (1차)
  *
- * 5개 영역(견적서 · 거래처 · 담당자 · 상품 · 통번역사)의 개별 휴지통 데이터를
+ * 각 영역(의뢰건 · 견적서 · 거래처 · 담당자 · 상품 · 통번역사 · 사용자)의 개별 휴지통 데이터를
  * DB/API 변경 없이 프론트에서 모아 보여준다(집계 방식).
- *  · 견적서/거래처/담당자/상품: 기존 soft-delete(deletedAt) 휴지통 API 재사용
+ *  · 의뢰건/견적서/거래처/담당자/상품: 기존 soft-delete(deletedAt) 휴지통 API 재사용
  *  · 통번역사: deletedAt 컬럼이 없으므로 isActive=false 세트를 휴지통으로 재사용
  *  · 복원/완전삭제는 각 영역의 기존 엔드포인트·권한·확인 절차를 그대로 위임한다(서버 재검증).
  *
@@ -19,7 +19,7 @@ import {
 } from './bulkListShared';
 
 /** 통합 대상 영역 키 */
-type TrashDomain = 'quote' | 'company' | 'contact' | 'product' | 'translator' | 'user';
+type TrashDomain = 'inquiry' | 'quote' | 'company' | 'contact' | 'product' | 'translator' | 'user';
 
 /** 각 영역 원본 행을 공통 형태로 정규화한 항목 */
 interface TrashItem {
@@ -66,6 +66,35 @@ const trashFetch = (path: string, method: string, authH: Record<string, string>,
 
 /** 영역별 어댑터 — 기존 개별 휴지통과 동일한 엔드포인트/응답 필드를 사용한다. */
 const DOMAINS: Record<TrashDomain, DomainMeta> = {
+  inquiry: {
+    key: 'inquiry',
+    typeLabel: '의뢰건',
+    areaLabel: '의뢰접수',
+    badge: { bg: '#fdf2f8', color: '#db2777', border: '#fbcfe8' },
+    fetchList: async (authH) => {
+      const res = await fetch(api('/api/admin/inquiries-trash'), { headers: authH });
+      const data = await res.json().catch(() => []);
+      if (!res.ok) throw new Error(data?.error ?? String(res.status));
+      return Array.isArray(data) ? data : [];
+    },
+    // 의뢰건에는 별도 제목이 없다 → 주제(subject), 없으면 의뢰번호를 제목으로 쓴다.
+    normalize: (r) => {
+      const no = s(r.inquiryNumber) ?? `#${r.id}`;
+      // 연결 거래처와 접수 원문 거래처명이 다르면 둘 다 표시한다(어느 이름으로도 검색되도록).
+      const companies = [...new Set([s(r.companyName), s(r.customerCompanyName)].filter(Boolean))].join(' / ') || null;
+      return {
+        domain: 'inquiry', id: r.id,
+        title: s(r.subject) ?? no,
+        subtitle: [s(r.subject) ? no : null, companies].filter(Boolean).join(' · ') || null,
+        deletedAt: s(r.deletedAt), deletedByName: s(r.deletedByName), deletionReason: s(r.deletionReason),
+        raw: r,
+      };
+    },
+    restore: (id, authH, reason) => trashFetch(`/api/admin/inquiries/${id}/restore`, 'POST', authH, reason),
+    purge: (id, authH, reason) => trashFetch(`/api/admin/inquiries/${id}/permanent`, 'DELETE', authH, reason),
+    // error 에 첫 사유가 담겨 오므로 나머지 사유만 덧붙인다.
+    purgeDetail: (data) => (Array.isArray(data?.reasons) && data.reasons.length > 1 ? ` ${data.reasons.slice(1).join(' ')}` : ''),
+  },
   quote: {
     key: 'quote',
     typeLabel: '견적서',
@@ -216,9 +245,9 @@ const DOMAINS: Record<TrashDomain, DomainMeta> = {
   },
 };
 
-const TAB_ORDER: (TrashDomain | 'all')[] = ['all', 'quote', 'company', 'contact', 'product', 'translator', 'user'];
+const TAB_ORDER: (TrashDomain | 'all')[] = ['all', 'inquiry', 'quote', 'company', 'contact', 'product', 'translator', 'user'];
 const TAB_LABEL: Record<TrashDomain | 'all', string> = {
-  all: '전체', quote: '견적서', company: '거래처', contact: '담당자', product: '상품', translator: '통번역사', user: '사용자',
+  all: '전체', inquiry: '의뢰건', quote: '견적서', company: '거래처', contact: '담당자', product: '상품', translator: '통번역사', user: '사용자',
 };
 
 const th: React.CSSProperties = { padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap' };
@@ -240,7 +269,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
   const authH = { Authorization: `Bearer ${token}` };
   const [tab, setTab] = useState<TrashDomain | 'all'>('all');
   const [search, setSearch] = useState('');
-  const [data, setData] = useState<Record<TrashDomain, TrashItem[]>>({ quote: [], company: [], contact: [], product: [], translator: [], user: [] });
+  const [data, setData] = useState<Record<TrashDomain, TrashItem[]>>({ inquiry: [], quote: [], company: [], contact: [], product: [], translator: [], user: [] });
   const [errored, setErrored] = useState<TrashDomain[]>([]);
   const [loading, setLoading] = useState(false);
   const [bulkBusy, setBulkBusy] = useState<'restore' | 'purge' | null>(null);
@@ -248,17 +277,18 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
   const [restoreReason, setRestoreReason] = useState('');
   const [purgeConfirmOpen, setPurgeConfirmOpen] = useState(false);
   const [purgeReason, setPurgeReason] = useState('');
+  const [purgeFailures, setPurgeFailures] = useState<string[]>([]);   // 완전삭제 차단 사유(항목별)
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
 
   const sel = useBulkSelection<string>();
 
-  /** 5개 영역 병렬 로드. */
+  /** 전체 영역 병렬 로드. */
   const loadAll = useCallback(async () => {
     setLoading(true);
     setErrored([]);
     const keys = Object.keys(DOMAINS) as TrashDomain[];
     const results = await Promise.allSettled(keys.map(k => DOMAINS[k].fetchList(authH)));
-    const next: Record<TrashDomain, TrashItem[]> = { quote: [], company: [], contact: [], product: [], translator: [], user: [] };
+    const next: Record<TrashDomain, TrashItem[]> = { inquiry: [], quote: [], company: [], contact: [], product: [], translator: [], user: [] };
     const failed: TrashDomain[] = [];
     results.forEach((res, i) => {
       const k = keys[i];
@@ -278,7 +308,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
   const counts = Object.fromEntries((Object.keys(DOMAINS) as TrashDomain[]).map(k => [k, data[k].length])) as Record<TrashDomain, number>;
   const totalCount = Object.values(counts).reduce((a, b) => a + b, 0);
 
-  // 현재 탭 대상 항목(전체 = 5개 병합 + 삭제일 최신순).
+  // 현재 탭 대상 항목(전체 = 전 영역 병합 + 삭제일 최신순).
   const base: TrashItem[] = tab === 'all'
     ? ([] as TrashItem[]).concat(...(Object.keys(DOMAINS) as TrashDomain[]).map(k => data[k])).sort(byDeletedAtDesc)
     : data[tab];
@@ -339,9 +369,17 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
     const reason = purgeReason;
     setBulkBusy('purge');
     try {
-      const results = await Promise.allSettled(
-        items.map(it => DOMAINS[it.domain].purge!(it.id, authH, reason).then(r => r.ok).catch(() => false)));
-      const ok = results.filter(r => r.status === 'fulfilled' && r.value).length;
+      // 항목별 결과 — 실패는 서버가 준 차단 사유를 모아 화면에 표시한다.
+      const failures = (await Promise.all(items.map(async it => {
+        try {
+          const r = await DOMAINS[it.domain].purge!(it.id, authH, reason);
+          if (r.ok) return null;
+          const d = await r.json().catch(() => ({}));
+          return `[${DOMAINS[it.domain].typeLabel}] ${it.title}: ${d?.error ?? r.status}${DOMAINS[it.domain].purgeDetail?.(d) ?? ''}`;
+        } catch { return `[${DOMAINS[it.domain].typeLabel}] ${it.title}: 요청 실패`; }
+      }))).filter((f): f is string => f !== null);
+      const ok = items.length - failures.length;
+      setPurgeFailures(failures);
       onToast(`${ok}건을 완전삭제했습니다.${ok < items.length ? ` (${items.length - ok}건 실패 — 연결 데이터/권한)` : ''}${excluded > 0 ? ` · 사용자 ${excluded}건 제외(복구만 가능)` : ''}`);
       setPurgeConfirmOpen(false);
       setPurgeReason('');
@@ -357,13 +395,13 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
         <div>
           <h1 style={{ fontSize: 20, fontWeight: 800, color: '#111827', margin: 0 }}>통합 휴지통</h1>
           <p style={{ fontSize: 12, color: '#9ca3af', margin: '4px 0 0' }}>
-            {loading ? '불러오는 중…' : `전체 ${totalCount}건 · 견적서 ${counts.quote} · 거래처 ${counts.company} · 담당자 ${counts.contact} · 상품 ${counts.product} · 통번역사 ${counts.translator} · 사용자 ${counts.user}`}
+            {loading ? '불러오는 중…' : `전체 ${totalCount}건 · 의뢰건 ${counts.inquiry} · 견적서 ${counts.quote} · 거래처 ${counts.company} · 담당자 ${counts.contact} · 상품 ${counts.product} · 통번역사 ${counts.translator} · 사용자 ${counts.user}`}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="이름 · 삭제자 · 삭제사유 · 유형 검색"
-            data-testid="input-unified-trash-search"
+            placeholder="이름 · 번호 · 거래처 · 삭제자 · 삭제사유 · 유형 검색"
+            data-testid="input-unified-trash-search" aria-label="통합 휴지통 검색"
             style={{ width: 280, maxWidth: '100%', padding: '8px 12px', fontSize: 13, border: '1px solid #d1d5db', borderRadius: 8, outline: 'none' }} />
           <button type="button" onClick={loadAll} disabled={loading} data-testid="btn-unified-trash-refresh"
             aria-label="새로고침"
@@ -373,7 +411,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
         </div>
       </div>
 
-      {/* 탭 [전체][견적서][거래처][담당자][상품][통번역사] */}
+      {/* 탭 [전체][의뢰건][견적서][거래처][담당자][상품][통번역사][사용자] */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 14, flexWrap: 'wrap', borderBottom: '1px solid #e5e7eb' }} role="tablist">
         {TAB_ORDER.map(t => {
           const active = tab === t;
@@ -394,6 +432,17 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
       {errored.length > 0 && (
         <div style={{ marginBottom: 12, padding: '8px 12px', fontSize: 12, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8 }}>
           일부 영역을 불러오지 못했습니다: {errored.map(e => TAB_LABEL[e]).join(', ')}. [새로고침]으로 다시 시도하세요.
+        </div>
+      )}
+
+      {purgeFailures.length > 0 && (
+        <div role="alert" data-testid="unified-trash-purge-failures" style={{ marginBottom: 12, padding: '8px 12px', fontSize: 12, color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontWeight: 700, marginBottom: 4 }}>
+            완전삭제하지 못한 항목 {purgeFailures.length}건
+            <button type="button" onClick={() => setPurgeFailures([])} data-testid="btn-unified-trash-purge-failures-close" aria-label="완전삭제 실패 안내 닫기"
+              style={{ border: 'none', background: 'none', color: '#b91c1c', cursor: 'pointer', fontSize: 12, padding: 0 }}>닫기</button>
+          </div>
+          {purgeFailures.map(f => <div key={f}>· {f}</div>)}
         </div>
       )}
 
