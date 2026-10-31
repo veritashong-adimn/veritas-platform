@@ -2144,7 +2144,7 @@ async function deleteContact(req: any, res: any, contactId: number) {
     .returning({ id: contactsTable.id });
   if (!updated) { res.status(400).json({ error: "이미 휴지통에 있는 담당자입니다." }); return; }
 
-  await logEvent("company", existing.companyId, "company_contact_deleted", undefined, (req as any).user?.id,
+  await logEvent("company", existing.companyId, "company_contact_deleted", undefined, req.user ?? undefined,
     JSON.stringify({ contactId, name: existing.name, companyId: existing.companyId, reason: trimmedReason }));
 
   res.json({ ok: true, softDeleted: true, deletedContactId: contactId });

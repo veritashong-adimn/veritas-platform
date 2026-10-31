@@ -74,6 +74,19 @@ const pg = await call("DELETE", `/admin/companies/${cid}/permanent`, { reason: "
 check("⑨ 완전삭제", pg.status === 200, pg);
 check("⑨ 행 삭제·감사로그 보존", !(await one(sql`SELECT id FROM companies WHERE id = ${cid}`)) && await logN("deleted") === 2 && await logN("purged") === 1, [await logN("deleted"), await logN("purged")]);
 
+console.log("\n[담당자] 삭제 감사로그 처리자");
+const hostCo = (await one(sql`INSERT INTO companies (name) VALUES (${`${tag}담당자거래처`}) RETURNING id`)).id;
+const ctId = (await one(sql`INSERT INTO contacts (company_id, name) VALUES (${hostCo}, ${`${tag}담당자`}) RETURNING id`)).id;
+const del = await call("DELETE", `/admin/contacts/${ctId}`, { reason: "테스트 삭제" });
+check("담당자 삭제", del.status === 200, del);
+const ctRow = await one(sql`SELECT deleted_by FROM contacts WHERE id = ${ctId}`);
+const ctLog = await one(sql`SELECT performed_by, performed_by_email, metadata FROM logs WHERE entity_type = 'company' AND entity_id = ${hostCo} AND action = 'company_contact_deleted' ORDER BY id DESC LIMIT 1`);
+check("감사로그 처리자 ID = 실제 처리자", ctLog?.performed_by === 10, ctLog);
+check("감사로그 처리자 이메일 기록", ctLog?.performed_by_email === "admin@test", ctLog);
+check("감사로그 처리자 = 삭제 기록 deleted_by", ctLog?.performed_by === ctRow.deleted_by, [ctLog, ctRow]);
+check("감사로그 대상 담당자·사유 유지", JSON.parse(ctLog.metadata).contactId === ctId && JSON.parse(ctLog.metadata).reason === "테스트 삭제", ctLog);
+await db.execute(sql`DELETE FROM contacts WHERE id = ${ctId}`);
+
 await db.execute(sql`DELETE FROM companies WHERE name LIKE ${tag + "%"}`);
 await db.execute(sql`DELETE FROM users WHERE email LIKE ${tag + "%"}`);
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
