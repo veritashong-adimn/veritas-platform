@@ -1946,7 +1946,7 @@ async function createContact(req: any, res: any, targetCompanyId: number) {
     })
     .returning();
 
-  await logEvent("company", targetCompanyId, "company_contact_created", undefined, (req as any).user?.id,
+  await logEvent("company", targetCompanyId, "company_contact_created", undefined, req.user ?? undefined,
     JSON.stringify({ contactId: contact.id, name: contact.name, isPrimary: contact.isPrimary }));
 
   res.status(201).json(contact);
@@ -2091,7 +2091,7 @@ async function patchContact(req: any, res: any, contactId: number) {
     .where(eq(contactsTable.id, contactId))
     .returning();
 
-  const performer = (req as any).user?.id;
+  const performer = req.user ?? undefined;
   await logEvent("company", existing.companyId, "company_contact_updated", undefined, performer,
     JSON.stringify({ contactId, name: updated.name, isPrimary: updated.isPrimary, prevPrimary }));
   if (isPrimary === true && !prevPrimary) {
@@ -2311,7 +2311,7 @@ router.post("/admin/contacts/merge", ...adminGuard, requirePermission("contact.u
 
     const mergedNames = rows.filter(r => mergeContactIds.includes(r.id)).map(r => r.name);
 
-    await logEvent("company", companyId, "company_contact_merged", undefined, (req as any).user?.id,
+    await logEvent("company", companyId, "company_contact_merged", undefined, req.user ?? undefined,
       JSON.stringify({
         primaryContactId,
         mergedContactIds: mergeContactIds,

@@ -87,6 +87,27 @@ check("감사로그 처리자 = 삭제 기록 deleted_by", ctLog?.performed_by =
 check("감사로그 대상 담당자·사유 유지", JSON.parse(ctLog.metadata).contactId === ctId && JSON.parse(ctLog.metadata).reason === "테스트 삭제", ctLog);
 await db.execute(sql`DELETE FROM contacts WHERE id = ${ctId}`);
 
+console.log("\n[담당자] 생성·수정·대표 변경·통합 감사로그 처리자");
+const ctLogOf = (action: string) => one(sql`SELECT performed_by, performed_by_email, metadata FROM logs WHERE entity_type = 'company' AND entity_id = ${hostCo} AND action = ${action} ORDER BY id DESC LIMIT 1`);
+const checkPerformer = (n: string, l: any) => check(`${n} 감사로그 처리자 ID·이메일`, l?.performed_by === 10 && l?.performed_by_email === "admin@test", l);
+const mkContact = async (s: string) => { const r = await call("POST", `/admin/companies/${hostCo}/contacts`, { name: `${tag}${s}`, email: `${s}@test.local`, phone: "02-000-0000" }); check(`담당자 생성 ${s}`, r.status === 201 && r.body?.id > 0, r); return r.body.id; };
+const c1 = await mkContact("대표"), c2 = await mkContact("통합대상");
+const lc = await ctLogOf("company_contact_created");
+checkPerformer("생성", lc);
+check("생성 감사로그 대상 유지", JSON.parse(lc.metadata).contactId === c2, lc);
+const up = await call("PATCH", `/admin/contacts/${c1}`, { department: "테스트부서" });
+check("담당자 수정", up.status === 200, up);
+checkPerformer("수정", await ctLogOf("company_contact_updated"));
+const pr = await call("PATCH", `/admin/contacts/${c2}`, { isPrimary: true });
+check("대표 담당자 변경", pr.status === 200, pr);
+checkPerformer("대표 변경", await ctLogOf("company_contact_primary_changed"));
+const mg = await call("POST", "/admin/contacts/merge", { primaryContactId: c1, mergeContactIds: [c2] });
+check("담당자 통합", mg.status === 200, mg);
+const lm = await ctLogOf("company_contact_merged");
+checkPerformer("통합", lm);
+check("통합 감사로그 대상 유지", JSON.parse(lm.metadata).primaryContactId === c1 && JSON.parse(lm.metadata).mergedContactIds[0] === c2, lm);
+await db.execute(sql`DELETE FROM contacts WHERE company_id = ${hostCo}`);
+
 await db.execute(sql`DELETE FROM companies WHERE name LIKE ${tag + "%"}`);
 await db.execute(sql`DELETE FROM users WHERE email LIKE ${tag + "%"}`);
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
