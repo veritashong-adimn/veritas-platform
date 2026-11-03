@@ -37,6 +37,8 @@ import { ProductListTab } from '../components/admin/product/ProductListTab';
 import { ProductRegisterTab } from '../components/admin/product/ProductRegisterTab';
 import { ProductTrashTab } from '../components/admin/product/ProductTrashTab';
 import { UnifiedTrashTab } from '../components/admin/UnifiedTrashTab';
+import { ArchiveModule } from '../components/admin/archive/ArchiveModule';
+import type { ArchiveView } from '../components/admin/archive/archiveApi';
 import { InquiryListTab } from '../components/admin/InquiryListTab';
 import { InquiryRegisterTab } from '../components/admin/InquiryRegisterTab';
 import { InquiryDetailTab } from '../components/admin/InquiryDetailTab';
@@ -235,7 +237,7 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
   };
 
   // 초기 탭 — /admin/companies* 경로로 새로고침·직접진입 시 거래처 탭을 복원한다(URL 라우팅 연동).
-  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"quote-register"|"quote-trash"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"payout-reproduction"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"translator-register"|"translator-detail"|"vendors"|"vendor-register"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"legacy-crm-archive"|"data-layer"|"language-service"|"insight-management"|"insight-analytics"|"trash"|"inquiries"|"inquiry-register"|"inquiry-detail">(() => {
+  const [adminTab, setAdminTab] = useState<"dashboard"|"quotes"|"quote-register"|"quote-trash"|"projects"|"payments"|"tasks"|"settlements"|"settlement-statement"|"settlement-tax"|"payout-reproduction"|"users"|"customers"|"companies"|"contacts"|"products"|"product-register"|"product-trash"|"board"|"translators"|"translator-register"|"translator-detail"|"vendors"|"vendor-register"|"test"|"prepaid"|"billing"|"roles"|"permissions"|"settings"|"legacy-crm-archive"|"data-layer"|"language-service"|"insight-management"|"insight-analytics"|"trash"|"inquiries"|"inquiry-register"|"inquiry-detail"|`archive-${ArchiveView}`>(() => {
     // 로고 클릭 새로고침(§로고): 직전 탭을 세션에 저장해 두었다면 복원(1회 소비) → 메뉴 위치 유지.
     try {
       const restore = sessionStorage.getItem("veritasRestoreTab");
@@ -3401,6 +3403,12 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
       {/* ── 인사이트 성과분석 탭 ─────────────────────────────────────────────────── */}
       {adminTab === "insight-analytics" && (
         <InsightAnalyticsTab token={token} setToast={setToast} />
+      )}
+
+      {/* ── 회사 자료보관함(데이터 자산) — 12개 하위 메뉴 단일 진입점. 권한은 서버 ACL 이 강제 ── */}
+      {adminTab.startsWith("archive-") && (
+        <ArchiveModule token={token} view={adminTab.slice("archive-".length) as ArchiveView}
+          setToast={setToast} onNavigate={(v) => setAdminTab(`archive-${v}` as any)} />
       )}
 
           </>)}

@@ -64,6 +64,14 @@ export const ALL_PERMISSIONS: Array<{ key: string; name: string; category: "menu
 
   // 기능 권한 - 통번역사 민감정보
   { key: "translator.sensitive", name: "통번역사 민감정보 (주민번호·계좌)", category: "action" },
+
+  // 회사 자료보관함 — 시스템 admin 역할에만 자동 부여(ALL_KEYS). 다른 역할은 관리자가 직접 부여.
+  //  · 개별 자료의 열람/다운로드 등은 자료보관함 ACL(archive_acl)이 결정한다. 아래 키는 모듈 단위 권한.
+  { key: "menu.archive",    name: "회사 자료보관함",          category: "menu" },
+  { key: "archive.upload",  name: "자료보관함 자료 등록",      category: "action" },
+  { key: "archive.admin",   name: "자료보관함 관리(분류·권한·전체 열람)", category: "action" },
+  { key: "archive.approve", name: "자료보관함 승인·반려",      category: "action" },
+  { key: "archive.purge",   name: "자료보관함 영구 삭제",      category: "action" },
 ];
 
 // ─── 기본 역할 정의 ──────────────────────────────────────────────────────────

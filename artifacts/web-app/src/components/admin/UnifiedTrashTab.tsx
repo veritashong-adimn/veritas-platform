@@ -19,7 +19,7 @@ import {
 } from './bulkListShared';
 
 /** 통합 대상 영역 키 */
-type TrashDomain = 'inquiry' | 'quote' | 'company' | 'contact' | 'product' | 'translator' | 'user';
+type TrashDomain = 'inquiry' | 'quote' | 'company' | 'contact' | 'product' | 'translator' | 'user' | 'archive';
 
 /** 각 영역 원본 행을 공통 형태로 정규화한 항목 */
 interface TrashItem {
@@ -254,11 +254,35 @@ const DOMAINS: Record<TrashDomain, DomainMeta> = {
     restore: (id, authH, reason) => trashFetch(`/api/admin/users/${id}/restore`, 'POST', authH, reason),
     // 사용자는 복구만 제공 — 영구삭제 없음(FK·업무이력 안전, §15). purge 미정의.
   },
+  archive: {
+    key: 'archive',
+    typeLabel: '회사 자료',
+    areaLabel: '데이터 자산 · 회사 자료보관함',
+    badge: { bg: '#f0f9ff', color: '#0284c7', border: '#bae6fd' },
+    // 자료보관함 권한(menu.archive)이 없거나 복원 권한 있는 자료가 없으면 빈 목록 — 서버가 ACL 로 필터.
+    fetchList: async (authH) => {
+      const res = await fetch(api('/api/archive/trash'), { headers: authH });
+      if (res.status === 403) return [];
+      const data = await res.json().catch(() => []);
+      if (!res.ok) throw new Error(data?.error ?? String(res.status));
+      return Array.isArray(data) ? data : [];
+    },
+    normalize: (r) => ({
+      domain: 'archive', id: r.id,
+      title: s(r.title) ?? DASH,
+      subtitle: s(r.folderPath),
+      deletedAt: s(r.deletedAt), deletedByName: deleterLabel(r), deletionReason: s(r.deletionReason),
+      raw: r,
+    }),
+    restore: (id, authH, reason) => trashFetch(`/api/archive/documents/${id}/restore`, 'POST', authH, reason),
+    // 영구삭제는 archive.purge 필요. 기밀·극비·표준양식은 승인요청(202)으로 접수된다.
+    purge: (id, authH, reason) => trashFetch(`/api/archive/documents/${id}/purge`, 'DELETE', authH, reason),
+  },
 };
 
-const TAB_ORDER: (TrashDomain | 'all')[] = ['all', 'inquiry', 'quote', 'company', 'contact', 'product', 'translator', 'user'];
+const TAB_ORDER: (TrashDomain | 'all')[] = ['all', 'inquiry', 'quote', 'company', 'contact', 'product', 'translator', 'user', 'archive'];
 const TAB_LABEL: Record<TrashDomain | 'all', string> = {
-  all: '전체', inquiry: '의뢰건', quote: '견적서', company: '거래처', contact: '담당자', product: '상품', translator: '통번역사', user: '사용자',
+  all: '전체', inquiry: '의뢰건', quote: '견적서', company: '거래처', contact: '담당자', product: '상품', translator: '통번역사', user: '사용자', archive: '회사 자료',
 };
 
 const th: React.CSSProperties = { padding: '8px 10px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#6b7280', borderBottom: '1px solid #e5e7eb', whiteSpace: 'nowrap' };
@@ -280,7 +304,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
   const authH = { Authorization: `Bearer ${token}` };
   const [tab, setTab] = useState<TrashDomain | 'all'>('all');
   const [search, setSearch] = useState('');
-  const [data, setData] = useState<Record<TrashDomain, TrashItem[]>>({ inquiry: [], quote: [], company: [], contact: [], product: [], translator: [], user: [] });
+  const [data, setData] = useState<Record<TrashDomain, TrashItem[]>>({ inquiry: [], quote: [], company: [], contact: [], product: [], translator: [], user: [], archive: [] });
   const [errored, setErrored] = useState<TrashDomain[]>([]);
   const [loading, setLoading] = useState(false);
   const [bulkBusy, setBulkBusy] = useState<'restore' | 'purge' | null>(null);
@@ -299,7 +323,7 @@ export function UnifiedTrashTab({ token, isAdmin, onToast }: {
     setErrored([]);
     const keys = Object.keys(DOMAINS) as TrashDomain[];
     const results = await Promise.allSettled(keys.map(k => DOMAINS[k].fetchList(authH)));
-    const next: Record<TrashDomain, TrashItem[]> = { inquiry: [], quote: [], company: [], contact: [], product: [], translator: [], user: [] };
+    const next: Record<TrashDomain, TrashItem[]> = { inquiry: [], quote: [], company: [], contact: [], product: [], translator: [], user: [], archive: [] };
     const failed: TrashDomain[] = [];
     results.forEach((res, i) => {
       const k = keys[i];
