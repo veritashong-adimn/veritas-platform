@@ -17,20 +17,28 @@ import { legacyArchiveRowsTable, importBatchesTable, importRowSourcesTable, lega
 import { planLateLinks, LATE_LINK_METHOD } from "./legacyContactRestore";
 import {
   buildArchivePreview, computeFileHash, planArchiveImport, sourceIdentityKey, matchIncomingRows,
-  stableKey, normName, diffMutable,
+  stableKey, normName, diffMutable, mutualBestPairs,
   type ArchiveSourceType, type ArchivePreviewRow, type MatchableRow, type RowMatchDecision, type ChangedField,
 } from "./legacyArchiveResolve";
 
 const SOURCE_SYSTEM = "old_crm";
-export const SYNC_ALGO_VERSION = "sync-v2";
+export const SYNC_ALGO_VERSION = "sync-v3";
 // 이 배치가 동기화(sync) 경로로 생성되었음을 나타내는 import_row_sources 표식. 되돌리기는 이 표식이 있는 배치만 허용.
 const SYNC_MARK_STATUS = "sync_batch";
 // import_row_sources.status 값(varchar 20) — 변경 로그 종류.
 export const SYNC_LOG = {
   batch: SYNC_MARK_STATUS, created: "new", approvedNew: "approved_new", approvedUpdate: "approved_update", updated: "update",
-  held: "held", deletionSuspect: "del_suspect", linkCarry: "link_carry", linkNew: "link_new", linkReview: "link_review", rolledBack: "rolled_back",
+  held: "held", deletionSuspect: "del_suspect", deleted: "sync_deleted", deletionConflict: "del_conflict", linkCarry: "link_carry", linkNew: "link_new", linkReview: "link_review", rolledBack: "rolled_back",
 } as const;
 const LINK_CARRY_METHOD = "carry_over_v1";
+// 확정 연결 기록 — 같은 (판매, 수행) 쌍이 이미 있으면: 확정이면 그대로(무변경), 되돌린(rolled_back) 연결이면 이번 근거로 재확정.
+//   (되돌리기 후 같은 파일 재반영 시 UNIQUE(sale,progress) 때문에 연결이 rolled_back 으로 남아 유실되던 문제 방지)
+async function upsertConfirmedLink(dbx: any, v: { saleRowId: number; progressRowId: number; saleNo: string | null; matchKey: string; matchMethod: string }) {
+  return dbx.insert(legacySalesProgressLinksTable).values({ ...v, decision: "confirmed" })
+    .onConflictDoUpdate({ target: [legacySalesProgressLinksTable.saleRowId, legacySalesProgressLinksTable.progressRowId],
+      set: { decision: "confirmed", matchKey: v.matchKey, matchMethod: v.matchMethod }, setWhere: sql`${legacySalesProgressLinksTable.decision} = 'rolled_back'` })
+    .returning({ id: legacySalesProgressLinksTable.id });
+}
 
 export type SyncClass = "NEW" | "UPDATED" | "SAME" | "AMBIGUOUS";
 export type SyncScope = "range" | "full";   // 삭제·취소 의심 판정 범위: 업로드 파일 기간(range, 기본) | 전체 기간 파일(full)
@@ -43,7 +51,7 @@ export interface SyncRow extends MatchableRow {
 
 export interface SyncDecision extends RowMatchDecision {
   key: string;                                  // `${sheet}:${row}` — 승인 대상 식별(파일 내 위치)
-  matchBasis: "sale_no" | "stable_key";
+  matchBasis: "sale_no" | "stable_key" | "relaxed_key";
 }
 
 export interface SaleNoValidation {
@@ -126,14 +134,28 @@ export function validateSaleNumbers(sourceType: ArchiveSourceType, incoming: Syn
   return v;
 }
 
+// 최신 파일 기준 동기화(sync-v3): 기존 effective 중 최신 파일에 없는 행 = 삭제(비활성) 대상.
+//   · deletionSuspects = 판정 범위 내 미대응 행 전체(삭제 후보). 실제 삭제 = 충돌 제외분(buildSyncPreview 에서 분리).
+//   · 충돌(deletionConflicts) = 플랫폼 운영 전환·연결 보존·식별 불가 → 자동 삭제하지 않고 보고.
+export interface DeletionConflict { row: SyncRow; code: "activated" | "linked_progress" | "identity_unresolved"; reason: string }
 export interface SyncPlan {
   decisions: SyncDecision[];
-  counts: Record<SyncClass | "DELETION_SUSPECT", number>;
+  counts: Record<SyncClass | "DELETION_SUSPECT" | "DELETION_CONFLICT", number>;
   sameSetGroups: number;
   saleNo: SaleNoValidation;
-  deletionSuspects: SyncRow[];
-  deletionScope: { mode: SyncScope; from: string | null; to: string | null; outOfScope: number; undated: number };
+  deletionSuspects: SyncRow[];          // (호환 명칭) 실제 삭제 대상 — 충돌 분리 후 갱신
+  deletionConflicts: DeletionConflict[];
+  relaxedMatches: number;               // 식별 항목(체결일 등) 변경을 동일 업무로 재매칭한 건수
+  deletionScope: { mode: SyncScope; from: string | null; to: string | null; outOfScope: number; undated: number; inScope: number };
 }
+
+// 진행관리표 재매칭 키 — 거래처·상품·통번역사·납품일(체결일·담당자·언어 제외). 체결일 정정 등으로 stable key 가 바뀐 행 대응.
+function relaxedKey(r: SyncRow): string | null {
+  const d = String(r.deliveryDate ?? "").slice(0, 10);
+  if (!r.companyName || !r.productName || !d) return null;
+  return [normName(r.companyName), normName(r.productName), normName(r.translatorName), d].join("\u0001");
+}
+const numOr0 = (v: unknown) => { const n = Number(String(v ?? "").replace(/,/g, "")); return Number.isFinite(n) ? n : 0; };
 
 // 순수 판정 core(DB 없음) — preview·execute 공용(동일 입력이면 동일 결과).
 export function planSync(sourceType: ArchiveSourceType, incoming: SyncRow[], existing: SyncRow[], scope: SyncScope): SyncPlan {
@@ -220,9 +242,68 @@ export function planSync(sourceType: ArchiveSourceType, incoming: SyncRow[], exi
     if (from && to && e.saleDate >= from && e.saleDate <= to) deletionSuspects.push(e); else outOfScope++;
   }
 
-  const counts: SyncPlan["counts"] = { NEW: 0, UPDATED: 0, SAME: 0, AMBIGUOUS: 0, DELETION_SUSPECT: deletionSuspects.length };
+  // 재매칭(진행관리표): 신규(NEW) ↔ 삭제 후보를 재매칭 키로 대조.
+  //   · 키 그룹의 신규 수 = 삭제 후보 수 → 1:1 대응(금액·지급일·행순 정렬)으로 '수정' 처리(중복 생성·오삭제 방지).
+  //   · 수가 다르면 동일성 판단 불가 → 신규는 중복 의심(보류), 기존 행은 삭제하지 않고 충돌로 보고.
+  const deletionConflicts: DeletionConflict[] = [];
+  let relaxedMatches = 0;
+  if (sourceType === "progress") {
+    const sus = new Map<string, SyncRow[]>();
+    for (const e of deletionSuspects) { const k = relaxedKey(e); if (!k) continue; const a = sus.get(k); if (a) a.push(e); else sus.set(k, [e]); }
+    const nw = new Map<string, number[]>();
+    decisions.forEach((d, i) => { if (d.classification !== "NEW") return; const k = relaxedKey(incoming[i]); if (!k || !sus.has(k)) return; const a = nw.get(k); if (a) a.push(i); else nw.set(k, [i]); });
+    const removed = new Set<string>();
+    const ord = (r: SyncRow) => [numOr0(r.payoutPretax).toFixed(2).padStart(16, "0"), r.payoutDate ?? "", String(r.sourceRow).padStart(8, "0")].join("|");
+    const asUpdate = (i: number, e: SyncRow, reason: string) => {
+      const r = incoming[i];
+      Object.assign(decisions[i], {
+        classification: "UPDATED", matchBasis: "relaxed_key", matchedExistingId: e.id ?? null, matchedLogicalGroupKey: e.logicalGroupKey ?? null,
+        matchedEffectiveVersion: e.effectiveVersion ?? null, changedFields: [...diffStable(e, r), ...diffMutable(e, r)], confidence: "medium", reason,
+      });
+      claimed.add(String(e.id)); removed.add(String(e.id)); relaxedMatches++;
+    };
+    for (const [k, idxs] of nw) {
+      const exs = sus.get(k)!;
+      // 1:1 은 그대로 대응. 복수는 상호 최선 대응(동점·저점수 제외)으로 확실한 쌍만 만든다.
+      if (idxs.length === 1 && exs.length === 1) { asUpdate(idxs[0], exs[0], "식별 항목(발행일 등) 변경 — 거래처·상품·통번역사·납품일 일치(1:1) → 동일 업무 수정"); continue; }
+      const mb = mutualBestPairs(exs, idxs.map(i => incoming[i]), 0.5);
+      for (const [j, ix] of mb.pairs) asUpdate(idxs[ix], exs[j], "식별 항목 변경 — 거래처·상품·통번역사·납품일 일치 + 상호 최선 대응 → 동일 업무 수정");
+      const incLeft = mb.incLeft.map(ix => idxs[ix]), exLeft = mb.exLeft.map(j => exs[j]);
+      // 남은 신규만 있음 → 추가 수행행(신규 유지) · 남은 기존만 있음 → 최신 파일에 없음(삭제 후보 유지)
+      if (incLeft.length && exLeft.length) {
+        for (const i of incLeft) Object.assign(decisions[i], { classification: "AMBIGUOUS", confidence: "low", matchBasis: "relaxed_key",
+          reason: `거래처·상품·통번역사·납품일이 같은 기존 행 ${exLeft.length}건 ↔ 최신 ${incLeft.length}건 — 동일성 판단 불가(중복 의심)` });
+        for (const e of exLeft) { removed.add(String(e.id)); deletionConflicts.push({ row: e, code: "identity_unresolved", reason: `최신 파일의 유사 행 ${incLeft.length}건과 1:1 대응 불가 — 자동 삭제 보류` }); }
+      }
+    }
+    // 유형 C — 거래처/상품 결측으로 보류된 최신 행: 남은 삭제 후보 중 통번역사·납품일이 같은 행과 상호 최선 대응 → 수정.
+    //   대응 후보가 전혀 없으면: 전체 비교(full)일 때만 신규로 확정(범위 비교는 범위 밖 기존 행과 중복될 수 있어 보류 유지).
+    const cIdx = decisions.map((d, i) => i).filter(i => decisions[i].classification === "AMBIGUOUS" && decisions[i].matchedExistingId == null
+      && decisions[i].matchBasis === "stable_key" && (!incoming[i].companyName || !incoming[i].productName));
+    if (cIdx.length) {
+      const tk = (r: SyncRow) => { const t = normName(r.translatorName), d = String(r.deliveryDate ?? "").slice(0, 10); return t && d ? `${t}\u0001${d}` : null; };
+      const pool2 = new Map<string, SyncRow[]>();
+      for (const e of deletionSuspects) { if (removed.has(String(e.id))) continue; const k = tk(e); if (!k) continue; const a = pool2.get(k); if (a) a.push(e); else pool2.set(k, [e]); }
+      const byK = new Map<string, number[]>();
+      for (const i of cIdx) { const k = tk(incoming[i]); if (!k) continue; const a = byK.get(k); if (a) a.push(i); else byK.set(k, [i]); }
+      for (const [k, idxs] of byK) {
+        const exs = pool2.get(k) ?? [];
+        if (!exs.length) {
+          if (scope === "full") for (const i of idxs) Object.assign(decisions[i], { classification: "NEW", confidence: "medium", matchBasis: "relaxed_key",
+            reason: "거래처/상품 결측 — 통번역사·납품일이 같은 기존 행 없음(전체 비교) → 신규" });
+          continue;
+        }
+        const mb = mutualBestPairs(exs, idxs.map(i => incoming[i]));
+        for (const [j, ix] of mb.pairs) asUpdate(idxs[ix], exs[j], "거래처/상품 변경·결측 — 통번역사·납품일 일치 + 상호 최선 대응 → 동일 업무 수정");
+      }
+    }
+    if (removed.size) for (let i = deletionSuspects.length - 1; i >= 0; i--) if (removed.has(String(deletionSuspects[i].id))) deletionSuspects.splice(i, 1);
+  }
+
+  const inScope = scope === "full" ? existing.length : existing.length - outOfScope - undated;
+  const counts: SyncPlan["counts"] = { NEW: 0, UPDATED: 0, SAME: 0, AMBIGUOUS: 0, DELETION_SUSPECT: deletionSuspects.length, DELETION_CONFLICT: deletionConflicts.length };
   for (const d of decisions) counts[d.classification]++;
-  return { decisions, counts, sameSetGroups, saleNo: saleV, deletionSuspects, deletionScope: { mode: scope, from, to, outOfScope, undated } };
+  return { decisions, counts, sameSetGroups, saleNo: saleV, deletionSuspects, deletionConflicts, relaxedMatches, deletionScope: { mode: scope, from, to, outOfScope, undated, inScope } };
 }
 
 // ─── DB 조회 ───────────────────────────────────────────────────────────────────
@@ -273,7 +354,9 @@ async function baselineFingerprint(dbx: any, sourceType: ArchiveSourceType): Pro
   const l = (await dbx.execute(sql`SELECT count(*)::int AS n, coalesce(max(id),0)::int AS m FROM legacy_sales_progress_links WHERE decision = 'confirmed'`)).rows[0] as any;
   // 배치 상태(반영·되돌리기) — 같은 파일의 '이미 저장됨' 판정이 바뀌는 경우까지 포함
   const b = (await dbx.execute(sql`SELECT count(*)::int AS n, coalesce(max(id),0)::int AS m, count(*) FILTER (WHERE status = 'rolled_back')::int AS r FROM import_batches WHERE module = 'legacy_archive' AND source_type = ${sourceType}`)).rows[0] as any;
-  return `${r?.n}:${r?.f}:${l?.n}:${l?.m}:${b?.n}:${b?.m}:${b?.r}`;
+  // 운영 판매 전환(활성 매핑) — 삭제 충돌 판정이 바뀌므로 지문에 포함
+  const a = (await dbx.execute(sql`SELECT count(*)::int AS n, coalesce(max(id),0)::int AS m FROM legacy_master_mappings WHERE source_system = 'old_crm' AND entity_type = 'sale' AND status = 'active'`)).rows[0] as any;
+  return `${r?.n}:${r?.f}:${l?.n}:${l?.m}:${b?.n}:${b?.m}:${b?.r}:${a?.n}:${a?.m}`;
 }
 
 export function computePlanToken(sourceType: ArchiveSourceType, fileHash: string, scope: SyncScope, fingerprint: string): string {
@@ -339,6 +422,86 @@ export interface SyncPreview {
   rawChanges: Map<number, RawChange[]>;   // decision index → 원본 열 변경
   comparedWith: { sourceType: ArchiveSourceType; label: string; effectiveRows: number; detectedFileType: ArchiveSourceType | null };
   changeSummary: { columns: Record<string, number>; columnOnlyToSame: number; headerDiff: { added: string[]; removed: string[] } };
+  blockers: { code: string; message: string }[];      // 치명적 오류 — 실행 차단
+  amountImpact: AmountImpact;
+}
+
+// 지급(진행관리표)·매출(판매목록) 영향 — 변경 전후 금액. 진행: 지급액(세전) · 판매: 총액.
+export interface AmountImpact {
+  basis: "payout_pretax" | "total_amount";
+  added: { count: number; amount: number };
+  changed: { count: number; before: number; after: number };
+  excluded: { count: number; amount: number };
+  conflicts: { count: number; amount: number };
+  netDelta: number;
+}
+
+// ─── 삭제 충돌 판정(DB 조회, 읽기 전용) ──────────────────────────────────────────
+//   · activated: 플랫폼 운영 판매건으로 전환된 자료(판매번호 활성 매핑 · 전환 계보) → 운영 자료 보호, 자동 삭제 금지.
+//   · linked_progress(판매목록): 이 판매건에 연결된 진행관리표 수행행이 계속 유효 → 원인 확인 필요, 자동 삭제 금지.
+//     통합 동기화에서는 같은 실행에서 삭제되는 수행행(progressDeletionIds)은 '남은 행'으로 보지 않는다.
+const ACT_MODULE = "legacy_sale_activation";
+async function classifyDeletions(dbx: any, sourceType: ArchiveSourceType, suspects: SyncRow[], progressDeletionIds?: Set<number>): Promise<{ toDelete: SyncRow[]; conflicts: DeletionConflict[] }> {
+  if (!suspects.length) return { toDelete: [], conflicts: [] };
+  const ids = suspects.map(s => Number(s.id));
+  const arr = sql.raw(`ARRAY[${ids.join(",")}]::int[]`);
+  const conflict = new Map<number, DeletionConflict>();
+  const byId = new Map(suspects.map(s => [Number(s.id), s]));
+  if (sourceType === "sales_list") {
+    const act = (await dbx.execute(sql`
+      SELECT r.id FROM legacy_archive_rows r
+      WHERE r.id = ANY(${arr}) AND EXISTS (SELECT 1 FROM legacy_master_mappings m JOIN projects p ON p.id = m.entity_id AND p.status <> 'cancelled'
+        WHERE m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.status = 'active' AND m.legacy_id = nullif(btrim(r.source_raw->>'판매번호'),''))`)).rows as any[];
+    for (const a of act) conflict.set(Number(a.id), { row: byId.get(Number(a.id))!, code: "activated", reason: "플랫폼 운영 판매건으로 전환된 자료 — 운영 자료 보호(자동 삭제 안 함)" });
+    const lk = (await dbx.execute(sql`
+      SELECT l.sale_row_id AS s, array_agg(DISTINCT l.progress_row_id) AS p FROM legacy_sales_progress_links l
+      JOIN legacy_archive_rows pr ON pr.id = l.progress_row_id AND pr.is_effective
+      WHERE l.decision = 'confirmed' AND l.sale_row_id = ANY(${arr}) GROUP BY l.sale_row_id`)).rows as any[];
+    for (const x of lk) {
+      const sid = Number(x.s); if (conflict.has(sid)) continue;
+      const remain = (x.p as any[]).map(Number).filter(pid => !progressDeletionIds?.has(pid));
+      if (remain.length) conflict.set(sid, { row: byId.get(sid)!, code: "linked_progress", reason: `최신 기준에서도 유지되는 진행관리표 수행행 ${remain.length}건이 연결됨 — 원인 확인 필요(자동 삭제 안 함)` });
+    }
+  } else if (sourceType === "progress") {
+    const act = (await dbx.execute(sql`
+      SELECT DISTINCT r.id FROM legacy_archive_rows r
+      WHERE r.id = ANY(${arr}) AND (
+        EXISTS (SELECT 1 FROM import_row_sources s WHERE s.module = ${ACT_MODULE} AND s.row_key = 'progress:' || r.id)
+        OR EXISTS (SELECT 1 FROM legacy_sales_progress_links l JOIN legacy_archive_rows sr ON sr.id = l.sale_row_id
+          JOIN legacy_master_mappings m ON m.source_system = 'old_crm' AND m.entity_type = 'sale' AND m.status = 'active' AND m.legacy_id = nullif(btrim(sr.source_raw->>'판매번호'),'')
+          JOIN projects p ON p.id = m.entity_id AND p.status <> 'cancelled'
+          WHERE l.progress_row_id = r.id AND l.decision = 'confirmed'))`)).rows as any[];
+    for (const a of act) conflict.set(Number(a.id), { row: byId.get(Number(a.id))!, code: "activated", reason: "플랫폼 운영 판매건(수행정보·지급)으로 전환된 수행행 — 확정 기록 보호(자동 삭제 안 함)" });
+  }
+  return { toDelete: suspects.filter(s => !conflict.has(Number(s.id))), conflicts: [...conflict.values()] };
+}
+
+// 삭제 범위 이상 감지 — 부분 파일(일부 거래처·일부 행)을 전체 비교에 쓰는 사고 방지.
+const DELETE_RATIO_MAX = 0.1, DELETE_ABS_FREE = 50;
+function deletionBlockers(plan: SyncPlan): { code: string; message: string }[] {
+  const n = plan.deletionSuspects.length, base = plan.deletionScope.inScope;
+  if (n > DELETE_ABS_FREE && base > 0 && n / base > DELETE_RATIO_MAX) {
+    return [{ code: "DELETION_SCOPE_SUSPECT", message: `삭제 대상 ${n.toLocaleString()}건 = 비교 범위 기존 ${base.toLocaleString()}건의 ${(n / base * 100).toFixed(1)}% — 부분 자료로 보입니다. 전체 자료 파일인지, 동기화 범위가 맞는지 확인하세요(실행 차단).` }];
+  }
+  return [];
+}
+
+function computeAmountImpact(sourceType: ArchiveSourceType, plan: SyncPlan, incoming: SyncRow[], baselineById: Map<string, SyncRow>): AmountImpact {
+  const basis = sourceType === "sales_list" ? "total_amount" : "payout_pretax";
+  const amt = (r: SyncRow | undefined | null) => numOr0(basis === "total_amount" ? r?.totalAmount : r?.payoutPretax);
+  const out: AmountImpact = { basis, added: { count: 0, amount: 0 }, changed: { count: 0, before: 0, after: 0 }, excluded: { count: 0, amount: 0 }, conflicts: { count: 0, amount: 0 }, netDelta: 0 };
+  plan.decisions.forEach((d, i) => {
+    const r = incoming[i];
+    if (d.classification === "NEW") { out.added.count++; out.added.amount += amt(r); }
+    else if (d.classification === "UPDATED") {
+      const b = baselineById.get(String(d.matchedExistingId));
+      if (amt(b) !== amt(r) || (basis === "payout_pretax" && (b?.payoutDate ?? null) !== (r.payoutDate ?? null))) { out.changed.count++; out.changed.before += amt(b); out.changed.after += amt(r); }
+    }
+  });
+  for (const e of plan.deletionSuspects) { out.excluded.count++; out.excluded.amount += amt(e); }
+  for (const c of plan.deletionConflicts) { out.conflicts.count++; out.conflicts.amount += amt(c.row); }
+  out.netDelta = out.added.amount + (out.changed.after - out.changed.before) - out.excluded.amount;
+  return out;
 }
 
 // ─── 신규 판매건 ↔ 진행관리표 연결(기존 연결 규칙 재사용) ─────────────────────────────
@@ -417,7 +580,7 @@ export function diffRaw(before: Record<string, unknown> | null | undefined, afte
   return out;
 }
 
-export async function buildSyncPreview(dbx: any, opts: { buffer: Buffer; sourceType: ArchiveSourceType; scope: SyncScope }): Promise<SyncPreview> {
+export async function buildSyncPreview(dbx: any, opts: { buffer: Buffer; sourceType: ArchiveSourceType; scope: SyncScope; progressDeletionIds?: Set<number> }): Promise<SyncPreview> {
   const fileHash = computeFileHash(opts.buffer);
   const sheets = buildArchivePreview(opts.buffer, opts.sourceType);
   const allRows = sheets.flatMap(s => s.rows);
@@ -448,6 +611,12 @@ export async function buildSyncPreview(dbx: any, opts: { buffer: Buffer; sourceT
     incoming.forEach((r, i) => { r.rowHash = compHash(allRows[i].sourceRaw); });
   }
   const plan = planSync(opts.sourceType, incoming, baseline, opts.scope);
+  // 삭제 대상 ↔ 충돌 분리(운영 전환·연결 보존). 충돌은 삭제하지 않고 보고.
+  const dc = await classifyDeletions(dbx, opts.sourceType, plan.deletionSuspects, opts.progressDeletionIds);
+  plan.deletionSuspects = dc.toDelete;
+  plan.deletionConflicts.push(...dc.conflicts);
+  plan.counts.DELETION_SUSPECT = plan.deletionSuspects.length;
+  plan.counts.DELETION_CONFLICT = plan.deletionConflicts.length;
 
   // 원본 열 변경 항목 계산 + '열 구성 차이만' 있는 행은 변경 없음으로 재분류(새 버전 미생성).
   const rawChanges = new Map<number, RawChange[]>();
@@ -516,6 +685,15 @@ export async function buildSyncPreview(dbx: any, opts: { buffer: Buffer; sourceT
     (sum as any).newSaleLink = nl;
   }
   for (const s of plan.deletionSuspects) if ((linkCounts.get(Number(s.id)) ?? 0) > 0) sum.deletionSuspectWithLinks++;
+  // 같은 실행에서 삭제되는 진행 행으로는 신규 판매 연결을 만들지 않는다(잘못된 참조 방지).
+  if (opts.progressDeletionIds?.size) for (const [k, v] of newSaleLinks) if (v.status === "link") {
+    const keep = v.progressIds!.filter(id => !opts.progressDeletionIds!.has(id));
+    newSaleLinks.set(k, keep.length ? { ...v, progressIds: keep } : { status: "none", method: v.method, key: v.key, reason: "연결 대상 진행 행이 이번 동기화에서 삭제됨" });
+  }
+  const blockers: { code: string; message: string }[] = [...deletionBlockers(plan)];
+  if (!imp.safeToExecute) blockers.push({ code: "ARCHIVE_IDENTITY_CONFLICT", message: `source identity 충돌 ${imp.conflicts.length}건 — 동일 파일의 동일 위치에 다른 내용이 이미 보존됨` });
+  if (allRows.length === 0) blockers.push({ code: "EMPTY_FILE", message: "업로드 파일에 자료 행이 없습니다." });
+  const amountImpact = computeAmountImpact(opts.sourceType, plan, incoming, baselineById);
 
   return {
     sourceType: opts.sourceType, fileHash, scope: opts.scope, planToken,
@@ -523,6 +701,7 @@ export async function buildSyncPreview(dbx: any, opts: { buffer: Buffer; sourceT
     plan, incoming, baselineById, impact, impactSummary: sum, storedKeys, allRows, headers, newSaleLinks,
     rawChanges, changeSummary: { columns: columnChangeCounts, columnOnlyToSame, headerDiff },
     comparedWith: { sourceType: opts.sourceType, label: SOURCE_TYPE_LABEL[opts.sourceType], effectiveRows: baseline.length, detectedFileType: typeCheck.detected },
+    blockers, amountImpact,
   };
 }
 
@@ -534,7 +713,9 @@ export function summarizePreview(p: SyncPreview) {
     counts: p.plan.counts, sameSetGroups: p.plan.sameSetGroups,
     saleNoValidation: p.plan.saleNo, deletionScope: p.plan.deletionScope, impact: p.impactSummary,
     changeSummary: { ...p.changeSummary, topColumns: Object.entries(p.changeSummary.columns).sort((a, b) => b[1] - a[1]).slice(0, 15) },
-    willApply: { insertEffective: p.plan.counts.NEW + p.plan.counts.UPDATED, supersede: p.plan.counts.UPDATED, heldUnlessApproved: p.plan.counts.AMBIGUOUS },
+    willApply: { insertEffective: p.plan.counts.NEW + p.plan.counts.UPDATED, supersede: p.plan.counts.UPDATED, heldUnlessApproved: p.plan.counts.AMBIGUOUS, deactivate: p.plan.counts.DELETION_SUSPECT },
+    relaxedMatches: p.plan.relaxedMatches, blockers: p.blockers, amountImpact: p.amountImpact,
+    conflictsByCode: p.plan.deletionConflicts.reduce((m, c) => { m[c.code] = (m[c.code] ?? 0) + 1; return m; }, {} as Record<string, number>),
   };
 }
 
@@ -546,8 +727,14 @@ function pickView(r: SyncRow) {
   };
 }
 
-export function previewPage(p: SyncPreview, cls: SyncClass | "DELETION_SUSPECT" | "CHANGES", page: number, pageSize: number) {
+export function previewPage(p: SyncPreview, cls: SyncClass | "DELETION_SUSPECT" | "DELETION_CONFLICT" | "CHANGES", page: number, pageSize: number) {
   const size = Math.min(200, Math.max(10, pageSize || 50));
+  if (cls === "DELETION_CONFLICT") {
+    const all = p.plan.deletionConflicts;
+    const start = (Math.max(1, page) - 1) * size;
+    return { cls, page: Math.max(1, page), pageSize: size, total: all.length,
+      rows: all.slice(start, start + size).map(c => ({ existingId: c.row.id, conflictCode: c.code, reason: c.reason, ...pickView(c.row) })) };
+  }
   if (cls === "DELETION_SUSPECT") {
     const all = p.plan.deletionSuspects;
     const start = (Math.max(1, page) - 1) * size;
@@ -618,6 +805,7 @@ export interface SyncExecuteResult {
   applied: { created: number; approvedNew: number; approvedUpdate: number; updated: number; evidenceSame: number };
   unchangedSkipped: number;          // 변경 없음(SAME) — DB INSERT/UPDATE 없이 건너뜀
   held: number; deletionSuspects: number;
+  deleted: number; deletionConflicts: number;   // 최신 파일 기준 삭제(비활성) 반영 · 충돌(삭제 보류)
   linksCarried: number; linkReview: number; newLinks?: number;
   supersededSnapshotIds: number[];
   matching: { NEW: number; SAME: number; UPDATED: number; AMBIGUOUS: number };
@@ -638,17 +826,25 @@ async function insertLogs(dbx: any, rows: any[]) {
 export async function executeArchiveSync(dbx: any, opts: {
   buffer: Buffer; sourceType: ArchiveSourceType; fileName: string; performerId: number | null;
   scope: SyncScope; planToken: string; approvedAmbiguous: Set<string>;
+  // 통합 동기화: 호출자가 트랜잭션 시작 시 승인 토큰을 이미 검증한 미리보기(파일 재파싱·토큰 재검사 생략).
+  preview?: SyncPreview; asOfDate?: string | null; runId?: string | null;
+  recordMarkerIfNoChange?: boolean;   // 통합 동기화: 이 파일은 변경 0이어도 기준일 기록용 배치(0행)를 남긴다
 }): Promise<SyncExecuteResult> {
-  // 같은 파일·같은 기준선의 미리보기가 캐시에 있으면 재사용(파싱 생략). 기준선이 바뀌었으면 다시 계산 → 토큰 불일치로 거부.
-  const fileHash = computeFileHash(opts.buffer);
-  const cached = findCachedPreview(fileHash, opts.sourceType, opts.scope);
-  const nowToken = computePlanToken(opts.sourceType, fileHash, opts.scope, await baselineFingerprint(dbx, opts.sourceType));
-  const reusedPreview = !!cached && cached.planToken === nowToken;
-  const p = reusedPreview ? cached! : await buildSyncPreview(dbx, { buffer: opts.buffer, sourceType: opts.sourceType, scope: opts.scope });
-  if (!p.safeToExecute) throw new SyncError("ARCHIVE_IDENTITY_CONFLICT", 409, `source identity 충돌 ${p.conflicts}건 — 동일 파일의 동일 위치에 다른 내용이 이미 보존되어 있습니다(원본 무결성 위험).`);
-  if (!opts.planToken || opts.planToken !== p.planToken) {
-    throw new SyncError("SYNC_PLAN_CHANGED", 409, "미리보기 이후 기준 자료가 바뀌었거나 승인 토큰이 일치하지 않습니다. 미리보기를 다시 실행해 확인한 뒤 승인하세요.");
+  let p: SyncPreview; let reusedPreview: boolean;
+  if (opts.preview) { p = opts.preview; reusedPreview = true; }
+  else {
+    // 같은 파일·같은 기준선의 미리보기가 캐시에 있으면 재사용(파싱 생략). 기준선이 바뀌었으면 다시 계산 → 토큰 불일치로 거부.
+    const fileHash = computeFileHash(opts.buffer);
+    const cached = findCachedPreview(fileHash, opts.sourceType, opts.scope);
+    const nowToken = computePlanToken(opts.sourceType, fileHash, opts.scope, await baselineFingerprint(dbx, opts.sourceType));
+    reusedPreview = !!cached && cached.planToken === nowToken;
+    p = reusedPreview ? cached! : await buildSyncPreview(dbx, { buffer: opts.buffer, sourceType: opts.sourceType, scope: opts.scope });
+    if (!opts.planToken || opts.planToken !== p.planToken) {
+      throw new SyncError("SYNC_PLAN_CHANGED", 409, "미리보기 이후 기준 자료가 바뀌었거나 승인 토큰이 일치하지 않습니다. 미리보기를 다시 실행해 확인한 뒤 승인하세요.");
+    }
   }
+  if (!p.safeToExecute) throw new SyncError("ARCHIVE_IDENTITY_CONFLICT", 409, `source identity 충돌 ${p.conflicts}건 — 동일 파일의 동일 위치에 다른 내용이 이미 보존되어 있습니다(원본 무결성 위험).`);
+  if (p.blockers.length) throw new SyncError("SYNC_BLOCKED", 409, p.blockers.map(b => b.message).join(" / "), p.blockers);
   const sheetNames = [...new Set(p.allRows.map(r => r.sourceSheet))];
   const warnings = p.allRows.reduce((n, r) => n + r.warnings.length, 0);
   const effBefore = await effectiveCount(dbx, opts.sourceType);
@@ -669,11 +865,13 @@ export async function executeArchiveSync(dbx: any, opts: {
     else heldIdx.push(i);
   });
   const matching = { NEW: p.plan.counts.NEW, SAME: p.plan.counts.SAME, UPDATED: p.plan.counts.UPDATED, AMBIGUOUS: p.plan.counts.AMBIGUOUS };
-  const base = { total: p.total, alreadyStored: p.alreadyStored, matching, deletionSuspects: p.plan.counts.DELETION_SUSPECT, warnings, sheetNames, skippedDuplicate: p.alreadyStored, unchangedSkipped, reusedPreview };
-  if (acts.length === 0) {
+  const toDelete = p.plan.deletionSuspects.map(e => Number(e.id));
+  const base = { total: p.total, alreadyStored: p.alreadyStored, matching, deletionSuspects: p.plan.counts.DELETION_SUSPECT, deletionConflicts: p.plan.counts.DELETION_CONFLICT,
+    warnings, sheetNames, skippedDuplicate: p.alreadyStored, unchangedSkipped, reusedPreview };
+  if (acts.length === 0 && toDelete.length === 0 && !opts.recordMarkerIfNoChange) {
     // 반영할 변경 없음 → 배치·행·로그를 만들지 않는다(같은 파일 반복 업로드 시 건수·버전 불변).
     return { ...base, mode: "no_change", batchId: null, snapshotId: null, applied: { created: 0, approvedNew: 0, approvedUpdate: 0, updated: 0, evidenceSame: 0 },
-      held: heldIdx.length, linksCarried: 0, linkReview: 0, supersededSnapshotIds: [], effective: { before: effBefore, after: effBefore }, created: 0 };
+      deleted: 0, held: heldIdx.length, linksCarried: 0, linkReview: 0, supersededSnapshotIds: [], effective: { before: effBefore, after: effBefore }, created: 0 };
   }
 
   // 변경분 배치. 최초 원본 스냅샷의 '현재(is_current)' 지위는 바꾸지 않는다(변경분만 담긴 배치이므로).
@@ -686,6 +884,14 @@ export async function executeArchiveSync(dbx: any, opts: {
 
   // 행 저장 — 원본 append(신규·수정 버전만, 전부 effective).
   const insertedId = new Map<number, number>();   // decision index → 새 row id
+  // 되돌린 배치가 남긴 같은 원본 위치(file_hash·유형·시트·행)의 비유효 행 — UNIQUE(source identity) 때문에 재삽입이 막히므로
+  //   같은 원본 행을 재활성화하고 이번 배치로 소속을 옮긴다(내용은 같은 파일 bytes 그대로, 이후 되돌리기도 정상 동작).
+  const revivable = new Map<string, number>();
+  for (const r of (await dbx.execute(sql`
+    SELECT r.id, r.source_sheet, r.source_row FROM legacy_archive_rows r JOIN import_batches b ON b.id = r.import_batch_id
+    WHERE r.file_hash = ${p.fileHash} AND r.source_type = ${opts.sourceType} AND b.status = 'rolled_back' AND NOT r.is_effective`)).rows as any[]) {
+    revivable.set(`${r.source_sheet}:${r.source_row}`, Number(r.id));
+  }
   for (let c = 0; c < acts.length; c += 500) {
     const chunk = acts.slice(c, c + 500);
     const values = chunk.map(a => {
@@ -704,11 +910,19 @@ export async function executeArchiveSync(dbx: any, opts: {
         matchStatus: a.kind === "approved_new" ? "new" : a.kind === "approved_update" ? "updated" : d.classification.toLowerCase(), isEffective: true, logicalGroupKey: groupKey, effectiveVersion: ver,
       };
     });
-    const ins = await dbx.insert(T).values(values)
+    const fresh: any[] = [];
+    for (let j = 0; j < chunk.length; j++) {
+      const a = chunk[j], v = values[j]; const rid = revivable.get(p.plan.decisions[a.i].key);
+      if (rid == null) { fresh.push(v); continue; }
+      const { sourceType: _t, fileHash: _h, sourceSheet: _s, sourceRow: _r, ...upd } = v;
+      const back = await dbx.update(T).set({ ...upd, supersededById: null }).where(and(eq(T.id, rid), eq(T.isEffective, false))).returning({ id: T.id });
+      if (back.length === 1) insertedId.set(a.i, rid); else fresh.push(v);
+    }
+    const ins = fresh.length ? await dbx.insert(T).values(fresh)
       .onConflictDoNothing({ target: [T.fileHash, T.sourceType, T.sourceSheet, T.sourceRow] })
-      .returning({ id: T.id, sheet: T.sourceSheet, row: T.sourceRow });
+      .returning({ id: T.id, sheet: T.sourceSheet, row: T.sourceRow }) : [];
     const byKey = new Map<string, number>(ins.map((x: any) => [`${x.sheet}:${x.row}`, x.id as number] as [string, number]));
-    for (const a of chunk) { const id = byKey.get(p.plan.decisions[a.i].key); if (id != null) insertedId.set(a.i, id); }
+    for (const a of chunk) { if (insertedId.has(a.i)) continue; const id = byKey.get(p.plan.decisions[a.i].key); if (id != null) insertedId.set(a.i, id); }
   }
   if (insertedId.size !== acts.length) throw new Error(`저장 행수 불일치: 대상 ${acts.length} ≠ 저장 ${insertedId.size}. 롤백합니다.`);
 
@@ -724,6 +938,17 @@ export async function executeArchiveSync(dbx: any, opts: {
       .where(and(eq(T.id, s.oldId), eq(T.isEffective, true))).returning({ id: T.id });
     if (upd.length !== 1) throw new Error(`이전 버전 #${s.oldId} 이 이미 변경되었습니다. 롤백합니다.`);
   }
+
+  // 최신 파일에서 사라진 행 → 삭제(비활성) 처리. 물리 삭제 없음(원본·연결 보존) → 배치 되돌리기로 복구.
+  //   대상 = 미리보기에서 충돌(운영 전환·연결 보존·식별 불가)을 제외한 행. 기준선이 바뀌어 대상이 이미 비유효면 전체 롤백.
+  let deleted = 0;
+  for (let c = 0; c < toDelete.length; c += 5000) {
+    const chunk = toDelete.slice(c, c + 5000);
+    const upd = await dbx.update(T).set({ isEffective: false })
+      .where(and(inArray(T.id, chunk), eq(T.isEffective, true), sql`${T.supersededById} IS NULL`)).returning({ id: T.id });
+    deleted += upd.length;
+  }
+  if (deleted !== toDelete.length) throw new Error(`삭제 대상 불일치: 대상 ${toDelete.length} ≠ 처리 ${deleted}. 롤백합니다.`);
 
   // 판매·진행 연결 이관(append) — 기존 확정 연결을 새 버전으로 복제. 원 연결은 이전 버전에 그대로 보존.
   const oldToNew = new Map(supersedePairs.map(s => [s.oldId, s.newId]));
@@ -741,10 +966,7 @@ export async function executeArchiveSync(dbx: any, opts: {
       const pair = pairByOld.get(movedOld)!;
       const review = p.plan.decisions[pair.i].changedFields.some(cf => LINK_SENSITIVE.has(String(cf.field)));
       const saleNo = opts.sourceType === "sales_list" ? (p.incoming[pair.i].saleNo ?? lk.saleNo) : lk.saleNo;
-      const ins = await dbx.insert(L).values({
-        saleRowId: newSale, progressRowId: newProg, saleNo, matchKey: `batch:${batch.id}|from_link:${lk.id}`,
-        matchMethod: LINK_CARRY_METHOD, decision: "confirmed",
-      }).onConflictDoNothing().returning({ id: L.id });
+      const ins = await upsertConfirmedLink(dbx, { saleRowId: newSale, progressRowId: newProg, saleNo, matchKey: `batch:${batch.id}|from_link:${lk.id}`, matchMethod: LINK_CARRY_METHOD });
       if (ins.length) {
         linksCarried++;
         if (review) linkReview++;
@@ -757,7 +979,9 @@ export async function executeArchiveSync(dbx: any, opts: {
 
   // 변경 로그(import_row_sources) — 되돌리기·감사 근거. 주민번호 등 원본 PII 는 넣지 않는다(정규화 변경 항목만).
   const logs: any[] = [{ batchId: batch.id, module: "legacy_archive", entityId: null, sourceFile: opts.fileName, rowKey: "batch", status: SYNC_LOG.batch, sourceSystem: SOURCE_SYSTEM,
-    sourceRaw: { algorithm: SYNC_ALGO_VERSION, scope: opts.scope, planToken: p.planToken, counts: p.plan.counts, unchangedSkipped, saleNoUsable: p.plan.saleNo.usable, approvedAmbiguous: [...opts.approvedAmbiguous].length } }];
+    sourceRaw: { algorithm: SYNC_ALGO_VERSION, scope: opts.scope, planToken: p.planToken, counts: p.plan.counts, unchangedSkipped, saleNoUsable: p.plan.saleNo.usable, approvedAmbiguous: [...opts.approvedAmbiguous].length,
+      asOfDate: opts.asOfDate ?? null, runId: opts.runId ?? null, deleted, deletionConflicts: p.plan.counts.DELETION_CONFLICT, relaxedMatches: p.plan.relaxedMatches,
+      deletionScope: p.plan.deletionScope, amountImpact: p.amountImpact, performerId: opts.performerId, executedAt: new Date().toISOString() } }];
   for (const a of acts) {
     const d = p.plan.decisions[a.i]; const r = p.allRows[a.i];
     logs.push({ batchId: batch.id, module: "legacy_archive", entityId: insertedId.get(a.i), sourceFile: opts.fileName, sourceSheet: r.sourceSheet, sourceRow: r.sourceRow,
@@ -771,9 +995,15 @@ export async function executeArchiveSync(dbx: any, opts: {
       rowKey: d.key, status: SYNC_LOG.held, sourceSystem: SOURCE_SYSTEM, legacyId: p.incoming[i].saleNo ?? null,
       sourceRaw: { reason: d.reason, candidateCount: d.candidateCount } });
   }
+  // 삭제(비활성) 로그 = 복구 근거. 주민번호 등 원본 PII 는 넣지 않는다.
   for (const s of p.plan.deletionSuspects) {
-    logs.push({ batchId: batch.id, module: "legacy_archive", entityId: Number(s.id), sourceFile: opts.fileName, rowKey: `existing:${s.id}`, status: SYNC_LOG.deletionSuspect,
-      sourceSystem: SOURCE_SYSTEM, legacyId: s.saleNo ?? null, sourceRaw: { scope: opts.scope, saleDate: s.saleDate } });
+    logs.push({ batchId: batch.id, module: "legacy_archive", entityId: Number(s.id), sourceFile: opts.fileName, rowKey: `existing:${s.id}`, status: SYNC_LOG.deleted,
+      sourceSystem: SOURCE_SYSTEM, legacyId: s.saleNo ?? null, sourceRaw: { scope: opts.scope, saleDate: s.saleDate, company: s.companyName, product: s.productName,
+        translator: s.translatorName, deliveryDate: s.deliveryDate, payoutDate: s.payoutDate, payoutPretax: s.payoutPretax, totalAmount: s.totalAmount } });
+  }
+  for (const c of p.plan.deletionConflicts) {
+    logs.push({ batchId: batch.id, module: "legacy_archive", entityId: Number(c.row.id), sourceFile: opts.fileName, rowKey: `existing:${c.row.id}`, status: SYNC_LOG.deletionConflict,
+      sourceSystem: SOURCE_SYSTEM, legacyId: c.row.saleNo ?? null, sourceRaw: { code: c.code, reason: c.reason, saleDate: c.row.saleDate } });
   }
   // 신규 판매건 ↔ 진행관리표 연결(미리보기 계획 그대로, 확실한 건만)
   let newLinks = 0;
@@ -783,8 +1013,7 @@ export async function executeArchiveSync(dbx: any, opts: {
       const nl = p.newSaleLinks.get(a.i); if (nl?.status !== "link") continue;
       const saleId = insertedId.get(a.i)!;
       for (const pid of nl.progressIds!) {
-        const ins = await dbx.insert(L).values({ saleRowId: saleId, progressRowId: pid, saleNo: p.incoming[a.i].saleNo, matchKey: nl.key, matchMethod: nl.method!, decision: "confirmed" })
-          .onConflictDoNothing().returning({ id: L.id });
+        const ins = await upsertConfirmedLink(dbx, { saleRowId: saleId, progressRowId: pid, saleNo: p.incoming[a.i].saleNo, matchKey: nl.key!, matchMethod: nl.method! });
         if (ins.length) {
           newLinks++;
           carryLogs.push({ batchId: batch.id, module: "legacy_archive", entityId: ins[0].id, sourceFile: opts.fileName, sourceSheet: p.allRows[a.i].sourceSheet, sourceRow: p.allRows[a.i].sourceRow,
@@ -798,8 +1027,7 @@ export async function executeArchiveSync(dbx: any, opts: {
   if (opts.sourceType === "progress" && insertedId.size) {
     const { links: late } = await planLateLinks(dbx, { progressIds: [...insertedId.values()] });
     for (const l of late) {
-      const ins = await dbx.insert(L).values({ saleRowId: l.saleRowId, progressRowId: l.progressRowId, saleNo: l.saleNo, matchKey: l.key, matchMethod: LATE_LINK_METHOD, decision: "confirmed" })
-        .onConflictDoNothing().returning({ id: L.id });
+      const ins = await upsertConfirmedLink(dbx, { saleRowId: l.saleRowId, progressRowId: l.progressRowId, saleNo: l.saleNo, matchKey: l.key, matchMethod: LATE_LINK_METHOD });
       if (ins.length) {
         newLinks++;
         carryLogs.push({ batchId: batch.id, module: "legacy_archive", entityId: ins[0].id, sourceFile: opts.fileName, rowKey: `newlink:${ins[0].id}`, status: SYNC_LOG.linkNew,
@@ -814,7 +1042,7 @@ export async function executeArchiveSync(dbx: any, opts: {
   const created = acts.filter(a => a.kind === "new").length, approvedNew = acts.filter(a => a.kind === "approved_new").length;
   const approvedUpdate = acts.filter(a => a.kind === "approved_update").length, updated = supersedePairs.length;
   const effAfter = await effectiveCount(dbx, opts.sourceType);
-  const expected = effBefore + created + approvedNew;
+  const expected = effBefore + created + approvedNew - deleted;
   if (effAfter !== expected) throw new Error(`effective invariant 위반: expected ${expected} ≠ ${effAfter}. 롤백합니다.`);
   const dup = await dbx.select({ k: T.logicalGroupKey, n: count() }).from(T)
     .where(and(eq(T.sourceType, opts.sourceType), eq(T.isEffective, true), isNotNull(T.logicalGroupKey)))
@@ -824,7 +1052,7 @@ export async function executeArchiveSync(dbx: any, opts: {
   return {
     ...base, mode: "applied", batchId: batch.id, snapshotId: batch.id,
     applied: { created, approvedNew, approvedUpdate, updated: updated - approvedUpdate, evidenceSame: 0 },
-    held: heldIdx.length, linksCarried, linkReview, newLinks, supersededSnapshotIds: [],
+    deleted, held: heldIdx.length, linksCarried, linkReview, newLinks, supersededSnapshotIds: [],
     effective: { before: effBefore, after: effAfter }, created: insertedId.size,
   };
 }
@@ -840,9 +1068,10 @@ export interface RollbackPlan {
   ok: boolean; reason: string;
   batchId: number; sourceType: string | null; fileName: string | null; createdAt: unknown;
   rowsInBatch: number; effectiveInBatch: number; restoreSuperseded: number; preservedLater: number; carriedLinks: number; linksToReattach: number;
+  undelete: number;   // 이 배치가 삭제(비활성)한 행 중 복구할 행
   effective: { before: number; afterExpected: number };
 }
-interface RollbackTargets { deactivate: number[]; restore: Map<number, number>; preserved: number[]; carriedLinkIds: number[]; reattach: { linkId: number; sale: number; prog: number }[] }
+interface RollbackTargets { deactivate: number[]; restore: Map<number, number>; preserved: number[]; carriedLinkIds: number[]; reattach: { linkId: number; sale: number; prog: number }[]; undelete: number[] }
 
 async function computeRollbackTargets(dbx: any, batchId: number, sourceType: string): Promise<RollbackTargets> {
   const rows = (await dbx.execute(sql`SELECT id, is_effective AS e, superseded_by_id AS s FROM legacy_archive_rows WHERE import_batch_id = ${batchId}`)).rows as any[];
@@ -882,26 +1111,36 @@ async function computeRollbackTargets(dbx: any, batchId: number, sourceType: str
       if (otherEffective || (saleSide && progSide)) reattach.push({ linkId: Number(t.id), sale, prog });
     }
   }
-  return { deactivate, restore, preserved, carriedLinkIds: carried.map(r => Number(r.id)), reattach };
+  // 이 배치의 '최신 파일 기준 삭제' 복구 대상 — 지금도 비유효·미대체인 행만(이후 버전이 생긴 행은 건드리지 않음).
+  const undel = (await dbx.execute(sql`
+    SELECT DISTINCT r.id FROM import_row_sources s JOIN legacy_archive_rows r ON r.id = s.entity_id
+    WHERE s.batch_id = ${batchId} AND s.status = ${SYNC_LOG.deleted} AND NOT r.is_effective AND r.superseded_by_id IS NULL`)).rows as any[];
+  return { deactivate, restore, preserved, carriedLinkIds: carried.map(r => Number(r.id)), reattach, undelete: undel.map(r => Number(r.id)) };
 }
 
 export async function planBatchRollback(dbx: any, batchId: number): Promise<RollbackPlan> {
   const [b] = await dbx.select().from(importBatchesTable).where(eq(importBatchesTable.id, batchId)).limit(1);
   const empty: RollbackPlan = { ok: false, reason: "", batchId, sourceType: b?.sourceType ?? null, fileName: b?.originalFilename ?? null, createdAt: b?.createdAt ?? null,
-    rowsInBatch: 0, effectiveInBatch: 0, restoreSuperseded: 0, preservedLater: 0, carriedLinks: 0, linksToReattach: 0, effective: { before: 0, afterExpected: 0 } };
+    rowsInBatch: 0, effectiveInBatch: 0, restoreSuperseded: 0, preservedLater: 0, carriedLinks: 0, linksToReattach: 0, undelete: 0, effective: { before: 0, afterExpected: 0 } };
   if (!b || b.module !== "legacy_archive") return { ...empty, reason: "과거 CRM 업로드 배치가 아닙니다." };
   if (b.status === "rolled_back") return { ...empty, reason: "이미 되돌린 배치입니다." };
   if (b.status !== "completed") return { ...empty, reason: `완료 상태가 아닌 배치(${b.status})입니다.` };
   const mark = await dbx.select({ n: count() }).from(importRowSourcesTable).where(and(eq(importRowSourcesTable.batchId, batchId), eq(importRowSourcesTable.status, SYNC_MARK_STATUS)));
   if (Number(mark[0].n) === 0) return { ...empty, reason: "반복 업로드 기능 이전에 등록된 원본 배치는 되돌릴 수 없습니다(전체 원본 보호)." };
   const t = await computeRollbackTargets(dbx, batchId, b.sourceType);
+  // 삭제를 포함한 배치는 이후 동기화가 없을 때만 되돌린다(이후 업로드가 같은 업무를 다시 등록했을 수 있어 복구 시 중복 위험).
+  if (t.undelete.length) {
+    const later = (await dbx.execute(sql`SELECT count(*)::int AS n FROM import_batches b WHERE b.module = 'legacy_archive' AND b.source_type = ${b.sourceType}
+      AND b.id > ${batchId} AND b.status = 'completed' AND EXISTS (SELECT 1 FROM import_row_sources s WHERE s.batch_id = b.id AND s.status = ${SYNC_MARK_STATUS})`)).rows[0] as any;
+    if (Number(later.n) > 0) return { ...empty, undelete: t.undelete.length, reason: `이후 동기화 ${later.n}건이 있어 삭제 복구를 포함한 되돌리기는 최신 동기화부터 순서대로 진행해야 합니다.` };
+  }
   const total = (await dbx.execute(sql`SELECT count(*)::int AS n FROM legacy_archive_rows WHERE import_batch_id = ${batchId}`)).rows[0] as any;
   const before = await effectiveCount(dbx, b.sourceType);
   return { ...empty, ok: true,
     reason: t.preserved.length ? `되돌리기 가능 — 이후 다른 업로드로 다시 수정된 ${t.preserved.length}건은 보존` : "되돌리기 가능",
     rowsInBatch: total.n, effectiveInBatch: t.deactivate.length, restoreSuperseded: t.restore.size, preservedLater: t.preserved.length,
-    carriedLinks: t.carriedLinkIds.length, linksToReattach: t.reattach.length,
-    effective: { before, afterExpected: before - t.deactivate.length + t.restore.size } };
+    carriedLinks: t.carriedLinkIds.length, linksToReattach: t.reattach.length, undelete: t.undelete.length,
+    effective: { before, afterExpected: before - t.deactivate.length + t.restore.size + t.undelete.length } };
 }
 
 export async function executeBatchRollback(dbx: any, batchId: number, performerId: number | null) {
@@ -915,25 +1154,26 @@ export async function executeBatchRollback(dbx: any, batchId: number, performerI
   // ② 이전 버전 복원
   const restoreIds = [...new Set(t.restore.values())];
   const restored = restoreIds.length ? await dbx.execute(sql`UPDATE legacy_archive_rows SET is_effective = true, superseded_by_id = NULL WHERE id = ANY(${ids(restoreIds)}) AND NOT is_effective`) : { rowCount: 0 };
+  // ②-b 최신 파일 기준 삭제(비활성) 복구
+  const undeleted = t.undelete.length ? await dbx.execute(sql`UPDATE legacy_archive_rows SET is_effective = true WHERE id = ANY(${ids(t.undelete)}) AND NOT is_effective AND superseded_by_id IS NULL`) : { rowCount: 0 };
   // ③ 이 배치가 이관한 연결은 삭제하지 않고 rolled_back 처리
   const lk = t.carriedLinkIds.length ? await dbx.execute(sql`UPDATE legacy_sales_progress_links SET decision = 'rolled_back' WHERE id = ANY(${ids(t.carriedLinkIds)})`) : { rowCount: 0 };
   // ④ 복원된 이전 버전 ↔ 현재 유효 상대 행 연결 보완(append, 중복 무시)
   let reattached = 0;
   for (const r of t.reattach) {
-    const ins = await dbx.insert(L).values({ saleRowId: r.sale, progressRowId: r.prog, saleNo: null, matchKey: `rollback:${batchId}|from_link:${r.linkId}`, matchMethod: LINK_CARRY_METHOD, decision: "confirmed" })
-      .onConflictDoNothing().returning({ id: L.id });
+    const ins = await upsertConfirmedLink(dbx, { saleRowId: r.sale, progressRowId: r.prog, saleNo: null, matchKey: `rollback:${batchId}|from_link:${r.linkId}`, matchMethod: LINK_CARRY_METHOD });
     reattached += ins.length;
   }
   await dbx.update(importBatchesTable).set({ status: "rolled_back", isCurrent: false }).where(eq(importBatchesTable.id, batchId));
   await dbx.insert(importRowSourcesTable).values({ batchId, module: "legacy_archive", entityId: null, rowKey: "rollback", status: SYNC_LOG.rolledBack, sourceSystem: SOURCE_SYSTEM,
-    sourceRaw: { performerId, deactivated: Number(deact.rowCount ?? 0), restored: Number(restored.rowCount ?? 0), preservedLater: t.preserved, linksRolledBack: Number(lk.rowCount ?? 0), linksReattached: reattached, at: new Date().toISOString() } });
+    sourceRaw: { performerId, deactivated: Number(deact.rowCount ?? 0), restored: Number(restored.rowCount ?? 0), undeleted: Number(undeleted.rowCount ?? 0), preservedLater: t.preserved, linksRolledBack: Number(lk.rowCount ?? 0), linksReattached: reattached, at: new Date().toISOString() } });
 
   const after = await effectiveCount(dbx, st);
   if (after !== plan.effective.afterExpected) throw new Error(`되돌리기 invariant 위반: expected ${plan.effective.afterExpected} ≠ ${after}. 롤백합니다.`);
   const dup = await dbx.select({ k: T.logicalGroupKey, n: count() }).from(T)
     .where(and(eq(T.sourceType, st), eq(T.isEffective, true), isNotNull(T.logicalGroupKey))).groupBy(T.logicalGroupKey).having(sql`count(*) > 1`);
   if (dup.length) throw new Error(`logical_group effective 유일성 위반: ${dup.length}건. 롤백합니다.`);
-  return { ...plan, deactivated: Number(deact.rowCount ?? 0), restored: Number(restored.rowCount ?? 0), linksRolledBack: Number(lk.rowCount ?? 0), linksReattached: reattached,
+  return { ...plan, deactivated: Number(deact.rowCount ?? 0), restored: Number(restored.rowCount ?? 0), undeleted: Number(undeleted.rowCount ?? 0), linksRolledBack: Number(lk.rowCount ?? 0), linksReattached: reattached,
     effective: { before: plan.effective.before, afterExpected: plan.effective.afterExpected, after } };
 }
 
@@ -946,4 +1186,203 @@ export async function listBatchChanges(dbx: any, batchId: number, status: string
     .where(eq(importRowSourcesTable.batchId, batchId)).groupBy(importRowSourcesTable.status)) as { s: string; n: number }[];
   const rows = await dbx.select().from(importRowSourcesTable).where(where).orderBy(importRowSourcesTable.id).limit(size).offset((Math.max(1, page) - 1) * size);
   return { batchId, total, page: Math.max(1, page), pageSize: size, byStatus: Object.fromEntries(byStatus.map(x => [x.s, Number(x.n)])), rows };
+}
+
+// ═══ 판매목록·진행관리표 통합 동기화(같은 기준일 · 전부 반영 또는 전무) ═══════════════════════════
+//   · 미리보기: 진행관리표 → 판매목록 순으로 판정(판매 삭제 충돌은 '같은 실행에서 삭제되는 수행행'을 제외하고 판정).
+//   · 실행: 단일 DB 트랜잭션 + advisory lock(동시 실행 차단). 판매목록 → 진행관리표 순 반영, 어느 하나 실패 시 전체 롤백.
+//   · 기준일(asOfDate)은 각 배치의 sync_batch 로그에 보존. 이전 기준일보다 오래된 파일은 차단.
+//   · 되돌리기: runId 로 묶인 두 배치를 한 트랜잭션에서 되돌린다(진행 → 판매).
+const FULL_SYNC_LOCK_KEY = 74123001;   // pg advisory lock — 과거 CRM 동기화 전용
+const AS_OF_RE = /^\d{4}-\d{2}-\d{2}$/;
+export interface FullSyncSet {
+  id: string; userId: number | null; at: number; asOfDate: string; scope: SyncScope;
+  salesName: string; progressName: string; sales: SyncPreview; progress: SyncPreview;
+  lastAsOf: { sales_list: string | null; progress: string | null };
+  blockers: { code: string; message: string; source?: ArchiveSourceType }[];
+  links: { salesDeletedWithProgressDeleted: number; progressDeletedSaleKept: number };
+  // 관리자 판매취소 확인 대상(선택 실행) — 삭제 충돌 중 '수행행 유지'(linked_progress) 판매건. 운영 전환(activated)은 제외(항상 보호).
+  cancelCandidates: { saleIds: number[]; progressRows: number; progressPretax: number };
+}
+
+// 판매취소 확인 판매건에 연결된 유효 수행행 — 다른 유지 판매건에도 연결된 행·운영 전환 행은 제외(보호).
+async function linkedProgressForCancel(dbx: any, saleIds: number[], excludeProgress: Set<number>): Promise<{ id: number; pretax: number }[]> {
+  if (!saleIds.length) return [];
+  const arr = sql.raw(`ARRAY[${saleIds.join(",")}]::int[]`);
+  const rows = (await dbx.execute(sql`
+    SELECT DISTINCT p.id, coalesce(p.payout_pretax, 0)::numeric AS pretax FROM legacy_sales_progress_links l
+    JOIN legacy_archive_rows p ON p.id = l.progress_row_id AND p.is_effective AND p.superseded_by_id IS NULL
+    WHERE l.decision = 'confirmed' AND l.sale_row_id = ANY(${arr})
+      AND NOT EXISTS (SELECT 1 FROM legacy_sales_progress_links l2 JOIN legacy_archive_rows s2 ON s2.id = l2.sale_row_id AND s2.is_effective
+        WHERE l2.progress_row_id = p.id AND l2.decision = 'confirmed' AND NOT (l2.sale_row_id = ANY(${arr})))`)).rows as any[];
+  const cand = rows.filter(r => !excludeProgress.has(Number(r.id)));
+  if (!cand.length) return [];
+  const asRows = cand.map(r => ({ id: Number(r.id) } as any));
+  const { toDelete } = await classifyDeletions(dbx, "progress", asRows);   // 운영 전환 수행행은 제외
+  const keep = new Set(toDelete.map(r => Number(r.id)));
+  return cand.filter(r => keep.has(Number(r.id))).map(r => ({ id: Number(r.id), pretax: Number(r.pretax) }));
+}
+const fullSyncCache = new Map<string, FullSyncSet>();
+function pruneFull() { const now = Date.now(); for (const [k, v] of fullSyncCache) if (now - v.at > PREVIEW_TTL_MS) fullSyncCache.delete(k); while (fullSyncCache.size > 2) fullSyncCache.delete(fullSyncCache.keys().next().value as string); }
+
+export async function lastSyncAsOf(dbx: any): Promise<{ sales_list: string | null; progress: string | null }> {
+  const rows = (await dbx.execute(sql`
+    SELECT b.source_type AS t, max(s.source_raw->>'asOfDate') AS d FROM import_row_sources s JOIN import_batches b ON b.id = s.batch_id
+    WHERE s.status = ${SYNC_MARK_STATUS} AND b.status = 'completed' AND b.module = 'legacy_archive' AND nullif(s.source_raw->>'asOfDate','') IS NOT NULL
+    GROUP BY b.source_type`)).rows as any[];
+  const m = new Map(rows.map(r => [r.t, r.d ?? null]));
+  return { sales_list: m.get("sales_list") ?? null, progress: m.get("progress") ?? null };
+}
+function staleBlockers(asOfDate: string, last: { sales_list: string | null; progress: string | null }) {
+  const out: { code: string; message: string }[] = [];
+  if (!AS_OF_RE.test(asOfDate)) out.push({ code: "AS_OF_INVALID", message: "동기화 기준일(YYYY-MM-DD)을 입력하세요." });
+  const maxLast = [last.sales_list, last.progress].filter(Boolean).sort().pop() ?? null;
+  if (maxLast && AS_OF_RE.test(asOfDate) && asOfDate < maxLast) out.push({ code: "STALE_AS_OF", message: `기준일 ${asOfDate}이 최종 동기화 기준일 ${maxLast}보다 이전입니다 — 최신 자료를 오래된 파일로 덮어쓸 수 없습니다(실행 차단).` });
+  return out;
+}
+
+export async function buildFullSyncPreview(dbx: any, o: { salesBuffer: Buffer; progressBuffer: Buffer; salesName: string; progressName: string; asOfDate: string; scope: SyncScope; userId: number | null }): Promise<FullSyncSet> {
+  const progress = await buildSyncPreview(dbx, { buffer: o.progressBuffer, sourceType: "progress", scope: o.scope });
+  const progDel = new Set(progress.plan.deletionSuspects.map(e => Number(e.id)));
+  const sales = await buildSyncPreview(dbx, { buffer: o.salesBuffer, sourceType: "sales_list", scope: o.scope, progressDeletionIds: progDel });
+  const lastAsOf = await lastSyncAsOf(dbx);
+  const blockers = [
+    ...staleBlockers(o.asOfDate, lastAsOf),
+    ...sales.blockers.map(b => ({ ...b, source: "sales_list" as const, message: `[판매목록] ${b.message}` })),
+    ...progress.blockers.map(b => ({ ...b, source: "progress" as const, message: `[진행관리표] ${b.message}` })),
+  ];
+  // 연결 검증(미리보기) — 판매 삭제 ↔ 수행행 삭제 동반 여부, 수행행만 삭제(판매 유지 = 일부 수행행 삭제 정상)
+  const salesDel = sales.plan.deletionSuspects.map(e => Number(e.id));
+  let salesDeletedWithProgressDeleted = 0, progressDeletedSaleKept = 0;
+  if (salesDel.length || progDel.size) {
+    const r = (await dbx.execute(sql`
+      SELECT
+        (SELECT count(DISTINCT l.sale_row_id) FROM legacy_sales_progress_links l WHERE l.decision = 'confirmed'
+           AND l.sale_row_id = ANY(${sql.raw(`ARRAY[${salesDel.join(",") || "0"}]::int[]`)})
+           AND l.progress_row_id = ANY(${sql.raw(`ARRAY[${[...progDel].join(",") || "0"}]::int[]`)}))::int AS a,
+        (SELECT count(DISTINCT l.progress_row_id) FROM legacy_sales_progress_links l JOIN legacy_archive_rows s ON s.id = l.sale_row_id AND s.is_effective
+           WHERE l.decision = 'confirmed' AND l.progress_row_id = ANY(${sql.raw(`ARRAY[${[...progDel].join(",") || "0"}]::int[]`)})
+           AND NOT (l.sale_row_id = ANY(${sql.raw(`ARRAY[${salesDel.join(",") || "0"}]::int[]`)})))::int AS b`)).rows[0] as any;
+    salesDeletedWithProgressDeleted = Number(r.a); progressDeletedSaleKept = Number(r.b);
+  }
+  const cancelSaleIds = sales.plan.deletionConflicts.filter(c => c.code === "linked_progress").map(c => Number(c.row.id));
+  const cancelProg = await linkedProgressForCancel(dbx, cancelSaleIds, progDel);
+  pruneFull();
+  for (const p of [sales, progress]) for (const r of p.allRows) (r as any).rawRow = undefined;
+  const set: FullSyncSet = { id: crypto.randomUUID(), userId: o.userId, at: Date.now(), asOfDate: o.asOfDate, scope: o.scope, salesName: o.salesName, progressName: o.progressName,
+    sales, progress, lastAsOf, blockers, links: { salesDeletedWithProgressDeleted, progressDeletedSaleKept },
+    cancelCandidates: { saleIds: cancelSaleIds, progressRows: cancelProg.length, progressPretax: cancelProg.reduce((a, r) => a + r.pretax, 0) } };
+  fullSyncCache.set(set.id, set);
+  return set;
+}
+export function getFullSyncSet(id: string, userId: number | null): FullSyncSet | null {
+  pruneFull(); const s = fullSyncCache.get(id);
+  return s && !(s.userId != null && userId != null && s.userId !== userId) ? s : null;
+}
+export function summarizeFullSync(s: FullSyncSet) {
+  return { fullSyncId: s.id, asOfDate: s.asOfDate, scope: s.scope, salesName: s.salesName, progressName: s.progressName, lastAsOf: s.lastAsOf,
+    blockers: s.blockers, executable: s.blockers.length === 0, links: s.links,
+    cancelCandidates: { sales: s.cancelCandidates.saleIds.length, progressRows: s.cancelCandidates.progressRows, progressPretax: s.cancelCandidates.progressPretax },
+    sales: summarizePreview(s.sales), progress: summarizePreview(s.progress) };
+}
+
+export async function executeFullSync(tx: any, o: { fullSyncId: string; salesToken: string; progressToken: string; userId: number | null; cancelConfirmedSales?: boolean; cancelLinkedProgress?: boolean }) {
+  const lock = (await tx.execute(sql`SELECT pg_try_advisory_xact_lock(${FULL_SYNC_LOCK_KEY}) AS ok`)).rows[0] as any;
+  if (!lock?.ok) throw new SyncError("SYNC_RUNNING", 409, "다른 과거 CRM 동기화가 실행 중입니다. 완료 후 다시 시도하세요.");
+  const set = getFullSyncSet(o.fullSyncId, o.userId);
+  if (!set) throw new SyncError("PREVIEW_EXPIRED", 410, "미리보기 결과가 만료되었습니다. 두 파일로 미리보기를 다시 실행하세요.");
+  if (set.blockers.length) throw new SyncError("SYNC_BLOCKED", 409, set.blockers.map(b => b.message).join(" / "), set.blockers);
+  // 쓰기 전에 두 승인 토큰을 현재 기준선과 대조(판매 반영 후에는 연결 지문이 바뀌므로 반드시 선검증).
+  for (const [p, tok] of [[set.sales, o.salesToken], [set.progress, o.progressToken]] as [SyncPreview, string][]) {
+    const now = computePlanToken(p.sourceType, p.fileHash, p.scope, await baselineFingerprint(tx, p.sourceType));
+    if (!tok || tok !== p.planToken || now !== p.planToken) throw new SyncError("SYNC_PLAN_CHANGED", 409, `미리보기 이후 ${SOURCE_TYPE_LABEL[p.sourceType]} 기준 자료가 바뀌었습니다. 미리보기를 다시 실행하세요.`);
+  }
+  const stale = staleBlockers(set.asOfDate, await lastSyncAsOf(tx));
+  if (stale.length) throw new SyncError("STALE_AS_OF", 409, stale.map(b => b.message).join(" / "));
+  const runId = crypto.randomUUID();
+  const common = { performerId: o.userId, scope: set.scope, approvedAmbiguous: new Set<string>(), asOfDate: set.asOfDate, runId, buffer: Buffer.alloc(0) };
+  // 두 파일 중 하나라도 반영할 변경이 있으면 양쪽 모두 같은 기준일 배치를 남긴다(기준일 불일치 방지). 둘 다 변경 0이면 아무것도 쓰지 않는다.
+  const hasChange = (p: SyncPreview) => p.plan.deletionSuspects.length > 0 || p.plan.decisions.some(d => (d.classification === "NEW" || d.classification === "UPDATED") && !p.storedKeys.has(d.key));
+  const marker = hasChange(set.sales) || hasChange(set.progress);
+  const sales = await executeArchiveSync(tx, { ...common, preview: set.sales, sourceType: "sales_list", fileName: set.salesName, planToken: o.salesToken, recordMarkerIfNoChange: marker });
+  const progress = await executeArchiveSync(tx, { ...common, preview: set.progress, sourceType: "progress", fileName: set.progressName, planToken: o.progressToken, recordMarkerIfNoChange: marker });
+  // 관리자 판매취소 확인(선택): 삭제 충돌(수행행 유지) 판매건을 비활성화. 연결 수행행은 cancelLinkedProgress 일 때만
+  //   (기본: 최신 파일에 남아 있는 수행행은 유지하고 결과에 보고).
+  //   같은 실행의 배치에 sync_deleted 로 기록 → 통합 되돌리기로 함께 복구. 운영 전환 자료는 대상에서 제외.
+  let cancelled = { sales: 0, progress: 0 };
+  if (o.cancelConfirmedSales && set.cancelCandidates.saleIds.length) {
+    const sIds = set.cancelCandidates.saleIds;
+    const pRows = o.cancelLinkedProgress ? await linkedProgressForCancel(tx, sIds, new Set()) : [];
+    const deact = async (ids: number[]) => ids.length ? (await tx.update(T).set({ isEffective: false })
+      .where(and(inArray(T.id, ids), eq(T.isEffective, true), sql`${T.supersededById} IS NULL`)).returning({ id: T.id })).map((r: any) => Number(r.id)) : [];
+    const ds = await deact(sIds), dp = await deact(pRows.map(r => r.id));
+    if (ds.length !== sIds.length) throw new Error(`판매취소 대상 불일치: ${sIds.length} ≠ ${ds.length}. 롤백합니다.`);
+    const log = (batchId: number | null, ids: number[], kind: string) => batchId == null || !ids.length ? [] : ids.map(id => ({ batchId, module: "legacy_archive", entityId: id,
+      rowKey: `existing:${id}`, status: SYNC_LOG.deleted, sourceSystem: SOURCE_SYSTEM, sourceRaw: { reason: "admin_cancel_confirmed", kind, performerId: o.userId, asOfDate: set.asOfDate } }));
+    if (sales.batchId == null || progress.batchId == null) throw new Error("판매취소 처리 기록 배치가 없습니다. 롤백합니다.");
+    await insertLogs(tx, [...log(sales.batchId, ds, "sale"), ...log(progress.batchId, dp, "progress_of_cancelled_sale")]);
+    cancelled = { sales: ds.length, progress: dp.length };
+  }
+  // 판매취소 판매에 연결된 채 유지되는 수행행(최신 파일에 존재) — 보고용
+  const keptOfCancelled = o.cancelConfirmedSales && set.cancelCandidates.saleIds.length ? ((await tx.execute(sql`
+    SELECT s.source_raw->>'판매번호' AS sale_no, p.id, p.translator_name, p.delivery_date::text AS delivery, p.payout_date::text AS payout, coalesce(p.payout_pretax,0)::numeric AS pretax
+    FROM legacy_sales_progress_links l JOIN legacy_archive_rows s ON s.id = l.sale_row_id JOIN legacy_archive_rows p ON p.id = l.progress_row_id AND p.is_effective
+    WHERE l.decision = 'confirmed' AND l.sale_row_id = ANY(${sql.raw(`ARRAY[${set.cancelCandidates.saleIds.join(",")}]::int[]`)}) ORDER BY 1, p.id`)).rows as any[]) : [];
+  const integrity = await syncIntegrity(tx, [sales.batchId, progress.batchId].filter((x): x is number => x != null));
+  if (integrity.newLinksToInactive > 0) throw new Error(`연결 무결성 위반: 이번 동기화가 비유효 행과의 연결 ${integrity.newLinksToInactive}건을 만들었습니다. 롤백합니다.`);
+  if (integrity.orphanedByRun > 0) throw new Error(`연결 무결성 위반: 이번 동기화로 판매건을 잃은 수행행 ${integrity.orphanedByRun}건. 롤백합니다.`);
+  fullSyncCache.delete(set.id);
+  return { runId: sales.batchId || progress.batchId ? runId : null, asOfDate: set.asOfDate, mode: sales.mode === "no_change" && progress.mode === "no_change" ? "no_change" : "applied", sales, progress, integrity, cancelled,
+    keptProgressOfCancelledSales: keptOfCancelled.map(r => ({ saleNo: r.sale_no, progressRowId: Number(r.id), translator: r.translator_name, deliveryDate: r.delivery, payoutDate: r.payout, pretax: Number(r.pretax) })) };
+}
+
+// 동기화 후 연결 정합성(읽기 전용). 신규 연결(link_new)만 대상 — 수정 건의 연결 이관(link_carry)은 기존 관계 보존이므로
+//   같은 실행에서 삭제된 상대 행을 가리켜도 정상(업무 조회는 양쪽 is_effective 로 필터).
+export async function syncIntegrity(dbx: any, batchIds: number[]) {
+  const arr = sql.raw(`ARRAY[${batchIds.join(",") || "0"}]::int[]`);
+  const r = (await dbx.execute(sql`
+    SELECT
+      (SELECT count(*) FROM legacy_sales_progress_links l JOIN legacy_archive_rows s ON s.id = l.sale_row_id JOIN legacy_archive_rows p ON p.id = l.progress_row_id
+        WHERE l.decision = 'confirmed' AND (NOT s.is_effective OR NOT p.is_effective)
+          AND l.id IN (SELECT entity_id FROM import_row_sources WHERE batch_id = ANY(${arr}) AND status = 'link_new'))::int AS new_links_to_inactive,
+      (SELECT count(DISTINCT p.id) FROM legacy_archive_rows p JOIN legacy_sales_progress_links l ON l.progress_row_id = p.id AND l.decision = 'confirmed'
+        WHERE p.is_effective AND p.source_type = 'progress'
+          AND l.sale_row_id IN (SELECT entity_id FROM import_row_sources WHERE batch_id = ANY(${arr}) AND status = ${SYNC_LOG.deleted}
+            AND coalesce(source_raw->>'reason','') <> 'admin_cancel_confirmed')
+          AND NOT EXISTS (SELECT 1 FROM legacy_sales_progress_links l2 JOIN legacy_archive_rows s2 ON s2.id = l2.sale_row_id AND s2.is_effective
+            WHERE l2.progress_row_id = p.id AND l2.decision = 'confirmed'))::int AS orphaned_by_run,
+      (SELECT count(*) FROM (SELECT logical_group_key FROM legacy_archive_rows WHERE is_effective AND logical_group_key IS NOT NULL GROUP BY source_type, logical_group_key HAVING count(*) > 1) x)::int AS dup_groups,
+      (SELECT count(*) FROM legacy_archive_rows WHERE source_type = 'progress' AND is_effective)::int AS progress_effective,
+      (SELECT count(*) FROM legacy_archive_rows WHERE source_type = 'sales_list' AND is_effective)::int AS sales_effective`)).rows[0] as any;
+  return { newLinksToInactive: Number(r.new_links_to_inactive), orphanedByRun: Number(r.orphaned_by_run), duplicateGroups: Number(r.dup_groups),
+    progressEffective: Number(r.progress_effective), salesEffective: Number(r.sales_effective) };
+}
+
+export async function listFullSyncRuns(dbx: any, limit = 20) {
+  const rows = (await dbx.execute(sql`
+    SELECT s.source_raw->>'runId' AS run_id, s.source_raw->>'asOfDate' AS as_of, b.id AS batch_id, b.source_type, b.original_filename, b.status, b.created_at,
+      coalesce((s.source_raw->>'deleted')::int, 0) AS deleted, s.source_raw->'counts' AS counts, s.source_raw->>'performerId' AS performer
+    FROM import_row_sources s JOIN import_batches b ON b.id = s.batch_id
+    WHERE s.status = ${SYNC_MARK_STATUS} AND nullif(s.source_raw->>'runId','') IS NOT NULL
+    ORDER BY b.id DESC LIMIT ${limit * 2}`)).rows as any[];
+  const m = new Map<string, any>();
+  for (const r of rows) {
+    const g = m.get(r.run_id) ?? { runId: r.run_id, asOfDate: r.as_of, createdAt: r.created_at, performerId: r.performer ? Number(r.performer) : null, batches: [] as any[] };
+    g.batches.push({ batchId: Number(r.batch_id), sourceType: r.source_type, fileName: r.original_filename, status: r.status, deleted: Number(r.deleted), counts: r.counts });
+    m.set(r.run_id, g);
+  }
+  return [...m.values()].slice(0, limit).map(g => ({ ...g, rolledBack: g.batches.every((b: any) => b.status === "rolled_back") }));
+}
+
+export async function rollbackFullSync(tx: any, runId: string, performerId: number | null) {
+  const lock = (await tx.execute(sql`SELECT pg_try_advisory_xact_lock(${FULL_SYNC_LOCK_KEY}) AS ok`)).rows[0] as any;
+  if (!lock?.ok) throw new SyncError("SYNC_RUNNING", 409, "다른 과거 CRM 동기화가 실행 중입니다.");
+  const batches = (await tx.execute(sql`
+    SELECT b.id, b.source_type, b.status FROM import_row_sources s JOIN import_batches b ON b.id = s.batch_id
+    WHERE s.status = ${SYNC_MARK_STATUS} AND s.source_raw->>'runId' = ${runId} ORDER BY CASE b.source_type WHEN 'progress' THEN 0 ELSE 1 END`)).rows as any[];
+  if (!batches.length) throw new SyncError("RUN_NOT_FOUND", 404, "동기화 실행 기록을 찾을 수 없습니다.");
+  const out: any[] = [];
+  for (const b of batches) { if (b.status === "rolled_back") continue; out.push(await executeBatchRollback(tx, Number(b.id), performerId)); }
+  if (!out.length) throw new SyncError("ROLLBACK_NOT_ALLOWED", 409, "이미 되돌린 동기화입니다.");
+  return { runId, rolledBack: out };
 }

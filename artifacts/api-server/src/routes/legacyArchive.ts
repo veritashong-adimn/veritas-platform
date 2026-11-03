@@ -387,7 +387,7 @@ router.post("/admin/legacy-archive/preview-rows", ...adminGuard, excelUpload.sin
 
 // POST /admin/legacy-archive/execute — 저장(원본 재검증 후 transaction)
 //   반복 업로드 개선: 변경분 미리보기(sync-preview)의 승인 토큰(planToken) + 대표 승인(approve=true) 필수, 관리자만.
-//   신규·수정만 반영하고 중복 의심은 approvedAmbiguous 로 승인된 행만 저장한다. 삭제·취소 의심은 보고만.
+//   최신 파일 기준: 신규·수정·삭제(비활성, 충돌 제외)를 반영. 중복 의심은 approvedAmbiguous 로 승인된 행만 저장한다.
 router.post("/admin/legacy-archive/execute", requireAuth, requireRole("admin"), excelUpload.single("file"), async (req, res) => {
   try {
     const sourceType = coerceSourceType(req.body?.sourceType);

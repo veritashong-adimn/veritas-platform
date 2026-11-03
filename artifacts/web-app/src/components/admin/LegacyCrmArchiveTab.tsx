@@ -6,6 +6,8 @@ import { api } from '../../lib/constants';
 import { formatAmountDisplay } from '../../lib/utils';
 import { LegacyArchiveDetailPage } from './LegacyArchiveDetailPage';
 import { LegacyArchiveSyncPanel } from './LegacyArchiveSyncPanel';
+import { LegacyCrmFullSyncPanel } from './LegacyCrmFullSyncPanel';
+import { LegacyCrmSavedFiles, type Summary as SavedSummary } from './LegacyCrmSavedFiles';
 
 type SourceType = 'sales_list' | 'progress' | 'translator_list';
 const SOURCE_LABEL: Record<SourceType, string> = { sales_list: '판매목록', progress: '통번역 진행관리', translator_list: 'CRM 통번역사 명부' };
@@ -127,7 +129,28 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
   const [excelPageSize, setExcelPageSize] = useState(50);
   const [excelLoading, setExcelLoading] = useState(false);
   const [showIdentity, setShowIdentity] = useState(false);  // (C-4H-2) 데이터 식별자 진단 펼침
-  const resetImport = () => { setAnalyze(null); setExecResult(null); setShowDupDetail(false); setExcelPreview(null); setExcelPageSize(50); };
+  const resetImport = () => { setAnalyze(null); setExecResult(null); setShowDupDetail(false); setExcelPreview(null); setExcelPageSize(50); setSyncSum(null); };
+  // 자료 유형별 독립 슬롯 — 유형 전환 시 현재 유형의 파일·분석 결과를 보관하고 대상 유형의 것을 복원(다른 유형 파일 표시·덮어쓰기 방지).
+  type Slot = { file: File | null; analyze: AnalyzeResult | null; execResult: ExecuteResult | null; excelPreview: ExcelPreviewPage | null; excelPageSize: number; syncSum: SavedSummary['syncPreview'] };
+  const slotsRef = useRef<Partial<Record<SourceType, Slot>>>({});
+  const [syncSum, setSyncSum] = useState<SavedSummary['syncPreview']>(null);
+  const switchType = (t: SourceType) => {
+    if (t === impType) return;
+    slotsRef.current[impType] = { file, analyze, execResult, excelPreview, excelPageSize, syncSum };
+    const s = slotsRef.current[t];
+    setFile(s?.file ?? null); setAnalyze(s?.analyze ?? null); setExecResult(s?.execResult ?? null);
+    setExcelPreview(s?.excelPreview ?? null); setExcelPageSize(s?.excelPageSize ?? 50); setSyncSum(s?.syncSum ?? null);
+    setShowDupDetail(false); setShowIdentity(false);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    setImpType(t);
+  };
+  const fileFor = (t: SourceType) => (t === impType ? file : slotsRef.current[t]?.file ?? null);
+  // 분석 파일 저장용 요약(집계값만)
+  const savedSummary: SavedSummary | null = analyze || syncSum ? {
+    totalRows: analyze?.archivePlan?.total ?? analyze?.summary?.total ?? 0,
+    archivePlan: analyze?.archivePlan ? { total: analyze.archivePlan.total, toSave: analyze.archivePlan.toSave, sameContentRows: analyze.archivePlan.sameContentRows, warning: analyze.archivePlan.warning } : null,
+    matching: analyze?.recordMatching?.counts ?? null, syncPreview: syncSum ?? null,
+  } : null;
   // (C-4D §8) 파일 내부 동일행은 Execute 차단 사유가 아니다. source identity 충돌(동일 위치·내용 상이)일 때만 차단.
   const dupBlocksExecute = analyze?.archivePlan?.safeToExecute === false;
 
@@ -253,11 +276,12 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
   //   단일 effect 로 통합해 탭 클릭당 요청 1회만 발생(중복요청 방지). 동일 탭 재클릭은 sourceType 불변 → 미발생.
   useEffect(() => { if (mode === 'search') runSearch(1); }, [mode, filters.sourceType]); // eslint-disable-line
 
-  const runAnalyze = useCallback(async () => {
-    if (!file) { setToast('엑셀 파일을 선택하세요.'); return; }
+  const runAnalyze = useCallback(async (override?: File) => {
+    const target = override ?? file;
+    if (!target) { setToast('엑셀 파일을 선택하세요.'); return; }
     setAnalyzing(true); setExecResult(null);
     try {
-      const fd = new FormData(); fd.append('file', file); fd.append('sourceType', impType);
+      const fd = new FormData(); fd.append('file', target); fd.append('sourceType', impType);
       const res = await fetch(api('/api/admin/legacy-archive/analyze'), { method: 'POST', headers: authHeaders, body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || '분석 실패');
@@ -568,12 +592,14 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
 
       {mode === 'import' && (
         <>
+          {/* 최신 CRM 판매목록·진행관리표 통합 동기화(같은 기준일 · 신규·변경·삭제) */}
+          <LegacyCrmFullSyncPanel token={token} setToast={setToast} onApplied={loadSnapshots} />
           <div style={box}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#374151', marginBottom: 10 }}>자료 유형</div>
             <div style={{ display: 'flex', gap: 10 }}>
               {(['sales_list', 'progress', 'translator_list'] as SourceType[]).map(t => (
                 <div key={t} role="button" aria-label={`자료유형 ${SOURCE_LABEL[t]}`} data-testid={`source-type-${t}`}
-                     style={chip(impType === t)} onClick={() => { setImpType(t); resetImport(); }}>{SOURCE_LABEL[t]}</div>
+                     style={chip(impType === t)} onClick={() => switchType(t)}>{SOURCE_LABEL[t]}</div>
               ))}
             </div>
           </div>
@@ -617,8 +643,12 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
 
             {/* 액션 */}
             <div style={{ display: 'flex', gap: 12, marginTop: 14 }}>
-              <button style={btn(!file || analyzing, true)} disabled={!file || analyzing} onClick={runAnalyze} aria-label="Preview 실행" data-testid="archive-preview-btn">{analyzing ? '분석 중…' : 'Preview'}</button>
+              <button style={btn(!file || analyzing, true)} disabled={!file || analyzing} onClick={() => runAnalyze()} aria-label="Preview 실행" data-testid="archive-preview-btn">{analyzing ? '분석 중…' : 'Preview'}</button>
             </div>
+            {/* 분석 파일 저장·불러오기·삭제(보관) — 자료 유형별 독립. CRM 데이터 변경 없음. */}
+            <LegacyCrmSavedFiles token={token} sourceType={impType} sourceLabel={SOURCE_LABEL[impType]} file={file} summary={savedSummary} setToast={setToast}
+              onLoad={(f) => { resetImport(); setFile(f); }} onReanalyze={(f) => { resetImport(); setFile(f); runAnalyze(f); }}
+              reanalyzedSummary={savedSummary} onReset={removeFile} />
           </div>
 
           {analyze && (
@@ -906,7 +936,13 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
           )}
 
           {/* 반복 업로드: 변경분 미리보기 · 대표 승인 반영 · 배치 되돌리기(5분류, 중복 의심 보류, 삭제 의심 표시만) */}
-          <LegacyArchiveSyncPanel token={token} file={file} sourceType={impType} setToast={setToast} onApplied={loadSnapshots} />
+          {/* 자료 유형별 패널을 각각 유지(비활성 유형은 숨김) — 유형을 오가도 변경분 미리보기 결과가 섞이거나 사라지지 않음 */}
+          {(['sales_list', 'progress', 'translator_list'] as SourceType[]).map(t => (
+            <div key={t} hidden={t !== impType} data-testid={`archive-sync-slot-${t}`}>
+              <LegacyArchiveSyncPanel token={token} file={fileFor(t)} sourceType={t} setToast={setToast} onApplied={loadSnapshots}
+                onSummary={(s) => { if (t === impType) setSyncSum(s); else { const sl = slotsRef.current[t]; if (sl) sl.syncSum = s; } }} />
+            </div>
+          ))}
         </>
       )}
     </div>

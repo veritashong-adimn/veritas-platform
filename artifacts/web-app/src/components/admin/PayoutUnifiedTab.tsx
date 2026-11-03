@@ -1,6 +1,6 @@
 // 통합 지급회차관리 (Phase 1 · READ-ONLY) — 과거 CRM(legacy) + 신규 플랫폼(current)을 지급일별로 통합 조회·집계.
 //   · 운영 지급확정/은행이체 로직은 변경하지 않음(§12). 저장·송금·상태변경 없음. 원본값 기준.
-//   · 과거 CRM 지급완료 판정 = 납품일 ≤ 2026-09-15(대표 확인·2026-10-07 CRM 기준) 또는 입금증빙. 조회/표시 전용(원본 불변).
+//   · 과거 CRM 지급완료 판정 = 납품일 ≤ 2026-09-15(대표 확인·2026-10-07 CRM 기준)만. 입금일/입금내역은 고객 수금 기록(지급 증빙 아님). 조회/표시 전용(원본 불변).
 //   · 날짜 기준 기본값 = 납품일(§5). 조회 기준과 지급회차 귀속(지급일)은 분리.
 //   · 중복 의심(§9)은 표시만 — 자동 삭제/제외/지급 없음.
 import React, { useState, useCallback, useEffect } from 'react';
@@ -16,6 +16,7 @@ type RoundRow = {
   assignmentCount: number; legacyCount: number; currentCount: number;
   pretaxTotal: number; posttaxTotal: number; withholdingImplied: number; withholdingRecalc: number;
   paidTotal: number; unpaidTotal: number; needReviewCount: number; excludedCount: number;
+  scheduledCount?: number; scheduledTotal?: number;
 };
 type DetailRow = {
   source: 'legacy' | 'current'; sourceKey: string; id: number;
@@ -24,7 +25,7 @@ type DetailRow = {
   masterEmail: string | null; masterPhone: string | null; originalPhone: string | null;
   matchStatus: string; matchedUserId: number | null; masterKey: string; confirmed: boolean;
   content: string | null; filename: string | null; pretax: number; posttax: number; withholdingImplied: number;
-  status: 'paid' | 'pending' | 'deposit_unconfirmed' | 'excluded' | 'dup_suspect'; statusLabel: string; dupSuspect: boolean;
+  status: 'paid' | 'scheduled' | 'pending' | 'deposit_unconfirmed' | 'excluded' | 'dup_suspect'; statusLabel: string; dupSuspect: boolean;
   paidBasis: string | null;
 };
 type PayeeGroup = {
@@ -32,18 +33,20 @@ type PayeeGroup = {
   email: string | null; phone: string | null; count: number; languages: string[];
   pretaxTotal: number; posttaxTotal: number; withholdingImplied: number;
   paidPretax: number; unpaidPretax: number; paidCount: number; unpaidCount: number; needReviewCount: number; dupSuspectCount: number; sources: string[];
+  scheduledCount?: number;
 };
 
-// 지급상태 — 실제 '지급' 여부만(검증상태와 분리). '지급확인 필요'는 지급일은 있으나 원본에 입금일/입금내역이 없어 지급완료를 확인할 수 없는 건(입금증빙=검증상태와 별개).
+// 지급상태 — 실제 '지급' 여부만(검증상태와 분리). 지급예정 = 지급일 미래·지급확정 기록 없음 · 지급확인 필요 = 지급일 경과/미상·지급확정 기록 없음 · 최신 CRM 파일 기준 동기화로 삭제된 건은 목록·집계에서 제외됨.
 const STATUS_META: Record<string, { label: string; bg: string; fg: string }> = {
   paid: { label: '지급완료', bg: '#eff6ff', fg: '#1d4ed8' },
   pending: { label: '지급대기', bg: '#fffbeb', fg: '#b45309' },
+  scheduled: { label: '지급예정', bg: '#ecfdf5', fg: '#047857' },
   deposit_unconfirmed: { label: '지급확인 필요', bg: '#fef3c7', fg: '#92400e' },
   dup_suspect: { label: '중복 의심', bg: '#fef2f2', fg: '#dc2626' },
   excluded: { label: '지급 제외', bg: '#f1f5f9', fg: '#475569' },
 };
 // 출처(legacy/current)는 화면 열에서 제거(§4) — 데이터·식별정보는 백엔드에 그대로 보존. 회차 목록의 건수(과거/신규)로만 표시.
-const STATUS_OPTS: [string, string][] = [['all', '전체'], ['paid', '지급완료'], ['pending', '지급대기'], ['deposit_unconfirmed', '지급확인 필요'], ['dup_suspect', '중복 의심'], ['excluded', '지급 제외']];
+const STATUS_OPTS: [string, string][] = [['all', '전체'], ['paid', '지급완료'], ['scheduled', '지급예정'], ['pending', '지급대기'], ['deposit_unconfirmed', '지급확인 필요'], ['dup_suspect', '중복 의심'], ['excluded', '지급 제외']];
 const SOURCE_OPTS: [string, string][] = [['all', '전체'], ['legacy', '과거 CRM'], ['current', '신규 플랫폼']];
 
 const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -125,9 +128,10 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
     ['세전금액', `${won(totals.pretaxTotal)}원`, '전체 건 세전 합계'],
     ['원천세공제(3.3%)', `${won(totals.withholdingImpliedTotal)}원`, '원본 세전−세후(실제 공제) 합계 · 3.3%는 참고'],
     ['실지급액(세후)', `${won(totals.posttaxTotal)}원`, '전체 건 세후(실지급) 합계 = 세전 − 원천세공제'],
-    ['지급완료(세전)', `${won(totals.paidTotal)}원`, '입금 증빙이 있는 지급완료 건의 세전 합계(전체 세후와 기준이 다름)'],
+    ['지급완료(세전)', `${won(totals.paidTotal)}원`, '지급완료 건의 세전 합계 — 과거 CRM: 납품일 ≤ 2026-09-15(대표 확인) · 신규: 지급회차 지급완료 처리 건(전체 세후와 기준이 다름)'],
     ['미지급(세전)', `${won(totals.unpaidTotal)}원`, '신규 미지급 건의 세전 합계'],
-    ['지급확인 필요', `${num(totals.needReviewCount)}건`, '지급일은 있으나 원본에 입금일/입금내역이 없어 지급완료를 확인할 수 없는 건(지급상태) · 입금증빙·Master연결·금액 검증과 무관. 대표 확인 대상.'],
+    ['지급예정', `${num(totals.scheduledCount)}건`, '과거 CRM 지급일이 오늘 이후이고 지급확정 기록이 없는 건'],
+    ['지급확인 필요', `${num(totals.needReviewCount)}건`, '지급일이 지났거나 미상인데 지급확정 기록이 없는 과거 CRM 건 · 입금일/입금내역(고객 수금)은 지급 근거가 아님. 대표 확인 대상.'],
   ] : [];
 
   // 선택한 통번역사의 상세만 표시(§6). null=미선택(숨김) · '__all__'=전체 건별.
@@ -149,7 +153,7 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
     <div data-testid="payout-unified-tab">
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '0 0 8px', flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 19, fontWeight: 800, color: '#111827', margin: 0 }}>지급회차관리</h1>
-        <span style={{ fontSize: 11.5, color: '#9ca3af' }}>과거 CRM + 신규 플랫폼 통합 조회 · 조회/명세서 전용(지급확정·송금 없음) · 과거 CRM 지급완료 = 대표 확인(2026-10-07 CRM 기준, 납품일 ≤ 2026-09-15) 또는 입금증빙</span>
+        <span style={{ fontSize: 11.5, color: '#9ca3af' }}>과거 CRM + 신규 플랫폼 통합 조회 · 조회/명세서 전용(지급확정·송금 없음) · 과거 CRM 지급완료 = 대표 확인(2026-10-07 CRM 기준, 납품일 ≤ 2026-09-15)만 · 입금내역(고객 수금)은 지급 근거 아님</span>
       </div>
 
       {/* 검색조건 — 한 줄(폭 부족 시 줄바꿈) */}
@@ -179,7 +183,7 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
       <div style={secTitle}>① 지급회차 목록 <span style={{ fontSize: 11, fontWeight: 600, color: '#9ca3af' }}>· 행 클릭 → 통번역사별 지급내역</span></div>
       <div style={roundsBox}>
         <table className="veritas-read-table vz-sticky" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-          <thead><tr>{['지급일(회차)', '수행건수', '출처(과거/신규)', '세전금액', '원천세공제', '지급완료', '미지급', '지급확인'].map(h => <th key={h} style={{ padding: '8px 12px', textAlign: h.includes('금액') || h.includes('완료') || h.includes('미지급') || h.includes('공제') ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
+          <thead><tr>{['지급일(회차)', '수행건수', '출처(과거/신규)', '세전금액', '원천세공제', '지급완료', '미지급', '지급예정', '지급확인'].map(h => <th key={h} style={{ padding: '8px 12px', textAlign: h.includes('금액') || h.includes('완료') || h.includes('미지급') || h.includes('공제') ? 'right' : 'left', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
           <tbody>
             {rounds.map((r, i) => (
               <tr key={(r.payoutDate ?? 'none') + i} data-testid={`pu-round-${r.payoutDate ?? 'none'}`} onClick={() => loadDetail(r)}
@@ -191,10 +195,11 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
                 <td style={{ ...tdR, color: '#6b7280' }}>{won(r.withholdingImplied)}</td>
                 <td style={{ ...tdR, color: '#1d4ed8' }}>{won(r.paidTotal)}</td>
                 <td style={{ ...tdR, color: r.unpaidTotal > 0 ? '#b45309' : '#9ca3af' }}>{won(r.unpaidTotal)}</td>
-                <td style={{ ...tdR, color: r.needReviewCount > 0 ? '#92400e' : '#9ca3af' }}>{r.needReviewCount.toLocaleString()}건</td>
+                <td style={{ ...tdR, color: num(r.scheduledCount) > 0 ? '#047857' : '#9ca3af' }} data-testid={`pu-round-scheduled-${r.payoutDate ?? 'none'}`}>{num(r.scheduledCount).toLocaleString()}건</td>
+                <td style={{ ...tdR, color: r.needReviewCount > 0 ? '#92400e' : '#9ca3af' }} data-testid={`pu-round-review-${r.payoutDate ?? 'none'}`}>{r.needReviewCount.toLocaleString()}건</td>
               </tr>
             ))}
-            {rounds.length === 0 && !loading && <tr><td colSpan={8} style={{ padding: 28, textAlign: 'center', color: '#9ca3af' }}>조회된 회차가 없습니다.</td></tr>}
+            {rounds.length === 0 && !loading && <tr><td colSpan={9} style={{ padding: 28, textAlign: 'center', color: '#9ca3af' }}>조회된 회차가 없습니다.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -256,10 +261,11 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
                         {/* 지급상태(§4②) — 건수 기준으로 지급완료/지급확인필요/미지급을 분리 표시. 연결 검증상태와 혼합하지 않음. */}
                         <div style={{ textAlign: 'right', display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                           {g.paidCount > 0 && <span style={{ fontSize: 10, color: '#1d4ed8', background: '#eff6ff', padding: '1px 5px', borderRadius: 7 }}>지급완료 {g.paidCount}건</span>}
-                          {g.needReviewCount > 0 && <span style={{ fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 7 }} title="지급일은 있으나 원본에 입금일/입금내역이 없어 지급완료를 확인할 수 없는 건(대표 확인 대상)">지급확인 필요 {g.needReviewCount}건</span>}
+                          {g.needReviewCount > 0 && <span style={{ fontSize: 10, color: '#92400e', background: '#fef3c7', padding: '1px 5px', borderRadius: 7 }} title="지급일이 지났거나 미상인데 지급확정 기록이 없는 건(대표 확인 대상)">지급확인 필요 {g.needReviewCount}건</span>}
+                          {num(g.scheduledCount) > 0 && <span style={{ fontSize: 10, color: '#047857', background: '#ecfdf5', padding: '1px 5px', borderRadius: 7 }} title="지급일이 미래이고 지급확정 기록이 없는 건">지급예정 {num(g.scheduledCount)}건</span>}
                           {g.unpaidCount > 0 && <span style={{ fontSize: 10, color: '#b45309', background: '#fffbeb', padding: '1px 5px', borderRadius: 7 }}>미지급 {g.unpaidCount}건</span>}
                           {g.dupSuspectCount > 0 && <span style={{ fontSize: 10, color: '#dc2626', background: '#fef2f2', padding: '1px 5px', borderRadius: 7 }}>중복 {g.dupSuspectCount}건</span>}
-                          {g.paidCount === 0 && g.unpaidCount === 0 && g.needReviewCount === 0 && g.dupSuspectCount === 0 && <span style={{ fontSize: 10, color: '#9ca3af' }}>-</span>}
+                          {g.paidCount === 0 && g.unpaidCount === 0 && g.needReviewCount === 0 && g.dupSuspectCount === 0 && !num(g.scheduledCount) && <span style={{ fontSize: 10, color: '#9ca3af' }}>-</span>}
                         </div>
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                           <button style={stmtBtn} data-testid={`pu-excel-${g.name}`} onClick={(e) => { e.stopPropagation(); exportReproStatementExcel(opts); onToast(`${g.name} 지급명세서 Excel을 다운로드했습니다.`); }}>Excel</button>
@@ -301,7 +307,7 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
                           <td style={tdR}>{won(p.pretax)}</td>
                           <td style={tdR}>{won(p.posttax)}</td>
                           <td style={{ ...tdR, color: '#dc2626' }}>{won(p.withholdingImplied)}</td>
-                          <td style={td}><span style={{ padding: '2px 8px', borderRadius: 10, background: sm.bg, color: sm.fg, fontSize: 12, fontWeight: 700, cursor: p.paidBasis ? 'help' : undefined }} title={p.paidBasis ? `지급완료 근거: ${p.paidBasis}` : undefined} data-testid={`pu-detail-status-${i}`}>{sm.label}</span></td>
+                          <td style={td}><span style={{ padding: '2px 8px', borderRadius: 10, background: sm.bg, color: sm.fg, fontSize: 12, fontWeight: 700, cursor: p.paidBasis ? 'help' : undefined }} title={p.paidBasis ? `지급완료 근거: ${p.paidBasis}` : undefined} data-testid={`pu-detail-status-${i}`} aria-label={`지급상태 ${sm.label}`}>{sm.label}</span></td>
                         </tr>
                       );
                     })}

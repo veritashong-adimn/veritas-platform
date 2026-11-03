@@ -9,8 +9,8 @@
 //   · DB write 전혀 없음(순수 SELECT 집계). 운영 payout_rounds/items/transfers·지급확정·IBK 미접촉.
 //   · 과거 CRM 원본/신규 수행정보 원본 수정·삭제·복사 없음. Master 연결정보 변경 없음.
 //   · 지급상태 분류는 "조회 표시"일 뿐 — 지급확정/송금을 발생시키지 않는다.
-//   · 과거 '지급완료' 판정은 원본 입금일/입금내역 증빙 기준(지급일만으로 단정하지 않음 §7).
-//     입금증빙 없고 지급 여부 불명 → '확인 필요'.
+//   · 과거 '지급완료' 판정 = 납품일 ≤ 2026-09-15(대표 확인)만. 지급일·입금일/입금내역(고객 수금)만으로 단정하지 않음(§7).
+//     지급 여부 불명 → 지급예정(지급일 미래) / 지급확인 필요(지급일 경과·미상).
 //
 // 엔드포인트(GET, 읽기 전용):
 //   GET /admin/payout-unified/rounds    지급일별 통합 회차 목록(과거+신규, 필터·페이지네이션)
@@ -22,20 +22,19 @@ import { sql } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
+import { LEGACY_PAID_DELIVERY_CUTOFF, LEGACY_PAID_BASIS } from "../lib/legacyPayoutRule";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 const REFERENCE_TREATMENT = "domestic_3_3" as const;
 
-// ── 과거 CRM 지급완료 정정 기준(대표 확인) ──────────────────────────────────────
-//   대표가 2026-10-07 다운로드한 기존 CRM 진행관리표를 대조한 결과, 납품일 2026-09-15까지
-//   납품 완료된 과거 CRM 건은 입금증빙 유무와 무관하게 실제 지급이 완료된 자료임을 확인.
-//   → 과거(legacy) 건의 지급완료 판정 = (납품일 ≤ 2026-09-15) OR (입금일/입금내역 증빙 존재).
+// ── 과거 CRM 지급완료 판정 기준 — lib/legacyPayoutRule.ts(SSOT) 참조 ───────────────
+//   · 지급완료 = 납품일 ≤ 2026-09-15(대표 확인)만. 입금일/입금내역은 '고객 수금' 기록이므로 지급 증빙이 아니다
+//     (2026-11 전수조사: 지급예정일 미래 건이 입금내역 때문에 '지급완료'로 표시되던 오류 정정).
+//   · 그 외: 지급일 > 오늘(KST) → 지급예정 · 지급일 ≤ 오늘/미상 → 지급확인 필요.
+//   · 최신 CRM 파일 기준 동기화로 삭제(비활성)된 행은 is_effective=false → 지급대상·회차 집계에서 자동 제외.
 //   · 원본(legacy_archive_rows) 불변 — 조회/표시 전용 판정. 신규 지급거래·지급회차 생성 없음(§5).
-//   · 납품일 2026-09-16 이후 건은 기존 증빙 기준 유지. 납품일 누락/무효 건은 자동 지급완료 처리하지 않음(별도 보고).
-//   · 신규 플랫폼(current) 건에는 이 기준을 적용하지 않는다(payment_status 그대로).
-const LEGACY_PAID_DELIVERY_CUTOFF = "2026-09-15";
-const LEGACY_PAID_BASIS = "대표 확인 · 2026-10-07 CRM 자료 기준(납품일 ≤ 2026-09-15)";
+//   · 신규 플랫폼(current) 건에는 이 기준을 적용하지 않는다(payment_status 그대로 — 지급회차 [지급완료]로만 paid).
 
 function num(v: unknown): number { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 function parseBasis(v: unknown): "payout" | "delivery" { return v === "payout" ? "payout" : "delivery"; } // 기본값 = 납품일(§5)
@@ -63,7 +62,7 @@ function phoneFull(raw: string | null | undefined): string | null {
 }
 function emailFull(raw: string | null | undefined): string | null { if (isLegacyPlaceholderEmail(raw)) return null; const e = (raw ?? "").trim(); return e || null; }
 
-// 과거 진행관리(progress) 정규화 — 원본 불변. 입금일/입금내역 → 지급완료 증빙(§7).
+// 과거 진행관리(progress) 정규화 — 원본 불변. 입금일/입금내역 = 고객 수금 기록(지급 증빙 아님).
 const PROG = sql`
   prog AS (
     SELECT
@@ -80,13 +79,12 @@ const PROG = sql`
       CASE WHEN regexp_replace(coalesce(source_raw->>'주민등록번호',''), '[^0-9]', '', 'g') ~ '^[0-9]{6}'
            THEN substring(regexp_replace(source_raw->>'주민등록번호','[^0-9]','','g') from 1 for 6) || '-*******' ELSE NULL END AS rrn_masked,
       (source_raw->>'파일명' ILIKE '%급여%' OR source_raw->>'파일명' ILIKE '%근로소득%') AS is_payroll,
-      -- 입금증빙(검증상태): 입금일 또는 입금내역 존재. 지급완료 판정의 보조 근거.
+      -- 고객 수금 기록(입금일 또는 입금내역) 존재 — 검증 참고 정보. ※ 통번역사 지급 증빙이 아니다(지급완료 판정에 사용 금지).
       (nullif(btrim(source_raw->>'입금일'),'') IS NOT NULL OR nullif(btrim(source_raw->>'입금내역'),'') IS NOT NULL) AS has_deposit,
-      -- 지급완료 판정(과거 CRM 공통 규칙): 납품일 ≤ 2026-09-15(대표 확인) 또는 입금증빙 존재.
-      --   납품일 누락/무효 && 증빙 없음 → false(지급확인 필요, 자동 지급완료 안 함).
-      (coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false)
-        OR nullif(btrim(source_raw->>'입금일'),'') IS NOT NULL
-        OR nullif(btrim(source_raw->>'입금내역'),'') IS NOT NULL) AS legacy_paid,
+      -- 지급완료 판정(과거 CRM): 납품일 ≤ 2026-09-15(대표 확인)만. 납품일 누락/무효 → false(자동 지급완료 안 함).
+      coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false) AS legacy_paid,
+      -- 지급예정: 지급일이 오늘(KST) 이후. 지급일 경과/미상은 지급확인 필요.
+      coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') > to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false) AS payout_future,
       coalesce(nullif(regexp_replace(coalesce(source_raw->>'지급액(세전)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0) AS pretax,
       coalesce(nullif(regexp_replace(coalesce(source_raw->>'지금액(세후)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0) AS posttax
     FROM legacy_archive_rows WHERE source_type = 'progress' AND is_effective = true
@@ -119,14 +117,20 @@ const CUR = sql`
   )`;
 
 // 지급상태 코드 — 실제 '지급' 여부만 나타낸다(검증상태와 분리).
-//   paid 지급완료(과거 입금증빙 有 / 신규 paid) · deposit_unconfirmed 지급확인 필요(과거 지급일은 있으나 입금일/입금내역 미기재 → 원본으로 지급완료 확인 불가)
+//   paid 지급완료(과거: 납품일 ≤ cutoff 대표 확인 / 신규: 지급회차 [지급완료] 처리된 payment_status=paid)
+//   · scheduled 지급예정(과거: 지급일이 미래, 지급확정 기록 없음)
+//   · deposit_unconfirmed 지급확인 필요(과거: 지급일 경과·미상인데 지급확정 기록 없음) — 코드값은 호환 위해 유지
 //   · pending 지급대기(신규 미지급) · excluded 지급 제외(신규 보류) · dup_suspect 중복 의심.
-//   ※ Master 연결·입금증빙(hasDeposit)·금액 검증은 '검증상태'이며 지급상태에 섞지 않는다(§3).
-//     입금증빙 유무는 응답의 hasDeposit(검증상태)로 별도 제공하며, 지급상태 명칭에 '입금확인'을 쓰지 않는다.
-type PayStatus = "paid" | "deposit_unconfirmed" | "pending" | "excluded" | "dup_suspect";
+//   ※ hasDeposit = 고객 수금 기록 유무(검증 참고). 통번역사 지급 여부와 무관하며 지급상태에 섞지 않는다.
+type PayStatus = "paid" | "scheduled" | "deposit_unconfirmed" | "pending" | "excluded" | "dup_suspect";
 const STATUS_LABEL: Record<PayStatus, string> = {
-  paid: "지급완료", deposit_unconfirmed: "지급확인 필요", pending: "지급대기", excluded: "지급 제외", dup_suspect: "중복 의심",
+  paid: "지급완료", scheduled: "지급예정", deposit_unconfirmed: "지급확인 필요",
+  pending: "지급대기", excluded: "지급 제외", dup_suspect: "중복 의심",
 };
+function legacyStatus(r: { legacy_paid?: unknown; payout_future?: unknown }): PayStatus {
+  if (r.legacy_paid === true) return "paid";
+  return r.payout_future === true ? "scheduled" : "deposit_unconfirmed";
+}
 
 // 날짜 범위 필터(선택 기준 컬럼에 적용). 그룹핑은 항상 실제 지급일(payout_date).
 function rangeCond(basis: "payout" | "delivery", dFrom: string | null, dTo: string | null) {
@@ -152,14 +156,16 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, async (req, res) => {
       ${translator ? sql` AND translator ILIKE ${"%" + translator + "%"}` : sql``}
       ${client ? sql` AND client ILIKE ${"%" + client + "%"}` : sql``}`;
 
-    // 과거 집계 — 지급완료(입금증빙)/확인필요 구분.
+    // 과거 집계 — 지급완료(대표 확인 cutoff)/지급예정/확인필요 구분.
     const legacyRows = source === "current" ? [] : (await db.execute(sql`WITH ${PROG}
       SELECT payout_date,
         count(*)::int AS cnt,
         count(DISTINCT translator) FILTER (WHERE translator IS NOT NULL)::int AS payees,
         coalesce(sum(pretax),0) AS pretax_total, coalesce(sum(posttax),0) AS posttax_total,
         coalesce(sum(pretax) FILTER (WHERE legacy_paid),0) AS paid_total,
-        count(*) FILTER (WHERE NOT legacy_paid)::int AS need_review_cnt
+        count(*) FILTER (WHERE NOT legacy_paid AND NOT payout_future)::int AS need_review_cnt,
+        count(*) FILTER (WHERE NOT legacy_paid AND payout_future)::int AS scheduled_cnt,
+        coalesce(sum(pretax) FILTER (WHERE NOT legacy_paid AND payout_future),0) AS scheduled_total
       FROM prog ${filters} GROUP BY payout_date`)).rows as any[];
 
     // 신규 집계 — paid/unpaid/hold.
@@ -177,13 +183,14 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, async (req, res) => {
     const map = new Map<string, any>();
     const key = (d: any) => d ?? "__none__";
     for (const r of legacyRows) {
-      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, legacyCnt: 0, currentCnt: 0 };
+      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0 };
       g.cnt += num(r.cnt); g.pretax += num(r.pretax_total); g.posttax += num(r.posttax_total);
       g.paid += num(r.paid_total); g.needReview += num(r.need_review_cnt); g.legacyCnt += num(r.cnt);
+      g.scheduled += num(r.scheduled_cnt); g.scheduledTotal += num(r.scheduled_total);
       map.set(k, g);
     }
     for (const r of curRows) {
-      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, legacyCnt: 0, currentCnt: 0 };
+      const k = key(r.payout_date); const g = map.get(k) ?? { payoutDate: r.payout_date ?? null, cnt: 0, payees: new Set<string>(), pretax: 0, posttax: 0, paid: 0, unpaid: 0, needReview: 0, excluded: 0, scheduled: 0, scheduledTotal: 0, legacyCnt: 0, currentCnt: 0 };
       g.cnt += num(r.cnt); g.pretax += num(r.pretax_total); g.posttax += num(r.posttax_total);
       g.paid += num(r.paid_total); g.unpaid += num(r.unpaid_total); g.excluded += num(r.excluded_cnt); g.currentCnt += num(r.cnt);
       map.set(k, g);
@@ -204,6 +211,7 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, async (req, res) => {
         withholdingImplied,
         withholdingRecalc: recalcDeduction(g.pretax),
         paidTotal: g.paid, unpaidTotal: g.unpaid, needReviewCount: g.needReview, excludedCount: g.excluded,
+        scheduledCount: g.scheduled, scheduledTotal: g.scheduledTotal,
       };
     });
     res.json({ rounds, basis, pagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) }, referenceRate: 3.3 });
@@ -274,10 +282,9 @@ router.get("/admin/payout-unified/payees", ...adminGuard, async (req, res) => {
         else matchStatus = "unmatched";
         // Master 키: 연결된 건(active/confirmed 매핑)만 Master 기준 합산. 미연결은 이름키로 별도(자동병합 아님).
         const masterKey = r.mapped_user_id != null ? `m:${r.mapped_user_id}` : `n:${r.translator ?? "?"}`;
-        // 지급완료 판정(과거 CRM 공통 규칙, PROG.legacy_paid와 동일) — 납품일 ≤ cutoff(대표 확인) 또는 입금증빙.
-        const status: PayStatus = r.legacy_paid ? "paid" : "deposit_unconfirmed";
-        const deliveryLeCutoff = r.delivery_date != null && r.delivery_date <= LEGACY_PAID_DELIVERY_CUTOFF;
-        const paidBasis: string | null = r.legacy_paid ? (deliveryLeCutoff ? LEGACY_PAID_BASIS : "입금증빙(입금일/입금내역)") : null;
+        // 지급상태(과거 CRM, PROG 판정과 동일) — 지급완료는 납품일 ≤ cutoff(대표 확인)만. 입금내역(고객 수금)은 근거 아님.
+        const status: PayStatus = legacyStatus(r);
+        const paidBasis: string | null = r.legacy_paid ? LEGACY_PAID_BASIS : null;
         return {
           source: "legacy", sourceKey: r.source_key, id: num(r.id),
           deliveryDate: r.delivery_date ?? null, payoutDate: r.payout_date ?? null,
@@ -308,7 +315,7 @@ router.get("/admin/payout-unified/payees", ...adminGuard, async (req, res) => {
           masterKey: r.master_user_id != null ? `m:${r.master_user_id}` : (r.vendor_company_id != null ? `v:${r.vendor_company_id}` : `n:${r.translator ?? "?"}`),
           confirmed, isPayroll: false, content, filename: null,
           pretax, posttax, withholdingImplied: Math.round((pretax - posttax) * 100) / 100,
-          status, statusLabel: STATUS_LABEL[status], hasDeposit: ps === "paid", paidBasis: null,
+          status, statusLabel: STATUS_LABEL[status], hasDeposit: ps === "paid", paidBasis: ps === "paid" ? "지급회차 지급완료 처리" : null,
         };
       }),
     ];
@@ -335,11 +342,12 @@ router.get("/admin/payout-unified/payees", ...adminGuard, async (req, res) => {
     // ── 통번역사(Master)별 통합 집계(§8) — 확정 연결 기준 masterKey. 미확정은 이름키로 분리.
     const groups = new Map<string, any>();
     for (const it of items) {
-      const g = groups.get(it.masterKey) ?? { masterKey: it.masterKey, name: it.translator ?? "(이름 미상)", confirmed: it.confirmed, matchStatus: it.matchStatus, matchedUserId: it.matchedUserId, email: it.masterEmail ?? null, phone: it.masterPhone ?? it.originalPhone ?? null, count: 0, pretax: 0, posttax: 0, paidPretax: 0, unpaidPretax: 0, paidCount: 0, unpaidCount: 0, needReview: 0, dupSuspect: 0, sources: new Set<string>(), languages: new Set<string>() };
+      const g = groups.get(it.masterKey) ?? { masterKey: it.masterKey, name: it.translator ?? "(이름 미상)", confirmed: it.confirmed, matchStatus: it.matchStatus, matchedUserId: it.matchedUserId, email: it.masterEmail ?? null, phone: it.masterPhone ?? it.originalPhone ?? null, count: 0, pretax: 0, posttax: 0, paidPretax: 0, unpaidPretax: 0, paidCount: 0, unpaidCount: 0, needReview: 0, dupSuspect: 0, scheduled: 0, sources: new Set<string>(), languages: new Set<string>() };
       g.count++; g.pretax += it.pretax; g.posttax += it.posttax; g.sources.add(it.source); if (it.language) g.languages.add(it.language);
       if ((it as any).status === "paid") { g.paidPretax += it.pretax; g.paidCount++; }
       else if ((it as any).status === "pending") { g.unpaidPretax += it.pretax; g.unpaidCount++; }
       else if ((it as any).status === "deposit_unconfirmed") g.needReview++;
+      else if ((it as any).status === "scheduled") g.scheduled++;
       if ((it as any).status === "dup_suspect") g.dupSuspect++;
       if (!g.email && it.masterEmail) g.email = it.masterEmail; if (!g.phone && (it.masterPhone || it.originalPhone)) g.phone = it.masterPhone ?? it.originalPhone;
       groups.set(it.masterKey, g);
@@ -349,6 +357,7 @@ router.get("/admin/payout-unified/payees", ...adminGuard, async (req, res) => {
       email: g.email, phone: g.phone, count: g.count,
       pretaxTotal: g.pretax, posttaxTotal: g.posttax, withholdingImplied: Math.round((g.pretax - g.posttax) * 100) / 100,
       paidPretax: g.paidPretax, unpaidPretax: g.unpaidPretax, paidCount: g.paidCount, unpaidCount: g.unpaidCount, needReviewCount: g.needReview, dupSuspectCount: g.dupSuspect,
+      scheduledCount: g.scheduled,
       sources: [...g.sources], languages: [...g.languages],   // 해당 회차 수행 언어(중복 제거). 없으면 빈 배열.
     })).sort((a, b) => a.name.localeCompare(b.name, "ko"));
 
@@ -359,8 +368,9 @@ router.get("/admin/payout-unified/payees", ...adminGuard, async (req, res) => {
       const st = (p as any).status;
       if (st === "paid") t.paidTotal += p.pretax; else if (st === "pending") t.unpaidTotal += p.pretax;
       if (st === "deposit_unconfirmed") t.needReviewCount++; if (st === "dup_suspect") t.dupSuspectCount++; if (st === "excluded") t.excludedCount++;
+      if (st === "scheduled") { t.scheduledCount++; t.scheduledTotal += p.pretax; }
       return t;
-    }, { assignmentCount: 0, pretaxTotal: 0, posttaxTotal: 0, withholdingImpliedTotal: 0, paidTotal: 0, unpaidTotal: 0, needReviewCount: 0, dupSuspectCount: 0, excludedCount: 0 });
+    }, { assignmentCount: 0, pretaxTotal: 0, posttaxTotal: 0, withholdingImpliedTotal: 0, paidTotal: 0, unpaidTotal: 0, needReviewCount: 0, dupSuspectCount: 0, excludedCount: 0, scheduledCount: 0, scheduledTotal: 0 });
     (totals as any).payeeCount = new Set(items.map(i => i.masterKey)).size;
 
     res.json({ items: shown, allCount: items.length, payees, totals, basis, contactFull: canViewFullContact, referenceRate: 3.3 });

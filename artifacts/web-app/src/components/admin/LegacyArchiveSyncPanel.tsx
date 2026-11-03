@@ -1,6 +1,7 @@
 // 과거 CRM 반복 업로드 — 변경분 미리보기 · 대표 승인 반영 · 배치 되돌리기 패널
-//   신규 / 수정 / 변경 없음 / 중복 의심 / 삭제·취소 의심 5분류와 수정 전후 값을 보여주고,
-//   대표(관리자)가 확인·승인한 경우에만 반영한다. 중복 의심은 건별 승인한 행만 저장, 삭제 의심은 보고만.
+//   신규 / 수정 / 변경 없음 / 중복 의심 / 삭제 5분류와 수정 전후 값을 보여주고,
+//   대표(관리자)가 확인·승인한 경우에만 반영한다. 중복 의심은 건별 승인한 행만 저장.
+//   최신 파일 기준 동기화(sync-v3): 최신 파일에 없는 행은 삭제(비활성·복구 가능) 반영, 운영 전환·연결 보존 건은 충돌로 보고.
 import React, { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/constants';
 import { formatAmountDisplay } from '../../lib/utils';
@@ -20,7 +21,8 @@ type PageRow = {
 type Summary = {
   planToken: string; total: number; alreadyStored: number; conflicts: number; safeToExecute: boolean; scope: 'range' | 'full';
   comparedWith?: { sourceType: SourceType; label: string; effectiveRows: number; detectedFileType: SourceType | null };
-  counts: Record<'NEW' | 'UPDATED' | 'SAME' | 'AMBIGUOUS' | 'DELETION_SUSPECT', number>;
+  counts: Record<'NEW' | 'UPDATED' | 'SAME' | 'AMBIGUOUS' | 'DELETION_SUSPECT', number> & { DELETION_CONFLICT?: number };
+  blockers?: { code: string; message: string }[];
   saleNoValidation: { applicable: boolean; usable: boolean; reason: string; total: number; withSaleNo: number; duplicateInFileKeys: number; duplicateInExistingKeys: number; inconsistentMatches: number };
   deletionScope: { mode: string; from: string | null; to: string | null; outOfScope: number; undated: number };
   impact: { updatedWithLinks: number; linksToCarry: number; linkReview: number; masterLost: number; masterMoved: number; newUnmappedNames: number; deletionSuspectWithLinks: number;
@@ -35,7 +37,7 @@ const CLS_META: Record<Cls, { label: string; color: string; bg: string }> = {
   UPDATED: { label: '수정', color: '#92400e', bg: '#fffbeb' },
   SAME: { label: '변경 없음', color: '#065f46', bg: '#ecfdf5' },
   AMBIGUOUS: { label: '중복 의심', color: '#991b1b', bg: '#fef2f2' },
-  DELETION_SUSPECT: { label: '삭제·취소 의심', color: '#6b21a8', bg: '#faf5ff' },
+  DELETION_SUSPECT: { label: '삭제(최신 파일에 없음)', color: '#6b21a8', bg: '#faf5ff' },
 };
 const FIELD_LABEL: Record<string, string> = {
   companyName: '거래처', contactName: '담당자', productName: '상품', language: '언어', recordDate: '체결일', translatorName: '통번역사',
@@ -45,8 +47,9 @@ const FIELD_LABEL: Record<string, string> = {
 const AMOUNT_FIELDS = new Set(['payoutPretax', 'supplyAmount', 'vatAmount', 'totalAmount']);
 const fmt = (f: string, v: unknown) => (v == null || v === '' ? '(없음)' : AMOUNT_FIELDS.has(f) ? formatAmountDisplay(v as any) : String(v));
 
-export function LegacyArchiveSyncPanel({ token, file, sourceType, setToast, onApplied }: {
+export function LegacyArchiveSyncPanel({ token, file, sourceType, setToast, onApplied, onSummary }: {
   token: string; file: File | null; sourceType: SourceType; setToast: (m: string) => void; onApplied?: () => void;
+  onSummary?: (s: { counts: Record<string, number>; scope: string } | null) => void;   // 분석 파일 저장용 집계(표시 전용)
 }) {
   const authHeaders = { Authorization: `Bearer ${token}` };
   const [scope, setScope] = useState<'range' | 'full'>('range');
@@ -66,9 +69,32 @@ export function LegacyArchiveSyncPanel({ token, file, sourceType, setToast, onAp
   const [batches, setBatches] = useState<Batch[]>([]);
   const [rbPlan, setRbPlan] = useState<any>(null);
   const [rbBusy, setRbBusy] = useState(false);
+  // 삭제 충돌 상세(펼침) — 미리보기 캐시(previewId)에서 조회만 한다(판정·반영 로직 무관).
+  const [conflictOpen, setConflictOpen] = useState(false);
+  const [conflictRows, setConflictRows] = useState<any[] | null>(null);
+  const [conflictLoading, setConflictLoading] = useState(false);
 
   // 파일·유형·범위가 바뀌면 이전 판정·승인 무효화
   useEffect(() => { setSummary(null); setPreviewId(null); setRows([]); setApprovedAmb(new Set()); setConfirmChecked(false); setResult(null); }, [file, sourceType, scope]);
+  useEffect(() => { onSummary?.(summary ? { counts: { ...summary.counts }, scope: summary.scope } : null); }, [summary?.planToken]); // eslint-disable-line
+  // 미리보기가 새로 계산되면(토큰 변경) 이전 충돌 상세는 무효
+  useEffect(() => { setConflictOpen(false); setConflictRows(null); }, [summary?.planToken]);
+  const toggleConflicts = async () => {
+    if (conflictOpen) { setConflictOpen(false); return; }
+    setConflictOpen(true);
+    if (conflictRows || !previewId) return;
+    setConflictLoading(true);
+    try {
+      const res = await fetch(api('/api/admin/legacy-archive/sync-preview/page'), {
+        method: 'POST', headers: { ...authHeaders, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ previewId, cls: 'DELETION_CONFLICT', page: 1, pageSize: 200 }),
+      });
+      const data = await res.json();
+      if (res.status === 410) throw new Error('미리보기 결과가 만료되었습니다. 변경분 미리보기를 다시 실행하세요.');
+      if (!res.ok) throw new Error(data?.error || '삭제 충돌 상세 조회 실패');
+      setConflictRows(data.page.rows ?? []);
+    } catch (e: any) { setToast(e?.message || '삭제 충돌 상세 조회 실패'); setConflictOpen(false); } finally { setConflictLoading(false); }
+  };
 
   const load = useCallback(async (nextCls: Cls, nextPage: number, nextSize: number, reset: boolean) => {
     if (!file) { setToast('엑셀 파일을 선택하세요.'); return; }
@@ -151,16 +177,17 @@ export function LegacyArchiveSyncPanel({ token, file, sourceType, setToast, onAp
   const td: React.CSSProperties = { padding: '6px 8px', borderTop: '1px solid #f3f4f6', verticalAlign: 'top' };
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const willApply = summary ? summary.counts.NEW + summary.counts.UPDATED + approvedAmb.size : 0;
-  const canApply = !!summary && summary.safeToExecute && confirmChecked && !applying && willApply > 0;
+  const blocked = !!summary?.blockers?.length;
+  const canApply = !!summary && summary.safeToExecute && !blocked && confirmChecked && !applying && (willApply > 0 || summary.counts.DELETION_SUSPECT > 0);
 
   return (
     <div style={box} data-testid="archive-sync-panel">
       <div style={{ fontSize: 15, fontWeight: 800, color: '#111827' }}>변경분 미리보기 · 대표 승인 반영</div>
       <div style={{ fontSize: 12, color: '#6b7280', margin: '4px 0 10px' }}>
-        기존 자료와 비교해 신규·수정만 반영합니다. 중복 의심은 승인한 건만 저장하고, 삭제·취소 의심은 표시만 합니다(자동 삭제 없음). 같은 파일을 다시 올려도 중복 생성되지 않습니다.
+        최신 파일 기준으로 신규·수정·삭제를 반영합니다. 최신 파일에 없는 행은 삭제(비활성 — 업무 화면·집계 제외, 되돌리기로 복구 가능)되며, 플랫폼 운영 전환 건·연결이 남은 건은 충돌로 분리해 삭제하지 않습니다. 중복 의심은 승인한 건만 저장합니다. 같은 파일을 다시 올려도 중복 생성·중복 삭제되지 않습니다.
       </div>
       <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, fontWeight: 700 }}>삭제·취소 의심 판정 범위</span>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>삭제 판정 범위</span>
         {([['range', '업로드 파일 기간만(일부 기간 파일)'], ['full', '전체 기간 파일']] as const).map(([v, label]) => (
           <label key={v} style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
             <input type="radio" name="sync-scope" checked={scope === v} onChange={() => setScope(v)} data-testid={`sync-scope-${v}`} aria-label={label} />{label}
@@ -198,8 +225,38 @@ export function LegacyArchiveSyncPanel({ token, file, sourceType, setToast, onAp
               <div>판매번호 검증: <b style={{ color: summary.saleNoValidation.usable ? '#065f46' : '#b45309' }}>{summary.saleNoValidation.usable ? '통과' : '미통과'}</b> — {summary.saleNoValidation.reason}
                 {' '}(보유 {summary.saleNoValidation.withSaleNo}/{summary.saleNoValidation.total}, 파일 내 중복 번호 {summary.saleNoValidation.duplicateInFileKeys}, 기존 중복 번호 {summary.saleNoValidation.duplicateInExistingKeys}, 번호 재사용 의심 {summary.saleNoValidation.inconsistentMatches})</div>
             )}
-            <div>삭제·취소 의심 범위: {summary.deletionScope.mode === 'full' ? '전체 기간' : `${summary.deletionScope.from ?? '-'} ~ ${summary.deletionScope.to ?? '-'}`}
-              {summary.deletionScope.mode === 'range' && ` (범위 밖 ${summary.deletionScope.outOfScope.toLocaleString()}건·날짜 없음 ${summary.deletionScope.undated.toLocaleString()}건은 판정 제외)`}</div>
+            <div>삭제 판정 범위: {summary.deletionScope.mode === 'full' ? '전체 기간' : `${summary.deletionScope.from ?? '-'} ~ ${summary.deletionScope.to ?? '-'}`}
+              {summary.deletionScope.mode === 'range' && ` (범위 밖 ${summary.deletionScope.outOfScope.toLocaleString()}건·날짜 없음 ${summary.deletionScope.undated.toLocaleString()}건은 판정 제외)`}
+              {(summary.counts.DELETION_CONFLICT ?? 0) > 0 && <> · <button type="button" onClick={toggleConflicts} data-testid="sync-conflict-toggle" aria-expanded={conflictOpen}
+                aria-label={`삭제 충돌 ${summary.counts.DELETION_CONFLICT}건 상세 ${conflictOpen ? '접기' : '보기'}`}
+                style={{ border: 'none', background: 'none', padding: 0, cursor: 'pointer', color: '#b45309', fontWeight: 700, fontSize: 12, textDecoration: 'underline' }}>
+                삭제 충돌 {summary.counts.DELETION_CONFLICT}건(운영 전환·연결 보존 — 삭제 안 함) {conflictOpen ? '▲' : '▼'}</button></>}</div>
+            {conflictOpen && (
+              <div data-testid="sync-conflict-detail" style={{ margin: '6px 0', border: '1px solid #fed7aa', borderRadius: 8, overflowX: 'auto', background: '#fffbeb' }}>
+                {conflictLoading ? <div style={{ padding: 10, color: '#6b7280' }}>불러오는 중…</div> : (
+                  <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12 }}>
+                    <thead><tr>{['판매번호', '거래처명', '상품명', sourceType === 'progress' ? '지급액(세전)' : '판매금액', '삭제 보류 사유', '연결된 운영자료'].map(h => <th key={h} style={{ padding: '6px 8px', textAlign: h.includes('금액') || h.includes('지급액') ? 'right' : 'left', color: '#6b7280', whiteSpace: 'nowrap' }}>{h}</th>)}</tr></thead>
+                    <tbody>
+                      {(conflictRows ?? []).map((r, i) => (
+                        <tr key={r.existingId ?? i} data-testid={`sync-conflict-row-${i}`}>
+                          <td style={{ ...td, whiteSpace: 'nowrap' }}>{r.saleNo ?? '-'}</td>
+                          <td style={td}>{r.companyName ?? '-'}</td>
+                          <td style={td}>{r.productName ?? '-'}</td>
+                          <td style={{ ...td, textAlign: 'right', whiteSpace: 'nowrap' }}>{fmt(sourceType === 'progress' ? 'payoutPretax' : 'totalAmount', sourceType === 'progress' ? r.payoutPretax : r.totalAmount)}</td>
+                          <td style={{ ...td, color: '#4b5563' }}>{r.reason ?? '-'}</td>
+                          <td style={{ ...td, whiteSpace: 'nowrap', fontWeight: 700, color: r.conflictCode === 'activated' ? '#b91c1c' : r.conflictCode === 'linked_progress' ? '#92400e' : '#6b7280' }}>
+                            {r.conflictCode === 'activated' ? '있음 — 운영 판매건 전환' : r.conflictCode === 'linked_progress' ? '있음 — 진행관리표 수행행 연결' : '없음 — 식별 불가'}
+                          </td>
+                        </tr>
+                      ))}
+                      {conflictRows && conflictRows.length === 0 && <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: '#9ca3af' }}>표시할 충돌 건이 없습니다.</td></tr>}
+                    </tbody>
+                  </table>
+                )}
+                {conflictRows && <div style={{ padding: '5px 8px', fontSize: 11.5, color: '#6b7280' }} data-testid="sync-conflict-count">상세 {conflictRows.length.toLocaleString()}건 / 표시 {(summary.counts.DELETION_CONFLICT ?? 0).toLocaleString()}건 — 삭제하지 않고 그대로 보존됩니다.</div>}
+              </div>
+            )}
+            {blocked && <div style={{ color: '#b91c1c', fontWeight: 700 }} data-testid="sync-blockers">실행 차단: {summary.blockers!.map(b => b.message).join(' / ')}</div>}
             <div>연결 영향: 수정 건 중 판매·진행 연결 보유 {summary.impact.updatedWithLinks}건(연결 {summary.impact.linksToCarry}개 새 버전으로 이관, 재검토 {summary.impact.linkReview}건)
               {sourceType === 'progress' && ` · 수행이력 Master 연결 끊김 ${summary.impact.masterLost}건 · Master 변경 ${summary.impact.masterMoved}건 · 미연결 통번역사명 ${summary.impact.newUnmappedNames}명`}
               {summary.impact.deletionSuspectWithLinks > 0 && ` · 연결 있는 삭제 의심 ${summary.impact.deletionSuspectWithLinks}건`}</div>
@@ -286,15 +343,15 @@ export function LegacyArchiveSyncPanel({ token, file, sourceType, setToast, onAp
           <div style={{ marginTop: 14, padding: 12, borderRadius: 8, background: '#fff7ed', border: '1px solid #fed7aa' }} data-testid="sync-approval-box">
             <div style={{ fontSize: 13, fontWeight: 800, color: '#9a3412', marginBottom: 6 }}>대표 승인</div>
             <div style={{ fontSize: 12.5, color: '#374151', marginBottom: 8 }}>
-              반영: 신규 {summary.counts.NEW.toLocaleString()}건 · 수정 {summary.counts.UPDATED.toLocaleString()}건 · 중복 의심 승인 {approvedAmb.size}건
-              {' '}/ 반영 안 함: 중복 의심 보류 {(summary.counts.AMBIGUOUS - approvedAmb.size).toLocaleString()}건 · 삭제·취소 의심 {summary.counts.DELETION_SUSPECT.toLocaleString()}건(표시만) · 변경 없음 {summary.counts.SAME.toLocaleString()}건
+              반영: 신규 {summary.counts.NEW.toLocaleString()}건 · 수정 {summary.counts.UPDATED.toLocaleString()}건 · 삭제 {summary.counts.DELETION_SUSPECT.toLocaleString()}건 · 중복 의심 승인 {approvedAmb.size}건
+              {' '}/ 반영 안 함: 중복 의심 보류 {(summary.counts.AMBIGUOUS - approvedAmb.size).toLocaleString()}건 · 삭제 충돌 {(summary.counts.DELETION_CONFLICT ?? 0).toLocaleString()}건 · 변경 없음 {summary.counts.SAME.toLocaleString()}건
             </div>
             <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" checked={confirmChecked} onChange={e => setConfirmChecked(e.target.checked)} data-testid="sync-confirm-check" aria-label="변경 내용을 확인했으며 반영을 승인합니다" />
               변경 내용을 확인했으며 반영을 승인합니다(관리자 권한 필요, 되돌리기 가능)
             </label>
             <button style={{ ...btn(!canApply, '#c2410c'), marginTop: 8 }} disabled={!canApply} onClick={apply} data-testid="sync-apply-btn" aria-label="승인 후 반영">
-              {applying ? '반영 중…' : willApply === 0 ? '반영할 변경 없음' : `승인 후 반영 (${willApply.toLocaleString()}건)`}
+              {applying ? '반영 중…' : willApply === 0 && summary.counts.DELETION_SUSPECT === 0 ? '반영할 변경 없음' : `승인 후 반영 (${(willApply + summary.counts.DELETION_SUSPECT).toLocaleString()}건)`}
             </button>
           </div>
         </>
@@ -303,7 +360,7 @@ export function LegacyArchiveSyncPanel({ token, file, sourceType, setToast, onAp
       {result && (
         <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#ecfdf5', border: '1px solid #a7f3d0', fontSize: 12.5 }} data-testid="sync-result">
           {result.mode === 'no_change' ? '반영할 변경이 없어 아무것도 저장하지 않았습니다.' : <>
-            <b>배치 #{result.batchId} 반영 완료</b> — 신규 {result.applied.created} · 수정 {result.applied.updated} · 중복 의심 승인(신규 {result.applied.approvedNew}·수정 {result.applied.approvedUpdate}) · 연결 이관 {result.linksCarried}(재검토 {result.linkReview}) · 보류 {result.held} · 삭제 의심 {result.deletionSuspects}
+            <b>배치 #{result.batchId} 반영 완료</b> — 신규 {result.applied.created} · 수정 {result.applied.updated} · 중복 의심 승인(신규 {result.applied.approvedNew}·수정 {result.applied.approvedUpdate}) · 연결 이관 {result.linksCarried}(재검토 {result.linkReview}) · 보류 {result.held} · 삭제 {result.deleted ?? 0} · 삭제 충돌 {result.deletionConflicts ?? 0}
             <div>유효 자료 {result.effective.before.toLocaleString()} → {result.effective.after.toLocaleString()}건 · 변경 없음 {result.unchangedSkipped?.toLocaleString?.() ?? 0}건은 저장하지 않음</div>
           </>}
         </div>

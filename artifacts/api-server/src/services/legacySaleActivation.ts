@@ -22,6 +22,7 @@ import {
 } from "@workspace/db";
 import { sql, eq } from "drizzle-orm";
 import { normalizeCompanyName } from "../lib/normalizeCompany";
+import { isLegacyConfirmedPaid } from "../lib/legacyPayoutRule";
 import { getSettings } from "../lib/getSettings";
 import { generateQuoteNumber } from "../routes/admin";
 import { applyPerformanceRow, loadKrHolidaySet, type ApplyRowCtx } from "../routes/performances";
@@ -233,7 +234,11 @@ export async function buildActivationPlan(dbx: Dbx, legacyRowId: number) {
     const pv = { gross: lp.gross };
     const original = lp.original;
     const hasAmount = (original ?? 0) > 0 || pv.gross > 0;
-    const planned: PlannedPayStatus = rr.payDate ? "legacy_paid" : hasAmount ? "payout_review" : "unpaid";
+    // 지급상태 계획 — '통번역사지급일'은 지급"예정"일이므로 값 존재만으로 지급완료로 보지 않는다(2026-11 정정).
+    //   · 지급완료(legacy_paid): 지급일 有 + 납품일 ≤ 2026-09-15(대표 확인 cutoff, lib/legacyPayoutRule).
+    //   · 그 외 지급일 有 또는 금액 有 → payout_review(지급 확인 필요 · 보류) — 이중지급·허위 지급완료 방지.
+    const planned: PlannedPayStatus = rr.payDate && isLegacyConfirmedPaid(rr.deliveryDate) ? "legacy_paid"
+      : (rr.payDate || hasAmount) ? "payout_review" : "unpaid";
     return {
       progressRowId: Number(p.id), rowHash: p.row_hash as string,
       translatorName: rr.translatorName || null, translatorId: tm.id, translatorMatch: tm.method,

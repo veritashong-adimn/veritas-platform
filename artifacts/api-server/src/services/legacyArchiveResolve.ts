@@ -899,6 +899,50 @@ export function diffMutable(ex: MatchableRow, inc: MatchableRow): ChangedField[]
   }
   return out;
 }
+// ─── 상호 최선 1:1 대응(mutual best) — 중복 의심 축소용 보수적 매칭 ─────────────────────
+//   · 같은 업무 후보 묶음 안에서, 기존 행 e 와 최신 행 r 이 서로에게 '유일한 최고 점수' 상대일 때만 대응한다.
+//   · 점수 = 통번역사·납품일·지급일·지급액(세전)·총액·공급가·언어·담당자·발행일 일치(가중치). 최소 점수 미달·동점은 대응하지 않음
+//     → 서로 다른 정상 수행행을 임의로 병합하지 않는다. 남은 행은 호출부가 신규/삭제/보류로 판정.
+const numEq = (a: unknown, b: unknown) => numNorm(a) === numNorm(b) && numNorm(a) !== "∅";
+export function matchScore(e: MatchableRow, r: MatchableRow): number {
+  let s = 0;
+  if (normName(e.translatorName) && normName(e.translatorName) === normName(r.translatorName)) s += 3;
+  if (e.deliveryDate && e.deliveryDate === r.deliveryDate) s += 2;
+  if (e.payoutDate && e.payoutDate === r.payoutDate) s += 2;
+  if (numEq(e.payoutPretax, r.payoutPretax)) s += Number(numNorm(e.payoutPretax)) !== 0 ? 2 : 0.5;
+  if (numEq(e.totalAmount, r.totalAmount) && Number(numNorm(e.totalAmount)) !== 0) s += 1;
+  if (numEq(e.supplyAmount, r.supplyAmount) && Number(numNorm(e.supplyAmount)) !== 0) s += 1;
+  if (e.language && e.language === r.language) s += 0.5;
+  if (normName(e.contactName) && normName(e.contactName) === normName(r.contactName)) s += 0.5;
+  if (e.recordDate && e.recordDate === r.recordDate) s += 0.5;
+  return s;
+}
+export const MATCH_MIN_SCORE = 4;   // 예: 통번역사+납품일(5), 통번역사+지급액(5) — 단일 항목 일치만으로는 대응 안 함
+export function mutualBestPairs<E extends MatchableRow, I extends MatchableRow>(exs: E[], incs: I[], min = MATCH_MIN_SCORE): { pairs: [number, number][]; exLeft: number[]; incLeft: number[] } {
+  let exLeft = exs.map((_, j) => j), incLeft = incs.map((_, i) => i);
+  const pairs: [number, number][] = [];
+  const sc = exs.map(e => incs.map(r => matchScore(e, r)));
+  for (let guard = 0; guard < 1000; guard++) {
+    const best = (vals: [number, number][]) => { // [idx, score] → 유일 최고(동점이면 null)
+      let b: [number, number] | null = null, tie = false;
+      for (const v of vals) { if (!b || v[1] > b[1]) { b = v; tie = false; } else if (v[1] === b[1]) tie = true; }
+      return b && !tie && b[1] >= min ? b[0] : null;
+    };
+    const found: [number, number][] = [];
+    for (const j of exLeft) {
+      const i = best(incLeft.map(i => [i, sc[j][i]] as [number, number])); if (i == null) continue;
+      const jj = best(exLeft.map(x => [x, sc[x][i]] as [number, number]));
+      if (jj === j) found.push([j, i]);
+    }
+    if (!found.length) break;
+    for (const [j, i] of found) pairs.push([j, i]);
+    const uj = new Set(found.map(f => f[0])), ui = new Set(found.map(f => f[1]));
+    exLeft = exLeft.filter(j => !uj.has(j)); incLeft = incLeft.filter(i => !ui.has(i));
+    if (!exLeft.length || !incLeft.length) break;
+  }
+  return { pairs, exLeft, incLeft };
+}
+
 function sameMultiset(a: MatchableRow[], b: MatchableRow[]): boolean {
   if (a.length !== b.length) return false;
   const m = new Map<string, number>();
@@ -970,6 +1014,12 @@ export function matchIncomingRows(incoming: MatchableRow[], existing: MatchableR
         if (j != null) pair(i, j, "동일 묶음 + 통번역사명 유일 일치", "medium"); else rest.push(i);
       }
       left = rest; exLeft = exLeft.filter(j => !exUsed.has(j));
+    }
+    // ③-b 남은 행끼리 상호 최선 1:1(통번역사·납품일·지급일·금액 점수, 동점·저점수 제외)
+    if (left.length && exLeft.length) {
+      const mb = mutualBestPairs(exLeft.map(j => exRows[j]), left.map(i => incoming[i]));
+      for (const [jx, ix] of mb.pairs) pair(left[ix], exLeft[jx], "동일 묶음 + 상호 최선 대응(통번역사·납품일·지급 항목)", "medium");
+      left = mb.incLeft.map(ix => left[ix]); exLeft = exLeft.filter(j => !exUsed.has(j));
     }
     if (left.length && exLeft.length === 0) {
       for (const i of left) decisions[i] = { index: i, classification: "NEW", matchedExistingId: null, matchedLogicalGroupKey: null, matchedEffectiveVersion: null, changedFields: [], confidence: "medium", sameSet: false, groupKey: key, candidateCount: exRows.length, reason: `동일 묶음의 기존 ${exRows.length}건이 모두 대응됨 — 추가 수행 건` };
