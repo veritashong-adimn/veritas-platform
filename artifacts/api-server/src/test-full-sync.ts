@@ -240,9 +240,11 @@ async function body() {
   // ── ⑦ 동일 파일 재업로드 → 변경 0 ──
   const set3 = await preview(salesBuf, progBuf);
   const s3 = summarizeFullSync(set3);
-  check("⑦ 동일 파일 재업로드: 변경·삭제 0 · 신규 = CRM 파일에 남은 판매취소 수행행만(재등장 — CRM 정리 필요)",
-    s3.sales.counts.NEW === 0 && s3.sales.counts.UPDATED === 0 && s3.sales.counts.DELETION_SUSPECT === 0 && s3.progress.counts.UPDATED === 0 && s3.progress.counts.DELETION_SUSPECT === 0 && s3.progress.counts.NEW === r.cancelled.progress,
-    `판매 ${JSON.stringify(s3.sales.counts)} / 진행 ${JSON.stringify(s3.progress.counts)} / 취소 수행행 ${r.cancelled.progress}`);
+  check("⑦ 동일 파일 재업로드: 신규·변경·삭제 0 (판매취소 확정 수행행은 재등록 안 함)",
+    ["sales", "progress"].every(k => s3[k].counts.NEW === 0 && s3[k].counts.UPDATED === 0 && s3[k].counts.DELETION_SUSPECT === 0) && s3.progress.cancelledSkipped === r.cancelled.progress && r.cancelled.progress > 0,
+    `판매 ${JSON.stringify(s3.sales.counts)} / 진행 ${JSON.stringify(s3.progress.counts)} / 재등록 제외 ${s3.progress.cancelledSkipped}·취소 수행행 ${r.cancelled.progress}`);
+  const r3 = await run(set3);
+  check("⑦ 동일 파일 재실행 → no_change(배치 미생성)", r3.mode === "no_change" && r3.runId === null);
   const stale = await preview(salesBuf, progBuf, "2026-10-01");
   check("기준일 검증: 최종 기준일(2026-11-04)보다 오래된 파일 차단", stale.blockers.some(b => b.code === "STALE_AS_OF"));
 

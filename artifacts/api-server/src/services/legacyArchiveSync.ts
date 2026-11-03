@@ -146,6 +146,7 @@ export interface SyncPlan {
   deletionSuspects: SyncRow[];          // (호환 명칭) 실제 삭제 대상 — 충돌 분리 후 갱신
   deletionConflicts: DeletionConflict[];
   relaxedMatches: number;               // 식별 항목(체결일 등) 변경을 동일 업무로 재매칭한 건수
+  cancelledSkipped?: number;            // 판매취소 확정으로 비활성화된 수행행과 같은 최신 행 — 재등록하지 않음
   deletionScope: { mode: SyncScope; from: string | null; to: string | null; outOfScope: number; undated: number; inScope: number };
 }
 
@@ -601,9 +602,17 @@ export async function buildSyncPreview(dbx: any, opts: { buffer: Buffer; sourceT
   const exRaw = new Map<number, Record<string, unknown>>();
   const baseRawRows = await dbx.select({ id: T.id, raw: T.sourceRaw }).from(T).where(and(eq(T.sourceType, opts.sourceType), eq(T.isEffective, true)));
   const baseKeys = new Set<string>();
-  for (const r of baseRawRows) { const raw = (r.raw ?? {}) as Record<string, unknown>; exRaw.set(r.id as number, raw); for (const k of Object.keys(raw)) baseKeys.add(k); }
+  // 비교 열 = 업로드 파일 열 ∩ '모든' 기존 유효 행이 가진 열(교집합). 합집합을 쓰면 최신 CRM 이 열을 추가한 뒤
+  //   (예: 2026-11-03 수익률·수익액·지급액(교통비포함)) 새 버전 행만 그 열을 가져 기존 행 전체가 '내용 변경'으로 보이고
+  //   여러 행 묶음이 대량 중복 의심이 된다(재동기화 비멱등). 교집합이면 열 추가 전후 비교가 안정적이다.
+  let baseAll: Set<string> | null = null;
+  for (const r of baseRawRows) {
+    const raw = (r.raw ?? {}) as Record<string, unknown>; exRaw.set(r.id as number, raw);
+    const ks = Object.keys(raw); for (const k of ks) baseKeys.add(k);
+    if (baseAll == null) baseAll = new Set(ks); else { const cur = new Set(ks); for (const k of [...baseAll]) if (!cur.has(k)) baseAll.delete(k); }
+  }
   const incKeys = new Set<string>(); for (const r of allRows) for (const k of Object.keys(r.sourceRaw ?? {})) incKeys.add(k);
-  const common = [...incKeys].filter(k => baseKeys.has(k)).sort();
+  const common = [...incKeys].filter(k => (baseAll ?? baseKeys).has(k)).sort();
   const compHash = (raw: Record<string, unknown> | null | undefined) =>
     crypto.createHash("sha256").update(JSON.stringify(common.map(k => [k, rawNorm((raw ?? {})[k])]))).digest("hex");
   if (baseKeys.size > 0) {
@@ -611,6 +620,45 @@ export async function buildSyncPreview(dbx: any, opts: { buffer: Buffer; sourceT
     incoming.forEach((r, i) => { r.rowHash = compHash(allRows[i].sourceRaw); });
   }
   const plan = planSync(opts.sourceType, incoming, baseline, opts.scope);
+  // 판매취소 확정으로 비활성화된 수행행(되돌리지 않은 배치) — CRM 파일에 남아 있어도 신규로 재등록하지 않는다.
+  //   대응 = 거래처·상품·통번역사·납품일(재매칭 키) 1:1. 다른 신규 행은 그대로 신규.
+  if (opts.sourceType === "progress") {
+    const cx = (await dbx.execute(sql`
+      SELECT DISTINCT r.id, r.company_name, r.product_name, r.translator_name, r.delivery_date::text AS delivery_date, r.source_raw
+      FROM import_row_sources s JOIN import_batches b ON b.id = s.batch_id AND b.status = 'completed'
+      JOIN legacy_archive_rows r ON r.id = s.entity_id AND NOT r.is_effective AND r.superseded_by_id IS NULL
+      WHERE s.status = ${SYNC_LOG.deleted} AND s.source_raw->>'reason' = 'admin_cancel_confirmed' AND s.source_raw->>'kind' = 'progress_of_cancelled_sale'`)).rows as any[];
+    if (cx.length) {
+      // 1순위: 원본 내용 일치(비교 해시 — 같은 열 기준). 각 취소 행은 1회만 대응.
+      //   (거래처·상품·통번역사·납품일 키로는 대응하지 않는다 — 취소 후 재계약된 새 판매의 수행행을 잘못 제외할 수 있음.
+      //    실례: 2026-10-13-0004 취소 → 2026-10-29-0005 재계약, 같은 통번역사·납품일)
+      const hashOf = (raw: any) => (baseKeys.size > 0 ? compHash(raw ?? {}) : null);
+      const used = new Set<number>();
+      const rowsByHash = new Map<string, any[]>();
+      for (const r of cx) { const h = hashOf(r.source_raw); if (h) { const a = rowsByHash.get(h) ?? []; a.push(r); rowsByHash.set(h, a); } }
+      const take = (arr: any[] | undefined) => { const x = arr?.find(r => !used.has(Number(r.id))); if (x) used.add(Number(x.id)); return !!x; };
+      // 3순위: 판매취소 확정 '판매건'에 속한 행 — 판매↔진행 연결 규칙과 같은 키(거래처|상품|총액|판매일=체결일).
+      //   CRM 이 취소 판매의 수행행을 고쳐 쓴 경우(금액 기입·행 분할)도 재등록하지 않는다.
+      const cancelledSaleKeys = new Set<string>(((await dbx.execute(sql`
+        SELECT DISTINCT r.company_name, r.product_name, r.total_amount, r.source_raw->>'판매번호' AS sale_no
+        FROM import_row_sources s JOIN import_batches b ON b.id = s.batch_id AND b.status = 'completed'
+        JOIN legacy_archive_rows r ON r.id = s.entity_id AND NOT r.is_effective
+        WHERE s.status = ${SYNC_LOG.deleted} AND s.source_raw->>'reason' = 'admin_cancel_confirmed' AND s.source_raw->>'kind' = 'sale'`)).rows as any[])
+        .map(r => saleLinkKey(r.company_name, r.product_name, r.total_amount, dateOnly(r.sale_no))?.key).filter((k): k is string => !!k));
+      const inCancelledSale = (i: number) => { const raw = allRows[i].sourceRaw ?? {}; const k = saleLinkKey(raw["거래처명"] as any, raw["상품명"] as any, raw["총액"], dateOnly(raw["체결일"])); return !!k && cancelledSaleKeys.has(k.key); };
+      let skipped = 0;
+      plan.decisions.forEach((d, i) => {
+        const held = d.classification === "AMBIGUOUS" && d.matchedExistingId == null;
+        if (d.classification !== "NEW" && !held) return;
+        const hit = d.classification === "NEW" && take(rowsByHash.get(incoming[i].rowHash));
+        if (!hit && !inCancelledSale(i)) return;
+        if (held) { plan.counts.AMBIGUOUS--; plan.counts.SAME++; } else { plan.counts.NEW--; plan.counts.SAME++; }
+        skipped++;
+        Object.assign(d, { classification: "SAME", confidence: "high", reason: "판매취소 확정 판매의 수행행 — 최신 CRM 파일에 남아 있어도 재등록하지 않음" });
+      });
+      plan.cancelledSkipped = skipped;
+    }
+  }
   // 삭제 대상 ↔ 충돌 분리(운영 전환·연결 보존). 충돌은 삭제하지 않고 보고.
   const dc = await classifyDeletions(dbx, opts.sourceType, plan.deletionSuspects, opts.progressDeletionIds);
   plan.deletionSuspects = dc.toDelete;
@@ -714,7 +762,7 @@ export function summarizePreview(p: SyncPreview) {
     saleNoValidation: p.plan.saleNo, deletionScope: p.plan.deletionScope, impact: p.impactSummary,
     changeSummary: { ...p.changeSummary, topColumns: Object.entries(p.changeSummary.columns).sort((a, b) => b[1] - a[1]).slice(0, 15) },
     willApply: { insertEffective: p.plan.counts.NEW + p.plan.counts.UPDATED, supersede: p.plan.counts.UPDATED, heldUnlessApproved: p.plan.counts.AMBIGUOUS, deactivate: p.plan.counts.DELETION_SUSPECT },
-    relaxedMatches: p.plan.relaxedMatches, blockers: p.blockers, amountImpact: p.amountImpact,
+    relaxedMatches: p.plan.relaxedMatches, cancelledSkipped: p.plan.cancelledSkipped ?? 0, blockers: p.blockers, amountImpact: p.amountImpact,
     conflictsByCode: p.plan.deletionConflicts.reduce((m, c) => { m[c.code] = (m[c.code] ?? 0) + 1; return m; }, {} as Record<string, number>),
   };
 }
