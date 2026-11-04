@@ -1,5 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { z } from "zod";
+import path from "node:path";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage";
 import { requireAuth } from "../middlewares/auth";
 
@@ -58,6 +59,13 @@ router.get("/storage/objects/*objectPath", requireAuth, async (req: Request, res
   try {
     const raw = req.params.objectPath;
     const objectPath = "/objects/" + (Array.isArray(raw) ? raw.join("/") : raw);
+    // 회사 자료보관함 파일(archive/)은 ACL 검증 경로(/api/archive/documents/:id/file)로만 제공한다.
+    // 이 범용 경로로 우회 접근하지 못하도록 차단(기존 업무 파일 경로 uploads/ 등은 영향 없음).
+    const normalized = path.posix.normalize(objectPath).replace(/\/+/g, "/");
+    if (/^\/objects\/archive(\/|$)/i.test(normalized) || objectPath.split("/").includes("..")) {
+      res.status(403).json({ error: "이 파일은 회사 자료보관함을 통해서만 접근할 수 있습니다." });
+      return;
+    }
     const file = await objectStorageService.getObjectEntityFile(objectPath);
     const response = await objectStorageService.downloadObject(file, 3600);
 

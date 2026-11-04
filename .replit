@@ -56,3 +56,6 @@ VITE_ALLOW_HARD_DELETE = "true"
 
 [userenv.shared]
 JWT_SECRET = "550a5f239005d7fcb6319c8356a5024e5ac07cac2e5084280e8c6764dc76627d"
+
+[objectStorage]
+defaultBucketID = "replit-objstore-8dc646ec-f6cd-4094-8e13-26ad68d9febb"

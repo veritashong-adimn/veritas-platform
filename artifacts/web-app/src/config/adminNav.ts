@@ -134,6 +134,19 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
       { id: "language-service",   label: "언어 서비스 데이터",  icon: "📊", perm: "menu.user" },
       { id: "insight-management", label: "인사이트 관리",       icon: "💡", perm: "menu.user" },
       { id: "insight-analytics",  label: "인사이트 성과분석",   icon: "📈", perm: "menu.user" },
+      // 회사 자료보관함 — 하나의 통합 저장소를 8개 목적별 메뉴로 조회(5개 업무 분류는 '업무자료 관리' 내부 탭). menu.archive 보유자에게만 노출.
+      //  · 그룹(data) perm 은 사이드바 필터에 쓰이지 않으므로 기존 5개 항목의 노출 범위는 그대로다.
+      //  · 세부 자료 권한은 서버(자료보관함 ACL)가 강제한다.
+      { id: "archive-catalog", label: "회사 자료보관함", icon: "🗄️", perm: "menu.archive", children: [
+        { id: "archive-overview",   label: "자료 현황",           icon: "📊", perm: "menu.archive" },
+        { id: "archive-all",        label: "전체 자료",           icon: "🗂️", perm: "menu.archive" },
+        { id: "archive-forms",      label: "서류양식 관리",       icon: "📝", perm: "menu.archive" },
+        { id: "archive-work",       label: "업무자료 관리",       icon: "📂", perm: "menu.archive" },
+        { id: "archive-import",     label: "자료 등록·가져오기",  icon: "⬆️", perm: "archive.upload" },
+        { id: "archive-ai",         label: "AI 지식관리",         icon: "🤖", perm: "menu.archive" },
+        { id: "archive-approvals",  label: "승인관리",            icon: "✅", perm: "menu.archive" },
+        { id: "archive-settings",   label: "자료 관리설정",       icon: "⚙️", perm: "archive.admin" },
+      ] },
     ],
   },
   {
@@ -201,4 +214,18 @@ export const ADMIN_PAGE_TITLE: Record<string, string> = {
   "insight-management":   "인사이트 관리",
   "insight-analytics":    "인사이트 성과분석",
   trash:                  "통합 휴지통",
+  "archive-overview":     "회사 자료보관함 · 자료 현황",
+  "archive-all":          "회사 자료보관함 · 전체 자료",
+  "archive-forms":        "회사 자료보관함 · 서류양식 관리",
+  "archive-work":         "회사 자료보관함 · 업무자료 관리",
+  // 구 경로(호환) — 진입 즉시 archive-work 로 전환되지만 전환 전 제목도 동일하게 표시
+  "archive-manuals":      "회사 자료보관함 · 업무자료 관리",
+  "archive-contracts":    "회사 자료보관함 · 업무자료 관리",
+  "archive-records":      "회사 자료보관함 · 업무자료 관리",
+  "archive-hr":           "회사 자료보관함 · 업무자료 관리",
+  "archive-management":   "회사 자료보관함 · 업무자료 관리",
+  "archive-import":       "회사 자료보관함 · 자료 등록·가져오기",
+  "archive-ai":           "회사 자료보관함 · AI 지식관리",
+  "archive-approvals":    "회사 자료보관함 · 승인관리",
+  "archive-settings":     "회사 자료보관함 · 자료 관리설정",
 };

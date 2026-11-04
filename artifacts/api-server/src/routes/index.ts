@@ -54,6 +54,10 @@ import inquiryAiAnalyzeRouter from "./inquiryAiAnalyze";
 import comparisonQuotesRouter from "./comparisonQuotes";
 import vendorDocumentsRouter from "./vendorDocuments";
 import translatorDocumentsRouter from "./translatorDocuments";
+import archiveRouter from "./archive";
+import archiveUploadRouter from "./archiveUpload";
+import archiveApprovalsRouter from "./archiveApprovals";
+import archiveKnowledgeRouter from "./archiveKnowledge";
 
 const router: IRouter = Router();
 
@@ -112,5 +116,10 @@ router.use(publicInsightsRouter);
 router.use(invitationsRouter);
 router.use(customerRouter);
 router.use(prepaidRouter);
+// 회사 자료보관함(데이터 자산) — 모든 경로 /archive/* , 자체 권한 검증
+router.use(archiveUploadRouter);
+router.use(archiveApprovalsRouter);
+router.use(archiveKnowledgeRouter);
+router.use(archiveRouter);
 
 export default router;
