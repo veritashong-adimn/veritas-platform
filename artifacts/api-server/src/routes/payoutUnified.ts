@@ -97,7 +97,12 @@ const CUR = sql`
       pa.id,
       'current:' || pa.id AS source_key,
       coalesce(nullif(btrim(pa.performer_name_snapshot), ''), cu.name) AS translator,
-      p.company_name_snapshot AS client,
+      -- 거래처 = 수행정보가 속한 판매건(프로젝트)의 거래처. 공식 지급회차(payoutRounds)와 같은 기준:
+      --   ① 프로젝트 거래처명 스냅샷 → ② 프로젝트 거래처 Master(company_id) → ③ 이 수행건에 연결된 견적서의 거래처(파생·고객사명).
+      --   (의뢰접수→견적→판매전환 경로는 스냅샷이 비어 있는 경우가 있어 ①만 보면 '거래처 확인 필요'로 표시되던 오류 수정)
+      --   이름·통번역사·납품일 유사성으로 다른 판매건을 추정 연결하지 않는다(모두 ID 관계만 사용).
+      coalesce(nullif(btrim(p.company_name_snapshot), ''), nullif(btrim(pco.name), ''),
+        nullif(btrim(q.derived_company_name_snapshot), ''), nullif(btrim(q.customer_company_name), '')) AS client,
       to_char(coalesce(pa.expected_payment_date, pa.expected_payment_date_auto), 'YYYY-MM-DD') AS payout_date,
       to_char(coalesce(pa.delivery_date, pa.delivery_date_auto), 'YYYY-MM-DD') AS delivery_date,
       pa.product_name_snapshot AS product_name,
@@ -111,6 +116,8 @@ const CUR = sql`
       coalesce(pa.net_payment, pa.cost_total - pa.withholding_tax, 0) AS posttax
     FROM performance_assignments pa
     LEFT JOIN projects p ON p.id = pa.project_id
+    LEFT JOIN companies pco ON pco.id = p.company_id
+    LEFT JOIN quotes q ON q.id = pa.quote_id
     LEFT JOIN users cu ON cu.id = pa.individual_user_id
     LEFT JOIN translator_profiles tp ON tp.user_id = pa.individual_user_id
     WHERE pa.deleted_at IS NULL
