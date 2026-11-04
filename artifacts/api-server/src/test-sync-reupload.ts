@@ -112,10 +112,11 @@ async function main() {
   {
     const SB = await storage();
     const { p, s } = await timed("판매목록 수정 파일 미리보기", () => preview(bufA, "sales_list"));
-    check("3 수정 파일 판정: 수정 7·중복의심 1·신규 0", s.counts.UPDATED === 7 && s.counts.AMBIGUOUS === 1 && s.counts.NEW === 0 && s.counts.DELETION_SUSPECT === 0, JSON.stringify(s.counts));
+    // (2026-11 최신 파일 우선 원칙) 같은 판매번호의 거래처·상품 전면 변경도 '수정'으로 반영(번호 재사용 의심 보류 폐지)
+    check("3 수정 파일 판정: 수정 8(거래처·상품 전면 변경 포함)·중복의심 0·신규 0", s.counts.UPDATED === 8 && s.counts.AMBIGUOUS === 0 && s.counts.NEW === 0 && s.counts.DELETION_SUSPECT === 0, JSON.stringify(s.counts));
     check("3 미리보기는 DB 미변경", same(await storage(), SB));
     const upd = previewPage(p, "UPDATED", 1, 50).rows;
-    check("3 수정 전후 값 표시", upd.length === 7 && upd.every(r => r.before && r.changedFields.length > 0));
+    check("3 수정 전후 값 표시", upd.length === 8 && upd.every(r => r.before && r.changedFields.length > 0));
     let rejected = "";
     try { await exec(bufA, "sales_list", "invalid"); } catch (e) { rejected = e.code; }
     check("3 승인 토큰 불일치 시 반영 거부(DB 미변경)", rejected === "SYNC_PLAN_CHANGED" && same(await storage(), SB));
@@ -123,8 +124,8 @@ async function main() {
     const r = await timed("판매목록 수정 반영(배치 A)", () => exec(bufA, "sales_list", s.planToken, [], "A.xlsx"));
     batchA = r.batchId;
     const SA = await storage();
-    check("3 반영: 수정 7건만 새 버전 저장(변경 없음 미저장)", r.applied.updated === 7 && r.unchangedSkipped === sales.rows.length - 8 && SA.rows === SB.rows + 7, `rows +${SA.rows - SB.rows}, skipped ${r.unchangedSkipped}`);
-    check("3 반영: 중복 의심 1건 보류(미저장)", r.held === 1);
+    check("3 반영: 수정 8건만 새 버전 저장(변경 없음 미저장)", r.applied.updated === 8 && r.unchangedSkipped === sales.rows.length - 8 && SA.rows === SB.rows + 8, `rows +${SA.rows - SB.rows}, skipped ${r.unchangedSkipped}`);
+    check("3 반영: 보류 0건(최신 파일 우선)", r.held === 0);
     check("3 반영: 유효 판매 건수 동일", r.effective.after === F0.salesEff.n);
     const F = await fingerprint();
     check("3 반영 후 판매·진행 유효 연결 수 유지", F.linksEff.n === F0.linksEff.n, `${F0.linksEff.n}→${F.linksEff.n}`);
@@ -184,7 +185,7 @@ async function main() {
   // ── 6. 되돌리기: 이후 업로드가 있어도 해당 배치가 바꾼 행만 ──
   {
     const pA = await planBatchRollback(db, batchA);
-    check("6 배치 A 되돌리기 미리보기: 변경 7 중 6 복원·1건(B가 재수정) 보존", pA.ok && pA.effectiveInBatch === 6 && pA.restoreSuperseded === 6 && pA.preservedLater === 1, JSON.stringify({ eff: pA.effectiveInBatch, restore: pA.restoreSuperseded, preserved: pA.preservedLater, reattach: pA.linksToReattach }));
+    check("6 배치 A 되돌리기 미리보기: 변경 8 중 7 복원·1건(B가 재수정) 보존", pA.ok && pA.effectiveInBatch === 7 && pA.restoreSuperseded === 7 && pA.preservedLater === 1, JSON.stringify({ eff: pA.effectiveInBatch, restore: pA.restoreSuperseded, preserved: pA.preservedLater, reattach: pA.linksToReattach }));
     const ra = await timed("배치 A 되돌리기", () => rollback(batchA));
     const F = await fingerprint();
     const r1Eff = await one(sql`SELECT total_amount::text t, import_batch_id b FROM legacy_archive_rows WHERE source_type='sales_list' AND is_effective AND source_raw->>'판매번호'=${r1.source_raw["판매번호"]}`);
@@ -210,7 +211,7 @@ async function main() {
     const origBatch = await one(sql`SELECT min(id) id FROM import_batches WHERE module='legacy_archive' AND source_type='sales_list'`);
     check("6 최초 원본 배치 되돌리기 차단", !(await planBatchRollback(db, origBatch.id)).ok);
     const { s } = await preview(bufA, "sales_list");
-    check("6 되돌린 뒤 같은 파일 재분석 시 다시 반영 가능", s.counts.UPDATED === 7 && s.alreadyStored === 0, JSON.stringify(s.counts));
+    check("6 되돌린 뒤 같은 파일 재분석 시 다시 반영 가능", s.counts.UPDATED === 8 && s.alreadyStored === 0, JSON.stringify(s.counts));
   }
 
   // ── 7. 통합·제외된 통번역사 재업로드(2회) ──

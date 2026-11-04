@@ -126,6 +126,12 @@ async function body() {
   const saleChg = Number((await one(sql`SELECT id FROM legacy_archive_rows WHERE source_type='sales_list' AND is_effective AND source_raw->>'판매번호' >= '2025-03' AND id NOT IN (${saleNoLink}, ${saleLinkedKept}, ${saleActivated}) ORDER BY id LIMIT 1`)).id);
   const salesRows = S.rows.filter(r => ![saleNoLink, saleLinkedKept, saleActivated].includes(Number(r.id))).map(r => { const c = clone(r); if (Number(r.id) === saleChg) c.source_raw["총액"] = "9,999,999"; return c; });
   const newSale = clone(S.rows.find(r => Number(r.id) === saleChg)); newSale.source_raw["판매번호"] = "2026-11-04-9001"; newSale.source_raw["거래처명"] = "TEST신규거래처(동기화)"; salesRows.push(newSale);
+  // 되돌리기 결함 회귀: 삭제 판매의 연결 수행행 1건을 최신 파일에서 '수정' → 같은 배치에서 수정본 추가 후 비활성화되는 경로
+  const linkedOfKept = (await q(sql`SELECT DISTINCT l.progress_row_id id FROM legacy_sales_progress_links l JOIN legacy_archive_rows p ON p.id=l.progress_row_id AND p.is_effective
+    WHERE l.decision='confirmed' AND l.sale_row_id=${saleLinkedKept} ORDER BY 1`)).map(x => Number(x.id));
+  const inFile = new Set(progRows.map(r => Number(r.id)));
+  const updLinked = linkedOfKept.find(id => inFile.has(id));
+  for (const r of progRows) if (Number(r.id) === updLinked) r.source_raw["지급액(세전)"] = "424242";
   const salesBuf = await toXlsx(salesRows, S.headers), progBuf = await toXlsx(progRows, P.headers);
 
   // ── ⑩ 부분 업로드 보호 · 범위 밖 보존(미리보기만) ──
@@ -169,14 +175,13 @@ async function body() {
  check("⑧ 재매칭 경로 사용(발행일 변경 → relaxed_key)", dDate?.matchBasis === "relaxed_key", String(dDate?.matchBasis));
   const decOf = (id: number) => set.progress.plan.decisions.find(d => d.matchedExistingId != null && Number(d.matchedExistingId) === id);
   check("유형 B(1↔2, 금액 차이로 구별 가능) → 1건 수정 + 1건 신규, 보류·충돌 없음", decOf(ambId)?.classification === "UPDATED" && !set.progress.plan.deletionConflicts.some(c => Number(c.row.id) === ambId) && !progDelIds.has(ambId), String(decOf(ambId)?.reason));
-  const tie = set.progress.plan.deletionConflicts.find(c => Number(c.row.id) === tieId);
-  check("진짜 식별 불가(동점 2건) → 보류 유지 · 기존 행 삭제 보류", tie?.code === "identity_unresolved" && !progDelIds.has(tieId) && set.progress.plan.counts.AMBIGUOUS === 2, `${tie?.code} AMB=${set.progress.plan.counts.AMBIGUOUS}`);
+  check("(최신 파일 우선) 동점 2건 vs 기존 1건 → 최신 2건 신규 + 기존 행 삭제 · 보류 0", progDelIds.has(tieId) && set.progress.plan.counts.AMBIGUOUS === 0 && !set.progress.plan.deletionConflicts.some(c => Number(c.row.id) === tieId), `AMB=${set.progress.plan.counts.AMBIGUOUS}`);
   check("유형 A(같은 묶음·같은 통번역사 2행 동시 변경) → 2건 모두 수정", aIds.length === 2 && aIds.every(id => decOf(id)?.classification === "UPDATED"), aIds.map(id => decOf(id)?.reason).join(" | "));
   check("유형 C(거래처 공란) → 통번역사·납품일로 기존 행 수정", decOf(cId)?.classification === "UPDATED" && !progDelIds.has(cId), String(decOf(cId)?.reason));
   const salesDel = new Set(set.sales.plan.deletionSuspects.map(e => Number(e.id)));
   const salesConf = new Map(set.sales.plan.deletionConflicts.map(c => [Number(c.row.id), c.code]));
   check("③ 판매목록 삭제(연결 없는 판매)", salesDel.has(saleNoLink));
-  check("8. 수행행이 남은 판매 삭제 → 충돌(삭제 안 함)", salesConf.get(saleLinkedKept) === "linked_progress", String(salesConf.get(saleLinkedKept)));
+  check("8. (최신 파일 우선) 수행행이 남은 판매도 최신 파일에 없으면 삭제 대상 · 충돌 아님", salesDel.has(saleLinkedKept) && !salesConf.has(saleLinkedKept), String(salesConf.get(saleLinkedKept)));
   check("⑪ 운영 전환 판매(2026-10-23-0001) → 충돌(삭제 안 함)", saleActivated > 0 && salesConf.get(saleActivated) === "activated", String(salesConf.get(saleActivated)));
   const page = previewPage(set.progress, "DELETION_SUSPECT", 1, 200);
   check("미리보기 삭제 목록 페이지 조회", page.total === progDelIds.size);
@@ -200,8 +205,8 @@ async function body() {
   // ── 실제 실행(관리자 판매취소 확인 옵션 포함) ──
   const linkedOfCancel = (await q(sql`SELECT DISTINCT l.progress_row_id id FROM legacy_sales_progress_links l JOIN legacy_archive_rows p ON p.id=l.progress_row_id AND p.is_effective
     WHERE l.decision='confirmed' AND l.sale_row_id=${saleLinkedKept}`)).map(x => Number(x.id));
-  check("판매취소 후보 = 수행행 유지 충돌 판매(운영 전환 제외)", set2.cancelCandidates.saleIds.length === 1 && set2.cancelCandidates.saleIds[0] === saleLinkedKept, JSON.stringify(set2.cancelCandidates));
-  const r = await db.transaction(tx => executeFullSync(tx, { fullSyncId: set2.id, salesToken: set2.sales.planToken, progressToken: set2.progress.planToken, userId: USER, cancelConfirmedSales: true, cancelLinkedProgress: true }));
+  check("판매 삭제 + 연결 수행행 정리 대상 = 수행행이 남은 삭제 판매(운영 전환 제외)", set2.cancelCandidates.saleIds.includes(saleLinkedKept) && !set2.cancelCandidates.saleIds.includes(saleActivated), JSON.stringify(set2.cancelCandidates));
+  const r = await db.transaction(tx => executeFullSync(tx, { fullSyncId: set2.id, salesToken: set2.sales.planToken, progressToken: set2.progress.planToken, userId: USER }));
   check("실행 결과 applied", r.mode === "applied", r.mode);
   const la = await lastSyncAsOf(db);
   check("기준일: 판매목록·진행관리표 모두 2026-11-04 로 기록", la.sales_list === "2026-11-04" && la.progress === "2026-11-04", JSON.stringify(la));
@@ -216,10 +221,14 @@ async function body() {
   check("⑧ 체결일 변경 행: 같은 버전 체인에 유효 1건(중복 생성 없음)", dg.n === 1 && !(await eff(dateChgId)));
   const keep = await q(sql`SELECT count(*)::int n FROM legacy_sales_progress_links l JOIN legacy_archive_rows p ON p.id=l.progress_row_id AND p.is_effective WHERE l.decision='confirmed' AND l.sale_row_id=${Number(oneN.s)}`);
   check("⑨ 판매 1건 ↔ 수행 N행: 삭제된 1행 외 나머지 연결 유지", (await eff(Number(oneN.s))) && keep[0].n === keepProg.length, `${keep[0].n}/${keepProg.length}`);
-  check("식별 불가 기존 행 유지(자동 병합·삭제 안 함)", await eff(tieId));
+  const tieN = (await one(sql`SELECT count(*)::int n FROM legacy_archive_rows WHERE source_type='progress' AND is_effective AND record_date='2024-02-26'`)).n;
+  const tieDec = set2.progress.plan.decisions.filter((d, i) => set2.progress.incoming[i].recordDate === '2024-02-26').map(d => `${d.classification}:${d.matchedExistingId ?? '-'}:${d.reason.slice(0, 30)}`);
+  check("동점 케이스: 기존 행 비활성 · 최신 2행 신규 저장(파일 = DB)", !(await eff(tieId)) && tieDec.filter(x => x.startsWith("NEW")).length === 2 && tieN >= 2, `tie유효=${await eff(tieId)} ${JSON.stringify(tieDec)}`);
   check("유형 B 신규 행 저장(정상 수행행 누락 없음)", (await one(sql`SELECT count(*)::int n FROM legacy_archive_rows WHERE source_type='progress' AND is_effective AND payout_pretax = 1 AND record_date = '2024-02-27'`)).n === 1);
   check("판매취소 확인 판매 비활성 · 운영 전환 판매는 보호(유지)", !(await eff(saleLinkedKept)) && (await eff(saleActivated)), JSON.stringify(r.cancelled));
   const stillOn = []; for (const id of linkedOfCancel) if (await eff(id)) stillOn.push(id);
+  const updVer = await one(sql`SELECT superseded_by_id s FROM legacy_archive_rows WHERE id=${updLinked}`);
+  check("수정 후 판매취소 연결로 비활성화된 수행행(같은 배치) — 수정본도 비활성", updVer?.s != null && !(await eff(Number(updVer.s))), `old ${updLinked} → new ${updVer?.s}`);
   check("판매취소 판매의 연결 수행행 비활성(지급예정 제외)", linkedOfCancel.length > 0 && stillOn.length === 0 && r.cancelled.progress >= 1, `${linkedOfCancel.length}행 중 유효 ${stillOn.length}`);
   check("⑰ 596(오수정) 비활성", !(await eff(596)));
   const r1113 = await round("2026-11-13");
@@ -258,7 +267,7 @@ async function body() {
   const linkN = async () => (await one(sql`SELECT count(*)::int n FROM legacy_sales_progress_links l JOIN legacy_archive_rows s ON s.id=l.sale_row_id AND s.is_effective JOIN legacy_archive_rows p ON p.id=l.progress_row_id AND p.is_effective WHERE l.decision='confirmed'`)).n;
   const rowsN0 = (await one(sql`SELECT count(*)::int n FROM legacy_archive_rows`)).n;
   const set4 = await preview(salesBuf, progBuf);
-  const r4 = await db.transaction(tx => executeFullSync(tx, { fullSyncId: set4.id, salesToken: set4.sales.planToken, progressToken: set4.progress.planToken, userId: USER, cancelConfirmedSales: true, cancelLinkedProgress: true }));
+  const r4 = await db.transaction(tx => executeFullSync(tx, { fullSyncId: set4.id, salesToken: set4.sales.planToken, progressToken: set4.progress.planToken, userId: USER }));
   const rowsN1 = (await one(sql`SELECT count(*)::int n FROM legacy_archive_rows`)).n;
   check("⑳-b 되돌린 뒤 같은 파일 재반영 성공 · 물리 행 추가 0(재활성화) · 결과 동일", r4.mode === "applied" && rowsN1 === rowsN0 && r4.progress.deleted === r.progress.deleted && r4.sales.applied.created === r.sales.applied.created,
     `행 ${rowsN0}→${rowsN1} · 삭제 ${r4.progress.deleted}/${r.progress.deleted}`);

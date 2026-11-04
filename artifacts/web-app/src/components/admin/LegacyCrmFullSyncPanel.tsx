@@ -37,14 +37,12 @@ export function LegacyCrmFullSyncPanel({ token, setToast, onApplied }: { token: 
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState<{ source: Src; cls: string; rows: any[]; total: number } | null>(null);
   const [confirm, setConfirm] = useState(false);
-  const [cancelSales, setCancelSales] = useState(false);
-  const [cancelProg, setCancelProg] = useState(false);     // 판매취소 판매의 연결 수행행까지 비활성화(기본: 유지·보고)   // 삭제 충돌(수행행 유지) 판매건 = 관리자 판매취소 확인 → 비활성화
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [runs, setRuns] = useState<Run[]>([]);
   const [rbArm, setRbArm] = useState<string | null>(null);
 
-  useEffect(() => { setSummary(null); setDetail(null); setConfirm(false); setCancelSales(false); setCancelProg(false); }, [asOfDate, scope, salesFile, progressFile]);
+  useEffect(() => { setSummary(null); setDetail(null); setConfirm(false); }, [asOfDate, scope, salesFile, progressFile]);
   const loadMeta = useCallback(async () => {
     try {
       const [s, r] = await Promise.all([fetch(api('/api/admin/legacy-archive/full-sync/status'), { headers: authH }), fetch(api('/api/admin/legacy-archive/full-sync/runs'), { headers: authH })]);
@@ -77,7 +75,7 @@ export function LegacyCrmFullSyncPanel({ token, setToast, onApplied }: { token: 
     setRunning(true);
     try {
       const res = await fetch(api('/api/admin/legacy-archive/full-sync/execute'), { method: 'POST', headers: { ...authH, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ confirm: true, fullSyncId: summary.fullSyncId, salesToken: summary.sales.planToken, progressToken: summary.progress.planToken, cancelConfirmedSales: cancelSales, cancelLinkedProgress: cancelSales && cancelProg }) });
+        body: JSON.stringify({ confirm: true, fullSyncId: summary.fullSyncId, salesToken: summary.sales.planToken, progressToken: summary.progress.planToken, }) });
       const d = await res.json(); if (!res.ok) throw new Error(d?.error || '동기화 실패');
       setResult(d); setSummary(null); setDetail(null); setConfirm(false);
       setToast(d.mode === 'no_change' ? '최신 자료와 이미 일치합니다. 변경 없음.' : `동기화 완료(기준일 ${d.asOfDate})`);
@@ -205,17 +203,10 @@ export function LegacyCrmFullSyncPanel({ token, setToast, onApplied }: { token: 
 
           <div style={{ marginTop: 12, padding: 12, borderRadius: 8, background: '#eef2ff', border: '1px solid #c7d2fe' }}>
             {(summary.cancelCandidates?.sales ?? 0) > 0 && (
-              <label style={{ display: 'flex', gap: 6, alignItems: 'flex-start', fontSize: 13, cursor: 'pointer', marginBottom: 8, color: '#92400e' }}>
-                <input type="checkbox" checked={cancelSales} onChange={e => setCancelSales(e.target.checked)} data-testid="fs-cancel-sales" aria-label="삭제 충돌 판매건을 판매취소로 확인하고 비활성화" style={{ marginTop: 3 }} />
-                <span>판매목록 삭제 충돌(수행행 유지) <b>{summary.cancelCandidates!.sales}건</b>은 관리자가 판매취소로 확인함 → 판매건을 비활성화합니다.
-                  <span style={{ display: 'block', fontSize: 11.5, color: '#6b7280' }}>운영 판매 전환 자료는 제외(보호) · 되돌리기로 복구 가능 · 최신 진행관리표에 남아 있는 연결 수행행 {summary.cancelCandidates!.progressRows}건(세전 {won(summary.cancelCandidates!.progressPretax)}원)은 기본적으로 유지하고 결과에 표시합니다.</span></span>
-              </label>
-            )}
-            {cancelSales && (summary.cancelCandidates?.progressRows ?? 0) > 0 && (
-              <label style={{ display: 'flex', gap: 6, alignItems: 'flex-start', fontSize: 12.5, cursor: 'pointer', margin: '-2px 0 8px 22px', color: '#92400e' }}>
-                <input type="checkbox" checked={cancelProg} onChange={e => setCancelProg(e.target.checked)} data-testid="fs-cancel-progress" aria-label="판매취소 판매의 연결 수행행도 비활성화" style={{ marginTop: 3 }} />
-                <span>연결 수행행 {summary.cancelCandidates!.progressRows}건도 비활성화(지급예정 제외) — CRM 진행관리표에 계속 남아 있으면 다음 동기화 때 다시 신규로 잡힙니다.</span>
-              </label>
+              <div data-testid="fs-cancel-info" style={{ fontSize: 12.5, color: '#92400e', marginBottom: 8, lineHeight: 1.6 }}>
+                최신 판매목록에 없는 판매 중 연결 수행행이 남은 <b>{summary.cancelCandidates!.sales}건</b> — 판매는 비활성화하고, 연결 수행행 {summary.cancelCandidates!.progressRows}건(세전 {won(summary.cancelCandidates!.progressPretax)}원)은
+                최신 파일상 다른 유효 판매(재등록 판매번호 등)와 연결되면 재연결, 아니면 비활성화(지급예정 제외)합니다. 운영 전환 자료는 보호.
+              </div>
             )}
             <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 13, cursor: 'pointer' }}>
               <input type="checkbox" checked={confirm} onChange={e => setConfirm(e.target.checked)} disabled={!summary.executable} data-testid="fs-confirm" aria-label="미리보기 내용을 확인했으며 최신 자료로 동기화합니다" />
@@ -233,7 +224,7 @@ export function LegacyCrmFullSyncPanel({ token, setToast, onApplied }: { token: 
             {(['sales', 'progress'] as const).map(k => { const r = result[k]; return (
               <div key={k}>{k === 'sales' ? '판매목록' : '진행관리표'}: 신규 {r.applied.created} · 변경 {r.applied.updated} · 삭제 {r.deleted} · 삭제 충돌 {r.deletionConflicts} · 보류 {r.held} · 유효 {r.effective.before.toLocaleString()} → {r.effective.after.toLocaleString()}</div>
             ); })}
-            {result.cancelled && (result.cancelled.sales > 0 || result.cancelled.progress > 0) && <div>판매취소 확인 처리: 판매 {result.cancelled.sales}건 · 연결 수행행 {result.cancelled.progress}건 비활성화</div>}
+            {result.cancelled && result.cancelled.sales > 0 && <div>최신 파일에 없는 판매(연결 수행행 보유) {result.cancelled.sales}건 비활성화 · 연결 수행행 비활성화 {result.cancelled.progress}건 · 다른 유효 판매로 재연결 {result.cancelled.relinked ?? 0}건</div>}
             {(result.keptProgressOfCancelledSales?.length ?? 0) > 0 && <div>판매취소 판매에 연결된 채 유지된 수행행 {result.keptProgressOfCancelledSales.length}건: {result.keptProgressOfCancelledSales.map((k: any) => `${k.saleNo}·${k.translator ?? '-'}·${k.deliveryDate ?? '-'}`).join(' / ')}</div>}
             <div>정합성: 비유효 행과의 신규 연결 {result.integrity.newLinksToInactive} · 판매건을 잃은 수행행 {result.integrity.orphanedByRun} · 중복 버전 그룹 {result.integrity.duplicateGroups}</div>
           </>}
