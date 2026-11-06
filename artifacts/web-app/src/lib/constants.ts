@@ -314,6 +314,7 @@ export type TranslatorListItem = {
   bio: string | null;
   resumeUrl: string | null; portfolioUrl: string | null;
   education: string | null; major: string | null;
+  educationHistory?: string | null; // 학력 이력 JSON (목록 학력 표시용)
   workTypes: string[]; subTypes: string[];
   profileWorkTypes?: string | null; profileSubTypes?: string | null;
   residentNumber: string | null;
@@ -481,7 +482,7 @@ export type TranslatorProfile = {
   phone?: string | null;
   languagePairs?: string | null; languageLevel?: string | null;
   specializations?: string | null;
-  education?: string | null; major?: string | null;
+  education?: string | null; major?: string | null; educationHistory?: string | null;
   graduationYear?: number | null; graduationStatus?: string | null; region?: string | null;
   grade?: string | null;
   rating?: number | null; availabilityStatus?: string;

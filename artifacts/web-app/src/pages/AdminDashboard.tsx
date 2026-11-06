@@ -67,6 +67,7 @@ import { StaffManagementTab } from '../components/admin/StaffManagementTab';
 import { exportContacts } from '../lib/contactExcel';
 import { exportTranslators } from '../lib/translatorExcel';
 import { exportPrepaidAccounts } from '../lib/prepaidExcel';
+import { educationDisplay } from "../lib/educationDisplay";
 
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '9px 12px', borderRadius: 8,
@@ -2620,9 +2621,13 @@ export function AdminDashboard({ user, token, permissions = [], onLogout }: { us
                           </td>
                           {/* 학력 */}
                           <td style={{ ...tableTd, fontSize: 12, color: "#6b7280" }}>
-                            {t.education
-                              ? <span style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden", whiteSpace: "normal" }}>{getEducationLabel(t.education)}</span>
-                              : <span style={{ color: "#d1d5db" }}>-</span>}
+                            {(() => {
+                              // 학력 이력(구조화) 우선 — 없으면 기존 학력값으로 대체 표시
+                              const edu = educationDisplay(t.educationHistory, t.education, t.major, getEducationLabel);
+                              return edu
+                                ? <span title={edu} data-testid={`translator-education-${t.id}`} style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as any, overflow: "hidden", whiteSpace: "normal" }}>{edu}</span>
+                                : <span style={{ color: "#d1d5db" }}>-</span>;
+                            })()}
                           </td>
                           {/* 업무유형 — 프로필 우선, 없으면 단가 기반 */}
                           <td style={{ ...tableTd, fontSize: 12 }}>

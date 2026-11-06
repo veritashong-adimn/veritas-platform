@@ -23,6 +23,10 @@ import { buildMergePreview } from "../services/translatorMerge";
 import { runMergeExecute, revertMerge } from "../services/translatorMergeExecute";
 import { logEvent } from "../lib/logEvent";
 import {
+  RESUME_EDUCATION_LIST, sanitizeEducationHistory, pickFinalEducation, formatEducationName,
+  formatMajor, summarizeEducationHistory, normalizeEducationName, serializeEducationHistory, formatEducationSummary,
+} from "../lib/resumeEducation";
+import {
   uploadResumeToGCS, deleteResumeFromGCS, getResumeDownloadUrl, isAllowedMime, isAllowedExt,
   uploadDocumentToGCS, isAllowedDocumentMime, isAllowedDocumentExt,
 } from "../lib/gcsResume";
@@ -165,12 +169,29 @@ async function findAntiword(): Promise<string | null> {
   return null;
 }
 
+/** mammoth HTML → 텍스트. 표는 행 단위 "셀 | 셀", 문단은 줄바꿈으로 변환 */
+function docxHtmlToText(html: string): string {
+  const decode = (t: string) => t
+    .replace(/&nbsp;/g, " ").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+  // 엔티티 디코딩은 마지막에 한 번만 수행 (태그 제거 후)
+  const cellText = (c: string) => c.replace(/<\/(p|h\d|li)>/gi, " ").replace(/<br\s*\/?>/gi, " ").replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ").trim();
+  const withTables = html.replace(/<table[\s\S]*?<\/table>/gi, (tbl) => {
+    const rows = tbl.match(/<tr[\s\S]*?<\/tr>/gi) ?? [];
+    const lines = rows.map(r => (r.match(/<t[dh][\s\S]*?<\/t[dh]>/gi) ?? []).map(cellText).filter(Boolean).join(" | ")).filter(Boolean);
+    return `\n${lines.join("\n")}\n`;
+  });
+  return decode(withTables.replace(/<\/(p|h\d|li|tr)>/gi, "\n").replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, ""))
+    .replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 /**
  * .doc / .docx 파일에서 텍스트를 추출한다.
  * 우선순위: mammoth(ZIP/DOCX) → word-extractor(OLE2, 순수 JS) → antiword(시스템 바이너리 fallback)
  * word-extractor는 시스템 의존성 없이 OLE2 .doc를 파싱하므로 Railway/Docker 환경에서도 작동한다.
  */
-async function extractDocText(buffer: Buffer, label: string): Promise<{ text: string; method: string }> {
+export async function extractDocText(buffer: Buffer, label: string): Promise<{ text: string; method: string }> {
   // [DOC-REAL] VER=6 — 이 마커가 Railway Logs에 보이면 신규 코드 실행 중
   console.log(`[DOC-REAL] VER=6 label=${label} bytes=${buffer.byteLength} ts=${Date.now()}`);
   const fmt = detectDocFormat(buffer);
@@ -179,6 +200,18 @@ async function extractDocText(buffer: Buffer, label: string): Promise<{ text: st
   // ZIP 서명 → 실제 DOCX (확장자가 .doc여도 mammoth로 처리)
   if (fmt === "zip") {
     try {
+      // 표 구조 보존: 표의 각 행을 "셀 | 셀 | 셀" 한 줄로 만들어 학교·전공·학위·기간이 같은 행으로 연결되게 한다.
+      // (extractRawText는 셀마다 줄을 나눠 표의 행 관계가 사라짐) 실패·빈 결과 시 기존 extractRawText로 대체.
+      try {
+        const html = (await mammoth.convertToHtml({ buffer })).value;
+        const tableText = docxHtmlToText(html);
+        if (tableText.trim()) {
+          console.log(`[DOC-EXTRACT][${label}] mammoth(zip-docx,html-table) OK — textLen=${tableText.length}`);
+          return { text: tableText, method: "mammoth(zip-docx,html-table)" };
+        }
+      } catch (htmlErr) {
+        console.log(`[DOC-EXTRACT][${label}] mammoth html path failed — fallback to rawText: ${String(htmlErr)}`);
+      }
       const result = await mammoth.extractRawText({ buffer });
       console.log(`[DOC-EXTRACT][${label}] mammoth(zip-docx) OK — textLen=${result.value.length}`);
       return { text: result.value, method: "mammoth(zip-docx)" };
@@ -400,6 +433,7 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         operationalStatus: translatorProfilesTable.operationalStatus,
         reassignmentAllowed: translatorProfilesTable.reassignmentAllowed,
         languageExperiences: translatorProfilesTable.languageExperiences,
+        educationHistory: translatorProfilesTable.educationHistory,
       })
       .from(usersTable)
       .leftJoin(translatorProfilesTable, eq(translatorProfilesTable.userId, usersTable.id))
@@ -524,6 +558,7 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
         profileWorkTypes: r.profileWorkTypes ?? null,
         profileSubTypes: r.profileSubTypes ?? null,
         languageExperiences: r.languageExperiences ?? null,
+        educationHistory: r.educationHistory ?? null,
         residentNumber: sensitiveMap[r.id] ?? null,
         // ── 중복 이름 필터용 보조 플래그(가산 필드, 기존 shape 불변) ──
         isNew: newIds.has(r.id),                                     // 기존/신규 등록 구분
@@ -696,6 +731,7 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
     affiliatedCompanyId, settlementType,
     profileWorkTypes, profileSubTypes,
     languageExperiences: langExpsCreate,
+    educationHistory: eduHistoryCreate,
   } = req.body;
 
   const normEmail = normalizeEmail(email);
@@ -735,6 +771,7 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
       profileWorkTypes: profileWorkTypes?.trim() || null,
       profileSubTypes: profileSubTypes?.trim() || null,
       languageExperiences: (typeof langExpsCreate === "string" && langExpsCreate) ? langExpsCreate : null,
+      educationHistory: serializeEducationHistory(eduHistoryCreate) ?? null,
     }).returning();
 
     // 대표 이메일을 translator_emails에 시딩
@@ -780,6 +817,7 @@ router.post("/admin/translators", ...adminGuard, async (req, res) => {
       settlementType: profile.settlementType ?? null,
       reassignmentAllowed: profile.reassignmentAllowed ?? true,
       languageExperiences: profile.languageExperiences ?? null,
+      educationHistory: profile.educationHistory ?? null,
       workTypes: [],   // 등록 직후 단가 없음 — 단가 추가 후 목록 새로고침 시 반영
       subTypes: [],
       residentNumber: null,
@@ -1308,6 +1346,7 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
     profileWorkTypes, profileSubTypes,
     operationalStatus, operationalNote, reassignmentAllowed,
     languageExperiences,
+    educationHistory,
     emails,
   } = req.body;
 
@@ -1361,6 +1400,8 @@ router.patch("/admin/translators/:id", ...adminGuard, async (req, res) => {
       languageExperiences: languageExperiences !== undefined
         ? (typeof languageExperiences === "string" ? languageExperiences || null : null)
         : undefined,
+      // 학력 이력: 요청에 포함된 경우에만 갱신 (미포함 시 기존 값 유지)
+      educationHistory: educationHistory !== undefined ? serializeEducationHistory(educationHistory) : undefined,
       updatedAt: new Date(),
     };
 
@@ -1750,24 +1791,7 @@ const RESUME_SUB_TYPES = [
   "행사스태프", "행사보조", "등록데스크", "안내요원", "VIP 의전", "현장운영",
   "바이어 상담보조", "전시회 운영지원", "해외 바이어 응대", "행사 MC", "행사 사회자", "기타 행사운영",
 ];
-const RESUME_EDUCATION_LIST = [
-  "한국외국어대학교 통번역대학원",
-  "이화여자대학교 통역번역대학원",
-  "서울외국어대학원대학교 통번역대학원",
-  "중앙대학교 국제대학원",
-  "부산외국어대학교 통번역대학원",
-  "제주대학교 통번역대학원",
-  "선문대학교 통번역대학원",
-  "계명대학교 통번역대학원",
-  "Macquarie University - Translation & Interpreting",
-  "Middlebury Institute of International Studies at Monterey",
-  "University of Bath",
-  "University of Westminster",
-  "University of Leeds",
-  "Université Paris Cité ESIT",
-  "University of Geneva FTI",
-  "University of Ottawa",
-];
+// RESUME_EDUCATION_LIST → ../lib/resumeEducation 로 이동 (학력 후처리와 공유)
 const RESUME_MAJOR_LIST = [
   "한영과", "한중과", "한일과", "한불과", "한독과", "한서과", "한노과", "한아과",
   "한영통번역", "한중통번역", "한일통번역",
@@ -1853,39 +1877,8 @@ function normalizeExtractedMajor(raw: string | null): string | null {
   return t;
 }
 
-function normalizeExtractedEducation(raw: string | null): string | null {
-  if (!raw) return null;
-  const t = raw.trim();
-  if (RESUME_EDUCATION_LIST.includes(t)) return t;
-  // 부분 일치 퍼지 매칭 (학교명 포함 여부)
-  const ALIASES: Record<string, string> = {
-    "한국외대": "한국외국어대학교 통번역대학원",
-    "통역번역대학원": "한국외국어대학교 통번역대학원",
-    "중앙대": "중앙대학교 국제대학원",
-    "중앙대학교 대학원": "중앙대학교 국제대학원",
-    "이화여대": "이화여자대학교 통역번역대학원",
-    "서울외대": "서울외국어대학원대학교 통번역대학원",
-    "부산외대": "부산외국어대학교 통번역대학원",
-    "계명대": "계명대학교 통번역대학원",
-    "맥쿼리": "Macquarie University - Translation & Interpreting",
-    "macquarie": "Macquarie University - Translation & Interpreting",
-    "master of translation and interpreting": "Macquarie University - Translation & Interpreting",
-    "master of conference interpreting": "Macquarie University - Translation & Interpreting",
-    "middlebury": "Middlebury Institute of International Studies at Monterey",
-    "monterey": "Middlebury Institute of International Studies at Monterey",
-    "bath": "University of Bath",
-    "westminster": "University of Westminster",
-    "leeds": "University of Leeds",
-    "esit": "Université Paris Cité ESIT",
-    "geneva": "University of Geneva FTI",
-    "ottawa": "University of Ottawa",
-  };
-  const tl = t.toLowerCase();
-  for (const [key, val] of Object.entries(ALIASES)) {
-    if (tl.includes(key.toLowerCase())) return val;
-  }
-  return t;
-}
+// 학교/대학원명 정규화는 normalizeEducationName(../lib/resumeEducation) 사용.
+// (기존: 학교명 별칭만으로 통번역대학원으로 강제 매핑 → 경영정보대학원·일반대학원 오분류 원인)
 
 function normalizeExtractedSpecializations(raw: string | null): string | null {
   if (!raw) return null;
@@ -1975,7 +1968,7 @@ function filterSubTypesForGraduate(profileSubTypes: string | null, education: st
   return filtered.length > 0 ? filtered.join(", ") : null;
 }
 
-function buildResumePromptMessages(resumeText: string): Array<{ role: "system" | "user"; content: string }> {
+export function buildResumePromptMessages(resumeText: string): Array<{ role: "system" | "user"; content: string }> {
   return [
     {
       role: "system",
@@ -2046,16 +2039,29 @@ acquisitionBg 결정:
 배열 구조 (각 언어별 하나의 요소):
 {"language":"한국어언어명","canWork":boolean,"level":"원어민"|"고급"|"중급"|"초급"|"","acquisitionBg":"해외거주"|"해외유학"|"국내교육"|"자기학습"|"이중언어(가정환경)"|"기타"|"","residenceCountry":"","residenceCity":"","residencePeriod":"","abroadElementary":false,"abroadMiddle":false,"abroadHigh":false,"abroadUniversity":false,"abroadGraduate":false,"internationalSchool":false,"exchangeStudent":false,"languageStudyAbroad":false,"notes":""}
 
-【학력(education)】
-다음 목록 중 가장 가까운 학교명으로 반환하세요:
-${RESUME_EDUCATION_LIST.join(", ")}
-유사한 경우 목록에서 선택. 없으면 원문 그대로.
+【학력 이력(educationHistory) — JSON 배열, 원문 우선】
+이력서의 모든 학력(학부·대학원·복수전공 등)을 각각 별도 요소로 추출합니다. 표와 본문에 나뉘어 있어도 같은 학교·기간·학위는 하나의 요소로 연결하세요.
+각 요소: {"school":"학교명","graduateSchool":"대학원명 원문"|null,"department":"학과·전공 원문","majorDetail":"세부 전공·분야"|null,"degree":"학사"|"석사"|"박사"|"전문학사"|null,"degreeName":"원문 학위명(예: 경영학 석사)"|null,"majorType":"주전공"|"복수전공"|"제2전공"|"부전공"|null,"secondaryMajors":[{"majorType":"복수전공"|"제2전공"|"부전공","department":"전공명 원문"}],"status":"졸업"|"졸업예정"|"재학중"|"수료"|"중퇴"|null,"admissionYear":number|null,"graduationYear":number|null,"sourceText":"근거가 된 원문 발췌(100자 이내)"}
+규칙:
+- 모든 값은 원문에 적힌 표현 그대로 사용하세요. 목록에 맞추거나 다른 명칭으로 바꾸지 마세요.
+- graduateSchool은 원문에 대학원명이 명시된 경우에만 그대로 기입합니다 (예: "경영정보대학원", "통번역대학원", "통역번역대학원", "국제대학원", "대학원"). 일반대학원·특수대학원·통번역대학원을 원문 명칭으로 구별하세요.
+- ⛔ 대학원 종류가 원문에 없으면 "통번역대학원"으로 추측하지 마세요. 통역·번역 경력, 영어 관련 전공, 통번역 관련 과목 수강, 학교명(한국외대·이화여대 등)은 통번역대학원 졸업의 근거가 아닙니다.
+- degree는 해당 과정의 학위 단계입니다 (4년제 대학교 학부 과정=학사, 대학원 석사과정=석사, 박사과정=박사). 졸업예정·재학·수료여도 과정 단계를 기입하고, 취득 여부는 status로만 구분합니다. 과정 단계를 알 수 없으면 null.
+- 서로 다른 대학원의 석사는 각각 별도 요소로, 같은 대학원의 석사와 박사도 각각 별도 요소로 만드세요. 박사가 있어도 석사를 생략하지 마세요.
+- 학부 전공과 대학원 전공을 섞지 마세요. 석사 학위의 전공은 대학원 요소에, 학사 전공은 학부 요소에만 기입합니다.
+- 복수전공·이중전공·제2전공·부전공은 해당 학력(주전공) 요소의 secondaryMajors에 빠짐없이 모두 기재합니다 (없으면 빈 배열). 주전공 department를 제2전공으로 바꾸지 마세요.
+- 계열·단과대(예: 어문학계열)는 department에 넣지 말고 학과·전공명만 넣으세요. 세부 분야(예: 미국희곡, 논문 분야)는 majorDetail에 넣습니다.
+- 작성 당시 기준 졸업예정·재학·수료 표기는 그대로 status에 반영합니다.
+- 원문에 없는 학력·전공·학위·연도는 만들지 말고 null로 두세요.
 
-【전공(major)】
-다음 목록 중 하나로 반환:
-${RESUME_MAJOR_LIST.join(", ")}
-주의: 학위(석사/학사 등)의 전공명을 추출하세요. 경력·직책(강사, 교수, 교원 등)은 전공이 아닙니다. 예) "전문통번역학 석사 / 한영과 강사" → "전문통번역학" (강사 직책은 무시).
-영문 전공명 변환: "Translation and Interpretation"→"통번역전공", "Conference Interpretation"→"국제회의통역", "Interpretation"→"통역전공", "Translation"→"번역전공", "T&I"→"통번역전공"
+【학력(education)·전공(major)·졸업연도·졸업상태 — 최종 학력】
+educationHistory 중 가장 높은 학위(박사>석사>학사)의 항목을 기준으로 작성합니다.
+- education: 학교명 + 원문 대학원명 (예: "한국외국어대학교 경영정보대학원"). 학부가 최종이면 학교명만.
+- major: 최종 학력의 학과·전공 원문 (예: "경영정보학과"). 강사·교수 등 직책은 전공이 아닙니다. 예) "전문통번역학 석사 / 한영과 강사" → "전문통번역학".
+- 통번역대학원 원문 명칭이 명시된 경우에만 다음 표준명을 사용할 수 있습니다: ${RESUME_EDUCATION_LIST.join(", ")}
+
+【통역·번역 경력과 학력은 독립적으로 판단】
+가능언어·전문분야·업무유형·경력은 경력/자격 근거로 분석하고, 학력 판단에 영향을 주지 마세요. 통번역 경력이 많아도 통번역대학원 졸업자로 판단하지 않습니다.
 
 【전문분야(specializations)】
 반드시 다음 목록에서만 선택(쉼표 구분):
@@ -2071,7 +2077,7 @@ ${RESUME_SPECIALIZATION_LIST.join(", ")}
 반드시 다음에서만 선택(쉼표 구분): ${RESUME_SUB_TYPES.join(", ")}
 영문 매핑: "Simultaneous Interpretation"→"동시통역", "Consecutive Interpretation"→"순차통역", "Escort Interpretation"→"수행통역", "Whispering"→"위스퍼링통역", "Conference Interpretation"→"동시통역", "Phone Interpretation"→"전화통역", "Video Interpretation"→"화상통역"
 행사운영 세부유형 매핑: 등록데스크·안내데스크→"등록데스크", VIP 의전·수행비서→"VIP 의전", 행사 스태프·진행요원→"행사스태프", 전시회·박람회 운영→"전시회 운영지원", 해외 바이어 응대→"해외 바이어 응대", 행사 MC·사회자→"행사 MC"
-⚠️ 통번역대학원 출신 규칙: education 필드가 통번역대학원/통역번역대학원에 해당하면 "일반번역"을 세부유형에 포함하지 마세요. 대신 "전문번역"을 사용하세요.
+⚠️ 통번역대학원 출신 규칙: 원문에 통번역대학원/통역번역대학원 학력이 명시되어 education이 이에 해당하면 "일반번역"을 세부유형에 포함하지 마세요. 대신 "전문번역"을 사용하세요.
 
 【지역(region)】
 ⚠️ 엄격한 규칙: 이력서에 현재 거주지를 명시한 경우에만 입력합니다. 반드시 아래 키워드가 명시적으로 존재해야만 추출:
@@ -2105,7 +2111,7 @@ ${RESUME_SPECIALIZATION_LIST.join(", ")}
 - 핵심 산업 또는 전문분야 (예: "의료·제약 GMP", "법률·금융·IT")
 - 대표 프로젝트 또는 주요 실적
 - 국제기구·대형 클라이언트 경험
-- 통번역대학원 출신 여부 (해당 시)
+- 통번역대학원 출신 여부 (원문에 통번역대학원 학력이 명시된 경우에만)
 - 자격증 또는 공인 시험 성적 (해당 시)
 
 예시:
@@ -2116,7 +2122,7 @@ ${RESUME_SPECIALIZATION_LIST.join(", ")}
 각 줄은 \\n으로 구분, 전체 100자 내외로 간결하게
 
 【졸업상태(graduationStatus)】
-다음 중 하나: 졸업, 졸업예정, 재학중, 수료, 중퇴
+최종 학력 항목의 상태. 다음 중 하나: 졸업, 졸업예정, 재학중, 수료, 중퇴
 
 【언어레벨(languageLevel)】
 주요 업무 언어의 레벨. 다음 중 하나: 원어민, 고급, 중급, 초급
@@ -2126,7 +2132,7 @@ ${RESUME_SPECIALIZATION_LIST.join(", ")}
     },
     {
       role: "user",
-      content: `다음 이력서에서 정보를 추출해주세요:\n\n${resumeText.slice(0, 12000)}\n\n아래 JSON 스키마로만 응답하세요 (모든 필드 포함):\n{"name":string|null,"phone":string|null,"email":string|null,"address":string|null,"languagePairs":string|null,"referenceLangs":string|null,"languageLevel":"원어민"|"고급"|"중급"|"초급"|null,"education":string|null,"major":string|null,"graduationYear":number|null,"graduationStatus":"졸업"|"졸업예정"|"재학중"|"수료"|"중퇴"|null,"specializations":string|null,"profileWorkTypes":string|null,"profileSubTypes":string|null,"region":string|null,"careerYears":string|null,"certifications":string|null,"bio":string|null,"languageExperiences":array,"confidence":"high"|"medium"|"low","notes":string|null}`,
+      content: `다음 이력서에서 정보를 추출해주세요:\n\n${resumeText.slice(0, 12000)}\n\n아래 JSON 스키마로만 응답하세요 (모든 필드 포함):\n{"name":string|null,"phone":string|null,"email":string|null,"address":string|null,"languagePairs":string|null,"referenceLangs":string|null,"languageLevel":"원어민"|"고급"|"중급"|"초급"|null,"educationHistory":array,"education":string|null,"major":string|null,"graduationYear":number|null,"graduationStatus":"졸업"|"졸업예정"|"재학중"|"수료"|"중퇴"|null,"specializations":string|null,"profileWorkTypes":string|null,"profileSubTypes":string|null,"region":string|null,"careerYears":string|null,"certifications":string|null,"bio":string|null,"languageExperiences":array,"confidence":"high"|"medium"|"low","notes":string|null}`,
     },
   ];
 }
@@ -2192,8 +2198,19 @@ function stripLangNamesFromBio(bio: string | null): string | null {
   return cleaned || null;
 }
 
-function buildResumeDto(result: Record<string, unknown>) {
-  const normalizedEducation = normalizeExtractedEducation((result.education as string) ?? null);
+export function buildResumeDto(result: Record<string, unknown>) {
+  // 학력: educationHistory가 있으면 최종 학력(최고 학위) 항목에서 필드를 만든다.
+  // 없으면 기존처럼 AI의 education/major 단일 값을 사용한다 (하위 호환).
+  const educationHistory = sanitizeEducationHistory(result.educationHistory);
+  const finalEdu = pickFinalEducation(educationHistory);
+  const normalizedEducation = normalizeEducationName(
+    finalEdu ? (formatEducationName(finalEdu) ?? ((result.education as string) ?? null)) : ((result.education as string) ?? null),
+  );
+  const educationMajor = finalEdu
+    ? (formatMajor(finalEdu, educationHistory, normalizeExtractedMajor) ?? normalizeExtractedMajor((result.major as string) ?? null))
+    : normalizeExtractedMajor((result.major as string) ?? null);
+  const educationSummary = summarizeEducationHistory(educationHistory);
+  const aiNotes = (result.notes as string) ?? null;
   const aiRawName = (result.name as string) ?? null;
   const normalizedName = normalizeExtractedName(aiRawName);
   console.log(`[NAME-TRACE][2] buildResumeDto aiRaw="${aiRawName}" afterNormalize="${normalizedName}"`);
@@ -2205,10 +2222,13 @@ function buildResumeDto(result: Record<string, unknown>) {
     languagePairs: (result.languagePairs as string) ?? null,
     referenceLangs: (result.referenceLangs as string) ?? null,
     languageLevel: (result.languageLevel as string) ?? null,
-    education: normalizedEducation,
-    major: normalizeExtractedMajor((result.major as string) ?? null),
-    graduationYear: typeof result.graduationYear === "number" ? result.graduationYear : null,
-    graduationStatus: (result.graduationStatus as string) ?? null,
+    // 학력 표시값: 학교·핵심 전공·학위 조합 (승인 시 그대로 저장되어 목록·상세에 동일 표시)
+    education: (finalEdu && formatEducationSummary(educationHistory, b => normalizeEducationName(b) ?? b)) || normalizedEducation,
+    major: educationMajor,
+    graduationYear: finalEdu
+      ? finalEdu.graduationYear
+      : (typeof result.graduationYear === "number" ? result.graduationYear : null),
+    graduationStatus: finalEdu ? (finalEdu.status ?? null) : ((result.graduationStatus as string) ?? null),
     specializations: normalizeExtractedSpecializations((result.specializations as string) ?? null),
     profileWorkTypes: (result.profileWorkTypes as string) ?? null,
     profileSubTypes: filterSubTypesForGraduate((result.profileSubTypes as string) ?? null, normalizedEducation),
@@ -2225,7 +2245,9 @@ function buildResumeDto(result: Record<string, unknown>) {
       } catch { return null; }
     })(),
     confidence: (result.confidence as "high" | "medium" | "low") ?? "low",
-    notes: (result.notes as string) ?? null,
+    notes: [aiNotes, educationSummary].filter(Boolean).join("\n") || null,
+    // 추가 필드(기존 응답 형태 유지): 전체 학력 이력 — UI는 사용하지 않으며 진단·향후 저장용
+    educationHistory: educationHistory.length > 0 ? educationHistory : null,
   };
 }
 

@@ -45,9 +45,10 @@ const EDUCATION_LABEL_MAP: Record<string, string> = Object.fromEntries(
 );
 const getEducationLabel = (v: string) => EDUCATION_LABEL_MAP[v] ?? v;
 
+// 학력값에 학위가 덧붙은 경우(예: "University of Bath … 석사")도 동일하게 판정
 const isGraduateInterpreterEducation = (education: string) =>
-  EDUCATION_DOMESTIC.some(e => e.value === education) ||
-  EDUCATION_OVERSEAS.some(e => e.value === education) ||
+  EDUCATION_DOMESTIC.some(e => e.value === education || education.startsWith(`${e.value} `)) ||
+  EDUCATION_OVERSEAS.some(e => e.value === education || education.startsWith(`${e.value} `)) ||
   education.includes("통번역대학원") ||
   education.includes("통역번역대학원");
 
@@ -507,6 +508,8 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
     region: "",
   });
   const [langExperiences, setLangExperiences] = useState<LangExpEntry[]>([]);
+  // 학력 이력 (JSON 문자열) — 이력서 AI 분석 승인 시 설정, 등록 시 함께 저장
+  const [educationHistory, setEducationHistory] = useState<string | null>(null);
   const [aliasDrafts, setAliasDrafts] = useState<string[]>([]);
   const [createdInvite, setCreatedInvite] = useState<{ email: string; inviteToken: string } | null>(null);
   const [sf, setSF] = useState(emptySensitive());
@@ -608,6 +611,10 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
         if (Array.isArray(parsed) && parsed.length > 0) setLangExperiences(parsed);
       } catch { /* ignore */ }
     }
+    // 학력 이력: AI가 추출한 전체 학력을 함께 보존
+    if (Array.isArray(result.educationHistory) && result.educationHistory.length > 0) {
+      setEducationHistory(JSON.stringify(result.educationHistory));
+    }
     setShowAnalyzePanel(false);
     onToast("AI 분석 결과가 반영되었습니다. 내용을 확인 후 등록하세요.");
   };
@@ -684,6 +691,7 @@ export function TranslatorCreateModal({ token, permissions = [], onClose, onCrea
           profileWorkTypes: form.profileWorkTypes.trim() || undefined,
           profileSubTypes: profileSubTypesValue,
           languageExperiences: langExperiences.length > 0 ? JSON.stringify(langExperiences) : undefined,
+          educationHistory: educationHistory ?? undefined,
         }),
       });
       const data = await res.json();

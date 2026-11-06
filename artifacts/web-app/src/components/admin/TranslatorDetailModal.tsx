@@ -17,6 +17,7 @@ import {
 } from "./translatorRateConstants";
 import { TranslatorRateEntryCard, RateEntryData, emptyRateEntry } from "./TranslatorRateEntryCard";
 import { ResumeAnalyzePanel, ResumeAnalysisResult } from "./ResumeAnalyzePanel";
+import { educationDisplay, parseEducationHistory, formatEducationLines } from "../../lib/educationDisplay";
 import { TranslatorEvidenceDocumentsSection } from "./TranslatorEvidenceDocumentsSection";
 import { TranslatorDocumentsSection } from "./TranslatorDocumentsSection";
 import { DocumentPreviewModal } from "./DocumentPreviewModal";
@@ -85,9 +86,10 @@ const EDUCATION_LABEL_MAP: Record<string, string> = Object.fromEntries(
 );
 const getEducationLabel = (v: string) => EDUCATION_LABEL_MAP[v] ?? v;
 
+// 학력값에 학위가 덧붙은 경우(예: "University of Bath … 석사")도 동일하게 판정
 const isGraduateInterpreterEducation = (education: string) =>
-  EDUCATION_DOMESTIC.some(e => e.value === education) ||
-  EDUCATION_OVERSEAS.some(e => e.value === education) ||
+  EDUCATION_DOMESTIC.some(e => e.value === education || education.startsWith(`${e.value} `)) ||
+  EDUCATION_OVERSEAS.some(e => e.value === education || education.startsWith(`${e.value} `)) ||
   education.includes("통번역대학원") ||
   education.includes("통역번역대학원");
 
@@ -622,6 +624,8 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
   // [취소] 시 원복을 위한 편집 진입 시점 스냅샷(마스터 폼 한정. 단가/이력서 등 즉시커밋 독립기능은 대상 아님).
   const editSnapshot = useRef<null | Record<string, any>>(null);
   const [langExperiences, setLangExperiences] = useState<LangExpEntry[]>([]);
+  // 학력 이력 (JSON 문자열) — 이력서 AI 분석 승인 시 갱신, 저장 시 그대로 전송
+  const [educationHistory, setEducationHistory] = useState<string | null>(null);
 
   const [form, setForm] = useState({
     name: "",
@@ -736,6 +740,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
         const rawSubs = (p?.profileSubTypes ?? "").split(",").map(s => s.trim()).filter(Boolean);
         setPinnedSubTypes(new Set(rawSubs.slice(0, 2)));
         setLangExperiences(parseLangExperiences((p as any)?.languageExperiences));
+        setEducationHistory((p as any)?.educationHistory ?? null);
         // 거주지역 파싱
         const parsedRegion = parseRegionStr(p?.region ?? "");
         setRegionCountry(parsedRegion.country);
@@ -826,6 +831,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
           operationalNote: form.operationalNote.trim() || null,
           reassignmentAllowed: form.reassignmentAllowed,
           languageExperiences: langExperiences.length > 0 ? JSON.stringify(langExperiences) : null,
+          educationHistory,
           emails: validated.map(e => ({ email: (e as any).usePlaceholder ? placeholderEmail! : e.email.trim().toLowerCase(), isPrimary: e.isPrimary })),
         }),
       });
@@ -1301,7 +1307,7 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
             {(form.education || form.major || pinnedSubTypes.size > 0 || form.specializations || form.bio) && (
               <div style={{ width: "100%", display: "flex", gap: "4px 14px", flexWrap: "wrap", borderTop: "1px solid #bae6fd", paddingTop: 6, marginTop: 2, alignItems: "center" }}>
                 {form.education && (
-                  <span style={{ fontSize: 11, color: "#0369a1" }}>🎓 {getEducationLabel(form.education)}</span>
+                  <span style={{ fontSize: 11, color: "#0369a1" }}>🎓 {educationDisplay(educationHistory, form.education, form.major, getEducationLabel)}</span>
                 )}
                 {form.major && (
                   <span style={{ fontSize: 11, color: "#0369a1" }}>📚 {form.major}</span>
@@ -1527,6 +1533,15 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
                     />
                   </div>
                 </div>
+                {/* 전체 학력 이력 (이력서 AI 분석 승인 시 저장된 구조화 학력) — 읽기 전용 */}
+                {parseEducationHistory(educationHistory).length > 0 && (
+                  <div data-testid="translator-education-history" aria-label="학력 이력" style={{ marginTop: 6, padding: "6px 10px", background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "#6b7280", marginBottom: 3 }}>학력 이력</div>
+                    {formatEducationLines(parseEducationHistory(educationHistory)).map((line, i) => (
+                      <div key={i} style={{ fontSize: 11, color: "#374151", lineHeight: 1.6 }}>{i + 1}. {line}</div>
+                    ))}
+                  </div>
+                )}
               </div>
               {/* 언어레벨 | 거주국가 | 거주지역/도시 — 3컬럼 한 줄 */}
               <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: "0 16px", alignItems: "start" }}>
@@ -2297,6 +2312,10 @@ export function TranslatorDetailModal({ userId, userEmail, token, permissions = 
               const parsed = JSON.parse(result.languageExperiences);
               if (Array.isArray(parsed) && parsed.length > 0) setLangExperiences(parsed);
             } catch { /* ignore */ }
+          }
+          // 학력 이력: AI가 추출한 전체 학력을 함께 반영 (학력·전공 필드와 동일 출처)
+          if (Array.isArray(result.educationHistory) && result.educationHistory.length > 0) {
+            setEducationHistory(JSON.stringify(result.educationHistory));
           }
           setShowAnalyzePanel(false);
         }}

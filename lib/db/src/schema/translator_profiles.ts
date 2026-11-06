@@ -42,6 +42,8 @@ export const translatorProfilesTable = pgTable("translator_profiles", {
   reassignmentAllowed: boolean("reassignment_allowed").notNull().default(true),
   // 언어·국제경험 (JSON 배열, LangExpEntry[])
   languageExperiences: text("language_experiences"),
+  // 학력 이력 (JSON 배열, EducationEntry[]) — 이력서 AI 분석 승인 시 저장. education/major는 최종 학력 요약값으로 유지
+  educationHistory: text("education_history"),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 

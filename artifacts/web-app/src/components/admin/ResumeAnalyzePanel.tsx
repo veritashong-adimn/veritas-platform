@@ -67,12 +67,14 @@ export interface ResumeAnalysisResult {
   certifications: string | null;
   bio: string | null;
   languageExperiences: string | null;
+  // 전체 학력 이력 (구조화) — 팝업에는 표시하지 않고 승인 시 프로필에 함께 저장
+  educationHistory?: Array<Record<string, unknown>> | null;
   confidence: "high" | "medium" | "low";
   notes: string | null;
   _debug?: ResumeDebugInfo;
 }
 
-export type ResumeFieldKey = Exclude<keyof ResumeAnalysisResult, "_debug">;
+export type ResumeFieldKey = Exclude<keyof ResumeAnalysisResult, "_debug" | "educationHistory">;
 export type ResumeCurrentValues = Partial<Record<ResumeFieldKey, string | number | null>>;
 
 type Props = {
