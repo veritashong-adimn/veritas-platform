@@ -61,3 +61,9 @@ Thumbs.db
 
 # 임시 빌드 산출물
 artifacts/api-server/dist-scratch/
+
+# Claude Code 로컬 설정(개인 권한 규칙·로컬 로그인 명령 포함) — 저장소에 올리지 않음
+.claude/settings.local.json
+
+# api-server 검증 하니스 번들 산출물(node scripts/buildTestHarness.mjs 로 생성)
+artifacts/api-server/scripts/dist-harness/
