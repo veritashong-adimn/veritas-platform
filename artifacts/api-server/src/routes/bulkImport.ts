@@ -144,6 +144,8 @@ const COMPANY_UPDATE_FIELDS: Record<string, (r: CompanyRow) => string | null> = 
   industry: (r) => r.industry || null,
   businessCategory: (r) => r.businessCategory || null,
   address: (r) => r.address || null,
+  phone: (r) => r.phone || null,
+  email: (r) => r.email || null,
 };
 
 interface ImportDiagnostics {
@@ -372,6 +374,10 @@ async function analyzeCompanies(buffer: Buffer, opts?: { forceCustomerType?: "IN
         { key: "industry", excel: row.industry, db: ex.industry ?? "" },
         { key: "businessCategory", excel: row.businessCategory, db: ex.businessCategory ?? "" },
         { key: "address", excel: row.address, db: ex.address ?? "" },
+        // (2026-11-08) CRM 거래처 명부 최신화 — 사업자번호 정확 일치 거래처의 대표전화·대표이메일 변경도 반영(빈 셀은 덮어쓰지 않음).
+        //   식별키로 쓰지 않는다(§3 유지) — 사업자번호로 이미 같은 거래처가 확정된 행에서 값만 갱신.
+        { key: "phone", excel: row.phone, db: ex.phone ?? "", norm: (v: string) => normalizePhone(v) || v.trim() },
+        { key: "email", excel: row.email, db: ex.email ?? "", norm: (v: string) => normalizeEmail(v) || v.trim() },
       ]);
       row.existingId = ex.id;
       if (Object.keys(changes).length === 0) { row.status = "identical"; row.reason = "기존 데이터 동일"; }
@@ -559,6 +565,12 @@ router.post(
       const updateRows = mode === "update"
         ? result.rows.filter((r) => r.status === "update" && r.existingId != null)
         : [];
+      // 같은 기존 거래처를 가리키는 여러 행의 대표전화·이메일이 서로 다르면 임의 선택하지 않는다(해당 항목만 갱신 제외).
+      for (const key of ["phone", "email"] as const) {
+        const vals = new Map<number, Set<string>>();
+        for (const r of updateRows) if (r.changes?.[key]) { const v = vals.get(r.existingId as number) ?? new Set<string>(); v.add(String(r.changes[key].new).trim()); vals.set(r.existingId as number, v); }
+        for (const r of updateRows) if (r.changes?.[key] && (vals.get(r.existingId as number)?.size ?? 0) > 1) delete r.changes[key];
+      }
       const summary = summarize(result.rows);
       const today = new Date().toISOString().slice(0, 10);
       const performer = { id: (req as any).user?.id ?? 0, email: (req as any).user?.email ?? "" };

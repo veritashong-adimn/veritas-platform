@@ -7,6 +7,7 @@ import { formatAmountDisplay } from '../../lib/utils';
 import { LegacyArchiveDetailPage } from './LegacyArchiveDetailPage';
 import { LegacyArchiveSyncPanel } from './LegacyArchiveSyncPanel';
 import { LegacyCrmFullSyncPanel } from './LegacyCrmFullSyncPanel';
+import { CrmRefreshPanel } from './CrmRefreshPanel';
 import { LegacyCrmSavedFiles, type Summary as SavedSummary } from './LegacyCrmSavedFiles';
 
 type SourceType = 'sales_list' | 'progress' | 'translator_list';
@@ -93,6 +94,8 @@ const EMPTY_FILTERS = { sourceType: 'sales_list' as 'all' | SourceType, q: '', c
 export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToast: (msg: string) => void }) {
   const authHeaders = { Authorization: `Bearer ${token}` };
   const [mode, setMode] = useState<'search' | 'import'>('search');
+  // 이전 방식(변경분 미리보기·승인·원본 Preview) 상세 도구 — 기본 숨김. 일상 최신화는 CrmRefreshPanel 사용.
+  const [showDetailTools, setShowDetailTools] = useState(false);
   const [detailId, setDetailId] = useState<number | null>(null);
 
   // ── 조회 상태 ──
@@ -329,7 +332,7 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
       {/* (C-4I-n) 상단 한 줄: 좌측 모드 탭 + 우측 끝 [과거 스냅샷][Excel 다운로드]. 좁아지면 줄바꿈(겹침 방지). */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={tab(mode === 'search')} role="button" aria-label="자료 조회" data-testid="archive-mode-search" onClick={() => setMode('search')}>자료 조회</div>
-        <div style={tab(mode === 'import')} role="button" aria-label="Excel 등록" data-testid="archive-mode-import" onClick={() => setMode('import')}>Excel 등록</div>
+        <div style={tab(mode === 'import')} role="button" aria-label="Excel 등록" data-testid="archive-mode-import" onClick={() => setMode('import')}>CRM 자료 최신화</div>
         {mode === 'search' && (
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <button style={{ ...btn(false), background: '#fff', color: '#374151', border: '1px solid #d1d5db' }} data-testid="archive-snapshots-toggle"
@@ -592,6 +595,15 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
 
       {mode === 'import' && (
         <>
+          {/* 최신 CRM 파일 업로드 즉시 반영(5개 자료) — 건별 비교·승인 없음 */}
+          <CrmRefreshPanel token={token} setToast={setToast} onApplied={loadSnapshots} />
+          <div style={{ marginBottom: 12 }}>
+            <button onClick={() => setShowDetailTools(v => !v)} aria-expanded={showDetailTools} aria-label="상세 도구 펼치기/접기" data-testid="archive-detail-tools-toggle"
+              style={{ fontSize: 12.5, border: '1px solid #d1d5db', background: '#fff', borderRadius: 8, padding: '6px 12px', cursor: 'pointer', color: '#4b5563' }}>
+              {showDetailTools ? '▲ 상세 도구 접기' : '▼ 상세 도구(원본 Preview · 변경분 미리보기 · 실행 이력·되돌리기)'}
+            </button>
+          </div>
+          {showDetailTools && (<>
           {/* 최신 CRM 판매목록·진행관리표 통합 동기화(같은 기준일 · 신규·변경·삭제) */}
           <LegacyCrmFullSyncPanel token={token} setToast={setToast} onApplied={loadSnapshots} />
           <div style={box}>
@@ -943,6 +955,7 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
                 onSummary={(s) => { if (t === impType) setSyncSum(s); else { const sl = slotsRef.current[t]; if (sl) sl.syncSum = s; } }} />
             </div>
           ))}
+          </>)}
         </>
       )}
     </div>

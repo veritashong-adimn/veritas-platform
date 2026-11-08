@@ -1,6 +1,6 @@
 // 통합 지급회차관리 (Phase 1 · READ-ONLY) — 과거 CRM(legacy) + 신규 플랫폼(current)을 지급일별로 통합 조회·집계.
 //   · 운영 지급확정/은행이체 로직은 변경하지 않음(§12). 저장·송금·상태변경 없음. 원본값 기준.
-//   · 과거 CRM 지급완료 판정 = 납품일 ≤ 2026-09-15(대표 확인·2026-10-07 CRM 기준)만. 입금일/입금내역은 고객 수금 기록(지급 증빙 아님). 조회/표시 전용(원본 불변).
+//   · 과거 CRM 지급완료 판정 = 납품일 ≤ 2026-09-15(대표 확인) 또는 지급회차 지급일 경과(지급일 다음 날부터, 별도 지급파일 처리분). 입금일/입금내역은 고객 수금 기록(지급 증빙 아님). 조회/표시 전용(원본 불변).
 //   · 날짜 기준 기본값 = 납품일(§5). 조회 기준과 지급회차 귀속(지급일)은 분리.
 //   · 중복 의심(§9)은 표시만 — 자동 삭제/제외/지급 없음.
 import React, { useState, useCallback, useEffect } from 'react';
@@ -128,7 +128,7 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
     ['세전금액', `${won(totals.pretaxTotal)}원`, '전체 건 세전 합계'],
     ['원천세공제(3.3%)', `${won(totals.withholdingImpliedTotal)}원`, '원본 세전−세후(실제 공제) 합계 · 3.3%는 참고'],
     ['실지급액(세후)', `${won(totals.posttaxTotal)}원`, '전체 건 세후(실지급) 합계 = 세전 − 원천세공제'],
-    ['지급완료(세전)', `${won(totals.paidTotal)}원`, '지급완료 건의 세전 합계 — 과거 CRM: 납품일 ≤ 2026-09-15(대표 확인) · 신규: 지급회차 지급완료 처리 건(전체 세후와 기준이 다름)'],
+    ['지급완료(세전)', `${won(totals.paidTotal)}원`, '지급완료 건의 세전 합계 — 과거 CRM: 납품일 ≤ 2026-09-15(대표 확인) 또는 지급일 경과(별도 지급파일 처리분) · 신규: 지급회차 지급완료 처리 건(전체 세후와 기준이 다름)'],
     ['미지급(세전)', `${won(totals.unpaidTotal)}원`, '신규 미지급 건의 세전 합계'],
     ['지급예정', `${num(totals.scheduledCount)}건`, '과거 CRM 지급일이 오늘 이후이고 지급확정 기록이 없는 건'],
     ['지급확인 필요', `${num(totals.needReviewCount)}건`, '지급일이 지났거나 미상인데 지급확정 기록이 없는 과거 CRM 건 · 입금일/입금내역(고객 수금)은 지급 근거가 아님. 대표 확인 대상.'],
@@ -153,7 +153,7 @@ export function PayoutUnifiedTab({ token, onToast }: { token: string; onToast: (
     <div data-testid="payout-unified-tab">
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, margin: '0 0 8px', flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 19, fontWeight: 800, color: '#111827', margin: 0 }}>지급회차관리</h1>
-        <span style={{ fontSize: 11.5, color: '#9ca3af' }}>과거 CRM + 신규 플랫폼 통합 조회 · 조회/명세서 전용(지급확정·송금 없음) · 과거 CRM 지급완료 = 대표 확인(2026-10-07 CRM 기준, 납품일 ≤ 2026-09-15)만 · 입금내역(고객 수금)은 지급 근거 아님</span>
+        <span style={{ fontSize: 11.5, color: '#9ca3af' }}>과거 CRM + 신규 플랫폼 통합 조회 · 조회/명세서 전용(지급확정·송금 없음) · 과거 CRM 지급완료 = 지급일 경과(다음 날부터 · 별도 지급파일 처리분, VERITAS 송금 아님) 또는 납품일 ≤ 2026-09-15(대표 확인) · 입금내역(고객 수금)은 지급 근거 아님</span>
       </div>
 
       {/* 검색조건 — 한 줄(폭 부족 시 줄바꿈) */}

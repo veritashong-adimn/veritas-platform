@@ -9,8 +9,8 @@
 //   · DB write 전혀 없음(순수 SELECT 집계). 운영 payout_rounds/items/transfers·지급확정·IBK 미접촉.
 //   · 과거 CRM 원본/신규 수행정보 원본 수정·삭제·복사 없음. Master 연결정보 변경 없음.
 //   · 지급상태 분류는 "조회 표시"일 뿐 — 지급확정/송금을 발생시키지 않는다.
-//   · 과거 '지급완료' 판정 = 납품일 ≤ 2026-09-15(대표 확인)만. 지급일·입금일/입금내역(고객 수금)만으로 단정하지 않음(§7).
-//     지급 여부 불명 → 지급예정(지급일 미래) / 지급확인 필요(지급일 경과·미상).
+//   · 과거 '지급완료' 판정 = 납품일 ≤ 2026-09-15(대표 확인) 또는 지급회차 지급일 경과(지급일 < 오늘 KST, 2026-11-08 대표 확정).
+//     입금일/입금내역(고객 수금)은 근거 아님. 지급일 당일·미래 → 지급예정 / 지급일 미상 → 지급확인 필요.
 //
 // 엔드포인트(GET, 읽기 전용):
 //   GET /admin/payout-unified/rounds    지급일별 통합 회차 목록(과거+신규, 필터·페이지네이션)
@@ -24,16 +24,16 @@ import { sql } from "drizzle-orm";
 import { requireAuth, requireRole } from "../middlewares/auth";
 import { getPermissionsForRole } from "../lib/rbac";
 import { isLegacyPlaceholderEmail } from "../lib/mailer";
-import { LEGACY_PAID_DELIVERY_CUTOFF, LEGACY_PAID_BASIS } from "../lib/legacyPayoutRule";
+import { LEGACY_PAID_DELIVERY_CUTOFF, LEGACY_PAID_BASIS, LEGACY_PAID_BY_ROUND_BASIS } from "../lib/legacyPayoutRule";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
 const REFERENCE_TREATMENT = "domestic_3_3" as const;
 
 // ── 과거 CRM 지급완료 판정 기준 — lib/legacyPayoutRule.ts(SSOT) 참조 ───────────────
-//   · 지급완료 = 납품일 ≤ 2026-09-15(대표 확인)만. 입금일/입금내역은 '고객 수금' 기록이므로 지급 증빙이 아니다
-//     (2026-11 전수조사: 지급예정일 미래 건이 입금내역 때문에 '지급완료'로 표시되던 오류 정정).
-//   · 그 외: 지급일 > 오늘(KST) → 지급예정 · 지급일 ≤ 오늘/미상 → 지급확인 필요.
+//   · 지급완료 = 납품일 ≤ 2026-09-15(대표 확인) 또는 지급일 < 오늘(KST) — 과거 CRM 은 별도 지급파일로 송금(대표 확정).
+//     입금일/입금내역은 '고객 수금' 기록이므로 지급 증빙이 아니다.
+//   · 그 외: 지급일 ≥ 오늘(KST, 당일 포함) → 지급예정 · 지급일 미상 → 지급확인 필요.
 //   · 최신 CRM 파일 기준 동기화로 삭제(비활성)된 행은 is_effective=false → 지급대상·회차 집계에서 자동 제외.
 //   · 원본(legacy_archive_rows) 불변 — 조회/표시 전용 판정. 신규 지급거래·지급회차 생성 없음(§5).
 //   · 신규 플랫폼(current) 건에는 이 기준을 적용하지 않는다(payment_status 그대로 — 지급회차 [지급완료]로만 paid).
@@ -84,9 +84,12 @@ const PROG = sql`
       -- 고객 수금 기록(입금일 또는 입금내역) 존재 — 검증 참고 정보. ※ 통번역사 지급 증빙이 아니다(지급완료 판정에 사용 금지).
       (nullif(btrim(source_raw->>'입금일'),'') IS NOT NULL OR nullif(btrim(source_raw->>'입금내역'),'') IS NOT NULL) AS has_deposit,
       -- 지급완료 판정(과거 CRM): 납품일 ≤ 2026-09-15(대표 확인)만. 납품일 누락/무효 → false(자동 지급완료 안 함).
-      coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false) AS legacy_paid,
-      -- 지급예정: 지급일이 오늘(KST) 이후. 지급일 경과/미상은 지급확인 필요.
-      coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') > to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false) AS payout_future,
+      --   + (2026-11-08) 지급회차 지급일 경과(지급일 < 오늘 KST) — 과거 CRM 지급건 한정(별도 지급파일 처리분). 지급일 당일은 지급예정.
+      (coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false)
+        OR coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') < to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false)) AS legacy_paid,
+      coalesce(substring(source_raw->>'통번역사납품일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') <= ${LEGACY_PAID_DELIVERY_CUTOFF}, false) AS legacy_paid_cutoff,
+      -- 지급예정: 지급일이 오늘(KST) 당일 또는 이후. 지급일 미상은 지급확인 필요(지급일 경과는 위 legacy_paid).
+      coalesce(substring(source_raw->>'통번역사지급일' from '^[0-9]{4}-[0-9]{2}-[0-9]{2}') >= to_char((now() AT TIME ZONE 'Asia/Seoul')::date, 'YYYY-MM-DD'), false) AS payout_future,
       coalesce(nullif(regexp_replace(coalesce(source_raw->>'지급액(세전)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0) AS pretax,
       coalesce(nullif(regexp_replace(coalesce(source_raw->>'지금액(세후)',''), '[^0-9.-]', '', 'g'), '')::numeric, 0) AS posttax
     FROM legacy_archive_rows WHERE source_type = 'progress' AND is_effective = true
@@ -307,7 +310,7 @@ export async function collectUnifiedItems(opts: {
       const masterKey = r.mapped_user_id != null ? `m:${r.mapped_user_id}` : `n:${r.translator ?? "?"}`;
       // 지급상태(과거 CRM, PROG 판정과 동일) — 지급완료는 납품일 ≤ cutoff(대표 확인)만. 입금내역(고객 수금)은 근거 아님.
       const status: PayStatus = legacyStatus(r);
-      const paidBasis: string | null = r.legacy_paid ? LEGACY_PAID_BASIS : null;
+      const paidBasis: string | null = !r.legacy_paid ? null : r.legacy_paid_cutoff ? LEGACY_PAID_BASIS : LEGACY_PAID_BY_ROUND_BASIS;
       return {
         source: "legacy", sourceKey: r.source_key, id: num(r.id),
         deliveryDate: r.delivery_date ?? null, payoutDate: r.payout_date ?? null,
