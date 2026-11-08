@@ -7,7 +7,7 @@
   },
   "include": ["src"],
   // web-app 표시 로직(educationDisplay)을 함께 검증하는 테스트 — esbuild 번들로만 실행
-  "exclude": ["src/test-resume-education.ts"],
+  "exclude": ["src/test-resume-education.ts", "src/test-region-display.ts"],
   "references": [
     {
       "path": "../../lib/db"

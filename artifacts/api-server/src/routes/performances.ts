@@ -11,6 +11,7 @@ import {
   db, performanceAssignmentsTable, performanceExpensesTable, performanceDeductionsTable,
   quotesTable, quoteItemsTable, quoteItemFilesTable, productsTable, holidaysTable, projectsTable,
   translatorSensitiveTable, translatorProfilesTable, translatorRatesTable, usersTable, companiesTable,
+  translatorEmailsTable,
   calcIndividualPayout, calcVendorPurchase, DEFAULT_DOMESTIC_WITHHOLDING_TREATMENT,
   calcBasePerformanceFee, calcCostTotal, calcPaymentDate,
 } from "@workspace/db";
@@ -24,6 +25,8 @@ import { isPendingPayoutReview, activatedSaleExists } from "../services/legacyAc
 import { getPermissionsForRole } from "../lib/rbac";
 import { decrypt, maskResidentNumber } from "../lib/encrypt";
 import { autoAssignByPaymentDate } from "./payoutRounds";
+import { isLegacyPlaceholderEmail } from "../lib/mailer";
+import { activateTranslatorOnAssignment } from "../services/translatorActivation";
 
 // 납품확인 권한(§9) — 관리자(super) OR 프로젝트 담당(admin_id) OR project.update 권한 보유자.
 async function canConfirmDelivery(user: { id: number; role?: string; roleId?: number | null } | undefined, projectAdminId: number | null): Promise<boolean> {
@@ -1026,6 +1029,7 @@ router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermiss
   if (!parsed.success) { res.status(400).json({ error: "유효성 검증 실패", detail: parsed.error.flatten() }); return; }
   const { rows, deletedIds } = parsed.data;
   const userId = req.user?.id ?? null;
+  const activatedTranslatorIds: number[] = [];   // 이번 저장으로 자동 활성화된 통번역사(가산 응답 필드)
 
   try {
     const auditBefore = await db.select({ id: performanceAssignmentsTable.id, individualUserId: performanceAssignmentsTable.individualUserId,
@@ -1055,7 +1059,17 @@ router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermiss
       const priorById = new Map(priorRows.map(p => [p.id, p]));
       const ctx: ApplyRowCtx = { userId, isHoliday, mayConfirm, priorById };
       for (const r of rows) {
-        await applyPerformanceRow(tx, projectId, r, ctx);   // 저장 SSOT(§33) — Import와 동일 경로
+        const assignmentId = await applyPerformanceRow(tx, projectId, r, ctx);   // 저장 SSOT(§33) — Import와 동일 경로
+        // 배정 확정 시 자동 활성화 — 이 행에 새로 배정된(신규 행 또는 수행자 변경) 비활성 통번역사만, 같은 트랜잭션에서 처리.
+        //   기존 배정 유지 행·활성 인원은 변경 없음. 저장이 실패하면 활성화·감사로그도 함께 롤백된다.
+        const [saved] = await tx.select({ individualUserId: performanceAssignmentsTable.individualUserId })
+          .from(performanceAssignmentsTable).where(eq(performanceAssignmentsTable.id, assignmentId));
+        const uid = saved?.individualUserId ?? null;
+        const prior = priorById.get(assignmentId);
+        if (uid && (!prior || prior.individualUserId !== uid)) {
+          const ok = await activateTranslatorOnAssignment(tx, uid, { projectId, assignmentId, performedBy: userId, performedByEmail: req.user?.email ?? null });
+          if (ok) activatedTranslatorIds.push(uid);
+        }
       }
     });
 
@@ -1078,7 +1092,7 @@ router.put("/admin/projects/:id/performances", ...adminGuard, requireRolePermiss
           JSON.stringify({ changes, deletedIds }));
       }
     } catch (e) { req.log.error({ e, projectId }, "수행정보 감사로그 기록 실패(저장은 정상)"); }
-    res.json({ ok: true, rows: rowsOut });
+    res.json({ ok: true, rows: rowsOut, activatedTranslatorIds });
   } catch (err: any) {
     req.log.error({ err }, "수행정보 저장 실패");
     res.status(400).json({ error: err?.message ?? "수행정보 저장에 실패했습니다." });
@@ -1197,6 +1211,33 @@ router.get("/admin/performances/resolve-individual", ...adminGuard, async (req, 
 
 // ── 통번역사 최근 수행이력(읽기전용) — 상세 미리보기용. 기존 performance_assignments 를 individualUserId 로 조회. ──
 //   새 테이블/컬럼 없이 최근 2~3건(상품·업무명 · 수행월 · 상태)만 반환한다. 민감정보(주민번호·계좌·주소 등)는 포함하지 않는다.
+// 수행정보 통번역사 상세 미리보기 — 전체 연락처·이메일(§연락처 표시).
+//   배정(수행정보 저장)과 같은 권한(project.update)이 있는 사용자에게만 제공. 검색 목록 응답(view=picker)은 계속 마스킹.
+//   전화 = translator_profiles.phone, 이메일 = 대표 이메일(translator_emails.is_primary) → 없으면 users.email.
+//   과거 CRM 이관용 식별 이메일(실제 주소 아님)은 통번역사 목록과 동일하게 미등록(null) 처리. 값은 로그에 남기지 않는다.
+router.get("/admin/performances/translator-contact", ...adminGuard, requireRolePermission("project.update"), async (req, res) => {
+  const translatorId = Number(req.query.translatorId);
+  if (!Number.isInteger(translatorId) || translatorId <= 0) { res.status(400).json({ error: "translatorId 가 필요합니다." }); return; }
+  try {
+    const [u] = await db.select({ id: usersTable.id, email: usersTable.email, phone: translatorProfilesTable.phone })
+      .from(usersTable)
+      .leftJoin(translatorProfilesTable, eq(translatorProfilesTable.userId, usersTable.id))
+      .where(and(eq(usersTable.id, translatorId), eq(usersTable.role, "translator")));
+    if (!u) { res.status(404).json({ error: "통번역사를 찾을 수 없습니다." }); return; }
+    const [primary] = await db.select({ email: translatorEmailsTable.email }).from(translatorEmailsTable)
+      .where(and(eq(translatorEmailsTable.translatorId, translatorId), eq(translatorEmailsTable.isPrimary, true))).limit(1);
+    const email = primary?.email ?? u.email ?? null;
+    res.json({
+      ok: true,
+      phone: u.phone?.trim() || null,
+      email: email && !isLegacyPlaceholderEmail(email) ? email : null,
+    });
+  } catch (err) {
+    req.log.error({ translatorId, errName: err instanceof Error ? err.name : "unknown" }, "통번역사 연락처 조회 실패");
+    res.status(500).json({ error: "연락처를 불러오지 못했습니다." });
+  }
+});
+
 router.get("/admin/performances/recent-by-translator", ...adminGuard, async (req, res) => {
   const translatorId = Number(req.query.translatorId);
   if (!Number.isInteger(translatorId) || translatorId <= 0) { res.status(400).json({ error: "translatorId 가 필요합니다." }); return; }

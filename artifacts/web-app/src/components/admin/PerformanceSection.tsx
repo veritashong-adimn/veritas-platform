@@ -13,6 +13,7 @@ import { C, TYPO, SP, BD, dsInputStd } from '../../lib/ds';
 import PerformanceProfitSummary from './PerformanceProfitSummary';
 import RowControls from './RowControls';
 import InlinePerformerPicker from './InlinePerformerPicker';
+import type { TranslatorContactResult } from './TranslatorPreviewPopover';
 import { AmountDetailPopup, AdjustmentPopup, RatePopup } from './performancePopups';
 import ServiceDetailCell from './performanceServiceDetail';
 import './readTableView.css';
@@ -344,7 +345,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
       } catch { if (seq === searchSeq.current) { setSearchResults([]); setSearchState('error'); } }
     }, 200);
   };
-  const onSearchTranslator = (i: number, s: string) => { if (!s.trim()) { clearSearch(i); return; } runSearch(i, `/api/admin/translators?search=${encodeURIComponent(s.trim())}`); };
+  const onSearchTranslator = (i: number, s: string) => { if (!s.trim()) { clearSearch(i); return; } runSearch(i, `/api/admin/translators?view=picker&search=${encodeURIComponent(s.trim())}`); };
   // 외주 역할(is_vendor=true) 회사 검색 — 고객+외주 겸업 회사도 포함(§3·§7). page 지정으로 서버 필터/검색 분기 사용.
   const onSearchVendor = (i: number, s: string) => { if (!s.trim()) { clearSearch(i); return; } runSearch(i, `/api/admin/companies?role=vendor&page=1&pageSize=20&search=${encodeURIComponent(s.trim())}`); };
   // 조회모드 필터는 '배정된 행' 안에서만 찾는다. 0건이면 같은 검색어로 수정모드 새 통번역사 행에서 Master 검색을 시작한다.
@@ -353,7 +354,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
     const base = list.map(toRow);
     setRows([...base, { performerCategory: 'individual', lineCategory: '통번역사', status: 'unassigned', paymentStatus: 'unpaid', quantity: 1, expenses: [], deductions: [] }]);
     setDeletedIds([]); setPinnedEtcCols([]); setEditMode(true); setQ('');
-    runSearch(base.length, `/api/admin/translators?search=${encodeURIComponent(kw)}`);
+    runSearch(base.length, `/api/admin/translators?view=picker&search=${encodeURIComponent(kw)}`);
     setPrefillQ(kw);
   };
   const onClearPerformer = (i: number) => { patchRow(i, { performerNameSnapshot: null }); clearSearch(i); };
@@ -365,6 +366,18 @@ export default function PerformanceSection({ projectId, token, performances, onC
       const data = await res.json().catch(() => ({}));
       return res.ok && Array.isArray(data.rows) ? data.rows : [];
     } catch { return []; }
+  }, [token]);
+
+  // 통번역사 전체 연락처·이메일(§연락처 표시) — 상세 미리보기를 열 때만 조회. 권한(project.update) 없으면 forbidden.
+  //   값은 로그로 출력하지 않는다.
+  const fetchTranslatorContact = React.useCallback(async (translatorId: number): Promise<TranslatorContactResult> => {
+    try {
+      const res = await fetch(api(`/api/admin/performances/translator-contact?translatorId=${translatorId}`), { headers: { Authorization: `Bearer ${token}` } });
+      if (res.status === 401 || res.status === 403) return { status: 'forbidden' };
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) return { status: 'error' };
+      return { status: 'ok', phone: data.phone ?? null, email: data.email ?? null };
+    } catch { return { status: 'error' }; }
   }, [token]);
 
   // 인라인 선택(§선택-저장 분리) — 신규·기존 행 모두 "로컬 폼에만" 반영. 즉시 저장·화면전환 없음.
@@ -741,7 +754,7 @@ export default function PerformanceSection({ projectId, token, performances, onC
                 onSearchTranslator={onSearchTranslator} onSearchVendor={onSearchVendor}
                 onPickTranslator={pickTranslator} onPickVendor={pickVendor} onClear={onClearPerformer}
                 onCancelChange={() => clearSearch(null)} patch={(p) => patchRow(i, p)}
-                fetchRecentPerformances={fetchRecentPerformances} />
+                fetchRecentPerformances={fetchRecentPerformances} fetchTranslatorContact={fetchTranslatorContact} />
             : <span>{r.performerNameSnapshot || muted}</span>}
         </td>
         <td style={{ ...tdBase, width: LW.product }}>

@@ -22,6 +22,9 @@ import { evaluateTranslatorHardDeleteDependencies } from "../services/masterDepe
 import { buildMergePreview } from "../services/translatorMerge";
 import { runMergeExecute, revertMerge } from "../services/translatorMergeExecute";
 import { logEvent } from "../lib/logEvent";
+import { toDisplayRegion } from "../lib/regionDisplay";
+import { maskPhoneLast4 } from "../lib/phoneMask";
+import { loadTrashDeactivatedIds, isPickerEligible } from "../services/translatorActivation";
 import {
   RESUME_EDUCATION_LIST, sanitizeEducationHistory, pickFinalEducation, formatEducationName,
   formatMajor, summarizeEducationHistory, normalizeEducationName, serializeEducationHistory, formatEducationSummary,
@@ -389,9 +392,13 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
       regType?: string; activityState?: string;   // 등록구분(all|existing|migrated) · 활동상태(all|active|inactive|unverified)
       nameDup?: string;                             // 이름 중복 필터(all|dup|unique)
     };
+    // view=picker: 판매관리 수행정보 통번역사 검색 전용 — 거주지역(region)의 상세주소 제거 · 전화번호 끝 4자리 외 마스킹(개인정보 최소화).
+    // 미지정 시 기존 응답 그대로(통번역사 관리 화면 등 다른 화면 영향 없음). 검색 조건은 원본 기준 그대로.
+    const pickerView = (req.query as { view?: string }).view === "picker";
     // 신규 필터(등록구분/활동상태)가 지정되면 비활성 이관 인력까지 조회 대상에 포함한다.
     // 이름 중복 필터(dup)는 운영상태와 무관하게 동명 Master를 모두 보여줘야 하므로 전체 대상을 포함한다(§중복누락 방지).
-    const wantAll = includeInactive === "true" || (regType && regType !== "all") || (activityState && activityState !== "all") || nameDup === "dup";
+    // view=picker(수행정보 통번역사 검색)도 비활성 등록 인원까지 조회 — 삭제·제외 인원은 아래에서 별도 제외(isPickerEligible).
+    const wantAll = includeInactive === "true" || (regType && regType !== "all") || (activityState && activityState !== "all") || nameDup === "dup" || pickerView;
     // 서버 페이지네이션: page 파라미터가 있을 때만 {rows,total,page,pageSize} 래핑 응답.
     // page 미지정(예: Excel 다운로드 등 전체 매칭 조회)은 기존 배열 응답을 그대로 유지한다(§10 export ≠ pagination 분리).
     const paginate = page != null && String(page).trim() !== "";
@@ -647,6 +654,17 @@ router.get("/admin/translators", ...adminGuard, async (req, res) => {
 
     // 서버 페이지네이션: 필터 적용 후의 전체 결과 기준으로 total 산정 → 현재 페이지 구간만 slice.
     // (기존 검색/필터 의미는 그대로. 정렬은 createdAt DESC, id DESC로 stable → 페이지 간 중복/누락 없음.)
+    if (pickerView) {
+      // 비활성 인원 중 삭제·제외(운영상태 excluded, 휴지통 삭제)는 검색 대상에서 제외. 활성 인원은 기존과 동일.
+      const trashIds = await loadTrashDeactivatedIds(db, result.filter(r => !r.isActive).map(r => r.id));
+      // 전체 연락처는 수행정보 배정 권한(project.update) 보유자에게만 — 상세 연락처 API(translator-contact)와 같은 기준.
+      //   (역할 미지정 관리자·직원은 requireRolePermission 과 동일하게 허용) 그 외에는 기존처럼 끝 4자리 마스킹.
+      const roleId = req.user?.roleId ?? null;
+      const contactVisible = !roleId || (await getPermissionsForRole(roleId)).has("project.update");
+      result = result.filter(r => isPickerEligible(r, trashIds))
+        .map(r => ({ ...r, region: toDisplayRegion(r.region), phone: contactVisible ? (r.phone?.trim() || null) : maskPhoneLast4(r.phone), contactVisible }));
+    }
+
     if (paginate) {
       const total = result.length;
       const offset = (pageNum - 1) * pageSizeNum;
