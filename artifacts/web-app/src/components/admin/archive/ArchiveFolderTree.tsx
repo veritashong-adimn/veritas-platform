@@ -12,13 +12,14 @@ export function buildChildren(folders: ArchiveFolder[]) {
   return m;
 }
 
-export function ArchiveFolderTree({ folders, selectedId, onSelect, showAllOption = true, testIdPrefix = 'folder-tree', renderExtra }: {
+export function ArchiveFolderTree({ folders, selectedId, onSelect, showAllOption = true, testIdPrefix = 'folder-tree', renderExtra, onRowContextMenu }: {
   folders: ArchiveFolder[];
   selectedId: number | null;
   onSelect: (id: number | null) => void;
   showAllOption?: boolean;
   testIdPrefix?: string;
   renderExtra?: (f: ArchiveFolder) => React.ReactNode;
+  onRowContextMenu?: (f: ArchiveFolder, e: React.MouseEvent) => void;   // 폴더 관리 메뉴(관리자 전용)
 }) {
   const children = useMemo(() => buildChildren(folders), [folders]);
   const [open, setOpen] = useState<Record<number, boolean>>({});
@@ -29,7 +30,7 @@ export function ArchiveFolderTree({ folders, selectedId, onSelect, showAllOption
     const active = selectedId === f.id;
     return (
       <div key={f.id}>
-        <div style={{
+        <div onContextMenu={onRowContextMenu ? (e) => onRowContextMenu(f, e) : undefined} style={{
           display: 'flex', alignItems: 'center', gap: 4, padding: '4px 6px', paddingLeft: 6 + depth * 14, borderRadius: 6,
           background: active ? '#eff6ff' : 'transparent', color: f.isActive ? (active ? '#1d4ed8' : '#374151') : '#9ca3af', fontSize: 13,
         }}>

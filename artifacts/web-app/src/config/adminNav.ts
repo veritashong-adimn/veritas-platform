@@ -3,9 +3,23 @@ export type NavItem = {
   label: string;
   icon: string;
   perm?: string;
+  /** 지정 시 이 중 하나라도 보유하면 노출(perm 대신 사용) — 예: 자료 관리설정(관리자·승인권자) */
+  permAny?: string[];
+  /** 메뉴에 없는 화면이지만 이 메뉴가 선택된 것으로 표시할 탭 id (예: 전체 자료 ← 자료 등록 화면) */
+  activeAlso?: string[];
   /** 하위 메뉴 (1단계 중첩). 부모는 페이지가 아니라 펼침 전용. */
   children?: NavItem[];
 };
+
+/** 현재 탭이 이 메뉴(또는 activeAlso 화면)에 해당하는지 — 사이드바 선택 표시·자동 펼침용 */
+export function navItemMatches(item: Pick<NavItem, "id" | "activeAlso">, tab: string): boolean {
+  return item.id === tab || !!item.activeAlso?.includes(tab);
+}
+
+/** 메뉴 노출 판정 — perm 단일 키 또는 permAny(하나 이상 보유) */
+export function navItemVisible(item: Pick<NavItem, "perm" | "permAny">, hasPerm: (key: string | undefined) => boolean): boolean {
+  return item.permAny?.length ? item.permAny.some(k => hasPerm(k)) : hasPerm(item.perm);
+}
 
 export type NavGroup = {
   key: string;
@@ -134,18 +148,16 @@ export const ADMIN_NAV_GROUPS: NavGroup[] = [
       { id: "language-service",   label: "언어 서비스 데이터",  icon: "📊", perm: "menu.user" },
       { id: "insight-management", label: "인사이트 관리",       icon: "💡", perm: "menu.user" },
       { id: "insight-analytics",  label: "인사이트 성과분석",   icon: "📈", perm: "menu.user" },
-      // 회사 자료보관함 — 하나의 통합 저장소를 8개 목적별 메뉴로 조회(5개 업무 분류는 '업무자료 관리' 내부 탭). menu.archive 보유자에게만 노출.
+      // 회사 자료보관함 — 하나의 통합 저장소를 3개 메뉴(전체 자료·자료 등록·자료 관리설정)로 이용. menu.archive 보유자에게만 노출.
       //  · 그룹(data) perm 은 사이드바 필터에 쓰이지 않으므로 기존 5개 항목의 노출 범위는 그대로다.
       //  · 세부 자료 권한은 서버(자료보관함 ACL)가 강제한다.
       { id: "archive-catalog", label: "회사 자료보관함", icon: "🗄️", perm: "menu.archive", children: [
-        { id: "archive-overview",   label: "자료 현황",           icon: "📊", perm: "menu.archive" },
-        { id: "archive-all",        label: "전체 자료",           icon: "🗂️", perm: "menu.archive" },
-        { id: "archive-forms",      label: "서류양식 관리",       icon: "📝", perm: "menu.archive" },
-        { id: "archive-work",       label: "업무자료 관리",       icon: "📂", perm: "menu.archive" },
-        { id: "archive-import",     label: "자료 등록·가져오기",  icon: "⬆️", perm: "archive.upload" },
-        { id: "archive-ai",         label: "AI 지식관리",         icon: "🤖", perm: "menu.archive" },
-        { id: "archive-approvals",  label: "승인관리",            icon: "✅", perm: "menu.archive" },
-        { id: "archive-settings",   label: "자료 관리설정",       icon: "⚙️", perm: "archive.admin" },
+        // 2개 메뉴로 통합: 자료 현황 → 전체 자료 상단 통계, 승인 관리 → 자료 관리설정 내부 탭,
+        //   자료 등록 → 전체 자료의 '+ 자료 등록' 버튼으로 진입(archive-import 화면·경로는 그대로, 메뉴 선택은 '전체 자료').
+        //   기존 경로(archive-overview·archive-approvals·archive-import·archive-forms·archive-work·archive-ai)는 화면 호환을 위해 그대로 동작.
+        { id: "archive-all",        label: "전체 자료",           icon: "🗂️", perm: "menu.archive", activeAlso: ["archive-import"] },
+        // 관리자 전용: 자료보관함 관리자(archive.admin) 또는 승인권자(archive.approve) — 승인 관리 탭을 위해 승인권자 포함
+        { id: "archive-settings",   label: "자료 관리설정",       icon: "⚙️", permAny: ["archive.admin", "archive.approve"] },
       ] },
     ],
   },
@@ -224,8 +236,8 @@ export const ADMIN_PAGE_TITLE: Record<string, string> = {
   "archive-records":      "회사 자료보관함 · 업무자료 관리",
   "archive-hr":           "회사 자료보관함 · 업무자료 관리",
   "archive-management":   "회사 자료보관함 · 업무자료 관리",
-  "archive-import":       "회사 자료보관함 · 자료 등록·가져오기",
+  "archive-import":       "회사 자료보관함 · 자료 등록",
   "archive-ai":           "회사 자료보관함 · AI 지식관리",
-  "archive-approvals":    "회사 자료보관함 · 승인관리",
+  "archive-approvals":    "회사 자료보관함 · 승인 관리",
   "archive-settings":     "회사 자료보관함 · 자료 관리설정",
 };

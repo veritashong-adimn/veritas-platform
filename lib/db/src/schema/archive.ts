@@ -11,7 +11,7 @@ import { usersTable } from "./users";
 //  · 원본(버전 파일) / 최신 승인본(approvedVersionId) / AI 검색용 텍스트(versions.extractedText, aiAllowed)를 분리한다.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** 폴더(분류) 트리 — 깊이 제한 없음(parentId 자기참조). 비활성화로 숨김, 물리 삭제 금지. */
+/** 폴더(분류) 트리 — 깊이 제한 없음(parentId 자기참조). 비활성화로 숨김, 삭제는 소프트 삭제(deletedAt)만 — 물리 삭제 금지. */
 export const archiveFoldersTable = pgTable("archive_folders", {
   id: serial("id").primaryKey(),
   parentId: integer("parent_id"),
@@ -25,6 +25,9 @@ export const archiveFoldersTable = pgTable("archive_folders", {
   createdBy: integer("created_by").references(() => usersTable.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  /** 소프트 삭제(복원 가능). 문서·하위 폴더가 없는 폴더만 삭제 가능. */
+  deletedAt: timestamp("deleted_at"),
+  deletedBy: integer("deleted_by").references(() => usersTable.id, { onDelete: "set null" }),
 }, (t) => [index("archive_folders_parent_idx").on(t.parentId)]);
 
 /** 자료(문서) 메타데이터. 파일 자체는 버전 테이블에 있다. */

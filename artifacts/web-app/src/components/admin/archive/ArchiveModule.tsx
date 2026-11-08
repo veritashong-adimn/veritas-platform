@@ -1,5 +1,8 @@
 /**
- * 회사 자료보관함 — 데이터 자산 하위 8개 메뉴의 단일 진입점.
+ * 회사 자료보관함 — 데이터 자산 하위 메뉴(전체 자료·자료 등록·자료 관리설정)의 단일 진입점.
+ *  · 구 '자료 현황'(overview) → 전체 자료 상단 통계로 통합(경로 진입 시 전체 자료로 전환)
+ *  · 구 '승인 관리'(approvals) → 자료 관리설정 › 승인 관리 탭(권한 없으면 전체 자료로 전환)
+ * (이하 기존 설명)
  * 8개 메뉴는 독립 저장소가 아니라 하나의 통합 저장소를 목적별로 조회한다.
  * 5개 업무 분류(manuals·contracts·records·hr·management)는 '업무자료 관리'(view=work) 내부 탭으로 통합.
  * 구 경로(archive-manuals 등)로 진입하면 work 로 전환하면서 해당 탭을 선택한다.
@@ -7,13 +10,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ARCHIVE_MENU_LABEL, S, isWorkTab, makeArchiveApi, type ArchiveFolder, type ArchiveMe, type ArchiveView, type WorkTab } from './archiveApi';
 import { ArchiveWorkspace } from './ArchiveWorkspace';
-import { ArchiveOverview } from './ArchiveOverview';
 import { ArchiveDocumentBrowser } from './ArchiveDocumentBrowser';
 import { ArchiveDocumentDetail, Modal } from './ArchiveDocumentDetail';
 import { ArchiveUploadPanel } from './ArchiveUploadPanel';
-import { ArchiveApprovals } from './ArchiveApprovals';
 import { ArchiveAiPanel } from './ArchiveAiPanel';
-import { ArchiveSettings } from './ArchiveSettings';
+import { ArchiveSettings, type SettingsTab } from './ArchiveSettings';
+import { ArchiveStatsBar } from './ArchiveStatsBar';
 
 const BROWSE_VIEWS = new Set(['all', 'forms']);
 const WORK_TAB_KEY = 'archiveWorkTab';
@@ -43,6 +45,15 @@ export function ArchiveModule({ token, view, setToast, onNavigate }: {
   useEffect(() => {
     if (isWorkTab(view)) { setWorkTab(view); onNavigate('work'); }
   }, [view, onNavigate, setWorkTab]);
+  // 구 메뉴 경로 호환: 자료 현황 → 전체 자료, 승인 관리 → (권한 확인) 자료 관리설정 › 승인 관리
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
+  useEffect(() => {
+    if (view === 'overview') onNavigate('all');
+    else if (view === 'approvals' && me) {
+      if (me.canApprove || me.isArchiveAdmin) { setSettingsTab('approvals'); onNavigate('settings'); }
+      else onNavigate('all');
+    }
+  }, [view, me, onNavigate]);
   const [issueTemplate, setIssueTemplate] = useState<number | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const bump = () => setRefreshKey(k => k + 1);
@@ -71,19 +82,30 @@ export function ArchiveModule({ token, view, setToast, onNavigate }: {
         </div>
       )}
 
-      {view === 'overview' && <ArchiveOverview api={api} onOpen={setOpenDoc} onNavigate={onNavigate} refreshKey={refreshKey} />}
+      {view === 'all' && <ArchiveStatsBar api={api} me={me} refreshKey={refreshKey} onNavigate={onNavigate} onOpen={setOpenDoc} />}
       {BROWSE_VIEWS.has(view) && (
         <ArchiveDocumentBrowser key={view} api={api} me={me} menu={view === 'all' ? null : view} folders={folders}
-          onOpen={setOpenDoc} onUpload={(fid) => { setUploadMenu(null); setUploadFolder(fid); }} refreshKey={refreshKey} />
+          onOpen={setOpenDoc}
+          folderAdmin={view === 'all' ? { reload: loadFolders, setToast } : undefined}
+          // 전체 자료의 '+ 자료 등록' → 기존 자료 등록 화면(archive-import)으로 이동. 그 외 조회 화면은 기존 등록 창 유지.
+          onUpload={(fid) => { if (view === 'all') { onNavigate('import'); return; } setUploadMenu(null); setUploadFolder(fid); }} refreshKey={refreshKey} />
       )}
       {(view === 'work' || isWorkTab(view)) && (
         <ArchiveWorkspace api={api} me={me} folders={folders} tab={workTab} onTab={setWorkTab} onOpen={setOpenDoc}
           onUpload={(fid, menuKey) => { setUploadMenu(menuKey); setUploadFolder(fid); }} onNavigate={onNavigate} refreshKey={refreshKey} />
       )}
-      {view === 'import' && <ArchiveUploadPanel api={api} me={me} folders={folders} setToast={setToast} onDone={onChanged} />}
+      {view === 'import' && (
+        <>
+          {/* 사이드바에서 '자료 등록' 메뉴는 제거됨 — '전체 자료'에서 진입·복귀. 분석 진행 상태는 이 화면에서 계속 표시 */}
+          <button type="button" style={{ ...S.btn, marginBottom: 10 }} onClick={() => onNavigate('all')} data-testid="archive-import-back" aria-label="전체 자료로 이동">← 전체 자료</button>
+          <ArchiveUploadPanel api={api} me={me} folders={folders} setToast={setToast} onDone={onChanged} />
+        </>
+      )}
       {view === 'ai' && <ArchiveAiPanel api={api} onOpen={setOpenDoc} />}
-      {view === 'approvals' && <ArchiveApprovals api={api} onOpen={setOpenDoc} setToast={setToast} refreshKey={refreshKey} onChanged={onChanged} />}
-      {view === 'settings' && <ArchiveSettings api={api} me={me} folders={folders} reloadFolders={loadFolders} setToast={setToast} />}
+      {view === 'settings' && (
+        <ArchiveSettings key={settingsTab ?? 'default'} api={api} me={me} folders={folders} reloadFolders={loadFolders} setToast={setToast}
+          initialTab={settingsTab} onOpen={setOpenDoc} refreshKey={refreshKey} onChanged={onChanged} />
+      )}
 
       {openDoc != null && (
         <ArchiveDocumentDetail key={openDoc} api={api} me={me} docId={openDoc} folders={folders}

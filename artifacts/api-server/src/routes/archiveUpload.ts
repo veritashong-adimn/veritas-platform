@@ -15,7 +15,7 @@ import { requireAuth, requireRole } from "../middlewares/auth";
 import { isR2Configured } from "../lib/r2";
 import {
   loadAclContext, documentActions, folderActions, canListDocument, canSeeUnapproved, folderPath, archiveAudit,
-  type AclContext,
+  isFolderDeleted, type AclContext,
 } from "../services/archiveAccess";
 import {
   requireArchiveModule, archiveFileInfo, ARCHIVE_MAX_FILE_SIZE, ARCHIVE_ALLOWED_EXTS, DOC_TYPES, SECURITY_LEVELS,
@@ -24,6 +24,7 @@ import {
 import {
   sha256, extractForArchive, storeArchiveFile, addVersion, requestReview, normalizeAclRows, WorkflowError,
 } from "../services/archiveWorkflow";
+import { ensureReviewFolder, runArchiveClassification } from "../services/archiveClassify";
 
 const router: IRouter = Router();
 const guard = [requireAuth, requireRole("admin", "staff"), requireArchiveModule];
@@ -103,7 +104,7 @@ async function ensureSubfolders(base: number, relativePath: string | undefined, 
   let parent = base;
   for (const name of parts.slice(0, 10)) {
     const safe = name.slice(0, 200);
-    const existing = [...ctx.folders.values()].find(f => f.parentId === parent && f.name === safe);
+    const existing = [...ctx.folders.values()].find(f => f.parentId === parent && f.name === safe && !f.deletedAt);   // 삭제된 폴더에는 배정하지 않음
     if (existing) { parent = existing.id; continue; }
     const [f] = await db.insert(archiveFoldersTable).values({ parentId: parent, name: safe, createdBy: actorId })
       .returning({ id: archiveFoldersTable.id, parentId: archiveFoldersTable.parentId, name: archiveFoldersTable.name, menuKey: archiveFoldersTable.menuKey, isActive: archiveFoldersTable.isActive, sortOrder: archiveFoldersTable.sortOrder });
@@ -158,7 +159,7 @@ router.post("/archive/upload", ...guard, singleFile, async (req, res) => {
   if (!acl) { res.status(400).json({ error: "공개 범위(visibility: inherit|private|custom)를 지정해 주세요." }); return; }
   const ctx = await loadAclContext();
   const baseFolder = parseId(meta.folderId);
-  if (!baseFolder || !ctx.folders.has(baseFolder)) { res.status(400).json({ error: "저장할 폴더를 선택해 주세요." }); return; }
+  if (!baseFolder || !ctx.folders.has(baseFolder) || isFolderDeleted(ctx, baseFolder)) { res.status(400).json({ error: "저장할 폴더를 선택해 주세요." }); return; }
   if (!ctx.folders.get(baseFolder)!.isActive) { res.status(400).json({ error: "비활성 폴더에는 등록할 수 없습니다." }); return; }
   if (!folderActions(actor, ctx, baseFolder).has("upload")) { res.status(403).json({ error: "이 폴더에 자료를 등록할 권한이 없습니다." }); return; }
   // 극비 자료는 관리자만 등록
@@ -196,6 +197,63 @@ router.post("/archive/upload", ...guard, singleFile, async (req, res) => {
     req.log.error({ err }, "[archive] upload failed");
     res.status(500).json({ error: "자료 등록 중 오류가 발생했습니다." });
   }
+});
+
+// ─── 통합 간편 등록(파일만) — AI 자동 분석·분류 ──────────────────────────────────
+//  직원 입력은 파일뿐. 원본을 먼저 저장해 등록을 완료하고(관리자 승인 불필요), AI 분류는 비동기로 반영한다.
+//  · 최초 위치: 「분류 확인 필요」 폴더 → AI 가 기존 폴더 중 적합한 곳으로 이동(불명확하면 그대로)
+//  · 공개 범위: 등록자·자료보관함 관리자 전용(no_inherit) — 열람 확대는 관리자가 권한 설정
+//  · 승인: 'register' 승인요청 생성(관리자 확인 대기). AI 활용·공식 서식/매뉴얼 지정은 기본 해제(관리자 승인 사항)
+//  · 폴더 업로드의 하위 경로는 폴더를 새로 만들지 않고 AI 참고 정보로만 사용
+router.post("/archive/upload/auto", ...guard, singleFile, async (req, res) => {
+  const actor = req.archiveActor!;
+  if (!actor.canUpload) { res.status(403).json({ error: "자료 등록 권한(archive.upload)이 없습니다." }); return; }
+  const meta = parseMeta(req);
+  const f = prepareFile(req, res, meta);
+  if (!f) return;
+  const relativePath = typeof meta.relativePath === "string" ? meta.relativePath.slice(0, 500) : null;
+  try {
+    const ctx = await loadAclContext();
+    const dups = await findVisibleDuplicates(req, ctx, [f.hash]);
+    const duplicates = dups.get(f.hash) ?? [];
+    const reviewFolder = await ensureReviewFolder(actor.id);
+    const storageKey = await storeArchiveFile(f.buf, f.ext, f.mime);
+    const ex = await extractForArchive(f.buf, f.fileName, f.ext);
+    const hasText = !!ex.text?.trim();
+    const [doc] = await db.insert(archiveDocumentsTable).values({
+      folderId: reviewFolder, title: f.fileName.replace(/\.[^.]+$/, "").slice(0, 500) || f.fileName,
+      docType: "other", securityLevel: "restricted", aiAllowed: false, requiresApproval: true, isStandardForm: false,
+      ownerDepartment: actor.department, aiStatus: hasText ? "analyzing" : "needs_review",
+      createdBy: actor.id, updatedBy: actor.id,
+    }).returning();
+    await db.insert(archiveAclTable).values(normalizeAclRows([{ subjectType: "no_inherit" }], { documentId: doc.id }, actor.id));
+    const v = await addVersion({
+      doc, storageKey, fileName: f.fileName, mime: f.mime, size: f.buf.length, hash: f.hash,
+      text: ex.text, method: ex.method, reason: "최초 등록(간편 등록·AI 자동 분류)", actorId: actor.id, submit: true, requestType: "register",
+    });
+    await archiveAudit(req, "upload", { documentId: doc.id, folderId: reviewFolder, versionId: v.versionId }, {
+      fileName: f.fileName, size: f.buf.length, sha256: f.hash, mode: "auto", relativePath, duplicateOf: duplicates.map(d => d.id), extract: ex.aiStatus,
+    });
+    if (v.approvalId) await archiveAudit(req, "approval_request", { documentId: doc.id, versionId: v.versionId }, { type: "register", approvalId: v.approvalId });
+    res.status(201).json({ documentId: doc.id, versionId: v.versionId, status: v.status, approvalId: v.approvalId, duplicates, aiStatus: hasText ? "analyzing" : "needs_review" });
+    // 응답 후 비동기 분류 — 실패해도 원본·문서는 보존(aiStatus=failed → 재분석 가능)
+    void runArchiveClassification(doc.id, { actorId: actor.id, actorEmail: actor.email, relativePath }).catch(() => undefined);
+  } catch (err) {
+    req.log.error({ err }, "[archive] auto upload failed");
+    res.status(500).json({ error: "자료 등록 중 오류가 발생했습니다." });
+  }
+});
+
+/** 등록 상태 조회(업로드 화면 진행 표시용) — 요청자에게 보이는 자료만 */
+router.post("/archive/ai-status", ...guard, async (req, res) => {
+  const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(parseId).filter((x: number | null): x is number => !!x).slice(0, 200);
+  if (!ids.length) { res.json([]); return; }
+  const ctx = await loadAclContext();
+  const docs = await db.select().from(archiveDocumentsTable).where(and(inArray(archiveDocumentsTable.id, ids), isNull(archiveDocumentsTable.deletedAt)));
+  const actor = req.archiveActor!;
+  res.json(docs.filter(d => canListDocument(actor, documentActions(actor, ctx, d), d)).map(d => ({
+    id: d.id, aiStatus: d.aiStatus, title: d.title, docType: d.docType, status: d.status, folderPath: folderPath(ctx, d.folderId),
+  })));
 });
 
 // ─── 새 버전 등록(기존 승인본은 보존) ─────────────────────────────────────────
@@ -256,6 +314,16 @@ router.post("/archive/documents/:id/versions/:vid/restore", ...guard, async (req
   res.status(201).json(v);
 });
 
+/** AI 재분석 — 분석 실패·확인 필요 자료(수정 권한자). 관리자가 수정한 폴더·제목·날짜는 보존 */
+router.post("/archive/documents/:id/reanalyze", ...guard, async (req, res) => {
+  const l = await loadEditable(req, res);
+  if (!l) return;
+  await db.update(archiveDocumentsTable).set({ aiStatus: "analyzing" }).where(eq(archiveDocumentsTable.id, l.doc.id));
+  await archiveAudit(req, "ai_reanalyze", { documentId: l.doc.id });
+  const aiStatus = await runArchiveClassification(l.doc.id, { actorId: req.user!.id, actorEmail: req.user!.email });
+  res.json({ aiStatus });
+});
+
 router.post("/archive/documents/:id/versions/:vid/submit", ...guard, async (req, res) => {
   const l = await loadEditable(req, res);
   if (!l) return;
@@ -287,7 +355,7 @@ router.post("/archive/documents/:id/issue", ...guard, singleFile, async (req, re
   const f = prepareFile(req, res, meta);
   if (!f) return;
   const folderId = parseId(meta.folderId) ?? tpl.folderId;
-  if (!ctx.folders.has(folderId) || !folderActions(actor, ctx, folderId).has("upload")) {
+  if (!ctx.folders.has(folderId) || isFolderDeleted(ctx, folderId) || !folderActions(actor, ctx, folderId).has("upload")) {
     res.status(403).json({ error: "발급본을 저장할 폴더에 대한 권한이 없습니다." }); return;
   }
   const acl = aclFromVisibility(meta) ?? [{ subjectType: "no_inherit" }]; // 발급본 기본: 비공개

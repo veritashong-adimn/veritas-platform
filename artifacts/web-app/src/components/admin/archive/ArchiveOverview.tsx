@@ -68,10 +68,10 @@ export function ArchiveOverview({ api, onOpen, onNavigate, refreshKey }: {
         </div>
         <div style={S.card}>
           <h3 style={{ ...S.h2, fontSize: 14 }}>AI 분석 처리 현황</h3>
-          {[['extracted', '본문 추출 완료'], ['empty', '본문 없음'], ['skipped', '추출 대상 아님'], ['failed', '추출 실패'], ['none', '미처리']].map(([k, l]) => (
+          {[['classified', '자동 분류 완료'], ['analyzing', '분석 중'], ['needs_review', '분류 확인 필요'], ['failed', '분석 실패'], ['extracted', '본문 추출(기존 등록)'], ['empty', '본문 없음'], ['skipped', '추출 대상 아님'], ['none', '미처리']].map(([k, l]) => (
             <div key={k} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '3px 0' }}><span>{l}</span><b>{aiStatus[k] ?? 0}</b></div>
           ))}
-          <div style={{ ...S.muted, marginTop: 8 }}>의미 기반 검색·AI 요약은 미구현(유료 API 승인 필요)</div>
+          <div style={{ ...S.muted, marginTop: 8 }}>등록 시 AI가 유형·폴더·요약·키워드를 자동 정리합니다. 이미지 OCR은 사용하지 않습니다.</div>
         </div>
         {s.admin && (
           <div style={S.card}>

@@ -1,42 +1,72 @@
 /**
- * 자료 관리설정 — 기본 분류 생성, 폴더 추가·수정·이동·비활성화·메뉴 연결, 폴더 권한(상속), 감사로그 조회.
- * 서버가 archive.admin / 폴더 manage 권한을 재검증한다.
+ * 자료 관리설정 — ① 승인 관리 ② 분류·폴더·권한(기본 분류 생성, 폴더 추가·수정·이동·비활성화·메뉴 연결, 폴더 권한) ③ 감사로그.
+ * 탭 노출: 승인 관리=승인권자·관리자, 분류·폴더·권한=관리자·폴더 권한설정자, 감사로그=관리자.
+ * 서버가 archive.approve / archive.admin / 폴더 manage 권한을 재검증한다(화면 숨김과 별개로 API 차단).
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ARCHIVE_MENU_LABEL, AUDIT_ACTION_LABEL, S, fmtDateTime, type AclEntry, type ArchiveApi, type ArchiveFolder, type ArchiveMe,
 } from './archiveApi';
 import { ArchiveFolderTree } from './ArchiveFolderTree';
+import { useArchiveFolderManager } from './ArchiveFolderManager';
 import { ArchiveAclEditor } from './ArchiveAclEditor';
 import { Field } from './ArchiveDocumentDetail';
+import { ArchiveApprovals } from './ArchiveApprovals';
+
+export type SettingsTab = 'approvals' | 'folders' | 'audit';
 
 const MENU_KEYS = ['forms', 'manuals', 'contracts', 'records', 'hr', 'management'];
 
-export function ArchiveSettings({ api, me, folders, reloadFolders, setToast }: {
+export function ArchiveSettings({ api, me, folders, reloadFolders, setToast, initialTab, onOpen, refreshKey = 0, onChanged }: {
   api: ArchiveApi; me: ArchiveMe; folders: ArchiveFolder[]; reloadFolders: () => Promise<void>; setToast: (m: string) => void;
+  initialTab?: SettingsTab | null; onOpen?: (id: number) => void; refreshKey?: number; onChanged?: () => void;
 }) {
-  const [tab, setTab] = useState<'folders' | 'audit'>('folders');
+  const canApprovals = me.canApprove || me.isArchiveAdmin;
+  const canFolders = me.isArchiveAdmin || folders.some(f => f.actions.includes('manage'));
+  const firstTab: SettingsTab = initialTab === 'approvals' && canApprovals ? 'approvals'
+    : initialTab === 'audit' && me.isArchiveAdmin ? 'audit'
+    : canApprovals ? 'approvals' : 'folders';
+  const [tab, setTab] = useState<SettingsTab>(firstTab);
+  // 승인 대기 건수(처리 가능한 요청만) — 0건이면 표시하지 않음
+  const [pendingCount, setPendingCount] = useState(0);
+  const loadPending = useCallback(() => {
+    if (!canApprovals) return;
+    api.get<any[]>('/archive/approvals?status=pending').then(r => setPendingCount(r.filter(a => a.canDecide).length)).catch(() => setPendingCount(0));
+  }, [api, canApprovals]);
+  useEffect(() => { loadPending(); }, [loadPending, refreshKey]);
   const [sel, setSel] = useState<number | null>(null);
   const folder = folders.find(f => f.id === sel) ?? null;
   const canManage = (f: ArchiveFolder | null) => me.isArchiveAdmin || !!f?.actions.includes('manage');
+  // 전체 자료 화면과 동일한 폴더 관리 기능(같은 API·같은 folders 상태)
+  const fm = useArchiveFolderManager({ api, me, folders, reload: reloadFolders, setToast, idPrefix: 'archive-settings-folder' });
+  useEffect(() => { if (sel != null && !folders.some(f => f.id === sel)) setSel(null); }, [folders, sel]);
 
   const seed = async () => {
     try { await api.post('/archive/folders/seed'); setToast('기본 분류 체계를 생성했습니다.'); await reloadFolders(); }
     catch (e: any) { setToast(e.message); }
   };
 
-  if (!me.isArchiveAdmin && !folders.some(f => f.actions.includes('manage'))) {
-    return <div style={S.card}>자료 관리설정 권한이 없습니다(archive.admin 또는 폴더 권한설정 권한 필요).</div>;
+  if (!canApprovals && !canFolders) {
+    return <div style={S.card} data-testid="archive-settings-denied">자료 관리설정 권한이 없습니다(자료보관함 관리자·승인권자 전용).</div>;
   }
+  const tabBtn = (k: SettingsTab, label: React.ReactNode, aria: string) => (
+    <button type="button" style={{ ...S.btn, fontWeight: tab === k ? 700 : 400, background: tab === k ? '#eff6ff' : '#fff' }} onClick={() => setTab(k)} data-testid={`archive-settings-tab-${k}`} aria-label={aria}>{label}</button>
+  );
 
   return (
     <div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
-        <button type="button" style={{ ...S.btn, fontWeight: tab === 'folders' ? 700 : 400, background: tab === 'folders' ? '#eff6ff' : '#fff' }} onClick={() => setTab('folders')} data-testid="archive-settings-tab-folders" aria-label="분류·폴더·권한">분류·폴더·권한</button>
-        {me.isArchiveAdmin && <button type="button" style={{ ...S.btn, fontWeight: tab === 'audit' ? 700 : 400, background: tab === 'audit' ? '#eff6ff' : '#fff' }} onClick={() => setTab('audit')} data-testid="archive-settings-tab-audit" aria-label="감사로그">감사로그</button>}
+        {canApprovals && tabBtn('approvals', <>승인 관리{pendingCount > 0 && <span data-testid="archive-settings-pending" style={{ marginLeft: 6, background: '#dc2626', color: '#fff', borderRadius: 999, padding: '0 7px', fontSize: 11, fontWeight: 700 }}>{pendingCount}</span>}</>, `승인 관리${pendingCount ? ` 대기 ${pendingCount}건` : ''}`)}
+        {canFolders && tabBtn('folders', '분류·폴더·권한', '분류·폴더·권한')}
+        {me.isArchiveAdmin && tabBtn('audit', '감사로그', '감사로그')}
       </div>
 
-      {tab === 'folders' && (
+      {tab === 'approvals' && canApprovals && (
+        <ArchiveApprovals api={api} onOpen={onOpen ?? (() => {})} setToast={setToast} refreshKey={refreshKey}
+          onChanged={() => { loadPending(); onChanged?.(); }} />
+      )}
+
+      {tab === 'folders' && canFolders && (
         <>
           {me.isArchiveAdmin && me.folderCount === 0 && folders.length === 0 && (
             <div style={{ ...S.card, marginBottom: 12, background: '#f0f9ff', borderColor: '#bae6fd' }}>
@@ -47,8 +77,10 @@ export function ArchiveSettings({ api, me, folders, reloadFolders, setToast }: {
           <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
             <aside style={{ ...S.card, width: 300, flexShrink: 0, padding: 10, maxHeight: '75vh', overflowY: 'auto' }}>
               <div style={{ ...S.muted, fontWeight: 700, padding: '2px 6px 6px' }}>폴더(비활성 포함)</div>
-              <ArchiveFolderTree folders={folders} selectedId={sel} onSelect={setSel} showAllOption={false} testIdPrefix="archive-settings-tree" />
-              {me.isArchiveAdmin && <NewFolder api={api} parentId={null} label="+ 최상위 분류 추가" onDone={reloadFolders} setToast={setToast} />}
+              {fm.toolbar}
+              <ArchiveFolderTree folders={folders} selectedId={sel} onSelect={setSel} showAllOption={false} testIdPrefix="archive-settings-tree"
+                renderExtra={fm.enabled ? fm.rowExtra : undefined} onRowContextMenu={fm.enabled ? fm.onRowContextMenu : undefined} />
+              {fm.overlay}
             </aside>
             <section style={{ flex: 1, minWidth: 0 }}>
               {!folder && <div style={{ ...S.card, color: '#6b7280' }}>왼쪽에서 폴더를 선택하세요.</div>}
@@ -58,7 +90,7 @@ export function ArchiveSettings({ api, me, folders, reloadFolders, setToast }: {
           </div>
         </>
       )}
-      {tab === 'audit' && <AuditViewer api={api} />}
+      {tab === 'audit' && me.isArchiveAdmin && <AuditViewer api={api} />}
     </div>
   );
 }

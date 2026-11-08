@@ -8,6 +8,7 @@ import {
 } from './archiveApi';
 import { ArchiveAclEditor } from './ArchiveAclEditor';
 import { Field } from './ArchiveDocumentDetail';
+import { ArchiveQuickUpload } from './ArchiveQuickUpload';
 
 interface Item { key: string; file: File; relativePath?: string; status: 'ready' | 'unsupported' | 'toolarge' | 'uploading' | 'done' | 'failed' | 'skipped'; message?: string; hash?: string | null; duplicates?: Array<{ id: number; title: string; folderPath: string }>; documentId?: number }
 
@@ -34,7 +35,16 @@ async function readEntry(entry: any, prefix: string, out: Array<{ file: File; re
 /** 업무자료 분류별 기본 자료 유형(사용자가 변경 가능) */
 const MENU_DEFAULT_DOCTYPE: Record<string, string> = { manuals: 'manual', contracts: 'contract', records: 'record', hr: 'general', management: 'report' };
 
-export function ArchiveUploadPanel({ api, me, folders, initialFolderId, templateId, menuKey, onDone, setToast }: {
+/**
+ * 자료 등록 진입점 — 일반 등록은 파일만 받는 간편 통합 업로드(AI 자동 분류),
+ * 표준양식 기반 「작성·발급본」 등록(templateId)만 기존 상세 등록 화면을 사용한다.
+ */
+export function ArchiveUploadPanel(props: Parameters<typeof ArchiveUploadForm>[0]) {
+  if (!props.templateId) return <ArchiveQuickUpload api={props.api} me={props.me} onDone={props.onDone} setToast={props.setToast} />;
+  return <ArchiveUploadForm {...props} />;
+}
+
+function ArchiveUploadForm({ api, me, folders, initialFolderId, templateId, menuKey, onDone, setToast }: {
   api: ArchiveApi; me: ArchiveMe; folders: ArchiveFolder[]; initialFolderId?: number | null; templateId?: number | null;
   /** 지정 시 해당 분류(menuKey) 폴더 중 등록 권한이 있는 폴더만 저장 위치로 표시 */
   menuKey?: string | null;

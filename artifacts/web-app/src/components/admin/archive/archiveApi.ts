@@ -19,16 +19,21 @@ export const isWorkTab = (v: string): v is WorkTab => (WORK_TABS as readonly str
 export const ARCHIVE_MENU_LABEL: Record<string, string> = {
   overview: '자료 현황', all: '전체 자료', forms: '서류양식 관리', work: '업무자료 관리', manuals: '매뉴얼·업무프로세스',
   contracts: '계약·협약 관리', records: '이메일·업무기록', hr: '인사·노무·복지', management: '경영·기획·통계',
-  import: '자료 등록·가져오기', ai: 'AI 지식관리', approvals: '승인관리', settings: '자료 관리설정',
+  import: '자료 등록', ai: 'AI 지식관리', approvals: '승인 관리', settings: '자료 관리설정',
 };
 
 export const DOC_TYPE_LABEL: Record<string, string> = {
-  general: '일반자료', form_template: '표준양식', form_issued: '작성·발급본', contract: '계약·협약', manual: '매뉴얼',
-  policy: '규정·정책', email: '이메일', record: '업무기록', report: '보고서·통계', other: '기타',
+  general: '일반·인사자료', form_template: '문서 서식', form_issued: '작성·발급본', contract: '계약·협약', manual: '업무매뉴얼',
+  policy: '업무프로세스·규정', email: '이메일·공문', record: '업무기록', report: '경영·기획·통계', other: '기타·분류 확인 필요',
+};
+/** AI 등록 분석 상태(aiStatus) */
+export const AI_STATUS_LABEL: Record<string, [string, string]> = {
+  analyzing: ['분석 중', '#7c3aed'], classified: ['자동 분류', '#059669'], needs_review: ['확인 필요', '#d97706'], failed: ['분석 실패', '#dc2626'],
+  none: ['미처리', '#6b7280'], extracted: ['본문 추출', '#6b7280'], empty: ['본문 없음', '#6b7280'], skipped: ['추출 대상 아님', '#6b7280'],
 };
 export const SECURITY_LABEL: Record<string, string> = { internal: '사내일반', restricted: '제한', confidential: '기밀', secret: '극비' };
 export const SECURITY_COLOR: Record<string, string> = { internal: '#059669', restricted: '#2563eb', confidential: '#d97706', secret: '#dc2626' };
-export const STATUS_LABEL: Record<string, string> = { draft: '초안', in_review: '검토중', approved: '승인', revised: '개정중', discarded: '폐기' };
+export const STATUS_LABEL: Record<string, string> = { draft: '초안', in_review: '승인 대기', approved: '승인', revised: '개정중', discarded: '폐기' };
 export const STATUS_COLOR: Record<string, string> = { draft: '#6b7280', in_review: '#d97706', approved: '#059669', revised: '#7c3aed', discarded: '#9ca3af' };
 export const VERSION_STATUS_LABEL: Record<string, string> = { draft: '초안', in_review: '검토중', approved: '승인본', rejected: '반려', superseded: '이전 승인본' };
 export const APPROVAL_TYPE_LABEL: Record<string, string> = {
@@ -58,6 +63,7 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   approval_reject: '반려', approval_cancel: '요청 취소', acl_change: '권한 변경', link_add: '업무 연결',
   link_remove: '연결 해제', search: '검색', ai_search: 'AI 검색', access_denied: '접근 거부',
   form_issue: '양식 발급', folder_create: '폴더 생성', folder_update: '폴더 수정', folder_move: '폴더 이동', folder_seed: '기본 분류 생성',
+  folder_delete: '폴더 삭제', folder_restore: '폴더 복원', folder_reorder: '폴더 순서 변경',
 };
 
 export interface ArchiveMe {
@@ -76,7 +82,7 @@ export interface ArchiveListItem {
   ownerDepartment: string | null; authorName: string | null; documentDate: string | null; expiresAt: string | null;
   createdAt: string; updatedAt: string; createdByName: string | null; hasApprovedVersion: boolean;
   fileName: string | null; mimeType: string | null; fileSize: number | null; versionNo: number | null;
-  versionStatus: string | null; fileCategory: string; actions: string[];
+  versionStatus: string | null; fileCategory: string; actions: string[]; aiStatus?: string;
 }
 export interface AclEntry { id?: number; subjectType: string; subjectId?: number | null; subjectValue?: string | null; effect: string; actions: string[]; fromFolder?: string }
 

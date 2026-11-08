@@ -83,7 +83,7 @@ export async function loadArchiveActor(req: Request): Promise<ArchiveActor> {
 
 // ─── ACL 컨텍스트 (요청당 1회 로드: 폴더 트리 + ACL 전체) ─────────────────────
 
-export interface FolderNode { id: number; parentId: number | null; name: string; menuKey: string | null; isActive: boolean; sortOrder: number }
+export interface FolderNode { id: number; parentId: number | null; name: string; menuKey: string | null; isActive: boolean; sortOrder: number; deletedAt?: Date | null }
 
 export interface AclContext {
   folders: Map<number, FolderNode>;
@@ -96,6 +96,7 @@ export async function loadAclContext(): Promise<AclContext> {
     db.select({
       id: archiveFoldersTable.id, parentId: archiveFoldersTable.parentId, name: archiveFoldersTable.name,
       menuKey: archiveFoldersTable.menuKey, isActive: archiveFoldersTable.isActive, sortOrder: archiveFoldersTable.sortOrder,
+      deletedAt: archiveFoldersTable.deletedAt,
     }).from(archiveFoldersTable),
     db.select().from(archiveAclTable),
   ]);
@@ -134,6 +135,17 @@ export function folderMenuKey(ctx: AclContext, folderId: number): string | null 
 /** 폴더 경로 표시용 ("회사 경영·관리 / 재무·회계·세무") */
 export function folderPath(ctx: AclContext, folderId: number): string {
   return folderChain(ctx, folderId).reverse().map(id => ctx.folders.get(id)?.name ?? "?").join(" / ");
+}
+
+/** 소프트 삭제된 폴더 여부. 삭제 폴더도 경로 표시·이력 보존을 위해 ctx 에는 남아 있다. */
+export function isFolderDeleted(ctx: AclContext, folderId: number): boolean {
+  return !!ctx.folders.get(folderId)?.deletedAt;
+}
+
+/** 신규 자료 배정 가능 여부 — 자신과 모든 상위 폴더가 활성이고 삭제되지 않았을 때만. (AI 자동 분류·업로드 대상 판정) */
+export function folderUsable(ctx: AclContext, folderId: number): boolean {
+  if (!ctx.folders.has(folderId)) return false;
+  return folderChain(ctx, folderId).every(id => { const f = ctx.folders.get(id); return !!f && f.isActive && !f.deletedAt; });
 }
 
 /** 폴더 + 모든 하위 폴더 id */

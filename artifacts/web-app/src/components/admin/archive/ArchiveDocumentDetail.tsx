@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   APPROVAL_STATUS_LABEL, APPROVAL_TYPE_LABEL, AUDIT_ACTION_LABEL, DOC_TYPE_LABEL, LINK_TYPE_LABEL,
-  SECURITY_COLOR, SECURITY_LABEL, STATUS_COLOR, STATUS_LABEL, VERSION_STATUS_LABEL, S, badgeStyle,
+  SECURITY_COLOR, SECURITY_LABEL, STATUS_COLOR, STATUS_LABEL, VERSION_STATUS_LABEL, S, badgeStyle, AI_STATUS_LABEL,
   fmtDate, fmtDateTime, fmtSize, printBlob, saveBlob, type AclEntry, type ArchiveApi, type ArchiveFolder, type ArchiveMe,
 } from './archiveApi';
 import { ArchiveAclEditor } from './ArchiveAclEditor';
@@ -88,7 +88,7 @@ export function ArchiveDocumentDetail({ api, me, docId, folders, onClose, onChan
       {tab === 'versions' && <VersionsTab api={api} doc={doc} canEdit={has('edit')} canDownload={has('download')} run={run} download={download} />}
       {tab === 'acl' && <AclTab api={api} doc={doc} run={run} />}
       {tab === 'approvals' && <ApprovalsList approvals={doc.approvals} />}
-      {tab === 'ai' && <AiTab doc={doc} />}
+      {tab === 'ai' && <AiTab api={api} doc={doc} canEdit={has('edit')} busy={busy} run={run} />}
       {tab === 'audit' && <AuditList rows={doc.audit ?? []} />}
     </Modal>
   );
@@ -192,9 +192,10 @@ function InfoTab({ api, doc, folders, canEdit, canDelete, busy, run, onDeleted, 
               <Field label="만료일"><input type="date" style={S.input} value={form.expiresAt} onChange={e => set('expiresAt', e.target.value)} aria-label="만료일" data-testid="archive-edit-expires" /></Field>
             </div>
             <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 13 }}>
-              <label><input type="checkbox" checked={form.aiAllowed} onChange={e => set('aiAllowed', e.target.checked)} aria-label="AI 활용 허용" data-testid="archive-edit-ai" /> AI 활용 허용</label>
+              {/* AI 직원 업무 활용·공식 서식/매뉴얼 지정은 관리자 승인 사항 — 승인권자·관리자만 켤 수 있음(서버에서도 강제) */}
+              <label title={!(me.canApprove || me.isArchiveAdmin) && !doc.aiAllowed ? '관리자 승인 권한 필요' : undefined}><input type="checkbox" checked={form.aiAllowed} onChange={e => set('aiAllowed', e.target.checked)} aria-label="AI 활용 허용" data-testid="archive-edit-ai" disabled={!doc.aiAllowed && !(me.canApprove || me.isArchiveAdmin)} /> AI 직원 활용 허용</label>
               <label><input type="checkbox" checked={form.requiresApproval} onChange={e => set('requiresApproval', e.target.checked)} aria-label="승인 필요" data-testid="archive-edit-approval" disabled={doc.requiresApproval && !me.canApprove} /> 변경 시 승인 필요</label>
-              <label><input type="checkbox" checked={form.isStandardForm} onChange={e => set('isStandardForm', e.target.checked)} aria-label="표준양식 지정" data-testid="archive-edit-standard" disabled={doc.isStandardForm && !me.canApprove} /> 표준양식 지정</label>
+              <label title={!(me.canApprove || me.isArchiveAdmin) ? '관리자 승인 권한 필요' : undefined}><input type="checkbox" checked={form.isStandardForm} onChange={e => set('isStandardForm', e.target.checked)} aria-label="공식 서식·매뉴얼 지정" data-testid="archive-edit-standard" disabled={!(me.canApprove || me.isArchiveAdmin)} /> 공식 서식·매뉴얼 지정</label>
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
               <button type="button" style={S.btnPrimary} disabled={busy} data-testid="archive-edit-save" aria-label="저장"
@@ -385,19 +386,42 @@ function ApprovalsList({ approvals }: { approvals: any[] }) {
   );
 }
 
-function AiTab({ doc }: { doc: any }) {
-  const statusLabel: Record<string, string> = { none: '미처리', extracted: '본문 추출 완료', empty: '추출된 본문 없음', failed: '추출 실패', skipped: '추출 대상 아님(이미지·MSG)' };
+function AiTab({ api, doc, canEdit, busy, run }: { api: ArchiveApi; doc: any; canEdit: boolean; busy: boolean; run: (fn: () => Promise<any>, ok: string) => void }) {
   const eligible = doc.aiAllowed && doc.approvedVersionId && doc.status !== 'discarded';
+  const a = doc.aiAnalysis as Record<string, any> | null;
+  const st = AI_STATUS_LABEL[doc.aiStatus] ?? [doc.aiStatus, '#6b7280'];
+  const row = (k: string, v: React.ReactNode) => (v == null || v === '' || (Array.isArray(v) && !v.length)) ? null
+    : <div style={{ display: 'flex', gap: 8, padding: '3px 0' }}><span style={{ width: 110, flexShrink: 0, color: '#6b7280' }}>{k}</span><span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{v}</span></div>;
   return (
     <div style={{ fontSize: 13 }}>
-      <h3 style={{ ...S.h2, fontSize: 13 }}>H. AI 분석 및 활용</h3>
-      <div style={{ padding: '4px 0' }}>본문 추출(검색 색인용, 원본과 분리 보관): <b>{statusLabel[doc.aiStatus] ?? doc.aiStatus}</b></div>
-      <div style={{ padding: '4px 0' }}>AI 활용 허용: <b>{doc.aiAllowed ? '허용' : '미허용'}</b></div>
-      <div style={{ padding: '4px 0' }}>AI 지식검색 대상: <b>{eligible ? '예 — 최신 승인본만 사용' : '아니오'}</b>
-        {!eligible && <span style={S.muted}> ({!doc.aiAllowed ? 'AI 미허용' : !doc.approvedVersionId ? '승인본 없음' : '폐기 자료'})</span>}</div>
-      <div style={{ marginTop: 10, padding: 10, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, color: '#92400e', fontSize: 12 }}>
-        AI 요약·자동 분류·의미 기반 검색·개정 제안은 아직 구현되지 않았습니다. 유료 AI API 사용 승인 후 활성화 예정입니다.
+      <h3 style={{ ...S.h2, fontSize: 13 }}>H. AI 등록 분석 <span style={S.muted}>(등록 처리용 자동 분류 — 문서에 없는 내용은 기록하지 않음)</span></h3>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span style={badgeStyle(st[1])} data-testid="archive-ai-status">{st[0]}</span>
+        {a?.analyzedAt && <span style={S.muted}>{fmtDateTime(a.analyzedAt)}</span>}
+        {canEdit && doc.aiStatus !== 'analyzing' && (
+          <button type="button" style={{ ...S.btn, marginLeft: 'auto' }} disabled={busy} data-testid="archive-ai-reanalyze" aria-label="AI 재분석"
+            onClick={() => run(() => api.post(`/archive/documents/${doc.id}/reanalyze`), 'AI 재분석을 완료했습니다.')}>AI 재분석</button>
+        )}
       </div>
+      {doc.aiSummary && <div style={{ padding: 10, background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 8, marginBottom: 8, whiteSpace: 'pre-wrap' }}>{doc.aiSummary}</div>}
+      {a && <>
+        {row('분류', a.categoryLabel ? `${a.categoryLabel}${a.confidence ? ` (신뢰도 ${a.confidence === 'high' ? '높음' : a.confidence === 'medium' ? '보통' : '낮음'})` : ''}` : null)}
+        {row('서식·매뉴얼 종류', a.formKind || a.manualKind)}
+        {row('관련 업무', a.relatedWork)}
+        {row('관련 부서', a.relatedDepartment)}
+        {row('작성일', a.documentDate ? `${a.documentDate} · 근거: "${a.dateEvidence?.documentDate ?? ''}"` : '미확인')}
+        {row('시행일', a.effectiveDate ? `${a.effectiveDate} · 근거: "${a.dateEvidence?.effectiveDate ?? ''}"` : '미확인')}
+        {row('만료일', a.expiresAt ? `${a.expiresAt} · 근거: "${a.dateEvidence?.expiresAt ?? ''}"` : '미확인')}
+        {row('개인정보', a.containsPersonalInfo === true ? `포함${a.personalInfoTypes?.length ? ` (${a.personalInfoTypes.join(', ')})` : ''}` : a.containsPersonalInfo === false ? '미확인' : null)}
+        {row('기밀정보', a.containsConfidential === true ? '포함 가능성' : null)}
+        {row('동일 파일', a.duplicateOf?.length ? `기존 자료 #${a.duplicateOf.join(', #')} (기존 자료는 그대로 유지)` : null)}
+        {row('개정본 후보', a.possibleRevisionOf?.length ? `기존 자료 #${a.possibleRevisionOf.join(', #')} — 관리자 확인 후 버전 연결` : null)}
+        {row('확인 사유', a.reason || (a.error ? 'AI 분석 실패 — 원본 보존, 재분석 가능' : null))}
+      </>}
+      <h3 style={{ ...S.h2, fontSize: 13, marginTop: 14 }}>AI 직원 활용</h3>
+      <div style={{ padding: '4px 0' }}>AI 직원 활용 허용: <b>{doc.aiAllowed ? '허용(관리자 승인)' : '미허용'}</b></div>
+      <div style={{ padding: '4px 0' }}>AI 지식검색 대상: <b>{eligible ? '예 — 최신 승인본만 사용' : '아니오'}</b>
+        {!eligible && <span style={S.muted}> ({!doc.aiAllowed ? '관리자 승인 전' : !doc.approvedVersionId ? '승인본 없음' : '폐기 자료'})</span>}</div>
     </div>
   );
 }

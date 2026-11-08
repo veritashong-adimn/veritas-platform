@@ -4,15 +4,16 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ARCHIVE_MENU_LABEL, DOC_TYPE_LABEL, SECURITY_COLOR, SECURITY_LABEL, STATUS_COLOR, STATUS_LABEL, S, badgeStyle,
-  fmtDate, fmtSize, type ArchiveApi, type ArchiveFolder, type ArchiveListItem, type ArchiveMe,
+  ARCHIVE_MENU_LABEL, DOC_TYPE_LABEL, SECURITY_LABEL, STATUS_COLOR, STATUS_LABEL, S, badgeStyle, AI_STATUS_LABEL,
+  fmtDate, type ArchiveApi, type ArchiveFolder, type ArchiveListItem, type ArchiveMe,
 } from './archiveApi';
 import { ArchiveFolderTree } from './ArchiveFolderTree';
+import { useArchiveFolderManager } from './ArchiveFolderManager';
 
 const FILE_TYPES: Record<string, string> = { pdf: 'PDF', word: 'Word', excel: 'Excel/CSV', ppt: 'PowerPoint', hwp: '한글', image: '이미지', email: '이메일', text: '텍스트', other: '기타' };
 const FILE_ICON: Record<string, string> = { pdf: '📕', word: '📘', excel: '📗', ppt: '📙', hwp: '📄', image: '🖼️', email: '✉️', text: '📝', other: '📎' };
 
-export function ArchiveDocumentBrowser({ api, me, menu, folders, onOpen, onUpload, refreshKey, showTitle = true, emptyFolderNotice }: {
+export function ArchiveDocumentBrowser({ api, me, menu, folders, onOpen, onUpload, refreshKey, showTitle = true, emptyFolderNotice, folderAdmin }: {
   api: ArchiveApi;
   me: ArchiveMe;
   menu: string | null;                   // null = 전체 자료
@@ -22,6 +23,8 @@ export function ArchiveDocumentBrowser({ api, me, menu, folders, onOpen, onUploa
   refreshKey: number;
   showTitle?: boolean;                   // 업무자료 관리: 상단 탭이 제목 역할 → 중복 제목 생략
   emptyFolderNotice?: React.ReactNode;   // 분류에 표시할 폴더가 없을 때 목록 위 안내
+  /** 지정 시 폴더 탐색 영역에 관리자 전용 폴더 관리(추가·이름변경·이동·순서·삭제·복원) 표시 — 전체 자료 화면 */
+  folderAdmin?: { reload: () => Promise<void>; setToast: (m: string) => void };
 }) {
   const [folderId, setFolderId] = useState<number | null>(null);
   const [q, setQ] = useState('');
@@ -36,6 +39,13 @@ export function ArchiveDocumentBrowser({ api, me, menu, folders, onOpen, onUploa
 
   // 메뉴 전환 시 폴더 선택 초기화
   useEffect(() => { setFolderId(null); setPage(1); }, [menu]);
+
+  const fm = useArchiveFolderManager({
+    api, me, folders, reload: folderAdmin?.reload ?? (async () => {}), setToast: folderAdmin?.setToast ?? (() => {}), idPrefix: 'archive-browse-folder',
+  });
+  const manage = !!folderAdmin && fm.enabled;
+  // 선택 폴더가 삭제·숨김되면 전체로 복귀
+  useEffect(() => { if (folderId != null && !folders.some(f => f.id === folderId)) { setFolderId(null); setPage(1); } }, [folders, folderId]);
 
   const menuFolders = useMemo(() => {
     if (!menu) return folders;
@@ -67,7 +77,10 @@ export function ArchiveDocumentBrowser({ api, me, menu, folders, onOpen, onUploa
     <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
       <aside style={{ ...S.card, width: 250, flexShrink: 0, padding: 10, maxHeight: '75vh', overflowY: 'auto' }}>
         <div style={{ ...S.muted, fontWeight: 700, padding: '2px 6px 6px' }}>폴더 탐색</div>
-        <ArchiveFolderTree folders={menuFolders} selectedId={folderId} onSelect={(id) => { setFolderId(id); setPage(1); }} testIdPrefix="archive-browse-tree" />
+        {manage && fm.toolbar}
+        <ArchiveFolderTree folders={menuFolders} selectedId={folderId} onSelect={(id) => { setFolderId(id); setPage(1); }} testIdPrefix="archive-browse-tree"
+          renderExtra={manage ? fm.rowExtra : undefined} onRowContextMenu={manage ? fm.onRowContextMenu : undefined} />
+        {manage && fm.overlay}
       </aside>
 
       <section style={{ flex: 1, minWidth: 0 }}>
@@ -128,15 +141,15 @@ export function ArchiveDocumentBrowser({ api, me, menu, folders, onOpen, onUploa
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <th style={S.th}>자료명</th><th style={S.th}>분류</th><th style={S.th}>유형</th><th style={S.th}>상태</th>
-                <th style={S.th}>보안</th><th style={S.th}>파일</th><th style={S.th}>등록자</th><th style={S.th}>수정일</th>
+                {/* 검색 결과 핵심 정보: 문서 제목 · 자료 유형 · 등록일 · 승인 상태 (분류·보안·파일 등은 상세에서 확인) */}
+                <th style={S.th}>문서 제목</th><th style={S.th}>자료 유형</th><th style={S.th}>등록일</th><th style={S.th}>승인 상태</th>
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={8} style={{ ...S.td, textAlign: 'center', color: '#9ca3af' }}>불러오는 중…</td></tr>}
-              {!loading && error && <tr><td colSpan={8} style={{ ...S.td, color: '#b91c1c' }}>{error}</td></tr>}
+              {loading && <tr><td colSpan={4} style={{ ...S.td, textAlign: 'center', color: '#9ca3af' }}>불러오는 중…</td></tr>}
+              {!loading && error && <tr><td colSpan={4} style={{ ...S.td, color: '#b91c1c' }}>{error}</td></tr>}
               {!loading && !error && data?.items.length === 0 && (
-                <tr><td colSpan={8} style={{ ...S.td, textAlign: 'center', color: '#9ca3af', padding: 32 }}>
+                <tr><td colSpan={4} style={{ ...S.td, textAlign: 'center', color: '#9ca3af', padding: 32 }}>
                   {qApplied ? '검색 결과가 없습니다. (열람 권한이 있는 자료만 표시됩니다)' : '등록된 자료가 없거나 열람 권한이 있는 자료가 없습니다.'}
                 </td></tr>
               )}
@@ -149,14 +162,12 @@ export function ArchiveDocumentBrowser({ api, me, menu, folders, onOpen, onUploa
                     </button>
                     {it.isStandardForm && <span style={{ ...badgeStyle('#0891b2'), marginLeft: 6 }}>표준양식</span>}
                     {it.versionNo && it.versionNo > 1 && <span style={{ ...S.muted, marginLeft: 6 }}>v{it.versionNo}</span>}
+                    {it.aiStatus && ['analyzing', 'needs_review', 'failed'].includes(it.aiStatus) &&
+                      <span style={{ ...badgeStyle(AI_STATUS_LABEL[it.aiStatus][1]), marginLeft: 6 }} data-testid={`archive-row-ai-${it.id}`}>{AI_STATUS_LABEL[it.aiStatus][0]}</span>}
                   </td>
-                  <td style={{ ...S.td, fontSize: 12, color: '#6b7280', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={it.folderPath}>{it.folderPath}</td>
                   <td style={{ ...S.td, fontSize: 12 }}>{DOC_TYPE_LABEL[it.docType] ?? it.docType}</td>
+                  <td style={{ ...S.td, fontSize: 12 }}>{fmtDate(it.createdAt)}</td>
                   <td style={S.td}><span style={badgeStyle(STATUS_COLOR[it.status] ?? '#6b7280')}>{STATUS_LABEL[it.status] ?? it.status}</span></td>
-                  <td style={S.td}><span style={badgeStyle(SECURITY_COLOR[it.securityLevel] ?? '#6b7280')}>{SECURITY_LABEL[it.securityLevel] ?? it.securityLevel}</span></td>
-                  <td style={{ ...S.td, fontSize: 12, color: '#6b7280' }}>{fmtSize(it.fileSize)}</td>
-                  <td style={{ ...S.td, fontSize: 12 }}>{it.createdByName ?? '—'}</td>
-                  <td style={{ ...S.td, fontSize: 12 }}>{fmtDate(it.updatedAt)}</td>
                 </tr>
               ))}
             </tbody>

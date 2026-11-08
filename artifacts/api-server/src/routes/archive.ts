@@ -16,13 +16,14 @@ import { requireAuth, requireRole } from "../middlewares/auth";
 import { getR2ObjectStream } from "../lib/r2";
 import {
   loadAclContext, documentActions, folderActions, canListDocument, canSeeUnapproved, folderPath,
-  folderDescendants, folderMenuKey, archiveAudit, type AclContext, type ArchiveAction,
+  folderDescendants, folderMenuKey, archiveAudit, isFolderDeleted, type AclContext, type ArchiveAction,
 } from "../services/archiveAccess";
 import {
   requireArchiveModule, DEFAULT_TAXONOMY, ARCHIVE_MENU_KEYS, DOC_TYPES, SECURITY_LEVELS, LINK_ENTITY_TYPES,
   isInlinePreviewable, resolveLinkLabels, parseId, ARCHIVE_MAX_FILE_SIZE, ARCHIVE_ALLOWED_EXTS,
 } from "../services/archiveCommon";
 import { purgeDocument, recentAudit } from "../services/archiveWorkflow";
+import { latestAiAnalysis, REVIEW_FOLDER_NAME } from "../services/archiveClassify";
 
 const router: IRouter = Router();
 const guard = [requireAuth, requireRole("admin", "staff"), requireArchiveModule];
@@ -97,7 +98,7 @@ router.get("/archive/folders", ...guard, async (req, res) => {
   try {
     const actor = req.archiveActor!;
     const ctx = await loadAclContext();
-    const all = [...ctx.folders.values()];
+    const all = [...ctx.folders.values()].filter(f => !f.deletedAt);   // 소프트 삭제 폴더는 탐색에서 제외(복원 목록은 /archive/folders/deleted)
     let visible: Set<number>;
     if (actor.isArchiveAdmin) {
       visible = new Set(all.map(f => f.id));
@@ -164,28 +165,48 @@ function canManageFolder(req: Request, ctx: AclContext, folderId: number | null)
   return folderActions(actor, ctx, folderId).has("manage");
 }
 
+const normName = (n: string) => n.trim().replace(/\s+/g, " ").toLowerCase();
+/** 같은 상위 폴더(삭제 제외)에 같은 이름이 있는지 — 공백·대소문자 무시. 기존 중복 데이터는 건드리지 않고 신규 생성·변경만 차단. */
+function siblingNameTaken(ctx: AclContext, parentId: number | null, name: string, excludeId?: number): boolean {
+  const n = normName(name);
+  for (const f of ctx.folders.values()) {
+    if (f.deletedAt || f.id === excludeId) continue;
+    if ((f.parentId ?? null) === parentId && normName(f.name) === n) return true;
+  }
+  return false;
+}
+/** AI 「분류 확인 필요」 시스템 폴더 — 이름으로 조회되므로 이름 변경·비활성화·삭제 금지(이동·순서 변경은 허용). */
+const isReviewFolder = (ctx: AclContext, id: number) => ctx.folders.get(id)?.name === REVIEW_FOLDER_NAME;
+const folderSnapshot = (ctx: AclContext, id: number) => {
+  const f = ctx.folders.get(id);
+  return f ? { name: f.name, parentId: f.parentId, path: folderPath(ctx, id), sortOrder: f.sortOrder, isActive: f.isActive, menuKey: f.menuKey } : null;
+};
+const DUP_NAME_ERROR = "같은 위치에 동일한 이름의 폴더가 이미 있습니다.";
+
 router.post("/archive/folders", ...guard, async (req, res) => {
   const ctx = await loadAclContext();
   const parentId = req.body?.parentId == null ? null : parseId(req.body.parentId);
   const name = String(req.body?.name ?? "").trim();
   if (!name || name.length > 200) { res.status(400).json({ error: "폴더명을 입력해 주세요(200자 이내)." }); return; }
-  if (parentId != null && !ctx.folders.has(parentId)) { res.status(400).json({ error: "상위 폴더가 없습니다." }); return; }
+  if (parentId != null && (!ctx.folders.has(parentId) || isFolderDeleted(ctx, parentId))) { res.status(400).json({ error: "상위 폴더가 없습니다." }); return; }
   if (!canManageFolder(req, ctx, parentId)) { res.status(403).json({ error: "폴더를 추가할 권한이 없습니다." }); return; }
+  if (siblingNameTaken(ctx, parentId, name)) { res.status(409).json({ error: DUP_NAME_ERROR, code: "name_conflict" }); return; }
   const menuKey = req.body?.menuKey && (ARCHIVE_MENU_KEYS as readonly string[]).includes(req.body.menuKey) ? req.body.menuKey : null;
   const [f] = await db.insert(archiveFoldersTable).values({
     parentId, name, menuKey, description: req.body?.description ? String(req.body.description) : null,
     sortOrder: Number(req.body?.sortOrder) || 0, createdBy: req.user!.id,
   }).returning();
-  await archiveAudit(req, "folder_create", { folderId: f.id }, { name, parentId });
+  await archiveAudit(req, "folder_create", { folderId: f.id }, { name, parentId, parentPath: parentId != null ? folderPath(ctx, parentId) : null });
   res.status(201).json(f);
 });
 
 router.patch("/archive/folders/:id", ...guard, async (req, res) => {
   const id = parseId(req.params.id);
   const ctx = await loadAclContext();
-  if (!id || !ctx.folders.has(id)) { res.status(404).json({ error: "폴더를 찾을 수 없습니다." }); return; }
+  if (!id || !ctx.folders.has(id) || isFolderDeleted(ctx, id)) { res.status(404).json({ error: "폴더를 찾을 수 없습니다." }); return; }
   if (!canManageFolder(req, ctx, id)) { res.status(403).json({ error: "폴더를 수정할 권한이 없습니다." }); return; }
-  const before = ctx.folders.get(id)!;
+  const before = folderSnapshot(ctx, id);
+  const cur = ctx.folders.get(id)!;
   const patch: Partial<typeof archiveFoldersTable.$inferInsert> = { updatedAt: new Date() };
   if (typeof req.body?.name === "string" && req.body.name.trim()) patch.name = req.body.name.trim().slice(0, 200);
   if (req.body?.description !== undefined) patch.description = req.body.description ? String(req.body.description) : null;
@@ -194,18 +215,153 @@ router.patch("/archive/folders/:id", ...guard, async (req, res) => {
     patch.menuKey = req.body.menuKey && (ARCHIVE_MENU_KEYS as readonly string[]).includes(req.body.menuKey) ? req.body.menuKey : null;
   }
   if (typeof req.body?.isActive === "boolean") patch.isActive = req.body.isActive;
+  if (isReviewFolder(ctx, id) && ((patch.name !== undefined && patch.name !== cur.name) || patch.isActive === false)) {
+    res.status(400).json({ error: `「${REVIEW_FOLDER_NAME}」 폴더는 AI 자동 분류용 시스템 폴더라 이름 변경·비활성화할 수 없습니다.` }); return;
+  }
   if (req.body?.parentId !== undefined) {
     const newParent = req.body.parentId == null ? null : parseId(req.body.parentId);
     if (newParent != null) {
-      if (!ctx.folders.has(newParent)) { res.status(400).json({ error: "대상 상위 폴더가 없습니다." }); return; }
+      if (!ctx.folders.has(newParent) || isFolderDeleted(ctx, newParent)) { res.status(400).json({ error: "대상 상위 폴더가 없습니다." }); return; }
       if (folderDescendants(ctx, id).has(newParent)) { res.status(400).json({ error: "자기 자신 또는 하위 폴더로 이동할 수 없습니다." }); return; }
     }
     if (!canManageFolder(req, ctx, newParent)) { res.status(403).json({ error: "대상 위치에 대한 권한이 없습니다." }); return; }
     patch.parentId = newParent;
   }
+  // 이름·위치가 바뀌는 경우에만 같은 상위 폴더 내 중복 이름 차단(기존 중복은 유지)
+  const nextParent = patch.parentId !== undefined ? patch.parentId ?? null : cur.parentId ?? null;
+  const nextName = patch.name ?? cur.name;
+  if ((patch.name !== undefined && normName(patch.name) !== normName(cur.name)) || nextParent !== (cur.parentId ?? null)) {
+    if (siblingNameTaken(ctx, nextParent, nextName, id)) { res.status(409).json({ error: DUP_NAME_ERROR, code: "name_conflict" }); return; }
+  }
+  const moved = patch.parentId !== undefined && nextParent !== (cur.parentId ?? null);
   const [f] = await db.update(archiveFoldersTable).set(patch).where(eq(archiveFoldersTable.id, id)).returning();
-  await archiveAudit(req, patch.parentId !== undefined ? "folder_move" : "folder_update", { folderId: id }, { before, after: patch });
+  const after = await loadAclContext().then(c => folderSnapshot(c, id));
+  await archiveAudit(req, moved ? "folder_move" : "folder_update", { folderId: id }, { before, after, patch });
   res.json(f);
+});
+
+// ─── 폴더 순서 변경 · 삭제(소프트) · 복원 ───────────────────────────────────────
+
+/** 같은 상위 폴더 안에서 위/아래로 한 칸 이동 — 형제 순서를 10 단위로 재번호(감사로그 1건). */
+router.post("/archive/folders/:id/reorder", ...guard, async (req, res) => {
+  const id = parseId(req.params.id);
+  const ctx = await loadAclContext();
+  if (!id || !ctx.folders.has(id) || isFolderDeleted(ctx, id)) { res.status(404).json({ error: "폴더를 찾을 수 없습니다." }); return; }
+  if (!canManageFolder(req, ctx, id)) { res.status(403).json({ error: "폴더 순서를 변경할 권한이 없습니다." }); return; }
+  const dir = req.body?.direction;
+  if (dir !== "up" && dir !== "down") { res.status(400).json({ error: "direction 은 up 또는 down 이어야 합니다." }); return; }
+  const parentId = ctx.folders.get(id)!.parentId ?? null;
+  const siblings = [...ctx.folders.values()].filter(f => !f.deletedAt && (f.parentId ?? null) === parentId)
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+  const idx = siblings.findIndex(f => f.id === id);
+  const swap = dir === "up" ? idx - 1 : idx + 1;
+  if (swap < 0 || swap >= siblings.length) { res.json({ ok: true, unchanged: true }); return; }
+  const before = siblings.map(f => ({ id: f.id, name: f.name, sortOrder: f.sortOrder }));
+  [siblings[idx], siblings[swap]] = [siblings[swap], siblings[idx]];
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    for (let i = 0; i < siblings.length; i++) {
+      const order = (i + 1) * 10;
+      if (siblings[i].sortOrder !== order) await tx.update(archiveFoldersTable).set({ sortOrder: order, updatedAt: now }).where(eq(archiveFoldersTable.id, siblings[i].id));
+    }
+  });
+  await archiveAudit(req, "folder_reorder", { folderId: id }, {
+    direction: dir, parentPath: parentId != null ? folderPath(ctx, parentId) : null,
+    before, after: siblings.map((f, i) => ({ id: f.id, name: f.name, sortOrder: (i + 1) * 10 })),
+  });
+  res.json({ ok: true });
+});
+
+/** 삭제 영향 범위 — 하위 폴더(삭제 제외)·소속 문서·휴지통 문서·폴더 권한 수. 삭제 가능 여부와 사유를 함께 반환. */
+async function folderDeleteImpact(ctx: AclContext, id: number) {
+  const childFolders = [...ctx.folders.values()].filter(f => f.parentId === id && !f.deletedAt);
+  const [counts] = await db.select({
+    active: sql<number>`count(*) filter (where ${archiveDocumentsTable.deletedAt} is null)::int`,
+    trashed: sql<number>`count(*) filter (where ${archiveDocumentsTable.deletedAt} is not null)::int`,
+  }).from(archiveDocumentsTable).where(eq(archiveDocumentsTable.folderId, id));
+  const [acl] = await db.select({ c: sql<number>`count(*)::int` }).from(archiveAclTable).where(eq(archiveAclTable.folderId, id));
+  const reasons: string[] = [];
+  if (childFolders.length) reasons.push(`하위 폴더 ${childFolders.length}개가 있습니다. 먼저 다른 위치로 이동하거나 삭제해 주세요.`);
+  if (counts.active) reasons.push(`자료 ${counts.active}건이 있습니다. 먼저 다른 폴더로 이동해 주세요.`);
+  if (counts.trashed) reasons.push(`휴지통에 이 폴더 소속 자료 ${counts.trashed}건이 있습니다. 복원 후 이동하거나 휴지통에서 정리해 주세요.`);
+  if (isReviewFolder(ctx, id)) reasons.push(`「${REVIEW_FOLDER_NAME}」 폴더는 AI 자동 분류용 시스템 폴더라 삭제할 수 없습니다.`);
+  return {
+    folderId: id, path: folderPath(ctx, id),
+    childFolderCount: childFolders.length, childFolders: childFolders.map(f => f.name).slice(0, 20),
+    documentCount: counts.active, trashedDocumentCount: counts.trashed, aclCount: acl.c,
+    canDelete: reasons.length === 0, reasons,
+  };
+}
+
+router.get("/archive/folders/:id/delete-check", ...guard, async (req, res) => {
+  if (!req.archiveActor!.isArchiveAdmin) { res.status(403).json({ error: "폴더 삭제는 자료보관함 관리자만 할 수 있습니다." }); return; }
+  const id = parseId(req.params.id);
+  const ctx = await loadAclContext();
+  if (!id || !ctx.folders.has(id) || isFolderDeleted(ctx, id)) { res.status(404).json({ error: "폴더를 찾을 수 없습니다." }); return; }
+  res.json(await folderDeleteImpact(ctx, id));
+});
+
+router.delete("/archive/folders/:id", ...guard, async (req, res) => {
+  if (!req.archiveActor!.isArchiveAdmin) { res.status(403).json({ error: "폴더 삭제는 자료보관함 관리자만 할 수 있습니다." }); return; }
+  const id = parseId(req.params.id);
+  const ctx = await loadAclContext();
+  if (!id || !ctx.folders.has(id) || isFolderDeleted(ctx, id)) { res.status(404).json({ error: "폴더를 찾을 수 없습니다." }); return; }
+  const impact = await folderDeleteImpact(ctx, id);
+  if (!impact.canDelete) { res.status(409).json({ error: impact.reasons.join(" "), code: "folder_not_empty", impact }); return; }
+  const before = folderSnapshot(ctx, id);
+  // 소프트 삭제만 — 폴더 행·폴더 권한(ACL)·감사로그는 그대로 보존(복원 시 원상태)
+  await db.update(archiveFoldersTable).set({ deletedAt: new Date(), deletedBy: req.user!.id, updatedAt: new Date() })
+    .where(and(eq(archiveFoldersTable.id, id), isNull(archiveFoldersTable.deletedAt)));
+  await archiveAudit(req, "folder_delete", { folderId: id }, { before, aclPreserved: impact.aclCount, reason: req.body?.reason ?? null });
+  res.json({ ok: true });
+});
+
+router.get("/archive/folders/deleted", ...guard, async (req, res) => {
+  if (!req.archiveActor!.isArchiveAdmin) { res.status(403).json({ error: "자료보관함 관리 권한이 필요합니다." }); return; }
+  const ctx = await loadAclContext();
+  const rows = await db.select({ id: archiveFoldersTable.id, deletedAt: archiveFoldersTable.deletedAt, deletedBy: archiveFoldersTable.deletedBy, name: usersTable.name, email: usersTable.email })
+    .from(archiveFoldersTable).leftJoin(usersTable, eq(archiveFoldersTable.deletedBy, usersTable.id))
+    .where(isNotNull(archiveFoldersTable.deletedAt)).orderBy(desc(archiveFoldersTable.deletedAt));
+  res.json(rows.map(r => {
+    const f = ctx.folders.get(r.id)!;
+    const parentId = f.parentId ?? null;
+    const parentAvailable = parentId == null || (ctx.folders.has(parentId) && !isFolderDeleted(ctx, parentId));
+    return {
+      id: r.id, name: f.name, parentId, originalPath: folderPath(ctx, r.id),
+      deletedAt: r.deletedAt, deletedByName: r.name, deletedByEmail: r.email,
+      parentAvailable, nameConflict: parentAvailable ? siblingNameTaken(ctx, parentId, f.name, r.id) : false,
+    };
+  }));
+});
+
+/**
+ * 폴더 복원 — 원래 위치·이름으로. 충돌(상위 폴더가 삭제됨 / 같은 이름 존재)이면 409 로 알리고,
+ * 관리자가 parentId·name 을 지정해 다시 요청하면 그 위치·이름으로 복원한다(자동 변경 없음).
+ */
+router.post("/archive/folders/:id/restore", ...guard, async (req, res) => {
+  if (!req.archiveActor!.isArchiveAdmin) { res.status(403).json({ error: "폴더 복원은 자료보관함 관리자만 할 수 있습니다." }); return; }
+  const id = parseId(req.params.id);
+  const ctx = await loadAclContext();
+  if (!id || !ctx.folders.has(id) || !isFolderDeleted(ctx, id)) { res.status(404).json({ error: "삭제된 폴더를 찾을 수 없습니다." }); return; }
+  const f = ctx.folders.get(id)!;
+  const overrideParent = req.body?.parentId !== undefined;
+  const parentId = overrideParent ? (req.body.parentId == null ? null : parseId(req.body.parentId)) : f.parentId ?? null;
+  const name = typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim().slice(0, 200) : f.name;
+  if (parentId != null && (!ctx.folders.has(parentId) || isFolderDeleted(ctx, parentId))) {
+    res.status(409).json({ error: overrideParent ? "선택한 상위 폴더를 사용할 수 없습니다." : "원래 상위 폴더가 삭제되어 있습니다. 복원할 위치를 선택해 주세요.", code: "parent_unavailable" });
+    return;
+  }
+  if (parentId != null && folderDescendants(ctx, id).has(parentId)) { res.status(400).json({ error: "자기 자신 또는 하위 폴더 아래로 복원할 수 없습니다." }); return; }
+  if (siblingNameTaken(ctx, parentId, name, id)) {
+    res.status(409).json({ error: `복원 위치에 같은 이름(「${name}」)의 폴더가 있습니다. 새 이름을 지정해 주세요.`, code: "name_conflict" });
+    return;
+  }
+  const before = { ...folderSnapshot(ctx, id), deletedAt: f.deletedAt };
+  await db.update(archiveFoldersTable).set({ deletedAt: null, deletedBy: null, parentId, name, updatedAt: new Date() })
+    .where(eq(archiveFoldersTable.id, id));
+  const after = await loadAclContext().then(c => folderSnapshot(c, id));
+  await archiveAudit(req, "folder_restore", { folderId: id }, { before, after });
+  res.json({ ok: true });
 });
 
 // ─── 자료 목록·검색 ─────────────────────────────────────────────────────────
@@ -262,7 +418,7 @@ router.get("/archive/documents", ...guard, async (req, res) => {
     if (q && rows.length) {
       const like = `%${q}%`;
       const candidateIds = rows.map(r => r.doc.id);
-      const metaHit = new Set(rows.filter(r => [r.doc.title, r.doc.description, r.doc.keywords, r.doc.authorName, r.doc.ownerDepartment]
+      const metaHit = new Set(rows.filter(r => [r.doc.title, r.doc.description, r.doc.keywords, r.doc.authorName, r.doc.ownerDepartment, r.doc.aiSummary]
         .some(v => v && v.toLowerCase().includes(q.toLowerCase()))).map(r => r.doc.id));
       const verHits = await db.select({
         documentId: archiveDocumentVersionsTable.documentId, id: archiveDocumentVersionsTable.id,
@@ -314,7 +470,7 @@ router.get("/archive/documents", ...guard, async (req, res) => {
         ownerDepartment: r.doc.ownerDepartment, authorName: r.doc.authorName, documentDate: r.doc.documentDate,
         expiresAt: r.doc.expiresAt, createdAt: r.doc.createdAt, updatedAt: r.doc.updatedAt,
         createdByName: r.createdByName || r.createdByEmail || null,
-        hasApprovedVersion: !!r.doc.approvedVersionId,
+        hasApprovedVersion: !!r.doc.approvedVersionId, aiStatus: r.doc.aiStatus,
         fileName: v?.fileName ?? null, mimeType: v?.mimeType ?? null, fileSize: v?.fileSize ?? null,
         versionNo: v?.versionNo ?? null, versionStatus: v?.status ?? null,
         fileCategory: fileCategory(v?.fileName),
@@ -392,10 +548,11 @@ router.get("/archive/documents/:id", ...guard, async (req, res) => {
   const acl = showAcl ? await db.select().from(archiveAclTable).where(eq(archiveAclTable.documentId, doc.id)) : [];
 
   await archiveAudit(req, "view", { documentId: doc.id });
-  const { aiSummary, ...docRest } = doc;
+  // AI 등록 분석(요약·키워드·분류 근거)은 등록 처리 결과이므로 열람 권한자에게 표시. AI 직원 업무 활용 여부(aiAllowed)와는 별개.
+  const aiAnalysis = await latestAiAnalysis(doc.id);
   res.json({
-    ...docRest,
-    aiSummary: acts.has("ai") ? aiSummary : null,
+    ...doc,
+    aiAnalysis,
     folderPath: folderPath(ctx, doc.folderId),
     createdByName: creator?.name || creator?.email || null,
     actions: [...acts],
@@ -436,6 +593,10 @@ router.patch("/archive/documents/:id", ...guard, async (req, res) => {
   if (typeof b.isStandardForm === "boolean") patch.isStandardForm = b.isStandardForm;
   // 승인 정책 완화(승인필요 해제·표준양식 해제)는 승인권자/관리자만
   const actor = req.archiveActor!;
+  // AI 직원 업무 활용 허용·공식 서식/매뉴얼(표준) 지정은 관리자 승인 사항 — 승인권자/관리자만 켤 수 있다
+  if ((patch.aiAllowed === true && !l.doc.aiAllowed) || (patch.isStandardForm === true && !l.doc.isStandardForm)) {
+    if (!actor.canApprove && !actor.isArchiveAdmin) { res.status(403).json({ error: "AI 활용 허용·공식 문서 지정은 관리자 승인 권한이 필요합니다." }); return; }
+  }
   if ((patch.requiresApproval === false && l.doc.requiresApproval) || (patch.isStandardForm === false && l.doc.isStandardForm)) {
     if (!actor.canApprove && !actor.isArchiveAdmin) { res.status(403).json({ error: "승인 정책 해제는 승인권자만 가능합니다." }); return; }
   }
@@ -472,7 +633,7 @@ router.post("/archive/documents/:id/move", ...guard, async (req, res) => {
   const l = await loadDoc(req, res, "edit");
   if (!l) return;
   const target = parseId(req.body?.folderId);
-  if (!target || !l.ctx.folders.has(target)) { res.status(400).json({ error: "대상 폴더가 없습니다." }); return; }
+  if (!target || !l.ctx.folders.has(target) || isFolderDeleted(l.ctx, target)) { res.status(400).json({ error: "대상 폴더가 없습니다." }); return; }
   if (!l.ctx.folders.get(target)!.isActive) { res.status(400).json({ error: "비활성 폴더로 이동할 수 없습니다." }); return; }
   if (!folderActions(req.archiveActor!, l.ctx, target).has("upload")) { res.status(403).json({ error: "대상 폴더에 자료를 둘 권한이 없습니다." }); return; }
   await db.update(archiveDocumentsTable).set({ folderId: target, updatedAt: new Date(), updatedBy: req.user!.id }).where(eq(archiveDocumentsTable.id, l.doc.id));
