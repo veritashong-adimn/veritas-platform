@@ -9,6 +9,7 @@ import { LegacyArchiveSyncPanel } from './LegacyArchiveSyncPanel';
 import { LegacyCrmFullSyncPanel } from './LegacyCrmFullSyncPanel';
 import { CrmRefreshPanel } from './CrmRefreshPanel';
 import { LegacyCrmSavedFiles, type Summary as SavedSummary } from './LegacyCrmSavedFiles';
+import { Pagination as Paginator } from '../ui/Paginator';
 
 type SourceType = 'sales_list' | 'progress' | 'translator_list';
 const SOURCE_LABEL: Record<SourceType, string> = { sales_list: '판매목록', progress: '통번역 진행관리', translator_list: 'CRM 통번역사 명부' };
@@ -88,6 +89,7 @@ type FullRow = { id: number; sourceRow: number | null; fileRow?: number | null; 
 type ExportEstimate = { scope: 'search' | 'all'; sourceType: string; total: number; types: { sourceType: SourceType; label: string; count: number }[] };
 
 const PAGE_SIZE = 50;
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 200];   // 자료 조회 페이지당 표시(서버 최대 200)
 // (C-4J-2C-8) 기본 선택 탭 = 판매목록. '전체(혼합)' 탭은 화면에서 제거(통합검색 API/기능은 유지).
 const EMPTY_FILTERS = { sourceType: 'sales_list' as 'all' | SourceType, q: '', company: '', translator: '', product: '', language: '', collectionStatus: '', dateFrom: '', dateTo: '', snapshot: 'current' as 'current' | 'all' | string };
 
@@ -180,7 +182,13 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
   const onDragLeave = (e: React.DragEvent) => { e.preventDefault(); setDragActive(false); };
 
   // (C-4J-2C-9) f 로 조회조건 스냅샷을 명시 주입 가능(기본은 현재 filters). 초기화 등 setState 직후 즉시 조회 시 stale closure 방지.
-  const runSearch = useCallback(async (page = 1, f: typeof filters = filters) => {
+  // 페이지 이동·표시 건수 변경은 '마지막으로 조회한 조건'을 그대로 쓴다(입력만 하고 검색하지 않은 값이 섞이지 않게).
+  const lastFiltersRef = useRef<typeof filters | null>(null);
+  const pageSizeRef = useRef(PAGE_SIZE);
+  const reqSeq = useRef(0);   // 연속 클릭 시 늦게 도착한 이전 응답 무시
+  const runSearch = useCallback(async (page = 1, f: typeof filters = filters, size: number = pageSizeRef.current) => {
+    const seq = ++reqSeq.current;
+    lastFiltersRef.current = f; pageSizeRef.current = size;
     setSearching(true);
     try {
       const p = new URLSearchParams();
@@ -188,13 +196,14 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
       for (const k of ['q', 'company', 'translator', 'product', 'language', 'collectionStatus', 'dateFrom', 'dateTo'] as const) {
         if (f[k]?.trim()) p.set(k, f[k].trim());
       }
-      p.set('page', String(page)); p.set('pageSize', String(PAGE_SIZE));
+      p.set('page', String(page)); p.set('pageSize', String(size));
       if (f.snapshot && f.snapshot !== 'current') p.set('snapshot', f.snapshot);  // (C-4G) 기본 current(=effective)
       // (C-4I-c/e) 전체컬럼(full) 뷰 여부는 서버가 데이터 기준으로 판정한다:
       //   진행관리 탭 또는 '전체' 탭 결과가 단일 progress 유형이면 full. 화면은 data.view 로 분기.
       p.set('view', 'full');   // 서버에 full 가능 여부 판정을 요청(혼합/판매목록이면 서버가 요약 목록을 반환).
       const res = await fetch(api(`/api/admin/legacy-archive?${p.toString()}`), { headers: authHeaders });
       const data = await res.json();
+      if (seq !== reqSeq.current) return;
       if (!res.ok) throw new Error(data?.error || '검색 실패');
       setSearched(true); setPagination(data.pagination);
       if (data.view === 'full') {
@@ -204,7 +213,7 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
         setFullView(false); setRows(data.rows ?? []); setFullSourceType(null);
       }
     } catch (e: any) { setToast(e?.message || '검색 실패'); }
-    finally { setSearching(false); }
+    finally { if (seq === reqSeq.current) setSearching(false); }
   }, [filters, token]);
 
   // ── (C-4I-d) Excel 다운로드 ──
@@ -427,9 +436,19 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
 
           {/* 결과 */}
           <div style={box}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 10, flexWrap: 'wrap' }}>
               <div style={{ fontSize: 13, color: '#374151', fontWeight: 700 }} data-testid="archive-total">총 {pagination.total.toLocaleString()}건</div>
-              <div style={{ fontSize: 12, color: '#6b7280' }}>{pagination.page} / {pagination.totalPages} 페이지</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 12, color: '#6b7280' }} data-testid="archive-page-count">{pagination.page.toLocaleString()} / {pagination.totalPages.toLocaleString()} 페이지</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: '#374151', fontWeight: 700 }}>
+                  페이지당 표시
+                  <select value={pagination.pageSize} disabled={searching} aria-label="페이지당 표시 건수" data-testid="archive-page-size"
+                    onChange={e => runSearch(1, lastFiltersRef.current ?? filters, Number(e.target.value))}
+                    style={{ height: 32, padding: '0 8px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13, fontWeight: 600, background: '#fff', cursor: 'pointer' }}>
+                    {PAGE_SIZE_OPTIONS.map(n => <option key={n} value={n}>{n}건</option>)}
+                  </select>
+                </label>
+              </div>
             </div>
             {/* (C-4I-c) 진행관리 = 원본 전체컬럼(행 클릭 상세 없음). 그 외 = 기존 요약 목록. */}
             {fullView ? (
@@ -524,13 +543,12 @@ export function LegacyCrmArchiveTab({ token, setToast }: { token: string; setToa
               </table>
             </div>
             )}
-            {/* pagination */}
-            {pagination.totalPages > 1 && (
-              <div style={{ display: 'flex', gap: 6, justifyContent: 'center', marginTop: 14 }}>
-                <button style={btn(pagination.page <= 1)} disabled={pagination.page <= 1} onClick={() => runSearch(pagination.page - 1)} aria-label="이전 페이지">이전</button>
-                <span style={{ padding: '10px 14px', fontSize: 13, color: '#374151' }}>{pagination.page} / {pagination.totalPages}</span>
-                <button style={btn(pagination.page >= pagination.totalPages)} disabled={pagination.page >= pagination.totalPages} onClick={() => runSearch(pagination.page + 1)} aria-label="다음 페이지">다음</button>
-              </div>
+            {/* pagination — 공통 Paginator(7개 번호 · 처음/이전/다음/마지막 · 현재/전체 페이지). 표시 건수 선택은 목록 상단 오른쪽. */}
+            {pagination.total > 0 && (
+              <Paginator page={pagination.page} pageSize={pagination.pageSize} total={pagination.total} unit="건" idPrefix="archive"
+                maxButtons={7} showPageCount hidePageSize disabled={searching} pageSizeOptions={PAGE_SIZE_OPTIONS}
+                onPageChange={pg => runSearch(pg, lastFiltersRef.current ?? filters)}
+                onPageSizeChange={n => runSearch(1, lastFiltersRef.current ?? filters, n)} />
             )}
           </div>
         </>

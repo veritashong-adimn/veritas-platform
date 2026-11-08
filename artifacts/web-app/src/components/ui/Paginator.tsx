@@ -22,13 +22,18 @@ export interface PaginationProps {
   disabled?: boolean;
   /** 스크린리더/테스트 식별용 접두어(거래처/담당자 등) */
   idPrefix?: string;
+  /** 페이지 번호 버튼 수(기본 5 — 기존 화면 동일) */
+  maxButtons?: number;
+  /** '현재 / 전체 페이지' 표시(기본 숨김) */
+  showPageCount?: boolean;
+  /** 페이지당 개수 선택을 이 컴포넌트에서 숨김(화면 상단 등 다른 위치에 둘 때) */
+  hidePageSize?: boolean;
 }
 
-/** (표준화) 현재 페이지 중심 최대 5개 연속 구간. 예: 10페이지 → 8 9 10 11 12 / 끝단 보정. */
-function buildPageItems(current: number, totalPages: number): number[] {
-  const maxButtons = 5;
+/** (표준화) 현재 페이지 중심 최대 maxButtons개(기본 5) 연속 구간. 예: 10페이지 → 8 9 10 11 12 / 끝단 보정. */
+export function buildPageItems(current: number, totalPages: number, maxButtons = 5): number[] {
   if (totalPages <= maxButtons) return Array.from({ length: totalPages }, (_, i) => i + 1);
-  let start = Math.max(1, current - 2);
+  let start = Math.max(1, current - Math.floor((maxButtons - 1) / 2));
   const end = Math.min(totalPages, start + maxButtons - 1);
   start = Math.max(1, end - maxButtons + 1);
   return Array.from({ length: end - start + 1 }, (_, i) => start + i);
@@ -73,12 +78,13 @@ function PageBtn({ children, active, disabled, onClick, label, testid }: {
 export function Pagination({
   page, pageSize, total, onPageChange, onPageSizeChange,
   pageSizeOptions = DEFAULT_PAGE_SIZES, unit = '건', disabled = false, idPrefix = 'list',
+  maxButtons = 5, showPageCount = false, hidePageSize = false,
 }: PaginationProps) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(Math.max(1, page), totalPages);
   const rangeStart = total === 0 ? 0 : (safePage - 1) * pageSize + 1;
   const rangeEnd = Math.min(safePage * pageSize, total);
-  const items = buildPageItems(safePage, totalPages);
+  const items = buildPageItems(safePage, totalPages, maxButtons);
 
   return (
     <div style={{
@@ -90,7 +96,12 @@ export function Pagination({
         <span style={{ fontSize: 13, color: C.textMuted, whiteSpace: 'nowrap' }}>
           {rangeStart.toLocaleString()}~{rangeEnd.toLocaleString()} / 전체 <b style={{ color: C.g700 }}>{total.toLocaleString()}</b>{unit}
         </span>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.textMuted }}>
+        {showPageCount && (
+          <span style={{ fontSize: 13, color: C.textMuted, whiteSpace: 'nowrap' }} data-testid={`${idPrefix}-pagination-pagecount`}>
+            <b style={{ color: C.g700 }}>{safePage.toLocaleString()}</b> / {totalPages.toLocaleString()} 페이지
+          </span>
+        )}
+        {!hidePageSize && <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: C.textMuted }}>
           페이지당
           <select
             value={pageSize}
@@ -108,11 +119,11 @@ export function Pagination({
           >
             {pageSizeOptions.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-        </label>
+        </label>}
       </div>
 
       {/* 우: 페이지 네비게이션 — [처음][이전][1~5][다음][마지막] 표준 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
         <PageBtn label="첫 페이지" disabled={disabled || safePage <= 1}
           onClick={() => onPageChange(1)} testid={`${idPrefix}-pagination-first`}>
           «
