@@ -19,6 +19,7 @@ import { decrypt, maskResidentNumber, maskBankAccount, readAccountPlain, isValid
 import { generatePayoutTransfers, reverifyTransfer, REVERIFIABLE_STATUSES } from "../services/payoutTransfers";
 import { buildIbkTransferWorkbook, ibkFileName, type IbkTransferRow } from "../lib/ibkTransferExcel";
 import { buildPayeePrintName } from "../lib/ibkPrintName";
+import { collectUnifiedItems } from "./payoutUnified";
 
 const router: IRouter = Router();
 const adminGuard = [requireAuth, requireRole("admin", "staff")];
@@ -1393,7 +1394,7 @@ router.get("/admin/tax-report", ...adminGuard, async (req, res) => {
     const from = String(req.query.from ?? "").slice(0, 10);
     const to = String(req.query.to ?? "").slice(0, 10);
     const q = String(req.query.q ?? "").trim().toLowerCase();
-    const region = String(req.query.region ?? "all");           // all | domestic | overseas
+    const region = String(req.query.region ?? "all");           // all | domestic | overseas | unconfirmed(과거 CRM 구분 미확정)
     const wantReveal = String(req.query.reveal ?? "") === "1";
 
     // 주민번호 전체노출 권한(translator.sensitive) — 슈퍼관리자(roleId 없음) 또는 권한 보유 시만.
@@ -1489,7 +1490,7 @@ router.get("/admin/tax-report", ...adminGuard, async (req, res) => {
       for (const s of snaps) snapMap.set(s.performanceAssignmentId, s);
     }
 
-    const rows = flat.map((it: any) => {
+    const currentRows: any[] = flat.map((it: any) => {
       const ex = extraMap.get(it.id) ?? {};
       const sn = sensMap.get(it.payeeId) ?? {};
       const snap = snapMap.get(it.id) ?? null;                  // 확정 스냅샷(있으면 SSOT)
@@ -1547,8 +1548,72 @@ router.get("/admin/tax-report", ...adminGuard, async (req, res) => {
         withholdingTax,                             // 원천세액
         ssotSource: snap ? "snapshot" : "live",     // 확정 스냅샷 기준 여부(교차검증·표시용)
         note,
+        source: "current",                          // 자료 출처(신규 플랫폼)
+        payeeId: it.payeeId ?? null,                // 통번역사 고유 ID(동명이인 구분)
       };
-    })
+    });
+
+    // ── 과거 CRM 지급완료 건 — 지급회차 관리(/payout-unified)와 같은 수집·판정 함수 재사용(재판정·재계산 없음) ──
+    //   · 지급완료 = 통합 판정 status 'paid'(납품일 ≤ cutoff 대표 확인)만. 지급예정·확인필요·중복 의심은 제외.
+    //   · 지급일 = 과거 CRM '통번역사지급일'. 지급일이 없는 지급완료 건은 세무자료에 넣지 않고 건수만 안내.
+    //   · 금액 = 원본 세전·세후. 원천세액 = 원본 세전−세후(분리·세율 정보 없음 → 세금처리·세율은 빈칸). 새 계산·저장 없음.
+    //   · 국내/해외 = Master(확정 연결) 통번역사의 등록 지급방식(translator_sensitive.paymentMethod)만 사용. 정보 없으면 '구분 확인 필요'.
+    //   · 주민번호 = 확정 연결 Master 등록값(기존 마스킹/권한 정책 그대로) → 없으면 과거 CRM 원본의 앞 6자리 마스킹값만(전체값 미노출).
+    const legacy = await collectUnifiedItems({
+      basis: "payout", source: "legacy", dFrom: from || null, dTo: to || null, canViewFullContact: false, limit: 100000,
+    });
+    const legacyPaid = legacy.items.filter((it) => it.status === "paid");
+    const legacyPaidNoDate = legacyPaid.filter((it) => !it.payoutDate).length;
+    const legacyDupExcluded = legacy.items.filter((it) => it.status === "dup_suspect" && it.paidBasis).length;
+    const legacyUserIds = [...new Set(legacyPaid.filter((it) => it.confirmed && it.matchedUserId != null).map((it) => it.matchedUserId as number))]
+      .filter((id) => !sensMap.has(id) || !profMap.has(id));
+    if (legacyUserIds.length) {
+      const [sens, profs] = await Promise.all([
+        db.select({
+          translatorId: translatorSensitiveTable.translatorId, residentNumber: translatorSensitiveTable.residentNumber,
+          paymentMethod: translatorSensitiveTable.paymentMethod,
+        }).from(translatorSensitiveTable).where(inArray(translatorSensitiveTable.translatorId, legacyUserIds)),
+        db.select({ userId: translatorProfilesTable.userId, languagePairs: translatorProfilesTable.languagePairs })
+          .from(translatorProfilesTable).where(inArray(translatorProfilesTable.userId, legacyUserIds)),
+      ]);
+      for (const x of sens) if (!sensMap.has(x.translatorId)) sensMap.set(x.translatorId, x);
+      for (const x of profs) if (!profMap.has(x.userId)) profMap.set(x.userId, x.languagePairs ?? null);
+    }
+    const legacyRows: any[] = legacyPaid.filter((it) => !!it.payoutDate).map((it) => {
+      const uid = it.confirmed ? it.matchedUserId : null;
+      const sn = uid != null ? (sensMap.get(uid) ?? {}) : {};
+      const pm = String(sn.paymentMethod ?? "");
+      const lregion = pm.startsWith("overseas") ? "overseas" : pm.startsWith("domestic") ? "domestic" : "unconfirmed";
+      let residentNumber: string | null = null, residentNumberMasked: string | null = it.residentMasked ?? null;
+      if (sn.residentNumber) {
+        try { const dec = decrypt(sn.residentNumber); residentNumberMasked = maskResidentNumber(dec); if (reveal) residentNumber = dec; } catch { /* 원본 마스킹 유지 */ }
+      }
+      const withholdingTax = Math.round((num(it.pretax) - num(it.posttax)) * 100) / 100;
+      const notes = ["과거 CRM 원본 세전·세후 기준(세금처리·세율 정보 없음)"];
+      if (lregion === "unconfirmed") notes.push("국내·해외 구분 확인 필요(Master 지급방식 미등록)");
+      if (it.isPayroll) notes.push("급여(근로소득) 파일 자료");
+      if (!num(it.pretax) || !num(it.posttax)) notes.push(`원본 ${!num(it.pretax) ? "세전" : ""}${!num(it.pretax) && !num(it.posttax) ? "·" : ""}${!num(it.posttax) ? "세후" : ""} 금액 누락(보정 안 함)`);
+      return {
+        payDate: it.payoutDate,
+        payeeKey: uid != null ? `u:${uid}` : `n:${it.translator ?? "?"}`,
+        payeeName: it.translator ?? "(이름 미상)",
+        residentNumber, residentNumberMasked,
+        language: (uid != null ? koLanguagesFromPairs(profMap.get(uid) ?? null) : null) ?? it.language ?? null,
+        transport: 0,
+        pretax: lregion === "overseas" ? null : num(it.pretax),
+        posttax: lregion === "overseas" ? null : num(it.posttax),
+        overseasAmount: lregion === "overseas" ? num(it.posttax) : null,
+        region: lregion,
+        roundName: `${it.payoutDate} 지급`,
+        withholdingTreatment: null, withholdingRate: null, withholdingTax,
+        ssotSource: "legacy_crm",
+        note: notes.join(" · "),
+        source: "legacy",
+        payeeId: uid,
+      };
+    });
+
+    const rows = [...currentRows, ...legacyRows]
       .filter((r) => r.payDate != null)                        // §5 지급완료(실제 지급일 존재)만 포함 — 미지급 제외
       .filter((r) => !from || (r.payDate as string) >= from)   // 기간 필터 = 실제 지급일 기준
       .filter((r) => !to || (r.payDate as string) <= to)
@@ -1556,7 +1621,11 @@ router.get("/admin/tax-report", ...adminGuard, async (req, res) => {
       .filter((r) => !q || (r.payeeName ?? "").toLowerCase().includes(q))
       .sort((a, b) => (a.payDate ?? "").localeCompare(b.payDate ?? "") || (a.payeeName ?? "").localeCompare(b.payeeName ?? "", "ko"));
 
-    res.json({ rows, canReveal, revealed: reveal });
+    res.json({
+      rows, canReveal, revealed: reveal,
+      // 세무자료에서 제외된 과거 CRM 지급완료 건(누락 상태 안내용 — 임의 보정 없음)
+      legacyExcluded: { paidWithoutPayoutDate: legacyPaidNoDate, duplicateSuspect: legacyDupExcluded },
+    });
   } catch (err) {
     req.log.error({ err }, "세무자료 조회 실패");
     res.status(500).json({ error: "세무자료 조회 중 오류가 발생했습니다." });

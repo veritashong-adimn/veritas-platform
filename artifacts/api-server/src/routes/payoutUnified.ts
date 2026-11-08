@@ -15,6 +15,8 @@
 // 엔드포인트(GET, 읽기 전용):
 //   GET /admin/payout-unified/rounds    지급일별 통합 회차 목록(과거+신규, 필터·페이지네이션)
 //   GET /admin/payout-unified/payees    특정 지급일 회차의 건별 상세 + 통번역사(Master)별 통합 집계
+//        (지급명세서 메뉴 공용) date 미지정 + basis=payout 이면 지급일 기간(dateFrom~dateTo)으로 조회,
+//        q = 통합 검색(통번역사명·거래처·지급일, 연락처 열람 권한자는 이메일·연락처 포함). 기존 호출(date 지정)은 결과 불변.
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, type IRouter } from "express";
 import { db, calcPayoutWithholding } from "@workspace/db";
@@ -113,7 +115,8 @@ const CUR = sql`
       pa.payment_status::text AS payment_status,
       pa.payout_round_id,
       coalesce(pa.cost_total, 0) AS pretax,
-      coalesce(pa.net_payment, pa.cost_total - pa.withholding_tax, 0) AS posttax
+      coalesce(pa.net_payment, pa.cost_total - pa.withholding_tax, 0) AS posttax,
+      pa.withholding_tax AS withholding_tax   -- 저장된 원천세(세전−세후 중 원천세 부분, 나머지는 기타 공제)
     FROM performance_assignments pa
     LEFT JOIN projects p ON p.id = pa.project_id
     LEFT JOIN companies pco ON pco.id = p.company_id
@@ -225,6 +228,142 @@ router.get("/admin/payout-unified/rounds", ...adminGuard, async (req, res) => {
   } catch (err) { (req as any).log?.error?.({ err }, "payout-unified rounds failed"); res.status(500).json({ error: "통합 회차 조회 실패" }); }
 });
 
+// ── 통합 지급자료 수집(과거 CRM + 신규) — /payees(지급회차 관리·지급명세서)와 세무자료(/admin/tax-report)가 공유하는 단일 판정 ──
+//   · 지급상태(paid/scheduled/…)·Master 연결·중복 의심 판정은 모두 여기서만 수행한다(화면별 재판정 금지).
+//   · 순수 SELECT — 쓰기 없음.
+export type UnifiedItem = Record<string, any> & {
+  source: "legacy" | "current"; sourceKey: string; id: number; payoutDate: string | null; deliveryDate: string | null;
+  translator: string | null; matchStatus: string; matchedUserId: number | null; masterKey: string; confirmed: boolean;
+  pretax: number; posttax: number; withholdingImplied: number; status: string; residentMasked: string | null;
+};
+export async function collectUnifiedItems(opts: {
+  basis: "payout" | "delivery"; date?: string; translator?: string; client?: string; source?: string;
+  dFrom: string | null; dTo: string | null; q?: string; canViewFullContact: boolean; limit?: number;
+}): Promise<{ items: UnifiedItem[]; legacyCount: number; currentCount: number }> {
+  const { basis, date, dFrom, dTo, canViewFullContact } = opts;
+  const translator = (opts.translator ?? "").trim(), client = (opts.client ?? "").trim(), source = (opts.source ?? "all").trim();
+  const q = (opts.q ?? "").trim().slice(0, 100);
+  const limit = Math.max(1, Math.min(100000, opts.limit ?? 5000));
+  const payoutCond = date === "none" ? sql` AND payout_date IS NULL`
+    : (/^\d{4}-\d{2}-\d{2}$/.test(date ?? "") ? sql` AND payout_date = ${date}` : sql``);
+  const deliveryCond = basis === "delivery" ? rangeCond("delivery", dFrom, dTo)
+    // 지급명세서 메뉴: 회차(date) 미지정 + 지급일 기준이면 지급일 기간 적용(지급회차 관리는 항상 date 지정 → 영향 없음)
+    : (date == null || date === "" ? rangeCond("payout", dFrom, dTo) : sql``);
+  // 통합 검색(q) — 이름·거래처·지급일. 이메일·연락처 검색은 연락처 전체 열람 권한자만(마스킹 우회 방지).
+  const qLike = "%" + q + "%";
+  // 연락처 검색은 검색어가 전화번호 형태(숫자·공백·하이픈·괄호·+ 만, 숫자 4자리 이상)일 때만 — 이메일 등에 섞인 숫자로 오검색 방지
+  const qDigits = /^[0-9\s\-()+.]+$/.test(q) ? q.replace(/[^0-9]/g, "") : "";
+  const digitsLike = (col: ReturnType<typeof sql>) => sql` OR regexp_replace(coalesce(${col}, ''), '[^0-9]', '', 'g') LIKE ${"%" + qDigits + "%"}`;
+  const legacyQ = !q ? sql`` : sql` AND (prog.translator ILIKE ${qLike} OR prog.client ILIKE ${qLike} OR prog.payout_date LIKE ${q + "%"}
+    ${canViewFullContact ? sql` OR mu.email ILIKE ${qLike} OR nu.email ILIKE ${qLike}` : sql``}
+    ${canViewFullContact && qDigits.length >= 4 ? sql`${digitsLike(sql`prog.orig_phone`)}${digitsLike(sql`mtp.phone`)}${digitsLike(sql`ntp.phone`)}` : sql``})`;
+  const curQ = !q ? sql`` : sql` AND (translator ILIKE ${qLike} OR client ILIKE ${qLike} OR payout_date LIKE ${q + "%"}
+    ${canViewFullContact ? sql` OR master_email ILIKE ${qLike}` : sql``}
+    ${canViewFullContact && qDigits.length >= 4 ? digitsLike(sql`master_phone`) : sql``})`;
+
+  const common = sql`${payoutCond} ${deliveryCond}
+    ${translator ? sql` AND translator ILIKE ${"%" + translator + "%"}` : sql``}
+    ${client ? sql` AND client ILIKE ${"%" + client + "%"}` : sql``}`;
+
+  // 과거 상세 — Master 연결(확정매핑>이름유일후보) + 거래처/파일명/연락처/입금증빙.
+  const legacyItems = source === "current" ? [] : (await db.execute(sql`WITH ${PROG},
+    umatch AS (SELECT btrim(name) AS nm, min(id) AS uid, count(*)::int AS c FROM users WHERE role IN ('translator','linguist') AND btrim(name) <> '' GROUP BY btrim(name)),
+    -- 연결 판정(§1): 롤백되지 않은 모든 Master 매핑(active/confirmed)을 '연결됨'으로 인정.
+    --   active 는 import/재구축으로 명시 기록된 유효 매핑(기본상태)이며, 다른 모듈(merge/dedup/delete)도 status<>'rolled_back'을 유효 연결로 취급한다.
+    --   ※ '이름만 일치'는 여기 포함되지 않는다(아래 umatch 후보로만) → 자동 연결·병합 아님.
+    lmm AS (SELECT legacy_id, entity_id FROM legacy_master_mappings WHERE source_system='old_crm' AND entity_type='translator' AND status <> 'rolled_back'),
+    comp AS (SELECT btrim(name) AS nm, bool_or(is_vendor) AS is_vendor FROM companies WHERE btrim(name) <> '' GROUP BY btrim(name))
+    SELECT prog.*, lmm.entity_id AS mapped_user_id, mu.name AS mapped_user_name, mu.email AS mapped_email, mtp.phone AS mapped_phone, mtp.language_pairs AS mapped_langpairs,
+      CASE WHEN um.c=1 THEN um.uid ELSE NULL END AS name_user_id, nu.name AS name_user_name, nu.email AS name_email, ntp.phone AS name_phone,
+      comp.is_vendor AS comp_vendor, (comp.nm IS NOT NULL) AS is_company
+    FROM prog
+    LEFT JOIN lmm ON lmm.legacy_id = prog.translator
+    LEFT JOIN users mu ON mu.id = lmm.entity_id
+    LEFT JOIN translator_profiles mtp ON mtp.user_id = lmm.entity_id
+    LEFT JOIN umatch um ON um.nm = prog.translator
+    LEFT JOIN users nu ON nu.id = (CASE WHEN um.c=1 THEN um.uid ELSE NULL END)
+    LEFT JOIN translator_profiles ntp ON ntp.user_id = (CASE WHEN um.c=1 THEN um.uid ELSE NULL END)
+    LEFT JOIN comp ON comp.nm = prog.translator
+    WHERE 1=1 ${common} ${legacyQ}
+    ORDER BY prog.delivery_date NULLS LAST, prog.translator NULLS LAST, prog.id LIMIT ${limit}`)).rows as any[];
+
+  const curItems = source === "legacy" ? [] : (await db.execute(sql`WITH ${CUR}
+    SELECT cur.* FROM cur WHERE 1=1 ${common} ${curQ} ORDER BY delivery_date NULLS LAST, translator NULLS LAST, id LIMIT ${limit}`)).rows as any[];
+
+  // 통합 매핑 → 공통 아이템 형태.
+  const items = [
+    ...legacyItems.map((r) => {
+      const pretax = num(r.pretax), posttax = num(r.posttax);
+      const content = [r.product_name, r.language].filter(Boolean).join(" · ") || null;
+      let language: string | null = r.language ?? null; let languageSource: "original" | "master" | null = r.language ? "original" : null;
+      if (!language && r.mapped_user_id != null && r.mapped_langpairs) { language = r.mapped_langpairs; languageSource = "master"; }
+      let matchStatus: string, matchedUserId: number | null = null, matchedUserName: string | null = null, masterEmail: string | null = null, masterPhone: string | null = null;
+      if (r.mapped_user_id != null) { matchStatus = "confirmed"; matchedUserId = num(r.mapped_user_id); matchedUserName = r.mapped_user_name ?? null; masterEmail = canViewFullContact ? emailFull(r.mapped_email) : maskEmail(r.mapped_email); masterPhone = canViewFullContact ? phoneFull(r.mapped_phone) : maskPhone(r.mapped_phone); }
+      else if (r.name_user_id != null) { matchStatus = "candidate"; matchedUserId = num(r.name_user_id); matchedUserName = r.name_user_name ?? null; masterEmail = canViewFullContact ? emailFull(r.name_email) : maskEmail(r.name_email); masterPhone = canViewFullContact ? phoneFull(r.name_phone) : maskPhone(r.name_phone); }
+      else if (r.comp_vendor === true) matchStatus = "vendor";
+      else if (r.is_company === true) matchStatus = "client";
+      else matchStatus = "unmatched";
+      // Master 키: 연결된 건(active/confirmed 매핑)만 Master 기준 합산. 미연결은 이름키로 별도(자동병합 아님).
+      const masterKey = r.mapped_user_id != null ? `m:${r.mapped_user_id}` : `n:${r.translator ?? "?"}`;
+      // 지급상태(과거 CRM, PROG 판정과 동일) — 지급완료는 납품일 ≤ cutoff(대표 확인)만. 입금내역(고객 수금)은 근거 아님.
+      const status: PayStatus = legacyStatus(r);
+      const paidBasis: string | null = r.legacy_paid ? LEGACY_PAID_BASIS : null;
+      return {
+        source: "legacy", sourceKey: r.source_key, id: num(r.id),
+        deliveryDate: r.delivery_date ?? null, payoutDate: r.payout_date ?? null,
+        client: r.client ?? null, translator: r.translator ?? null,
+        residentMasked: r.rrn_masked ?? null, language, languageSource,
+        masterEmail, masterPhone, originalPhone: canViewFullContact ? phoneFull(r.orig_phone) : maskPhone(r.orig_phone),
+        matchStatus, matchedUserId, matchedUserName, masterKey, confirmed: matchStatus === "confirmed",
+        isPayroll: r.is_payroll === true, content, filename: r.filename ?? null,
+        pretax, posttax, withholdingImplied: Math.round((pretax - posttax) * 100) / 100,
+        withholdingTax: null,   // 과거 CRM: 원천세·기타공제 분리 정보 없음(세전−세후만 존재) — 추정 분리 금지
+        status, statusLabel: STATUS_LABEL[status], hasDeposit: r.has_deposit === true, paidBasis,
+      };
+    }),
+    ...curItems.map((r) => {
+      const pretax = num(r.pretax), posttax = num(r.posttax);
+      const content = [r.product_name, r.language].filter(Boolean).join(" · ") || null;
+      const ps = String(r.payment_status);
+      const status: PayStatus = ps === "paid" ? "paid" : ps === "payment_hold" ? "excluded" : "pending";
+      const confirmed = r.master_user_id != null; // 신규는 배정 시점에 Master 직접 연결(확정)
+      return {
+        source: "current", sourceKey: r.source_key, id: num(r.id),
+        deliveryDate: r.delivery_date ?? null, payoutDate: r.payout_date ?? null,
+        client: r.client ?? null, translator: r.translator ?? null,
+        residentMasked: null, language: r.language ?? null, languageSource: r.language ? "original" : null,
+        masterEmail: canViewFullContact ? emailFull(r.master_email) : maskEmail(r.master_email),
+        masterPhone: canViewFullContact ? phoneFull(r.master_phone) : maskPhone(r.master_phone), originalPhone: null,
+        matchStatus: confirmed ? "confirmed" : (r.vendor_company_id != null ? "vendor" : "unmatched"),
+        matchedUserId: r.master_user_id != null ? num(r.master_user_id) : null, matchedUserName: r.translator ?? null,
+        masterKey: r.master_user_id != null ? `m:${r.master_user_id}` : (r.vendor_company_id != null ? `v:${r.vendor_company_id}` : `n:${r.translator ?? "?"}`),
+        confirmed, isPayroll: false, content, filename: null,
+        pretax, posttax, withholdingImplied: Math.round((pretax - posttax) * 100) / 100,
+        withholdingTax: r.withholding_tax == null ? null : num(r.withholding_tax),   // 저장 원천세(기타 공제 = 세전−세후−원천세)
+        status, statusLabel: STATUS_LABEL[status], hasDeposit: ps === "paid", paidBasis: ps === "paid" ? "지급회차 지급완료 처리" : null,
+      };
+    }),
+  ];
+
+  // ── 중복 의심(§9) — 과거↔신규 교차. 동일 (Master, 납품일, 세전반올림, 거래처) → 양쪽 dup_suspect. 자동 삭제/제외 없음.
+  const dupIndex = new Map<string, { legacy: number[]; current: number[] }>();
+  items.forEach((it, idx) => {
+    if (it.matchedUserId == null || !it.deliveryDate) return;
+    // 회차(date) 미지정 조회(지급명세서 기간 조회)는 지급일까지 키에 포함 → 지급일별 회차 상세와 동일한 판정 범위 유지.
+    const k = `${it.matchedUserId}|${it.deliveryDate}|${Math.round(it.pretax)}|${(it.client ?? "").trim()}${date ? "" : `|${it.payoutDate ?? ""}`}`;
+    const b = dupIndex.get(k) ?? { legacy: [], current: [] };
+    (it.source === "legacy" ? b.legacy : b.current).push(idx); dupIndex.set(k, b);
+  });
+  let dupSuspectCount = 0;
+  for (const b of dupIndex.values()) {
+    if (b.legacy.length > 0 && b.current.length > 0) { // 교차 출처에 동일 건 → 중복 의심
+      for (const i of [...b.legacy, ...b.current]) { (items[i] as any).dupSuspect = true; (items[i] as any).status = "dup_suspect"; (items[i] as any).statusLabel = STATUS_LABEL.dup_suspect; dupSuspectCount++; }
+    }
+  }
+  items.forEach((it) => { if ((it as any).dupSuspect == null) (it as any).dupSuspect = false; });
+  return { items: items as UnifiedItem[], legacyCount: legacyItems.length, currentCount: curItems.length };
+}
+
 // ── GET 건별 상세 + 통번역사(Master)별 통합 집계 ───────────────────────────────
 router.get("/admin/payout-unified/payees", ...adminGuard, async (req, res) => {
   try {
@@ -242,106 +381,9 @@ router.get("/admin/payout-unified/payees", ...adminGuard, async (req, res) => {
     let canViewFullContact = user.role === "admin" && !user.roleId;
     if (!canViewFullContact && user.roleId) { try { canViewFullContact = (await getPermissionsForRole(user.roleId)).has("translator.sensitive"); } catch { canViewFullContact = false; } }
 
-    const payoutCond = date === "none" ? sql` AND payout_date IS NULL`
-      : (/^\d{4}-\d{2}-\d{2}$/.test(date ?? "") ? sql` AND payout_date = ${date}` : sql``);
-    const deliveryCond = basis === "delivery" ? rangeCond("delivery", dFrom, dTo) : sql``;
-    const common = sql`${payoutCond} ${deliveryCond}
-      ${translator ? sql` AND translator ILIKE ${"%" + translator + "%"}` : sql``}
-      ${client ? sql` AND client ILIKE ${"%" + client + "%"}` : sql``}`;
-
-    // 과거 상세 — Master 연결(확정매핑>이름유일후보) + 거래처/파일명/연락처/입금증빙.
-    const legacyItems = source === "current" ? [] : (await db.execute(sql`WITH ${PROG},
-      umatch AS (SELECT btrim(name) AS nm, min(id) AS uid, count(*)::int AS c FROM users WHERE role IN ('translator','linguist') AND btrim(name) <> '' GROUP BY btrim(name)),
-      -- 연결 판정(§1): 롤백되지 않은 모든 Master 매핑(active/confirmed)을 '연결됨'으로 인정.
-      --   active 는 import/재구축으로 명시 기록된 유효 매핑(기본상태)이며, 다른 모듈(merge/dedup/delete)도 status<>'rolled_back'을 유효 연결로 취급한다.
-      --   ※ '이름만 일치'는 여기 포함되지 않는다(아래 umatch 후보로만) → 자동 연결·병합 아님.
-      lmm AS (SELECT legacy_id, entity_id FROM legacy_master_mappings WHERE source_system='old_crm' AND entity_type='translator' AND status <> 'rolled_back'),
-      comp AS (SELECT btrim(name) AS nm, bool_or(is_vendor) AS is_vendor FROM companies WHERE btrim(name) <> '' GROUP BY btrim(name))
-      SELECT prog.*, lmm.entity_id AS mapped_user_id, mu.name AS mapped_user_name, mu.email AS mapped_email, mtp.phone AS mapped_phone, mtp.language_pairs AS mapped_langpairs,
-        CASE WHEN um.c=1 THEN um.uid ELSE NULL END AS name_user_id, nu.name AS name_user_name, nu.email AS name_email, ntp.phone AS name_phone,
-        comp.is_vendor AS comp_vendor, (comp.nm IS NOT NULL) AS is_company
-      FROM prog
-      LEFT JOIN lmm ON lmm.legacy_id = prog.translator
-      LEFT JOIN users mu ON mu.id = lmm.entity_id
-      LEFT JOIN translator_profiles mtp ON mtp.user_id = lmm.entity_id
-      LEFT JOIN umatch um ON um.nm = prog.translator
-      LEFT JOIN users nu ON nu.id = (CASE WHEN um.c=1 THEN um.uid ELSE NULL END)
-      LEFT JOIN translator_profiles ntp ON ntp.user_id = (CASE WHEN um.c=1 THEN um.uid ELSE NULL END)
-      LEFT JOIN comp ON comp.nm = prog.translator
-      WHERE 1=1 ${common}
-      ORDER BY prog.delivery_date NULLS LAST, prog.translator NULLS LAST, prog.id LIMIT 5000`)).rows as any[];
-
-    const curItems = source === "legacy" ? [] : (await db.execute(sql`WITH ${CUR}
-      SELECT cur.* FROM cur WHERE 1=1 ${common} ORDER BY delivery_date NULLS LAST, translator NULLS LAST, id LIMIT 5000`)).rows as any[];
-
-    // 통합 매핑 → 공통 아이템 형태.
-    const items = [
-      ...legacyItems.map((r) => {
-        const pretax = num(r.pretax), posttax = num(r.posttax);
-        const content = [r.product_name, r.language].filter(Boolean).join(" · ") || null;
-        let language: string | null = r.language ?? null; let languageSource: "original" | "master" | null = r.language ? "original" : null;
-        if (!language && r.mapped_user_id != null && r.mapped_langpairs) { language = r.mapped_langpairs; languageSource = "master"; }
-        let matchStatus: string, matchedUserId: number | null = null, matchedUserName: string | null = null, masterEmail: string | null = null, masterPhone: string | null = null;
-        if (r.mapped_user_id != null) { matchStatus = "confirmed"; matchedUserId = num(r.mapped_user_id); matchedUserName = r.mapped_user_name ?? null; masterEmail = canViewFullContact ? emailFull(r.mapped_email) : maskEmail(r.mapped_email); masterPhone = canViewFullContact ? phoneFull(r.mapped_phone) : maskPhone(r.mapped_phone); }
-        else if (r.name_user_id != null) { matchStatus = "candidate"; matchedUserId = num(r.name_user_id); matchedUserName = r.name_user_name ?? null; masterEmail = canViewFullContact ? emailFull(r.name_email) : maskEmail(r.name_email); masterPhone = canViewFullContact ? phoneFull(r.name_phone) : maskPhone(r.name_phone); }
-        else if (r.comp_vendor === true) matchStatus = "vendor";
-        else if (r.is_company === true) matchStatus = "client";
-        else matchStatus = "unmatched";
-        // Master 키: 연결된 건(active/confirmed 매핑)만 Master 기준 합산. 미연결은 이름키로 별도(자동병합 아님).
-        const masterKey = r.mapped_user_id != null ? `m:${r.mapped_user_id}` : `n:${r.translator ?? "?"}`;
-        // 지급상태(과거 CRM, PROG 판정과 동일) — 지급완료는 납품일 ≤ cutoff(대표 확인)만. 입금내역(고객 수금)은 근거 아님.
-        const status: PayStatus = legacyStatus(r);
-        const paidBasis: string | null = r.legacy_paid ? LEGACY_PAID_BASIS : null;
-        return {
-          source: "legacy", sourceKey: r.source_key, id: num(r.id),
-          deliveryDate: r.delivery_date ?? null, payoutDate: r.payout_date ?? null,
-          client: r.client ?? null, translator: r.translator ?? null,
-          residentMasked: r.rrn_masked ?? null, language, languageSource,
-          masterEmail, masterPhone, originalPhone: canViewFullContact ? phoneFull(r.orig_phone) : maskPhone(r.orig_phone),
-          matchStatus, matchedUserId, matchedUserName, masterKey, confirmed: matchStatus === "confirmed",
-          isPayroll: r.is_payroll === true, content, filename: r.filename ?? null,
-          pretax, posttax, withholdingImplied: Math.round((pretax - posttax) * 100) / 100,
-          status, statusLabel: STATUS_LABEL[status], hasDeposit: r.has_deposit === true, paidBasis,
-        };
-      }),
-      ...curItems.map((r) => {
-        const pretax = num(r.pretax), posttax = num(r.posttax);
-        const content = [r.product_name, r.language].filter(Boolean).join(" · ") || null;
-        const ps = String(r.payment_status);
-        const status: PayStatus = ps === "paid" ? "paid" : ps === "payment_hold" ? "excluded" : "pending";
-        const confirmed = r.master_user_id != null; // 신규는 배정 시점에 Master 직접 연결(확정)
-        return {
-          source: "current", sourceKey: r.source_key, id: num(r.id),
-          deliveryDate: r.delivery_date ?? null, payoutDate: r.payout_date ?? null,
-          client: r.client ?? null, translator: r.translator ?? null,
-          residentMasked: null, language: r.language ?? null, languageSource: r.language ? "original" : null,
-          masterEmail: canViewFullContact ? emailFull(r.master_email) : maskEmail(r.master_email),
-          masterPhone: canViewFullContact ? phoneFull(r.master_phone) : maskPhone(r.master_phone), originalPhone: null,
-          matchStatus: confirmed ? "confirmed" : (r.vendor_company_id != null ? "vendor" : "unmatched"),
-          matchedUserId: r.master_user_id != null ? num(r.master_user_id) : null, matchedUserName: r.translator ?? null,
-          masterKey: r.master_user_id != null ? `m:${r.master_user_id}` : (r.vendor_company_id != null ? `v:${r.vendor_company_id}` : `n:${r.translator ?? "?"}`),
-          confirmed, isPayroll: false, content, filename: null,
-          pretax, posttax, withholdingImplied: Math.round((pretax - posttax) * 100) / 100,
-          status, statusLabel: STATUS_LABEL[status], hasDeposit: ps === "paid", paidBasis: ps === "paid" ? "지급회차 지급완료 처리" : null,
-        };
-      }),
-    ];
-
-    // ── 중복 의심(§9) — 과거↔신규 교차. 동일 (Master, 납품일, 세전반올림, 거래처) → 양쪽 dup_suspect. 자동 삭제/제외 없음.
-    const dupIndex = new Map<string, { legacy: number[]; current: number[] }>();
-    items.forEach((it, idx) => {
-      if (it.matchedUserId == null || !it.deliveryDate) return;
-      const k = `${it.matchedUserId}|${it.deliveryDate}|${Math.round(it.pretax)}|${(it.client ?? "").trim()}`;
-      const b = dupIndex.get(k) ?? { legacy: [], current: [] };
-      (it.source === "legacy" ? b.legacy : b.current).push(idx); dupIndex.set(k, b);
+    const { items, legacyCount, currentCount } = await collectUnifiedItems({
+      basis, date, translator, client, source, dFrom, dTo, q: (qp.q ?? "").trim().slice(0, 100), canViewFullContact,
     });
-    let dupSuspectCount = 0;
-    for (const b of dupIndex.values()) {
-      if (b.legacy.length > 0 && b.current.length > 0) { // 교차 출처에 동일 건 → 중복 의심
-        for (const i of [...b.legacy, ...b.current]) { (items[i] as any).dupSuspect = true; (items[i] as any).status = "dup_suspect"; (items[i] as any).statusLabel = STATUS_LABEL.dup_suspect; dupSuspectCount++; }
-      }
-    }
-    items.forEach((it) => { if ((it as any).dupSuspect == null) (it as any).dupSuspect = false; });
 
     // 상태 필터(조회 후 적용 — 집계는 전체 기준, 표시만 필터).
     const shown = statusFilter === "all" ? items : items.filter(i => (i as any).status === statusFilter);
@@ -380,7 +422,8 @@ router.get("/admin/payout-unified/payees", ...adminGuard, async (req, res) => {
     }, { assignmentCount: 0, pretaxTotal: 0, posttaxTotal: 0, withholdingImpliedTotal: 0, paidTotal: 0, unpaidTotal: 0, needReviewCount: 0, dupSuspectCount: 0, excludedCount: 0, scheduledCount: 0, scheduledTotal: 0 });
     (totals as any).payeeCount = new Set(items.map(i => i.masterKey)).size;
 
-    res.json({ items: shown, allCount: items.length, payees, totals, basis, contactFull: canViewFullContact, referenceRate: 3.3 });
+    const truncated = legacyCount >= 5000 || currentCount >= 5000;   // 조회 상한 도달 — 화면에서 조건 축소 안내
+    res.json({ items: shown, allCount: items.length, payees, totals, basis, contactFull: canViewFullContact, referenceRate: 3.3, truncated });
   } catch (err) { (req as any).log?.error?.({ err }, "payout-unified payees failed"); res.status(500).json({ error: "통합 상세 조회 실패" }); }
 });
 

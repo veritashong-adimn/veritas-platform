@@ -12,6 +12,7 @@ import PayoutRoundsTab from './PayoutRoundsTab';
 import PayoutStatementTab from './PayoutStatementTab';
 import TaxReportTab from './TaxReportTab';
 import { PayoutUnifiedTab } from './PayoutUnifiedTab';
+import { PayoutStatementSearchTab } from './PayoutStatementSearchTab';
 
 interface Props {
   view: 'payout' | 'statement' | 'tax';
@@ -22,8 +23,27 @@ interface Props {
 export function SettlementTabs({ view, token, onToast }: Props) {
   // 지급회차 관리 화면: 통합 조회(기본) ↔ 운영 지급확정·이체(보조). 다른 view(명세서·세무)는 영향 없음.
   const [mode, setMode] = useState<'unified' | 'operational'>('unified');
+  // 지급명세서: 통합 검색(기본 — 지급회차 관리와 같은 통합 지급자료) ↔ 운영 지급회차 확정 스냅샷 명세서(기존 화면, 보조).
+  const [stmtMode, setStmtMode] = useState<'search' | 'operational'>('search');
 
-  if (view === 'statement') return <PayoutStatementTab token={token} onToast={onToast} />;
+  if (view === 'statement') return (
+    <div data-testid="settlement-statement-container">
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+        <button
+          type="button"
+          aria-label={stmtMode === 'search' ? '운영 지급회차(확정 스냅샷) 명세서 화면 열기' : '통합 지급명세서 검색으로 돌아가기'}
+          data-testid="statement-mode-toggle"
+          onClick={() => setStmtMode(m => (m === 'search' ? 'operational' : 'search'))}
+          style={{ padding: '7px 14px', borderRadius: 8, fontSize: 13, fontWeight: 700, border: '1px solid #cbd5e1', background: '#fff', color: '#334155', cursor: 'pointer' }}
+        >
+          {stmtMode === 'search' ? '운영 지급회차 명세서 →' : '← 통합 지급명세서 검색'}
+        </button>
+      </div>
+      {stmtMode === 'search'
+        ? <PayoutStatementSearchTab token={token} onToast={onToast} />
+        : <PayoutStatementTab token={token} onToast={onToast} />}
+    </div>
+  );
   if (view === 'tax') return <TaxReportTab token={token} onToast={onToast} />;
 
   return (

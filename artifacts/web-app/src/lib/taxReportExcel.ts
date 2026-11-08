@@ -27,8 +27,15 @@ export interface TaxReportRow {
   withholdingTreatment?: string | null;    // 세금처리 enum
   withholdingRate?: number | null;         // 원천세율(%)
   withholdingTax?: number | null;          // 원천세액
-  ssotSource?: string | null;              // 'snapshot' | 'live'
+  ssotSource?: string | null;              // 'snapshot' | 'live' | 'legacy_crm'
+  // 통합 세무자료(과거 CRM 포함) — 기존 열 뒤에 추가 출력
+  region?: string | null;                  // domestic | overseas | unconfirmed
+  source?: string | null;                  // current(신규) | legacy(과거 CRM)
+  payeeId?: number | null;                 // 통번역사 고유 ID(동명이인 구분)
 }
+
+export const TAX_REGION_LABEL: Record<string, string> = { domestic: '국내', overseas: '해외', unconfirmed: '구분 확인 필요' };
+export const TAX_SOURCE_LABEL: Record<string, string> = { current: '신규 플랫폼', legacy: '과거 CRM' };
 
 // 원천세율 — 서버 확정값(withholdingRate) 우선, 없으면 국내 정률(3.3/2.2)에서 도출. exempt=0, 그 외 미확정=blank.
 const RATE_BY_TREATMENT: Record<string, number> = { domestic_3_3: 3.3, domestic_2_2: 2.2, exempt: 0 };
@@ -84,6 +91,10 @@ const COLUMNS: { header: string; width: number }[] = [
   { header: '지급액(세후)', width: 14 },
   { header: '해외 현지 송금건', width: 16 },
   { header: '비고', width: 30 },
+  // 기존 열(0~11) 위치는 유지하고 뒤에 추가
+  { header: '국내·해외 구분', width: 13 },
+  { header: '자료 출처', width: 11 },
+  { header: '통번역사 ID', width: 10 },
 ];
 
 export function downloadTaxReportExcel(opts: { filename: string; rows: TaxReportRow[]; masked: boolean }): void {
@@ -116,6 +127,9 @@ export function downloadTaxReportExcel(opts: { filename: string; rows: TaxReport
     if (row.posttax != null) put(r, 9, { v: Math.round(row.posttax), t: 'n', s: NUM }); else put(r, 9, { v: '', t: 's', s: TEXT_C });
     if (row.overseasAmount != null) put(r, 10, { v: Math.round(row.overseasAmount), t: 'n', s: NUM }); else put(r, 10, { v: '', t: 's', s: TEXT_C });
     put(r, 11, { v: row.note ?? '', t: 's', s: TEXT });
+    put(r, 12, { v: TAX_REGION_LABEL[row.region ?? ''] ?? '', t: 's', s: TEXT_C });
+    put(r, 13, { v: TAX_SOURCE_LABEL[row.source ?? ''] ?? '', t: 's', s: TEXT_C });
+    if (row.payeeId != null) put(r, 14, { v: row.payeeId, t: 'n', s: TEXT_C }); else put(r, 14, { v: '', t: 's', s: TEXT_C });
   });
 
   const lastRow = rows.length;   // header=0, data=1..rows.length
